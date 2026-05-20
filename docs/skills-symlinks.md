@@ -1,7 +1,29 @@
-# Skills symlinks
+# Skills (симлинки)
 
-Скиллы в live-среде: `~/.claude/skills/` → симлинки в Arcadia (`ai/artifacts/skills/…`) и плагины.
+Скиллы не версионируются в этом репозитории: `~/.claude/skills/` — каталог симлинков в Arcadia (`ai/artifacts/skills/…`) и плагины.
 
-Полный список путей: [skills-symlinks.txt](skills-symlinks.txt) (генерация: `scripts/refresh-skills-manifest.sh`).
+**Актуальный список** — только из live-дерева (не коммитить снимок, он протухает):
 
-Не коммитить содержимое SKILL.md из Arcadia — только манифест ссылок.
+```bash
+ls -la ~/.claude/skills
+```
+
+Только имена (без `-> target`):
+
+```bash
+ls -1 ~/.claude/skills
+```
+
+Проверить, куда ведёт один скилл:
+
+```bash
+readlink -f ~/.claude/skills/arc
+```
+
+Поиск битых симлинков:
+
+```bash
+find ~/.claude/skills -maxdepth 1 -type l ! -exec test -e {} \; -print
+```
+
+После добавления/удаления скилла в `~/.claude/skills` в git ничего менять не нужно.

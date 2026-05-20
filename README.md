@@ -36,7 +36,7 @@ git diff && git commit -am "..."
 ## Что не в git
 
 - `~/.claude/memory/deepagent/` и другие leaf-факты
-- `~/.claude/skills/` — симлинки в Arcadia; см. `docs/skills-symlinks.txt`
+- `~/.claude/skills/` — симлинки в Arcadia; актуальный список: `ls -la ~/.claude/skills` (см. [docs/skills-symlinks.md](docs/skills-symlinks.md))
 - `settings.json`, sessions, plugins cache
 
 ## Агенты
