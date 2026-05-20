@@ -23,15 +23,20 @@ Use Yandex's version control system which is "arc".
 ## Параллельная работа в arc
 
 - Каждая задача с Tracker-тикетом (`[A-Z]+-\d+`) — в отдельном параллельном маунте: `~/arcadia_<TICKET>-<slug>`, ветка `<TICKET>-<slug>` (без префикса `users/<login>/` — арк добавит сам). Команда маунта и отличия от upstream-скилла — в `~/.claude/memory/claude-code/arc-parallel-mounts.md` (скилл `using-arc-multiple-mounts` не патчить, он на симлинке).
+- **`arc mount` только из `cd ~`** (не из cwd под `~/arcadia*`). Mount в фоне, ждать `[mounted]` в логе или в `arc mount --list`; не `pkill` по таймауту.
 - Параллельный `arc mount`: всегда `--object-store …/objects`, `--override-object-store`, **`--allow-other`** (как основной `~/arcadia`; нужно для Docker и чужого uid).
 - **Никогда не делай `arc checkout` в основном маунте `~/arcadia` без явного разрешения** — там работает пользователь.
 - Ad-hoc вопросы / мелкие правки без тикета — в текущем контексте, маунт не нужен.
 - Маунт после задачи оставлять до явной команды на cleanup.
 
+## Git-репозиторий инструкций
+
+Правки в `~/claude-agent-instructions/` (симлинки на `~/.claude/`) — **сразу `git commit`**, без запроса; и после правок агента, и после правок пользователя. См. `~/claude-agent-instructions/CLAUDE.md`.
+
 ## Memory и self-improvement
 
 - **memory** — доменные факты в `~/.claude/memory/` (INDEX → leaf).
-- **self-improvement** — правила, агенты, репозиторий `~/claude-agent-instructions/`.
+- **self-improvement** — правила, агенты, репозиторий `~/claude-agent-instructions/`; после правок — commit.
 
 ### Обязательный self-improvement (родительский агент)
 
@@ -50,9 +55,7 @@ Use Yandex's version control system which is "arc".
 
 ## Agents
 
-При **затруднении** (блокер, повторяющаяся ошибка, расхождение с планом, неясность «что дальше» — в базовой задаче или служебной подзадаче) делегируй **manager** (`Task`, `subagent_type: manager`).
-
-- **manager** — сложные мультишаговые задачи и **преодоление затруднений** (цикл исследование → критика → перепланирование → действие, см. `~/.claude/agents/manager.md`); следит, чтобы при обратной связи вызывался **self-improvement**.
+- **manager** — сложные мультишаговые задачи; следит, чтобы при обратной связи вызывался **self-improvement**.
 - **planner** — декомпозиция Tracker-тикетов.
 - **thinker** — проверка рассуждений.
 - **memory** — `~/.claude/memory/`.

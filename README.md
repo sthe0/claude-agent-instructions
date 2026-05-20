@@ -28,8 +28,10 @@ git clone <remote> ~/claude-agent-instructions   # или уже есть лок
 ```bash
 cd ~/claude-agent-instructions
 $EDITOR agents/memory.md    # или правка через ~/.claude/agents — то же самое
-git diff && git commit -am "..."
+git add -A && git diff --staged && git commit -m "..."
 ```
+
+**Агент коммитит автоматически** после любой правки в этом репо (своей или пользователя) — не ждёт «можно закоммитить?». Одна логическая правка — один commit.
 
 Копирование **не нужно**: `~/.claude/agents/foo.md` — это файл в репозитории.
 

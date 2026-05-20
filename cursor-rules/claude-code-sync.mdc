@@ -22,13 +22,17 @@ Delegate to subagents (see `~/.claude/agents/`):
 - **memory** — `~/.claude/memory/`, start at INDEX.md.
 - **self-improvement** — agents, CLAUDE.md, `~/claude-agent-instructions/`.
 
-**Mandatory:** on any substantive user correction or feedback about agent behavior (not bare «ok»/«thanks»), the parent agent must run **self-improvement** via Task in the same turn, with user quote + what was done + proposed instruction fixes. See `~/.claude/CLAUDE.md` § «Обязательный self-improvement».
+**Mandatory:** on any substantive user correction or feedback about agent behavior (not bare «ok»/«thanks»), the parent agent must run **self-improvement** via Task in the same turn, with user quote + what was done + proposed instruction fixes. See `~/.claude/CLAUDE.md` § «Обязательный self-improvement». Do not finish the turn with only a tactical fix — launch self-improvement before replying. A second correction on the same issue (including «why wasn't self-improvement run?») triggers self-improvement again.
 
-- **manager** — coordinate agents; on difficulty (blocker, plan drift, stuck subtask) delegate to manager; ensure self-improvement runs on user feedback.
+- **manager** — coordinate agents; ensure self-improvement runs on user feedback.
+
+Before relaunching bundled CLI (Nirvana meta, train→…→eval): check **recent agent transcripts** and which WI stages already SUCCESS. **Republish workflow ≠ new full run.** Do not call full meta/train CLI when only republish or convert-only is needed — see `~/.claude/memory/deepagent/train-eval-meta-relaunch.md`. On difficulty, scan transcripts first (`~/.claude/agents/manager.md` § Исследование).
+
+**WI monitoring:** bounded poll loop over **all** tracked instances; exit on terminal state for each; mandatory final summary to user. No long `Await`/sleep without interim status and plan — see `~/.claude/memory/claude-code/nirvana-wi-watch.md`.
 
 ## Agents (Task / subagents)
 
-On **difficulty** (blocker, repeated failure, plan mismatch, unclear next step — base task or auxiliary subtask), delegate **manager** (`Task`, `subagent_type: manager`). See `~/.claude/agents/manager.md`.
+On **difficulty** (blocker, repeated failure, plan mismatch, unclear next step — base task or auxiliary subtask), delegate **manager** (`Task`, `subagent_type: manager`). Before or with that, scan **recent agent transcripts** for the same topic (`~/.cursor/projects/<project>/agent-transcripts/`, keyword search). See `~/.claude/agents/manager.md` (§ «Преодоление затруднений» → Исследование).
 
 Delegate via the Task tool using `subagent_type` equal to the agent `name` from `~/.claude/agents/*.md`:
 
