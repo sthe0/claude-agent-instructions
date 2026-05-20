@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Claude Code sync
 
-Always consdifer ~/.claude/CLAUDE.md as a source of all global instructions and guidelines.
+Always consider ~/.claude/CLAUDE.md as a source of all global instructions and guidelines.
 
 Agent definitions live in `~/.claude/agents/` (also linked as `~/.cursor/agents/`). Skills live in `~/.claude/skills/`. When editing agents or global policy, change Claude Code sources; Cursor reuses them.
 
