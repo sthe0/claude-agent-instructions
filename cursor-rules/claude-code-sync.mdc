@@ -15,11 +15,12 @@ Use Yandex's version control system which is "arc".
 
 ## Memory and self-improvement
 
-Delegate to subagents (see `~/.claude/agents/`):
-
 - **memory** — `~/.claude/memory/`, start at INDEX.md.
-- **self-improvement** — improve agents, CLAUDE.md, skills; git repo `~/claude-agent-instructions/`.
-- **manager** — coordinate agents and resources for the user's task.
+- **self-improvement** — agents, CLAUDE.md, `~/claude-agent-instructions/`.
+
+**Mandatory:** on any substantive user correction or feedback about agent behavior (not bare «ok»/«thanks»), the parent agent must run **self-improvement** via Task in the same turn, with user quote + what was done + proposed instruction fixes. See `~/.claude/CLAUDE.md` § «Обязательный self-improvement».
+
+- **manager** — coordinate agents; ensure self-improvement runs on user feedback.
 
 ## Agents (Task / subagents)
 
@@ -29,7 +30,7 @@ Delegate via the Task tool using `subagent_type` equal to the agent `name` from 
 - **planner** — Tracker tickets and detailed implementation plans.
 - **thinker** — verify reasoning on non-trivial or ambiguous work.
 - **memory** — save or retrieve domain facts in `~/.claude/memory/`.
-- **self-improvement** — user corrections, systemic improvements, instruction repo.
+- **self-improvement** — mandatory on user corrections/feedback (same turn).
 - **logos-*** agents ONLY when the task is directly related to the Logos ETL system.
 - **yandex-developer** for general Yandex/Arcadia development; may delegate to planner, thinker, memory, manager.
 
