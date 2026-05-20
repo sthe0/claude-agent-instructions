@@ -5,6 +5,8 @@ alwaysApply: true
 
 # Claude Code sync
 
+Always consider ~/.claude/CLAUDE.md as a source of all global instructions and guidelines.
+
 Agent definitions live in `~/.claude/agents/` (also linked as `~/.cursor/agents/`). Skills live in `~/.claude/skills/`. When editing agents or global policy, change Claude Code sources; Cursor reuses them.
 
 Try your best to avoid duplicating code. Explore adjacent files, project files, use the Depagent tool, and code search. Don't hesitate break existing functions and classes into pieces to move common code parts into separate common abstractions.
@@ -15,10 +17,12 @@ Use Yandex's version control system which is "arc".
 
 ## Memory and self-improvement
 
+Delegate to subagents (see `~/.claude/agents/`):
+
 - **memory** — `~/.claude/memory/`, start at INDEX.md.
 - **self-improvement** — agents, CLAUDE.md, `~/claude-agent-instructions/`.
 
-**Mandatory:** on any substantive user correction or feedback about agent behavior (not bare «ok»/«thanks»), the parent agent must run **self-improvement** via Task in the same turn, with user quote + what was done + proposed instruction fixes. See `~/.claude/CLAUDE.md` § «Обязательный self-improvement».
+**Mandatory:** on any substantive user correction or feedback about agent behavior (not bare «ok»/«thanks»), the parent agent must run **self-improvement** via Task in the same turn, with user quote + what was done + proposed instruction fixes. See `~/.claude/CLAUDE.md` § «Обязательный self-improvement». Do not finish the turn with only a tactical fix — launch self-improvement before replying. A second correction on the same issue (including «why wasn't self-improvement run?») triggers self-improvement again.
 
 - **manager** — coordinate agents; ensure self-improvement runs on user feedback.
 
@@ -30,7 +34,7 @@ Delegate via the Task tool using `subagent_type` equal to the agent `name` from 
 - **planner** — Tracker tickets and detailed implementation plans.
 - **thinker** — verify reasoning on non-trivial or ambiguous work.
 - **memory** — save or retrieve domain facts in `~/.claude/memory/`.
-- **self-improvement** — mandatory on user corrections/feedback (same turn).
+- **self-improvement** — user corrections, systemic improvements, instruction repo.
 - **logos-*** agents ONLY when the task is directly related to the Logos ETL system.
 - **yandex-developer** for general Yandex/Arcadia development; may delegate to planner, thinker, memory, manager.
 
