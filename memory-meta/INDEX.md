@@ -22,3 +22,4 @@
 | Тема | Файл |
 |------|------|
 | Как устроена память | [README.md](README.md) |
+| Git-репозиторий промптов агентов (`~/claude-agent-instructions`) | вне memory — см. README репозитория |

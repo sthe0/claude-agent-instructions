@@ -66,13 +66,13 @@ model: opus
 2. Классифицируй: ошибка рассуждения / нехватка инструмента / неверная делегация / устаревшая memory / шум в CLAUDE.md.
 3. Предложи **конкретный diff** (файл, раздел, формулировка), не общие слова.
 4. Если нужен факт для будущего — поручи **memory**; если нужен план внедрения — **manager** или **planner**.
-5. Коммить в `~/claude-agent-instructions` после согласия пользователя; затем `scripts/install-to-home.sh`.
+5. Коммить в `~/claude-agent-instructions` после согласия пользователя (live = симлинки, отдельный выкат не нужен).
 
 ## Работа с git-репозиторием инструкций
 
-- Перед правкой: `git status`, `git log -3` в `~/claude-agent-instructions`
-- Одна логическая правка — один commit с понятным message
-- После commit: установка в live через `scripts/install-to-home.sh`
+- `~/.claude/agents`, `~/.claude/CLAUDE.md`, sync-rule — **симлинки** на `~/claude-agent-instructions/`
+- Перед правкой: `git status`, `git log -3` в репозитории
+- Одна логическая правка — один commit; на новой машине — `scripts/setup-symlinks.sh`
 - Предлагай откат: `git revert` / `git checkout <rev> -- path`
 
 ## Взаимодействие

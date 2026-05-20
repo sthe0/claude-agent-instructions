@@ -1,37 +1,41 @@
 # Claude / Cursor agent instructions
 
-Версионируемый набор инструкций для агентов: промпты, глобальный `CLAUDE.md`, sync-правило Cursor, оглавление memory (без leaf-фактов).
+Git-репозиторий инструкций. **Правки здесь сразу видны** Cursor и Claude Code через симлинки в `~/.claude/`.
 
-**Live-пути** (куда ставит `scripts/install-to-home.sh`):
+## Симлинки (основной режим)
 
-| В репозитории | Куда |
-|---------------|------|
-| `agents/` | `~/.claude/agents/` |
+| Репозиторий | Симлинк |
+|-------------|---------|
+| `agents/` | `~/.claude/agents` |
 | `CLAUDE.md` | `~/.claude/CLAUDE.md` |
 | `cursor-rules/claude-code-sync.mdc` | `~/.cursor/rules/claude-code-sync.mdc` |
-| `memory-meta/` | справочно; leaf-факты остаются в `~/.claude/memory/` |
+| `memory-meta/INDEX.md` | `~/.claude/memory/INDEX.md` |
+| `memory-meta/README.md` | `~/.claude/memory/README.md` |
 
-`~/.cursor/agents` — симлинк на `~/.claude/agents` (не трогаем).
+`~/.cursor/agents` → `~/.claude/agents` (как было).
+
+Первичная настройка на новой машине:
+
+```bash
+git clone <remote> ~/claude-agent-instructions   # или уже есть локально
+~/claude-agent-instructions/scripts/setup-symlinks.sh
+```
+
+Повторный запуск `setup-symlinks.sh` безопасен (`ln -sfn`).
 
 ## Workflow
 
 ```bash
-# правки в репозитории
 cd ~/claude-agent-instructions
-$EDITOR agents/memory.md
-git diff && git commit -am "memory agent: clarify INDEX updates"
-
-# выкат в live
-./scripts/install-to-home.sh
-
-# подтянуть изменения, сделанные вручную в ~/.claude
-./scripts/collect-from-home.sh
-git diff && git commit -am "sync from live"
+$EDITOR agents/memory.md    # или правка через ~/.claude/agents — то же самое
+git diff && git commit -am "..."
 ```
+
+Копирование **не нужно**: `~/.claude/agents/foo.md` — это файл в репозитории.
 
 ## Что не в git
 
-- `~/.claude/memory/deepagent/*.md` и прочие leaf-факты (могут содержать внутренние ссылки; отдельное решение позже)
+- `~/.claude/memory/deepagent/` и другие leaf-факты
 - `~/.claude/skills/` — симлинки в Arcadia; см. `docs/skills-symlinks.txt`
 - `settings.json`, sessions, plugins cache
 
@@ -44,4 +48,6 @@ git diff && git commit -am "sync from live"
 | self-improvement | `agents/self-improvement.md` | Улучшение системы, этот репозиторий |
 | planner, thinker, yandex-developer, logos-* | `agents/*.md` | Специализации |
 
-Инициатива git-репозитория — пример улучшения от **self-improvement**.
+## Устаревшие скрипты
+
+`install-to-home.sh` и `collect-from-home.sh` — для режима **копирования**; при симлинках не используются.
