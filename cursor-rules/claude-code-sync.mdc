@@ -30,18 +30,30 @@ Before relaunching bundled CLI (Nirvana meta, train→…→eval): check **recen
 
 **WI monitoring:** bounded poll loop over **all** tracked instances; exit on terminal state for each; mandatory final summary to user. No long `Await`/sleep without interim status and plan — see `~/.claude/memory/claude-code/nirvana-wi-watch.md`.
 
+## Tracker ticket workflow (mandatory)
+
+When the task references a Tracker key (`[A-Z]+-\d+`) and involves Arcadia code changes:
+
+1. **Mount first** — parallel arc mount `~/arcadia_<TICKET>-<slug>` before any edit/checkout/commit. Never edit ticket work in main `~/arcadia` unless the user explicitly allows it. See `~/.claude/CLAUDE.md` § «Параллельная работа в arc» and `~/.claude/memory/claude-code/arc-parallel-mounts.md`.
+2. **Delegate via Task** — **planner** (decomposition/plan), **manager** (multi-step coordination), **yandex-developer** (all production code edits). Parent agent must **not** implement Arcadia code itself on ticket tasks.
+3. Read-only exploration before mount is OK; **Edit/Write** under `~/arcadia` for ticket work is not.
+
+Soft «prefer» does **not** apply — delegation and mount are required.
+
 ## Agents (Task / subagents)
 
 On **difficulty** (blocker, repeated failure, plan mismatch, unclear next step — base task or auxiliary subtask), delegate **manager** (`Task`, `subagent_type: manager`). Before or with that, scan **recent agent transcripts** for the same topic (`~/.cursor/projects/<project>/agent-transcripts/`, keyword search). See `~/.claude/agents/manager.md` (§ «Преодоление затруднений» → Исследование).
 
+**On Tracker ticket + code changes** — delegate **manager** or **planner** first, then **yandex-developer**; do not skip because the task looks «simple».
+
 Delegate via the Task tool using `subagent_type` equal to the agent `name` from `~/.claude/agents/*.md`:
 
 - **manager** — multi-step tasks, overcoming difficulties (investigate → critique → replan → act), session review, agent routing and resource plans.
-- **planner** — Tracker tickets and detailed implementation plans.
+- **planner** — **required** for Tracker ticket decomposition before code edits.
 - **thinker** — verify reasoning on non-trivial or ambiguous work.
 - **memory** — save or retrieve domain facts in `~/.claude/memory/`.
 - **self-improvement** — user corrections, systemic improvements, instruction repo.
 - **logos-*** agents ONLY when the task is directly related to the Logos ETL system.
-- **yandex-developer** for general Yandex/Arcadia development; may delegate to planner, thinker, memory, manager.
+- **yandex-developer** — **required** for Arcadia code changes on ticket tasks; parent must not edit production code itself.
 
 When the user says "ask deepagent" or "consult deepagent", use the deepagent MCP tool (`depagent-generate_answer` / `mcp__yandex__deepagent-generate_answer`), not a subagent.

@@ -26,8 +26,19 @@ Use Yandex's version control system which is "arc".
 - **`arc mount` только из `cd ~`** (не из cwd под `~/arcadia*`). Mount в фоне, ждать `[mounted]` в логе или в `arc mount --list`; не `pkill` по таймауту.
 - Параллельный `arc mount`: всегда `--object-store …/objects`, `--override-object-store`, **`--allow-other`** (как основной `~/arcadia`; нужно для Docker и чужого uid).
 - **Никогда не делай `arc checkout` в основном маунте `~/arcadia` без явного разрешения** — там работает пользователь.
-- Ad-hoc вопросы / мелкие правки без тикета — в текущем контексте, маунт не нужен.
+- Ad-hoc вопросы / мелкие правки **без** ключа тикета — в текущем контексте, маунт не нужен. Наличие `[A-Z]+-\d+` в задаче, ветке или workspace **отменяет** это исключение.
 - Маунт после задачи оставлять до явной команды на cleanup.
+
+## Обязательный workflow: Tracker-тикет (`[A-Z]+-\d+`)
+
+Родительский агент (Cursor / Claude Code) при задаче с ключом тикета — **до любых** `Edit`/`Write` в Arcadia, `arc checkout`, `arc commit`:
+
+1. **Маунт** — отдельный параллельный маунт `~/arcadia_<TICKET>-<slug>` и ветка `<TICKET>-<slug>`. Runbook: `~/.claude/memory/claude-code/arc-parallel-mounts.md`. **Запрещено** править код тикета в основном `~/arcadia`, пока пользователь явно не разрешил.
+2. **План** — делегируй **planner** (`Task`, `subagent_type: planner`) для декомпозиции по тикету; для мультишаговой координации — **manager**.
+3. **Код** — делегируй **yandex-developer** (`Task`). Родитель **не** пишет production-код в Arcadia сам; read-only разведка (Read, codesearch) до маунта допустима.
+4. **Проверка** — перед первой правкой: cwd/workspace в `~/arcadia_<TICKET>-*`, не в `~/arcadia`.
+
+«Prefer» / «лучше использовать» для тикетных задач **не применяется** — делегирование и маунт обязательны.
 
 ## Git-репозиторий инструкций
 
@@ -55,10 +66,12 @@ Use Yandex's version control system which is "arc".
 
 ## Agents
 
-- **manager** — сложные мультишаговые задачи; следит, чтобы при обратной связи вызывался **self-improvement**.
-- **planner** — декомпозиция Tracker-тикетов.
+Делегирование — через **Task** с `subagent_type` = `name` из `~/.claude/agents/*.md`. Для Tracker-тикета см. § «Обязательный workflow» выше.
+
+- **manager** — сложные мультишаговые задачи; маршрутизация planner + yandex-developer; следит за self-improvement при обратной связи.
+- **planner** — **обязателен** для декомпозиции Tracker-тикетов (план до правок кода).
 - **thinker** — проверка рассуждений.
 - **memory** — `~/.claude/memory/`.
 - **self-improvement** — **обязателен** при корректировках и обратной связи (см. выше).
-- **yandex-developer** — код в Arcadia.
+- **yandex-developer** — **обязателен** для правок кода в Arcadia по тикету; родитель не пишет код сам.
 - **logos-*** — только Logos ETL.
