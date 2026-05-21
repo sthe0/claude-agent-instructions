@@ -89,3 +89,5 @@ Use Yandex's version control system which is "arc".
 - **self-improvement** — **обязателен** при корректировках и обратной связи (см. выше).
 - **yandex-developer** — **обязателен** для правок кода в Arcadia по тикету; родитель не пишет код сам.
 - **logos-*** — только Logos ETL; **локальные** (`agents-local/logos-*.md`, не в git).
+
+Чеклист старта Tracker-тикета и типовые ошибки сессий: `~/.claude/memory/claude-code/session-retrospective-2026-05.md` (см. также **planner**, **manager**).
