@@ -22,33 +22,31 @@ Delegate to subagents (see `~/.claude/agents/`):
 - **memory** — `~/.claude/memory/`, start at INDEX.md.
 - **self-improvement** — agents, CLAUDE.md, `~/claude-agent-instructions/`.
 
-**Instructions git repo** (`~/claude-agent-instructions/`): before edits run `scripts/sync-instructions-repo.sh pull`; after every commit run `push` (also via `githooks/post-commit`). Cron pulls every 10 min (`scripts/install-sync-cron.sh`). See `memory-meta/claude-code/instructions-git-sync.md`.
-
 **Mandatory:** on any substantive user correction or feedback about agent behavior (not bare «ok»/«thanks»), the parent agent must run **self-improvement** via Task in the same turn, with user quote + what was done + proposed instruction fixes. See `~/.claude/CLAUDE.md` § «Обязательный self-improvement». Do not finish the turn with only a tactical fix — launch self-improvement before replying. A second correction on the same issue (including «why wasn't self-improvement run?») triggers self-improvement again.
 
-- **manager** — coordinate agents; ensure self-improvement runs on user feedback.
+- **manager** — **mandatory** on difficulty (see below); coordinate agents; session review; ensure self-improvement runs on user feedback.
 
-Before relaunching bundled CLI (Nirvana meta, train→…→eval): check **recent agent transcripts** and which WI stages already SUCCESS. **Republish workflow ≠ new full run.** Do not call full meta/train CLI when only republish or convert-only is needed — see `~/.claude/memory/deepagent/train-eval-meta-relaunch.md`. On difficulty, scan transcripts first (`~/.claude/agents/manager.md` § Исследование).
+**Mandatory manager (parent):** in the **same turn**, run **Task** → **manager** if any trigger fires: repeated failure; blocker; plan mismatch; 2+ user process corrections on the same topic; before another Nirvana WI / `arc mount` / bundled CLI attempt after failure; session retrospective; **multiple Tracker tickets** or multi-step coordination (**manager before planner**). Parent must **not** self-coordinate (Shell/Grep/transcript-only loops). Parent must **not** edit `agents/manager.md` for difficulty workflow — delegate **manager** or **self-improvement**. See `~/.claude/CLAUDE.md` § «Обязательный manager».
 
-**WI monitoring:** after **any** Nirvana launch, proactively poll **all** tracked WI until terminal; mandatory «мониторинг завершён» table — do not wait for user to ask. No long `Await`/sleep without interim status — see `~/.claude/memory/claude-code/nirvana-wi-watch.md`. Domain runbooks (test_quality, compute_metrics) — `~/.claude/memory/deepagent/` only, not agent prompts.
+Before relaunching bundled CLI (Nirvana meta, train→…→eval): check **recent agent transcripts** and which WI stages already SUCCESS. **Republish workflow ≠ new full run.** Do not call full meta/train CLI when only republish or convert-only is needed — see `~/.claude/memory/deepagent/train-eval-meta-relaunch.md`. On difficulty, **delegate manager** (it scans transcripts per `manager.md` § Исследование) — do not skip delegation.
+
+**WI monitoring:** bounded poll loop over **all** tracked instances; exit on terminal state for each; mandatory final summary to user. No long `Await`/sleep without interim status and plan — see `~/.claude/memory/claude-code/nirvana-wi-watch.md`.
 
 ## Tracker ticket workflow (mandatory)
 
 When the task references a Tracker key (`[A-Z]+-\d+`) and involves Arcadia code changes:
 
-0. **Understand first** — unexplained numbers/durations in the ticket (e.g. «14 days», TTL): find the source (wiki, code, deepagent MCP) or **ask the user** before choosing what to edit. Read-only exploration before mount is OK.
 1. **Mount first** — parallel arc mount `~/arcadia_<TICKET>-<slug>` before any edit/checkout/commit. Never edit ticket work in main `~/arcadia` unless the user explicitly allows it. See `~/.claude/CLAUDE.md` § «Параллельная работа в arc» and `~/.claude/memory/claude-code/arc-parallel-mounts.md`.
-2. **Delegate via Task** — **planner** (decomposition/plan), **manager** (multi-step coordination). Parent must **not** implement Arcadia code itself on ticket tasks.
-3. **Plan approval** — show the plan to the user; wait for explicit OK before delegating **yandex-developer** or any `Edit`/`Write`/`arc commit` (unless user said «do it now» / «no approval needed»).
-4. **Code** — **yandex-developer** (all production code edits) in the ticket mount only.
+2. **Delegate via Task** — **planner** (decomposition/plan), **manager** (multi-step coordination), **yandex-developer** (all production code edits). Parent agent must **not** implement Arcadia code itself on ticket tasks.
+3. Read-only exploration before mount is OK; **Edit/Write** under `~/arcadia` for ticket work is not.
 
-Soft «prefer» does **not** apply — understanding, plan approval, delegation, and mount are required.
+Soft «prefer» does **not** apply — delegation and mount are required.
 
 ## Agents (Task / subagents)
 
-On **difficulty** (blocker, repeated failure, plan mismatch, unclear next step — base task or auxiliary subtask), delegate **manager** (`Task`, `subagent_type: manager`). Before or with that, scan **recent agent transcripts** for the same topic (`~/.cursor/projects/<project>/agent-transcripts/`, keyword search). See `~/.claude/agents/manager.md` (§ «Преодоление затруднений» → Исследование).
+On **difficulty** (blocker, repeated failure, plan mismatch, unclear next step — base task or auxiliary subtask), **mandatory** **Task** → **manager** in the **same turn** before another retry. Parent does not replace manager with ad-hoc investigation. See `~/.claude/CLAUDE.md` § «Обязательный manager» and `manager.md` § «Преодоление затруднений».
 
-**On Tracker ticket + code changes** — delegate **manager** or **planner** first, then **yandex-developer**; do not skip because the task looks «simple».
+**On Tracker ticket + code changes** — single ticket, no difficulty: **planner** first. Multiple tickets, session review, or any difficulty trigger: **manager** first (routes planner), then **yandex-developer**; do not skip because the task looks «simple».
 
 Delegate via the Task tool using `subagent_type` equal to the agent `name` from `~/.claude/agents/*.md`:
 
@@ -57,7 +55,7 @@ Delegate via the Task tool using `subagent_type` equal to the agent `name` from 
 - **thinker** — verify reasoning on non-trivial or ambiguous work.
 - **memory** — save or retrieve domain facts in `~/.claude/memory/`.
 - **self-improvement** — user corrections, systemic improvements, instruction repo.
-- **logos-*** agents ONLY for Logos ETL; definitions live in `~/claude-agent-instructions/agents-local/` (local, not in git).
+- **logos-*** agents ONLY when the task is directly related to the Logos ETL system.
 - **yandex-developer** — **required** for Arcadia code changes on ticket tasks; parent must not edit production code itself.
 
 When the user says "ask deepagent" or "consult deepagent", use the deepagent MCP tool (`depagent-generate_answer` / `mcp__yandex__deepagent-generate_answer`), not a subagent.

@@ -21,7 +21,7 @@
 | 6f052210 | 220, 403 | manager, train→eval |
 | 8f8b2055 | — | git sync инструкций, agents-local |
 
-**Делегирование (агрегат):** `Task` ~22 vs `Shell` ~1250, `StrReplace` ~370. Субагенты: self-improvement 12, yandex-developer 10, planner 4, manager 6. Родитель делает слишком много сам.
+**Делегирование (агрегат, пересчёт 2026-05-21):** `Task` ~22 vs `Shell` ~1250, `StrReplace` ~370. Субагенты в transcripts `robot/deepagent`: self-improvement 12, yandex-developer 6, planner 1, **manager 0**. Родитель делает слишком много сам и **схлопывает роль координатора** вместо Task→manager.
 
 ## Топ ошибок (не повторять)
 
@@ -37,6 +37,7 @@
 | 8 | Маунт без `--allow-other` → Docker не видит FUSE | `arc-parallel-mounts.md` |
 | 9 | Маунт не снят после тикета → Warming up | `arc unmount` по завершении |
 | 10 | Правки инструкций без push / без pull перед edit | `instructions-git-sync.md` |
+| 11 | Блокер / повтор ошибки / WI-OOM — родитель сам Shell+Grep+transcripts | **Task → manager** (§ «Преодоление затруднений»); не править `manager.md` вместо вызова |
 
 Детали инцидента 416: `deepagent/compute-metrics-oom-de416.md`.
 
@@ -67,6 +68,10 @@
 
 - [ ] Запущен **self-improvement** в **том же** ходе (до финального ответа)
 
+При блокере, повторной ошибке или 2+ корректировках по процессу:
+
+- [ ] Запущен **manager** в **том же** ходе (до «ещё одной попытки» Nirvana/arc)
+
 ## Метрика длинной сессии (опционально)
 
 В конце сессии с >10 tool calls — одна строка в итоге пользователю:
@@ -78,6 +83,7 @@
 ## Что уже закрыто инструкциями (2026-05-21)
 
 - Workflow: понимание → план → согласование → mount → yandex-developer
+- Обязательный **manager** при затруднениях (не self-coordinate родителем)
 - Обязательный self-improvement в том же ходе
 - `agents-local/` для logos-*; git pull/commit/push + hooks
 - `nirvana-wi-watch.md`, TTL layers, memory revalidate в `memory.md`
