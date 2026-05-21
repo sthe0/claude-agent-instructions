@@ -1,6 +1,6 @@
 # Global agent memory
 
-Cross-project facts and **how to think / work**, not tied to one repository or Yandex product.
+Cross-project facts and **how to think / work**, not tied to one repository or one vendor product.
 
 **Path:** `~/.claude/memory-global/` (symlink to this directory in `~/claude-agent-instructions`).
 
@@ -19,9 +19,9 @@ Cross-project facts and **how to think / work**, not tied to one repository or Y
 
 ## What does not
 
-- Prod pipeline paths, Nirvana block names, YT table layouts → local memory
+- Prod pipeline paths, orchestrator block names, data store layouts → local memory
 - Secrets, tokens, one-off session plans
 
 ## Freshness
 
-Same rules as local memory: runbook leaves need `## Метаданные` with `last_verified`, `staleness_triggers`, `revalidate`. Agent **memory** maintains both trees.
+Same rules as local memory: runbook leaves need `## Metadata` with `last_verified`, `staleness_triggers`, `revalidate`. Agent **memory** maintains both trees.

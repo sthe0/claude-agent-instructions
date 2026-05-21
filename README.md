@@ -1,43 +1,43 @@
 # Claude / Cursor agent instructions
 
-Единый git-репозиторий **глобальных** инструкций для **Claude Code** и **Cursor**. Правки в репо видны в обоих IDE через симлинки в `~/.claude/` и `~/.cursor/`.
+Single git repository for **global** instructions for **Claude Code** and **Cursor**. Edits in the repo appear in both IDEs via symlinks under `~/.claude/` and `~/.cursor/`.
 
-Контракт файловой структуры: [memory-global/agent-instructions/file-structure-contract.md](memory-global/agent-instructions/file-structure-contract.md). Runtime-пути: [runtime-layout.md](memory-global/agent-instructions/runtime-layout.md).
+File structure contract: [memory-global/agent-instructions/file-structure-contract.md](memory-global/agent-instructions/file-structure-contract.md). Runtime paths: [runtime-layout.md](memory-global/agent-instructions/runtime-layout.md).
 
-## Кооперация агентов
+## Agent cooperation
 
-> **Этот раздел — конспект живой модели кооперации.** При любом изменении ролей, обязательных gate или порядка делегирования обновляй его **в том же commit**, что `CLAUDE.md`, `agents/*.md` и `cursor-rules/claude-code-sync.mdc`. Детали — в [CLAUDE.md](CLAUDE.md).
+> **This section is a living summary of how agents cooperate.** When roles, mandatory gates, or delegation order change, update it **in the same commit** as `CLAUDE.md`, `agents/*.md`, and `cursor-rules/claude-code-sync.mdc`. Details — [CLAUDE.md](CLAUDE.md).
 
-### Понятия
+### Concepts
 
-| Понятие | Смысл |
+| Concept | Meaning |
 |---------|--------|
-| **Родительский агент** | Диалог в Cursor / Claude Code: делегирует, не подменяет специалистов |
-| **Субагент** | Промпт в `~/claude-agent-instructions/agents/` или дополнительный файл в `~/.claude/agents/`; вызов `Task`, `subagent_type: <name>` |
-| **Memory (глобальная)** | `~/.claude/memory-global/` — как думать, координация, git sync |
-| **Memory (локальная)** | `~/.claude/memory/INDEX.md` — runbook'и продукта и среды (вне этого git) |
-| **Инструкции** | Этот репо → `~/.claude/CLAUDE.md` |
+| **Parent agent** | Dialog in Cursor / Claude Code: delegates, does not replace specialists |
+| **Subagent** | Prompt in `~/claude-agent-instructions/agents/` or extra file in `~/.claude/agents/`; invoke `Task`, `subagent_type: <name>` |
+| **Memory (global)** | `~/.claude/memory-global/` — how to think, coordination, git sync |
+| **Memory (local)** | `~/.claude/memory/INDEX.md` — product and environment runbooks (outside this git) |
+| **Instructions** | This repo → `~/.claude/CLAUDE.md` |
 
-### Принципы
+### Principles
 
-1. **Обязательность важнее «prefer».** Согласование плана, self-improvement при обратной связи, manager при затруднении (детали тикетного workflow — [CLAUDE.md](CLAUDE.md)).
-2. **Понять → согласовать → делать.** План до **developer**, кроме явного «делай сразу».
-3. **Код по тикету — developer** в изолированной рабочей копии VCS, не родитель в общей default-копии (см. [CLAUDE.md](CLAUDE.md)).
-4. **Затруднение — manager** в том же ходе.
-5. **Обратная связь — self-improvement** в том же ходе.
-6. **Runbook'и — в memory INDEX**, не в промпты generic-агентов.
-7. **Контракт файловой структуры** — описание global/local деревьев актуально; после изменений — `verify-layout-contract.sh`; расхождение → правка docs или диска.
+1. **Mandatory beats "prefer".** Plan approval, self-improvement on feedback, manager on difficulty (ticket workflow details — [CLAUDE.md](CLAUDE.md)).
+2. **Understand → approve → execute.** Plan before **developer**, except explicit "do it now".
+3. **Ticket code — developer** in isolated VCS copy, not parent in shared default copy ([CLAUDE.md](CLAUDE.md)).
+4. **Difficulty — manager** in the same turn.
+5. **Feedback — self-improvement** in the same turn.
+6. **Runbooks — memory INDEX**, not generic agent prompts.
+7. **File structure contract** — global/local tree docs stay current; after changes run `verify-layout-contract.sh`; on mismatch fix docs or disk.
 
-### Типовые потоки
+### Typical flows
 
 ```text
-Задача с планом: понимание → planner → согласование → developer
-Затруднение: … → manager → (planner | developer | memory | thinker | опциональные ~/.claude/agents/)
+Task with plan: understanding → planner → approval → developer
+Difficulty: … → manager → (planner | developer | memory | thinker | optional ~/.claude/agents/)
 ```
 
-Глобальные антипаттерны: [memory-global/development/typical-coordinator-pitfalls.md](memory-global/development/typical-coordinator-pitfalls.md).
+Global anti-patterns: [memory-global/development/typical-coordinator-pitfalls.md](memory-global/development/typical-coordinator-pitfalls.md).
 
-## Быстрый старт
+## Quick start
 
 ```bash
 git clone git@github.com:sthe0/claude-agent-instructions.git ~/claude-agent-instructions
@@ -45,11 +45,11 @@ git clone git@github.com:sthe0/claude-agent-instructions.git ~/claude-agent-inst
 ~/claude-agent-instructions/scripts/verify-instructions-sync.sh
 ```
 
-Опциональная локальная конфигурация (доп. агенты, memory, скрипты): `~/.claude/memory/INDEX.md` после `setup-symlinks.sh`.
+Optional local configuration (extra agents, memory, scripts): `~/.claude/memory/INDEX.md` after `setup-symlinks.sh`.
 
-## Симлинки (глобальное из git)
+## Symlinks (global from git)
 
-| В репо | Runtime |
+| In repo | Runtime |
 |--------|---------|
 | `CLAUDE.md` | `~/.claude/CLAUDE.md` |
 | `agents/*.md` | `~/.claude/agents/<name>.md` |
@@ -57,33 +57,33 @@ git clone git@github.com:sthe0/claude-agent-instructions.git ~/claude-agent-inst
 | `cursor-rules/claude-code-sync.mdc` | `~/.cursor/rules/` |
 | — | `~/.cursor/agents` → `~/.claude/agents` |
 
-Локальные `~/.claude/memory/` и `~/.claude/scripts-local/` **не** в этом git — источник настраивается на машине (`setup-symlinks.sh`).
+Local `~/.claude/memory/` and `~/.claude/scripts-local/` are **not** in this git — source is configured on the machine (`setup-symlinks.sh`).
 
-## Скрипты (глобальные, git)
+## Scripts (global, git)
 
-| Скрипт | Назначение |
-|--------|------------|
-| [setup-symlinks.sh](scripts/setup-symlinks.sh) | Симлинки Claude + Cursor (+ локальные runtime-пути) |
-| [verify-instructions-sync.sh](scripts/verify-instructions-sync.sh) | Проверка глобальных симлинков; делегирует local verify |
-| [verify-layout-contract.sh](scripts/verify-layout-contract.sh) | Сверка дерева с file-structure-contract.md |
-| [sync-instructions-repo.sh](scripts/sync-instructions-repo.sh) | `pull` / `push` этого репо |
+| Script | Purpose |
+|--------|---------|
+| [setup-symlinks.sh](scripts/setup-symlinks.sh) | Symlinks for Claude + Cursor (+ local runtime paths) |
+| [verify-instructions-sync.sh](scripts/verify-instructions-sync.sh) | Check global symlinks; delegates local verify |
+| [verify-layout-contract.sh](scripts/verify-layout-contract.sh) | Compare tree to file-structure-contract.md |
+| [sync-instructions-repo.sh](scripts/sync-instructions-repo.sh) | `pull` / `push` this repo |
 | [install-git-hooks.sh](scripts/install-git-hooks.sh) | post-commit → push |
-| [install-sync-cron.sh](scripts/install-sync-cron.sh) | Cron: git pull /10 min |
+| [install-sync-cron.sh](scripts/install-sync-cron.sh) | Cron: git pull every 10 min |
 
-Локальные скрипты: `~/.claude/scripts-local/` (см. README в этом каталоге после `setup-symlinks.sh`).
+Local scripts: `~/.claude/scripts-local/` (see README in that directory after `setup-symlinks.sh`).
 
 ## Git workflow
 
 ```bash
 ~/claude-agent-instructions/scripts/sync-instructions-repo.sh pull
-# правки → commit → push (post-commit hook)
+# edits → commit → push (post-commit hook)
 ```
 
 Runbook: [memory-global/agent-instructions/instructions-git-sync.md](memory-global/agent-instructions/instructions-git-sync.md).
 
-## Агенты в репозитории (`agents/`)
+## Agents in this repo (`agents/`)
 
-| name | Файл |
+| name | File |
 |------|------|
 | manager | [agents/manager.md](agents/manager.md) |
 | planner | [agents/planner.md](agents/planner.md) |
@@ -93,24 +93,24 @@ Runbook: [memory-global/agent-instructions/instructions-git-sync.md](memory-glob
 | self-improvement | [agents/self-improvement.md](agents/self-improvement.md) |
 | yandex-cloud-expert | [agents/yandex-cloud-expert.md](agents/yandex-cloud-expert.md) |
 
-Дополнительные субагенты — только файлы в `~/.claude/agents/`, которых нет в `agents/` этого репо.
+Additional subagents — only files in `~/.claude/agents/` not listed in this repo's `agents/`.
 
-## Что не в этом репозитории
+## Not in this repository
 
-| Что | Где искать |
+| What | Where |
 |-----|------------|
-| Локальная memory | `~/.claude/memory/INDEX.md` |
-| Доп. агенты | `~/.claude/agents/` |
-| Локальные скрипты | `~/.claude/scripts-local/` |
-| Скиллы | `~/.claude/skills/` |
+| Local memory | `~/.claude/memory/INDEX.md` |
+| Extra agents | `~/.claude/agents/` |
+| Local scripts | `~/.claude/scripts-local/` |
+| Skills | `~/.claude/skills/` |
 
-## Поддержка README
+## Maintaining this README
 
-При изменении модели — обнови § «Кооперация агентов», [CLAUDE.md](CLAUDE.md) и затронутые `agents/*.md` в **одном commit**.
+When the cooperation model changes — update § Agent cooperation, [CLAUDE.md](CLAUDE.md), and affected `agents/*.md` in **one commit**.
 
-При изменении **каталогов, скриптов, симлинков** (global или local):
+When **directories, scripts, or symlinks** change (global or local):
 
-1. Обнови [file-structure-contract.md](memory-global/agent-instructions/file-structure-contract.md) и при необходимости [runtime-layout.md](memory-global/agent-instructions/runtime-layout.md).
-2. Сверь § симлинки/скрипты в этом README с фактом.
-3. Запусти `scripts/verify-layout-contract.sh` и `verify-instructions-sync.sh`.
-4. Локальный слой — по runbook в `~/.claude/memory/INDEX.md` и `~/.claude/scripts-local/`.
+1. Update [file-structure-contract.md](memory-global/agent-instructions/file-structure-contract.md) and if needed [runtime-layout.md](memory-global/agent-instructions/runtime-layout.md).
+2. Align § symlinks/scripts in this README with reality.
+3. Run `scripts/verify-layout-contract.sh` and `verify-instructions-sync.sh`.
+4. Local layer — per runbook in `~/.claude/memory/INDEX.md` and `~/.claude/scripts-local/`.

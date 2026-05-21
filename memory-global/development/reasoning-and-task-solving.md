@@ -1,12 +1,12 @@
 # Reasoning and task solving
 
-## Метаданные
+## Metadata
 
-| Поле | Значение |
+| Field | Value |
 |------|----------|
 | `last_verified` | 2026-05-21 |
-| `staleness_triggers` | смена обязательного workflow в CLAUDE.md |
-| `revalidate` | сверить с README § «Кооперация агентов» и `~/.claude/CLAUDE.md` |
+| `staleness_triggers` | mandatory workflow change in CLAUDE.md |
+| `revalidate` | align with README § Agent cooperation and `~/.claude/CLAUDE.md` |
 
 ## Understand before acting
 
@@ -16,7 +16,7 @@
 
 ## Plan and approval
 
-- Non-trivial work: decompose (self or **planner**), show plan, wait for explicit OK unless user said «do it now».
+- Non-trivial work: decompose (self or **planner**), show plan, wait for explicit OK unless user said "do it now".
 - Parent coordinator must not substitute for **developer** on production code when policy assigns that role.
 
 ## When stuck

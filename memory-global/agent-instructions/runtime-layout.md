@@ -1,34 +1,34 @@
 # Runtime layout (canonical paths)
 
-Где искать компоненты после `scripts/setup-symlinks.sh`. Полное дерево каталогов и обязанность сверки — [file-structure-contract.md](file-structure-contract.md).
+Where to find components after `scripts/setup-symlinks.sh`. Full tree and reconciliation duty — [file-structure-contract.md](file-structure-contract.md).
 
-## Git (глобально, одинаково)
+## Git (global, same everywhere)
 
-| Что | Где |
+| What | Where |
 |-----|-----|
-| Репозиторий инструкций | `~/claude-agent-instructions/` |
-| Политика | `CLAUDE.md` → `~/.claude/CLAUDE.md` |
-| Глобальные агенты | `agents/*.md` → `~/.claude/agents/<name>.md` |
-| Глобальная memory | `memory-global/` → `~/.claude/memory-global/` |
+| Instructions repository | `~/claude-agent-instructions/` |
+| Policy | `CLAUDE.md` → `~/.claude/CLAUDE.md` |
+| Global agents | `agents/*.md` → `~/.claude/agents/<name>.md` |
+| Global memory | `memory-global/` → `~/.claude/memory-global/` |
 | Cursor rule | `cursor-rules/claude-code-sync.mdc` → `~/.cursor/rules/` |
 
-## Runtime (одинаковые имена, источник может отличаться)
+## Runtime (same names, source may differ)
 
-| Что | Где искать |
-|-----|------------|
-| Все субагенты (глобальные + опциональные локальные) | `~/.claude/agents/` — по `name` в frontmatter |
-| Скиллы | `~/.claude/skills/` |
-| Локальная доменная memory | `~/.claude/memory/INDEX.md` |
-| Глобальная memory | `~/.claude/memory-global/INDEX.md` |
-| Глобальные скрипты (git) | `~/claude-agent-instructions/scripts/` |
-| Локальные скрипты (arc) | `~/.claude/scripts-local/` |
+| What | Where to look |
+|-----|----------------|
+| All subagents (global + optional local) | `~/.claude/agents/` — by `name` in frontmatter |
+| Skills | `~/.claude/skills/` |
+| Local domain memory | `~/.claude/memory/INDEX.md` |
+| Global memory | `~/.claude/memory-global/INDEX.md` |
+| Global scripts (git) | `~/claude-agent-instructions/scripts/` |
+| Local scripts (arc) | `~/.claude/scripts-local/` |
 
-Локальная конфигурация (memory, доп. агенты, arc sync) — на машине, не в git инструкций. Симлинки: `~/claude-agent-instructions/scripts/setup-symlinks.sh`. Runbook: `~/.claude/memory/INDEX.md`.
+Local configuration (memory, extra agents, arc sync) — on the machine, not in instructions git. Symlinks: `~/claude-agent-instructions/scripts/setup-symlinks.sh`. Runbook: `~/.claude/memory/INDEX.md`.
 
-## Метаданные
+## Metadata
 
-| Поле | Значение |
+| Field | Value |
 |------|----------|
 | `last_verified` | 2026-05-21 |
-| `staleness_triggers` | смена `setup-symlinks.sh` |
+| `staleness_triggers` | change to `setup-symlinks.sh` |
 | `revalidate` | `~/claude-agent-instructions/scripts/verify-layout-contract.sh` |

@@ -43,7 +43,7 @@ When the monorepo uses a non-standard build (custom `make` macros, Bazel, intern
 
 ## Issue workflow (when parent delegated an external issue key)
 
-- Do not start edits until the parent confirmed the **planner** plan (or the user said «do it now»).
+- Do not start edits until the parent confirmed the **planner** plan (or the user said "do it now").
 - Work only in the ticket mount path the parent provides (e.g. isolated worktree), never in a shared default tree if policy forbids it.
 - Numbers or deadlines in the ticket without a source → escalate to parent/planner; do not invent constants in code.
 - Branch/PR naming: follow project policy from **`~/.claude/memory/INDEX.md`** when relevant.

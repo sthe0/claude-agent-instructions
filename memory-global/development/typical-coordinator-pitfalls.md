@@ -1,12 +1,12 @@
 # Typical coordinator pitfalls (parent agent)
 
-## Метаданные
+## Metadata
 
-| Поле | Значение |
+| Field | Value |
 |------|----------|
 | `last_verified` | 2026-05-21 |
-| `staleness_triggers` | новые обязательные роли в CLAUDE.md; смена имён субагентов |
-| `revalidate` | 3 последних parent transcripts: Task vs Edit/Write ratio; были ли planner/developer/manager |
+| `staleness_triggers` | new mandatory roles in CLAUDE.md; subagent renames |
+| `revalidate` | last 3 parent transcripts: Task vs Edit/Write ratio; planner/developer/manager used |
 
 ## Anti-patterns
 

@@ -1,16 +1,18 @@
-# Git: репозиторий инструкций (`~/claude-agent-instructions`)
+# Git: instructions repository (`~/claude-agent-instructions`)
 
-Симлинки: `~/.claude/agents`, `~/.claude/CLAUDE.md`, `~/.cursor/rules/claude-code-sync.mdc` → файлы в репо.
+Symlinks: `~/.claude/agents`, `~/.claude/CLAUDE.md`, `~/.cursor/rules/claude-code-sync.mdc` → files in the repo.
 
-## Перед правкой (обязательно)
+**Canonical copy:** `~/.claude/memory-global/agent-instructions/instructions-git-sync.md`
+
+## Before editing (mandatory)
 
 ```bash
 ~/claude-agent-instructions/scripts/sync-instructions-repo.sh pull
 ```
 
-Подтянуть `origin/main`. При конфликте rebase скрипт предпочитает **входящие** изменения (`--theirs`); если не удалось — агент доразрешает вручную.
+Fetch `origin/main`. On rebase conflict the script prefers **incoming** (`--theirs`); if that fails — resolve manually.
 
-## После правки
+## After editing
 
 ```bash
 cd ~/claude-agent-instructions
@@ -18,39 +20,33 @@ git add -A && git commit -m "…"
 ~/claude-agent-instructions/scripts/sync-instructions-repo.sh push
 ```
 
-**Каждый** commit в этом репо сопровождается **push** в `origin` (без запроса пользователя).
+**Every** commit is followed by **push** to `origin` (without asking the user).
 
-Если push отклонён (remote впереди): `pull` → при необходимости поправить конфликты → `push` снова.
+If push rejected (remote ahead): `pull` → fix conflicts → `push` again.
 
-## Фоновая синхронизация (каждые 10 минут)
+## Background sync (every 10 minutes)
 
 ```bash
 ~/claude-agent-instructions/scripts/install-sync-cron.sh
 ```
 
-Cron-строка (путь к репо подставляется при установке): `*/10 * * * * …/sync-instructions-repo.sh pull`.
+Cron: `*/10 * * * * …/sync-instructions-repo.sh pull`. Log: `~/.local/log/claude-agent-instructions-sync.log`
 
-Лог: `~/.local/log/claude-agent-instructions-sync.log`
-
-Если `crontab` запрещён (корп. VM): `scripts/install-sync-systemd-timer.sh` — user systemd timer (pull каждые 10 мин). Дополнительно агент делает `pull` перед каждой правкой и при старте сессии, если планирует трогать репо.
+If `crontab` forbidden: `scripts/install-sync-systemd-timer.sh`. Agent also `pull`s before each edit.
 
 ## Git hooks
 
-```bash
-~/claude-agent-instructions/scripts/install-git-hooks.sh
-```
+`install-git-hooks.sh` — `post-commit` → auto `push`.
 
-`post-commit` автоматически вызывает `sync-instructions-repo.sh push` после каждого commit (дублирует явный push агента — на случай ручного commit).
+## Scripts
 
-## Скрипты
-
-| Скрипт | Назначение |
-|--------|------------|
-| `scripts/sync-instructions-repo.sh pull` | fetch + rebase/ff-only |
-| `scripts/sync-instructions-repo.sh push` | push если есть локальные коммиты |
-| `scripts/sync-instructions-repo.sh sync` | pull, затем push |
-| `scripts/install-sync-cron.sh` | добавить cron-строку |
-| `scripts/install-sync-systemd-timer.sh` | user systemd timer (если cron недоступен) |
-| `scripts/install-git-hooks.sh` | post-commit → auto-push |
-| `scripts/setup-symlinks.sh` | симлинки Claude + Cursor |
-| `scripts/verify-instructions-sync.sh` | проверка симлинков и drift |
+| Script | Purpose |
+|--------|---------|
+| `sync-instructions-repo.sh pull` | fetch + rebase/ff-only |
+| `sync-instructions-repo.sh push` | push if local commits |
+| `sync-instructions-repo.sh sync` | pull, then push |
+| `install-sync-cron.sh` | add cron |
+| `install-sync-systemd-timer.sh` | user systemd timer |
+| `install-git-hooks.sh` | post-commit → push |
+| `setup-symlinks.sh` | Claude + Cursor symlinks |
+| `verify-instructions-sync.sh` | symlinks and drift |

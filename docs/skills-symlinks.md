@@ -1,29 +1,29 @@
-# Skills (симлинки)
+# Skills (symlinks)
 
-Скиллы не версионируются в этом репозитории: `~/.claude/skills/` — каталог симлинков в Arcadia (`ai/artifacts/skills/…`) и плагины.
+Skills are not versioned in this repository: `~/.claude/skills/` is a directory of symlinks into Arcadia (`ai/artifacts/skills/…`) and plugins.
 
-**Актуальный список** — только из live-дерева (не коммитить снимок, он протухает):
+**Current list** — only from the live tree (do not commit a snapshot, it goes stale):
 
 ```bash
 ls -la ~/.claude/skills
 ```
 
-Только имена (без `-> target`):
+Names only (no `-> target`):
 
 ```bash
 ls -1 ~/.claude/skills
 ```
 
-Проверить, куда ведёт один скилл:
+Check where one skill points:
 
 ```bash
 readlink -f ~/.claude/skills/arc
 ```
 
-Поиск битых симлинков:
+Find broken symlinks:
 
 ```bash
 find ~/.claude/skills -maxdepth 1 -type l ! -exec test -e {} \; -print
 ```
 
-После добавления/удаления скилла в `~/.claude/skills` в git ничего менять не нужно.
+After adding/removing a skill under `~/.claude/skills` nothing in git needs to change.

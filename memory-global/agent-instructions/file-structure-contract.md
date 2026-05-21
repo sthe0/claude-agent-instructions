@@ -1,33 +1,33 @@
-# Контракт файловой структуры (агентские инструкции)
+# File structure contract (agent instructions)
 
-**Каноническое описание.** При расхождении с диском — исправь **либо** этот документ и связанные README, **либо** дерево файлов и симлинки. Не оставляй устаревшее описание.
+**Canonical description.** If disk disagrees — fix **either** this document and related READMEs **or** the file tree and symlinks. Do not leave stale docs.
 
-См. также: [runtime-layout.md](runtime-layout.md) (runtime-пути), [../../README.md](../../README.md) § «Кооперация агентов».
+See also: [runtime-layout.md](runtime-layout.md) (runtime paths), [../../README.md](../../README.md) § Agent cooperation.
 
-## Метаданные
+## Metadata
 
-| Поле | Значение |
+| Field | Value |
 |------|----------|
 | `last_verified` | 2026-05-21 |
-| `staleness_triggers` | новый каталог в git/arc инструкций; смена `setup-symlinks.sh`; перенос скриптов между global/local |
+| `staleness_triggers` | new directory in git/arc instructions; change to `setup-symlinks.sh`; moving scripts between global/local |
 | `revalidate` | `~/claude-agent-instructions/scripts/verify-layout-contract.sh`; `verify-instructions-sync.sh` |
 
-## Слои
+## Layers
 
-| Слой | Версионирование | Описание дерева |
+| Layer | Versioning | Tree description |
 |------|-----------------|-----------------|
-| **Глобальный** | git `~/claude-agent-instructions` | этот файл, § Global tree |
-| **Локальный** | arc (ветка на машине) | `~/.claude/memory/INDEX.md` → leaf `the0-agents-mount`; `~/.claude/scripts-local/README.md` |
+| **Global** | git `~/claude-agent-instructions` | this file, § Global tree |
+| **Local** | arc (branch on machine) | `~/.claude/memory/INDEX.md` → leaf `the0-agents-mount`; `~/.claude/scripts-local/README.md` |
 
-Глобальные промпты **не** ссылаются на пути arc junk — только на runtime (`~/.claude/...`).
+Global prompts **must not** reference arc junk paths — only runtime (`~/.claude/...`).
 
 ## Global tree (`~/claude-agent-instructions/`)
 
 ```
 CLAUDE.md
 README.md
-agents/*.md              # глобальные субагенты (developer, manager, …)
-agents-local/README.md   # указатель на локальный arc, без *.md агентов
+agents/*.md              # global subagents (developer, manager, …)
+agents-local/README.md   # pointer to local arc, no *.md agents here
 cursor-rules/
   claude-code-sync.mdc
   project-overlay-deepagent.mdc
@@ -35,7 +35,7 @@ memory-global/
   INDEX.md, README.md
   agent-instructions/    # runtime-layout, file-structure-contract, instructions-git-sync
   development/
-memory-meta/README.md    # deprecated, не добавлять leaf
+memory-meta/README.md    # deprecated, do not add leaves
 scripts/
   setup-symlinks.sh
   verify-instructions-sync.sh
@@ -45,27 +45,27 @@ scripts/
   install-sync-cron.sh
   install-sync-systemd-timer.sh
 githooks/post-commit
-docs/                    # опционально
+docs/                    # optional
 ```
 
-**Запрещено в global `scripts/`:** arc-скрипты (`sync-junk-agents-arc`, `junk-agents-arc-commit`, `setup-the0-agents-mount`, …) — только в локальном `scripts/`.
+**Forbidden in global `scripts/`:** arc scripts (`sync-junk-agents-arc`, `junk-agents-arc-commit`, `setup-the0-agents-mount`, …) — local `scripts/` only.
 
-## Runtime symlinks (после `setup-symlinks.sh`)
+## Runtime symlinks (after `setup-symlinks.sh`)
 
-| Runtime | Источник (логический) |
+| Runtime | Source (logical) |
 |---------|------------------------|
 | `~/.claude/CLAUDE.md` | `CLAUDE.md` |
 | `~/.claude/agents/<global>.md` | `agents/<name>.md` |
-| `~/.claude/agents/<local>.md` | локальный `agents-local/` (arc) |
+| `~/.claude/agents/<local>.md` | local `agents-local/` (arc) |
 | `~/.claude/memory-global/` | `memory-global/` |
-| `~/.claude/memory/` | локальный `memory-local/` (arc) |
-| `~/.claude/scripts-local/` | локальный `scripts/` (arc) |
+| `~/.claude/memory/` | local `memory-local/` (arc) |
+| `~/.claude/scripts-local/` | local `scripts/` (arc) |
 | `~/.cursor/rules/claude-code-sync.mdc` | `cursor-rules/claude-code-sync.mdc` |
 | `~/.cursor/agents` | `~/.claude/agents` |
 
-## Local tree (arc, не в git инструкций)
+## Local tree (arc, not in instructions git)
 
-Описание на диске машины (типовое):
+On-disk layout on the machine (typical):
 
 ```
 junk/the0/agents/
@@ -83,35 +83,35 @@ junk/the0/agents/
     verify-the0-agents-sync.sh
 ```
 
-Runtime только через `~/.claude/memory/`, `~/.claude/scripts-local/`.
+Runtime only via `~/.claude/memory/`, `~/.claude/scripts-local/`.
 
-## Обязанность агента
+## Agent obligations
 
-### При изменении структуры
+### On structure change
 
-Любое добавление/перенос/удаление каталога, скрипта, split global/local:
+Any add/move/delete of directory, script, or global/local split:
 
-1. Обнови **этот файл** (и `runtime-layout.md`, если меняются runtime-пути).
-2. Обнови **README.md** § симлинки/скрипты и § «Поддержка README».
-3. Локальный слой — leaf в `~/.claude/memory/` или `scripts/README.md` в arc; commit arc.
-4. Глобальный слой — commit + push git.
-5. Запусти `verify-layout-contract.sh` и `verify-instructions-sync.sh`.
+1. Update **this file** (and `runtime-layout.md` if runtime paths change).
+2. Update **README.md** § symlinks/scripts and § Maintaining this README.
+3. Local layer — leaf in `~/.claude/memory/` or `scripts/README.md` in arc; arc commit.
+4. Global layer — git commit + push.
+5. Run `verify-layout-contract.sh` and `verify-instructions-sync.sh`.
 
-### Регулярная сверка
+### Regular reconciliation
 
-| Когда | Действие |
+| When | Action |
 |-------|----------|
-| После правок в `~/claude-agent-instructions/` или локальном arc | `verify-layout-contract.sh` |
-| Раз в несколько недель / по запросу пользователя | полная сверка: контракт ↔ `ls`/`readlink` ↔ INDEX |
-| Расхождение | исправить документ **или** дерево; не оба вразнобой |
+| After edits in `~/claude-agent-instructions/` or local arc | `verify-layout-contract.sh` |
+| Every few weeks / on user request | full reconcile: contract ↔ `ls`/`readlink` ↔ INDEX |
+| Mismatch | fix document **or** tree; not both diverging |
 
-Родитель и **self-improvement** при рефакторинге инструкций включают сверку в Definition of Done.
+Parent and **self-improvement** include reconciliation in Definition of Done when refactoring instructions.
 
-### Расхождение: что править
+### Mismatch: what to fix
 
-| Симптом | Скорее всего |
+| Symptom | Likely fix |
 |---------|----------------|
-| Файл есть, в контракте нет | дополнить контракт (если намеренно) или удалить лишнее |
-| В контракте есть, на диске нет | восстановить файл или убрать из контракта |
-| Симлинк не на тот target | `setup-symlinks.sh` |
-| arc-скрипт в global git | перенести в local `scripts/` |
+| File exists, not in contract | extend contract (if intentional) or remove extra |
+| In contract, missing on disk | restore file or remove from contract |
+| Symlink wrong target | `setup-symlinks.sh` |
+| arc script in global git | move to local `scripts/` |

@@ -1,12 +1,12 @@
 # Deprecated: memory-meta
 
-Перенесено:
+Moved:
 
-| Было | Стало |
+| Was | Now |
 |------|--------|
-| Оглавление в git | **`memory-global/`** → `~/.claude/memory-global/` |
-| Доменные leaf | **`~/.claude/memory/INDEX.md`** (источник на диске — `setup-symlinks.sh` на машине) |
+| Index in git | **`memory-global/`** → `~/.claude/memory-global/` |
+| Domain leaves | **`~/.claude/memory/INDEX.md`** (on-disk source — `setup-symlinks.sh` on the machine) |
 
-Схема runtime: `memory-global/agent-instructions/runtime-layout.md`.
+Runtime schema: `memory-global/agent-instructions/runtime-layout.md`.
 
-Не добавляй новые файлы в `memory-meta/`.
+Do not add new files under `memory-meta/`.

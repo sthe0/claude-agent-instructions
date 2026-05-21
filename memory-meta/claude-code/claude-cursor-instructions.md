@@ -1,62 +1,62 @@
-# Claude Code и Cursor: один источник инструкций
+# Claude Code and Cursor: single instruction source
 
-## Метаданные
+## Metadata
 
-| Поле | Значение |
+| Field | Value |
 |------|----------|
 | `last_verified` | 2026-05-21 |
-| `revalidate` | `~/claude-agent-instructions/scripts/verify-instructions-sync.sh` без FAIL |
+| `revalidate` | `~/claude-agent-instructions/scripts/verify-instructions-sync.sh` with no FAIL |
 
-## Архитектура
+## Architecture
 
 ```text
-~/claude-agent-instructions/     ← git (единственный источник правды)
+~/claude-agent-instructions/     ← git (single source of truth)
 ├── CLAUDE.md
 ├── agents/*.md
-├── agents-local/*.md            ← gitignored (опционально, см. agents-local/README.md)
+├── agents-local/*.md            ← gitignored (optional, see agents-local/README.md)
 ├── cursor-rules/
-│   ├── claude-code-sync.mdc     ← глобально для Cursor
-│   └── project-overlay-deepagent.mdc  ← шаблон overlay для robot/deepagent
-└── memory-meta/INDEX.md
+│   ├── claude-code-sync.mdc     ← global for Cursor
+│   └── project-overlay-deepagent.mdc  ← overlay template for robot/deepagent
+└── memory-global/INDEX.md
 
 ~/.claude/CLAUDE.md              → symlink
-~/.claude/agents/<agent>.md      → symlink (по файлу)
+~/.claude/agents/<agent>.md      → symlink (per file)
 ~/.claude/memory/INDEX.md        → symlink
-~/.cursor/agents                 → symlink на ~/.claude/agents
+~/.cursor/agents                 → symlink to ~/.claude/agents
 ~/.cursor/rules/claude-code-sync.mdc → symlink
 
-<project>/.cursor/rules/         ← только overlay (не дублировать глобальную политику)
-<project>/CLAUDE.md              → опционально symlink на ~/.claude/CLAUDE.md
+<project>/.cursor/rules/         ← overlay only (do not duplicate global policy)
+<project>/CLAUDE.md              → optional symlink to ~/.claude/CLAUDE.md
 ```
 
-## Кто что читает
+## Who reads what
 
-| Инструмент | Глобальная политика | Агенты | Memory INDEX |
+| Tool | Global policy | Agents | Memory INDEX |
 |------------|---------------------|--------|--------------|
 | **Claude Code** | `~/.claude/CLAUDE.md` | `~/.claude/agents/*.md` | `~/.claude/memory/INDEX.md` |
-| **Cursor** | `~/.cursor/rules/claude-code-sync.mdc` + тот же `CLAUDE.md` в проекте (если symlink) | `~/.cursor/agents` (= `.claude/agents`) | тот же INDEX |
+| **Cursor** | `~/.cursor/rules/claude-code-sync.mdc` + same `CLAUDE.md` in project (if symlink) | `~/.cursor/agents` (= `.claude/agents`) | same INDEX |
 
-**Канонический текст** глобальных правил — `CLAUDE.md` в репозитории. `claude-code-sync.mdc` дублирует обязательные gate для Cursor (`alwaysApply`) и отсылает к `CLAUDE.md` при расхождении.
+**Canonical text** for global rules — `CLAUDE.md` in the repo. `claude-code-sync.mdc` mirrors mandatory gates for Cursor (`alwaysApply`) and defers to `CLAUDE.md` on conflict.
 
-## Синхронизация между машинами и IDE
+## Sync across machines and IDEs
 
-1. **Git:** `pull` перед правкой, `commit` + `push` после (`instructions-git-sync.md`).
-2. **Симлинки:** `scripts/setup-symlinks.sh` после clone/pull на новой машине.
-3. **Фон:** systemd timer или cron — `pull` каждые 10 мин.
-4. **Проверка:** `scripts/verify-instructions-sync.sh` — симлинки, отсутствие устаревших копий.
+1. **Git:** `pull` before edit, `commit` + `push` after (`instructions-git-sync.md`).
+2. **Symlinks:** `scripts/setup-symlinks.sh` after clone/pull on a new machine.
+3. **Background:** systemd timer or cron — `pull` every 10 min.
+4. **Verify:** `scripts/verify-instructions-sync.sh` — symlinks, no stale copies.
 
-## Правила правок (агент)
+## Edit rules (agent)
 
-| Что менять | Где |
+| What to change | Where |
 |------------|-----|
-| Глобальная политика, workflow, manager/self-improvement | `CLAUDE.md` + зеркало в `cursor-rules/claude-code-sync.mdc` |
-| Роль одного агента | `agents/<name>.md` |
-| Только Cursor (globs, project) | `cursor-rules/project-overlay-*.mdc` |
-| Только deepagent домен | `~/.claude/memory/deepagent/` (не в git репо инструкций) |
+| Global policy, workflow, manager/self-improvement | `CLAUDE.md` + mirror in `cursor-rules/claude-code-sync.mdc` |
+| One agent's role | `agents/<name>.md` |
+| Cursor-only (globs, project) | `cursor-rules/project-overlay-*.mdc` |
+| deepagent domain only | `~/.claude/memory/deepagent/` (not in instructions git) |
 
-**Запрещено:** полная копия `claude-code-sync.mdc` внутри проекта Arcadia — только **overlay** из шаблона `project-overlay-deepagent.mdc`.
+**Forbidden:** full copy of `claude-code-sync.mdc` inside Arcadia project — only **overlay** from `project-overlay-deepagent.mdc`.
 
 ## robot/deepagent
 
 - `CLAUDE.md` → `~/.claude/CLAUDE.md` (symlink)
-- `.cursor/rules/deepagent-project.mdc` — overlay (permissions, deepagent memory), не замена глобального rule
+- `.cursor/rules/deepagent-project.mdc` — overlay (permissions, deepagent memory), not a replacement for the global rule

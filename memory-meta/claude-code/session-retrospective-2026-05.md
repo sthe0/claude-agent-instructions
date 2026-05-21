@@ -1,95 +1,95 @@
-# Ретроспектива сессий агента (2026-05-17 — 2026-05-21)
+# Agent session retrospective (2026-05-17 — 2026-05-21)
 
-Источник: agent transcripts проекта `robot/deepagent` (13 сессий, ~2.9 MB). Не дублировать доменные факты deepagent — они в leaf `deepagent/*`.
+Source: agent transcripts for project `robot/deepagent` (13 sessions, ~2.9 MB). Do not duplicate deepagent domain facts — they live in `deepagent/*` leaves.
 
-## Метаданные
+## Metadata
 
-| Поле | Значение |
+| Field | Value |
 |------|----------|
 | `last_verified` | 2026-05-21 |
-| `staleness_triggers` | смена обязательного workflow в CLAUDE.md; новые массовые паттерны ошибок в transcripts |
-| `revalidate` | выборочно 3 последних parent-transcript; счётчик Task vs Edit; есть ли нарушения «план до кода» |
+| `staleness_triggers` | mandatory workflow change in CLAUDE.md; new widespread error patterns in transcripts |
+| `revalidate` | sample 3 latest parent transcripts; Task vs Edit count; any "plan before code" violations |
 
-## Сводка периода
+## Period summary
 
-| Сессия (uuid prefix) | Тикеты | Тип |
+| Session (uuid prefix) | Tickets | Type |
 |----------------------|--------|-----|
 | e7175906 | DEEPAGENT-416 | OOM compute_metrics, Nirvana, Docker |
-| 085f3aed | DEEPAGENT-421 | TTL; ошибка «14 дней» без уточнения |
-| 593d90aa | DEEPAGENT-419 | cleanup auto_eval; сначала без маунта |
+| 085f3aed | DEEPAGENT-421 | TTL; "14 days" without clarification |
+| 593d90aa | DEEPAGENT-419 | cleanup auto_eval; started without mount |
 | 9d95383c, 8f0c5353 | DEEPAGENT-402 | FTE-alert; orphan mount → Warming up |
 | 6f052210 | 220, 403 | manager, train→eval |
-| 8f8b2055 | — | git sync инструкций, agents-local |
+| 8f8b2055 | — | instructions git sync, agents-local |
 
-**Делегирование (агрегат, пересчёт 2026-05-21):** `Task` ~22 vs `Shell` ~1250, `StrReplace` ~370. Субагенты в transcripts `robot/deepagent`: self-improvement 12, yandex-developer 6, planner 1, **manager 0**. Родитель делает слишком много сам и **схлопывает роль координатора** вместо Task→manager.
+**Delegation (aggregate, recalc 2026-05-21):** `Task` ~22 vs `Shell` ~1250, `StrReplace` ~370. Subagents in `robot/deepagent` transcripts: self-improvement 12, developer 6, planner 1, **manager 0**. Parent does too much itself and **collapses coordinator role** instead of Task→manager.
 
-## Топ ошибок (не повторять)
+## Top mistakes (do not repeat)
 
-| # | Симптом | Правильно |
+| # | Symptom | Correct |
 |---|---------|-----------|
-| 1 | Код/поиск в `~/arcadia` до маунта и без planner | pull instructions → tracker → **planner** → **согласование** → mount → **yandex-developer** |
-| 2 | Число в тикете привязано к «похожей» константе (421: 14 дней) | Источник или вопрос пользователю **до** правок |
-| 3 | Полный `run_quality` / train→eval при отладке одного кубика | memory: `test-quality-retest.md`, `train-eval-meta-relaunch.md` |
-| 4 | Новый `console_scripts` вместо Fire-подкоманды | Один entry point; one-off — stash, не Arc |
-| 5 | Self-improvement после 2-й корректировки или только извинение | **Task → self-improvement в том же ходе** до ответа |
-| 6 | WI запущен — пользователь спрашивает «ты следишь?» | Сразу poll всех WI → таблица «мониторинг завершён» (`nirvana-wi-watch.md`) |
-| 7 | Runbook Nirvana/VH3 в `manager.md` / `yandex-developer.md` | Только **memory** leaf + ссылка в плане |
-| 8 | Маунт без `--allow-other` → Docker не видит FUSE | `arc-parallel-mounts.md` |
-| 9 | Маунт не снят после тикета → Warming up | `arc unmount` по завершении |
-| 10 | Правки инструкций без push / без pull перед edit | `instructions-git-sync.md` |
-| 11 | Блокер / повтор ошибки / WI-OOM — родитель сам Shell+Grep+transcripts | **Task → manager** (§ «Преодоление затруднений»); не править `manager.md` вместо вызова |
+| 1 | Code/search in `~/arcadia` before mount and without planner | pull instructions → tracker → **planner** → **approval** → mount → **developer** |
+| 2 | Ticket number tied to "similar" constant (421: 14 days) | Source or ask user **before** edits |
+| 3 | Full `run_quality` / train→eval when debugging one block | memory: `test-quality-retest.md`, `train-eval-meta-relaunch.md` |
+| 4 | New `console_scripts` instead of Fire subcommand | One entry point; one-off — stash, not Arc |
+| 5 | Self-improvement only after 2nd correction or apology only | **Task → self-improvement same turn** before reply |
+| 6 | WI launched — user asks "are you watching?" | Poll all WI immediately → "monitoring complete" table (`nirvana-wi-watch.md`) |
+| 7 | Nirvana/VH3 runbook in `manager.md` / `developer.md` | **memory** leaf + link in plan only |
+| 8 | Mount without `--allow-other` → Docker cannot see FUSE | `arc-parallel-mounts.md` |
+| 9 | Mount not removed after ticket → Warming up | `arc unmount` on completion |
+| 10 | Instruction edits without push / without pull before edit | `instructions-git-sync.md` |
+| 11 | Blocker / repeat error / WI-OOM — parent Shell+Grep+transcripts alone | **Task → manager** (§ Overcoming difficulties); do not patch `manager.md` instead of calling |
 
-Детали инцидента 416: `deepagent/compute-metrics-oom-de416.md`.
+Incident 416 details: `deepagent/compute-metrics-oom-de416.md`.
 
-## Чеклист старта Tracker-тикета (P0)
+## Tracker ticket startup checklist (P0)
 
-Используют **родитель**, **manager**, **planner** — не пропускать шаги.
+Used by **parent**, **manager**, **planner** — do not skip steps.
 
 1. `scripts/sync-instructions-repo.sh pull`
-2. Прочитать тикет + комментарии + links
-3. Неясные числа/сроки/TTL → источник (wiki, код, deepagent MCP) **или вопрос пользователю**
-4. `memory/INDEX.md` — релевантные leaf (Nirvana relaunch, retest, mount…)
-5. **planner** → markdown-план с «Проблема и критерий решения»
-6. Показать план → **явное «ок»** (кроме «делай сразу»)
-7. Параллельный маунт `~/arcadia_<TICKET>-<slug>` (`--allow-other`)
-8. **yandex-developer** в маунте — не родитель
-9. После Nirvana launch → WI watch до терминала
-10. Закрытие: PR/тикет, **unmount**, при обучении — **memory** / **self-improvement**
+2. Read ticket + comments + links
+3. Unclear numbers/deadlines/TTL → source (wiki, code, deepagent MCP) **or ask user**
+4. `memory/INDEX.md` — relevant leaves (Nirvana relaunch, retest, mount…)
+5. **planner** → markdown plan with "Problem and done criteria"
+6. Show plan → **explicit OK** (except "do it now")
+7. Parallel mount `~/arcadia_<TICKET>-<slug>` (`--allow-other`)
+8. **developer** in mount — not parent
+9. After Nirvana launch → WI watch until terminal
+10. Close: PR/ticket, **unmount**, if learning — **memory** / **self-improvement**
 
-## Gate самопроверки (родитель)
+## Self-check gates (parent)
 
-Перед первым `Edit`/`Write`/`arc commit` в Arcadia по тикету:
+Before first `Edit`/`Write`/`arc commit` in Arcadia on a ticket:
 
-- [ ] В этом диалоге было сообщение пользователю с планом и подтверждением (или «делай сразу»)
-- [ ] cwd — `~/arcadia_<TICKET>-*`, не `~/arcadia`
-- [ ] Нет дублирующего полного пайплайна, если цель — ретест одной стадии
+- [ ] This dialog had a plan message to user and confirmation (or "do it now")
+- [ ] cwd is `~/arcadia_<TICKET>-*`, not `~/arcadia`
+- [ ] No duplicate full pipeline if goal is single-stage retest
 
-После корректировки пользователя о поведении агента:
+After user correction about agent behavior:
 
-- [ ] Запущен **self-improvement** в **том же** ходе (до финального ответа)
+- [ ] **self-improvement** ran in the **same** turn (before final reply)
 
-При блокере, повторной ошибке или 2+ корректировках по процессу:
+On blocker, repeat failure, or 2+ process corrections:
 
-- [ ] Запущен **manager** в **том же** ходе (до «ещё одной попытки» Nirvana/arc)
+- [ ] **manager** ran in the **same** turn (before "one more try" Nirvana/arc)
 
-## Метрика длинной сессии (опционально)
+## Long session metric (optional)
 
-В конце сессии с >10 tool calls — одна строка в итоге пользователю:
+At end of session with >10 tool calls — one line to user:
 
-`Делегирование: Task=N; правки родителем (Edit/Write)=M.`
+`Delegation: Task=N; parent Edit/Write=M.`
 
-Цель: снижать M на тикетных задачах.
+Goal: lower M on ticket-sized tasks.
 
-## Что уже закрыто инструкциями (2026-05-21)
+## Already covered by instructions (2026-05-21)
 
-- Workflow: понимание → план → согласование → mount → yandex-developer
-- Обязательный **manager** при затруднениях (не self-coordinate родителем)
-- Обязательный self-improvement в том же ходе
-- `agents-local/` для logos-*; git pull/commit/push + hooks
-- `nirvana-wi-watch.md`, TTL layers, memory revalidate в `memory.md`
+- Workflow: understand → plan → approval → mount → developer
+- Mandatory **manager** on difficulties (parent must not self-coordinate)
+- Mandatory self-improvement same turn
+- `agents-local/` for logos-*; git pull/commit/push + hooks
+- `nirvana-wi-watch.md`, TTL layers, memory revalidate in `memory.md`
 
-## Приоритет улучшений
+## Improvement priorities
 
-1. **Исполнение** чеклиста (не новые правила).
-2. Читать memory **до** запуска Nirvana CLI.
-3. Домен → memory leaf с `revalidate`, не промпты агентов.
+1. **Execute** the checklist (not new rules).
+2. Read memory **before** launching Nirvana CLI.
+3. Domain → memory leaf with `revalidate`, not agent prompts.

@@ -1,14 +1,14 @@
 ---
-description: deepagent project overlay — дополнение к ~/.cursor/rules/claude-code-sync.mdc и ~/.claude/CLAUDE.md
+description: deepagent project overlay — supplements ~/.cursor/rules/claude-code-sync.mdc and ~/.claude/CLAUDE.md
 alwaysApply: true
 ---
 
 # deepagent (project overlay)
 
-Глобальная политика: **`~/.cursor/rules/claude-code-sync.mdc`** и **`~/.claude/CLAUDE.md`** (оба из `~/claude-agent-instructions/`). **Не дублируй** здесь tracker workflow, manager, self-improvement — они только в глобальных файлах.
+Global policy: **`~/.cursor/rules/claude-code-sync.mdc`** and **`~/.claude/CLAUDE.md`** (both from `~/claude-agent-instructions/`). **Do not duplicate** tracker workflow, manager, self-improvement here — they live only in global files.
 
-- **Tool permissions:** `.cursor/cli.json` зеркалит `.claude/settings.local.json` в этом репозитории.
-- **Доменная memory (этот продукт):** leaf по [INDEX](~/.claude/memory/INDEX.md). Не копировать leaf в Arc `CLAUDE.md`.
-- **Deepagent MCP:** по запросу «спроси deepagent» — `mcp__yandex__deepagent-generate_answer`, не субагент.
+- **Tool permissions:** `.cursor/cli.json` mirrors `.claude/settings.local.json` in this repository.
+- **Domain memory (this product):** leaves via [INDEX](~/.claude/memory/INDEX.md). Do not copy leaves into Arc `CLAUDE.md`.
+- **Deepagent MCP:** on request "ask deepagent" — `mcp__yandex__deepagent-generate_answer`, not a subagent.
 
-При правке инструкций агента: репозиторий `~/claude-agent-instructions/`, не этот overlay.
+When editing agent instructions: repository `~/claude-agent-instructions/`, not this overlay.

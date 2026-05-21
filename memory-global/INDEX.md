@@ -13,7 +13,7 @@ Practices that apply across projects. Domain runbooks → `~/.claude/memory/INDE
 
 | Topic | File |
 |-------|------|
-| **Контракт файловой структуры** (global/local, сверка) | [agent-instructions/file-structure-contract.md](agent-instructions/file-structure-contract.md) |
+| **File structure contract** (global/local, verification) | [agent-instructions/file-structure-contract.md](agent-instructions/file-structure-contract.md) |
 | Runtime paths (`~/.claude/agents`, memory trees) | [agent-instructions/runtime-layout.md](agent-instructions/runtime-layout.md) |
 | Git sync for `~/claude-agent-instructions` | [agent-instructions/instructions-git-sync.md](agent-instructions/instructions-git-sync.md) |
-| Agent roles (canonical) | [../../README.md](../../README.md) § «Кооперация агентов» |
+| Agent roles (canonical) | [../../README.md](../../README.md) § Agent cooperation |

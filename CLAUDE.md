@@ -1,138 +1,138 @@
-## Не коммитить
+## Do not commit
 
-Этот файл — **локальные инструкции для агента** (Cursor / Claude Code). **Не добавляйте и не коммитьте его в Arc:** в тексте есть ссылки на локальную среду (`~/.venv`, `~/.claude/agents/`, субагенты **planner**, **thinker**, **developer** и опциональные роли в `~/.claude/agents/`), которые у каждого разработчика могут отличаться.
+This file is **local agent instructions** (Cursor / Claude Code). **Do not add or commit it to Arc:** it references machine-specific paths (`~/.venv`, `~/.claude/agents/`, subagents **planner**, **thinker**, **developer**, and optional roles in `~/.claude/agents/`) that differ per developer.
 
-Файл перечислен в `.arcignore`. Если он всё же попал в индекс — не включайте в PR; правки держите локально или вынесите в общую документацию без machine-specific путей.
+It is listed in `.arcignore`. If it still entered the index — do not include in PR; keep edits local or move shared parts to docs without machine-specific paths.
 
 ---
 
-Try your best to avoid duplicating code. Explore adjacent files, project files, use the Depagent tool, and code search. Don't hesitate break existing functions and classes into pieces to move common code parts into separete common abstractions.
+Try your best to avoid duplicating code. Explore adjacent files, project files, use the Depagent tool, and code search. Don't hesitate break existing functions and classes into pieces to move common code parts into separate common abstractions.
 Do not add obvious or trivial comments. Prefer code expressiveness, readability and clarity over comments.
-Ask deepagent tool about arcadia code projects and yandex-specific (or unknown) infrustructure. If you see an unknown term, first thing to do is to refer to deepagent tool, not code exploring. Ask deepagent tool about best implementations practices when in doubt. Deepagent tool provides best results when asked in Russian.
+Ask deepagent tool about arcadia code projects and yandex-specific (or unknown) infrastructure. If you see an unknown term, first thing to do is to refer to deepagent tool, not code exploring. Ask deepagent tool about best implementations practices when in doubt. Deepagent tool provides best results when asked in Russian.
 Use ~/.venv virtualenv to run python (except data_science CLI: always via Docker, see library/deepagent/data_science/DOCKER_RUN.md)
 Use Yandex's version control system which is "arc".
 
-## Поиск кода в Arcadia
+## Code search in Arcadia
 
-**Никогда не делай `grep`/`rg`/`find` по `~/arcadia` целиком или по большим папкам** — Arcadia смонтирована через FUSE, рекурсивный обход подвешивает ФС и сжирает ресурсы. Вместо этого:
-- **`ya tool grep`** — для текстового/regex-поиска по индексу Arcadia.
-- **semantic code search** (MCP `mcp__intrasearch__semantic_code_search` или скилл `semantic_code_search`) — для поиска по описанию на естественном языке.
-- **`ya tool cs`** / скилл `codesearch` — для навигации по символам и путям.
-- Локальный `find`/`grep` допустим **только** внутри уже известной узкой подпапки проекта (например, `~/arcadia/path/to/project/`), не выше.
+**Never run `grep`/`rg`/`find` on all of `~/arcadia` or large folders** — Arcadia is FUSE-mounted; recursive traversal hangs the FS and consumes resources. Instead:
+- **`ya tool grep`** — text/regex search over the Arcadia index.
+- **semantic code search** (MCP `mcp__intrasearch__semantic_code_search` or skill `semantic_code_search`) — natural-language search.
+- **`ya tool cs`** / skill `codesearch` — symbols and paths.
+- Local `find`/`grep` is allowed **only** inside a known narrow project subfolder (e.g. `~/arcadia/path/to/project/`), not above.
 
-## Параллельная работа в arc
+## Parallel work in arc
 
-- Каждая задача с Tracker-тикетом (`[A-Z]+-\d+`) — в отдельном параллельном маунте: `~/arcadia_<TICKET>-<slug>`, ветка `<TICKET>-<slug>` (без префикса `users/<login>/` — арк добавит сам). Runbook маунта — `~/.claude/memory/INDEX.md` (скилл `using-arc-multiple-mounts` не патчить, он на симлинке).
-- **`arc mount` только из `cd ~`** (не из cwd под `~/arcadia*`). Mount в фоне, ждать `[mounted]` в логе или в `arc mount --list`; не `pkill` по таймауту.
-- Параллельный `arc mount`: всегда `--object-store …/objects`, `--override-object-store`, **`--allow-other`** (как основной `~/arcadia`; **обязательно** для `docker run -v ~/arcadia_*` — без флага root в контейнере не видит FUSE). Runbook: `~/.claude/memory/INDEX.md`.
-- **Никогда не делай `arc checkout` в основном маунте `~/arcadia` без явного разрешения** — там работает пользователь.
-- Ad-hoc вопросы / мелкие правки **без** ключа тикета — в текущем контексте, маунт не нужен. Наличие `[A-Z]+-\d+` в задаче, ветке или workspace **отменяет** это исключение.
-- Маунт после задачи оставлять до явной команды на cleanup.
+- Each task with a Tracker ticket (`[A-Z]+-\d+`) — separate parallel mount: `~/arcadia_<TICKET>-<slug>`, branch `<TICKET>-<slug>` (no `users/<login>/` prefix — arc adds it). Mount runbook — `~/.claude/memory/INDEX.md` (do not patch skill `using-arc-multiple-mounts`, it is on a symlink).
+- **`arc mount` only from `cd ~`** (not from cwd under `~/arcadia*`). Mount in background, wait for `[mounted]` in log or `arc mount --list`; do not `pkill` on timeout.
+- Parallel `arc mount`: always `--object-store …/objects`, `--override-object-store`, **`--allow-other`** (like main `~/arcadia`; **required** for `docker run -v ~/arcadia_*` — without it root in the container cannot see FUSE). Runbook: `~/.claude/memory/INDEX.md`.
+- **Never `arc checkout` on main mount `~/arcadia` without explicit permission** — the user works there.
+- Ad-hoc questions / small edits **without** a ticket key — current context, no mount needed. Presence of `[A-Z]+-\d+` in task, branch, or workspace **cancels** this exception.
+- Leave mount after the task until explicit cleanup command.
 
-## Обязательный workflow: Tracker-тикет (`[A-Z]+-\d+`)
+## Mandatory workflow: Tracker ticket (`[A-Z]+-\d+`)
 
-Родительский агент (Cursor / Claude Code) при задаче с ключом тикета — **до любых** `Edit`/`Write` в Arcadia, `arc checkout`, `arc commit`:
+Parent agent (Cursor / Claude Code) on a task with a ticket key — **before any** `Edit`/`Write` in Arcadia, `arc checkout`, `arc commit`:
 
-0. **Понимание** — прочитай тикет и комментарии. Числа, сроки, аббревиатуры («14 дней», TTL, quota, лимиты) без явного источника в тикете — **найди происхождение** (wiki, код, deepagent MCP, связанные PR) или **спроси пользователя**. Не привязывай число к случайному полю в коде и не начинай правки, пока не можешь объяснить, *откуда* взялось число и *какой* артефакт/поведение оно описывает. Read-only разведка до маунта допустима.
-1. **Маунт** — отдельный параллельный маунт `~/arcadia_<TICKET>-<slug>` и ветка `<TICKET>-<slug>`. Runbook: `~/.claude/memory/INDEX.md`. **Запрещено** править код тикета в основном `~/arcadia`, пока пользователь явно не разрешил.
-2. **План** — при **одном** тикете без затруднений: **planner** (`Task`, `subagent_type: planner`). При **нескольких тикетах**, мультишаговой координации или любом триггере из § «Обязательный manager» — сначала **manager** (он делегирует planner). В плане явно: интерпретация ключевых чисел/сроков и **где именно** в коде/конфиге будет правка (с обоснованием).
-3. **Согласование** — покажи пользователю план (или резюме planner) и дождись явного «ок» / правок. **Запрещено** делегировать **developer** и делать `Edit`/`Write`/`arc commit`, пока план не согласован. Исключение: пользователь явно сказал «делай сразу» / «без согласования».
-4. **Код** — делегируй **developer** (`Task`). Родитель **не** пишет production-код в Arcadia сам. Неизвестная орг-инфраструктура → субагент-консультант из `~/.claude/agents/` (если настроен) до или вместе с кодом.
-5. **Проверка** — перед первой правкой: cwd/workspace в `~/arcadia_<TICKET>-*`, не в `~/arcadia`.
+0. **Understanding** — read ticket and comments. Numbers, deadlines, abbreviations ("14 days", TTL, quota, limits) without explicit source in the ticket — **find origin** (wiki, code, deepagent MCP, related PRs) or **ask the user**. Do not tie a number to a random code field and do not start edits until you can explain *where* the number came from and *which* artifact/behavior it describes. Read-only exploration before mount is OK.
+1. **Mount** — separate parallel mount `~/arcadia_<TICKET>-<slug>` and branch `<TICKET>-<slug>`. Runbook: `~/.claude/memory/INDEX.md`. **Forbidden** to edit ticket code on main `~/arcadia` unless the user explicitly allows.
+2. **Plan** — for **one** ticket without difficulties: **planner** (`Task`, `subagent_type: planner`). For **multiple tickets**, multi-step coordination, or any trigger from § Mandatory manager — **manager** first (it delegates planner). Plan must state interpretation of key numbers/deadlines and **where exactly** in code/config will change (with justification).
+3. **Approval** — show user the plan (or planner summary) and wait for explicit OK / edits. **Forbidden** to delegate **developer** and do `Edit`/`Write`/`arc commit` until plan is approved. Exception: user explicitly said "do it now" / "no approval".
+4. **Code** — delegate **developer** (`Task`). Parent **does not** write production code in Arcadia itself. Unknown org infra → consultant subagent from `~/.claude/agents/` (if configured) before or with code.
+5. **Check** — before first edit: cwd/workspace in `~/arcadia_<TICKET>-*`, not `~/arcadia`.
 
-«Prefer» / «лучше использовать» для тикетных задач **не применяется** — понимание, согласование плана, делегирование и маунт обязательны.
+"Prefer" / "better to use" for ticket tasks **does not apply** — understanding, plan approval, delegation, and mount are mandatory.
 
-## Claude Code и Cursor (один источник)
+## Claude Code and Cursor (one source)
 
-Оба инструмента читают **одни и те же файлы** через симлинки из `~/claude-agent-instructions/`:
+Both tools read **the same files** via symlinks from `~/claude-agent-instructions/`:
 
-| Файл в репо | Claude Code | Cursor |
-|-------------|-------------|--------|
-| `CLAUDE.md` | `~/.claude/CLAUDE.md` | тот же путь в проекте (symlink) + правило ниже |
+| Repo file | Claude Code | Cursor |
+|-----------|-------------|--------|
+| `CLAUDE.md` | `~/.claude/CLAUDE.md` | same path in project (symlink) + rule below |
 | `agents/*.md` | `~/.claude/agents/` | `~/.cursor/agents` → `.claude/agents` |
-| `memory-global/` | `~/.claude/memory-global/` | тот же |
+| `memory-global/` | `~/.claude/memory-global/` | same |
 | `cursor-rules/claude-code-sync.mdc` | — | `~/.cursor/rules/claude-code-sync.mdc` |
-| Локальная memory (вне git) | `~/.claude/memory/` | тот же |
+| Local memory (outside git) | `~/.claude/memory/` | same |
 
-Настройка и проверка: `scripts/setup-symlinks.sh`, `scripts/verify-instructions-sync.sh`, `scripts/verify-layout-contract.sh`. Контракт деревьев (global/local): `~/.claude/memory-global/agent-instructions/file-structure-contract.md`.
+Setup and verify: `scripts/setup-symlinks.sh`, `scripts/verify-instructions-sync.sh`, `scripts/verify-layout-contract.sh`. Tree contract (global/local): `~/.claude/memory-global/agent-instructions/file-structure-contract.md`.
 
-**Правки политики** — в репозитории; после `commit` обязателен `push` (см. ниже). Проект `robot/deepagent` — только overlay `.cursor/rules/deepagent-project.mdc`, не копия глобального rule.
+**Policy edits** — in the repo; after `commit` **push** is mandatory (see below). Project `robot/deepagent` — only overlay `.cursor/rules/deepagent-project.mdc`, not a copy of the global rule.
 
-## Контракт файловой структуры
+## File structure contract
 
-Каноническое описание слоёв (git global, arc local, runtime-симлинки): **`~/.claude/memory-global/agent-instructions/file-structure-contract.md`**.
+Canonical description of layers (git global, arc local, runtime symlinks): **`~/.claude/memory-global/agent-instructions/file-structure-contract.md`**.
 
-**Поддерживай актуальным:** при любом переносе/добавлении каталогов, скриптов или split global/local — обнови контракт, `runtime-layout.md`, README § симлинки/скрипты в **том же commit** (git и/или arc).
+**Keep up to date:** on any move/add of directories, scripts, or global/local split — update contract, `runtime-layout.md`, README § symlinks/scripts in **the same commit** (git and/or arc).
 
-**Регулярно сверяй** факт с описанием:
+**Reconcile regularly** fact vs description:
 
-1. `~/claude-agent-instructions/scripts/verify-layout-contract.sh` (и `verify-instructions-sync.sh`).
-2. При расхождении — исправь **документ или дерево**, не оставляй расхождение.
-3. После рефакторинга инструкций — Definition of Done включает прохождение verify.
+1. `~/claude-agent-instructions/scripts/verify-layout-contract.sh` (and `verify-instructions-sync.sh`).
+2. On mismatch — fix **doc or tree**, do not leave drift.
+3. After instruction refactor — Definition of Done includes passing verify.
 
-Делегирование тяжёлой сверки локального arc-слоя — **memory** или **self-improvement**; родитель не пропускает verify после своих правок в `~/claude-agent-instructions/`.
+Delegate heavy reconcile of local arc layer to **memory** or **self-improvement**; parent does not skip verify after own edits in `~/claude-agent-instructions/`.
 
-## Git-репозиторий инструкций
+## Instructions git repository
 
-Правки в `~/claude-agent-instructions/` (симлинки на `~/.claude/` и `~/.cursor/`). Детали: `~/.claude/memory-global/agent-instructions/instructions-git-sync.md`.
+Edits in `~/claude-agent-instructions/` (symlinks to `~/.claude/` and `~/.cursor/`). Details: `~/.claude/memory-global/agent-instructions/instructions-git-sync.md`.
 
-1. **Перед любой правкой** — `~/claude-agent-instructions/scripts/sync-instructions-repo.sh pull` (подтянуть `origin/main`).
-2. **После правки** — `git add` + `git commit` (без запроса пользователя) + **обязательный** `scripts/sync-instructions-repo.sh push`.
-3. **Фон** — cron каждые 10 минут делает `pull`; конфликты rebase: скрипт предпочитает входящие, иначе доразрешить вручную.
+1. **Before any edit** — `~/claude-agent-instructions/scripts/sync-instructions-repo.sh pull` (fetch `origin/main`).
+2. **After edit** — `git add` + `git commit` (without asking the user) + **mandatory** `scripts/sync-instructions-repo.sh push`.
+3. **Background** — cron every 10 minutes runs `pull`; on rebase conflict script prefers incoming, else resolve manually.
 
-## Memory и self-improvement
+## Memory and self-improvement
 
-- **memory** — факты: локально `~/.claude/memory/INDEX.md`, глобально `~/.claude/memory-global/INDEX.md`.
-- **self-improvement** — правила, агенты, репозиторий `~/claude-agent-instructions/`; после правок — commit + push (см. § «Git-репозиторий инструкций»).
+- **memory** — facts: locally `~/.claude/memory/INDEX.md`, globally `~/.claude/memory-global/INDEX.md`.
+- **self-improvement** — rules, agents, repo `~/claude-agent-instructions/`; after edits — commit + push (see § Instructions git repository).
 
-### Обязательный self-improvement (родительский агент)
+### Mandatory self-improvement (parent agent)
 
-**В тот же момент диалога**, когда пользователь дал содержательную обратную связь, **запусти** субагент **self-improvement** (`Task`), даже если ты уже внёс тактический фикс.
+**In the same dialog turn** when the user gave substantive feedback, **run** subagent **self-improvement** (`Task`), even if you already made a tactical fix.
 
-Запуск **обязателен**, если сообщение пользователя:
+Run is **mandatory** if the user message:
 
-- исправляет, отвергает или уточняет **твоё** действие, вывод, план или выбор инструмента;
-- задаёт принцип или политику («так не надо», «лучше X», «зачем Y», «всегда Z»);
-- оценивает качество работы агента (замечание, несогласие, пожелание по процессу);
-- предлагает изменить инструкции, агентов, memory, репозиторий, скиллы, workflow.
+- corrects, rejects, or clarifies **your** action, conclusion, plan, or tool choice;
+- states a principle or policy ("don't do that", "prefer X", "why Y", "always Z");
+- evaluates agent quality (remark, disagreement, process wish);
+- proposes changing instructions, agents, memory, repo, skills, workflow.
 
-**Не обязателен** только для нейтрального подтверждения без новой информации («ок», «да, делай», «спасибо») и для чистого вопроса **без** оценки или правки твоих действий.
+**Not mandatory** only for neutral confirmation without new info ("ok", "yes do it", "thanks") and for a pure question **without** evaluating or correcting your actions.
 
-В prompt для self-improvement передай: цитату пользователя, что ты сделал, что уже изменил, ожидаемый output (диагноз + предложения правок в `~/claude-agent-instructions/`).
+In the self-improvement prompt pass: user quote, what you did, what you already changed, expected output (diagnosis + proposed edits in `~/claude-agent-instructions/`).
 
-**Не заканчивай ход** тактическим фиксом или извинением — сначала **Task** → **self-improvement**. Повторная корректировка по той же теме (в т.ч. «почему не было self-improvement») — снова запуск в **том же** ходе.
+**Do not end the turn** with only a tactical fix or apology — first **Task** → **self-improvement**. Repeated correction on the same topic (including "why was self-improvement not run") — run again in the **same** turn.
 
-### Обязательный manager (родительский агент)
+### Mandatory manager (parent agent)
 
-Родитель **не** играет координатора при затруднениях сам (Shell/Grep/transcript-read вместо делегирования — антипаттерн). **В тот же ход** запусти **Task** → **manager**, если выполняется **хотя бы один** триггер:
+Parent **must not** self-coordinate on difficulties (Shell/Grep/transcript-only loops instead of delegation — anti-pattern). **In the same turn** run **Task** → **manager** if **any** trigger applies:
 
-- **повторная ошибка** — та же команда/ветка/запуск упали второй раз;
-- **блокер** — нет доступа, неясный следующий шаг, OOM/CI/WI FAILED без готового runbook;
-- **расхождение с планом** — факт ≠ ожидание, пропущен шаг чеклиста, неверный relaunch пайплайна;
-- **2+ корректировки пользователя по процессу** в одной теме (не только по коду);
-- **перед ещё одной попыткой** Nirvana WI, `arc mount`, bundled CLI после неуспеха — сначала manager (исследование transcripts + перепланирование);
-- **разбор сессии**, ретроспектива, **несколько тикетов** или мультишаговая координация — **manager до planner** (manager маршрутизирует planner/developer).
+- **repeated failure** — same command/branch/run failed twice;
+- **blocker** — no access, unclear next step, OOM/CI/WI FAILED without a ready runbook;
+- **plan mismatch** — fact ≠ expectation, checklist step skipped, wrong pipeline relaunch;
+- **2+ user process corrections** on one topic (not only code);
+- **before another attempt** at Nirvana WI, `arc mount`, bundled CLI after failure — manager first (transcript research + replan);
+- **session review**, retrospective, **multiple tickets** or multi-step coordination — **manager before planner** (manager routes planner/developer).
 
-Запуск **обязателен** — «prefer delegate manager» **не применяется**. В prompt передай: цитату/симптом, что уже пробовали, текущий план, ожидаемый output (диагноз → переплан → действие).
+Run is **mandatory** — "prefer delegate manager" **does not apply**. In prompt pass: quote/symptom, what was tried, current plan, expected output (diagnosis → replan → action).
 
-**Запрещено** родителю править `agents/manager.md` ради «как работать при затруднении» — делегируй **manager** (отработать цикл) или **self-improvement** (системное правило в `CLAUDE.md` / sync-rule). Доменные runbook'и — только **memory**.
+**Forbidden** for parent to edit `agents/manager.md` for "how to work when stuck" — delegate **manager** (run the cycle) or **self-improvement** (system rule in `CLAUDE.md` / sync-rule). Domain runbooks — **memory** only.
 
-### Nirvana: после запуска WI
+### Nirvana: after launching WI
 
-Запустил граф (CLI, Nirvana API, docker) — **сразу** сообщи WI id/URL и **опрашивай** до терминала у **всех** отслеживаемых инстансов (не жди явного «следи»). Runbook WI — `~/.claude/memory/INDEX.md`. Итог — таблица «мониторинг завершён» в том же ходе.
+After starting a graph (CLI, Nirvana API, docker) — **immediately** report WI id/URL and **poll** until terminal for **all** tracked instances (do not wait for explicit "watch"). WI runbook — `~/.claude/memory/INDEX.md`. End with "monitoring complete" table in the same turn.
 
-Доменные runbook'и — только leaf по `~/.claude/memory/INDEX.md`, не в промпты generic-агентов.
+Domain runbooks — only leaves via `~/.claude/memory/INDEX.md`, not in generic agent prompts.
 
 ## Agents
 
-Делегирование — через **Task** с `subagent_type` = `name` из `~/.claude/agents/*.md`. Для Tracker-тикета см. § «Обязательный workflow» выше.
+Delegation — **Task** with `subagent_type` = `name` from `~/.claude/agents/*.md`. For Tracker tickets see § Mandatory workflow above.
 
-- **manager** — **обязателен** при затруднениях (§ выше); мультишаговые задачи и разбор сессий; маршрутизация planner + developer; цикл исследование→критика→переплан→действие.
-- **planner** — **обязателен** для декомпозиции Tracker-тикетов (план до правок кода).
-- **thinker** — проверка рассуждений.
+- **manager** — **mandatory** on difficulties (§ above); multi-step tasks and session review; routes planner + developer; investigate→critique→replan→act cycle.
+- **planner** — **mandatory** for Tracker ticket decomposition (plan before code edits).
+- **thinker** — verify reasoning.
 - **memory** — `~/.claude/memory/`.
-- **self-improvement** — **обязателен** при корректировках и обратной связи (см. выше).
-- **developer** — **обязателен** для правок кода в Arcadia по тикету; родитель не пишет код сам.
-- **Опциональные субагенты** — только если есть в `~/.claude/agents/` (`name` + `description`); не выдумывай роли, которых нет на машине.
+- **self-improvement** — **mandatory** on corrections and feedback (see above).
+- **developer** — **mandatory** for Arcadia code edits on tickets; parent does not write code itself.
+- **Optional subagents** — only if present in `~/.claude/agents/` (`name` + `description`); do not invent roles missing on the machine.
 
-Чеклист старта Tracker-тикета — leaf в `~/.claude/memory/INDEX.md`; глобальные практики — `~/.claude/memory-global/development/` (см. **planner**, **manager**).
+Tracker ticket startup checklist — leaf in `~/.claude/memory/INDEX.md`; global practices — `~/.claude/memory-global/development/` (see **planner**, **manager**).
