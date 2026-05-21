@@ -44,12 +44,13 @@ Use Yandex's version control system which is "arc".
 
 Parent agent (Cursor / Claude Code) on a task with a ticket key — **before any** `Edit`/`Write` in Arcadia, `arc checkout`, `arc commit`:
 
-0. **Understanding** — read ticket and comments. Numbers, deadlines, abbreviations ("14 days", TTL, quota, limits) without explicit source in the ticket — **find origin** (wiki, code, deepagent MCP, related PRs) or **ask the user**. Do not tie a number to a random code field and do not start edits until you can explain *where* the number came from and *which* artifact/behavior it describes. Read-only exploration before mount is OK.
-1. **Mount** — separate parallel mount `~/arcadia_<TICKET>-<slug>` and branch `<TICKET>-<slug>`. Runbook: `~/.claude/memory/INDEX.md`. **Forbidden** to edit ticket code on main `~/arcadia` unless the user explicitly allows.
-2. **Plan** — for **one** ticket without difficulties: **planner** (`Task`, `subagent_type: planner`). For **multiple tickets**, multi-step coordination, or any trigger from § Mandatory manager — **manager** first (it delegates planner). Plan must state interpretation of key numbers/deadlines and **where exactly** in code/config will change (with justification).
-3. **Approval** — show user the plan (or planner summary) and wait for explicit OK / edits. **Forbidden** to delegate **developer** and do `Edit`/`Write`/`arc commit` until plan is approved. Exception: user explicitly said "do it now" / "no approval".
-4. **Code** — delegate **developer** (`Task`). Parent **does not** write production code in Arcadia itself. Unknown org infra → consultant subagent from `~/.claude/agents/` (if configured) before or with code.
-5. **Check** — before first edit: cwd/workspace in `~/arcadia_<TICKET>-*`, not `~/arcadia`.
+0. **Manager first** — parent runs **Task → manager** in the same turn (§ Mandatory manager). **Forbidden** to start with **planner**, **developer**, or self-coordination (Shell/Grep/transcripts) on a new ticket task. **manager** routes the rest of this checklist.
+1. **Understanding** — **manager** / **planner**: read ticket and comments. Numbers, deadlines, abbreviations without explicit source — **find origin** (wiki, code, domain MCP per local memory) or **ask the user** before edits. Read-only exploration before mount is OK.
+2. **Mount** — separate parallel mount `~/arcadia_<TICKET>-<slug>` and branch `<TICKET>-<slug>`. Runbook: `~/.claude/memory/INDEX.md`. **Forbidden** to edit ticket code on main `~/arcadia` unless the user explicitly allows.
+3. **Plan** — **manager** delegates **planner** (`Task`, `subagent_type: planner`). Plan must state interpretation of key numbers/deadlines and **where exactly** in code/config will change (with justification).
+4. **Approval** — show user the plan (or planner summary) and wait for explicit OK / edits. **Forbidden** to delegate **developer** and do `Edit`/`Write`/`arc commit` until plan is approved. Exception: user explicitly said "do it now" / "no approval".
+5. **Code** — **manager** delegates **developer** (`Task`). Parent **does not** write production code in Arcadia itself.
+6. **Check** — before first edit: cwd/workspace in `~/arcadia_<TICKET>-*`, not `~/arcadia`.
 
 "Prefer" / "better to use" for ticket tasks **does not apply** — understanding, plan approval, delegation, and mount are mandatory.
 
@@ -115,18 +116,33 @@ In the self-improvement prompt pass: user quote, what you did, what you already 
 
 ### Mandatory manager (parent agent)
 
-Parent **must not** self-coordinate on difficulties (Shell/Grep/transcript-only loops instead of delegation — anti-pattern). **In the same turn** run **Task** → **manager** if **any** trigger applies:
+**manager is the mandatory entry agent** for substantive work. Parent **must not** self-coordinate (Shell/Grep/transcript-only loops, or calling **planner** / **developer** first on a new goal — anti-pattern).
+
+#### A. New user task (every time)
+
+When the user **opens or assigns** substantive work — implementation, investigation, fix, ticket, pipeline, refactor, multi-step goal, or a new requirement on an existing topic — parent **in the same turn**:
+
+1. **First delegation** — **Task → manager** (before **planner**, **developer**, mount, or broad code search for that goal).
+2. **manager** states need, resources, and who executes next (typically **planner** → approval → **developer**).
+
+**Not a new task** (manager optional): bare "ok" / "thanks"; trivial one-line answer with no tools; user explicitly says skip manager / "direct to planner" / "direct to developer".
+
+#### B. Difficulty (in addition to A if work already started)
+
+Run **Task → manager** again if **any** applies:
 
 - **repeated failure** — same command/branch/run failed twice;
 - **blocker** — no access, unclear next step, OOM/CI/WI FAILED without a ready runbook;
 - **plan mismatch** — fact ≠ expectation, checklist step skipped, wrong pipeline relaunch;
 - **2+ user process corrections** on one topic (not only code);
-- **before another attempt** at Nirvana WI, `arc mount`, bundled CLI after failure — manager first (transcript research + replan);
-- **session review**, retrospective, **multiple tickets** or multi-step coordination — **manager before planner** (manager routes planner/developer).
+- **before another attempt** at Nirvana WI, `arc mount`, bundled CLI after failure;
+- **session review** or retrospective.
 
-Run is **mandatory** — "prefer delegate manager" **does not apply**. In prompt pass: quote/symptom, what was tried, current plan, expected output (diagnosis → replan → action).
+**Continuing** an already-approved plan in the same session (e.g. **developer** executing agreed steps) — no second **manager** unless a trigger in B fires or the user changes scope.
 
-**Forbidden** for parent to edit `agents/manager.md` for "how to work when stuck" — delegate **manager** (run the cycle) or **self-improvement** (system rule in `CLAUDE.md` / sync-rule). Domain runbooks — **memory** only.
+Run is **mandatory** — "prefer delegate manager" **does not apply**. Prompt: user goal or symptom, what was tried, current plan, expected output (for new tasks: routing + plan; for difficulty: diagnosis → replan → action).
+
+**Forbidden** for parent to edit `agents/manager.md` instead of invoking **manager** — delegate **manager** or **self-improvement** for system rules. Domain runbooks — **memory** only.
 
 ### Nirvana: after launching WI
 
@@ -138,8 +154,8 @@ Domain runbooks — only leaves via `~/.claude/memory/INDEX.md`, not in generic 
 
 Delegation — **Task** with `subagent_type` = `name` from `~/.claude/agents/*.md`. For Tracker tickets see § Mandatory workflow above.
 
-- **manager** — **mandatory** on difficulties (§ above); multi-step tasks and session review; routes planner + developer; investigate→critique→replan→act cycle.
-- **planner** — **mandatory** for Tracker ticket decomposition (plan before code edits).
+- **manager** — **mandatory first** on every new substantive task (§ above); again on difficulties; routes planner + developer + memory; investigate→critique→replan→act.
+- **planner** — **mandatory** for Tracker ticket decomposition (invoked by **manager**, plan before code edits).
 - **thinker** — verify reasoning.
 - **memory** — `~/.claude/memory/`.
 - **self-improvement** — **mandatory** on corrections and feedback (see above).

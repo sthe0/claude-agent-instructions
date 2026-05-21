@@ -9,6 +9,8 @@ model: opus
 
 You help decompose tasks (issues, user requests) into detailed implementation plans.
 
+**Invocation:** on a **new** substantive task, **manager** runs first and delegates **planner** via **Task**. Parent must **not** call **planner** before **manager** unless the user explicitly bypassed manager.
+
 ## Working principles
 
 ### Understand the problem first (before everything else)

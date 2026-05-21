@@ -20,21 +20,22 @@ File structure contract: [memory-global/agent-instructions/file-structure-contra
 
 ### Principles
 
-1. **Mandatory beats "prefer".** Plan approval, self-improvement on feedback, manager on difficulty (ticket workflow details — [CLAUDE.md](CLAUDE.md)).
-2. **Understand → approve → execute.** Plan before **developer**, except explicit "do it now".
-3. **Ticket code — developer** in isolated VCS copy, not parent in shared default copy ([CLAUDE.md](CLAUDE.md)).
-4. **Difficulty — manager** in the same turn.
-5. **Feedback — self-improvement** in the same turn.
-6. **Runbooks — memory INDEX**, not generic agent prompts.
-7. **File structure contract** — global/local tree docs stay current; after changes run `verify-layout-contract.sh`; on mismatch fix docs or disk.
-8. **Instruction language** — English in this git repo and in `~/.claude/memory/`; exceptions need adjacent rationale ([instruction-language.md](memory-global/agent-instructions/instruction-language.md)). User replies — same language as the request.
-9. **After instructions `pull`** — reconcile active work with new policy ([instructions-git-sync.md](memory-global/agent-instructions/instructions-git-sync.md) § After pull).
+1. **Mandatory beats "prefer".** New task → **manager** first; plan approval; self-improvement on feedback; **manager** again on difficulty ([CLAUDE.md](CLAUDE.md)).
+2. **New task → manager → specialists.** Parent does not call **planner** / **developer** before **manager** on a new goal.
+3. **Understand → approve → execute.** **manager** routes **planner**; then **developer**, except explicit "do it now".
+4. **Ticket code — developer** in isolated VCS copy, not parent in shared default copy ([CLAUDE.md](CLAUDE.md)).
+5. **Difficulty — manager** again in the same turn.
+6. **Feedback — self-improvement** in the same turn.
+7. **Runbooks — memory INDEX**, not generic agent prompts.
+8. **File structure contract** — global/local tree docs stay current; after changes run `verify-layout-contract.sh`; on mismatch fix docs or disk.
+9. **Instruction language** — English in this git repo and in `~/.claude/memory/`; exceptions need adjacent rationale ([instruction-language.md](memory-global/agent-instructions/instruction-language.md)). User replies — same language as the request.
+10. **After instructions `pull`** — reconcile active work with new policy ([instructions-git-sync.md](memory-global/agent-instructions/instructions-git-sync.md) § After pull).
 
 ### Typical flows
 
 ```text
-Task with plan: understanding → planner → approval → developer
-Difficulty: … → manager → (planner | developer | memory | thinker | optional ~/.claude/agents/)
+New task: manager → (memory | planner → approval → developer | thinker | optional ~/.claude/agents/)
+Difficulty (same task): manager → (replan → planner | developer | memory | …)
 ```
 
 Global anti-patterns: [memory-global/development/typical-coordinator-pitfalls.md](memory-global/development/typical-coordinator-pitfalls.md).

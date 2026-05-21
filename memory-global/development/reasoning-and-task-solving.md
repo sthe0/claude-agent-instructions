@@ -10,7 +10,8 @@
 
 ## Understand before acting
 
-- Restate the goal and **done criteria** in one short paragraph before tools.
+- On a **new substantive task**, parent delegates **manager** first — not **planner** / **developer** / long Shell loops before routing.
+- Restate the goal and **done criteria** in one short paragraph before tools (**manager** or **planner**).
 - Numbers, deadlines, or limits in a ticket **without a source** → find source (code, doc, user) **before** editing.
 - Prefer the **smallest** change that satisfies criteria (minimal retest, one entry point, extend existing code).
 

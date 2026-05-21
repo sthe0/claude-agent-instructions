@@ -66,7 +66,7 @@ When rebasing onto main/trunk, read VCS status and conflict type, not only inlin
 
 | Agent | When |
 |-------|------|
-| **manager** | Blocker, repeated failure, plan mismatch, multi-ticket coordination, session review |
+| **manager** | **First** on every new substantive task; again on blocker, repeated failure, plan mismatch, session review |
 | **memory** | Record or find domain facts (local or global INDEX) |
 | **self-improvement** | User corrected agent behavior; update instructions repo |
 | **planner** | Decompose issue, risks, architecture discussion |

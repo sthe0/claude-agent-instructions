@@ -12,8 +12,9 @@
 
 | Symptom | Better |
 |---------|--------|
+| Parent starts new task with Shell/planner/developer, no **manager** | **Task → manager** first on new goal |
 | Parent does most edits via Shell/StrReplace | `Task` → **developer** (code), **manager** (stuck) |
-| «Prefer» treated as optional for mandated workflow | Treat CLAUDE.md gates as hard requirements |
+| "Prefer" treated as optional for mandated workflow | Treat CLAUDE.md gates as hard requirements |
 | Full pipeline rerun to debug one stage | Minimal retest; read local memory runbook |
 | Second CLI binary for one-off experiment | Local script/stash; one entry point in repo |
 | User feedback on process → only apology | **self-improvement** same turn |
