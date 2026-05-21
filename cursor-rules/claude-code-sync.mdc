@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Claude Code sync
 
-**Канонический источник:** `~/.claude/CLAUDE.md` (symlink → `~/claude-agent-instructions/CLAUDE.md`). При расхождении с этим файлом — **побеждает CLAUDE.md**. Схема runtime: `~/.claude/memory-global/agent-instructions/runtime-layout.md`.
+**Канонический источник:** `~/.claude/CLAUDE.md` (symlink → `~/claude-agent-instructions/CLAUDE.md`). При расхождении с этим файлом — **побеждает CLAUDE.md**. File structure contract: `~/.claude/memory-global/agent-instructions/file-structure-contract.md` — keep in sync with disk; run `verify-layout-contract.sh` after layout changes.
 
 Always consider ~/.claude/CLAUDE.md as a source of all global instructions and guidelines.
 

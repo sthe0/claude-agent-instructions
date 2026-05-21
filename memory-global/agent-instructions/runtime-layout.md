@@ -1,6 +1,6 @@
 # Runtime layout (canonical paths)
 
-Где искать компоненты после `scripts/setup-symlinks.sh`. **Не** привязывай глобальные промпты к путям в Arcadia junk — источник локальной конфигурации задаётся на машине.
+Где искать компоненты после `scripts/setup-symlinks.sh`. Полное дерево каталогов и обязанность сверки — [file-structure-contract.md](file-structure-contract.md).
 
 ## Git (глобально, одинаково)
 
@@ -31,4 +31,4 @@
 |------|----------|
 | `last_verified` | 2026-05-21 |
 | `staleness_triggers` | смена `setup-symlinks.sh` |
-| `revalidate` | `ls -la ~/.claude/agents ~/.claude/memory ~/.claude/memory-global` |
+| `revalidate` | `~/claude-agent-instructions/scripts/verify-layout-contract.sh` |

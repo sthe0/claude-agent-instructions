@@ -54,9 +54,23 @@ Use Yandex's version control system which is "arc".
 | `cursor-rules/claude-code-sync.mdc` | — | `~/.cursor/rules/claude-code-sync.mdc` |
 | Локальная memory (вне git) | `~/.claude/memory/` | тот же |
 
-Настройка и проверка: `scripts/setup-symlinks.sh`, `scripts/verify-instructions-sync.sh`. Схема путей: `~/.claude/memory-global/agent-instructions/runtime-layout.md`.
+Настройка и проверка: `scripts/setup-symlinks.sh`, `scripts/verify-instructions-sync.sh`, `scripts/verify-layout-contract.sh`. Контракт деревьев (global/local): `~/.claude/memory-global/agent-instructions/file-structure-contract.md`.
 
 **Правки политики** — в репозитории; после `commit` обязателен `push` (см. ниже). Проект `robot/deepagent` — только overlay `.cursor/rules/deepagent-project.mdc`, не копия глобального rule.
+
+## Контракт файловой структуры
+
+Каноническое описание слоёв (git global, arc local, runtime-симлинки): **`~/.claude/memory-global/agent-instructions/file-structure-contract.md`**.
+
+**Поддерживай актуальным:** при любом переносе/добавлении каталогов, скриптов или split global/local — обнови контракт, `runtime-layout.md`, README § симлинки/скрипты в **том же commit** (git и/или arc).
+
+**Регулярно сверяй** факт с описанием:
+
+1. `~/claude-agent-instructions/scripts/verify-layout-contract.sh` (и `verify-instructions-sync.sh`).
+2. При расхождении — исправь **документ или дерево**, не оставляй расхождение.
+3. После рефакторинга инструкций — Definition of Done включает прохождение verify.
+
+Делегирование тяжёлой сверки локального arc-слоя — **memory** или **self-improvement**; родитель не пропускает verify после своих правок в `~/claude-agent-instructions/`.
 
 ## Git-репозиторий инструкций
 

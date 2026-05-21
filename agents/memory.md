@@ -83,6 +83,10 @@ model: opus
 
 По запросу или если INDEX разросся: пройти таблицу INDEX, revalidate старые runbook-leaf, удалить/сжать мёртвое, обновить даты.
 
+### Файловая структура
+
+Контракт global/local: `~/.claude/memory-global/agent-instructions/file-structure-contract.md`. При записи о новых каталогах в memory или после переноса leaf — сверь с контрактом; при расхождении предложи обновить контракт **или** привести дерево (`verify-layout-contract.sh`).
+
 ## Взаимодействие с другими агентами
 
 | Агент | Когда звать |

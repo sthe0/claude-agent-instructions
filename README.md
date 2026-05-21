@@ -2,7 +2,7 @@
 
 Единый git-репозиторий **глобальных** инструкций для **Claude Code** и **Cursor**. Правки в репо видны в обоих IDE через симлинки в `~/.claude/` и `~/.cursor/`.
 
-Схема runtime-путей: [memory-global/agent-instructions/runtime-layout.md](memory-global/agent-instructions/runtime-layout.md).
+Контракт файловой структуры: [memory-global/agent-instructions/file-structure-contract.md](memory-global/agent-instructions/file-structure-contract.md). Runtime-пути: [runtime-layout.md](memory-global/agent-instructions/runtime-layout.md).
 
 ## Кооперация агентов
 
@@ -26,6 +26,7 @@
 4. **Затруднение — manager** в том же ходе.
 5. **Обратная связь — self-improvement** в том же ходе.
 6. **Runbook'и — в memory INDEX**, не в промпты generic-агентов.
+7. **Контракт файловой структуры** — описание global/local деревьев актуально; после изменений — `verify-layout-contract.sh`; расхождение → правка docs или диска.
 
 ### Типовые потоки
 
@@ -64,6 +65,7 @@ git clone git@github.com:sthe0/claude-agent-instructions.git ~/claude-agent-inst
 |--------|------------|
 | [setup-symlinks.sh](scripts/setup-symlinks.sh) | Симлинки Claude + Cursor (+ `~/.claude/scripts-local`) |
 | [verify-instructions-sync.sh](scripts/verify-instructions-sync.sh) | Проверка глобальных симлинков; делегирует local verify |
+| [verify-layout-contract.sh](scripts/verify-layout-contract.sh) | Сверка дерева с file-structure-contract.md |
 | [sync-instructions-repo.sh](scripts/sync-instructions-repo.sh) | `pull` / `push` этого репо |
 | [install-git-hooks.sh](scripts/install-git-hooks.sh) | post-commit → push |
 | [install-sync-cron.sh](scripts/install-sync-cron.sh) | Cron: git pull /10 min |
@@ -104,3 +106,10 @@ Runbook: [memory-global/agent-instructions/instructions-git-sync.md](memory-glob
 ## Поддержка README
 
 При изменении модели — обнови § «Кооперация агентов», [CLAUDE.md](CLAUDE.md) и затронутые `agents/*.md` в **одном commit**.
+
+При изменении **каталогов, скриптов, симлинков** (global или local):
+
+1. Обнови [file-structure-contract.md](memory-global/agent-instructions/file-structure-contract.md) и при необходимости [runtime-layout.md](memory-global/agent-instructions/runtime-layout.md).
+2. Сверь § симлинки/скрипты в этом README с фактом.
+3. Запусти `scripts/verify-layout-contract.sh` и `verify-instructions-sync.sh`.
+4. Локальный arc — `~/.claude/scripts-local/junk-agents-arc-commit.sh` после правок в маунте.

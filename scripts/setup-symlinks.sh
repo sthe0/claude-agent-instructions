@@ -75,7 +75,8 @@ if [[ -d "$DEEPAGENT_RULES" ]]; then
   fi
 fi
 
-chmod +x "$REPO/scripts/verify-instructions-sync.sh"
+chmod +x "$REPO/scripts/verify-instructions-sync.sh" "$REPO/scripts/verify-layout-contract.sh"
+"$REPO/scripts/verify-layout-contract.sh" 2>/dev/null || true
 "$REPO/scripts/verify-instructions-sync.sh" || true
 
 echo "Symlinks:"

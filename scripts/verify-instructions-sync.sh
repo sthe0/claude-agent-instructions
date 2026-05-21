@@ -23,6 +23,11 @@ check_link() {
   fi
 }
 
+if [[ -x "$REPO/scripts/verify-layout-contract.sh" ]]; then
+  echo "=== Layout contract ==="
+  "$REPO/scripts/verify-layout-contract.sh" || FAIL=1
+fi
+
 echo "=== Global symlinks ==="
 check_link "$HOME/.claude/CLAUDE.md" "$REPO/CLAUDE.md"
 check_link "$HOME/.cursor/rules/claude-code-sync.mdc" "$REPO/cursor-rules/claude-code-sync.mdc"

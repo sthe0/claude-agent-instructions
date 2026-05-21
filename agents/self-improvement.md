@@ -52,6 +52,7 @@ model: opus
 | Доменный runbook (процедуры прод/CI, что перезапускать при сбое, CLI/контракты конкретного репо) | **memory leaf** + INDEX (через **memory**); **не** в generic-агенты |
 | Только Cursor (globs, project rules) | `.cursor/rules/*.mdc` + явная пометка «нет аналога в Claude Code» |
 | Версионирование и откат инструкций | `~/claude-agent-instructions/` + commit; при смене ролей/gate — **сначала** § «Кооперация агентов» в корневом `README.md`, затем `CLAUDE.md` / агенты |
+| Файловая структура (global/local, симлинки) | `memory-global/agent-instructions/file-structure-contract.md` + `verify-layout-contract.sh`; расхождение — docs **или** диск, не оба |
 
 ### Доменные runbook vs generic-агенты
 
@@ -80,6 +81,14 @@ model: opus
 **self-improvement** правит процесс и шаблон; **memory** — содержимое leaf, `last_verified`, revalidate по коду.
 
 ## Области улучшения
+
+### Контракт файловой структуры
+
+После любого рефакторинга путей, split global/local, переноса скриптов:
+
+1. Обнови `file-structure-contract.md`, `runtime-layout.md`, README (симлинки/скрипты).
+2. Запусти `verify-layout-contract.sh` + `verify-instructions-sync.sh`.
+3. Локальный слой — обнови leaf в `~/.claude/memory/` / `scripts/README.md` в arc.
 
 ### Текстовые компоненты
 
