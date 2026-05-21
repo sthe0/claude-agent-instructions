@@ -20,9 +20,9 @@
 
 ### Принципы
 
-1. **Обязательность важнее «prefer».** Tracker-тикет, mount, согласование плана, self-improvement, manager при затруднении.
-2. **Понять → согласовать → делать.** План до **developer**, кроме «делай сразу».
-3. **Код тикета — developer** в `~/arcadia_<TICKET>-*`, не родитель в `~/arcadia`.
+1. **Обязательность важнее «prefer».** Согласование плана, self-improvement при обратной связи, manager при затруднении (детали тикетного workflow — [CLAUDE.md](CLAUDE.md)).
+2. **Понять → согласовать → делать.** План до **developer**, кроме явного «делай сразу».
+3. **Код по тикету — developer** в изолированной рабочей копии VCS, не родитель в общей default-копии (см. [CLAUDE.md](CLAUDE.md)).
 4. **Затруднение — manager** в том же ходе.
 5. **Обратная связь — self-improvement** в том же ходе.
 6. **Runbook'и — в memory INDEX**, не в промпты generic-агентов.
@@ -31,7 +31,7 @@
 ### Типовые потоки
 
 ```text
-Tracker-тикет: понимание → planner → согласование → mount → developer
+Задача с планом: понимание → planner → согласование → developer
 Затруднение: … → manager → (planner | developer | memory | thinker | опциональные ~/.claude/agents/)
 ```
 
@@ -45,7 +45,7 @@ git clone git@github.com:sthe0/claude-agent-instructions.git ~/claude-agent-inst
 ~/claude-agent-instructions/scripts/verify-instructions-sync.sh
 ```
 
-Локальные агенты, memory и скрипты — arc-ветка `the0-agents`, runtime: `~/.claude/memory/`, `~/.claude/scripts-local/` (см. local INDEX / `scripts/README` в маунте).
+Опциональная локальная конфигурация (доп. агенты, memory, скрипты): `~/.claude/memory/INDEX.md` после `setup-symlinks.sh`.
 
 ## Симлинки (глобальное из git)
 
@@ -57,20 +57,20 @@ git clone git@github.com:sthe0/claude-agent-instructions.git ~/claude-agent-inst
 | `cursor-rules/claude-code-sync.mdc` | `~/.cursor/rules/` |
 | — | `~/.cursor/agents` → `~/.claude/agents` |
 
-Локальная `~/.claude/memory/` **не** в этом git — источник задаётся на машине.
+Локальные `~/.claude/memory/` и `~/.claude/scripts-local/` **не** в этом git — источник настраивается на машине (`setup-symlinks.sh`).
 
 ## Скрипты (глобальные, git)
 
 | Скрипт | Назначение |
 |--------|------------|
-| [setup-symlinks.sh](scripts/setup-symlinks.sh) | Симлинки Claude + Cursor (+ `~/.claude/scripts-local`) |
+| [setup-symlinks.sh](scripts/setup-symlinks.sh) | Симлинки Claude + Cursor (+ локальные runtime-пути) |
 | [verify-instructions-sync.sh](scripts/verify-instructions-sync.sh) | Проверка глобальных симлинков; делегирует local verify |
 | [verify-layout-contract.sh](scripts/verify-layout-contract.sh) | Сверка дерева с file-structure-contract.md |
 | [sync-instructions-repo.sh](scripts/sync-instructions-repo.sh) | `pull` / `push` этого репо |
 | [install-git-hooks.sh](scripts/install-git-hooks.sh) | post-commit → push |
 | [install-sync-cron.sh](scripts/install-sync-cron.sh) | Cron: git pull /10 min |
 
-Локальные (arc): `~/.claude/scripts-local/` — `sync-junk-agents-arc.sh`, `junk-agents-arc-commit.sh`, …
+Локальные скрипты: `~/.claude/scripts-local/` (см. README в этом каталоге после `setup-symlinks.sh`).
 
 ## Git workflow
 
@@ -93,14 +93,15 @@ Runbook: [memory-global/agent-instructions/instructions-git-sync.md](memory-glob
 | self-improvement | [agents/self-improvement.md](agents/self-improvement.md) |
 | yandex-cloud-expert | [agents/yandex-cloud-expert.md](agents/yandex-cloud-expert.md) |
 
-Дополнительные субагенты (инфра-консультант, ETL и т.д.) — только в `~/.claude/agents/`, если настроены на машине.
+Дополнительные субагенты — только файлы в `~/.claude/agents/`, которых нет в `agents/` этого репо.
 
 ## Что не в этом репозитории
 
 | Что | Где искать |
 |-----|------------|
 | Локальная memory | `~/.claude/memory/INDEX.md` |
-| Доп. агенты | `~/.claude/agents/` (лишние к глобальным) |
+| Доп. агенты | `~/.claude/agents/` |
+| Локальные скрипты | `~/.claude/scripts-local/` |
 | Скиллы | `~/.claude/skills/` |
 
 ## Поддержка README
@@ -112,4 +113,4 @@ Runbook: [memory-global/agent-instructions/instructions-git-sync.md](memory-glob
 1. Обнови [file-structure-contract.md](memory-global/agent-instructions/file-structure-contract.md) и при необходимости [runtime-layout.md](memory-global/agent-instructions/runtime-layout.md).
 2. Сверь § симлинки/скрипты в этом README с фактом.
 3. Запусти `scripts/verify-layout-contract.sh` и `verify-instructions-sync.sh`.
-4. Локальный arc — `~/.claude/scripts-local/junk-agents-arc-commit.sh` после правок в маунте.
+4. Локальный слой — по runbook в `~/.claude/memory/INDEX.md` и `~/.claude/scripts-local/`.
