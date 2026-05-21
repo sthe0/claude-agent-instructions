@@ -39,6 +39,10 @@ require_dir "$REPO/scripts"
 require_file "$REPO/scripts/setup-symlinks.sh"
 require_file "$REPO/scripts/verify-layout-contract.sh"
 require_file "$REPO/scripts/sync-instructions-repo.sh"
+require_file "$REPO/scripts/apply-mcp-local.sh"
+require_file "$REPO/agents-local/README.md"
+require_file "$REPO/skills-local/README.md"
+require_file "$REPO/mcp-local/README.md"
 
 for forbidden in sync-junk-agents-arc.sh junk-agents-arc-commit.sh setup-the0-agents-mount.sh install-junk-agents-sync-cron.sh; do
   require_absent "$REPO/scripts/$forbidden"
@@ -55,9 +59,22 @@ if [[ -L "$HOME/.claude/memory" ]]; then
     ok "~/.claude/memory"
   fi
 else
-  fail "~/.claude/memory not symlink"
+  # On non-Arcadia machines memory/ is a plain directory — acceptable
+  if [[ -d "$HOME/arcadia_the0-agents" ]] || [[ -n "${THE0_AGENTS_MOUNT:-}" ]]; then
+    fail "~/.claude/memory not symlink (Arcadia mount available — run setup-symlinks.sh)"
+  else
+    echo "WARN: ~/.claude/memory not symlink (no Arcadia mount — non-Arcadia machine)"
+  fi
 fi
-if [[ -L "$HOME/.claude/scripts-local" ]]; then ok "~/.claude/scripts-local"; else fail "~/.claude/scripts-local (run setup-symlinks.sh)"; fi
+if [[ -L "$HOME/.claude/scripts-local" ]]; then
+  ok "~/.claude/scripts-local"
+else
+  if [[ -d "$HOME/arcadia_the0-agents" ]] || [[ -n "${THE0_AGENTS_MOUNT:-}" ]]; then
+    fail "~/.claude/scripts-local (Arcadia mount available — run setup-symlinks.sh)"
+  else
+    echo "WARN: ~/.claude/scripts-local missing (no Arcadia mount — non-Arcadia machine)"
+  fi
+fi
 
 if [[ -x "$HOME/.claude/scripts-local/verify-the0-agents-sync.sh" ]]; then
   echo "=== Local layer (delegate) ==="

@@ -8,7 +8,7 @@ See also: [runtime-layout.md](runtime-layout.md) (runtime paths), [../../README.
 
 | Field | Value |
 |------|----------|
-| `last_verified` | 2026-05-21 |
+| `last_verified` | 2026-05-21 (skills-local, mcp-local added) |
 | `staleness_triggers` | new directory in git/arc instructions; change to `setup-symlinks.sh`; moving scripts between global/local |
 | `revalidate` | `~/claude-agent-instructions/scripts/verify-layout-contract.sh`; `verify-instructions-sync.sh` |
 
@@ -27,7 +27,9 @@ Global prompts **must not** reference arc junk paths — only runtime (`~/.claud
 CLAUDE.md
 README.md
 agents/*.md              # global subagents (developer, manager, …)
-agents-local/README.md   # pointer to local arc, no *.md agents here
+agents-local/README.md   # on Arcadia machines: pointer to arc; on non-Arcadia: gitignored *.md here as fallback
+skills-local/README.md   # gitignored *.md here → ~/.claude/skills/ (non-Arcadia machine-local skills)
+mcp-local/README.md      # gitignored *.json here → applied to settings.local.json via apply-mcp-local.sh
 cursor-rules/
   claude-code-sync.mdc
   project-overlay-deepagent.mdc
@@ -44,6 +46,7 @@ scripts/
   install-git-hooks.sh
   install-sync-cron.sh
   install-sync-systemd-timer.sh
+  apply-mcp-local.sh     # merge mcp-local/*.json → ~/.claude/settings.local.json
 githooks/post-commit
 docs/                    # optional
 ```
@@ -56,7 +59,8 @@ docs/                    # optional
 |---------|------------------------|
 | `~/.claude/CLAUDE.md` | `CLAUDE.md` |
 | `~/.claude/agents/<global>.md` | `agents/<name>.md` |
-| `~/.claude/agents/<local>.md` | local `agents-local/` (arc) |
+| `~/.claude/agents/<local>.md` | local `agents-local/` (arc on Arcadia; `agents-local/*.md` gitignored in repo on other machines) |
+| `~/.claude/skills/<local>.md` | `skills-local/*.md` gitignored in repo (non-Arcadia machine-local skills) |
 | `~/.claude/memory-global/` | `memory-global/` |
 | `~/.claude/memory/` | local `memory-local/` (arc) |
 | `~/.claude/scripts-local/` | local `scripts/` (arc) |

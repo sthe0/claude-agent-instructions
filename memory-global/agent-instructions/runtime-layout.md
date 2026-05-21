@@ -9,6 +9,9 @@ Where to find components after `scripts/setup-symlinks.sh`. Full tree and reconc
 | Instructions repository | `~/claude-agent-instructions/` |
 | Policy | `CLAUDE.md` → `~/.claude/CLAUDE.md` |
 | Global agents | `agents/*.md` → `~/.claude/agents/<name>.md` |
+| Local agents (non-Arcadia) | `agents-local/*.md` (gitignored) → `~/.claude/agents/<name>.md` |
+| Local skills | `skills-local/*.md` (gitignored) → `~/.claude/skills/<name>.md` |
+| Local MCP | `mcp-local/*.json` (gitignored) → `settings.local.json` via `apply-mcp-local.sh` |
 | Global memory | `memory-global/` → `~/.claude/memory-global/` |
 | Cursor rule | `cursor-rules/claude-code-sync.mdc` → `~/.cursor/rules/` |
 
