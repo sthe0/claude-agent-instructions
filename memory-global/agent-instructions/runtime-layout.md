@@ -20,8 +20,10 @@
 | Скиллы | `~/.claude/skills/` |
 | Локальная доменная memory | `~/.claude/memory/INDEX.md` |
 | Глобальная memory | `~/.claude/memory-global/INDEX.md` |
+| Глобальные скрипты (git) | `~/claude-agent-instructions/scripts/` |
+| Локальные скрипты (arc) | `~/.claude/scripts-local/` |
 
-Опциональные субагенты и локальная memory настраиваются на машине (отдельный arc-маунт, не основной `~/arcadia`). Симлинки задаёт `setup-symlinks.sh`; pull/commit/push — `sync-junk-agents-arc.sh` / `junk-agents-arc-commit.sh`. Runbook: `~/.claude/memory/INDEX.md` (тема the0-agents mount).
+Локальная конфигурация (memory, доп. агенты, arc sync) — на машине, не в git инструкций. Симлинки: `~/claude-agent-instructions/scripts/setup-symlinks.sh`. Runbook: `~/.claude/memory/INDEX.md`.
 
 ## Метаданные
 

@@ -95,7 +95,7 @@ model: opus
 Ты **не** правишь `~/.claude/plugins/cache/` и upstream-скиллы на симлинках — только `memory/` и по согласованию INDEX/README.
 
 **memory-global/** — git `~/claude-agent-instructions` → `~/.claude/memory-global/`; перед правкой: `pull` → commit → push.  
-**Локальные leaf** — `~/.claude/memory/` (отдельный arc-маунт, не `~/arcadia`). Перед правкой: `~/claude-agent-instructions/scripts/sync-junk-agents-arc.sh pull`; после: `junk-agents-arc-commit.sh`. Глобальный git sync: `~/.claude/memory-global/agent-instructions/instructions-git-sync.md`.
+**Локальные leaf** — `~/.claude/memory/` (arc, не `~/arcadia`). Перед правкой: `~/.claude/scripts-local/sync-junk-agents-arc.sh pull`; после: `~/.claude/scripts-local/junk-agents-arc-commit.sh`. Глобальный git: `~/claude-agent-instructions/scripts/sync-instructions-repo.sh`.
 
 ## Стиль ответа
 

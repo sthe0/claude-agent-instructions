@@ -44,7 +44,7 @@ git clone git@github.com:sthe0/claude-agent-instructions.git ~/claude-agent-inst
 ~/claude-agent-instructions/scripts/verify-instructions-sync.sh
 ```
 
-Локальные агенты и memory — маунт `~/arcadia_the0-agents`, ветка `the0-agents`. Маунт: `scripts/setup-the0-agents-mount.sh`; sync: `scripts/sync-junk-agents-arc.sh`; commit: `scripts/junk-agents-arc-commit.sh`.
+Локальные агенты, memory и скрипты — arc-ветка `the0-agents`, runtime: `~/.claude/memory/`, `~/.claude/scripts-local/` (см. local INDEX / `scripts/README` в маунте).
 
 ## Симлинки (глобальное из git)
 
@@ -58,17 +58,17 @@ git clone git@github.com:sthe0/claude-agent-instructions.git ~/claude-agent-inst
 
 Локальная `~/.claude/memory/` **не** в этом git — источник задаётся на машине.
 
-## Скрипты
+## Скрипты (глобальные, git)
 
 | Скрипт | Назначение |
 |--------|------------|
-| [setup-symlinks.sh](scripts/setup-symlinks.sh) | Симлинки Claude + Cursor |
-| [verify-instructions-sync.sh](scripts/verify-instructions-sync.sh) | Проверка симлинков |
-| [sync-instructions-repo.sh](scripts/sync-instructions-repo.sh) | `pull` / `push` / `sync` (git) |
-| [setup-the0-agents-mount.sh](scripts/setup-the0-agents-mount.sh) | Маунт `~/arcadia_the0-agents` |
-| [sync-junk-agents-arc.sh](scripts/sync-junk-agents-arc.sh) | `arc pull` / `push` локальной конфигурации |
-| [junk-agents-arc-commit.sh](scripts/junk-agents-arc-commit.sh) | add + commit + push `junk/the0/agents` |
-| [install-junk-agents-sync-cron.sh](scripts/install-junk-agents-sync-cron.sh) | Cron: arc pull /10 min |
+| [setup-symlinks.sh](scripts/setup-symlinks.sh) | Симлинки Claude + Cursor (+ `~/.claude/scripts-local`) |
+| [verify-instructions-sync.sh](scripts/verify-instructions-sync.sh) | Проверка глобальных симлинков; делегирует local verify |
+| [sync-instructions-repo.sh](scripts/sync-instructions-repo.sh) | `pull` / `push` этого репо |
+| [install-git-hooks.sh](scripts/install-git-hooks.sh) | post-commit → push |
+| [install-sync-cron.sh](scripts/install-sync-cron.sh) | Cron: git pull /10 min |
+
+Локальные (arc): `~/.claude/scripts-local/` — `sync-junk-agents-arc.sh`, `junk-agents-arc-commit.sh`, …
 
 ## Git workflow
 
