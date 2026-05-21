@@ -52,3 +52,5 @@ Cron-строка (путь к репо подставляется при уст
 | `scripts/install-sync-cron.sh` | добавить cron-строку |
 | `scripts/install-sync-systemd-timer.sh` | user systemd timer (если cron недоступен) |
 | `scripts/install-git-hooks.sh` | post-commit → auto-push |
+| `scripts/setup-symlinks.sh` | симлинки Claude + Cursor |
+| `scripts/verify-instructions-sync.sh` | проверка симлинков и drift |

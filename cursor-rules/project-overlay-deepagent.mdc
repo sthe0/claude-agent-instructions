@@ -1,0 +1,14 @@
+---
+description: deepagent project overlay — дополнение к ~/.cursor/rules/claude-code-sync.mdc и ~/.claude/CLAUDE.md
+alwaysApply: true
+---
+
+# deepagent (project overlay)
+
+Глобальная политика: **`~/.cursor/rules/claude-code-sync.mdc`** и **`~/.claude/CLAUDE.md`** (оба из `~/claude-agent-instructions/`). **Не дублируй** здесь tracker workflow, manager, self-improvement — они только в глобальных файлах.
+
+- **Tool permissions:** `.cursor/cli.json` зеркалит `.claude/settings.local.json` в этом репозитории.
+- **Доменная memory:** `~/.claude/memory/deepagent/` — [INDEX](~/.claude/memory/INDEX.md). Не копировать leaf в Arc `CLAUDE.md`.
+- **Deepagent MCP:** по запросу «спроси deepagent» — `mcp__yandex__deepagent-generate_answer`, не субагент.
+
+При правке инструкций агента: репозиторий `~/claude-agent-instructions/`, не этот overlay.

@@ -42,9 +42,24 @@ Use Yandex's version control system which is "arc".
 
 «Prefer» / «лучше использовать» для тикетных задач **не применяется** — понимание, согласование плана, делегирование и маунт обязательны.
 
+## Claude Code и Cursor (один источник)
+
+Оба инструмента читают **одни и те же файлы** через симлинки из `~/claude-agent-instructions/`:
+
+| Файл в репо | Claude Code | Cursor |
+|-------------|-------------|--------|
+| `CLAUDE.md` | `~/.claude/CLAUDE.md` | тот же путь в проекте (symlink) + правило ниже |
+| `agents/*.md`, `agents-local/*.md` | `~/.claude/agents/` | `~/.cursor/agents` → `.claude/agents` |
+| `cursor-rules/claude-code-sync.mdc` | — | `~/.cursor/rules/claude-code-sync.mdc` |
+| `memory-meta/INDEX.md` | `~/.claude/memory/INDEX.md` | тот же |
+
+Настройка и проверка: `scripts/setup-symlinks.sh`, `scripts/verify-instructions-sync.sh`. Runbook: `memory-meta/claude-code/claude-cursor-instructions.md`.
+
+**Правки политики** — в репозитории; после `commit` обязателен `push` (см. ниже). Проект `robot/deepagent` — только overlay `.cursor/rules/deepagent-project.mdc`, не копия глобального rule.
+
 ## Git-репозиторий инструкций
 
-Правки в `~/claude-agent-instructions/` (симлинки на `~/.claude/`). Детали: `memory-meta/claude-code/instructions-git-sync.md`.
+Правки в `~/claude-agent-instructions/` (симлинки на `~/.claude/` и `~/.cursor/`). Детали: `memory-meta/claude-code/instructions-git-sync.md`.
 
 1. **Перед любой правкой** — `~/claude-agent-instructions/scripts/sync-instructions-repo.sh pull` (подтянуть `origin/main`).
 2. **После правки** — `git add` + `git commit` (без запроса пользователя) + **обязательный** `scripts/sync-instructions-repo.sh push`.
