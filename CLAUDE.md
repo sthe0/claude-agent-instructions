@@ -8,19 +8,19 @@ It is listed in `.arcignore`. If it still entered the index — do not include i
 
 ## Instruction language
 
-**Default:** all text in `~/claude-agent-instructions/` (agents, CLAUDE.md, cursor-rules, memory-global, README policy) is **English**.
+**Default:** all instruction text in `~/claude-agent-instructions/` and `~/.claude/memory/` (local arc tree) is **English**.
 
 **Exception:** non-English is allowed only with an adjacent note **why English cannot be used** (same paragraph or line above/below). Canonical spec: `~/.claude/memory-global/agent-instructions/instruction-language.md`.
 
-User-facing **replies** may use the user's language; that is not an exception to instruction language.
+User-facing **replies** use the **same language as the user's request**; that is not an exception to instruction language.
 
 ---
 
 Try your best to avoid duplicating code. Explore adjacent files, project files, use the Depagent tool, and code search. Don't hesitate break existing functions and classes into pieces to move common code parts into separate common abstractions.
 Do not add obvious or trivial comments. Prefer code expressiveness, readability and clarity over comments.
-Ask deepagent tool about arcadia code projects and yandex-specific (or unknown) infrastructure. If you see an unknown term, first thing to do is to refer to deepagent tool, not code exploring. Ask deepagent tool about best implementations practices when in doubt.
-> **Language exception (query language, not instruction text):** prefer **Russian** for deepagent MCP prompts when possible — the tool's indexed corpus and retrieval are tuned for Russian; English paraphrases often rank worse. User-facing answers may still be English.
-Use ~/.venv virtualenv to run python (except data_science CLI: always via Docker, see library/deepagent/data_science/DOCKER_RUN.md)
+For **robot/deepagent** (local product): domain runbooks and MCP usage → `~/.claude/memory/deepagent/INDEX.md` via `~/.claude/memory/INDEX.md` (query language, Docker CLI, etc.). Do not duplicate deepagent-specific rules in this file.
+For org-wide Arcadia/Yandex infra or unknown terms: optional consultant subagent in `~/.claude/agents/` if present, else intrasearch / wiki per task.
+Use ~/.venv virtualenv to run python.
 Use Yandex's version control system which is "arc".
 
 ## Code search in Arcadia
@@ -87,7 +87,7 @@ Delegate heavy reconcile of local arc layer to **memory** or **self-improvement*
 
 Edits in `~/claude-agent-instructions/` (symlinks to `~/.claude/` and `~/.cursor/`). Details: `~/.claude/memory-global/agent-instructions/instructions-git-sync.md`.
 
-1. **Before any edit** — `~/claude-agent-instructions/scripts/sync-instructions-repo.sh pull` (fetch `origin/main`).
+1. **Before any edit** — `~/claude-agent-instructions/scripts/sync-instructions-repo.sh pull` (fetch `origin/main`), then **reconcile** session work with pulled instructions (see `instructions-git-sync.md` § After pull).
 2. **After edit** — `git add` + `git commit` (without asking the user) + **mandatory** `scripts/sync-instructions-repo.sh push`.
 3. **Background** — cron every 10 minutes runs `pull`; on rebase conflict script prefers incoming, else resolve manually.
 

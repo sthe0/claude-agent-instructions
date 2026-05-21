@@ -141,4 +141,4 @@ Do not bloat CLAUDE.md — move detail to agents and memory.
 
 Structured report: observations → diagnosis → proposals (priority) → next step.
 
-**This agent's prompts and commits** — English per `instruction-language.md`. **User-facing report text** — user's language.
+**This agent's prompts and commits** — English per `instruction-language.md`. **User-facing report** — same language as the user's request. After `pull` of instructions repo — reconcile per `instructions-git-sync.md` § After pull.

@@ -10,13 +10,13 @@
 
 ## Rule
 
-**Default:** all agent instructions — prompts in `agents/`, `CLAUDE.md`, `cursor-rules/`, `memory-global/`, and README policy sections — are written in **English**.
+**Default:** all agent instructions — prompts in `agents/`, `CLAUDE.md`, `cursor-rules/`, `memory-global/`, `~/.claude/memory/` (local arc tree), README policy sections — are written in **English**.
 
 **Exception:** a non-English fragment is allowed only if **immediately next to it** (same paragraph or the line above/below) there is an explicit note **why English cannot be used** (product constraint, quoted user gate phrase, legal term, etc.).
 
 **Not covered by this rule (no exception note required):**
 
-- **User-facing replies** — agents may answer in the user's language; that is output, not stored instruction text.
+- **User-facing replies** — same **language as the user's request**; that is output, not stored instruction text.
 - **Quoted examples** of what the user might say (`"ok"`, `"do it now"`) — keep quotes literal; surrounding prose stays English.
 - **Proper nouns and API identifiers** (Tracker, Arcadia, `arc`, ticket keys) — not "another language".
 
@@ -33,4 +33,5 @@
 
 - Policy summary: [../../CLAUDE.md](../../CLAUDE.md) § Instruction language
 - Cooperation README: [../../README.md](../../README.md) § Agent cooperation → Principles
-- Enforcer: **self-improvement** on feedback; **memory** does not relax this for domain runbooks in **local** `~/.claude/memory/` (local tree may stay Russian until migrated — document in local INDEX if needed)
+- Product-specific exceptions (e.g. deepagent MCP query language) — **local** leaves under `~/.claude/memory/<product>/`, not global `CLAUDE.md`
+- Enforcer: **self-improvement** on feedback; **memory** maintains local leaves in English

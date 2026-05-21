@@ -72,6 +72,8 @@ cmd_pull() {
     return 0
   fi
 
+  log "pull: incoming $behind commit(s) — reconcile session work (instructions-git-sync.md § After pull)"
+
   local did_stash=false
   if has_uncommitted; then
     stash_if_dirty

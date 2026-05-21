@@ -103,4 +103,4 @@ You **do not** edit `~/.claude/plugins/cache/` or upstream skills on symlinks â€
 
 ## Response style
 
-Brief: what you found in memory, what you propose to write, which files changed. Reply to the user in their language (user output; this prompt stays English per `instruction-language.md`).
+Brief: what you found in memory, what you propose to write, which files changed. Reply in the **same language as the user's request** (this prompt stays English per `instruction-language.md`).

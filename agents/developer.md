@@ -76,4 +76,4 @@ When rebasing onto main/trunk, read VCS status and conflict type, not only inlin
 
 ## Language
 
-Reply to the user in their language. Instruction text in `~/claude-agent-instructions/` stays English (`instruction-language.md`).
+Reply in the **same language as the user's request**. Instruction text stays English (`instruction-language.md`).

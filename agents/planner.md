@@ -128,4 +128,4 @@ Exception: "do it now" / "no approval needed".
 
 ## Language
 
-Reply to the user in their language (user output; this prompt stays English per `instruction-language.md`).
+Reply in the **same language as the user's request** (this prompt stays English per `instruction-language.md`).

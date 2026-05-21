@@ -10,6 +10,20 @@ Symlinks: `~/.claude/agents`, `~/.claude/CLAUDE.md`, `~/.cursor/rules/claude-cod
 
 Fetch `origin/main`. On rebase conflict the script prefers **incoming** changes (`--theirs`); if that fails — resolve manually.
 
+## After pull (mandatory reconcile)
+
+When `pull` brought new commits (`behind > 0` before pull, or log shows `pull: done` with updates):
+
+1. **Verify tree** — `scripts/verify-instructions-sync.sh` and `scripts/verify-layout-contract.sh` (no FAIL).
+2. **Read what changed** — `git log -3 --oneline` and, if needed, `git diff HEAD@{1}..HEAD --stat` for agents, `CLAUDE.md`, `cursor-rules/`, `memory-global/`.
+3. **Reconcile active work** — compare open plan, pending edits, and delegation choices with new policy. If pulled rules **contradict** what you already did or planned in this session:
+   - **stop** further production edits until aligned;
+   - adjust plan or revert local tactical changes;
+   - tell the user what conflicted (file/section) and which rule now applies.
+4. **Do not assume** pre-pull mental model still holds for gates (manager, self-improvement, mount, planner approval, instruction language).
+
+Cron background `pull` does not replace this reconcile at the start of a session that will edit code or instructions.
+
 ## After editing
 
 ```bash

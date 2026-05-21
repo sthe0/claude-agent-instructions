@@ -13,8 +13,7 @@ Agent definitions live in `~/.claude/agents/` (also linked as `~/.cursor/agents/
 
 Try your best to avoid duplicating code. Explore adjacent files, project files, use the Depagent tool, and code search. Don't hesitate break existing functions and classes into pieces to move common code parts into separate common abstractions.
 Do not add obvious or trivial comments. Prefer code expressiveness, readability and clarity over comments.
-Ask deepagent tool about arcadia code projects and yandex-specific (or unknown) infrastructure. If you see an unknown term, first thing to do is to refer to deepagent tool, not code exploring. Ask deepagent tool about best implementations practices when in doubt.
-> **Language exception (query language):** prefer **Russian** for deepagent MCP prompts when possible — retrieval corpus is Russian-heavy; see `instruction-language.md`.
+For **robot/deepagent** product rules and deepagent MCP → `~/.claude/memory/INDEX.md` (local memory). For other Arcadia/Yandex infra → consultant subagent in `~/.claude/agents/` if present, else intrasearch.
 Use `~/.venv` virtualenv to run python.
 Use Yandex's version control system which is "arc".
 
@@ -25,7 +24,7 @@ Delegate to subagents (see `~/.claude/agents/`):
 - **memory** — `~/.claude/memory/`, start at INDEX.md.
 - **self-improvement** — agents, CLAUDE.md, `~/claude-agent-instructions/`.
 
-**Instructions git repo** (`~/claude-agent-instructions/`): before edits run `scripts/sync-instructions-repo.sh pull`; after every commit run `push` (also via `githooks/post-commit`). Cron pulls every 10 min (`scripts/install-sync-cron.sh`). See `~/.claude/memory-global/agent-instructions/instructions-git-sync.md`.
+**Instructions git repo** (`~/claude-agent-instructions/`): before edits run `scripts/sync-instructions-repo.sh pull`, then **reconcile** with pulled policy (§ After pull in `instructions-git-sync.md`); after every commit run `push` (also via `githooks/post-commit`). Cron pulls every 10 min (`scripts/install-sync-cron.sh`). See `~/.claude/memory-global/agent-instructions/instructions-git-sync.md`.
 
 **Mandatory:** on any substantive user correction or feedback about agent behavior (not bare "ok"/"thanks"), the parent agent must run **self-improvement** via Task in the same turn, with user quote + what was done + proposed instruction fixes. See `~/.claude/CLAUDE.md` § Mandatory self-improvement. Do not finish the turn with only a tactical fix — launch self-improvement before replying. A second correction on the same issue (including "why wasn't self-improvement run?") triggers self-improvement again.
 
@@ -63,4 +62,4 @@ Delegate via the Task tool using `subagent_type` equal to the agent `name` from 
 - **developer** — **required** for Arcadia code changes on ticket tasks; parent must not edit production code itself.
 - **Optional subagents** in `~/.claude/agents/` — only when `description` matches the task (ETL, infra consultant, etc.).
 
-When the user says "ask deepagent" or "consult deepagent", use the deepagent MCP tool (`depagent-generate_answer` / `mcp__yandex__deepagent-generate_answer`), not a subagent.
+For robot/deepagent MCP and query language → `~/.claude/memory/deepagent/mcp-and-tooling.md` (project overlay in `deepagent-project.mdc` when workspace is robot/deepagent).

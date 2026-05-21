@@ -5,10 +5,10 @@ alwaysApply: true
 
 # deepagent (project overlay)
 
-Global policy: **`~/.cursor/rules/claude-code-sync.mdc`** and **`~/.claude/CLAUDE.md`** (both from `~/claude-agent-instructions/`). **Do not duplicate** tracker workflow, manager, self-improvement here — they live only in global files.
+Global policy: **`~/.cursor/rules/claude-code-sync.mdc`** and **`~/.claude/CLAUDE.md`** (from `~/claude-agent-instructions/`). **Do not duplicate** tracker workflow, manager, self-improvement here.
 
 - **Tool permissions:** `.cursor/cli.json` mirrors `.claude/settings.local.json` in this repository.
-- **Domain memory (this product):** leaves via [INDEX](~/.claude/memory/INDEX.md). Do not copy leaves into Arc `CLAUDE.md`.
-- **Deepagent MCP:** on request "ask deepagent" — `mcp__yandex__deepagent-generate_answer`, not a subagent.
+- **Domain memory (this product):** [INDEX](~/.claude/memory/INDEX.md) → `deepagent/*` leaves. Do not copy leaves into Arc `CLAUDE.md`.
+- **Deepagent MCP:** on "ask deepagent" / "consult deepagent" — `mcp__yandex__deepagent-generate_answer` (not a subagent). Query language and Docker CLI: [mcp-and-tooling.md](~/.claude/memory/deepagent/mcp-and-tooling.md).
 
-When editing agent instructions: repository `~/claude-agent-instructions/`, not this overlay.
+When editing **global** agent instructions: `~/claude-agent-instructions/`, not this overlay.
