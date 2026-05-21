@@ -52,11 +52,11 @@ Before "Stages" in the plan, mark status (✓ / blocker):
 | 7 | Relaunch vs single-stage retest (if pipeline) — memory | per plan |
 | 8 | After long jobs — monitor until terminal | parent/manager |
 
-Organizational details (mount, VCS, branch names) — [CLAUDE.md](~/.claude/CLAUDE.md) and `~/.claude/memory/INDEX.md`. Global anti-patterns — `~/.claude/memory-global/development/`.
+Organizational details (mount, VCS, branch names) — `~/.claude/memory/claude-code/tracker-ticket-workflow.md`, **arc-parallel-mounts.md`. Global anti-patterns — `~/.claude/memory-global/development/`.
 
 ### Infrastructure before code (issue + repo edits)
 
-If the task has an external issue key (`[A-Z]+-\d+` per org policy) and production code edits — **first stage after approval**: isolated copy and branch per [CLAUDE.md](~/.claude/CLAUDE.md); runbook — `~/.claude/memory/INDEX.md`. Code — **developer**, not parent.
+If the task has an external issue key (`[A-Z]+-\d+` per org policy) and production code edits — **first stage after approval**: isolated copy and branch per `tracker-ticket-workflow.md`; mount procedure — `arc-parallel-mounts.md`. Code — **developer**, not parent.
 
 ### Gathering context
 

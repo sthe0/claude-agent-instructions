@@ -32,6 +32,12 @@ link "$REPO/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
 link "$REPO/cursor-rules/claude-code-sync.mdc" "$HOME/.cursor/rules/claude-code-sync.mdc"
 link "$REPO/memory-global" "$HOME/.claude/memory-global"
 
+if [[ -f "$JUNK_AGENTS_ROOT/cursor-rules/org-yandex.mdc" ]]; then
+  link "$JUNK_AGENTS_ROOT/cursor-rules/org-yandex.mdc" "$HOME/.cursor/rules/org-yandex.mdc"
+else
+  echo "WARN: missing $JUNK_AGENTS_ROOT/cursor-rules/org-yandex.mdc — pull the0-agents branch" >&2
+fi
+
 if [[ ! -d "$JUNK_AGENTS_ROOT/memory-local" ]]; then
   echo "WARN: missing $JUNK_AGENTS_ROOT/memory-local — run ~/.claude/scripts-local/setup-the0-agents-mount.sh after arc commit" >&2
 else

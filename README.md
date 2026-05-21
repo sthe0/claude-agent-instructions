@@ -59,8 +59,9 @@ Optional local configuration (extra agents, memory, scripts): `~/.claude/memory/
 | `memory-global/` | `~/.claude/memory-global/` |
 | `cursor-rules/claude-code-sync.mdc` | `~/.cursor/rules/` |
 | — | `~/.cursor/agents` → `~/.claude/agents` |
+| — | `~/.cursor/rules/org-yandex.mdc` ← local arc (`cursor-rules/org-yandex.mdc`) |
 
-Local `~/.claude/memory/` and `~/.claude/scripts-local/` are **not** in this git — source is configured on the machine (`setup-symlinks.sh`).
+Local `~/.claude/memory/`, `org-yandex.mdc`, and `~/.claude/scripts-local/` are **not** in this git — configured on the machine (`setup-symlinks.sh`).
 
 ## Scripts (global, git)
 

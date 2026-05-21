@@ -19,7 +19,7 @@ See also: [runtime-layout.md](runtime-layout.md) (runtime paths), [../../README.
 | **Global** | git `~/claude-agent-instructions` | this file, § Global tree |
 | **Local** | arc (branch on machine) | `~/.claude/memory/INDEX.md` → leaf `the0-agents-mount`; `~/.claude/scripts-local/README.md` |
 
-Global prompts **must not** reference arc junk paths — only runtime (`~/.claude/...`).
+Global prompts (`agents/`, slim `CLAUDE.md`) **must not** embed arc/Arcadia/Tracker procedures — only pointers to `~/.claude/memory/`. Org **gates** live in local `cursor-rules/org-yandex.mdc` (arc tree).
 
 ## Global tree (`~/claude-agent-instructions/`)
 
@@ -33,6 +33,7 @@ mcp-local/README.md      # gitignored *.json here → applied to settings.local.
 cursor-rules/
   claude-code-sync.mdc
   project-overlay-deepagent.mdc
+  # org-yandex.mdc — local arc only (junk/the0/agents/cursor-rules/)
 memory-global/
   INDEX.md, README.md
   agent-instructions/    # runtime-layout, file-structure-contract, instruction-language, instructions-git-sync
@@ -65,6 +66,7 @@ docs/                    # optional
 | `~/.claude/memory/` | local `memory-local/` (arc) |
 | `~/.claude/scripts-local/` | local `scripts/` (arc) |
 | `~/.cursor/rules/claude-code-sync.mdc` | `cursor-rules/claude-code-sync.mdc` |
+| `~/.cursor/rules/org-yandex.mdc` | local `junk/the0/agents/cursor-rules/org-yandex.mdc` |
 | `~/.cursor/agents` | `~/.claude/agents` |
 
 ## Local tree (arc, not in instructions git)
@@ -75,6 +77,7 @@ On-disk layout on the machine (typical):
 junk/the0/agents/
   README.md
   agents-local/*.md
+  cursor-rules/org-yandex.mdc
   memory-local/
     INDEX.md, README.md
     deepagent/, claude-code/, yandex/

@@ -32,7 +32,7 @@ In the dialog or in a subagent's work, look for signals:
 
 | Signal | Likely agent |
 |--------|----------------|
-| Task with external issue key + production code changes | **you** coordinate: **planner** (plan) → **developer** (code). Parent must not edit code itself. Gate order — [CLAUDE.md](~/.claude/CLAUDE.md), checklist — **planner** |
+| Task with external issue key + production code changes | **you** coordinate: **planner** (plan) → **developer** (code). Checklist — `~/.claude/memory/claude-code/tracker-ticket-workflow.md`; gates — `~/.cursor/rules/org-yandex.mdc` |
 | Decomposition, stages, timelines, risks | **planner** |
 | Doubtful reasoning chain | **thinker** |
 | Code, VCS, build, PR | **developer** |
@@ -44,7 +44,7 @@ If the need exists but is not stated — **state it explicitly** and propose del
 
 ### Task with issue key (coordination)
 
-You are **already** the entry agent (parent invoked **manager** first). Organizational order — **CLAUDE.md** ticket checklist; do not duplicate mount/VCS detail here.
+You are **already** the entry agent (parent invoked **manager** first). Organizational order — `~/.claude/memory/claude-code/tracker-ticket-workflow.md` and **arc-parallel-mounts.md**; do not duplicate mount/VCS detail here.
 
 0. **Pull instructions** — `~/claude-agent-instructions/scripts/sync-instructions-repo.sh pull` (+ reconcile § After pull if updates landed).
 1. **Understanding** — unclear numbers/deadlines: find source or ask the user **before** choosing where to edit.

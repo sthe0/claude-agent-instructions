@@ -5,62 +5,48 @@ alwaysApply: true
 
 # Claude Code sync
 
-**Canonical source:** `~/.claude/CLAUDE.md` (symlink → `~/claude-agent-instructions/CLAUDE.md`). On conflict with this file — **CLAUDE.md wins**. File structure contract: `~/.claude/memory-global/agent-instructions/file-structure-contract.md` — keep in sync with disk; run `verify-layout-contract.sh` after layout changes.
+**Canonical source:** `~/.claude/CLAUDE.md` (symlink → `~/claude-agent-instructions/CLAUDE.md`). On conflict — **CLAUDE.md wins**. Org gates (arc, Tracker, mounts): `~/.cursor/rules/org-yandex.mdc` + `~/.claude/memory/INDEX.md`.
 
-Always consider ~/.claude/CLAUDE.md as a source of all global instructions and guidelines.
+Contract: `~/.claude/memory-global/agent-instructions/file-structure-contract.md` — run `verify-layout-contract.sh` after layout changes.
 
-Agent definitions live in `~/.claude/agents/` (also linked as `~/.cursor/agents/`). Skills live in `~/.claude/skills/`. When editing agents or global policy, change Claude Code sources; Cursor reuses them.
+Always consider `~/.claude/CLAUDE.md` and `~/.claude/agents/`. Skills: `~/.claude/skills/`. Edit global policy in `~/claude-agent-instructions/`; org overlay in local arc (`junk/the0/agents/cursor-rules/org-yandex.mdc`).
 
-Try your best to avoid duplicating code. Explore adjacent files, project files, use the Depagent tool, and code search. Don't hesitate break existing functions and classes into pieces to move common code parts into separate common abstractions.
-Do not add obvious or trivial comments. Prefer code expressiveness, readability and clarity over comments.
-For **robot/deepagent** product rules and deepagent MCP → `~/.claude/memory/INDEX.md` (local memory). For other Arcadia/Yandex infra → consultant subagent in `~/.claude/agents/` if present, else intrasearch.
-Use `~/.venv` virtualenv to run python.
-Use Yandex's version control system which is "arc".
+## Habits
+
+Avoid duplicate code; explore before changing; clear code over trivial comments. Python: `~/.venv` unless local memory says otherwise.
+
+**robot/deepagent** → `~/.claude/memory/deepagent/`. **Org workflow** → `~/.claude/memory/INDEX.md` and `org-yandex.mdc`.
 
 ## Memory and self-improvement
 
-Delegate to subagents (see `~/.claude/agents/`):
+- **memory** — `~/.claude/memory/INDEX.md`
+- **self-improvement** — `~/claude-agent-instructions/`
 
-- **memory** — `~/.claude/memory/`, start at INDEX.md.
-- **self-improvement** — agents, CLAUDE.md, `~/claude-agent-instructions/`.
+**Instructions git:** `pull` before edits, **reconcile** after pull (`instructions-git-sync.md` § After pull), `push` after every commit. Cron pull every 10 min.
 
-**Instructions git repo** (`~/claude-agent-instructions/`): before edits run `scripts/sync-instructions-repo.sh pull`, then **reconcile** with pulled policy (§ After pull in `instructions-git-sync.md`); after every commit run `push` (also via `githooks/post-commit`). Cron pulls every 10 min (`scripts/install-sync-cron.sh`). See `~/.claude/memory-global/agent-instructions/instructions-git-sync.md`.
+**Mandatory self-improvement:** substantive user feedback about agent behavior → **Task → self-improvement** same turn (not bare "ok"/"thanks"). See `~/.claude/CLAUDE.md`.
 
-**Mandatory:** on any substantive user correction or feedback about agent behavior (not bare "ok"/"thanks"), the parent agent must run **self-improvement** via Task in the same turn, with user quote + what was done + proposed instruction fixes. See `~/.claude/CLAUDE.md` § Mandatory self-improvement. Do not finish the turn with only a tactical fix — launch self-improvement before replying. A second correction on the same issue (including "why wasn't self-improvement run?") triggers self-improvement again.
+**Mandatory manager:** every **new substantive task** → **Task → manager** first (before planner, developer, mount, broad search). Again on difficulty. See `~/.claude/CLAUDE.md` § Mandatory manager.
 
-**Mandatory manager (parent):** on every **new substantive user task**, **Task → manager** first in the same turn — **before** planner, developer, mount, or broad code search. **manager** routes planner → approval → developer. Again on difficulty (repeated failure, blocker, plan mismatch, 2+ process corrections, retry after failed WI/arc/CLI, session review). Parent must **not** self-coordinate or call planner/developer first on a new goal. See `~/.claude/CLAUDE.md` § Mandatory manager.
+## Org work (local memory + org-yandex.mdc)
 
-Before relaunching bundled CLI (Nirvana meta, train→…→eval): check **recent agent transcripts** and which WI stages already SUCCESS. **Republish workflow ≠ new full run.** Do not call full meta/train CLI when only republish or convert-only is needed — see `~/.claude/memory/INDEX.md`. On difficulty, scan transcripts first (`~/.claude/agents/manager.md` § Overcoming difficulties → Investigation).
+Do **not** duplicate procedures here. Before Tracker ticket + code, arc mount, or Nirvana WI:
 
-**WI monitoring:** after **any** Nirvana launch, proactively poll **all** tracked WI until terminal; mandatory "monitoring complete" table — do not wait for user to ask. No long `Await`/sleep without interim status — runbook in `~/.claude/memory/INDEX.md`. Domain runbooks — local memory only, not agent prompts.
+- `~/.cursor/rules/org-yandex.mdc` (gates)
+- `~/.claude/memory/claude-code/tracker-ticket-workflow.md`
+- `~/.claude/memory/claude-code/arc-parallel-mounts.md`
+- `~/.claude/memory/claude-code/nirvana-wi-watch.md`
 
-## Tracker ticket workflow (mandatory)
+## Agents (Task)
 
-When the task references a Tracker key (`[A-Z]+-\d+`) and involves Arcadia code changes:
+| Agent | When |
+|-------|------|
+| **manager** | **First** on new tasks; again on difficulties |
+| **planner** | Plan (routed by manager for tickets) |
+| **developer** | Production code in isolated worktree |
+| **memory** | Runbooks and facts |
+| **self-improvement** | User feedback on agent behavior |
+| **thinker** | Non-trivial reasoning |
+| Optional | `~/.claude/agents/` when `description` matches |
 
-0. **Manager first** — **Task → manager** before planner/developer on a new ticket task. See `~/.claude/CLAUDE.md` § Mandatory manager.
-1. **Understand** — manager/planner: unexplained numbers/durations — find source or **ask the user**. Read-only exploration before mount is OK.
-2. **Mount** — parallel arc mount `~/arcadia_<TICKET>-<slug>` before edit/checkout/commit. Never edit ticket work in main `~/arcadia` unless allowed. See `~/.claude/CLAUDE.md` § Parallel work in arc and `~/.claude/memory/INDEX.md`.
-3. **Plan** — **manager** delegates **planner**. Parent must **not** implement Arcadia code itself on ticket tasks.
-4. **Plan approval** — show the plan to the user; wait for explicit OK before **developer** or any `Edit`/`Write`/`arc commit` (unless "do it now" / "no approval").
-5. **Code** — **manager** delegates **developer** in the ticket mount only.
-
-Soft "prefer" does **not** apply — manager first, plan approval, delegation, and mount are required.
-
-## Agents (Task / subagents)
-
-On **new substantive task** — **manager** first (`Task`, `subagent_type: manager`), then routed specialists. On **difficulty** — **manager** again; scan **recent agent transcripts** (`~/.cursor/projects/<project>/agent-transcripts/`). See `~/.claude/agents/manager.md`.
-
-**On Tracker ticket + code changes** — **manager** first, then **planner** (via manager), then **developer**; never skip manager because the task looks "simple".
-
-Delegate via the Task tool using `subagent_type` equal to the agent `name` from `~/.claude/agents/*.md`:
-
-- **manager** — **mandatory first** on new tasks; again on difficulties; routes planner/developer/memory; investigate → critique → replan → act.
-- **planner** — **required** for Tracker decomposition (delegated by **manager**, plan before code).
-- **thinker** — verify reasoning on non-trivial or ambiguous work.
-- **memory** — save or retrieve domain facts in `~/.claude/memory/`.
-- **self-improvement** — user corrections, systemic improvements, instruction repo.
-- **developer** — **required** for Arcadia code changes on ticket tasks; parent must not edit production code itself.
-- **Optional subagents** in `~/.claude/agents/` — only when `description` matches the task (ETL, infra consultant, etc.).
-
-For robot/deepagent MCP and query language → `~/.claude/memory/deepagent/mcp-and-tooling.md` (project overlay in `deepagent-project.mdc` when workspace is robot/deepagent).
+On difficulty — scan `~/.cursor/projects/<project>/agent-transcripts/`. See `agents/manager.md` § Overcoming difficulties.
