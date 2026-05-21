@@ -65,6 +65,15 @@ model: opus
 - Название ветки: `<ключ-тикета>-<короткое-описание-1-5-слов-на-английском>`, например `DEEPAGENT-367-reproducible-dataset`.
 - Название ревью (PR): `[<ключ тикета>] Краткое описание сути изменений`, например `[DEEPAGENT-220] Build docker image for commit in nirvana`.
 
+### Rebase на trunk: конфликт «trunk удалил файл»
+При `arc rebase trunk` смотри `arc status` и тип конфликта, не только маркеры внутри файла.
+
+- **`deleted by us` / modify-delete** при rebase на trunk: trunk уже удалил файл, ветка его меняла. По умолчанию **принять удаление trunk** — `arc rm <file>`, затем `arc rebase --continue`.
+- Пустая сторона trunk (`<<<<<<< HEAD` без содержимого до `=======`) — это не «оставить ветку», а сигнал удаления на trunk. Не оставляй сотни строк только потому, что в ветке файл ещё есть.
+- Восстановить файл в ветке — только если пользователь **явно** просит; иначе удаление trunk — ожидаемый исход rebase.
+- Сомневаешься: `arc log trunk -n 5 -- <file>` — был ли файл удалён в trunk.
+- Скилл `arc`, детали `-X ours/theirs`: `references/resolve-conflicts.md`.
+
 ### Система сборки
 - Для Python: `PY3_LIBRARY`, `PY3_PROGRAM`, `PY3TEST`, `PEERDIR` для зависимостей
 - Для C++: `LIBRARY`, `PROGRAM`, `SRCS`, `PEERDIR`, `ADDINCL`
