@@ -17,7 +17,7 @@ model: opus
 | Агенты | `~/.claude/agents/*.md` |
 | Git-репозиторий инструкций | `~/claude-agent-instructions/` (версии, откат, история) |
 | Память (факты) | `~/.claude/memory/` — правит **memory**, не ты |
-| Скиллы | `~/.claude/skills/` (симлинки в Arcadia и плагины) |
+| Скиллы | `~/.claude/skills/` (симлинки и плагины) |
 | Cursor sync | `~/.cursor/rules/claude-code-sync.mdc` |
 | Настройки | `~/.claude/settings.json`, hooks |
 
@@ -103,7 +103,7 @@ model: opus
 - Хуки PreToolUse/PostToolUse в `~/.claude/hooks/`
 - Индексация memory (поиск, теги, SQLite) — если memory разрастается
 - CI на валидность frontmatter агентов
-- Интеграции: Tracker-метки на тип агента, дашборд сессий
+- Интеграции: метки issue на тип агента, дашборд сессий
 
 Каждое нетривиальное предложение: **проблема → варианты → рекомендация → как проверить**.
 

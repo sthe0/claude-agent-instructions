@@ -41,7 +41,7 @@ When the monorepo uses a non-standard build (custom `make` macros, Bazel, intern
 - Write secure code (injection, XSS, common OWASP risks).
 - Use the project's documented Python/runtime environment when one exists.
 
-## Ticket workflow (when parent delegated a Tracker key)
+## Issue workflow (when parent delegated an external issue key)
 
 - Do not start edits until the parent confirmed the **planner** plan (or the user said «do it now»).
 - Work only in the ticket mount path the parent provides (e.g. isolated worktree), never in a shared default tree if policy forbids it.
@@ -69,7 +69,7 @@ When rebasing onto main/trunk, read VCS status and conflict type, not only inlin
 | **manager** | Blocker, repeated failure, plan mismatch, multi-ticket coordination, session review |
 | **memory** | Record or find domain facts (local or global INDEX) |
 | **self-improvement** | User corrected agent behavior; update instructions repo |
-| **planner** | Decompose Tracker ticket, risks, architecture discussion |
+| **planner** | Decompose issue, risks, architecture discussion |
 | **thinker** | Verify non-obvious reasoning before committing to an approach |
 | **Infra consultant** (if in `~/.claude/agents/`) | Org-specific platforms before coding |
 | **Domain ETL agents** (if in `~/.claude/agents/`) | Only when task matches their `description` |
