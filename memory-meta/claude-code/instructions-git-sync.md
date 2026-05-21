@@ -32,7 +32,7 @@ Cron-строка (путь к репо подставляется при уст
 
 Лог: `~/.local/log/claude-agent-instructions-sync.log`
 
-Если `crontab` запрещён (корп. VM): агент **обязан** делать `pull` перед каждой правкой и при старте сессии, если планирует трогать репо; при длительной сессии — `pull` не реже чем раз в ~10 минут вручную.
+Если `crontab` запрещён (корп. VM): `scripts/install-sync-systemd-timer.sh` — user systemd timer (pull каждые 10 мин). Дополнительно агент делает `pull` перед каждой правкой и при старте сессии, если планирует трогать репо.
 
 ## Git hooks
 
@@ -50,4 +50,5 @@ Cron-строка (путь к репо подставляется при уст
 | `scripts/sync-instructions-repo.sh push` | push если есть локальные коммиты |
 | `scripts/sync-instructions-repo.sh sync` | pull, затем push |
 | `scripts/install-sync-cron.sh` | добавить cron-строку |
+| `scripts/install-sync-systemd-timer.sh` | user systemd timer (если cron недоступен) |
 | `scripts/install-git-hooks.sh` | post-commit → auto-push |
