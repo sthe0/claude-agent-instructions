@@ -19,6 +19,9 @@ link "$REPO/cursor-rules/claude-code-sync.mdc" "$HOME/.cursor/rules/claude-code-
 link "$REPO/memory-meta/INDEX.md" "$HOME/.claude/memory/INDEX.md"
 link "$REPO/memory-meta/README.md" "$HOME/.claude/memory/README.md"
 
+"$REPO/scripts/install-git-hooks.sh"
+"$REPO/scripts/install-sync-cron.sh" 2>/dev/null || true
+
 echo "Symlinks:"
 ls -la "$HOME/.claude/agents" "$HOME/.claude/CLAUDE.md" "$HOME/.cursor/rules/claude-code-sync.mdc" \
   "$HOME/.claude/memory/INDEX.md" "$HOME/.claude/memory/README.md"

@@ -102,14 +102,15 @@ model: opus
 2. Классифицируй: ошибка рассуждения / нехватка инструмента / неверная делегация / устаревшая memory / шум в CLAUDE.md.
 3. Предложи **конкретный diff** (файл, раздел, формулировка), не общие слова.
 4. Если нужен факт для будущего — поручи **memory**; если нужен план внедрения — **manager** или **planner**.
-5. **Сразу закоммить** правки в `~/claude-agent-instructions` (live = симлинки; отдельный выкат не нужен). **Без** ожидания «можно закоммитить?» — в том числе если правку внёс пользователь вручную: увидел `git status` с изменениями в репо → commit в этом же ходе.
+5. **Сразу закоммить и запушить** правки в `~/claude-agent-instructions` (live = симлинки; отдельный выкат не нужен). **Без** ожидания «можно закоммитить?» — в том числе если правку внёс пользователь вручную: увидел `git status` с изменениями в репо → `pull` (если ещё не делал) → commit → `push` в этом же ходе.
 
 ## Работа с git-репозиторием инструкций
 
 - `~/.claude/agents`, `~/.claude/CLAUDE.md`, sync-rule — **симлинки** на `~/claude-agent-instructions/`
-- Перед правкой: `git status`, `git log -3` в репозитории
-- После любой правки файлов репо: `git add -A` (или точечно) + `git commit` — **обязательно, автоматически**
+- **Перед правкой:** `scripts/sync-instructions-repo.sh pull` (+ `git status`, `git log -3`)
+- **После правки:** `git add` + `git commit` + `scripts/sync-instructions-repo.sh push` — **обязательно, автоматически**
 - Одна логическая правка — один commit; на новой машине — `scripts/setup-symlinks.sh`
+- Фоновый pull: cron `*/10` через `scripts/install-sync-cron.sh`; runbook: `memory-meta/claude-code/instructions-git-sync.md`
 - Предлагай откат: `git revert` / `git checkout <rev> -- path`
 
 ## Взаимодействие

@@ -26,12 +26,16 @@ git clone <remote> ~/claude-agent-instructions   # или уже есть лок
 ## Workflow
 
 ```bash
+~/claude-agent-instructions/scripts/sync-instructions-repo.sh pull   # перед правкой
 cd ~/claude-agent-instructions
 $EDITOR agents/memory.md    # или правка через ~/.claude/agents — то же самое
 git add -A && git diff --staged && git commit -m "..."
+~/claude-agent-instructions/scripts/sync-instructions-repo.sh push   # после каждого commit
 ```
 
-**Агент коммитит автоматически** после любой правки в этом репо (своей или пользователя) — не ждёт «можно закоммитить?». Одна логическая правка — один commit.
+**Агент:** pull → правка → commit → push (без запроса). Одна логическая правка — один commit.
+
+**Фон:** `scripts/install-sync-cron.sh` — pull каждые 10 минут; `scripts/install-git-hooks.sh` — push после commit. См. [memory-meta/claude-code/instructions-git-sync.md](memory-meta/claude-code/instructions-git-sync.md).
 
 Копирование **не нужно**: `~/.claude/agents/foo.md` — это файл в репозитории.
 

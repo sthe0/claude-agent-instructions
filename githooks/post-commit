@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Auto-push after every commit in this repo (see memory-meta/claude-code/instructions-git-sync.md)
+set -euo pipefail
+REPO="$(git rev-parse --show-toplevel)"
+exec "$REPO/scripts/sync-instructions-repo.sh" push

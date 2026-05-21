@@ -22,7 +22,7 @@ Delegate to subagents (see `~/.claude/agents/`):
 - **memory** — `~/.claude/memory/`, start at INDEX.md.
 - **self-improvement** — agents, CLAUDE.md, `~/claude-agent-instructions/`.
 
-**Instructions git repo** (`~/claude-agent-instructions/`): before edits run `scripts/sync-instructions-repo.sh pull`; after every commit run `push`. Cron pulls every 10 min (`scripts/install-sync-cron.sh`). See `memory-meta/claude-code/instructions-git-sync.md`.
+**Instructions git repo** (`~/claude-agent-instructions/`): before edits run `scripts/sync-instructions-repo.sh pull`; after every commit run `push` (also via `githooks/post-commit`). Cron pulls every 10 min (`scripts/install-sync-cron.sh`). See `memory-meta/claude-code/instructions-git-sync.md`.
 
 **Mandatory:** on any substantive user correction or feedback about agent behavior (not bare «ok»/«thanks»), the parent agent must run **self-improvement** via Task in the same turn, with user quote + what was done + proposed instruction fixes. See `~/.claude/CLAUDE.md` § «Обязательный self-improvement». Do not finish the turn with only a tactical fix — launch self-improvement before replying. A second correction on the same issue (including «why wasn't self-improvement run?») triggers self-improvement again.
 

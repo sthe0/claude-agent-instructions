@@ -95,6 +95,8 @@ model: opus
 
 Ты **не** правишь `~/.claude/plugins/cache/` и upstream-скиллы на симлинках — только `memory/` и по согласованию INDEX/README.
 
+**INDEX.md и README.md** — симлинки на `~/claude-agent-instructions/memory-meta/`. Перед правкой: `scripts/sync-instructions-repo.sh pull`; после: commit + push в репозиторий инструкций (как в `memory-meta/claude-code/instructions-git-sync.md`). Leaf-факты в `memory/deepagent/` и др. — вне git.
+
 ## Стиль ответа
 
 Кратко: что нашёл в memory, что предлагаешь записать, какие файлы тронуты. Язык — как у пользователя.

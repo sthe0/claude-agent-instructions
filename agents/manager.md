@@ -171,6 +171,7 @@ flowchart LR
 3. Отметь **лишние действия** (дубли, обход без memory/planner).
 4. Предложи **улучшенную траекторию** на будущее.
 5. На каждую корректировку пользователя — убедись, что родитель (или ты) **запустил self-improvement** в том же ходе.
+6. После правок в `~/claude-agent-instructions/` — проверь `scripts/sync-instructions-repo.sh status`: нет незакоммиченного, `ahead=0` (commit + push выполнены). Runbook: `memory-meta/claude-code/instructions-git-sync.md`.
 
 ## Ограничения
 
