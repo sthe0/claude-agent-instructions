@@ -9,7 +9,8 @@
 | Prod training dataset: пайплайн, top50, instruct, повторения, 367/415 | [deepagent/datasets-prod-pipeline.md](deepagent/datasets-prod-pipeline.md) |
 | Термин **dsv3** и суффиксы в путях YT | [deepagent/dsv3-judge-naming.md](deepagent/dsv3-judge-naming.md) |
 | Eliza/Zeliboba: где смотреть LLM (бесплатные коммунальные vs платные внешние) | [deepagent/eliza-and-zeliboba-models.md](deepagent/eliza-and-zeliboba-models.md) |
-| test_quality: полный vs минимальный ретест (eval_baskets / compute_metrics) | [deepagent/test-quality-retest.md](deepagent/test-quality-retest.md) |
+| test_quality: полный eval, ретест compute_metrics (без launcher в Arc) | [deepagent/test-quality-retest.md](deepagent/test-quality-retest.md) |
+| DEEPAGENT-416: OOM compute_metrics, ошибки агента, эфемерный ретест | [deepagent/compute-metrics-oom-de416.md](deepagent/compute-metrics-oom-de416.md) |
 | Nirvana TTL (deepagent): см. [claude-code/nirvana-vh3-ttl-layers.md](claude-code/nirvana-vh3-ttl-layers.md); точка входа `_build_eval_graph` | [deepagent/nirvana-ttl-retention.md](deepagent/nirvana-ttl-retention.md) |
 | train-eval-meta: republish vs convert-only vs полный meta (не перезапускать train) | [deepagent/train-eval-meta-relaunch.md](deepagent/train-eval-meta-relaunch.md) |
 

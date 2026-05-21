@@ -24,7 +24,7 @@ Use Yandex's version control system which is "arc".
 
 - Каждая задача с Tracker-тикетом (`[A-Z]+-\d+`) — в отдельном параллельном маунте: `~/arcadia_<TICKET>-<slug>`, ветка `<TICKET>-<slug>` (без префикса `users/<login>/` — арк добавит сам). Команда маунта и отличия от upstream-скилла — в `~/.claude/memory/claude-code/arc-parallel-mounts.md` (скилл `using-arc-multiple-mounts` не патчить, он на симлинке).
 - **`arc mount` только из `cd ~`** (не из cwd под `~/arcadia*`). Mount в фоне, ждать `[mounted]` в логе или в `arc mount --list`; не `pkill` по таймауту.
-- Параллельный `arc mount`: всегда `--object-store …/objects`, `--override-object-store`, **`--allow-other`** (как основной `~/arcadia`; нужно для Docker и чужого uid).
+- Параллельный `arc mount`: всегда `--object-store …/objects`, `--override-object-store`, **`--allow-other`** (как основной `~/arcadia`; **обязательно** для `docker run -v ~/arcadia_*` — без флага root в контейнере не видит FUSE). Runbook: `~/.claude/memory/claude-code/arc-parallel-mounts.md`.
 - **Никогда не делай `arc checkout` в основном маунте `~/arcadia` без явного разрешения** — там работает пользователь.
 - Ad-hoc вопросы / мелкие правки **без** ключа тикета — в текущем контексте, маунт не нужен. Наличие `[A-Z]+-\d+` в задаче, ветке или workspace **отменяет** это исключение.
 - Маунт после задачи оставлять до явной команды на cleanup.
@@ -69,6 +69,14 @@ Use Yandex's version control system which is "arc".
 **Не обязателен** только для нейтрального подтверждения без новой информации («ок», «да, делай», «спасибо») и для чистого вопроса **без** оценки или правки твоих действий.
 
 В prompt для self-improvement передай: цитату пользователя, что ты сделал, что уже изменил, ожидаемый output (диагноз + предложения правок в `~/claude-agent-instructions/`).
+
+**Не заканчивай ход** тактическим фиксом или извинением — сначала **Task** → **self-improvement**. Повторная корректировка по той же теме (в т.ч. «почему не было self-improvement») — снова запуск в **том же** ходе.
+
+### Nirvana: после запуска WI
+
+Запустил граф (CLI, Nirvana API, docker) — **сразу** сообщи WI id/URL и **опрашивай** до терминала у **всех** отслеживаемых инстансов (не жди явного «следи»). Runbook: `~/.claude/memory/claude-code/nirvana-wi-watch.md`. Итог — таблица «мониторинг завершён» в том же ходе.
+
+Доменные runbook'и (ретест `compute_metrics`, VH3, data_science) — только `~/.claude/memory/deepagent/`, не в промпты агентов.
 
 ## Agents
 

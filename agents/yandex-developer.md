@@ -47,7 +47,8 @@ model: opus
 1. Прочитай существующий код. Не предлагай изменения вслепую.
 2. Ищи существующие решения — через Grep, Glob, mcp__intrasearch__semantic_code_search. Расширяй существующий код, а не дублируй.
 3. Если встретил незнакомый термин или яндекс-специфичную инфраструктуру — сначала ищи информацию через mcp__intrasearch__search / mcp__intrasearch__semantic_code_search / WebSearch (запросы на русском дают лучшие результаты), а не гадай.
-4. **CLI entry points:** перед добавлением `console_scripts` / нового бинаря проверь `setup.py`, `ya.make` и существующий `fire.Fire(...)`. Если корневая команда уже есть — добавляй **Fire-подкоманду** (`my-tool run_foo`), а не второй entry point (`my-foo`). Shell-обёртки вызывают подкоманду, не дублируют бинарь. Runbook'и по перезапуску пайплайнов — в **memory**, не в этот промпт.
+4. **CLI entry points:** перед добавлением `console_scripts` / нового бинаря проверь `setup.py`, `ya.make` и существующий `fire.Fire(...)`. Если корневая команда уже есть — добавляй **Fire-подкоманду** (`my-tool run_foo`), а не второй entry point (`my-foo`). Shell-обёртки вызывают подкоманду, не дублируют бинарь. One-off ретесты — локальный скрипт/stash, **не** коммитить дублирующий `console_scripts`. Runbook'и — **memory**, не в этот промпт.
+5. **VH3 pass-through данных:** для передачи готового JSON/plan между блоками — `vh3.echo(..., vh3.JSON)` (inline). **Не** создавай отдельный `@vh3.decorator.operation` с `job_layer` только чтобы «вернуть» JSON — лимиты concurrent ops, VALIDATE_COMMAND, лишний job. Сверяйся с существующими графами в `test_quality.py`.
 5. Для повторяющихся доменов — **`~/.claude/memory/INDEX.md`** (только нужные файлы) или субагент **memory**. После важного открытия предложи занести факт через memory.
 
 ### Во время разработки
@@ -70,10 +71,11 @@ model: opus
 ### Rebase на trunk: конфликт «trunk удалил файл»
 При `arc rebase trunk` смотри `arc status` и тип конфликта, не только маркеры внутри файла.
 
-- **`deleted by us` / modify-delete** при rebase на trunk: trunk уже удалил файл, ветка его меняла. По умолчанию **принять удаление trunk** — `arc rm <file>`, затем `arc rebase --continue`.
-- Пустая сторона trunk (`<<<<<<< HEAD` без содержимого до `=======`) — это не «оставить ветку», а сигнал удаления на trunk. Не оставляй сотни строк только потому, что в ветке файл ещё есть.
-- Восстановить файл в ветке — только если пользователь **явно** просит; иначе удаление trunk — ожидаемый исход rebase.
-- Сомневаешься: `arc log trunk -n 5 -- <file>` — был ли файл удалён в trunk.
+- **`deleted by us` / modify-delete** при rebase на trunk: trunk уже удалил файл, ветка его меняла. По умолчанию **принять удаление trunk** — `arc rm <file>`, затем `arc rebase --continue`. **Никогда** не выбирай «ours» целиком, если trunk-side пустой.
+- Пустая сторона trunk (`<<<<<<< HEAD` без содержимого до `=======`) — сигнал удаления на trunk, не «оставить ветку».
+- Восстановить файл — только если пользователь **явно** просит; иначе удаление trunk — ожидаемый исход.
+- Перед `arc rebase --continue`: `arc diff trunk --name-only` — нет ли файлов, которые trunk уже убрал.
+- Сомневаешься: `arc show trunk:<path>` или `arc log trunk -n 5 -- <file>`.
 - Скилл `arc`, детали `-X ours/theirs`: `references/resolve-conflicts.md`.
 
 ### Система сборки

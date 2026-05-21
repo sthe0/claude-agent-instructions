@@ -87,7 +87,7 @@ flowchart LR
 
 **Многостадийные пайплайны (Nirvana meta, bundled CLI).** Перед relaunch классифицируй цель: (1) только republish/обновление workflow — без нового WI run; (2) ретест одной стадии — entry point этой стадии; (3) новый end-to-end прогон — полный CLI. **Сначала** transcripts + статус уже успешных WI — не перезапускай дорогие стадии (train и т.п.) по умолчанию. Доменные runbook'и — memory INDEX (напр. `deepagent/train-eval-meta-relaunch.md`), не дублировать здесь.
 
-**Мониторинг WI.** Запрос «следи за графом» = подзадача с критерием: все WI терминальны + handoff пользователю. Bounded poll (все WI каждую итерацию), без «зависания» в длинном ожидании без статуса. Runbook: `claude-code/nirvana-wi-watch.md`.
+**Мониторинг WI.** После **любого** запуска Nirvana — сразу опрос до терминала (не ждать «следи»). Все WI в списке каждую итерацию; итог — таблица «мониторинг завершён». Runbook: `claude-code/nirvana-wi-watch.md`. Доменные процедуры (test_quality, compute_metrics) — memory `deepagent/`, не здесь.
 
 ### 6. Проверка
 

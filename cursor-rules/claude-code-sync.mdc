@@ -30,7 +30,7 @@ Delegate to subagents (see `~/.claude/agents/`):
 
 Before relaunching bundled CLI (Nirvana meta, train→…→eval): check **recent agent transcripts** and which WI stages already SUCCESS. **Republish workflow ≠ new full run.** Do not call full meta/train CLI when only republish or convert-only is needed — see `~/.claude/memory/deepagent/train-eval-meta-relaunch.md`. On difficulty, scan transcripts first (`~/.claude/agents/manager.md` § Исследование).
 
-**WI monitoring:** bounded poll loop over **all** tracked instances; exit on terminal state for each; mandatory final summary to user. No long `Await`/sleep without interim status and plan — see `~/.claude/memory/claude-code/nirvana-wi-watch.md`.
+**WI monitoring:** after **any** Nirvana launch, proactively poll **all** tracked WI until terminal; mandatory «мониторинг завершён» table — do not wait for user to ask. No long `Await`/sleep without interim status — see `~/.claude/memory/claude-code/nirvana-wi-watch.md`. Domain runbooks (test_quality, compute_metrics) — `~/.claude/memory/deepagent/` only, not agent prompts.
 
 ## Tracker ticket workflow (mandatory)
 
