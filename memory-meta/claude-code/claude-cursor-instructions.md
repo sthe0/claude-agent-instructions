@@ -13,7 +13,7 @@
 ~/claude-agent-instructions/     ← git (единственный источник правды)
 ├── CLAUDE.md
 ├── agents/*.md
-├── agents-local/*.md            ← gitignored (logos-*)
+├── agents-local/*.md            ← gitignored (опционально, см. agents-local/README.md)
 ├── cursor-rules/
 │   ├── claude-code-sync.mdc     ← глобально для Cursor
 │   └── project-overlay-deepagent.mdc  ← шаблон overlay для robot/deepagent

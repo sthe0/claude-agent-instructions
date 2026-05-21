@@ -51,7 +51,7 @@ model: opus
 | Доменный факт, ссылка, таблица | **memory** (через агента memory) |
 | Доменный runbook (процедуры прод/CI, что перезапускать при сбое, CLI/контракты конкретного репо) | **memory leaf** + INDEX (через **memory**); **не** в generic-агенты |
 | Только Cursor (globs, project rules) | `.cursor/rules/*.mdc` + явная пометка «нет аналога в Claude Code» |
-| Версионирование и откат инструкций | `~/claude-agent-instructions/` + commit |
+| Версионирование и откат инструкций | `~/claude-agent-instructions/` + commit; обновить `README.md` при смене структуры репо |
 
 ### Доменные runbook vs generic-агенты
 
@@ -90,7 +90,7 @@ model: opus
 ### За рамками текста (предлагай явно)
 
 - **Git** для инструкций (уже: `~/claude-agent-instructions`)
-- Скрипты: `install-to-home.sh`, проверка дрейфа live vs repo
+- Скрипты: `verify-instructions-sync.sh`, `setup-symlinks.sh`; при изменении списка — обновить корневой `README.md` в том же commit
 - Хуки PreToolUse/PostToolUse в `~/.claude/hooks/`
 - Индексация memory (поиск, теги, SQLite) — если memory разрастается
 - CI на валидность frontmatter агентов

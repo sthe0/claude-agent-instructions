@@ -1,62 +1,87 @@
 # Claude / Cursor agent instructions
 
-Git-репозиторий инструкций. **Правки здесь сразу видны** в Claude Code и Cursor через симлинки (`~/.claude/`, `~/.cursor/`). См. [memory-meta/claude-code/claude-cursor-instructions.md](memory-meta/claude-code/claude-cursor-instructions.md).
+Единый git-репозиторий глобальных инструкций для **Claude Code** и **Cursor**. Правки в репо сразу видны в обоих IDE через симлинки в `~/.claude/` и `~/.cursor/`.
 
-## Симлинки (основной режим)
+Подробная схема: [memory-meta/claude-code/claude-cursor-instructions.md](memory-meta/claude-code/claude-cursor-instructions.md).
 
-| Репозиторий | Симлинк |
-|-------------|---------|
-| `agents/*.md` + `agents-local/*.md` | `~/.claude/agents/<name>.md` (по файлу) |
-| `CLAUDE.md` | `~/.claude/CLAUDE.md` |
-| `cursor-rules/claude-code-sync.mdc` | `~/.cursor/rules/claude-code-sync.mdc` |
-| `~/.cursor/agents` | → `~/.claude/agents` (каталог) |
-| `memory-meta/INDEX.md` | `~/.claude/memory/INDEX.md` |
-| `memory-meta/README.md` | `~/.claude/memory/README.md` |
-
-Проверка симлинков: `scripts/verify-instructions-sync.sh`.
-
-Первичная настройка на новой машине:
+## Быстрый старт
 
 ```bash
 git clone git@github.com:sthe0/claude-agent-instructions.git ~/claude-agent-instructions
 ~/claude-agent-instructions/scripts/setup-symlinks.sh
+~/claude-agent-instructions/scripts/verify-instructions-sync.sh
 ```
 
-Повторный запуск `setup-symlinks.sh` безопасен (`ln -sfn`).
+Повторный `setup-symlinks.sh` безопасен (`ln -sfn`).
 
-## Workflow
+## Симлинки
+
+| Файл / каталог в репо | Куда линкуется |
+|----------------------|----------------|
+| `CLAUDE.md` | `~/.claude/CLAUDE.md` |
+| `agents/*.md` | `~/.claude/agents/<name>.md` |
+| `agents-local/*.md` (если есть) | `~/.claude/agents/<name>.md` |
+| `cursor-rules/claude-code-sync.mdc` | `~/.cursor/rules/claude-code-sync.mdc` |
+| `memory-meta/INDEX.md`, `README.md` | `~/.claude/memory/` |
+| — | `~/.cursor/agents` → `~/.claude/agents` |
+
+Копирование в home **не используется** — только симлинки.
+
+Проект `robot/deepagent`: overlay [cursor-rules/project-overlay-deepagent.mdc](cursor-rules/project-overlay-deepagent.mdc) → `.cursor/rules/deepagent-project.mdc` (настраивает `setup-symlinks.sh`).
+
+## Скрипты
+
+| Скрипт | Назначение |
+|--------|------------|
+| [setup-symlinks.sh](scripts/setup-symlinks.sh) | Симлинки Claude + Cursor; overlay deepagent |
+| [verify-instructions-sync.sh](scripts/verify-instructions-sync.sh) | Проверка симлинков и drift |
+| [sync-instructions-repo.sh](scripts/sync-instructions-repo.sh) | `pull` / `push` / `sync` / `status` |
+| [install-git-hooks.sh](scripts/install-git-hooks.sh) | `post-commit` → auto-push |
+| [install-sync-cron.sh](scripts/install-sync-cron.sh) | Cron: pull каждые 10 мин |
+| [install-sync-systemd-timer.sh](scripts/install-sync-systemd-timer.sh) | То же через user systemd, если cron недоступен |
+
+## Git workflow (агент и человек)
 
 ```bash
 ~/claude-agent-instructions/scripts/sync-instructions-repo.sh pull   # перед правкой
-cd ~/claude-agent-instructions
-$EDITOR agents/memory.md    # или правка через ~/.claude/agents — то же самое
-git add -A && git diff --staged && git commit -m "..."
-~/claude-agent-instructions/scripts/sync-instructions-repo.sh push   # после каждого commit
+# правки в ~/claude-agent-instructions/
+git add -A && git diff --staged && git commit -m "…"
+# push: post-commit hook или явно:
+~/claude-agent-instructions/scripts/sync-instructions-repo.sh push
 ```
 
-**Агент:** pull → правка → commit → push (без запроса). Одна логическая правка — один commit.
+Runbook: [memory-meta/claude-code/instructions-git-sync.md](memory-meta/claude-code/instructions-git-sync.md).
 
-**Фон:** `scripts/install-sync-cron.sh` — pull каждые 10 минут; `scripts/install-git-hooks.sh` — push после commit. См. [memory-meta/claude-code/instructions-git-sync.md](memory-meta/claude-code/instructions-git-sync.md).
+## Агенты в репозитории (`agents/`)
 
-Копирование **не нужно**: `~/.claude/agents/foo.md` — симлинк на файл в `agents/` или `agents-local/`.
+| name | Роль |
+|------|------|
+| **manager** | Координация, затруднения, разбор сессий |
+| **planner** | Декомпозиция Tracker-тикетов |
+| **yandex-developer** | Код в Arcadia |
+| **yandex-cloud-expert** | Yandex Cloud |
+| **thinker** | Проверка рассуждений |
+| **memory** | `~/.claude/memory/` |
+| **self-improvement** | Улучшение инструкций и процесса |
 
-## Что не в git
+Делегирование: `Task` с `subagent_type` = `name` из frontmatter. Глобальная политика — [CLAUDE.md](CLAUDE.md).
 
-- `agents-local/*.md` (кроме `agents-local/README.md`) — машино-специфичные агенты; на этой машине сюда входят **logos-***
-- `~/.claude/memory/deepagent/` и другие leaf-факты
-- `~/.claude/skills/` — симлинки в Arcadia; актуальный список: `ls -la ~/.claude/skills` (см. [docs/skills-symlinks.md](docs/skills-symlinks.md))
-- `settings.json`, sessions, plugins cache
+## Локальные агенты (`agents-local/`)
 
-## Агенты
+Каталог **в `.gitignore`** (кроме [agents-local/README.md](agents-local/README.md)). Для промптов, которые не должны быть в общем git (другая машина, другой набор агентов).
 
-| name | Файл | Роль |
-|------|------|------|
-| manager | `agents/manager.md` | Координация задач и субагентов |
-| memory | `agents/memory.md` | `~/.claude/memory/` |
-| self-improvement | `agents/self-improvement.md` | Улучшение системы, этот репозиторий |
-| planner, thinker, yandex-developer, yandex-cloud-expert | `agents/*.md` | Специализации (git) |
-| logos-* | `agents-local/logos-*.md` | Logos ETL (локально) |
+На отдельных машинах здесь могут лежать дополнительные `*.md` (например Logos ETL) — см. README в каталоге. После добавления файлов: `setup-symlinks.sh`.
 
-## Устаревшие скрипты
+## Что не в этом репозитории
 
-`install-to-home.sh` и `collect-from-home.sh` — для режима **копирования**; при симлинках не используются.
+| Что | Где |
+|-----|-----|
+| Доменная memory (deepagent, runbook'и) | `~/.claude/memory/` — leaf вне git |
+| Скиллы | `~/.claude/skills/` — симлинки в Arcadia ([docs/skills-symlinks.md](docs/skills-symlinks.md)) |
+| Сессии, plugins cache, `settings.json` | `~/.claude/` локально |
+
+## Поддержка README в актуальном состоянии
+
+При изменении структуры репозитория (новый скрипт, агент, симлинк, overlay) **обнови этот README в том же commit**, что и сами файлы. Проверка: оглавление скриптов совпадает с `ls scripts/`; таблица агентов — с `ls agents/*.md`; нет ссылок на удалённые пути.
+
+Агенты после правок инструкций: `pull` → правка → `commit` → `push` (см. [CLAUDE.md](CLAUDE.md)).
