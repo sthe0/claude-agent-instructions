@@ -57,7 +57,7 @@ Delegate via the Task tool using `subagent_type` equal to the agent `name` from 
 - **thinker** — verify reasoning on non-trivial or ambiguous work.
 - **memory** — save or retrieve domain facts in `~/.claude/memory/`.
 - **self-improvement** — user corrections, systemic improvements, instruction repo.
-- **logos-*** agents ONLY when the task is directly related to the Logos ETL system.
+- **logos-*** agents ONLY for Logos ETL; definitions live in `~/claude-agent-instructions/agents-local/` (local, not in git).
 - **yandex-developer** — **required** for Arcadia code changes on ticket tasks; parent must not edit production code itself.
 
 When the user says "ask deepagent" or "consult deepagent", use the deepagent MCP tool (`depagent-generate_answer` / `mcp__yandex__deepagent-generate_answer`), not a subagent.

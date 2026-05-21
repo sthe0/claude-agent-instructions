@@ -4,4 +4,5 @@
 .env
 *.local.json
 secrets/
-agents-local/
+agents-local/*
+!agents-local/README.md

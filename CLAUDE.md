@@ -82,14 +82,10 @@ Use Yandex's version control system which is "arc".
 
 Делегирование — через **Task** с `subagent_type` = `name` из `~/.claude/agents/*.md`. Для Tracker-тикета см. § «Обязательный workflow» выше.
 
-Агенты бывают двух видов:
-- **Репозиторные** (`~/claude-agent-instructions/agents/*.md`) — версионированы в git, доступны на всех машинах.
-- **Локальные** (`~/claude-agent-instructions/agents-local/*.md`) — gitignored, только на текущей машине. Используй для агентов, специфичных для конкретной среды. `setup-symlinks.sh` линкует их в `~/.claude/agents/` наравне с репозиторными.
-
 - **manager** — сложные мультишаговые задачи; маршрутизация planner + yandex-developer; следит за self-improvement при обратной связи.
 - **planner** — **обязателен** для декомпозиции Tracker-тикетов (план до правок кода).
 - **thinker** — проверка рассуждений.
 - **memory** — `~/.claude/memory/`.
 - **self-improvement** — **обязателен** при корректировках и обратной связи (см. выше).
 - **yandex-developer** — **обязателен** для правок кода в Arcadia по тикету; родитель не пишет код сам.
-- **logos-*** — только Logos ETL.
+- **logos-*** — только Logos ETL; **локальные** (`agents-local/logos-*.md`, не в git).
