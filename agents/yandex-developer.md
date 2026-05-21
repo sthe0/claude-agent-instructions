@@ -61,7 +61,9 @@ model: opus
 - Используй систему контроля версий `arc` (не git). Добавляй созданные файлы в arc.
 
 ### Работа с тикетами и ветками
+- **Не начинай правки**, пока родитель не согласовал с пользователем план от **planner** (или явное «делай сразу»). Если в тикете есть числа/сроки без источника — эскалируй родителю/planner, не угадывай поле в коде.
 - **Параллельный маунт обязателен:** работай только в `~/arcadia_<TICKET>-<slug>`, не в основном `~/arcadia`. Перед `arc checkout` и первой правкой — маунт создан (`arc mount --list`). Runbook: `~/.claude/memory/claude-code/arc-parallel-mounts.md`, политика в `~/.claude/CLAUDE.md` § «Обязательный workflow».
+- Задачи про Nirvana TTL / retention: перед правкой прочитай `~/.claude/memory/deepagent/nirvana-ttl-retention.md` — graph `results_ttl_days` и operation `ttl` (минуты) разные слои.
 - Название ветки: `<ключ-тикета>-<короткое-описание-1-5-слов-на-английском>`, например `DEEPAGENT-367-reproducible-dataset`.
 - Название ревью (PR): `[<ключ тикета>] Краткое описание сути изменений`, например `[DEEPAGENT-220] Build docker image for commit in nirvana`.
 

@@ -22,6 +22,8 @@ Delegate to subagents (see `~/.claude/agents/`):
 - **memory** — `~/.claude/memory/`, start at INDEX.md.
 - **self-improvement** — agents, CLAUDE.md, `~/claude-agent-instructions/`.
 
+**Instructions git repo** (`~/claude-agent-instructions/`): before edits run `scripts/sync-instructions-repo.sh pull`; after every commit run `push`. Cron pulls every 10 min (`scripts/install-sync-cron.sh`). See `memory-meta/claude-code/instructions-git-sync.md`.
+
 **Mandatory:** on any substantive user correction or feedback about agent behavior (not bare «ok»/«thanks»), the parent agent must run **self-improvement** via Task in the same turn, with user quote + what was done + proposed instruction fixes. See `~/.claude/CLAUDE.md` § «Обязательный self-improvement». Do not finish the turn with only a tactical fix — launch self-improvement before replying. A second correction on the same issue (including «why wasn't self-improvement run?») triggers self-improvement again.
 
 - **manager** — coordinate agents; ensure self-improvement runs on user feedback.
@@ -34,11 +36,13 @@ Before relaunching bundled CLI (Nirvana meta, train→…→eval): check **recen
 
 When the task references a Tracker key (`[A-Z]+-\d+`) and involves Arcadia code changes:
 
+0. **Understand first** — unexplained numbers/durations in the ticket (e.g. «14 days», TTL): find the source (wiki, code, deepagent MCP) or **ask the user** before choosing what to edit. Read-only exploration before mount is OK.
 1. **Mount first** — parallel arc mount `~/arcadia_<TICKET>-<slug>` before any edit/checkout/commit. Never edit ticket work in main `~/arcadia` unless the user explicitly allows it. See `~/.claude/CLAUDE.md` § «Параллельная работа в arc» and `~/.claude/memory/claude-code/arc-parallel-mounts.md`.
-2. **Delegate via Task** — **planner** (decomposition/plan), **manager** (multi-step coordination), **yandex-developer** (all production code edits). Parent agent must **not** implement Arcadia code itself on ticket tasks.
-3. Read-only exploration before mount is OK; **Edit/Write** under `~/arcadia` for ticket work is not.
+2. **Delegate via Task** — **planner** (decomposition/plan), **manager** (multi-step coordination). Parent must **not** implement Arcadia code itself on ticket tasks.
+3. **Plan approval** — show the plan to the user; wait for explicit OK before delegating **yandex-developer** or any `Edit`/`Write`/`arc commit` (unless user said «do it now» / «no approval needed»).
+4. **Code** — **yandex-developer** (all production code edits) in the ticket mount only.
 
-Soft «prefer» does **not** apply — delegation and mount are required.
+Soft «prefer» does **not** apply — understanding, plan approval, delegation, and mount are required.
 
 ## Agents (Task / subagents)
 

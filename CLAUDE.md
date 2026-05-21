@@ -33,21 +33,27 @@ Use Yandex's version control system which is "arc".
 
 Родительский агент (Cursor / Claude Code) при задаче с ключом тикета — **до любых** `Edit`/`Write` в Arcadia, `arc checkout`, `arc commit`:
 
+0. **Понимание** — прочитай тикет и комментарии. Числа, сроки, аббревиатуры («14 дней», TTL, quota, лимиты) без явного источника в тикете — **найди происхождение** (wiki, код, deepagent MCP, связанные PR) или **спроси пользователя**. Не привязывай число к случайному полю в коде и не начинай правки, пока не можешь объяснить, *откуда* взялось число и *какой* артефакт/поведение оно описывает. Read-only разведка до маунта допустима.
 1. **Маунт** — отдельный параллельный маунт `~/arcadia_<TICKET>-<slug>` и ветка `<TICKET>-<slug>`. Runbook: `~/.claude/memory/claude-code/arc-parallel-mounts.md`. **Запрещено** править код тикета в основном `~/arcadia`, пока пользователь явно не разрешил.
-2. **План** — делегируй **planner** (`Task`, `subagent_type: planner`) для декомпозиции по тикету; для мультишаговой координации — **manager**.
-3. **Код** — делегируй **yandex-developer** (`Task`). Родитель **не** пишет production-код в Arcadia сам; read-only разведка (Read, codesearch) до маунта допустима.
-4. **Проверка** — перед первой правкой: cwd/workspace в `~/arcadia_<TICKET>-*`, не в `~/arcadia`.
+2. **План** — делегируй **planner** (`Task`, `subagent_type: planner`) для декомпозиции по тикету; для мультишаговой координации — **manager**. В плане явно: интерпретация ключевых чисел/сроков и **где именно** в коде/конфиге будет правка (с обоснованием).
+3. **Согласование** — покажи пользователю план (или резюме planner) и дождись явного «ок» / правок. **Запрещено** делегировать **yandex-developer** и делать `Edit`/`Write`/`arc commit`, пока план не согласован. Исключение: пользователь явно сказал «делай сразу» / «без согласования».
+4. **Код** — делегируй **yandex-developer** (`Task`). Родитель **не** пишет production-код в Arcadia сам.
+5. **Проверка** — перед первой правкой: cwd/workspace в `~/arcadia_<TICKET>-*`, не в `~/arcadia`.
 
-«Prefer» / «лучше использовать» для тикетных задач **не применяется** — делегирование и маунт обязательны.
+«Prefer» / «лучше использовать» для тикетных задач **не применяется** — понимание, согласование плана, делегирование и маунт обязательны.
 
 ## Git-репозиторий инструкций
 
-Правки в `~/claude-agent-instructions/` (симлинки на `~/.claude/`) — **сразу `git commit`**, без запроса; и после правок агента, и после правок пользователя. См. `~/claude-agent-instructions/CLAUDE.md`.
+Правки в `~/claude-agent-instructions/` (симлинки на `~/.claude/`). Детали: `memory-meta/claude-code/instructions-git-sync.md`.
+
+1. **Перед любой правкой** — `~/claude-agent-instructions/scripts/sync-instructions-repo.sh pull` (подтянуть `origin/main`).
+2. **После правки** — `git add` + `git commit` (без запроса пользователя) + **обязательный** `scripts/sync-instructions-repo.sh push`.
+3. **Фон** — cron каждые 10 минут делает `pull`; конфликты rebase: скрипт предпочитает входящие, иначе доразрешить вручную.
 
 ## Memory и self-improvement
 
 - **memory** — доменные факты в `~/.claude/memory/` (INDEX → leaf).
-- **self-improvement** — правила, агенты, репозиторий `~/claude-agent-instructions/`; после правок — commit.
+- **self-improvement** — правила, агенты, репозиторий `~/claude-agent-instructions/`; после правок — commit + push (см. § «Git-репозиторий инструкций»).
 
 ### Обязательный self-improvement (родительский агент)
 

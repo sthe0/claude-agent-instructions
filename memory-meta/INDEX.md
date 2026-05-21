@@ -10,6 +10,7 @@
 | Термин **dsv3** и суффиксы в путях YT | [deepagent/dsv3-judge-naming.md](deepagent/dsv3-judge-naming.md) |
 | Eliza/Zeliboba: где смотреть LLM (бесплатные коммунальные vs платные внешние) | [deepagent/eliza-and-zeliboba-models.md](deepagent/eliza-and-zeliboba-models.md) |
 | test_quality: полный vs минимальный ретест (eval_baskets / compute_metrics) | [deepagent/test-quality-retest.md](deepagent/test-quality-retest.md) |
+| Nirvana/VH3: graph results retention vs operation job TTL | [deepagent/nirvana-ttl-retention.md](deepagent/nirvana-ttl-retention.md) |
 | train-eval-meta: republish vs convert-only vs полный meta (не перезапускать train) | [deepagent/train-eval-meta-relaunch.md](deepagent/train-eval-meta-relaunch.md) |
 
 ## claude-code (настройка агента)
