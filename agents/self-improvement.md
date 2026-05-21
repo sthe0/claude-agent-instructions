@@ -51,7 +51,7 @@ model: opus
 | Доменный факт, ссылка, таблица | **memory** (через агента memory) |
 | Доменный runbook (процедуры прод/CI, что перезапускать при сбое, CLI/контракты конкретного репо) | **memory leaf** + INDEX (через **memory**); **не** в generic-агенты |
 | Только Cursor (globs, project rules) | `.cursor/rules/*.mdc` + явная пометка «нет аналога в Claude Code» |
-| Версионирование и откат инструкций | `~/claude-agent-instructions/` + commit; обновить `README.md` при смене структуры репо |
+| Версионирование и откат инструкций | `~/claude-agent-instructions/` + commit; при смене ролей/gate — **сначала** § «Кооперация агентов» в корневом `README.md`, затем `CLAUDE.md` / агенты |
 
 ### Доменные runbook vs generic-агенты
 
