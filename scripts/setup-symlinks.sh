@@ -13,15 +13,31 @@ link() {
   ln -sfn "$target" "$linkpath"
 }
 
-link "$REPO/agents" "$HOME/.claude/agents"
+# CLAUDE.md and memory-meta: symlink files directly
 link "$REPO/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
 link "$REPO/cursor-rules/claude-code-sync.mdc" "$HOME/.cursor/rules/claude-code-sync.mdc"
 link "$REPO/memory-meta/INDEX.md" "$HOME/.claude/memory/INDEX.md"
 link "$REPO/memory-meta/README.md" "$HOME/.claude/memory/README.md"
 
+# agents/: real directory; individual symlinks from agents/ (repo) and agents-local/ (local, gitignored)
+if [[ -L "$HOME/.claude/agents" ]]; then
+  rm "$HOME/.claude/agents"
+fi
+mkdir -p "$HOME/.claude/agents"
+
+for f in "$REPO/agents/"*.md; do
+  [[ -f "$f" ]] && link "$f" "$HOME/.claude/agents/$(basename "$f")"
+done
+
+if [[ -d "$REPO/agents-local" ]]; then
+  for f in "$REPO/agents-local/"*.md; do
+    [[ -f "$f" ]] && link "$f" "$HOME/.claude/agents/$(basename "$f")"
+  done
+fi
+
 "$REPO/scripts/install-git-hooks.sh"
 "$REPO/scripts/install-sync-cron.sh" 2>/dev/null || true
 
 echo "Symlinks:"
-ls -la "$HOME/.claude/agents" "$HOME/.claude/CLAUDE.md" "$HOME/.cursor/rules/claude-code-sync.mdc" \
+ls -la "$HOME/.claude/agents/" "$HOME/.claude/CLAUDE.md" "$HOME/.cursor/rules/claude-code-sync.mdc" \
   "$HOME/.claude/memory/INDEX.md" "$HOME/.claude/memory/README.md"
