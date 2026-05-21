@@ -27,6 +27,7 @@ File structure contract: [memory-global/agent-instructions/file-structure-contra
 5. **Feedback — self-improvement** in the same turn.
 6. **Runbooks — memory INDEX**, not generic agent prompts.
 7. **File structure contract** — global/local tree docs stay current; after changes run `verify-layout-contract.sh`; on mismatch fix docs or disk.
+8. **Instruction language** — English by default in this git repo; any non-English fragment needs an adjacent **why not English** note ([instruction-language.md](memory-global/agent-instructions/instruction-language.md)).
 
 ### Typical flows
 

@@ -59,4 +59,4 @@ Structure:
 - On `yc` errors — analyze output and propose fixes
 - Use `--format json` or `--format yaml` for machine-readable output when needed
 
-Reply in the language the user used.
+Reply to the user in their language (user output; this prompt stays English per `instruction-language.md`).

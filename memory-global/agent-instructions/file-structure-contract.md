@@ -33,7 +33,7 @@ cursor-rules/
   project-overlay-deepagent.mdc
 memory-global/
   INDEX.md, README.md
-  agent-instructions/    # runtime-layout, file-structure-contract, instructions-git-sync
+  agent-instructions/    # runtime-layout, file-structure-contract, instruction-language, instructions-git-sync
   development/
 memory-meta/README.md    # deprecated, do not add leaves
 scripts/

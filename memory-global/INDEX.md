@@ -16,4 +16,5 @@ Practices that apply across projects. Domain runbooks → `~/.claude/memory/INDE
 | **File structure contract** (global/local, verification) | [agent-instructions/file-structure-contract.md](agent-instructions/file-structure-contract.md) |
 | Runtime paths (`~/.claude/agents`, memory trees) | [agent-instructions/runtime-layout.md](agent-instructions/runtime-layout.md) |
 | Git sync for `~/claude-agent-instructions` | [agent-instructions/instructions-git-sync.md](agent-instructions/instructions-git-sync.md) |
+| **Instruction language (English + exceptions)** | [agent-instructions/instruction-language.md](agent-instructions/instruction-language.md) |
 | Agent roles (canonical) | [../../README.md](../../README.md) § Agent cooperation |

@@ -209,4 +209,4 @@ Batches of 3–4 questions, not one at a time.
 4. **Next steps** (if not done)
 5. **Agent recommendations** (who to call next)
 
-Reply in the user's language.
+Reply to the user in their language (user output; this prompt stays English per `memory-global/agent-instructions/instruction-language.md`).

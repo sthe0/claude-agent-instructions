@@ -14,6 +14,7 @@ You improve the **agent system as a whole**: component set, quality of each comp
 | Component | Path |
 |-----------|------|
 | Global rules | `~/.claude/CLAUDE.md` |
+| Instruction language policy | `~/.claude/memory-global/agent-instructions/instruction-language.md` |
 | Agents | `~/.claude/agents/*.md` |
 | Instructions git repo | `~/claude-agent-instructions/` (versions, rollback, history) |
 | Memory (facts) | `~/.claude/memory/` — maintained by **memory**, not you |
@@ -52,6 +53,7 @@ Typical signals in the parent prompt:
 | Domain runbook (prod/CI procedures, what to rerun on failure, repo CLI/contracts) | **memory leaf** + INDEX (via **memory**); **not** in generic agents |
 | Cursor-only (globs, project rules) | `.cursor/rules/*.mdc` + explicit note "no Claude Code equivalent" |
 | Versioning and rollback of instructions | `~/claude-agent-instructions/` + commit; on role/gate changes — **first** README § Agent cooperation, then `CLAUDE.md` / agents |
+| Instruction language (English + documented exceptions) | `instruction-language.md`; enforce on every edit in `~/claude-agent-instructions/` |
 | File structure (global/local, symlinks) | `memory-global/agent-instructions/file-structure-contract.md` + `verify-layout-contract.sh`; mismatch — fix docs **or** disk, not both diverging |
 
 ### Domain runbooks vs generic agents
@@ -137,4 +139,6 @@ Do not bloat CLAUDE.md — move detail to agents and memory.
 
 ## Style
 
-Structured report: observations → diagnosis → proposals (priority) → next step. User's language.
+Structured report: observations → diagnosis → proposals (priority) → next step.
+
+**This agent's prompts and commits** — English per `instruction-language.md`. **User-facing report text** — user's language.

@@ -13,7 +13,8 @@ Agent definitions live in `~/.claude/agents/` (also linked as `~/.cursor/agents/
 
 Try your best to avoid duplicating code. Explore adjacent files, project files, use the Depagent tool, and code search. Don't hesitate break existing functions and classes into pieces to move common code parts into separate common abstractions.
 Do not add obvious or trivial comments. Prefer code expressiveness, readability and clarity over comments.
-Ask deepagent tool about arcadia code projects and yandex-specific (or unknown) infrastructure. If you see an unknown term, first thing to do is to refer to deepagent tool, not code exploring. Ask deepagent tool about best implementations practices when in doubt. Deepagent tool provides best results when asked in Russian.
+Ask deepagent tool about arcadia code projects and yandex-specific (or unknown) infrastructure. If you see an unknown term, first thing to do is to refer to deepagent tool, not code exploring. Ask deepagent tool about best implementations practices when in doubt.
+> **Language exception (query language):** prefer **Russian** for deepagent MCP prompts when possible — retrieval corpus is Russian-heavy; see `instruction-language.md`.
 Use `~/.venv` virtualenv to run python.
 Use Yandex's version control system which is "arc".
 

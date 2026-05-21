@@ -6,9 +6,20 @@ It is listed in `.arcignore`. If it still entered the index — do not include i
 
 ---
 
+## Instruction language
+
+**Default:** all text in `~/claude-agent-instructions/` (agents, CLAUDE.md, cursor-rules, memory-global, README policy) is **English**.
+
+**Exception:** non-English is allowed only with an adjacent note **why English cannot be used** (same paragraph or line above/below). Canonical spec: `~/.claude/memory-global/agent-instructions/instruction-language.md`.
+
+User-facing **replies** may use the user's language; that is not an exception to instruction language.
+
+---
+
 Try your best to avoid duplicating code. Explore adjacent files, project files, use the Depagent tool, and code search. Don't hesitate break existing functions and classes into pieces to move common code parts into separate common abstractions.
 Do not add obvious or trivial comments. Prefer code expressiveness, readability and clarity over comments.
-Ask deepagent tool about arcadia code projects and yandex-specific (or unknown) infrastructure. If you see an unknown term, first thing to do is to refer to deepagent tool, not code exploring. Ask deepagent tool about best implementations practices when in doubt. Deepagent tool provides best results when asked in Russian.
+Ask deepagent tool about arcadia code projects and yandex-specific (or unknown) infrastructure. If you see an unknown term, first thing to do is to refer to deepagent tool, not code exploring. Ask deepagent tool about best implementations practices when in doubt.
+> **Language exception (query language, not instruction text):** prefer **Russian** for deepagent MCP prompts when possible — the tool's indexed corpus and retrieval are tuned for Russian; English paraphrases often rank worse. User-facing answers may still be English.
 Use ~/.venv virtualenv to run python (except data_science CLI: always via Docker, see library/deepagent/data_science/DOCKER_RUN.md)
 Use Yandex's version control system which is "arc".
 
