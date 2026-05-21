@@ -17,7 +17,7 @@
 | Full pipeline rerun to debug one stage | Minimal retest; read local memory runbook |
 | Second CLI binary for one-off experiment | Local script/stash; one entry point in repo |
 | User feedback on process → only apology | **self-improvement** same turn |
-| Unknown internal term → guess in code | **yandex-guru** or intrasearch / deepagent MCP |
+| Unknown internal term → guess in code | infra consultant subagent if present in `~/.claude/agents/`, else intrasearch / domain MCP |
 | Domain runbook pasted into manager/developer prompts | **memory** leaf + link in plan |
 
 ## Optional session metric

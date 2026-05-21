@@ -8,7 +8,7 @@ Cross-project facts and **how to think / work**, not tied to one repository or Y
 
 1. Start with **[INDEX.md](INDEX.md)**.
 2. Read only relevant leaf files.
-3. For machine- or product-specific runbooks → **`~/.claude/memory/`** (local, Arcadia `junk/the0/agents/memory-local/` on this host).
+3. For machine- or product-specific runbooks → **`~/.claude/memory/INDEX.md`** (local tree; source path is machine setup, not this git repo).
 
 ## What belongs here
 

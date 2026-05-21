@@ -18,7 +18,7 @@ model: opus
 - Факты о prod-пайплайнах, таблицах YT, контрактах между тикетами
 - Термины, схемы именования, ссылки на операции/PR/wiki
 - Состояние проектов («parity OK 2026-05-18», «баг в for row, _»)
-- Настройки среды, которые не в Arcadia (arc mounts, хуки) — в `memory/claude-code/`
+- Настройки среды, которые не в Arcadia (arc mounts, хуки) — локальный leaf в `~/.claude/memory/`
 
 ## Что НЕ класть в memory (нет)
 
@@ -46,7 +46,7 @@ model: opus
 Процесс:
 
 1. Сформулируй **одним абзацем**, что именно нужно вспомнить и **в каком контексте** (тикет, репо, инструмент).
-2. Выбери дерево и путь: глобальное (`memory-global/development/`, …) или локальное (`deepagent/`, `claude-code/`, `yandex/`, …).
+2. Выбери дерево: глобальное (`~/.claude/memory-global/`) или локальное (`~/.claude/memory/`); путь — по INDEX соответствующего дерева.
 3. Пиши **сжато**: таблицы, ссылки, даты проверок; без воды.
 4. Обнови **INDEX.md** (строка в таблице + краткий якорь).
 5. Покажи пользователю diff/summary и спроси подтверждение, если запись спорная или большая.
@@ -94,8 +94,8 @@ model: opus
 
 Ты **не** правишь `~/.claude/plugins/cache/` и upstream-скиллы на симлинках — только `memory/` и по согласованию INDEX/README.
 
-**memory-global/** — в git `~/claude-agent-instructions`; перед правкой INDEX/README: `pull` → commit → push.  
-**Локальные leaf** — Arcadia `junk/the0/agents/memory-local/` на этой машине (`arc commit`); runtime: `~/.claude/memory/`. Git sync репо инструкций: `~/.claude/memory-global/agent-instructions/instructions-git-sync.md`.
+**memory-global/** — git `~/claude-agent-instructions` → `~/.claude/memory-global/`; перед правкой: `pull` → commit → push.  
+**Локальные leaf** — `~/.claude/memory/` (источник на диске задаётся `setup-symlinks.sh` на машине, не в git репо инструкций). Git sync: `~/.claude/memory-global/agent-instructions/instructions-git-sync.md`.
 
 ## Стиль ответа
 

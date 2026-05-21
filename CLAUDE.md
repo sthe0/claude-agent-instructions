@@ -1,6 +1,6 @@
 ## Не коммитить
 
-Этот файл — **локальные инструкции для агента** (Cursor / Claude Code). **Не добавляйте и не коммитьте его в Arc:** в тексте есть ссылки на локальную среду (`~/.venv`, `~/.claude/agents/`, субагенты **planner**, **thinker**, **developer**, **yandex-guru** и др.), которые у каждого разработчика свои.
+Этот файл — **локальные инструкции для агента** (Cursor / Claude Code). **Не добавляйте и не коммитьте его в Arc:** в тексте есть ссылки на локальную среду (`~/.venv`, `~/.claude/agents/`, субагенты **planner**, **thinker**, **developer** и опциональные роли в `~/.claude/agents/`), которые у каждого разработчика могут отличаться.
 
 Файл перечислен в `.arcignore`. Если он всё же попал в индекс — не включайте в PR; правки держите локально или вынесите в общую документацию без machine-specific путей.
 
@@ -22,9 +22,9 @@ Use Yandex's version control system which is "arc".
 
 ## Параллельная работа в arc
 
-- Каждая задача с Tracker-тикетом (`[A-Z]+-\d+`) — в отдельном параллельном маунте: `~/arcadia_<TICKET>-<slug>`, ветка `<TICKET>-<slug>` (без префикса `users/<login>/` — арк добавит сам). Команда маунта и отличия от upstream-скилла — в `~/.claude/memory/claude-code/arc-parallel-mounts.md` (скилл `using-arc-multiple-mounts` не патчить, он на симлинке).
+- Каждая задача с Tracker-тикетом (`[A-Z]+-\d+`) — в отдельном параллельном маунте: `~/arcadia_<TICKET>-<slug>`, ветка `<TICKET>-<slug>` (без префикса `users/<login>/` — арк добавит сам). Runbook маунта — `~/.claude/memory/INDEX.md` (скилл `using-arc-multiple-mounts` не патчить, он на симлинке).
 - **`arc mount` только из `cd ~`** (не из cwd под `~/arcadia*`). Mount в фоне, ждать `[mounted]` в логе или в `arc mount --list`; не `pkill` по таймауту.
-- Параллельный `arc mount`: всегда `--object-store …/objects`, `--override-object-store`, **`--allow-other`** (как основной `~/arcadia`; **обязательно** для `docker run -v ~/arcadia_*` — без флага root в контейнере не видит FUSE). Runbook: `~/.claude/memory/claude-code/arc-parallel-mounts.md`.
+- Параллельный `arc mount`: всегда `--object-store …/objects`, `--override-object-store`, **`--allow-other`** (как основной `~/arcadia`; **обязательно** для `docker run -v ~/arcadia_*` — без флага root в контейнере не видит FUSE). Runbook: `~/.claude/memory/INDEX.md`.
 - **Никогда не делай `arc checkout` в основном маунте `~/arcadia` без явного разрешения** — там работает пользователь.
 - Ad-hoc вопросы / мелкие правки **без** ключа тикета — в текущем контексте, маунт не нужен. Наличие `[A-Z]+-\d+` в задаче, ветке или workspace **отменяет** это исключение.
 - Маунт после задачи оставлять до явной команды на cleanup.
@@ -34,10 +34,10 @@ Use Yandex's version control system which is "arc".
 Родительский агент (Cursor / Claude Code) при задаче с ключом тикета — **до любых** `Edit`/`Write` в Arcadia, `arc checkout`, `arc commit`:
 
 0. **Понимание** — прочитай тикет и комментарии. Числа, сроки, аббревиатуры («14 дней», TTL, quota, лимиты) без явного источника в тикете — **найди происхождение** (wiki, код, deepagent MCP, связанные PR) или **спроси пользователя**. Не привязывай число к случайному полю в коде и не начинай правки, пока не можешь объяснить, *откуда* взялось число и *какой* артефакт/поведение оно описывает. Read-only разведка до маунта допустима.
-1. **Маунт** — отдельный параллельный маунт `~/arcadia_<TICKET>-<slug>` и ветка `<TICKET>-<slug>`. Runbook: `~/.claude/memory/claude-code/arc-parallel-mounts.md`. **Запрещено** править код тикета в основном `~/arcadia`, пока пользователь явно не разрешил.
+1. **Маунт** — отдельный параллельный маунт `~/arcadia_<TICKET>-<slug>` и ветка `<TICKET>-<slug>`. Runbook: `~/.claude/memory/INDEX.md`. **Запрещено** править код тикета в основном `~/arcadia`, пока пользователь явно не разрешил.
 2. **План** — при **одном** тикете без затруднений: **planner** (`Task`, `subagent_type: planner`). При **нескольких тикетах**, мультишаговой координации или любом триггере из § «Обязательный manager» — сначала **manager** (он делегирует planner). В плане явно: интерпретация ключевых чисел/сроков и **где именно** в коде/конфиге будет правка (с обоснованием).
 3. **Согласование** — покажи пользователю план (или резюме planner) и дождись явного «ок» / правок. **Запрещено** делегировать **developer** и делать `Edit`/`Write`/`arc commit`, пока план не согласован. Исключение: пользователь явно сказал «делай сразу» / «без согласования».
-4. **Код** — делегируй **developer** (`Task`). Родитель **не** пишет production-код в Arcadia сам. Неизвестная яндекс-инфраструктура → **yandex-guru** до или вместе с кодом.
+4. **Код** — делегируй **developer** (`Task`). Родитель **не** пишет production-код в Arcadia сам. Неизвестная орг-инфраструктура → субагент-консультант из `~/.claude/agents/` (если настроен) до или вместе с кодом.
 5. **Проверка** — перед первой правкой: cwd/workspace в `~/arcadia_<TICKET>-*`, не в `~/arcadia`.
 
 «Prefer» / «лучше использовать» для тикетных задач **не применяется** — понимание, согласование плана, делегирование и маунт обязательны.
@@ -49,17 +49,18 @@ Use Yandex's version control system which is "arc".
 | Файл в репо | Claude Code | Cursor |
 |-------------|-------------|--------|
 | `CLAUDE.md` | `~/.claude/CLAUDE.md` | тот же путь в проекте (symlink) + правило ниже |
-| `agents/*.md`, `agents-local/*.md` | `~/.claude/agents/` | `~/.cursor/agents` → `.claude/agents` |
+| `agents/*.md` | `~/.claude/agents/` | `~/.cursor/agents` → `.claude/agents` |
+| `memory-global/` | `~/.claude/memory-global/` | тот же |
 | `cursor-rules/claude-code-sync.mdc` | — | `~/.cursor/rules/claude-code-sync.mdc` |
-| `memory-meta/INDEX.md` | `~/.claude/memory/INDEX.md` | тот же |
+| Локальная memory (вне git) | `~/.claude/memory/` | тот же |
 
-Настройка и проверка: `scripts/setup-symlinks.sh`, `scripts/verify-instructions-sync.sh`. Runbook: `memory-meta/claude-code/claude-cursor-instructions.md`.
+Настройка и проверка: `scripts/setup-symlinks.sh`, `scripts/verify-instructions-sync.sh`. Схема путей: `~/.claude/memory-global/agent-instructions/runtime-layout.md`.
 
 **Правки политики** — в репозитории; после `commit` обязателен `push` (см. ниже). Проект `robot/deepagent` — только overlay `.cursor/rules/deepagent-project.mdc`, не копия глобального rule.
 
 ## Git-репозиторий инструкций
 
-Правки в `~/claude-agent-instructions/` (симлинки на `~/.claude/` и `~/.cursor/`). Детали: `memory-meta/claude-code/instructions-git-sync.md`.
+Правки в `~/claude-agent-instructions/` (симлинки на `~/.claude/` и `~/.cursor/`). Детали: `~/.claude/memory-global/agent-instructions/instructions-git-sync.md`.
 
 1. **Перед любой правкой** — `~/claude-agent-instructions/scripts/sync-instructions-repo.sh pull` (подтянуть `origin/main`).
 2. **После правки** — `git add` + `git commit` (без запроса пользователя) + **обязательный** `scripts/sync-instructions-repo.sh push`.
@@ -67,7 +68,7 @@ Use Yandex's version control system which is "arc".
 
 ## Memory и self-improvement
 
-- **memory** — доменные факты в `~/.claude/memory/` (INDEX → leaf).
+- **memory** — факты: локально `~/.claude/memory/INDEX.md`, глобально `~/.claude/memory-global/INDEX.md`.
 - **self-improvement** — правила, агенты, репозиторий `~/claude-agent-instructions/`; после правок — commit + push (см. § «Git-репозиторий инструкций»).
 
 ### Обязательный self-improvement (родительский агент)
@@ -104,9 +105,9 @@ Use Yandex's version control system which is "arc".
 
 ### Nirvana: после запуска WI
 
-Запустил граф (CLI, Nirvana API, docker) — **сразу** сообщи WI id/URL и **опрашивай** до терминала у **всех** отслеживаемых инстансов (не жди явного «следи»). Runbook: `~/.claude/memory/claude-code/nirvana-wi-watch.md`. Итог — таблица «мониторинг завершён» в том же ходе.
+Запустил граф (CLI, Nirvana API, docker) — **сразу** сообщи WI id/URL и **опрашивай** до терминала у **всех** отслеживаемых инстансов (не жди явного «следи»). Runbook WI — `~/.claude/memory/INDEX.md`. Итог — таблица «мониторинг завершён» в том же ходе.
 
-Доменные runbook'и (ретест `compute_metrics`, VH3, data_science) — только `~/.claude/memory/deepagent/`, не в промпты агентов.
+Доменные runbook'и — только leaf по `~/.claude/memory/INDEX.md`, не в промпты generic-агентов.
 
 ## Agents
 
@@ -118,7 +119,6 @@ Use Yandex's version control system which is "arc".
 - **memory** — `~/.claude/memory/`.
 - **self-improvement** — **обязателен** при корректировках и обратной связи (см. выше).
 - **developer** — **обязателен** для правок кода в Arcadia по тикету; родитель не пишет код сам.
-- **yandex-guru** — консультации по Arcadia/YT/Nirvana/arc/ya.make (локальный агент, `junk/the0/agents/agents-local/`).
-- **logos-*** — только Logos ETL; **локальные** (`agents-local/logos-*.md`, не в git).
+- **Опциональные субагенты** — только если есть в `~/.claude/agents/` (`name` + `description`); не выдумывай роли, которых нет на машине.
 
-Чеклист старта Tracker-тикета и типовые ошибки сессий: `~/.claude/memory/claude-code/session-retrospective-2026-05.md` (см. также **planner**, **manager**).
+Чеклист старта Tracker-тикета — leaf в `~/.claude/memory/INDEX.md`; глобальные практики — `~/.claude/memory-global/development/` (см. **planner**, **manager**).

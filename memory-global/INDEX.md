@@ -1,6 +1,6 @@
 # Global memory index
 
-Practices that apply across projects. Machine- and Yandex-specific runbooks → `~/.claude/memory/INDEX.md`.
+Practices that apply across projects. Domain runbooks → `~/.claude/memory/INDEX.md` (local).
 
 ## development
 
@@ -13,5 +13,6 @@ Practices that apply across projects. Machine- and Yandex-specific runbooks → 
 
 | Topic | File |
 |-------|------|
+| Runtime paths (`~/.claude/agents`, memory trees) | [agent-instructions/runtime-layout.md](agent-instructions/runtime-layout.md) |
 | Git sync for `~/claude-agent-instructions` | [agent-instructions/instructions-git-sync.md](agent-instructions/instructions-git-sync.md) |
 | Agent roles (canonical) | [../../README.md](../../README.md) § «Кооперация агентов» |

@@ -28,11 +28,11 @@
 
 - Durable domain facts → **memory** (local or global INDEX), not bloated agent prompts.
 - Cross-session *how to work* → this tree (`memory-global/`).
-- Product pipelines, infra names → local `~/.claude/memory/`.
+- Product pipelines, infra names → `~/.claude/memory/INDEX.md` (local tree).
 
 ## Self-check before first production edit
 
 - [ ] Goal and criteria clear
 - [ ] Plan shown and confirmed (if required)
-- [ ] Right specialist delegated (developer / yandex-guru / logos-*)
+- [ ] Right specialist delegated (`~/.claude/agents/`, see INDEX in each memory tree)
 - [ ] Not duplicating a full pipeline when only one stage needs retest

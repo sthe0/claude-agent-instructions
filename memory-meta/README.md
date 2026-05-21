@@ -1,12 +1,12 @@
 # Deprecated: memory-meta
 
-Память разделена:
+Перенесено:
 
 | Было | Стало |
 |------|--------|
-| `memory-meta/` (git) | **`memory-global/`** в `~/claude-agent-instructions` → `~/.claude/memory-global/` |
-| `~/.claude/memory/deepagent`, claude-code | **`junk/the0/agents/memory-local/`** → `~/.claude/memory/` |
+| Оглавление в git | **`memory-global/`** → `~/.claude/memory-global/` |
+| Доменные leaf | **`~/.claude/memory/INDEX.md`** (источник на диске — `setup-symlinks.sh` на машине) |
 
-Обнови симлинки: `scripts/setup-symlinks.sh`.
+Схема runtime: `memory-global/agent-instructions/runtime-layout.md`.
 
-Старые пути в этом каталоге оставлены для ссылок из истории; не добавляй новые leaf сюда.
+Не добавляй новые файлы в `memory-meta/`.

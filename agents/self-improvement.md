@@ -21,7 +21,7 @@ model: opus
 | Cursor sync | `~/.cursor/rules/claude-code-sync.mdc` |
 | Настройки | `~/.claude/settings.json`, hooks |
 
-**Не патчить** файлы в `~/.claude/plugins/cache/` и upstream на симлинках — локальные дополнения в memory или CLAUDE.md (см. `memory/claude-code/`).
+**Не патчить** файлы в `~/.claude/plugins/cache/` и upstream на симлинках — локальные дополнения в `~/.claude/memory/` или CLAUDE.md.
 
 ## Когда тебя вызывают
 
@@ -74,8 +74,8 @@ model: opus
 
 | Что | Куда |
 |-----|------|
-| Контракт метаданных, write/read/cleanup workflow | `memory-meta/README.md`, `agents/memory.md` (через **memory**) |
-| Конкретный runbook и шаги проверки | leaf в `~/.claude/memory/` (напр. `deepagent/test-quality-retest.md`) — через **memory** |
+| Контракт метаданных, write/read/cleanup workflow | `~/.claude/memory-global/README.md`, `agents/memory.md` (через **memory**) |
+| Конкретный runbook и шаги проверки | leaf по `~/.claude/memory/INDEX.md` — через **memory** |
 
 **self-improvement** правит процесс и шаблон; **memory** — содержимое leaf, `last_verified`, revalidate по коду.
 
@@ -83,7 +83,7 @@ model: opus
 
 ### Текстовые компоненты
 
-- Промпты: **planner**, **thinker**, **developer**, **yandex-guru**, **memory**, **manager**, logos-*, и др.
+- Промпты: **planner**, **thinker**, **developer**, **memory**, **manager**, и др. из `~/claude-agent-instructions/agents/` + опционально `~/.claude/agents/`.
 - Секции делегирования и границы ответственности
 - Описания `description` в frontmatter (триггеры для Task tool)
 
@@ -112,7 +112,7 @@ model: opus
 - **Перед правкой:** `scripts/sync-instructions-repo.sh pull` (+ `git status`, `git log -3`)
 - **После правки:** `git add` + `git commit` + `scripts/sync-instructions-repo.sh push` — **обязательно, автоматически**
 - Одна логическая правка — один commit; на новой машине — `scripts/setup-symlinks.sh`
-- Фоновый pull: cron `*/10` через `scripts/install-sync-cron.sh`; runbook: `memory-meta/claude-code/instructions-git-sync.md`
+- Фоновый pull: cron `*/10` через `scripts/install-sync-cron.sh`; runbook: `~/.claude/memory-global/agent-instructions/instructions-git-sync.md`
 - Предлагай откат: `git revert` / `git checkout <rev> -- path`
 
 ## Взаимодействие
