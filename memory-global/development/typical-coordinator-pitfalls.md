@@ -19,8 +19,8 @@
 | Second CLI binary for one-off experiment | Local script/stash; one entry point in repo |
 | User feedback on process → only apology | **self-improvement** same turn |
 | User asks "why no self-improvement?" / confirms "run it" | **self-improvement** same turn — reminder is feedback |
-| Closed ticket + "if not done" → re-implement because trunk lacks change | Tracker closed = done; report; ask merge/reopen |
-| `arc checkout` / commit on ticket task without user ask | Read-only + status report until user confirms scope |
+| Conditional "if not done" + artifact missing in repo → redo without status check | Read org runbook first; closed/done may mean stop — ask user |
+| VCS branch/commit on scoped task without user ask | Read-only + report until user confirms scope |
 | Unknown internal term → guess in code | infra consultant subagent if present in `~/.claude/agents/`, else intrasearch / domain MCP |
 | Domain runbook pasted into manager/developer prompts | **memory** leaf + link in plan |
 

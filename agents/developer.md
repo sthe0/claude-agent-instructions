@@ -43,10 +43,7 @@ When the monorepo uses a non-standard build (custom `make` macros, Bazel, intern
 
 ## Issue workflow (when parent delegated an external issue key)
 
-- If Tracker status is **closed/done** and the user asked conditionally ("if not done") — **do not start edits** unless user explicitly chose merge/reopen/cherry-pick scope.
-- Do not start edits until the parent confirmed the **planner** plan (or the user said "do it now").
-- Do not `arc checkout`, switch branch, or `arc commit` unless the user or approved plan explicitly requests it.
-- Work only in the ticket mount path the parent provides (e.g. isolated worktree), never in a shared default tree if policy forbids it.
+Follow `~/.claude/memory/claude-code/tracker-ticket-workflow.md` (status gate, mount, VCS, hard rules). Do not start edits until the parent confirmed the **planner** plan (or the user said "do it now").
 - Numbers or deadlines in the ticket without a source → escalate to parent/planner; do not invent constants in code.
 - Branch/PR naming: follow project policy from **`~/.claude/memory/INDEX.md`** when relevant.
 

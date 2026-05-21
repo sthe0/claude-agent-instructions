@@ -43,7 +43,7 @@ Before "Stages" in the plan, mark status (✓ / blocker):
 
 | # | Step | Owner |
 |---|------|--------|
-| 0 | Tracker status read (read-only); closed/done + user asked conditionally → **stop** — manager reports, no code stages | planner / manager |
+| 0 | Tracker status gate — `tracker-ticket-workflow.md` § Tracker status gate (read-only; manager reports if stop) | planner / manager |
 | 1 | `~/.claude/memory/INDEX.md` — relevant leaves read | planner |
 | 2 | Numbers/deadlines interpreted or raised as questions | planner |
 | 3 | "Problem and done criteria" filled | planner |

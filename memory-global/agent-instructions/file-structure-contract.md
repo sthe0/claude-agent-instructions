@@ -21,6 +21,8 @@ See also: [runtime-layout.md](runtime-layout.md) (runtime paths), [../../README.
 
 Global prompts (`agents/`, slim `CLAUDE.md`) **must not** embed arc/Arcadia/Tracker procedures — only pointers to `~/.claude/memory/`. Org **gates** live in local `cursor-rules/org-yandex.mdc` (arc tree).
 
+**self-improvement:** org-specific fixes go to local memory / org-yandex first; global gets pointers only (see `agents/self-improvement.md` § Org-specific content). Duplicating gates into global after a session is a contract violation.
+
 ## Global tree (`~/claude-agent-instructions/`)
 
 ```

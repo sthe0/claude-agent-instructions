@@ -26,7 +26,7 @@ File structure contract: [memory-global/agent-instructions/file-structure-contra
 4. **Ticket code — developer** in isolated VCS copy, not parent in shared default copy ([CLAUDE.md](CLAUDE.md)).
 5. **Difficulty — manager** again in the same turn.
 6. **Feedback — self-improvement** in the same turn (including when user reminds agent forgot).
-7. **Closed Tracker + conditional wording** ("if not done") → status report first; no code/VCS until user picks merge/reopen/nothing ([tracker-ticket-workflow.md](~/.claude/memory/claude-code/tracker-ticket-workflow.md) — local memory).
+7. **Org/ticket gates** — canonical runbooks in local memory + `org-yandex.mdc`; global agents point, do not restate ([tracker-ticket-workflow.md](~/.claude/memory/claude-code/tracker-ticket-workflow.md)).
 8. **Runbooks — memory INDEX**, not generic agent prompts.
 9. **File structure contract** — global/local tree docs stay current; after changes run `verify-layout-contract.sh`; on mismatch fix docs or disk.
 10. **Instruction language** — English in this git repo and in `~/.claude/memory/`; exceptions need adjacent rationale ([instruction-language.md](memory-global/agent-instructions/instruction-language.md)). User replies — same language as the request.

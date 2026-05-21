@@ -70,6 +70,19 @@ After investigation or user correction, **classify first**:
 
 Anti-pattern: a paragraph with one repo/product procedure in coordinator or developer prompt. If user says "remember" / "too specific for an agent" — memory only, revert agent edit.
 
+### Org-specific content (Tracker, arc, Nirvana, Arcadia)
+
+When the session mistake involves internal Yandex tools or processes:
+
+| Layer | What to edit |
+|-------|----------------|
+| **Local (canonical)** | `~/.claude/memory/claude-code/*.md`, `~/.cursor/rules/org-yandex.mdc` (arc tree) — full gates, commands, examples |
+| **Global** | `CLAUDE.md`, `agents/*`, `memory-global/` — **pointer only** (one line + path); **never** copy procedures or ticket/VCS gates |
+
+**Anti-pattern:** after a correction, pasting Tracker closed/done rules, `arc checkout` policy, or mount steps into `CLAUDE.md` / **manager** / **planner** / **developer** — causes drift and bypasses local-only updates. Fix the **local leaf**; trim global duplicates in the same commit.
+
+**Classify "done":** for ticket tasks, "done" is often **issue tracker status**, not "change absent from trunk" — document that in the **local** runbook, not in global pitfalls with product tool names unless abstract.
+
 **Parent must not patch `manager.md` instead of calling manager.** Request "add overcoming difficulties" / edit coordination cycle: to **work through** difficulty in session — **Task → manager**; for a **system** rule for all sessions — **self-improvement** → `CLAUDE.md` / sync-rule, do not bloat `manager.md`.
 
 ### Memory freshness (staleness)

@@ -121,9 +121,7 @@ After starting an external workflow/job graph — report ids/URLs and monitor un
 
 Delegation — **Task**, `subagent_type` from `~/.claude/agents/*.md`.
 
-**Ticket / Arcadia production work** — follow `~/.claude/memory/claude-code/tracker-ticket-workflow.md` (manager routes).
-
-**Conditional ticket requests** ("if not done", "unless already fixed"): read Tracker status **before** code or VCS. Closed/done → report and ask (merge/reopen/nothing); missing change in trunk is not automatic "redo". No `arc checkout` / commit without explicit user request.
+**Ticket / Arcadia production work** — manager routes; gates and procedures only in `tracker-ticket-workflow.md` + `org-yandex.mdc` (not duplicated here).
 
 | Agent | Role |
 |-------|------|
