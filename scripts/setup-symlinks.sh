@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-JUNK_AGENTS_ROOT="${JUNK_AGENTS_ROOT:-$HOME/arcadia/junk/the0/agents}"
+THE0_AGENTS_MOUNT="${THE0_AGENTS_MOUNT:-$HOME/arcadia_the0-agents}"
+JUNK_AGENTS_ROOT="${JUNK_AGENTS_ROOT:-$THE0_AGENTS_MOUNT/junk/the0/agents}"
 
 mkdir -p "$HOME/.claude" "$HOME/.cursor/rules"
 
@@ -30,7 +31,7 @@ link "$REPO/memory-global" "$HOME/.claude/memory-global"
 
 # Local memory + agents (Arcadia junk on this machine)
 if [[ ! -d "$JUNK_AGENTS_ROOT/memory-local" ]]; then
-  echo "WARN: missing $JUNK_AGENTS_ROOT/memory-local — create junk/the0/agents or set JUNK_AGENTS_ROOT" >&2
+  echo "WARN: missing $JUNK_AGENTS_ROOT/memory-local — run scripts/setup-the0-agents-mount.sh" >&2
 else
   link "$JUNK_AGENTS_ROOT/memory-local" "$HOME/.claude/memory"
 fi
@@ -61,6 +62,10 @@ link "$HOME/.claude/agents" "$HOME/.cursor/agents"
 
 "$REPO/scripts/install-git-hooks.sh"
 "$REPO/scripts/install-sync-cron.sh" 2>/dev/null || true
+"$REPO/scripts/install-junk-agents-sync-cron.sh" 2>/dev/null || true
+chmod +x "$REPO/scripts/sync-junk-agents-arc.sh" \
+  "$REPO/scripts/junk-agents-arc-commit.sh" \
+  "$REPO/scripts/setup-the0-agents-mount.sh" 2>/dev/null || true
 
 DEEPAGENT_RULES="$HOME/arcadia/robot/deepagent/.cursor/rules"
 if [[ -d "$DEEPAGENT_RULES" ]]; then

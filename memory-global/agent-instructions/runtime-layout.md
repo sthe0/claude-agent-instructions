@@ -21,7 +21,7 @@
 | Локальная доменная memory | `~/.claude/memory/INDEX.md` |
 | Глобальная memory | `~/.claude/memory-global/INDEX.md` |
 
-Опциональные субагенты (инфра-консультант, доменный ETL и т.п.) появляются в `~/.claude/agents/` только если настроены на машине; в git репо инструкций их может не быть.
+Опциональные субагенты и локальная memory настраиваются на машине (отдельный arc-маунт, не основной `~/arcadia`). Симлинки задаёт `setup-symlinks.sh`; pull/commit/push — `sync-junk-agents-arc.sh` / `junk-agents-arc-commit.sh`. Runbook: `~/.claude/memory/INDEX.md` (тема the0-agents mount).
 
 ## Метаданные
 

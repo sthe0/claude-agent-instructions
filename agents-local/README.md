@@ -1,17 +1,7 @@
-# Локальные агенты (перенесено)
+# Локальные агенты (Arcadia)
 
-Промпты этой машины версионируются в Arcadia:
+Контент **не** в git `claude-agent-instructions`. Редактировать только в маунте **`~/arcadia_the0-agents`**, ветка **`the0-agents`**, путь **`junk/the0/agents/agents-local/`**.
 
-**`~/arcadia/junk/the0/agents/agents-local/`**
-
-(`yandex-guru`, `logos-*`, …)
-
-После правок:
-
-```bash
-~/claude-agent-instructions/scripts/setup-symlinks.sh
-arc add junk/the0/agents/agents-local/
-arc commit -m "..."
-```
-
-См. [junk/the0/agents/README.md](~/arcadia/junk/the0/agents/README.md).
+Симлинки: `~/claude-agent-instructions/scripts/setup-symlinks.sh`  
+Версионирование: `scripts/sync-junk-agents-arc.sh`, `scripts/junk-agents-arc-commit.sh`  
+Runbook: `~/.claude/memory/INDEX.md` → `claude-code/the0-agents-mount.md`

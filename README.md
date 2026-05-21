@@ -44,7 +44,7 @@ git clone git@github.com:sthe0/claude-agent-instructions.git ~/claude-agent-inst
 ~/claude-agent-instructions/scripts/verify-instructions-sync.sh
 ```
 
-На машине с локальной конфигурацией (доп. агенты и memory) — см. README в вашем локальном хранилище (настраивается `setup-symlinks.sh`, переменная `JUNK_AGENTS_ROOT`).
+Локальные агенты и memory — маунт `~/arcadia_the0-agents`, ветка `the0-agents`. Маунт: `scripts/setup-the0-agents-mount.sh`; sync: `scripts/sync-junk-agents-arc.sh`; commit: `scripts/junk-agents-arc-commit.sh`.
 
 ## Симлинки (глобальное из git)
 
@@ -64,7 +64,11 @@ git clone git@github.com:sthe0/claude-agent-instructions.git ~/claude-agent-inst
 |--------|------------|
 | [setup-symlinks.sh](scripts/setup-symlinks.sh) | Симлинки Claude + Cursor |
 | [verify-instructions-sync.sh](scripts/verify-instructions-sync.sh) | Проверка симлинков |
-| [sync-instructions-repo.sh](scripts/sync-instructions-repo.sh) | `pull` / `push` / `sync` |
+| [sync-instructions-repo.sh](scripts/sync-instructions-repo.sh) | `pull` / `push` / `sync` (git) |
+| [setup-the0-agents-mount.sh](scripts/setup-the0-agents-mount.sh) | Маунт `~/arcadia_the0-agents` |
+| [sync-junk-agents-arc.sh](scripts/sync-junk-agents-arc.sh) | `arc pull` / `push` локальной конфигурации |
+| [junk-agents-arc-commit.sh](scripts/junk-agents-arc-commit.sh) | add + commit + push `junk/the0/agents` |
+| [install-junk-agents-sync-cron.sh](scripts/install-junk-agents-sync-cron.sh) | Cron: arc pull /10 min |
 
 ## Git workflow
 

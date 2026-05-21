@@ -3,7 +3,8 @@
 set -euo pipefail
 
 REPO="${CLAUDE_INSTRUCTIONS_REPO:-$HOME/claude-agent-instructions}"
-JUNK_AGENTS_ROOT="${JUNK_AGENTS_ROOT:-$HOME/arcadia/junk/the0/agents}"
+THE0_AGENTS_MOUNT="${THE0_AGENTS_MOUNT:-$HOME/arcadia_the0-agents}"
+JUNK_AGENTS_ROOT="${JUNK_AGENTS_ROOT:-$THE0_AGENTS_MOUNT/junk/the0/agents}"
 FAIL=0
 
 check_link() {
@@ -29,6 +30,13 @@ check_link "$HOME/.claude/CLAUDE.md" "$REPO/CLAUDE.md"
 check_link "$HOME/.cursor/rules/claude-code-sync.mdc" "$REPO/cursor-rules/claude-code-sync.mdc"
 check_link "$HOME/.claude/memory-global" "$REPO/memory-global"
 check_link "$HOME/.claude/memory" "$JUNK_AGENTS_ROOT/memory-local"
+if readlink -f "$HOME/.claude/memory" 2>/dev/null | grep -qE '/arcadia/junk/the0/agents'; then
+  echo "FAIL: ~/.claude/memory still points at main ~/arcadia — run setup-symlinks.sh"
+  FAIL=1
+fi
+if [[ ! -d "$THE0_AGENTS_MOUNT" ]] || ! arc mount --list 2>/dev/null | grep -qF "$THE0_AGENTS_MOUNT"; then
+  echo "WARN: mount $THE0_AGENTS_MOUNT not listed — run scripts/setup-the0-agents-mount.sh"
+fi
 check_link "$HOME/.cursor/agents" "$HOME/.claude/agents"
 
 if [[ -d "$HOME/.claude/agents" ]]; then
