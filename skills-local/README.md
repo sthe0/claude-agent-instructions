@@ -1,7 +1,7 @@
-# Локальные скиллы (`skills-local/`)
+# Local skills (`skills-local/`)
 
-Каталог **не версионируется** (кроме этого README). Файлы `*.md` здесь линкуются в `~/.claude/skills/` через `scripts/setup-symlinks.sh`.
+Directory is **not versioned** (except this README). Files `*.md` here are symlinked into `~/.claude/skills/` by `scripts/setup-symlinks.sh`.
 
-Используй для скиллов, специфичных для конкретной машины (например, скиллы, зависящие от локальных инструментов или окружения).
+Use for skills specific to this machine (e.g. skills that depend on local tooling or environment).
 
-На новой машине: скопируй нужные `*.md` с другой машины или восстанови из бэкапа, затем `setup-symlinks.sh`.
+To restore on a new machine: copy the needed `*.md` files from another machine or a backup, then run `setup-symlinks.sh`.

@@ -1,8 +1,8 @@
-# Локальные MCP-серверы (`mcp-local/`)
+# Local MCP servers (`mcp-local/`)
 
-Каталог **не версионируется** (кроме этого README).
+Directory is **not versioned** (except this README).
 
-Каждый файл `<name>.json` — конфиг одного MCP-сервера в формате:
+Each `<name>.json` file is a config for one MCP server:
 
 ```json
 {
@@ -12,12 +12,12 @@
 }
 ```
 
-Применить все конфиги в `~/.claude/settings.local.json`:
+Apply all configs to `~/.claude/settings.local.json`:
 
 ```bash
 ~/claude-agent-instructions/scripts/apply-mcp-local.sh
 ```
 
-Скрипт идемпотентен: повторный запуск обновляет существующие записи, не дублирует.
+The script is idempotent: re-running updates existing entries without duplicating them.
 
-На новой машине: скопируй нужные `*.json` с другой машины или восстанови из бэкапа, затем запусти `apply-mcp-local.sh`.
+To restore on a new machine: copy the needed `*.json` files from another machine or a backup, then run `apply-mcp-local.sh`.
