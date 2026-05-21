@@ -3,6 +3,7 @@
 set -euo pipefail
 
 REPO="${CLAUDE_INSTRUCTIONS_REPO:-$HOME/claude-agent-instructions}"
+JUNK_AGENTS_ROOT="${JUNK_AGENTS_ROOT:-$HOME/arcadia/junk/the0/agents}"
 FAIL=0
 
 check_link() {
@@ -26,7 +27,8 @@ check_link() {
 echo "=== Symlinks (Claude Code + Cursor) ==="
 check_link "$HOME/.claude/CLAUDE.md" "$REPO/CLAUDE.md"
 check_link "$HOME/.cursor/rules/claude-code-sync.mdc" "$REPO/cursor-rules/claude-code-sync.mdc"
-check_link "$HOME/.claude/memory/INDEX.md" "$REPO/memory-meta/INDEX.md"
+check_link "$HOME/.claude/memory-global" "$REPO/memory-global"
+check_link "$HOME/.claude/memory" "$JUNK_AGENTS_ROOT/memory-local"
 check_link "$HOME/.cursor/agents" "$HOME/.claude/agents"
 
 if [[ -d "$HOME/.claude/agents" ]]; then
@@ -35,6 +37,14 @@ if [[ -d "$HOME/.claude/agents" ]]; then
     base="$(basename "$f")"
     check_link "$HOME/.claude/agents/$base" "$f"
   done
+  if [[ -f "$JUNK_AGENTS_ROOT/agents-local/yandex-guru.md" ]]; then
+    check_link "$HOME/.claude/agents/yandex-guru.md" "$JUNK_AGENTS_ROOT/agents-local/yandex-guru.md"
+  fi
+fi
+
+if [[ -L "$HOME/.claude/agents/yandex-developer.md" ]]; then
+  echo "FAIL: stale yandex-developer symlink — remove and run setup-symlinks.sh"
+  FAIL=1
 fi
 
 echo "=== Stale copies (should not exist) ==="

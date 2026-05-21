@@ -8,7 +8,8 @@ alwaysApply: true
 Глобальная политика: **`~/.cursor/rules/claude-code-sync.mdc`** и **`~/.claude/CLAUDE.md`** (оба из `~/claude-agent-instructions/`). **Не дублируй** здесь tracker workflow, manager, self-improvement — они только в глобальных файлах.
 
 - **Tool permissions:** `.cursor/cli.json` зеркалит `.claude/settings.local.json` в этом репозитории.
-- **Доменная memory:** `~/.claude/memory/deepagent/` — [INDEX](~/.claude/memory/INDEX.md). Не копировать leaf в Arc `CLAUDE.md`.
+- **Локальная memory:** `~/.claude/memory/deepagent/` — [INDEX](~/.claude/memory/INDEX.md) (Arcadia `junk/the0/agents/memory-local/`). **Глобальная:** `~/.claude/memory-global/`. Не копировать leaf в Arc `CLAUDE.md`.
+- **Код по тикету:** **developer**; консультации Яндекс/Arcadia — **yandex-guru** (локальный агент в junk).
 - **Deepagent MCP:** по запросу «спроси deepagent» — `mcp__yandex__deepagent-generate_answer`, не субагент.
 
 При правке инструкций агента: репозиторий `~/claude-agent-instructions/`, не этот overlay.

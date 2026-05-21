@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
+JUNK_AGENTS_ROOT="${JUNK_AGENTS_ROOT:-$HOME/arcadia/junk/the0/agents}"
 
-mkdir -p "$HOME/.claude" "$HOME/.claude/memory" "$HOME/.cursor/rules" "$HOME/.cursor/agents"
+mkdir -p "$HOME/.claude" "$HOME/.cursor/rules"
 
 link() {
   local target="$1" linkpath="$2"
@@ -23,9 +24,16 @@ link_agent_md() {
 
 link "$REPO/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
 link "$REPO/cursor-rules/claude-code-sync.mdc" "$HOME/.cursor/rules/claude-code-sync.mdc"
-link "$HOME/.claude/agents" "$HOME/.cursor/agents"
-link "$REPO/memory-meta/INDEX.md" "$HOME/.claude/memory/INDEX.md"
-link "$REPO/memory-meta/README.md" "$HOME/.claude/memory/README.md"
+
+# Global memory (git repo)
+link "$REPO/memory-global" "$HOME/.claude/memory-global"
+
+# Local memory + agents (Arcadia junk on this machine)
+if [[ ! -d "$JUNK_AGENTS_ROOT/memory-local" ]]; then
+  echo "WARN: missing $JUNK_AGENTS_ROOT/memory-local — create junk/the0/agents or set JUNK_AGENTS_ROOT" >&2
+else
+  link "$JUNK_AGENTS_ROOT/memory-local" "$HOME/.claude/memory"
+fi
 
 if [[ -L "$HOME/.claude/agents" ]]; then
   rm "$HOME/.claude/agents"
@@ -36,16 +44,24 @@ for file_path in "$REPO/agents/"*.md; do
   [[ -f "$file_path" ]] && link_agent_md "$file_path"
 done
 
-if [[ -d "$REPO/agents-local" ]]; then
-  for file_path in "$REPO/agents-local/"*.md; do
+if [[ -d "$JUNK_AGENTS_ROOT/agents-local" ]]; then
+  for file_path in "$JUNK_AGENTS_ROOT/agents-local/"*.md; do
     [[ -f "$file_path" ]] && link_agent_md "$file_path"
   done
+else
+  echo "WARN: missing $JUNK_AGENTS_ROOT/agents-local" >&2
+  if [[ -d "$REPO/agents-local" ]]; then
+    for file_path in "$REPO/agents-local/"*.md; do
+      [[ -f "$file_path" ]] && link_agent_md "$file_path"
+    done
+  fi
 fi
+
+link "$HOME/.claude/agents" "$HOME/.cursor/agents"
 
 "$REPO/scripts/install-git-hooks.sh"
 "$REPO/scripts/install-sync-cron.sh" 2>/dev/null || true
 
-# deepagent: project overlay only (не полная копия claude-code-sync.mdc)
 DEEPAGENT_RULES="$HOME/arcadia/robot/deepagent/.cursor/rules"
 if [[ -d "$DEEPAGENT_RULES" ]]; then
   mkdir -p "$DEEPAGENT_RULES"
@@ -66,4 +82,4 @@ chmod +x "$REPO/scripts/verify-instructions-sync.sh"
 echo "Symlinks:"
 ls -la "$HOME/.claude/agents" "$HOME/.claude/CLAUDE.md" "$HOME/.cursor/agents" \
   "$HOME/.cursor/rules/claude-code-sync.mdc" \
-  "$HOME/.claude/memory/INDEX.md" "$HOME/.claude/memory/README.md"
+  "$HOME/.claude/memory-global" "$HOME/.claude/memory" 2>/dev/null || true

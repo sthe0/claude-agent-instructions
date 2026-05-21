@@ -1,15 +1,17 @@
-# Локальные агенты (`agents-local/`)
+# Локальные агенты (перенесено)
 
-Каталог **не версионируется** (кроме этого README). Файлы `*.md` здесь линкуются в `~/.claude/agents/` через `scripts/setup-symlinks.sh`.
+Промпты этой машины версионируются в Arcadia:
 
-## logos-* (Logos ETL)
+**`~/arcadia/junk/the0/agents/agents-local/`**
 
-На этой машине все `logos-*` агенты лежат только здесь, не в `agents/` репозитория.
+(`yandex-guru`, `logos-*`, …)
 
-После `git pull`, если в репо удалили logos из `agents/`, один раз:
+После правок:
 
 ```bash
 ~/claude-agent-instructions/scripts/setup-symlinks.sh
+arc add junk/the0/agents/agents-local/
+arc commit -m "..."
 ```
 
-На новой машине: скопируй `agents-local/logos-*.md` с рабочей станции или восстанови из бэкапа, затем `setup-symlinks.sh`.
+См. [junk/the0/agents/README.md](~/arcadia/junk/the0/agents/README.md).

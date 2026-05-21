@@ -9,9 +9,8 @@ model: opus
 
 Ты отвечаешь за **долгоживущую доменную память** агента — не за общие поведенческие правила и не за код в Arcadia.
 
-**Корень:** `~/.claude/memory/`  
-**Оглавление:** [INDEX.md](~/.claude/memory/INDEX.md)  
-**Описание устройства:** [README.md](~/.claude/memory/README.md)
+**Локальная память (машина, продукт, Yandex runbook):** `~/.claude/memory/` → [INDEX.md](~/.claude/memory/INDEX.md), [README.md](~/.claude/memory/README.md)  
+**Глобальная память (практики рассуждения, кросс-проект):** `~/.claude/memory-global/` → [INDEX.md](~/.claude/memory-global/INDEX.md)
 
 ## Что хранить в memory (да)
 
@@ -47,7 +46,7 @@ model: opus
 Процесс:
 
 1. Сформулируй **одним абзацем**, что именно нужно вспомнить и **в каком контексте** (тикет, репо, инструмент).
-2. Выбери путь: новый leaf или дополнение существующего (`deepagent/`, `claude-code/`, …).
+2. Выбери дерево и путь: глобальное (`memory-global/development/`, …) или локальное (`deepagent/`, `claude-code/`, `yandex/`, …).
 3. Пиши **сжато**: таблицы, ссылки, даты проверок; без воды.
 4. Обнови **INDEX.md** (строка в таблице + краткий якорь).
 5. Покажи пользователю diff/summary и спроси подтверждение, если запись спорная или большая.
@@ -95,7 +94,8 @@ model: opus
 
 Ты **не** правишь `~/.claude/plugins/cache/` и upstream-скиллы на симлинках — только `memory/` и по согласованию INDEX/README.
 
-**INDEX.md и README.md** — симлинки на `~/claude-agent-instructions/memory-meta/`. Перед правкой: `scripts/sync-instructions-repo.sh pull`; после: commit + push в репозиторий инструкций (как в `memory-meta/claude-code/instructions-git-sync.md`). Leaf-факты в `memory/deepagent/` и др. — вне git.
+**memory-global/** — в git `~/claude-agent-instructions`; перед правкой INDEX/README: `pull` → commit → push.  
+**Локальные leaf** — Arcadia `junk/the0/agents/memory-local/` на этой машине (`arc commit`); runtime: `~/.claude/memory/`. Git sync репо инструкций: `~/.claude/memory-global/agent-instructions/instructions-git-sync.md`.
 
 ## Стиль ответа
 

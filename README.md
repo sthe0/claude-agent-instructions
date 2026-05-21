@@ -15,8 +15,9 @@
 | **Родительский агент** | Диалог в Cursor / Claude Code: принимает запрос пользователя, делегирует, не подменяет специалистов |
 | **Субагент** | Отдельный промпт в `agents/<name>.md`; вызывается через `Task`, `subagent_type: <name>` |
 | **Делегирование** | Передача подзадачи с явным prompt: контекст, ожидаемый output, ограничения |
-| **Memory** | Доменные runbook'и в `~/.claude/memory/` (вне git репо инструкций) — факты, TTL, ретесты |
-| **Инструкции** | Этот git-репо: политика, роли, симлинки; канон глобальных правил — `CLAUDE.md` |
+| **Memory (глобальная)** | `~/.claude/memory-global/` — git, практики рассуждения и кросс-проектные выводы |
+| **Memory (локальная)** | `~/.claude/memory/` — Arcadia `junk/the0/agents/memory-local/`, runbook'и продукта и Яндекса |
+| **Инструкции** | Этот git-репо: политика, роли, симлинки; канон — `CLAUDE.md` |
 
 ### Идея
 
@@ -26,26 +27,27 @@
 
 - **Поведение всех сессий** → `CLAUDE.md` + `cursor-rules/claude-code-sync.mdc`
 - **Роль одного субагента** → `agents/<name>.md`
-- **Конкретный домен (deepagent, Nirvana, arc)** → leaf в `~/.claude/memory/`, не раздувание generic-агентов
+- **Конкретный домен (deepagent, Nirvana, arc)** → локальный leaf в `~/.claude/memory/`
+- **Как думать / типовые ошибки координатора** → `~/.claude/memory-global/`
 
 ### Принципы
 
 1. **Обязательность важнее «prefer».** Tracker-тикет, mount, согласование плана, self-improvement при обратной связи, manager при затруднении — не опциональные советы.
-2. **Понять → согласовать → делать.** Числа и сроки в тикете без источника — вопрос или исследование **до** правок кода. План показывается пользователю до `yandex-developer` (кроме явного «делай сразу»).
-3. **Код тикета — только yandex-developer** в параллельном маунте `~/arcadia_<TICKET>-*`, не родитель в `~/arcadia`.
+2. **Понять → согласовать → делать.** Числа и сроки в тикете без источника — вопрос или исследование **до** правок кода. План показывается пользователю до **developer** (кроме явного «делай сразу»).
+3. **Код тикета — только developer** в параллельном маунте `~/arcadia_<TICKET>-*`, не родитель в `~/arcadia`.
 4. **Затруднение — manager, не бесконечный retry родителя.** Повторная ошибка, блокер, расхождение с планом, 2+ корректировки процесса, новая попытка Nirvana/arc после провала → `Task` → **manager** (цикл: исследование → критика → переплан → действие). Мульти-тикет / сложная координация → **manager до planner**.
 5. **Обратная связь о процессе — self-improvement в том же ходе**, до финального ответа пользователю; не только извинение и тактический фикс.
 6. **Простое решение предпочтительнее.** Минимальный ретест вместо полного пайплайна; один CLI entry point вместо дублирующих скриптов; расширение существующего кода вместо нового, если уместно.
-7. **Домен не вшивать в manager/planner/yandex-developer.** Runbook'и, имена кубиков, пути prod — в memory; в агентах — ссылки на INDEX.
+7. **Домен не вшивать в manager/planner/developer.** Runbook'и — в локальную memory; рассуждения — в memory-global; в агентах — ссылки на INDEX.
 
 ### Типовые потоки
 
 ```text
 Обычный Tracker-тикет (один ключ, без затруднений):
-  понимание → planner → согласование с пользователем → mount → yandex-developer
+  понимание → planner → согласование с пользователем → mount → developer
 
 Несколько тикетов / сложная координация / затруднение:
-  … → manager → (planner | yandex-developer | memory | thinker)
+  … → manager → (planner | developer | yandex-guru | memory | thinker)
 
 Корректировка пользователя («не так», «зачем», «лучше X»):
   self-improvement (+ при необходимости manager, если блокер по задаче)
@@ -62,12 +64,13 @@
 |----------|--------|
 | **manager** | Затруднения, мультишаг, разбор сессий, маршрутизация |
 | **planner** | План по Tracker-тикету |
-| **yandex-developer** | Production-код в Arcadia |
+| **developer** | Production-код (любой стек; в Arcadia — по политике mount) |
+| **yandex-guru** | Консультации по инфраструктуре Яндекса (локальный агент) |
 | **thinker** | Сомнительная цепочка выводов |
 | **memory** | Запомнить/найти доменный факт |
 | **self-improvement** | Улучшить инструкции после обратной связи |
 
-Полный список файлов — таблица ниже; опциональные промпты машины — `agents-local/`.
+Полный список глобальных агентов — таблица ниже. Локальные (`yandex-guru`, `logos-*`) — `~/arcadia/junk/the0/agents/agents-local/`.
 
 ### Антипаттерны
 
@@ -77,7 +80,7 @@
 - Полный перезапуск train→eval при отладке одного кубика.
 - Дублирование глобальной политики в project `.cursor/rules` (только overlay).
 
-Runbook типовых ошибок: [memory-meta/claude-code/session-retrospective-2026-05.md](memory-meta/claude-code/session-retrospective-2026-05.md).
+Runbook типовых ошибок (локально): `~/.claude/memory/claude-code/session-retrospective-2026-05.md`. Глобальные практики: `memory-global/development/`.
 
 ## Быстрый старт
 
@@ -95,9 +98,10 @@ git clone git@github.com:sthe0/claude-agent-instructions.git ~/claude-agent-inst
 |----------------------|----------------|
 | `CLAUDE.md` | `~/.claude/CLAUDE.md` |
 | `agents/*.md` | `~/.claude/agents/<name>.md` |
-| `agents-local/*.md` (если есть) | `~/.claude/agents/<name>.md` |
+| `junk/the0/agents/agents-local/*.md` | `~/.claude/agents/<name>.md` |
 | `cursor-rules/claude-code-sync.mdc` | `~/.cursor/rules/claude-code-sync.mdc` |
-| `memory-meta/INDEX.md`, `README.md` | `~/.claude/memory/` |
+| `memory-global/` | `~/.claude/memory-global/` |
+| `junk/the0/agents/memory-local/` | `~/.claude/memory/` |
 | — | `~/.cursor/agents` → `~/.claude/agents` |
 
 Копирование в home **не используется** — только симлинки.
@@ -135,23 +139,29 @@ Runbook: [memory-meta/claude-code/instructions-git-sync.md](memory-meta/claude-c
 |------|------|
 | manager | [agents/manager.md](agents/manager.md) |
 | planner | [agents/planner.md](agents/planner.md) |
-| yandex-developer | [agents/yandex-developer.md](agents/yandex-developer.md) |
+| developer | [agents/developer.md](agents/developer.md) |
 | yandex-cloud-expert | [agents/yandex-cloud-expert.md](agents/yandex-cloud-expert.md) |
 | thinker | [agents/thinker.md](agents/thinker.md) |
 | memory | [agents/memory.md](agents/memory.md) |
 | self-improvement | [agents/self-improvement.md](agents/self-improvement.md) |
 
-## Локальные агенты (`agents-local/`)
+## Локальные агенты и память (эта машина)
 
-Каталог **в `.gitignore`** (кроме [agents-local/README.md](agents-local/README.md)). Для промптов, которые не должны быть в общем git (другая машина, другой набор агентов).
+Версионируются в Arcadia: **`~/arcadia/junk/the0/agents/`** (`agents-local/`, `memory-local/`). Симлинки настраивает `setup-symlinks.sh` (`JUNK_AGENTS_ROOT` при необходимости).
 
-На отдельных машинах здесь могут лежать дополнительные `*.md` (например Logos ETL) — см. README в каталоге. После добавления файлов: `setup-symlinks.sh`.
+| name | Файл |
+|------|------|
+| yandex-guru | `junk/the0/agents/agents-local/yandex-guru.md` |
+| logos-* | `junk/the0/agents/agents-local/logos-*.md` |
+
+Каталог `agents-local/` в git репо инструкций — только [README-заглушка](agents-local/README.md); содержимое на диске — в junk.
 
 ## Что не в этом репозитории
 
 | Что | Где |
 |-----|-----|
-| Доменная memory (deepagent, runbook'и) | `~/.claude/memory/` — leaf вне git |
+| Локальная memory (deepagent, Nirvana, arc) | `junk/the0/agents/memory-local/` → `~/.claude/memory/` |
+| Глобальная memory | `memory-global/` → `~/.claude/memory-global/` |
 | Скиллы | `~/.claude/skills/` — симлинки в Arcadia ([docs/skills-symlinks.md](docs/skills-symlinks.md)) |
 | Сессии, plugins cache, `settings.json` | `~/.claude/` локально |
 
