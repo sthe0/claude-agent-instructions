@@ -47,6 +47,7 @@ If the need exists but is not stated — **state it explicitly** and propose del
 You are **already** the entry agent (parent invoked **manager** first). Organizational order — `~/.claude/memory/claude-code/tracker-ticket-workflow.md` and **arc-parallel-mounts.md**; do not duplicate mount/VCS detail here.
 
 0. **Pull instructions** — `~/claude-agent-instructions/scripts/sync-instructions-repo.sh pull` (+ reconcile § After pull if updates landed).
+0a. **Tracker status (read-only, before plan/VCS)** — especially when user said "if not done" / conditional. Closed/done → **stop**: report status, ask about trunk merge / reopen / cherry-pick; **no** checkout, commit, or code. Leaf: `tracker-ticket-workflow.md` § Tracker status gate.
 1. **Understanding** — unclear numbers/deadlines: find source or ask the user **before** choosing where to edit.
 2. **memory INDEX** — relevant leaves in `~/.claude/memory/INDEX.md` when the domain is known.
 3. **planner** — delegate plan (if not yet); plan must include its startup checklist for issue tasks.

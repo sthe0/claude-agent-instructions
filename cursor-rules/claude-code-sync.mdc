@@ -24,7 +24,7 @@ Avoid duplicate code; explore before changing; clear code over trivial comments.
 
 **Instructions git:** `pull` before edits, **reconcile** after pull (`instructions-git-sync.md` § After pull), `push` after every commit. Cron pull every 10 min.
 
-**Mandatory self-improvement:** substantive user feedback about agent behavior → **Task → self-improvement** same turn (not bare "ok"/"thanks"). See `~/.claude/CLAUDE.md`.
+**Mandatory self-improvement:** substantive user feedback about agent behavior → **Task → self-improvement** same turn (not bare "ok"/"thanks"). User reminder ("why didn't you run self-improvement?") or confirmation to run counts as feedback. See `~/.claude/CLAUDE.md`.
 
 **Mandatory manager:** every **new substantive task** → **Task → manager** first (before planner, developer, mount, broad search). Again on difficulty. See `~/.claude/CLAUDE.md` § Mandatory manager.
 

@@ -34,6 +34,7 @@ Typical signals in the parent prompt:
 - what the parent already did (fix, commit, revert);
 - request: diagnosis, where to put the rule, concrete diff in `~/claude-agent-instructions/`.
 - meta: "why was self-improvement not run", "why only apologize", "second correction on the same topic" — parent violated `CLAUDE.md`; strengthen wording and record in the report.
+- user confirms self-improvement after a reminder ("да", "yes run it") — run **now** in this turn; a prior missed run does not replace the current obligation.
 
 ## Analysis triggers (inside your work)
 

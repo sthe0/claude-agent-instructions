@@ -25,11 +25,12 @@ File structure contract: [memory-global/agent-instructions/file-structure-contra
 3. **Understand → approve → execute.** **manager** routes **planner**; then **developer**, except explicit "do it now".
 4. **Ticket code — developer** in isolated VCS copy, not parent in shared default copy ([CLAUDE.md](CLAUDE.md)).
 5. **Difficulty — manager** again in the same turn.
-6. **Feedback — self-improvement** in the same turn.
-7. **Runbooks — memory INDEX**, not generic agent prompts.
-8. **File structure contract** — global/local tree docs stay current; after changes run `verify-layout-contract.sh`; on mismatch fix docs or disk.
-9. **Instruction language** — English in this git repo and in `~/.claude/memory/`; exceptions need adjacent rationale ([instruction-language.md](memory-global/agent-instructions/instruction-language.md)). User replies — same language as the request.
-10. **After instructions `pull`** — reconcile active work with new policy ([instructions-git-sync.md](memory-global/agent-instructions/instructions-git-sync.md) § After pull).
+6. **Feedback — self-improvement** in the same turn (including when user reminds agent forgot).
+7. **Closed Tracker + conditional wording** ("if not done") → status report first; no code/VCS until user picks merge/reopen/nothing ([tracker-ticket-workflow.md](~/.claude/memory/claude-code/tracker-ticket-workflow.md) — local memory).
+8. **Runbooks — memory INDEX**, not generic agent prompts.
+9. **File structure contract** — global/local tree docs stay current; after changes run `verify-layout-contract.sh`; on mismatch fix docs or disk.
+10. **Instruction language** — English in this git repo and in `~/.claude/memory/`; exceptions need adjacent rationale ([instruction-language.md](memory-global/agent-instructions/instruction-language.md)). User replies — same language as the request.
+11. **After instructions `pull`** — reconcile active work with new policy ([instructions-git-sync.md](memory-global/agent-instructions/instructions-git-sync.md) § After pull).
 
 ### Typical flows
 

@@ -86,6 +86,8 @@ Run is **mandatory** if the user message:
 
 **Not mandatory** only for neutral confirmation without new info ("ok", "yes do it", "thanks") and for a pure question **without** evaluating or correcting your actions.
 
+**Reminder counts:** if the user asks why self-improvement was not run, or confirms it should run ("да", "yes, run it") after a missed turn — that **is** substantive feedback. **Task → self-improvement** immediately in the **current** turn; do not reply with apology only.
+
 Pass to self-improvement: user quote, what you did, what you already changed, expected output (diagnosis + edits in `~/claude-agent-instructions/`).
 
 **Do not end the turn** with only a tactical fix — **Task → self-improvement** first. Repeated correction on the same topic — run again in the **same** turn.
@@ -120,6 +122,8 @@ After starting an external workflow/job graph — report ids/URLs and monitor un
 Delegation — **Task**, `subagent_type` from `~/.claude/agents/*.md`.
 
 **Ticket / Arcadia production work** — follow `~/.claude/memory/claude-code/tracker-ticket-workflow.md` (manager routes).
+
+**Conditional ticket requests** ("if not done", "unless already fixed"): read Tracker status **before** code or VCS. Closed/done → report and ask (merge/reopen/nothing); missing change in trunk is not automatic "redo". No `arc checkout` / commit without explicit user request.
 
 | Agent | Role |
 |-------|------|
