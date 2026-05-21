@@ -6,3 +6,8 @@
 secrets/
 agents-local/*
 !agents-local/README.md
+
+skills-local/*
+!skills-local/README.md
+mcp-local/*
+!mcp-local/README.md

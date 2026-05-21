@@ -23,6 +23,11 @@ link_agent_md() {
   link "$file_path" "$HOME/.claude/agents/$base"
 }
 
+prune_dangling() {
+  local dir="$1"
+  find "$dir" -maxdepth 1 -type l ! -exec test -e {} \; -delete 2>/dev/null || true
+}
+
 link "$REPO/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
 link "$REPO/cursor-rules/claude-code-sync.mdc" "$HOME/.cursor/rules/claude-code-sync.mdc"
 link "$REPO/memory-global" "$HOME/.claude/memory-global"
@@ -45,6 +50,7 @@ if [[ -L "$HOME/.claude/agents" ]]; then
   rm "$HOME/.claude/agents"
 fi
 mkdir -p "$HOME/.claude/agents"
+prune_dangling "$HOME/.claude/agents"
 
 for file_path in "$REPO/agents/"*.md; do
   [[ -f "$file_path" ]] && link_agent_md "$file_path"
@@ -55,6 +61,31 @@ if [[ -d "$JUNK_AGENTS_ROOT/agents-local" ]]; then
     [[ -f "$file_path" ]] && link_agent_md "$file_path"
   done
 fi
+
+# Fallback: local agents from repo agents-local/ (for non-Arcadia machines)
+if [[ -d "$REPO/agents-local" ]]; then
+  for file_path in "$REPO/agents-local/"*.md; do
+    [[ -f "$file_path" ]] && link_agent_md "$file_path"
+  done
+fi
+
+# skills-local/: local-only skills (gitignored)
+if [[ -L "$HOME/.claude/skills" ]]; then
+  rm "$HOME/.claude/skills"
+fi
+mkdir -p "$HOME/.claude/skills"
+prune_dangling "$HOME/.claude/skills"
+
+if [[ -d "$REPO/skills-local" ]]; then
+  for file_path in "$REPO/skills-local/"*.md; do
+    [[ -f "$file_path" ]] || continue
+    base="$(basename "$file_path")"
+    [[ "$base" == "README.md" ]] && continue
+    link "$file_path" "$HOME/.claude/skills/$base"
+  done
+fi
+
+# mcp-local/: JSON snippets for local MCP servers — applied via scripts/apply-mcp-local.sh
 
 link "$HOME/.claude/agents" "$HOME/.cursor/agents"
 
