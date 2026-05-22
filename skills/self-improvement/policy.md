@@ -123,11 +123,17 @@ The repo at `~/claude-agent-instructions/` is the single source of truth. Symlin
 
 ### Before editing (mandatory)
 
+Two steps, in order. Both are required — the second is not implied by the first.
+
+**1. Pull origin/main:**
+
 ```bash
 ~/claude-agent-instructions/scripts/sync-instructions-repo.sh pull
 ```
 
 Fetches `origin/main`. On rebase conflict the script prefers **incoming** changes (`--theirs`); if that fails — resolve manually.
+
+**2. Re-read the target files from disk** before reasoning about the edit. Conversation context can carry stale copies of any instruction file — loaded at session start or before an in-session edit. Use `Read` on each file you will touch (CLAUDE.md, the target agent/skill, this policy, memory leaves). On-disk content wins over what you remember in context; rebuild the edit on top of the current state.
 
 ### After pull (mandatory reconcile)
 

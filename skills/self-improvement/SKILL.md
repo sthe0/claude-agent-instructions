@@ -13,11 +13,21 @@ A user reminder ("did you run self-improvement?", "yes, run it") IS feedback. In
 
 ## Per-session workflow
 
-1. **Collect signals.** User quote(s), what went wrong, what you already did (tactical fix, commit, revert).
-2. **Classify.** Reasoning error / missing tool / wrong delegation / stale or misplaced memory / noise in instructions / wrong place for the content.
-3. **Locate.** Where does the change belong? Use the table in § Where to put changes.
-4. **Diff.** Propose a **concrete edit** (file, section, wording) — not generalities.
-5. **Apply.** Edit, commit, push. The git workflow, English-only policy, and file-structure rules are mandatory and live in [policy.md](policy.md) — read it before editing the repo.
+This skill **always** starts with two preparation steps before reasoning about the change. They are not optional — skipping them produces edits that conflict with the current repo state.
+
+1. **Sync first.** Run `~/claude-agent-instructions/scripts/sync-instructions-repo.sh pull` before anything else. There is no background cron auto-pull, and other machines may have pushed since your session started. If `pull` brought new commits, do the reconcile in [policy.md](policy.md) § After pull before proceeding.
+
+2. **Re-read the relevant instruction files from disk.** The conversation context (system prompt, prior turns, your own memory of the dialogue) may carry **stale versions** of `CLAUDE.md`, `agents/*.md`, `skills/*/SKILL.md`, `policy.md`, or memory leaves — they were loaded at session start (or earlier), and they have since been edited in this session, in another session, or by another machine. **Use `Read` on every file you plan to touch**, immediately before reasoning about the edit. If on-disk content differs from what you have in context, **on-disk wins**: build the edit on top of the current state, not your mental model. The same applies to any file you cite or compare against.
+
+3. **Collect signals.** User quote(s), what went wrong, what you already did (tactical fix, commit, revert).
+
+4. **Classify.** Reasoning error / missing tool / wrong delegation / stale or misplaced memory / noise in instructions / wrong place for the content.
+
+5. **Locate.** Where does the change belong? Use the table in § Where to put changes.
+
+6. **Diff.** Propose a **concrete edit** (file, section, wording) — not generalities.
+
+7. **Apply.** Edit, commit, push. The git workflow, English-only policy, and file-structure rules are mandatory and live in [policy.md](policy.md) — read it before editing the repo.
 
 ## Source of truth
 
