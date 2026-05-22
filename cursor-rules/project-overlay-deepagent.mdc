@@ -17,14 +17,6 @@ The directory is symlinked from `~/.claude/projects/<cwd-hash>/memory/` by `~/cl
 
 `.cursor/cli.json` mirrors `.claude/settings.local.json` in this repository. Keep them aligned — drift breaks Cursor's permission prompts.
 
-## Deepagent MCP — excluded from Cursor
-
-The deepagent MCP tools (`mcp__yandex__deepagent-generate_answer`, anything else under a `deepagent` MCP server) are **Claude Code only** on this machine — Cursor must not invoke them and they must not appear in Cursor's MCP configuration.
-
-If you ever set up `<project>/.cursor/mcp.json` for this project, do **not** enable a `deepagent` (or equivalent) server. If you see `deepagent`-prefixed tools in Cursor's available tool list, treat it as a misconfiguration and remove the server entry from `mcp.json` rather than calling the tool.
-
-"Ask deepagent" / "consult deepagent" requests in a Cursor session: tell the user the call is Claude-Code-only and stop. Do not attempt to substitute another MCP.
-
 ## Where to edit instructions
 
 - **Global** agent rules → `~/claude-agent-instructions/` (`CLAUDE.md`, `agents/`, `skills/`, `cursor-rules/`).

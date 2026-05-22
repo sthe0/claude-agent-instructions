@@ -41,7 +41,7 @@ Source: agent transcripts for project `robot/deepagent` (13 sessions, ~2.9 MB). 
 
 1. `scripts/sync-instructions-repo.sh pull`.
 2. Read ticket + comments + links.
-3. Unclear numbers/deadlines/TTL → source (wiki, code, deepagent MCP) **or** ask the user.
+3. Unclear numbers/deadlines/TTL → source (wiki, code, project MCP servers) **or** ask the user.
 4. Project memory — relevant leaves (Nirvana relaunch, retest, mount, …).
 5. `Task → planner` → markdown plan with "Problem and done criteria".
 6. Show plan → **explicit OK** (except "do it now").
