@@ -141,7 +141,7 @@ When `pull` brought new commits:
    - tell the user what conflicted (file / section) and which rule now applies.
 4. **Do not assume** the pre-pull mental model still holds for any gate.
 
-Background cron pull does **not** replace this reconcile at the start of a session that will edit code or instructions.
+If cron pull is enabled (opt-in, see below), it does **not** replace this reconcile at the start of a session that will edit code or instructions.
 
 ### After editing (mandatory)
 
@@ -155,7 +155,9 @@ git add -A && git commit -m "…"
 
 If push is rejected (remote ahead): `pull` → resolve conflicts → `push` again.
 
-### Background pull (every 10 minutes)
+### Background pull (opt-in, every 10 minutes)
+
+Background auto-pull is **not installed by default**; `setup-symlinks.sh` does not enable it. Install manually only if you want it:
 
 ```bash
 ~/claude-agent-instructions/scripts/install-sync-cron.sh
@@ -165,6 +167,8 @@ Cron line (repo path substituted on install): `*/10 * * * * …/sync-instruction
 Log: `~/.local/log/claude-agent-instructions-sync.log`.
 
 If `crontab` is forbidden (corp VM): `scripts/install-sync-systemd-timer.sh`.
+
+To disable later: `crontab -l | grep -v claude-agent-instructions | crontab -`.
 
 ### Git hooks
 
@@ -181,8 +185,8 @@ If `crontab` is forbidden (corp VM): `scripts/install-sync-systemd-timer.sh`.
 | `sync-instructions-repo.sh pull` | fetch + rebase / ff-only |
 | `sync-instructions-repo.sh push` | push if local commits exist |
 | `sync-instructions-repo.sh sync` | pull, then push |
-| `install-sync-cron.sh` | cron line (pull every 10 min) |
-| `install-sync-systemd-timer.sh` | user systemd timer (if cron unavailable) |
+| `install-sync-cron.sh` | cron line (pull every 10 min) — opt-in, run manually if desired |
+| `install-sync-systemd-timer.sh` | user systemd timer (if cron unavailable) — opt-in |
 | `install-git-hooks.sh` | post-commit → auto-push |
 | `setup-symlinks.sh` | apply the runtime symlinks |
 | `setup-project-memory.sh` | per-project: symlink shared agent memory into the project tree |

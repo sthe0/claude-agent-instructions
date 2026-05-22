@@ -102,7 +102,7 @@ fi
 link "$HOME/.claude/agents" "$HOME/.cursor/agents"
 
 "$REPO/scripts/install-git-hooks.sh"
-"$REPO/scripts/install-sync-cron.sh" 2>/dev/null || true
+# Note: cron pull is opt-in — run scripts/install-sync-cron.sh manually if desired.
 
 DEEPAGENT_RULES="$HOME/arcadia/robot/deepagent/.cursor/rules"
 if [[ -d "$DEEPAGENT_RULES" ]]; then

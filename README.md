@@ -82,7 +82,7 @@ If the machine was set up before a refactor that changed the on-disk layout, `se
 | [verify-layout-contract.sh](scripts/verify-layout-contract.sh) | Compare tree to the layout in `skills/self-improvement/policy.md` |
 | [sync-instructions-repo.sh](scripts/sync-instructions-repo.sh) | `pull` / `push` this repo |
 | [install-git-hooks.sh](scripts/install-git-hooks.sh) | post-commit → push |
-| [install-sync-cron.sh](scripts/install-sync-cron.sh) | Cron: git pull every 10 min |
+| [install-sync-cron.sh](scripts/install-sync-cron.sh) | Cron: git pull every 10 min (opt-in; not installed by `setup-symlinks.sh`) |
 
 ## Git workflow
 
