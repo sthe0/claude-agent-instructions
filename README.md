@@ -1,8 +1,6 @@
 # Claude / Cursor agent instructions
 
-Single git repository for **global** instructions for **Claude Code**. Edits in the repo appear at runtime via symlinks under `~/.claude/`.
-
-The Cursor wiring is currently being reworked — see [docs/deferred/cursor-integration.md](docs/deferred/cursor-integration.md). Until then, `cursor-rules/*.mdc` and the project overlay are stale.
+Single git repository for **global** instructions for **Claude Code** and **Cursor**. Edits in the repo appear at runtime via symlinks under `~/.claude/` and `~/.cursor/`. The canonical source for both tools is the same `CLAUDE.md`; the Cursor rule (`cursor-rules/claude-code-sync.mdc`) is a thin mirror that handles things Cursor cannot do natively (no `Skill` tool, no auto-memory writes).
 
 File layout, instruction language, and the git workflow live in [skills/self-improvement/policy.md](skills/self-improvement/policy.md).
 
@@ -70,8 +68,9 @@ If the machine was set up before a refactor that changed the on-disk layout, `se
 | `agents/*.md` | `~/.claude/agents/<name>.md` |
 | `skills/<name>/` | `~/.claude/skills/<name>/` |
 | `memory-global/` | `~/.claude/memory-global/` |
-| `cursor-rules/claude-code-sync.mdc` | `~/.cursor/rules/` *(deferred refactor)* |
-| — | `~/.cursor/agents` → `~/.claude/agents` *(deferred refactor)* |
+| `cursor-rules/claude-code-sync.mdc` | `~/.cursor/rules/claude-code-sync.mdc` |
+| — | `~/.cursor/agents` → `~/.claude/agents` (so Cursor sees the same subagents) |
+| `cursor-rules/project-overlay-deepagent.mdc` | `~/arcadia/robot/deepagent/.cursor/rules/deepagent-project.mdc` (Arcadia machines only) |
 
 ## Scripts
 

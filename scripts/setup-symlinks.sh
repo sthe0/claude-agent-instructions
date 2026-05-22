@@ -104,7 +104,20 @@ link "$HOME/.claude/agents" "$HOME/.cursor/agents"
 "$REPO/scripts/install-git-hooks.sh"
 "$REPO/scripts/install-sync-cron.sh" 2>/dev/null || true
 
-chmod +x "$REPO/scripts/verify-instructions-sync.sh" "$REPO/scripts/verify-layout-contract.sh" "$REPO/scripts/setup-project-memory.sh"
+DEEPAGENT_RULES="$HOME/arcadia/robot/deepagent/.cursor/rules"
+if [[ -d "$DEEPAGENT_RULES" ]]; then
+  if [[ -f "$DEEPAGENT_RULES/claude-code-sync.mdc" && ! -L "$DEEPAGENT_RULES/claude-code-sync.mdc" ]]; then
+    mv "$DEEPAGENT_RULES/claude-code-sync.mdc" \
+      "$DEEPAGENT_RULES/claude-code-sync.mdc.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
+  fi
+  rm -f "$DEEPAGENT_RULES/claude-code-sync.mdc"
+  link "$REPO/cursor-rules/project-overlay-deepagent.mdc" "$DEEPAGENT_RULES/deepagent-project.mdc"
+  if [[ ! -e "$HOME/arcadia/robot/deepagent/CLAUDE.md" ]]; then
+    link "$REPO/CLAUDE.md" "$HOME/arcadia/robot/deepagent/CLAUDE.md"
+  fi
+fi
+
+chmod +x "$REPO/scripts/verify-instructions-sync.sh" "$REPO/scripts/verify-layout-contract.sh" "$REPO/scripts/setup-project-memory.sh" "$REPO/scripts/migrate-pre-2026-05.sh"
 "$REPO/scripts/verify-layout-contract.sh" 2>/dev/null || true
 "$REPO/scripts/verify-instructions-sync.sh" || true
 
