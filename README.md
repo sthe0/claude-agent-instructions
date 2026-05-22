@@ -58,6 +58,10 @@ Per-project memory (run inside each project where you want shared agent memory):
 git add .claude/agent-memory && git commit -m "agent memory: bootstrap"
 ```
 
+## Migrating a previously set-up machine
+
+If the machine was set up before a refactor that changed the on-disk layout, `setup-symlinks.sh` alone may not be enough — there can be stale directories or dangling symlinks to remove. See [docs/migrations/](docs/migrations/) for per-refactor migration runbooks. The most recent is [Collapse manager / memory / self-improvement agents into root + skills (2026-05-22)](docs/migrations/2026-05-collapse-manager-memory.md); the automated form is `scripts/migrate-pre-2026-05.sh`.
+
 ## Symlinks (global from git)
 
 | In repo | Runtime |
