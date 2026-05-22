@@ -1,45 +1,47 @@
 # Claude / Cursor agent instructions
 
-Single git repository for **global** instructions for **Claude Code** and **Cursor**. Edits in the repo appear in both IDEs via symlinks under `~/.claude/` and `~/.cursor/`.
+Single git repository for **global** instructions for **Claude Code**. Edits in the repo appear at runtime via symlinks under `~/.claude/`.
 
-File structure contract: [memory-global/agent-instructions/file-structure-contract.md](memory-global/agent-instructions/file-structure-contract.md). Runtime paths: [runtime-layout.md](memory-global/agent-instructions/runtime-layout.md).
+The Cursor wiring is currently being reworked — see [docs/deferred/cursor-integration.md](docs/deferred/cursor-integration.md). Until then, `cursor-rules/*.mdc` and the project overlay are stale.
+
+File layout, instruction language, and the git workflow live in [skills/self-improvement/policy.md](skills/self-improvement/policy.md).
 
 ## Agent cooperation
 
-> **This section is a living summary of how agents cooperate.** When roles, mandatory gates, or delegation order change, update it **in the same commit** as `CLAUDE.md`, `agents/*.md`, and `cursor-rules/claude-code-sync.mdc`. Details — [CLAUDE.md](CLAUDE.md).
+> Living summary. When roles, mandatory gates, or delegation order change, update this section **in the same commit** as `CLAUDE.md` and the affected `agents/*.md` / `skills/*/SKILL.md`. Details — [CLAUDE.md](CLAUDE.md).
 
 ### Concepts
 
 | Concept | Meaning |
-|---------|--------|
-| **Parent agent** | Dialog in Cursor / Claude Code: delegates, does not replace specialists |
-| **Subagent** | Prompt in `~/claude-agent-instructions/agents/` or extra file in `~/.claude/agents/`; invoke `Task`, `subagent_type: <name>` |
-| **Memory (global)** | `~/.claude/memory-global/` — how to think, coordination, git sync |
-| **Memory (local)** | `~/.claude/memory/INDEX.md` — product and environment runbooks (outside this git) |
-| **Instructions** | This repo → `~/.claude/CLAUDE.md` |
+|---|---|
+| **Root coordinator** | The main Claude Code dialog. Coordinates, decides routing, does not replace specialists. Acts as the manager — there is no separate manager subagent. |
+| **Subagent** | Prompt file in `agents/` (or `~/.claude/agents/` for machine-local) — invoke via `Task`, `subagent_type: <name>`. |
+| **Skill** | Directory in `skills/<name>/` with `SKILL.md` (+ optional supporting files). Invoked via the `Skill` tool or `/<name>` from the user. Runs in the main thread, sees full context. |
+| **Global memory** | `~/.claude/memory-global/MEMORY.md` + `leaves/` — cross-project facts and practices. Imported into every session via `@…` in `CLAUDE.md`. |
+| **Project memory** | `<project_cwd>/.claude/agent-memory/` — project-specific runbooks. Symlinked from `~/.claude/projects/<cwd-hash>/memory/` by `scripts/setup-project-memory.sh`, so native auto-memory reads / writes through the symlink. Committed to the project's git. |
 
 ### Principles
 
-1. **Mandatory beats "prefer".** New task → **manager** first; plan approval; self-improvement on feedback; **manager** again on difficulty ([CLAUDE.md](CLAUDE.md)).
-2. **New task → manager → specialists.** Parent does not call **planner** / **developer** before **manager** on a new goal.
-3. **Understand → approve → execute.** **manager** routes **planner**; then **developer**, except explicit "do it now".
-4. **Ticket code — developer** in isolated VCS copy, not parent in shared default copy ([CLAUDE.md](CLAUDE.md)).
-5. **Difficulty — manager** again in the same turn.
-6. **Feedback — self-improvement** in the same turn (including when user reminds agent forgot).
-7. **Org/ticket gates** — canonical runbooks in local memory + `org-yandex.mdc`; global agents point, do not restate ([tracker-ticket-workflow.md](~/.claude/memory/claude-code/tracker-ticket-workflow.md)).
-8. **Runbooks — memory INDEX**, not generic agent prompts.
-9. **File structure contract** — global/local tree docs stay current; after changes run `verify-layout-contract.sh`; on mismatch fix docs or disk.
-10. **Instruction language** — English in this git repo and in `~/.claude/memory/`; exceptions need adjacent rationale ([instruction-language.md](memory-global/agent-instructions/instruction-language.md)). User replies — same language as the request.
-11. **After instructions `pull`** — reconcile active work with new policy ([instructions-git-sync.md](memory-global/agent-instructions/instructions-git-sync.md) § After pull).
+1. **Root coordinates first.** On a new substantive task, restate goal + done criterion, then decide routing (`Task → planner`, `developer`, `thinker`, …). Do not skip to coding.
+2. **Understand → approve → execute.** Non-trivial work → plan with the user, wait for explicit OK unless "do it now".
+3. **Ticket code — `developer`** in an isolated VCS copy, not the root in the default tree.
+4. **Stuck → `overcome-difficulty` skill** in the same turn (not another blind retry).
+5. **Feedback → `self-improvement` skill** in the same turn (including when the user reminds you it was missed).
+6. **Org / ticket gates** — canonical runbooks live in project memory; agents point, do not restate.
+7. **Runbooks → memory**, not generic agent prompts.
+8. **File structure contract** — global tree stays current; after layout changes run `verify-layout-contract.sh`; on mismatch fix doc **or** disk, not both diverging.
+9. **Instruction language** — English in this repo and in `.claude/agent-memory/` trees; exceptions need adjacent rationale. User-facing replies use the user's language.
+10. **After instructions `pull`** — reconcile active work with new policy (see [skills/self-improvement/policy.md](skills/self-improvement/policy.md) § Git sync).
 
 ### Typical flows
 
 ```text
-New task: manager → (memory | planner → approval → developer | thinker | optional ~/.claude/agents/)
-Difficulty (same task): manager → (replan → planner | developer | memory | …)
+New task: root → (planner → approval → developer | thinker | direct answer)
+Difficulty: root → Skill overcome-difficulty → (replan → planner | developer | …)
+Feedback:  root → Skill self-improvement → (edits in this repo → commit → push)
 ```
 
-Global anti-patterns: [memory-global/development/typical-coordinator-pitfalls.md](memory-global/development/typical-coordinator-pitfalls.md).
+Anti-patterns: [memory-global/leaves/coordinator-pitfalls.md](memory-global/leaves/coordinator-pitfalls.md).
 
 ## Quick start
 
@@ -49,33 +51,35 @@ git clone git@github.com:sthe0/claude-agent-instructions.git ~/claude-agent-inst
 ~/claude-agent-instructions/scripts/verify-instructions-sync.sh
 ```
 
-Optional local configuration (extra agents, memory, scripts): `~/.claude/memory/INDEX.md` after `setup-symlinks.sh`.
+Per-project memory (run inside each project where you want shared agent memory):
+
+```bash
+~/claude-agent-instructions/scripts/setup-project-memory.sh
+git add .claude/agent-memory && git commit -m "agent memory: bootstrap"
+```
 
 ## Symlinks (global from git)
 
 | In repo | Runtime |
-|--------|---------|
+|---|---|
 | `CLAUDE.md` | `~/.claude/CLAUDE.md` |
 | `agents/*.md` | `~/.claude/agents/<name>.md` |
+| `skills/<name>/` | `~/.claude/skills/<name>/` |
 | `memory-global/` | `~/.claude/memory-global/` |
-| `cursor-rules/claude-code-sync.mdc` | `~/.cursor/rules/` |
-| — | `~/.cursor/agents` → `~/.claude/agents` |
-| — | `~/.cursor/rules/org-yandex.mdc` ← local arc (`cursor-rules/org-yandex.mdc`) |
+| `cursor-rules/claude-code-sync.mdc` | `~/.cursor/rules/` *(deferred refactor)* |
+| — | `~/.cursor/agents` → `~/.claude/agents` *(deferred refactor)* |
 
-Local `~/.claude/memory/`, `org-yandex.mdc`, and `~/.claude/scripts-local/` are **not** in this git — configured on the machine (`setup-symlinks.sh`).
-
-## Scripts (global, git)
+## Scripts
 
 | Script | Purpose |
-|--------|---------|
-| [setup-symlinks.sh](scripts/setup-symlinks.sh) | Symlinks for Claude + Cursor (+ local runtime paths) |
-| [verify-instructions-sync.sh](scripts/verify-instructions-sync.sh) | Check global symlinks; delegates local verify |
-| [verify-layout-contract.sh](scripts/verify-layout-contract.sh) | Compare tree to file-structure-contract.md |
+|---|---|
+| [setup-symlinks.sh](scripts/setup-symlinks.sh) | Apply runtime symlinks for agents, skills, memory-global |
+| [setup-project-memory.sh](scripts/setup-project-memory.sh) | Per-project: symlink shared agent memory into the project tree |
+| [verify-instructions-sync.sh](scripts/verify-instructions-sync.sh) | Check global symlinks and drift |
+| [verify-layout-contract.sh](scripts/verify-layout-contract.sh) | Compare tree to the layout in `skills/self-improvement/policy.md` |
 | [sync-instructions-repo.sh](scripts/sync-instructions-repo.sh) | `pull` / `push` this repo |
 | [install-git-hooks.sh](scripts/install-git-hooks.sh) | post-commit → push |
 | [install-sync-cron.sh](scripts/install-sync-cron.sh) | Cron: git pull every 10 min |
-
-Local scripts: `~/.claude/scripts-local/` (see README in that directory after `setup-symlinks.sh`).
 
 ## Git workflow
 
@@ -84,38 +88,41 @@ Local scripts: `~/.claude/scripts-local/` (see README in that directory after `s
 # edits → commit → push (post-commit hook)
 ```
 
-Runbook: [memory-global/agent-instructions/instructions-git-sync.md](memory-global/agent-instructions/instructions-git-sync.md).
+Runbook: [skills/self-improvement/policy.md](skills/self-improvement/policy.md) § Git sync.
 
 ## Agents in this repo (`agents/`)
 
 | name | File |
-|------|------|
-| manager | [agents/manager.md](agents/manager.md) |
-| planner | [agents/planner.md](agents/planner.md) |
+|---|---|
 | developer | [agents/developer.md](agents/developer.md) |
+| planner | [agents/planner.md](agents/planner.md) |
 | thinker | [agents/thinker.md](agents/thinker.md) |
-| memory | [agents/memory.md](agents/memory.md) |
-| self-improvement | [agents/self-improvement.md](agents/self-improvement.md) |
 | yandex-cloud-expert | [agents/yandex-cloud-expert.md](agents/yandex-cloud-expert.md) |
 
-Additional subagents — only files in `~/.claude/agents/` not listed in this repo's `agents/`.
+Additional subagents — only files in `~/.claude/agents/` not listed in this repo's `agents/` (machine-local, gitignored).
+
+## Skills in this repo (`skills/`)
+
+| name | Triggers (summary) | File |
+|---|---|---|
+| `overcome-difficulty` | Verification failed, blocker, repeated error, plan mismatch, 2+ corrections | [skills/overcome-difficulty/SKILL.md](skills/overcome-difficulty/SKILL.md) |
+| `self-improvement` | User correction or feedback about agent behavior | [skills/self-improvement/SKILL.md](skills/self-improvement/SKILL.md) |
 
 ## Not in this repository
 
 | What | Where |
-|-----|------------|
-| Local memory | `~/.claude/memory/INDEX.md` |
+|---|---|
+| Project memory | `<project_cwd>/.claude/agent-memory/` (project's git) |
 | Extra agents | `~/.claude/agents/` |
 | Local scripts | `~/.claude/scripts-local/` |
-| Skills | `~/.claude/skills/` |
+| Local skills | `~/.claude/skills/` (single-file `skills-local/*.md`, gitignored fallback) |
 
 ## Maintaining this README
 
-When the cooperation model changes — update § Agent cooperation, [CLAUDE.md](CLAUDE.md), and affected `agents/*.md` in **one commit**.
+When the cooperation model changes — update § Agent cooperation, [CLAUDE.md](CLAUDE.md), and affected `agents/*.md` or `skills/*/SKILL.md` in **one commit**.
 
-When **directories, scripts, or symlinks** change (global or local):
+When **directories, scripts, or symlinks** change:
 
-1. Update [file-structure-contract.md](memory-global/agent-instructions/file-structure-contract.md) and if needed [runtime-layout.md](memory-global/agent-instructions/runtime-layout.md).
-2. Align § symlinks/scripts in this README with reality.
-3. Run `scripts/verify-layout-contract.sh` and `verify-instructions-sync.sh`.
-4. Local layer — per runbook in `~/.claude/memory/INDEX.md` and `~/.claude/scripts-local/`.
+1. Update [skills/self-improvement/policy.md](skills/self-improvement/policy.md) § File structure.
+2. Align § Symlinks / § Scripts in this README with reality.
+3. Run `scripts/verify-layout-contract.sh` and `scripts/verify-instructions-sync.sh`.

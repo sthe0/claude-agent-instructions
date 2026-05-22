@@ -39,36 +39,25 @@ for f in "$REPO/agents/"*.md; do
   check_link "$HOME/.claude/agents/$(basename "$f")" "$f"
 done
 
-if [[ -L "$HOME/.claude/agents/yandex-developer.md" ]]; then
-  echo "FAIL: stale yandex-developer symlink"
-  FAIL=1
+if [[ -d "$REPO/skills" ]]; then
+  for d in "$REPO/skills/"*/; do
+    [[ -d "$d" ]] || continue
+    d="${d%/}"
+    check_link "$HOME/.claude/skills/$(basename "$d")" "$d"
+  done
 fi
+
+# Stale agents that should no longer exist
+for stale in manager.md memory.md self-improvement.md yandex-developer.md; do
+  if [[ -L "$HOME/.claude/agents/$stale" || -f "$HOME/.claude/agents/$stale" ]]; then
+    echo "FAIL: stale agent symlink $stale"
+    FAIL=1
+  fi
+done
 
 if [[ -f "$HOME/claude-agent-instructions/scripts/sync-junk-agents-arc.sh" ]]; then
   echo "FAIL: local arc scripts must not live in global scripts/ — use ~/.claude/scripts-local/"
   FAIL=1
-fi
-
-echo "=== Local (the0-agents) ==="
-if [[ -x "$HOME/.claude/scripts-local/verify-the0-agents-sync.sh" ]]; then
-  "$HOME/.claude/scripts-local/verify-the0-agents-sync.sh" || FAIL=1
-else
-  echo "WARN: skip local verify — ~/.claude/scripts-local/ missing"
-fi
-
-echo "=== Stale copies ==="
-DEEPAGENT_RULE="$HOME/arcadia/robot/deepagent/.cursor/rules/claude-code-sync.mdc"
-if [[ -f "$DEEPAGENT_RULE" && ! -L "$DEEPAGENT_RULE" ]]; then
-  size="$(wc -c <"$DEEPAGENT_RULE")"
-  if [[ "$size" -lt 2000 ]]; then
-    echo "WARN: $DEEPAGENT_RULE is a small regular file ($size bytes)"
-    FAIL=1
-  fi
-fi
-
-OVERLAY="$HOME/arcadia/robot/deepagent/.cursor/rules/deepagent-project.mdc"
-if [[ -L "$OVERLAY" ]]; then
-  check_link "$OVERLAY" "$REPO/cursor-rules/project-overlay-deepagent.mdc"
 fi
 
 echo "=== Git (instructions repo) ==="

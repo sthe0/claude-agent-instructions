@@ -23,35 +23,35 @@ link_agent_md() {
   link "$file_path" "$HOME/.claude/agents/$base"
 }
 
+link_skill_dir() {
+  local dir_path="$1"
+  local base
+  base="$(basename "$dir_path")"
+  link "$dir_path" "$HOME/.claude/skills/$base"
+}
+
 prune_dangling() {
   local dir="$1"
   find "$dir" -maxdepth 1 -type l ! -exec test -e {} \; -delete 2>/dev/null || true
 }
 
+# Core global symlinks
 link "$REPO/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
 link "$REPO/cursor-rules/claude-code-sync.mdc" "$HOME/.cursor/rules/claude-code-sync.mdc"
 link "$REPO/memory-global" "$HOME/.claude/memory-global"
 
+# Local arc gates / scripts (optional, present only on Arcadia machines)
 if [[ -f "$JUNK_AGENTS_ROOT/cursor-rules/org-yandex.mdc" ]]; then
   link "$JUNK_AGENTS_ROOT/cursor-rules/org-yandex.mdc" "$HOME/.cursor/rules/org-yandex.mdc"
-else
-  echo "WARN: missing $JUNK_AGENTS_ROOT/cursor-rules/org-yandex.mdc — pull the0-agents branch" >&2
-fi
-
-if [[ ! -d "$JUNK_AGENTS_ROOT/memory-local" ]]; then
-  echo "WARN: missing $JUNK_AGENTS_ROOT/memory-local — run ~/.claude/scripts-local/setup-the0-agents-mount.sh after arc commit" >&2
-else
-  link "$JUNK_AGENTS_ROOT/memory-local" "$HOME/.claude/memory"
 fi
 
 if [[ -d "$JUNK_AGENTS_ROOT/scripts" ]]; then
   link "$JUNK_AGENTS_ROOT/scripts" "$HOME/.claude/scripts-local"
   chmod +x "$JUNK_AGENTS_ROOT/scripts"/*.sh 2>/dev/null || true
   "$JUNK_AGENTS_ROOT/scripts/install-junk-agents-sync-cron.sh" 2>/dev/null || true
-else
-  echo "WARN: missing $JUNK_AGENTS_ROOT/scripts — pull the0-agents branch" >&2
 fi
 
+# Agents: ~/.claude/agents/ as a regular directory with per-file symlinks
 if [[ -L "$HOME/.claude/agents" ]]; then
   rm "$HOME/.claude/agents"
 fi
@@ -68,20 +68,28 @@ if [[ -d "$JUNK_AGENTS_ROOT/agents-local" ]]; then
   done
 fi
 
-# Fallback: local agents from repo agents-local/ (for non-Arcadia machines)
 if [[ -d "$REPO/agents-local" ]]; then
   for file_path in "$REPO/agents-local/"*.md; do
     [[ -f "$file_path" ]] && link_agent_md "$file_path"
   done
 fi
 
-# skills-local/: local-only skills (gitignored)
+# Skills: ~/.claude/skills/ as a regular directory with per-skill directory symlinks
 if [[ -L "$HOME/.claude/skills" ]]; then
   rm "$HOME/.claude/skills"
 fi
 mkdir -p "$HOME/.claude/skills"
 prune_dangling "$HOME/.claude/skills"
 
+if [[ -d "$REPO/skills" ]]; then
+  for dir_path in "$REPO/skills/"*/; do
+    [[ -d "$dir_path" ]] || continue
+    dir_path="${dir_path%/}"
+    link_skill_dir "$dir_path"
+  done
+fi
+
+# Machine-local skills (gitignored single-file skills)
 if [[ -d "$REPO/skills-local" ]]; then
   for file_path in "$REPO/skills-local/"*.md; do
     [[ -f "$file_path" ]] || continue
@@ -91,30 +99,14 @@ if [[ -d "$REPO/skills-local" ]]; then
   done
 fi
 
-# mcp-local/: JSON snippets for local MCP servers — applied via scripts/apply-mcp-local.sh
-
 link "$HOME/.claude/agents" "$HOME/.cursor/agents"
 
 "$REPO/scripts/install-git-hooks.sh"
 "$REPO/scripts/install-sync-cron.sh" 2>/dev/null || true
 
-DEEPAGENT_RULES="$HOME/arcadia/robot/deepagent/.cursor/rules"
-if [[ -d "$DEEPAGENT_RULES" ]]; then
-  mkdir -p "$DEEPAGENT_RULES"
-  if [[ -f "$DEEPAGENT_RULES/claude-code-sync.mdc" && ! -L "$DEEPAGENT_RULES/claude-code-sync.mdc" ]]; then
-    mv "$DEEPAGENT_RULES/claude-code-sync.mdc" \
-      "$DEEPAGENT_RULES/claude-code-sync.mdc.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
-  fi
-  rm -f "$DEEPAGENT_RULES/claude-code-sync.mdc"
-  link "$REPO/cursor-rules/project-overlay-deepagent.mdc" "$DEEPAGENT_RULES/deepagent-project.mdc"
-  if [[ ! -L "$HOME/arcadia/robot/deepagent/CLAUDE.md" ]]; then
-    link "$REPO/CLAUDE.md" "$HOME/arcadia/robot/deepagent/CLAUDE.md"
-  fi
-fi
-
-chmod +x "$REPO/scripts/verify-instructions-sync.sh" "$REPO/scripts/verify-layout-contract.sh"
+chmod +x "$REPO/scripts/verify-instructions-sync.sh" "$REPO/scripts/verify-layout-contract.sh" "$REPO/scripts/setup-project-memory.sh"
 "$REPO/scripts/verify-layout-contract.sh" 2>/dev/null || true
 "$REPO/scripts/verify-instructions-sync.sh" || true
 
 echo "Symlinks:"
-ls -la "$HOME/.claude/memory-global" "$HOME/.claude/memory" "$HOME/.claude/scripts-local" 2>/dev/null || true
+ls -la "$HOME/.claude/memory-global" "$HOME/.claude/skills" "$HOME/.claude/agents" 2>/dev/null || true

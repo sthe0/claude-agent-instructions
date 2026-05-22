@@ -1,11 +1,6 @@
-# Claude Code and Cursor: single instruction source
+# Claude Code and Cursor: single instruction source (deferred)
 
-## Metadata
-
-| Field | Value |
-|------|----------|
-| `last_verified` | 2026-05-21 |
-| `revalidate` | `~/claude-agent-instructions/scripts/verify-instructions-sync.sh` with no FAIL |
+> **Deferred snapshot.** This document predates the agent-system refactor (manager / memory agents removed; `overcome-difficulty` and `self-improvement` are skills now; memory rebuilt on native Claude Code auto-memory with `memory-global/MEMORY.md` + `<project>/.claude/agent-memory/`). The Cursor wiring described below is **not** current — keep it here as a reference, rework it as a separate step once the Claude side stabilizes.
 
 ## Architecture
 

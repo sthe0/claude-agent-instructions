@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verify on-disk layout matches memory-global/agent-instructions/file-structure-contract.md
+# Verify on-disk layout matches skills/self-improvement/policy.md § File structure.
 set -euo pipefail
 
 REPO="${CLAUDE_INSTRUCTIONS_REPO:-$HOME/claude-agent-instructions}"
@@ -31,12 +31,29 @@ require_file "$REPO/CLAUDE.md"
 require_file "$REPO/README.md"
 require_dir "$REPO/agents"
 require_file "$REPO/agents/developer.md"
-require_file "$REPO/memory-global/INDEX.md"
-require_file "$REPO/memory-global/agent-instructions/file-structure-contract.md"
-require_file "$REPO/memory-global/agent-instructions/runtime-layout.md"
+require_file "$REPO/agents/planner.md"
+require_file "$REPO/agents/thinker.md"
+require_absent "$REPO/agents/manager.md"
+require_absent "$REPO/agents/memory.md"
+require_absent "$REPO/agents/self-improvement.md"
+
+require_dir "$REPO/skills"
+require_file "$REPO/skills/overcome-difficulty/SKILL.md"
+require_file "$REPO/skills/self-improvement/SKILL.md"
+require_file "$REPO/skills/self-improvement/policy.md"
+
+require_dir "$REPO/memory-global"
+require_file "$REPO/memory-global/MEMORY.md"
+require_dir "$REPO/memory-global/leaves"
+require_absent "$REPO/memory-global/INDEX.md"
+require_absent "$REPO/memory-global/agent-instructions"
+require_absent "$REPO/memory-global/development"
+require_absent "$REPO/memory-meta"
+
 require_file "$REPO/cursor-rules/claude-code-sync.mdc"
 require_dir "$REPO/scripts"
 require_file "$REPO/scripts/setup-symlinks.sh"
+require_file "$REPO/scripts/setup-project-memory.sh"
 require_file "$REPO/scripts/verify-layout-contract.sh"
 require_file "$REPO/scripts/sync-instructions-repo.sh"
 require_file "$REPO/scripts/apply-mcp-local.sh"
@@ -52,40 +69,20 @@ ok "no local arc scripts in global scripts/"
 echo "=== Runtime symlinks ==="
 if [[ -L "$HOME/.claude/CLAUDE.md" ]]; then ok "~/.claude/CLAUDE.md"; else fail "~/.claude/CLAUDE.md not symlink"; fi
 if [[ -L "$HOME/.claude/memory-global" ]]; then ok "~/.claude/memory-global"; else fail "~/.claude/memory-global"; fi
-if [[ -L "$HOME/.claude/memory" ]]; then
-  if readlink -f "$HOME/.claude/memory" | grep -qE '/arcadia/junk/the0/agents'; then
-    fail "~/.claude/memory points at main ~/arcadia"
-  else
-    ok "~/.claude/memory"
-  fi
-else
-  # On non-Arcadia machines memory/ is a plain directory — acceptable
-  if [[ -d "$HOME/arcadia_the0-agents" ]] || [[ -n "${THE0_AGENTS_MOUNT:-}" ]]; then
-    fail "~/.claude/memory not symlink (Arcadia mount available — run setup-symlinks.sh)"
-  else
-    echo "WARN: ~/.claude/memory not symlink (no Arcadia mount — non-Arcadia machine)"
-  fi
-fi
-if [[ -L "$HOME/.claude/scripts-local" ]]; then
-  ok "~/.claude/scripts-local"
-else
-  if [[ -d "$HOME/arcadia_the0-agents" ]] || [[ -n "${THE0_AGENTS_MOUNT:-}" ]]; then
-    fail "~/.claude/scripts-local (Arcadia mount available — run setup-symlinks.sh)"
-  else
-    echo "WARN: ~/.claude/scripts-local missing (no Arcadia mount — non-Arcadia machine)"
-  fi
+if [[ -d "$HOME/.claude/skills" ]]; then ok "~/.claude/skills"; else fail "~/.claude/skills"; fi
+
+# ~/.claude/memory (old local memory dir) must be gone in the new model
+if [[ -e "$HOME/.claude/memory" ]]; then
+  fail "~/.claude/memory exists — superseded by ~/.claude/memory-global and <project>/.claude/agent-memory. Remove it."
 fi
 
-if [[ -x "$HOME/.claude/scripts-local/verify-the0-agents-sync.sh" ]]; then
-  echo "=== Local layer (delegate) ==="
-  "$HOME/.claude/scripts-local/verify-the0-agents-sync.sh" || FAIL=1
-else
-  echo "WARN: skip local layer verify"
+if [[ -L "$HOME/.claude/scripts-local" ]]; then
+  ok "~/.claude/scripts-local"
 fi
 
 if [[ "$FAIL" -eq 0 ]]; then
   echo "Layout contract checks passed."
   exit 0
 fi
-echo "Layout contract checks failed. See: $REPO/memory-global/agent-instructions/file-structure-contract.md"
+echo "Layout contract checks failed. See: $REPO/skills/self-improvement/policy.md § File structure"
 exit 1
