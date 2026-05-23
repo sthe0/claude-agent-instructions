@@ -1,0 +1,16 @@
+---
+description: deepagent project overlay — supplements ~/.cursor/rules/claude-code-sync.mdc
+alwaysApply: true
+---
+
+# deepagent (project overlay)
+
+Global policy: `~/.cursor/rules/claude-code-sync.mdc` and `~/.claude/CLAUDE.md`.
+
+**Canonical project files** live in the open repository root under `.claude/` (not in this global template). After clone, ensure:
+
+- `.claude/CLAUDE.md`, `.claude/agent-memory/`, `.claude/rules/org-yandex.mdc`, `.claude/rules/project.mdc`
+- `.claude/skills/` — relative symlinks to `ai/artifacts/skills/` (run `.claude/scripts/link-skills.sh`)
+- Local symlinks: `CLAUDE.md` → `.claude/CLAUDE.md`; `.cursor/rules/*.mdc` → `.claude/rules/`
+
+After global `setup-symlinks.sh`, run `.claude/scripts/setup-local.sh` from this repository root once per machine/mount.

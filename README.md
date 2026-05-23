@@ -49,12 +49,17 @@ git clone git@github.com:sthe0/claude-agent-instructions.git ~/claude-agent-inst
 ~/claude-agent-instructions/scripts/verify-instructions-sync.sh
 ```
 
-Per-project memory (run inside each project where you want shared agent memory):
+Per-project local setup (from each product repo root; scripts live in that repo's `.claude/scripts/`):
 
 ```bash
-~/claude-agent-instructions/scripts/setup-project-memory.sh
-git add .claude/agent-memory && git commit -m "agent memory: bootstrap"
+# deepagent (Arc)
+cd ~/arcadia/robot/deepagent && .claude/scripts/setup-local.sh
+
+# logos (local only; logos/.claude is arcignored)
+cd ~/arcadia/logos && .claude/scripts/setup-local.sh
 ```
+
+`setup-local.sh` calls global `setup-project-memory.sh` where applicable and creates Cursor symlinks. See each project's `.claude/scripts/README.md`.
 
 ## Migrating a previously set-up machine
 

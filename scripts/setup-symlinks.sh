@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-DEEPAGENT_ROOT="${DEEPAGENT_ROOT:-$HOME/arcadia/robot/deepagent}"
 
 mkdir -p "$HOME/.claude" "$HOME/.cursor/rules"
 
@@ -112,21 +111,11 @@ link "$HOME/.claude/agents" "$HOME/.cursor/agents"
 
 "$REPO/scripts/install-git-hooks.sh"
 
-# deepagent: project-local Cursor rules and CLAUDE.md (canonical in Arc)
-if [[ -d "$DEEPAGENT_ROOT/.claude/rules" ]]; then
-  mkdir -p "$DEEPAGENT_ROOT/.cursor/rules"
-  rm -f "$DEEPAGENT_ROOT/.cursor/rules/claude-code-sync.mdc"
-  link "$DEEPAGENT_ROOT/.claude/rules/project.mdc" "$DEEPAGENT_ROOT/.cursor/rules/deepagent-project.mdc"
-  link "$DEEPAGENT_ROOT/.claude/rules/org-yandex.mdc" "$DEEPAGENT_ROOT/.cursor/rules/org-yandex.mdc"
-  link "$DEEPAGENT_ROOT/.claude/CLAUDE.md" "$DEEPAGENT_ROOT/CLAUDE.md"
-  if [[ -x "$DEEPAGENT_ROOT/.claude/scripts/link-skills.sh" ]]; then
-    "$DEEPAGENT_ROOT/.claude/scripts/link-skills.sh" >/dev/null 2>&1 || true
-  fi
-fi
-
-chmod +x "$REPO/scripts/verify-instructions-sync.sh" "$REPO/scripts/verify-layout-contract.sh" "$REPO/scripts/setup-project-memory.sh"
+chmod +x "$REPO/scripts/verify-instructions-sync.sh" "$REPO/scripts/verify-layout-contract.sh" "$REPO/scripts/setup-project-memory.sh" "$REPO/scripts/migrate-pre-2026-05.sh"
 "$REPO/scripts/verify-layout-contract.sh" 2>/dev/null || true
 "$REPO/scripts/verify-instructions-sync.sh" || true
 
-echo "Symlinks:"
+echo "Global symlinks ok. Per-project setup (run from each repo root):"
+echo "  robot/deepagent  →  .claude/scripts/setup-local.sh"
+echo "  logos            →  .claude/scripts/setup-local.sh"
 ls -la "$HOME/.claude/memory-global" "$HOME/.claude/skills" "$HOME/.claude/agents" 2>/dev/null || true
