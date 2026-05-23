@@ -19,6 +19,7 @@ Loaded into every session via `@~/.claude/memory-global/MEMORY.md` import in `CL
 
 - [Subagent resume and transcripts](leaves/subagent-resume-and-transcripts.md) — `SendMessage` resume mechanism (needs `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`), transcript layout under `~/.claude/projects/.../subagents/`, subagent auto-compaction, cleanup.
 - [Granted permissions (global)](leaves/granted-permissions.md) — persistent workflow-level permissions the user has granted with `always` scope; consulted before spawning a specialist to digest into the prompt.
+- [settings.json env precedence](leaves/claude-code-settings-env-precedence.md) — env in settings.json overrides shell env (`env -u` does not help); auth precedence ladder; what to do when an apiKeyHelper isn't enough.
 
 ## Recent retrospectives
 
