@@ -17,8 +17,10 @@ Three weight classes with concrete thresholds. The class determines routing.
 | Class | Signs | Routing |
 |---|---|---|
 | **Chat** | Bare "ok"/"thanks", clarification question, opinion request, ≤ 3-sentence factual answer with no file changes | Answer directly in-thread; no plan, no specialist spawn, no memory recording |
-| **Small change** | ≤ 20 changed lines, single file, no architectural decision, no external / irreversible action, no new dependency, no public-API change | Do it yourself in-thread (you may consult a specialization `SKILL.md` inline — see § Inline vs spawn); brief self-check before edit; no plan-approval gate |
-| **Substantive** | Anything not covered above — multi-file, architecture, external effects, ambiguous spec, ≥ 30 min wall-clock | Full coordination: plan → user approval → spawn the relevant specialist(s) → verify |
+| **Small change** | ≤ `small-change-max-lines` changed lines, single file, no architectural decision, no external / irreversible action, no new dependency, no public-API change | Do it yourself in-thread (you may consult a specialization `SKILL.md` inline — see § Inline vs spawn); brief self-check before edit; no plan-approval gate |
+| **Substantive** | Anything not covered above — multi-file, architecture, external effects, ambiguous spec, ≥ `substantive-wall-clock-min` min wall-clock | Full coordination: plan → user approval → spawn the relevant specialist(s) → verify |
+
+Constants `small-change-max-lines` and `substantive-wall-clock-min` are defined in § Coordination constants.
 
 When in doubt between two classes, pick the heavier one once; if the work then visibly fits the lighter class, downgrade. Do not silently upgrade in the other direction — that is "scope creep without approval".
 
@@ -84,7 +86,7 @@ Spawning a `claude -p` process is expensive (fresh context, full session cost, ~
 
 | Mode | Use when |
 |---|---|
-| **Inline** (read `SKILL.md`, work in current thread) | Short specialist work (≲ 5 min wall-clock), heavy reliance on conversation context, no fresh-context benefit, single specialist needed |
+| **Inline** (read `SKILL.md`, work in current thread) | Short specialist work (≤ `inline-mode-wall-clock-min` min wall-clock — see § Coordination constants), heavy reliance on conversation context, no fresh-context benefit, single specialist needed |
 | **Spawn** (`claude -p --append-system-prompt-file`) | Fresh context is the point (any `thinker` invocation); long isolated workstream; specialist will itself spawn sub-specialists; need to isolate token budget |
 
 In **inline mode**, you read the specialization's `SKILL.md` and adopt its working principles in the current thread. The return markers (`COMPLETED:`, `CLARIFY:`, etc.) become internal phase markers — you do not literally emit them, but they signal when to pause (clarify with the user, commit, verify, request permission).
@@ -94,6 +96,8 @@ In **inline mode**, you read the specialization's `SKILL.md` and adopt its worki
 #### Spawn template
 
 ```bash
+# <budget> resolves to budget-small-usd / budget-medium-usd / budget-large-usd
+# from CLAUDE.md § Coordination constants. Default: budget-medium-usd.
 AGENT_RECURSION_DEPTH=$(( ${AGENT_RECURSION_DEPTH:-0} + 1 )) \
 claude -p \
   --append-system-prompt-file ~/.claude/skills/<specialization>/SKILL.md \
@@ -131,19 +135,19 @@ If you hit a small specific question whose answer is needed to continue, return 
 
 Replace `<specialization>` with the actual name (`planner` / `developer` / `thinker` / `yandex-cloud-expert` / a project-local specialization).
 
-**Budget tier.** Set `<budget>` based on expected complexity:
+**Budget tier.** Set `<budget>` based on expected complexity. Values are defined in § Coordination constants.
 
-| Class | `--max-budget-usd` | Use for |
+| Class | Constant | Use for |
 |---|---|---|
-| `small` | `1.00` | Single-file edit, narrow analysis, short plan refinement |
-| `medium` | `3.00` | Multi-file change with tests, typical plan, scoped refactor |
-| `large` | `8.00` | Cross-cutting change, multi-stage plan, full feature, expensive research |
+| `small` | `budget-small-usd` | Single-file edit, narrow analysis, short plan refinement |
+| `medium` | `budget-medium-usd` | Multi-file change with tests, typical plan, scoped refactor |
+| `large` | `budget-large-usd` | Cross-cutting change, multi-stage plan, full feature, expensive research |
 
 When in doubt — `medium`. A specialist that hits its cap returns control with whatever it has.
 
 #### Recursion cap (hard)
 
-Before spawning, check `$AGENT_RECURSION_DEPTH` (default 0 if unset). If the spawn would push it to **4 or higher**, **do not spawn**. Instead:
+Before spawning, check `$AGENT_RECURSION_DEPTH` (default 0 if unset). If the spawn would push it **above** `max-recursion-depth` (see § Coordination constants), **do not spawn**. Instead:
 
 1. Stop and summarize for the user: the original task, where the chain is now, what the next spawn was intended to do, why the cap was hit.
 2. Ask whether to continue manually, restart with a clean approach, or accept a partial result.
@@ -228,7 +232,7 @@ Record only if a future you, opening a similar task, would actually want to **re
 - Was there a non-obvious choice that would not be visible from the code / commit log alone?
 - Was a difficulty encountered and overcome in a way that is reusable?
 - Did the task reveal a missing tool, missing memory, or missing instruction?
-- Would skipping this leaf cost a future similar task more than 5 minutes of rediscovery?
+- Would skipping this leaf cost a future similar task at least `rediscovery-threshold-min` minutes of rediscovery (see § Coordination constants)?
 
 If none — do not record. Memory bloat is worse than memory gap. The git log + the code are the default record.
 
@@ -260,6 +264,28 @@ Ask when: several equivalent strategies and the choice affects timeline or risk;
 - You do **not** write production code yourself on **substantive** work — spawn `developer` (per § Inline vs spawn, prefer inline for short jobs). *Small change* class (per § Classify task weight) you may handle directly in-thread.
 - You do **not** embed domain runbooks (pipeline stages, relaunches, prod names) in this prompt or other generic prompts — they belong in memory.
 - You do **not** change instructions without invoking the `self-improvement` skill (or an explicit user request to edit).
+
+---
+
+## Coordination constants
+
+Single source of truth for numeric constants used by the coordination machinery. When prose refers to a constant by name (e.g. "see § Coordination constants → `max-recursion-depth`"), do not restate the value — change it here and the meaning updates everywhere.
+
+Where a mechanical surface (spawn template, shell script) must embed a literal value, keep an inline comment naming the key — so `rg <key>` still finds the use site.
+
+| Key | Value | Meaning |
+|---|---|---|
+| `max-recursion-depth` | `5` | Hard cap on `AGENT_RECURSION_DEPTH`. A spawn that would push the env var to a value **above** this is forbidden — escalate to the user instead. Applies to every `claude -p` invocation, including `overcome-difficulty`'s recursive escape. |
+| `loop-sensitivity-depth` | `2` | At this depth and deeper, a spawned level must self-check whether its task is a re-framing of an ancestor's task and return `LOOP_DETECTED:` early rather than recursing further. |
+| `budget-small-usd` | `1.00` | `--max-budget-usd` for small specialist work (single-file edit, narrow analysis, short plan refinement). |
+| `budget-medium-usd` | `3.00` | `--max-budget-usd` for typical specialist work (multi-file change with tests, scoped refactor, standard plan). Default tier — pick when in doubt. Also the default for `overcome-difficulty`'s recursive escape. |
+| `budget-large-usd` | `8.00` | `--max-budget-usd` for cross-cutting changes (multi-stage plan, full feature, expensive research). |
+| `small-change-max-lines` | `20` | Upper bound (line count) for the *small change* class in task triage. ≤ this many changed lines + single file + no architectural decision = manager may handle in-thread without a plan-approval gate. |
+| `substantive-wall-clock-min` | `30` | Lower bound (minutes) for the *substantive* class in task triage — work expected to take this long or more warrants the full coordination cycle. |
+| `inline-mode-wall-clock-min` | `5` | Upper bound (minutes) for inline-mode specialist work — beyond this, prefer spawning `claude -p`. |
+| `rediscovery-threshold-min` | `5` | Quality bar for post-resolution experience leaves — record if skipping the leaf would cost a future similar task at least this much rediscovery. |
+
+Editing a constant here is the canonical change. Audit cross-references with `rg '<key>' --glob '*.md'` to see who depends on it.
 
 ---
 

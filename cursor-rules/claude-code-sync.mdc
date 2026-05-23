@@ -30,10 +30,12 @@ There is no separate manager subagent. Coordinate every substantive task yoursel
 | Class | Signs | Routing |
 |---|---|---|
 | **Chat** | Bare "ok"/"thanks", clarification question, opinion, ≤ 3-sentence factual answer with no file changes | Answer directly; no plan, no specialization read, no memory record |
-| **Small change** | ≤ 20 changed lines, single file, no architectural decision, no external / irreversible action, no new dependency, no public-API change | Do it yourself; optionally consult a specialization SKILL.md inline; no plan-approval gate |
+| **Small change** | ≤ `small-change-max-lines` changed lines, single file, no architectural decision, no external / irreversible action, no new dependency, no public-API change | Do it yourself; optionally consult a specialization SKILL.md inline; no plan-approval gate |
 | **Substantive** | Anything not covered above | Full coordination: produce a plan (apply `planner` principles), get user approval, execute step by step applying the relevant specialization principles |
 
 When in doubt — pick the heavier class once, downgrade if reality fits a lighter one. Do not silently upgrade (scope creep without approval).
+
+Numeric thresholds (`small-change-max-lines`, etc.) resolve via `~/.claude/CLAUDE.md` § Coordination constants — that section is the single source of truth.
 
 ### On a substantive task
 
