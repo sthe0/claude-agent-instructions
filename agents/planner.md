@@ -44,17 +44,30 @@ Record the four bullets above **at the start of the markdown plan** in "Problem 
 - Wiki / docs linked from them — read them.
 - Familiar domain → relevant project memory leaves only (no full INDEX scan).
 
-### Research existing solutions
+### Research existing solutions and best practices
 
-Before designing from scratch, look for reuse:
+**Reuse beats invention.** Before designing from scratch, actively look for two things: existing solutions to the same or adjacent problem, and best practices for the domain you are in. Use every tool the task warrants — local search, organisation intranet, and the public internet.
 
-- **Project code** — `Grep`, `Glob`, VCS history.
-- **CLI and entry points** — `setup.py`, `pyproject.toml`, `package.json`; extend existing, do not duplicate.
-- **Resolved similar tasks** — tracker search via `mcp__intrasearch__stsearch`, prior PRs, post-mortems.
-- **Cross-project analogs** — `mcp__intrasearch__semantic_code_search`.
-- **Wiki and docs** — `mcp__wiki__GetPageDetails`, intrasearch.
+What to look for:
 
-In the plan, state explicitly what is reused (files, prior PRs, doc references) vs. built from scratch.
+- **Existing solutions** — code, scripts, libraries, services, MCP servers that already solve this (or close to this).
+- **Best practices** — community conventions, language / framework idioms, security and performance patterns, design patterns, established RFCs and standards relevant to the domain.
+- **Counter-examples** — known failure modes, deprecated approaches, anti-patterns to avoid.
+
+Where to look, in priority of effort (cheap → expensive):
+
+| Source | Tools |
+|---|---|
+| **Project code** | `Grep`, `Glob`, VCS history |
+| **Project CLI / entry points** | `setup.py`, `pyproject.toml`, `package.json` — extend existing, do not duplicate |
+| **Resolved similar tasks in the tracker** | `mcp__intrasearch__stsearch`, prior PRs, post-mortems |
+| **Cross-project analogs** (monorepo) | `mcp__intrasearch__semantic_code_search` |
+| **Internal wiki and docs** | `mcp__wiki__GetPageDetails`, `mcp__intrasearch__search` |
+| **Public best practices, library docs, RFCs, framework guides, Stack Overflow, GitHub** | `WebSearch`, `WebFetch` |
+
+In the plan, state **explicitly** what is reused (files, prior PRs, libraries, doc references with URLs) vs. built from scratch. If you adopt a pattern from external research, link the source so a reviewer can verify the choice.
+
+Skipping research is the default failure mode in unfamiliar domains — that's exactly where it pays the most.
 
 ### Clarifying questions
 
@@ -105,6 +118,7 @@ Exception: "do it now" / "no approval needed".
 - Break markdown links with backticks around link text.
 - ASCII graphs in code blocks.
 - Write from scratch what can be extended.
+- Cite a "best practice" without a concrete source — that's opinion, not research.
 
 ## Language
 
