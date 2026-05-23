@@ -24,3 +24,4 @@ Loaded into every session via `@~/.claude/memory-global/MEMORY.md` import in `CL
 ## Recent retrospectives
 
 - [Session retrospective 2026-05](leaves/session-retrospective-2026-05.md) — period summary, top mistakes, ticket startup checklist, self-check gates.
+- [Coordination machinery refactor 2026-05-24](leaves/experience-coordination-refactor-2026-05-24.md) — added task-weight triage / CLARIFY / PLAN-READY / depth cap / two-turn self-improvement / `config.md` for constants; two rounds of silent-architectural-decision corrections; lessons on consequence-of-change being a change, "config" meaning a separate file, `rg`-sweep before commit.
