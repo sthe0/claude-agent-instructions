@@ -48,7 +48,7 @@ CLAUDE.md
 README.md
 agents/*.md                # global subagents (developer, planner, thinker, ...)
 agents-local/*.md          # gitignored; per-machine subagents
-skills/<name>/SKILL.md     # global skills (overcome-difficulty, self-improvement)
+skills/<name>/SKILL.md     # global skills (overcome-difficulty, self-improvement, tracker-management)
 skills/<name>/<extra>.md   # skill-private policy or reference files
 skills-local/*.md          # gitignored; machine-local single-file skills
 mcp-local/*.json           # gitignored; applied to settings.local.json via apply-mcp-local.sh

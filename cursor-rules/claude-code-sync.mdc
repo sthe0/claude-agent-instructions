@@ -34,7 +34,7 @@ Both warrant the `overcome-difficulty` skill (next section).
 
 ## Skills (Cursor has no Skill tool — invoke by reading)
 
-Two global skills live in `~/.claude/skills/`. Cursor cannot trigger them through a `Skill` tool, so **you invoke them by reading the SKILL.md and following it in this conversation** when the trigger fires.
+Three global skills live in `~/.claude/skills/`. Cursor cannot trigger them through a `Skill` tool, so **you invoke them by reading the SKILL.md and following it in this conversation** when the trigger fires.
 
 ### `overcome-difficulty`
 
@@ -51,6 +51,24 @@ When triggered → read `~/.claude/skills/overcome-difficulty/SKILL.md` and work
 **SKIP** for neutral confirmation ("ok", "thanks", "yes do it") and for pure questions without evaluation of your actions.
 
 When triggered → read `~/.claude/skills/self-improvement/SKILL.md` (and `policy.md` for instruction-language / file-structure / git-sync rules) and follow them in the **same turn** as the trigger, before the final reply.
+
+### `tracker-management`
+
+**TRIGGER:** the user's task references an external tracker / ticket / issue — by ticket key (e.g. `ABC-123`), by the words "ticket"/"issue"/"tracker"/"тикет" in any language, by asking to post/update/close a ticket, or by linking to a tracker URL.
+
+**SKIP** when the task has no tracker reference, or when the user explicitly says not to touch the tracker.
+
+When triggered → read `~/.claude/skills/tracker-management/SKILL.md` and layer tracker publication on top of normal coordination: load ticket context, publish the plan, post key progress updates, post the final result. Tracker-agnostic — project-specific conventions live in `<project_cwd>/.claude/agent-memory/`.
+
+## On task resolution (record experience)
+
+When a substantive task is resolved (user explicitly confirms it — ask once if you finish without confirmation in their last message), write a memory leaf with the final plan and how each difficulty was overcome:
+
+- Cross-project lesson → `~/.claude/memory-global/leaves/`.
+- Project-specific lesson → `<project_cwd>/.claude/agent-memory/`.
+- One leaf per resolved task, `type: reference`.
+
+Skip for trivial Q&A. Full rule: `~/.claude/CLAUDE.md` § On task resolution.
 
 ## Memory
 

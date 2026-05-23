@@ -55,6 +55,7 @@ Not mandatory only for neutral confirmation ("ok", "yes do it", "thanks") and fo
 | Doubtful reasoning chain | `thinker` |
 | Production code, VCS, build, PR | `developer` |
 | Org-specific term, unknown infra | infra-consultant subagent from `~/.claude/agents/` (if present) or domain MCP |
+| User mentions a ticket / issue / tracker, or a ticket key like `ABC-123` | `tracker-management` skill (layered on top of normal coordination) |
 | Difficulty in the work itself | `overcome-difficulty` skill |
 | User correction / feedback about agent behavior | `self-improvement` skill |
 
@@ -66,6 +67,20 @@ If the need exists but is not stated — state it explicitly and propose delegat
 2. **What was done** — by step, who executed.
 3. **Artifacts** — paths, links, commands.
 4. **Next steps** — if not done.
+
+### On task resolution (record experience)
+
+A substantive task is **resolved** only when the user explicitly confirms it (e.g. "done", "thanks, perfect", "this works", "так и оставим"). If the work appears complete and the user has not confirmed in their last message, ask once at the end of your reply — in the user's language — whether they consider the task resolved, then wait for explicit agreement.
+
+When a substantive task is resolved, **record the experience** in memory:
+
+- **Scope.** Cross-project lesson → global memory (`~/.claude/memory-global/leaves/`). Project-specific lesson → project memory (`<project_cwd>/.claude/agent-memory/`).
+- **One leaf per resolved task,** name keyed to the task's essence (e.g. `experience-cursor-rule-divergence.md`), frontmatter `type: reference`.
+- **Content:** the final plan as actually executed (including any replanning from `overcome-difficulty`), each difficulty and how it was overcome, links to artifacts, lessons for future similar work.
+
+These leaves accumulate as your durable **experience** — reusable knowledge across sessions. Read the relevant memory index before starting a new task that pattern-matches past work.
+
+Skip this for trivial Q&A turns and one-line tasks. The rule applies to substantive work where you planned, delegated, or hit a difficulty.
 
 ### Escalation to the user
 
@@ -102,7 +117,7 @@ Global memory is imported into every session via the line at the end of this fil
 
 - **Read** the relevant scope index when the task touches a domain it knows, when the user references prior-conversation work, or before making assumptions about repo/infra conventions.
 - **Verify** specific file paths, function names, or flags from memory before recommending them — code may have moved.
-- **Write** when a fact is durable and non-obvious: corrections that should not recur, decisions and their reasons, user role and preferences, project state, runbooks for prod or external pipelines.
+- **Write** when a fact is durable and non-obvious: corrections that should not recur, decisions and their reasons, user role and preferences, project state, runbooks for prod or external pipelines, **post-resolution task experiences** (see § On task resolution).
 - **Do not** write: ephemeral task state (use the task list), one-session plan drafts (use a plan file), secrets, content already covered by `CLAUDE.md`.
 - **Behavioral rules** ("always X", "never Y") belong in `CLAUDE.md` or skill / agent prompts — not in memory.
 
@@ -147,7 +162,7 @@ Delegation — `Task`, `subagent_type` from `~/.claude/agents/*.md`.
 | `thinker` | Independent reasoning check; surfaces hidden assumptions and contradictions |
 | Optional consultants | Only when present in `~/.claude/agents/` and the task matches their `description` |
 
-Skills (in `~/.claude/skills/`): `overcome-difficulty`, `self-improvement` — see § Coordination above for triggers.
+Skills (in `~/.claude/skills/`): `overcome-difficulty`, `self-improvement`, `tracker-management` — see § Coordination above for triggers.
 
 ---
 

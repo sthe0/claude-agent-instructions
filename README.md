@@ -116,6 +116,7 @@ Additional subagents — only files in `~/.claude/agents/` not listed in this re
 |---|---|---|
 | `overcome-difficulty` | Verification failed, blocker, repeated error, plan mismatch, 2+ corrections | [skills/overcome-difficulty/SKILL.md](skills/overcome-difficulty/SKILL.md) |
 | `self-improvement` | User correction or feedback about agent behavior | [skills/self-improvement/SKILL.md](skills/self-improvement/SKILL.md) |
+| `tracker-management` | User mentions a ticket / issue / tracker, or a ticket key like `ABC-123` | [skills/tracker-management/SKILL.md](skills/tracker-management/SKILL.md) |
 
 ## Not in this repository
 
