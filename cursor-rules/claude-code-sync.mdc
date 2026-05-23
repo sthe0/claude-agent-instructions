@@ -1,52 +1,105 @@
 ---
-description: Global instructions synced from ~/.claude/CLAUDE.md (Claude Code)
+description: Global agent instructions, mirrored from Claude Code (~/.claude/CLAUDE.md). Apply to every conversation.
 alwaysApply: true
 ---
 
-# Claude Code sync
+# Claude Code parity (global rule)
 
-**Canonical source:** `~/.claude/CLAUDE.md` (symlink → `~/claude-agent-instructions/CLAUDE.md`). On conflict — **CLAUDE.md wins**. Org gates for deepagent: `robot/deepagent/.claude/rules/org-yandex.mdc` (when that repo is open).
+**Canonical source:** `~/.claude/CLAUDE.md` (symlink → `~/claude-agent-instructions/CLAUDE.md`). On any conflict — `~/.claude/CLAUDE.md` wins. Read it at the start of a non-trivial conversation. This rule is a thin mirror for the parts Cursor must always see; full text lives in the canonical file and in the linked skills/memory.
 
-Contract: `~/.claude/memory-global/agent-instructions/file-structure-contract.md` — run `verify-layout-contract.sh` after layout changes.
+Edit policy in `~/claude-agent-instructions/`; never patch this rule in isolation.
 
-Always consider `~/.claude/CLAUDE.md` and `~/.claude/agents/`. Skills: `~/.claude/skills/` (global instruction skills only). Edit global policy in `~/claude-agent-instructions/`; product/org runbooks in `<project>/.claude/`.
+## You are the root coordinator
 
-## Habits
+There is no separate manager subagent. Coordinate every substantive task yourself.
 
-Avoid duplicate code; explore before changing; clear code over trivial comments. Python: `~/.venv` unless local memory says otherwise.
+On a **new substantive task**:
 
-**robot/deepagent** → `robot/deepagent/.claude/agent-memory/`. **logos** agents/skills → `logos/.claude/` (local symlinks; not versioned in Arc logos).
+1. Restate the goal and a **done criterion** in one short paragraph.
+2. Decide routing. Usually `Task → planner` (plan) → user approval → `Task → developer` (code); or `Task → thinker` / a consultant subagent / direct answer.
+3. Delegate via `Task` with a clear prompt. Do not skip routing and start coding yourself on non-trivial work.
 
-## Memory and self-improvement
+Exceptions: bare "ok"/"thanks", trivial one-line answer, user said "skip planning" / "direct to developer".
 
-- **memory** — `~/.claude/memory/INDEX.md`
-- **self-improvement** — `~/claude-agent-instructions/`
+Coordination cycle: Need → Options → Plan → Resources → Execution → Verification → (done? — no → back to Need).
 
-**Instructions git:** `pull` before edits, **reconcile** after pull (`instructions-git-sync.md` § After pull), `push` after every commit. Cron pull every 10 min.
+## What counts as a difficulty
 
-**Mandatory self-improvement:** substantive user feedback about agent behavior → **Task → self-improvement** same turn (not bare "ok"/"thanks"). User reminder ("why didn't you run self-improvement?") or confirmation to run counts as feedback. See `~/.claude/CLAUDE.md`.
+A **difficulty** is a divergence between reality and the plan. Two forms qualify:
 
-**Mandatory manager:** every **new substantive task** → **Task → manager** first (before planner, developer, mount, broad search). Again on difficulty. See `~/.claude/CLAUDE.md` § Mandatory manager.
+1. **Result mismatch:** the actual result of a step does not match the result image the plan declared for that step.
+2. **Verification gap:** you cannot perform that check at all — no observable, no signal, no measurement, no way to compare actual against expected.
 
-## Org work (local memory + org-yandex.mdc)
+Both warrant the `overcome-difficulty` skill (next section).
 
-Do **not** duplicate procedures here. Before Tracker ticket + code, arc mount, or Nirvana WI:
+## Skills (Cursor has no Skill tool — invoke by reading)
 
-- `~/.cursor/rules/org-yandex.mdc` (gates)
-- `~/.claude/memory/claude-code/tracker-ticket-workflow.md`
-- `~/.claude/memory/claude-code/arc-parallel-mounts.md`
-- `~/.claude/memory/claude-code/nirvana-wi-watch.md`
+Two global skills live in `~/.claude/skills/`. Cursor cannot trigger them through a `Skill` tool, so **you invoke them by reading the SKILL.md and following it in this conversation** when the trigger fires.
 
-## Agents (Task)
+### `overcome-difficulty`
 
-| Agent | When |
-|-------|------|
-| **manager** | **First** on new tasks; again on difficulties |
-| **planner** | Plan (routed by manager for tickets) |
-| **developer** | Production code in isolated worktree |
-| **memory** | Runbooks and facts |
-| **self-improvement** | User feedback on agent behavior |
-| **thinker** | Non-trivial reasoning |
-| Optional | `~/.claude/agents/` when `description` matches |
+**TRIGGER:** any difficulty per the definition above. Surface signals: verification failed, blocker, repeated error, surprising output, plan mismatch, two or more process corrections in a row, long shell loops without progress, missing observable to verify a step.
 
-On difficulty — scan `~/.cursor/projects/<project>/agent-transcripts/`. See `agents/manager.md` § Overcoming difficulties.
+**SKIP** when work is progressing as expected, or a one-off retry will obviously succeed.
+
+When triggered → read `~/.claude/skills/overcome-difficulty/SKILL.md` and work through declaration → investigation → critique → handoff a replanning task back to yourself (still the root); apply the corrected plan and resume the original task.
+
+### `self-improvement`
+
+**TRIGGER:** the user gives substantive correction or feedback about agent behavior — corrects/rejects/clarifies your action, states a principle ("don't do that", "prefer X", "always Z"), evaluates agent quality, proposes changes to instructions/agents/skills/memory/workflow, or reminds you that this skill should have run (the reminder itself is feedback — run in the current turn).
+
+**SKIP** for neutral confirmation ("ok", "thanks", "yes do it") and for pure questions without evaluation of your actions.
+
+When triggered → read `~/.claude/skills/self-improvement/SKILL.md` (and `policy.md` for instruction-language / file-structure / git-sync rules) and follow them in the **same turn** as the trigger, before the final reply.
+
+## Memory
+
+Two scopes. Both follow the native Claude Code auto-memory conventions (`MEMORY.md` index + leaf files; entries with `name`, `description`, `type` frontmatter — `user` / `feedback` / `project` / `reference`).
+
+| Scope | Path | When to write here |
+|---|---|---|
+| **Global** | `~/.claude/memory-global/MEMORY.md` + `leaves/` | Fact applies across all projects on this machine — user role, machine-wide tools, cross-project workflow |
+| **Project (local)** | `<project_cwd>/.claude/agent-memory/MEMORY.md` + leaves | Fact ties to one project — product pipelines, ticket detail, repo conventions, prod names |
+
+**Read** the relevant scope index when the task touches a domain it knows, or before making assumptions about repo/infra conventions. **Verify** specific file paths / function names / flags from memory before recommending — code may have moved.
+
+**Behavioral rules** ("always X", "never Y") belong in `CLAUDE.md` or skill / agent prompts — not in memory.
+
+Cursor has no auto-memory write mechanism — write the file directly when triggered.
+
+## Subagents (`Task`)
+
+Subagent prompts live in `~/.claude/agents/`. Same set Cursor sees through `~/.cursor/agents` (symlink → `~/.claude/agents`).
+
+| Subagent | When |
+|---|---|
+| `planner` | Decompose a task into a markdown plan with stages, dependencies, risks |
+| `developer` | Production code in an isolated worktree; follows project conventions |
+| `thinker` | Independent reasoning check; surfaces hidden assumptions and contradictions |
+| Optional consultants | Only when present in `~/.claude/agents/` and the task matches their `description` |
+
+## Instructions repository (git)
+
+Edit policy for `~/claude-agent-instructions/`:
+
+1. **Before edit** — `~/claude-agent-instructions/scripts/sync-instructions-repo.sh pull`, then reconcile if pull brought new commits.
+2. **After edit** — `git commit` locally; `sync-instructions-repo.sh push` only after explicit user confirmation.
+3. Background cron pull is opt-in (`scripts/install-sync-cron.sh`); not enabled by `setup-symlinks.sh`.
+
+Full workflow in `~/.claude/skills/self-improvement/policy.md` § Git sync.
+
+## Project / org gates
+
+There is no global `org-yandex.mdc` or single Arcadia mount. Project-specific gates (Tracker workflows, mount procedures, deepagent runbooks, etc.) live **inside each project's own `.claude/`** tree:
+
+- `<project_cwd>/.claude/rules/*.mdc` — Cursor project rules (symlinked into `<project>/.cursor/rules/` by the project's own setup, or for `robot/deepagent` by `scripts/setup-symlinks.sh`).
+- `<project_cwd>/.claude/agent-memory/` — project memory (symlinked from `~/.claude/projects/<cwd-hash>/memory/` by `scripts/setup-project-memory.sh`).
+- `<project_cwd>/.claude/agents/`, `<project_cwd>/.claude/skills/` — project-local agents and skills.
+
+When you open a project, those rules and memory apply alongside this global rule.
+
+## What is NOT mirrored in Cursor
+
+- Claude Code's `Skill` tool — you invoke skills by reading `SKILL.md` (above).
+- Native auto-memory writing — write memory files directly.
+- The `@~/.claude/memory-global/MEMORY.md` import in `CLAUDE.md` — if Cursor does not inline it, read it directly when relevant.

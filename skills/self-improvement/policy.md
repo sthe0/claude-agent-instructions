@@ -47,18 +47,17 @@ The repository layout below is canonical. If disk disagrees — fix **either** t
 CLAUDE.md
 README.md
 agents/*.md                # global subagents (developer, planner, thinker, ...)
-agents-local/*.md          # gitignored on non-Arcadia machines; on Arcadia: pointer to arc tree
+agents-local/*.md          # gitignored; per-machine subagents
 skills/<name>/SKILL.md     # global skills (overcome-difficulty, self-improvement)
 skills/<name>/<extra>.md   # skill-private policy or reference files
-skills-local/*.md          # gitignored; non-Arcadia machine-local skills
+skills-local/*.md          # gitignored; machine-local single-file skills
 mcp-local/*.json           # gitignored; applied to settings.local.json via apply-mcp-local.sh
 cursor-rules/
-  claude-code-sync.mdc
-  project-overlay-deepagent.mdc
+  claude-code-sync.mdc     # global Cursor rule (alwaysApply); mirrors CLAUDE.md
 memory-global/
   MEMORY.md                # global memory index (auto-memory format)
   leaves/*.md              # global memory entries
-docs/                      # optional; deferred refactor notes go under docs/deferred/
+docs/                      # optional documentation
 scripts/
   setup-symlinks.sh
   setup-project-memory.sh
@@ -72,7 +71,7 @@ scripts/
 githooks/post-commit
 ```
 
-**Forbidden in global `scripts/`:** arc-specific scripts (`sync-junk-agents-arc`, `setup-the0-agents-mount`, …) — they belong in the local `scripts/` tree on the machine.
+**Forbidden in global `scripts/`:** project-specific or machine-specific scripts (Arcadia mount helpers, deepagent runbook scripts, etc.) — those belong in the relevant project's own `.claude/scripts/` tree.
 
 ### Runtime symlinks after `setup-symlinks.sh`
 
@@ -80,12 +79,14 @@ githooks/post-commit
 |---|---|
 | `~/.claude/CLAUDE.md` | `CLAUDE.md` |
 | `~/.claude/agents/<global>.md` | `agents/<name>.md` |
-| `~/.claude/agents/<local>.md` | `agents-local/*.md` (gitignored fallback) or arc agents-local |
+| `~/.claude/agents/<local>.md` | `agents-local/*.md` (gitignored) |
 | `~/.claude/skills/<global>/` | `skills/<name>/` (directory symlink) |
 | `~/.claude/skills/<local>.md` | `skills-local/*.md` (gitignored) |
 | `~/.claude/memory-global/` | `memory-global/` |
 | `~/.cursor/rules/claude-code-sync.mdc` | `cursor-rules/claude-code-sync.mdc` |
 | `~/.cursor/agents` | `~/.claude/agents` |
+
+Project-specific rules / agents / skills / memory live in **each project's own** `<project_cwd>/.claude/` tree (not in this repo), and are wired by the project's own setup or by `scripts/setup-project-memory.sh` for memory.
 
 ### Project memory symlink (per project, not in this repo)
 

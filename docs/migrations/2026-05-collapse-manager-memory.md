@@ -97,15 +97,9 @@ The script symlinks `~/.claude/projects/<cwd-hash>/memory/` → `<project_cwd>/.
 
 The script refuses to run with `$HOME` as the project (home is not a project; its memory stays at `~/.claude/projects/-Users-<you>/memory/`).
 
-### 6. Optional automation
+### 6. Automation (removed)
 
-`scripts/migrate-pre-2026-05.sh` performs steps 2 + 3 + 4 idempotently. Run it instead of doing them by hand:
-
-```bash
-~/claude-agent-instructions/scripts/migrate-pre-2026-05.sh
-```
-
-It does **not** touch per-project memory (step 5) — that requires choosing which projects to set up.
+There was a `scripts/migrate-pre-2026-05.sh` that performed steps 2 + 3 + 4 idempotently. It has been removed since the migration is complete on the maintainer's machines. If you need to migrate now, perform steps 2–4 manually as documented above — they are short and safe to repeat.
 
 ## After migration — what to know in a new session
 

@@ -1,9 +1,13 @@
 # Local agents (`agents-local/`)
 
-Deprecated for Arcadia: Logos agents live in `logos/neuro/agent/claude_code/agents/` (exposed via `logos/.claude/agents/` symlinks). **yandex-guru** lives in `robot/deepagent/.claude/agents/`.
+Per-machine subagent definitions that should not live in the global git repo. Files placed here are symlinked into `~/.claude/agents/` by `setup-symlinks.sh` and are excluded from version control via `.gitignore` (`agents-local/*`).
 
-## On non-Arcadia machines (fallback)
+Project-specific subagents (e.g. agents for `robot/deepagent` or other Arcadia projects) belong in **that project's** own `.claude/agents/` tree, not here.
 
-Place gitignored `*.md` files directly in this directory. They are linked into `~/.claude/agents/` by `setup-symlinks.sh`. Excluded from git via `.gitignore` (`agents-local/*`).
+## Usage
 
-After adding files: `~/claude-agent-instructions/scripts/setup-symlinks.sh`.
+1. Drop a `*.md` file (with valid agent frontmatter) into this directory.
+2. Run `~/claude-agent-instructions/scripts/setup-symlinks.sh`.
+3. The agent appears in `~/.claude/agents/<name>.md` and is available via `Task`.
+
+The file stays gitignored — moving to another machine requires copying it manually.
