@@ -35,6 +35,7 @@ prune_dangling() {
 
 # Core global symlinks
 link "$REPO/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
+link "$REPO/config.md" "$HOME/.claude/config.md"
 link "$REPO/cursor-rules/claude-code-sync.mdc" "$HOME/.cursor/rules/claude-code-sync.mdc"
 link "$REPO/memory-global" "$HOME/.claude/memory-global"
 

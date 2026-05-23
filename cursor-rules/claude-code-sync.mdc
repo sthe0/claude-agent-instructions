@@ -35,7 +35,7 @@ There is no separate manager subagent. Coordinate every substantive task yoursel
 
 When in doubt — pick the heavier class once, downgrade if reality fits a lighter one. Do not silently upgrade (scope creep without approval).
 
-Numeric thresholds (`small-change-max-lines`, etc.) resolve via `~/.claude/CLAUDE.md` § Coordination constants — that section is the single source of truth.
+Numeric thresholds (`small-change-max-lines`, `max-recursion-depth`, budget tiers, etc.) resolve via `~/.claude/config.md` — single source of truth, imported by `~/.claude/CLAUDE.md` at session start. Edit values there, not in the prose that references them.
 
 ### On a substantive task
 

@@ -45,6 +45,7 @@ The repository layout below is canonical. If disk disagrees — fix **either** t
 
 ```
 CLAUDE.md
+config.md                            # numeric coordination constants — single source of truth
 README.md
 agents/                              # reserved for future Task-spawned subagents
   README.md
@@ -87,6 +88,7 @@ githooks/post-commit
 | Runtime path | Source in repo |
 |---|---|
 | `~/.claude/CLAUDE.md` | `CLAUDE.md` |
+| `~/.claude/config.md` | `config.md` |
 | `~/.claude/agents/<global>.md` | `agents/<name>.md` (currently none — directory reserved) |
 | `~/.claude/agents/<local>.md` | `agents-local/*.md` (gitignored) |
 | `~/.claude/skills/<flat>/` | `skills/<name>/` (excluding the `specializations/` container) |

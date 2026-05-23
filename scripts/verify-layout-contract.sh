@@ -28,6 +28,7 @@ require_absent() {
 
 echo "=== Global repo tree ==="
 require_file "$REPO/CLAUDE.md"
+require_file "$REPO/config.md"
 require_file "$REPO/README.md"
 require_dir "$REPO/agents"
 require_file "$REPO/agents/README.md"
@@ -79,6 +80,7 @@ ok "no local arc scripts in global scripts/"
 
 echo "=== Runtime symlinks ==="
 if [[ -L "$HOME/.claude/CLAUDE.md" ]]; then ok "~/.claude/CLAUDE.md"; else fail "~/.claude/CLAUDE.md not symlink"; fi
+if [[ -L "$HOME/.claude/config.md" ]]; then ok "~/.claude/config.md"; else fail "~/.claude/config.md not symlink"; fi
 if [[ -L "$HOME/.claude/memory-global" ]]; then ok "~/.claude/memory-global"; else fail "~/.claude/memory-global"; fi
 if [[ -d "$HOME/.claude/skills" ]]; then ok "~/.claude/skills"; else fail "~/.claude/skills"; fi
 
