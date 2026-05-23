@@ -33,7 +33,9 @@ Need → Options → Plan → Resources → Execution → Verification → done?
 
 ### When the work is stuck
 
-Use the **overcome-difficulty** skill (see `~/.claude/skills/overcome-difficulty/`). Triggers: verification failed, blocker, repeated error, plan mismatch, 2+ process corrections, before retrying an external workflow / VCS / mount / CLI after failure, session review.
+A **difficulty** is a divergence between reality and the plan. The canonical form: an actual step result does not match the result image the plan declared for that step. A second form: you cannot perform that check at all — no observable, no signal, no way to compare actual against expected. Both warrant the same response.
+
+Use the **overcome-difficulty** skill (see `~/.claude/skills/overcome-difficulty/`). Surface signals: verification failed, blocker, repeated error, plan mismatch, two or more process corrections in a row, before retrying an external workflow / VCS / mount / CLI after failure, session review, missing observable to verify a step.
 
 The skill localizes the divergence (declaration → investigation → critique) and produces a **replanning task** that you (still as root) then apply to fix the plan and resume the original user task on the new plan.
 

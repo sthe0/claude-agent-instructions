@@ -5,7 +5,18 @@ description: TRIGGER when the actual result of the plan or one of its stages div
 
 # Overcome difficulty
 
-You are invoking this skill because the **actual** outcome of the plan (or one of its stages) diverged from the **expected** outcome. Work through three phases in order: **declaration**, **investigation**, **critique**. At the end, hand a concrete replanning task back to yourself — you are the root coordinator — and resume the original user task on the corrected plan.
+## What counts as a difficulty
+
+A **difficulty** is a divergence between reality and the plan. Two forms qualify:
+
+1. **Result mismatch (canonical):** the actual result of a step does not match the result image the plan declared for that step.
+2. **Verification gap:** you cannot perform that check at all — no observable, no signal, no measurement, no way to compare actual against expected. Inability to analyze conformance is itself a difficulty.
+
+Surface signals (verification failed, blocker, repeated error, surprising output, plan mismatch, two or more process corrections in a row, long shell loops without progress, "I don't even know how to tell if this worked") are all manifestations of one of these two underlying forms.
+
+## What this skill does
+
+You are invoking this skill because either of the above happened. Work through three phases in order: **declaration**, **investigation**, **critique**. At the end, hand a concrete replanning task back to yourself — you are the root coordinator — and resume the original user task on the corrected plan.
 
 Do not start the next round of execution until the corrected plan addresses the localized gap.
 
