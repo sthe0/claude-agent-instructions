@@ -97,7 +97,9 @@ For each project where shared agent memory is desired:
 ~/.claude/projects/<cwd-hash>/memory  →  <project_cwd>/.claude/agent-memory
 ```
 
-The symlink is created by `scripts/setup-project-memory.sh`. The native Claude Code auto-memory mechanism then reads and writes through the symlink, so the actual files live in the project tree and other developers inherit them on clone.
+The symlink is created by `scripts/setup-project-memory.sh`, usually invoked from `<project>/.claude/scripts/setup-local.sh`. The native Claude Code auto-memory mechanism then reads and writes through the symlink, so the actual files live in the project tree and other developers inherit them on clone.
+
+Each product repo may ship `.claude/scripts/setup-local.sh` (Cursor symlinks, skills, memory) and `.claude/scripts/README.md` — not in this global repository.
 
 ### On structure change
 
