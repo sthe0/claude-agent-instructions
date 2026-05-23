@@ -154,12 +154,16 @@ If cron pull is enabled (opt-in, see below), it does **not** replace this reconc
 ```bash
 cd ~/claude-agent-instructions
 git add -A && git commit -m "…"
+# push only after explicit user confirmation (see below)
 ~/claude-agent-instructions/scripts/sync-instructions-repo.sh push
 ```
 
-**Every** commit is followed by **push** to `origin` without asking the user.
+1. **Commit** locally after every edit batch (message explains the change).
+2. **Prepare for push:** `git status`, `git log -1`, run verifiers if layout changed; tell the user the commit is ready and what will go to `origin/main`.
+3. **Push** only after the user explicitly confirms (e.g. «push», «да, пушь», «опубликуй инструкции»). Do **not** run `sync-instructions-repo.sh push` on your own after commit.
+4. If the user declines or defers push — leave the commit local; do not push.
 
-If push is rejected (remote ahead): `pull` → resolve conflicts → `push` again.
+If push is rejected (remote ahead): `pull` → resolve conflicts → ask for confirmation again → `push`.
 
 ### Background pull (opt-in, every 10 minutes)
 
@@ -182,7 +186,7 @@ To disable later: `crontab -l | grep -v claude-agent-instructions | crontab -`.
 ~/claude-agent-instructions/scripts/install-git-hooks.sh
 ```
 
-`post-commit` runs `sync-instructions-repo.sh push` automatically. Duplicates the explicit agent push, in case the user committed manually.
+`post-commit` only reminds that push needs user confirmation — it does **not** auto-push (see § After editing).
 
 ### Scripts
 
@@ -193,7 +197,7 @@ To disable later: `crontab -l | grep -v claude-agent-instructions | crontab -`.
 | `sync-instructions-repo.sh sync` | pull, then push |
 | `install-sync-cron.sh` | cron line (pull every 10 min) — opt-in, run manually if desired |
 | `install-sync-systemd-timer.sh` | user systemd timer (if cron unavailable) — opt-in |
-| `install-git-hooks.sh` | post-commit → auto-push |
+| `install-git-hooks.sh` | post-commit → reminder (no auto-push) |
 | `setup-symlinks.sh` | apply the runtime symlinks |
 | `setup-project-memory.sh` | per-project: symlink shared agent memory into the project tree |
 | `verify-instructions-sync.sh` | check symlinks and drift |

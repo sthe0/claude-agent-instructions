@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Auto-push after every commit in this repo (see skills/self-improvement/policy.md § Git sync)
+# Push requires user confirmation — see skills/self-improvement/policy.md § Git sync
 set -euo pipefail
-REPO="$(git rev-parse --show-toplevel)"
-exec "$REPO/scripts/sync-instructions-repo.sh" push
+echo "claude-agent-instructions: commit recorded. Push only after user confirms: scripts/sync-instructions-repo.sh push" >&2

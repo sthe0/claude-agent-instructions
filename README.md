@@ -36,7 +36,7 @@ File layout, instruction language, and the git workflow live in [skills/self-imp
 ```text
 New task: root → (planner → approval → developer | thinker | direct answer)
 Difficulty: root → Skill overcome-difficulty → (replan → planner | developer | …)
-Feedback:  root → Skill self-improvement → (edits in this repo → commit → push)
+Feedback:  root → Skill self-improvement → (edits in this repo → commit → push after user confirms)
 ```
 
 Anti-patterns: [memory-global/leaves/coordinator-pitfalls.md](memory-global/leaves/coordinator-pitfalls.md).
@@ -81,14 +81,14 @@ If the machine was set up before a refactor that changed the on-disk layout, `se
 | [verify-instructions-sync.sh](scripts/verify-instructions-sync.sh) | Check global symlinks and drift |
 | [verify-layout-contract.sh](scripts/verify-layout-contract.sh) | Compare tree to the layout in `skills/self-improvement/policy.md` |
 | [sync-instructions-repo.sh](scripts/sync-instructions-repo.sh) | `pull` / `push` this repo |
-| [install-git-hooks.sh](scripts/install-git-hooks.sh) | post-commit → push |
+| [install-git-hooks.sh](scripts/install-git-hooks.sh) | post-commit → reminder (push needs user OK) |
 | [install-sync-cron.sh](scripts/install-sync-cron.sh) | Cron: git pull every 10 min (opt-in; not installed by `setup-symlinks.sh`) |
 
 ## Git workflow
 
 ```bash
 ~/claude-agent-instructions/scripts/sync-instructions-repo.sh pull
-# edits → commit → push (post-commit hook)
+# edits → commit → push after user confirms
 ```
 
 Runbook: [skills/self-improvement/policy.md](skills/self-improvement/policy.md) § Git sync.
