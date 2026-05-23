@@ -1,24 +1,16 @@
 ---
-description: deepagent project overlay — supplements ~/.cursor/rules/claude-code-sync.mdc and ~/.claude/CLAUDE.md
+description: deepagent project overlay — supplements ~/.cursor/rules/claude-code-sync.mdc
 alwaysApply: true
 ---
 
 # deepagent (project overlay)
 
-Global policy: `~/.cursor/rules/claude-code-sync.mdc` and `~/.claude/CLAUDE.md` (from `~/claude-agent-instructions/`). Do **not** duplicate the coordination cycle, skills, or git workflow here.
+Global policy: `~/.cursor/rules/claude-code-sync.mdc` and `~/.claude/CLAUDE.md`.
 
-## Project memory
+**Canonical project files** live in the open repository root under `.claude/` (not in this global template). After clone, ensure:
 
-Project-specific runbooks live in `~/arcadia/robot/deepagent/.claude/agent-memory/MEMORY.md` (+ leaves). Read the index before launching pipelines, retesting, or interpreting numbers/TTL from a ticket.
+- `.claude/CLAUDE.md`, `.claude/agent-memory/`, `.claude/rules/org-yandex.mdc`, `.claude/rules/project.mdc`
+- `.claude/skills/` — relative symlinks to `ai/artifacts/skills/` (run `.claude/scripts/link-skills.sh`)
+- Local symlinks: `CLAUDE.md` → `.claude/CLAUDE.md`; `.cursor/rules/*.mdc` → `.claude/rules/`
 
-The directory is symlinked from `~/.claude/projects/<cwd-hash>/memory/` by `~/claude-agent-instructions/scripts/setup-project-memory.sh`, so writes through the native auto-memory mechanism land in the project tree and are versioned in the project's git.
-
-## Tool permissions
-
-`.cursor/cli.json` mirrors `.claude/settings.local.json` in this repository. Keep them aligned — drift breaks Cursor's permission prompts.
-
-## Where to edit instructions
-
-- **Global** agent rules → `~/claude-agent-instructions/` (`CLAUDE.md`, `agents/`, `skills/`, `cursor-rules/`).
-- **deepagent project** runbooks → `~/arcadia/robot/deepagent/.claude/agent-memory/` (commit to project git).
-- **This overlay** — only deepagent-specific gates that cannot live in either of the above.
+Run `~/claude-agent-instructions/scripts/setup-project-memory.sh` with this repository root once per machine/mount.

@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-THE0_AGENTS_MOUNT="${THE0_AGENTS_MOUNT:-$HOME/arcadia_the0-agents}"
-JUNK_AGENTS_ROOT="${JUNK_AGENTS_ROOT:-$THE0_AGENTS_MOUNT/junk/the0/agents}"
+DEEPAGENT_ROOT="${DEEPAGENT_ROOT:-$HOME/arcadia/robot/deepagent}"
 
 mkdir -p "$HOME/.claude" "$HOME/.cursor/rules"
 
@@ -40,18 +39,11 @@ link "$REPO/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
 link "$REPO/cursor-rules/claude-code-sync.mdc" "$HOME/.cursor/rules/claude-code-sync.mdc"
 link "$REPO/memory-global" "$HOME/.claude/memory-global"
 
-# Local arc gates / scripts (optional, present only on Arcadia machines)
-if [[ -f "$JUNK_AGENTS_ROOT/cursor-rules/org-yandex.mdc" ]]; then
-  link "$JUNK_AGENTS_ROOT/cursor-rules/org-yandex.mdc" "$HOME/.cursor/rules/org-yandex.mdc"
-fi
+# Do not install org-yandex globally — it lives in robot/deepagent/.claude/rules/
+rm -f "$HOME/.cursor/rules/org-yandex.mdc"
+rm -rf "$HOME/.claude/scripts-local" 2>/dev/null || true
 
-if [[ -d "$JUNK_AGENTS_ROOT/scripts" ]]; then
-  link "$JUNK_AGENTS_ROOT/scripts" "$HOME/.claude/scripts-local"
-  chmod +x "$JUNK_AGENTS_ROOT/scripts"/*.sh 2>/dev/null || true
-  "$JUNK_AGENTS_ROOT/scripts/install-junk-agents-sync-cron.sh" 2>/dev/null || true
-fi
-
-# Agents: ~/.claude/agents/ as a regular directory with per-file symlinks
+# Agents: global only in ~/.claude/agents/
 if [[ -L "$HOME/.claude/agents" ]]; then
   rm "$HOME/.claude/agents"
 fi
@@ -62,24 +54,33 @@ for file_path in "$REPO/agents/"*.md; do
   [[ -f "$file_path" ]] && link_agent_md "$file_path"
 done
 
-if [[ -d "$JUNK_AGENTS_ROOT/agents-local" ]]; then
-  for file_path in "$JUNK_AGENTS_ROOT/agents-local/"*.md; do
-    [[ -f "$file_path" ]] && link_agent_md "$file_path"
-  done
-fi
-
 if [[ -d "$REPO/agents-local" ]]; then
   for file_path in "$REPO/agents-local/"*.md; do
     [[ -f "$file_path" ]] && link_agent_md "$file_path"
   done
 fi
 
-# Skills: ~/.claude/skills/ as a regular directory with per-skill directory symlinks
+# Skills: global instruction skills only in ~/.claude/skills/
 if [[ -L "$HOME/.claude/skills" ]]; then
   rm "$HOME/.claude/skills"
 fi
 mkdir -p "$HOME/.claude/skills"
 prune_dangling "$HOME/.claude/skills"
+
+# Remove legacy home symlinks to Arcadia artifacts or the0-agents
+for entry in "$HOME/.claude/skills/"*; do
+  [[ -e "$entry" ]] || continue
+  base="$(basename "$entry")"
+  [[ "$base" == "overcome-difficulty" || "$base" == "self-improvement" || "$base" == "README.md" ]] && continue
+  if [[ -L "$entry" ]]; then
+    target="$(readlink "$entry")"
+    if [[ "$target" == *"/ai/artifacts/skills"* ]] || [[ "$target" == *"arcadia_the0-agents"* ]]; then
+      rm -f "$entry"
+    fi
+  elif [[ -d "$entry" ]]; then
+    rm -rf "$entry"
+  fi
+done
 
 if [[ -d "$REPO/skills" ]]; then
   for dir_path in "$REPO/skills/"*/; do
@@ -89,7 +90,6 @@ if [[ -d "$REPO/skills" ]]; then
   done
 fi
 
-# Machine-local skills (gitignored single-file skills)
 if [[ -d "$REPO/skills-local" ]]; then
   for file_path in "$REPO/skills-local/"*.md; do
     [[ -f "$file_path" ]] || continue
@@ -99,21 +99,28 @@ if [[ -d "$REPO/skills-local" ]]; then
   done
 fi
 
+# Drop legacy per-agent symlinks to the0-agents / logos / deepagent project agents
+for entry in "$HOME/.claude/agents/"*.md; do
+  [[ -L "$entry" ]] || continue
+  target="$(readlink "$entry")"
+  if [[ "$target" == *"arcadia_the0-agents"* ]] || [[ "$target" == *"/logos/"* ]] || [[ "$target" == *"/robot/deepagent/.claude/agents"* ]]; then
+    rm -f "$entry"
+  fi
+done
+
 link "$HOME/.claude/agents" "$HOME/.cursor/agents"
 
 "$REPO/scripts/install-git-hooks.sh"
-# Note: cron pull is opt-in — run scripts/install-sync-cron.sh manually if desired.
 
-DEEPAGENT_RULES="$HOME/arcadia/robot/deepagent/.cursor/rules"
-if [[ -d "$DEEPAGENT_RULES" ]]; then
-  if [[ -f "$DEEPAGENT_RULES/claude-code-sync.mdc" && ! -L "$DEEPAGENT_RULES/claude-code-sync.mdc" ]]; then
-    mv "$DEEPAGENT_RULES/claude-code-sync.mdc" \
-      "$DEEPAGENT_RULES/claude-code-sync.mdc.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
-  fi
-  rm -f "$DEEPAGENT_RULES/claude-code-sync.mdc"
-  link "$REPO/cursor-rules/project-overlay-deepagent.mdc" "$DEEPAGENT_RULES/deepagent-project.mdc"
-  if [[ ! -e "$HOME/arcadia/robot/deepagent/CLAUDE.md" ]]; then
-    link "$REPO/CLAUDE.md" "$HOME/arcadia/robot/deepagent/CLAUDE.md"
+# deepagent: project-local Cursor rules and CLAUDE.md (canonical in Arc)
+if [[ -d "$DEEPAGENT_ROOT/.claude/rules" ]]; then
+  mkdir -p "$DEEPAGENT_ROOT/.cursor/rules"
+  rm -f "$DEEPAGENT_ROOT/.cursor/rules/claude-code-sync.mdc"
+  link "$DEEPAGENT_ROOT/.claude/rules/project.mdc" "$DEEPAGENT_ROOT/.cursor/rules/deepagent-project.mdc"
+  link "$DEEPAGENT_ROOT/.claude/rules/org-yandex.mdc" "$DEEPAGENT_ROOT/.cursor/rules/org-yandex.mdc"
+  link "$DEEPAGENT_ROOT/.claude/CLAUDE.md" "$DEEPAGENT_ROOT/CLAUDE.md"
+  if [[ -x "$DEEPAGENT_ROOT/.claude/scripts/link-skills.sh" ]]; then
+    "$DEEPAGENT_ROOT/.claude/scripts/link-skills.sh" >/dev/null 2>&1 || true
   fi
 fi
 

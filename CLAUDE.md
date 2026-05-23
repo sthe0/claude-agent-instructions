@@ -127,8 +127,8 @@ Full rule: `~/.claude/skills/self-improvement/policy.md` § Instruction language
 Edit policy for `~/claude-agent-instructions/`:
 
 1. **Before edit** — `~/claude-agent-instructions/scripts/sync-instructions-repo.sh pull`, then reconcile if pull brought new commits.
-2. **After edit** — `git commit` + `sync-instructions-repo.sh push` (mandatory, every commit; the repo's `post-commit` hook does this automatically).
-3. Background cron pull is **opt-in** — install via `scripts/install-sync-cron.sh` if desired; otherwise rely on the pre-edit pull.
+2. **After edit** — `git commit` + `sync-instructions-repo.sh push` (mandatory, every commit).
+3. Background cron — `pull` every 10 min.
 
 Full workflow: `~/.claude/skills/self-improvement/policy.md` § Git sync.
 
