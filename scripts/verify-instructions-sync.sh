@@ -36,11 +36,24 @@ check_link "$HOME/.cursor/agents" "$HOME/.claude/agents"
 
 for f in "$REPO/agents/"*.md; do
   [[ -f "$f" ]] || continue
-  check_link "$HOME/.claude/agents/$(basename "$f")" "$f"
+  base="$(basename "$f")"
+  [[ "$base" == "README.md" ]] && continue
+  check_link "$HOME/.claude/agents/$base" "$f"
 done
 
 if [[ -d "$REPO/skills" ]]; then
   for d in "$REPO/skills/"*/; do
+    [[ -d "$d" ]] || continue
+    d="${d%/}"
+    base="$(basename "$d")"
+    # The specializations/ container is not symlinked; its contents are flattened.
+    [[ "$base" == "specializations" ]] && continue
+    check_link "$HOME/.claude/skills/$base" "$d"
+  done
+fi
+
+if [[ -d "$REPO/skills/specializations" ]]; then
+  for d in "$REPO/skills/specializations/"*/; do
     [[ -d "$d" ]] || continue
     d="${d%/}"
     check_link "$HOME/.claude/skills/$(basename "$d")" "$d"

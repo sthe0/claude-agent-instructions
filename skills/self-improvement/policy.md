@@ -46,18 +46,27 @@ The repository layout below is canonical. If disk disagrees — fix **either** t
 ```
 CLAUDE.md
 README.md
-agents/*.md                # global subagents (developer, planner, thinker, ...)
-agents-local/*.md          # gitignored; per-machine subagents
-skills/<name>/SKILL.md     # global skills (overcome-difficulty, self-improvement, tracker-management)
-skills/<name>/<extra>.md   # skill-private policy or reference files
-skills-local/*.md          # gitignored; machine-local single-file skills
-mcp-local/*.json           # gitignored; applied to settings.local.json via apply-mcp-local.sh
+agents/                              # reserved for future Task-spawned subagents
+  README.md
+agents-local/                        # gitignored; per-machine subagents
+  README.md
+skills/                              # flat skills + specializations container
+  overcome-difficulty/SKILL.md       # flat skill (invoked inline)
+  self-improvement/SKILL.md + policy.md
+  tracker-management/SKILL.md
+  specializations/
+    planner/SKILL.md                 # specialization skill (spawned as claude -p)
+    developer/SKILL.md
+    thinker/SKILL.md
+    yandex-cloud-expert/SKILL.md
+skills-local/                        # gitignored; machine-local single-file skills
+mcp-local/                           # gitignored; applied to settings.local.json
 cursor-rules/
-  claude-code-sync.mdc     # global Cursor rule (alwaysApply); mirrors CLAUDE.md
+  claude-code-sync.mdc               # global Cursor rule (alwaysApply); mirrors CLAUDE.md
 memory-global/
-  MEMORY.md                # global memory index (auto-memory format)
-  leaves/*.md              # global memory entries
-docs/                      # optional documentation
+  MEMORY.md                          # global memory index (auto-memory format)
+  leaves/*.md                        # global memory entries; includes granted-permissions.md
+docs/                                # optional documentation
 scripts/
   setup-symlinks.sh
   setup-project-memory.sh
@@ -78,9 +87,10 @@ githooks/post-commit
 | Runtime path | Source in repo |
 |---|---|
 | `~/.claude/CLAUDE.md` | `CLAUDE.md` |
-| `~/.claude/agents/<global>.md` | `agents/<name>.md` |
+| `~/.claude/agents/<global>.md` | `agents/<name>.md` (currently none — directory reserved) |
 | `~/.claude/agents/<local>.md` | `agents-local/*.md` (gitignored) |
-| `~/.claude/skills/<global>/` | `skills/<name>/` (directory symlink) |
+| `~/.claude/skills/<flat>/` | `skills/<name>/` (excluding the `specializations/` container) |
+| `~/.claude/skills/<specialization>/` | `skills/specializations/<name>/` — flattened so the catalog sees them by name |
 | `~/.claude/skills/<local>.md` | `skills-local/*.md` (gitignored) |
 | `~/.claude/memory-global/` | `memory-global/` |
 | `~/.cursor/rules/claude-code-sync.mdc` | `cursor-rules/claude-code-sync.mdc` |

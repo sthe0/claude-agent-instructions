@@ -85,6 +85,19 @@ if [[ -d "$REPO/skills" ]]; then
   for dir_path in "$REPO/skills/"*/; do
     [[ -d "$dir_path" ]] || continue
     dir_path="${dir_path%/}"
+    base="$(basename "$dir_path")"
+    # skip the specializations container itself; iterate its contents below
+    [[ "$base" == "specializations" ]] && continue
+    link_skill_dir "$dir_path"
+  done
+fi
+
+# Specializations live in skills/specializations/ but are symlinked flat into
+# ~/.claude/skills/<name>/ so the Claude Code skill catalog sees them by name.
+if [[ -d "$REPO/skills/specializations" ]]; then
+  for dir_path in "$REPO/skills/specializations/"*/; do
+    [[ -d "$dir_path" ]] || continue
+    dir_path="${dir_path%/}"
     link_skill_dir "$dir_path"
   done
 fi
@@ -111,7 +124,7 @@ link "$HOME/.claude/agents" "$HOME/.cursor/agents"
 
 "$REPO/scripts/install-git-hooks.sh"
 
-chmod +x "$REPO/scripts/verify-instructions-sync.sh" "$REPO/scripts/verify-layout-contract.sh" "$REPO/scripts/setup-project-memory.sh" "$REPO/scripts/migrate-pre-2026-05.sh"
+chmod +x "$REPO/scripts/verify-instructions-sync.sh" "$REPO/scripts/verify-layout-contract.sh" "$REPO/scripts/setup-project-memory.sh"
 "$REPO/scripts/verify-layout-contract.sh" 2>/dev/null || true
 "$REPO/scripts/verify-instructions-sync.sh" || true
 

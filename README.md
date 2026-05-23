@@ -13,8 +13,9 @@ File layout, instruction language, and the git workflow live in [skills/self-imp
 | Concept | Meaning |
 |---|---|
 | **Root coordinator** | The main Claude Code dialog. Coordinates, decides routing, does not replace specialists. Acts as the manager — there is no separate manager subagent. |
-| **Subagent** | Prompt file in `agents/` (or `~/.claude/agents/` for machine-local) — invoke via `Task`, `subagent_type: <name>`. |
-| **Skill** | Directory in `skills/<name>/` with `SKILL.md` (+ optional supporting files). Invoked via the `Skill` tool or `/<name>` from the user. Runs in the main thread, sees full context. |
+| **Subagent** | Prompt file in `agents/` (or `~/.claude/agents/` for machine-local) — invoked via `Task`, `subagent_type: <name>`. Currently no shipped subagents; infrastructure remains for future use. |
+| **Flat skill** | Directory in `skills/<name>/` with `SKILL.md`. Invoked **inline** by the `Skill` tool or `/<name>`. Runs in the main thread, sees full context. Ships: `overcome-difficulty`, `self-improvement`, `tracker-management`. |
+| **Specialization skill** | Directory in `skills/specializations/<name>/` with `SKILL.md`. Symlinked flat into `~/.claude/skills/<name>/`. Spawned as a separate `claude -p` process with `--append-system-prompt-file`. Ships: `planner`, `developer`, `thinker`, `yandex-cloud-expert`. |
 | **Global memory** | `~/.claude/memory-global/MEMORY.md` + `leaves/` — cross-project facts and practices. Imported into every session via `@…` in `CLAUDE.md`. |
 | **Project memory** | `<project_cwd>/.claude/agent-memory/` — project-specific runbooks. Symlinked from `~/.claude/projects/<cwd-hash>/memory/` by `scripts/setup-project-memory.sh`, so native auto-memory reads / writes through the symlink. Committed to the project's git. |
 
@@ -101,22 +102,32 @@ Runbook: [skills/self-improvement/policy.md](skills/self-improvement/policy.md) 
 
 ## Agents in this repo (`agents/`)
 
-| name | File |
-|---|---|
-| developer | [agents/developer.md](agents/developer.md) |
-| planner | [agents/planner.md](agents/planner.md) |
-| thinker | [agents/thinker.md](agents/thinker.md) |
-| yandex-cloud-expert | [agents/yandex-cloud-expert.md](agents/yandex-cloud-expert.md) |
+None currently. The directory exists with a [README](agents/README.md) describing what it is reserved for. `setup-symlinks.sh` iterates the directory so future agents are picked up automatically.
 
-Additional subagents — only files in `~/.claude/agents/` not listed in this repo's `agents/` (machine-local, gitignored).
+Machine-local subagents (gitignored) → [`agents-local/`](agents-local/README.md). Project-local subagents → `<project_cwd>/.claude/agents/`.
 
 ## Skills in this repo (`skills/`)
 
+### Flat skills (invoked inline in the current process)
+
 | name | Triggers (summary) | File |
 |---|---|---|
-| `overcome-difficulty` | Verification failed, blocker, repeated error, plan mismatch, 2+ corrections | [skills/overcome-difficulty/SKILL.md](skills/overcome-difficulty/SKILL.md) |
+| `overcome-difficulty` | Reality diverges from the plan; verification failed; repeated error; missing observable | [skills/overcome-difficulty/SKILL.md](skills/overcome-difficulty/SKILL.md) |
 | `self-improvement` | User correction or feedback about agent behavior | [skills/self-improvement/SKILL.md](skills/self-improvement/SKILL.md) |
 | `tracker-management` | User mentions a ticket / issue / tracker, or a ticket key like `ABC-123` | [skills/tracker-management/SKILL.md](skills/tracker-management/SKILL.md) |
+
+### Specialization skills (spawned as `claude -p` per plan step)
+
+Canonical path in repo: `skills/specializations/<name>/SKILL.md`. Symlinked flat into `~/.claude/skills/<name>/` by `setup-symlinks.sh`.
+
+| name | Spawns when a plan step calls for | File |
+|---|---|---|
+| `planner` | Decomposition, stages, dependencies, risks, done criteria | [skills/specializations/planner/SKILL.md](skills/specializations/planner/SKILL.md) |
+| `developer` | Writing, refactoring, debugging, reviewing production code | [skills/specializations/developer/SKILL.md](skills/specializations/developer/SKILL.md) |
+| `thinker` | Independent reasoning check on a non-trivial chain | [skills/specializations/thinker/SKILL.md](skills/specializations/thinker/SKILL.md) |
+| `yandex-cloud-expert` | Yandex Cloud / `yc` operations | [skills/specializations/yandex-cloud-expert/SKILL.md](skills/specializations/yandex-cloud-expert/SKILL.md) |
+
+Full spawn template and return-marker handling: [CLAUDE.md](CLAUDE.md) § Spawning specialists.
 
 ## Not in this repository
 

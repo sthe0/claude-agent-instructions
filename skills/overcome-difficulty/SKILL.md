@@ -78,7 +78,11 @@ Verification after the next round of action loops back to declaration if a new d
 
 Use this when working through declaration → investigation → critique in the current thread is **not converging**: the same difficulty keeps re-appearing in different costumes, plan-rework iterations chase their tail, you can feel the parent thread is anchored on a wrong frame, or accumulated context noise is more burden than help.
 
-Mechanism: spawn a **fresh root Claude Code in a separate process** via `claude -p` (no `--agent` flag — that keeps the full Claude Code built-in system prompt, the same `CLAUDE.md`, the same memory, the same skills, the same subagents). Empty conversation history; everything else identical. Each spawn can itself spawn another, so recursion depth is unbounded by architecture.
+Mechanism: spawn a **fresh manager** in a separate Claude Code process via `claude -p` — **no `--agent` flag** and **no `--append-system-prompt-file`**. That keeps the full Claude Code built-in system prompt, the same `CLAUDE.md`, the same memory, the same skills, the same subagent infrastructure; only the conversation history is empty.
+
+The escape is **always a vanilla manager**, never a specialization-preloaded process — even when the difficulty arose inside a specialist (e.g. inside a developer `claude -p` process). The whole point of the escape is a fresh perspective without anchors. If the fresh manager determines it needs a specific specialist to resolve the sub-difficulty, it will spawn one itself via the standard spawn template (per its own freshly-built plan).
+
+Each spawn can itself spawn another (overcome-difficulty escape can recurse), so recursion depth is unbounded by architecture.
 
 ### Invocation
 

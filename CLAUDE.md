@@ -49,17 +49,98 @@ Not mandatory only for neutral confirmation ("ok", "yes do it", "thanks") and fo
 
 ### Recognizing when to delegate
 
-| Signal | Specialist |
+| Signal | Specialist / skill |
 |---|---|
-| Decomposition, stages, timelines, risks | `planner` |
-| Doubtful reasoning chain | `thinker` |
-| Production code, VCS, build, PR | `developer` |
-| Org-specific term, unknown infra | infra-consultant subagent from `~/.claude/agents/` (if present) or domain MCP |
-| User mentions a ticket / issue / tracker, or a ticket key like `ABC-123` | `tracker-management` skill (layered on top of normal coordination) |
-| Difficulty in the work itself | `overcome-difficulty` skill |
-| User correction / feedback about agent behavior | `self-improvement` skill |
+| Decomposition, stages, timelines, risks | Spawn `planner` specialization (`claude -p`) |
+| Production code, VCS, build, PR | Spawn `developer` specialization (`claude -p`) |
+| Independent reasoning check on a non-trivial chain | Spawn `thinker` specialization (`claude -p`) |
+| Yandex Cloud / `yc` operations | Spawn `yandex-cloud-expert` specialization (`claude -p`) |
+| Other domain expertise | Project-local specialization if one exists in `<cwd>/.claude/skills/specializations/`; else domain MCP / search |
+| User mentions a ticket / issue / tracker, or a ticket key like `ABC-123` | `tracker-management` skill (inline, layered on top of coordination) |
+| Difficulty in the work itself | `overcome-difficulty` skill (inline; with recursive escape via vanilla `claude -p`) |
+| User correction / feedback about agent behavior | `self-improvement` skill (inline) |
 
 If the need exists but is not stated — state it explicitly and propose delegation.
+
+### Spawning specialists
+
+A **specialist** is a fresh Claude Code process (`claude -p`) with a specialization skill appended to its system prompt. The spawned process is a manager + that specialization: no parent conversation history, but the same CLAUDE.md, memory, skills, and tools.
+
+**Specialists are spawned only per a plan step.** Do not spawn a specialist autonomously, mid-task, outside the plan — that is a difficulty signal; invoke `overcome-difficulty` instead.
+
+#### Spawn template
+
+```bash
+AGENT_RECURSION_DEPTH=$(( ${AGENT_RECURSION_DEPTH:-0} + 1 )) \
+claude -p \
+  --append-system-prompt-file ~/.claude/skills/<specialization>/SKILL.md \
+  --max-budget-usd 5.00 \
+  --output-format text \
+  "AGENT_RECURSION_DEPTH=$AGENT_RECURSION_DEPTH
+
+## Working plan
+
+<the markdown plan, with the step the specialist owns marked **<<this step>>**>
+
+## Done criterion for this step
+
+<concrete done criterion>
+
+## Constraints
+
+<scope, do-not-touch, deadlines>
+
+## Permissions previously granted (apply during your work)
+
+<digest of relevant granted permissions, or omit this section if none>
+
+If your work needs an action not covered, return PERMISSION-REQUEST: with the request.
+"
+```
+
+Replace `<specialization>` with the actual name (`planner` / `developer` / `thinker` / `yandex-cloud-expert` / a project-local specialization).
+
+#### Return markers
+
+Each specialist's output starts with exactly one of:
+
+- `COMPLETED:` — step done; summary + artifacts.
+- `INCOMPLETE:` — partial; what's done, what's left, blocker.
+- `REPLAN:` — the difficulty is plan-level; specialist proposes a revision.
+- `PERMISSION-REQUEST:` — needs explicit permission for a specific external / irreversible action.
+- `ESCALATE:` — other decision the manager must make.
+
+### Handling specialist escalations
+
+**On `REPLAN:`** — incorporate the proposed revision (possibly after asking the user), update the plan, re-spawn the same or a different specialist with the revised plan.
+
+**On `PERMISSION-REQUEST:`** —
+
+1. **Check existing grants** in `~/.claude/memory-global/leaves/granted-permissions.md` (global) and `<cwd>/.claude/agent-memory/granted-permissions.md` (project). If the requested action matches an existing `always` grant, treat as granted; go to step 4.
+2. **Otherwise ask the user** with the request. Options:
+   - **Once** — granted for this specific action only.
+   - **Always (project)** — record in the project's `granted-permissions.md`.
+   - **Always (global)** — record in the global `granted-permissions.md`.
+   - **No, do fallback** — deny.
+3. **On any `always` grant** — append a row to the corresponding `granted-permissions.md`: date, action pattern, scope, brief context.
+4. **Re-spawn the specialist** with the resolution embedded in the new prompt:
+
+   ```
+   The earlier PERMISSION-REQUEST for <action> was resolved: GRANTED (scope: once / project / global) or DENIED.
+   [If granted persistently:] Recorded in <path>.
+   [If denied:] Do not perform <action>; use your stated fallback or stop.
+
+   Continue from where you stopped:
+   <continuation context>
+   ```
+
+**On `ESCALATE:`** — resolve the question (with the user if necessary), then re-spawn the specialist with the answer or hand back to the broader plan.
+
+**On `INCOMPLETE:`** — decide: re-spawn with more context, ask the user, or accept the partial.
+
+**On `COMPLETED:`** — move to the next plan step.
+
+> Workflow-level permissions (this section) are independent of Claude Code's tool-call permissions in `~/.claude/settings.json`. The two are checked separately: a tool call may be allowed by settings but still need workflow permission for the higher-level action (e.g. `Bash` is allowed, but pushing to `main` is a workflow-level action that needs explicit permission).
 
 ### Outcome format
 
@@ -151,18 +232,30 @@ Full workflow: `~/.claude/skills/self-improvement/policy.md` § Git sync.
 
 ---
 
-## Available subagents
+## Available specializations and skills
 
-Delegation — `Task`, `subagent_type` from `~/.claude/agents/*.md`.
+### Specializations (spawned as `claude -p` per plan step)
 
-| Subagent | Role |
+| Specialization | When to spawn |
 |---|---|
-| `planner` | Decompose a task into a markdown plan with stages, dependencies, risks |
-| `developer` | Production code in an isolated worktree; follows project conventions |
-| `thinker` | Independent reasoning check; surfaces hidden assumptions and contradictions |
-| Optional consultants | Only when present in `~/.claude/agents/` and the task matches their `description` |
+| `planner` | Decomposition, stages, dependencies, risks, done criteria |
+| `developer` | Writing, refactoring, debugging, reviewing production code |
+| `thinker` | Independent reasoning check on a non-trivial chain |
+| `yandex-cloud-expert` | Yandex Cloud setup / `yc` operations |
 
-Skills (in `~/.claude/skills/`): `overcome-difficulty`, `self-improvement`, `tracker-management` — see § Coordination above for triggers.
+Project-local specializations may live in `<cwd>/.claude/skills/specializations/<name>/SKILL.md` and are spawned the same way.
+
+### Flat skills (inline, in the current process)
+
+| Skill | Triggered by |
+|---|---|
+| `overcome-difficulty` | Reality diverges from the plan; verification failed; repeated error; missing observable. The skill includes a recursive escape via a vanilla `claude -p` (no specialization). |
+| `self-improvement` | Substantive user correction / feedback about agent behavior |
+| `tracker-management` | User mentions a ticket / issue / tracker |
+
+### Task-spawned subagents
+
+`~/.claude/agents/` is currently empty in the global layer. The infrastructure remains for future use when a true `Task`-spawned subagent is the right fit (one-shot research with parallel fan-out, isolated read-only worker, etc.). Project-local subagents may live in `<cwd>/.claude/agents/`.
 
 ---
 

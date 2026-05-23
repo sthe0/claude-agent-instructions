@@ -16,10 +16,10 @@ There is no separate manager subagent. Coordinate every substantive task yoursel
 On a **new substantive task**:
 
 1. Restate the goal and a **done criterion** in one short paragraph.
-2. Decide routing. Usually `Task → planner` (plan) → user approval → `Task → developer` (code); or `Task → thinker` / a consultant subagent / direct answer.
-3. Delegate via `Task` with a clear prompt. Do not skip routing and start coding yourself on non-trivial work.
+2. Decide routing. Usually: spawn the `planner` specialization (separate `claude -p` process — see § Specialists), get user approval on the plan, then spawn the `developer` specialization for code per plan step; or `thinker` for reasoning verification, or a project-local specialization, or a direct answer.
+3. Specialists are spawned via `claude -p --append-system-prompt-file …` (see § Specialists). Do not skip routing and start coding yourself on non-trivial work.
 
-Exceptions: bare "ok"/"thanks", trivial one-line answer, user said "skip planning" / "direct to developer".
+Exceptions: bare "ok"/"thanks", trivial one-line answer, user said "skip planning" / "do it directly".
 
 Coordination cycle: Need → Options → Plan → Resources → Execution → Verification → (done? — no → back to Need).
 
@@ -85,16 +85,33 @@ Two scopes. Both follow the native Claude Code auto-memory conventions (`MEMORY.
 
 Cursor has no auto-memory write mechanism — write the file directly when triggered.
 
-## Subagents (`Task`)
+## Specialists (spawned as `claude -p` per plan step)
 
-Subagent prompts live in `~/.claude/agents/`. Same set Cursor sees through `~/.cursor/agents` (symlink → `~/.claude/agents`).
+Specialization skills live in `~/.claude/skills/<name>/SKILL.md` (canonical path; in the repo, specialization SKILL.md files live under `skills/specializations/<name>/` and are symlinked flat into `~/.claude/skills/` by `setup-symlinks.sh`).
 
-| Subagent | When |
+| Specialization | When to spawn |
 |---|---|
-| `planner` | Decompose a task into a markdown plan with stages, dependencies, risks |
-| `developer` | Production code in an isolated worktree; follows project conventions |
-| `thinker` | Independent reasoning check; surfaces hidden assumptions and contradictions |
-| Optional consultants | Only when present in `~/.claude/agents/` and the task matches their `description` |
+| `planner` | Decomposition, stages, dependencies, risks, done criteria |
+| `developer` | Writing, refactoring, debugging, reviewing production code |
+| `thinker` | Independent reasoning check on a non-trivial chain |
+| `yandex-cloud-expert` | Yandex Cloud setup / `yc` operations |
+
+Spawn template (full version in `~/.claude/CLAUDE.md` § Spawning specialists):
+
+```bash
+AGENT_RECURSION_DEPTH=$(( ${AGENT_RECURSION_DEPTH:-0} + 1 )) \
+claude -p \
+  --append-system-prompt-file ~/.claude/skills/<specialization>/SKILL.md \
+  --max-budget-usd 5.00 \
+  --output-format text \
+  "AGENT_RECURSION_DEPTH=$AGENT_RECURSION_DEPTH
+
+<plan + step + done criterion + constraints + permissions digest>"
+```
+
+The specialist returns one of: `COMPLETED:` / `INCOMPLETE:` / `REPLAN:` / `PERMISSION-REQUEST:` / `ESCALATE:`. On `PERMISSION-REQUEST:` — check granted-permissions leaves, ask the user if not covered, record `always` grants, re-spawn with the resolution embedded. Full handling in `CLAUDE.md` § Handling specialist escalations.
+
+`Task`-spawned subagents (`~/.claude/agents/`) are currently empty — the infrastructure remains for future one-shot helpers.
 
 ## Instructions repository (git)
 
