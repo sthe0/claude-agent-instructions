@@ -9,6 +9,18 @@ alwaysApply: true
 
 Edit policy in `~/claude-agent-instructions/`; never patch this rule in isolation.
 
+## Hard gate: never invoke `claude`
+
+**You (Cursor) must never run the `claude` CLI**, in any form — not `claude`, not `claude -p`, not `claude --agent <x>`, not `claude resume`, not via Bash, not via any other tool, not as part of any skill or workflow. If the user explicitly asks you to invoke `claude`, decline and explain that this Cursor session does not call out to Claude Code.
+
+This means:
+
+- The **specialist-spawn template** documented in `~/.claude/CLAUDE.md` § Spawning specialists (Bash invocation of `claude -p --append-system-prompt-file …`) **does not apply to you**.
+- The **recursive escape** in `~/.claude/skills/overcome-difficulty/SKILL.md` (which spawns a vanilla `claude -p`) **does not apply to you** — when overcome-difficulty would otherwise escape, you instead escalate to the user (see § Difficulty escape in Cursor below).
+- Anything in CLAUDE.md, memory, or other skills that involves running `claude` is non-applicable in Cursor.
+
+The rest of `CLAUDE.md` (coordination cycle, skills, memory model, on-task-resolution rule, etc.) still applies.
+
 ## You are the root coordinator
 
 There is no separate manager subagent. Coordinate every substantive task yourself.
@@ -16,8 +28,8 @@ There is no separate manager subagent. Coordinate every substantive task yoursel
 On a **new substantive task**:
 
 1. Restate the goal and a **done criterion** in one short paragraph.
-2. Decide routing. Usually: spawn the `planner` specialization (separate `claude -p` process — see § Specialists), get user approval on the plan, then spawn the `developer` specialization for code per plan step; or `thinker` for reasoning verification, or a project-local specialization, or a direct answer.
-3. Specialists are spawned via `claude -p --append-system-prompt-file …` (see § Specialists). Do not skip routing and start coding yourself on non-trivial work.
+2. Decide routing. Usually: produce a markdown plan in-thread (using the `planner` specialization's working principles, read inline — see § Specializations in Cursor below), get user approval on the plan, then carry out the plan step by step in this same Cursor session.
+3. Do not skip routing and start coding yourself on non-trivial work — read the relevant specialization SKILL.md first and apply its principles.
 
 Exceptions: bare "ok"/"thanks", trivial one-line answer, user said "skip planning" / "do it directly".
 
@@ -43,6 +55,8 @@ Three global skills live in `~/.claude/skills/`. Cursor cannot trigger them thro
 **SKIP** when work is progressing as expected, or a one-off retry will obviously succeed.
 
 When triggered → read `~/.claude/skills/overcome-difficulty/SKILL.md` and work through declaration → investigation → critique → handoff a replanning task back to yourself (still the root); apply the corrected plan and resume the original task.
+
+**The recursive escape inside this skill spawns `claude -p` — that is forbidden in Cursor (see § Hard gate above).** When inline overcome-difficulty does not converge in Cursor, follow § Difficulty escape in Cursor below instead.
 
 ### `self-improvement`
 
@@ -85,33 +99,38 @@ Two scopes. Both follow the native Claude Code auto-memory conventions (`MEMORY.
 
 Cursor has no auto-memory write mechanism — write the file directly when triggered.
 
-## Specialists (spawned as `claude -p` per plan step)
+## Specializations in Cursor (read inline, do not spawn)
 
-Specialization skills live in `~/.claude/skills/<name>/SKILL.md` (canonical path; in the repo, specialization SKILL.md files live under `skills/specializations/<name>/` and are symlinked flat into `~/.claude/skills/` by `setup-symlinks.sh`).
+Specialization skills live in `~/.claude/skills/<name>/SKILL.md`. The CLAUDE.md spawn pattern (separate `claude -p` process with `--append-system-prompt-file`) **does not apply in Cursor** — see § Hard gate above.
 
-| Specialization | When to spawn |
-|---|---|
-| `planner` | Decomposition, stages, dependencies, risks, done criteria |
-| `developer` | Writing, refactoring, debugging, reviewing production code |
-| `thinker` | Independent reasoning check on a non-trivial chain |
-| `yandex-cloud-expert` | Yandex Cloud setup / `yc` operations |
+When a plan step calls for a specialization, **read the SKILL.md inline** and apply its working principles in your current Cursor context. You stay in-thread; you do not spawn a separate process.
 
-Spawn template (full version in `~/.claude/CLAUDE.md` § Spawning specialists):
+| Specialization | Read when a plan step calls for | SKILL.md |
+|---|---|---|
+| `planner` | Decomposition, stages, dependencies, risks, done criteria | `~/.claude/skills/planner/SKILL.md` |
+| `developer` | Writing, refactoring, debugging, reviewing production code | `~/.claude/skills/developer/SKILL.md` |
+| `thinker` | Reasoning check on a non-trivial chain (note: no fresh-context isolation available in Cursor) | `~/.claude/skills/thinker/SKILL.md` |
+| `yandex-cloud-expert` | Yandex Cloud setup / `yc` operations | `~/.claude/skills/yandex-cloud-expert/SKILL.md` |
 
-```bash
-AGENT_RECURSION_DEPTH=$(( ${AGENT_RECURSION_DEPTH:-0} + 1 )) \
-claude -p \
-  --append-system-prompt-file ~/.claude/skills/<specialization>/SKILL.md \
-  --max-budget-usd 5.00 \
-  --output-format text \
-  "AGENT_RECURSION_DEPTH=$AGENT_RECURSION_DEPTH
+The SKILL.md bodies are written for the spawned-process model (they say "you have been spawned as a fresh manager"). In Cursor, treat that framing as guidance about the **role** to adopt and the **working principles** to follow, not literal instructions about a separate process. Return markers (`COMPLETED:` / `INCOMPLETE:` / `REPLAN:` / `PERMISSION-REQUEST:` / `ESCALATE:`) are still meaningful as **internal phase markers** in your in-thread work — they tell you when to pause and check with the user.
 
-<plan + step + done criterion + constraints + permissions digest>"
-```
+You lose the fresh-context property of spawning, but you stay entirely within Cursor and never invoke `claude`.
 
-The specialist returns one of: `COMPLETED:` / `INCOMPLETE:` / `REPLAN:` / `PERMISSION-REQUEST:` / `ESCALATE:`. On `PERMISSION-REQUEST:` — check granted-permissions leaves, ask the user if not covered, record `always` grants, re-spawn with the resolution embedded. Full handling in `CLAUDE.md` § Handling specialist escalations.
+### `PERMISSION-REQUEST` in Cursor
 
-`Task`-spawned subagents (`~/.claude/agents/`) are currently empty — the infrastructure remains for future one-shot helpers.
+The PERMISSION-REQUEST protocol from `CLAUDE.md` § Handling specialist escalations still applies, just in-thread: when about to take an external / irreversible action, check the granted-permissions leaves first; ask the user if not covered; record `always` grants; continue (no re-spawn — you are already in the same thread).
+
+`Task`-spawned subagents (`~/.claude/agents/`) are currently empty.
+
+## Difficulty escape in Cursor
+
+The recursive escape inside `overcome-difficulty/SKILL.md` spawns `claude -p`. **That is forbidden in Cursor** (see § Hard gate). When inline declaration → investigation → critique does not converge in this session:
+
+1. **Try `/clear` or starting a fresh Cursor chat manually** — the analog of "fresh context" available to you in Cursor is the user restarting the conversation. Suggest this if you sense accumulated noise is the obstacle.
+2. **Escalate to the user with a structured summary** — declare the difficulty (expected / actual / mismatch), list what you tried inline, suggest options, ask for direction.
+3. **Optionally hand off to Claude Code** — if the user has a Claude Code session available, state the difficulty in self-contained form so they can paste it into Claude Code themselves. **You do not run `claude` for them.**
+
+Do not attempt to invoke `claude` from Bash as a workaround. The gate is unconditional.
 
 ## Instructions repository (git)
 
