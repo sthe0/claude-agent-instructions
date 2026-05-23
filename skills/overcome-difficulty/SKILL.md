@@ -82,14 +82,18 @@ Mechanism: spawn a **fresh manager** in a separate Claude Code process via `clau
 
 The escape is **always a vanilla manager**, never a specialization-preloaded process — even when the difficulty arose inside a specialist (e.g. inside a developer `claude -p` process). The whole point of the escape is a fresh perspective without anchors. If the fresh manager determines it needs a specific specialist to resolve the sub-difficulty, it will spawn one itself via the standard spawn template (per its own freshly-built plan).
 
-Each spawn can itself spawn another (overcome-difficulty escape can recurse), so recursion depth is unbounded by architecture.
+Each spawn can itself spawn another (overcome-difficulty escape can recurse) up to the depth cap defined below.
 
 ### Invocation
+
+Before spawning, verify `${AGENT_RECURSION_DEPTH:-0}` is `≤ 2` (so the spawn lands at depth ≤ 3). If the would-be depth is ≥ 4, follow § Safeguards § Hard depth cap and do not spawn.
+
+Choose the budget tier per `CLAUDE.md` § Budget tier — `medium = 3.00` is the default for overcome-difficulty escapes; use `large = 8.00` only when the difficulty likely needs deep exploration.
 
 ```bash
 AGENT_RECURSION_DEPTH=$(( ${AGENT_RECURSION_DEPTH:-0} + 1 )) \
 claude -p \
-  --max-budget-usd 5.00 \
+  --max-budget-usd 3.00 \
   --output-format text \
   "AGENT_RECURSION_DEPTH=$AGENT_RECURSION_DEPTH
 
@@ -126,12 +130,12 @@ The child returns to stdout. The Bash tool result will start with one marker:
 
 If the child hits its budget cap (`--max-budget-usd`) without emitting a marker, treat the output as `INVESTIGATION:` even without the prefix.
 
-### Soft safeguards (no hard depth cap)
+### Safeguards
 
-- **Per-level budget** — `--max-budget-usd 5.00` caps API spend at each level. Hitting the cap returns control to the caller.
+- **Hard depth cap (≤ 3).** Before spawning, check `$AGENT_RECURSION_DEPTH`. If the spawn would push it to **4 or higher**, **do not spawn**. Instead: stop, summarize the chain for the user (original task, where the recursion is now, what the next spawn would have done), ask whether to continue manually, restart with a clean approach, or accept a partial result. This cap is shared with the global one in `CLAUDE.md` § Recursion cap.
+- **Per-level budget** — `--max-budget-usd` (see `CLAUDE.md` § Budget tier — default `medium = 3.00` for overcome-difficulty spawns) caps API spend at each level. Hitting the cap returns control to the caller.
 - **Visible depth** — `AGENT_RECURSION_DEPTH` is in env and in the prompt; each level knows where it is in the stack.
-- **Loop sensitivity at depth ≥ 5** — the spawned level must self-check whether its task is a re-framing of an ancestor's task. If yes, return `LOOP_DETECTED:` early.
-- **No hard depth cap.** Termination is each level's responsibility: resolve, return findings, or detect a loop and bail. The architecture allows arbitrary depth; the safeguards above limit cost and runaway loops without limiting depth itself.
+- **Loop sensitivity at depth ≥ 2** — the spawned level must self-check whether its task is a re-framing of an ancestor's task. If yes, return `LOOP_DETECTED:` early rather than recursing further.
 - **Transcripts persist** — each spawned level leaves a session transcript at `~/.claude/projects/<cwd-hash>/<sid>.jsonl`. Useful for post-mortem if recursion was long.
 
 ### When NOT to escalate
@@ -139,6 +143,7 @@ If the child hits its budget cap (`--max-budget-usd`) without emitting a marker,
 - One more inline retry would obviously succeed (transient error, missed flag).
 - The difficulty is a simple lookup — `grep`, `git log`, `ls` — no need for a fresh context.
 - Asking the user a clarifying question would be cheaper than recursion.
-- You are already deep (e.g. `AGENT_RECURSION_DEPTH ≥ 5`) and previous levels returned `LOOP_DETECTED:` — escalate to the user instead.
+- You are at or near the cap (`AGENT_RECURSION_DEPTH ≥ 3`) — escalate to the user instead.
+- A previous level returned `LOOP_DETECTED:` — escalate to the user, do not re-spawn on the same difficulty.
 
 Inline overcome-difficulty (the phases above) is the default. Spawn only when the current thread genuinely won't converge.

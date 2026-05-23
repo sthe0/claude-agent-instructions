@@ -23,6 +23,15 @@ You implement the step. You do **not** unilaterally spawn other specialists — 
 
 - `COMPLETED:` — the step is done; include a summary, artifact paths (PR link, branch, files changed, test output), and any local plan revisions you applied.
 - `INCOMPLETE:` — partial; what is done, what remains, what blocks completion.
+- `CLARIFY:` — you need a small, specific answer to continue: a file path, a value, a choice between named options, a confirmation about a corner case. Use this in preference to `ESCALATE:` when the answer is short and implementation resumes immediately. Format:
+
+  ```
+  CLARIFY:
+  Question: <one specific question>
+  Options seen (if any): <a / b / c>
+  Resumes with: <what you'll do once answered>
+  ```
+
 - `REPLAN:` — overcome-difficulty concluded the difficulty is **plan-level** (the step's done criterion or its place in the broader plan is wrong); propose the revision and reasoning. Do not unilaterally rewrite the broader plan.
 - `PERMISSION-REQUEST:` — you cannot proceed without explicit permission for a specific external / irreversible action (push to a shared branch, deploy, modify a file outside the agreed scope, call an external API that costs money, etc.). Use the format:
 
@@ -33,7 +42,7 @@ You implement the step. You do **not** unilaterally spawn other specialists — 
   Fallback if denied: <what you will do instead, or "stop the step">
   ```
 
-- `ESCALATE:` — other decision the manager must make (ambiguity in the spec that you cannot resolve from context, dependency on another step's output that isn't yet available, etc.).
+- `ESCALATE:` — other decision the manager must make (ambiguity in the spec that you cannot resolve from context, dependency on another step's output that isn't yet available, a strategic call that affects scope, etc.).
 
 ## Languages and stacks
 

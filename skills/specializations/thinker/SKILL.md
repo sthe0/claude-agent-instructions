@@ -26,9 +26,18 @@ If you hit a difficulty in the analysis itself (the input is malformed, key cont
 
 - `COMPLETED:` — the analysis is done; include the verdict (which links hold, which are weak, what's missing) and the implication for the broader plan.
 - `INCOMPLETE:` — partial; what was analyzed, what is unverifiable from the input alone, what would unblock you.
+- `CLARIFY:` — you need a small specific fact to finish the analysis: a definition, a single missing measurement, which of two reading is intended. Use in preference to `ESCALATE:` when the answer is short and analysis resumes immediately. Format:
+
+  ```
+  CLARIFY:
+  Question: <one specific question>
+  Options seen (if any): <a / b / c>
+  Resumes with: <what you'll do once answered>
+  ```
+
 - `REPLAN:` — the reasoning chain is so flawed that the plan built on it cannot stand; propose what should change in the broader plan.
 - `PERMISSION-REQUEST:` — rare for analysis; use only if external lookup with non-trivial cost is needed (e.g. fetching a paper behind a paywall).
-- `ESCALATE:` — context is missing (a referenced document, a definition, a measurement) and the manager must supply it.
+- `ESCALATE:` — broader context is missing (a referenced document, a body of evidence, a strategic choice between substantively different interpretations) and the manager must supply it.
 
 ## How you think
 

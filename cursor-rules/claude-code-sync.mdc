@@ -25,15 +25,26 @@ The rest of `CLAUDE.md` (coordination cycle, skills, memory model, on-task-resol
 
 There is no separate manager subagent. Coordinate every substantive task yourself.
 
-On a **new substantive task**:
+### Classify task weight first
 
-1. Restate the goal and a **done criterion** in one short paragraph.
-2. Decide routing. Usually: produce a markdown plan in-thread (using the `planner` specialization's working principles, read inline — see § Specializations in Cursor below), get user approval on the plan, then carry out the plan step by step in this same Cursor session.
-3. Do not skip routing and start coding yourself on non-trivial work — read the relevant specialization SKILL.md first and apply its principles.
+| Class | Signs | Routing |
+|---|---|---|
+| **Chat** | Bare "ok"/"thanks", clarification question, opinion, ≤ 3-sentence factual answer with no file changes | Answer directly; no plan, no specialization read, no memory record |
+| **Small change** | ≤ 20 changed lines, single file, no architectural decision, no external / irreversible action, no new dependency, no public-API change | Do it yourself; optionally consult a specialization SKILL.md inline; no plan-approval gate |
+| **Substantive** | Anything not covered above | Full coordination: produce a plan (apply `planner` principles), get user approval, execute step by step applying the relevant specialization principles |
 
-Exceptions: bare "ok"/"thanks", trivial one-line answer, user said "skip planning" / "do it directly".
+When in doubt — pick the heavier class once, downgrade if reality fits a lighter one. Do not silently upgrade (scope creep without approval).
+
+### On a substantive task
+
+1. Restate the goal and a **done criterion** — mark as *measurable* (test, command output, file present) or *acceptance-review* (user accepts on review when no objective check exists).
+2. Produce a markdown plan in-thread (using `planner` principles, read inline — see § Specializations in Cursor).
+3. Get user approval on the plan before execution. This is a **hard gate** — never skip it.
+4. Carry out the plan step by step in this same Cursor session, applying the relevant specialization principles.
 
 Coordination cycle: Need → Options → Plan → Resources → Execution → Verification → (done? — no → back to Need).
+
+**Verification** by criterion type: *measurable* — run the check and read the result; *acceptance-review* — present the result and ask the user explicitly for accept / reject.
 
 ## What counts as a difficulty
 
@@ -76,22 +87,31 @@ When triggered → read `~/.claude/skills/tracker-management/SKILL.md` and layer
 
 ## On task resolution (record experience)
 
-When a substantive task is resolved (user explicitly confirms it — ask once if you finish without confirmation in their last message), write a memory leaf with the final plan and how each difficulty was overcome:
+When a substantive task is resolved (user explicitly confirms it — ask once if you finish without confirmation in their last message), **decide whether to record**.
+
+**Quality bar.** Record only if a future you would actually want to **read** the leaf before a similar task: non-obvious choice, reusable difficulty resolution, missing tool / memory / instruction discovered, or ≥ 5 min of rediscovery saved. Otherwise skip — memory bloat is worse than memory gap.
+
+**Required sections** in a leaf: (1) final plan as executed, (2) difficulties + how overcome, (3) artifacts, (4) lessons, (5) **self-critique of the agent system** (concrete friction observed — file / section / behavior, no vague "could be better").
+
+**Auto-trigger self-improvement.** If § self-critique names any concrete friction, invoke `self-improvement` in the same turn (after the leaf, before the final user reply) — treat the self-critique as the input signal.
 
 - Cross-project lesson → `~/.claude/memory-global/leaves/`.
 - Project-specific lesson → `<project_cwd>/.claude/agent-memory/`.
 - One leaf per resolved task, `type: reference`.
 
-Skip for trivial Q&A. Full rule: `~/.claude/CLAUDE.md` § On task resolution.
+Skip the leaf entirely for trivial Q&A and one-line tasks. Full rule: `~/.claude/CLAUDE.md` § On task resolution.
 
 ## Memory
 
-Two scopes. Both follow the native Claude Code auto-memory conventions (`MEMORY.md` index + leaf files; entries with `name`, `description`, `type` frontmatter — `user` / `feedback` / `project` / `reference`).
+Three scopes. Pick by **purpose**, not by convenience. All follow the same shape: `MEMORY.md` index + leaf files with frontmatter `name` / `description` / `type` (`user` / `feedback` / `project` / `reference`).
 
-| Scope | Path | When to write here |
+| Scope | Path | Purpose |
 |---|---|---|
-| **Global** | `~/.claude/memory-global/MEMORY.md` + `leaves/` | Fact applies across all projects on this machine — user role, machine-wide tools, cross-project workflow |
-| **Project (local)** | `<project_cwd>/.claude/agent-memory/MEMORY.md` + leaves | Fact ties to one project — product pipelines, ticket detail, repo conventions, prod names |
+| **Personal (auto-memory)** | `~/.claude/projects/<cwd-hash>/memory/MEMORY.md` + leaves | Personal facts about the user, conversational preferences, "what we agreed on" continuity, project state in the user's language |
+| **Global engineering** | `~/.claude/memory-global/MEMORY.md` + `leaves/` | Cross-project engineering patterns, reasoning practices, runbooks, retrospectives, granted-permissions — English, structured |
+| **Project (local)** | `<project_cwd>/.claude/agent-memory/MEMORY.md` + leaves | Project-specific runbooks — pipelines, ticket detail, repo conventions, prod names — English |
+
+If a fact qualifies for two scopes, write to the **most specific**. Duplicate content across scopes is a maintenance hazard.
 
 **Read** the relevant scope index when the task touches a domain it knows, or before making assumptions about repo/infra conventions. **Verify** specific file paths / function names / flags from memory before recommending — code may have moved.
 
@@ -112,7 +132,11 @@ When a plan step calls for a specialization, **read the SKILL.md inline** and ap
 | `thinker` | Reasoning check on a non-trivial chain (note: no fresh-context isolation available in Cursor) | `~/.claude/skills/thinker/SKILL.md` |
 | `yandex-cloud-expert` | Yandex Cloud setup / `yc` operations | `~/.claude/skills/yandex-cloud-expert/SKILL.md` |
 
-The SKILL.md bodies are written for the spawned-process model (they say "you have been spawned as a fresh manager"). In Cursor, treat that framing as guidance about the **role** to adopt and the **working principles** to follow, not literal instructions about a separate process. Return markers (`COMPLETED:` / `INCOMPLETE:` / `REPLAN:` / `PERMISSION-REQUEST:` / `ESCALATE:`) are still meaningful as **internal phase markers** in your in-thread work — they tell you when to pause and check with the user.
+The SKILL.md bodies are written for the spawned-process model (they say "you have been spawned as a fresh manager"). In Cursor, treat that framing as guidance about the **role** to adopt and the **working principles** to follow, not literal instructions about a separate process. Return markers (`COMPLETED:` / `PLAN-READY:` / `INCOMPLETE:` / `CLARIFY:` / `REPLAN:` / `PERMISSION-REQUEST:` / `ESCALATE:`) are meaningful as **internal phase markers** in your in-thread work — they tell you when to pause and check with the user.
+
+Two markers behave specially in-thread:
+- `PLAN-READY:` — when you finish a plan, treat it as a hard gate: stop and ask the user for explicit approval before executing the first step.
+- `CLARIFY:` — when you need one small specific fact to continue (file path, number, choice between named options), ask the user; resume immediately on the answer.
 
 You lose the fresh-context property of spawning, but you stay entirely within Cursor and never invoke `claude`.
 

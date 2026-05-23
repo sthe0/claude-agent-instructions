@@ -16,25 +16,31 @@ This skill is **tracker-agnostic**. Specific API conventions, status transitions
 3. **Publish key progress updates** — at meaningful boundaries, post a short status.
 4. **Publish the final result** — at the end, post the resolution with all artifacts.
 
+## Phase hooks (when each publication fires)
+
+This skill is layered on top of the root coordination cycle in `CLAUDE.md`. Each tracker action is tied to a specific phase — not done ad-hoc.
+
+| Coordination phase | Tracker action |
+|---|---|
+| **Ticket loaded** (first turn referencing the ticket) | Internal: read ticket + links + recent comments. Confirm to the user you have the context. No comment yet. |
+| **PLAN-READY** received from `planner` (or in-thread plan finished) | Post the plan as a comment, **before** asking the user for approval. The user reviews the plan on the ticket as well as in chat. |
+| **User approval** received on the plan | Optional one-line ack ("approved, starting"). Begin execution. |
+| **Stage `COMPLETED`** (specialist returns `COMPLETED:`) | One-line status + artifact link (PR, dashboard, file path, measurement). |
+| **`REPLAN:` from a specialist** | Post: what changed in the plan, why, link to the revised plan. |
+| **`overcome-difficulty` invoked** | One-line note that a difficulty arose; the resolution belongs to a later post (no recursion mechanics on the ticket). |
+| **Blocker** (specialist returned `INCOMPLETE:` with a blocker, or escalation to user) | What blocks, what is needed to unblock, who can unblock. |
+| **Task resolution** (user confirmed the task is done) | Final result: resolution summary + all artifacts (merged PRs, dashboards, measurements). Then any tracker-side close action that project memory specifies. |
+
+If a phase fires and you skipped the tracker action, post it on the next opportunity rather than dropping it — the ticket should reflect the actual sequence of events.
+
 What this skill is **not**:
 - Not a replacement for `planner` (who decomposes) or `developer` (who writes code).
 - Not tied to a specific tracker product. Yandex Tracker / Jira / Linear / GitHub Issues specifics are project memory.
 - Not authoritative for status transitions (project-specific).
 
-## What to publish, and when
+## Content guidance per action
 
-| Stage | What goes on the ticket |
-|---|---|
-| **Ticket loaded** | Internal — no comment yet; just confirm to the user you have read the ticket and links |
-| **Plan ready, before execution** | Markdown plan (or link to a plan file). Indicate which stages need user approval; flag any blockers / open questions. |
-| **Approval received** (or "do it now") | Optional one-line ack; execution begins |
-| **Stage completed** | One-line status + artifact link (PR, dashboard, measurement, file path) |
-| **Blocker** | What blocks, what's needed to unblock, who can unblock |
-| **Approach change** | Why the plan changed, what's new — link the new plan version |
-| **Difficulty escalated to `overcome-difficulty` skill** | One-line note that a difficulty arose; the resolution belongs to a later post |
-| **Final result** | Resolution summary + all artifacts (merged PRs, dashboards, measurements, link to ticket-related code) |
-
-Adapt the detail to the project's conventions. If project memory specifies a comment format, follow it. Otherwise: terse, factual, linkable.
+Adapt the detail to the project's conventions. If project memory specifies a comment format, follow it. Otherwise: terse, factual, linkable. Plan posts include the markdown plan (or a link to a plan file) and flag stages needing approval. Progress posts are one line plus an artifact link. Final-result posts list all artifacts.
 
 ## How to publish
 

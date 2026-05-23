@@ -11,13 +11,17 @@ You run as a skill in the main thread, so you have full conversation context —
 
 A user reminder ("did you run self-improvement?", "yes, run it") IS feedback. Invoke in the **same turn** as the trigger, before the final reply. Do not reply with apology only.
 
-## Per-session workflow
+## Two-turn workflow
 
-This skill **always** starts with two preparation steps before reasoning about the change. They are not optional — skipping them produces edits that conflict with the current repo state.
+This skill splits into **two distinct turns** to avoid overloading a single response with diagnosis + writing + editing + committing. Each turn has a narrow job.
 
-1. **Sync first.** Run `~/claude-agent-instructions/scripts/sync-instructions-repo.sh pull` before anything else. There is no background cron auto-pull, and other machines may have pushed since your session started. If `pull` brought new commits, do the reconcile in [policy.md](policy.md) § After pull before proceeding.
+### Turn 1 — diagnosis and proposal (same turn as the trigger)
 
-2. **Re-read the relevant instruction files from disk.** The conversation context (system prompt, prior turns, your own memory of the dialogue) may carry **stale versions** of `CLAUDE.md`, `agents/*.md`, `skills/*/SKILL.md`, `policy.md`, or memory leaves — they were loaded at session start (or earlier), and they have since been edited in this session, in another session, or by another machine. **Use `Read` on every file you plan to touch**, immediately before reasoning about the edit. If on-disk content differs from what you have in context, **on-disk wins**: build the edit on top of the current state, not your mental model. The same applies to any file you cite or compare against.
+In the same dialog turn the trigger fires, produce **text only**: no file edits to the instructions repo yet. The goal is a clear, reviewable proposal the user can accept, push back on, or refine.
+
+1. **Sync first.** Run `~/claude-agent-instructions/scripts/sync-instructions-repo.sh pull` before reasoning. There is no background cron auto-pull, and other machines may have pushed since your session started. If `pull` brought new commits, do the reconcile in [policy.md](policy.md) § After pull before proceeding.
+
+2. **Re-read the relevant instruction files from disk.** The conversation context (system prompt, prior turns, your own memory of the dialogue) may carry **stale versions** of `CLAUDE.md`, `agents/*.md`, `skills/*/SKILL.md`, `policy.md`, or memory leaves. **Use `Read` on every file you plan to touch**, immediately before reasoning about the edit. On-disk content wins.
 
 3. **Collect signals.** User quote(s), what went wrong, what you already did (tactical fix, commit, revert).
 
@@ -25,9 +29,25 @@ This skill **always** starts with two preparation steps before reasoning about t
 
 5. **Locate.** Where does the change belong? Use the table in § Where to put changes.
 
-6. **Diff.** Propose a **concrete edit** (file, section, wording) — not generalities.
+6. **Propose concrete edits.** For each proposed change: target file, section, before/after wording (or close to it). No generalities. The user reads this and approves, refines, or rejects.
 
-7. **Apply.** Edit, commit, push. The git workflow, English-only policy, and file-structure rules are mandatory and live in [policy.md](policy.md) — read it before editing the repo.
+End turn 1 with a clear ask: "Apply these changes?" — and stop. Do not start editing files.
+
+### Turn 2 — apply (next turn, after user confirmation)
+
+The user's confirmation can be terse ("да", "ok", "do it"). On confirmation:
+
+7. **Apply.** Edit the target files. The git workflow, English-only policy, and file-structure rules are mandatory and live in [policy.md](policy.md) — read it before editing the repo.
+
+8. **Commit.** One commit per coherent batch (see [policy.md](policy.md) § Git sync).
+
+9. **Push.** Only after the user explicitly confirms push (separate confirmation — commit ≠ push).
+
+### When to collapse into one turn
+
+If the user's message **already contains explicit approval to edit** ("сделай эти правки", "apply", "do it now", "сделай все"), turns 1 and 2 collapse into a single response. Still do steps 1–9 in order — just without a stop between 6 and 7.
+
+A bare reminder ("did you run self-improvement?") is **not** pre-approval — run turn 1 only and wait.
 
 ## Source of truth
 
