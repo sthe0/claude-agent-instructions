@@ -11,6 +11,7 @@ type: reference
 | Symptom | Better |
 |---|---|
 | Root does most edits via Bash/Edit/Write | `Task → developer` for code; invoke `overcome-difficulty` skill when stuck |
+| Extend existing pattern (keyword scoring, regex routing, hand-coded heuristics) without checking it still fits — especially when an LLM is now in the pipeline reading the same data | Audit pattern fit before extending. In LLM-mediated pipelines, prefer natural-language prefs and let the LLM filter semantically — keyword lists are usually pre-LLM holdovers. |
 | Full pipeline rerun to debug one stage | Minimal retest; read project memory runbook before re-launching |
 | Second CLI binary for one-off experiment | Local script/stash; one entry point in the repo |
 | User feedback on process → only apology | Invoke `self-improvement` skill in the same turn |

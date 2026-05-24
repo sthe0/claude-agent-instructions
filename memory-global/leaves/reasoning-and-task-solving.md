@@ -11,6 +11,7 @@ type: reference
 - Restate the goal and **done criteria** in one short paragraph before any tools.
 - Numbers, deadlines, or limits in a ticket **without a source** → find the source (code, doc, user) **before** editing.
 - Prefer the **smallest** change that satisfies criteria — minimal retest, one entry point, extend existing code over duplication.
+- Before extending an existing pattern, audit whether the pattern itself still fits the current surroundings. If an LLM already reads the same data downstream in the pipeline, prefer natural-language preferences / instructions over keyword lists, regex heuristics, or hand-coded scoring — those are usually pre-LLM holdovers that strip the LLM of the semantics it could otherwise apply. "Smallest change" means smallest *correct* change, not blind continuation of a dubious pattern.
 
 ## Plan and approval
 
