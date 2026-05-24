@@ -66,7 +66,8 @@ cursor-rules/
   claude-code-sync.mdc               # global Cursor rule (alwaysApply); mirrors CLAUDE.md
 memory-global/
   MEMORY.md                          # global memory index (auto-memory format)
-  leaves/*.md                        # global memory entries; includes granted-permissions.md
+  leaves/*.md                        # evergreen reference leaves; includes granted-permissions.md
+  leaves/experience/*.md             # post-resolution task experiences (see CLAUDE.md § On task resolution); named YYYY-MM-DD-<slug>.md
 docs/                                # optional documentation
 scripts/
   setup-symlinks.sh

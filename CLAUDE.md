@@ -238,8 +238,8 @@ If none — do not record. Memory bloat is worse than memory gap. The git log + 
 
 #### What to record
 
-- **Scope.** Cross-project lesson → global memory (`~/.claude/memory-global/leaves/`). Project-specific lesson → project memory (`<project_cwd>/.claude/agent-memory/`).
-- **One leaf per resolved task,** name keyed to the task's essence (e.g. `experience-cursor-rule-divergence.md`), frontmatter `type: reference`.
+- **Scope.** Cross-project lesson → `~/.claude/memory-global/leaves/experience/`. Project-specific lesson → `<project_cwd>/.claude/agent-memory/experience/` (or, for the personal auto-memory at `~/.claude/projects/<cwd-hash>/memory/`, the `experience/` subfolder there).
+- **One leaf per resolved task** in the `experience/` subfolder. Name: `YYYY-MM-DD-<slug>.md` — date-prefixed for chronological sort, slug short and content-keyed. Frontmatter `type: reference`. The folder location distinguishes experience leaves from evergreen reference leaves — no `experience-` prefix in the filename needed.
 - **Required sections** in the leaf:
   1. **Final plan as executed** — the plan you actually ran, including any replanning from `overcome-difficulty`.
   2. **Difficulties** — each one, the signal that surfaced it, and how it was overcome.
@@ -285,9 +285,9 @@ You have three memory scopes. Pick by **purpose**, not by convenience.
 
 | Scope | Where | Purpose |
 |---|---|---|
-| **Personal (auto-memory)** | `~/.claude/projects/<cwd-hash>/memory/MEMORY.md` + leaves | Personal facts about the user, conversational preferences, "what we agreed on" continuity, project state in the user's language. Native Claude Code auto-memory mechanism. |
-| **Global engineering** | `~/.claude/memory-global/MEMORY.md` + `leaves/` | Cross-project engineering patterns, reasoning practices, runbooks, retrospectives, granted-permissions. English, structured. Imported into every session via the line at the end of this file. |
-| **Project (local)** | `<project_cwd>/.claude/agent-memory/MEMORY.md` + leaves | Project-specific runbooks — product pipelines, ticket detail, repo conventions, prod naming. English. Shared via the project's git. |
+| **Personal (auto-memory)** | `~/.claude/projects/<cwd-hash>/memory/MEMORY.md` + leaves + `experience/` | Personal facts about the user, conversational preferences, "what we agreed on" continuity, project state in the user's language. Native Claude Code auto-memory mechanism. |
+| **Global engineering** | `~/.claude/memory-global/MEMORY.md` + `leaves/` + `leaves/experience/` | Cross-project engineering patterns, reasoning practices, runbooks, retrospectives, granted-permissions. English, structured. Imported into every session via the line at the end of this file. |
+| **Project (local)** | `<project_cwd>/.claude/agent-memory/MEMORY.md` + leaves + `experience/` | Project-specific runbooks — product pipelines, ticket detail, repo conventions, prod naming. English. Shared via the project's git. |
 
 All three follow the same file shape: `MEMORY.md` as a short index, detail in leaf files, frontmatter `name` / `description` / `type` (`user` / `feedback` / `project` / `reference`).
 
