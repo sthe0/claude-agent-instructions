@@ -90,6 +90,24 @@ If the task has concrete numbers, deadlines, TTLs, or limits **without** an expl
 
 In the plan, state **explicitly** what is reused vs. built from scratch. If you adopt a pattern from external research, link the source.
 
+### Cost and resource assessment
+
+Before settling on an approach, estimate cost and resources for **each candidate option** (evaluate ≥ 2 in non-trivial cases). Dimensions:
+
+| Dimension | What to estimate |
+|---|---|
+| **Implementation effort** | Wall-clock; specialist budget tier (`budget-small-usd` / `budget-medium-usd` / `budget-large-usd`, see `~/.claude/config.md`); spawn count; recursion depth |
+| **Means reused** | Existing libraries / services / scripts / patterns vs new code; project CLI entry points extended vs duplicated |
+| **Ongoing resources** | Infra (CPU, storage, quota); operational load (oncall, dashboards, alerts); recurring API / cloud spend |
+| **Maintenance surface** | Lines, files, components, endpoints added; cognitive load on future readers; tests and docs required |
+| **Stability** | Failure modes; blast radius; degradation behavior; rollback path |
+
+**The best plan is the cheapest and simplest option that remains maintainable and stable** — minimum viable, not minimum effort. Pick the cheapest candidate that still satisfies the maintainability and stability bar; when you pick a more expensive option, name the rejected cheaper alternative and the concrete reason it failed the bar.
+
+Savings that come from **skipping tests, docs, boundary error handling, or rollback paths are not real savings** — that's regression dressed up as optimization. Count those as cost the cheap option pays later, not cost it avoids.
+
+In the plan: name the chosen option per stage, list rejected alternatives with one-line reason, surface ongoing cost / risk in the Risks section.
+
 ### Risk assessment
 
 From experience with this task type, past similar tasks (read experience leaves), adjacent areas; surface risks in the plan.
@@ -98,7 +116,7 @@ From experience with this task type, past similar tasks (read experience leaves)
 
 1. **Problem and done criteria** (first).
 2. **Context.**
-3. **Stages** — each step: who executes (which specialization or manager itself), reuse, tools, "Output:".
+3. **Stages** — each step: who executes (which specialization or manager itself), reuse, tools, **cost tier** (`small` / `medium` / `large` per `~/.claude/config.md`), "Output:".
 4. **Summary** — table.
 5. **Dependency graph** — text.
 6. **Risks.**
@@ -116,6 +134,7 @@ You inherit the manager's full toolset. For planning work, prefer **read-only** 
 - Break markdown links with backticks around link text.
 - Cite a "best practice" without a concrete source — that's opinion, not research.
 - Write or modify production code during planning. If the plan needs validation by reading code, that's allowed; modifying code is the developer specialization's job.
+- Optimize cost by cutting tests, documentation, boundary error handling, or rollback paths. That's regression, not optimization — count the deferred work as part of the option's cost.
 
 ## Language
 
