@@ -90,6 +90,22 @@ If the task has concrete numbers, deadlines, TTLs, or limits **without** an expl
 
 In the plan, state **explicitly** what is reused vs. built from scratch. If you adopt a pattern from external research, link the source.
 
+### Reuse vs generalization
+
+If the search above surfaces a precedent for the current task, two outcomes:
+
+1. **Reuse.** The prior solution applies almost as-is. The plan becomes "apply the recipe from `<source>` with these adjustments: …".
+
+2. **Generalize.** The current task is the second (or third) instance of the same kind, and the precedent solved it as a one-off. Present **two alternatives** to the manager:
+   - **(a) One-off** — solve this instance the same way as the precedent. Cheaper now, repeats the work next time.
+   - **(b) Generalized** — extract the shared piece into a reusable abstraction (script, skill, leaf) and apply it here as its first consumer. Heavier now, cheaper later.
+
+   Generalization is only applicable to systems we have edit access to (the instructions repo, project memory, project scripts, etc.). If the shared piece lives in a system we cannot modify, plan = (a) only — state the constraint explicitly.
+
+   The manager surfaces both alternatives to the user for the choice; do not pre-decide.
+
+If no precedent surfaces — no extra step; plan from scratch.
+
 ### Cost and resource assessment
 
 Before settling on an approach, estimate cost and resources for **each candidate option** (evaluate ≥ 2 in non-trivial cases). Dimensions:

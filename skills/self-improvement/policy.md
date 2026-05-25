@@ -1,6 +1,34 @@
 # Self-improvement policy
 
-Mandatory rules for every edit to `~/claude-agent-instructions/`. Three areas: instruction language, file structure, git sync.
+Mandatory rules for every edit to `~/claude-agent-instructions/`. Four areas: process-as-code, instruction language, file structure, git sync.
+
+---
+
+## Process as code
+
+A rule that reduces to a deterministic check or a fixed sequence of steps is
+a **process**: it belongs in a script (plus a hook or `verify-all` wiring),
+not in prose. Prose then describes intent and points at the script — one
+source of truth.
+
+**Cognition** — choosing between strategies, judging quality, restating
+user intent, designing new abstractions — stays in prose (`CLAUDE.md`,
+skill bodies, leaves). Cognition is what the LLM does; process is what
+the harness enforces.
+
+When formulating a new rule during self-improvement, classify first:
+
+- "Verify property X on file Y" → a check script + `verify-all.py` (gate)
+  or a stand-alone CLI (informational).
+- "Always do A, B, C in order" → a workflow script (e.g. under
+  `scripts/workflows/<name>.py` once that pattern exists), not a prose
+  checklist.
+- "Think about Z before doing W" → prose, in the narrowest file every
+  session that needs Z will load.
+
+Do not write the same procedure twice — once as "you must …" in prose and
+once as `verify-X.py`. Code is the single source of truth; prose points
+to it.
 
 ---
 

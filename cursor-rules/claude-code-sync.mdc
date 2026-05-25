@@ -93,7 +93,7 @@ When a substantive task is resolved (user explicitly confirms it — ask once if
 
 **Quality bar.** Record only if a future you would actually want to **read** the leaf before a similar task: non-obvious choice, reusable difficulty resolution, missing tool / memory / instruction discovered, or ≥ 5 min of rediscovery saved. Otherwise skip — memory bloat is worse than memory gap.
 
-**Required sections** in a leaf: (1) final plan as executed, (2) difficulties + how overcome, (3) artifacts, (4) lessons, (5) **self-critique of the agent system** (concrete friction observed — file / section / behavior, no vague "could be better").
+**Required sections** in a leaf: (1) final plan as executed, (2) difficulties + how overcome, (3) artifacts, (4) lessons, (5) **self-critique of the agent system** (concrete friction observed — file / section / behavior, no vague "could be better"), (6) **cost & effort** ($ spent on spawns, wall-clock duration, count of user interventions — see `scripts/cost-report.py`).
 
 **Auto-trigger self-improvement.** If § self-critique names any concrete friction, invoke `self-improvement` in the same turn (after the leaf, before the final user reply) — treat the self-critique as the input signal.
 

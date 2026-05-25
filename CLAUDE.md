@@ -245,6 +245,12 @@ If none — do not record. Memory bloat is worse than memory gap. The git log + 
   3. **Artifacts** — links, paths, commands, PR / ticket references.
   4. **Lessons** — what a future similar task should do differently.
   5. **Self-critique of the agent system** — concrete friction observed while resolving this task: missing affordance in `CLAUDE.md` / skill / memory / tools / hooks, stale guidance, awkward delegation, wrong default. Vague "could be better" is noise — name file, section, or behavior.
+  6. **Cost & effort** — the measured / estimated cost of this task:
+     - $ spent on `claude -p` spawns over the task window (run `scripts/cost-report.py --since <task-start-date>` for the figure).
+     - Wall-clock duration (first turn → resolution).
+     - User interventions — count of corrections, re-prompts, or clarifications you needed beyond the initial brief.
+
+     This row lets a future you compare alternative approaches to similar tasks. Cost matters in retrospect, not before.
 
 These leaves are your durable **experience** — reusable knowledge across sessions. Read the relevant memory index before starting a new task that pattern-matches past work.
 
