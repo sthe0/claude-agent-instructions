@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lint the cursor-rules mirror for structural drift against `skills/`.
+r"""Lint the cursor-rules mirror for structural drift against `skills/`.
 
 Three presence checks — no full-text comparison (formulations legitimately
 differ between Claude Code and Cursor contexts):
