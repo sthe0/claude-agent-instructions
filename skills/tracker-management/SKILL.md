@@ -46,10 +46,12 @@ Adapt the detail to the project's conventions. If project memory specifies a com
 
 In priority order:
 
-1. **MCP tracker tools** if available in the session — e.g. `mcp__tracker__GetIssue`, `mcp__tracker__*` for Yandex Tracker, equivalents for other trackers.
-2. **Project-specific CLI / scripts** described in `<project_cwd>/.claude/agent-memory/`.
-3. **Direct API call** via `Bash` + `curl` if neither of the above and credentials are available.
-4. **Ask the user to post on your behalf** if no tooling — provide the exact text to paste.
+1. **MCP tracker tools** if available in the session — e.g. `mcp__tracker__GetIssue`, `mcp__tracker__*` for Yandex Tracker, equivalents for other trackers. MCP servers are often **read-only**; if writes are needed, do not stop here — fall through to step 2.
+2. **Project-specific CLI / scripts.** Check both locations:
+   - `<project_cwd>/.claude/agent-memory/` for documented runbooks (look for a "Tooling" / "Write operations" section in the tracker leaf).
+   - `<project_cwd>/.claude/skills/` for symlinked corporate skills (e.g. `tracker/scripts/tracker-cli.sh` in monorepos that mount org skills into the project). Run `ls <project_cwd>/.claude/skills/` to enumerate what is wired up. These CLIs typically carry their own write-scoped auth (token auto-fetch, kerberos) — do not assume your shell `$*_TOKEN` env vars have write scope.
+3. **Direct API call** via `Bash` + `curl` only after step 2 is exhausted. If a `curl` write returns 401/403, the obstacle is credential scope — re-check step 2 for a CLI with proper auth before escalating.
+4. **Ask the user to post on your behalf** only as a last resort — provide the exact text to paste.
 
 ## Loading ticket context
 
