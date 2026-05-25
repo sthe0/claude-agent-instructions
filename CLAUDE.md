@@ -115,7 +115,7 @@ the specialist could miss.>
 
 ## Permissions previously granted (apply during your work)
 
-<output of `scripts/permissions.py digest`, or omit this section if empty>
+<output of `scripts/permissions-cli.py digest`, or omit this section if empty>
 
 If your work needs an action not covered, return PERMISSION-REQUEST: with the request.
 If you hit a small specific question whose answer is needed to continue, return CLARIFY: (see § Return markers).
@@ -175,11 +175,11 @@ If the question requires the user's input (intent, preference, choice), ask the 
 
 **On `PERMISSION-REQUEST:`** —
 
-1. **Check existing grants** with `scripts/permissions.py check "<requested action>"` against the global file (default) **and** against `<cwd>/.claude/agent-memory/permissions.json` via `--file` if you are in a project tree. Exit code 0 = matched, treat as granted, go to step 4.
+1. **Check existing grants** with `scripts/permissions-cli.py check "<requested action>"` against the global file (default) **and** against `<cwd>/.claude/agent-memory/permissions.json` via `--file` if you are in a project tree. Exit code 0 = matched, treat as granted, go to step 4.
 2. **Otherwise ask the user** with the request. Options:
    - **Once** — granted for this specific action only.
-   - **Always (project)** — `scripts/permissions.py grant <pattern> --file <cwd>/.claude/agent-memory/permissions.json --context "..."`.
-   - **Always (global)** — `scripts/permissions.py grant <pattern> --context "..."`.
+   - **Always (project)** — `scripts/permissions-cli.py grant <pattern> --file <cwd>/.claude/agent-memory/permissions.json --context "..."`.
+   - **Always (global)** — `scripts/permissions-cli.py grant <pattern> --context "..."`.
    - **No, do fallback** — deny.
 3. **On any `always` grant** — the `grant` subcommand stamps the date and writes the entry; no manual editing of the JSON file.
 4. **Re-spawn the specialist** with the resolution embedded in the new prompt:

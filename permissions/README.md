@@ -41,12 +41,12 @@ Field rules:
 ## CLI
 
 ```bash
-scripts/permissions.py list                    # all global grants
-scripts/permissions.py check "arc push main"   # exit 0 if matched, 1 otherwise
-scripts/permissions.py grant "arc push *" \
+scripts/permissions-cli.py list                    # all global grants
+scripts/permissions-cli.py check "arc push main"   # exit 0 if matched, 1 otherwise
+scripts/permissions-cli.py grant "arc push *" \
     --context "Routine work-machine flow"      # append (idempotent on pattern)
-scripts/permissions.py revoke "arc push *"     # remove by exact pattern match
-scripts/permissions.py digest                  # human-readable summary for prompts
+scripts/permissions-cli.py revoke "arc push *"     # remove by exact pattern match
+scripts/permissions-cli.py digest                  # human-readable summary for prompts
 ```
 
 All commands accept `--file PATH` to operate on a non-default file (e.g. a
@@ -54,6 +54,6 @@ project's `permissions.json`).
 
 ## Validation
 
-`scripts/verify-permissions.py` is wired into `scripts/verify-all.py` and the
+`scripts/lint-permissions.py` is wired into `scripts/verify-all.py` and the
 `pre-commit` hook. It checks the JSON is well-formed, each entry has the
 required fields, dates parse, and patterns are not duplicated.

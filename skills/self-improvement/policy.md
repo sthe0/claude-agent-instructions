@@ -91,8 +91,8 @@ scripts/
   verify-layout-contract.sh
   verify-all.py                        # entry point for instruction-policy checks
   verify-language.py                   # English-by-default policy
-  verify-permissions.py                # permissions JSON schema check
-  permissions.py                       # CLI for permissions/*.json
+  lint-permissions.py                  # permissions JSON schema check
+  permissions-cli.py                   # CLI for permissions/*.json
   sync-instructions-repo.sh
   install-git-hooks.sh
   install-sync-cron.sh

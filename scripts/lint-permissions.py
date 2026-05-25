@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the structure of permissions JSON files.
+"""Lint the structure of permissions JSON files.
 
 Checks:
 - File is valid JSON with a top-level `permissions` array.
@@ -93,11 +93,11 @@ def main(argv: list[str] | None = None) -> int:
         all_errors.extend(check_file(p))
 
     if all_errors:
-        print(f"verify-permissions: FAIL — {len(all_errors)} issue(s) in {len(paths)} file(s) ({mode} mode)")
+        print(f"lint-permissions: FAIL — {len(all_errors)} issue(s) in {len(paths)} file(s) ({mode} mode)")
         for e in all_errors:
             print(f"  {e}")
         return 1
-    print(f"verify-permissions: OK — {len(paths)} file(s) scanned ({mode} mode)")
+    print(f"lint-permissions: OK — {len(paths)} file(s) scanned ({mode} mode)")
     return 0
 
 

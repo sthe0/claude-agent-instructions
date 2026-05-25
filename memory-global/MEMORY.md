@@ -20,7 +20,7 @@ Loaded into every session via `@~/.claude/memory-global/MEMORY.md` import in `CL
 - [Subagent resume and transcripts](leaves/subagent-resume-and-transcripts.md) — `SendMessage` resume mechanism (needs `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`), transcript layout under `~/.claude/projects/.../subagents/`, subagent auto-compaction, cleanup.
 - [settings.json env precedence](leaves/claude-code-settings-env-precedence.md) — env in settings.json overrides shell env (`env -u` does not help); auth precedence ladder; what to do when an apiKeyHelper isn't enough.
 
-Workflow-level permissions (separate from memory): `~/claude-agent-instructions/permissions/` + `scripts/permissions.py`. Not a memory leaf — operational config.
+Workflow-level permissions (separate from memory): `~/claude-agent-instructions/permissions/` + `scripts/permissions-cli.py`. Not a memory leaf — operational config.
 
 ## Recent retrospectives
 
