@@ -18,6 +18,7 @@ from pathlib import Path
 CHECKS: list[str] = [
     "verify-language",
     "lint-permissions",
+    "verify-cross-refs",
 ]
 
 

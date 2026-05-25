@@ -8,7 +8,8 @@ chmod +x "$HOOKS/post-commit" "$HOOKS/pre-commit" \
   "$REPO/scripts/verify-language.py" \
   "$REPO/scripts/lint-permissions.py" \
   "$REPO/scripts/permissions-cli.py" \
-  "$REPO/scripts/spawn-specialist.py"
+  "$REPO/scripts/spawn-specialist.py" \
+  "$REPO/scripts/verify-cross-refs.py"
 cd "$REPO"
 git config core.hooksPath githooks
 echo "core.hooksPath=$(git config core.hooksPath)"

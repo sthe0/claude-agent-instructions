@@ -91,6 +91,7 @@ scripts/
   verify-layout-contract.sh
   verify-all.py                        # entry point for instruction-policy checks
   verify-language.py                   # English-by-default policy
+  verify-cross-refs.py                 # intra-repo link / inline-path resolution check
   lint-permissions.py                  # permissions JSON schema check
   permissions-cli.py                   # CLI for permissions/*.json
   spawn-specialist.py                  # `claude -p` spawn wrapper (recursion cap, budget, permissions, cost log)
