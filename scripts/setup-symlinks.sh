@@ -30,7 +30,16 @@ link_skill_dir() {
 
 prune_dangling() {
   local dir="$1"
-  find "$dir" -maxdepth 1 -type l ! -exec test -e {} \; -delete 2>/dev/null || true
+  local logfile="$HOME/.local/log/setup-symlinks-prune.log"
+  mkdir -p "$(dirname "$logfile")"
+  local stale now
+  while IFS= read -r stale; do
+    [[ -z "$stale" ]] && continue
+    now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "$now prune-dangling: $stale" >&2
+    echo "$now prune-dangling: $stale" >> "$logfile"
+    rm "$stale"
+  done < <(find "$dir" -maxdepth 1 -type l ! -exec test -e {} \; -print 2>/dev/null || true)
 }
 
 # Core global symlinks
@@ -104,11 +113,17 @@ if [[ -d "$REPO/skills/specializations" ]]; then
 fi
 
 if [[ -d "$REPO/skills-local" ]]; then
-  for file_path in "$REPO/skills-local/"*.md; do
-    [[ -f "$file_path" ]] || continue
-    base="$(basename "$file_path")"
+  for entry in "$REPO/skills-local/"*; do
+    [[ -e "$entry" ]] || continue
+    base="$(basename "$entry")"
     [[ "$base" == "README.md" ]] && continue
-    link "$file_path" "$HOME/.claude/skills/$base"
+    if [[ -f "$entry" && "$entry" == *.md ]]; then
+      # Single-file skill — link the .md directly.
+      link "$entry" "$HOME/.claude/skills/$base"
+    elif [[ -d "$entry" && -f "$entry/SKILL.md" ]]; then
+      # Multi-file skill — link the whole directory (mirrors how skills/ are linked).
+      link "$entry" "$HOME/.claude/skills/$base"
+    fi
   done
 fi
 
