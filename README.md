@@ -90,6 +90,7 @@ Project-specific Cursor rules live in the project's own `<project>/.claude/rules
 | [verify-all.py](scripts/verify-all.py) | Run all instruction-policy checks (entry point; pre-commit hook uses `--staged`) |
 | [verify-language.py](scripts/verify-language.py) | Enforce English-by-default policy with adjacent-exception rule |
 | [verify-cross-refs.py](scripts/verify-cross-refs.py) | Catch broken intra-repo Markdown links and inline-code path references |
+| [lint-cursor-mirror.py](scripts/lint-cursor-mirror.py) | Detect structural drift between `skills/` and the cursor mirror (flat-skill parity, specialization parity, trigger markers) |
 | [lint-permissions.py](scripts/lint-permissions.py) | Lint `permissions/*.json` schema (structure, fields, dates, duplicates) |
 | [permissions-cli.py](scripts/permissions-cli.py) | CLI for workflow-level permissions: `list / check / grant / revoke / digest` |
 | [spawn-specialist.py](scripts/spawn-specialist.py) | Wrap `claude -p` spawn: recursion cap, budget tier, permissions digest, marker validation, cost log |

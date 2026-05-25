@@ -19,6 +19,7 @@ CHECKS: list[str] = [
     "verify-language",
     "lint-permissions",
     "verify-cross-refs",
+    "lint-cursor-mirror",
 ]
 
 
