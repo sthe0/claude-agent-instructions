@@ -20,6 +20,7 @@ CHECKS: list[str] = [
     "lint-permissions",
     "verify-cross-refs",
     "lint-cursor-mirror",
+    "lint-prose-length",
 ]
 
 

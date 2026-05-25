@@ -13,7 +13,8 @@ chmod +x "$HOOKS/post-commit" "$HOOKS/pre-commit" "$HOOKS/commit-msg" \
   "$REPO/scripts/lint-cursor-mirror.py" \
   "$REPO/scripts/cost-report.py" \
   "$REPO/scripts/memory-audit.py" \
-  "$REPO/scripts/verify-self-improvement-edit.py"
+  "$REPO/scripts/verify-self-improvement-edit.py" \
+  "$REPO/scripts/lint-prose-length.py"
 cd "$REPO"
 git config core.hooksPath githooks
 echo "core.hooksPath=$(git config core.hooksPath)"

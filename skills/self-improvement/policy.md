@@ -94,6 +94,7 @@ scripts/
   verify-cross-refs.py                 # intra-repo link / inline-path resolution check
   lint-cursor-mirror.py                # cursor-rules vs skills/ structural parity
   verify-self-improvement-edit.py      # commit-msg gate: requires review marker for self-improvement edits
+  lint-prose-length.py                 # hard ceiling on CLAUDE.md / cursor mirror / SKILL.md / policy.md
   lint-permissions.py                  # permissions JSON schema check
   permissions-cli.py                   # CLI for permissions/*.json
   spawn-specialist.py                  # `claude -p` spawn wrapper (recursion cap, budget, permissions, cost log)
