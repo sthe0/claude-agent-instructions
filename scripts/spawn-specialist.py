@@ -157,6 +157,18 @@ def log_cost_entry(entry: dict) -> None:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
+def log_refused(reason: str, extra: dict) -> None:
+    """Log a spawn that was refused before reaching `claude -p` (recursion cap, unknown kind, etc.).
+    Visible in cost-report.py as a separate category."""
+    entry = {
+        "ts": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+        "event": "refused",
+        "reason": reason,
+        **extra,
+    }
+    log_cost_entry(entry)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--kind", required=True, help="specialization name (must exist at ~/.claude/skills/<kind>/SKILL.md)")
@@ -181,10 +193,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.plan.exists():
         print(f"error: plan file not found: {args.plan}", file=sys.stderr)
+        log_refused("plan-not-found", {"kind": args.kind, "plan": str(args.plan)})
         return 2
     skill = skill_path(args.kind)
     if not skill.exists():
         print(f"error: unknown specialization (no SKILL.md at {skill})", file=sys.stderr)
+        log_refused("unknown-kind", {"kind": args.kind})
         return 2
 
     constants = parse_config_md()
@@ -198,6 +212,7 @@ def main(argv: list[str] | None = None) -> int:
             f"per CLAUDE.md § Recursion cap (hard).",
             file=sys.stderr,
         )
+        log_refused("recursion-cap", {"kind": args.kind, "depth_attempted": depth_next, "cap": cap})
         return 3
 
     budget = budget_value(args.budget, constants)
@@ -255,6 +270,7 @@ def main(argv: list[str] | None = None) -> int:
 
     log_cost_entry({
         "ts": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+        "event": "spawn",
         "kind": args.kind,
         "budget_tier": args.budget,
         "budget_usd_cap": budget,
