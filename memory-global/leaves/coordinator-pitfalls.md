@@ -21,6 +21,8 @@ type: reference
 | VCS branch/commit on a scoped task without user ask | Read-only + report until the user confirms scope |
 | Unknown internal term → guess in code | Infra-consultant subagent if present in `~/.claude/agents/`, else intrasearch / domain MCP |
 | Domain runbook pasted into a generic agent prompt or `CLAUDE.md` | Memory leaf (global or project) and link in the plan |
+| Substantive task confirmed-resolved after the first sub-stage only (plan written → "task resolved?") | Re-read the original user message. Resolution = X done, not plan-X done. Ask "first sub-stage accepted?" and continue execution on confirmation. |
+| Misapply "don't fabricate" by **deleting** the field instead of asking for a source | "Don't fabricate" includes "ask or find a source". Removing a required field (estimate, threshold, deadline) is a regression — when the plan format requires it, `CLARIFY:` / ask user instead. |
 
 ## Optional session metric
 
