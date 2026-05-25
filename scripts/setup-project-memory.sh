@@ -42,8 +42,10 @@ Loaded into every Claude Code session in this project via the native auto-memory
 EOF
 fi
 
-# Claude Code per-cwd hash: leading "-" + absolute cwd with each "/" replaced by "-".
-HASH="-${PROJECT_CWD//\//-}"
+# Claude Code per-cwd hash: absolute cwd with each "/" replaced by "-".
+# Leading "/" already produces the leading "-", so no extra prefix.
+# /home/x → -home-x  (NOT --home-x).
+HASH="${PROJECT_CWD//\//-}"
 PROJECTS_DIR="$HOME/.claude/projects/$HASH"
 mkdir -p "$PROJECTS_DIR"
 
