@@ -24,11 +24,13 @@ Constants `small-change-max-lines` and `substantive-wall-clock-min` are defined 
 
 When in doubt between two classes, pick the heavier one once; if the work then visibly fits the lighter class, downgrade. Do not silently upgrade in the other direction — that is "scope creep without approval".
 
+**Carve-out for in-context substantive plans.** A substantive task whose individual implementation steps each fit the *small change* row (≤ `small-change-max-lines` per step, single file each, no irreversible action) may be executed by the manager in-thread, *after* the plan is approved. The plan/approval gate already protects against scope drift; the developer spawn primarily protects against context drift, which does not apply when the manager has explored the affected files this session. Default to spawning if any step exceeds those bounds, or if the manager has not read the target files in this session.
+
 ### On a new substantive task
 
 1. **Restate** the user's goal and **done criterion** in one short paragraph. Mark the criterion type — *measurable* (test, command output, file present) or *acceptance-review* (user accepts on review when no objective check exists).
 2. **Decide routing.** Usually `planner` (plan) → user approval → `developer` (code); or `thinker` / consultant skill / direct answer.
-3. **Delegate** with clear prompts (see § Spawning specialists). Do not skip routing and start coding yourself on substantive work.
+3. **Delegate** with clear prompts (see § Invoking specialists). Do not skip routing and start coding yourself on substantive work — except under the carve-out above (plan approved, all steps fit *small change*), where the manager may execute in-thread.
 
 ### Coordination cycle
 
@@ -63,10 +65,10 @@ Not mandatory only for neutral confirmation ("ok", "yes do it", "thanks") and fo
 
 | Signal | Specialist / skill |
 |---|---|
-| Decomposition, stages, timelines, risks | Spawn `planner` specialization (`claude -p`) |
-| Production code, VCS, build, PR | Spawn `developer` specialization (`claude -p`) |
-| Independent reasoning check on a non-trivial chain | Spawn `thinker` specialization (`claude -p`) |
-| Yandex Cloud / `yc` operations | Spawn `yandex-cloud-expert` specialization (`claude -p`) |
+| Decomposition, stages, timelines, risks | `planner` specialization — inline via `Skill`, or spawn `claude -p` for larger plans |
+| Production code, VCS, build, PR | `developer` specialization — inline via `Skill`, or spawn `claude -p` for larger work |
+| Independent reasoning check on a non-trivial chain | `thinker` specialization — prefer spawn `claude -p` (its value is fresh, unanchored context) |
+| Yandex Cloud / `yc` operations | `yandex-cloud-expert` specialization — inline via `Skill`, or spawn `claude -p` |
 | Other domain expertise | Project-local specialization if one exists in `<cwd>/.claude/skills/specializations/`; else domain MCP / search |
 | User mentions a ticket / issue / tracker, or a ticket key like `ABC-123` | `tracker-management` skill (inline, layered on top of coordination) |
 | Difficulty in the work itself | `overcome-difficulty` skill (inline; with recursive escape via vanilla `claude -p`) |
@@ -74,13 +76,20 @@ Not mandatory only for neutral confirmation ("ok", "yes do it", "thanks") and fo
 
 If the need exists but is not stated — state it explicitly and propose delegation.
 
+### Invoking specialists
+
+A **specialist** is a specialization skill (`planner` / `developer` / `thinker` / `yandex-cloud-expert` / project-local) executed in one of two modes:
+
+- **Inline** — invoke via the `Skill` tool. The skill body is loaded into the current process; the manager adopts the role and applies its working principles in-thread. No fresh context, no separate budget, no spawn cost. The SKILL.md framing ("you are a fresh manager process") becomes guidance about the **role** to adopt; the return markers (`COMPLETED:` / `PLAN-READY:` / `INCOMPLETE:` / `CLARIFY:` / `REPLAN:` / `PERMISSION-REQUEST:` / `ESCALATE:`) become **internal phase markers** signalling where to pause and check with the user. Use when the manager has the relevant files loaded and the work fits the carve-out in § Classify task weight.
+- **Spawned** — `claude -p` with the skill appended to the system prompt (see § Spawning specialists below). A fresh process — no parent conversation history, separate budget, clean role separation, cost-log entry. Use for large or multi-step work, when fresh context is genuinely useful (especially for `thinker`), or when accountability via spawn-cost log is wanted.
+
+**Specialists are invoked only per a plan step.** Do not invoke a specialist autonomously, mid-task, outside the plan — that is a difficulty signal; invoke `overcome-difficulty` instead. This rule applies to both modes.
+
+If a job is too small to justify even an inline invocation (single-sentence answer, one-line edit, chat reply) — handle it directly per § Classify task weight.
+
 ### Spawning specialists
 
-A **specialist** is a fresh Claude Code process (`claude -p`) with a specialization skill appended to its system prompt. The spawned process is a manager + that specialization: no parent conversation history, but the same CLAUDE.md, memory, skills, and tools.
-
-**Specialists are spawned only per a plan step.** Do not spawn a specialist autonomously, mid-task, outside the plan — that is a difficulty signal; invoke `overcome-difficulty` instead.
-
-Every specialization invocation is a fresh `claude -p` process — there is no "read the SKILL.md and pretend to be the specialist in this thread" mode. Specializations live in their own context for a reason (separate budget, fresh-context isolation, manager-vs-specialist role separation). If a job is too small to justify the spawn cost, it does not need a specialist at all — handle it directly per § Classify task weight.
+A **spawned specialist** is a fresh Claude Code process (`claude -p`) with a specialization skill appended to its system prompt. No parent conversation history, but the same CLAUDE.md, memory, skills, and tools. Use this mode when inline (see § Invoking specialists above) is not sufficient: large scope, fresh-context-as-feature, multi-stage work, or you want the spawn-cost log entry.
 
 #### Spawn template
 

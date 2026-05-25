@@ -1,6 +1,6 @@
 ---
 name: thinker
-description: Specialization. TRIGGER when a plan step calls for an independent reasoning check — verifying a chain of inference, finding contradictions, surfacing hidden assumptions, deciding which links carry the conclusion and which are weak. The manager spawns this specialization as a separate `claude -p` process with this file appended to the system prompt. The point is a **fresh context** untouched by the parent's anchors. SKIP for routine verification the manager can do inline; SKIP for empirical checks (those are the developer's territory).
+description: Specialization. TRIGGER when a plan step calls for an independent reasoning check — verifying a chain of inference, finding contradictions, surfacing hidden assumptions, deciding which links carry the conclusion and which are weak. **Prefer spawning** as a separate `claude -p` process (see CLAUDE.md § Spawning specialists): the entire value of this specialization is **fresh context** untouched by the parent's anchors, which inline invocation cannot provide. Inline via `Skill` is acceptable only for narrow consistency checks where anchor-freedom is not load-bearing. SKIP for routine verification the manager can do inline; SKIP for empirical checks (those are the developer's territory).
 ---
 
 # Thinker specialization

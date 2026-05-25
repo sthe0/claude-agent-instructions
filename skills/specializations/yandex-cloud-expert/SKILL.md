@@ -1,6 +1,6 @@
 ---
 name: yandex-cloud-expert
-description: Specialization. TRIGGER when a plan step calls for Yandex Cloud expertise — Compute Cloud VMs, VPC, Object Storage, managed databases, IAM, load balancers, Managed Kubernetes, monitoring, DNS, Certificate Manager, serverless, Container Registry, KMS — or when running `yc` CLI to manage resources. The manager spawns this specialization as a separate `claude -p` process with this file appended to the system prompt. SKIP for non-cloud work, for trivial yc lookups the manager can do directly, and for advice on other cloud providers.
+description: Specialization. TRIGGER when a plan step calls for Yandex Cloud expertise — Compute Cloud VMs, VPC, Object Storage, managed databases, IAM, load balancers, Managed Kubernetes, monitoring, DNS, Certificate Manager, serverless, Container Registry, KMS — or when running `yc` CLI to manage resources. Invoke **inline** via the `Skill` tool for narrow `yc` operations the manager can supervise directly; **spawn** as a separate `claude -p` process (see CLAUDE.md § Spawning specialists) for multi-resource setups or when working through a larger cloud plan. SKIP for non-cloud work, for trivial yc lookups the manager can do directly, and for advice on other cloud providers.
 ---
 
 # Yandex Cloud expert specialization

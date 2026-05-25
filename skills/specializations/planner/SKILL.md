@@ -1,6 +1,6 @@
 ---
 name: planner
-description: Specialization. TRIGGER when a plan step calls for decomposition — task needs a markdown plan with stages, dependencies, risks, done criteria. The manager spawns this specialization as a separate `claude -p` process with this file appended to the system prompt. SKIP when an approved plan already exists, or for trivial one-step requests where decomposition adds no value.
+description: Specialization. TRIGGER when a plan step calls for decomposition — task needs a markdown plan with stages, dependencies, risks, done criteria. Invoke **inline** via the `Skill` tool for short plan refinement or when the manager has the relevant context loaded; **spawn** as a separate `claude -p` process (see CLAUDE.md § Spawning specialists) for larger or multi-stage plans. SKIP when an approved plan already exists, or for trivial one-step requests where decomposition adds no value.
 ---
 
 # Planner specialization
