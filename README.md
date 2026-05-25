@@ -87,8 +87,10 @@ Project-specific Cursor rules live in the project's own `<project>/.claude/rules
 | [setup-project-memory.sh](scripts/setup-project-memory.sh) | Per-project: symlink shared agent memory into the project tree |
 | [verify-instructions-sync.sh](scripts/verify-instructions-sync.sh) | Check global symlinks and drift |
 | [verify-layout-contract.sh](scripts/verify-layout-contract.sh) | Compare tree to the layout in `skills/self-improvement/policy.md` |
+| [verify-all.py](scripts/verify-all.py) | Run all instruction-policy checks (entry point; pre-commit hook uses `--staged`) |
+| [verify-language.py](scripts/verify-language.py) | Enforce English-by-default policy with adjacent-exception rule |
 | [sync-instructions-repo.sh](scripts/sync-instructions-repo.sh) | `pull` / `push` this repo |
-| [install-git-hooks.sh](scripts/install-git-hooks.sh) | post-commit → reminder (push needs user OK) |
+| [install-git-hooks.sh](scripts/install-git-hooks.sh) | Install `pre-commit` (run `verify-all.py --staged`) and `post-commit` (push reminder) |
 | [install-sync-cron.sh](scripts/install-sync-cron.sh) | Cron: git pull every 10 min (opt-in; not installed by `setup-symlinks.sh`) |
 
 ## Git workflow

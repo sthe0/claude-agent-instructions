@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Pre-commit: enforce instruction-repo policies before allowing the commit.
+# Currently runs verify-all.py in --staged mode (see scripts/verify-all.py).
+# Bypass with `git commit --no-verify` only when truly necessary; the gate exists
+# because past sessions broke the rules and nobody noticed until the user pointed.
+set -e
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+exec python3 "$REPO_ROOT/scripts/verify-all.py" --staged

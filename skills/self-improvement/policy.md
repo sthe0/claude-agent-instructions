@@ -30,10 +30,22 @@ All agent instructions — prompts in `agents/`, skill prompts in `skills/`, `CL
 ### Check
 
 ```bash
-rg '[\p{Cyrillic}]' ~/claude-agent-instructions --glob '*.md'
+# Full repo scan (use this when reviewing or after large edits):
+python3 ~/claude-agent-instructions/scripts/verify-language.py
+
+# Staged-only scan (what the pre-commit hook runs):
+python3 ~/claude-agent-instructions/scripts/verify-language.py --staged
 ```
 
-Each hit must have an adjacent exception comment.
+The script strips quoted regions (`"..."`, `«...»`, `` `...` ``) and fenced
+code blocks before checking — so quoted user examples and code do not need an
+exception note. Any other Cyrillic prose must have an adjacent exception
+comment (within 3 lines): `<!-- Language exception: ... -->` or
+`> **Language exception:** ...`.
+
+The pre-commit hook installed by `scripts/install-git-hooks.sh` runs
+`verify-all.py --staged`, which includes the language check. It blocks any
+commit with an unannotated violation.
 
 ---
 
@@ -74,12 +86,16 @@ scripts/
   setup-project-memory.sh
   verify-instructions-sync.sh
   verify-layout-contract.sh
+  verify-all.py                        # entry point for instruction-policy checks
+  verify-language.py                   # English-by-default policy
   sync-instructions-repo.sh
   install-git-hooks.sh
   install-sync-cron.sh
   install-sync-systemd-timer.sh
   apply-mcp-local.sh
-githooks/post-commit
+githooks/
+  pre-commit                           # runs verify-all.py --staged
+  post-commit                          # push reminder
 ```
 
 **Forbidden in global `scripts/`:** project-specific or machine-specific scripts (Arcadia mount helpers, deepagent runbook scripts, etc.) — those belong in the relevant project's own `.claude/scripts/` tree.
