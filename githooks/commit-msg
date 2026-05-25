@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# commit-msg: gate edits to the self-improvement skill.
+# See scripts/verify-self-improvement-edit.py for the rationale.
+set -e
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+exec python3 "$REPO_ROOT/scripts/verify-self-improvement-edit.py" "$1"

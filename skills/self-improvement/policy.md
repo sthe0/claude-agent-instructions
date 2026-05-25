@@ -93,6 +93,7 @@ scripts/
   verify-language.py                   # English-by-default policy
   verify-cross-refs.py                 # intra-repo link / inline-path resolution check
   lint-cursor-mirror.py                # cursor-rules vs skills/ structural parity
+  verify-self-improvement-edit.py      # commit-msg gate: requires review marker for self-improvement edits
   lint-permissions.py                  # permissions JSON schema check
   permissions-cli.py                   # CLI for permissions/*.json
   spawn-specialist.py                  # `claude -p` spawn wrapper (recursion cap, budget, permissions, cost log)
@@ -105,6 +106,7 @@ scripts/
   apply-mcp-local.sh
 githooks/
   pre-commit                           # runs verify-all.py --staged
+  commit-msg                           # runs verify-self-improvement-edit.py
   post-commit                          # push reminder
 ```
 
@@ -199,6 +201,13 @@ git add -A && git commit -m "…"
 # push only after explicit user confirmation (see below)
 ~/claude-agent-instructions/scripts/sync-instructions-repo.sh push
 ```
+
+**Editing this skill itself.** When the staged change touches any file under
+`skills/self-improvement/`, the `commit-msg` hook requires the literal marker
+`[self-improvement-reviewed]` in the commit message body. This forces a
+deliberate acknowledgment: editing the skill that processes user feedback
+changes future invocations in the same conversation, so the change is
+explicitly reviewed before it lands.
 
 1. **Commit** locally after every edit batch (message explains the change).
 2. **Prepare for push:** `git status`, `git log -1`, run verifiers if layout changed; tell the user the commit is ready and what will go to `origin/main`.
