@@ -13,7 +13,6 @@ Edit values **here** — not in the prose that references them. Every cross-refe
 | `budget-large-usd` | `8.00` | `--max-budget-usd` for cross-cutting changes (multi-stage plan, full feature, expensive research). |
 | `small-change-max-lines` | `20` | Upper bound (line count) for the *small change* class in task triage. ≤ this many changed lines + single file + no architectural decision = manager may handle in-thread without a plan-approval gate. |
 | `substantive-wall-clock-min` | `30` | Lower bound (minutes) for the *substantive* class in task triage — work expected to take this long or more warrants the full coordination cycle. |
-| `inline-mode-wall-clock-min` | `5` | Upper bound (minutes) for inline-mode specialist work — beyond this, prefer spawning `claude -p`. |
 | `rediscovery-threshold-min` | `5` | Quality bar for post-resolution experience leaves — record if skipping the leaf would cost a future similar task at least this much rediscovery. |
 
 Audit cross-references with `rg '<key>' --glob '*.md' ~/claude-agent-instructions/` to see who depends on each value.

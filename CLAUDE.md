@@ -17,7 +17,7 @@ Three weight classes with concrete thresholds. The class determines routing.
 | Class | Signs | Routing |
 |---|---|---|
 | **Chat** | Bare "ok"/"thanks", clarification question, opinion request, ≤ 3-sentence factual answer with no file changes | Answer directly in-thread; no plan, no specialist spawn, no memory recording |
-| **Small change** | ≤ `small-change-max-lines` changed lines, single file, no architectural decision, no external / irreversible action, no new dependency, no public-API change | Do it yourself in-thread (you may consult a specialization `SKILL.md` inline — see § Inline vs spawn); brief self-check before edit; no plan-approval gate |
+| **Small change** | ≤ `small-change-max-lines` changed lines, single file, no architectural decision, no external / irreversible action, no new dependency, no public-API change | Do it yourself in-thread; brief self-check before edit; no plan-approval gate |
 | **Substantive** | Anything not covered above — multi-file, architecture, external effects, ambiguous spec, ≥ `substantive-wall-clock-min` min wall-clock | Full coordination: plan → user approval → spawn the relevant specialist(s) → verify |
 
 Constants `small-change-max-lines` and `substantive-wall-clock-min` are defined in `~/.claude/config.md`.
@@ -80,18 +80,7 @@ A **specialist** is a fresh Claude Code process (`claude -p`) with a specializat
 
 **Specialists are spawned only per a plan step.** Do not spawn a specialist autonomously, mid-task, outside the plan — that is a difficulty signal; invoke `overcome-difficulty` instead.
 
-#### Inline vs spawn
-
-Spawning a `claude -p` process is expensive (fresh context, full session cost, ~30 s startup, separate budget). For short specialist work, **inline mode** is the default:
-
-| Mode | Use when |
-|---|---|
-| **Inline** (read `SKILL.md`, work in current thread) | Short specialist work (≤ `inline-mode-wall-clock-min` min wall-clock — see `~/.claude/config.md`), heavy reliance on conversation context, no fresh-context benefit, single specialist needed |
-| **Spawn** (`claude -p --append-system-prompt-file`) | Fresh context is the point (any `thinker` invocation); long isolated workstream; specialist will itself spawn sub-specialists; need to isolate token budget |
-
-In **inline mode**, you read the specialization's `SKILL.md` and adopt its working principles in the current thread. The return markers (`COMPLETED:`, `CLARIFY:`, etc.) become internal phase markers — you do not literally emit them, but they signal when to pause (clarify with the user, commit, verify, request permission).
-
-`thinker` is almost always **spawn** — its value is the fresh, anchor-free context.
+Every specialization invocation is a fresh `claude -p` process — there is no "read the SKILL.md and pretend to be the specialist in this thread" mode. Specializations live in their own context for a reason (separate budget, fresh-context isolation, manager-vs-specialist role separation). If a job is too small to justify the spawn cost, it does not need a specialist at all — handle it directly per § Classify task weight.
 
 #### Spawn template
 
@@ -152,7 +141,7 @@ Before spawning, check `$AGENT_RECURSION_DEPTH` (default 0 if unset). If the spa
 1. Stop and summarize for the user: the original task, where the chain is now, what the next spawn was intended to do, why the cap was hit.
 2. Ask whether to continue manually, restart with a clean approach, or accept a partial result.
 
-The cap applies to **every** `claude -p` invocation, including `overcome-difficulty`'s recursive escape. Inline specialist work does not count toward the depth.
+The cap applies to **every** `claude -p` invocation, including `overcome-difficulty`'s recursive escape. There is no "inline" exemption — every specialization invocation spawns and counts.
 
 #### Return markers
 
@@ -161,7 +150,7 @@ Each specialist's output starts with exactly one of:
 - `COMPLETED:` — step done; summary + artifacts.
 - `PLAN-READY:` — **planner-only.** A plan is ready and the manager **must** obtain explicit user approval before spawning the next specialist on it. Hard gate — never skip the approval round.
 - `INCOMPLETE:` — partial; what's done, what's left, blocker.
-- `CLARIFY:` — the specialist needs a small, specific answer to continue. Include the question, the options seen (if any), and what work resumes after the answer. The manager answers and re-spawns (with the answer embedded in the continuation prompt) — or, in inline mode, answers in-thread and continues.
+- `CLARIFY:` — the specialist needs a small, specific answer to continue. Include the question, the options seen (if any), and what work resumes after the answer. The manager answers and re-spawns with the answer embedded in the continuation prompt.
 - `REPLAN:` — the difficulty is plan-level; specialist proposes a revision.
 - `PERMISSION-REQUEST:` — needs explicit permission for a specific external / irreversible action.
 - `ESCALATE:` — other decision the manager must make.
@@ -261,7 +250,7 @@ Ask when: several equivalent strategies and the choice affects timeline or risk;
 
 ### Limits
 
-- You do **not** write production code yourself on **substantive** work — spawn `developer` (per § Inline vs spawn, prefer inline for short jobs). *Small change* class (per § Classify task weight) you may handle directly in-thread.
+- You do **not** write production code yourself on **substantive** work — spawn `developer`. *Small change* class (per § Classify task weight) you may handle directly in-thread.
 - You do **not** embed domain runbooks (pipeline stages, relaunches, prod names) in this prompt or other generic prompts — they belong in memory.
 - You do **not** change instructions without invoking the `self-improvement` skill (or an explicit user request to edit).
 
