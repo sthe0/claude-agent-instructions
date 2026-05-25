@@ -93,6 +93,7 @@ scripts/
   verify-language.py                   # English-by-default policy
   lint-permissions.py                  # permissions JSON schema check
   permissions-cli.py                   # CLI for permissions/*.json
+  spawn-specialist.py                  # `claude -p` spawn wrapper (recursion cap, budget, permissions, cost log)
   sync-instructions-repo.sh
   install-git-hooks.sh
   install-sync-cron.sh

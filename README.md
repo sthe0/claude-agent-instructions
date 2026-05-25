@@ -91,6 +91,7 @@ Project-specific Cursor rules live in the project's own `<project>/.claude/rules
 | [verify-language.py](scripts/verify-language.py) | Enforce English-by-default policy with adjacent-exception rule |
 | [lint-permissions.py](scripts/lint-permissions.py) | Lint `permissions/*.json` schema (structure, fields, dates, duplicates) |
 | [permissions-cli.py](scripts/permissions-cli.py) | CLI for workflow-level permissions: `list / check / grant / revoke / digest` |
+| [spawn-specialist.py](scripts/spawn-specialist.py) | Wrap `claude -p` spawn: recursion cap, budget tier, permissions digest, marker validation, cost log |
 | [sync-instructions-repo.sh](scripts/sync-instructions-repo.sh) | `pull` / `push` this repo |
 | [install-git-hooks.sh](scripts/install-git-hooks.sh) | Install `pre-commit` (run `verify-all.py --staged`) and `post-commit` (push reminder) |
 | [install-sync-cron.sh](scripts/install-sync-cron.sh) | Cron: git pull every 10 min (opt-in; not installed by `setup-symlinks.sh`) |
