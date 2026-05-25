@@ -89,6 +89,8 @@ Project-specific Cursor rules live in the project's own `<project>/.claude/rules
 | [verify-layout-contract.sh](scripts/verify-layout-contract.sh) | Compare tree to the layout in `skills/self-improvement/policy.md` |
 | [verify-all.py](scripts/verify-all.py) | Run all instruction-policy checks (entry point; pre-commit hook uses `--staged`) |
 | [verify-language.py](scripts/verify-language.py) | Enforce English-by-default policy with adjacent-exception rule |
+| [verify-permissions.py](scripts/verify-permissions.py) | Validate `permissions/*.json` schema |
+| [permissions.py](scripts/permissions.py) | CLI for workflow-level permissions: `list / check / grant / revoke / digest` |
 | [sync-instructions-repo.sh](scripts/sync-instructions-repo.sh) | `pull` / `push` this repo |
 | [install-git-hooks.sh](scripts/install-git-hooks.sh) | Install `pre-commit` (run `verify-all.py --staged`) and `post-commit` (push reminder) |
 | [install-sync-cron.sh](scripts/install-sync-cron.sh) | Cron: git pull every 10 min (opt-in; not installed by `setup-symlinks.sh`) |

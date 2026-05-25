@@ -78,8 +78,11 @@ cursor-rules/
   claude-code-sync.mdc               # global Cursor rule (alwaysApply); mirrors CLAUDE.md
 memory-global/
   MEMORY.md                          # global memory index (auto-memory format)
-  leaves/*.md                        # evergreen reference leaves; includes granted-permissions.md
+  leaves/*.md                        # evergreen reference leaves
   leaves/experience/*.md             # post-resolution task experiences (see CLAUDE.md § On task resolution); named YYYY-MM-DD-<slug>.md
+permissions/                         # operational workflow-level grants (not memory)
+  global.json                        # cross-machine grants
+  README.md                          # schema + CLI usage
 docs/                                # optional documentation
 scripts/
   setup-symlinks.sh
@@ -88,6 +91,8 @@ scripts/
   verify-layout-contract.sh
   verify-all.py                        # entry point for instruction-policy checks
   verify-language.py                   # English-by-default policy
+  verify-permissions.py                # permissions JSON schema check
+  permissions.py                       # CLI for permissions/*.json
   sync-instructions-repo.sh
   install-git-hooks.sh
   install-sync-cron.sh
