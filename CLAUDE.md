@@ -221,7 +221,7 @@ A substantive task is **resolved** only when the user explicitly confirms it. **
 
 1. **Verify done.** All stages green per their `Expected result image:`? `## Final verification` passed? If no — `overcome-difficulty`, not "close".
 2. **Recap one line.** `Requested: <user's ask>. Delivered: <what was actually shipped>.` Keep it terse — one line each side.
-3. **Ask explicitly** in the user's language: "Considered resolved?" Use `AskUserQuestion` when the answer is binary; free text otherwise.
+3. **Ask explicitly via `AskUserQuestion`** in the user's language: "Considered resolved?" The gate is binary, so `AskUserQuestion` is **mandatory** per § Escalation to the user. If the same turn already has other binary asks queued (push, scope, follow-up), **bundle** the resolution question into the same `AskUserQuestion` call — do not split structured + free-text sign-offs across the turn.
 4. **Wait for explicit confirmation.** An unambiguous "yes" / "resolved" / "так и оставим" / direct answer to your ask. **Bare gratitude is not confirmation** — `thanks` / `спасибо` / `thx` / `perfect` alone is ambiguous between "thanks for the work" and "task is over". Ask anyway. Enforced by `scripts/hook-resolution-reminder.py` (UserPromptSubmit) — emits a stderr nudge when the user's reply is brief gratitude.
 5. **On confirmation** — decide whether to record the experience (quality bar below).
 
@@ -267,7 +267,7 @@ Skip the leaf entirely for trivial Q&A turns and one-line tasks. The whole rule 
 
 Ask when: several equivalent strategies and the choice affects timeline or risk; no access to a resource and no workaround; the done criterion is undefined. Batch 3–4 questions, not one at a time.
 
-**Use `AskUserQuestion` for confirmations and choices from a defined set** — push gates, apply/skip decisions, picking one of N pre-defined approaches, resolution confirmations. The structured UI turns each confirmation into a single click (or Enter on the recommended option) instead of typed `да` / `yes`. Put the recommended option first, marked `(Recommended)`; the user always has the implicit "Other" escape. Stay with free text for open-ended questions and for mid-flow micro-acknowledgments where a click prompt would be a needless interruption.
+**Use `AskUserQuestion` for every confirmation and every choice from a defined set — mandatory, not a preference.** This covers: apply / skip ("apply these edits?"), push gates ("push to origin?"), scope choices ("touch deepagent too?"), resolution confirmations ("considered resolved?"), and picks of one of N pre-defined approaches. If the answer is binary or one-of-N you can list, `AskUserQuestion` is the right tool — the structured UI turns each confirmation into a single click (or Enter on the recommended option) instead of typed `да` / `yes`. Put the recommended option first, marked `(Recommended)`; the user always has the implicit "Other" escape. **Bundle** multiple binary decisions at end-of-turn into a single `AskUserQuestion` call rather than splitting structured + free-text sign-offs. Free text is only for genuinely open-ended questions (the user must type a name, path, sentence) — never for "apply?", "push?", "resolved?".
 
 ### Limits
 

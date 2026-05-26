@@ -31,7 +31,7 @@ In the same dialog turn the trigger fires, produce **text only**: no file edits 
 
 6. **Propose concrete edits.** For each proposed change: target file, section, before/after wording (or close to it). No generalities. The user reads this and approves, refines, or rejects.
 
-End turn 1 with a clear ask: "Apply these changes?" — and stop. Do not start editing files.
+End turn 1 with an `AskUserQuestion` ask: "Apply these changes?" (options: `Apply (Recommended)` / `Refine` / `Skip`) — and stop. Do not start editing files. Per CLAUDE.md § Escalation to the user, `AskUserQuestion` is mandatory at confirmation gates — free text at the apply-gate is the exact failure mode this skill most often diagnoses for users; the skill itself must model it.
 
 ### Turn 2 — apply (next turn, after user confirmation)
 
@@ -41,7 +41,7 @@ The user's confirmation can be terse ("да", "ok", "do it"). On confirmation:
 
 8. **Commit.** One commit per coherent batch (see [policy.md](policy.md) § Git sync).
 
-9. **Push.** Only after the user explicitly confirms push (separate confirmation — commit ≠ push).
+9. **Push.** Only after the user explicitly confirms push (separate confirmation — commit ≠ push). Ask via `AskUserQuestion` (options: `Push (Recommended)` / `Keep local`).
 
 ### When to collapse into one turn
 
