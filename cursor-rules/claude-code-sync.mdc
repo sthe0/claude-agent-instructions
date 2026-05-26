@@ -97,7 +97,7 @@ When triggered → read `~/.claude/skills/ccgram-management/SKILL.md`. Per-machi
 
 ## On task resolution (record experience)
 
-When a substantive task is resolved (user explicitly confirms it — ask once if you finish without confirmation in their last message), **decide whether to record**.
+Close the loop **proactively** when all plan stages have passed their `Expected result image:` and the plan's `## Final verification` has passed: one-line recap (`Requested: X. Delivered: Y.`) + explicit ask in the user's language. **Bare gratitude (`thanks` / `спасибо` / `perfect` alone) is not confirmation** — ask anyway. Then **decide whether to record**.
 
 **Quality bar.** Record only if a future you would actually want to **read** the leaf before a similar task: non-obvious choice, reusable difficulty resolution, missing tool / memory / instruction discovered, or ≥ 5 min of rediscovery saved. Otherwise skip — memory bloat is worse than memory gap.
 

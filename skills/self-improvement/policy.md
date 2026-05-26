@@ -161,6 +161,7 @@ scripts/
   hook-tracker-reminder.py             # UserPromptSubmit: detect tracker references (ticket keys, keywords) and nudge to invoke `tracker-management`
   hook-push-confirmation-reminder.py   # PreToolUse Bash: nudge to verify user push-confirmation before `git push` / `sync-instructions-repo.sh push`
   verify-plan-file.py                  # validate planner plan file structure (Problem/Stages/Final verification/Risks + Expected result image lines); run from spawn-specialist.py after PLAN-READY:
+  hook-resolution-reminder.py          # UserPromptSubmit: nudge when user reply is brief gratitude — do NOT treat as resolution confirmation
   lint-permissions.py                  # permissions JSON schema check
   permissions-cli.py                   # CLI for permissions/*.json
   spawn-specialist.py                  # `claude -p` spawn wrapper (recursion cap, budget, permissions, cost log)

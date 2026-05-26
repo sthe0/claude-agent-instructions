@@ -213,9 +213,15 @@ If the question requires the user's input (intent, preference, choice), ask the 
 
 ### On task resolution (record experience)
 
-A substantive task is **resolved** only when the user explicitly confirms it (e.g. "done", "thanks, perfect", "this works", "так и оставим"). If the work appears complete and the user has not confirmed in their last message, ask once at the end of your reply — in the user's language — whether they consider the task resolved, then wait for explicit agreement.
+A substantive task is **resolved** only when the user explicitly confirms it. **Do not wait for user gratitude — close the loop proactively.** The moment all stages have passed their `Expected result image:` check and the plan's `## Final verification` has passed against the user's overall done criterion, you are at the resolution gate.
 
-When a substantive task is resolved, **decide whether to record the experience**.
+**Closing protocol** (runs at the resolution gate):
+
+1. **Verify done.** All stages green per their `Expected result image:`? `## Final verification` passed? If no — `overcome-difficulty`, not "close".
+2. **Recap one line.** `Requested: <user's ask>. Delivered: <what was actually shipped>.` Keep it terse — one line each side.
+3. **Ask explicitly** in the user's language: "Considered resolved?" Use `AskUserQuestion` when the answer is binary; free text otherwise.
+4. **Wait for explicit confirmation.** An unambiguous "yes" / "resolved" / "так и оставим" / direct answer to your ask. **Bare gratitude is not confirmation** — `thanks` / `спасибо` / `thx` / `perfect` alone is ambiguous between "thanks for the work" and "task is over". Ask anyway. Enforced by `scripts/hook-resolution-reminder.py` (UserPromptSubmit) — emits a stderr nudge when the user's reply is brief gratitude.
+5. **On confirmation** — decide whether to record the experience (quality bar below).
 
 #### Quality bar (decide before writing)
 
