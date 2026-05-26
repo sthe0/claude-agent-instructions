@@ -184,8 +184,29 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--context-dossier", type=Path, help="path to a file with the conversation-context digest")
     p.add_argument("--budget", choices=("small", "medium", "large"), default="medium", help="budget tier from config.md")
     p.add_argument("--project-permissions", type=Path, help="project-scope permissions.json to also include in the digest")
+    p.add_argument(
+        "--permission-mode",
+        choices=("acceptEdits", "auto", "bypassPermissions", "default", "dontAsk", "plan"),
+        help="claude --permission-mode for the spawned process. Default: bypassPermissions for kind=developer (trusted local writes), default otherwise.",
+    )
     p.add_argument("--dry-run", action="store_true", help="print the prompt and the command that would run, then exit")
     return p
+
+
+def resolve_permission_mode(args: argparse.Namespace) -> str | None:
+    """Pick the permission mode passed to `claude -p`.
+
+    Default policy: developer specialization needs unattended Read/Grep/Write in
+    a trusted local mount, so use bypassPermissions; other specializations stay
+    on harness defaults (interactive prompts) since they are mostly read-only.
+
+    User-supplied `--permission-mode` always wins.
+    """
+    if args.permission_mode is not None:
+        return args.permission_mode
+    if args.kind == "developer":
+        return "bypassPermissions"
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -228,8 +249,11 @@ def main(argv: list[str] | None = None) -> int:
         budget,
         "--output-format",
         "json",
-        prompt,
     ]
+    permission_mode = resolve_permission_mode(args)
+    if permission_mode is not None:
+        cmd.extend(["--permission-mode", permission_mode])
+    cmd.append(prompt)
 
     if args.dry_run:
         print("=== assembled prompt ===")
