@@ -258,9 +258,9 @@ You have three memory scopes. Pick by **purpose**, not by convenience.
 
 | Scope | Where | Purpose |
 |---|---|---|
-| **Personal (auto-memory)** | `~/.claude/projects/<cwd-hash>/memory/MEMORY.md` + leaves + `experience/` | Personal facts about the user, conversational preferences, "what we agreed on" continuity, project state in the user's language. Native Claude Code auto-memory mechanism. |
-| **Global engineering** | `~/.claude/memory-global/MEMORY.md` + `leaves/` + `leaves/experience/` | Cross-project engineering patterns, reasoning practices, runbooks, retrospectives, granted-permissions. English, structured. Imported into every session via the line at the end of this file. |
-| **Project (local)** | `<project_cwd>/.claude/agent-memory/MEMORY.md` + leaves + `experience/` | Project-specific runbooks — product pipelines, ticket detail, repo conventions, prod naming. English. Shared via the project's git. |
+| **Personal (auto-memory)** | `~/.claude/projects/<cwd-hash>/memory/MEMORY.md` + leaves + `experience/` + `system-knowledge/` | Personal facts about the user, conversational preferences, "what we agreed on" continuity, project state in the user's language. Native Claude Code auto-memory mechanism. |
+| **Global engineering** | `~/.claude/memory-global/MEMORY.md` + `leaves/` + `leaves/experience/` + `leaves/system-knowledge/` | Cross-project engineering patterns, reasoning practices, runbooks, retrospectives, granted-permissions. English, structured. Imported into every session via the line at the end of this file. |
+| **Project (local)** | `<project_cwd>/.claude/agent-memory/MEMORY.md` + leaves + `experience/` + `system-knowledge/` | Project-specific runbooks — product pipelines, ticket detail, repo conventions, prod naming. English. Shared via the project's git. |
 
 All three follow the same file shape: `MEMORY.md` as a short index, detail in leaf files, frontmatter `name` / `description` / `type` (`user` / `feedback` / `project` / `reference`).
 
@@ -276,6 +276,19 @@ Project memory is shared via the project's git: `scripts/setup-project-memory.sh
 - **Cite the source for OS / binary / version-dependent claims.** If a memory fact depends on a specific distro, daemon, CLI flag, or environment behavior, add a `> verified by: …` line next to it (manpage citation, log line, command output, doc URL). Without it, future you treats the claim as ground truth and wastes diagnosis time when it has gone stale.
 - **Do not** write: ephemeral task state (use the task list), one-session plan drafts (use a plan file), secrets, content already covered by `CLAUDE.md`.
 - **Behavioral rules** ("always X", "never Y") belong in `CLAUDE.md` or skill / agent prompts — not in memory.
+
+### `system-knowledge/` leaves
+
+Record durable facts about systems, processes, organizational structure, component interrelations, codebase architecture that isn't self-evident. Filename is content-keyed slug only (no date): `auth-team-ownership.md`, `nanobot-digest-pipeline.md`. Same frontmatter shape as other leaves (`name` / `description` / `type: reference`).
+
+Record only if **all four** apply:
+
+1. **Not reachable in 1–2 hops** of internet / intranet / `git log` / repo search.
+2. **Not explicitly documented** in code, README, ADR, or known design docs.
+3. **Not a duplicate** of an existing leaf — search `system-knowledge/` (and adjacent memory) before writing; update an existing leaf instead of creating a parallel one.
+4. **Specific, not a principle** — names a concrete component / process / person / dataflow boundary. Generic patterns and reasoning practices belong in `leaves/*.md` (evergreen reference), not here.
+
+Cite the source where possible (`> verified by: <commit>/<URL>/<conversation>`).
 
 ---
 

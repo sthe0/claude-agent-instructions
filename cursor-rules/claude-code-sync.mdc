@@ -121,6 +121,10 @@ If a fact qualifies for two scopes, write to the **most specific**. Duplicate co
 
 **Behavioral rules** ("always X", "never Y") belong in `CLAUDE.md` or skill / agent prompts — not in memory.
 
+Each scope also carries two sub-folders for specialized content:
+- `experience/` — per-task post-resolution leaves (see § On task resolution above).
+- `system-knowledge/` — durable facts about systems, processes, organizational structure, and codebase architecture that isn't self-evident. Slug-only filenames. Record only when **all** apply: not reachable in 1–2 search hops; not explicitly documented in code or docs; not a duplicate of an existing leaf; specific (concrete component / process / boundary), not a generic principle. Cite source with `> verified by: …` where possible.
+
 Cursor has no auto-memory write mechanism — write the file directly when triggered.
 
 ## Specializations in Cursor (read inline, do not spawn)

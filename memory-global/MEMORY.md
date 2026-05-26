@@ -18,6 +18,7 @@ Loaded into every session via `@~/.claude/memory-global/MEMORY.md` import in `CL
 ## User preferences (feedback)
 
 - [No hard caps on memory file sizes](leaves/feedback-no-hard-caps-on-memory.md) — when proposing code-driven enforcement, do not add line ceilings on `MEMORY.md` or leaves; memory is meant to accumulate.
+- [Avoid premature optimization](leaves/feedback-avoid-premature-optimization.md) — drop speculative fields / validators / abstractions from design proposals; add them only when a concrete difficulty surfaces.
 
 ## Tooling and mechanics
 
@@ -25,6 +26,12 @@ Loaded into every session via `@~/.claude/memory-global/MEMORY.md` import in `CL
 - [settings.json env precedence](leaves/claude-code-settings-env-precedence.md) — env in settings.json overrides shell env (`env -u` does not help); auth precedence ladder; what to do when an apiKeyHelper isn't enough.
 
 Workflow-level permissions (separate from memory): `~/claude-agent-instructions/permissions/` + `scripts/permissions-cli.py`. Not a memory leaf — operational config.
+
+## System knowledge
+
+Durable facts about systems, processes, organizational structure, and codebase architecture. Leaves live in `leaves/system-knowledge/`. Recording criteria in `~/.claude/CLAUDE.md` § Memory § `system-knowledge/` leaves.
+
+<!-- Add one-line pointers to leaf files as system knowledge accumulates. -->
 
 ## Recent retrospectives
 

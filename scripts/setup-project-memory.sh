@@ -26,7 +26,7 @@ if [[ "$PROJECT_CWD" == "$HOME" ]]; then
 fi
 
 AGENT_MEMORY="$PROJECT_CWD/.claude/agent-memory"
-mkdir -p "$AGENT_MEMORY"
+mkdir -p "$AGENT_MEMORY" "$AGENT_MEMORY/experience" "$AGENT_MEMORY/system-knowledge"
 
 if [[ ! -f "$AGENT_MEMORY/MEMORY.md" ]]; then
   cat >"$AGENT_MEMORY/MEMORY.md" <<EOF

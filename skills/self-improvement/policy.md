@@ -109,6 +109,7 @@ memory-global/
   MEMORY.md                          # global memory index (auto-memory format)
   leaves/*.md                        # evergreen reference leaves
   leaves/experience/*.md             # post-resolution task experiences (see CLAUDE.md § On task resolution); named YYYY-MM-DD-<slug>.md
+  leaves/system-knowledge/*.md       # durable facts about systems/processes/components (see CLAUDE.md § Memory § system-knowledge); slug-only filenames
 permissions/                         # operational workflow-level grants (not memory)
   global.json                        # cross-machine grants
   README.md                          # schema + CLI usage
