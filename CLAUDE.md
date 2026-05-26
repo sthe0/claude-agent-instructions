@@ -248,12 +248,11 @@ If none — do not record. Memory bloat is worse than memory gap. The git log + 
   3. **Artifacts** — links, paths, commands, PR / ticket references.
   4. **Lessons** — what a future similar task should do differently.
   5. **Self-critique of the agent system** — concrete friction observed while resolving this task: missing affordance in `CLAUDE.md` / skill / memory / tools / hooks, stale guidance, awkward delegation, wrong default. Vague "could be better" is noise — name file, section, or behavior.
-  6. **Cost & effort** — the measured / estimated cost of this task:
-     - $ spent on `claude -p` spawns over the task window (run `scripts/cost-report.py --since <task-start-date>` for the figure).
+  6. **Cost & effort** — measured / estimated cost; the totals should reconcile with the plan's per-stage `Actual effort:` entries (the breakdown of *where* cost went, filled in by the manager as stages completed):
+     - $ spent on `claude -p` spawns over the task window (`scripts/cost-report.py --since <task-start-date>`).
      - Wall-clock duration (first turn → resolution).
-     - User interventions — count of corrections, re-prompts, or clarifications you needed beyond the initial brief.
-
-     This row lets a future you compare alternative approaches to similar tasks. Cost matters in retrospect, not before.
+     - User interventions — corrections, re-prompts, clarifications beyond the initial brief.
+     - **Resources that drove cost** — pick 1–3 entries from the plan's `## Required resources` (if present) whose use generated the most cost or surprise. Lets a future similar task estimate those resources up-front.
 
 These leaves are your durable **experience** — reusable knowledge across sessions. Read the relevant memory index before starting a new task that pattern-matches past work.
 
@@ -268,6 +267,16 @@ Skip the leaf entirely for trivial Q&A turns and one-line tasks. The whole rule 
 Ask when: several equivalent strategies and the choice affects timeline or risk; no access to a resource and no workaround; the done criterion is undefined. Batch 3–4 questions, not one at a time.
 
 **Use `AskUserQuestion` for every confirmation and every choice from a defined set — mandatory, not a preference.** This covers: apply / skip ("apply these edits?"), push gates ("push to origin?"), scope choices ("touch deepagent too?"), resolution confirmations ("considered resolved?"), and picks of one of N pre-defined approaches. If the answer is binary or one-of-N you can list, `AskUserQuestion` is the right tool — the structured UI turns each confirmation into a single click (or Enter on the recommended option) instead of typed `да` / `yes`. Put the recommended option first, marked `(Recommended)`; the user always has the implicit "Other" escape. **Bundle** multiple binary decisions at end-of-turn into a single `AskUserQuestion` call rather than splitting structured + free-text sign-offs. Free text is only for genuinely open-ended questions (the user must type a name, path, sentence) — never for "apply?", "push?", "resolved?".
+
+### Acting without asking
+
+Carve-outs that minimize per-action confirmation:
+
+1. **Side-effect-free actions pre-authorized** — `Read` / `Grep` / `Glob`, web / wiki / docs / code search, `--help`, `--dry-run`, MCP `get_*` / `list_*` / `search_*` / `describe_*`. No ask, plan or no plan.
+2. **Plan-scope-declared actions pre-authorized after plan approval** — anything the approved plan declares (files in `Reference files`, artifacts in `Stages.Output`, declared VCS ops, named external calls) proceeds without re-asking per action.
+3. **Unknown tool side-effect class:** budget **1 lookup** (`--help` / `ToolSearch select:<name>` / `Read` SKILL.md). If still unclear → `PERMISSION-REQUEST:`; do not burn additional lookups.
+
+**Substantive plan changes still require approval.** Refinement (tightening Expected-image, missed read step, reorder without dep change, typo, post-hoc `Actual effort:`) — manager applies in-thread. Substantive (scope expansion / contraction, new required resource, new specialist, changed done criterion, new external action) — `AskUserQuestion` with diff vs prior plan. Full policy and anti-patterns: `~/.claude/memory-global/leaves/acting-without-asking.md`.
 
 ### Limits
 
