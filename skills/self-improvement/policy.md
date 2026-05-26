@@ -30,6 +30,35 @@ Do not write the same procedure twice — once as "you must …" in prose and
 once as `verify-X.py`. Code is the single source of truth; prose points
 to it.
 
+### What NOT to encode as code
+
+Two carve-outs from the "process belongs in a script" instinct. Both
+reject *speculative* machinery — code that exists in service of an
+imagined future failure rather than an observed one.
+
+- **No hard line ceilings on memory files.** `MEMORY.md` indices and
+  leaves accumulate across sessions; capping them via
+  `lint-prose-length.py` (or any analogue) forces pruning that deletes
+  useful pointers. The truncation cliff at ~200 lines for `MEMORY.md`
+  is a *signal* for the agent to curate, not a gate for a linter.
+  Distinguish **instruction surfaces** (`CLAUDE.md`, cursor mirror,
+  `SKILL.md`, `policy.md` — loaded into every session prompt → hard
+  ceilings protect the token budget) from **content stores**
+  (memory — curation by judgment).
+
+- **No premature optimization in design proposals.** When drafting a
+  Turn-1 self-improvement proposal, mark each component as either
+  *solves a concrete current difficulty* or *speculative*. Drop the
+  speculative items unless the user explicitly asks for them. New
+  frontmatter fields, validators, helper scripts, generic interfaces:
+  start without them. Add when a real failure case appears, not when
+  one is imagined. One-off duplication is cheaper than premature
+  abstraction; visible noise from a missing validator is cheaper than
+  a validator that has no observed failure to prevent. Machinery is
+  justified up front only when (a) a single failure is unrecoverable,
+  (b) the failure mode has already been observed, or (c) the mechanism
+  is a thin wrapper around something already needed.
+
 ---
 
 ## Instruction language

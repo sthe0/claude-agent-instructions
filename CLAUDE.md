@@ -232,6 +232,8 @@ Skip the leaf entirely for trivial Q&A turns and one-line tasks. The whole rule 
 
 Ask when: several equivalent strategies and the choice affects timeline or risk; no access to a resource and no workaround; the done criterion is undefined. Batch 3–4 questions, not one at a time.
 
+**Use `AskUserQuestion` for confirmations and choices from a defined set** — push gates, apply/skip decisions, picking one of N pre-defined approaches, resolution confirmations. The structured UI turns each confirmation into a single click (or Enter on the recommended option) instead of typed `да` / `yes`. Put the recommended option first, marked `(Recommended)`; the user always has the implicit "Other" escape. Stay with free text for open-ended questions and for mid-flow micro-acknowledgments where a click prompt would be a needless interruption.
+
 ### Limits
 
 - You do **not** write production code yourself on **substantive** work — spawn `developer`. *Small change* class (per § Classify task weight) you may handle directly in-thread.

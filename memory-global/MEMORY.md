@@ -15,11 +15,6 @@ Loaded into every session via `@~/.claude/memory-global/MEMORY.md` import in `CL
 - [Reasoning and task solving](leaves/reasoning-and-task-solving.md) — understand before acting, plan and approval, when stuck, memory vs prompts, self-check before first production edit.
 - [Typical coordinator pitfalls](leaves/coordinator-pitfalls.md) — anti-patterns to avoid as the root coordinator; signals that point to specific corrective actions.
 
-## User preferences (feedback)
-
-- [No hard caps on memory file sizes](leaves/feedback-no-hard-caps-on-memory.md) — when proposing code-driven enforcement, do not add line ceilings on `MEMORY.md` or leaves; memory is meant to accumulate.
-- [Avoid premature optimization](leaves/feedback-avoid-premature-optimization.md) — drop speculative fields / validators / abstractions from design proposals; add them only when a concrete difficulty surfaces.
-
 ## Tooling and mechanics
 
 - [Subagent resume and transcripts](leaves/subagent-resume-and-transcripts.md) — `SendMessage` resume mechanism (needs `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`), transcript layout under `~/.claude/projects/.../subagents/`, subagent auto-compaction, cleanup.
