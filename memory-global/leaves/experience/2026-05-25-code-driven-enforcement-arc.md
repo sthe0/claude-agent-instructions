@@ -2,6 +2,7 @@
 name: code-driven-enforcement-arc
 description: Nine-iteration build-out of code-driven enforcement for the instructions repo (verify-* scripts, hooks, structured permissions, spawn wrapper, cost log) plus three follow-up rule additions. Lessons on process-as-code pacing, verify-script ROI, and the cognition/process boundary.
 type: reference
+resolution_confirmed_by_user: "<retroactive: rule introduced 2026-05-26; original confirmation not captured at write time>"
 ---
 
 # Code-driven enforcement arc — 2026-05-25

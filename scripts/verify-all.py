@@ -21,6 +21,7 @@ CHECKS: list[str] = [
     "verify-cross-refs",
     "lint-cursor-mirror",
     "lint-prose-length",
+    "verify-experience-leaf",
 ]
 
 

@@ -18,6 +18,12 @@ differ between Claude Code and Cursor contexts):
      declares the trigger contract, even if the wording diverges from the
      SKILL.md frontmatter.
 
+  4. Resolution-confirmation rule present. The mirror must mention the
+     `resolution_confirmed_by_user` frontmatter requirement — Cursor (and
+     other environments without the PreToolUse hook) rely on the prose
+     statement, so it must not silently drift out of the mirror when
+     CLAUDE.md changes.
+
 Exit code 1 on any drift.
 """
 from __future__ import annotations
@@ -157,6 +163,14 @@ def main(argv: list[str] | None = None) -> int:
     for name, body in mirror["flat_blocks"].items():
         if not any("**TRIGGER:**" in line for line in body):
             errors.append(f"mirror skill block lacks **TRIGGER:** marker: `{name}`")
+
+    mirror_text = MIRROR_FILE.read_text(encoding="utf-8")
+    if "resolution_confirmed_by_user" not in mirror_text:
+        errors.append(
+            "mirror is missing the `resolution_confirmed_by_user` frontmatter rule "
+            "(see CLAUDE.md § On task resolution § What to record). Cursor agents "
+            "depend on the prose statement — keep the requirement explicit."
+        )
 
     if errors:
         print(f"lint-cursor-mirror: FAIL — {len(errors)} drift(s) in {MIRROR_FILE.relative_to(REPO_ROOT)}")

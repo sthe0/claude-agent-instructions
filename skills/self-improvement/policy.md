@@ -124,6 +124,7 @@ scripts/
   lint-cursor-mirror.py                # cursor-rules vs skills/ structural parity
   verify-self-improvement-edit.py      # commit-msg gate: requires review marker for self-improvement edits
   lint-prose-length.py                 # hard ceiling on CLAUDE.md / cursor mirror / SKILL.md / policy.md
+  verify-experience-leaf.py            # require `resolution_confirmed_by_user` frontmatter on `**/experience/*.md` (PreToolUse hook + verify-all)
   lint-permissions.py                  # permissions JSON schema check
   permissions-cli.py                   # CLI for permissions/*.json
   spawn-specialist.py                  # `claude -p` spawn wrapper (recursion cap, budget, permissions, cost log)

@@ -248,6 +248,7 @@ If none — do not record. Memory bloat is worse than memory gap. The git log + 
 
 - **Scope.** Cross-project lesson → `~/.claude/memory-global/leaves/experience/`. Project-specific lesson → `<project_cwd>/.claude/agent-memory/experience/` (or, for the personal auto-memory at `~/.claude/projects/<cwd-hash>/memory/`, the `experience/` subfolder there).
 - **One leaf per resolved task** in the `experience/` subfolder. Name: `YYYY-MM-DD-<slug>.md` — date-prefixed for chronological sort, slug short and content-keyed. Frontmatter `type: reference`. The folder location distinguishes experience leaves from evergreen reference leaves — no `experience-` prefix in the filename needed.
+- **Required frontmatter field `resolution_confirmed_by_user: "<user's literal confirmation quote>"`.** Enforced by `scripts/verify-experience-leaf.py` via a PreToolUse hook on `Write` and via `verify-all.py`. The field exists because writing a leaf on assumed resolution is a recurring failure mode — the check makes "confirm → record" mechanical rather than prose-dependent.
 - **Required sections** in the leaf:
   1. **Final plan as executed** — the plan you actually ran, including any replanning from `overcome-difficulty`.
   2. **Difficulties** — each one, the signal that surfaced it, and how it was overcome.
@@ -314,6 +315,7 @@ Project memory is shared via the project's git: `scripts/setup-project-memory.sh
 - **Read** the relevant scope index when the task touches a domain it knows, when the user references prior-conversation work, or before making assumptions about repo/infra conventions.
 - **Verify** specific file paths, function names, or flags from memory before recommending them — code may have moved.
 - **Write** when a fact is durable and non-obvious: corrections that should not recur, decisions and their reasons, user role and preferences, project state, runbooks for prod or external pipelines, **post-resolution task experiences** (see § On task resolution).
+- **Cite the source for OS / binary / version-dependent claims.** If a memory fact depends on a specific distro, daemon, CLI flag, or environment behavior, add a `> verified by: …` line next to it (manpage citation, log line, command output, doc URL). Without it, future you treats the claim as ground truth and wastes diagnosis time when it has gone stale.
 - **Do not** write: ephemeral task state (use the task list), one-session plan drafts (use a plan file), secrets, content already covered by `CLAUDE.md`.
 - **Behavioral rules** ("always X", "never Y") belong in `CLAUDE.md` or skill / agent prompts — not in memory.
 

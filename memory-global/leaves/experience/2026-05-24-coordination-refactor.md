@@ -2,6 +2,7 @@
 name: experience-coordination-refactor-2026-05-24
 description: Resolved task — extended the coordination machinery in ~/claude-agent-instructions with task-weight triage, CLARIFY/PLAN-READY markers, depth cap, tiered budgets, two-turn self-improvement, and a separate config.md for numeric constants. Captures the actual sequence, two difficulties from silent architectural decisions, and lessons for future self-improvement work.
 type: reference
+resolution_confirmed_by_user: "<retroactive: rule introduced 2026-05-26; original confirmation not captured at write time>"
 ---
 
 # Coordination machinery refactor — 2026-05-24

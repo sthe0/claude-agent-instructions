@@ -95,6 +95,8 @@ When a substantive task is resolved (user explicitly confirms it — ask once if
 
 **Required sections** in a leaf: (1) final plan as executed, (2) difficulties + how overcome, (3) artifacts, (4) lessons, (5) **self-critique of the agent system** (concrete friction observed — file / section / behavior, no vague "could be better"), (6) **cost & effort** ($ spent on spawns, wall-clock duration, count of user interventions — see `scripts/cost-report.py`).
 
+**Required frontmatter field**: `resolution_confirmed_by_user: "<user's literal confirmation quote>"`. In Claude Code, `scripts/verify-experience-leaf.py` blocks the `Write` tool call when this field is missing (PreToolUse hook). Cursor and other environments lack the hook — apply the rule manually; the pre-commit hook on the instructions repo catches it for committed leaves.
+
 **Auto-trigger self-improvement.** If § self-critique names any concrete friction, invoke `self-improvement` in the same turn (after the leaf, before the final user reply) — treat the self-critique as the input signal.
 
 - Cross-project lesson → `~/.claude/memory-global/leaves/`.
