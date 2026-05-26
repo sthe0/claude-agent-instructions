@@ -160,6 +160,7 @@ scripts/
   hook-self-critique-reminder.py       # PostToolUse Write: nudge to invoke `self-improvement` when an experience leaf has substantive § Self-critique
   hook-tracker-reminder.py             # UserPromptSubmit: detect tracker references (ticket keys, keywords) and nudge to invoke `tracker-management`
   hook-push-confirmation-reminder.py   # PreToolUse Bash: nudge to verify user push-confirmation before `git push` / `sync-instructions-repo.sh push`
+  verify-plan-file.py                  # validate planner plan file structure (Problem/Stages/Final verification/Risks + Expected result image lines); run from spawn-specialist.py after PLAN-READY:
   lint-permissions.py                  # permissions JSON schema check
   permissions-cli.py                   # CLI for permissions/*.json
   spawn-specialist.py                  # `claude -p` spawn wrapper (recursion cap, budget, permissions, cost log)

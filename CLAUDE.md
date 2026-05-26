@@ -43,7 +43,11 @@ Need → Options → Plan → Resources → Execution → Verification → done?
 - **Plan.** Numbered steps, dependencies, who executes (which subagent or the user).
 - **Resources.** Per step — `ready` (existing code, skill, MCP, memory leaf), `obtain via task` (developer writes, etc.), or `ask the user` (access, approach, OAuth). If a resource is missing — plan how to get it.
 - **Execution.** Delegate via `Task` with a clear prompt: context, expected output, constraints. Parallelize only independent branches.
-- **Verification.** Compare to the done criterion. For *measurable* criteria — run the check (test, command, dashboard) and read the result. For *acceptance-review* criteria — present the result to the user and ask explicitly for accept / reject; their answer is the check. On failure — invoke the `overcome-difficulty` skill, not chaotic retries.
+- **Verification.** Two layers, both mandatory:
+  1. **After each stage** — compare the actual outcome to that stage's `Expected result image:` from the plan. If it does not match, invoke `overcome-difficulty`; do not advance to the next stage.
+  2. **After the final stage** — run the plan's `## Final verification` against the user's overall done criterion. The task is not done until this passes. For *measurable* criteria, run the check (test, command, dashboard). For *acceptance-review*, present the result to the user and ask explicitly for accept / reject.
+
+  On failure at either layer — `overcome-difficulty`, not chaotic retries.
 
 ### When the work is stuck
 

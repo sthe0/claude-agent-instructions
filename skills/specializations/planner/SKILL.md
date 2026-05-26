@@ -21,7 +21,16 @@ You execute the planning step. You do **not** unilaterally spawn other specialis
 
 ## Return one of these markers on the first non-empty line of your final output
 
-- `PLAN-READY:` — **preferred terminal marker for planner.** The plan is ready and the manager **must** obtain explicit user approval before spawning the next specialist on it. Include the markdown plan (or path to a `.md` file you wrote) and a one-paragraph summary. This is a hard gate — never expect the manager to skip the approval round.
+- `PLAN-READY:` — **preferred terminal marker for planner.** The plan is ready and the manager **must** obtain explicit user approval before spawning the next specialist on it. Hard gate — never expect the manager to skip the approval round.
+
+  Format (enforced by `scripts/verify-plan-file.py` via `spawn-specialist.py`):
+  ```
+  PLAN-READY:
+  Plan: /absolute/path/to/plan.md
+  Summary: <one paragraph>
+  ```
+
+  You **must** write the plan to a markdown file before returning. Convention: `~/.claude/plans/<slug>.md`. Make `<slug>` short, content-keyed, kebab-case. The file must contain the sections listed in § Plan format below — `verify-plan-file.py` will reject the spawn with `MALFORMED:` otherwise.
 - `COMPLETED:` — use only when planner work did not result in a plan that requires approval (e.g. you were asked to refine a single section of an already-approved plan). Otherwise prefer `PLAN-READY:`.
 - `INCOMPLETE:` — partial plan; what is decided, what is unresolved, what blocks completion.
 - `CLARIFY:` — you need a small, specific answer to continue the plan: a file path, a number, a choice between named options, a deadline source. Include the exact question, the options you see (if any), and what work resumes after the answer. Use this in preference to `ESCALATE:` when the answer is short and planning can resume immediately. Format:
@@ -130,12 +139,20 @@ From experience with this task type, past similar tasks (read experience leaves)
 
 ### Plan format
 
-1. **Problem and done criteria** (first).
+Required `##` sections (in this order; `verify-plan-file.py` enforces presence):
+
+1. **Problem and done criteria.**
 2. **Context.**
-3. **Stages** — each step: who executes (which specialization or manager itself), reuse, tools, **cost tier** (`small` / `medium` / `large` per `~/.claude/config.md`), "Output:".
+3. **Stages.** Each stage block declares:
+   - Who executes (which specialization, or manager in-thread).
+   - Reuse / tools.
+   - **Cost tier** (`small` / `medium` / `large` per `~/.claude/config.md`).
+   - **Output:** the artifact this stage produces.
+   - **Expected result image:** concrete observable + expected value/state — what the world looks like when this stage succeeded (e.g. "`pytest tests/foo.py` exits 0", "PR opens with N commits and CI green", "table `users` has new column `tier` populated for all rows"). For `measurable` criteria — a runnable check command or query. For `acceptance-review` — what the user inspects and what "good" looks like. `verify-plan-file.py` requires at least one `Expected result image:` line in the Stages section.
 4. **Summary** — table.
 5. **Dependency graph** — text.
-6. **Risks.**
+6. **Final verification.** End-to-end check against the user's overall done criterion: how it is run, who runs it, what "pass" looks like. The task is not done until this passes — the manager runs this gate before reporting completion.
+7. **Risks.**
 
 For each stage that calls for a specialist (developer, thinker, yandex-cloud-expert, …), the manager will spawn that specialization as a separate `claude -p` process — your plan only names which specialization is needed, not how to spawn it.
 

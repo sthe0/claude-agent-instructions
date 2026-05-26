@@ -151,6 +151,39 @@ def validate_marker(result_text: str) -> tuple[str, bool]:
     return f"MALFORMED: specialist output did not start with a known marker.\n\n{result_text}", False
 
 
+PLAN_PATH_RE = re.compile(r"^\s*Plan\s*:\s*(.+?)\s*$", re.MULTILINE)
+
+
+def validate_planner_plan(result_text: str) -> tuple[str, bool]:
+    """For planner PLAN-READY: outputs, extract the `Plan: <path>` line and
+    run verify-plan-file.py against it. Return (forwarded_text, ok)."""
+    m = PLAN_PATH_RE.search(result_text)
+    if not m:
+        return (
+            "MALFORMED: planner PLAN-READY: output is missing a "
+            "`Plan: <absolute-path>` line. The plan must be written to a file "
+            "(convention: ~/.claude/plans/<slug>.md) and the path declared "
+            "on its own line right after PLAN-READY:.\n\n" + result_text,
+            False,
+        )
+    plan_path = m.group(1).strip().strip("`'\"")
+    verifier = Path(__file__).resolve().parent / "verify-plan-file.py"
+    if not verifier.exists():
+        return result_text, True  # graceful degrade if verifier missing
+    proc = subprocess.run(
+        ["python3", str(verifier), plan_path],
+        capture_output=True, text=True, check=False,
+    )
+    if proc.returncode == 0:
+        return result_text, True
+    return (
+        f"MALFORMED: planner PLAN-READY: declared plan at `{plan_path}` "
+        f"but verify-plan-file.py rejected it:\n{proc.stderr}\n\n"
+        + result_text,
+        False,
+    )
+
+
 def log_cost_entry(entry: dict) -> None:
     COST_LOG.parent.mkdir(parents=True, exist_ok=True)
     with COST_LOG.open("a", encoding="utf-8") as f:
@@ -341,6 +374,8 @@ def main(argv: list[str] | None = None) -> int:
     if ok:
         first = forwarded.splitlines()[0].strip()
         parsed_marker = first.split(":", 1)[0]
+        if args.kind == "planner" and parsed_marker == "PLAN-READY":
+            forwarded, ok = validate_planner_plan(forwarded)
     sys.stdout.write(forwarded)
     if not forwarded.endswith("\n"):
         sys.stdout.write("\n")
