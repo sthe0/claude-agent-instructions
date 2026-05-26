@@ -193,25 +193,38 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _discover_transcript_path(after_wall_time: float, timeout: float = 10.0) -> Path | None:
-    """Find the freshest `~/.claude/projects/**/*.jsonl` whose mtime is after
-    `after_wall_time`. Polls every 0.5s up to `timeout` seconds. Returns the
-    Path or None if nothing appears in time."""
+def _snapshot_transcripts() -> set[Path]:
+    """Set of `~/.claude/projects/**/*.jsonl` that exist right now."""
+    root = Path.home() / ".claude" / "projects"
+    if not root.is_dir():
+        return set()
+    return set(root.rglob("*.jsonl"))
+
+
+def _discover_transcript_path(known_before: set[Path], timeout: float = 10.0) -> Path | None:
+    """Find a new `~/.claude/projects/**/*.jsonl` that didn't exist before the
+    spawn. Polls every 0.5s up to `timeout` seconds.
+
+    Filtering by "not in known_before" avoids picking the parent manager's own
+    live transcript (which is being touched concurrently and would otherwise
+    win on mtime). Returns the freshest new jsonl, or None on timeout.
+    """
     root = Path.home() / ".claude" / "projects"
     deadline = time.time() + timeout
     while time.time() < deadline:
-        candidates: list[tuple[float, Path]] = []
         if root.is_dir():
+            candidates: list[tuple[float, Path]] = []
             for p in root.rglob("*.jsonl"):
+                if p in known_before:
+                    continue
                 try:
                     mtime = p.stat().st_mtime
                 except OSError:
                     continue
-                if mtime > after_wall_time:
-                    candidates.append((mtime, p))
-        if candidates:
-            candidates.sort(reverse=True)
-            return candidates[0][1]
+                candidates.append((mtime, p))
+            if candidates:
+                candidates.sort(reverse=True)
+                return candidates[0][1]
         time.sleep(0.5)
     return None
 
@@ -292,16 +305,18 @@ def main(argv: list[str] | None = None) -> int:
         return 4
 
     env = {**os.environ, "AGENT_RECURSION_DEPTH": str(depth_next)}
+
+    # Snapshot existing transcripts BEFORE spawning so we can identify the
+    # child's new jsonl (the parent manager's own live transcript would
+    # otherwise win on mtime).
+    transcripts_before = _snapshot_transcripts()
     started = time.monotonic()
-    started_wall = time.time()
 
     # Use Popen so we can print the child's transcript path to stderr early —
     # the parent (manager) can then tail it for monitoring while we block on
-    # the child's final JSON output. The transcript jsonl appears under
-    # ~/.claude/projects/<sanitized-cwd>/<session-id>.jsonl shortly after
-    # claude warms up; we locate it by mtime > spawn-start.
+    # the child's final JSON output.
     proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    transcript_path = _discover_transcript_path(started_wall, timeout=10.0)
+    transcript_path = _discover_transcript_path(transcripts_before, timeout=10.0)
     if transcript_path is not None:
         print(f"spawn-specialist: transcript={transcript_path}", file=sys.stderr, flush=True)
     else:
