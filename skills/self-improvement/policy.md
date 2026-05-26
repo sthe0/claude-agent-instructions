@@ -125,6 +125,7 @@ skills/                              # flat skills + specializations container
   overcome-difficulty/SKILL.md       # flat skill (invoked inline)
   self-improvement/SKILL.md + policy.md
   tracker-management/SKILL.md
+  ccgram-management/SKILL.md         # CCGram Telegram bridge ops (per-machine setup, daily ops, troubleshooting)
   specializations/
     planner/SKILL.md                 # specialization skill (spawned as claude -p)
     developer/SKILL.md
@@ -146,6 +147,7 @@ docs/                                # optional documentation
 scripts/
   setup-symlinks.sh
   setup-project-memory.sh
+  setup-ccgram.sh                      # bootstrap CCGram on a new machine (uv + ccgram + autostart + hooks)
   verify-instructions-sync.sh
   verify-layout-contract.sh
   verify-all.py                        # entry point for instruction-policy checks

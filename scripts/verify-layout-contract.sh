@@ -46,6 +46,8 @@ require_file "$REPO/skills/overcome-difficulty/SKILL.md"
 require_file "$REPO/skills/self-improvement/SKILL.md"
 require_file "$REPO/skills/self-improvement/policy.md"
 require_file "$REPO/skills/tracker-management/SKILL.md"
+require_file "$REPO/skills/ccgram-management/SKILL.md"
+require_file "$REPO/scripts/setup-ccgram.sh"
 
 require_dir "$REPO/skills/specializations"
 require_file "$REPO/skills/specializations/planner/SKILL.md"

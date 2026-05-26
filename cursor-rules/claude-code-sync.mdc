@@ -87,6 +87,14 @@ When triggered → read `~/.claude/skills/self-improvement/SKILL.md` (and `polic
 
 When triggered → read `~/.claude/skills/tracker-management/SKILL.md` and layer tracker publication on top of normal coordination: load ticket context, publish the plan, post key progress updates, post the final result. Tracker-agnostic — project-specific conventions live in `<project_cwd>/.claude/agent-memory/`.
 
+### `ccgram-management`
+
+**TRIGGER:** the user mentions ccgram, the Telegram bridge for Claude Code, the Claude–Mac / Claude–Personal VPS / Claude–Work VPS groups, asks to restart / check / reinstall the bridge, debug a missing topic, or set up the bridge on a new machine.
+
+**SKIP** for unrelated Telegram bot work or for one-off Telegram API tasks.
+
+When triggered → read `~/.claude/skills/ccgram-management/SKILL.md`. Per-machine settings live in each machine's `~/.ccgram/.env` (do not copy into memory — tokens are secrets). Bootstrap on a new machine: `scripts/setup-ccgram.sh`.
+
 ## On task resolution (record experience)
 
 When a substantive task is resolved (user explicitly confirms it — ask once if you finish without confirmation in their last message), **decide whether to record**.
