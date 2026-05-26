@@ -68,7 +68,7 @@ When the monorepo uses a non-standard build (custom `make` macros, Bazel, intern
 
 ## While developing
 
-- Prefer clear, readable code over trivial comments.
+- **Comments: default no.** Add one only when the *why* is non-obvious — a workaround for a specific bug, an ordering constraint, a pinned-version rationale, a hidden invariant a future reader will not see from the names. Do not explain *what* the code does (well-named identifiers already do that). Do not reference the current task / fix / callers ("added for X", "used by Y", "handles the case from issue #123") — that context belongs in the commit message and PR description, not in code (where it rots). In **build / config** files (`ya.make`, `a.yaml`, `Dockerfile`, `Makefile`, `pyproject.toml`) the rule is the same: an `import` / `PEERDIR` / dependency line is its own documentation; annotate only when the entry is genuinely surprising (non-default flag, workaround for an upstream bug, ordering constraint imposed by the toolchain). When in doubt, **delete** the comment rather than rewriting it. Examples of comments to delete on sight: `# OAuth tokens via YAV — canonical arcadia client` above `library/python/vault_client`; `# Tracker client used by tracker_fetch.py` above `library/python/startrek_python_client`; `# Standard arcadia deps` above a PEERDIR block — each restates the identifier. Background: `~/.claude/memory-global/leaves/code-comment-discipline.md`.
 - Fix only what the step asks; do not expand scope with drive-by refactors. If a drive-by would be valuable, note it in `COMPLETED:` for the manager.
 - Reduce duplication; split functions when it improves reuse.
 - Match project style from neighboring files.

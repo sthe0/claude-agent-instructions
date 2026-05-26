@@ -341,7 +341,7 @@ Cite the source where possible (`> verified by: <commit>/<URL>/<conversation>`).
 ## Development habits
 
 - Avoid duplicating code. Explore adjacent files, use project search; extend shared abstractions over copy-paste.
-- Prefer clear code over trivial comments. Comments only when the *why* is non-obvious.
+- **Default: no comments.** Add one only when the *why* is non-obvious — workaround for a specific bug, ordering constraint, pinned-version rationale, hidden invariant a future reader will not see from the names. If removing the comment would not confuse a future reader, do not write it. Applies equally to **build / config** files (`ya.make`, `a.yaml`, `Dockerfile`, `Makefile`, `pyproject.toml`): never annotate an `import` / `PEERDIR` / dependency line with "what this does" — the identifier is the documentation. Details and concrete antipatterns: `~/.claude/memory-global/leaves/code-comment-discipline.md`.
 - Use `~/.venv` for Python unless a project memory runbook says otherwise.
 - **Log-reading discipline:** never emit more than 10 lines from one log file per tool call; aggregate first (counts, top-K, time windows), then surface a digest. Details: `~/.claude/memory-global/leaves/log-reading-discipline.md`.
 
