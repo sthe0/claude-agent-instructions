@@ -154,6 +154,13 @@ Required `##` sections (in this order; `verify-plan-file.py` enforces presence):
 6. **Final verification.** End-to-end check against the user's overall done criterion: how it is run, who runs it, what "pass" looks like. The task is not done until this passes — the manager runs this gate before reporting completion.
 7. **Risks.**
 
+Optional `##` sections (add when the task warrants them; not enforced by `verify-plan-file.py`):
+
+- **Reference files.** Subsections `### To modify` (file + line ranges that will change) and `### To read` (files, tests, configs needed for context). Add when the task touches existing code — a concrete file map is the cheapest way to anchor stages and give the developer an exact starting set.
+- **Contracts.** Only the contracts actually touched: API endpoints, method/service/repository signatures, models / DTOs, enums and interfaces, DB schema (tables, columns, indexes), events / queues, configs, external integrations. Add when the plan changes any interface.
+- **Operator questions.** Blocking questions the operator must answer before or during execution; persistent record (vs `CLARIFY:` which is one-shot). If you can make a reasonable assumption, fix it here marked `[assumption]` and proceed. New blocking questions discovered during solve are appended here too.
+- **Decomposition.** If markers M1–M4 (see `~/.claude/memory-global/leaves/decomposition-markers.md`) push toward splitting the plan into separate PRs/tickets, record the verdict (`recommended` / `possible` / `not required`), the rationale citing which markers fired, and — if recommended — a numbered list of sub-PRs.
+
 For each stage that calls for a specialist (developer, thinker, yandex-cloud-expert, …), the manager will spawn that specialization as a separate `claude -p` process — your plan only names which specialization is needed, not how to spawn it.
 
 ### Tool guidance

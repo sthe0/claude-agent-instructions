@@ -26,6 +26,8 @@ When in doubt between two classes, pick the heavier one once; if the work then v
 
 **Carve-out for in-context substantive plans.** A substantive task whose individual implementation steps each fit the *small change* row (≤ `small-change-max-lines` per step, single file each, no irreversible action) may be executed by the manager in-thread, *after* the plan is approved. The plan/approval gate already protects against scope drift; the developer spawn primarily protects against context drift, which does not apply when the manager has explored the affected files this session. Default to spawning if any step exceeds those bounds, or if the manager has not read the target files in this session.
 
+**Decomposition is a separate axis.** Weight class decides routing; **decomposition markers** decide whether a substantive task ships as one PR or several. Apply M1–M4 (independence / heterogeneity / blocking deps / rollback risk) after the plan is approved, before implementation — see `~/.claude/memory-global/leaves/decomposition-markers.md`.
+
 ### On a new substantive task
 
 1. **Restate** the user's goal and **done criterion** in one short paragraph. Mark the criterion type — *measurable* (test, command output, file present) or *acceptance-review* (user accepts on review when no objective check exists).
@@ -239,8 +241,9 @@ If none — do not record. Memory bloat is worse than memory gap. The git log + 
 - **Scope.** Cross-project lesson → `~/.claude/memory-global/leaves/experience/`. Project-specific lesson → `<project_cwd>/.claude/agent-memory/experience/` (or, for the personal auto-memory at `~/.claude/projects/<cwd-hash>/memory/`, the `experience/` subfolder there).
 - **One leaf per resolved task** in the `experience/` subfolder. Name: `YYYY-MM-DD-<slug>.md` — date-prefixed for chronological sort, slug short and content-keyed. Frontmatter `type: reference`. The folder location distinguishes experience leaves from evergreen reference leaves — no `experience-` prefix in the filename needed.
 - **Required frontmatter field `resolution_confirmed_by_user: "<user's literal confirmation quote>"`.** Enforced by `scripts/verify-experience-leaf.py` via a PreToolUse hook on `Write` and via `verify-all.py`. The field exists because writing a leaf on assumed resolution is a recurring failure mode — the check makes "confirm → record" mechanical rather than prose-dependent.
+- **Link the plan file.** If the planner wrote a plan markdown (e.g. `~/.claude/plans/<slug>.md`), add a frontmatter field `plan_file: <absolute-path>` pointing to the **as-executed** version (post-replanning, if any). The leaf's `## Final plan as executed` section then **links** to that file with a one-paragraph diff-summary (what changed during execution) — do not re-type the plan body. If no plan file existed (small-change carve-out, or in-conversation plan only), describe the plan inline as before.
 - **Required sections** in the leaf:
-  1. **Final plan as executed** — the plan you actually ran, including any replanning from `overcome-difficulty`.
+  1. **Final plan as executed** — either a link to `plan_file:` plus a one-paragraph summary of mid-flight changes, or — if there is no plan file — the plan you actually ran, including any replanning from `overcome-difficulty`.
   2. **Difficulties** — each one, the signal that surfaced it, and how it was overcome.
   3. **Artifacts** — links, paths, commands, PR / ticket references.
   4. **Lessons** — what a future similar task should do differently.
@@ -331,6 +334,7 @@ Cite the source where possible (`> verified by: <commit>/<URL>/<conversation>`).
 - Avoid duplicating code. Explore adjacent files, use project search; extend shared abstractions over copy-paste.
 - Prefer clear code over trivial comments. Comments only when the *why* is non-obvious.
 - Use `~/.venv` for Python unless a project memory runbook says otherwise.
+- **Log-reading discipline:** never emit more than 10 lines from one log file per tool call; aggregate first (counts, top-K, time windows), then surface a digest. Details: `~/.claude/memory-global/leaves/log-reading-discipline.md`.
 
 ---
 
