@@ -23,7 +23,7 @@ type: reference
 | Domain runbook pasted into a generic agent prompt or `CLAUDE.md` | Memory leaf (global or project) and link in the plan |
 | Substantive task confirmed-resolved after the first sub-stage only (plan written → "task resolved?") | Re-read the original user message. Resolution = X done, not plan-X done. Ask "first sub-stage accepted?" and continue execution on confirmation. |
 | Misapply "don't fabricate" by **deleting** the field instead of asking for a source | "Don't fabricate" includes "ask or find a source". Removing a required field (estimate, threshold, deadline) is a regression — when the plan format requires it, `CLARIFY:` / ask user instead. |
-| Experience leaf written before the user explicitly confirmed resolution | CLAUDE.md § "On task resolution" — ask in the user's language and wait. `scripts/verify-experience-leaf.py` blocks the Write when the `resolution_confirmed_by_user` frontmatter field is missing. Recovery: confirm with the user, paste their literal quote into the field, retry. |
+| Proceed on an action that depends on a file after a system-reminder said the file changed, without re-reading it | When a `<system-reminder>` reports a file was modified — **Read it before any next action that depends on its prior contents**. Skipping cost a full spawn budget on one occasion (developer child accumulated 48 permission_denials at $3.05 because reverted `settings.local.json` was assumed still patched). |
 
 ## Optional session metric
 
