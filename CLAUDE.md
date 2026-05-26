@@ -93,88 +93,46 @@ A **spawned specialist** is a fresh Claude Code process (`claude -p`) with a spe
 
 #### Spawn template
 
-Use `scripts/spawn-specialist.py` — a wrapper that handles all the *process*
-concerns of spawning (recursion-cap check, budget-tier resolution, permission
-digest embedding, return-marker validation, cost logging). The manager only
-supplies the cognitive inputs.
+Use `scripts/spawn-specialist.py` — it handles process concerns (recursion-cap check, budget-tier resolution, permission digest, return-marker validation, cost log). Run `--help` for the flag list; `--dry-run` previews the assembled prompt and command.
 
-```bash
-scripts/spawn-specialist.py \
-  --kind <specialization> \
-  --plan <path-to-plan.md> \
-  --done-criterion "<concrete criterion>" \
-  --criterion-type {measurable|acceptance-review} \
-  [--constraints "<scope, do-not-touch, deadlines>"] \
-  [--context-dossier <path-to-dossier.md>] \
-  [--budget {small|medium|large}] \
-  [--project-permissions <project>/.claude/agent-memory/permissions.json]
-```
+Cognitive inputs the manager supplies (mechanics are in `--help`):
 
-Replace `<specialization>` with the actual name (`planner` / `developer` /
-`thinker` / `yandex-cloud-expert` / a project-local specialization that exists
-at `~/.claude/skills/<kind>/SKILL.md`).
+- `--kind` — specialization name (must exist at `~/.claude/skills/<kind>/SKILL.md`): `planner` / `developer` / `thinker` / `yandex-cloud-expert` / project-local.
+- `--plan` — markdown plan with the owned step marked `**<<this step>>**`.
+- `--done-criterion` + `--criterion-type` (`measurable` | `acceptance-review`).
+- `--context-dossier` — 5–10 line digest of conversation context the specialist cannot read on its own (intent nuances, rejected options, in-session decisions, terminology aliases). Omit if nothing's missable.
+- `--budget` — see table below.
+- `--project-permissions <project>/.claude/agent-memory/permissions.json` if inside a project tree.
 
-The plan markdown must mark the step the specialist owns with `**<<this step>>**`.
-The dossier file, when used, is a 5–10 line digest of conversation context the
-specialist needs but cannot read on its own (intent nuances, rejected options,
-in-session decisions, terminology aliases). Omit if there is genuinely nothing
-the specialist could miss.
+**Budget tiers** (resolve to `budget-*-usd` in `config.md`):
 
-The wrapper:
-- Increments `AGENT_RECURSION_DEPTH` and verifies the next depth ≤
-  `max-recursion-depth` (refuses with exit 3 otherwise — see § Recursion cap).
-- Resolves `--budget` to the corresponding `budget-*-usd` constant from `~/.claude/config.md`.
-- Embeds the output of `scripts/permissions-cli.py digest` (global + project, if
-  `--project-permissions` is passed) automatically.
-- Spawns `claude -p --output-format json` and forwards the specialist's text
-  result to stdout.
-- Validates the first non-empty line of the result against the known return
-  markers — wraps with `MALFORMED:` if the marker is missing.
-- Appends a JSONL row to `~/.local/log/claude-spawn-costs.jsonl`:
-  `{ts, kind, budget_tier, depth, cost_usd, duration_ms, return_marker, exit_code, malformed}`.
+| Tier | Use for |
+|---|---|
+| `small` | Single-file edit, narrow analysis, short plan refinement |
+| `medium` | Multi-file change with tests, scoped refactor, standard plan — default when in doubt |
+| `large` | Cross-cutting change, multi-stage plan, full feature, expensive research |
 
-`--dry-run` prints the assembled prompt and the underlying command without spawning.
+A specialist that hits its cap returns control with whatever it has.
 
-**Budget tier.** Values resolve to `budget-*-usd` from `~/.claude/config.md`.
+#### Recursion cap
 
-| Tier | Constant | Use for |
-|---|---|---|
-| `small` | `budget-small-usd` | Single-file edit, narrow analysis, short plan refinement |
-| `medium` | `budget-medium-usd` | Multi-file change with tests, typical plan, scoped refactor |
-| `large` | `budget-large-usd` | Cross-cutting change, multi-stage plan, full feature, expensive research |
+`spawn-specialist.py` enforces `max-recursion-depth` (config.md): refuses with exit 3 when the next depth would exceed it. Applies to every `claude -p` invocation, including `overcome-difficulty`'s recursive escape — no exemption.
 
-When in doubt — `medium`. A specialist that hits its cap returns control with whatever it has.
-
-#### Recursion cap (hard)
-
-`scripts/spawn-specialist.py` enforces the cap automatically: it reads
-`AGENT_RECURSION_DEPTH` from the environment, computes `next = current + 1`,
-and refuses to spawn (exit code 3) if `next > max-recursion-depth` from
-`~/.claude/config.md`.
-
-When the wrapper refuses, **do not retry**. Instead:
-
-1. Stop and summarize for the user: the original task, where the chain is now, what the next spawn was intended to do, why the cap was hit.
-2. Ask whether to continue manually, restart with a clean approach, or accept a partial result.
-
-The cap applies to **every** `claude -p` invocation, including `overcome-difficulty`'s recursive escape. There is no "inline" exemption — every specialization invocation spawns and counts.
+On refuse — **do not retry**. Stop, summarize for the user (original task, current chain state, what the next spawn would do, why the cap hit), ask whether to continue manually, restart, or accept partial.
 
 #### Return markers
 
-Each specialist's output starts with exactly one of the markers below. The
-spawn wrapper validates this — if the first non-empty line carries none of
-them, the output is forwarded with a `MALFORMED:` prefix so the manager
-notices and either re-prompts or escalates.
+Each specialist's first non-empty line carries one of these. The wrapper validates and prefixes the output with `MALFORMED:` if the marker is missing.
 
 - `COMPLETED:` — step done; summary + artifacts.
-- `PLAN-READY:` — **planner-only.** A plan is ready and the manager **must** obtain explicit user approval before spawning the next specialist on it. Hard gate — never skip the approval round.
+- `PLAN-READY:` — **planner-only.** Plan ready; manager must obtain explicit user approval before next spawn. Hard gate.
 - `INCOMPLETE:` — partial; what's done, what's left, blocker.
-- `CLARIFY:` — the specialist needs a small, specific answer to continue. Include the question, the options seen (if any), and what work resumes after the answer. The manager answers and re-spawns with the answer embedded in the continuation prompt.
-- `REPLAN:` — the difficulty is plan-level; specialist proposes a revision.
-- `PERMISSION-REQUEST:` — needs explicit permission for a specific external / irreversible action.
-- `ESCALATE:` — other decision the manager must make.
+- `CLARIFY:` — specialist needs one specific fact (path, number, choice between named options) to continue. Manager answers, re-spawns with answer embedded.
+- `REPLAN:` — plan-level difficulty; specialist proposes a revision.
+- `PERMISSION-REQUEST:` — explicit permission needed for a specific external / irreversible action.
+- `ESCALATE:` — other decision (manager or user) affecting plan / scope.
 
-`CLARIFY:` vs `ESCALATE:` — `CLARIFY:` is for a missing **fact** that unblocks one step (a file path, a number, a choice between named options). `ESCALATE:` is for a **decision** that affects the plan or scope. Prefer `CLARIFY:` when the answer is short and work resumes immediately.
+`CLARIFY:` vs `ESCALATE:` — fact vs decision. Prefer `CLARIFY:` when work resumes immediately on the answer.
 
 ### Handling specialist escalations
 
