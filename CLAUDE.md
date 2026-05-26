@@ -120,6 +120,28 @@ A specialist that hits its cap returns control with whatever it has.
 
 On refuse — **do not retry**. Stop, summarize for the user (original task, current chain state, what the next spawn would do, why the cap hit), ask whether to continue manually, restart, or accept partial.
 
+#### Monitoring a running spawn
+
+`spawn-specialist.py` prints `transcript=<path>` to stderr within ~10s — the freshest jsonl under `~/.claude/projects/<sanitized-cwd>/` that didn't exist before the spawn. Tail that file periodically (~5 min cadence for `developer` spawns) to catch divergence: wrong `cwd`, writes/commits outside the assigned mount, off-scope work (e.g. running someone else's smoke test). **Kill early** — one rescoped re-spawn is cheaper than waiting for a runaway to exhaust its cap.
+
+#### After the spawn (kill or completion)
+
+Before deciding the next move (accept, re-spawn, manual takeover), check **both** uncommitted state *and* commit history on the assigned branch:
+
+```bash
+arc status      # uncommitted changes only
+arc log -n 5    # whether the spawn committed on-scope work before drifting
+```
+
+(git equivalents in non-arc repos.) A spawn killed for off-scope behavior may still have committed legitimate on-scope work before drifting — `status` is clean, but `log` shows the commit. Skipping `log` has cost a redundant verification spawn in one observed case.
+
+#### `bypassPermissions` for `developer`
+
+The wrapper defaults `kind=developer` to `--permission-mode bypassPermissions` so the child can perform unattended Read / Grep / Write on the assigned mount. The harness no longer prompts on individual writes — that safety is replaced by **prompt-level discipline**:
+
+- The `--constraints` / dossier **must** contain an explicit hard-deny list — no `cd` / no Write / no Edit / no `arc commit` outside `<assigned-mount>`, no `ya package` / `docker push` / smoke tests of other tickets — plus a self-check at session start (`pwd` ⊆ expected mount; if not, return `CLARIFY:`).
+- Without this discipline the child treats sibling mounts (referenced as "analogs") as fair game for "understanding through execution".
+
 #### Return markers
 
 Each specialist's first non-empty line carries one of these. The wrapper validates and prefixes the output with `MALFORMED:` if the marker is missing.
