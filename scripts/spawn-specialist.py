@@ -193,6 +193,29 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _discover_transcript_path(after_wall_time: float, timeout: float = 10.0) -> Path | None:
+    """Find the freshest `~/.claude/projects/**/*.jsonl` whose mtime is after
+    `after_wall_time`. Polls every 0.5s up to `timeout` seconds. Returns the
+    Path or None if nothing appears in time."""
+    root = Path.home() / ".claude" / "projects"
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        candidates: list[tuple[float, Path]] = []
+        if root.is_dir():
+            for p in root.rglob("*.jsonl"):
+                try:
+                    mtime = p.stat().st_mtime
+                except OSError:
+                    continue
+                if mtime > after_wall_time:
+                    candidates.append((mtime, p))
+        if candidates:
+            candidates.sort(reverse=True)
+            return candidates[0][1]
+        time.sleep(0.5)
+    return None
+
+
 def resolve_permission_mode(args: argparse.Namespace) -> str | None:
     """Pick the permission mode passed to `claude -p`.
 
@@ -270,7 +293,22 @@ def main(argv: list[str] | None = None) -> int:
 
     env = {**os.environ, "AGENT_RECURSION_DEPTH": str(depth_next)}
     started = time.monotonic()
-    completed = subprocess.run(cmd, env=env, capture_output=True, text=True, check=False)
+    started_wall = time.time()
+
+    # Use Popen so we can print the child's transcript path to stderr early —
+    # the parent (manager) can then tail it for monitoring while we block on
+    # the child's final JSON output. The transcript jsonl appears under
+    # ~/.claude/projects/<sanitized-cwd>/<session-id>.jsonl shortly after
+    # claude warms up; we locate it by mtime > spawn-start.
+    proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    transcript_path = _discover_transcript_path(started_wall, timeout=10.0)
+    if transcript_path is not None:
+        print(f"spawn-specialist: transcript={transcript_path}", file=sys.stderr, flush=True)
+    else:
+        print("spawn-specialist: transcript=<not-found-within-10s>", file=sys.stderr, flush=True)
+
+    stdout_str, stderr_str = proc.communicate()
+    completed = subprocess.CompletedProcess(args=cmd, returncode=proc.returncode, stdout=stdout_str, stderr=stderr_str)
     duration_ms = int((time.monotonic() - started) * 1000)
 
     cost_usd: float | None = None
