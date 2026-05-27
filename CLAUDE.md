@@ -249,7 +249,7 @@ If none — do not record. Memory bloat is worse than memory gap. The git log + 
   2. **Difficulties** — each one, the signal that surfaced it, and how it was overcome.
   3. **Artifacts** — links, paths, commands, PR / ticket references.
   4. **Lessons** — what a future similar task should do differently.
-  5. **Self-critique of the agent system** — concrete friction observed while resolving this task: missing affordance in `CLAUDE.md` / skill / memory / tools / hooks, stale guidance, awkward delegation, wrong default. Vague "could be better" is noise — name file, section, or behavior.
+  5. **Self-critique of the agent system** — concrete friction observed while resolving this task: missing affordance in `CLAUDE.md` / skill / memory / tools / hooks, stale guidance, awkward delegation, wrong default. Vague "could be better" is noise — name file, section, or behavior. **Then scan recent experience leaves** via the `experience/MEMORY.md` sub-index: if the same friction appears across ≥2 prior leaves, or hit ≥2 times in this task, you have a divergence between the agent-system *plan* (instructions/memory/skills/hooks) and its *actual* behavior — invoke `Skill(overcome-difficulty)`, where the plan is the agent system itself, and the replanning task is an **architectural improvement** (new memory node, new trigger leaf, new hook, structural refactor — not just a rule tweak in an existing file). Full discipline: [systemic-pattern-scan.md](memory-global/leaves/systemic-pattern-scan.md).
   6. **Cost & effort** — measured / estimated cost; the totals should reconcile with the plan's per-stage `Actual effort:` entries (the breakdown of *where* cost went, filled in by the manager as stages completed):
      - $ spent on `claude -p` spawns over the task window (`scripts/cost-report.py --since <task-start-date>`).
      - Wall-clock duration (first turn → resolution).
@@ -260,7 +260,7 @@ These leaves are your durable **experience** — reusable knowledge across sessi
 
 #### Auto-trigger self-improvement from the self-critique
 
-If § **Self-critique** names any concrete agent-system friction, **invoke the `self-improvement` skill in the same turn** (after writing the leaf, before the final user reply). The leaf's self-critique is the input signal — treat it exactly as if the user had said "and that was annoying because X, fix it". This is how experience translates into actual instruction changes instead of accumulating as dead text.
+If § **Self-critique** names any concrete agent-system friction, **invoke the `self-improvement` skill in the same turn** (after writing the leaf, before the final user reply). The leaf's self-critique is the input signal — treat it exactly as if the user had said "and that was annoying because X, fix it". This is how experience translates into actual instruction changes instead of accumulating as dead text. **For systemic patterns** (friction recurring across leaves), invoke `overcome-difficulty` first against the agent-system-as-plan; its replanning task is the architectural proposal that `self-improvement` then writes — see [systemic-pattern-scan.md](memory-global/leaves/systemic-pattern-scan.md).
 
 Skip the leaf entirely for trivial Q&A turns and one-line tasks. The whole rule applies only to substantive work where you planned, delegated, or hit a difficulty.
 

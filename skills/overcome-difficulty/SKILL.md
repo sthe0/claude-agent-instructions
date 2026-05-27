@@ -14,6 +14,8 @@ A **difficulty** is a divergence between reality and the plan. Two forms qualify
 
 Surface signals (verification failed, blocker, repeated error, surprising output, plan mismatch, two or more process corrections in a row, long shell loops without progress, "I don't even know how to tell if this worked") are all manifestations of one of these two underlying forms.
 
+**The plan can be the task plan or the agent system itself.** Instructions (`CLAUDE.md`, memory, skills, hooks) are the persistent multi-session plan you work by; the same Expected/Actual/Mismatch frame applies when behavior across sessions diverges from what the instructions intended. See `memory-global/leaves/systemic-pattern-scan.md` for the resolution-time entry point that surfaces these.
+
 ## What this skill does
 
 You are invoking this skill because either of the above happened. Work through three phases in order: **declaration**, **investigation**, **critique**. At the end, hand a concrete replanning task back to yourself — you are the root coordinator — and resume the original user task on the corrected plan.
