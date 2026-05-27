@@ -93,6 +93,10 @@ For these: state the diff (was → now → why), present via `AskUserQuestion` (
 - **Quietly expanding scope** ("while I was at it I also fixed X in the adjacent file"). § 5 violation — silent substantive change. Ask first, even if the side change feels obviously beneficial.
 - **Treating "refinement" as cover for substantive change.** Adding a file to `Reference files` is substantive (§ 5), not refinement, even though it looks like "just an addition".
 
+## Policy ↔ settings.json alignment
+
+The carve-outs in § 1 are **policy**; the **harness** only honors them when the matching patterns are present in `~/.claude/settings.json` `permissions.allow`. If you see permission prompts for items § 1 calls side-effect-free (`ls`, `head`, `cat`, `find`, `wc`, `grep`, `git status`, `arc log`, etc.), the policy is current but the settings haven't caught up — add the patterns. Maintain global read-only Bash idioms in **global** settings.json (cross-machine, cross-project), and project-specific Edit/Write paths in `<cwd>/.claude/settings.local.json`. Audit habit: `Skill(skill="fewer-permission-prompts")` after a click-heavy session.
+
 ## See also
 
 - `~/.claude/CLAUDE.md` § Acting without asking — the short pointer that loads this leaf.
