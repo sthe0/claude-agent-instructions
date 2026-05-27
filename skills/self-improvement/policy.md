@@ -1,6 +1,6 @@
 # Self-improvement policy
 
-Mandatory rules for every edit to `~/claude-agent-instructions/`. Four areas: process-as-code, instruction language, file structure, git sync.
+Mandatory rules for every edit to `~/claude-agent-instructions/`. Five areas: process-as-code, cache-aware editing, instruction language, file structure, git sync.
 
 ---
 
@@ -58,6 +58,34 @@ imagined future failure rather than an observed one.
   justified up front only when (a) a single failure is unrecoverable,
   (b) the failure mode has already been observed, or (c) the mechanism
   is a thin wrapper around something already needed.
+
+---
+
+## Cache-aware editing
+
+Anthropic prompt caching is **strict-prefix**: any byte change in a file that sits in the cached prompt prefix forces `cache_create` on every byte that follows. Observed cost in the 2026-05-27 deepagent sessions was 1.5M–2.8M `cache_create` tokens per long session, traced largely to mid-task edits of `CLAUDE.md` and `MEMORY.md`. See [token-economy-plan.md](../../memory-global/leaves/token-economy-plan.md).
+
+### Files that count as the cached prefix
+
+These load into every session's prompt; any mid-session edit invalidates downstream cache:
+
+- `~/.claude/CLAUDE.md`
+- `~/.claude/config.md`
+- `~/.claude/memory-global/MEMORY.md` (auto-imported by `CLAUDE.md`)
+- `<project>/.claude/CLAUDE.md` (project)
+- `<project>/.claude/agent-memory/MEMORY.md` (auto-loaded via the per-project memory symlink)
+- This `policy.md` and the `SKILL.md` files in `skills/<name>/` are loaded only when the skill triggers — but skill **catalog** lines (frontmatter `description`) are in every session's system reminder, so edits to frontmatter are prefix-invalidating.
+
+Leaves under `memory-global/leaves/**` (other than the sub-index `MEMORY.md` files) are loaded on demand and **do not** invalidate the prefix when edited.
+
+### Rule
+
+- **Prefer end-of-task** for any edit to a cached-prefix file. The two-turn workflow already biases toward this: turn 1 = proposal, turn 2 = apply after user confirmation. Land the user-confirmed edit at the close of the task, not in the middle.
+- **If the edit must happen mid-task** (a blocking rule the active task itself depends on), batch all related cached-prefix edits into a single `Edit`/`Write` burst so the cache is invalidated at most once, not per change.
+- **Leaf-first when possible.** If the proposed change is content that does not have to live in the prefix, write it as a leaf under `memory-global/leaves/**` and update only the one pointer line in the relevant `MEMORY.md` index. The pointer line is small; the leaf body lives off the cached prefix.
+- **Volatile content goes to the bottom of `MEMORY.md` indices.** When a `MEMORY.md` mixes stable runbook pointers with volatile pointers (session checkpoints, in-progress tickets), put the volatile section at the end so its frequent edits don't force re-create of the stable section.
+
+This rule is **process discipline**, not a verifier check — placement of "volatile" is judgement-based and not worth coding. The token-economy plan tracks observed regressions and lands new items here.
 
 ---
 
@@ -168,6 +196,9 @@ scripts/
   cost-report.py                       # aggregate spawn cost log
   tool-usage-report.py                 # aggregate Skill / Agent / spawn invocations per task — feeds experience leaf § Cost, effort, and tool usage
   memory-audit.py                      # informational memory leaves audit
+  skill-usage-audit.py                 # informational: which user-invocable skills are actually invoked vs only catalog-loaded (see memory-global/leaves/skill-catalog-curation.md)
+  offload-large.sh                     # pipe-through wrapper for Bash outputs > N bytes → /tmp/cc-scratch/ + head+tail digest (see memory-global/leaves/large-tool-output-discipline.md)
+  session-start-digest.sh              # bootstrap aggregator: cwd + arc/git state + agent-memory listing in one call (replaces 4–5 separate startup Bash calls)
   sync-instructions-repo.sh
   install-git-hooks.sh
   install-sync-cron.sh

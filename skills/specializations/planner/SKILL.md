@@ -165,6 +165,12 @@ Optional `##` sections (add when the task warrants them; not enforced by `verify
 
 For each stage that calls for a specialist (developer, thinker, yandex-cloud-expert, …), the manager will spawn that specialization as a separate `claude -p` process — your plan only names which specialization is needed, not how to spawn it.
 
+### Large plans — split into index + per-stage files
+
+For plans expected to exceed ~20 KB or ~600 lines, or with > 3 stages that will each accrue `Actual effort:` updates as work progresses, split into an index file plus per-stage files. The index keeps the four required `##` sections (so `verify-plan-file.py` passes); each stage's detailed `Output` / `Expected result image` / `Actual effort` moves into its own file under `~/.claude/plans/<slug>-stage-<N>-<short>.md`. Subsequent Read calls then pull only the active stage instead of the whole plan. Layout and exact section template: [plan-file-split.md](../../../memory-global/leaves/plan-file-split.md).
+
+Default single-file behaviour stands for shorter plans — splitting overhead is not worth it for ≤ 3 stages or < 10 KB.
+
 ### Tool guidance
 
 You inherit the manager's full toolset. For planning work, prefer **read-only** discovery (`Read`, `Grep`, `Glob`, `WebSearch`, `WebFetch`, intrasearch, wiki MCP, tracker MCP). The only `Write` you should perform during planning is writing the plan markdown file itself.
