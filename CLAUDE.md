@@ -310,7 +310,7 @@ You have three memory scopes. Pick by **purpose**, not by convenience.
 | **Global engineering** | `~/.claude/memory-global/MEMORY.md` + `leaves/` + `leaves/experience/` + `leaves/system-knowledge/` | Cross-project engineering patterns, reasoning practices, runbooks, retrospectives, granted-permissions. English, structured. Imported into every session via the line at the end of this file. |
 | **Project (local)** | `<project_cwd>/.claude/agent-memory/MEMORY.md` + leaves + `experience/` + `system-knowledge/` | Project-specific runbooks — product pipelines, ticket detail, repo conventions, prod naming. English. Shared via the project's git. |
 
-All three follow the same file shape: `MEMORY.md` as a short index, detail in leaf files, frontmatter `name` / `description` / `type` (`user` / `feedback` / `project` / `reference`).
+All three follow the same file shape: `MEMORY.md` as a short index, detail in leaf files, frontmatter `name` / `description` / `type` (`user` / `feedback` / `project` / `reference`). Spin off `<subdir>/MEMORY.md` sub-indexes for monotonic (`experience/`, retrospectives) or domain-coherent (`system-knowledge/`) content — full principle in [memory-hierarchy.md](memory-global/leaves/memory-hierarchy.md).
 
 If a fact qualifies for two scopes, write it to the **most specific** one. Duplicate content across scopes is a maintenance hazard — pick one and reference it from the other if a pointer is needed.
 

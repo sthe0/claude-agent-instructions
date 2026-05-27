@@ -19,6 +19,7 @@ Loaded into every session via `@~/.claude/memory-global/MEMORY.md` import in `CL
 - [Acting without asking](leaves/acting-without-asking.md) — side-effect-free actions and plan-scope-declared changes are pre-authorized; 1-lookup budget for unknown tools; substantive plan changes still require approval.
 - [Code comment discipline](leaves/code-comment-discipline.md) — default no comments; comment only when the *why* is non-obvious; build / config files (`ya.make`, `Dockerfile`, …) are not exceptions; concrete antipatterns from DEEPAGENT-414 PR review.
 - [Skill-first dispatch](leaves/skill-first-dispatch.md) — scan the system-reminder skill list before hand-rolling Bash for known domain ops; class-of-operation → skill-family table; `fewer-permission-prompts` as the audit habit.
+- [Memory hierarchy](leaves/memory-hierarchy.md) — when to spin off `<subdir>/MEMORY.md` sub-indexes (monotonic / domain-coherent / display pressure); mechanics, anti-patterns, retire procedure.
 
 ## Tooling and mechanics
 
@@ -29,13 +30,12 @@ Workflow-level permissions (separate from memory): `~/claude-agent-instructions/
 
 ## System knowledge
 
-Durable facts about systems, processes, organizational structure, and codebase architecture. Leaves live in `leaves/system-knowledge/`. Recording criteria in `~/.claude/CLAUDE.md` § Memory § `system-knowledge/` leaves.
+- [System-knowledge sub-index](leaves/system-knowledge/MEMORY.md) — durable facts about systems, processes, org structure, codebase architecture that aren't self-evident; recording criteria in `~/.claude/CLAUDE.md` § Memory.
 
-<!-- Add one-line pointers to leaf files as system knowledge accumulates. -->
+## Resolved-task experience
 
-## Recent retrospectives
+- [Experience sub-index](leaves/experience/MEMORY.md) — chronological log of resolved-task experience leaves (one per non-trivial task — final plan, difficulties, artifacts, lessons, self-critique, cost).
+
+## Period retrospectives
 
 - [Session retrospective 2026-05](leaves/session-retrospective-2026-05.md) — period summary, top mistakes, ticket startup checklist, self-check gates.
-- [Coordination machinery refactor 2026-05-24](leaves/experience/2026-05-24-coordination-refactor.md) — added task-weight triage / CLARIFY / PLAN-READY / depth cap / two-turn self-improvement / `config.md` for constants; two rounds of silent-architectural-decision corrections; lessons on consequence-of-change being a change, "config" meaning a separate file, `rg`-sweep before commit.
-- [Code-driven enforcement arc 2026-05-25](leaves/experience/2026-05-25-code-driven-enforcement-arc.md) — nine-iteration build-out of `verify-*` scripts, hooks, structured permissions, spawn wrapper, cost log + three rule additions; lessons on process-as-code pacing, verify-script ROI, JSON-over-YAML for stdlib portability, missed-leaf-at-resolution as a recurring failure mode.
-- [Soft-control hooks arc 2026-05-26](leaves/experience/2026-05-26-soft-control-hooks-arc.md) — frontmatter sentinel + CLAUDE.md token-trim + 3 soft-control hooks (self-critique / tracker / push reminders) + 1 rejected proposal (hard cap on memory); lessons on warn-vs-block trade-off and the instruction-surfaces-vs-content-stores distinction.

@@ -39,7 +39,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-EXPERIENCE_PATH_RE = re.compile(r"(^|/)experience/[^/]+\.md$")
+EXPERIENCE_PATH_RE = re.compile(r"(^|/)experience/(?!MEMORY\.md$)[^/]+\.md$")
 FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 FIELD_RE = re.compile(
     r"^resolution_confirmed_by_user\s*:\s*(.*?)\s*$", re.MULTILINE
