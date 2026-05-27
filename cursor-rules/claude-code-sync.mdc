@@ -101,7 +101,7 @@ Close the loop **proactively** when all plan stages have passed their `Expected 
 
 **Quality bar.** Record only if a future you would actually want to **read** the leaf before a similar task: non-obvious choice, reusable difficulty resolution, missing tool / memory / instruction discovered, or ≥ 5 min of rediscovery saved. Otherwise skip — memory bloat is worse than memory gap.
 
-**Required sections** in a leaf: (1) final plan as executed, (2) difficulties + how overcome, (3) artifacts, (4) lessons, (5) **self-critique of the agent system** (concrete friction observed — file / section / behavior, no vague "could be better"), (6) **cost & effort** ($ spent on spawns, wall-clock duration, count of user interventions — see `scripts/cost-report.py`).
+**Required sections** in a leaf: (1) final plan as executed, (2) difficulties + how overcome, (3) artifacts, (4) lessons, (5) **self-critique of the agent system** (concrete friction observed — file / section / behavior, no vague "could be better"), (6) **cost, effort, and tool usage** ($ spent on spawns + wall-clock + user interventions via `scripts/cost-report.py`; specializations / skills / `Task` invocations as `name | count | purpose` table via `scripts/tool-usage-report.py`).
 
 **Required frontmatter field**: `resolution_confirmed_by_user: "<user's literal confirmation quote>"`. In Claude Code, `scripts/verify-experience-leaf.py` blocks the `Write` tool call when this field is missing (PreToolUse hook). Cursor and other environments lack the hook — apply the rule manually; the pre-commit hook on the instructions repo catches it for committed leaves.
 

@@ -250,11 +250,10 @@ If none — do not record. Memory bloat is worse than memory gap. The git log + 
   3. **Artifacts** — links, paths, commands, PR / ticket references.
   4. **Lessons** — what a future similar task should do differently.
   5. **Self-critique of the agent system** — concrete friction observed while resolving this task: missing affordance in `CLAUDE.md` / skill / memory / tools / hooks, stale guidance, awkward delegation, wrong default. Vague "could be better" is noise — name file, section, or behavior. **Then scan recent experience leaves** via the `experience/MEMORY.md` sub-index: if the same friction appears across ≥2 prior leaves, or hit ≥2 times in this task, you have a divergence between the agent-system *plan* (instructions/memory/skills/hooks) and its *actual* behavior — invoke `Skill(overcome-difficulty)`, where the plan is the agent system itself, and the replanning task is an **architectural improvement** (new memory node, new trigger leaf, new hook, structural refactor — not just a rule tweak in an existing file). Full discipline: [systemic-pattern-scan.md](memory-global/leaves/systemic-pattern-scan.md).
-  6. **Cost & effort** — measured / estimated cost; the totals should reconcile with the plan's per-stage `Actual effort:` entries (the breakdown of *where* cost went, filled in by the manager as stages completed):
-     - $ spent on `claude -p` spawns over the task window (`scripts/cost-report.py --since <task-start-date>`).
-     - Wall-clock duration (first turn → resolution).
-     - User interventions — corrections, re-prompts, clarifications beyond the initial brief.
-     - **Resources that drove cost** — pick 1–3 entries from the plan's `## Required resources` (if present) whose use generated the most cost or surprise. Lets a future similar task estimate those resources up-front.
+  6. **Cost, effort, and tool usage** — analytics about how the task was solved; reconcile with the plan's per-stage `Actual effort:`:
+     - $ on `claude -p` spawns + wall-clock (first turn → resolution) + user interventions count (`scripts/cost-report.py --since <task-start>`).
+     - **Specializations and skills usage** — every specialization spawn and `Skill` / `Task` invocation: `name | count | one-line purpose`. Source: `scripts/tool-usage-report.py --since <task-start>`. Detail: [specialization-skill-usage-tracking.md](memory-global/leaves/specialization-skill-usage-tracking.md).
+     - **Resources that drove cost** — pick 1–3 entries from the plan's `## Required resources` whose use generated the most cost or surprise.
 
 These leaves are your durable **experience** — reusable knowledge across sessions. Read the relevant memory index before starting a new task that pattern-matches past work.
 

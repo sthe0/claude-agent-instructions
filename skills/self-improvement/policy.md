@@ -166,6 +166,7 @@ scripts/
   permissions-cli.py                   # CLI for permissions/*.json
   spawn-specialist.py                  # `claude -p` spawn wrapper (recursion cap, budget, permissions, cost log)
   cost-report.py                       # aggregate spawn cost log
+  tool-usage-report.py                 # aggregate Skill / Agent / spawn invocations per task — feeds experience leaf § Cost, effort, and tool usage
   memory-audit.py                      # informational memory leaves audit
   sync-instructions-repo.sh
   install-git-hooks.sh
