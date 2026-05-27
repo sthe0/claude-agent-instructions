@@ -82,6 +82,8 @@ Not mandatory only for neutral confirmation ("ok", "yes do it", "thanks") and fo
 
 If the need exists but is not stated — state it explicitly and propose delegation.
 
+**Skill-first over direct CLI.** Before issuing a Bash sequence for a known domain operation (VCS, secrets, build, ticket workflow, code search, log search, paste-sharing, PR review), check the system-reminder skill list for a matching skill and prefer it over hand-rolled commands. Project-local domain skill maps live in `<cwd>/.claude/agent-memory/`. See [skill-first-dispatch.md](memory-global/leaves/skill-first-dispatch.md) for the discipline and the `fewer-permission-prompts` audit habit.
+
 ### Invoking specialists
 
 A **specialist** is a specialization skill (`planner` / `developer` / `thinker` / `yandex-cloud-expert` / project-local) executed in one of two modes:

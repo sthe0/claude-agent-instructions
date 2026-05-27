@@ -1,0 +1,49 @@
+---
+name: skill_first_dispatch
+description: Discipline for picking a skill before hand-rolling Bash for known domain operations — and the fewer-permission-prompts audit habit
+type: feedback
+---
+
+Before issuing a `Bash` sequence for a **known domain operation**, scan the system-reminder skill list for a matching skill and prefer it over raw CLI. The Skill tool is the cheaper, more auditable path; raw CLI is the fallback.
+
+**Why:** Audit of 9 recent transcripts in `robot/deepagent` (2026-05-27): 7 Skill invocations, **0 Agent invocations**, 482 Bash calls. Out of ~100 available skills, only 3 unique skills were used. Hand-rolled `arc add/commit/push`, `ya vault`, `arc grep`, manual Tracker REST PATCH, manual PR creation — all had matching skills in the system-reminder list that I never opened. The skill descriptions are there at session start, but **passive listing is not a trigger** — without active scanning I default to whatever Bash command came to mind first.
+
+**How to apply:**
+
+When you're about to issue Bash for any of these *classes* of operation, **pause and check the skill list** for a match before composing the command:
+
+| Operation class | Look for skills like |
+|---|---|
+| VCS in Arcadia (commit / push / branch / PR-related) | `arc`, `arc-worktrees`, `arc-wt`, `create-pr` |
+| PR review / Arcanum API (comments, checks, labels) | `arcanum`, `arcanum-client`, `code-review`, `review`, `self-review`, `security-review` |
+| CI / releases / Sandbox | `ci`, `ci-releases`, `ci-jobs-logs`, `arcci-client`, `sandbox`, `sandbox-client` |
+| Secrets / vault | `ya-vault` |
+| Tickets / tracker / search | `tracker`, `tracker-management`, `startrek-client`, `intrasearch`, `intrasearch-client` |
+| Code search in monorepo | `codesearch`, `ast-index` (Arcadia-aware, faster than recursive grep on the mount) |
+| YT / YQL / analytics | `yt`, `yql`, `yql-analyst`, `ya-yql`, `chyt`, `datacatalog` |
+| Nirvana / Reactor / Hitman / VH3 workflows | `nirvana`, `nirvana-skill`, `reactor`, `hitman-migration` |
+| Backend logs / alerts | `monium`, `monium-client`, `monium-alerts`, `monium-metrics`, `juggler`, `jns` |
+| Wiki / docs / pasta | `wiki`, `wiki-client`, `docs`, `docs-client`, `paste` |
+| Roles / access / org | `idm`, `abc`, `abc-client`, `abcd-quota`, `staff-client`, `yandex-staff` |
+| Forms / surveys / crowd labeling | `create-yandex-form-json`, plus see project memory for Yang/Toloka |
+| App run / verify | `run`, `verify` |
+| Diff simplification | `simplify` |
+
+The Skill tool path is **single-call**: `Skill(skill="<name>", args="...")`. If the skill name has a plugin namespace, use `plugin:skill` form.
+
+**fewer-permission-prompts audit habit.** Once per multi-session domain (or whenever the session feels click-heavy), run:
+
+```
+Skill(skill="fewer-permission-prompts")
+```
+
+It scans recent transcripts for common read-only Bash and MCP calls and emits an allowlist for `.claude/settings.json`. This is the **automated** version of the manual audit I did on 2026-05-27 for `robot/deepagent` — don't re-do that by hand next time.
+
+**When NOT to use a skill:**
+- Trivial one-off shell ops (`ls`, `cat`, `mkdir`) with no domain semantics.
+- Operations the skill explicitly cannot do (see its SKILL.md scope/limits).
+- When the skill is broken / outdated and a fix would take longer than the raw command.
+
+**Domain-specific dispatch tables** belong in project memory, not here — `<cwd>/.claude/agent-memory/` is the right place to enumerate which exact skill maps to which exact operation in that project's context. This leaf is the cross-project discipline only.
+
+Related: [[coordinator_pitfalls]] (same shape: tool exists, not invoked).
