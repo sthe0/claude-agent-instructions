@@ -77,7 +77,9 @@ When triggered → read `~/.claude/skills/overcome-difficulty/SKILL.md` and work
 
 **SKIP** for neutral confirmation ("ok", "thanks", "yes do it") and for pure questions without evaluation of your actions.
 
-When triggered → read `~/.claude/skills/self-improvement/SKILL.md` (and `policy.md` for instruction-language / file-structure / git-sync rules) and follow them in the **same turn** as the trigger, before the final reply.
+When triggered → read `~/.claude/skills/self-improvement/SKILL.md` (and `policy.md` for process-as-code / cache-aware editing / instruction-language / file-structure / git-sync rules) and follow them in the **same turn** as the trigger, before the final reply.
+
+**Cache-aware editing** (per policy.md): edits to cached-prefix files — `CLAUDE.md`, `config.md`, `memory-global/MEMORY.md`, project `CLAUDE.md`, project `agent-memory/MEMORY.md`, skill frontmatter — invalidate the whole downstream prompt cache. Prefer end-of-task; batch related edits; write to leaves and update only the pointer line in the relevant `MEMORY.md` index when possible.
 
 ### `tracker-management`
 
