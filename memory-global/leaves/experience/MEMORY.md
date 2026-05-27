@@ -8,6 +8,7 @@ Most recent first.
 
 ## 2026-05
 
+- [2026-05-27 — Architectural sweep](2026-05-27-architectural-sweep.md) — session-long DEEPAGENT audit produced 5 architectural improvements (allow-list parity, project-memory trigger leaves, skill-first dispatch, memory hierarchy, systemic-pattern-scan discipline) converging on "capability exists, trigger does not fire" meta-pattern. 9 commits across 2 VCSs.
 - [2026-05-26 — Soft-control hooks arc](2026-05-26-soft-control-hooks-arc.md) — frontmatter sentinel + CLAUDE.md token-trim + 3 soft-control hooks (self-critique / tracker / push reminders) + 1 rejected proposal (hard cap on memory); lessons on warn-vs-block trade-off and the instruction-surfaces-vs-content-stores distinction.
 - [2026-05-26 — Plan ↔ verify loop](2026-05-26-plan-verify-loop.md) — recurring mismatch between stage `Expected result image:` and actual outcome; tightened the verify cycle in CLAUDE.md.
 - [2026-05-25 — Code-driven enforcement arc](2026-05-25-code-driven-enforcement-arc.md) — nine-iteration build-out of `verify-*` scripts, hooks, structured permissions, spawn wrapper, cost log + three rule additions; lessons on process-as-code pacing, verify-script ROI, JSON-over-YAML for stdlib portability, missed-leaf-at-resolution as a recurring failure mode.
