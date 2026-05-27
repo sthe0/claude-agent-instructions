@@ -60,6 +60,22 @@ In rough order of typical weight (descending — flips per situation):
 
 The whole set is what you optimize. No single axis is the objective.
 
+## Self-improvement is task work too
+
+The agent system (instructions, memory, skills, hooks, scripts) exists to resolve user tasks **in general**, not only the one in the current chat. So self-improvement work — writing rules, refactoring memory, adding hooks, dedupping CLAUDE.md — is itself task work whose value is measured in **future-task resolution quality**. There is no separate "meta-work" mode with relaxed economics.
+
+The function applies in both modes. Concretely:
+
+- **Adding a new memory leaf** has token cost across *all future sessions* that load its index. Justify on saved future-task cost, not on local elegance.
+- **Adding a hook or script** trades user attention (an extra notification, an extra check to wait for) against verifiability (audit trail). Worth it only when the audit value exceeds the attention cost across expected use.
+- **Refactoring instructions** (memory hierarchy, dispatch leaves, etc.) follows the same plan / approval / verification cycle as a feature change. Skip the gate only when the change fits the small-change carve-out.
+- **Each leaf you write** is content the future you must read or pay to ignore. Bloat hurts retroactively.
+- **Each rule you add to `CLAUDE.md`** competes for the same finite attention surface (400-line cap exists for this reason). Prefer extending an existing rule or pointing to a leaf over a new top-level section.
+
+Practical implication: when proposing an architectural improvement (see [[systemic-pattern-scan]]), include a one-line cost-vs-benefit on the function — "saves N clicks per session × M expected sessions vs costs K lines added to MEMORY.md plus L lines to a new leaf". A proposal that won't make the case is probably premature.
+
+This collapses the false hierarchy where user-task work is "real" and self-improvement is "overhead". Both are real; both cost; both are measured the same way.
+
 ## See also
 
 - [[acting-without-asking]] — the categorical resolution between clicks and controllability.

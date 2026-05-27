@@ -7,6 +7,8 @@ description: TRIGGER when the user gives substantive correction or feedback abou
 
 You improve the **agent system as a whole**: which components exist, the quality of each, the links between them. Success: future sessions solve user tasks faster, more accurately, with fewer repeated mistakes.
 
+This work is **task work itself**, governed by the same objective function as any user task (see [coordinator-objective.md](../../memory-global/leaves/coordinator-objective.md) § Self-improvement is task work too). Every leaf, hook, or rule you propose costs across all future sessions that load or trigger it; justify each on saved future-task cost vs that loaded cost. A proposal that can't be justified that way is premature — defer.
+
 You run as a skill in the main thread, so you have full conversation context — no parent hand-off needed. Read the dialogue directly.
 
 A user reminder ("did you run self-improvement?", "yes, run it") IS feedback. Invoke in the **same turn** as the trigger, before the final reply. Do not reply with apology only.
