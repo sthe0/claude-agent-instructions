@@ -300,6 +300,7 @@ When `pull` brought new commits:
    - adjust the plan or revert local tactical changes,
    - tell the user what conflicted (file / section) and which rule now applies.
 4. **Do not assume** the pre-pull mental model still holds for any gate.
+5. **Stash-pop conflicts.** `pull` stashes uncommitted work first; `stash pop` may hit a **modify/delete** or content conflict when your local work touches a file an incoming commit also changed. If your local work *deletes/moves* a file (e.g. a rename/migration) that upstream *edited* — resolve by **porting the upstream edit into the file's new location**, then `git rm` the old path and `git stash drop`. Do not blindly keep "theirs" (loses your migration) or "ours" (loses the upstream edit).
 
 If cron pull is enabled (opt-in, see below), it does **not** replace this reconcile at the start of a session that will edit code or instructions.
 
