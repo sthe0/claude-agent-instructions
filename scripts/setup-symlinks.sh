@@ -135,9 +135,13 @@ for entry in "$HOME/.claude/agents/"*.md; do
   fi
 done
 
-chmod +x "$REPO/scripts/verify-instructions-sync.sh" "$REPO/scripts/verify-layout-contract.sh" "$REPO/scripts/setup-project-memory.sh" "$REPO/cursor/scripts/install-cursor-links.sh" "$REPO/cursor/scripts/link-project-cursor-agents.sh" "$REPO/cursor/scripts/migrate-cursor-namespace.sh"
+chmod +x "$REPO/scripts/verify-instructions-sync.sh" "$REPO/scripts/verify-layout-contract.sh" "$REPO/scripts/setup-project-memory.sh" "$REPO/scripts/apply-settings.sh" "$REPO/cursor/scripts/install-cursor-links.sh" "$REPO/cursor/scripts/link-project-cursor-agents.sh" "$REPO/cursor/scripts/migrate-cursor-namespace.sh"
 
 "$REPO/cursor/scripts/install-cursor-links.sh"
+
+# Merge versioned policy permissions (read-only allowlist + env) into the
+# machine-local ~/.claude/settings.json; machine-specific keys are preserved.
+"$REPO/scripts/apply-settings.sh"
 
 "$REPO/scripts/install-git-hooks.sh"
 "$REPO/scripts/verify-layout-contract.sh" 2>/dev/null || true

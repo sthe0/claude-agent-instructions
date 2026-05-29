@@ -273,7 +273,7 @@ Ask when: several equivalent strategies and the choice affects timeline or risk;
 
 Carve-outs that minimize per-action confirmation:
 
-1. **Side-effect-free actions pre-authorized** — `Read` / `Grep` / `Glob`, web / wiki / docs / code search, `--help`, `--dry-run`, MCP `get_*` / `list_*` / `search_*` / `describe_*`. No ask, plan or no plan.
+1. **Side-effect-free actions pre-authorized** — `Read` / `Grep` / `Glob`, web / wiki / docs / code search, `--help`, `--dry-run`, MCP `get_*` / `list_*` / `search_*` / `describe_*`. No ask, plan or no plan. The mechanical allowlist that suppresses the harness prompt for this class lives in versioned `settings/base.json` (read-only entries only, enforced by `scripts/lint-settings-base.py`) and is merged into each machine's `~/.claude/settings.json` by `setup-symlinks.sh` (via `apply-settings.sh`) — machine-specific paths and ephemeral grants stay local.
 2. **Plan-scope-declared actions pre-authorized after plan approval** — anything the approved plan declares (files in `Reference files`, artifacts in `Stages.Output`, declared VCS ops, named external calls) proceeds without re-asking per action.
 3. **Unknown tool side-effect class:** budget **1 lookup** (`--help` / `ToolSearch select:<name>` / `Read` SKILL.md). If still unclear → `PERMISSION-REQUEST:`; do not burn additional lookups.
 
