@@ -8,6 +8,7 @@ Most recent first.
 
 ## 2026-05
 
+- [2026-05-29 — mosh + forwarded agent → persistent ssh master](2026-05-29-mosh-forwarded-agent-persistent-master.md) — mosh's spawning ssh dies right after launching mosh-server, killing the forwarded agent socket. Fixed by an in-thread `mosh()` zsh wrapper that brings up a persistent `ControlMaster` ssh first, plus a host-side fallback over `/tmp/ssh-*/agent.*`. Side-quests: macOS Keychain pattern for passphrase-free id_rsa; `compinit` before yc completion. Self-critique drove an in-thread carve-out for the Closing protocol and a meta-question trigger in `hook-resolution-reminder.py`.
 - [2026-05-27 — Architectural sweep](2026-05-27-architectural-sweep.md) — session-long DEEPAGENT audit produced 5 architectural improvements (allow-list parity, project-memory trigger leaves, skill-first dispatch, memory hierarchy, systemic-pattern-scan discipline) converging on "capability exists, trigger does not fire" meta-pattern. 9 commits across 2 VCSs.
 - [2026-05-26 — Soft-control hooks arc](2026-05-26-soft-control-hooks-arc.md) — frontmatter sentinel + CLAUDE.md token-trim + 3 soft-control hooks (self-critique / tracker / push reminders) + 1 rejected proposal (hard cap on memory); lessons on warn-vs-block trade-off and the instruction-surfaces-vs-content-stores distinction.
 - [2026-05-26 — Plan ↔ verify loop](2026-05-26-plan-verify-loop.md) — recurring mismatch between stage `Expected result image:` and actual outcome; tightened the verify cycle in CLAUDE.md.
