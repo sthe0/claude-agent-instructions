@@ -59,7 +59,7 @@ INLINE_PATH_RE = re.compile(rf"`((?:{_TOP_DIRS_ALT})/[^`\s]+)`")
 URL_PREFIXES = ("http://", "https://", "mailto:", "tel:", "ftp://", "//", "data:")
 
 # Inline-code refs with these characters are glob patterns or placeholders
-# (`agents/*.md`, `skills/<name>/`, `cursor-rules/project-overlay-*.mdc`),
+# (`agents/*.md`, `skills/<name>/`, `cursor/rules/*.mdc`),
 # not literal paths — skip.
 PATTERN_CHARS = set("*?<>[]{}")
 

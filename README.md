@@ -1,6 +1,6 @@
 # Claude / Cursor agent instructions
 
-Single git repository for **global** instructions for **Claude Code** and **Cursor**. Edits in the repo appear at runtime via symlinks under `~/.claude/` and `~/.cursor/`. The canonical source for both tools is the same `CLAUDE.md`; the Cursor rule (`cursor-rules/claude-code-sync.mdc`) is a thin mirror that handles things Cursor cannot do natively (no `Skill` tool, no auto-memory writes).
+Single git repository for **global** instructions for **Claude Code** and **Cursor**. Edits in the repo appear at runtime via symlinks under `~/.claude/` and `~/.cursor/`. The canonical source for both tools is the same `CLAUDE.md`; the Cursor rule (`cursor/rules/claude-code-sync.mdc`) is a thin mirror that handles things Cursor cannot do natively (no `Skill` tool, no auto-memory writes).
 
 File layout, instruction language, and the git workflow live in [skills/self-improvement/policy.md](skills/self-improvement/policy.md).
 
@@ -74,10 +74,12 @@ If the machine was set up before a refactor that changed the on-disk layout, `se
 | `agents/*.md` | `~/.claude/agents/<name>.md` |
 | `skills/<name>/` | `~/.claude/skills/<name>/` |
 | `memory-global/` | `~/.claude/memory-global/` |
-| `cursor-rules/claude-code-sync.mdc` | `~/.cursor/rules/claude-code-sync.mdc` |
-| — | `~/.cursor/agents` → `~/.claude/agents` (so Cursor sees the same subagents) |
+| `cursor/rules/claude-code-sync.mdc` | `~/.cursor/rules/claude-code-sync.mdc` |
+| `cursor/agents/*.md` | `~/.cursor/agents/<name>.md` |
 
 Project-specific Cursor rules live in the project's own `<project>/.claude/rules/` tree (committed in the project's git), and are wired to `<project>/.cursor/rules/` by the project's setup. The deepagent case is automated by `setup-symlinks.sh` when `~/arcadia/robot/deepagent/.claude/rules/` is present.
+
+Cursor-only assets live in [`cursor/`](cursor/README.md) and are intentionally isolated from `~/.claude/agents`.
 
 ## Scripts
 
@@ -90,7 +92,10 @@ Project-specific Cursor rules live in the project's own `<project>/.claude/rules
 | [verify-all.py](scripts/verify-all.py) | Run all instruction-policy checks (entry point; pre-commit hook uses `--staged`) |
 | [verify-language.py](scripts/verify-language.py) | Enforce English-by-default policy with adjacent-exception rule |
 | [verify-cross-refs.py](scripts/verify-cross-refs.py) | Catch broken intra-repo Markdown links and inline-code path references |
-| [lint-cursor-mirror.py](scripts/lint-cursor-mirror.py) | Detect structural drift between `skills/` and the cursor mirror (flat-skill parity, specialization parity, trigger markers) |
+| [lint-cursor-mirror.py](cursor/scripts/lint-cursor-mirror.py) | Detect structural drift between `skills/` and the cursor mirror (flat-skill parity, specialization parity, trigger markers) |
+| [install-cursor-links.sh](cursor/scripts/install-cursor-links.sh) | Apply Cursor-only symlinks (`~/.cursor/rules/*`, `~/.cursor/agents/*`) |
+| [link-project-cursor-agents.sh](cursor/scripts/link-project-cursor-agents.sh) | Symlink `<project>/.cursor/agents/*` → `cursor/agents/` (used by deepagent `setup-local.sh`) |
+| [migrate-cursor-namespace.sh](cursor/scripts/migrate-cursor-namespace.sh) | Migrate global + all `~/arcadia*/robot/deepagent` mounts (`--all-deepagent-mounts`) |
 | [lint-permissions.py](scripts/lint-permissions.py) | Lint `permissions/*.json` schema (structure, fields, dates, duplicates) |
 | [permissions-cli.py](scripts/permissions-cli.py) | CLI for workflow-level permissions: `list / check / grant / revoke / digest` |
 | [spawn-specialist.py](scripts/spawn-specialist.py) | Wrap `claude -p` spawn: recursion cap, budget tier, permissions digest, marker validation, cost log |

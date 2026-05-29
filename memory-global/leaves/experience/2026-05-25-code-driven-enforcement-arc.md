@@ -109,7 +109,7 @@ Rule additions in prose:
 - `skills/self-improvement/policy.md` § Process as code (new top-level section).
 - `CLAUDE.md` § On task resolution → § What to record → 6th required section
   (Cost & effort).
-- `cursor-rules/claude-code-sync.mdc` § On task resolution (inline list
+- `cursor/rules/claude-code-sync.mdc` § On task resolution (inline list
   updated to include item 6).
 - `skills/specializations/planner/SKILL.md` § Reuse vs generalization (new
   section between Research and Cost).

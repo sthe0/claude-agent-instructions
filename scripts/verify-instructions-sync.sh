@@ -30,9 +30,8 @@ fi
 
 echo "=== Global symlinks ==="
 check_link "$HOME/.claude/CLAUDE.md" "$REPO/CLAUDE.md"
-check_link "$HOME/.cursor/rules/claude-code-sync.mdc" "$REPO/cursor-rules/claude-code-sync.mdc"
+check_link "$HOME/.cursor/rules/claude-code-sync.mdc" "$REPO/cursor/rules/claude-code-sync.mdc"
 check_link "$HOME/.claude/memory-global" "$REPO/memory-global"
-check_link "$HOME/.cursor/agents" "$HOME/.claude/agents"
 
 for f in "$REPO/agents/"*.md; do
   [[ -f "$f" ]] || continue
@@ -40,6 +39,18 @@ for f in "$REPO/agents/"*.md; do
   [[ "$base" == "README.md" ]] && continue
   check_link "$HOME/.claude/agents/$base" "$f"
 done
+
+for f in "$REPO/cursor/agents/"*.md; do
+  [[ -f "$f" ]] || continue
+  base="$(basename "$f")"
+  [[ "$base" == "README.md" ]] && continue
+  check_link "$HOME/.cursor/agents/$base" "$f"
+done
+
+if [[ -L "$HOME/.cursor/agents" ]]; then
+  echo "FAIL: ~/.cursor/agents must be a directory, not a symlink"
+  FAIL=1
+fi
 
 if [[ -d "$REPO/skills" ]]; then
   for d in "$REPO/skills/"*/; do

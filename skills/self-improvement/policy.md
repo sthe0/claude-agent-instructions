@@ -93,7 +93,7 @@ This rule is **process discipline**, not a verifier check — placement of "vola
 
 ### Rule
 
-All agent instructions — prompts in `agents/`, skill prompts in `skills/`, `CLAUDE.md`, `cursor-rules/*.mdc`, `memory-global/`, `<project>/.claude/agent-memory/`, README policy sections — are written in **English** by default.
+All agent instructions — prompts in `agents/`, skill prompts in `skills/`, `CLAUDE.md`, `cursor/rules/*.mdc`, `memory-global/`, `<project>/.claude/agent-memory/`, README policy sections — are written in **English** by default.
 
 **Exception:** a non-English fragment is allowed only if **immediately next to it** (same paragraph or the adjacent line) there is an explicit note that explains **why English cannot be used** — product constraint, quoted user gate phrase, legal term, etc.
 
@@ -161,8 +161,18 @@ skills/                              # flat skills + specializations container
     yandex-cloud-expert/SKILL.md
 skills-local/                        # gitignored; machine-local single-file skills
 mcp-local/                           # gitignored; applied to settings.local.json
-cursor-rules/
-  claude-code-sync.mdc               # global Cursor rule (alwaysApply); mirrors CLAUDE.md
+cursor/
+  README.md
+  rules/
+    claude-code-sync.mdc             # global Cursor rule (alwaysApply); mirrors CLAUDE.md
+  agents/
+    README.md
+    developer-spawn.md               # Cursor-only specialization wrapper over ~/.claude/skills/developer/SKILL.md
+    planner-spawn.md                 # Cursor-only specialization wrapper over ~/.claude/skills/planner/SKILL.md
+    thinker-spawn.md                 # Cursor-only specialization wrapper over ~/.claude/skills/thinker/SKILL.md
+  scripts/
+    install-cursor-links.sh          # wires ~/.cursor/rules/* and ~/.cursor/agents/*
+    migrate-cursor-namespace.sh      # helper for migrating other machines / project roots
 memory-global/
   MEMORY.md                          # global memory index (auto-memory format)
   leaves/*.md                        # evergreen reference leaves
@@ -181,7 +191,7 @@ scripts/
   verify-all.py                        # entry point for instruction-policy checks
   verify-language.py                   # English-by-default policy
   verify-cross-refs.py                 # intra-repo link / inline-path resolution check
-  lint-cursor-mirror.py                # cursor-rules vs skills/ structural parity
+  # Cursor mirror lint moved to cursor/scripts/lint-cursor-mirror.py
   verify-self-improvement-edit.py      # commit-msg gate: requires review marker for self-improvement edits
   lint-prose-length.py                 # hard ceiling on CLAUDE.md / cursor mirror / SKILL.md / policy.md
   verify-experience-leaf.py            # require `resolution_confirmed_by_user` frontmatter on `**/experience/*.md` (PreToolUse hook + verify-all)
@@ -224,8 +234,8 @@ githooks/
 | `~/.claude/skills/<specialization>/` | `skills/specializations/<name>/` — flattened so the catalog sees them by name |
 | `~/.claude/skills/<local>.md` | `skills-local/*.md` (gitignored) |
 | `~/.claude/memory-global/` | `memory-global/` |
-| `~/.cursor/rules/claude-code-sync.mdc` | `cursor-rules/claude-code-sync.mdc` |
-| `~/.cursor/agents` | `~/.claude/agents` |
+| `~/.cursor/rules/claude-code-sync.mdc` | `cursor/rules/claude-code-sync.mdc` |
+| `~/.cursor/agents/<name>.md` | `cursor/agents/<name>.md` |
 
 Project-specific rules / agents / skills / memory live in **each project's own** `<project_cwd>/.claude/` tree (not in this repo), and are wired by the project's own setup or by `scripts/setup-project-memory.sh` for memory.
 

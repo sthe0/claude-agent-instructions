@@ -6,4 +6,5 @@ Read the migration page if `verify-layout-contract.sh` fails on a freshly pulled
 
 | Date | Commit | Title |
 |---|---|---|
+| 2026-05-28 | _pending_ | [Cursor namespace split (`cursor/`)](2026-05-cursor-namespace.md) |
 | 2026-05-22 | `4671a41` | [Collapse manager / memory / self-improvement agents into root + skills](2026-05-collapse-manager-memory.md) |

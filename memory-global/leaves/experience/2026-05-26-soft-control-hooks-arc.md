@@ -46,7 +46,7 @@ All five commits pushed to `origin/main`.
   - `hook-self-critique-reminder.py` (PostToolUse Write).
   - `hook-tracker-reminder.py` (UserPromptSubmit).
   - `hook-push-confirmation-reminder.py` (PreToolUse Bash).
-- Updated: `CLAUDE.md`, `cursor-rules/claude-code-sync.mdc`, `memory-global/leaves/coordinator-pitfalls.md`, `memory-global/MEMORY.md`, `scripts/verify-all.py`, `scripts/verify-layout-contract.sh`, `scripts/lint-cursor-mirror.py`, `skills/self-improvement/policy.md`, `~/.claude/settings.json` (PreToolUse Write + PreToolUse Bash + PostToolUse Write + UserPromptSubmit).
+- Updated: `CLAUDE.md`, `cursor/rules/claude-code-sync.mdc`, `memory-global/leaves/coordinator-pitfalls.md`, `memory-global/MEMORY.md`, `scripts/verify-all.py`, `scripts/verify-layout-contract.sh`, `cursor/scripts/lint-cursor-mirror.py`, `skills/self-improvement/policy.md`, `~/.claude/settings.json` (PreToolUse Write + PreToolUse Bash + PostToolUse Write + UserPromptSubmit).
 - New memory leaves: `feedback-no-hard-caps-on-memory.md`, this leaf.
 
 ## Lessons

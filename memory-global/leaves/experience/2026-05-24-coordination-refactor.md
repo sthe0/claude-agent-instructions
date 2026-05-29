@@ -11,7 +11,7 @@ resolution_confirmed_by_user: "<retroactive: rule introduced 2026-05-26; origina
 
 1. User asked for a critique of the existing coordination instructions; provided one across 12 points with concrete proposals.
 2. User confirmed "do all"; ran self-improvement (single turn — pre-dated the two-turn rule that was being added in the same session).
-3. Edited `CLAUDE.md`, `cursor-rules/claude-code-sync.mdc`, all four specialization SKILLs, `overcome-difficulty/SKILL.md`, `self-improvement/SKILL.md`, `tracker-management/SKILL.md`. Commit `06e1f11`.
+3. Edited `CLAUDE.md`, `cursor/rules/claude-code-sync.mdc`, all four specialization SKILLs, `overcome-difficulty/SKILL.md`, `self-improvement/SKILL.md`, `tracker-management/SKILL.md`. Commit `06e1f11`.
 4. User noticed the `loop-sensitivity-depth` and OD budget defaults had been changed silently as a side-effect of the depth cap change; asked why and proposed extracting all numeric constants to a config.
 5. Did turn-1 of self-improvement properly this time (proposal + open questions), got user direction (`max-recursion-depth = 5`); applied with constants section inside `CLAUDE.md`. Commit `65619e6`.
 6. User pushed back — the constants section should be a *separate file*, not embedded in `CLAUDE.md`, so values can be edited by hand without risking prose damage.

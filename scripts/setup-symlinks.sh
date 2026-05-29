@@ -2,7 +2,7 @@
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
-mkdir -p "$HOME/.claude" "$HOME/.cursor/rules"
+mkdir -p "$HOME/.claude" "$HOME/.cursor"
 
 link() {
   local target="$1" linkpath="$2"
@@ -45,7 +45,6 @@ prune_dangling() {
 # Core global symlinks
 link "$REPO/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
 link "$REPO/config.md" "$HOME/.claude/config.md"
-link "$REPO/cursor-rules/claude-code-sync.mdc" "$HOME/.cursor/rules/claude-code-sync.mdc"
 link "$REPO/memory-global" "$HOME/.claude/memory-global"
 
 # Do not install org-yandex globally — it lives in robot/deepagent/.claude/rules/
@@ -136,11 +135,11 @@ for entry in "$HOME/.claude/agents/"*.md; do
   fi
 done
 
-link "$HOME/.claude/agents" "$HOME/.cursor/agents"
+chmod +x "$REPO/scripts/verify-instructions-sync.sh" "$REPO/scripts/verify-layout-contract.sh" "$REPO/scripts/setup-project-memory.sh" "$REPO/cursor/scripts/install-cursor-links.sh" "$REPO/cursor/scripts/link-project-cursor-agents.sh" "$REPO/cursor/scripts/migrate-cursor-namespace.sh"
+
+"$REPO/cursor/scripts/install-cursor-links.sh"
 
 "$REPO/scripts/install-git-hooks.sh"
-
-chmod +x "$REPO/scripts/verify-instructions-sync.sh" "$REPO/scripts/verify-layout-contract.sh" "$REPO/scripts/setup-project-memory.sh"
 "$REPO/scripts/verify-layout-contract.sh" 2>/dev/null || true
 "$REPO/scripts/verify-instructions-sync.sh" || true
 

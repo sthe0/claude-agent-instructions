@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-r"""Lint the cursor-rules mirror for structural drift against `skills/`.
+r"""Lint the cursor rule mirror for structural drift against `skills/`.
 
 Three presence checks — no full-text comparison (formulations legitimately
 differ between Claude Code and Cursor contexts):
@@ -33,9 +33,9 @@ import re
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SKILLS_DIR = REPO_ROOT / "skills"
-MIRROR_FILE = REPO_ROOT / "cursor-rules" / "claude-code-sync.mdc"
+MIRROR_FILE = REPO_ROOT / "cursor" / "rules" / "claude-code-sync.mdc"
 
 SKILL_HEADING_RE = re.compile(r"^###\s+`([^`]+)`")
 SPEC_ROW_RE = re.compile(r"^\|\s*`([^`]+)`\s*\|")
@@ -52,9 +52,9 @@ def disk_skills() -> tuple[set[str], set[str]]:
         if not child.is_dir():
             continue
         if child.name == "specializations":
-            for s in child.iterdir():
-                if s.is_dir() and (s / "SKILL.md").exists():
-                    spec.add(s.name)
+            for specialization_dir in child.iterdir():
+                if specialization_dir.is_dir() and (specialization_dir / "SKILL.md").exists():
+                    spec.add(specialization_dir.name)
         else:
             if (child / "SKILL.md").exists():
                 flat.add(child.name)
@@ -65,16 +65,16 @@ def slice_section(lines: list[str], heading_prefix: str) -> list[str]:
     """Return the lines between (and including) the heading that starts with
     `heading_prefix` and the next top-level (## ) heading."""
     start: int | None = None
-    for i, line in enumerate(lines):
+    for index, line in enumerate(lines):
         if line.startswith(heading_prefix):
-            start = i
+            start = index
             break
     if start is None:
         return []
     end = len(lines)
-    for j in range(start + 1, len(lines)):
-        if SECTION_HEADING_RE.match(lines[j]):
-            end = j
+    for section_index in range(start + 1, len(lines)):
+        if SECTION_HEADING_RE.match(lines[section_index]):
+            end = section_index
             break
     return lines[start:end]
 
@@ -95,11 +95,11 @@ def parse_mirror() -> dict:
     current_name: str | None = None
     current_body: list[str] = []
     for line in skills_section[1:]:  # skip the `## Skills ...` line itself
-        m = SKILL_HEADING_RE.match(line)
-        if m:
+        match = SKILL_HEADING_RE.match(line)
+        if match:
             if current_name is not None:
                 flat_blocks[current_name] = current_body
-            current_name = m.group(1)
+            current_name = match.group(1)
             current_body = []
         else:
             if current_name is not None:
@@ -110,9 +110,9 @@ def parse_mirror() -> dict:
     # Specializations: first-column ``name`` rows in the markdown table.
     spec_names: set[str] = set()
     for line in spec_section[1:]:
-        m = SPEC_ROW_RE.match(line)
-        if m:
-            name = m.group(1)
+        match = SPEC_ROW_RE.match(line)
+        if match:
+            name = match.group(1)
             # Skip table header row (`Specialization`) and separator-like.
             if name.lower() != "specialization":
                 spec_names.add(name)
@@ -127,8 +127,11 @@ def parse_mirror() -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--staged", action="store_true",
-                        help="(accepted for interface parity with verify-all; this lint always reads the full mirror)")
+    parser.add_argument(
+        "--staged",
+        action="store_true",
+        help="(accepted for interface parity with verify-all; this lint always reads the full mirror)",
+    )
     parser.parse_args(argv)
 
     disk_flat, disk_spec = disk_skills()
@@ -140,9 +143,9 @@ def main(argv: list[str] | None = None) -> int:
     errors: list[str] = []
 
     if not mirror["skills_section_present"]:
-        errors.append(f"mirror is missing the '## Skills ...' section")
+        errors.append("mirror is missing the '## Skills ...' section")
     if not mirror["spec_section_present"]:
-        errors.append(f"mirror is missing the '## Specializations ...' section")
+        errors.append("mirror is missing the '## Specializations ...' section")
 
     mirror_flat = set(mirror["flat_blocks"])
     missing_from_mirror = sorted(disk_flat - mirror_flat)
@@ -174,8 +177,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if errors:
         print(f"lint-cursor-mirror: FAIL — {len(errors)} drift(s) in {MIRROR_FILE.relative_to(REPO_ROOT)}")
-        for e in errors:
-            print(f"  {e}")
+        for error in errors:
+            print(f"  {error}")
         return 1
 
     print(

@@ -61,7 +61,7 @@ A bare reminder ("did you run self-improvement?") is **not** pre-approval — ru
 | Global memory | `~/.claude/memory-global/MEMORY.md` + leaves in `memory-global/leaves/` |
 | Project memory (local) | `<project_cwd>/.claude/agent-memory/MEMORY.md` (symlinked from `~/.claude/projects/<cwd-hash>/memory/`) |
 | Settings / hooks | `~/.claude/settings.json`, `settings.local.json` |
-| Cursor sync | `cursor-rules/claude-code-sync.mdc` (global) and `cursor-rules/project-overlay-*.mdc` (project) |
+| Cursor sync | `cursor/rules/claude-code-sync.mdc` (global) and project overlays in `<project>/.claude/rules/*.mdc` |
 | Versioning | git repo `~/claude-agent-instructions/` |
 
 Do not patch files in `~/.claude/plugins/cache/` or upstream files on symlinks — make the change in the repo so the symlinks pick it up.
@@ -70,21 +70,21 @@ Do not patch files in `~/.claude/plugins/cache/` or upstream files on symlinks �
 
 | Type of change | Target |
 |---|---|
-| "Always / never" for all sessions | `CLAUDE.md` (+ mirror essentials in `cursor-rules/claude-code-sync.mdc` if Cursor must always see them) |
+| "Always / never" for all sessions | `CLAUDE.md` (+ mirror essentials in `cursor/rules/claude-code-sync.mdc` if Cursor must always see them) |
 | One subagent's role or delegation rules | `agents/<name>.md` |
 | One skill's behavior, triggers, internals | `skills/<name>/SKILL.md` (or its `policy.md` / leaves) |
-| Skill trigger description | `skills/<name>/SKILL.md` frontmatter **and** the corresponding `### <skill>` block in `cursor-rules/claude-code-sync.mdc` (Cursor has no Skill tool — it relies on the embedded trigger description to know when to invoke) |
+| Skill trigger description | `skills/<name>/SKILL.md` frontmatter **and** the corresponding `### <skill>` block in `cursor/rules/claude-code-sync.mdc` (Cursor has no Skill tool — it relies on the embedded trigger description to know when to invoke) |
 | Cross-project fact, practice, or runbook | global memory (`memory-global/MEMORY.md` + leaf in `memory-global/leaves/`) |
 | Project-only fact or runbook | project memory (`<cwd>/.claude/agent-memory/`) |
 | File layout, instruction language, git sync rules | this skill's [policy.md](policy.md) |
-| Cursor-only (globs, project) | `cursor-rules/*.mdc` |
+| Cursor-only (globs, project) | `cursor/rules/*.mdc` |
 
 ### Keeping Claude and Cursor in sync
 
-`cursor-rules/claude-code-sync.mdc` is a thin mirror of `CLAUDE.md`. When you change behavior that Cursor must see:
+`cursor/rules/claude-code-sync.mdc` is a thin mirror of `CLAUDE.md`. When you change behavior that Cursor must see:
 
 - Edit `CLAUDE.md` first (canonical).
-- If the change affects mandatory triggers / coordination cycle / skill descriptions / agent table — also update `cursor-rules/claude-code-sync.mdc` in the **same commit**.
+- If the change affects mandatory triggers / coordination cycle / skill descriptions / agent table — also update `cursor/rules/claude-code-sync.mdc` in the **same commit**.
 - Heavy detail (full skill body, memory leaves) lives in the linked files; the Cursor rule only carries triggers and entry points.
 
 ### Behavioral rule vs domain fact

@@ -48,6 +48,18 @@ Coordination cycle: Need → Options → Plan → Resources → Execution → Ve
 
 **Verification** by criterion type: *measurable* — run the check and read the result; *acceptance-review* — present the result and ask the user explicitly for accept / reject.
 
+## Acting without asking
+
+Carve-outs that minimize per-action confirmation (full policy: `~/.claude/memory-global/leaves/acting-without-asking.md`; anti-pattern row in `memory-global/leaves/coordinator-pitfalls.md`):
+
+1. **Side-effect-free actions** — `Read` / `Grep` / `Glob`, web and docs reads, `--help`, `--dry-run`, MCP `get_*` / `list_*` / `search_*` / `describe_*`, repo verify scripts (`verify-*`, `lint-*` that only read). Proceed without asking, plan or no plan.
+2. **After plan approval** — every action **declared in the approved plan** (paths under `Reference files`, stage outputs, named verify steps, declared VCS ops, listed external calls) proceeds **without per-step re-ask**.
+3. **Unknown tool** — budget **1 lookup** (`--help`, tool schema, SKILL.md). If still unclear → `PERMISSION-REQUEST:` (see below); do not burn extra lookups.
+
+**Substantive plan changes** (scope expansion, new external action, changed done criterion) still need explicit approval. In-plan refinement (tighten Expected image, add a missed read, typos) — apply in-thread without re-approval.
+
+**Do not** ask the user to confirm individual actions already covered above — structured confirms are for decisions the user has not already made (plan approval, irreversible ops, substantive replan).
+
 ## What counts as a difficulty
 
 A **difficulty** is a divergence between reality and the plan. Two forms qualify:
@@ -135,7 +147,7 @@ Each scope also carries two sub-folders for specialized content:
 - `experience/` — per-task post-resolution leaves (see § On task resolution above).
 - `system-knowledge/` — durable facts about systems, processes, organizational structure, and codebase architecture that isn't self-evident. Slug-only filenames. Record only when **all** apply: not reachable in 1–2 search hops; not explicitly documented in code or docs; not a duplicate of an existing leaf; specific (concrete component / process / boundary), not a generic principle. Cite source with `> verified by: …` where possible.
 
-Cursor has no auto-memory write mechanism — write the file directly when triggered.
+Cursor has no auto-memory write mechanism — write memory files directly when triggered.
 
 ## Specializations in Cursor (read inline, do not spawn)
 

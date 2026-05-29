@@ -26,7 +26,10 @@ CHECKS: list[str] = [
 
 
 def load_check(name: str, scripts_dir: Path):
-    path = scripts_dir / f"{name}.py"
+    if name == "lint-cursor-mirror":
+        path = scripts_dir.parent / "cursor" / "scripts" / f"{name}.py"
+    else:
+        path = scripts_dir / f"{name}.py"
     if not path.exists():
         return None
     spec = importlib.util.spec_from_file_location(name.replace("-", "_"), path)
