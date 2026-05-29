@@ -221,7 +221,7 @@ A substantive task is **resolved** only when the user explicitly confirms it. **
 
 **Closing protocol** (runs at the resolution gate):
 
-1. **Verify done.** All stages green per their `Expected result image:`? `## Final verification` passed? If no — `overcome-difficulty`, not "close".
+1. **Verify done.** All stages green per their `Expected result image:`? `## Final verification` passed? If no — `overcome-difficulty`, not "close". **In-thread carve-out:** for substantive work executed in-thread without a formal plan (chain of small changes), the moment you are about to write the final user-facing summary **is** the resolution gate — put the `AskUserQuestion` in the **same reply** as the recap, do not leave it for the user to prompt.
 2. **Recap one line.** `Requested: <user's ask>. Delivered: <what was actually shipped>.` Keep it terse — one line each side.
 3. **Ask explicitly via `AskUserQuestion`** in the user's language: "Considered resolved?" The gate is binary, so `AskUserQuestion` is **mandatory** per § Escalation to the user. If the same turn already has other binary asks queued (push, scope, follow-up), **bundle** the resolution question into the same `AskUserQuestion` call — do not split structured + free-text sign-offs across the turn.
 4. **Wait for explicit confirmation.** An unambiguous "yes" / "resolved" / "так и оставим" / direct answer to your ask. **Bare gratitude is not confirmation** — `thanks` / `спасибо` / `thx` / `perfect` alone is ambiguous between "thanks for the work" and "task is over". Ask anyway. Enforced by `scripts/hook-resolution-reminder.py` (UserPromptSubmit) — emits a stderr nudge when the user's reply is brief gratitude.
