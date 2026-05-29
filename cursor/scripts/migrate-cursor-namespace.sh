@@ -75,8 +75,13 @@ mapfile -t PROJECT_ROOTS < <(printf '%s\n' "${PROJECT_ROOTS[@]}" | sort -u)
 for project_root in "${PROJECT_ROOTS[@]}"; do
   setup_local="$project_root/.claude/scripts/setup-local.sh"
   if [[ -x "$setup_local" ]]; then
-    echo "project: $project_root"
-    (cd "$project_root" && "$setup_local")
+    # Invoke via the real storage path, not the mount's .claude symlink:
+    # setup-local.sh derives STORAGE from "$(dirname "$0")/.." with a logical
+    # pwd, so calling it through .claude/scripts/ resolves STORAGE back to the
+    # .claude symlink and makes step 1 relink .claude onto itself (ELOOP).
+    real_setup="$(readlink -f "$setup_local")"
+    echo "project: $project_root (setup-local: $real_setup)"
+    (cd "$project_root" && "$real_setup")
   else
     echo "skip: $project_root (missing executable $setup_local)"
     if [[ -x "$REPO/cursor/scripts/link-project-cursor-agents.sh" ]]; then
