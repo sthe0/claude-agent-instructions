@@ -318,7 +318,7 @@ Project memory is shared via the project's git: `scripts/setup-project-memory.sh
 ### When to use memory
 
 - **Read** the relevant scope index when the task touches a domain it knows, when the user references prior-conversation work, or before making assumptions about repo/infra conventions.
-- **Verify** specific file paths, function names, or flags from memory before recommending them — code may have moved.
+- **Verify** specific file paths, function names, or flags from memory before recommending them — code may have moved. A leaf describing **mutable state** (PR / ticket status, working-tree contents, "pending" / "in progress" work, a session checkpoint) must be reconciled against the live source — `arc status` / `arc log`, PR API — **before** you present it as current; a checkpoint's own "next session" checklist counts only if you actually run it.
 - **Write** when a fact is durable and non-obvious: corrections that should not recur, decisions and their reasons, user role and preferences, project state, runbooks for prod or external pipelines, **post-resolution task experiences** (see § On task resolution).
 - **Cite the source for OS / binary / version-dependent claims.** If a memory fact depends on a specific distro, daemon, CLI flag, or environment behavior, add a `> verified by: …` line next to it (manpage citation, log line, command output, doc URL). Without it, future you treats the claim as ground truth and wastes diagnosis time when it has gone stale.
 - **Do not** write: ephemeral task state (use the task list), one-session plan drafts (use a plan file), secrets, content already covered by `CLAUDE.md`.
