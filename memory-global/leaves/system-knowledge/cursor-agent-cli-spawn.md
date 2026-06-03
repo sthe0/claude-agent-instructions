@@ -43,8 +43,23 @@ timeout 120 agent -p "Reply with exactly one line: RESOLVED: ping" \
 
 Flags for unattended: `--trust`, `--force`, `--approve-mcps`.
 
-## Wrapper
+## Wrappers
 
-`spawn-cursor-escape.py` — recursion cap, overcome-difficulty prompt, marker validation, `~/.local/log/cursor-spawn-costs.jsonl`.
+| Script | Use |
+|---|---|
+| `spawn-cursor-specialist.py` | Specialization spawn (`--kind planner\|developer\|…`): inline SKILL.md + plan/done-criterion prompt, budget tier → timeout (300/600/900s), same return markers as `spawn-specialist.py` |
+| `spawn-cursor-escape.py` | Overcome-difficulty recursive escape: `RESOLVED:` / `INVESTIGATION:` / `LOOP_DETECTED:` |
 
-> verified by: smoke on the0 2026-06-03 — `agent` 2026.06.02-8c11d9f, exit 0, `RESOLVED: ping`.
+Both: recursion cap from `config.md`, `CURSOR_API_KEY` from env or `~/.cursor_api_key`, cost log `~/.local/log/cursor-spawn-costs.jsonl`, `--dry-run`, optional `--smoke`.
+
+```bash
+# Specialist dry-run (no API call)
+~/claude-agent-instructions/scripts/spawn-cursor-specialist.py \
+  --kind developer --plan /path/to/plan.md \
+  --done-criterion "…" --criterion-type measurable \
+  --workspace /path/to/project --dry-run
+# Specialist smoke
+~/claude-agent-instructions/scripts/spawn-cursor-specialist.py --smoke --workspace /path/to/project
+```
+
+> verified by: smoke on the0 2026-06-03 — `agent` 2026.06.02-8c11d9f, exit 0, `RESOLVED: ping` (escape), `COMPLETED: ping` (specialist).
