@@ -45,6 +45,24 @@ Use during **overcome-difficulty § Investigation** when the failure is in an or
 
 Only after 1–3: YT job stderr, Nirvana block logs, watt/hahn ops, launcher health, Monium — scoped to the **localized** failing step from investigation, not the whole chain.
 
+#### Reading a failed Nirvana block's stderr
+
+**Preferred:** load the `nirvana` skill → `get_failed_blocks(recursive=true)` → for a composite block (e.g. `eval_baskets`) this returns the **nested** `workflow_instance_id`; use that, not the top-level → `get_block_logs` → `get_log_content`, `stderr.log` first.
+
+**If the `mcp__nirvana__*` tools are not connected this session** (check the tool list) — do **not** grind the `vh3.async_api` / `nirvana_api` Python clients: their `get_block_logs` returns `[]` for failed-block logs and there is **no** `get_log_content` equivalent. Use the raw HTTP endpoint instead:
+
+1. `yt --proxy <cluster> get-job-stderr <job_id> <op_id>` (robot YT token) returns the **launcher wrapper** stderr, which contains the pointer `…/process/{iid}/graph/result/{block_guid}` — that gives you `{iid}` and `{block_guid}`.
+2. Fetch the user-code stderr directly:
+
+   ```bash
+   curl -H "Authorization: OAuth $NIRVANA_TOKEN" \
+     "https://nirvana.yandex-team.ru/ui-api-proxy/nv-api/api/logs/{iid}/{block_guid}/stderr.log?file_name=stderr.log&group=DEFAULT_GROUP"
+   ```
+
+   (`stdout.log`, `job_launcher.err.log`, `job_launcher.diag.log` available the same way.)
+
+> verified by: DEEPAGENT-415 workflow_url smoke (2026-06-03) — 15+ `vh3`/`nirvana_api` Python-client calls returned `[]` / non-serializable `Obj` and produced two wrong "infra" conclusions; the raw endpoint returned the full traceback in one `curl`, and the root cause (`YtResolveError`: eval-folder not pre-created) was on stderr line 1.
+
 ## Hypothesis portfolio (required)
 
 Maintain **at least two** competing hypotheses until one is falsified. For each:
