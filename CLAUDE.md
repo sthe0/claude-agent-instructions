@@ -50,12 +50,13 @@ Need → Options → Plan → Resources → Execution → Verification → done?
   2. **After the final stage** — run the plan's `## Final verification` against the user's overall done criterion. The task is not done until this passes. For *measurable* criteria, run the check (test, command, dashboard). For *acceptance-review*, present the result to the user and ask explicitly for accept / reject.
 
   On failure at either layer — `overcome-difficulty`, not chaotic retries.
+  **Mini-OD on first external-job failure.** Before relaunch or infra log dives on a failed orchestrated job (Nirvana WI, CI, Reactor, Sandbox graph): inline Expected/Actual/Mismatch, then `workflow-debug-investigation.md` (baseline → topology → code delta, ≥2 hypotheses). Project signals leaf when present under `.claude/agent-memory/leaves/`.
 
 ### When the work is stuck
 
 A **difficulty** is a divergence between reality and the plan. The canonical form: an actual step result does not match the result image the plan declared for that step. A second form: you cannot perform that check at all — no observable, no signal, no way to compare actual against expected. Both warrant the same response.
 
-Use the **overcome-difficulty** skill (see `~/.claude/skills/overcome-difficulty/`). Surface signals: verification failed, blocker, repeated error, plan mismatch, two or more process corrections in a row, before retrying an external workflow / VCS / mount / CLI after failure, session review, missing observable to verify a step.
+Use the **overcome-difficulty** skill (see `~/.claude/skills/overcome-difficulty/`). Surface signals: verification failed, blocker, repeated error, plan mismatch, two or more process corrections in a row, **same root-cause narrative repeated without new evidence**, before retrying an external workflow / VCS / mount / CLI after failure, session review, missing observable to verify a step.
 
 The skill localizes the divergence (declaration → investigation → critique) and produces a **replanning task** that you (still as root) then apply to fix the plan and resume the original user task on the new plan.
 

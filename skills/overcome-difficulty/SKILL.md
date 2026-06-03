@@ -1,6 +1,6 @@
 ---
 name: overcome-difficulty
-description: TRIGGER when the actual result of the plan or one of its stages diverges from the expected result — verification failed, blocker, repeated error, surprising output, plan mismatch, two or more process corrections in a row, long shell loops without progress. Work through declaration → investigation → critique to localize the moment of divergence and derive a concrete replanning task that the root coordinator then applies to fix the plan. SKIP when work is progressing as expected, or a one-off retry will obviously succeed without further analysis.
+description: TRIGGER when the actual result of the plan or one of its stages diverges from the expected result — verification failed, blocker, repeated error, surprising output, plan mismatch, two or more process corrections in a row, long shell loops without progress, same root-cause narrative repeated without new evidence, or the first failure in an external orchestrated job (Nirvana WI, CI launch, Reactor) before chaotic retries. Work through declaration → investigation → critique to localize the moment of divergence and derive a concrete replanning task that the root coordinator then applies to fix the plan. SKIP when work is progressing as expected, or a one-off retry will obviously succeed without further analysis.
 ---
 
 # Overcome difficulty
@@ -12,7 +12,7 @@ A **difficulty** is a divergence between reality and the plan. Two forms qualify
 1. **Result mismatch (canonical):** the actual result of a step does not match the result image the plan declared for that step.
 2. **Verification gap:** you cannot perform that check at all — no observable, no signal, no measurement, no way to compare actual against expected. Inability to analyze conformance is itself a difficulty.
 
-Surface signals (verification failed, blocker, repeated error, surprising output, plan mismatch, two or more process corrections in a row, long shell loops without progress, "I don't even know how to tell if this worked") are all manifestations of one of these two underlying forms.
+Surface signals (verification failed, blocker, repeated error, surprising output, plan mismatch, two or more process corrections in a row, long shell loops without progress, "I don't even know how to tell if this worked", **same root-cause narrative repeated across investigation iterations without new evidence**, **retrying an external workflow / VCS / mount / CLI after failure without a fresh declaration**, **first external job failure in an orchestrated pipeline** — child WI `failure`/`cancel`, CI launch red, unexpected block status) are all manifestations of one of these two underlying forms.
 
 **The plan can be the task plan or the agent system itself.** Instructions (`CLAUDE.md`, memory, skills, hooks) are the persistent multi-session plan you work by; the same Expected/Actual/Mismatch frame applies when behavior across sessions diverges from what the instructions intended. See `memory-global/leaves/systemic-pattern-scan.md` for the resolution-time entry point that surfaces these.
 
@@ -43,7 +43,23 @@ Compare in order:
 | **Process** | Which steps ran, in what order, what was skipped, what was added? At which point did execution stop matching the plan? |
 | **Means** | Which agents / skills / commands / MCP were used versus what the plan named? Did any substitution coincide with the divergence? |
 | **Results** | Stage outputs vs expected artifacts. Which intermediate output was the first one to fail expectation? |
-| **Prior sessions** | What was already attempted on the same task — read the relevant session transcript (`~/.claude/projects/<cwd-hash>/<uuid>.jsonl`) for launch parameters, working commands, branches already rejected. Avoid blind repeats. |
+| **Reference baseline** | Is there a known-good run (same workflow / flow, comparable params)? At **block order**, what differs from the failing run? (See `memory-global/leaves/workflow-debug-investigation.md` § Reference baseline.) |
+| **Topology / causality** | Parent/child WI, block completion order, Stop/Start/shared instance ids — is the reported failure block the **root** cause or downstream of orchestration? |
+| **Code delta** | For ticket-scoped work — `arc diff` or PR diff on code paths for failing block names **before** deep infra logs. |
+| **Prior sessions** | What was already attempted on the same task — read the relevant session transcript (`~/.claude/projects/<cwd-hash>/<uuid>.jsonl` or Cursor `agent-transcripts/`) for launch parameters, working commands, branches already rejected. Avoid blind repeats. |
+
+
+For orchestrated pipelines (Nirvana, Arcadia CI, Reactor, multi-stage Sandbox), follow the ordered checklist in **`memory-global/leaves/workflow-debug-investigation.md`** — baseline → topology → code delta → infra logs last. Project-specific pipeline signals may live in `<project_cwd>/.claude/agent-memory/leaves/overcome-difficulty-signals-pipelines.md`.
+
+### Hypothesis portfolio
+
+Before committing to a fix, maintain **at least two** competing hypotheses. For each:
+
+- **Hypothesis** — one sentence.
+- **Would confirm** — observation that supports it.
+- **Would falsify** — checkable observation that kills it (prefer ≤3 tool calls).
+
+Do not anchor on the loudest symptom (timeout, OOM, `cancel`, "model never started") until baseline and topology passes falsify simpler orchestration/code explanations. Example table shape: `workflow-debug-investigation.md` § Hypothesis portfolio.
 
 If the reasoning gets non-trivial — `Task → thinker` with the localized fact + expectation to verify logic, not to replace investigation.
 
@@ -150,3 +166,23 @@ If the child hits its budget cap (`--max-budget-usd`) without emitting a marker,
 - A previous level returned `LOOP_DETECTED:` — escalate to the user, do not re-spawn on the same difficulty.
 
 Inline overcome-difficulty (the phases above) is the default. Spawn only when the current thread genuinely won't converge.
+
+### Cursor (use spawn-cursor-escape.py)
+
+In **Cursor**, do **not** invoke the `claude` CLI for recursive escape (global hard gate). Use the wrapper instead:
+
+```bash
+~/claude-agent-instructions/scripts/spawn-cursor-escape.py \
+  --expected '...' \
+  --actual '...' \
+  --mismatch '...' \
+  --tried 'approach A — why it failed' \
+  --tried 'approach B — why it failed' \
+  --workspace /path/to/project
+```
+
+The script enforces `max-recursion-depth` from `config.md`, resolves `CURSOR_API_KEY` (env or `~/.cursor_api_key`), spawns `agent -p` with the same overcome-difficulty escape prompt, validates `RESOLVED:` / `INVESTIGATION:` / `LOOP_DETECTED:` on the first non-empty line (else `MALFORMED:`), and appends cost metadata to `~/.local/log/cursor-spawn-costs.jsonl`. Use `--dry-run` to preview prompt and command.
+
+**When to use in Cursor:** after **two** full inline declaration → investigation → critique cycles on the same difficulty without convergence, or when context noise clearly anchors a wrong frame. Before that, prefer inline OD or asking the user. If spawn refuses (depth cap) or returns `LOOP_DETECTED:`, structured escalate to the user — do not relaunch external workflows on the same unexplained hypothesis.
+
+**Reading the result:** same markers as § Reading the result above. On `RESOLVED:` — apply and continue. On `INVESTIGATION:` — merge findings into the plan. On `LOOP_DETECTED:` or cap refusal — stop and ask the user for direction.

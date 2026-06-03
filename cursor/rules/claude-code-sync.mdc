@@ -180,9 +180,10 @@ The PERMISSION-REQUEST protocol from `CLAUDE.md` § Handling specialist escalati
 
 The recursive escape inside `overcome-difficulty/SKILL.md` spawns `claude -p`. **That is forbidden in Cursor** (see § Hard gate). When inline declaration → investigation → critique does not converge in this session:
 
-1. **Try `/clear` or starting a fresh Cursor chat manually** — the analog of "fresh context" available to you in Cursor is the user restarting the conversation. Suggest this if you sense accumulated noise is the obstacle.
-2. **Escalate to the user with a structured summary** — declare the difficulty (expected / actual / mismatch), list what you tried inline, suggest options, ask for direction.
-3. **Optionally hand off to Claude Code** — if the user has a Claude Code session available, state the difficulty in self-contained form so they can paste it into Claude Code themselves. **You do not run `claude` for them.**
+1. **`spawn-cursor-escape.py`** — fresh `agent -p` manager (not `claude`); key `~/.cursor_api_key`; install `curl https://cursor.com/install | gunzip | bash`. Markers: `RESOLVED:` / `INVESTIGATION:` / `LOOP_DETECTED:`. Detail: `memory-global/leaves/system-knowledge/cursor-agent-cli-spawn.md`.
+2. **`/clear` or new chat** — if `agent` unavailable or escape returns `LOOP_DETECTED:`.
+3. **Structured escalate** — Expected/Actual/Mismatch, what you tried, options.
+4. **Optional Claude Code handoff** — self-contained paste for the user; you do not run `claude`.
 
 Do not attempt to invoke `claude` from Bash as a workaround. The gate is unconditional.
 

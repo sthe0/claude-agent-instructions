@@ -99,6 +99,7 @@ Cursor-only assets live in [`cursor/`](cursor/README.md) and are intentionally i
 | [lint-permissions.py](scripts/lint-permissions.py) | Lint `permissions/*.json` schema (structure, fields, dates, duplicates) |
 | [permissions-cli.py](scripts/permissions-cli.py) | CLI for workflow-level permissions: `list / check / grant / revoke / digest` |
 | [spawn-specialist.py](scripts/spawn-specialist.py) | Wrap `claude -p` spawn: recursion cap, budget tier, permissions digest, marker validation, cost log |
+| [spawn-cursor-escape.py](scripts/spawn-cursor-escape.py) | Wrap `agent -p` overcome-difficulty escape for Cursor: recursion cap, API key, marker validation, cost log |
 | [cost-report.py](scripts/cost-report.py) | Aggregate `~/.local/log/claude-spawn-costs.jsonl` (totals, by kind/tier/day, depth/marker distributions, refused events) |
 | [memory-audit.py](scripts/memory-audit.py) | Find orphan / broken / stale memory leaves and frontmatter issues (informational; does not gate) |
 | [verify-self-improvement-edit.py](scripts/verify-self-improvement-edit.py) | `commit-msg` gate: require `[self-improvement-reviewed]` in commits that touch `skills/self-improvement/` |
