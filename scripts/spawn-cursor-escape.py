@@ -14,6 +14,7 @@ supplies the difficulty declaration:
   6. Append a JSONL row to ~/.local/log/cursor-spawn-costs.jsonl.
 
 Use --dry-run to print the assembled prompt and command without spawning.
+Use --smoke for a minimal RESOLVED: ping installation check.
 """
 from __future__ import annotations
 
@@ -141,9 +142,9 @@ def log_refused(reason: str, extra: dict) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--expected", required=True, help="what the plan declared the result should be")
-    p.add_argument("--actual", required=True, help="what actually happened")
-    p.add_argument("--mismatch", required=True, help="one or two sentences naming the gap")
+    p.add_argument("--expected", help="what the plan declared the result should be")
+    p.add_argument("--actual", help="what actually happened")
+    p.add_argument("--mismatch", help="one or two sentences naming the gap")
     p.add_argument(
         "--tried",
         action="append",
@@ -170,6 +171,11 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"path to API key file (default: {DEFAULT_API_KEY_FILE})",
     )
     p.add_argument("--dry-run", action="store_true", help="print prompt and command, then exit")
+    p.add_argument(
+        "--smoke",
+        action="store_true",
+        help="installation smoke: minimal prompt expecting RESOLVED: ping",
+    )
     return p
 
 
@@ -203,6 +209,24 @@ def build_agent_cmd(
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
+    if args.smoke:
+        prompt = "Reply with exactly one line: RESOLVED: ping"
+        timeout_sec = min(args.timeout_sec, 90)
+    else:
+        missing = [
+            name
+            for name, val in (
+                ("expected", args.expected),
+                ("actual", args.actual),
+                ("mismatch", args.mismatch),
+            )
+            if not val
+        ]
+        if missing:
+            print(f"error: --{missing[0]} required unless --smoke", file=sys.stderr)
+            return 1
+        timeout_sec = args.timeout_sec
+
     workspace = args.workspace.resolve()
     if not workspace.is_dir():
         print(f"error: workspace not found: {workspace}", file=sys.stderr)
@@ -222,16 +246,17 @@ def main(argv: list[str] | None = None) -> int:
         log_refused("recursion-cap", {"depth_attempted": depth_next, "cap": cap})
         return 3
 
-    prompt = assemble_prompt(
-        depth=depth_next,
-        expected=args.expected,
-        actual=args.actual,
-        mismatch=args.mismatch,
-        tried=args.tried,
-    )
+    if not args.smoke:
+        prompt = assemble_prompt(
+            depth=depth_next,
+            expected=args.expected or "",
+            actual=args.actual or "",
+            mismatch=args.mismatch or "",
+            tried=args.tried,
+        )
 
     agent_bin = find_agent_binary()
-    cmd = build_agent_cmd(agent_bin or "agent", prompt, workspace, args.model, args.timeout_sec)
+    cmd = build_agent_cmd(agent_bin or "agent", prompt, workspace, args.model, timeout_sec)
 
     if args.dry_run:
         print("=== assembled prompt ===")
@@ -285,7 +310,7 @@ def main(argv: list[str] | None = None) -> int:
     log_cost_entry({
         "ts": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
         "event": "spawn",
-        "kind": "cursor-escape",
+        "kind": "cursor-escape-smoke" if args.smoke else "cursor-escape",
         "depth": depth_next,
         "model": args.model,
         "workspace": str(workspace),
@@ -307,9 +332,9 @@ def main(argv: list[str] | None = None) -> int:
         summary_bits.append("MALFORMED")
     print(" ".join(summary_bits), file=sys.stderr)
 
-    if completed.returncode != 0:
+    if not ok:
         return 1
-    return 0
+    return 0 if completed.returncode == 0 else 1
 
 
 if __name__ == "__main__":

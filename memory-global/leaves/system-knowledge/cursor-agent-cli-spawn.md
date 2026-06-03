@@ -32,10 +32,13 @@ Do not commit or log the key.
 
 ```bash
 export CURSOR_API_KEY="$(tr -d '\n' < ~/.cursor_api_key)"
+# Direct CLI
 timeout 120 agent -p "Reply with exactly one line: RESOLVED: ping" \
   --trust --force --approve-mcps \
   --workspace /path/to/project \
   --output-format text --model composer-2.5
+# Wrapper plumbing check
+~/claude-agent-instructions/scripts/spawn-cursor-escape.py --smoke --workspace /path/to/project
 ```
 
 Flags for unattended: `--trust`, `--force`, `--approve-mcps`.
