@@ -93,6 +93,8 @@ For these: state the diff (was → now → why), present via `AskUserQuestion` (
 - **Quietly expanding scope** ("while I was at it I also fixed X in the adjacent file"). § 5 violation — silent substantive change. Ask first, even if the side change feels obviously beneficial.
 - **Treating "refinement" as cover for substantive change.** Adding a file to `Reference files` is substantive (§ 5), not refinement, even though it looks like "just an addition".
 - **Asking about a referenced file / script / skill without reading it first.** If the user mentions a file / script / skill you don't see in your working tree — `Read` it (and refresh the VCS view first if it's a tracked path that may have landed since your branch diverged — e.g. `arc fetch trunk` then `arc show arcadia/trunk:<path>`). Only `AskUserQuestion` *after* you have the actual content. Asking "how do we adapt X?" before reading X is the inverse of § 1 (`Read` is pre-authorized).
+- **Surfacing the executor choice (manager in-thread vs `developer` spawn) to the user.** Who types the code is an *internal* routing decision (CLAUDE.md § Classify task weight + the in-context carve-out) — decide it yourself and proceed. The user approves the **plan and its scope**, not the implementer. An `AskUserQuestion` offering "in-thread vs developer-spawn" is friction, not a genuine user decision.
+- **Re-asking to commit an in-scope edit.** `commit` on the assigned branch is plan-scope-declared (§ 2) — commit and report it. Only **push** (or a commit to a shared / protected branch) is a separate gate. Asking "commit in-thread?" for a file the plan exists to change is the same over-ask as asking permission for the edit itself.
 
 ## Policy ↔ settings.json alignment
 
