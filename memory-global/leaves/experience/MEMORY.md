@@ -6,6 +6,10 @@ Sub-index of `memory-global/leaves/experience/`. Pointed at from `memory-global/
 
 Most recent first.
 
+## 2026-06
+
+- [2026-06-04 — tech-writer specialization](2026-06-04-tech-writer-specialization.md) — created a Russian technical-writer/editor specialization (calque→plain-Russian list, README structure, writing principles). Two gotchas: CLAUDE.md was at the 400-line cap (reclaimed 2 lines by collapsing a `###` header to bold) and `verify-language` blocked the commit because its per-line within-3-lines exception rule can't cover a Cyrillic table — fix is fenced blocks / backtick spans (stripped before the check), the right pattern for any non-English-output skill.
+
 ## 2026-05
 
 - [2026-05-29 — cursor mount migration: symlink-invoked script self-linked .claude (ELOOP)](2026-05-29-cursor-mount-migration-symlink-eloop.md) — `migrate-cursor-namespace.sh --all-deepagent-mounts` invoked `setup-local.sh` through the mount's `.claude` symlink; the script's logical-`pwd` STORAGE resolved back to `.claude`, step 1 relinked `.claude` onto itself (ELOOP), breaking a ticket worktree. Recovered with one `ln -sfn` (storage intact), switched to the narrow `link-project-cursor-agents.sh`, fixed the caller with `readlink -f`. Footgun: a script that locates itself via logical pwd must be invoked by its real path.
