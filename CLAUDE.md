@@ -111,7 +111,7 @@ Cognitive inputs the manager supplies (mechanics are in `--help`):
 - `--plan` — markdown plan with the owned step marked `**<<this step>>**`.
 - `--done-criterion` + `--criterion-type` (`measurable` | `acceptance-review`).
 - `--context-dossier` — 5–10 line digest of conversation context the specialist cannot read on its own (intent nuances, rejected options, in-session decisions, terminology aliases). Omit if nothing's missable.
-- `--budget` — see table below.
+- `--budget` (cost ceiling) — see table below. `--complexity` (`low`/`medium`/`high` → haiku/sonnet/opus) sets the sub-agent model by **assessed task difficulty**, overriding the per-kind default; rubric in `--help`. Budget and complexity are distinct axes — a cheap-budget task can still need opus.
 - `--project-permissions <project>/.claude/agent-memory/permissions.json` if inside a project tree.
 
 **Budget tiers** (resolve to `budget-*-usd` in `config.md`):

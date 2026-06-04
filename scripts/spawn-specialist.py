@@ -223,19 +223,35 @@ def build_parser() -> argparse.ArgumentParser:
         help="claude --permission-mode for the spawned process. Default: bypassPermissions for kind=developer (trusted local writes), default otherwise.",
     )
     p.add_argument(
+        "--complexity",
+        choices=("low", "medium", "high"),
+        help="task difficulty -> sub-agent model: low=haiku, medium=sonnet, high=opus. "
+        "The manager sets this per spawn from how hard the ASSIGNED task is, not the "
+        "specialization. Rubric: "
+        "low  = mechanical / narrow / fully specified (single-file edit by an example, "
+        "rename, format/lint fix, fetch-and-summarize); "
+        "medium = standard implementation or analysis (multi-file change with tests, "
+        "scoped refactor, standard plan, routine debugging) -- pick this when unsure; "
+        "high = subtle reasoning, architecture, tricky debugging, cross-cutting change, "
+        "or adversarial verification where correctness is load-bearing. "
+        "Overrides the per-kind default; --model overrides this.",
+    )
+    p.add_argument(
         "--model",
-        help="model alias for the spawned process (e.g. sonnet, haiku, opus). "
-        "Default by kind: sonnet for developer/thinker/tech-writer/yandex-cloud-expert "
-        "(cheaper, ample for these roles); inherit the parent model for planner.",
+        help="explicit model alias (e.g. sonnet, haiku, opus). Wins over --complexity "
+        "and the per-kind default. Prefer --complexity unless you need an exact model.",
     )
     p.add_argument("--dry-run", action="store_true", help="print the prompt and the command that would run, then exit")
     return p
 
 
-# Default model per specialization. Cheap-but-capable Sonnet for the high-volume
-# implementation/analysis roles (Anthropic cost guidance: reserve Opus for
-# architecture / hard multi-step reasoning). planner is omitted on purpose so it
-# inherits the parent (stronger) model — plan quality drives everything downstream.
+# Task difficulty -> model. The manager judges difficulty per spawn; this is the
+# primary lever (see --complexity). Aliases resolve to the latest of each family.
+COMPLEXITY_MODEL = {"low": "haiku", "medium": "sonnet", "high": "opus"}
+
+# Fallback model per specialization, used only when neither --model nor --complexity
+# is given. Cheap-but-capable Sonnet for the high-volume implementation/analysis roles;
+# planner is omitted so it inherits the parent (stronger) model.
 MODEL_BY_KIND = {
     "developer": "sonnet",
     "thinker": "sonnet",
@@ -245,10 +261,12 @@ MODEL_BY_KIND = {
 
 
 def resolve_model(args: argparse.Namespace) -> str | None:
-    """Model alias for `claude -p --model`. User `--model` wins; else map by kind;
-    else None (inherit the parent process model)."""
+    """Model alias for `claude -p --model`, by precedence:
+    explicit --model > --complexity map > per-kind default > None (inherit parent)."""
     if args.model:
         return args.model
+    if args.complexity:
+        return COMPLEXITY_MODEL[args.complexity]
     return MODEL_BY_KIND.get(args.kind)
 
 
