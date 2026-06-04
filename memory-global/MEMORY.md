@@ -28,6 +28,8 @@ Loaded into every session via `@~/.claude/memory-global/MEMORY.md` import in `CL
 - [Skill catalog curation](leaves/skill-catalog-curation.md) — discipline for keeping the user-invocable skill catalog lean; periodic audit via `scripts/skill-usage-audit.py`.
 - [Large tool-output discipline](leaves/large-tool-output-discipline.md) — pipe high-volume Bash commands through `scripts/offload-large.sh` so the model gets a head+tail digest and the full bytes live in `/tmp/cc-scratch/`.
 - [Plan-file split](leaves/plan-file-split.md) — for plans > ~20 KB / > 3 stages, split into index + per-stage files so later Reads pull only the active stage.
+- [Spawning specialists](leaves/spawning-specialists.md) — full `claude -p` spawn mechanics: spawn-template inputs, budget tiers, recursion cap, monitoring a running spawn, after-spawn `status`+`log` checks, `bypassPermissions` discipline, return markers.
+- [Handling escalations](leaves/handling-escalations.md) — how the manager resolves each specialist return marker (PLAN-READY / CLARIFY / REPLAN / PERMISSION-REQUEST / ESCALATE / INCOMPLETE / COMPLETED) and the continuation-prompt templates for re-spawning.
 
 ## Tooling and mechanics
 

@@ -101,114 +101,13 @@ If a job is too small to justify even an inline invocation (single-sentence answ
 
 A **spawned specialist** is a fresh Claude Code process (`claude -p`) with a specialization skill appended to its system prompt. No parent conversation history, but the same CLAUDE.md, memory, skills, and tools. Use this mode when inline (see § Invoking specialists above) is not sufficient: large scope, fresh-context-as-feature, multi-stage work, or you want the spawn-cost log entry.
 
-#### Spawn template
+Use `scripts/spawn-specialist.py` (`--help` for flags, `--dry-run` to preview). The manager supplies the cognitive inputs: `--kind`, `--plan` with the owned step marked `**<<this step>>**`, `--done-criterion` + `--criterion-type`, `--context-dossier`, `--budget` tier (`small` / `medium` default / `large` → `budget-*-usd`), `--complexity` (model by difficulty), `--project-permissions`. The wrapper enforces `max-recursion-depth` (refuses with exit 3 — **do not retry**; summarize and ask the user) and defaults `kind=developer` to `--permission-mode bypassPermissions`, which **requires** an explicit hard-deny list in the dossier (no `cd` / Write / `arc commit` outside the assigned mount; start-of-session `pwd` self-check). Monitor a running `developer` spawn via the `transcript=<path>` it prints to stderr; **kill early** on drift, then check **both** `arc status` *and* `arc log -n 5` before the next move.
 
-Use `scripts/spawn-specialist.py` — it handles process concerns (recursion-cap check, budget-tier resolution, permission digest, return-marker validation, cost log). Run `--help` for the flag list; `--dry-run` previews the assembled prompt and command.
-
-Cognitive inputs the manager supplies (mechanics are in `--help`):
-
-- `--kind` — specialization name (must exist at `~/.claude/skills/<kind>/SKILL.md`): `planner` / `developer` / `thinker` / `yandex-cloud-expert` / `tech-writer` / project-local.
-- `--plan` — markdown plan with the owned step marked `**<<this step>>**`.
-- `--done-criterion` + `--criterion-type` (`measurable` | `acceptance-review`).
-- `--context-dossier` — 5–10 line digest of conversation context the specialist cannot read on its own (intent nuances, rejected options, in-session decisions, terminology aliases). Omit if nothing's missable.
-- `--budget` (cost ceiling) — see table below. `--complexity` (`low`/`medium`/`high` → haiku/sonnet/opus) sets the sub-agent model by **assessed task difficulty**, overriding the per-kind default; rubric in `--help`. Budget and complexity are distinct axes — a cheap-budget task can still need opus.
-- `--project-permissions <project>/.claude/agent-memory/permissions.json` if inside a project tree.
-
-**Budget tiers** (resolve to `budget-*-usd` in `config.md`):
-
-| Tier | Use for |
-|---|---|
-| `small` | Single-file edit, narrow analysis, short plan refinement |
-| `medium` | Multi-file change with tests, scoped refactor, standard plan — default when in doubt |
-| `large` | Cross-cutting change, multi-stage plan, full feature, expensive research |
-
-A specialist that hits its cap returns control with whatever it has.
-
-#### Recursion cap
-
-`spawn-specialist.py` enforces `max-recursion-depth` (config.md): refuses with exit 3 when the next depth would exceed it. Applies to every `claude -p` invocation, including `overcome-difficulty`'s recursive escape — no exemption.
-
-On refuse — **do not retry**. Stop, summarize for the user (original task, current chain state, what the next spawn would do, why the cap hit), ask whether to continue manually, restart, or accept partial.
-
-#### Monitoring a running spawn
-
-`spawn-specialist.py` prints `transcript=<path>` to stderr within ~10s — the freshest jsonl under `~/.claude/projects/<sanitized-cwd>/` that didn't exist before the spawn. Tail that file periodically (~5 min cadence for `developer` spawns) to catch divergence: wrong `cwd`, writes/commits outside the assigned mount, off-scope work (e.g. running someone else's smoke test). **Kill early** — one rescoped re-spawn is cheaper than waiting for a runaway to exhaust its cap.
-
-#### After the spawn (kill or completion)
-
-Before deciding the next move (accept, re-spawn, manual takeover), check **both** uncommitted state *and* commit history on the assigned branch:
-
-```bash
-arc status      # uncommitted changes only
-arc log -n 5    # whether the spawn committed on-scope work before drifting
-```
-
-(git equivalents in non-arc repos.) A spawn killed for off-scope behavior may still have committed legitimate on-scope work before drifting — `status` is clean, but `log` shows the commit. Skipping `log` has cost a redundant verification spawn in one observed case.
-
-#### `bypassPermissions` for `developer`
-
-The wrapper defaults `kind=developer` to `--permission-mode bypassPermissions` so the child can perform unattended Read / Grep / Write on the assigned mount. The harness no longer prompts on individual writes — that safety is replaced by **prompt-level discipline**:
-
-- The `--constraints` / dossier **must** contain an explicit hard-deny list — no `cd` / no Write / no Edit / no `arc commit` outside `<assigned-mount>`, no `ya package` / `docker push` / smoke tests of other tickets — plus a self-check at session start (`pwd` ⊆ expected mount; if not, return `CLARIFY:`).
-- Without this discipline the child treats sibling mounts (referenced as "analogs") as fair game for "understanding through execution".
-
-#### Return markers
-
-Each specialist's first non-empty line carries one of these. The wrapper validates and prefixes the output with `MALFORMED:` if the marker is missing.
-
-- `COMPLETED:` — step done; summary + artifacts.
-- `PLAN-READY:` — **planner-only.** Plan ready; manager must obtain explicit user approval before next spawn. Hard gate.
-- `INCOMPLETE:` — partial; what's done, what's left, blocker.
-- `CLARIFY:` — specialist needs one specific fact (path, number, choice between named options) to continue. Manager answers, re-spawns with answer embedded.
-- `REPLAN:` — plan-level difficulty; specialist proposes a revision.
-- `PERMISSION-REQUEST:` — explicit permission needed for a specific external / irreversible action.
-- `ESCALATE:` — other decision (manager or user) affecting plan / scope.
-
-`CLARIFY:` vs `ESCALATE:` — fact vs decision. Prefer `CLARIFY:` when work resumes immediately on the answer.
+Each specialist's first non-empty line carries a **return marker** — `COMPLETED:` / `PLAN-READY:` (planner-only, hard gate) / `INCOMPLETE:` / `CLARIFY:` (one fact) / `REPLAN:` / `PERMISSION-REQUEST:` / `ESCALATE:` (decision); the wrapper prefixes `MALFORMED:` if absent. `CLARIFY:` vs `ESCALATE:` = fact vs decision. Full spawn mechanics — template inputs, budget table, recursion-cap handling, monitoring cadence, after-spawn checks, `bypassPermissions` discipline, marker semantics — in [spawning-specialists.md](memory-global/leaves/spawning-specialists.md).
 
 ### Handling specialist escalations
 
-**On `PLAN-READY:`** — **stop and present the plan to the user for explicit approval** before any further spawn. Do not infer approval from silence or from a side comment; require a positive answer. On `approve` — proceed to the next plan step. On `change` — update the plan (in-thread or by re-spawning planner) and ask again.
-
-**On `CLARIFY:`** — answer the specialist's question directly (in user-visible text if the user can usefully see the question; otherwise inline). Re-spawn the specialist with the answer embedded in a continuation prompt:
-
-```
-The earlier CLARIFY: question — <restate question> — is answered: <answer>.
-Continue from where you stopped:
-<continuation context>
-```
-
-If the question requires the user's input (intent, preference, choice), ask the user first; do not invent an answer.
-
-**On `REPLAN:`** — incorporate the proposed revision (possibly after asking the user), update the plan, re-spawn the same or a different specialist with the revised plan.
-
-**On `PERMISSION-REQUEST:`** —
-
-1. **Check existing grants** with `scripts/permissions-cli.py check "<requested action>"` against the global file (default) **and** against `<cwd>/.claude/agent-memory/permissions.json` via `--file` if you are in a project tree. Exit code 0 = matched, treat as granted, go to step 4.
-2. **Otherwise ask the user** with the request. Options:
-   - **Once** — granted for this specific action only.
-   - **Always (project)** — `scripts/permissions-cli.py grant <pattern> --file <cwd>/.claude/agent-memory/permissions.json --context "..."`.
-   - **Always (global)** — `scripts/permissions-cli.py grant <pattern> --context "..."`.
-   - **No, do fallback** — deny.
-3. **On any `always` grant** — the `grant` subcommand stamps the date and writes the entry; no manual editing of the JSON file.
-4. **Re-spawn the specialist** with the resolution embedded in the new prompt:
-
-   ```
-   The earlier PERMISSION-REQUEST for <action> was resolved: GRANTED (scope: once / project / global) or DENIED.
-   [If granted persistently:] Recorded in <path>.
-   [If denied:] Do not perform <action>; use your stated fallback or stop.
-
-   Continue from where you stopped:
-   <continuation context>
-   ```
-
-**On `ESCALATE:`** — resolve the question (with the user if necessary), then re-spawn the specialist with the answer or hand back to the broader plan.
-
-**On `INCOMPLETE:`** — decide: re-spawn with more context, ask the user, or accept the partial.
-
-**On `COMPLETED:`** — move to the next plan step.
-
-> Workflow-level permissions (this section) are independent of Claude Code's tool-call permissions in `~/.claude/settings.json`. The two are checked separately: a tool call may be allowed by settings but still need workflow permission for the higher-level action (e.g. `Bash` is allowed, but pushing to `main` is a workflow-level action that needs explicit permission).
+Resolve each return marker, then re-spawn the specialist with the resolution embedded in a continuation prompt. **`PLAN-READY:` is a hard gate** — stop and get explicit user approval before any further spawn; never infer approval from silence. `CLARIFY:` — answer the specific fact (ask the user first if it needs their input). `REPLAN:` — incorporate the revision, update the plan. `PERMISSION-REQUEST:` — check existing grants via `scripts/permissions-cli.py check` (global **and** project file) before asking the user; persist any `always` grant via `permissions-cli.py grant`. `ESCALATE:` — resolve the decision (with the user if needed). `INCOMPLETE:` — re-spawn / ask / accept partial. `COMPLETED:` — next step. Per-marker continuation-prompt templates and the workflow-vs-tool-permission distinction in [handling-escalations.md](memory-global/leaves/handling-escalations.md).
 
 ### Outcome format
 
