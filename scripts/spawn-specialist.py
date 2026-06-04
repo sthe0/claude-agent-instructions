@@ -222,8 +222,34 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("acceptEdits", "auto", "bypassPermissions", "default", "dontAsk", "plan"),
         help="claude --permission-mode for the spawned process. Default: bypassPermissions for kind=developer (trusted local writes), default otherwise.",
     )
+    p.add_argument(
+        "--model",
+        help="model alias for the spawned process (e.g. sonnet, haiku, opus). "
+        "Default by kind: sonnet for developer/thinker/tech-writer/yandex-cloud-expert "
+        "(cheaper, ample for these roles); inherit the parent model for planner.",
+    )
     p.add_argument("--dry-run", action="store_true", help="print the prompt and the command that would run, then exit")
     return p
+
+
+# Default model per specialization. Cheap-but-capable Sonnet for the high-volume
+# implementation/analysis roles (Anthropic cost guidance: reserve Opus for
+# architecture / hard multi-step reasoning). planner is omitted on purpose so it
+# inherits the parent (stronger) model — plan quality drives everything downstream.
+MODEL_BY_KIND = {
+    "developer": "sonnet",
+    "thinker": "sonnet",
+    "tech-writer": "sonnet",
+    "yandex-cloud-expert": "sonnet",
+}
+
+
+def resolve_model(args: argparse.Namespace) -> str | None:
+    """Model alias for `claude -p --model`. User `--model` wins; else map by kind;
+    else None (inherit the parent process model)."""
+    if args.model:
+        return args.model
+    return MODEL_BY_KIND.get(args.kind)
 
 
 def _snapshot_transcripts() -> set[Path]:
@@ -322,6 +348,9 @@ def main(argv: list[str] | None = None) -> int:
     permission_mode = resolve_permission_mode(args)
     if permission_mode is not None:
         cmd.extend(["--permission-mode", permission_mode])
+    model = resolve_model(args)
+    if model is not None:
+        cmd.extend(["--model", model])
     cmd.append(prompt)
 
     if args.dry_run:

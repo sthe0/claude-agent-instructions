@@ -350,23 +350,23 @@ Cite the source where possible (`> verified by: <commit>/<URL>/<conversation>`).
 
 ---
 
+## Cost discipline
+
+- **Keep the main thread lean** — ~90% of spend is cache read/write on accumulated context (not the static prefix), so **delegate verbose / exploratory work to a sub-agent** (multi-file reads, log diving, broad search, test runs, bulk research): only the conclusion returns, the volume stays in the sub-agent. Sub-agents default to Sonnet (`spawn-specialist.py`).
+- **One task ≈ one session:** `/clear` between unrelated tasks; lower `/effort` for chat / dispatch, reserve high/xhigh for implementation (thinking bills as output). On `/compact`, keep goal + done criterion, approved plan + active stage, decisions/why, open blockers; drop verbose tool output.
+- Harness enforces the rest (model `opus` 200k, `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`, `BASH_MAX_OUTPUT_LENGTH`); use `/usage` to attribute burn. Full programme: [token-economy-plan.md](memory-global/leaves/token-economy-plan.md).
+
+---
+
 ## Instruction language
 
-All text in `~/claude-agent-instructions/` and in any `.claude/agent-memory/` is **English** by default. Non-English fragments need an adjacent rationale (`> **Language exception:** …`). User-facing **replies** use the same language as the user's request.
-
-Full rule: `~/.claude/skills/self-improvement/policy.md` § Instruction language.
+All text in `~/claude-agent-instructions/` and `.claude/agent-memory/` is **English** by default (non-English needs an adjacent `> **Language exception:** …`); user-facing replies match the user's request. Full rule: `~/.claude/skills/self-improvement/policy.md` § Instruction language.
 
 ---
 
 ## Instructions repository (git)
 
-Edit policy for `~/claude-agent-instructions/`:
-
-1. **Before edit** — `~/claude-agent-instructions/scripts/sync-instructions-repo.sh pull`, then reconcile if pull brought new commits.
-2. **After edit** — `git commit` (mandatory); `sync-instructions-repo.sh push` only after **explicit user confirmation** when the commit is ready.
-3. Background cron — `pull` every 10 min.
-
-Full workflow: `~/.claude/skills/self-improvement/policy.md` § Git sync.
+Edit policy for `~/claude-agent-instructions/`: `sync-instructions-repo.sh pull` + reconcile before editing; `git commit` after (mandatory); `push` only after **explicit user confirmation**. Full workflow: `~/.claude/skills/self-improvement/policy.md` § Git sync.
 
 ---
 
