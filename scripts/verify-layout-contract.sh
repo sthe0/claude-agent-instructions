@@ -54,6 +54,7 @@ require_file "$REPO/skills/specializations/planner/SKILL.md"
 require_file "$REPO/skills/specializations/developer/SKILL.md"
 require_file "$REPO/skills/specializations/thinker/SKILL.md"
 require_file "$REPO/skills/specializations/yandex-cloud-expert/SKILL.md"
+require_file "$REPO/skills/specializations/tech-writer/SKILL.md"
 
 require_dir "$REPO/memory-global"
 require_file "$REPO/memory-global/MEMORY.md"

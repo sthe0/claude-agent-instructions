@@ -161,6 +161,7 @@ When a plan step calls for a specialization, **read the SKILL.md inline** and ap
 | `developer` | Writing, refactoring, debugging, reviewing production code | `~/.claude/skills/developer/SKILL.md` |
 | `thinker` | Reasoning check on a non-trivial chain (note: no fresh-context isolation available in Cursor) | `~/.claude/skills/thinker/SKILL.md` |
 | `yandex-cloud-expert` | Yandex Cloud setup / `yc` operations | `~/.claude/skills/yandex-cloud-expert/SKILL.md` |
+| `tech-writer` | Russian README / docs authoring; polishing a plan or a detailed Russian comment (clear, concise Russian, no calques/jargon) | `~/.claude/skills/tech-writer/SKILL.md` |
 
 The SKILL.md bodies are written for the spawned-process model (they say "you have been spawned as a fresh manager"). In Cursor, treat that framing as guidance about the **role** to adopt and the **working principles** to follow, not literal instructions about a separate process. Return markers (`COMPLETED:` / `PLAN-READY:` / `INCOMPLETE:` / `CLARIFY:` / `REPLAN:` / `PERMISSION-REQUEST:` / `ESCALATE:`) are meaningful as **internal phase markers** in your in-thread work — they tell you when to pause and check with the user.
 

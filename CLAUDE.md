@@ -76,6 +76,7 @@ Not mandatory only for neutral confirmation ("ok", "yes do it", "thanks") and fo
 | Production code, VCS, build, PR | `developer` specialization — inline via `Skill`, or spawn `claude -p` for larger work |
 | Independent reasoning check on a non-trivial chain | `thinker` specialization — prefer spawn `claude -p` (its value is fresh, unanchored context) |
 | Yandex Cloud / `yc` operations | `yandex-cloud-expert` specialization — inline via `Skill`, or spawn `claude -p` |
+| Russian README / docs; polishing a plan before showing it; a detailed Russian comment to the user (not short replies) | `tech-writer` specialization — inline via `Skill` for plan / comment polishing, spawn `claude -p` for from-scratch README / docs |
 | Other domain expertise | Project-local specialization if one exists in `<cwd>/.claude/skills/specializations/`; else domain MCP / search |
 | User mentions a ticket / issue / tracker, or a ticket key like `ABC-123` | `tracker-management` skill (inline, layered on top of coordination) |
 | Difficulty in the work itself | `overcome-difficulty` skill (inline; with recursive escape via vanilla `claude -p`) |
@@ -87,7 +88,7 @@ If the need exists but is not stated — state it explicitly and propose delegat
 
 ### Invoking specialists
 
-A **specialist** is a specialization skill (`planner` / `developer` / `thinker` / `yandex-cloud-expert` / project-local) executed in one of two modes:
+A **specialist** is a specialization skill (`planner` / `developer` / `thinker` / `yandex-cloud-expert` / `tech-writer` / project-local) executed in one of two modes:
 
 - **Inline** — invoke via the `Skill` tool. The skill body is loaded into the current process; the manager adopts the role and applies its working principles in-thread. No fresh context, no separate budget, no spawn cost. The SKILL.md framing ("you are a fresh manager process") becomes guidance about the **role** to adopt; the return markers (`COMPLETED:` / `PLAN-READY:` / `INCOMPLETE:` / `CLARIFY:` / `REPLAN:` / `PERMISSION-REQUEST:` / `ESCALATE:`) become **internal phase markers** signalling where to pause and check with the user. Use when the manager has the relevant files loaded and the work fits the carve-out in § Classify task weight.
 - **Spawned** — `claude -p` with the skill appended to the system prompt (see § Spawning specialists below). A fresh process — no parent conversation history, separate budget, clean role separation, cost-log entry. Use for large or multi-step work, when fresh context is genuinely useful (especially for `thinker`), or when accountability via spawn-cost log is wanted.
@@ -106,7 +107,7 @@ Use `scripts/spawn-specialist.py` — it handles process concerns (recursion-cap
 
 Cognitive inputs the manager supplies (mechanics are in `--help`):
 
-- `--kind` — specialization name (must exist at `~/.claude/skills/<kind>/SKILL.md`): `planner` / `developer` / `thinker` / `yandex-cloud-expert` / project-local.
+- `--kind` — specialization name (must exist at `~/.claude/skills/<kind>/SKILL.md`): `planner` / `developer` / `thinker` / `yandex-cloud-expert` / `tech-writer` / project-local.
 - `--plan` — markdown plan with the owned step marked `**<<this step>>**`.
 - `--done-criterion` + `--criterion-type` (`measurable` | `acceptance-review`).
 - `--context-dossier` — 5–10 line digest of conversation context the specialist cannot read on its own (intent nuances, rejected options, in-session decisions, terminology aliases). Omit if nothing's missable.
@@ -379,6 +380,7 @@ Full workflow: `~/.claude/skills/self-improvement/policy.md` § Git sync.
 | `developer` | Writing, refactoring, debugging, reviewing production code |
 | `thinker` | Independent reasoning check on a non-trivial chain |
 | `yandex-cloud-expert` | Yandex Cloud setup / `yc` operations |
+| `tech-writer` | Russian README / docs authoring (plan & comment polishing is usually inline) |
 
 Project-local specializations may live in `<cwd>/.claude/skills/specializations/<name>/SKILL.md` and are spawned the same way.
 
@@ -390,9 +392,7 @@ Project-local specializations may live in `<cwd>/.claude/skills/specializations/
 | `self-improvement` | Substantive user correction / feedback about agent behavior |
 | `tracker-management` | User mentions a ticket / issue / tracker |
 
-### Task-spawned subagents
-
-`~/.claude/agents/` is currently empty in the global layer. The infrastructure remains for future use when a true `Task`-spawned subagent is the right fit (one-shot research with parallel fan-out, isolated read-only worker, etc.). Project-local subagents may live in `<cwd>/.claude/agents/`.
+**Task-spawned subagents.** `~/.claude/agents/` is currently empty in the global layer. The infrastructure remains for future use when a true `Task`-spawned subagent is the right fit (one-shot research with parallel fan-out, isolated read-only worker, etc.). Project-local subagents may live in `<cwd>/.claude/agents/`.
 
 ---
 

@@ -159,6 +159,7 @@ skills/                              # flat skills + specializations container
     developer/SKILL.md
     thinker/SKILL.md
     yandex-cloud-expert/SKILL.md
+    tech-writer/SKILL.md             # Russian technical writer / editor (README, docs, plan & comment polishing)
 skills-local/                        # gitignored; machine-local single-file skills
 mcp-local/                           # gitignored; applied to settings.local.json
 cursor/

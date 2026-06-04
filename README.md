@@ -15,7 +15,7 @@ File layout, instruction language, and the git workflow live in [skills/self-imp
 | **Root coordinator** | The main Claude Code dialog. Coordinates, decides routing, does not replace specialists. Acts as the manager — there is no separate manager subagent. |
 | **Subagent** | Prompt file in `agents/` (or `~/.claude/agents/` for machine-local) — invoked via `Task`, `subagent_type: <name>`. Currently no shipped subagents; infrastructure remains for future use. |
 | **Flat skill** | Directory in `skills/<name>/` with `SKILL.md`. Invoked **inline** by the `Skill` tool or `/<name>`. Runs in the main thread, sees full context. Ships: `overcome-difficulty`, `self-improvement`, `tracker-management`. |
-| **Specialization skill** | Directory in `skills/specializations/<name>/` with `SKILL.md`. Symlinked flat into `~/.claude/skills/<name>/`. Spawned as a separate `claude -p` process with `--append-system-prompt-file`. Ships: `planner`, `developer`, `thinker`, `yandex-cloud-expert`. |
+| **Specialization skill** | Directory in `skills/specializations/<name>/` with `SKILL.md`. Symlinked flat into `~/.claude/skills/<name>/`. Spawned as a separate `claude -p` process with `--append-system-prompt-file`. Ships: `planner`, `developer`, `thinker`, `yandex-cloud-expert`, `tech-writer`. |
 | **Global memory** | `~/.claude/memory-global/MEMORY.md` + `leaves/` — cross-project facts and practices. Imported into every session via `@…` in `CLAUDE.md`. |
 | **Project memory** | `<project_cwd>/.claude/agent-memory/` — project-specific runbooks. Symlinked from `~/.claude/projects/<cwd-hash>/memory/` by `scripts/setup-project-memory.sh`, so native auto-memory reads / writes through the symlink. Committed to the project's git. |
 
@@ -144,6 +144,7 @@ Canonical path in repo: `skills/specializations/<name>/SKILL.md`. Symlinked flat
 | `developer` | Writing, refactoring, debugging, reviewing production code | [skills/specializations/developer/SKILL.md](skills/specializations/developer/SKILL.md) |
 | `thinker` | Independent reasoning check on a non-trivial chain | [skills/specializations/thinker/SKILL.md](skills/specializations/thinker/SKILL.md) |
 | `yandex-cloud-expert` | Yandex Cloud / `yc` operations | [skills/specializations/yandex-cloud-expert/SKILL.md](skills/specializations/yandex-cloud-expert/SKILL.md) |
+| `tech-writer` | Russian README / documentation authoring; polishing plans & long comments | [skills/specializations/tech-writer/SKILL.md](skills/specializations/tech-writer/SKILL.md) |
 
 Full spawn template and return-marker handling: [CLAUDE.md](CLAUDE.md) § Spawning specialists.
 
