@@ -88,6 +88,12 @@ These almost always need `PERMISSION-REQUEST:` before execution unless the grant
 - Drop / delete data or artifacts other people may depend on.
 - `git reset --hard` on a branch with others' commits.
 
+## Commit & push cadence
+
+On a **personal ticket / working branch** (anything not main / master / release-*), commit in small increments and **push after each commit** (`arc push` / `git push`). Frequent pushed commits make rollback cheap and keep the manager's PR current — never withhold ticket-branch pushes waiting for the coordinator to "handle the PR". Pushing to an **open PR's branch is safe**: in Arcanum the pushed commits land as a **draft** update and are not shown to reviewers until an explicit `arc pr publish`. Only **shared-branch** pushes (§ When the plan step involves external / irreversible actions) need `PERMISSION-REQUEST:`.
+
+When your work updates an open PR, add a **short PR comment** for anything **launched manually by us** (test / smoke runs, graph WIs — even non-graph scripts): one line of result / status + the exact **relaunch command** + link (WI / Sandbox / paste). Reviewers must be able to reproduce without spelunking.
+
 ## Rebase / merge conflicts (deleted on upstream)
 
 When rebasing onto main / trunk, read VCS status and conflict type, not only inline markers.
