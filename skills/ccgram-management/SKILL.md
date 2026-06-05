@@ -56,6 +56,11 @@ CCGram bridges Telegram ↔ tmux on each of the user's machines. Each machine ru
 | `claude not found in PATH` from `ccgram doctor` | nvm not loaded in non-interactive shell | Use `bash -ic` or `bash -lc` to run doctor; the systemd unit on `the0.fun` already adds nvm bin to PATH. |
 | Topics appear but no message routing | Hooks not installed | Run `ccgram hook --install`. |
 | Daemon exits or restarts repeatedly | Look in `~/.ccgram/ccgram.log` first | Common: revoked bot token (re-issue in BotFather + update `.env`), or one ccgram daemon polling the same bot's `getUpdates` twice. |
+| Bridge "отвалилась" but daemon shows `active` and `getMe` returns 200 | **Disk filled up (`OSError: [Errno 28] No space left on device`)** — background loops (`Status poll loop`, topic autoclose) crash and do **not** self-resurrect; the main process stays `active` so `status` looks healthy. Also: stale tmux window → topic binding after a session ended ("Could not probe same-name topic … not rebinding"). | `grep -c 'No space left' ~/.ccgram/ccgram.log` and check `df -h /` **first**. Free disk, then `systemctl --user restart ccgram.service` (Linux) / `launchctl kickstart -k` (Mac) — a restart is the only thing that revives the dead loops and re-binds windows. Transient `Reset Telegram polling … TimedOut` lines that self-recover are **not** this — they are flaky IPv6 egress to `api.telegram.org`, not a daemon bug. |
+
+## Monitoring (the0.klg host)
+
+`~/bin/ccgram-watchdog.sh` + `ccgram-watchdog.timer` (systemd --user, every 10 min) alert into the bridge's own Telegram group on: disk `/` ≥ 90%, `No space left` in the log, ≥ 10 polling timeouts/hour, or a dead daemon. Anti-spam: re-alerts a standing condition at most once per 2 h, sends a `✓` on recovery. Timeout count is parsed from `ccgram.log` (dateless `HH:MM:SS`, UTC) via `tail -n 2000` + awk windowing — the daemon's structlog output does **not** reach the systemd journal, so `journalctl` cannot be used for it. Not yet deployed to Mac / `the0.fun`.
 
 ## Set up a new machine
 
