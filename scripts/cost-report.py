@@ -18,12 +18,41 @@ import argparse
 import csv
 import datetime as dt
 import json
+import re
 import statistics
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
 COST_LOG = Path.home() / ".local" / "log" / "claude-spawn-costs.jsonl"
+PROJECTS_DIR = Path.home() / ".claude" / "projects"
+
+# USD per 1M tokens. Rates change — refresh via the `claude-api` skill.
+# cache_write = 5-minute cache-creation rate (1.25x base input); cache_read = 0.1x base input.
+PRICING_USD_PER_MTOK = {
+    "opus":   {"input": 15.0, "output": 75.0, "cache_write": 18.75, "cache_read": 1.50},
+    "sonnet": {"input": 3.0,  "output": 15.0, "cache_write": 3.75,  "cache_read": 0.30},
+    "haiku":  {"input": 1.0,  "output": 5.0,  "cache_write": 1.25,  "cache_read": 0.10},
+}
+_FALLBACK_RATES = PRICING_USD_PER_MTOK["opus"]
+
+
+def _rates_for(model: str | None) -> dict:
+    m = (model or "").lower()
+    for key in ("opus", "sonnet", "haiku"):
+        if key in m:
+            return PRICING_USD_PER_MTOK[key]
+    return _FALLBACK_RATES
+
+
+def token_cost(usage: dict, model: str | None) -> float:
+    r = _rates_for(model)
+    return (
+        (usage.get("input_tokens", 0) or 0) * r["input"]
+        + (usage.get("output_tokens", 0) or 0) * r["output"]
+        + (usage.get("cache_creation_input_tokens", 0) or 0) * r["cache_write"]
+        + (usage.get("cache_read_input_tokens", 0) or 0) * r["cache_read"]
+    ) / 1_000_000
 
 
 def parse_entries(path: Path) -> list[dict]:
@@ -184,6 +213,133 @@ def csv_out(spawns: list[dict], refused: list[dict]) -> str:
     return buf.getvalue().rstrip()
 
 
+INTERRUPT_SENTINEL = "[Request interrupted by user]"
+CORRECTION_RE = re.compile(
+    r"нет\b|не так|неправильн|неверн|поправ|по-русски|шире|только\b|"
+    r"wrong|actually|instead|not just|don't|почему (?:только|ты)|не нужно|не надо",
+    re.IGNORECASE,
+)
+
+
+def _iter_jsonl(path: Path):
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                yield json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+
+def _msg_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(c.get("text", "") for c in content
+                        if isinstance(c, dict) and c.get("type") == "text")
+    return ""
+
+
+def _is_tool_result(content) -> bool:
+    return isinstance(content, list) and any(
+        isinstance(c, dict) and c.get("type") == "tool_result" for c in content
+    )
+
+
+def parse_transcripts(files: list[Path], classify: bool = False) -> dict:
+    """Aggregate token usage + interaction counts from session transcript JSONL.
+
+    Real user prompts = type:user lines whose content is text (not a tool_result).
+    AskUserQuestion tool_use calls count as agent->user asks.
+    """
+    by_model_tokens: dict[str, Counter] = defaultdict(Counter)
+    interactive_usd = 0.0
+    user_prompts = interrupts = asks = corrections = 0
+    timestamps: list[str] = []
+    for path in files:
+        for d in _iter_jsonl(path):
+            ts = d.get("timestamp") or (d.get("message") or {}).get("ts")
+            if isinstance(ts, str):
+                timestamps.append(ts)
+            typ = d.get("type")
+            msg = d.get("message") if isinstance(d.get("message"), dict) else {}
+            if typ == "assistant":
+                usage = msg.get("usage")
+                if usage:
+                    model = msg.get("model")
+                    interactive_usd += token_cost(usage, model)
+                    tok = by_model_tokens[model or "?"]
+                    for k in ("input_tokens", "output_tokens",
+                              "cache_creation_input_tokens", "cache_read_input_tokens"):
+                        tok[k] += usage.get(k, 0) or 0
+                for c in (msg.get("content") or []):
+                    if (isinstance(c, dict) and c.get("type") == "tool_use"
+                            and c.get("name") == "AskUserQuestion"):
+                        asks += 1
+            elif typ == "user":
+                content = msg.get("content")
+                if _is_tool_result(content):
+                    continue
+                text = _msg_text(content)
+                if not text.strip():
+                    continue
+                if INTERRUPT_SENTINEL in text:
+                    interrupts += 1
+                else:
+                    user_prompts += 1
+                    if classify and CORRECTION_RE.search(text):
+                        corrections += 1
+    return {
+        "by_model_tokens": by_model_tokens,
+        "interactive_usd": interactive_usd,
+        "user_prompts": user_prompts,
+        "interrupts": interrupts,
+        "asks": asks,
+        "corrections": corrections,
+        "classify": classify,
+        "span": (min(timestamps), max(timestamps)) if timestamps else None,
+        "n_files": len(files),
+    }
+
+
+def resolve_project(project: str) -> list[Path]:
+    p = Path(project).expanduser()
+    if not p.exists():
+        p = PROJECTS_DIR / project
+    if p.is_dir():
+        return sorted(f for f in p.glob("*.jsonl"))
+    if p.is_file():
+        return [p]
+    return []
+
+
+def budget_report(tr: dict, spawn_cost: float, spawn_note: str) -> str:
+    low, high = spawn_cost, spawn_cost + tr["interactive_usd"]
+    L = ["=== Full-budget estimate (low -> high) ==="]
+    L.append(f"  A. Spawns (claude -p)            {fmt_usd(spawn_cost):>10}   measured    {spawn_note}")
+    L.append(f"  B. Interactive main session      {fmt_usd(tr['interactive_usd']):>10}   estimated   token x price, {tr['n_files']} transcript(s)")
+    L.append(f"  C. Subagent (Agent tool)                 $?   partial     not isolated from main transcript")
+    L.append(f"  D. External compute (Nirvana/Sandbox)    $?   n/a         robot compute, not captured")
+    L.append(f"  -> budget ~ {fmt_usd(low)} (measured) ... {fmt_usd(high)} (spawns + interactive est.); +C/+D unmeasured on top")
+    L.append("")
+    L.append("=== Token usage (interactive, by model) ===")
+    for model, tok in sorted(tr["by_model_tokens"].items()):
+        L.append(f"  {model:<22} in={tok['input_tokens']:>9}  out={tok['output_tokens']:>8}  "
+                 f"cache_w={tok['cache_creation_input_tokens']:>9}  cache_r={tok['cache_read_input_tokens']:>11}")
+    L.append("")
+    L.append("=== Interaction cost (agent <-> you) ===")
+    L.append(f"  your prompts:                     {tr['user_prompts']}")
+    L.append(f"  your interrupts:                  {tr['interrupts']}")
+    L.append(f"  agent->you asks (AskUserQuestion): {tr['asks']}")
+    if tr["classify"]:
+        L.append(f"  likely corrections (heuristic, approximate): {tr['corrections']}")
+    if tr["span"]:
+        L.append(f"\n  span: {tr['span'][0]} ... {tr['span'][1]}")
+    return "\n".join(L)
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--log", type=Path, default=COST_LOG, help=f"cost log path (default: {COST_LOG})")
@@ -192,9 +348,35 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--by", choices=("kind", "tier", "day"), default="kind", help="grouping for summary")
     p.add_argument("--detail", action="store_true", help="print one row per entry instead of summary")
     p.add_argument("--csv", action="store_true", help="emit CSV (with all fields)")
+    p.add_argument("--project", help="project dir or cwd-hash under ~/.claude/projects: full-budget interval + interaction cost from session transcripts")
+    p.add_argument("--session", help="a single session transcript .jsonl (instead of a whole project)")
+    p.add_argument("--classify-corrections", action="store_true", help="heuristically flag likely correction prompts (approximate)")
     args = p.parse_args(argv)
 
     entries = parse_entries(args.log)
+
+    if args.project or args.session:
+        files = resolve_project(args.session or args.project)
+        if not files:
+            print(f"(no transcripts found for {args.session or args.project})")
+            return 0
+        tr = parse_transcripts(files, classify=args.classify_corrections)
+        spawn_cost, note = 0.0, "spawn log empty"
+        spawns_all = split_events(entries)[0]
+        if tr["span"] and spawns_all:
+            try:
+                lo, hi = parse_ts(tr["span"][0]), parse_ts(tr["span"][1])
+                sp = [e for e in spawns_all
+                      if e.get("ts") and lo <= parse_ts(e["ts"]) <= hi]
+                spawn_cost = sum((e.get("cost_usd") or 0) for e in sp)
+                note = f"{len(sp)} spawn(s) in transcript time-span (window-matched, not tag-isolated)"
+            except ValueError:
+                pass
+        print(f"cost-report: project budget    transcripts: {tr['n_files']}    spawn-log: {args.log}")
+        print()
+        print(budget_report(tr, spawn_cost, note))
+        return 0
+
     if not entries:
         print(f"(no entries in {args.log})")
         return 0

@@ -39,6 +39,20 @@ CONFIG_MD = REPO_ROOT / "config.md"
 PERMISSIONS_CLI = REPO_ROOT / "scripts" / "permissions-cli.py"
 COST_LOG = Path.home() / ".local" / "log" / "claude-spawn-costs.jsonl"
 
+
+def _spawn_tags() -> dict:
+    """Best-effort session/ticket tags for the cost log (enables per-ticket attribution).
+
+    ticket: $CLAUDE_TICKET, else a TICKET-123 pattern in cwd (dedicated mounts encode it).
+    session_id: $CLAUDE_SESSION_ID if the harness exposes it, else None.
+    """
+    ticket = os.environ.get("CLAUDE_TICKET")
+    if not ticket:
+        m = re.search(r"[A-Z][A-Z0-9]+-\d+", os.getcwd())
+        ticket = m.group(0) if m else None
+    return {"session_id": os.environ.get("CLAUDE_SESSION_ID"), "ticket": ticket}
+
+
 RETURN_MARKERS = (
     "COMPLETED",
     "PLAN-READY",
@@ -439,6 +453,7 @@ def main(argv: list[str] | None = None) -> int:
         "return_marker": parsed_marker,
         "exit_code": completed.returncode,
         "malformed": not ok,
+        **_spawn_tags(),
     })
 
     summary_bits = [
