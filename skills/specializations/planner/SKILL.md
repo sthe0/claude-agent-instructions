@@ -131,6 +131,8 @@ Before settling on an approach, estimate cost and resources for **each candidate
 
 Savings that come from **skipping tests, docs, boundary error handling, or rollback paths are not real savings** — that's regression dressed up as optimization. Count those as cost the cheap option pays later, not cost it avoids.
 
+**First-time platform integration** (graph / Nirvana / CI / deploy / porto / docker): estimate the **runtime-debug tail separately and large** — environment-specific failures surface only in real runs, with slow iterations (image builds, graph stages), and usually dominate the coding effort, which is a small fraction. And when an approach minimizes blast radius by importing from a neighbouring module or by "not touching" a large shared file, check it against the team's code-review norms (DRY, coupling, no cross-module private imports) **before** finalizing — an architecture reviewers reject gets reversed in review, and the rework exceeds the blast radius saved.
+
 In the plan: name the chosen option per stage, list rejected alternatives with one-line reason, surface ongoing cost / risk in the Risks section.
 
 ### Risk assessment
@@ -152,7 +154,7 @@ Required `##` sections (in this order; `verify-plan-file.py` enforces presence):
    - **Actual effort:** *(post-hoc; filled by the manager after the stage completes — empty at plan-write time)*. Free-form: number of tool calls, wall-clock, surprises, retries (e.g. `5 tool calls, ~12 min, one retry on hook block`). The experience leaf's `Cost & effort` section references these per-stage entries as the breakdown of the total. Adding / updating this field is **refinement**, not a substantive plan change (CLAUDE.md § Acting without asking).
 4. **Summary** — table.
 5. **Dependency graph** — text.
-6. **Final verification.** End-to-end check against the user's overall done criterion: how it is run, who runs it, what "pass" looks like. The task is not done until this passes — the manager runs this gate before reporting completion.
+6. **Final verification.** End-to-end check against the user's overall done criterion: how it is run, who runs it, what "pass" looks like. The task is not done until this passes — the manager runs this gate before reporting completion. For graph / IaC / packaging changes, this **must include a live end-to-end run** reaching the changed path; static checks (imports, tests, `--help`, build-diff) do not suffice.
 7. **Risks.**
 
 Optional `##` sections (add when the task warrants them; not enforced by `verify-plan-file.py`):

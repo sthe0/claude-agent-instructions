@@ -51,6 +51,7 @@ Need → Options → Plan → Resources → Execution → Verification → done?
 
   On failure at either layer — `overcome-difficulty`, not chaotic retries.
   **Mini-OD on first external-job failure.** Before relaunch or infra log dives on a failed orchestrated job (Nirvana WI, CI, Reactor, Sandbox graph): inline Expected/Actual/Mismatch, then `workflow-debug-investigation.md` (baseline → topology → code delta, ≥2 hypotheses). Project signals leaf when present under `.claude/agent-memory/leaves/`.
+  **Verify the right axis, report honestly.** "Imports pass / tests green / build-diff identical" is *static* verification — it does not establish *runtime* correctness for code loaded by name from an external artifact (baked image, porto / job layer, serialized graph). Do not report "works / didn't break" until the runtime axis is checked for the affected path. Never infer success from partial progress (a job past block N says nothing about block N+1). After any outward action (PR comment, publish, push), confirm it actually landed / is visible — "posted" ≠ "published".
 
 ### When the work is stuck
 
@@ -65,6 +66,10 @@ The skill localizes the divergence (declaration → investigation → critique) 
 Use the **self-improvement** skill (see `~/.claude/skills/self-improvement/`). Triggers: user corrects/rejects/clarifies your action, states a principle ("don't do that", "prefer X", "always Z"), evaluates agent quality, proposes changes to instructions/agents/skills/memory/workflow, or reminds you that self-improvement should have run.
 
 Run **in the same dialog turn** as the trigger, before the final reply. A reminder ("did you run self-improvement?") counts as the trigger.
+
+**In-task corrections are themselves triggers** — "you did only part", "wrong scope", "answer in my language", "why only memory / not the instructions" are self-improvement signals, not mere task tweaks; run it the same turn. Before recording a lesson, **classify**: behavioral rule (always/never, process, delegation, verification) → instructions via this skill; domain fact → memory leaf. A behavioral rule filed as a memory leaf is misplaced.
+
+**When asked to analyze / retrospect a task**, cover the full scope the user named (e.g. the whole ticket from its original plan), not just the active session; if you narrow, say so explicitly.
 
 Not mandatory only for neutral confirmation ("ok", "yes do it", "thanks") and for pure questions without evaluation of your actions.
 
@@ -260,7 +265,7 @@ Cite the source where possible (`> verified by: <commit>/<URL>/<conversation>`).
 
 ## Instruction language
 
-All text in `~/claude-agent-instructions/` and `.claude/agent-memory/` is **English** by default (non-English needs an adjacent `> **Language exception:** …`); user-facing replies match the user's request. Full rule: `~/.claude/skills/self-improvement/policy.md` § Instruction language.
+All text in `~/claude-agent-instructions/` and `.claude/agent-memory/` is **English** by default (non-English needs an adjacent `> **Language exception:** …`); user-facing replies — including analyses, retrospectives, and self-improvement proposals — match the user's language. Full rule: `~/.claude/skills/self-improvement/policy.md` § Instruction language.
 
 ---
 
