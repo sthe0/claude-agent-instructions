@@ -107,6 +107,8 @@ Cursor-only assets live in [`cursor/`](cursor/README.md) and are intentionally i
 | [lint-prose-length.py](scripts/lint-prose-length.py) | Hard ceiling on instruction-file line counts (`CLAUDE.md`, cursor mirror, skill SKILL.md, policy.md) per `config.md` limits |
 | [sync-instructions-repo.sh](scripts/sync-instructions-repo.sh) | `pull` / `push` this repo |
 | [install-git-hooks.sh](scripts/install-git-hooks.sh) | Install `pre-commit` (run `verify-all.py --staged`) and `post-commit` (push reminder) |
+| [hook-context-growth-reminder.py](scripts/hook-context-growth-reminder.py) | UserPromptSubmit: nudge when live context size crosses a band (reads transcript usage); throttled per band per session |
+| [install-reminder-hooks.sh](scripts/install-reminder-hooks.sh) | Idempotently wire the canonical reminder-hook set into machine-local `settings.json` (hooks are not merged from `base.json`) |
 | [install-sync-cron.sh](scripts/install-sync-cron.sh) | Cron: git pull every 10 min (opt-in; not installed by `setup-symlinks.sh`) |
 
 ## Git workflow

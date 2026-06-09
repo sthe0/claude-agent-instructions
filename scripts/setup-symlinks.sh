@@ -143,6 +143,11 @@ chmod +x "$REPO/scripts/verify-instructions-sync.sh" "$REPO/scripts/verify-layou
 # machine-local ~/.claude/settings.json; machine-specific keys are preserved.
 "$REPO/scripts/apply-settings.sh"
 
+# Wire the canonical reminder-hook set into settings.json. Hooks are a
+# machine-specific key (apply-settings.sh does not merge them), so the repo's
+# hook scripts stay dead without this idempotent installer.
+"$REPO/scripts/install-reminder-hooks.sh"
+
 "$REPO/scripts/install-git-hooks.sh"
 "$REPO/scripts/verify-layout-contract.sh" 2>/dev/null || true
 "$REPO/scripts/verify-instructions-sync.sh" || true
