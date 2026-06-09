@@ -203,6 +203,7 @@ scripts/
   hook-resolution-reminder.py          # UserPromptSubmit: nudge when user reply is brief gratitude — do NOT treat as resolution confirmation
   hook-context-growth-reminder.py      # UserPromptSubmit: nudge when live context size crosses a band (reads transcript usage); throttled per band per session
   install-reminder-hooks.sh            # idempotently wire the canonical reminder-hook set into machine-local settings.json (hooks are not merged from base.json)
+  set-context-cap.sh                   # set an arbitrary context-size cap (auto-compaction trigger) by computing CLAUDE_CODE_DISABLE_1M_CONTEXT + CLAUDE_AUTOCOMPACT_PCT_OVERRIDE into base.json
   lint-permissions.py                  # permissions JSON schema check
   permissions-cli.py                   # CLI for permissions/*.json
   spawn-specialist.py                  # `claude -p` spawn wrapper (recursion cap, budget, permissions, cost log)
