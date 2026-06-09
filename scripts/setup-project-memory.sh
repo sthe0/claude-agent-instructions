@@ -9,7 +9,7 @@
 #
 # Default project_cwd is $PWD. The script:
 #   1. Creates <project_cwd>/.claude/agent-memory/ if missing (with a stub MEMORY.md).
-#   2. Computes the Claude Code per-cwd hash directory name: leading "-" + cwd with "/" → "-".
+#   2. Computes the Claude Code per-cwd hash directory name: every non-alphanumeric char in the absolute cwd → "-" (matches the harness; "/" and "_" both map to "-").
 #   3. Removes any existing ~/.claude/projects/<hash>/memory (file, dir, or symlink).
 #   4. Replaces it with a symlink → <project_cwd>/.claude/agent-memory.
 #
@@ -42,10 +42,11 @@ Loaded into every Claude Code session in this project via the native auto-memory
 EOF
 fi
 
-# Claude Code per-cwd hash: absolute cwd with each "/" replaced by "-".
-# Leading "/" already produces the leading "-", so no extra prefix.
-# /home/x → -home-x  (NOT --home-x).
-HASH="${PROJECT_CWD//\//-}"
+# Claude Code per-cwd hash: every non-alphanumeric char in the absolute cwd → "-"
+# (the harness sanitizes "/" AND "_" — and any other non-alnum — to "-"). The
+# leading "/" already produces the leading "-", so no extra prefix.
+# /home/x → -home-x ; /home/arcadia_X → -home-arcadia-X  (underscore → dash too).
+HASH="$(printf '%s' "$PROJECT_CWD" | sed 's/[^A-Za-z0-9]/-/g')"
 PROJECTS_DIR="$HOME/.claude/projects/$HASH"
 mkdir -p "$PROJECTS_DIR"
 

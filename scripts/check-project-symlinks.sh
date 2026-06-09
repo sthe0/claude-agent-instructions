@@ -67,9 +67,10 @@ fi
 # --- 3. Auto-memory symlink ~/.claude/projects/<hash>/memory → <cwd>/.claude/agent-memory.
 agent_memory="$claude_dir/agent-memory"
 if [[ -d "$agent_memory" ]]; then  # resolves through symlinks
-  # Claude Code's per-cwd hash: leading "/" already becomes "-" via the replacement,
-  # so no extra prefix. /home/x → -home-x  (NOT --home-x).
-  hash="${CWD//\//-}"
+  # Claude Code's per-cwd hash: every non-alphanumeric char → "-" (the harness
+  # sanitizes "/" AND "_" — and any other non-alnum). Leading "/" already becomes
+  # "-", so no extra prefix. /home/arcadia_X → -home-arcadia-X (underscore → dash).
+  hash="$(printf '%s' "$CWD" | sed 's/[^A-Za-z0-9]/-/g')"
   projects_dir="$HOME/.claude/projects/$hash"
   mem_link="$projects_dir/memory"
   expected_target="$(readlink -f "$agent_memory" 2>/dev/null || echo "$agent_memory")"
