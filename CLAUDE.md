@@ -118,7 +118,7 @@ Resolve each return marker, then re-spawn the specialist with the resolution emb
 
 1. **Task status** — done / in progress / blocked.
 2. **What was done** — by step, who executed.
-3. **Artifacts** — paths, links, commands.
+3. **Artifacts** — paths, links, commands. When referencing an external run / job / PR / CI task (Nirvana WI, Sandbox, CI), give the **clickable URL to the actual run**, never a truncated id fragment — applies equally to status reports and to user-facing comments (tracker, PR review).
 4. **Next steps** — if not done.
 
 ### On task resolution (record experience)
