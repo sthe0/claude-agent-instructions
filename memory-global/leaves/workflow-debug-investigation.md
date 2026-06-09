@@ -38,8 +38,9 @@ Use during **overcome-difficulty § Investigation** when the failure is in an or
 |------|--------|
 | Ticket scope | If debugging follows a branch/ticket — `arc diff` (or PR diff) on code paths for the failing block names **before** deep infra dives. |
 | Behavior change | Did a refactor change which terminal statuses raise (e.g. treat `cancel` as failure when trunk only raised on `failure`)? |
+| Branch freshness | Before writing a fix to match the branch's **current** state, diff the failing artifact against trunk (`arc fetch trunk; arc show arcadia/trunk:<path>`). A branch forked from / not yet rebased onto current trunk may be **missing** what trunk already has (a baked model, a config, a dep). "X expected but missing on the branch" → first hypothesis is *branch is stale*, not *X's consumer is wrong*. |
 
-**Falsifier:** If diff explains the mismatch between baseline and failing behavior, fix code/graph — not GPU quota.
+**Falsifier:** If diff explains the mismatch between baseline and failing behavior, fix code/graph — not GPU quota. If trunk's version of the artifact already contains the missing piece, the fix is a rebase / cherry-pick of trunk — not a code change aligning the consumer to the branch's stale state.
 
 ### 4. Infra logs (last)
 
