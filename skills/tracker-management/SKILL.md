@@ -33,6 +33,15 @@ This skill is layered on top of the root coordination cycle in `CLAUDE.md`. Each
 
 If a phase fires and you skipped the tracker action, post it on the next opportunity rather than dropping it — the ticket should reflect the actual sequence of events.
 
+## Special case: work driven by a PR review
+
+When the active work is resolving review comments on a PR (the iterative review cycle on an open PR), the **review thread is the place for the back-and-forth**, not the ticket. For the duration of review work this **overrides the per-stage progress rows** of the phase-hooks table:
+
+- Do **not** post intermediate / progress comments to the ticket — reply rationale, resolve/drop notes, per-iteration status all go in the PR review surface (e.g. `arcanum_reply_to_comment`), never the ticket.
+- Post **exactly one** ticket comment, and only **after the PR is merged** — the final-result post (merged PR link + summary).
+
+The review surface already carries the discussion; mirroring it on the ticket is noise.
+
 What this skill is **not**:
 - Not a replacement for `planner` (who decomposes) or `developer` (who writes code).
 - Not tied to a specific tracker product. Yandex Tracker / Jira / Linear / GitHub Issues specifics are project memory.
