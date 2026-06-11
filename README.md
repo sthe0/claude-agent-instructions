@@ -99,6 +99,7 @@ Cursor-only assets live in [`cursor/`](cursor/README.md) and are intentionally i
 | [lint-permissions.py](scripts/lint-permissions.py) | Lint `permissions/*.json` schema (structure, fields, dates, duplicates) |
 | [permissions-cli.py](scripts/permissions-cli.py) | CLI for workflow-level permissions: `list / check / grant / revoke / digest` |
 | [spawn-specialist.py](scripts/spawn-specialist.py) | Wrap `claude -p` spawn: recursion cap, budget tier, permissions digest, marker validation, cost log |
+| [coordinate-task.py](scripts/coordinate-task.py) | Drive the coordination cycle: `plan` (spawn planner, verify plan, print approval-gated run cmd) / `run --approved` (spawn developer, parse marker → exit code) |
 | [spawn-cursor-specialist.py](scripts/spawn-cursor-specialist.py) | Cursor analogue: wrap `agent -p` specialization spawn — inline SKILL.md, budget→timeout, recursion cap, marker validation, cost log |
 | [spawn-cursor-escape.py](scripts/spawn-cursor-escape.py) | Wrap `agent -p` overcome-difficulty escape for Cursor: recursion cap, API key, marker validation, cost log |
 | [cost-report.py](scripts/cost-report.py) | Aggregate `~/.local/log/claude-spawn-costs.jsonl` (totals, by kind/tier/day, depth/marker distributions, refused events) |
@@ -107,7 +108,13 @@ Cursor-only assets live in [`cursor/`](cursor/README.md) and are intentionally i
 | [lint-prose-length.py](scripts/lint-prose-length.py) | Hard ceiling on instruction-file line counts (`CLAUDE.md`, cursor mirror, skill SKILL.md, policy.md) per `config.md` limits |
 | [sync-instructions-repo.sh](scripts/sync-instructions-repo.sh) | `pull` / `push` this repo |
 | [install-git-hooks.sh](scripts/install-git-hooks.sh) | Install `pre-commit` (run `verify-all.py --staged`) and `post-commit` (push reminder) |
+| [hook-self-critique-reminder.py](scripts/hook-self-critique-reminder.py) | PostToolUse Write: nudge to invoke `self-improvement` after writing an experience leaf with a substantive § Self-critique |
+| [hook-tracker-reminder.py](scripts/hook-tracker-reminder.py) | UserPromptSubmit: detect tracker references in the prompt and remind to invoke `tracker-management` |
+| [hook-push-confirmation-reminder.py](scripts/hook-push-confirmation-reminder.py) | PreToolUse Bash: nudge to verify user push-confirmation before `git push` / `sync-instructions-repo.sh push` |
+| [hook-resolution-reminder.py](scripts/hook-resolution-reminder.py) | UserPromptSubmit: nudge to ask for explicit resolution when the user's prompt is brief gratitude |
 | [hook-context-growth-reminder.py](scripts/hook-context-growth-reminder.py) | UserPromptSubmit: nudge when live context size crosses a band (reads transcript usage); throttled per band per session |
+| [hook-prewrite-plan-check.py](scripts/hook-prewrite-plan-check.py) | PreToolUse Edit/Write: after 3 code edits with no plan file, one-time nudge to invoke planner |
+| [hook-retry-detector.py](scripts/hook-retry-detector.py) | PreToolUse Bash: same normalized command 3+ times → nudge to invoke overcome-difficulty |
 | [install-reminder-hooks.sh](scripts/install-reminder-hooks.sh) | Idempotently wire the canonical reminder-hook set into machine-local `settings.json` (hooks are not merged from `base.json`) |
 | [set-context-cap.sh](scripts/set-context-cap.sh) | Set an arbitrary context-size cap (auto-compaction trigger) in tokens — computes `CLAUDE_CODE_DISABLE_1M_CONTEXT` + `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` into `base.json`; max ~830k (83% clamp) |
 | [install-sync-cron.sh](scripts/install-sync-cron.sh) | Cron: git pull every 10 min (opt-in; not installed by `setup-symlinks.sh`) |

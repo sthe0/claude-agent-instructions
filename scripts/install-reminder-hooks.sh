@@ -26,6 +26,8 @@ DESIRED = [
     ("UserPromptSubmit", None,    "hook-resolution-reminder.py",     5),
     ("UserPromptSubmit", None,    "hook-tracker-reminder.py",        5),
     ("PreToolUse",       "Bash",  "hook-push-confirmation-reminder.py", 5),
+    ("PreToolUse",       "Edit|Write", "hook-prewrite-plan-check.py", 5),
+    ("PreToolUse",       "Bash",  "hook-retry-detector.py",          5),
     ("PostToolUse",      "Write", "hook-self-critique-reminder.py",  5),
 ]
 

@@ -67,6 +67,7 @@ require_file "$REPO/permissions/README.md"
 require_file "$REPO/scripts/permissions-cli.py"
 require_file "$REPO/scripts/lint-permissions.py"
 require_file "$REPO/scripts/spawn-specialist.py"
+require_file "$REPO/scripts/coordinate-task.py"
 require_file "$REPO/scripts/verify-cross-refs.py"
 require_file "$REPO/cursor/scripts/lint-cursor-mirror.py"
 require_file "$REPO/scripts/cost-report.py"
@@ -80,6 +81,8 @@ require_file "$REPO/scripts/hook-push-confirmation-reminder.py"
 require_file "$REPO/scripts/verify-plan-file.py"
 require_file "$REPO/scripts/hook-resolution-reminder.py"
 require_file "$REPO/scripts/hook-context-growth-reminder.py"
+require_file "$REPO/scripts/hook-prewrite-plan-check.py"
+require_file "$REPO/scripts/hook-retry-detector.py"
 require_file "$REPO/scripts/install-reminder-hooks.sh"
 require_file "$REPO/scripts/set-context-cap.sh"
 require_file "$REPO/githooks/commit-msg"
@@ -120,6 +123,21 @@ for forbidden in sync-junk-agents-arc.sh junk-agents-arc-commit.sh setup-the0-ag
   require_absent "$REPO/scripts/$forbidden"
 done
 ok "no local arc scripts in global scripts/"
+
+echo "=== Hook registration (bidirectional) ==="
+# Every scripts/hook-*.py must be registered in BOTH this contract's require_file
+# lines AND README.md. A one-directional allowlist makes newly-added hooks
+# invisible (observed 2026-06-11: two hooks shipped unregistered); this turns a
+# forgotten registration into a hard pre-commit failure.
+for hookpath in "$REPO"/scripts/hook-*.py; do
+  [[ -e "$hookpath" ]] || continue
+  base="$(basename "$hookpath")"
+  grep -qF "require_file \"\$REPO/scripts/$base\"" "$REPO/scripts/verify-layout-contract.sh" \
+    || fail "hook $base not registered in verify-layout-contract.sh require_file lines"
+  grep -qF "$base" "$REPO/README.md" \
+    || fail "hook $base not documented in README.md scripts table"
+done
+ok "all scripts/hook-*.py registered in contract + README"
 
 echo "=== Runtime symlinks ==="
 if [[ -L "$HOME/.claude/CLAUDE.md" ]]; then ok "~/.claude/CLAUDE.md"; else fail "~/.claude/CLAUDE.md not symlink"; fi
