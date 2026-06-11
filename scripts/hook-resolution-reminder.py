@@ -10,11 +10,10 @@ proactive close was missed and the user replies with bare gratitude,
 this hook prevents the agent from treating "спасибо" / "thanks" as
 silent confirmation.
 
-Recurring failure mode this addresses (see experience leaves
-2026-05-25 code-driven-enforcement-arc, 2026-05-26 cron-tz-user-
-crontab-trap, 2026-05-26 plan-verify-loop): agent finishes work,
-user thanks, agent closes without writing the experience leaf or
-asking for resolution.
+Recurring failure mode this addresses (see experience leaf
+2026-05-25-resolution-gate-confirm-before-record): agent finishes
+work, user thanks, agent closes without writing the experience leaf
+or asking for resolution.
 
 Matches either:
   (a) Brief gratitude: ≤ MAX_WORDS tokens AND a gratitude keyword.

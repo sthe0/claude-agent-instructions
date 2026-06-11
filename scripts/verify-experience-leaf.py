@@ -9,9 +9,9 @@ Rule (CLAUDE.md § On task resolution):
       resolution_confirmed_by_user: "<user quote>"
 
   Writing a leaf on assumed resolution is a recurring failure mode (see
-  memory-global/leaves/experience/2026-05-25-code-driven-enforcement-arc.md
-  and the 2026-05-26 follow-up). This check makes the order
-  "confirm → record" mechanical instead of relying on prose recall.
+  memory-global/leaves/experience/2026-05-25-resolution-gate-confirm-before-record.md).
+  This check makes the order "confirm → record" mechanical instead of
+  relying on prose recall.
 
 Invocation modes:
   (no args)   Scan all tracked experience leaves in the repo. Used by
