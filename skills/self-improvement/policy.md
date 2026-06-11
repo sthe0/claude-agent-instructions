@@ -61,6 +61,16 @@ imagined future failure rather than an observed one.
 
 ---
 
+## Ground instructions in the difficulty they remove
+
+Every instruction here is a step in the plan for removing an arbitrary difficulty (`CLAUDE.md` head). When you write or edit one, name the difficulty it removes — its functional ground.
+
+- **Teleological form when the *why* is non-obvious.** Prefer "to achieve X, do Y" over a bare "do Y" wherever X is not self-evident from the rule itself — the agent applies and generalizes a rule far better when it holds the X. Where X is obvious, the bare imperative is fine; an explicit X there is noise (and tokens in the cached prefix).
+- **No nameable difficulty → prune candidate.** If you cannot state the difficulty a rule removes, treat that as the signal it is noise: cut or merge it, do not preserve it "just in case."
+- This is the instruction-side mirror of the experience-leaf schema (difficulty as the unit) and the `system-knowledge/` rule (lead with the difficulty the component removes).
+
+---
+
 ## Cache-aware editing
 
 Anthropic prompt caching is **strict-prefix**: any byte change in a file that sits in the cached prompt prefix forces `cache_create` on every byte that follows. Observed cost in the 2026-05-27 deepagent sessions was 1.5M–2.8M `cache_create` tokens per long session, traced largely to mid-task edits of `CLAUDE.md` and `MEMORY.md`. See [token-economy-plan.md](../../memory-global/leaves/token-economy-plan.md).

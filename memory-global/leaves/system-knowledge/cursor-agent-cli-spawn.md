@@ -1,6 +1,6 @@
 ---
 name: cursor-agent-cli-spawn
-description: Cursor Agent CLI (agent -p) for headless spawns in Cursor; API key file and install on Linux
+description: Difficulty it removes — you need a headless agent spawn inside Cursor where claude -p is unavailable. Fact — Cursor Agent CLI (agent -p), API key file ~/.cursor_api_key, Linux install via curl|gunzip|bash, wrapped by spawn-cursor-escape.py.
 type: reference
 ---
 

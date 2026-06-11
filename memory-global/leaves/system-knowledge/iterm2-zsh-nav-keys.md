@@ -1,6 +1,6 @@
 ---
 name: iTerm2 + zsh text navigation keybindings
-description: When Option/Cmd+arrow / Home / End print escape sequences in the user's iTerm2 + zsh setup, both an iTerm profile setting AND zsh bindkeys are required — neither alone suffices.
+description: Difficulty it removes — Option/Cmd+arrow / Home / End print escape sequences in the user's iTerm2 + zsh. Fact — both an iTerm profile setting (Option Key Sends Esc+ / Natural Text Editing) AND a zsh bindkey block are required, neither alone suffices; cat -v diagnoses which half is broken.
 type: reference
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: Cursor agent model/key config is client-side, not server-side
-description: Custom LLM provider config for Cursor agent mode lives in Cursor.app on the local machine; Remote-SSH ~/.cursor-server/ has no model settings.
+description: Difficulty it removes — you try to configure Cursor's custom LLM provider server-side (~/.cursor-server/) and it has no effect. Fact — that config lives client-side in Cursor.app on the local machine; only terminal-side CLI env vars can be set server-side.
 type: reference
 ---
 
