@@ -31,7 +31,7 @@ In the same dialog turn the trigger fires, produce **text only**: no file edits 
 
 5. **Locate.** Where does the change belong? Use the table in § Where to put changes.
 
-6. **Propose concrete edits.** For each proposed change: target file, section, before/after wording (or close to it). No generalities. The user reads this and approves, refines, or rejects.
+6. **Propose concrete edits.** For each proposed change: target file, section, before/after wording (or close to it). No generalities. The user reads this and approves, refines, or rejects. **Name the difficulty per rule** — for each added/changed behavioral rule, state the functional ground (the desired-vs-actual it removes) in "to achieve X, do Y" form per [policy.md](policy.md) § Ground instructions in the difficulty they remove; a rule whose difficulty you cannot name is a prune candidate, not a proposal.
 
 End turn 1 with an `AskUserQuestion` ask: "Apply these changes?" (options: `Apply (Recommended)` / `Refine` / `Skip`) — and stop. Do not start editing files. Per CLAUDE.md § Escalation to the user, `AskUserQuestion` is mandatory at confirmation gates — free text at the apply-gate is the exact failure mode this skill most often diagnoses for users; the skill itself must model it.
 

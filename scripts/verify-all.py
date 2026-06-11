@@ -23,6 +23,7 @@ CHECKS: list[str] = [
     "lint-cursor-mirror",
     "lint-prose-length",
     "verify-experience-leaf",
+    "verify-difficulty-lead",
 ]
 
 

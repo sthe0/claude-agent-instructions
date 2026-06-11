@@ -206,6 +206,7 @@ scripts/
   verify-self-improvement-edit.py      # commit-msg gate: requires review marker for self-improvement edits
   lint-prose-length.py                 # hard ceiling on CLAUDE.md / cursor mirror / SKILL.md / policy.md
   verify-experience-leaf.py            # require `resolution_confirmed_by_user` + (for schema:difficulty/v1) the difficulty-centric sections on `**/experience/*.md` (PreToolUse hook + verify-all)
+  verify-difficulty-lead.py            # require a difficulty-lead blockquote before the first `## ` section on `**/system-knowledge/*.md` (PreToolUse hook + verify-all); enforces CLAUDE.md "lead with the difficulty"
   record-experience.py                 # generate / extend difficulty-centric experience leaves (search/new/extend/ticket); auto-maintains the experience/MEMORY.md sub-index (see memory-global/leaves/experience-leaf-schema.md)
   hook-self-critique-reminder.py       # PostToolUse Write: nudge to invoke `self-improvement` when an experience leaf has substantive § Self-critique
   hook-tracker-reminder.py             # UserPromptSubmit: detect tracker references (ticket keys, keywords) and nudge to invoke `tracker-management`

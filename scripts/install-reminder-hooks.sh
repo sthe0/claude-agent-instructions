@@ -20,7 +20,7 @@ import json, os, shutil, sys
 settings_path = sys.argv[1]
 scripts = os.environ["SCRIPTS_DIR"]
 
-# (event, matcher-or-None, script-basename, timeout)
+# (event, matcher-or-None, script-basename [+ optional args], timeout)
 DESIRED = [
     ("UserPromptSubmit", None,    "hook-context-growth-reminder.py", 5),
     ("UserPromptSubmit", None,    "hook-resolution-reminder.py",     5),
@@ -30,6 +30,11 @@ DESIRED = [
     ("PreToolUse",       "Edit|Write", "hook-prewrite-plan-check.py", 5),
     ("PreToolUse",       "Bash",  "hook-retry-detector.py",          5),
     ("PostToolUse",      "Write", "hook-self-critique-reminder.py",  5),
+    # Difficulty/confirmation gates on memory-leaf Writes. These run on ANY
+    # Write (any repo), so they are the only enforcement point for project
+    # memory (whose own git pre-commit does not run verify-all).
+    ("PreToolUse",       "Write", "verify-difficulty-lead.py --hook", 5),
+    ("PreToolUse",       "Write", "verify-experience-leaf.py --hook", 5),
 ]
 
 with open(settings_path, encoding="utf-8") as fh:
@@ -54,11 +59,15 @@ def group_for(event_groups, matcher):
 
 changed = []
 for event, matcher, script, timeout in DESIRED:
-    cmd = os.path.join(scripts, script)
+    parts = script.split()
+    script_base = os.path.basename(parts[0])
+    cmd = os.path.join(scripts, parts[0])
+    if len(parts) > 1:
+        cmd += " " + " ".join(parts[1:])
     groups = hooks.setdefault(event, [])
     grp = group_for(groups, matcher)
     grp.setdefault("hooks", [])
-    if any(basename_of(h.get("command", "")) == script for h in grp["hooks"]):
+    if any(basename_of(h.get("command", "")) == script_base for h in grp["hooks"]):
         continue
     grp["hooks"].append({"type": "command", "command": cmd, "timeout": timeout})
     changed.append(f"{event}/{matcher or '*'}: {script}")
