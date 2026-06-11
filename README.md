@@ -104,6 +104,7 @@ Cursor-only assets live in [`cursor/`](cursor/README.md) and are intentionally i
 | [spawn-cursor-escape.py](scripts/spawn-cursor-escape.py) | Wrap `agent -p` overcome-difficulty escape for Cursor: recursion cap, API key, marker validation, cost log |
 | [cost-report.py](scripts/cost-report.py) | Aggregate `~/.local/log/claude-spawn-costs.jsonl` (totals, by kind/tier/day, depth/marker distributions, refused events) |
 | [memory-audit.py](scripts/memory-audit.py) | Find orphan / broken / stale memory leaves and frontmatter issues (informational; does not gate) |
+| [record-experience.py](scripts/record-experience.py) | Generate / extend difficulty-centric experience leaves (`search`/`new`/`extend`/`ticket`); auto-maintains the `experience/MEMORY.md` sub-index |
 | [verify-self-improvement-edit.py](scripts/verify-self-improvement-edit.py) | `commit-msg` gate: require `[self-improvement-reviewed]` in commits that touch `skills/self-improvement/` |
 | [lint-prose-length.py](scripts/lint-prose-length.py) | Hard ceiling on instruction-file line counts (`CLAUDE.md`, cursor mirror, skill SKILL.md, policy.md) per `config.md` limits |
 | [sync-instructions-repo.sh](scripts/sync-instructions-repo.sh) | `pull` / `push` this repo |

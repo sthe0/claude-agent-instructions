@@ -44,10 +44,27 @@ FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 FIELD_RE = re.compile(
     r"^resolution_confirmed_by_user\s*:\s*(.*?)\s*$", re.MULTILINE
 )
+SCHEMA_RE = re.compile(r"^schema\s*:\s*(.*?)\s*$", re.MULTILINE)
+TICKET_RE = re.compile(r"^ticket\s*:\s*(.*?)\s*$", re.MULTILINE)
+
+# Required `## ` sections for a standalone difficulty/v1 leaf. Each tuple is
+# (canonical name, regex matching the heading). See
+# memory-global/leaves/experience-leaf-schema.md.
+V1_SECTIONS = [
+    ("## Difficulty", re.compile(r"^##\s+Difficulty\b", re.MULTILINE)),
+    ("## Order & criterion", re.compile(r"^##\s+Order\b", re.MULTILINE)),
+    ("## Contexts", re.compile(r"^##\s+Contexts?\b", re.MULTILINE)),
+    ("## Cost", re.compile(r"^##\s+Cost\b", re.MULTILINE)),
+]
 
 
 def is_experience_leaf(path: str) -> bool:
     return bool(EXPERIENCE_PATH_RE.search(path))
+
+
+def _fm_field(fm_body: str, regex: re.Pattern) -> str:
+    m = regex.search(fm_body)
+    return m.group(1).strip().strip("\"'") if m else ""
 
 
 def check_content(content: str) -> str | None:
@@ -55,12 +72,31 @@ def check_content(content: str) -> str | None:
     fm = FRONTMATTER_RE.match(content)
     if not fm:
         return "no YAML frontmatter block at top of file"
-    match = FIELD_RE.search(fm.group(1))
-    if not match:
-        return "frontmatter missing required field `resolution_confirmed_by_user`"
-    value = match.group(1).strip().strip("\"'")
-    if not value:
-        return "field `resolution_confirmed_by_user` is empty"
+    fm_body = fm.group(1)
+    if not _fm_field(fm_body, FIELD_RE):
+        return ("frontmatter missing/empty required field "
+                "`resolution_confirmed_by_user`")
+
+    # Schema-versioned leaves get the structural check; legacy leaves
+    # (no `schema:` field) keep the confirmation-only check — grandfathered.
+    schema = _fm_field(fm_body, SCHEMA_RE)
+    if "difficulty/v1" not in schema:
+        return None
+
+    body = content[fm.end():]
+    if _fm_field(fm_body, TICKET_RE):
+        # Ticket-driven thin leaf: the record lives in the ticket. Require the
+        # ticket id/url to appear in the body as the pointer; sections relaxed.
+        ticket = _fm_field(fm_body, TICKET_RE)
+        if ticket not in body:
+            return (f"ticket leaf must reference its ticket ({ticket}) in the "
+                    "body as a pointer to the full record")
+        return None
+
+    missing = [name for name, rx in V1_SECTIONS if not rx.search(body)]
+    if missing:
+        return ("schema:difficulty/v1 leaf missing required section(s): "
+                + ", ".join(missing))
     return None
 
 

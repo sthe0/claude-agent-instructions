@@ -1,6 +1,6 @@
 # Global resolved-task experience
 
-Chronological log of leaves recording how non-trivial cross-project tasks were resolved — final plan as executed, difficulties encountered, artifacts, lessons, self-critique, cost. Quality bar and required sections: `~/.claude/CLAUDE.md` § On task resolution.
+Chronological log of **difficulty-centric** experience leaves (`schema: difficulty/v1`) — one per recurring difficulty, accumulating the contexts it arose in and the plan that removed it in each. Schema, the search-before-record / extend-with-a-new-context flow, and the ticket-thin-leaf rule: [experience-leaf-schema.md](../experience-leaf-schema.md). Generate via `scripts/record-experience.py`. Quality bar: `~/.claude/CLAUDE.md` § On task resolution. (Leaves dated before 2026-06-11 follow the older task-centric format and are grandfathered.)
 
 Sub-index of `memory-global/leaves/experience/`. Pointed at from `memory-global/MEMORY.md`. Not auto-loaded by the harness.
 

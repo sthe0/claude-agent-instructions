@@ -1,0 +1,97 @@
+---
+name: experience-leaf-schema
+description: The difficulty-centric schema for experience leaves (schema:difficulty/v1) — sections, the difficulty graph (cycles allowed), search-before-record + multi-context merge, ticket-thin-leaf rule, and what verify-experience-leaf.py enforces.
+type: reference
+---
+
+# Experience leaf schema (`difficulty/v1`)
+
+The atomic unit of recorded experience is a **recurring difficulty**, not a one-off task. A difficulty is a divergence between the plan and reality (the same object `overcome-difficulty` localizes). One leaf records one difficulty and accumulates every **context** in which that difficulty arose, with the plan that removed it in each context. As contexts accumulate, the leaf exposes what is *common* across resolutions and what *varies* — which is the basis for a general solution.
+
+This is the single source of truth for the schema. `CLAUDE.md` § On task resolution points here; `scripts/record-experience.py` generates leaves to this shape; `scripts/verify-experience-leaf.py` enforces it.
+
+## The difficulty graph (cycles allowed)
+
+Leaves link to each other via the `refs:` frontmatter list and inline `[[slug]]` references. The links form a **graph, not a DAG** — cycles are expected, because the framework is self-referential:
+
+```
+order → plan → implementation → difficulty → induced order → plan → …
+```
+
+A child difficulty that arose while resolving a parent is referenced, never inlined: record it as its own leaf (or extend an existing one) and link it from the parent's `## Contexts` at the point it arose. No tooling assumes acyclicity.
+
+## Record flow — search before write
+
+1. **Search first (mandatory).** `scripts/record-experience.py search "<keywords>"` ranks existing experience leaves by `description` + `## Difficulty` body. This is how recurring difficulties get merged instead of duplicated.
+2. **If an analogous leaf exists → extend it.** `record-experience.py extend --leaf <path> --context "…" --plan "…"` appends a new `### context` and, once a leaf holds ≥2 contexts, prompts you to fill `## Common core & variations` — the distillation that turns scattered records into a general solution.
+3. **Else → create a new leaf.** `record-experience.py new …` writes a schema-correct leaf, auto-dates the filename (`YYYY-MM-DD-<slug>.md`), and inserts the `experience/MEMORY.md` pointer line.
+4. **Ticket-driven work → thin leaf.** `record-experience.py ticket --ticket <KEY> …` writes a thin pointer leaf and emits the full structured body to stdout for the `tracker-management` skill to post on the ticket (see § Ticket-driven work).
+
+## Standalone leaf shape
+
+```
+---
+name: <slug>                              # kebab; for new leaves the file is YYYY-MM-DD-<slug>.md
+description: <one-line hook = the recurring difficulty>
+type: reference
+schema: difficulty/v1
+resolution_confirmed_by_user: "<user's literal confirmation quote>"
+refs: [<slug § stage>, …]                 # optional; free-form links into the difficulty graph (cycles OK)
+plan_file: <abs path>                     # optional; the as-executed planner plan, if one exists
+---
+
+# <difficulty title>
+
+## Difficulty
+The invariant essence of the divergence (reality vs plan) — what kept going wrong, stated once, independent of any single occurrence.
+
+## Order & criterion
+The order for the result/resource that removes the difficulty, **plus the acceptance check** — how you know the order was met. As the difficulty recurs this is refined toward the general form.
+
+## Contexts
+One `###` subsection per occurrence. Each: where/when it arose (+ `[[ref]]` if it surfaced inside another difficulty) and the **plan that worked there**. A first occurrence is a single context with no synthesis yet — i.e. the simple four-part record. Do not inline a child difficulty's resolution; reference its leaf.
+
+### <YYYY-MM-DD — short context label>
+- Where it arose: …
+- Working plan: …
+
+## Common core & variations
+Appears once the leaf has **≥2 contexts**. The shared solution (the general answer) vs what differed per context. This section is the payoff of merging.
+
+## Cost
+Per occurrence: `$` on `claude -p` spawns + wall-clock + user-intervention count (`scripts/cost-report.py --since <task-start>`), and the specialization/skill usage table (`scripts/tool-usage-report.py --since <task-start>`). Kept because cost analytics are still wanted across occurrences.
+
+## Self-critique of the agent system    (optional)
+Agent-system friction observed while resolving this task — missing affordance, stale guidance, wrong default; name the file/section/behavior. This is itself a difficulty **about the agent system**: record or extend a separate difficulty leaf for it (context = this task) and invoke `self-improvement` in the same turn. `hook-self-critique-reminder.py` nudges when this section is substantive. For friction recurring across ≥2 leaves, run `overcome-difficulty` against the agent-system-as-plan first (see [systemic-pattern-scan.md](systemic-pattern-scan.md)).
+```
+
+## Ticket-driven work
+
+When the task is a ticket (`ABC-123`), the **full structured record lives in the ticket** — the `tracker-management` skill posts the Difficulty / Order & criterion / Context / Working-plan body as the resolution comment. The leaf is then a **thin pointer**:
+
+```
+---
+name: <slug>
+description: <one-line reusable hook>
+type: reference
+schema: difficulty/v1
+resolution_confirmed_by_user: "<quote>"
+ticket: <KEY or URL>
+---
+
+# <title>
+
+Full structured record (Difficulty / Order & criterion / Context / Working plan) — in the ticket: <URL>.
+
+<optional one-paragraph reusable distillation that a future *different* task needs and could not find by reading this ticket>
+```
+
+This keeps a single source of truth (the ticket), avoids context spent re-typing the plan, and prevents the leaf and ticket from diverging on later edits.
+
+## What `verify-experience-leaf.py` enforces
+
+- **Every** experience leaf: non-empty `resolution_confirmed_by_user` frontmatter (PreToolUse `Write` hook + `verify-all`). Writing on assumed resolution is a recurring failure mode.
+- **`schema: difficulty/v1`** leaves additionally:
+  - **standalone** (no `ticket:`): require `## Difficulty`, `## Order & criterion`, `## Contexts`, `## Cost`.
+  - **ticket** (`ticket:` non-empty): require the `ticket:` value to appear in the body (the pointer); sections relaxed — the record lives in the ticket.
+- Leaves **without** a `schema:` field keep the legacy confirmation-only check (grandfathered).

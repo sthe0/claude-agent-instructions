@@ -29,7 +29,7 @@ This skill is layered on top of the root coordination cycle in `CLAUDE.md`. Each
 | **`REPLAN:` from a specialist** | Post: what changed in the plan, why, link to the revised plan. |
 | **`overcome-difficulty` invoked** | One-line note that a difficulty arose; the resolution belongs to a later post (no recursion mechanics on the ticket). |
 | **Blocker** (specialist returned `INCOMPLETE:` with a blocker, or escalation to user) | What blocks, what is needed to unblock, who can unblock. |
-| **Task resolution** (user confirmed the task is done) | Final result: resolution summary + all artifacts (merged PRs, dashboards, measurements). Then any tracker-side close action that project memory specifies. |
+| **Task resolution** (user confirmed the task is done) | Final result: resolution summary + all artifacts (merged PRs, dashboards, measurements), **plus the structured difficulty record** (Difficulty / Order & criterion / Context / Working plan) — the ticket is its single source of truth. Then any tracker-side close action that project memory specifies. |
 
 If a phase fires and you skipped the tracker action, post it on the next opportunity rather than dropping it — the ticket should reflect the actual sequence of events.
 
@@ -50,6 +50,10 @@ What this skill is **not**:
 ## Content guidance per action
 
 Adapt the detail to the project's conventions. If project memory specifies a comment format, follow it. Otherwise: terse, factual, linkable. Plan posts include the markdown plan (or a link to a plan file) and flag stages needing approval. Progress posts are one line plus an artifact link. Final-result posts list all artifacts.
+
+### Experience record lives in the ticket
+
+For ticket-driven work the **ticket is the single source of truth for the resolved difficulty** — do not duplicate it into a full experience leaf. At resolution, post the structured record (Difficulty / Order & criterion / Context / Working plan) as the final comment, then write only a **thin pointer leaf** (`ticket:` frontmatter + a one-line reusable hook). `scripts/record-experience.py ticket …` does both: it writes the thin leaf and prints the comment body to post here. Schema: [experience-leaf-schema.md](../../memory-global/leaves/experience-leaf-schema.md). This keeps the ticket and memory from diverging on later edits and saves context that would go to re-typing the plan.
 
 ## How to publish
 
