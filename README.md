@@ -111,6 +111,7 @@ Cursor-only assets live in [`cursor/`](cursor/README.md) and are intentionally i
 | [hook-self-critique-reminder.py](scripts/hook-self-critique-reminder.py) | PostToolUse Write: nudge to invoke `self-improvement` after writing an experience leaf with a substantive § Self-critique |
 | [hook-tracker-reminder.py](scripts/hook-tracker-reminder.py) | UserPromptSubmit: detect tracker references in the prompt and remind to invoke `tracker-management` |
 | [hook-push-confirmation-reminder.py](scripts/hook-push-confirmation-reminder.py) | PreToolUse Bash: nudge to verify user push-confirmation before `git push` / `sync-instructions-repo.sh push` |
+| [hook-readme-currency-reminder.py](scripts/hook-readme-currency-reminder.py) | PreToolUse Bash: before `git`/`arc commit`, list READMEs next to changed code that aren't in the changeset — verify currency |
 | [hook-resolution-reminder.py](scripts/hook-resolution-reminder.py) | UserPromptSubmit: nudge to ask for explicit resolution when the user's prompt is brief gratitude |
 | [hook-context-growth-reminder.py](scripts/hook-context-growth-reminder.py) | UserPromptSubmit: nudge when live context size crosses a band (reads transcript usage); throttled per band per session |
 | [hook-prewrite-plan-check.py](scripts/hook-prewrite-plan-check.py) | PreToolUse Edit/Write: after 3 code edits with no plan file, one-time nudge to invoke planner |
