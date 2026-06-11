@@ -99,7 +99,7 @@ All agent instructions — prompts in `agents/`, skill prompts in `skills/`, `CL
 
 ### Not covered by this rule
 
-- **User-facing replies** — same language as the user's request. That is output, not stored instruction text.
+- **User-facing replies** — same language as the user's request (the language the user writes in). That is output, not stored instruction text. This explicitly includes **technical / design narratives, analyses, and the question + option-label text of every `AskUserQuestion`** — structured or technical content is **not** an exemption.
 - **Plan files** in `~/.claude/plans/<name>.md` — per-session artefacts the user reviews and approves; follow the same-language-as-user rule (they are output, not stored instructions). Plans committed *into* the instructions repo or any `.claude/agent-memory/` still follow English-by-default.
 - **Quoted examples** of what the user might say (`"ok"`, `"do it now"`) — keep quotes literal; surrounding prose stays English.
 - **Proper nouns and API identifiers** (Tracker, Arcadia, `arc`, ticket keys, model names) — not "another language".

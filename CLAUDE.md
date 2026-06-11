@@ -262,7 +262,7 @@ Cite the source where possible (`> verified by: <commit>/<URL>/<conversation>`).
 
 ## Instruction language
 
-All text in `~/claude-agent-instructions/` and `.claude/agent-memory/` is **English** by default (non-English needs an adjacent `> **Language exception:** …`); user-facing replies — including analyses, retrospectives, and self-improvement proposals — match the user's language. Full rule: `~/.claude/skills/self-improvement/policy.md` § Instruction language.
+All text in `~/claude-agent-instructions/` and `.claude/agent-memory/` is **English** by default (non-English needs an adjacent `> **Language exception:** …`); user-facing replies — including analyses, retrospectives, self-improvement proposals, **technical/design narratives, and the question + option-label text of every `AskUserQuestion`** — match the language the user writes in (structured or technical content is **not** an exemption). Full rule: `~/.claude/skills/self-improvement/policy.md` § Instruction language.
 
 ---
 
