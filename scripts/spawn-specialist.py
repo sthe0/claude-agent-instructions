@@ -285,10 +285,13 @@ def resolve_model(args: argparse.Namespace) -> str | None:
 
 
 # Absolute context ceiling before auto-compaction (tokens). The harness knob is a
-# percent of the window, so we convert per-model: pct = ceiling / window. Keep in
-# lock-step with env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE in ~/.claude/settings.json
-# (which sizes the default chat model, Opus 1M). See memory-global leaf
-# autocompact-threshold-policy.md.
+# percent of the window, so we convert per-model: pct = ceiling / window. This is
+# passed to the child via `claude --settings` (see cmd construction) rather than
+# process env, because env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE in ~/.claude/settings.json
+# is sized for the default chat model (Opus 1M -> 15%) and would otherwise win over
+# process env, collapsing the ceiling for 200k-window models (sonnet/haiku) to
+# 15% * 200k = 30k -> below the static prefix -> autocompact thrash. See memory-global
+# leaves autocompact-threshold-policy.md and claude-code-settings-env-precedence.md.
 AUTOCOMPACT_CEILING_TOKENS = 150_000
 
 # Context window per model family (tokens), by account tier. Unknown model -> 1M
@@ -394,6 +397,7 @@ def main(argv: list[str] | None = None) -> int:
     budget = budget_value(args.budget, constants)
     perms = permissions_digest(args.project_permissions)
     prompt = assemble_prompt(args, depth_next, perms)
+    model = resolve_model(args)
 
     cmd = [
         "claude",
@@ -404,11 +408,17 @@ def main(argv: list[str] | None = None) -> int:
         budget,
         "--output-format",
         "json",
+        # Pass the per-model autocompact threshold via --settings (highest in the
+        # settings precedence ladder) so it beats env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
+        # in ~/.claude/settings.json. Setting it in the child's process env does NOT
+        # work: settings.json env is applied after process start and wins (see
+        # memory-global leaf claude-code-settings-env-precedence.md).
+        "--settings",
+        json.dumps({"env": {"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": autocompact_pct_for_model(model)}}),
     ]
     permission_mode = resolve_permission_mode(args)
     if permission_mode is not None:
         cmd.extend(["--permission-mode", permission_mode])
-    model = resolve_model(args)
     if model is not None:
         cmd.extend(["--model", model])
     cmd.append(prompt)
@@ -429,7 +439,6 @@ def main(argv: list[str] | None = None) -> int:
     env = {
         **os.environ,
         "AGENT_RECURSION_DEPTH": str(depth_next),
-        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": autocompact_pct_for_model(model),
     }
 
     # Snapshot existing transcripts BEFORE spawning so we can identify the
