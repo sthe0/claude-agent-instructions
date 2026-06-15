@@ -23,6 +23,7 @@ This skill is layered on top of the root coordination cycle in `CLAUDE.md`. Each
 | Coordination phase | Tracker action |
 |---|---|
 | **Ticket loaded** (first turn referencing the ticket) | Internal: read ticket + links + recent comments. Confirm to the user you have the context. No comment yet. |
+| **Ticket work resumed** (first turn of a new session continuing a ticket already in flight) | To keep the ticket reflecting real progress across session boundaries: before continuing, reconcile the ticket's last comment against the **actual current state** — branch commits (`arc log trunk..HEAD`), PR status, prod runs, populated tables. For every meaningful boundary crossed since the last post (stage completed, first green run, prod cutover) that the per-stage hook would have fired in one continuous session, **backfill a catch-up status comment now**. The across-session gap is exactly where progress posts silently vanish — the skipped-phase memory of row "Stage `COMPLETED`" does not survive a new session, so resume is its own trigger. |
 | **PLAN-READY** received from `planner` (or in-thread plan finished) | Post the plan as a comment, **before** asking the user for approval. The user reviews the plan on the ticket as well as in chat. |
 | **User approval** received on the plan | Optional one-line ack ("approved, starting"). Begin execution. |
 | **Stage `COMPLETED`** (specialist returns `COMPLETED:`) | One-line status + artifact link (PR, dashboard, file path, measurement). |
