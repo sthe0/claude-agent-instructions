@@ -288,16 +288,17 @@ def resolve_model(args: argparse.Namespace) -> str | None:
 # percent of the window, so we convert per-model: pct = ceiling / window. This is
 # passed to the child via `claude --settings` (see cmd construction) rather than
 # process env, because env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE in ~/.claude/settings.json
-# is sized for the default chat model (Opus 1M -> 15%) and would otherwise win over
-# process env, collapsing the ceiling for 200k-window models (sonnet/haiku) to
-# 15% * 200k = 30k -> below the static prefix -> autocompact thrash. See memory-global
-# leaves autocompact-threshold-policy.md and claude-code-settings-env-precedence.md.
+# would otherwise win over process env (settings.json env is applied after process
+# start). See memory-global leaves autocompact-threshold-policy.md and
+# claude-code-settings-env-precedence.md.
 AUTOCOMPACT_CEILING_TOKENS = 150_000
 
-# Context window per model family (tokens), by account tier. Unknown model -> 1M
-# (largest assumption -> smallest percent -> never compacts later than the ceiling).
-MODEL_WINDOW_TOKENS = {"opus": 1_000_000, "sonnet": 200_000, "haiku": 200_000, "fable": 200_000}
-DEFAULT_WINDOW_TOKENS = 1_000_000
+# Context window per model family (tokens). With the 1M context tier disabled
+# (env.CLAUDE_CODE_DISABLE_1M_CONTEXT=1 in ~/.claude/settings.json) every model is
+# 200k -> 75% -> 150k. If 1M is re-enabled for a model, bump its window here (and
+# DEFAULT) so the derived percent tracks it.
+MODEL_WINDOW_TOKENS = {"opus": 200_000, "sonnet": 200_000, "haiku": 200_000, "fable": 200_000}
+DEFAULT_WINDOW_TOKENS = 200_000
 
 
 def autocompact_pct_for_model(model: str | None) -> str:
