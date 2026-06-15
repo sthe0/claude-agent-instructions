@@ -8,6 +8,12 @@ type: reference
 
 A **spawned specialist** is a fresh Claude Code process (`claude -p`) with a specialization skill appended to its system prompt. No parent conversation history, but the same CLAUDE.md, memory, skills, and tools. Use this mode when inline (see `CLAUDE.md` § Invoking specialists) is not sufficient: large scope, fresh-context-as-feature, multi-stage work, or you want the spawn-cost log entry.
 
+## When NOT to spawn — tiny-edit-in-large-file
+
+Means is chosen by *what the work needs to hold in context*, not only by work type. A spawn carries a ~150k autocompact ceiling (`spawn-specialist.py` injects `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`); a developer that full-Reads a large file (>~1000 lines) re-reads it after each autocompact and **thrashes** — the harness emits *"Autocompact is thrashing: context refilled to the limit within N turns"*, the process dies `MALFORMED`, and **no commits land**. This is mis-assigned means: the task is tiny (a few-line edit, or restoring an existing commit) but the executor cannot hold the file context.
+
+To remove this divergence: when the edit is surgical (≤ a few lines) but the target file is large, or the change is "restore an existing commit", **do it in-thread** — `arc cherry-pick <sha>` recovers a commit without dumping its diff into context; a ranged Read (`offset`/`limit`) + Edit touches only the edit region, never the whole file. If a spawn is genuinely unavoidable (multi-file, needs fresh context), the dossier **must** forbid full-file Reads (ranged only) and route large command outputs through `head` / `scripts/offload-large.sh`. Two consecutive `MALFORMED`-with-thrash on the same step is the overcome-difficulty signal — switch means, do not re-spawn a third time.
+
 ## Spawn template
 
 Use `scripts/spawn-specialist.py` — it handles process concerns (recursion-cap check, budget-tier resolution, permission digest, return-marker validation, cost log). Run `--help` for the flag list; `--dry-run` previews the assembled prompt and command.
