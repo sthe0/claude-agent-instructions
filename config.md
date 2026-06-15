@@ -15,6 +15,7 @@ Edit values **here** — not in the prose that references them. Every cross-refe
 | `substantive-wall-clock-min` | `30` | Lower bound (minutes) for the *substantive* class in task triage — work expected to take this long or more warrants the full coordination cycle. |
 | `rediscovery-threshold-min` | `5` | Quality bar for post-resolution experience leaves — record if skipping the leaf would cost a future similar task at least this much rediscovery. |
 | `claude-md-max-lines` | `400` | Hard ceiling on `CLAUDE.md` line count. Above this, extract a section to a `memory-global/leaves/` leaf and reference it. Enforced by `scripts/lint-prose-length.py`. |
+| `claude-md-max-bytes` | `39000` | Hard ceiling on `CLAUDE.md` UTF-8 byte size — a buffer under the harness's 40 000-byte ceiling, past which CLAUDE.md is silently truncated and tail rules are lost. Enforced by `scripts/lint-prose-length.py` (the line-count guard does not catch byte growth). |
 | `cursor-mirror-max-lines` | `220` | Hard ceiling on `cursor/rules/claude-code-sync.mdc`. The mirror is thin by design. |
 | `skill-md-max-lines` | `200` | Hard ceiling on any `skills/*/SKILL.md` or `skills/specializations/*/SKILL.md`. Detail belongs in a sibling `policy.md` or a memory leaf. |
 | `policy-md-max-lines` | `400` | Hard ceiling on any `skills/*/policy.md`. Policies are allowed to be detailed but not unbounded. |

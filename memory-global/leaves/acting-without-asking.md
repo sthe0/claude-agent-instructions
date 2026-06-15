@@ -85,6 +85,30 @@ Update the plan file in place; mention the refinement in passing in your reply i
 
 For these: state the diff (was → now → why), present via `AskUserQuestion` (`Apply revised plan / Refine / Stick with original`), wait for confirmation. This is exactly the `REPLAN:` flow when it originates from `overcome-difficulty`; the same gate applies when the manager realizes the substantive change in-thread.
 
+## In-context carve-out — manager implements substantive work in-thread
+
+Referenced from CLAUDE.md § Classify task weight ("Carve-out for in-context substantive plans"). A substantive task whose individual implementation steps each fit the *small change* row (≤ `small-change-max-lines` per step, single file each, no irreversible action) may be executed by the manager in-thread, **after the plan is approved**. Rationale: the plan/approval gate already protects against scope drift; the `developer` spawn primarily protects against context drift, which does not apply when the manager has explored the affected files this session. Default to spawning if any step exceeds those bounds, or if the manager has not read the target files in this session.
+
+### Exception — infrastructure-as-code (spawn anyway)
+
+Even when all steps fit *small change*, spawn `developer` when the task:
+
+- touches Dockerfile / docker-compose / CI / deploy scripts,
+- restructures a git repo (init / move files into VCS / symlink migration),
+- or changes container / service lifecycle on a host.
+
+The aggregate scope and the irreversibility of running-state mutations outweigh per-step size, and the cost-log entry from a separate process is the point.
+
+### Narrow counter-exception (in-thread allowed)
+
+If the infra task's dominant risk is **preservation of live state the manager already has fully loaded this session** (e.g. content-preserving migration of populated memory), and **all** of:
+
+- there are **no** external effects (local only — no remote / push / shared host),
+- the manager keeps backups,
+- the manager verifies each step,
+
+then in-thread execution can beat a cold spawn that would only re-derive the preservation trap. This does **not** license skipping spawns to save effort — name the live-state-preservation difficulty explicitly, or spawn.
+
 ## Anti-patterns
 
 - **Asking permission for a `Read` or `Grep`.** Pre-authorized — see § 1.

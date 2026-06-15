@@ -11,11 +11,15 @@ file with a one-line pointer.
 
 Governed files (per `config.md` keys):
 
-  CLAUDE.md                              claude-md-max-lines
+  CLAUDE.md                              claude-md-max-lines, claude-md-max-bytes
   cursor/rules/claude-code-sync.mdc      cursor-mirror-max-lines
   skills/*/SKILL.md                      skill-md-max-lines
   skills/specializations/*/SKILL.md      skill-md-max-lines
   skills/*/policy.md                     policy-md-max-lines
+
+CLAUDE.md also has a UTF-8 byte ceiling (`claude-md-max-bytes`): the harness
+silently truncates CLAUDE.md past ~40 000 bytes, losing tail rules, and the
+line-count guard does not catch byte growth.
 """
 from __future__ import annotations
 
@@ -61,6 +65,30 @@ def main(argv: list[str] | None = None) -> int:
 
     failures: list[str] = []
     scanned = 0
+
+    # Byte-size ceiling for CLAUDE.md. The harness silently truncates CLAUDE.md
+    # past ~40 000 bytes, dropping tail rules; the line-count guard below does
+    # not catch byte growth (a few long lines can blow the byte budget while
+    # staying well under the line limit), so check bytes explicitly.
+    byte_key = "claude-md-max-bytes"
+    raw_bytes = constants.get(byte_key)
+    if raw_bytes is None:
+        failures.append(f"config.md missing key: {byte_key}")
+    else:
+        try:
+            byte_limit = int(raw_bytes)
+        except ValueError:
+            failures.append(f"config.md key {byte_key} is not an integer: {raw_bytes!r}")
+        else:
+            claude_md = REPO_ROOT / "CLAUDE.md"
+            if claude_md.is_file():
+                scanned += 1
+                nbytes = len(claude_md.read_text(encoding="utf-8").encode("utf-8"))
+                if nbytes > byte_limit:
+                    failures.append(
+                        f"CLAUDE.md: {nbytes} bytes, limit {byte_limit} ({byte_key})"
+                    )
+
     for glob_pat, key in GOVERNED:
         raw = constants.get(key)
         if raw is None:
