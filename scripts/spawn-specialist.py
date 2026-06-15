@@ -284,6 +284,34 @@ def resolve_model(args: argparse.Namespace) -> str | None:
     return MODEL_BY_KIND.get(args.kind)
 
 
+# Absolute context ceiling before auto-compaction (tokens). The harness knob is a
+# percent of the window, so we convert per-model: pct = ceiling / window. Keep in
+# lock-step with env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE in ~/.claude/settings.json
+# (which sizes the default chat model, Opus 1M). See memory-global leaf
+# autocompact-threshold-policy.md.
+AUTOCOMPACT_CEILING_TOKENS = 150_000
+
+# Context window per model family (tokens), by account tier. Unknown model -> 1M
+# (largest assumption -> smallest percent -> never compacts later than the ceiling).
+MODEL_WINDOW_TOKENS = {"opus": 1_000_000, "sonnet": 200_000, "haiku": 200_000, "fable": 200_000}
+DEFAULT_WINDOW_TOKENS = 1_000_000
+
+
+def autocompact_pct_for_model(model: str | None) -> str:
+    """Percent of the window at which the child should auto-compact, so the
+    absolute context ceiling stays AUTOCOMPACT_CEILING_TOKENS regardless of which
+    model (window) the child runs. Matches a family by substring so both aliases
+    (`sonnet`) and full ids (`claude-sonnet-4-6`) resolve."""
+    window = DEFAULT_WINDOW_TOKENS
+    if model:
+        for family, w in MODEL_WINDOW_TOKENS.items():
+            if family in model:
+                window = w
+                break
+    pct = round(AUTOCOMPACT_CEILING_TOKENS / window * 100)
+    return str(max(1, min(95, pct)))
+
+
 def _snapshot_transcripts() -> set[Path]:
     """Set of `~/.claude/projects/**/*.jsonl` that exist right now."""
     root = Path.home() / ".claude" / "projects"
@@ -398,7 +426,11 @@ def main(argv: list[str] | None = None) -> int:
         print("error: `claude` not on PATH; cannot spawn. Re-run with --dry-run to inspect the prompt.", file=sys.stderr)
         return 4
 
-    env = {**os.environ, "AGENT_RECURSION_DEPTH": str(depth_next)}
+    env = {
+        **os.environ,
+        "AGENT_RECURSION_DEPTH": str(depth_next),
+        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": autocompact_pct_for_model(model),
+    }
 
     # Snapshot existing transcripts BEFORE spawning so we can identify the
     # child's new jsonl (the parent manager's own live transcript would

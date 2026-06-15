@@ -39,6 +39,7 @@ Loaded into every session via `@~/.claude/memory-global/MEMORY.md` import in `CL
 - [Remote sudo access paths](leaves/remote-sudo-access-paths.md) — when Claude needs sudo on a remote host (user-A ssh → work in user-B's space): NOPASSWD narrow scope (default) / Defaults timestamp_type=global (short window) / direct ssh as target; Claude's `!` shell has no TTY so interactive `sudo -v` won't work.
 
 - [Tracker write token](leaves/tracker-write-token.md) — Startrek writes need `~/.tracker-token` (OAuth); `$OAUTH_TOKEN` is read-only (403 `startrek:write`); MCP tracker tools are read-only.
+- [Auto-compaction threshold policy](leaves/autocompact-threshold-policy.md) — context ceiling 150k tokens; only knob is `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` (percent of window); settings.json default 15 (Opus 1M); spawns inject per-model percent in `spawn-specialist.py`.
 
 Workflow-level permissions (separate from memory): `~/claude-agent-instructions/permissions/` + `scripts/permissions-cli.py`. Not a memory leaf — operational config.
 
