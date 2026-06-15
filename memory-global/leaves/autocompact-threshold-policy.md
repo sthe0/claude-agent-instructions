@@ -11,7 +11,7 @@ metadata:
 
 - **Ceiling = 150 000 tokens.** Conversion: `pct = round(ceiling / window * 100)`, i.e. `pct = round(15_000_000 / window)`.
 - **Default `~/.claude/settings.json` `env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` = `15`** — sized for the **default chat model Opus 4.8, whose window is 1M** (confirmed via `/context`: `48.1k / 1m`). 15% × 1M = 150k.
-- **Spawned `claude -p` sub-agents** inherit settings.json (→ 15%) but may run a smaller-window model, where 15% would compact far too early (e.g. 200k window → 30k). So the per-model percent is injected into the child env in `scripts/spawn-specialist.py` (env build, ~line 401), keyed off the resolved model.
+- **Spawned `claude -p` sub-agents** may run a smaller-window model than the Opus-1M-sized default 15%, where 15% would compact far too early (e.g. 200k window → 30k → below the static prefix → autocompact thrash → child dies `MALFORMED`). So `scripts/spawn-specialist.py` passes the per-model percent via **`claude --settings '{"env":{"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "<pct>"}}'`** (cmd construction), keyed off the resolved model. **Not process env:** `settings.json` `env` is applied after process start and *overrides* process env, so an env injection is silently clobbered by the file's `15`; `--settings` sits above file settings in the precedence ladder and wins per-key. See [[claude-code-settings-env-precedence]].
 - **Safe direction under window uncertainty:** *overestimate* the window → smaller percent → compacts no later than the ceiling. Unknown model ⇒ default window 1M ⇒ 15%.
 
 **Why:** keep the working context bounded so cost (cache read/write scales with retained context) and quality stay predictable, independent of which model/window is active. See [[token-economy-plan]].
