@@ -115,6 +115,10 @@ If the search above surfaces a precedent for the current task, two outcomes:
 
 If no precedent surfaces — no extra step; plan from scratch.
 
+### Consult specialists on technical decisions
+
+When a plan choice hinges on a technical question you cannot settle from read-only discovery (feasibility, API / contract shape, performance, library / pattern choice), do **not** guess. Planning inline → spawn a `developer` (or the relevant specialist) in a **read-only advisory capacity** (no code) to validate the approach before committing it to the plan. Spawned planner (`-p`, cannot spawn) → surface the question as an explicit consultation item (`ESCALATE:` or an `Operator questions` entry) so the manager runs the consult before finalizing. A plan built on an unverified technical assumption is the difficulty this removes.
+
 ### Cost and resource assessment
 
 Before settling on an approach, estimate cost and resources for **each candidate option** (evaluate ≥ 2 in non-trivial cases). Dimensions:
@@ -143,14 +147,16 @@ From experience with this task type, past similar tasks (read experience leaves)
 
 Required `##` sections (in this order; `verify-plan-file.py` enforces presence):
 
-1. **Problem and done criteria.**
+1. **Problem and done criteria.** State both (1) a plain-language description of the end result and (2) a verifiable definition-of-done criterion for the task as a whole.
 2. **Context.**
 3. **Stages.** Each stage block declares:
    - Who executes (which specialization, or manager in-thread).
    - Reuse / tools.
    - **Cost tier** (`small` / `medium` / `large` per `~/.claude/config.md`).
+   - **Approach:** the chosen technical solution in 1–3 sentences — algorithm / pattern / which existing abstraction to extend, and where it lands (file · symbol). The executor implements this; it does not re-derive the design.
+   - **Steps:** an ordered checklist of concrete sub-actions, each naming the file / symbol it touches — granular enough that execution is mechanical, not design work.
    - **Output:** the artifact this stage produces.
-   - **Expected result image:** concrete observable + expected value/state — what the world looks like when this stage succeeded (e.g. "`pytest tests/foo.py` exits 0", "PR opens with N commits and CI green", "table `users` has new column `tier` populated for all rows"). For `measurable` criteria — a runnable check command or query. For `acceptance-review` — what the user inspects and what "good" looks like. `verify-plan-file.py` requires at least one `Expected result image:` line in the Stages section.
+   - **Expected result image:** *(this stage's definition of done)* concrete observable + expected value/state — what the world looks like when this stage succeeded (e.g. "`pytest tests/foo.py` exits 0", "PR opens with N commits and CI green", "table `users` has new column `tier` populated for all rows"). For `measurable` criteria — a runnable check command or query. For `acceptance-review` — what the user inspects and what "good" looks like. `verify-plan-file.py` requires at least one `Expected result image:` line in the Stages section.
    - **Actual effort:** *(post-hoc; filled by the manager after the stage completes — empty at plan-write time)*. Free-form: number of tool calls, wall-clock, surprises, retries (e.g. `5 tool calls, ~12 min, one retry on hook block`). The experience leaf's `Cost & effort` section references these per-stage entries as the breakdown of the total. Adding / updating this field is **refinement**, not a substantive plan change (CLAUDE.md § Acting without asking).
 4. **Summary** — table.
 5. **Dependency graph** — text.
@@ -160,7 +166,7 @@ Required `##` sections (in this order; `verify-plan-file.py` enforces presence):
 Optional `##` sections (add when the task warrants them; not enforced by `verify-plan-file.py`):
 
 - **Required resources.** Non-trivial resources the plan depends on — skip the trivial (Read, built-in tools). Include: input artifacts (datasets, configs, tickets), tools or skills with non-default availability (specific MCP servers, CLI tooling like `ya tool *`, infra access), approvals or org gates (queue access, role grant, oncall sign-off), budget constraints (wall-clock deadline, $ cap per `~/.claude/config.md`). One bullet per resource, with a one-line "why non-trivial". Surface here so the user sees the dependency surface up-front, and the experience leaf can attribute cost to the resources that drove it.
-- **Reference files.** Subsections `### To modify` (file + line ranges that will change) and `### To read` (files, tests, configs needed for context). Add when the task touches existing code — a concrete file map is the cheapest way to anchor stages and give the developer an exact starting set.
+- **Reference files** *(required when the task touches existing code)*. Subsections `### To modify` (file + line ranges that will change) and `### To read` (files, tests, configs needed for context) — a concrete file map is the cheapest way to anchor stages and give the developer an exact starting set.
 - **Contracts.** Only the contracts actually touched: API endpoints, method/service/repository signatures, models / DTOs, enums and interfaces, DB schema (tables, columns, indexes), events / queues, configs, external integrations. Add when the plan changes any interface.
 - **Operator questions.** Blocking questions the operator must answer before or during execution; persistent record (vs `CLARIFY:` which is one-shot). If you can make a reasonable assumption, fix it here marked `[assumption]` and proceed. New blocking questions discovered during solve are appended here too.
 - **Decomposition.** If markers M1–M4 (see `~/.claude/memory-global/leaves/decomposition-markers.md`) push toward splitting the plan into separate PRs/tickets, record the verdict (`recommended` / `possible` / `not required`), the rationale citing which markers fired, and — if recommended — a numbered list of sub-PRs.

@@ -84,6 +84,7 @@ Not mandatory only for neutral confirmation ("ok", "yes do it", "thanks") and fo
 | Signal | Specialist / skill |
 |---|---|
 | Decomposition, stages, timelines, risks | `planner` specialization — inline via `Skill`, or spawn `claude -p` for larger plans |
+| Technical feasibility / architecture check **while planning** | spawn `developer` (or the relevant specialist) in read-only advisory mode — a plan-prep consult, distinct from implementation |
 | Production code, VCS, build, PR | `developer` specialization — inline via `Skill`, or spawn `claude -p` for larger work |
 | Independent reasoning check on a non-trivial chain | `thinker` specialization — prefer spawn `claude -p` (its value is fresh, unanchored context) |
 | Yandex Cloud / `yc` operations | `yandex-cloud-expert` specialization — inline via `Skill`, or spawn `claude -p` |
