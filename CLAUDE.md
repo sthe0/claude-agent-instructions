@@ -86,6 +86,7 @@ Not mandatory only for neutral confirmation ("ok", "yes do it", "thanks") and fo
 | Decomposition, stages, timelines, risks | `planner` specialization — inline via `Skill`, or spawn `claude -p` for larger plans |
 | Technical feasibility / architecture check **while planning** | spawn `developer` (or the relevant specialist) in read-only advisory mode — a plan-prep consult, distinct from implementation |
 | Production code, VCS, build, PR | `developer` specialization — inline via `Skill`, or spawn `claude -p` for larger work |
+| Code just written; maintainability / readability / reusability review before done | `code-reviewer` specialization — inline via `Skill` for the developer's self-review, or spawn `claude -p` for an independent fresh-context review |
 | Independent reasoning check on a non-trivial chain | `thinker` specialization — prefer spawn `claude -p` (its value is fresh, unanchored context) |
 | Yandex Cloud / `yc` operations | `yandex-cloud-expert` specialization — inline via `Skill`, or spawn `claude -p` |
 | Russian README / docs; polishing a plan before showing it; a detailed Russian comment to the user (not short replies) | `tech-writer` specialization — inline via `Skill` for plan / comment polishing, spawn `claude -p` for from-scratch README / docs |
@@ -284,6 +285,7 @@ Edit policy for `~/claude-agent-instructions/`: `sync-instructions-repo.sh pull`
 |---|---|
 | `planner` | Decomposition, stages, dependencies, risks, done criteria |
 | `developer` | Writing, refactoring, debugging, reviewing production code |
+| `code-reviewer` | Maintainability / readability / reusability review of a diff — developer self-review or independent review |
 | `thinker` | Independent reasoning check on a non-trivial chain |
 | `yandex-cloud-expert` | Yandex Cloud setup / `yc` operations |
 | `tech-writer` | Russian README / docs authoring (plan & comment polishing is usually inline) |

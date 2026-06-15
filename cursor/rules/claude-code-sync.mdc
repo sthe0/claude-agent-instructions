@@ -159,6 +159,7 @@ When a plan step calls for a specialization, **read the SKILL.md inline** and ap
 |---|---|---|
 | `planner` | Decomposition, stages, dependencies, risks, done criteria | `~/.claude/skills/planner/SKILL.md` |
 | `developer` | Writing, refactoring, debugging, reviewing production code | `~/.claude/skills/developer/SKILL.md` |
+| `code-reviewer` | Maintainability / readability / reusability review of a diff (developer self-review or independent) | `~/.claude/skills/code-reviewer/SKILL.md` |
 | `thinker` | Reasoning check on a non-trivial chain (note: no fresh-context isolation available in Cursor) | `~/.claude/skills/thinker/SKILL.md` |
 | `yandex-cloud-expert` | Yandex Cloud setup / `yc` operations | `~/.claude/skills/yandex-cloud-expert/SKILL.md` |
 | `tech-writer` | Russian README / docs authoring; polishing a plan or a detailed Russian comment (clear, concise Russian, no calques/jargon) | `~/.claude/skills/tech-writer/SKILL.md` |

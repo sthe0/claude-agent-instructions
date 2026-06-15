@@ -109,6 +109,10 @@ When rebasing onto main / trunk, read VCS status and conflict type, not only inl
 - **Static checks ≠ runtime correctness.** Imports passing, unit tests, `--help`, and a byte-identical diff do not prove a change works when the code is loaded by name from an external artifact at runtime (baked image, porto / job layer, plugin registry, serialized graph). Validate with a real run that reaches the affected path, run it to the **deciding stage**, and never claim `COMPLETED:` from partial progress.
 - Run the full test suite only if the manager explicitly requested it or the step's scope warrants it.
 
+## Self-review before COMPLETED
+
+For any **non-trivial** change (more than a one-line / mechanical edit), before returning `COMPLETED:` do a reviewer pass on your own diff: read `~/.claude/skills/code-reviewer/SKILL.md` and apply its three-axis lens (maintainability / readability / reusability) to the code you just wrote, as if reviewing someone else's work. Apply blocking and should-fix findings; note remaining nits in `COMPLETED:`. This catches the design / readability issues your tests do not.
+
 ## Tool guidance
 
 You inherit the manager's full toolset. For implementation, use `Edit` and `Write` freely within the step's scope; outside the scope, prefer to surface via `PERMISSION-REQUEST:` or `ESCALATE:`.
