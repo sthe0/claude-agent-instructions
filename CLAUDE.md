@@ -59,6 +59,23 @@ Need → Options → Plan → Resources → Execution → Verification → done?
   **Mini-OD on first external-job failure.** Before relaunch or infra log dives on a failed orchestrated job (Nirvana WI, CI, Reactor, Sandbox graph): inline Expected/Actual/Mismatch, then `workflow-debug-investigation.md` (baseline → topology → code delta, ≥2 hypotheses). Project signals leaf when present under `.claude/agent-memory/leaves/`.
   **Verify the right axis, report honestly.** "Imports pass / tests green / build-diff identical" is *static* verification — it does not establish *runtime* correctness for code loaded by name from an external artifact (baked image, porto / job layer, serialized graph). Do not report "works / didn't break" until the runtime axis is checked for the affected path. Never infer success from partial progress (a job past block N says nothing about block N+1). After any outward action (PR comment, publish, push), confirm it actually landed / is visible — "posted" ≠ "published".
 
+### Escalation to the user
+
+Ask when: several equivalent strategies and the choice affects timeline or risk; no access to a resource and no workaround; the done criterion is undefined. Batch 3–4 questions, not one at a time.
+
+**Use `AskUserQuestion` for every confirmation and every choice from a defined set — mandatory, not a preference.** This covers: apply / skip ("apply these edits?"), push gates ("push to origin?"), scope choices ("touch deepagent too?"), resolution confirmations ("considered resolved?"), and picks of one of N pre-defined approaches. If the answer is binary or one-of-N you can list, `AskUserQuestion` is the right tool — the structured UI turns each confirmation into a single click (or Enter on the recommended option) instead of typed `да` / `yes`. Put the recommended option first, marked `(Recommended)`; the user always has the implicit "Other" escape. **Bundle** multiple binary decisions at end-of-turn into a single `AskUserQuestion` call rather than splitting structured + free-text sign-offs. Free text is only for genuinely open-ended questions (the user must type a name, path, sentence) — never for "apply?", "push?", "resolved?".
+
+### Acting without asking
+
+Carve-outs that minimize per-action confirmation:
+
+1. **Side-effect-free actions pre-authorized** — `Read` / `Grep` / `Glob`, web / wiki / docs / code search, `--help`, `--dry-run`, MCP `get_*` / `list_*` / `search_*` / `describe_*`. No ask, plan or no plan. The mechanical allowlist that suppresses the harness prompt for this class lives in versioned `settings/base.json` (read-only entries only, enforced by `scripts/lint-settings-base.py`) and is merged into each machine's `~/.claude/settings.json` by `setup-symlinks.sh` (via `apply-settings.sh`) — machine-specific paths and ephemeral grants stay local.
+2. **Plan-scope-declared actions pre-authorized after plan approval** — anything the approved plan declares (files in `Reference files`, artifacts in `Stages.Output`, declared VCS ops, named external calls) proceeds without re-asking per action.
+3. **Unknown tool side-effect class:** budget **1 lookup** (`--help` / `ToolSearch select:<name>` / `Read` SKILL.md). If still unclear → `PERMISSION-REQUEST:`; do not burn additional lookups.
+4. **Pushing commits to a personal ticket / working branch** (not trunk / shared / `release-*`) is pre-authorized — commit small and `arc push` after **each** commit; frequent pushed commits are the rollback safety net, and pushing to an open PR's branch is safe (commits land as a **draft** update, not shown to reviewers until an explicit `arc pr publish`). Pushing to trunk / shared / release branches still requires confirmation. Do not instruct spawned developers to withhold ticket-branch pushes.
+
+**Substantive plan changes still require approval.** Refinement (tightening Expected-image, missed read step, reorder without dep change, typo, post-hoc `Actual effort:`) — manager applies in-thread. Substantive (scope expansion / contraction, new required resource, new specialist, changed done criterion, new external action) — `AskUserQuestion` with diff vs prior plan. Full policy and anti-patterns: `~/.claude/memory-global/leaves/acting-without-asking.md`.
+
 ### When the work is stuck
 
 A **difficulty** is a divergence between reality and the plan. The canonical form: an actual step result does not match the result image the plan declared for that step. A second form: you cannot perform that check at all — no observable, no signal, no way to compare actual against expected. Both warrant the same response.
@@ -110,24 +127,17 @@ A **specialist** is a specialization skill (`planner` / `developer` / `thinker` 
 
 If a job is too small to justify even an inline invocation (single-sentence answer, one-line edit, chat reply) — handle it directly per § Classify task weight.
 
+Keep the main thread lean — delegate verbose / exploratory work (multi-file reads, log diving, broad search) to a spawned specialist so only the conclusion returns (see § Cost discipline).
+
 ### Spawning specialists
 
-A **spawned specialist** is a fresh Claude Code process (`claude -p`) with a specialization skill appended to its system prompt. No parent conversation history, but the same CLAUDE.md, memory, skills, and tools. Use this mode when inline (see § Invoking specialists above) is not sufficient: large scope, fresh-context-as-feature, multi-stage work, or you want the spawn-cost log entry.
+A **spawned specialist** is a fresh Claude Code process (`claude -p`) with a specialization skill appended to its system prompt — use it when inline (§ Invoking specialists) is not enough: large scope, fresh-context-as-feature, multi-stage work, or a spawn-cost log entry. Entry point: `scripts/spawn-specialist.py` (`--help` for flags, `--dry-run` to preview). The full mechanics — spawn-template inputs, budget tiers, the `max-recursion-depth` cap (refuse → do not retry), monitoring a running spawn, the after-spawn `arc status` + `arc log` checks, and the `bypassPermissions` discipline for `developer` — all live in [spawning-specialists.md](memory-global/leaves/spawning-specialists.md).
 
-Use `scripts/spawn-specialist.py` (`--help` for flags, `--dry-run` to preview). The manager supplies the cognitive inputs: `--kind`, `--plan` with the owned step marked `**<<this step>>**`, `--done-criterion` + `--criterion-type`, `--context-dossier`, `--budget` tier (`small` / `medium` default / `large` → `budget-*-usd`), `--complexity` (model by difficulty), `--project-permissions`. The wrapper enforces `max-recursion-depth` (refuses with exit 3 — **do not retry**; summarize and ask the user) and defaults `kind=developer` to `--permission-mode bypassPermissions`, which **requires** an explicit hard-deny list in the dossier (no `cd` / Write / `arc commit` outside the assigned mount; start-of-session `pwd` self-check). Monitor a running `developer` spawn via the `transcript=<path>` it prints to stderr; **kill early** on drift, then check **both** `arc status` *and* `arc log -n 5` before the next move.
-
-Each specialist's first non-empty line carries a **return marker** — `COMPLETED:` / `PLAN-READY:` (planner-only, hard gate) / `INCOMPLETE:` / `CLARIFY:` (one fact) / `REPLAN:` / `PERMISSION-REQUEST:` / `ESCALATE:` (decision); the wrapper prefixes `MALFORMED:` if absent. `CLARIFY:` vs `ESCALATE:` = fact vs decision. Full spawn mechanics — template inputs, budget table, recursion-cap handling, monitoring cadence, after-spawn checks, `bypassPermissions` discipline, marker semantics — in [spawning-specialists.md](memory-global/leaves/spawning-specialists.md).
+Each specialist's first non-empty line carries a **return marker** — `COMPLETED:` / `PLAN-READY:` (planner-only, hard gate) / `INCOMPLETE:` / `CLARIFY:` (one fact) / `REPLAN:` / `PERMISSION-REQUEST:` / `ESCALATE:` (decision); the wrapper prefixes `MALFORMED:` if absent. Marker semantics are defined in the leaf; handling each after the spawn returns is § Handling specialist escalations.
 
 ### Handling specialist escalations
 
 Resolve each return marker, then re-spawn the specialist with the resolution embedded in a continuation prompt. **`PLAN-READY:` is a hard gate** — stop and get explicit user approval before any further spawn; never infer approval from silence. `CLARIFY:` — answer the specific fact (ask the user first if it needs their input). `REPLAN:` — incorporate the revision, update the plan. `PERMISSION-REQUEST:` — check existing grants via `scripts/permissions-cli.py check` (global **and** project file) before asking the user; persist any `always` grant via `permissions-cli.py grant`. `ESCALATE:` — resolve the decision (with the user if needed). `INCOMPLETE:` — re-spawn / ask / accept partial. `COMPLETED:` — next step. Per-marker continuation-prompt templates and the workflow-vs-tool-permission distinction in [handling-escalations.md](memory-global/leaves/handling-escalations.md).
-
-### Outcome format
-
-1. **Task status** — done / in progress / blocked.
-2. **What was done** — by step, who executed.
-3. **Artifacts** — paths, links, commands. When referencing an external run / job / PR / CI task (Nirvana WI, Sandbox, CI), give the **clickable URL to the actual run**, never a truncated id fragment — applies equally to status reports and to user-facing comments (tracker, PR review).
-4. **Next steps** — if not done.
 
 ### On task resolution (record experience)
 
@@ -140,6 +150,15 @@ A substantive task is **resolved** only when the user explicitly confirms it. **
 3. **Ask explicitly via `AskUserQuestion`** in the user's language. The gate is binary, so `AskUserQuestion` is **mandatory** per § Escalation to the user. **Shape the question to the criterion type:** *measurable* — a generic "Считаем решённой?" (you've already run the check). *Acceptance-review* — name the **specific observation the user has just performed** ("Открыл свежий mosh — попал в shell без зависаний?", "Запустил X — увидел Y?"), not a meta-belief; otherwise "yes" can mean "the explanation sounded right" and a regression slips through (see `2026-05-25-resolution-gate-confirm-before-record.md`). If the same turn already has other binary asks queued (push, scope, follow-up), **bundle** the resolution question into the same `AskUserQuestion` call — do not split structured + free-text sign-offs across the turn.
 4. **Wait for explicit confirmation.** An unambiguous "yes" / "resolved" / "так и оставим" / direct answer to your ask. **Bare gratitude is not confirmation** — `thanks` / `спасибо` / `thx` / `perfect` alone is ambiguous between "thanks for the work" and "task is over". Ask anyway. Enforced by `scripts/hook-resolution-reminder.py` (UserPromptSubmit) — emits a stderr nudge when the user's reply is brief gratitude.
 5. **On confirmation** — decide whether to record the experience (quality bar below).
+
+#### Outcome format
+
+*Difficulty removed: a report the user (or the next step) cannot act on without re-asking — missing status, artifacts, or a clickable run URL.*
+
+1. **Task status** — done / in progress / blocked.
+2. **What was done** — by step, who executed.
+3. **Artifacts** — paths, links, commands. When referencing an external run / job / PR / CI task (Nirvana WI, Sandbox, CI), give the **clickable URL to the actual run**, never a truncated id fragment — applies equally to status reports and to user-facing comments (tracker, PR review).
+4. **Next steps** — if not done.
 
 #### Quality bar (decide before writing)
 
@@ -169,23 +188,6 @@ If § **Self-critique** names any concrete agent-system friction, **invoke the `
 
 Skip the leaf entirely for trivial Q&A turns and one-line tasks. The whole rule applies only to substantive work where you planned, delegated, or hit a difficulty.
 
-### Escalation to the user
-
-Ask when: several equivalent strategies and the choice affects timeline or risk; no access to a resource and no workaround; the done criterion is undefined. Batch 3–4 questions, not one at a time.
-
-**Use `AskUserQuestion` for every confirmation and every choice from a defined set — mandatory, not a preference.** This covers: apply / skip ("apply these edits?"), push gates ("push to origin?"), scope choices ("touch deepagent too?"), resolution confirmations ("considered resolved?"), and picks of one of N pre-defined approaches. If the answer is binary or one-of-N you can list, `AskUserQuestion` is the right tool — the structured UI turns each confirmation into a single click (or Enter on the recommended option) instead of typed `да` / `yes`. Put the recommended option first, marked `(Recommended)`; the user always has the implicit "Other" escape. **Bundle** multiple binary decisions at end-of-turn into a single `AskUserQuestion` call rather than splitting structured + free-text sign-offs. Free text is only for genuinely open-ended questions (the user must type a name, path, sentence) — never for "apply?", "push?", "resolved?".
-
-### Acting without asking
-
-Carve-outs that minimize per-action confirmation:
-
-1. **Side-effect-free actions pre-authorized** — `Read` / `Grep` / `Glob`, web / wiki / docs / code search, `--help`, `--dry-run`, MCP `get_*` / `list_*` / `search_*` / `describe_*`. No ask, plan or no plan. The mechanical allowlist that suppresses the harness prompt for this class lives in versioned `settings/base.json` (read-only entries only, enforced by `scripts/lint-settings-base.py`) and is merged into each machine's `~/.claude/settings.json` by `setup-symlinks.sh` (via `apply-settings.sh`) — machine-specific paths and ephemeral grants stay local.
-2. **Plan-scope-declared actions pre-authorized after plan approval** — anything the approved plan declares (files in `Reference files`, artifacts in `Stages.Output`, declared VCS ops, named external calls) proceeds without re-asking per action.
-3. **Unknown tool side-effect class:** budget **1 lookup** (`--help` / `ToolSearch select:<name>` / `Read` SKILL.md). If still unclear → `PERMISSION-REQUEST:`; do not burn additional lookups.
-4. **Pushing commits to a personal ticket / working branch** (not trunk / shared / `release-*`) is pre-authorized — commit small and `arc push` after **each** commit; frequent pushed commits are the rollback safety net, and pushing to an open PR's branch is safe (commits land as a **draft** update, not shown to reviewers until an explicit `arc pr publish`). Pushing to trunk / shared / release branches still requires confirmation. Do not instruct spawned developers to withhold ticket-branch pushes.
-
-**Substantive plan changes still require approval.** Refinement (tightening Expected-image, missed read step, reorder without dep change, typo, post-hoc `Actual effort:`) — manager applies in-thread. Substantive (scope expansion / contraction, new required resource, new specialist, changed done criterion, new external action) — `AskUserQuestion` with diff vs prior plan. Full policy and anti-patterns: `~/.claude/memory-global/leaves/acting-without-asking.md`.
-
 ### Limits
 
 - You do **not** write production code yourself on **substantive** work — spawn `developer`. *Small change* class (per § Classify task weight) you may handle directly in-thread.
@@ -201,6 +203,8 @@ Numeric constants for the coordination machinery (recursion cap, budget tiers, t
 ---
 
 ## Long-running jobs
+
+*Difficulty removed: a started external job left unmonitored fails silently and burns wall-clock before anyone notices.*
 
 After starting an external workflow / job graph — report ids/URLs and monitor until terminal state per the project's memory runbook. Do not wait for the user to ask.
 
@@ -248,6 +252,8 @@ Cite the source where possible (`> verified by: <commit>/<URL>/<conversation>`).
 
 ## Development habits
 
+*Difficulty removed: recurring code-level regressions (duplication, broken shared defaults, comment rot) that each pass review alone but accumulate.*
+
 - Avoid duplicating code. Explore adjacent files, use project search; extend shared abstractions over copy-paste.
 - **Don't change a shared entry point's default for one new caller.** When an existing CLI command or exported function is reused as a building block for a new caller (orchestrator, job step, parent graph), gate any added blocking / waiting / side-effecting behavior behind an opt-in parameter that defaults to the prior behavior; check current callers before altering a shared path. (Regression source: a CLI launch command was made to block on graph completion to serve a meta-graph that never even called that path — breaking fire-and-forget for direct users.)
 - **Mirror the working caller before inventing a bypass.** When code fails for missing ambient context (graph / session context, secrets, quota, a valid path) inside a constrained environment (a job, sandbox, frozen layer), find the existing *working* caller that does the same operation (standalone CLI, client publish path) and replicate how it establishes that context — before reaching for an env-var / quota / path workaround. (Regression source: a developer added a `DEEPAGENT_VH3_EXECUTABLE_QUOTA` env shim to dodge a missing graph-context, when the working client simply ran under `with profile.context()`.) Detail: `~/.claude/memory-global/leaves/mirror-working-caller-before-bypass.md`.
@@ -266,6 +272,8 @@ Cite the source where possible (`> verified by: <commit>/<URL>/<conversation>`).
 ---
 
 ## Instruction language
+
+*Two difficulties: (1) a reply in a language the user does not use is unusable to them; (2) non-English text in the instruction repo fragments the canonical English doc and degrades search/consistency.*
 
 All text in `~/claude-agent-instructions/` and `.claude/agent-memory/` is **English** by default (non-English needs an adjacent `> **Language exception:** …`); user-facing replies — including analyses, retrospectives, self-improvement proposals, **technical/design narratives, and the question + option-label text of every `AskUserQuestion`** — match the language the user writes in (structured or technical content is **not** an exemption). Full rule: `~/.claude/skills/self-improvement/policy.md` § Instruction language.
 
