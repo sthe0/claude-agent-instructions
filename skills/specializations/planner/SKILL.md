@@ -62,7 +62,7 @@ Before decomposing anything, state explicitly for yourself and in the plan:
 
 - **What difficulty** should be removed by this task (what fails / is inconvenient / suboptimal / missing now).
 - **Target outcome** — what the world looks like after: which artifacts appear (table, service, metric, document, PR), whose / what behavior changes and how.
-- **How to verify** — how we confirm the difficulty is actually gone: experiment / query / test / measurement / observation that gives a clear "yes, solved".
+- **How to verify** — how we confirm the difficulty is actually gone: experiment / query / test / measurement / observation that gives a clear "yes, solved". For a model / classifier / quality output, make this a check against a **labeled ground-truth set with a known, mixed label distribution**, and locate that set proactively at planning time (often the train/test data attached to the parent / source ticket) — a structurally-green run on an unlabeled or possibly-homogeneous sample cannot distinguish a correct output from a degenerate one (e.g. all-`yes`), so it is not a discriminating done-criterion.
 - **Acceptance requirements** — functional and non-functional (accuracy, performance, compatibility, format, owner, SLA, etc.).
 
 **Criterion that you understand the problem:** you can state verification and acceptance requirements. If you cannot, the problem is not understood. In `-p` mode you cannot interact mid-flight — if essential ambiguities exist, return `ESCALATE:` with the questions.
