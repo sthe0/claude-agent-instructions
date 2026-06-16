@@ -28,6 +28,7 @@ DESIRED = [
     ("PreToolUse",       "Bash",  "hook-push-confirmation-reminder.py", 5),
     ("PreToolUse",       "Bash",  "hook-readme-currency-reminder.py", 5),
     ("PreToolUse",       "Bash",  "hook-pr-run-comment-reminder.py", 5),
+    ("PreToolUse",       "Bash",  "hook-graph-url-plain-reminder.py", 5),
     ("PreToolUse",       "Edit|Write", "hook-prewrite-plan-check.py", 5),
     ("PreToolUse",       "Bash",  "hook-retry-detector.py",          5),
     ("PostToolUse",      "Write", "hook-self-critique-reminder.py",  5),

@@ -15,6 +15,8 @@ A proxy signal reads "fine" and is taken as proof of the underlying fact: a daem
 ## Order & criterion
 Before acting or concluding, observe the axis that actually carries the conclusion — not the proxy. **Acceptance check:** the conclusion rests on a direct observation of the load-bearing fact (disk + log grep, a primary-doc `WebFetch`, a measurement over real data, a runtime test of the affected path), and a transient proxy blip is retried before being read as a state.
 
+**Co-located-representation sweep (canonical-identifier change).** When the change sets a *default* or *canonical identifier* (model name, path, flag, tokenizer), completeness is load-bearing: before declaring done, **proactively** sweep every co-located representation — (i) runtime call-sites (is the default even live, or does the value come from a registry/config?), (ii) sibling/variant strings of the same identifier family (grep the family — `Foo` vs `Foo-Instruct-2507`), (iii) infra preload / baked caches under offline (`Dockerfile`, image warmup), (iv) related consumers (judge / dataset / metrics). Drift left in any one of these is the reviewer catching your incompleteness, not yours to leave for them (DEEPAGENT-433: four such catches in one session).
+
 ## Contexts
 
 ### 2026-06-04 — confident-but-wrong research; assumption overturned by measurement

@@ -114,6 +114,7 @@ Cursor-only assets live in [`cursor/`](cursor/README.md) and are intentionally i
 | [hook-push-confirmation-reminder.py](scripts/hook-push-confirmation-reminder.py) | PreToolUse Bash: nudge to verify user push-confirmation before `git push` / `sync-instructions-repo.sh push` |
 | [hook-readme-currency-reminder.py](scripts/hook-readme-currency-reminder.py) | PreToolUse Bash: before `git`/`arc commit`, list READMEs next to changed code that aren't in the changeset — verify currency |
 | [hook-pr-run-comment-reminder.py](scripts/hook-pr-run-comment-reminder.py) | PreToolUse Bash: on `arc pr create`/`publish`, nudge to post each verified manual run (WI/smoke/CI) as a PR review comment with plain-URL link + rerun command |
+| [hook-graph-url-plain-reminder.py](scripts/hook-graph-url-plain-reminder.py) | PreToolUse Bash: on Tracker/Arcanum comment post, nudge to put Nirvana graph URLs plain (status-aware widget), not markdown-wrapped |
 | [hook-resolution-reminder.py](scripts/hook-resolution-reminder.py) | UserPromptSubmit: nudge to ask for explicit resolution when the user's prompt is brief gratitude |
 | [hook-context-growth-reminder.py](scripts/hook-context-growth-reminder.py) | UserPromptSubmit: nudge when live context size crosses a band (reads transcript usage); throttled per band per session |
 | [hook-prewrite-plan-check.py](scripts/hook-prewrite-plan-check.py) | PreToolUse Edit/Write: after 3 code edits with no plan file, one-time nudge to invoke planner |
