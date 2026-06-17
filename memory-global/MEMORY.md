@@ -40,7 +40,7 @@ Loaded into every session via `@~/.claude/memory-global/MEMORY.md` import in `CL
 - [Remote sudo access paths](leaves/remote-sudo-access-paths.md) — when Claude needs sudo on a remote host (user-A ssh → work in user-B's space): NOPASSWD narrow scope (default) / Defaults timestamp_type=global (short window) / direct ssh as target; Claude's `!` shell has no TTY so interactive `sudo -v` won't work.
 
 - [Tracker write token](leaves/tracker-write-token.md) — Startrek writes need `~/.tracker-token` (OAuth); `$OAUTH_TOKEN` is read-only (403 `startrek:write`); MCP tracker tools are read-only.
-- [Auto-compaction threshold policy](leaves/autocompact-threshold-policy.md) — keep the autocompact trigger comfortably ABOVE the ~150k post-compaction floor (a trigger at the floor thrashes — DEEPAGENT-430); primary knob `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (precedence), PCT is secondary; current 300k window / 1M on / no PCT; `apply-settings.sh` is additive so dropping a key doesn't clear it from live.
+- [Auto-compaction threshold policy](leaves/autocompact-threshold-policy.md) — keep the autocompact trigger comfortably ABOVE the ~150k post-compaction floor (a trigger at the floor thrashes — DEEPAGENT-430); verified trigger ≈ round((window−20k)·0.8), frac 0.2 server-tunable; /context "buffer" (33k) is a display reserve, NOT window−trigger; current 300k window → trigger ~224k, min safe window ~270k; `apply-settings.sh` is additive so dropping a key doesn't clear it from live.
 
 Workflow-level permissions (separate from memory): `~/claude-agent-instructions/permissions/` + `scripts/permissions-cli.py`. Not a memory leaf — operational config.
 

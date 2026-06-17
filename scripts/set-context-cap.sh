@@ -1,88 +1,94 @@
 #!/usr/bin/env bash
-# Set the effective context-size cap (auto-compaction trigger) to a token value
-# by pinning the window knob:
-#   CLAUDE_CODE_AUTO_COMPACT_WINDOW (env, precedence) + autoCompactWindow (top-level)
+# Set the auto-compaction WINDOW (the knob you actually turn; what /context shows as
+# "Auto-compact window" and what CLAUDE_CODE_AUTO_COMPACT_WINDOW / autoCompactWindow
+# hold). Takes the desired window in tokens, derives the expected fire threshold, and
+# REFUSES windows that would put the threshold near the post-compaction floor.
 #
-# The harness fires auto-compaction at threshold = effective_window - 13000, where
-# effective_window = min(window setting, model max). So to land the trigger at the
-# requested cap we pin window = cap + 13000.
+# Verified threshold math (decompiled claude.exe, 2026-06-17, functions Rr4/nAq/zB8/
+# w1H/WYH; see memory-global/leaves/autocompact-threshold-policy.md):
+#   z       = window - OUTPUT_RESERVE        # OUTPUT_RESERVE = min(maxOutputTokens, 20000) = 20000
+#   trigger = min( round(z * (1 - FRACTION)), z - 13000 )   # FRACTION default 0.2
+# For normal windows the FRACTION term binds, so trigger ~= 0.8*(window-20000).
+# NOTE the /context "Autocompact buffer" (= OUTPUT_RESERVE + 13000 = 33000, window-
+# independent) is a DISPLAY reserve, NOT window-trigger — do not use it for sizing.
 #
-# HARD FLOOR: a compaction leaves ~150k tokens behind (system prompt + memory +
-# recent turns). A trigger at or below that floor re-fires every turn -> thrash
-# (this is what DEEPAGENT-430's window=200k/pct=75 -> 150k config caused). So this
-# script REFUSES any cap below ~200k (floor 150k + 50k margin). If you need a
-# tighter ACTIVE session, use /compact by hand — never aim the auto-trigger at the
-# floor. See memory-global/leaves/autocompact-threshold-policy.md.
+# FRACTION (precomputeBufferFraction) is server-driven (LaunchDarkly); the binary
+# fallback is 0.2. A larger live fraction lowers the real trigger, so treat the
+# printed trigger as an estimate and keep the margin.
 #
-# This script does NOT set CLAUDE_AUTOCOMPACT_PCT_OVERRIDE or
-# CLAUDE_CODE_DISABLE_1M_CONTEXT (and removes them if present): the window pin caps
-# the trigger regardless of model/1M tier, so the percent override is unneeded and
-# was the source of the thrash. Letting the 1M tier ride is fine.
+# HARD FLOOR: a compaction leaves ~150k tokens behind. A trigger at/below it re-fires
+# every turn -> thrash (DEEPAGENT-430). We require trigger >= 150k + 50k margin = 200k,
+# which (at FRACTION=0.2) means a minimum window of ~270k. For a tighter ACTIVE
+# session use /compact by hand — never push the auto-trigger into the floor.
 #
-# Caveats: auto-compaction is a *trigger*, not a hard wall — expect minor overshoot.
-# Env is read at session start: RESTART Claude Code and verify via /context. Note
-# apply-settings.sh is additive (live env keys win on conflict and removed base
-# keys are NOT cleared from live) — this script also prunes the stale keys from the
-# live file so the change actually takes effect.
+# Does NOT set CLAUDE_AUTOCOMPACT_PCT_OVERRIDE or CLAUDE_CODE_DISABLE_1M_CONTEXT (and
+# prunes them if present): the window pin governs the trigger; the percent override
+# was the source of the original thrash, and letting the 1M tier ride is fine.
 #
-# Writes settings/base.json (the stable merge source) and runs apply-settings.sh.
-# Commit base.json to share the new default.
+# Writes settings/base.json and runs apply-settings.sh; because apply-settings is
+# additive (live wins on conflict, even on the window key), it then forces the window
+# into the live file directly. Env is read at session start: RESTART Claude Code and
+# verify via /context. Commit base.json to share the new default.
 #
-# Usage: set-context-cap.sh <tokens> [--dry-run]
-#   set-context-cap.sh 387000          # default-equivalent (400k window)
-#   set-context-cap.sh 250000          # ~250k cap (263k window)
-#   set-context-cap.sh 387000 --dry-run
+# Usage: set-context-cap.sh <window-tokens> [--dry-run]
+#   set-context-cap.sh 300000          # window 300k -> trigger ~224k (current default)
+#   set-context-cap.sh 270000          # window 270k -> trigger ~200k (minimum allowed)
+#   set-context-cap.sh 300000 --dry-run
 set -euo pipefail
 
 REPO="${CLAUDE_INSTRUCTIONS_REPO:-$HOME/claude-agent-instructions}"
 BASE="$REPO/settings/base.json"
 command -v python3 >/dev/null || { echo "set-context-cap: python3 required" >&2; exit 1; }
 
-[[ $# -ge 1 ]] || { echo "usage: set-context-cap.sh <tokens> [--dry-run]" >&2; exit 2; }
-TOKENS="$1"; shift
+[[ $# -ge 1 ]] || { echo "usage: set-context-cap.sh <window-tokens> [--dry-run]" >&2; exit 2; }
+WINDOW="$1"; shift
 DRY=""
 [[ "${1:-}" == "--dry-run" ]] && DRY="1"
 
-BASE="$BASE" DRY="$DRY" python3 - "$TOKENS" <<'PY'
+BASE="$BASE" DRY="$DRY" python3 - "$WINDOW" <<'PY'
 import json, os, sys
 
 base = os.environ["BASE"]
 dry = bool(os.environ.get("DRY"))
 try:
-    cap = int(sys.argv[1])
+    window = int(sys.argv[1])
 except ValueError:
-    sys.exit(f"set-context-cap: tokens must be an integer, got {sys.argv[1]!r}")
+    sys.exit(f"set-context-cap: window must be an integer, got {sys.argv[1]!r}")
 
-BUFFER = 13_000           # harness autocompact buffer: trigger = window - BUFFER
-FLOOR = 150_000           # ~post-compaction floor (retained context after a compact)
+OUTPUT_RESERVE = 20_000   # min(maxOutputTokens, 20000); maxOut default 64000 -> 20000
+FLAT = 13_000             # zB8 flat subtrahend (Ks4)
+FRACTION = 0.2            # precomputeBufferFraction default (server-tunable)
+FLOOR = 150_000           # ~post-compaction floor
 MARGIN = 50_000           # minimum headroom above the floor
-MIN_CAP = FLOOR + MARGIN  # 200k — below this the trigger collides with the floor -> thrash
+MIN_TRIGGER = FLOOR + MARGIN
 
-if cap < MIN_CAP:
+z = window - OUTPUT_RESERVE
+trigger = min(round(z * (1 - FRACTION)), z - FLAT)
+
+if trigger < MIN_TRIGGER:
     sys.exit(
-        f"set-context-cap: refusing cap {cap} — it is at or below the ~{FLOOR} "
-        f"post-compaction floor (+{MARGIN} margin = min {MIN_CAP}). A trigger near "
-        "the floor re-fires every turn (thrash, cf. DEEPAGENT-430). Use /compact by "
-        "hand for a tighter active session instead of lowering the auto-trigger."
+        f"set-context-cap: refusing window {window} — its fire threshold ~{trigger} is "
+        f"below the safe minimum {MIN_TRIGGER} (~{FLOOR} floor + {MARGIN} margin). A "
+        "trigger near the floor re-fires every turn (thrash, cf. DEEPAGENT-430). At the "
+        "default fraction the minimum safe window is ~270000. Use /compact by hand for a "
+        "tighter active session."
     )
-
-window = cap + BUFFER
 
 with open(base, encoding="utf-8") as fh:
     data = json.load(fh)
 env = data.setdefault("env", {})
 env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(window)
 data["autoCompactWindow"] = window
-# Prune the deprecated knobs that caused the thrash; the window pin supersedes them.
 removed = [k for k in ("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "CLAUDE_CODE_DISABLE_1M_CONTEXT") if k in env]
 for k in removed:
     env.pop(k, None)
 
-print(f"requested cap : {cap} tokens")
-print(f"pinned window : {window} (CLAUDE_CODE_AUTO_COMPACT_WINDOW + autoCompactWindow)")
-print(f"trigger       : ~{window - BUFFER} tokens (window - {BUFFER}); floor ~{FLOOR}, margin ~{cap - FLOOR}")
+print(f"window         : {window} tokens (CLAUDE_CODE_AUTO_COMPACT_WINDOW + autoCompactWindow)")
+print(f"expected trigger: ~{trigger} tokens [min(round((W-{OUTPUT_RESERVE})*{1-FRACTION:.1f}), W-{OUTPUT_RESERVE+FLAT})], frac={FRACTION} (server-tunable estimate)")
+print(f"margin over floor: ~{trigger - FLOOR} (floor ~{FLOOR})")
+print(f"display buffer  : {OUTPUT_RESERVE + FLAT} (/context shows this; NOT window-trigger)")
 if removed:
-    print(f"pruned        : {', '.join(removed)} (superseded by the window pin)")
+    print(f"pruned         : {', '.join(removed)} (superseded by the window pin)")
 if dry:
     print("--dry-run: settings/base.json NOT modified")
     sys.exit(0)
@@ -94,11 +100,9 @@ PY
 
 if [[ -z "$DRY" ]]; then
   "$REPO/scripts/apply-settings.sh"
-  # apply-settings.sh is additive and LIVE WINS on conflict — including on the very
-  # key we own (CLAUDE_CODE_AUTO_COMPACT_WINDOW / autoCompactWindow). So the merge
-  # alone leaves a stale live value in place. Force the authoritative window into the
-  # live file directly, and prune the deprecated knobs there too.
-  WINDOW=$((TOKENS + 13000))   # keep in sync with BUFFER in the python block
+  # apply-settings.sh is additive and LIVE WINS on conflict — including on the window
+  # key we own. Force the authoritative window into the live file directly, and prune
+  # the deprecated knobs there too.
   TARGET="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
   if [[ -f "$TARGET" ]] && command -v jq >/dev/null; then
     tmp="$(mktemp)"
