@@ -78,6 +78,8 @@ Formulate the **essence** of the local mismatch — split it cleanly into two pa
 
 State concretely as `local fact → local expectation → local gap`.
 
+Before concluding a difficulty is intractable or that the only options are costly, restate the **functional ground** (the underlying desired-vs-actual, stripped of any framed mechanism) and enumerate the **simplest primitive** that removes it — especially one already demonstrated in code/artifacts you've read. Mechanism-fixation (solving "can API X pin the path?" instead of "how do I get real data to a controlled path?") is a common way investigation declares a false dead-end.
+
 Then derive a **replanning task** for the root coordinator. The task must name:
 
 - Which stages of the current plan are affected (refine / rebuild / drop / merge / insert).
