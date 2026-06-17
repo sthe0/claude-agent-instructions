@@ -150,7 +150,7 @@ From experience with this task type, past similar tasks (read experience leaves)
 Required `##` sections (in this order; `verify-plan-file.py` enforces presence):
 
 1. **Problem and done criteria.** State both (1) a plain-language description of the end result and (2) a verifiable definition-of-done criterion for the task as a whole.
-2. **Context.**
+2. **Context.** Write for an executor who has **not** read the originating dialogue: define domain terms on first use, state why the task exists and the current-vs-target state. No references to conversation-only artifacts ("option B", "Q1", "as agreed") — inline the actual decision and its rationale so the plan stands alone.
 3. **Stages.** Each stage block declares:
    - Who executes (which specialization, or manager in-thread).
    - Reuse / tools.
