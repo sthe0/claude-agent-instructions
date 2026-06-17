@@ -1,6 +1,6 @@
 ---
 name: autocompact-threshold-policy
-description: Keep the auto-compaction trigger comfortably ABOVE the ~150k post-compaction floor — a trigger at/below the floor re-fires every turn (thrash). Primary knob CLAUDE_CODE_AUTO_COMPACT_WINDOW pins the effective window (precedence, value auto|100k–1M); CLAUDE_AUTOCOMPACT_PCT_OVERRIDE is a secondary percent-of-window knob. Threshold = min(⌊window·pct/100⌋ when pct set, window−13k). Current: window=400k, 1M on, no PCT -> trigger ~387k.
+description: Keep the auto-compaction trigger comfortably ABOVE the ~150k post-compaction floor — a trigger at/below the floor re-fires every turn (thrash). Primary knob CLAUDE_CODE_AUTO_COMPACT_WINDOW pins the effective window (precedence, value auto|100k–1M); CLAUDE_AUTOCOMPACT_PCT_OVERRIDE is a secondary percent-of-window knob. Threshold = min(⌊window·pct/100⌋ when pct set, window−13k). Current: window=300k, 1M on, no PCT -> trigger ~287k.
 metadata:
   type: feedback
 ---
@@ -28,7 +28,7 @@ Autocompact decision: `MCf → $UH → As4(tokens, w1H(model, AUTO_COMPACT_WINDO
 
 ## Policy
 
-- **Prefer the window knob; leave a margin above the floor.** Pin `CLAUDE_CODE_AUTO_COMPACT_WINDOW` so the trigger (`window − 13k`) sits a comfortable margin (≥ ~50k) above the ~150k floor; **do not** set `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` on the main session and **do not** set `CLAUDE_CODE_DISABLE_1M_CONTEXT` unless you have a reason — letting 1M ride is fine because the window pin caps the trigger regardless. Current (`83fa383`): `CLAUDE_CODE_AUTO_COMPACT_WINDOW = "400000"` (+ top-level `autoCompactWindow`), no PCT, 1M on → trigger ~387k.
+- **Prefer the window knob; leave a margin above the floor.** Pin `CLAUDE_CODE_AUTO_COMPACT_WINDOW` so the trigger (`window − 13k`) sits a comfortable margin (≥ ~50k) above the ~150k floor; **do not** set `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` on the main session and **do not** set `CLAUDE_CODE_DISABLE_1M_CONTEXT` unless you have a reason — letting 1M ride is fine because the window pin caps the trigger regardless. Current: `CLAUDE_CODE_AUTO_COMPACT_WINDOW = "300000"` (+ top-level `autoCompactWindow`), no PCT, 1M on → trigger ~287k. (The window-pin approach landed in `83fa383` at 400k; lowered to 300k via `set-context-cap.sh` for a tighter context/cost ceiling.)
 - **Never aim a cap at or below ~200k.** The ~150k post-compaction floor is a hard lower bound on the usable trigger; a target cap near it thrashes (see Failure modes). If you genuinely need a tighter active session, use `/compact` by hand — don't lower the auto-trigger into the floor.
 - **Env is read at session start** — a settings change takes effect only on the **next Claude Code restart**, never the current session. After any change: **restart and verify in the new session via `/context`** (window + "will trigger soon" line) before trusting it.
 - **`apply-settings.sh` is additive — dropping a key from base does NOT remove it from live.** `env = base.env + live.env` with live winning on conflict. So (a) a stale live value silently shadows base (the drift that caused the overshoot), and (b) when you *remove* a key from `base.json` (as `fc7c5ce` removed `pct`/`DISABLE_1M`) you must also delete it from `~/.claude/settings.json` by hand or it persists. Always verify the live `env` after applying.
@@ -42,9 +42,9 @@ Autocompact decision: `MCf → $UH → As4(tokens, w1H(model, AUTO_COMPACT_WINDO
 
 | Model | Max window | Effective autocompact window | Notes |
 |---|---|---|---|
-| Opus 4.7 / 4.8 | 1M | min(`CLAUDE_CODE_AUTO_COMPACT_WINDOW`, 1M) = **400k** | 1M tier on (`DISABLE_1M` dropped); trigger ~387k |
-| Fable | 1M | min(window setting, 1M) = **400k** | 1M-capable, tier on |
-| Sonnet | 200k | min(400k, 200k) = **200k** | base tier; window setting can't exceed model max |
-| Haiku | 200k | min(400k, 200k) = **200k** | base tier |
+| Opus 4.7 / 4.8 | 1M | min(`CLAUDE_CODE_AUTO_COMPACT_WINDOW`, 1M) = **300k** | 1M tier on (`DISABLE_1M` dropped); trigger ~287k |
+| Fable | 1M | min(window setting, 1M) = **300k** | 1M-capable, tier on |
+| Sonnet | 200k | min(300k, 200k) = **200k** | base tier; window setting can't exceed model max |
+| Haiku | 200k | min(300k, 200k) = **200k** | base tier |
 
-> The window-pin only *lowers* below the model max (`min`), so a 400k pin on a 200k model just yields 200k (trigger ~187k — still well above the floor). Setting the pin *higher* than the model max has no effect. The only unsafe direction is aiming the resulting trigger at/below the ~150k floor.
+> The window-pin only *lowers* below the model max (`min`), so a 300k pin on a 200k model just yields 200k (trigger ~187k — still well above the floor). Setting the pin *higher* than the model max has no effect. The only unsafe direction is aiming the resulting trigger at/below the ~150k floor.
