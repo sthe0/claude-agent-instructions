@@ -1,13 +1,18 @@
 ---
 name: autocompact-threshold-policy
-description: Keep the working context bounded (~150k) before auto-compaction. TWO harness knobs, not one — CLAUDE_CODE_AUTO_COMPACT_WINDOW pins the effective window (takes precedence, value auto|100k–1M) and CLAUDE_AUTOCOMPACT_PCT_OVERRIDE sets the percent of that window (IS consumed on the main session). 1M tier disabled -> Opus is 200k. Pin window=200k + pct=75 -> ~140–150k.
+description: Keep the auto-compaction trigger comfortably ABOVE the ~150k post-compaction floor — a trigger at/below the floor re-fires every turn (thrash). Primary knob CLAUDE_CODE_AUTO_COMPACT_WINDOW pins the effective window (precedence, value auto|100k–1M); CLAUDE_AUTOCOMPACT_PCT_OVERRIDE is a secondary percent-of-window knob. Threshold = min(⌊window·pct/100⌋ when pct set, window−13k). Current: window=400k, 1M on, no PCT -> trigger ~387k.
 metadata:
   type: feedback
 ---
 
-**Difficulty:** the user wants the working context to stay bounded (target **~150k tokens**) before auto-compaction, independent of model/window. Env is read **once at session start**; a hook cannot re-threshold a live session. The earlier version of this leaf claimed the *only* knob is `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` and that 75% × 200k reliably gives 150k — that claim was **never runtime-verified and was falsified**: a long session ran to 199.9k/200k with no compaction (`/context` 2026-06-17 showed 200k window, 100%, "autocompact will trigger soon").
+**Difficulty:** keep the working context bounded before auto-compaction **without** destabilizing the session — and the hard constraint is that the auto-compaction *trigger* cannot live near the **~150k post-compaction floor** (the context a compaction leaves behind: system prompt + memory + recent turns). Env is read **once at session start**; a hook cannot re-threshold a live session.
 
-**Root cause of the earlier miss (verified by decompiling `claude.exe`, 2026-06-17):** the code path *does* honor the percent override on the main session — the overshoot was a **stale-env / config-drift** artifact: `settings/base.json` held `70` while live `~/.claude/settings.json` held `75`, and the offending session started before an effective value was in place. The real gap in the leaf was **omitting the primary knob** (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`) and asserting an unverified percent-only model.
+There are **two opposite failure modes**, both seen on 2026-06-17:
+
+- **Thrash — compact every turn (DEEPAGENT-430, session `323be019`, ~18 events).** Commit `e8abc05` set `window=200k` + `pct=75` + `DISABLE_1M=1` → threshold `min(⌊200k·0.75⌋, 200k−13k) = 150k`. That **collides with the ~150k floor**: immediately after each compaction the retained context is already ≥ the trigger, so it re-compacts on the next turn, forever. The whole premise "cap context at ~150k" was *impossible* — you cannot trigger below where a compaction lands. Hand-fixed live, committed `fc7c5ce` + `83fa383`: `window=400k`, drop `pct`, re-enable 1M → trigger ~387k, safely above the floor.
+- **Overshoot — compact too late (earlier).** A long session ran to 199.9k/200k with no compaction. Not a code limitation: decompiling `claude.exe` confirms the main session *does* honor the percent override; the overshoot was **stale-env / config-drift** — `settings/base.json` held `70` while live `~/.claude/settings.json` held `75`, and the session started before an effective value was in place.
+
+**Safe rule: the trigger must sit comfortably ABOVE the ~150k floor (margin ≥ ~50k → target cap ≥ ~200k).** A cap at or below the floor is unachievable and thrashes; a cap far above is fine (just compacts later). When in doubt, err high.
 
 ## Verified mechanism (decompiled main-session path)
 
@@ -23,28 +28,23 @@ Autocompact decision: `MCf → $UH → As4(tokens, w1H(model, AUTO_COMPACT_WINDO
 
 ## Policy
 
-- **Target ceiling ≈ 150k.** Set **both** knobs in `settings/base.json` `env` (applied to live via `apply-settings.sh`):
-  - `CLAUDE_CODE_AUTO_COMPACT_WINDOW = "200k"` — pins the effective window to 200k deterministically (belt-and-suspenders: if any model/provider re-enables extended context, this still caps the autocompact window at 200k).
-  - `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = "75"` — 75% of the pinned window. Net trigger ≈ `min(0.75·~187k, ~174k)` ≈ **140–150k** (the `−13000` buffer keeps it just under 150k → safe direction: compact no later than the ceiling).
-- **Env is read at session start** — a settings change takes effect only on the **next Claude Code restart**, never the current session. Use `/compact` manually to bound the active session.
-- **Avoid base-vs-live drift.** Always change the value in `settings/base.json` and run `apply-settings.sh` (or `set-context-cap.sh`, which writes base.json then applies). A hand-edit to live `~/.claude/settings.json` alone is clobbered on the next merge and silently desyncs the effective threshold — this drift caused the earlier overshoot.
-- **Spawned `claude -p` sub-agents** get the percent via `claude --settings '{"env":{"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":"<pct>"}}'` (`scripts/spawn-specialist.py`, keyed off resolved model). `--settings` sits above file `env` in the precedence ladder and wins per-key. See [[claude-code-settings-env-precedence]].
+- **Prefer the window knob; leave a margin above the floor.** Pin `CLAUDE_CODE_AUTO_COMPACT_WINDOW` so the trigger (`window − 13k`) sits a comfortable margin (≥ ~50k) above the ~150k floor; **do not** set `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` on the main session and **do not** set `CLAUDE_CODE_DISABLE_1M_CONTEXT` unless you have a reason — letting 1M ride is fine because the window pin caps the trigger regardless. Current (`83fa383`): `CLAUDE_CODE_AUTO_COMPACT_WINDOW = "400000"` (+ top-level `autoCompactWindow`), no PCT, 1M on → trigger ~387k.
+- **Never aim a cap at or below ~200k.** The ~150k post-compaction floor is a hard lower bound on the usable trigger; a target cap near it thrashes (see Failure modes). If you genuinely need a tighter active session, use `/compact` by hand — don't lower the auto-trigger into the floor.
+- **Env is read at session start** — a settings change takes effect only on the **next Claude Code restart**, never the current session. After any change: **restart and verify in the new session via `/context`** (window + "will trigger soon" line) before trusting it.
+- **`apply-settings.sh` is additive — dropping a key from base does NOT remove it from live.** `env = base.env + live.env` with live winning on conflict. So (a) a stale live value silently shadows base (the drift that caused the overshoot), and (b) when you *remove* a key from `base.json` (as `fc7c5ce` removed `pct`/`DISABLE_1M`) you must also delete it from `~/.claude/settings.json` by hand or it persists. Always verify the live `env` after applying.
+- **Spawned `claude -p` sub-agents:** `scripts/spawn-specialist.py` may inject `--settings '{"env":{...}}'` (precedence above file `env`, per-key). Keep sub-agent caps subject to the same floor rule. See [[claude-code-settings-env-precedence]].
 
 **Why:** keep the working context bounded so cost (cache read/write scales with retained context) and quality stay predictable, independent of which model/window is active. See [[token-economy-plan]].
 
-**How to change the ceiling:** prefer `scripts/set-context-cap.sh <tokens>` (writes base.json + applies). To re-derive a percent against a pinned window: `pct = round(ceiling / window * 100)` (150k / 200k = 75%).
+**How to change the cap:** use `scripts/set-context-cap.sh <tokens>` (writes base.json + applies). It pins `CLAUDE_CODE_AUTO_COMPACT_WINDOW = tokens + 13000` so the trigger lands at the requested cap, and **refuses** any cap below ~200k (floor + margin) rather than producing a thrash config. Then restart and verify via `/context`.
 
-## Known gap (follow-up, not yet applied)
+## Per-model window table (1M re-enabled by `83fa383`)
 
-`set-context-cap.sh` and `spawn-specialist.py` set **only** `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` (correct — it is consumed), but do **not** emit `CLAUDE_CODE_AUTO_COMPACT_WINDOW`. With 1M disabled this is fine (Opus = 200k). If extended context is ever re-enabled for any model, those paths would compute the percent against a ~1M window and compact far later than the ceiling. Robustness fix when needed: have both also pin `CLAUDE_CODE_AUTO_COMPACT_WINDOW` to the intended window.
+| Model | Max window | Effective autocompact window | Notes |
+|---|---|---|---|
+| Opus 4.7 / 4.8 | 1M | min(`CLAUDE_CODE_AUTO_COMPACT_WINDOW`, 1M) = **400k** | 1M tier on (`DISABLE_1M` dropped); trigger ~387k |
+| Fable | 1M | min(window setting, 1M) = **400k** | 1M-capable, tier on |
+| Sonnet | 200k | min(400k, 200k) = **200k** | base tier; window setting can't exceed model max |
+| Haiku | 200k | min(400k, 200k) = **200k** | base tier |
 
-## Per-model window table
-
-| Model | Window | Source |
-|---|---|---|
-| Opus 4.7 / 4.8 | 200k | 1M tier disabled (`CLAUDE_CODE_DISABLE_1M_CONTEXT=1`; `IR()` → false) |
-| Sonnet | 200k | base tier |
-| Haiku | 200k | base tier |
-| Fable | 200k | 1M-capable, but disabled by the flag |
-
-> If 1M is re-enabled for any model, either pin `CLAUDE_CODE_AUTO_COMPACT_WINDOW` to the desired window or lower the percent so the trigger still lands at the ceiling. Assuming a window *smaller* than real is the only unsafe direction (compacts too late → exceeds ceiling).
+> The window-pin only *lowers* below the model max (`min`), so a 400k pin on a 200k model just yields 200k (trigger ~187k — still well above the floor). Setting the pin *higher* than the model max has no effect. The only unsafe direction is aiming the resulting trigger at/below the ~150k floor.
