@@ -16,10 +16,14 @@
 # fallback is 0.2. A larger live fraction lowers the real trigger, so treat the
 # printed trigger as an estimate and keep the margin.
 #
-# HARD FLOOR: a compaction leaves ~150k tokens behind. A trigger at/below it re-fires
-# every turn -> thrash (DEEPAGENT-430). We require trigger >= 150k + 50k margin = 200k,
-# which (at FRACTION=0.2) means a minimum window of ~270k. For a tighter ACTIVE
-# session use /compact by hand — never push the auto-trigger into the floor.
+# HARD FLOOR: a compaction leaves ~90-97k tokens behind (structural: static prefix
+# ~60k = system prompt + tools + MCP + memory + skills, plus summary ~14-20k + first
+# reads; verified across 5 sessions 2026-06-17). A trigger at/below it re-fires every
+# turn -> thrash (DEEPAGENT-430, harness even warns "a file/tool output is likely too
+# large" — large retained tool outputs inflate the floor; see large-tool-output-
+# discipline). We require trigger >= 100k floor + 50k margin = 150k, which (at
+# FRACTION=0.2) means a minimum window of ~210k. For a tighter ACTIVE session use
+# /compact by hand — never push the auto-trigger into the floor.
 #
 # Does NOT set CLAUDE_AUTOCOMPACT_PCT_OVERRIDE or CLAUDE_CODE_DISABLE_1M_CONTEXT (and
 # prunes them if present): the window pin governs the trigger; the percent override
@@ -32,7 +36,7 @@
 #
 # Usage: set-context-cap.sh <window-tokens> [--dry-run]
 #   set-context-cap.sh 300000          # window 300k -> trigger ~224k (current default)
-#   set-context-cap.sh 270000          # window 270k -> trigger ~200k (minimum allowed)
+#   set-context-cap.sh 210000          # window 210k -> trigger ~152k (minimum allowed)
 #   set-context-cap.sh 300000 --dry-run
 set -euo pipefail
 
@@ -58,7 +62,7 @@ except ValueError:
 OUTPUT_RESERVE = 20_000   # min(maxOutputTokens, 20000); maxOut default 64000 -> 20000
 FLAT = 13_000             # zB8 flat subtrahend (Ks4)
 FRACTION = 0.2            # precomputeBufferFraction default (server-tunable)
-FLOOR = 150_000           # ~post-compaction floor
+FLOOR = 100_000           # ~post-compaction floor (verified ~90-97k across 5 sessions, rounded up)
 MARGIN = 50_000           # minimum headroom above the floor
 MIN_TRIGGER = FLOOR + MARGIN
 
@@ -70,7 +74,7 @@ if trigger < MIN_TRIGGER:
         f"set-context-cap: refusing window {window} — its fire threshold ~{trigger} is "
         f"below the safe minimum {MIN_TRIGGER} (~{FLOOR} floor + {MARGIN} margin). A "
         "trigger near the floor re-fires every turn (thrash, cf. DEEPAGENT-430). At the "
-        "default fraction the minimum safe window is ~270000. Use /compact by hand for a "
+        "default fraction the minimum safe window is ~210000. Use /compact by hand for a "
         "tighter active session."
     )
 
