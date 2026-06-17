@@ -1,34 +1,43 @@
 ---
 name: arcanum-api-readonly-pr-fields
-description: "Arcanum public HTTP API /api/v1/review-requests/{id} is read-only — PR summary/description cannot be edited via API; use web UI or amend the lead commit."
+description: "Arcanum API: the review-request resource is read-only, BUT its sub-resources /summary and /description accept PUT — edit a published PR's title/body programmatically, no web UI or force-push needed."
 type: reference
 ---
 
-# Arcanum public API: PR summary/description is not API-editable
+# Arcanum public API: edit PR title/description via the /summary and /description sub-resources
 
 > **Difficulty (functional ground):** desired — update an already-published PR's title
-> (`summary`) or `description` programmatically (stale "PR-A" title after scope grew);
-> actual — the obvious `PATCH`/`PUT` on the review-request fails, and you burn a spawn +
-> several probes discovering there is no API write path.
+> (`summary`) or `description` programmatically (e.g. a stale verification line in the body);
+> actual — the obvious `PATCH`/`PUT` on the review-request object returns 405, and the
+> earlier (wrong) conclusion was "no API write path → use web UI / amend", which also
+> fails when the stale text lives in a custom description block not derived from the commit.
 
-**Fact (verified 2026-06-15 against PR 13870840):**
+**Fact (verified 2026-06-18 against PR 13964799; supersedes the 2026-06-15 read-only claim):**
 
-- `GET https://a.yandex-team.ru/api/v1/review-requests/{id}?fields=summary,description,...`
-  reads fields fine (without `fields=` it returns only `{"id": …}`).
-- **Writes are not supported on this endpoint.** `PATCH` and `PUT` both return
-  `HTTP 405 Method Not Allowed`. `OPTIONS` confirms it definitively:
-  `Allow: HEAD,GET,OPTIONS`.
-- The Arcanum "Public API" doc (`docs.yandex-team.ru/arcanum/communication/public-api`,
-  passport-gated) covers only specific actions (commit-suggestions etc.), not
-  summary/description edits.
-- `arc pr create` does **not** update an existing PR either — it errors
-  `PR … already exists`, even with `-f/--force`.
+- **Read:** `GET https://a.yandex-team.ru/api/v1/review-requests/{id}?fields=summary,description`
+  — `fields=` is required (without it the response is only `{"id": …}`). `summary` = PR
+  title (first line); `description` = PR body **below** the title. The body field also
+  contains the commit-message block appended at create time.
+- **The top-level object is read-only:** `OPTIONS /review-requests/{id}` →
+  `Allow: HEAD,GET,OPTIONS`; `PATCH`/`PUT`/`POST` on it → `405`. **This is what misled
+  the earlier note — it never probed the sub-resources.**
+- **Writes live on dedicated sub-resources:**
+  - `OPTIONS /review-requests/{id}/description` → `Allow: OPTIONS,PUT`
+  - `OPTIONS /review-requests/{id}/summary` → `Allow: OPTIONS,PUT`
+  - `PUT https://a.yandex-team.ru/api/v1/review-requests/{id}/description`
+    with header `Authorization: OAuth <token>`, `Content-Type: application/json`,
+    body `{"description": "<full new body>"}` → **`HTTP 204`** on success.
+    (`summary` analogously expects `{"summary": "..."}`.)
+  - `$OAUTH_TOKEN` (general internal OAuth) and `~/.tracker-token` both authorized the
+    GET and the PUT here (204). PUT replaces the whole field — read it first and do a
+    minimal string replace to preserve the rest.
+  - A description-only PUT does **not** create a new diff-set and does **not** revert the
+    PR to draft — publication state is untouched (`arc pr status` stays `(open)`).
+- `arc pr create` does **not** update an existing PR — it errors `PR … already exists`
+  even with `-f/--force`. So the API sub-resource is the only clean programmatic path;
+  arc CLI has no PR-description edit.
+- Amend + force-push only changes the commit-message-derived portion; it will **not**
+  touch a custom description block set via `arc pr create -m`. Use the PUT for that.
 
-**How to actually change a PR title/description:**
-1. **Arcanum web UI** — edit the PR overview; fastest, no history rewrite.
-2. **Amend the lead commit message + force-push the branch** — the PR title/description
-   derive from the commit message; clean-looking but rewrites published-branch history.
-
-There is no clean CLI/API path; pick UI (default) or amend by whether a history rewrite is acceptable.
-
-> verified by: OPTIONS `Allow: HEAD,GET,OPTIONS` + 405 on PATCH/PUT, conversation 2026-06-15 (DEEPAGENT-426 / PR 13870840)
+> verified by: OPTIONS `Allow: OPTIONS,PUT` on `/description` + `PUT … 204` + read-back
+> (stale line gone), conversation 2026-06-18 (DEEPAGENT-340 / PR 13964799)
