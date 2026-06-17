@@ -2,6 +2,7 @@
 # Merge the versioned policy base (settings/base.json) into this machine's
 # ~/.claude/settings.json. Idempotent and additive:
 #   - env:               base keys added; existing local keys win on conflict
+#   - autoCompactWindow: set from base when absent in local
 #   - permissions.allow: union, base entries first, then local-only entries
 #   - every other key in the live file is preserved untouched
 # Machine-specific keys (hooks, marketplaces, absolute Read/Write paths, model)
@@ -23,6 +24,7 @@ merged="$(jq -n --slurpfile base "$BASE" --slurpfile cur "$TARGET" '
   ($base[0]) as $b | ($cur[0]) as $c |
   $c
   | .env = (($b.env // {}) + (.env // {}))
+  | .autoCompactWindow = ($c.autoCompactWindow // $b.autoCompactWindow)
   | .permissions = ((.permissions // {}) + {
       allow: (
         (($b.permissions.allow // []))
