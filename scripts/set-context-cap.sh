@@ -94,13 +94,21 @@ PY
 
 if [[ -z "$DRY" ]]; then
   "$REPO/scripts/apply-settings.sh"
-  # apply-settings.sh is additive (live env keys win, removed base keys persist),
-  # so prune the deprecated knobs directly from the live file too.
+  # apply-settings.sh is additive and LIVE WINS on conflict — including on the very
+  # key we own (CLAUDE_CODE_AUTO_COMPACT_WINDOW / autoCompactWindow). So the merge
+  # alone leaves a stale live value in place. Force the authoritative window into the
+  # live file directly, and prune the deprecated knobs there too.
+  WINDOW=$((TOKENS + 13000))   # keep in sync with BUFFER in the python block
   TARGET="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
   if [[ -f "$TARGET" ]] && command -v jq >/dev/null; then
     tmp="$(mktemp)"
-    jq 'if .env then .env |= del(.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, .CLAUDE_CODE_DISABLE_1M_CONTEXT) else . end' \
-      "$TARGET" > "$tmp" && jq empty "$tmp" && mv "$tmp" "$TARGET"
+    jq --argjson w "$WINDOW" '
+      .autoCompactWindow = $w
+      | if .env then
+          .env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = ($w|tostring)
+          | .env |= del(.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, .CLAUDE_CODE_DISABLE_1M_CONTEXT)
+        else . end
+    ' "$TARGET" > "$tmp" && jq empty "$tmp" && mv "$tmp" "$TARGET"
   fi
-  echo "set-context-cap: applied. RESTART Claude Code, then verify via /context (env is read at session start)."
+  echo "set-context-cap: applied (base + live). RESTART Claude Code, then verify via /context (env is read at session start)."
 fi
