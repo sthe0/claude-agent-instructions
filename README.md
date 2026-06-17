@@ -103,6 +103,7 @@ Cursor-only assets live in [`cursor/`](cursor/README.md) and are intentionally i
 | [spawn-cursor-specialist.py](scripts/spawn-cursor-specialist.py) | Cursor analogue: wrap `agent -p` specialization spawn — inline SKILL.md, budget→timeout, recursion cap, marker validation, cost log |
 | [spawn-cursor-escape.py](scripts/spawn-cursor-escape.py) | Wrap `agent -p` overcome-difficulty escape for Cursor: recursion cap, API key, marker validation, cost log |
 | [cost-report.py](scripts/cost-report.py) | Aggregate `~/.local/log/claude-spawn-costs.jsonl` (totals, by kind/tier/day, depth/marker distributions, refused events) |
+| [policy-scorecard.py](scripts/policy-scorecard.py) | Per-session ledger + scorecard for the model/sub-agent policy (efficiency + effectiveness, trend vs previous window, Flags); `--ledger-only`, `rate <id> <1-5>` modes. See `memory-global/leaves/policy-effectiveness-tracking.md` |
 | [memory-audit.py](scripts/memory-audit.py) | Find orphan / broken / stale memory leaves and frontmatter issues (informational; does not gate) |
 | [record-experience.py](scripts/record-experience.py) | Generate / extend difficulty-centric experience leaves (`search`/`new`/`extend`/`ticket`); auto-maintains the `experience/MEMORY.md` sub-index |
 | [verify-self-improvement-edit.py](scripts/verify-self-improvement-edit.py) | `commit-msg` gate: require `[self-improvement-reviewed]` in commits that touch `skills/self-improvement/` |
@@ -119,6 +120,7 @@ Cursor-only assets live in [`cursor/`](cursor/README.md) and are intentionally i
 | [hook-context-growth-reminder.py](scripts/hook-context-growth-reminder.py) | UserPromptSubmit: nudge when live context size crosses a band (reads transcript usage); throttled per band per session |
 | [hook-prewrite-plan-check.py](scripts/hook-prewrite-plan-check.py) | PreToolUse Edit/Write: after 3 code edits with no plan file, one-time nudge to invoke planner |
 | [hook-retry-detector.py](scripts/hook-retry-detector.py) | PreToolUse Bash: same normalized command 3+ times → nudge to invoke overcome-difficulty |
+| [hook-policy-scorecard-due.py](scripts/hook-policy-scorecard-due.py) | SessionStart: weekly throttled stderr nudge to run `policy-scorecard.py` (stamp `~/.local/state/claude-policy-scorecard.stamp`); nudge only, does not auto-scan |
 | [install-reminder-hooks.sh](scripts/install-reminder-hooks.sh) | Idempotently wire the canonical reminder-hook set into machine-local `settings.json` (hooks are not merged from `base.json`) |
 | [set-context-cap.sh](scripts/set-context-cap.sh) | Set an arbitrary context-size cap (auto-compaction trigger) in tokens — computes `CLAUDE_CODE_DISABLE_1M_CONTEXT` + `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` into `base.json`; max ~830k (83% clamp) |
 | [install-sync-cron.sh](scripts/install-sync-cron.sh) | Cron: git pull every 10 min (opt-in; not installed by `setup-symlinks.sh`) |
