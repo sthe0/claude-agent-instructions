@@ -111,6 +111,7 @@ Not mandatory only for neutral confirmation ("ok", "yes do it", "thanks") and fo
 | User mentions a ticket / issue / tracker, or a ticket key like `ABC-123` | `tracker-management` skill (inline, layered on top of coordination) |
 | Difficulty in the work itself | `overcome-difficulty` skill (inline; with recursive escape via vanilla `claude -p`) |
 | User correction / feedback about agent behavior | `self-improvement` skill (inline) |
+| Post-spawn monitoring (poll job / PR / WI output); initial codebase / data exploration before editing (multi-file cat / grep, log / YT probing) | cheap-model `Agent` spawn (`haiku` poll, `sonnet` search) — never inline on the opus main thread; [delegatable-work-patterns.md](memory-global/leaves/delegatable-work-patterns.md) |
 
 If the need exists but is not stated — state it explicitly and propose delegation.
 
@@ -263,7 +264,7 @@ Cite the source where possible (`> verified by: <commit>/<URL>/<conversation>`).
 
 ## Cost discipline
 
-- **Keep the main thread lean** — ~90% of spend is cache read/write on accumulated context, so **delegate verbose / exploratory work to a sub-agent** (multi-file reads, log diving, broad search, test runs, bulk research): only the conclusion returns, the volume stays in the sub-agent. Sub-agents default to Sonnet (`spawn-specialist.py`).
+- **Keep the main thread lean** — ~90% of spend is cache read/write on accumulated context, so **delegate verbose / exploratory work to a sub-agent** (multi-file reads, log diving, broad search, test runs, bulk research): only the conclusion returns, the volume stays in the sub-agent. **Set the sub-agent model explicitly** — `haiku` for retrieval/polling, `sonnet` for search-with-judgment, `opus` only for hard reasoning; the `Agent` tool **inherits opus** unless `model:` is set (`spawn-specialist.py` defaults sonnet). Two delegate-always shapes: [delegatable-work-patterns.md](memory-global/leaves/delegatable-work-patterns.md).
 - **One task ≈ one session:** `/clear` between unrelated tasks; lower `/effort` for chat / dispatch, reserve high/xhigh for implementation (thinking bills as output). On `/compact`, keep goal + done criterion, approved plan + active stage, decisions/why, open blockers; drop verbose tool output.
 - Harness enforces the rest (model `opus` 200k, `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`, `BASH_MAX_OUTPUT_LENGTH`); use `/usage` to attribute burn. Full programme: [token-economy-plan.md](memory-global/leaves/token-economy-plan.md).
 
