@@ -46,6 +46,8 @@ If the question requires the user's input (intent, preference, choice), ask the 
 
 **On `INCOMPLETE:`** — decide: re-spawn with more context, ask the user, or accept the partial.
 
-**On `COMPLETED:`** — move to the next plan step.
+**On `COMPLETED:`** — before moving on, **diff the delivered approach against the user's recorded decision/intent**, not just against "tests pass". A specialist's `COMPLETED:` certifies the spec it was given was met — not that the delivery still matches what the *user* approved. If the specialist made a material design choice that softens / narrows / reinterprets a user-approved requirement — even a technically justified one (a constraint made the original literally impossible) — that is a **substantive deviation**, not an implementation detail. Surface the fork the specialist resolved unilaterally via `AskUserQuestion` ("you asked for X; constraint C makes X⊕Y impossible; I delivered X weakened to X′ — keep X′ / pick alternative?") and get re-approval **before** treating the step as done or launching its verification run. Only when the delivery matches the approved intent — move to the next plan step.
+
+> Functional ground: a `COMPLETED:` whose delivery quietly reinterprets the user's intent reads as "done", and the divergence surfaces only later — here, "real typed outputs" silently became a JSON handle, caught only at user review after a verification run had already been launched. The diff-against-intent check converts a late, expensive rediscovery into an early one-click confirmation.
 
 > Workflow-level permissions (this section) are independent of Claude Code's tool-call permissions in `~/.claude/settings.json`. The two are checked separately: a tool call may be allowed by settings but still need workflow permission for the higher-level action (e.g. `Bash` is allowed, but pushing to `main` is a workflow-level action that needs explicit permission).
