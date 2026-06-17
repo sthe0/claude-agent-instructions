@@ -99,6 +99,8 @@ If the task has concrete numbers, deadlines, TTLs, or limits **without** an expl
 
 In the plan, state **explicitly** what is reused vs. built from scratch. If you adopt a pattern from external research, link the source.
 
+**Framework-capability discovery.** "A platform capability is absent" / "this needs custom code" (vh3 / Nirvana / YT / Arcadia ops) is an **evidence-bearing claim**, not a default. Before the plan asserts it, exhaust — and cite — (1) framework docs via `mcp__intrasearch__search` over `docs.yandex-team.ru` + wiki; (2) the ready-made op / cube / processor-option catalog searched **by capability** (e.g. an output-path option), not only the local repo; (3) cross-Arcadia call-sites via `ya tool cs` / `mcp__intrasearch__semantic_code_search`. For a deep platform-feasibility question, surface a `yandex-guru` consult instead of guessing. *(Difficulty: a plan that reinvents a mechanism the framework already has — e.g. the Nirvana `mr-output-path` output-pinning option, found only after the user pointed to it.)*
+
 ### Reuse vs generalization
 
 If the search above surfaces a precedent for the current task, two outcomes:
