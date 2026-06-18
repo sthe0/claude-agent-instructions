@@ -34,14 +34,15 @@ This skill is layered on top of the root coordination cycle in `CLAUDE.md`. Each
 
 If a phase fires and you skipped the tracker action, post it on the next opportunity rather than dropping it — the ticket should reflect the actual sequence of events.
 
-## Special case: work driven by a PR review
+## Special case: an open PR carries the work
 
-When the active work is resolving review comments on a PR (the iterative review cycle on an open PR), the **review thread is the place for the back-and-forth**, not the ticket. For the duration of review work this **overrides the per-stage progress rows** of the phase-hooks table:
+Once the work has a published PR — whether you are resolving review comments, rebasing onto trunk, fixing a conflict, or re-running CI — the **PR is where incremental status lives**, not the ticket. For the duration of PR-stage work this **overrides the per-stage progress rows** of the phase-hooks table:
 
-- Do **not** post intermediate / progress comments to the ticket — reply rationale, resolve/drop notes, per-iteration status all go in the PR review surface (e.g. `arcanum_reply_to_comment`), never the ticket.
+- Do **not** post intermediate / progress comments to the ticket. Status about the PR itself — rebase done, conflict resolved, CI re-run, what changed in this diff-set — belongs in the PR.
+- **Prefer actualizing the PR description** over posting a comment for status that describes the *current state* of the change (what the PR now does, how it was verified, how a conflict was resolved) — the description is the living summary a reviewer reads first. A reply comment is for back-and-forth discussion (reply rationale, resolve/drop notes), not for restating current state. Mechanics for editing a published PR's description programmatically are project memory (for Arcanum: the `arcanum-api-readonly-pr-fields` leaf — `PUT /review-requests/{id}/description`, no draft revert).
 - Post **exactly one** ticket comment, and only **after the PR is merged** — the final-result post (merged PR link + summary).
 
-The review surface already carries the discussion; mirroring it on the ticket is noise.
+The PR already carries the discussion and the current state; mirroring it on the ticket is noise.
 
 What this skill is **not**:
 - Not a replacement for `planner` (who decomposes) or `developer` (who writes code).
