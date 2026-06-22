@@ -39,16 +39,3 @@ jq empty "$tmp"  # validate before swapping in
 cp "$TARGET" "$TARGET.bak"
 mv "$tmp" "$TARGET"
 echo "apply-settings: merged $BASE -> $TARGET (backup: $TARGET.bak)"
-
-# Drift warning: the merge is additive and live wins on conflict, so a stale live
-# env value silently shadows base (this caused the autocompact overshoot). Flag any
-# env key whose live value differs from base.
-drift="$(jq -nr --slurpfile base "$BASE" --slurpfile cur "$TARGET" '
-  ($base[0].env // {}) as $b | ($cur[0].env // {}) as $c
-  | [ $b | to_entries[] | select($c[.key] != null and $c[.key] != .value)
-      | "  \(.key): base=\(.value) live=\($c[.key])" ] | .[]
-')"
-if [[ -n "$drift" ]]; then
-  echo "apply-settings: WARNING base/live env drift (live shadows base — fix live or it persists):" >&2
-  printf '%s\n' "$drift" >&2
-fi
