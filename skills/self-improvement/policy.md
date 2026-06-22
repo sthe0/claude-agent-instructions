@@ -212,8 +212,6 @@ scripts/
   hook-tracker-reminder.py             # UserPromptSubmit: detect tracker references (ticket keys, keywords) and nudge to invoke `tracker-management`
   hook-push-confirmation-reminder.py   # PreToolUse Bash: nudge to verify user push-confirmation before `git push` / `sync-instructions-repo.sh push`
   hook-readme-currency-reminder.py     # PreToolUse Bash: before git/arc commit, list READMEs next to changed code that aren't in the changeset — verify currency
-  hook-pr-run-comment-reminder.py      # PreToolUse Bash: on `arc pr create`/`publish`, nudge to post each verified manual run (WI/smoke/CI) as a PR review comment with plain-URL link + rerun command (feedback-vcs-and-review.md)
-  hook-graph-url-plain-reminder.py     # PreToolUse Bash: on Tracker/Arcanum comment post, nudge to put Nirvana graph URLs plain (Tracker status-aware widget), not markdown-wrapped
   verify-plan-file.py                  # validate planner plan file structure (Problem/Stages/Final verification/Risks + Expected result image lines); run from spawn-specialist.py after PLAN-READY:
   hook-resolution-reminder.py          # UserPromptSubmit: nudge when user reply is brief gratitude — do NOT treat as resolution confirmation
   hook-context-growth-reminder.py      # UserPromptSubmit: nudge when live context size crosses a band (reads transcript usage); throttled per band per session
