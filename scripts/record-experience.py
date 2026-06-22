@@ -254,7 +254,13 @@ def cmd_ticket(a) -> int:
     path.write_text(ticket_leaf_body(a), encoding="utf-8")
     update_subindex(exp_dir, a.date, a.title, filename, a.description)
     print(f"wrote thin leaf {path}\nupdated {exp_dir / 'MEMORY.md'}", file=sys.stderr)
-    print("\n===== post this on the ticket =====\n", file=sys.stderr)
+    print("\n===== post this on the ticket =====", file=sys.stderr)
+    print("NOTE: headers below are English (the LEAF stays English per repo policy).",
+          file=sys.stderr)
+    print("  Before posting, translate headers + prose to the TICKET's language,",
+          file=sys.stderr)
+    print("  and use BARE URLs — markdown [text](url) does NOT render in Tracker.\n",
+          file=sys.stderr)
     print(ticket_comment(a))
     return 0
 
