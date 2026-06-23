@@ -9,11 +9,20 @@ but ignored (README check is always whole-repo).
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
 
 REGIONS = ("scripts", "skills", "specializations")
+
+# Source file (repo-relative) each sentinel region lives in. The scripts inventory
+# is heavy and operational, so it lives in scripts/README.md, not the conceptual root README.
+REGION_FILES = {
+    "scripts": "scripts/README.md",
+    "skills": "README.md",
+    "specializations": "README.md",
+}
 
 _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 _TICK_RE = re.compile(r"`([^`]+)`")
@@ -90,10 +99,14 @@ def _parse_region(text: str, name: str) -> tuple[int, int, dict[str, str]] | Non
 
 def _fs_set(name: str, root: Path) -> set[str]:
     if name == "scripts":
+        # Identifiers are link targets relative to the region file's own directory,
+        # so the markdown links resolve correctly (verify-cross-refs resolves them
+        # relative to the file) — e.g. `setup-symlinks.sh`, `../cursor/scripts/x.py`.
+        base = (root / REGION_FILES[name]).parent
         ids: set[str] = set()
         for pat in ("scripts/*.py", "scripts/*.sh", "cursor/scripts/*.py", "cursor/scripts/*.sh"):
             for p in root.glob(pat):
-                ids.add(str(p.relative_to(root)))
+                ids.add(os.path.relpath(p, base))
         return ids
     elif name == "skills":
         d = root / "skills"
@@ -163,41 +176,51 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     root = args.root if args.root is not None else Path(__file__).resolve().parent.parent
-    readme = root / "README.md"
-    if not readme.exists():
-        print(f"verify-readme: FAIL — README.md not found at {readme}")
-        return 1
 
     if args.fix:
-        text = readme.read_text(encoding="utf-8")
+        by_file: dict[str, list[str]] = {}
         for name in REGIONS:
-            parsed = _parse_region(text, name)
-            if parsed is None:
+            by_file.setdefault(REGION_FILES[name], []).append(name)
+        for relpath, names in by_file.items():
+            f = root / relpath
+            if not f.exists():
                 continue
-            bi, ei, existing = parsed
-            text = _fix_region(text, name, bi, ei, existing, _fs_set(name, root))
-        readme.write_text(text, encoding="utf-8")
+            text = f.read_text(encoding="utf-8")
+            for name in names:
+                parsed = _parse_region(text, name)
+                if parsed is None:
+                    continue
+                bi, ei, existing = parsed
+                text = _fix_region(text, name, bi, ei, existing, _fs_set(name, root))
+            f.write_text(text, encoding="utf-8")
         return main(["--root", str(root)])
 
-    text = readme.read_text(encoding="utf-8")
     all_ok = True
     failures: list[str] = []
     counts: dict[str, int] = {}
 
     for name in REGIONS:
+        relpath = REGION_FILES[name]
+        f = root / relpath
+        if not f.exists():
+            failures.append(f"  {name}: source file not found: {relpath}")
+            all_ok = False
+            counts[name] = 0
+            continue
+        text = f.read_text(encoding="utf-8")
         parsed = _parse_region(text, name)
         if parsed is None:
-            failures.append(f"  {name}: marker pair not found in README")
+            failures.append(f"  {name}: marker pair not found in {relpath}")
             all_ok = False
             counts[name] = 0
             continue
         _, _, existing = parsed
         fs_ids = _fs_set(name, root)
         for m in sorted(fs_ids - set(existing)):
-            failures.append(f"  {name}: missing from README: {m}")
+            failures.append(f"  {name}: missing from {relpath}: {m}")
             all_ok = False
         for d in sorted(set(existing) - fs_ids):
-            failures.append(f"  {name}: dangling in README (not on FS): {d}")
+            failures.append(f"  {name}: dangling in {relpath} (not on FS): {d}")
             all_ok = False
         counts[name] = len(fs_ids)
 

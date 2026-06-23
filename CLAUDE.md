@@ -171,7 +171,7 @@ Skip the leaf entirely for trivial Q&A turns and one-line tasks. The whole rule 
 
 ### Limits
 
-- You do **not** write production code yourself on **substantive** work — spawn `developer`. *Small change* class (per § Classify task weight) you may handle directly in-thread.
+- You do **not** write production code yourself on **substantive** work — spawn `developer`. *Small change* class (per § Classify task weight) you may handle directly in-thread — following the developer code-quality rules (`skills/specializations/developer/SKILL.md` § While developing: dedup, comment discipline, shared-entry-point defaults, mirror-the-working-caller, log-reading).
 - You do **not** embed domain runbooks (pipeline stages, relaunches, prod names) in this prompt or other generic prompts — they belong in memory.
 - You do **not** change instructions without invoking the `self-improvement` skill (or an explicit user request to edit).
 
@@ -228,19 +228,6 @@ Record only if **all four** apply:
 4. **Specific, not a principle** — names a concrete component / process / person / dataflow boundary. Generic patterns and reasoning practices belong in `leaves/*.md` (evergreen reference), not here.
 
 Cite the source where possible (`> verified by: <commit>/<URL>/<conversation>`).
-
----
-
-## Development habits
-
-*Difficulty removed: recurring code-level regressions (duplication, broken shared defaults, comment rot) that each pass review alone but accumulate.*
-
-- Avoid duplicating code. Explore adjacent files, use project search; extend shared abstractions over copy-paste.
-- **Don't change a shared entry point's default for one new caller.** When an existing CLI command or exported function is reused as a building block for a new caller (orchestrator, job step, parent graph), gate any added blocking / waiting / side-effecting behavior behind an opt-in parameter that defaults to the prior behavior; check current callers before altering a shared path. (Regression source: a CLI launch command was made to block on graph completion to serve a meta-graph that never even called that path — breaking fire-and-forget for direct users.)
-- **Mirror the working caller before inventing a bypass.** When code fails for missing ambient context (graph / session context, secrets, quota, a valid path) inside a constrained environment (job, sandbox, frozen layer), find the existing *working* caller that does the same operation (standalone CLI, client publish path) and replicate how it establishes that context — before reaching for an env-var / quota / path workaround. Detail (with the regression example): `~/.claude/memory-global/leaves/mirror-working-caller-before-bypass.md`.
-- **Default: no comments.** Add one only when the *why* is non-obvious — workaround for a specific bug, ordering constraint, pinned-version rationale, a hidden invariant the names won't show. If removing it wouldn't confuse a future reader, don't write it. Applies equally to **build / config** files (`ya.make`, `a.yaml`, `Dockerfile`, `Makefile`, `pyproject.toml`): never annotate an `import` / `PEERDIR` / dependency line with "what this does" — the identifier is the documentation. Details and antipatterns: `~/.claude/memory-global/leaves/code-comment-discipline.md`.
-- Use `~/.venv` for Python unless a project memory runbook says otherwise.
-- **Log-reading discipline:** never emit more than 10 lines from one log file per tool call; aggregate first (counts, top-K, time windows), then surface a digest. Details: `~/.claude/memory-global/leaves/log-reading-discipline.md`.
 
 ---
 

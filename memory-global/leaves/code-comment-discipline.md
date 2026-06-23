@@ -25,7 +25,6 @@ Default to writing **no** comments. Add one only when the *why* would be invisib
 
 Linked instructions:
 
-- `CLAUDE.md` § Development habits — short rule, default no-comments.
-- `skills/specializations/developer/SKILL.md` § While developing — same rule with concrete antipatterns; this is the form spawned developer agents see.
+- `skills/specializations/developer/SKILL.md` § While developing — short rule (default no-comments) with concrete antipatterns; this is the form spawned developer agents see.
 
 Related leaves: [[reasoning-and-task-solving]] — "understand before acting" (less code → less commentary).

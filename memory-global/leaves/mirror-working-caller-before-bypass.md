@@ -19,4 +19,4 @@ type: feedback
 **Contexts**
 - **DEEPAGENT-403 val-eval in-job publish** (2026-06-14): a developer added a `DEEPAGENT_VH3_EXECUTABLE_QUOTA` env shim so an in-job executable upload could get a quota without the graph-context. The working client publish path simply ran the register/start under `with profile.context()`; mirroring that (drafting the executable in-job + `profile.context()`) replaced the shim and was correct. Separately, the real secret-resolution unblocker was a **baked `/arcadia` profile path** valid inside the job's FS, not the launcher's `/wt` mount — another "use what the working path uses" instance. Full saga: project `experience/2026-06-14-deepagent-403-val-eval-in-job-publish.md`.
 
-Related: shared-entry-point default rule in `CLAUDE.md` § Development habits; verify-the-load-bearing-axis (don't trust a green static check for a runtime-context failure).
+Related: shared-entry-point default rule in `skills/specializations/developer/SKILL.md` § While developing; verify-the-load-bearing-axis (don't trust a green static check for a runtime-context failure).
