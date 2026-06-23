@@ -51,27 +51,53 @@ def state_path(session_id: str) -> Path:
     return STATE_ROOT / f"{_safe(session_id)}.json"
 
 
-def load_node(path: Path) -> str | None:
+# Nodes where production edits are legitimate regardless of weight class: the
+# plan-approval gate (or the small-change carve-out) has already been passed.
+ALLOW_NODES = {"EXECUTING", "VERIFYING", "RESOLUTION"}
+
+
+def load_gate_fields(path: Path) -> tuple[str | None, str] | None:
+    """Return (weight_class, node) from the state file. weight_class may be None
+    (session not yet classified). Corrupt/unreadable state or a missing/non-string
+    node -> None, so main() falls through to allow (unchanged safety)."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
     node = data.get("node")
-    return node if isinstance(node, str) else None
+    if not isinstance(node, str):
+        return None
+    weight = data.get("weight_class")
+    weight = weight if isinstance(weight, str) else None
+    return weight, node
 
 
-def deny(node: str) -> None:
-    reason = (
-        f"agentctl session is in node={node}, not EXECUTING — the plan-approval "
-        "gate has not been passed. Production edits are allowed only after the plan "
-        "is approved (run `agentctl approve --by <user>` once the user has explicitly "
-        "approved the plan, which moves the session to APPROVED -> EXECUTING)."
-    )
+def gate_decision(weight_class: str | None, node: str) -> tuple[str, str]:
+    """Pure weight-aware gate. Returns ("allow"|"deny", reason)."""
+    if node in ALLOW_NODES:
+        return "allow", ""
+    # Closed/blocked task: a prod edit here means the agent is acting on a stale session.
+    if node in ("RESOLVED", "BLOCKED"):
+        return "deny", f"task {node.lower()}; run `agentctl reset` for a new task before editing"
+    if weight_class == "CHAT":
+        # chat is terminal at ROUTED and never does production edits
+        return "allow", ""
+    if weight_class is None:
+        return "deny", "unclassified: run `agentctl classify` before editing production code"
+    if weight_class == "SMALL_CHANGE":
+        return "deny", "small change: run `agentctl next-stage` to enter EXECUTING before editing"
+    # SUBSTANTIVE (or unknown) before EXECUTING: plan-approval gate not passed yet.
+    return "deny", f"plan-approval gate not passed (node={node}); approve the plan first"
+
+
+def deny_with(node: str, reason: str) -> None:
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
-            "permissionDecisionReason": reason,
+            "permissionDecisionReason": (
+                f"agentctl session is in node={node} — {reason}."
+            ),
         }
     }))
 
@@ -94,17 +120,20 @@ def main() -> int:
     if not sp.exists():
         return 0
 
-    node = load_node(sp)
-    if node is None or node == "EXECUTING":
-        return 0
-
     if not PRODUCTION_FILE_RE.search(file_path):
         return 0
 
     if any(seg in file_path for seg in SKIP_SEGMENTS):
         return 0
 
-    deny(node)
+    fields = load_gate_fields(sp)
+    if fields is None:
+        return 0
+    weight_class, node = fields
+
+    decision, reason = gate_decision(weight_class, node)
+    if decision == "deny":
+        deny_with(node, reason)
     return 0
 
 

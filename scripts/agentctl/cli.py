@@ -80,6 +80,13 @@ def _park_blocked(state: SessionState, store: StateStore, stage, marker, base: d
 # --- commands -------------------------------------------------------------
 
 def cmd_start(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    if getattr(args, "if_absent", False):
+        existing = store.load(args.session)
+        if existing is not None and existing.node != Node.RESOLVED.value:
+            return Directive(
+                True, existing.node, "continue",
+                f"session live (task={existing.task_id}, node={existing.node}); start is a no-op",
+            )
     state = SessionState(
         session_id=args.session,
         task_id=args.task,
@@ -91,6 +98,37 @@ def cmd_start(args, *, store: StateStore, runner: Runner | None = None) -> Direc
     state.log("start", task=state.task_id)
     store.save(state)
     return Directive(True, state.node, "classify", "session registered; run classify next")
+
+
+def cmd_reset(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Re-arm a session for a NEW task once its prior task is closed. Refuses to
+    discard a live prior task (not RESOLVED/ROUTED/BLOCKED) unless --force, so a
+    new prompt cannot silently wipe in-flight work. Otherwise builds a fresh
+    CLASSIFIED SessionState from the same args cmd_start uses."""
+    prior = store.load(args.session)
+    if (
+        prior is not None
+        and prior.node not in (Node.RESOLVED.value, Node.ROUTED.value, Node.BLOCKED.value)
+        and not getattr(args, "force", False)
+    ):
+        return Directive(
+            False, prior.node, "noop",
+            f"prior task '{prior.task_id}' is live at node={prior.node}; "
+            "resolve/block it or pass --force to discard",
+        )
+    new = SessionState(
+        session_id=args.session,
+        task_id=args.task,
+        goal=getattr(args, "goal", "") or "",
+        overall_done_criterion=getattr(args, "done_criterion", "") or "",
+        overall_criterion_type=getattr(args, "criterion_type", CriterionType.MEASURABLE.value),
+        recursion_depth=int(getattr(args, "recursion_depth", 0) or 0),
+    )
+    new.log("reset", task=new.task_id, prior_task=(prior.task_id if prior else None))
+    store.save(new)
+    return Directive(
+        True, new.node, "classify", "session re-armed for new task; run classify",
+    )
 
 
 def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -601,6 +639,7 @@ def cmd_status(args, *, store: StateStore, runner: Runner | None = None) -> Dire
 
 COMMANDS = {
     "start": cmd_start,
+    "reset": cmd_reset,
     "classify": cmd_classify,
     "plan": cmd_plan,
     "submit-plan": cmd_submit_plan,
@@ -633,6 +672,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--goal", default=""); sp.add_argument("--done-criterion", dest="done_criterion", default="")
     sp.add_argument("--criterion-type", dest="criterion_type", default=CriterionType.MEASURABLE.value)
     sp.add_argument("--recursion-depth", dest="recursion_depth", type=int, default=0)
+    sp.add_argument("--if-absent", dest="if_absent", action="store_true")
+
+    sp = add("reset"); sp.add_argument("--session", required=True); sp.add_argument("--task", required=True)
+    sp.add_argument("--goal", default=""); sp.add_argument("--done-criterion", dest="done_criterion", default="")
+    sp.add_argument("--criterion-type", dest="criterion_type", default=CriterionType.MEASURABLE.value)
+    sp.add_argument("--recursion-depth", dest="recursion_depth", type=int, default=0)
+    sp.add_argument("--force", action="store_true")
 
     sp = add("classify"); sp.add_argument("--session", required=True)
     sp.add_argument("--chat", action="store_true")

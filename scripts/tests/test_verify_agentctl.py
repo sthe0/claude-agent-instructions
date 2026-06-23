@@ -21,6 +21,12 @@ def test_happy_path_returns_zero():
     assert mod.main([]) == 0
 
 
+def test_engine_start_hook_is_in_desired():
+    mod = _load_module()
+    desired = mod.parse_desired_hooks(mod.INSTALL_SCRIPT.read_text(encoding="utf-8"))
+    assert "hook-engine-start.py" in desired
+
+
 def test_check_reachability_detects_unreachable_node():
     mod = _load_module()
     from agentctl.state import Node

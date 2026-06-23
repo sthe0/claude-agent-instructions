@@ -23,6 +23,7 @@ scripts = os.environ["SCRIPTS_DIR"]
 # (event, matcher-or-None, script-basename [+ optional args], timeout)
 DESIRED = [
     ("UserPromptSubmit", None,    "hook-context-growth-reminder.py", 5),
+    ("UserPromptSubmit", None,    "hook-engine-start.py",            5),
     ("UserPromptSubmit", None,    "hook-resolution-reminder.py",     5),
     ("UserPromptSubmit", None,    "hook-tracker-reminder.py",        5),
     ("PreToolUse",       "Bash",  "hook-push-confirmation-reminder.py", 5),

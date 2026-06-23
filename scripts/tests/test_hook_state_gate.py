@@ -1,14 +1,26 @@
-"""hook-state-gate.py: deny production Edit/Write unless the agentctl session is
-in EXECUTING. Driven end-to-end via subprocess with HOME pointed at a tmp tree so
-the hook's real STATE_ROOT (~/.claude/agentctl/state) resolves under tmp_path."""
+"""hook-state-gate.py: weight-aware deny of production Edit/Write unless the agentctl
+session has passed the gate appropriate to its weight class. Driven end-to-end via
+subprocess with HOME pointed at a tmp tree so the hook's real STATE_ROOT
+(~/.claude/agentctl/state) resolves under tmp_path. The pure gate_decision is also
+unit-tested directly via an importlib load of the hook module."""
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 HOOK = Path(__file__).resolve().parent.parent / "hook-state-gate.py"
+
+
+def _load_module():
+    spec = importlib.util.spec_from_file_location("hook_state_gate", HOOK)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def run_hook(payload: dict, home: Path) -> subprocess.CompletedProcess:
@@ -22,10 +34,13 @@ def run_hook(payload: dict, home: Path) -> subprocess.CompletedProcess:
     )
 
 
-def write_state(home: Path, session_id: str, node: str) -> None:
+def write_state(home: Path, session_id: str, node: str, weight_class: str | None = None) -> None:
     state_dir = home / ".claude" / "agentctl" / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
-    (state_dir / f"{session_id}.json").write_text(json.dumps({"node": node}))
+    data: dict = {"node": node}
+    if weight_class is not None:
+        data["weight_class"] = weight_class
+    (state_dir / f"{session_id}.json").write_text(json.dumps(data))
 
 
 def edit_payload(session_id: str, file_path: str) -> dict:
@@ -43,13 +58,17 @@ def _is_deny(proc: subprocess.CompletedProcess) -> bool:
     return out.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
 
 
+def _deny_reason(proc: subprocess.CompletedProcess) -> str:
+    return json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+
+
 def test_deny_on_production_edit_when_not_executing(tmp_path):
-    write_state(tmp_path, "sess1", "PLAN_READY")
+    write_state(tmp_path, "sess1", "PLAN_READY", weight_class="SUBSTANTIVE")
     proc = run_hook(edit_payload("sess1", "/work/project/module.py"), tmp_path)
     assert proc.returncode == 0  # hook never raises / never exits non-zero
     assert _is_deny(proc)
-    reason = json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "PLAN_READY" in reason and "EXECUTING" in reason
+    reason = _deny_reason(proc)
+    assert "PLAN_READY" in reason and "approve" in reason.lower()
 
 
 def test_allow_when_executing(tmp_path):
@@ -111,3 +130,67 @@ def test_malformed_stdin_allows(tmp_path):
     )
     assert proc.returncode == 0
     assert proc.stdout.strip() == ""
+
+
+# --- gate_decision pure-function table ------------------------------------
+
+@pytest.mark.parametrize(
+    "weight_class, node, expected, needle",
+    [
+        (None, "CLASSIFIED", "deny", "classify"),
+        ("CHAT", "ROUTED", "allow", ""),
+        ("SMALL_CHANGE", "ROUTED", "deny", "next-stage"),
+        ("SMALL_CHANGE", "EXECUTING", "allow", ""),
+        ("SUBSTANTIVE", "PLAN_READY", "deny", "approv"),
+        ("SUBSTANTIVE", "APPROVED", "deny", "approv"),
+        ("SUBSTANTIVE", "EXECUTING", "allow", ""),
+        ("SUBSTANTIVE", "RESOLVED", "deny", "reset"),
+        (None, "RESOLVED", "deny", "reset"),
+    ],
+)
+def test_gate_decision_rows(weight_class, node, expected, needle):
+    mod = _load_module()
+    decision, reason = mod.gate_decision(weight_class, node)
+    assert decision == expected
+    if needle:
+        assert needle in reason.lower()
+
+
+# --- a few end-to-end rows through stdin + state file ----------------------
+
+def test_e2e_unclassified_denies_with_classify_hint(tmp_path):
+    write_state(tmp_path, "u1", "CLASSIFIED", weight_class=None)
+    proc = run_hook(edit_payload("u1", "/work/project/module.py"), tmp_path)
+    assert proc.returncode == 0
+    assert _is_deny(proc)
+    assert "classify" in _deny_reason(proc).lower()
+
+
+def test_e2e_small_change_routed_denies_with_next_stage(tmp_path):
+    write_state(tmp_path, "u2", "ROUTED", weight_class="SMALL_CHANGE")
+    proc = run_hook(edit_payload("u2", "/work/project/module.py"), tmp_path)
+    assert proc.returncode == 0
+    assert _is_deny(proc)
+    assert "next-stage" in _deny_reason(proc).lower()
+
+
+def test_e2e_small_change_executing_allows(tmp_path):
+    write_state(tmp_path, "u3", "EXECUTING", weight_class="SMALL_CHANGE")
+    proc = run_hook(edit_payload("u3", "/work/project/module.py"), tmp_path)
+    assert proc.returncode == 0
+    assert not _is_deny(proc)
+
+
+def test_e2e_chat_routed_allows(tmp_path):
+    write_state(tmp_path, "u4", "ROUTED", weight_class="CHAT")
+    proc = run_hook(edit_payload("u4", "/work/project/module.py"), tmp_path)
+    assert proc.returncode == 0
+    assert not _is_deny(proc)
+
+
+def test_e2e_resolved_denies_with_reset(tmp_path):
+    write_state(tmp_path, "u5", "RESOLVED", weight_class="SUBSTANTIVE")
+    proc = run_hook(edit_payload("u5", "/work/project/module.py"), tmp_path)
+    assert proc.returncode == 0
+    assert _is_deny(proc)
+    assert "reset" in _deny_reason(proc).lower()
