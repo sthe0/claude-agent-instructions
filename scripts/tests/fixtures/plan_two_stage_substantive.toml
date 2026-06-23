@@ -1,0 +1,35 @@
+[meta]
+task_id = "demo-two-stage"
+goal = "Demonstrate the full two-stage coordination cycle"
+done_criterion = "all three stages PASSED and resolution confirmed"
+criterion_type = "measurable"
+
+[[stage]]
+index = 1
+title = "Scaffold module"
+executor = "spawn:developer"
+expected_result_image = "module file exists and imports cleanly"
+criterion_type = "measurable"
+done_criterion = "python -c 'import mod' exits 0"
+depends_on = []
+output_artifacts = ["mod.py"]
+
+[[stage]]
+index = 2
+title = "Add tests"
+executor = "spawn:developer"
+expected_result_image = "pytest green for the new module"
+criterion_type = "measurable"
+done_criterion = "pytest tests/test_mod.py green"
+depends_on = [1]
+output_artifacts = ["tests/test_mod.py"]
+
+[[stage]]
+index = 3
+title = "Wire CI"
+executor = "spawn:developer"
+expected_result_image = "CI runs the new tests on push"
+criterion_type = "measurable"
+done_criterion = "CI config references test_mod"
+depends_on = [2]
+output_artifacts = [".github/workflows/ci.yml"]

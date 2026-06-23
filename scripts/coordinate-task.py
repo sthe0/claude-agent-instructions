@@ -264,7 +264,16 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+DEPRECATION_NOTICE = (
+    "coordinate-task.py is a thin two-phase (plan/run) wrapper; the deterministic "
+    "coordination engine now lives in `python3 -m agentctl` (full classify -> route "
+    "-> plan-approval gate -> per-stage dispatch -> verify -> resolution state "
+    "machine). This shim is kept until the prose cutover wires agentctl in.\n"
+)
+
+
 def main(argv: list[str] | None = None) -> int:
+    sys.stderr.write(DEPRECATION_NOTICE)
     args = build_parser().parse_args(argv)
     return args.func(args)
 
