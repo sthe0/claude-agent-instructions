@@ -26,6 +26,8 @@ You may invoke these without `AskUserQuestion` / `PERMISSION-REQUEST:`, regardle
 
 These are pre-authorized even if no plan exists yet (exploration phase counts).
 
+> **Canonical machine subset:** the verb-level form the `settings/base.json` linter actually enforces is `classify_action(tool, verb, subverb)` in `scripts/agentctl/classify.py` (`READONLY_BASH`/`READONLY_GIT`/`READONLY_ARC`, `MCP_READONLY_PREFIXES`, `_MUTATING_BASH`). The classes above are the broader **human-judgment** policy; the code is the conservative subset (it returns `unknown` for anything it doesn't recognize). When you add a read-only verb to the policy, add it to those sets too — single source, kept consistent.
+
 ### 2. Plan-scope-declared actions are pre-authorized after plan approval
 
 Once the user has approved a plan (planner returned `PLAN-READY:` and the user said yes), every action **declared in the plan** is authorized — no per-action re-ask. Specifically:
@@ -54,6 +56,8 @@ When you face a tool whose side-effect class is not obvious from its name / surr
 |---|---|
 | `get`, `list`, `search`, `find`, `read`, `describe`, `show`, `status`, `check`, `info`, `inspect`, `query` | side-effect-free → § 1 |
 | `create`, `update`, `delete`, `post`, `send`, `push`, `commit`, `write`, `run`, `upload`, `start`, `cancel`, `set`, `apply`, `grant`, `revoke`, `add-*`, `remove-*` | has side effects → either § 2 (if in plan) or ask |
+
+These verb lists are the human-judgment superset of the code's `classify_action` (see § 1) — the function recognizes a conservative subset and returns `unknown` for the rest, which is exactly the case the budget below handles.
 
 After 1 lookup, if the class is **still unclear** (e.g. an MCP tool whose name is neutral and whose description doesn't disambiguate) → default to `PERMISSION-REQUEST:` with: tool name, what you'd run, what you don't know, the fallback if denied. **Do not** burn 3+ lookups trying to decide — the user's time is cheaper than your second lookup.
 
