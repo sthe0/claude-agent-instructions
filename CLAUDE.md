@@ -34,30 +34,16 @@ When in doubt between two classes, pick the heavier one once; if the work then v
 
 **Decomposition is a separate axis.** Weight class decides routing; **decomposition markers** decide whether a substantive task ships as one PR or several. Apply M1–M4 (independence / heterogeneity / blocking deps / rollback risk) after the plan is approved, before implementation — see `~/.claude/memory-global/leaves/decomposition-markers.md`.
 
-### On a new substantive task
+### Coordination spine — driven by `agentctl`
 
-1. **Restate** the user's goal and **done criterion** in one short paragraph. Mark the criterion type — *measurable* (test, command output, file present) or *acceptance-review* (user accepts on review when no objective check exists).
-2. **Decide routing.** Usually `planner` (plan) → user approval → `developer` (code); or `thinker` / consultant skill / direct answer.
-3. **Delegate** with clear prompts (see § Invoking specialists). Do not skip routing and start coding yourself on substantive work — except under the carve-out above (plan approved, all steps fit *small change*), where the manager may execute in-thread.
+The substantive-task spine (classify → route → plan-approval gate → dispatch → per-stage verify → resolution gate, plus difficulty/replan) is driven **deterministically by the `agentctl` engine**, not re-derived as prose each turn: `cd ~/claude-agent-instructions/scripts && python3 -m agentctl <cmd>` (or `PYTHONPATH=<repo>/scripts`). Each command returns a Directive — next node + which cognitive leaf to run + whether a gate blocks. Sequence: `start → classify → plan → submit-plan → approve → next-stage → dispatch → record-result → verify-final → resolve`. The plan-approval and resolution gates are non-skippable (hooks: `hook-state-gate.py` denies production Edit/Write outside node=EXECUTING). The engine owns control flow; you supply the cognition at each leaf.
 
-### Coordination cycle
+**Fallback** (engine not started, or unavailable) — walk the same steps by hand, same order: (1) **restate** goal + **done criterion**, marking *criterion type*; (2) **classify** weight (§ above) and **route** (planner→approval→developer, or thinker / skill / direct answer) — don't start coding on substantive work except under the in-context carve-out; (3) get **plan approval** before editing production; (4) **execute**, comparing each stage's actual to its `Expected result image:`; (5) run the plan's `## Final verification` against the overall done criterion before declaring done.
 
-```text
-Need → Options → Plan → Resources → Execution → Verification → done? — no → back to Need
-```
-
-- **Need.** What does the user need exactly? What is the done criterion?
-- **Options.** Briefly: 2–3 approaches, pros / cons, what blocks each.
-- **Plan.** Numbered steps, dependencies, who executes (which subagent or the user).
-- **Resources.** Per step — `ready` (existing code, skill, MCP, memory leaf), `obtain via task` (developer writes, etc.), or `ask the user` (access, approach, OAuth). If a resource is missing — plan how to get it.
-- **Execution.** Delegate via `Task` with a clear prompt: context, expected output, constraints. Parallelize only independent branches.
-- **Verification.** Two layers, both mandatory:
-  1. **After each stage** — compare the actual outcome to that stage's `Expected result image:` from the plan. If it does not match, invoke `overcome-difficulty`; do not advance to the next stage.
-  2. **After the final stage** — run the plan's `## Final verification` against the user's overall done criterion. The task is not done until this passes. For *measurable* criteria, run the check (test, command, dashboard). For *acceptance-review*, present the result to the user and ask explicitly for accept / reject.
-
-  On failure at either layer — `overcome-difficulty`, not chaotic retries.
-  **Mini-OD on first external-job failure.** Before relaunch or infra log dives on a failed orchestrated job (Nirvana WI, CI, Reactor, Sandbox graph): inline Expected/Actual/Mismatch, then `workflow-debug-investigation.md` (baseline → topology → code delta, ≥2 hypotheses). Project signals leaf when present under `.claude/agent-memory/leaves/`.
-  **Verify the right axis, report honestly.** "Imports pass / tests green / build-diff identical" is *static* verification — it doesn't establish *runtime* correctness for code loaded by name from an external artifact (baked image, porto/job layer, serialized graph); don't report "works / didn't break" until the runtime axis is checked for the affected path. Never infer success from partial progress (a job past block N says nothing about N+1). After any outward action (PR comment, publish, push), confirm it actually landed — "posted" ≠ "published".
+**Cognition the engine does NOT replace (always yours):**
+- *Criterion type* — **measurable** (test, command output, file present → run the check) vs **acceptance-review** (user accepts on review when no objective check exists). On any verification failure — `overcome-difficulty`, not chaotic retries.
+- **Verify the right axis, report honestly.** "Imports pass / tests green / build-diff identical" is *static* verification — it doesn't establish *runtime* correctness for code loaded by name from an external artifact (baked image, porto/job layer, serialized graph); don't report "works / didn't break" until the runtime axis is checked for the affected path. Never infer success from partial progress (a job past block N says nothing about N+1). After any outward action (PR comment, publish, push), confirm it actually landed — "posted" ≠ "published".
+- **Mini-OD on first external-job failure.** Before relaunch or infra log dives on a failed orchestrated job (Nirvana WI, CI, Reactor, Sandbox graph): inline Expected/Actual/Mismatch, then `workflow-debug-investigation.md` (baseline → topology → code delta, ≥2 hypotheses). Project signals leaf when present under `.claude/agent-memory/leaves/`.
 
 ### Escalation to the user
 
