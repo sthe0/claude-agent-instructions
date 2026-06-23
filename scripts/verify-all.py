@@ -25,6 +25,7 @@ CHECKS: list[str] = [
     "verify-experience-leaf",
     "verify-difficulty-lead",
     "verify-agentctl",
+    "verify-readme",
 ]
 
 

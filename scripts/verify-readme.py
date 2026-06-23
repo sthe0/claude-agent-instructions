@@ -1,0 +1,218 @@
+#!/usr/bin/env python3
+"""Verify README inventory sentinels (scripts/flat skills/specializations) match the filesystem.
+
+Reads three sentinel regions delimited by HTML comments in README.md and compares
+each against the filesystem. Use --fix to reconcile rows in place, preserving
+existing purpose cells. Use --root for project-repo reuse; --staged is accepted
+but ignored (README check is always whole-repo).
+"""
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from pathlib import Path
+
+REGIONS = ("scripts", "skills", "specializations")
+
+_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+_TICK_RE = re.compile(r"`([^`]+)`")
+
+_DEFAULT_HEADERS = {
+    "scripts": "| Script | Purpose |",
+    "skills": "| name | Triggers (summary) | File |",
+    "specializations": "| name | Spawns when a plan step calls for | File |",
+}
+_DEFAULT_SEPARATORS = {
+    "scripts": "|---|---|",
+    "skills": "|---|---|---|",
+    "specializations": "|---|---|---|",
+}
+
+
+def _begin(name: str) -> str:
+    return f"<!-- inventory:{name}:begin -->"
+
+
+def _end(name: str) -> str:
+    return f"<!-- inventory:{name}:end -->"
+
+
+def _is_separator(line: str) -> bool:
+    stripped = line.strip()
+    if not (stripped.startswith("|") and stripped.endswith("|")):
+        return False
+    segs = stripped[1:-1].split("|")
+    return (
+        all(all(c in "-: \t" for c in seg) for seg in segs)
+        and any("-" in seg for seg in segs)
+    )
+
+
+def _parse_region(text: str, name: str) -> tuple[int, int, dict[str, str]] | None:
+    """Return (begin_idx, end_idx, existing_rows) or None if markers are missing.
+
+    begin_idx / end_idx: indices into text.splitlines() for the marker lines.
+    existing_rows: ordered dict identifier -> full row text (no trailing newline).
+    """
+    bm, em = _begin(name), _end(name)
+    lines = text.splitlines()
+    bi = ei = None
+    for i, line in enumerate(lines):
+        ls = line.strip()
+        if ls == bm:
+            bi = i
+        elif ls == em:
+            ei = i
+    if bi is None or ei is None or bi >= ei:
+        return None
+
+    existing: dict[str, str] = {}
+    for line in lines[bi + 1 : ei]:
+        if not line.startswith("|"):
+            continue
+        if _is_separator(line):
+            continue
+        cols = [c.strip() for c in line.split("|")]
+        if len(cols) < 3:
+            continue
+        col1 = cols[1]
+        if name == "scripts":
+            m = _LINK_RE.search(col1)
+            if m:
+                existing[m.group(2)] = line
+        else:
+            m = _TICK_RE.search(col1)
+            if m:
+                existing[m.group(1)] = line
+    return bi, ei, existing
+
+
+def _fs_set(name: str, root: Path) -> set[str]:
+    if name == "scripts":
+        ids: set[str] = set()
+        for pat in ("scripts/*.py", "scripts/*.sh", "cursor/scripts/*.py", "cursor/scripts/*.sh"):
+            for p in root.glob(pat):
+                ids.add(str(p.relative_to(root)))
+        return ids
+    elif name == "skills":
+        d = root / "skills"
+        if not d.is_dir():
+            return set()
+        return {x.name for x in d.iterdir() if x.is_dir() and x.name != "specializations"}
+    else:
+        d = root / "skills" / "specializations"
+        if not d.is_dir():
+            return set()
+        return {x.name for x in d.iterdir() if x.is_dir()}
+
+
+def _synthesize_row(ident: str, name: str) -> str:
+    if name == "scripts":
+        base = Path(ident).name
+        return f"| [{base}]({ident}) | TODO |"
+    elif name == "skills":
+        path = f"skills/{ident}/SKILL.md"
+        return f"| `{ident}` | TODO | [{path}]({path}) |"
+    else:
+        path = f"skills/specializations/{ident}/SKILL.md"
+        return f"| `{ident}` | TODO | [{path}]({path}) |"
+
+
+def _fix_region(
+    text: str,
+    name: str,
+    bi: int,
+    ei: int,
+    existing: dict[str, str],
+    fs_ids: set[str],
+) -> str:
+    """Return updated text with the sentinel region rebuilt from fs_ids, preserving existing row text."""
+    lines_ke = text.splitlines(keepends=True)
+    content = [l.rstrip("\r\n") for l in lines_ke[bi + 1 : ei]]
+
+    header = next((l for l in content if l.startswith("|") and not _is_separator(l)), None)
+    separator = next((l for l in content if _is_separator(l)), None)
+    if header is None:
+        header = _DEFAULT_HEADERS[name]
+    if separator is None:
+        separator = _DEFAULT_SEPARATORS[name]
+
+    new_rows = [header, separator]
+    for ident in sorted(fs_ids):
+        new_rows.append(existing.get(ident, _synthesize_row(ident, name)))
+
+    new_middle = [row + "\n" for row in new_rows]
+    return "".join(lines_ke[: bi + 1] + new_middle + lines_ke[ei:])
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--fix", action="store_true", help="Reconcile README rows from filesystem")
+    parser.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="Repository root (default: parent of scripts/)",
+    )
+    parser.add_argument(
+        "--staged",
+        action="store_true",
+        help="Accepted but ignored; README check is always whole-repo",
+    )
+    args = parser.parse_args(argv)
+
+    root = args.root if args.root is not None else Path(__file__).resolve().parent.parent
+    readme = root / "README.md"
+    if not readme.exists():
+        print(f"verify-readme: FAIL — README.md not found at {readme}")
+        return 1
+
+    if args.fix:
+        text = readme.read_text(encoding="utf-8")
+        for name in REGIONS:
+            parsed = _parse_region(text, name)
+            if parsed is None:
+                continue
+            bi, ei, existing = parsed
+            text = _fix_region(text, name, bi, ei, existing, _fs_set(name, root))
+        readme.write_text(text, encoding="utf-8")
+        return main(["--root", str(root)])
+
+    text = readme.read_text(encoding="utf-8")
+    all_ok = True
+    failures: list[str] = []
+    counts: dict[str, int] = {}
+
+    for name in REGIONS:
+        parsed = _parse_region(text, name)
+        if parsed is None:
+            failures.append(f"  {name}: marker pair not found in README")
+            all_ok = False
+            counts[name] = 0
+            continue
+        _, _, existing = parsed
+        fs_ids = _fs_set(name, root)
+        for m in sorted(fs_ids - set(existing)):
+            failures.append(f"  {name}: missing from README: {m}")
+            all_ok = False
+        for d in sorted(set(existing) - fs_ids):
+            failures.append(f"  {name}: dangling in README (not on FS): {d}")
+            all_ok = False
+        counts[name] = len(fs_ids)
+
+    if all_ok:
+        n = counts.get("scripts", 0)
+        s = counts.get("skills", 0)
+        p = counts.get("specializations", 0)
+        print(f"verify-readme: OK — {n} scripts, {s} flat skills, {p} specializations")
+        return 0
+
+    print("verify-readme: FAIL")
+    for f in failures:
+        print(f)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
