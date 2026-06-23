@@ -90,7 +90,7 @@ Leaves under `memory-global/leaves/**` (other than the sub-index `MEMORY.md` fil
 
 ### Rule
 
-- **Prefer end-of-task** for any edit to a cached-prefix file. The two-turn workflow already biases toward this: turn 1 = proposal, turn 2 = apply after user confirmation. Land the user-confirmed edit at the close of the task, not in the middle.
+- **Prefer end-of-task** for any edit to a cached-prefix file. The two-beat workflow already biases toward this: beat 1 = proposal, beat 2 = apply after user confirmation. Land the user-confirmed edit at the close of the task, not in the middle.
 - **If the edit must happen mid-task** (a blocking rule the active task itself depends on), batch all related cached-prefix edits into a single `Edit`/`Write` burst so the cache is invalidated at most once, not per change.
 - **Leaf-first when possible.** If the proposed change is content that does not have to live in the prefix, write it as a leaf under `memory-global/leaves/**` and update only the one pointer line in the relevant `MEMORY.md` index. The pointer line is small; the leaf body lives off the cached prefix.
 - **Volatile content goes to the bottom of `MEMORY.md` indices.** When a `MEMORY.md` mixes stable runbook pointers with volatile pointers (session checkpoints, in-progress tickets), put the volatile section at the end so its frequent edits don't force re-create of the stable section.

@@ -13,43 +13,37 @@ You run as a skill in the main thread, so you have full conversation context —
 
 A user reminder ("did you run self-improvement?", "yes, run it") IS feedback. Invoke in the **same turn** as the trigger, before the final reply. Do not reply with apology only.
 
-## Two-turn workflow
+## Two-beat workflow
 
-This skill splits into **two distinct turns** to avoid overloading a single response with diagnosis + writing + editing + committing. Each turn has a narrow job.
+The skill runs as a **two-beat gate** so one response never overloads diagnosis + writing + editing + committing. The **gate bookkeeping + sync/marker contract is owned by the engine** — `agentctl si-propose` arms the proposal gate, `agentctl si-apply` refuses to open the apply beat until the gate was armed, an approver is named, and the sync-before-edit contract is confirmed. The cognition below (re-read, classify, author edits, the `AskUserQuestion`) is yours; the engine only holds the gate around it.
 
-### Turn 1 — diagnosis and proposal (same turn as the trigger)
+### Beat 1 — diagnosis and proposal (same turn as the trigger)
 
-In the same dialog turn the trigger fires, produce **text only**: no file edits to the instructions repo yet. The goal is a clear, reviewable proposal the user can accept, push back on, or refine.
+Produce **text only** — no edits to the instructions repo yet. Goal: a reviewable proposal the user can accept, refine, or reject.
 
-1. **Sync first.** Run `~/claude-agent-instructions/scripts/sync-instructions-repo.sh pull` before reasoning. There is no background cron auto-pull, and other machines may have pushed since your session started. If `pull` brought new commits, do the reconcile in [policy.md](policy.md) § After pull before proceeding.
+1. **Arm the gate:** `agentctl si-propose --session <id>`. The Directive returns `await_si_approval` (marker `PLAN-READY`, a hard gate) plus the `sync_cmd` to run and the `where_to_put` pointer.
+2. **Sync first.** Run `~/claude-agent-instructions/scripts/sync-instructions-repo.sh pull` (the `sync_cmd`) before reasoning — no background auto-pull exists, other machines may have pushed. If `pull` brought commits, reconcile per [policy.md](policy.md) § After pull before proceeding.
+3. **Re-read the target files from disk.** Conversation context may hold **stale** `CLAUDE.md` / `agents/*.md` / `skills/*/SKILL.md` / `policy.md` / leaves. `Read` every file you plan to touch immediately before reasoning — on-disk content wins.
+4. **Collect signals.** User quote(s), what went wrong, what you already did (tactical fix, commit, revert).
+5. **Classify.** Reasoning error / missing tool / wrong delegation / stale or misplaced memory / noise in instructions / wrong place for the content.
+6. **Locate.** Where does the change belong? Use the table in § Where to put changes.
+7. **Propose concrete edits.** Per change: target file, section, before/after wording. No generalities. **Name the difficulty per rule** — for each added/changed behavioral rule, state the functional ground (the desired-vs-actual it removes) in "to achieve X, do Y" form per [policy.md](policy.md) § Ground instructions in the difficulty they remove; a rule whose difficulty you cannot name is a prune candidate, not a proposal.
 
-2. **Re-read the relevant instruction files from disk.** The conversation context (system prompt, prior turns, your own memory of the dialogue) may carry **stale versions** of `CLAUDE.md`, `agents/*.md`, `skills/*/SKILL.md`, `policy.md`, or memory leaves. **Use `Read` on every file you plan to touch**, immediately before reasoning about the edit. On-disk content wins.
+End beat 1 with an `AskUserQuestion`: "Apply these changes?" (`Apply (Recommended)` / `Refine` / `Skip`) — and stop. Do not edit files. `AskUserQuestion` is mandatory at this gate — free text at the apply-gate is the exact failure mode this skill most often diagnoses; the skill must model it.
 
-3. **Collect signals.** User quote(s), what went wrong, what you already did (tactical fix, commit, revert).
+### Beat 2 — apply (next turn, after user confirmation)
 
-4. **Classify.** Reasoning error / missing tool / wrong delegation / stale or misplaced memory / noise in instructions / wrong place for the content.
+The confirmation can be terse ("да", "ok", "do it"). On confirmation:
 
-5. **Locate.** Where does the change belong? Use the table in § Where to put changes.
-
-6. **Propose concrete edits.** For each proposed change: target file, section, before/after wording (or close to it). No generalities. The user reads this and approves, refines, or rejects. **Name the difficulty per rule** — for each added/changed behavioral rule, state the functional ground (the desired-vs-actual it removes) in "to achieve X, do Y" form per [policy.md](policy.md) § Ground instructions in the difficulty they remove; a rule whose difficulty you cannot name is a prune candidate, not a proposal.
-
-End turn 1 with an `AskUserQuestion` ask: "Apply these changes?" (options: `Apply (Recommended)` / `Refine` / `Skip`) — and stop. Do not start editing files. Per CLAUDE.md § Escalation to the user, `AskUserQuestion` is mandatory at confirmation gates — free text at the apply-gate is the exact failure mode this skill most often diagnoses for users; the skill itself must model it.
-
-### Turn 2 — apply (next turn, after user confirmation)
-
-The user's confirmation can be terse ("да", "ok", "do it"). On confirmation:
-
-7. **Apply.** Edit the target files. The git workflow, English-only policy, and file-structure rules are mandatory and live in [policy.md](policy.md) — read it before editing the repo.
-
-8. **Commit.** One commit per coherent batch (see [policy.md](policy.md) § Git sync).
-
-9. **Push.** Only after the user explicitly confirms push (separate confirmation — commit ≠ push). Ask via `AskUserQuestion` (options: `Push (Recommended)` / `Keep local`).
+8. **Open the apply gate:** `agentctl si-apply --session <id> --by <approver> --synced`. It refuses (`fix_si` + blockers) unless the proposal was armed, `--by` names who approved, and `--synced` confirms you ran the pull + reconcile. On pass it returns `apply_edits` with `commit_trailer: [self-improvement-reviewed]`.
+9. **Apply + commit.** Edit the target files (git workflow, English-only, file-structure rules in [policy.md](policy.md) — read it first). One commit per coherent batch ([policy.md](policy.md) § Git sync), carrying the `[self-improvement-reviewed]` trailer.
+10. **Push.** Only after a **separate** explicit confirmation (commit ≠ push). Ask via `AskUserQuestion` (`Push (Recommended)` / `Keep local`).
 
 ### When to collapse into one turn
 
-If the user's message **already contains explicit approval to edit** ("сделай эти правки", "apply", "do it now", "сделай все"), turns 1 and 2 collapse into a single response. Still do steps 1–9 in order — just without a stop between 6 and 7.
+If the user's message **already contains explicit approval to edit** ("сделай эти правки", "apply", "do it now", "сделай все"), the two beats collapse into one response — still `si-propose` → steps 2–7 → `si-apply` → 9–10 in order, without a stop between 7 and 8.
 
-A bare reminder ("did you run self-improvement?") is **not** pre-approval — run turn 1 only and wait.
+A bare reminder ("did you run self-improvement?") is **not** pre-approval — run beat 1 only and wait.
 
 ## Source of truth
 
