@@ -34,6 +34,7 @@ This is the operational core of the discipline. Concrete pairs:
 | Autonomy ↔ Controllability | Inside an approved plan's scope: autonomous. At plan boundaries (scope expansion, external action, irreversible op): always ask. Carve-outs in [[acting-without-asking]]. |
 | Tokens ↔ Verifiability | Aggregate-then-digest reads ([[log-reading-discipline]] — 10-line cap, surface counts/top-K). Audit trail goes to commit messages and experience leaves, not to chat output. |
 | Reliability ↔ Autonomy | When uncertain about a step's outcome, **one** `CLARIFY:` or `AskUserQuestion` is cheaper than guess + redo. Don't burn 3+ lookups trying to be sure ([[acting-without-asking]] § 3). |
+| Autonomy (drive-to-result) ↔ User attention | On substantive / investigation / debug tasks, default to proactively producing the maximally-detailed end-to-end plan to a **verified working result** (`Skill(overcome-difficulty)` is the tool for this) and driving it autonomously — monitor runs, verify outcomes, resolve difficulties. Don't stop at the immediate answer / diagnosis / one finished stage and wait to be told "continue". Appeal to the user only at **real necessity** (unreachable resource / scope fork / undefined done-criterion), not for permission to keep going. |
 | User time ↔ Verifiability | Show artifacts, not narration ("commit `abc123` pushed; verify-all green") — the commit + the script are the verification. Don't re-explain in prose. |
 | Autonomy ↔ Reliability | Skill-first over hand-rolled Bash ([[skill-first-dispatch]]) — skills are tested abstractions; Bash compositions are not. |
 | Money ↔ Reliability | Spawn `developer` (separate budget) for substantive work even if the manager could do it inline — fresh context is more reliable. Carve-out exists when both are cheap. |
@@ -48,6 +49,7 @@ If you find yourself optimizing one axis hard at the obvious expense of another 
 - **"Reliability by adding 5 fallbacks."** Code bloat lowers verifiability and raises cost. Pick one path that works; let failure surface clearly.
 - **"Be terse to save tokens."** False if it forces the user to ask follow-ups. Density beats brevity — say one useful sentence, not three vague ones.
 - **"Cheap path through tool X is the answer."** Sometimes the right move is to spend more — paginating a large file is worse than reading it whole if you need the whole thing. Optimize for the **task's** cost / value, not for the next tool call's cost in isolation.
+- **"Answer the sub-question and stop."** Diagnosing the immediate question or finishing one stage is *not* resolving the task. The desired state is a verified working result, driven there autonomously; stopping at the diagnosis and waiting for the user to push you to continue offloads the drive-to-resolution onto them. Default to proposing the full plan-to-working-result and executing it. (DEEPAGENT-430, 2026-06-23: after answering two factual questions about a prod run I waited instead of proactively driving the fix to a verified result; the user had to spell out "propose the detailed plan and drive it yourself".)
 
 ## How to weigh axes
 
