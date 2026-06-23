@@ -8,7 +8,7 @@ type: reference
 
 A separate question from § Classify task weight in CLAUDE.md. Weight class decides routing (chat / small / substantive). **These markers decide whether a substantive task should ship as one PR or several.**
 
-Apply after the plan is approved, **before** spawning the developer. Adapted from `<arcadia>/ai/artifacts/skills/gena/gena-decompose` — but the framework is repo-agnostic.
+Applied after the plan is approved, **before** execution — the `agentctl` engine enforces this: `agentctl decompose` sits between the APPROVED and EXECUTING nodes on the spawn route, so a substantive task cannot reach execution without an M1–M4 assessment. You supply the four marker booleans (the cognition below); the engine computes the verdict and renders the section. Adapted from `<arcadia>/ai/artifacts/skills/gena/gena-decompose` — but the framework is repo-agnostic.
 
 ## Markers (evaluate top-down)
 
@@ -19,17 +19,19 @@ Apply after the plan is approved, **before** spawning the developer. Adapted fro
 
 Volume alone is not a reason. A 2000-line uniform refactor with no M1 still ships as one PR.
 
-## Verdict (one line)
+## Verdict (computed by the engine)
 
-- **recommended** — M1 holds **and** at least one of M2–M4 has a clear signal; **or** M3/M4 alone are severe enough to require a separate PR.
-- **possible** — M1 partial or weak, but M2–M4 give a reason to consider splitting; leave the choice to the user.
-- **not required** — M1 doesn't hold and M2–M4 don't push for it.
+`agentctl decompose` derives the verdict from the four marker booleans (code: `scripts/agentctl/decompose.py`). The truth-table it encodes:
+
+- **recommended** — M1 holds **and** at least one of M2–M4 fires; **or** M3/M4 is flagged severe.
+- **possible** — at least one marker fires but not the recommended combination (e.g. weak M1, or M1 alone).
+- **not_required** — no marker fires.
+
+You set the markers (cognition); the engine owns the derivation — do not re-derive it by hand.
 
 ## Where the verdict goes
 
-If the plan was written to a file (e.g. `~/.claude/plans/<slug>.md`), add a `## Decomposition` section: verdict line, 1–2-sentence rationale citing the markers that fired, and — if recommended — a numbered list of sub-PRs. Each sub-PR: imperative title, 1-line description (what + scope boundary), dependency note (`after #1` / `parallel with #2`) when material.
-
-If the plan is in-conversation only, surface the verdict and reasoning in the manager's reply before the user-approval gate. The user decides whether to split.
+`agentctl decompose` renders the `## Decomposition` skeleton (verdict line + which markers fired) into its Directive. Append the cognitive specifics: a 1–2-sentence rationale citing the markers that fired, and — if recommended — a numbered list of sub-PRs (imperative title, 1-line scope boundary, dependency note like `after #1` / `parallel with #2` when material). For an in-conversation plan, surface the verdict before the user-approval gate; the user decides whether to split.
 
 ## See also
 
