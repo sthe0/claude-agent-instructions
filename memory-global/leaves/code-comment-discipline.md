@@ -1,8 +1,7 @@
 ---
 name: code-comment-discipline
 description: Default no comments; comment only when the *why* is non-obvious. Build / config files are not exceptions — never annotate an import / PEERDIR / dependency line with "what this does".
-metadata:
-  type: feedback
+type: feedback
 ---
 
 # Code comment discipline

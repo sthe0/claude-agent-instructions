@@ -2,8 +2,7 @@
 name: policy-effectiveness-tracking
 description: Standing instrument that tracks the model/sub-agent invocation policy over time along two axes — efficiency (token cost, $, the user's attention) and effectiveness (proxies for task-resolution quality) — via a per-session ledger + weekly scorecard, so "policy → measured outcome → policy adjustment" is a closed loop instead of a hand-computed one-off jq audit.
 schema: difficulty/v1
-metadata:
-  type: reference
+type: reference
 refs:
   - delegatable-work-patterns
   - token-economy-plan

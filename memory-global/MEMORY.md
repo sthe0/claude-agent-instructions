@@ -54,7 +54,4 @@ Workflow-level permissions (separate from memory): `~/claude-agent-instructions/
 ## Resolved-task experience
 
 - [Experience sub-index](leaves/experience/MEMORY.md) — chronological log of resolved-task experience leaves (one per non-trivial task — final plan, difficulties, artifacts, lessons, self-critique, cost).
-
-## Period retrospectives
-
-- [Session retrospective 2026-05](leaves/session-retrospective-2026-05.md) — period summary, top mistakes, ticket startup checklist, self-check gates.
+- [Experience leaf schema](leaves/experience-leaf-schema.md) — the `difficulty/v1` leaf schema (Difficulty / Order & criterion / Contexts / Cost) + `record-experience.py` tooling for resolved-task leaves.

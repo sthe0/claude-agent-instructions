@@ -26,6 +26,7 @@ CHECKS: list[str] = [
     "verify-difficulty-lead",
     "verify-agentctl",
     "verify-readme",
+    "verify-memory-index",
 ]
 
 
