@@ -17,7 +17,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import continuations, gates
+from . import continuations, gates, permissions
 from .classify import Signals, classify
 from .config import Thresholds
 from .decompose import render_section, verdict
@@ -30,6 +30,7 @@ from .state import (
     Decomposition,
     GateRecord,
     Node,
+    PermissionRequest,
     Route,
     SessionState,
     Stage,
@@ -263,7 +264,8 @@ def cmd_next_stage(args, *, store: StateStore, runner: Runner | None = None) -> 
     )
 
 
-def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
+                 perm_checker=None) -> Directive:
     state = _require(store, args.session)
     stage = state.active_stage()
     if stage is None:
@@ -335,6 +337,30 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None) -> Di
             f"stage {stage.index} returned a fresh plan — HARD GATE, get explicit user approval",
             marker="PLAN-READY", data=base,
         )
+    if marker == "PERMISSION-REQUEST":
+        action = body
+        checker = perm_checker or permissions.check_permission
+        if checker(action):
+            # already granted — skip the user ask, re-spawn with the granted note
+            store.save(state)
+            return Directive(
+                True, state.node, "continue_spawn",
+                f"stage {stage.index} requested permission already granted: {action}",
+                marker="PERMISSION-REQUEST",
+                data={**base, "action": action,
+                      "continuation": continuations.permission_granted(action, "global")},
+            )
+        state.permission_request = PermissionRequest(
+            action=action, stage_index=stage.index, raw=body
+        )
+        state.log("permission_request", stage=stage.index, action=action)
+        store.save(state)
+        return Directive(
+            True, state.node, "ask_user_permission",
+            f"stage {stage.index} requests permission: {action}",
+            marker="PERMISSION-REQUEST",
+            data={**base, "action": action, "options": ["once", "project", "global", "deny"]},
+        )
     if marker is None and result.returncode != 0:
         store.save(state)
         return Directive(
@@ -344,6 +370,29 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None) -> Di
         )
     # ESCALATE / MALFORMED / marker-less success (rc==0, no marker) -> park BLOCKED.
     return _park_blocked(state, store, stage, marker, base)
+
+
+def cmd_resolve_permission(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Resume a session parked on a PERMISSION-REQUEST once the manager has the
+    user's decision. The user ask is cognitive; this only records the outcome,
+    clears the parked request, and hands back the continuation to re-spawn with."""
+    state = _require(store, args.session)
+    req = state.permission_request
+    if req is None:
+        return Directive(False, state.node, "noop", "no pending permission request to resolve")
+    if args.decision == "granted":
+        cont = continuations.permission_granted(req.action, getattr(args, "scope", "once"))
+        detail = f"permission granted for {req.action}; re-spawn the stage"
+    else:
+        cont = continuations.permission_denied(req.action)
+        detail = f"permission denied for {req.action}; re-spawn with the fallback"
+    state.permission_request = None
+    state.log("resolve_permission", action=req.action, decision=args.decision)
+    store.save(state)
+    return Directive(
+        True, state.node, "continue_spawn", detail,
+        data={"action": req.action, "decision": args.decision, "continuation": cont},
+    )
 
 
 def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -509,6 +558,7 @@ COMMANDS = {
     "decompose": cmd_decompose,
     "next-stage": cmd_next_stage,
     "dispatch": cmd_dispatch,
+    "resolve-permission": cmd_resolve_permission,
     "record-result": cmd_record_result,
     "verify-final": cmd_verify_final,
     "resolve": cmd_resolve,
@@ -555,6 +605,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("dispatch"); sp.add_argument("--session", required=True)
     sp.add_argument("--budget", default="medium"); sp.add_argument("--complexity", default="medium")
     sp.add_argument("--dry-run", action="store_true")
+    sp = add("resolve-permission"); sp.add_argument("--session", required=True)
+    sp.add_argument("--decision", choices=["granted", "denied"], required=True)
+    sp.add_argument("--scope", choices=["once", "project", "global"], default="once")
     sp = add("record-result"); sp.add_argument("--session", required=True)
     sp.add_argument("--status", choices=["passed", "failed"], required=True)
     sp.add_argument("--actual", default="")

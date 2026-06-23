@@ -19,7 +19,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class Node(str, Enum):
@@ -103,6 +103,16 @@ class Decomposition:
 
 
 @dataclass
+class PermissionRequest:
+    """A specialist's pending PERMISSION-REQUEST, parked while the manager asks the
+    user. Transient (not a gate): the engine records the requested action, then
+    clears it on resolve-permission."""
+    action: str
+    stage_index: int
+    raw: str = ""
+
+
+@dataclass
 class Stage:
     index: int
     title: str
@@ -137,6 +147,7 @@ class SessionState:
     plan_path: str | None = None
     plan_verified: bool = False
     decomposition: "Decomposition | None" = None
+    permission_request: "PermissionRequest | None" = None
     approval: GateRecord = field(default_factory=lambda: GateRecord("plan_approval"))
     resolution: GateRecord = field(default_factory=lambda: GateRecord("resolution"))
     stages: list[Stage] = field(default_factory=list)
@@ -218,6 +229,8 @@ class SessionState:
         data["stages"] = [Stage(**s) for s in data.get("stages", [])]
         decomp = data.get("decomposition")
         data["decomposition"] = Decomposition(**decomp) if decomp else None
+        pr = data.get("permission_request")
+        data["permission_request"] = PermissionRequest(**pr) if pr else None
         return cls(**data)
 
     @classmethod
