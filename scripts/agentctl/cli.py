@@ -17,12 +17,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import gates
+from . import continuations, gates
 from .classify import Signals, classify
 from .config import Thresholds
 from .decompose import render_section, verdict
 from .directive import Directive
-from .dispatch import Runner, dispatch_stage
+from .dispatch import Runner, dispatch_stage, parse_marker
 from .machine import transition
 from .plan import load_plan
 from .state import (
@@ -59,6 +59,21 @@ def _require(store: StateStore, session_id: str) -> SessionState:
     if state is None:
         raise KeyError(f"no session {session_id!r}")
     return state
+
+
+def _park_blocked(state: SessionState, store: StateStore, stage, marker, base: dict) -> Directive:
+    """Park the session at BLOCKED and escalate — for a spawn whose output is
+    malformed/unroutable (no marker, or a marker the engine cannot resolve)."""
+    state.blocked_from = state.node
+    state.node = Node.BLOCKED.value
+    reason = "malformed spawn output" if marker in (None, "MALFORMED") else f"marker {marker}"
+    state.log("dispatch_escalate", stage=stage.index, marker=marker)
+    store.save(state)
+    return Directive(
+        False, state.node, "escalate",
+        f"stage {stage.index} -> escalate ({reason})",
+        marker="ESCALATE", data=base,
+    )
 
 
 # --- commands -------------------------------------------------------------
@@ -263,10 +278,10 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None) -> Di
         dry_run=bool(getattr(args, "dry_run", False)),
     )
     state.log("dispatch", stage=stage.index, kind=stage.spawn_kind(), returncode=result.returncode)
-    ok = result.returncode == 0
-    if not ok and _is_recursion_refusal(result):
+    if result.returncode != 0 and _is_recursion_refusal(result):
         # spawn-specialist refused at the recursion cap — a structural blocker, not
-        # a stage result. Park at BLOCKED and escalate; never report success.
+        # a stage result. Park at BLOCKED and escalate; never report success. This
+        # must win before marker routing (a refusal carries no valid marker).
         state.blocked_from = state.node
         state.node = Node.BLOCKED.value
         state.log("dispatch_refused", stage=stage.index, reason="recursion-cap")
@@ -277,12 +292,58 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None) -> Di
             marker="ESCALATE",
             data={"returncode": result.returncode, "stderr": result.stderr},
         )
-    store.save(state)
-    return Directive(
-        ok, state.node, "record_result" if ok else "handle_spawn_failure",
-        f"dispatched stage {stage.index} -> {stage.spawn_kind()}",
-        data={"returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr},
-    )
+
+    # The marker wins over the returncode: a specialist may exit 0 with CLARIFY, or
+    # non-zero with a valid escalation marker. spawn-specialist.py has already parsed
+    # and (if needed) MALFORMED-wrapped the marker onto stdout.
+    marker, body = parse_marker(result.stdout)
+    base = {"returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
+
+    if marker == "COMPLETED":
+        store.save(state)
+        return Directive(
+            True, state.node, "record_result",
+            f"stage {stage.index} returned COMPLETED — diff delivery vs approved intent before recording",
+            marker="COMPLETED", data={**base, "intent_diff_required": True},
+        )
+    if marker == "CLARIFY":
+        store.save(state)
+        return Directive(
+            True, state.node, "answer_clarify",
+            f"stage {stage.index} needs a clarification answered before it can continue",
+            marker="CLARIFY",
+            data={**base, "question": body, "continuation": continuations.clarify(body)},
+        )
+    if marker == "REPLAN":
+        store.save(state)
+        return Directive(
+            False, state.node, "replan",
+            f"stage {stage.index} proposes a plan-level revision",
+            marker="REPLAN", data={**base, "reason": body},
+        )
+    if marker == "INCOMPLETE":
+        store.save(state)
+        return Directive(
+            False, state.node, "decide_incomplete",
+            f"stage {stage.index} returned INCOMPLETE — re-spawn / ask / accept",
+            marker="INCOMPLETE", data={**base, "reason": body},
+        )
+    if marker == "PLAN-READY":
+        store.save(state)
+        return Directive(
+            True, state.node, "await_plan_approval",
+            f"stage {stage.index} returned a fresh plan — HARD GATE, get explicit user approval",
+            marker="PLAN-READY", data=base,
+        )
+    if marker is None and result.returncode != 0:
+        store.save(state)
+        return Directive(
+            False, state.node, "handle_spawn_failure",
+            f"stage {stage.index} spawn failed (rc={result.returncode}) with no marker",
+            data=base,
+        )
+    # ESCALATE / MALFORMED / marker-less success (rc==0, no marker) -> park BLOCKED.
+    return _park_blocked(state, store, stage, marker, base)
 
 
 def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) -> Directive:

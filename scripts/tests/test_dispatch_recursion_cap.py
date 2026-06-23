@@ -54,7 +54,8 @@ def test_successful_dispatch_routes_to_record_result(store, fixtures_dir):
 
     assert d.ok
     assert d.action == "record_result"
-    assert d.marker is None
+    assert d.marker == "COMPLETED"  # marker routing now surfaces the parsed marker
+    assert d.data["intent_diff_required"] is True
 
 
 def test_is_recursion_refusal_on_returncode_3():

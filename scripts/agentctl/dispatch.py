@@ -8,6 +8,7 @@ can be exercised in tests with a fake runner and zero `claude -p` spend.
 """
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,37 @@ from .state import CriterionType, Stage
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SPAWN_CLI = REPO_ROOT / "scripts" / "spawn-specialist.py"
+
+# Source of truth: spawn-specialist.py RETURN_MARKERS / MARKER_RE. Mirrored here
+# (the engine routes the marker spawn-specialist already parsed onto stdout); a
+# drift-guard test asserts the two tuples stay identical.
+RETURN_MARKERS = (
+    "COMPLETED",
+    "PLAN-READY",
+    "INCOMPLETE",
+    "CLARIFY",
+    "REPLAN",
+    "PERMISSION-REQUEST",
+    "ESCALATE",
+)
+MARKER_RE = re.compile(rf"^({'|'.join(RETURN_MARKERS)}):")
+
+
+def parse_marker(stdout: str) -> tuple[str | None, str]:
+    """Inspect the first non-empty line of a spawn's stdout. Return the marker and
+    the body after its colon. A `MALFORMED:` wrapper line maps to marker
+    "MALFORMED"; no recognised marker maps to (None, "")."""
+    for line in (stdout or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        m = MARKER_RE.match(line)
+        if m:
+            return m.group(1), line[m.end():].strip()
+        if line.startswith("MALFORMED:"):
+            return "MALFORMED", line[len("MALFORMED:"):].strip()
+        return None, ""
+    return None, ""
 
 # A runner takes an argv list and returns (returncode, stdout, stderr).
 Runner = Callable[[list[str]], "RunResult"]
