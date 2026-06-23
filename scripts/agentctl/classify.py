@@ -45,6 +45,61 @@ ROUTE_BY_WEIGHT = {
     WeightClass.SUBSTANTIVE.value: Route.SPAWN.value,
 }
 
+# ---------------------------------------------------------------------------
+# Action-level side-effect classification
+# ---------------------------------------------------------------------------
+
+READONLY_BASH: set[str] = {
+    "ls", "head", "tail", "cat", "less", "more", "find", "wc", "stat", "file",
+    "tree", "du", "df", "grep", "rg", "awk", "sed", "echo", "printf", "jq",
+    "realpath", "readlink", "which", "whoami", "date", "pwd", "env", "printenv",
+    "python3",  # classify_action returns "unknown" for python3; caller applies READONLY_PYTHON3
+}
+READONLY_GIT: set[str] = {
+    "status", "log", "diff", "show", "branch", "remote", "config", "rev-parse",
+    "ls-files", "blame",
+}
+READONLY_ARC: set[str] = {"info", "status", "log", "diff", "show", "branch", "grep"}
+
+MCP_READONLY_PREFIXES = ("get", "list", "search", "describe")
+
+_MUTATING_BASH: set[str] = {
+    "rm", "mv", "cp", "mkdir", "rmdir", "touch", "chmod", "chown",
+    "dd", "tee", "curl", "wget", "push", "kill",
+}
+
+
+def classify_action(
+    tool: str, verb: str | None = None, subverb: str | None = None
+) -> str:
+    """Return 'side-effect-free' / 'needs-approval' / 'unknown' for a tool call.
+
+    Verb semantics live here; settings.json string syntax (`:*` stripping,
+    python3 arg patterns) is the caller's responsibility.
+    """
+    if tool in {"Read", "Grep", "Glob", "WebSearch", "WebFetch"}:
+        return "side-effect-free"
+    if tool in {"Edit", "Write", "NotebookEdit"}:
+        return "needs-approval"
+    if tool.startswith("mcp__"):
+        method = tool.rsplit("__", 1)[-1].lower()
+        if method.startswith(MCP_READONLY_PREFIXES) or "search" in method:
+            return "side-effect-free"
+        return "unknown"
+    if tool == "Bash":
+        if verb == "git":
+            return "side-effect-free" if subverb in READONLY_GIT else "needs-approval"
+        if verb == "arc":
+            return "side-effect-free" if subverb in READONLY_ARC else "needs-approval"
+        if verb == "python3":
+            return "unknown"  # arg-level refinement (READONLY_PYTHON3) stays with the caller
+        if verb in READONLY_BASH:
+            return "side-effect-free"
+        if verb in _MUTATING_BASH:
+            return "needs-approval"
+        return "unknown"
+    return "unknown"
+
 
 def classify(sig: Signals, thr: Thresholds) -> Classification:
     reasons: list[str] = []

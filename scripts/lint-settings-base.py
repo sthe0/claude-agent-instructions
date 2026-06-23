@@ -24,46 +24,39 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from agentctl.classify import READONLY_BASH, READONLY_GIT, READONLY_ARC, classify_action  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BASE = REPO_ROOT / "settings" / "base.json"
 
-READONLY_BASH = {
-    "ls", "head", "tail", "cat", "less", "more", "find", "wc", "stat", "file",
-    "tree", "du", "df", "grep", "rg", "awk", "sed", "echo", "printf", "jq",
-    "realpath", "readlink", "which", "whoami", "date", "pwd", "env", "printenv",
-    "python3",  # only the read-only invocations below are whitelisted
-}
 READONLY_PYTHON3 = ('-c "', "-m json.tool")
-READONLY_GIT = {
-    "status", "log", "diff", "show", "branch", "remote", "config", "rev-parse",
-    "ls-files", "blame",
-}
-READONLY_ARC = {"info", "status", "log", "diff", "show", "branch", "grep"}
 
 
 def _bash_ok(inner: str) -> bool:
-    # Claude's Bash pattern is either an exact command or a "<prefix>:*"
-    # arg-wildcard; strip the trailing ":*" to recover the command prefix.
+    # Bash entries are exact commands or "<prefix>:*" arg-wildcards; strip ":*".
     inner = inner.strip()
     if inner.endswith(":*"):
         inner = inner[:-2].strip()
     if inner == "git" or inner.startswith("git "):
         sub = inner[len("git"):].strip().split()
-        return bool(sub) and sub[0] in READONLY_GIT
+        subverb = sub[0] if sub else None
+        return classify_action("Bash", "git", subverb) == "side-effect-free"
     if inner == "arc" or inner.startswith("arc "):
         sub = inner[len("arc"):].strip().split()
-        return bool(sub) and sub[0] in READONLY_ARC
+        subverb = sub[0] if sub else None
+        return classify_action("Bash", "arc", subverb) == "side-effect-free"
     parts = inner.split()
     verb = parts[0] if parts else ""
     if verb == "python3":
         rest = inner[len("python3"):].strip()
         return rest.startswith(READONLY_PYTHON3)
-    return verb in READONLY_BASH
+    return classify_action("Bash", verb) == "side-effect-free"
 
 
 def _mcp_ok(name: str) -> bool:
-    method = name.rsplit("__", 1)[-1].lower()
-    return method.startswith(("get", "list", "search", "describe")) or "search" in method
+    return classify_action(name) == "side-effect-free"
 
 
 def entry_ok(entry: str) -> bool:
