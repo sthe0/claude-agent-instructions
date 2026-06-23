@@ -30,6 +30,7 @@ DESIRED = [
     ("PreToolUse",       "Edit|Write", "hook-prewrite-plan-check.py", 5),
     ("PreToolUse",       "Edit|Write", "hook-state-gate.py",          5),
     ("PreToolUse",       "Bash",  "hook-retry-detector.py",          5),
+    ("PreToolUse",       "Bash|Grep|Glob", "hook-arc-mount-search-guard.py", 5),
     ("PostToolUse",      "Write", "hook-self-critique-reminder.py",  5),
     ("SessionStart",     None,    "hook-policy-scorecard-due.py",    5),
     # Difficulty/confirmation gates on memory-leaf Writes. These run on ANY
