@@ -31,6 +31,7 @@ import json
 import os
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 EDIT_THRESHOLD = 3
@@ -118,6 +119,19 @@ def main() -> int:
     # Fire the one-time nudge
     state["nudged"] = True
     save_state(sp, state)
+
+    try:
+        ledger = Path.home() / ".claude" / "agentctl" / "prewrite-fallback.jsonl"
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        with ledger.open("a", encoding="utf-8") as _fh:
+            _fh.write(json.dumps({
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "session_id": session_id,
+                "edit_count": state["edit_count"],
+                "cwd": os.getcwd(),
+            }) + "\n")
+    except Exception:
+        pass
 
     print(
         f"[plan-check] {state['edit_count']} code edits in this session without a plan file.\n"
