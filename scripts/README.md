@@ -15,7 +15,7 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 | [cost-report.py](cost-report.py) | Aggregate `~/.local/log/claude-spawn-costs.jsonl` (totals, by kind/tier/day, depth/marker distributions, refused events) |
 | [hook-arc-mount-search-guard.py](hook-arc-mount-search-guard.py) | PreToolUse `Bash`/`Grep`/`Glob`: deny recursive searches spanning ≥2 arc FUSE mounts under `$HOME` |
 | [hook-context-growth-reminder.py](hook-context-growth-reminder.py) | UserPromptSubmit: nudge when live context size crosses a band (reads transcript usage); throttled per band per session |
-| [hook-engine-start.py](hook-engine-start.py) | UserPromptSubmit: surface the agentctl engine each turn — nudge `start`/`classify` (no state), `reset` (prior task closed), or a status+next-step hint (live); never mutates state |
+| [hook-engine-start.py](hook-engine-start.py) | UserPromptSubmit: keep the agentctl engine the default control path — auto-start a session via `start --if-absent` (no state) then steer to `classify`, `reset` line (prior task closed), or a status+next-step hint (live); only mutates via idempotent start, never classify |
 | [hook-policy-scorecard-due.py](hook-policy-scorecard-due.py) | SessionStart: weekly throttled stderr nudge to run `policy-scorecard.py` (stamp `~/.local/state/claude-policy-scorecard.stamp`); nudge only, does not auto-scan |
 | [hook-prewrite-plan-check.py](hook-prewrite-plan-check.py) | PreToolUse Edit/Write: after 3 code edits with no plan file, one-time nudge to invoke planner |
 | [hook-push-confirmation-reminder.py](hook-push-confirmation-reminder.py) | PreToolUse Bash: nudge to verify user push-confirmation before `git push` / `sync-instructions-repo.sh push` |
@@ -29,6 +29,7 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 | [install-reminder-hooks.sh](install-reminder-hooks.sh) | Idempotently wire the canonical reminder-hook set into machine-local `settings.json` (hooks are not merged from `base.json`) |
 | [install-sync-cron.sh](install-sync-cron.sh) | Cron: git pull every 10 min (opt-in; not installed by `setup-symlinks.sh`) |
 | [install-sync-systemd-timer.sh](install-sync-systemd-timer.sh) | User systemd timer: git pull every 10 min (fallback when crontab is denied) |
+| [lint-hooks-executable.py](lint-hooks-executable.py) | Verify every `hook-*.py` carries the executable bit on disk and in git (a non-+x hook fails silently with "Permission denied") |
 | [lint-permissions.py](lint-permissions.py) | Lint `permissions/*.json` schema (structure, fields, dates, duplicates) |
 | [lint-prose-length.py](lint-prose-length.py) | Hard ceiling on instruction-file line counts (`CLAUDE.md`, cursor mirror, skill SKILL.md, policy.md) per `config.md` limits |
 | [lint-settings-base.py](lint-settings-base.py) | Lint `settings/base.json` read-only allowlist against the `classify_action` verb taxonomy in `agentctl.classify` |

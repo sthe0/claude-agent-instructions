@@ -27,6 +27,7 @@ CHECKS: list[str] = [
     "verify-agentctl",
     "verify-readme",
     "verify-memory-index",
+    "lint-hooks-executable",
 ]
 
 

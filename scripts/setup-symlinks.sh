@@ -137,6 +137,11 @@ done
 
 chmod +x "$REPO/scripts/verify-instructions-sync.sh" "$REPO/scripts/verify-layout-contract.sh" "$REPO/scripts/setup-project-memory.sh" "$REPO/scripts/apply-settings.sh" "$REPO/cursor/scripts/install-cursor-links.sh" "$REPO/cursor/scripts/link-project-cursor-agents.sh" "$REPO/cursor/scripts/migrate-cursor-namespace.sh"
 
+# Every hook is exec'd directly by the harness (via /bin/sh); a missing +x bit
+# makes it fail silently with "Permission denied". chmod the whole family so a
+# newly added hook can never regress this way (enforced by lint-hooks-executable.py).
+chmod +x "$REPO/scripts/hook-"*.py
+
 "$REPO/cursor/scripts/install-cursor-links.sh"
 
 # Merge versioned policy permissions (read-only allowlist + env) into the
