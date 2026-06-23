@@ -30,6 +30,8 @@ def _to_plan_ready(store, sid, plan):
 def _to_resolution(store, sid, plan):
     _to_plan_ready(store, sid, plan)
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    cli.cmd_decompose(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
+                         m3_severe=False, m4_severe=False), store=store)
     # pass both stages of the two-stage fixture
     for _ in range(2):
         cli.cmd_next_stage(ns(session=sid), store=store)

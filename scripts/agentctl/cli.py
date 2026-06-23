@@ -20,12 +20,14 @@ from pathlib import Path
 from . import gates
 from .classify import Signals, classify
 from .config import Thresholds
+from .decompose import render_section, verdict
 from .directive import Directive
 from .dispatch import Runner, dispatch_stage
 from .machine import transition
 from .plan import load_plan
 from .state import (
     CriterionType,
+    Decomposition,
     GateRecord,
     Node,
     Route,
@@ -178,7 +180,43 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     state.node = transition(state.node, "approve")
     state.log("approve", by=args.by)
     store.save(state)
-    return Directive(True, state.node, "next_stage", "approved; advance to first ready stage")
+    return Directive(
+        True, state.node, "decompose",
+        "approved; assess decomposition (M1–M4) before execution",
+    )
+
+
+def cmd_decompose(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    state = _require(store, args.session)
+    if state.node != Node.APPROVED.value:
+        return Directive(
+            False, state.node, "noop",
+            f"decompose runs after approval, before execution; node={state.node} is not APPROVED",
+        )
+    m1 = bool(getattr(args, "m1", False))
+    m2 = bool(getattr(args, "m2", False))
+    m3 = bool(getattr(args, "m3", False))
+    m4 = bool(getattr(args, "m4", False))
+    m3_severe = bool(getattr(args, "m3_severe", False))
+    m4_severe = bool(getattr(args, "m4_severe", False))
+    v = verdict(m1, m2, m3, m4, m3_severe, m4_severe)
+    state.decomposition = Decomposition(
+        m1=m1, m2=m2, m3=m3, m4=m4, m3_severe=m3_severe, m4_severe=m4_severe, verdict=v
+    )
+    section = render_section(m1, m2, m3, m4, m3_severe, m4_severe, v)
+    state.node = transition(state.node, "decompose")
+    state.log("decompose", verdict=v, m1=m1, m2=m2, m3=m3, m4=m4)
+    store.save(state)
+    action = "surface_decomposition" if v in ("recommended", "possible") else "next_stage"
+    detail = (
+        f"decomposition verdict: {v}; surface to the user before implementation"
+        if v in ("recommended", "possible")
+        else f"decomposition verdict: {v}; ship as one PR — advance to first stage"
+    )
+    return Directive(
+        True, state.node, action, detail,
+        data={"verdict": v, "section": section},
+    )
 
 
 def cmd_next_stage(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -188,7 +226,7 @@ def cmd_next_stage(args, *, store: StateStore, runner: Runner | None = None) -> 
         return Directive(False, state.node, "verify_final", "no ready stages; run verify-final if all passed")
     stage = ready[0]
     # pick the entry edge into EXECUTING from the current node
-    if state.node == Node.APPROVED.value:
+    if state.node == Node.DECOMPOSED.value:
         event = "execute_approved"
     elif state.node == Node.ROUTED.value:
         event = "execute_small"
@@ -407,6 +445,7 @@ COMMANDS = {
     "plan": cmd_plan,
     "submit-plan": cmd_submit_plan,
     "approve": cmd_approve,
+    "decompose": cmd_decompose,
     "next-stage": cmd_next_stage,
     "dispatch": cmd_dispatch,
     "record-result": cmd_record_result,
@@ -446,6 +485,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("plan"); sp.add_argument("--session", required=True)
     sp = add("submit-plan"); sp.add_argument("--session", required=True); sp.add_argument("--plan", required=True)
     sp = add("approve"); sp.add_argument("--session", required=True); sp.add_argument("--by", required=True)
+    sp = add("decompose"); sp.add_argument("--session", required=True)
+    sp.add_argument("--m1", action="store_true"); sp.add_argument("--m2", action="store_true")
+    sp.add_argument("--m3", action="store_true"); sp.add_argument("--m4", action="store_true")
+    sp.add_argument("--m3-severe", dest="m3_severe", action="store_true")
+    sp.add_argument("--m4-severe", dest="m4_severe", action="store_true")
     sp = add("next-stage"); sp.add_argument("--session", required=True)
     sp = add("dispatch"); sp.add_argument("--session", required=True)
     sp.add_argument("--budget", default="medium"); sp.add_argument("--complexity", default="medium")

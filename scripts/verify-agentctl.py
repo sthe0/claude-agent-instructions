@@ -59,7 +59,14 @@ SIDE_CHANNEL_REACHABLE = {"BLOCKED"}
 
 
 def check_state_roundtrip() -> list[str]:
-    from agentctl.state import GateRecord, Node, SessionState, Stage, StageStatus
+    from agentctl.state import (
+        Decomposition,
+        GateRecord,
+        Node,
+        SessionState,
+        Stage,
+        StageStatus,
+    )
 
     problems: list[str] = []
     s = SessionState(session_id="vfy", task_id="vfy-task", goal="g")
@@ -77,6 +84,7 @@ def check_state_roundtrip() -> list[str]:
         weight_class="SUBSTANTIVE",
         route="SPAWN",
         approval=GateRecord("plan_approval", armed=True, passed=True, by="user"),
+        decomposition=Decomposition(m1=True, m2=True, verdict="recommended"),
         stages=[
             Stage(
                 index=1,

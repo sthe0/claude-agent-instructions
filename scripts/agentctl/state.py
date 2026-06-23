@@ -19,7 +19,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class Node(str, Enum):
@@ -28,11 +28,24 @@ class Node(str, Enum):
     PLANNING = "PLANNING"
     PLAN_READY = "PLAN_READY"
     APPROVED = "APPROVED"
+    DECOMPOSED = "DECOMPOSED"
     EXECUTING = "EXECUTING"
     VERIFYING = "VERIFYING"
     RESOLUTION = "RESOLUTION"
     RESOLVED = "RESOLVED"
     BLOCKED = "BLOCKED"
+
+
+# Nodes at or past EXECUTING on the spawn path — once here, a SPAWN route must
+# have recorded its decomposition assessment.
+_EXECUTION_NODES = frozenset(
+    {
+        Node.EXECUTING.value,
+        Node.VERIFYING.value,
+        Node.RESOLUTION.value,
+        Node.RESOLVED.value,
+    }
+)
 
 
 class WeightClass(str, Enum):
@@ -76,6 +89,20 @@ class GateRecord:
 
 
 @dataclass
+class Decomposition:
+    """The M1–M4 decomposition assessment recorded between APPROVED and EXECUTING
+    on the spawn path. The markers are cognitive inputs; the verdict is computed
+    by decompose.verdict()."""
+    m1: bool = False
+    m2: bool = False
+    m3: bool = False
+    m4: bool = False
+    m3_severe: bool = False
+    m4_severe: bool = False
+    verdict: str = ""
+
+
+@dataclass
 class Stage:
     index: int
     title: str
@@ -109,6 +136,7 @@ class SessionState:
     blocked_from: str | None = None
     plan_path: str | None = None
     plan_verified: bool = False
+    decomposition: "Decomposition | None" = None
     approval: GateRecord = field(default_factory=lambda: GateRecord("plan_approval"))
     resolution: GateRecord = field(default_factory=lambda: GateRecord("resolution"))
     stages: list[Stage] = field(default_factory=list)
@@ -132,6 +160,14 @@ class SessionState:
                 raise InvariantError("node=RESOLVED requires every stage PASSED")
         if self.route == Route.SPAWN.value and self.weight_class != WeightClass.SUBSTANTIVE.value:
             raise InvariantError("route=SPAWN requires weight_class=SUBSTANTIVE")
+        if (
+            self.route == Route.SPAWN.value
+            and self.node in _EXECUTION_NODES
+            and self.decomposition is None
+        ):
+            raise InvariantError(
+                "route=SPAWN at or past EXECUTING requires decomposition (run decompose)"
+            )
         if self.weight_class == WeightClass.CHAT.value and self.node not in (
             Node.CLASSIFIED.value,
             Node.ROUTED.value,
@@ -180,6 +216,8 @@ class SessionState:
         data["approval"] = GateRecord(**data["approval"])
         data["resolution"] = GateRecord(**data["resolution"])
         data["stages"] = [Stage(**s) for s in data.get("stages", [])]
+        decomp = data.get("decomposition")
+        data["decomposition"] = Decomposition(**decomp) if decomp else None
         return cls(**data)
 
     @classmethod
