@@ -461,6 +461,56 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     return Directive(True, state.node, "done", "task resolved", marker="COMPLETED")
 
 
+def cmd_si_propose(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Beat 1 of the self-improvement two-beat: arm the self_improvement gate. The
+    diagnosis + diff authorship are cognitive; the engine only records that a
+    proposal is pending and that the apply beat must not run before an explicit
+    user approval (mirrors cmd_submit_plan's arm shape)."""
+    state = _require(store, args.session)
+    state.self_improvement = GateRecord("self_improvement", armed=True, passed=False)
+    state.log("si_propose")
+    store.save(state)
+    return Directive(
+        True, state.node, "await_si_approval",
+        "self-improvement proposal armed — HARD GATE: run sync, present the proposal "
+        "via AskUserQuestion, get explicit user approval before si-apply",
+        marker="PLAN-READY",
+        data={"sync_cmd": "scripts/sync-instructions-repo.sh pull",
+              "where_to_put": "skills/self-improvement/policy.md § File structure"},
+    )
+
+
+def cmd_si_apply(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Beat 2 of the self-improvement two-beat: pass the gate so the edits may land.
+    Refuses unless the proposal was armed (si-propose), an approver is named (proof
+    the AskUserQuestion gate was passed), and the sync-before-edit contract was met
+    (--synced). The file edits + commit are cognitive (manager); the engine hands
+    back the commit trailer as data (mirrors cmd_resolve's blocker shape)."""
+    state = _require(store, args.session)
+    blockers: list[str] = []
+    if not state.self_improvement.armed:
+        blockers.append("no self-improvement proposal armed — run si-propose first")
+    if not (args.by and args.by.strip()):
+        blockers.append("empty approver: --by must name who approved the proposal")
+    if not getattr(args, "synced", False):
+        blockers.append(
+            "sync-before-edit not confirmed: run scripts/sync-instructions-repo.sh pull "
+            "(+ reconcile) then pass --synced"
+        )
+    if blockers:
+        return Directive(False, state.node, "fix_si", "cannot apply self-improvement",
+                         data={"blockers": blockers})
+    state.self_improvement = GateRecord("self_improvement", armed=True, passed=True, by=args.by)
+    state.log("si_apply", by=args.by)
+    store.save(state)
+    return Directive(
+        True, state.node, "apply_edits",
+        "self-improvement gate passed — make the edits, then commit with the trailer; "
+        "push only after a separate explicit user confirmation",
+        data={"commit_trailer": "[self-improvement-reviewed]"},
+    )
+
+
 def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     from .plan import diff_plans, load_plan as _load
@@ -562,6 +612,8 @@ COMMANDS = {
     "record-result": cmd_record_result,
     "verify-final": cmd_verify_final,
     "resolve": cmd_resolve,
+    "si-propose": cmd_si_propose,
+    "si-apply": cmd_si_apply,
     "replan": cmd_replan,
     "block": cmd_block,
     "unblock": cmd_unblock,
@@ -613,6 +665,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--actual", default="")
     sp = add("verify-final"); sp.add_argument("--session", required=True)
     sp = add("resolve"); sp.add_argument("--session", required=True); sp.add_argument("--by", required=True)
+    sp = add("si-propose"); sp.add_argument("--session", required=True)
+    sp = add("si-apply"); sp.add_argument("--session", required=True)
+    sp.add_argument("--by", required=True); sp.add_argument("--synced", action="store_true")
     sp = add("replan"); sp.add_argument("--session", required=True); sp.add_argument("--plan", required=True)
     sp = add("block"); sp.add_argument("--session", required=True); sp.add_argument("--reason", default="")
     sp = add("unblock"); sp.add_argument("--session", required=True)
