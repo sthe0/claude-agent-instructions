@@ -44,6 +44,14 @@ def _digest(text: str) -> str:
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:12]
 
 
+def _is_recursion_refusal(result) -> bool:
+    """spawn-specialist refuses at the recursion cap with returncode 3 and a
+    'max-recursion-depth=' stderr line (see spawn-specialist.py)."""
+    return getattr(result, "returncode", None) == 3 or (
+        "max-recursion-depth" in (getattr(result, "stderr", "") or "")
+    )
+
+
 def _require(store: StateStore, session_id: str) -> SessionState:
     state = store.load(session_id)
     if state is None:
@@ -217,8 +225,21 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None) -> Di
         dry_run=bool(getattr(args, "dry_run", False)),
     )
     state.log("dispatch", stage=stage.index, kind=stage.spawn_kind(), returncode=result.returncode)
-    store.save(state)
     ok = result.returncode == 0
+    if not ok and _is_recursion_refusal(result):
+        # spawn-specialist refused at the recursion cap — a structural blocker, not
+        # a stage result. Park at BLOCKED and escalate; never report success.
+        state.blocked_from = state.node
+        state.node = Node.BLOCKED.value
+        state.log("dispatch_refused", stage=stage.index, reason="recursion-cap")
+        store.save(state)
+        return Directive(
+            False, state.node, "escalate",
+            f"stage {stage.index} spawn refused: recursion cap reached — escalate to the user",
+            marker="ESCALATE",
+            data={"returncode": result.returncode, "stderr": result.stderr},
+        )
+    store.save(state)
     return Directive(
         ok, state.node, "record_result" if ok else "handle_spawn_failure",
         f"dispatched stage {stage.index} -> {stage.spawn_kind()}",

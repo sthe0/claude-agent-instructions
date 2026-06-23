@@ -24,6 +24,7 @@ CHECKS: list[str] = [
     "lint-prose-length",
     "verify-experience-leaf",
     "verify-difficulty-lead",
+    "verify-agentctl",
 ]
 
 

@@ -27,6 +27,13 @@ Detection is intentionally permissive — false positives (extra
 reminder when the user is fine) are cheap; false negatives (silent
 miss of a resolution gate) are expensive.
 
+State-aware path: when an agentctl session is being driven and the
+engine is parked at the resolution gate (node == RESOLUTION and
+resolution.passed is falsy), the nudge fires regardless of the
+user's phrasing — the gate is objectively open, so the agent must
+not close without an explicit confirmation. Sessions with no state
+file fall back to the gratitude/meta heuristics above (prose mode).
+
 Exit 0 always; emit stdout (becomes additional system context).
 """
 from __future__ import annotations
@@ -34,6 +41,9 @@ from __future__ import annotations
 import json
 import re
 import sys
+from pathlib import Path
+
+STATE_ROOT = Path.home() / ".claude" / "agentctl" / "state"
 
 MAX_WORDS = 6
 META_MAX_WORDS = 20
@@ -75,11 +85,45 @@ def is_resolution_meta_question(prompt: str) -> bool:
     return bool(GRATITUDE_RE.search(prompt) and META_RE.search(prompt))
 
 
+def _safe(session_id: str) -> str:
+    safe = "".join(c for c in (session_id or "") if c.isalnum() or c in "-_")
+    return safe or "nosession"
+
+
+def resolution_gate_open(session_id: str) -> bool:
+    """True iff an agentctl state file says node==RESOLUTION and the resolution
+    gate has not passed. Missing/corrupt state -> False (fall back to prose)."""
+    if not session_id:
+        return False
+    path = STATE_ROOT / f"{_safe(session_id)}.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    if data.get("node") != "RESOLUTION":
+        return False
+    resolution = data.get("resolution") or {}
+    return not bool(resolution.get("passed"))
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
     except Exception:
         return 0
+
+    if resolution_gate_open(payload.get("session_id") or ""):
+        print(
+            "[resolution-reminder] The agentctl session is parked at the "
+            "resolution gate (node=RESOLUTION, not yet passed). Per CLAUDE.md "
+            "§ On task resolution, do NOT close the task on this message "
+            "regardless of its wording. Give a one-line recap "
+            "(`Requested: X. Delivered: Y.`) and ask the user to confirm "
+            "explicitly via AskUserQuestion, then run `agentctl resolve "
+            "--by <user>` only after an unambiguous confirmation."
+        )
+        return 0
+
     prompt = payload.get("prompt") or ""
     if not isinstance(prompt, str) or not prompt.strip():
         return 0
