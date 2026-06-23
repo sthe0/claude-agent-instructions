@@ -139,7 +139,7 @@ A substantive task is **resolved** only when the user explicitly confirms it —
 1. **Task status** — done / in progress / blocked.
 2. **What was done** — by step, who executed.
 3. **Artifacts** — paths, links, commands. When referencing an external run / job / PR / CI task (Nirvana WI, Sandbox, CI), give the **clickable URL to the actual run**, never a truncated id fragment — in status reports and user-facing comments (tracker, PR review) alike.
-4. **Next steps** — if not done.
+4. **Next steps** — only if the task is *not* done. When it is done and accepted, **stop**: do not tee up the next roadmap phase / future work, and do not restate a pointer that already lives in its canonical place (e.g. the plan file) — the user decides when to continue.
 
 #### Quality bar (decide before writing)
 
