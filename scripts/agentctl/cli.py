@@ -162,6 +162,8 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
 def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     blockers = gates.blockers(state, "plan_approval")
+    if not args.by or not args.by.strip():
+        blockers = blockers + ["empty approver: --by must name who approved"]
     if blockers:
         return Directive(False, state.node, "fix_plan", "cannot approve", data={"blockers": blockers})
     state.approval = GateRecord("plan_approval", armed=True, passed=True, by=args.by)
@@ -279,6 +281,8 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
 def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     blockers = gates.blockers(state, "resolution")
+    if not args.by or not args.by.strip():
+        blockers = blockers + ["empty confirmer: --by must name who confirmed resolution"]
     if blockers:
         return Directive(False, state.node, "fix_stages", "cannot resolve", data={"blockers": blockers})
     state.resolution = GateRecord("resolution", armed=True, passed=True, by=args.by)
