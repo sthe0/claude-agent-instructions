@@ -22,8 +22,11 @@ metadata:
 
 The `Agent` tool **inherits the opus parent model unless `model:` is set** — so omitting it silently runs mechanical work on opus. CLAUDE.md's old "sub-agents default to Sonnet" referred to `spawn-specialist.py`, not the `Agent` tool; do not rely on a cheap default — name the tier.
 
+**Pin the search root when delegating Pattern B.** When the session cwd is under an arc FUSE mount (see [[home-dir-arc-fuse-mounts]]), an `Explore`/search sub-agent that defaults its search to `~`/`$HOME`/cwd-parent fans out across every `fuse.arc` mount and is pathologically slow. State the **absolute search root** in the spawn prompt (e.g. "search only under `~/claude-agent-instructions/`") and forbid traversal outside it — do not let the sub-agent infer scope. The `hook-arc-mount-search-guard.py` guard denies the worst case (a root spanning ≥2 arc mounts) for `Bash|Grep|Glob`, but it can't author a tight scope for you.
+
 **Contexts:**
 - 2026-06-17 self-improvement audit (this leaf's origin) — user asked "how often were sonnet/haiku used for subtasks, how often *could* they have been, where should a sub-agent have replaced inline work". Answer above. Fix: CLAUDE.md § Cost discipline + § Recognizing when to delegate updated to mandate explicit model tier and to list patterns A/B as delegate-always.
+- 2026-06-23 — a Pattern-B `Explore` spawn for roadmap grounding was launched with the target files named but the search root left unpinned; with cwd under an arc mount it began a broad search across `/home/the0` (5 `fuse.arc` mounts). User caught it. Fix: the "pin the search root" rule above + the `hook-arc-mount-search-guard.py` guard + [[home-dir-arc-fuse-mounts]].
 
 **Cost:** an inline exploration/monitoring stretch on opus costs ~5× the same work on sonnet and ~15–20× on haiku, and inflates the parent's retained context (cache read/write on every subsequent turn) — the dominant spend per [[token-economy-plan]]. See also [[log-reading-discipline]], [[large-tool-output-discipline]], [[spawning-specialists]].
 
