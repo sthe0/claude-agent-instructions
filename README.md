@@ -138,7 +138,8 @@ Cursor-only assets live in [`cursor/`](cursor/README.md) and are intentionally i
 | [set-context-cap.sh](scripts/set-context-cap.sh) | Set an arbitrary context-size cap (auto-compaction trigger) in tokens — computes `CLAUDE_CODE_DISABLE_1M_CONTEXT` + `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` into `base.json`; max ~830k (83% clamp) |
 | [install-sync-cron.sh](scripts/install-sync-cron.sh) | Cron: git pull every 10 min (opt-in; not installed by `setup-symlinks.sh`) |
 | [hook-arc-mount-search-guard.py](scripts/hook-arc-mount-search-guard.py) | PreToolUse `Bash`/`Grep`/`Glob`: deny recursive searches spanning ≥2 arc FUSE mounts under `$HOME` |
-| [hook-state-gate.py](scripts/hook-state-gate.py) | PreToolUse Edit/Write: deny production-file edits when agentctl state exists and the node is not `EXECUTING` (plan / resolution gate) |
+| [hook-state-gate.py](scripts/hook-state-gate.py) | PreToolUse Edit/Write: deny production-file edits unless agentctl state is at an execution node; weight-aware per-case reason (unclassified → classify, small-change → next-stage, substantive → approve plan, closed → reset) |
+| [hook-engine-start.py](scripts/hook-engine-start.py) | UserPromptSubmit: surface the agentctl engine each turn — nudge `start`/`classify` (no state), `reset` (prior task closed), or a status+next-step hint (live); never mutates state |
 | [lint-settings-base.py](scripts/lint-settings-base.py) | Lint `settings/base.json` read-only allowlist against the `classify_action` verb taxonomy in `agentctl.classify` |
 | [prewrite-fallback-report.py](scripts/prewrite-fallback-report.py) | Aggregate the prewrite-plan-check fallback-firing ledger (`~/.claude/agentctl/prewrite-fallback.jsonl`); informs hook retirement |
 | [skill-usage-audit.py](scripts/skill-usage-audit.py) | Audit which user-invocable skills are actually used (catalog curation) |
