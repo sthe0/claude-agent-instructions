@@ -151,15 +151,17 @@ Required `##` sections (in this order; `verify-plan-file.py` enforces presence):
 
 1. **Problem and done criteria.** State both (1) a plain-language description of the end result and (2) a verifiable definition-of-done criterion for the task as a whole.
 2. **Context.** Write for an executor who has **not** read the originating dialogue: define domain terms on first use, state why the task exists and the current-vs-target state. No references to conversation-only artifacts ("option B", "Q1", "as agreed") — inline the actual decision and its rationale so the plan stands alone.
-3. **Stages.** Each stage block declares:
-   - Who executes (which specialization, or manager in-thread).
-   - Reuse / tools.
-   - **Cost tier** (`small` / `medium` / `large` per `~/.claude/config.md`).
-   - **Approach:** the chosen technical solution in 1–3 sentences — algorithm / pattern / which existing abstraction to extend, and where it lands (file · symbol). The executor implements this; it does not re-derive the design.
-   - **Steps:** an ordered checklist of concrete sub-actions, each naming the file / symbol it touches — granular enough that execution is mechanical, not design work.
-   - **Output:** the artifact this stage produces.
-   - **Expected result image:** *(this stage's definition of done)* concrete observable + expected value/state — what the world looks like when this stage succeeded (e.g. "`pytest tests/foo.py` exits 0", "PR opens with N commits and CI green", "table `users` has new column `tier` populated for all rows"). For `measurable` criteria — a runnable check command or query. For `acceptance-review` — what the user inspects and what "good" looks like. `verify-plan-file.py` requires at least one `Expected result image:` line in the Stages section.
-   - **Actual effort:** *(post-hoc; filled by the manager after the stage completes — empty at plan-write time)*. Free-form: number of tool calls, wall-clock, surprises, retries (e.g. `5 tool calls, ~12 min, one retry on hook block`). The experience leaf's `Cost & effort` section references these per-stage entries as the breakdown of the total. Adding / updating this field is **refinement**, not a substantive plan change (CLAUDE.md § Acting without asking).
+3. **Stages.** Each stage is a full *elementary plan* whose constituents are the 8 activity elements — see [plan-activity-ontology](../../../memory-global/leaves/plan-activity-ontology.md). **Substantive** plans must declare all 8 per stage (`verify-plan-file.py` enforces the prose labels); lighter classes may omit them. If any element below is not a given, split it out as a **service stage** with a `depends_on` edge — any unmet element (material, means, even the actor/capability) becomes the order of a sub-plan, which is how a composite plan grows.
+   - **Who executes** — actor + the capability to wield the means (element 6); the manager spawns the named specialization, or manager in-thread.
+   - **Material:** what this stage transforms and its relevant initial state (element 2).
+   - **Means & method:** reused tools / abstractions to extend (immutable means, element 4) and how applied — algorithm / pattern and where it lands (file · symbol), so execution is mechanical not design (method, element 4').
+   - **Cost tier** — `small` / `medium` / `large` (per `~/.claude/config.md`).
+   - **Steps:** an ordered checklist of concrete sub-actions, each naming the file / symbol it touches.
+   - **Conditions & invariants:** conditions the stage runs under, and properties of the material that must stay unchanged (element 5).
+   - **Output:** the artifact this stage produces (result, element 2) — also the element it supplies to dependent stages.
+   - **Expected result image:** *(definition of done — target state + control criterion, elements 2/3)* concrete observable + expected value/state (e.g. "`pytest tests/foo.py` exits 0", "table `users` has column `tier`"). For `measurable` — a runnable check; for `acceptance-review` — what the user inspects. `verify-plan-file.py` requires ≥1 `Expected result image:` line.
+   - **Principle:** the inference behind the chosen material/method (element 7) — `Source:`, `Confidence:`, `Refutation:`; no transformation chosen "from the ceiling" (cf. § Numbers and deadlines without a source).
+   - **Actual effort:** *(post-hoc; manager fills after the stage — empty at plan-write time)*. Tool calls, wall-clock, retries. Adding / updating it is **refinement**, not a substantive plan change (CLAUDE.md § Acting without asking).
 4. **Summary** — table.
 5. **Dependency graph** — text.
 6. **Final verification.** End-to-end check against the user's overall done criterion: how it is run, who runs it, what "pass" looks like. The task is not done until this passes — the manager runs this gate before reporting completion. For graph / IaC / packaging changes, this **must include a live end-to-end run** reaching the changed path; static checks (imports, tests, `--help`, build-diff) do not suffice.
@@ -177,9 +179,7 @@ For each stage that calls for a specialist (developer, thinker, yandex-cloud-exp
 
 ### Large plans — split into index + per-stage files
 
-For plans expected to exceed ~20 KB or ~600 lines, or with > 3 stages that will each accrue `Actual effort:` updates as work progresses, split into an index file plus per-stage files. The index keeps the four required `##` sections (so `verify-plan-file.py` passes); each stage's detailed `Output` / `Expected result image` / `Actual effort` moves into its own file under `~/.claude/plans/<slug>-stage-<N>-<short>.md`. Subsequent Read calls then pull only the active stage instead of the whole plan. Layout and exact section template: [plan-file-split.md](../../../memory-global/leaves/plan-file-split.md).
-
-Default single-file behaviour stands for shorter plans — splitting overhead is not worth it for ≤ 3 stages or < 10 KB.
+For plans expected to exceed ~20 KB / ~600 lines, or with > 3 stages each accruing `Actual effort:` updates, split into an index file (keeping the four required `##` sections so `verify-plan-file.py` passes) plus per-stage files under `~/.claude/plans/<slug>-stage-<N>-<short>.md`, into which each stage's detailed `Output` / `Expected result image` / `Actual effort` moves — later Reads then pull only the active stage. Layout and section template: [plan-file-split.md](../../../memory-global/leaves/plan-file-split.md). For ≤ 3 stages or < 10 KB the single-file default stands.
 
 ### Tool guidance
 

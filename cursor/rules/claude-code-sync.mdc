@@ -159,7 +159,7 @@ When a plan step calls for a specialization, **read the SKILL.md inline** and ap
 
 | Specialization | Read when a plan step calls for | SKILL.md |
 |---|---|---|
-| `planner` | Decomposition, stages, dependencies, risks, done criteria | `~/.claude/skills/planner/SKILL.md` |
+| `planner` | Decomposition, stages, dependencies, risks, done criteria — a **substantive** plan must cover all 8 activity elements (`~/.claude/memory-global/leaves/plan-activity-ontology.md`) | `~/.claude/skills/planner/SKILL.md` |
 | `developer` | Writing, refactoring, debugging, reviewing production code | `~/.claude/skills/developer/SKILL.md` |
 | `code-reviewer` | Maintainability / readability / reusability review of a diff (developer self-review or independent) | `~/.claude/skills/code-reviewer/SKILL.md` |
 | `thinker` | Reasoning check on a non-trivial chain (note: no fresh-context isolation available in Cursor) | `~/.claude/skills/thinker/SKILL.md` |

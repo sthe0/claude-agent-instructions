@@ -5,7 +5,7 @@ machine-written record is JSON (state.py). Keeping the author surface separate
 from the durable state means a plan edit is reviewable as a plain diff and never
 silently rewrites engine state.
 
-TOML shape:
+TOML shape (minimal):
 
     [meta]
     task_id = "steady-riding-dragonfly"
@@ -23,10 +23,26 @@ TOML shape:
     depends_on = []                       # optional
     output_artifacts = ["scripts/agentctl/"]  # optional
 
+For substantive plans (meta.weight_class = "substantive") every stage must also
+carry the 8-element activity-structure fields:
+
+    material = "..."
+    means = "..."
+    method = "..."
+    conditions = "..."
+    invariants = "..."
+    capability_required = "..."          # optional even for substantive
+
+    [stage.principle]
+    statement = "..."
+    source = "..."
+    confidence = "high"                  # high | medium | low
+    refutation = "..."
+
 diff_plans classifies a replan as no_change / refinement / substantive, mirroring
 CLAUDE.md § Acting without asking: structural edits (stage set, dependencies,
-executors, done criteria) are substantive and re-arm the plan-approval gate;
-wording-only edits (titles, expected-result prose) are refinements.
+executors, done criteria, weight_class) are substantive and re-arm the plan-approval
+gate; wording-only edits (titles, expected-result prose) are refinements.
 """
 from __future__ import annotations
 
@@ -43,6 +59,7 @@ class PlanMeta:
     goal: str = ""
     done_criterion: str = ""
     criterion_type: str = CriterionType.MEASURABLE.value
+    weight_class: str | None = None
 
 
 @dataclass
@@ -55,6 +72,30 @@ class PlanError(Exception):
     """The TOML plan is missing required structure."""
 
 
+# Extra stage fields required for substantive plans (8-element activity structure).
+_SUBSTANTIVE_STAGE_FIELDS = ("material", "means", "method", "conditions", "invariants")
+_PRINCIPLE_SUBFIELDS = ("statement", "source", "confidence", "refutation")
+
+
+def _validate_substantive_stage(s: dict, index: int) -> None:
+    """Raise PlanError if a substantive stage is missing any activity-structure field."""
+    for field_name in _SUBSTANTIVE_STAGE_FIELDS:
+        if not s.get(field_name):
+            raise PlanError(
+                f"stage {index} missing {field_name!r} (required for substantive plans)"
+            )
+    principle = s.get("principle")
+    if not isinstance(principle, dict):
+        raise PlanError(
+            f"stage {index} missing [stage.principle] table (required for substantive plans)"
+        )
+    for sub in _PRINCIPLE_SUBFIELDS:
+        if not principle.get(sub):
+            raise PlanError(
+                f"stage {index} [stage.principle] missing {sub!r} (required for substantive plans)"
+            )
+
+
 def parse_plan(data: dict) -> PlanDoc:
     """Pure: a parsed-TOML dict -> PlanDoc. No filesystem."""
     if "meta" not in data:
@@ -62,16 +103,20 @@ def parse_plan(data: dict) -> PlanDoc:
     m = data["meta"]
     if not m.get("task_id"):
         raise PlanError("[meta] missing task_id")
+    raw_weight = m.get("weight_class")
     meta = PlanMeta(
         task_id=str(m["task_id"]),
         goal=str(m.get("goal", "")),
         done_criterion=str(m.get("done_criterion", "")),
         criterion_type=str(m.get("criterion_type", CriterionType.MEASURABLE.value)),
+        weight_class=str(raw_weight) if raw_weight is not None else None,
     )
 
     raw_stages = data.get("stage", [])
     if not raw_stages:
         raise PlanError("plan defines no [[stage]] entries")
+
+    is_substantive = meta.weight_class is not None and meta.weight_class.lower() == "substantive"
 
     stages: list[Stage] = []
     for i, s in enumerate(raw_stages, start=1):
@@ -79,6 +124,8 @@ def parse_plan(data: dict) -> PlanDoc:
         for required in ("title", "executor", "expected_result_image", "done_criterion"):
             if not s.get(required):
                 raise PlanError(f"stage {index} missing {required!r}")
+        if is_substantive:
+            _validate_substantive_stage(s, index)
         stages.append(
             Stage(
                 index=index,
@@ -113,6 +160,7 @@ def _structural_signature(doc: PlanDoc) -> dict:
     return {
         "done_criterion": doc.meta.done_criterion,
         "criterion_type": doc.meta.criterion_type,
+        "weight_class": doc.meta.weight_class,
         "stages": {
             s.index: (s.executor, tuple(sorted(s.depends_on)), s.done_criterion, s.criterion_type)
             for s in doc.stages

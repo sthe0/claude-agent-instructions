@@ -9,6 +9,17 @@ A plan file must contain, at minimum:
     user's done criterion)
   - `## Risks` section
 
+For **substantive** plans — those containing a line that matches
+``weight_class: substantive`` (case-insensitive, anywhere in the file)
+— the `## Stages` section must additionally carry, at least once each:
+  - `Material:` (element 2 — what is transformed, initial state)
+  - `Means & method:` *or* both `Means:` and `Method:` (elements 4/4')
+  - `Conditions & invariants:` *or* both `Conditions:` and `Invariants:` (element 5)
+  - `Principle:` containing `Source:`, `Confidence:`, and `Refutation:` (element 7)
+
+Legacy / non-substantive plans (no weight_class marker) are validated only
+against the 4-section baseline, preserving backward compatibility.
+
 This is a structural check only — it cannot verify that the *content*
 of each field is meaningful. The point is to make "did you remember
 the verification image" mechanical instead of recall-dependent.
@@ -39,6 +50,22 @@ REQUIRED_SECTIONS = (
 
 HEADING_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 EXPECTED_LINE_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Expected result image\**\s*:")
+
+# Detects `weight_class: substantive` (or `weight class = substantive`) anywhere.
+SUBSTANTIVE_RE = re.compile(r"(?im)^.*weight[_ ]?class\s*[:=]\s*substantive")
+
+# Activity-structure labels required inside ## Stages for substantive plans.
+_MATERIAL_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Material\**\s*:")
+_MEANS_AND_METHOD_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Means\s*&\s*method\**\s*:")
+_MEANS_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Means\**\s*:")
+_METHOD_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Method\**\s*:")
+_CONDITIONS_AND_INVARIANTS_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Conditions\s*&\s*invariants\**\s*:")
+_CONDITIONS_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Conditions\**\s*:")
+_INVARIANTS_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Invariants\**\s*:")
+_PRINCIPLE_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Principle\**\s*:")
+_SOURCE_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Source\**\s*:")
+_CONFIDENCE_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Confidence\**\s*:")
+_REFUTATION_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Refutation\**\s*:")
 
 
 def slice_section(text: str, heading: str) -> str | None:
@@ -76,6 +103,52 @@ def check(path: Path) -> list[str]:
                 "concrete observable + expected value/state."
             )
 
+    if SUBSTANTIVE_RE.search(text):
+        stages_text = stages or ""
+
+        if not _MATERIAL_RE.search(stages_text):
+            errors.append(
+                "substantive plan: missing `Material:` label inside `## Stages` "
+                "(element 2 — what is transformed and its initial state)"
+            )
+
+        has_means_method = _MEANS_AND_METHOD_RE.search(stages_text) or (
+            _MEANS_RE.search(stages_text) and _METHOD_RE.search(stages_text)
+        )
+        if not has_means_method:
+            errors.append(
+                "substantive plan: missing `Means & method:` label inside `## Stages` "
+                "(elements 4/4' — what is used and how; "
+                "use `Means & method:` or both `Means:` and `Method:` separately)"
+            )
+
+        has_cond_inv = _CONDITIONS_AND_INVARIANTS_RE.search(stages_text) or (
+            _CONDITIONS_RE.search(stages_text) and _INVARIANTS_RE.search(stages_text)
+        )
+        if not has_cond_inv:
+            errors.append(
+                "substantive plan: missing `Conditions & invariants:` label inside `## Stages` "
+                "(element 5 — execution conditions and properties that must stay unchanged; "
+                "use `Conditions & invariants:` or both `Conditions:` and `Invariants:` separately)"
+            )
+
+        if not _PRINCIPLE_RE.search(stages_text):
+            errors.append(
+                "substantive plan: missing `Principle:` label inside `## Stages` "
+                "(element 7 — the inference behind the chosen transformation)"
+            )
+        else:
+            for label, label_re in [
+                ("Source", _SOURCE_RE),
+                ("Confidence", _CONFIDENCE_RE),
+                ("Refutation", _REFUTATION_RE),
+            ]:
+                if not label_re.search(stages_text):
+                    errors.append(
+                        f"substantive plan: `Principle:` block inside `## Stages` is missing "
+                        f"`{label}:` (element 7 — state the principle's {label.lower()})"
+                    )
+
     return errors
 
 
@@ -93,7 +166,10 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "Plan format reference: ~/.claude/skills/planner/SKILL.md § Plan format.\n"
             "A plan needs Problem/done-criteria, Stages (with Expected result\n"
-            "image lines), Final verification, and Risks sections.",
+            "image lines), Final verification, and Risks sections.\n"
+            "Substantive plans (weight_class: substantive) additionally require\n"
+            "Material, Means & method, Conditions & invariants, and Principle\n"
+            "(with Source, Confidence, Refutation) inside ## Stages.",
             file=sys.stderr,
         )
         return 1

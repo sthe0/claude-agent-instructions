@@ -259,7 +259,7 @@ Edit policy for `~/claude-agent-instructions/`: `sync-instructions-repo.sh pull`
 
 | Specialization | When to spawn |
 |---|---|
-| `planner` | Decomposition, stages, dependencies, risks, done criteria |
+| `planner` | Decomposition, stages, dependencies, risks, done criteria. A **substantive** plan must cover all 8 activity elements, enforced by both schema surfaces — [plan-activity-ontology](memory-global/leaves/plan-activity-ontology.md) |
 | `developer` | Writing, refactoring, debugging, reviewing production code |
 | `code-reviewer` | Maintainability / readability / reusability review of a diff — developer self-review or independent review |
 | `thinker` | Independent reasoning check on a non-trivial chain |
