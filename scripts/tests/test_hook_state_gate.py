@@ -125,12 +125,33 @@ def test_allow_memory_edit_even_when_not_executing(tmp_path):
         assert not _is_deny(proc), p
 
 
-def test_allow_plan_artifact_even_when_not_executing(tmp_path):
-    # plans are authored before EXECUTING; gating them would break the planner
+def test_allow_plan_artifact_at_planning_position(tmp_path):
+    # a plan is the result-image of active planning: writable at planning-position
+    # nodes (here PLANNING) even though SUBSTANTIVE prod edits are still gated
     write_state(tmp_path, "sess4d", "PLANNING", weight_class="SUBSTANTIVE")
     proc = run_hook(edit_payload("sess4d", "/home/u/.claude/plans/task.md"), tmp_path)
     assert proc.returncode == 0
     assert not _is_deny(proc)
+
+
+@pytest.mark.parametrize("node", ["CLASSIFIED", "ROUTED", "PLANNING", "PLAN_READY"])
+def test_allow_plan_at_every_planning_position_node(tmp_path, node):
+    write_state(tmp_path, f"planok-{node}", node, weight_class="SUBSTANTIVE")
+    proc = run_hook(edit_payload(f"planok-{node}", "/home/u/.claude/plans/task.md"), tmp_path)
+    assert proc.returncode == 0, node
+    assert not _is_deny(proc), node
+
+
+@pytest.mark.parametrize("node", ["APPROVED", "DECOMPOSED", "EXECUTING", "VERIFYING", "RESOLUTION", "RESOLVED"])
+def test_deny_plan_outside_planning_position(tmp_path, node):
+    # changing a plan once past the planning position is a difficulty to overcome
+    # reflexively (replan / overcome-difficulty), not an in-place edit — even at
+    # EXECUTING (which is in ALLOW_NODES for ordinary prod files)
+    write_state(tmp_path, f"planno-{node}", node, weight_class="SUBSTANTIVE")
+    proc = run_hook(edit_payload(f"planno-{node}", "/home/u/.claude/plans/task.md"), tmp_path)
+    assert proc.returncode == 0, node
+    assert _is_deny(proc), node
+    assert "replan" in _deny_reason(proc).lower()
 
 
 def test_non_edit_tool_is_ignored(tmp_path):
@@ -184,6 +205,32 @@ def test_gate_decision_rows(weight_class, node, expected, needle):
     assert decision == expected
     if needle:
         assert needle in reason.lower()
+
+
+# --- gate_decision with is_plan=True: the node-aware plan rule overrides ----
+
+@pytest.mark.parametrize(
+    "node, expected",
+    [
+        ("CLASSIFIED", "allow"),
+        ("ROUTED", "allow"),
+        ("PLANNING", "allow"),
+        ("PLAN_READY", "allow"),
+        ("APPROVED", "deny"),
+        ("DECOMPOSED", "deny"),
+        ("EXECUTING", "deny"),   # in ALLOW_NODES for prod files, but denied for plans
+        ("VERIFYING", "deny"),
+        ("RESOLUTION", "deny"),
+        ("RESOLVED", "deny"),
+        ("BLOCKED", "deny"),
+    ],
+)
+def test_gate_decision_plan_rows(node, expected):
+    mod = _load_module()
+    decision, reason = mod.gate_decision("SUBSTANTIVE", node, is_plan=True)
+    assert decision == expected, node
+    if expected == "deny":
+        assert "replan" in reason.lower()
 
 
 # --- a few end-to-end rows through stdin + state file ----------------------

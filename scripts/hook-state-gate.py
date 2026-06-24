@@ -29,7 +29,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from agentctl.exempt_paths import is_gated_path  # noqa: E402
+from agentctl.exempt_paths import is_gated_path, is_plan_file  # noqa: E402
 
 STATE_ROOT = Path.home() / ".claude" / "agentctl" / "state"
 
@@ -46,6 +46,13 @@ def state_path(session_id: str) -> Path:
 # Nodes where production edits are legitimate regardless of weight class: the
 # plan-approval gate (or the small-change carve-out) has already been passed.
 ALLOW_NODES = {"EXECUTING", "VERIFYING", "RESOLUTION"}
+
+# Nodes that constitute the "planning position": where a plan file is the live
+# result-image being authored or refined. A plan write is legitimate only here.
+# Changing a plan during execution is a difficulty to be overcome reflexively
+# (overcome-difficulty -> replan_substantive re-arms at PLAN_READY), so writes at
+# every later node are denied with a pointer back to that path.
+PLAN_MUTABLE_NODES = {"CLASSIFIED", "ROUTED", "PLANNING", "PLAN_READY"}
 
 
 def load_gate_fields(path: Path) -> tuple[str | None, str] | None:
@@ -64,8 +71,21 @@ def load_gate_fields(path: Path) -> tuple[str | None, str] | None:
     return weight, node
 
 
-def gate_decision(weight_class: str | None, node: str) -> tuple[str, str]:
-    """Pure weight-aware gate. Returns ("allow"|"deny", reason)."""
+def gate_decision(weight_class: str | None, node: str, is_plan: bool = False) -> tuple[str, str]:
+    """Pure weight-aware gate. Returns ("allow"|"deny", reason).
+
+    Plan files get a node-aware rule that overrides the standard one: a plan is the
+    result-image of active planning, writable only at a planning-position node.
+    This is checked first because EXECUTING is in ALLOW_NODES, yet a plan write at
+    EXECUTING must be denied (it is a difficulty to overcome via replan)."""
+    if is_plan:
+        if node in PLAN_MUTABLE_NODES:
+            return "allow", ""
+        return "deny", (
+            "a plan is the result-image of active planning; changing it now is a "
+            "difficulty — step back via `agentctl replan` (re-arms at PLAN_READY) "
+            "or overcome-difficulty, then edit the plan"
+        )
     if node in ALLOW_NODES:
         return "allow", ""
     # Closed/blocked task: a prod edit here means the agent is acting on a stale session.
@@ -120,7 +140,7 @@ def main() -> int:
         return 0
     weight_class, node = fields
 
-    decision, reason = gate_decision(weight_class, node)
+    decision, reason = gate_decision(weight_class, node, is_plan=is_plan_file(file_path))
     if decision == "deny":
         deny_with(node, reason)
     return 0

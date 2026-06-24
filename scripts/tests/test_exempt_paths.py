@@ -1,15 +1,22 @@
 """agentctl.exempt_paths: the single source of truth for which edits the engine
-gate governs. Memory (all three scopes), /tmp, and plan artifacts are exempt;
+gate governs. Memory (all three scopes) and /tmp are unconditionally exempt;
 everything else with a production extension is gated — including the agent's own
-config and instructions (CLAUDE.md, skills/**, settings*.json, the Cursor mirror)."""
+config and instructions (CLAUDE.md, skills/**, settings*.json, the Cursor mirror)
+and plan artifacts (~/.claude/plans/, which is_plan_file identifies for the gate's
+node-aware rule)."""
 from __future__ import annotations
 
 import pytest
 
-from agentctl.exempt_paths import is_engine_exempt, is_gated_path, is_production_file
+from agentctl.exempt_paths import (
+    is_engine_exempt,
+    is_gated_path,
+    is_plan_file,
+    is_production_file,
+)
 
 
-# --- is_engine_exempt: only memory / scratch / plans -----------------------
+# --- is_engine_exempt: only memory / scratch -------------------------------
 
 @pytest.mark.parametrize(
     "path",
@@ -21,8 +28,6 @@ from agentctl.exempt_paths import is_engine_exempt, is_gated_path, is_production
         "/home/u/.claude/memory-global/leaves/experience/bar.md",
         "/home/u/proj/.claude/agent-memory/MEMORY.md",
         "/home/u/proj/.claude/agent-memory/experience/baz.md",
-        "/home/u/.claude/plans/some-task.md",
-        "/home/u/.claude/plans/some-task/stage-1.md",
     ],
 )
 def test_exempt_paths_are_exempt(path):
@@ -79,6 +84,36 @@ def test_memory_md_is_not_gated():
     assert is_gated_path("/home/u/.claude/memory-global/leaves/foo.md") is False
 
 
-def test_plan_md_is_not_gated():
-    # plans are authored before EXECUTING; gating them would break the planner
-    assert is_gated_path("/home/u/.claude/plans/task.md") is False
+def test_plan_md_is_gated():
+    # plans are no longer unconditionally exempt: they are gated, and the gate
+    # applies a node-aware rule (writable only at a planning-position node)
+    assert is_engine_exempt("/home/u/.claude/plans/task.md") is False
+    assert is_gated_path("/home/u/.claude/plans/task.md") is True
+
+
+# --- is_plan_file: identifies a plan path for the node-aware rule ----------
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/home/u/.claude/plans/task.md",
+        "/home/u/.claude/plans/some-task/stage-1.md",
+        "/home/u/.claude/plans/nested/deep/x.toml",
+    ],
+)
+def test_is_plan_file_true(path):
+    assert is_plan_file(path) is True
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/home/u/.claude/CLAUDE.md",
+        "/home/u/.claude/memory-global/leaves/foo.md",
+        "/work/project/module.py",
+        "/home/u/plans/task.md",  # not under .claude/plans/
+        "",
+    ],
+)
+def test_is_plan_file_false(path):
+    assert is_plan_file(path) is False
