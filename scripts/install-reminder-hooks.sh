@@ -34,10 +34,10 @@ DESIRED = [
     ("PreToolUse",       "Bash|Grep|Glob", "hook-arc-mount-search-guard.py", 5),
     ("PostToolUse",      "Write", "hook-self-critique-reminder.py",  5),
     ("SessionStart",     None,    "hook-policy-scorecard-due.py",    5),
-    # Difficulty/confirmation gates on memory-leaf Writes. These run on ANY
+    # Structure/confirmation gates on memory-leaf Writes. These run on ANY
     # Write (any repo), so they are the only enforcement point for project
     # memory (whose own git pre-commit does not run verify-all).
-    ("PreToolUse",       "Write", "verify-difficulty-lead.py --hook", 5),
+    ("PreToolUse",       "Write", "verify-leaf-structure.py --hook", 5),
     ("PreToolUse",       "Write", "verify-experience-leaf.py --hook", 5),
 ]
 

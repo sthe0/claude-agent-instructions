@@ -53,7 +53,7 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 | [verify-agentctl.py](verify-agentctl.py) | Verify the agentctl engine: schema, transitions, leaves, gate↔guardian-hook consistency |
 | [verify-all.py](verify-all.py) | Run all instruction-policy checks (entry point; pre-commit hook uses `--staged`) |
 | [verify-cross-refs.py](verify-cross-refs.py) | Catch broken intra-repo Markdown links and inline-code path references |
-| [verify-difficulty-lead.py](verify-difficulty-lead.py) | Verify `system-knowledge/` leaves lead with the difficulty they remove |
+| [verify-leaf-structure.py](verify-leaf-structure.py) | Verify non-experience leaves: `schema:leaf/v1` enforces 3 sections; grandfathered SK leaves get the difficulty-lead baseline |
 | [verify-experience-leaf.py](verify-experience-leaf.py) | Verify experience-leaf schema (`difficulty/v1`, required `resolution_confirmed_by_user` frontmatter) |
 | [verify-instructions-sync.sh](verify-instructions-sync.sh) | Check global symlinks and drift |
 | [verify-language.py](verify-language.py) | Enforce English-by-default policy with adjacent-exception rule |
