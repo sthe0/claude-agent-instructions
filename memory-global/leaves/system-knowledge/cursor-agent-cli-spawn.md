@@ -2,13 +2,20 @@
 name: cursor-agent-cli-spawn
 description: Difficulty it removes — you need a headless agent spawn inside Cursor where claude -p is unavailable. Fact — Cursor Agent CLI (agent -p), API key file ~/.cursor_api_key, Linux install via curl|gunzip|bash, wrapped by spawn-cursor-escape.py.
 type: reference
+schema: leaf/v1
 ---
 
 # Cursor Agent CLI spawn (Cursor sessions)
 
-Use when overcome-difficulty needs a **fresh manager** in Cursor and `claude -p` is forbidden.
+## Difficulty
 
-## Install (Linux)
+You need a headless agent spawn inside Cursor (e.g. `overcome-difficulty` recursive escape) but `claude -p` is unavailable — the Cursor sandbox does not expose the Claude Code CLI. A plain `claude -p` call fails with command-not-found or permission denied.
+
+## Guidance
+
+Use when `overcome-difficulty` needs a **fresh manager** in Cursor and `claude -p` is forbidden.
+
+### Install (Linux)
 
 The install URL serves **gzip-compressed** script — pipe through `gunzip`:
 
@@ -20,7 +27,7 @@ agent --version
 
 Binary: `~/.local/bin/agent` (symlink `cursor-agent` may also exist).
 
-## API key
+### API key
 
 - User key file: `~/.cursor_api_key` (one line, no trailing newline required).
 - Env override: `CURSOR_API_KEY`.
@@ -28,7 +35,7 @@ Binary: `~/.local/bin/agent` (symlink `cursor-agent` may also exist).
 
 Do not commit or log the key.
 
-## Headless smoke
+### Headless smoke
 
 ```bash
 export CURSOR_API_KEY="$(tr -d '\n' < ~/.cursor_api_key)"
@@ -43,7 +50,7 @@ timeout 120 agent -p "Reply with exactly one line: RESOLVED: ping" \
 
 Flags for unattended: `--trust`, `--force`, `--approve-mcps`.
 
-## Wrappers
+### Wrappers
 
 | Script | Use |
 |---|---|
@@ -63,3 +70,5 @@ Both: recursion cap from `config.md`, `CURSOR_API_KEY` from env or `~/.cursor_ap
 ```
 
 > verified by: smoke on the0 2026-06-03 — `agent` 2026.06.02-8c11d9f, exit 0, `RESOLVED: ping` (escape), `COMPLETED: ping` (specialist).
+
+## See also

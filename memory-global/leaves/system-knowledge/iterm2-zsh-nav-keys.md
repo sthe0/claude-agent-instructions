@@ -2,11 +2,18 @@
 name: iTerm2 + zsh text navigation keybindings
 description: Difficulty it removes — Option/Cmd+arrow / Home / End print escape sequences in the user's iTerm2 + zsh. Fact — both an iTerm profile setting (Option Key Sends Esc+ / Natural Text Editing) AND a zsh bindkey block are required, neither alone suffices; cat -v diagnoses which half is broken.
 type: reference
+schema: leaf/v1
 ---
 
 # iTerm2 + zsh navigation keys: two-part fix
 
-User's Mac: iTerm2 + zsh, `TERM=xterm-256color`. When Option+←/→, ⌘+←/→, Home, End, Option+Backspace print literal characters (`Æ`, `^[b`, `^[[H`, …) into the prompt, the cause is **two-part**, and fixing only one half leaves the bug:
+## Difficulty
+
+Option+←/→, ⌘+←/→, Home, End, Option+Backspace print literal characters (`Æ`, `^[b`, `^[[H`, …) into the prompt instead of performing word/line navigation. The cause is two-part and fixing only one half leaves the bug — the iTerm2 profile must send the right escape sequences AND zsh must have `bindkey` entries for them.
+
+## Guidance
+
+User's Mac: iTerm2 + zsh, `TERM=xterm-256color`.
 
 1. **iTerm2 profile**: `Option Key Sends` and `Right Option Key Sends` default to `0` (= "Normal"). In Normal mode, Option+Left sends a macOS-native UTF-8 byte (e.g. `Æ`) that no shell binding can intercept. Must be changed to `Esc+` (value `2`).
    - GUI path: iTerm2 → Settings → Profiles → \<profile\> → Keys → Key Mappings → **Presets → Natural Text Editing**. One click per profile; covers Option+arrow, Cmd+arrow, Home/End, Option+Backspace.
@@ -40,3 +47,5 @@ bindkey '^[^?'  backward-kill-word
 **Diagnostic shortcut**: `cat -v` then press the broken key → you'll see the exact bytes iTerm sends. If you see a printable char (like `Æ`) the iTerm profile is wrong (fix #1). If you see `^[…` the shell isn't binding it (fix #2).
 
 > verified by: live fix on 2026-05-29 on the user's Mac. `defaults read com.googlecode.iterm2 | grep "Option Key Sends"` showed `= 0` for both profiles before fix.
+
+## See also

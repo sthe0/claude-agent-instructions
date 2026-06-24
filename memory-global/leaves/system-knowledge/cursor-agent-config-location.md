@@ -2,9 +2,16 @@
 name: Cursor agent model/key config is client-side, not server-side
 description: Difficulty it removes — you try to configure Cursor's custom LLM provider server-side (~/.cursor-server/) and it has no effect. Fact — that config lives client-side in Cursor.app on the local machine; only terminal-side CLI env vars can be set server-side.
 type: reference
+schema: leaf/v1
 ---
 
 # Cursor agent mode: where the model/key actually lives
+
+## Difficulty
+
+You try to configure Cursor's custom LLM provider (API key, model, base URL) on the remote server under `~/.cursor-server/` and it has no effect — the change is silently ignored and Cursor keeps using the client-side setting. The remote `~/.cursor-server/` directory looks like it holds Cursor data, so editing it there seems like the right path.
+
+## Guidance
 
 When a user asks to "configure Cursor on a server" to use a custom LLM (DeepSeek, etc.), the realistic answer:
 
@@ -17,3 +24,7 @@ When a user asks to "configure Cursor on a server" to use a custom LLM (DeepSeek
 **`cursor-agent` CLI** is separate — a headless agent that ships as a binary, useful only for unattended/scripted runs (CI, cron, long detached sessions). Not needed for regular Remote-SSH interactive use.
 
 > verified by: inspection of `/home/nick/.cursor-server/` on the0.fun on 2026-05-29 — `data/User/` had no `settings.json`, `data/Machine/` was empty, `bin/` held only VS Code server binaries.
+
+## See also
+
+- [[cursor-agent-cli-spawn]] — headless cursor-agent CLI for unattended runs

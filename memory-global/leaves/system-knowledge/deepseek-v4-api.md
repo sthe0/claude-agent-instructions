@@ -2,9 +2,16 @@
 name: DeepSeek v4 API specifics
 description: Difficulty it removes — you need to call DeepSeek v4 but don't know the model ids, how to toggle thinking-mode, or the reasoning_effort levels. Fact — model identifiers, thinking-mode parameter shape (extra_body), and reasoning_effort levels for DeepSeek's OpenAI-compatible API as of 2026-05.
 type: reference
+schema: leaf/v1
 ---
 
 # DeepSeek v4 API specifics
+
+## Difficulty
+
+You need to call DeepSeek v4 but don't know the current model IDs, how to toggle thinking mode, or what values `reasoning_effort` accepts — documentation is sparse and the legacy model aliases (`deepseek-chat`, `deepseek-reasoner`) are misleading.
+
+## Guidance
 
 Verified 2026-05-29 against https://api-docs.deepseek.com/quick_start/pricing/ and https://api-docs.deepseek.com/guides/thinking_mode.
 
@@ -39,3 +46,5 @@ settings = ModelSettings(
 ```
 
 > verified by: docs fetch on 2026-05-29 and live smoke-test against `deepseek-v4-pro` (response payload included `provider_data={'model': 'deepseek-v4-pro', ...}` and a `ResponseReasoningItem` summary, confirming thinking mode active).
+
+## See also

@@ -2,15 +2,16 @@
 name: arcanum-api-readonly-pr-fields
 description: "Arcanum API: the review-request resource is read-only, BUT its sub-resources /summary and /description accept PUT — edit a published PR's title/body programmatically, no web UI or force-push needed."
 type: reference
+schema: leaf/v1
 ---
 
 # Arcanum public API: edit PR title/description via the /summary and /description sub-resources
 
-> **Difficulty (functional ground):** desired — update an already-published PR's title
-> (`summary`) or `description` programmatically (e.g. a stale verification line in the body);
-> actual — the obvious `PATCH`/`PUT` on the review-request object returns 405, and the
-> earlier (wrong) conclusion was "no API write path → use web UI / amend", which also
-> fails when the stale text lives in a custom description block not derived from the commit.
+## Difficulty
+
+Desired — update an already-published PR's title (`summary`) or `description` programmatically (e.g. a stale verification line in the body); actual — the obvious `PATCH`/`PUT` on the review-request object returns 405, and the earlier (wrong) conclusion was "no API write path → use web UI / amend", which also fails when the stale text lives in a custom description block not derived from the commit.
+
+## Guidance
 
 **Fact (verified 2026-06-18 against PR 13964799; supersedes the 2026-06-15 read-only claim):**
 
@@ -41,3 +42,5 @@ type: reference
 
 > verified by: OPTIONS `Allow: OPTIONS,PUT` on `/description` + `PUT … 204` + read-back
 > (stale line gone), conversation 2026-06-18 (DEEPAGENT-340 / PR 13964799)
+
+## See also
