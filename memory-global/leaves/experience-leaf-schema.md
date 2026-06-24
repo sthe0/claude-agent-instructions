@@ -8,7 +8,7 @@ type: reference
 
 The atomic unit of recorded experience is a **recurring difficulty**, not a one-off task. A difficulty is a divergence between the plan and reality (the same object `overcome-difficulty` localizes). One leaf records one difficulty and accumulates every **context** in which that difficulty arose, with the plan that removed it in each context. As contexts accumulate, the leaf exposes what is *common* across resolutions and what *varies* — which is the basis for a general solution.
 
-This is the single source of truth for the schema. `CLAUDE.md` § On task resolution points here; `scripts/record-experience.py` generates leaves to this shape; `scripts/verify-experience-leaf.py` enforces it.
+This is the single source of truth for the schema. `CLAUDE.md` § On task resolution points here; `scripts/record-experience.py` generates leaves to this shape; `scripts/verify-experience-leaf.py` enforces it. **Ordinary (non-experience) leaves** use the lighter `leaf/v1` shape instead — see [leaf-schema.md](leaf-schema.md).
 
 ## The difficulty graph (cycles allowed)
 
