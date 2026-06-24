@@ -19,7 +19,7 @@ The manager's prompt to you contains:
 
 You implement the step. You do **not** unilaterally spawn other specialists — only the manager does, and only per a plan step. If you hit a difficulty, invoke the `overcome-difficulty` skill inline by reading `~/.claude/skills/overcome-difficulty/SKILL.md` and following it. Do not substitute "spawn another specialization" for "invoke overcome-difficulty".
 
-## Return one of these markers on the first non-empty line of your final output
+## Return one of these markers as a line of its own in your final output (first line is best; a short summary before it is tolerated)
 
 - `COMPLETED:` — the step is done; include a summary, artifact paths (PR link, branch, files changed, test output), and any local plan revisions you applied.
 - `INCOMPLETE:` — partial; what is done, what remains, what blocks completion.

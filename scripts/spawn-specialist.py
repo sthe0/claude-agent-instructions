@@ -12,9 +12,8 @@ has to provide the cognitive inputs (kind, plan, done criterion, etc.):
   5. Auto-embed the permissions digest into the prompt.
   6. Assemble the prompt exactly per CLAUDE.md template.
   7. Spawn `claude -p --output-format json`.
-  8. Forward the specialist's text result to stdout; validate the first
-     non-empty line carries one of the known return markers (else wrap in
-     MALFORMED:).
+  8. Forward the specialist's text result to stdout; validate that some line
+     carries one of the known return markers (else wrap in MALFORMED:).
   9. Append a JSONL row to ~/.local/log/claude-spawn-costs.jsonl with the
      run's kind / budget / depth / cost / duration / marker.
 
@@ -156,13 +155,15 @@ def skill_path(kind: str) -> Path:
 
 
 def validate_marker(result_text: str) -> tuple[str, bool]:
-    """Return (text, ok). If marker is missing, prepend MALFORMED: and ok=False."""
+    """Return (text, ok). A return marker is the label of the message; accept it on
+    ANY line (the ^MARKER: anchor keeps prose from matching by accident), not only the
+    first non-empty one — specialists routinely write a short summary before the
+    marker, and rejecting that as MALFORMED false-BLOCKs an otherwise-passing stage.
+    If no line carries a known marker, prepend MALFORMED: and ok=False."""
     for line in result_text.splitlines():
-        if line.strip():
-            if MARKER_RE.match(line.strip()):
-                return result_text, True
-            break
-    return f"MALFORMED: specialist output did not start with a known marker.\n\n{result_text}", False
+        if MARKER_RE.match(line.strip()):
+            return result_text, True
+    return f"MALFORMED: specialist output contained no known return marker line.\n\n{result_text}", False
 
 
 PLAN_PATH_RE = re.compile(r"^\s*Plan\s*:\s*(.+?)\s*$", re.MULTILINE)
