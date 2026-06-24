@@ -87,18 +87,48 @@ def test_allow_when_no_state_file(tmp_path):
 
 
 def test_allow_non_production_path_even_when_not_executing(tmp_path):
+    # a non-production extension (.txt) is never gated regardless of node
     write_state(tmp_path, "sess3", "PLAN_READY")
-    proc = run_hook(edit_payload("sess3", "/work/project/NOTES.md"), tmp_path)
+    proc = run_hook(edit_payload("sess3", "/work/project/NOTES.txt"), tmp_path)
     assert proc.returncode == 0
     assert not _is_deny(proc)
 
 
-def test_allow_instructions_repo_path_even_when_not_executing(tmp_path):
-    # the skip set (claude-agent-instructions / tmp / .claude / memory) is meta-work
-    write_state(tmp_path, "sess4", "PLAN_READY")
+def test_deny_instructions_repo_path_when_not_executing(tmp_path):
+    # the agent's own config/instructions now flow through the spine — no longer exempt
+    write_state(tmp_path, "sess4", "PLAN_READY", weight_class="SUBSTANTIVE")
     proc = run_hook(
         edit_payload("sess4", "/home/u/claude-agent-instructions/scripts/x.py"), tmp_path
     )
+    assert proc.returncode == 0
+    assert _is_deny(proc)
+
+
+def test_deny_claude_md_when_not_executing(tmp_path):
+    # CLAUDE.md is .md and gated — the headline behavior of uniform gating
+    write_state(tmp_path, "sess4b", "PLAN_READY", weight_class="SUBSTANTIVE")
+    proc = run_hook(edit_payload("sess4b", "/home/u/.claude/CLAUDE.md"), tmp_path)
+    assert proc.returncode == 0
+    assert _is_deny(proc)
+
+
+def test_allow_memory_edit_even_when_not_executing(tmp_path):
+    # memory (all three scopes) is the only state-changing write left exempt
+    write_state(tmp_path, "sess4c", "PLAN_READY", weight_class="SUBSTANTIVE")
+    for p in (
+        "/home/u/.claude/memory-global/leaves/foo.md",
+        "/home/u/proj/.claude/agent-memory/MEMORY.md",
+        "/home/u/.claude/projects/abc/memory/leaves/bar.md",
+    ):
+        proc = run_hook(edit_payload("sess4c", p), tmp_path)
+        assert proc.returncode == 0, p
+        assert not _is_deny(proc), p
+
+
+def test_allow_plan_artifact_even_when_not_executing(tmp_path):
+    # plans are authored before EXECUTING; gating them would break the planner
+    write_state(tmp_path, "sess4d", "PLANNING", weight_class="SUBSTANTIVE")
+    proc = run_hook(edit_payload("sess4d", "/home/u/.claude/plans/task.md"), tmp_path)
     assert proc.returncode == 0
     assert not _is_deny(proc)
 

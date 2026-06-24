@@ -25,21 +25,13 @@ missing/corrupt state, or non-production path falls through to allow.
 from __future__ import annotations
 
 import json
-import re
 import sys
 from pathlib import Path
 
-PRODUCTION_FILE_RE = re.compile(
-    r"\.(py|sh|yaml|yml|json|ts|tsx|js|jsx|go|rs|cpp|c|h|java|kt|rb|tf|toml|cfg|conf|ini)$",
-    re.IGNORECASE,
-)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from agentctl.exempt_paths import is_gated_path  # noqa: E402
 
 STATE_ROOT = Path.home() / ".claude" / "agentctl" / "state"
-
-# Same skip set as hook-prewrite-plan-check.py: the instructions repo and
-# scratch/config trees are never gated (editing them is meta-work, not the task's
-# production code).
-SKIP_SEGMENTS = ("claude-agent-instructions", "/tmp/", "/.claude/", "/memory/")
 
 
 def _safe(session_id: str) -> str:
@@ -120,10 +112,7 @@ def main() -> int:
     if not sp.exists():
         return 0
 
-    if not PRODUCTION_FILE_RE.search(file_path):
-        return 0
-
-    if any(seg in file_path for seg in SKIP_SEGMENTS):
+    if not is_gated_path(file_path):
         return 0
 
     fields = load_gate_fields(sp)

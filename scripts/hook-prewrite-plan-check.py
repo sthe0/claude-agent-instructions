@@ -34,12 +34,10 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-EDIT_THRESHOLD = 3
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from agentctl.exempt_paths import is_gated_path  # noqa: E402
 
-PRODUCTION_FILE_RE = re.compile(
-    r"\.(py|sh|yaml|yml|json|ts|tsx|js|jsx|go|rs|cpp|c|h|java|kt|rb|tf|toml|cfg|conf|ini)$",
-    re.IGNORECASE,
-)
+EDIT_THRESHOLD = 3
 
 PLAN_DIR = Path.home() / ".claude" / "plans"
 PLAN_PATH_RE = re.compile(r"(^|/)\.claude/plans/")
@@ -102,12 +100,9 @@ def main() -> int:
     if state.get("plan_written") or state.get("nudged"):
         return 0
 
-    # Only count production-like files
-    if not PRODUCTION_FILE_RE.search(file_path):
-        return 0
-
-    # Skip files clearly inside the agent instructions repo or temp dirs
-    if any(seg in file_path for seg in ("claude-agent-instructions", "/tmp/", "/.claude/", "/memory/")):
+    # Only count gated edits: a production file the engine governs (memory /
+    # scratch / plan artifacts are exempt — see agentctl.exempt_paths).
+    if not is_gated_path(file_path):
         return 0
 
     state["edit_count"] = state.get("edit_count", 0) + 1

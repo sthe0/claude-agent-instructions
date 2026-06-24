@@ -91,6 +91,8 @@ When triggered → read `~/.claude/skills/overcome-difficulty/SKILL.md` and work
 
 When triggered → read `~/.claude/skills/self-improvement/SKILL.md` (and `policy.md` for process-as-code / cache-aware editing / instruction-language / file-structure / git-sync rules) and follow them in the **same turn** as the trigger, before the final reply.
 
+Editing the agent's own config / instructions / skills is **state-changing production work** — it rides the standard plan-approval gate like any task (the skill's beat-1 `AskUserQuestion` *is* that gate); **only memory writes** (project + global) bypass it.
+
 **Cache-aware editing** (per policy.md): edits to cached-prefix files — `CLAUDE.md`, `config.md`, `memory-global/MEMORY.md`, project `CLAUDE.md`, project `agent-memory/MEMORY.md`, skill frontmatter — invalidate the whole downstream prompt cache. Prefer end-of-task; batch related edits; write to leaves and update only the pointer line in the relevant `MEMORY.md` index when possible.
 
 ### `tracker-management`

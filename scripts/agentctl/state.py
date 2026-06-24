@@ -19,7 +19,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 class Node(str, Enum):
@@ -150,7 +150,6 @@ class SessionState:
     permission_request: "PermissionRequest | None" = None
     approval: GateRecord = field(default_factory=lambda: GateRecord("plan_approval"))
     resolution: GateRecord = field(default_factory=lambda: GateRecord("resolution"))
-    self_improvement: GateRecord = field(default_factory=lambda: GateRecord("self_improvement"))
     stages: list[Stage] = field(default_factory=list)
     current_stage: int | None = None
     recursion_depth: int = 0
@@ -227,8 +226,7 @@ class SessionState:
         data = dict(data)
         data["approval"] = GateRecord(**data["approval"])
         data["resolution"] = GateRecord(**data["resolution"])
-        if "self_improvement" in data:
-            data["self_improvement"] = GateRecord(**data["self_improvement"])
+        data.pop("self_improvement", None)  # legacy field (schema <=4); self-improvement now runs on the standard spine
         data["stages"] = [Stage(**s) for s in data.get("stages", [])]
         decomp = data.get("decomposition")
         data["decomposition"] = Decomposition(**decomp) if decomp else None
