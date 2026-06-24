@@ -1,60 +1,115 @@
 # Claude / Cursor agent instructions
 
-Single git repository for **global** instructions for **Claude Code** and **Cursor**. Edits in the repo appear at runtime via symlinks under `~/.claude/` and `~/.cursor/`. The canonical source for both tools is the same `CLAUDE.md`; the Cursor rule (`cursor/rules/claude-code-sync.mdc`) is a thin mirror that handles things Cursor cannot do natively (no `Skill` tool, no auto-memory writes).
+This repository turns a stock **Claude Code** (and, through a thin mirror, **Cursor**) into a disciplined **universal manager-actor**: one agent that takes any task and drives it to a verified result — planning, delegating to specialists, checking its own work, and accumulating reusable experience as it goes. The instructions, skills, coordination engine, and memory in this repo are what impose that discipline.
 
-File layout, instruction language, and the git workflow live in [skills/self-improvement/policy.md](skills/self-improvement/policy.md).
+If you just opened this repo and know nothing about it, read the next two sections first — the **core concepts** and the **Claude Code substrate** — then the **architecture** and the **end-to-end walkthrough**. Setup and maintenance are at the bottom.
 
-## Agent cooperation
+The repo is the single source of truth for both tools. Edits appear at runtime via symlinks under `~/.claude/` and `~/.cursor/`. The canonical instruction file for both is the same [CLAUDE.md](CLAUDE.md); the Cursor rule (`cursor/rules/claude-code-sync.mdc`) is a thin mirror for the things Cursor cannot do natively (no `Skill` tool, no auto-memory writes).
 
-> Living summary. When roles, mandatory gates, or delegation order change, update this section **in the same commit** as `CLAUDE.md` and the affected `agents/*.md` / `skills/*/SKILL.md`. Details — [CLAUDE.md](CLAUDE.md).
+## Core concepts
 
-### Concepts
+The whole system rests on four ideas. Everything else — every rule, skill, hook, and memory file — exists to serve one of them.
 
-| Concept | Meaning |
-|---|---|
-| **Root coordinator** | The main Claude Code dialog. Coordinates, decides routing, does not replace specialists. Acts as the manager — there is no separate manager subagent. |
-| **Subagent** | Prompt file in `agents/` (or `~/.claude/agents/` for machine-local) — invoked via `Task`, `subagent_type: <name>`. Currently no shipped subagents; infrastructure remains for future use. |
-| **Flat skill** | Directory in `skills/<name>/` with `SKILL.md`. Invoked **inline** by the `Skill` tool or `/<name>`. Runs in the main thread, sees full context. Ships: `overcome-difficulty`, `self-improvement`, `tracker-management`, `ccgram-management`. |
-| **Specialization skill** | Directory in `skills/specializations/<name>/` with `SKILL.md`. Symlinked flat into `~/.claude/skills/<name>/`. Spawned as a separate `claude -p` process with `--append-system-prompt-file`. Ships: `planner`, `developer`, `code-reviewer`, `thinker`, `yandex-cloud-expert`, `tech-writer`. |
-| **Coordination engine** | `scripts/agentctl/` — a code state machine driving substantive-task control-flow (classify → route → plan gate → dispatch → verify → resolution gate); prose supplies the cognition at each step. See § Coordination engine. |
-| **Global memory** | `~/.claude/memory-global/MEMORY.md` + `leaves/` — cross-project facts and practices. Imported into every session via `@…` in `CLAUDE.md`. |
-| **Project memory** | `<project_cwd>/.claude/agent-memory/` — project-specific runbooks. Symlinked from `~/.claude/projects/<cwd-hash>/memory/` by `scripts/setup-project-memory.sh`, so native auto-memory reads / writes through the symlink. Committed to the project's git. |
+1. **Difficulty** — the foundational object: *a divergence between a desired state and the actual state.* The agent's universal job is to remove difficulties. Every rule and component has a **functional ground**: the specific difficulty it removes. If you cannot name the difficulty a piece of this repo removes, treat that as a signal it is noise.
 
-### Principles
+2. **Task** — the form every action takes. Removing a difficulty is framed as a task; all work the system does is tasks. Tasks are classified by weight — **chat** (answer in-thread), **small change** (do it directly), **substantive** (full coordination cycle) — and routing follows from the class.
 
-1. **Root coordinates first.** On a new substantive task, restate goal + done criterion, then decide routing (`Task → planner`, `developer`, `thinker`, …). Do not skip to coding.
-2. **Understand → approve → execute.** Non-trivial work → plan with the user, wait for explicit OK unless "do it now".
-3. **Ticket code — `developer`** in an isolated VCS copy, not the root in the default tree.
-4. **Stuck → `overcome-difficulty` skill** in the same turn (not another blind retry).
-5. **Feedback → `self-improvement` skill** in the same turn (including when the user reminds you it was missed).
-6. **Org / ticket gates** — canonical runbooks live in project memory; agents point, do not restate.
-7. **Runbooks → memory**, not generic agent prompts.
-8. **File structure contract** — global tree stays current; after layout changes run `verify-layout-contract.sh`; on mismatch fix doc **or** disk, not both diverging.
-9. **Instruction language** — English in this repo and in `.claude/agent-memory/` trees; exceptions need adjacent rationale. User-facing replies use the user's language.
-10. **After instructions `pull`** — reconcile active work with new policy (see [skills/self-improvement/policy.md](skills/self-improvement/policy.md) § Git sync).
+3. **Universal manager-actor** — the single executor. The main Claude Code dialog *is* the manager; there is no separate manager bot. It resolves a task itself when small, or coordinates specialists (planner, developer, reviewer, …) when large. It is one disciplined actor wearing different hats, not a swarm of disconnected agents.
 
-### Typical flows
+4. **Memory** — the means of **accumulating experience in overcoming difficulties.** It is not just a fact store: it closes the learning loop *difficulty → overcame it → recorded how → reused it next time.* See § Memory.
+
+### Root + projects
+
+The instructions are layered by scope. The **root** (this repo) defines the **universal** properties of the manager-actor — the ones that hold for every task on the machine. A **project** adds its own properties **on top of** the root; there can be **many projects**, and each one is *root ⊕ project-specific*:
 
 ```text
-New task: root → (planner → approval → developer | thinker | direct answer)
-Difficulty: root → Skill overcome-difficulty → (replan → planner | developer | …)
-Feedback:  root → Skill self-improvement → (edits in this repo → commit → push after user confirms)
+effective agent = root (universal)  ⊕  project A specifics
+                                    ⊕  project B specifics
+                                    ⊕  …
 ```
 
-Anti-patterns: [memory-global/leaves/coordinator-pitfalls.md](memory-global/leaves/coordinator-pitfalls.md).
+Project-specific runbooks, memory, and skills live in each project's own `<project>/.claude/` tree (committed to that project's git), never in this root repo. The root never embeds project knowledge.
 
-## Coordination engine (`scripts/agentctl/`)
+## The Claude Code substrate
 
-`agentctl` is the code-driven coordination state machine. It owns the **deterministic control-flow** of a substantive task — classify → route → plan-approval gate → dispatch → per-stage verify → resolution gate, plus the difficulty/replan loop — while **prose supplies the cognition** at each step (the classification judgment, the plan content, the marker handling). Canon: code = deterministic control-flow, prose = cognition.
+The system is built on primitives that Claude Code provides. The terms below recur throughout this repo:
+
+- **Main dialog** — the running Claude Code conversation. It is the manager-actor.
+- **`Skill` tool / `/<name>`** — invokes a *skill* (a packaged procedure) **inline**, in the current process, with full context.
+- **`claude -p`** — spawns a *fresh* Claude Code process with its own context and budget. Used to run a specialist in isolation.
+- **Subagent (`Task`)** — a one-shot worker spawned by the harness; cheap models handle retrieval / monitoring so the main thread stays lean.
+- **Hook** — a script the harness runs on an event (prompt submit, before a tool call, on write). Hooks enforce gates deterministically — they can *deny* a tool call.
+- **Auto-memory** — Claude Code's built-in mechanism that reads/writes Markdown memory files automatically across sessions.
+
+## Architecture in layers
+
+The repo is organized as seven layers. Each higher layer constrains or drives the one below it; together they make the manager-actor disciplined rather than ad-hoc.
+
+| Layer | What | Role |
+|---|---|---|
+| **0 — Substrate** | Claude Code CLI (main dialog, `Skill`, `Task`, hooks, auto-memory, `claude -p`) | The runtime the system runs on. |
+| **1 — Instruction surface** | [CLAUDE.md](CLAUDE.md) (the constitution, loaded every session), [config.md](config.md) (numeric constants, single source), `memory-global/` (imported via `@`) | What the agent reads at session start. |
+| **2 — Skills** | Flat skills (inline) + specializations (spawned) — see § Skills | Packaged procedures and roles. |
+| **3 — Coordination engine** | [`scripts/agentctl/`](scripts/agentctl/) — a code state machine | Deterministic control-flow for substantive tasks. |
+| **4 — Hooks** | `scripts/hook-*.py` | Enforce the non-skippable gates and reminders. |
+| **5 — Memory** | personal auto-memory, global engineering (`memory-global/`), project (`<project>/.claude/agent-memory/`) | Accumulated experience and durable facts. |
+| **6 — Distribution** | `setup-symlinks.sh`, the Cursor mirror, `verify-*.py` / `lint-*.py`, githooks | Wires the repo into `~/.claude/` and keeps it consistent. |
+
+### The coordination engine and its state machine
+
+`agentctl` (Layer 3) owns the **deterministic control-flow** of a substantive task, while **prose supplies the cognition** at each step (the classification judgment, the plan content, the marker handling). The canon: *code = deterministic control-flow, prose = cognition.*
 
 ```bash
 cd scripts && PYTHONPATH=scripts python3 -m agentctl <cmd>
 # start → classify → plan → submit-plan → approve → next-stage → dispatch → record-result → verify-final → resolve
 ```
 
-State lives at `~/.claude/agentctl/state/<session_id>.json`. The plan-approval and resolution gates are non-skippable — enforced by guardian hooks ([hook-state-gate.py](scripts/hook-state-gate.py)); [verify-agentctl.py](scripts/verify-agentctl.py) checks that every gate has its guardian hook and that the schema, transitions, and cognitive leaves stay consistent. Modules under `scripts/agentctl/`: `classify`, `config`, `state`, `store`, `machine`, `gates`, `directive`, `cli`, `dispatch`, `decompose`, `permissions`, `plan`, `continuations`.
+The state machine a substantive task moves through:
 
-## Quick start
+```text
+start → CLASSIFIED → ROUTED → PLANNING → PLAN_READY ──■APPROVAL GATE■──→ APPROVED
+                       │                                                    │
+        small change ──┘                                              DECOMPOSED
+                       │                                                    │
+                       └──────────────────────────────→  EXECUTING  ⇄  VERIFYING
+                                                              │             │
+                                  (difficulty → BLOCKED → replan → PLANNING)│
+                                                                       RESOLUTION
+                                                                            │
+                                                            ──■RESOLUTION GATE■──→ RESOLVED
+```
+
+The two gates (`■`) are **non-skippable**, enforced by guardian hooks ([hook-state-gate.py](scripts/hook-state-gate.py) hard-denies production edits until the engine reaches an execution node; the resolution gate requires explicit user confirmation). [verify-agentctl.py](scripts/verify-agentctl.py) checks that every gate has its guardian hook and that the schema, transitions, and cognitive leaves stay consistent. State lives at `~/.claude/agentctl/state/<session_id>.json`. Engine modules under `scripts/agentctl/`: `classify`, `config`, `state`, `store`, `machine`, `gates`, `directive`, `cli`, `dispatch`, `decompose`, `permissions`, `plan`, `continuations`.
+
+If the engine is unavailable, the manager walks the same steps by hand in the same order — the engine automates the spine, it does not replace the cognition.
+
+## A task, end to end
+
+What happens when you give the agent a substantive task:
+
+1. **Prompt submitted** → a hook auto-arms the engine (`agentctl start`).
+2. **Classify** the task weight (chat / small change / substantive) and **route** accordingly.
+3. **Plan** — for substantive work, the agent (often via the `planner` skill) writes a plan with stages, each carrying an *expected result image* and a *done criterion*.
+4. **Approval gate** — the plan is shown to you; nothing touches production code until you approve. The `hook-state-gate` enforces this.
+5. **Execute** — the manager runs each stage itself (small steps) or **dispatches** a `developer` / other specialist (larger steps).
+6. **Difficulty?** If a stage's actual result diverges from its expected image, the `overcome-difficulty` skill localizes the divergence and produces a **replanning** task; the plan is fixed and work resumes.
+7. **Verify** each stage against its done criterion, then the whole plan against the overall criterion.
+8. **Resolution gate** — the agent recaps and **asks you to confirm** the task is resolved (it does not assume it from silence or thanks).
+9. **Record experience** — if the task taught something reusable, the agent writes an experience leaf to memory.
+
+## Memory — accumulating experience
+
+Memory is how the system gets better at removing difficulties over time. Three scopes, picked by purpose (write to the **most specific** one):
+
+| Scope | Where | Purpose |
+|---|---|---|
+| **Personal (auto-memory)** | `~/.claude/projects/<cwd-hash>/memory/` | User facts, preferences, conversational continuity. |
+| **Global engineering** | `memory-global/` (imported into every session) | Cross-project patterns, runbooks, retrospectives. |
+| **Project** | `<project>/.claude/agent-memory/` (project's git) | Project-specific runbooks; shared on clone. |
+
+Each scope is a short `MEMORY.md` index plus `leaves/` detail files. The key kind is the **experience leaf** (`difficulty/v1` schema): one recurring *difficulty*, every context it arose in, and the plan that removed it each time. When a task resolves and clears the quality bar, the agent searches existing leaves and **extends** a matching one or creates a new one — so the next similar task starts from accumulated experience, not from scratch.
+
+## Setup
 
 ```bash
 git clone git@github.com:sthe0/claude-agent-instructions.git ~/claude-agent-instructions
@@ -65,20 +120,15 @@ git clone git@github.com:sthe0/claude-agent-instructions.git ~/claude-agent-inst
 Per-project local setup (from each product repo root; scripts live in that repo's `.claude/scripts/`):
 
 ```bash
-# deepagent (Arc)
-cd ~/arcadia/robot/deepagent && .claude/scripts/setup-local.sh
-
-# logos (local only; logos/.claude is arcignored)
-cd ~/arcadia/logos && .claude/scripts/setup-local.sh
+cd ~/arcadia/robot/deepagent && .claude/scripts/setup-local.sh   # deepagent (Arc)
+cd ~/arcadia/logos && .claude/scripts/setup-local.sh             # logos (local only)
 ```
 
 `setup-local.sh` calls global `setup-project-memory.sh` where applicable and creates Cursor symlinks. See each project's `.claude/scripts/README.md`.
 
-## Migrating a previously set-up machine
+If `verify-layout-contract.sh` fails on a freshly pulled machine (stale directories / dangling symlinks from an old layout), see [docs/migrations/](docs/migrations/README.md) for per-refactor runbooks.
 
-If `verify-layout-contract.sh` fails on a freshly pulled machine (stale directories / dangling symlinks from an old layout that `setup-symlinks.sh` alone cannot reconcile), see [docs/migrations/](docs/migrations/README.md) for per-refactor runbooks.
-
-## Symlinks (global from git)
+### Symlinks (global from git)
 
 | In repo | Runtime |
 |---|---|
@@ -89,30 +139,15 @@ If `verify-layout-contract.sh` fails on a freshly pulled machine (stale director
 | `cursor/rules/claude-code-sync.mdc` | `~/.cursor/rules/claude-code-sync.mdc` |
 | `cursor/agents/*.md` | `~/.cursor/agents/<name>.md` |
 
-Project-specific Cursor rules live in the project's own `<project>/.claude/rules/` tree (committed in the project's git), and are wired to `<project>/.cursor/rules/` by the project's setup. The deepagent case is automated by `setup-symlinks.sh` when `~/arcadia/robot/deepagent/.claude/rules/` is present.
+Project-specific Cursor rules live in the project's own `<project>/.claude/rules/` tree (committed in the project's git) and are wired to `<project>/.cursor/rules/` by the project's setup. The deepagent case is automated by `setup-symlinks.sh` when `~/arcadia/robot/deepagent/.claude/rules/` is present. Cursor-only assets live in [`cursor/`](cursor/README.md), isolated from `~/.claude/agents`.
 
-Cursor-only assets live in [`cursor/`](cursor/README.md) and are intentionally isolated from `~/.claude/agents`.
-
-## Scripts
+### Scripts
 
 Full inventory (machine-checked against the filesystem by [verify-readme.py](scripts/verify-readme.py)) lives in [scripts/README.md](scripts/README.md).
 
-## Git workflow
+## Skills
 
-```bash
-~/claude-agent-instructions/scripts/sync-instructions-repo.sh pull
-# edits → commit → push after user confirms
-```
-
-Runbook: [skills/self-improvement/policy.md](skills/self-improvement/policy.md) § Git sync.
-
-## Agents in this repo (`agents/`)
-
-None currently. The directory exists with a [README](agents/README.md) describing what it is reserved for. `setup-symlinks.sh` iterates the directory so future agents are picked up automatically.
-
-Machine-local subagents (gitignored) → [`agents-local/`](agents-local/README.md). Project-local subagents → `<project_cwd>/.claude/agents/`.
-
-## Skills in this repo (`skills/`)
+A **skill** is a packaged procedure or role under `skills/`. Flat skills run inline; specializations are spawned as separate processes.
 
 ### Flat skills (invoked inline in the current process)
 
@@ -142,21 +177,34 @@ Canonical path in repo: `skills/specializations/<name>/SKILL.md`. Symlinked flat
 
 Full spawn template and return-marker handling: [CLAUDE.md](CLAUDE.md) § Spawning specialists.
 
+### Agents (`agents/`)
+
+None currently. The directory exists with a [README](agents/README.md) describing what it is reserved for; `setup-symlinks.sh` iterates it so future agents are picked up automatically. Machine-local subagents (gitignored) → [`agents-local/`](agents-local/README.md). Project-local subagents → `<project_cwd>/.claude/agents/`.
+
 ## Not in this repository
 
 | What | Where |
 |---|---|
-| Project memory | `<project_cwd>/.claude/agent-memory/` (project's git) |
+| Project memory & runbooks | `<project_cwd>/.claude/agent-memory/` (project's git) |
 | Extra agents | `~/.claude/agents/` |
 | Local scripts | `~/.claude/scripts-local/` |
 | Local skills | `~/.claude/skills/` (single-file `skills-local/*.md`, gitignored fallback) |
 
+## Git workflow
+
+```bash
+~/claude-agent-instructions/scripts/sync-instructions-repo.sh pull
+# edits → commit → push after user confirms
+```
+
+`push` to the remote happens **only after explicit user confirmation.** Runbook: [skills/self-improvement/policy.md](skills/self-improvement/policy.md) § Git sync.
+
 ## Maintaining this README
 
-When the cooperation model changes — update § Agent cooperation, [CLAUDE.md](CLAUDE.md), and affected `agents/*.md` or `skills/*/SKILL.md` in **one commit**.
+When the cooperation model changes — update the affected sections here, [CLAUDE.md](CLAUDE.md), and affected `agents/*.md` or `skills/*/SKILL.md` in **one commit**.
 
 When **directories, scripts, or symlinks** change:
 
 1. Update [skills/self-improvement/policy.md](skills/self-improvement/policy.md) § File structure.
-2. Align § Symlinks / § Scripts in this README with reality. The three inventory sentinels (scripts / flat skills / specializations) are machine-checked — run `scripts/verify-readme.py --fix` to reconcile the row sets, then fill in any `TODO` purpose cells by hand.
+2. Align § Symlinks / § Scripts / § Skills with reality. The inventory sentinels (flat skills / specializations) are machine-checked — run `scripts/verify-readme.py --fix` to reconcile the row sets, then fill in any `TODO` purpose cells by hand.
 3. Run `scripts/verify-layout-contract.sh`, `scripts/verify-instructions-sync.sh`, and `scripts/verify-readme.py`.
