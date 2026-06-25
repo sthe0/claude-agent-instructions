@@ -44,9 +44,14 @@ def test_parse_marker_no_marker():
     assert parse_marker("") == (None, "")
 
 
-def test_parse_marker_only_inspects_first_nonempty_line():
-    # a marker buried on a later line is not a return marker
-    assert parse_marker("preamble text\nCOMPLETED: done\n") == (None, "")
+def test_parse_marker_finds_marker_after_preamble():
+    # a specialist may print a summary before the marker line — the scan must
+    # tolerate the preamble and still find the marker (no false (None, "") BLOCK)
+    assert parse_marker("preamble text\nmore notes\nCOMPLETED: done\n") == ("COMPLETED", "done")
+    # but genuinely markerless output still maps to (None, "")
+    assert parse_marker("preamble text\nmore notes\nstill nothing\n") == (None, "")
+    # and a MALFORMED wrapper anywhere is detected
+    assert parse_marker("summary line\nMALFORMED: no marker\n") == ("MALFORMED", "no marker")
 
 
 # --- drift guard ------------------------------------------------------------
