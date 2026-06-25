@@ -33,14 +33,51 @@ The two gates (`■`) are **non-skippable**:
 
 [`verify-agentctl.py`](../verify-agentctl.py) checks that every gate has its guardian hook and that the schema, transitions, and cognitive leaves stay consistent.
 
-## Command sequence
+### States
+
+Each node is a phase in the task lifecycle (`Node` in `state.py`). The *route* picked at `ROUTED` decides the path: **chat** ends there (answer in-thread), **small change** jumps straight to `EXECUTING`, **substantive** walks the full spine.
+
+| State | Meaning |
+|---|---|
+| `CLASSIFIED` | Session armed; awaiting the weight-class judgment. |
+| `ROUTED` | Weight class + route recorded. Terminal for chat (`DIRECT`); small change → `EXECUTING`; substantive → `PLANNING`. |
+| `PLANNING` | Authoring the plan (stages, each with its result image + done criterion). |
+| `PLAN_READY` | Plan authored; **held at the approval gate** until the user approves. |
+| `APPROVED` | Plan-approval gate passed. |
+| `DECOMPOSED` | M1–M4 decomposition verdict recorded (ship as one PR or several). |
+| `EXECUTING` | Running the active stage — in-thread or via a dispatched specialist. |
+| `VERIFYING` | A stage result was recorded; checking it, then choosing next stage vs final. |
+| `RESOLUTION` | All stages PASSED; **held at the resolution gate** awaiting user confirmation. |
+| `RESOLVED` | User confirmed the task is done (terminal). |
+| `BLOCKED` | A difficulty interrupted the flow; `unblock` / `replan` returns to the prior node. |
+
+## Commands
+
+The happy-path spine, in order:
 
 ```text
 start → classify → plan → submit-plan → approve → decompose → next-stage
       → dispatch → record-result → verify-final → resolve
 ```
 
-Plus the side-channels: `replan` (difficulty → re-arm at `PLAN_READY`), `block` / `unblock`, `reset` (re-arm for a new task), `status` (inspect).
+| Command | Effect (transition) |
+|---|---|
+| `start` | Arm a session (idempotent with `--if-absent`; auto-run by `hook-engine-start.py` on each prompt). |
+| `reset` | Re-arm for a new task at a task boundary; refuses mid-substantive without `--force`. |
+| `classify` | Record weight class + route (`CLASSIFIED → ROUTED`). |
+| `plan` | Enter planning for a substantive task (`ROUTED → PLANNING`). |
+| `submit-plan` | Mark the plan authored and ready for approval (`PLANNING → PLAN_READY`). |
+| `approve` | Pass the plan-approval gate; `--by` names the approver (`PLAN_READY → APPROVED`). |
+| `decompose` | Record the M1–M4 decomposition verdict (`APPROVED → DECOMPOSED`). |
+| `next-stage` | Select the next ready stage and enter execution (`→ EXECUTING`). |
+| `dispatch` | At `EXECUTING`, route the active stage to its actor (`in_thread` / `spawn:<specialization>`) and return the cognitive leaf + return-marker handling; no node change. |
+| `record-result` | Record a stage's actual result + status (PASSED/FAILED) (`EXECUTING → VERIFYING`). |
+| `verify-final` | Pass the final-verification gate: all stages PASSED + the plan's *Final verification* (`VERIFYING → RESOLUTION`). |
+| `resolve` | Pass the resolution gate; `--by` names the confirmer (`RESOLUTION → RESOLVED`). |
+| `replan` | On a difficulty, re-arm planning at `PLAN_READY` with a revised `--plan`. |
+| `block` / `unblock` | Mark a difficulty (`any → BLOCKED`) and return to the prior node. |
+| `resolve-permission` | Record the decision on a specialist's `PERMISSION-REQUEST`. |
+| `status` | Inspect the current node + directive; no transition. |
 
 ## Modules
 
