@@ -169,6 +169,13 @@ cd ~/my-project && claude
 > Implement ABC-123.
 ```
 
+On a fresh machine you can even hand the agent the whole bootstrap in one message — point it at this repository, let it set itself up per this README, and name the ticket you want to start:
+
+```
+cd ~/my-project && claude
+> Look at this git repository (~/claude-agent-instructions) — it has a README; set yourself up according to it. I want to start working on MYTICKETQUEUE-123.
+```
+
 The key triggers the `tracker-management` skill, which loads the ticket's context, and — for a substantive ticket — publishes the plan and posts progress back to the ticket. A ticket task always goes through the plan → approval → execution spine (no in-thread shortcut), so you still approve the plan before any code changes. Posting back to a tracker needs that tracker's credentials configured on your machine; without them the work still proceeds locally, only the ticket updates are skipped — see the `tracker-management` skill for the credential setup.
 
 ## Skills
