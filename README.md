@@ -160,6 +160,13 @@ cd ~/my-project && claude
 > Add retry-with-backoff to the HTTP client and cover it with a test.
 ```
 
+You can also hand the agent the whole bootstrap in one message — point it at this repository, let it set itself up per this README, have it make sure the project you'll work in is checked out and available (and `cd` into it), then describe an arbitrary task in your own words:
+
+```
+cd ~/work && claude
+> Look at this git repository (~/claude-agent-instructions) — it has a README; set yourself up according to it. Then make sure the order-service project is checked out and start there: add a Prometheus /metrics endpoint with request-latency histograms, and cover it with tests.
+```
+
 For anything beyond a quick question or a ≤20-line one-file change, the agent classifies the task as *substantive*, writes a plan, and **stops at the approval gate** — it shows you the plan and changes nothing in your code until you approve (you click `Approve`, or ask for changes). After approval it executes, verifies, and asks you to confirm the task is resolved. Use `/clear` between unrelated tasks so each starts with clean context.
 
 **With a ticket.** Mention the ticket key (e.g. `ABC-123`) anywhere in your request:
@@ -169,11 +176,11 @@ cd ~/my-project && claude
 > Implement ABC-123.
 ```
 
-On a fresh machine you can even hand the agent the whole bootstrap in one message — point it at this repository, let it set itself up per this README, and name the ticket you want to start:
+On a fresh machine you can even hand the agent the whole bootstrap in one message — point it at this repository, let it set itself up per this README, have it check out the right project and start there, and name the ticket you want to work on:
 
 ```
-cd ~/my-project && claude
-> Look at this git repository (~/claude-agent-instructions) — it has a README; set yourself up according to it. I want to start working on MYTICKETQUEUE-123.
+cd ~/work && claude
+> Look at this git repository (~/claude-agent-instructions) — it has a README; set yourself up according to it. Then make sure the right project is checked out and start there: I want to work on MYTICKETQUEUE-123.
 ```
 
 The key triggers the `tracker-management` skill, which loads the ticket's context, and — for a substantive ticket — publishes the plan and posts progress back to the ticket. A ticket task always goes through the plan → approval → execution spine (no in-thread shortcut), so you still approve the plan before any code changes. Posting back to a tracker needs that tracker's credentials configured on your machine; without them the work still proceeds locally, only the ticket updates are skipped — see the `tracker-management` skill for the credential setup.
