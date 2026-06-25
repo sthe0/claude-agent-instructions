@@ -36,6 +36,7 @@ Loaded into every session via `@~/.claude/memory-global/MEMORY.md` import in `CL
 - [Plan-file split](leaves/plan-file-split.md) — for plans > ~20 KB / > 3 stages, split into index + per-stage files so later Reads pull only the active stage.
 - [Spawning specialists](leaves/spawning-specialists.md) — full `claude -p` spawn mechanics: spawn-template inputs, budget tiers, recursion cap, monitoring a running spawn, after-spawn `status`+`log` checks, `bypassPermissions` discipline, return markers.
 - [Handling escalations](leaves/handling-escalations.md) — how the manager resolves each specialist return marker (PLAN-READY / CLARIFY / REPLAN / PERMISSION-REQUEST / ESCALATE / INCOMPLETE / COMPLETED) and the continuation-prompt templates for re-spawning.
+- [Recording experience](leaves/recording-experience.md) — the execution-time how-to that follows the CLAUDE.md resolution gate: quality bar (decide whether to record), search-before (extend|new), `difficulty/v1` schema, ticket-thin leaf, required `resolution_confirmed_by_user` frontmatter, self-critique → self-improvement auto-trigger.
 - [Robot-run ACL access](leaves/robot-run-acl-access.md) — when YT/Nirvana ops run under a robot identity, set a team idm-group read ACL on EVERY op (named constant, all ops not a subset) or humans can't read stderr/logs/artifacts; verify a human token actually reads a finished op.
 
 ## Tooling and mechanics

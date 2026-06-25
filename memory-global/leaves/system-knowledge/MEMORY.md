@@ -1,8 +1,21 @@
 # Global system knowledge
 
-Sub-index of `memory-global/leaves/system-knowledge/`. Durable facts about systems, processes, organizational structure, codebase architecture that aren't self-evident from `git log`/code/docs. Each leaf is **described by the difficulty it removes** (its functional ground), not as a free-floating fact. Recording criteria: `~/.claude/CLAUDE.md` § Memory § `system-knowledge/` leaves.
+Sub-index of `memory-global/leaves/system-knowledge/`. Durable facts about systems, processes, organizational structure, codebase architecture that aren't self-evident from `git log`/code/docs. Each leaf is **described by the difficulty it removes** (its functional ground), not as a free-floating fact.
 
 Pointed at from `memory-global/MEMORY.md`. Not auto-loaded by the harness.
+
+## Recording criteria
+
+Record durable facts about systems, processes, org structure, component interrelations, codebase architecture that isn't self-evident. **Lead each leaf with the difficulty it removes** — describe the component/process by the divergence it resolves (its functional ground), not as a free-floating fact; the rediscovery cost the leaf spares *is* that difficulty. A fact whose difficulty you can't name fails criterion 1 below anyway. Filename is a content-keyed slug, no date (`auth-team-ownership.md`). Same frontmatter as other leaves (`name` / `description` / `type: reference`).
+
+Record only if **all four** apply:
+
+1. **Not reachable in 1–2 hops** of internet / intranet / `git log` / repo search.
+2. **Not explicitly documented** in code, README, ADR, or known design docs.
+3. **Not a duplicate** of an existing leaf — search `system-knowledge/` (and adjacent memory) before writing; update an existing leaf instead of creating a parallel one.
+4. **Specific, not a principle** — names a concrete component / process / person / dataflow boundary. Generic patterns and reasoning practices belong in `leaves/*.md` (evergreen reference), not here.
+
+Cite the source where possible (`> verified by: <commit>/<URL>/<conversation>`).
 
 - [Harness built-in Read dedup](harness-read-dedup.md) — difficulty: tempted to build a re-Read dedup hook / burning tokens on re-Reads. Fact: the harness already returns a "Wasted call" stub for re-Read of an unchanged file (Read or system-reminder), so no hook is needed.
 - [DeepSeek v4 API specifics](deepseek-v4-api.md) — difficulty: need to call DeepSeek v4 without knowing the knobs. Fact: model names (`deepseek-v4-pro`/`deepseek-v4-flash`), thinking-mode via `extra_body`, `reasoning_effort` levels, `openai-agents` SDK pattern.

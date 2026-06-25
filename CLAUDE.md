@@ -36,7 +36,7 @@ When in doubt between two classes, pick the heavier one once; if the work then v
 
 ### Coordination spine — driven by `agentctl`
 
-The substantive-task spine (classify → route → plan-approval gate → dispatch → per-stage verify → resolution gate, plus difficulty/replan) is driven **deterministically by the `agentctl` engine**, not re-derived as prose each turn: `cd ~/claude-agent-instructions/scripts && python3 -m agentctl <cmd>` (or `PYTHONPATH=<repo>/scripts`). Each command returns a Directive — next node + which cognitive leaf to run + whether a gate blocks. Sequence: `start → classify → plan → submit-plan → approve → next-stage → dispatch → record-result → verify-final → resolve`. The plan-approval and resolution gates are non-skippable: `hook-state-gate.py` denies production Edit/Write until the engine reaches an execution node — and **production includes the agent's own config and instructions** (`settings*.json`, `skills/**`, `agents/**`, `CLAUDE.md`, `*.mdc`, the `claude-agent-instructions/` repo); the **only** unconditionally gate-exempt state-changing writes are **memory** (project + global) and `/tmp/` scratch. **Plan artifacts** (`~/.claude/plans/`) are gated under a **node-aware** rule: a plan is the result-image of *active planning*, so it is writable only at a planning-position node (`CLASSIFIED`/`ROUTED`/`PLANNING`/`PLAN_READY`) and frozen during execution — changing a plan past that point is a *difficulty* to overcome reflexively (`overcome-difficulty` → `replan` re-arms at `PLAN_READY`), not an in-place edit. Centralized in `agentctl/exempt_paths.py` (`is_gated_path` + `is_plan_file`) so both gate hooks stay in lockstep. The gate is **weight-aware** — an *unclassified* state (`weight_class=None`) bites too, so a prod-touching session needs a classified state before its first edit — `hook-engine-start.py` auto-runs `agentctl start --if-absent` on every prompt (always armed by default), leaving you only `classify` (small-change then pays `next-stage`; the gate enforces it). At a new task boundary in the same session, `agentctl reset` re-arms it (refuses mid-substantive without `--force`). The engine owns control flow; you supply the cognition at each leaf. The spine is **pluggable** — a deterministic skill attaches a per-session sub-state-machine (observers + folded gates, no core edit) via `plugin-activate`; `tracker-management` is the first (engine owns *when*, skill owns *what*; `agentctl/README.md` § Plugins).
+The substantive-task spine (classify → route → plan-approval gate → dispatch → per-stage verify → resolution gate, plus difficulty/replan) is driven **deterministically by the `agentctl` engine**, not re-derived as prose each turn: `cd ~/claude-agent-instructions/scripts && python3 -m agentctl <cmd>`. Each command returns a Directive — next node + which cognitive leaf to run + whether a gate blocks. Sequence: `start → classify → plan → submit-plan → approve → next-stage → dispatch → record-result → verify-final → resolve` (the plan must be **TOML** for the engine to track stages; markdown is verified but registers none). The plan-approval and resolution **gates are non-skippable** — production Edit/Write is denied until the engine reaches an execution node, and **production includes the agent's own config and instructions** (`settings*.json`, `skills/**`, `agents/**`, `CLAUDE.md`, `*.mdc`, the `claude-agent-instructions/` repo); the **only** gate-exempt state-changing writes are **memory** (project + global) and `/tmp/` scratch (the session scratchpad is **not** exempt). **Plan artifacts** (`~/.claude/plans/`) are writable only at a planning-position node and frozen during execution — changing a plan past that point is a *difficulty* (`overcome-difficulty` → `replan` re-arms at `PLAN_READY`), not an in-place edit. The gate is **weight-aware**: an *unclassified* state bites too, so a prod-touching session must `classify` before its first edit — the engine auto-starts on every prompt, and `agentctl reset` re-arms at a new task boundary (refusing mid-substantive without `--force`). The engine owns control flow; you supply the cognition at each leaf. The spine is **pluggable** — a skill attaches a per-session sub-state-machine via `plugin-activate` (`tracker-management` is the first). Mechanism (hook files, `exempt_paths.py` lockstep, the node-aware gate, plugins) — `scripts/agentctl/README.md` § State machine / Plugins.
 
 **Fallback** (engine not started, or unavailable) — walk the same steps by hand, same order: (1) **restate** goal + **done criterion**, marking *criterion type*; (2) **classify** weight (§ above) and **route** (planner→approval→developer, or thinker / skill / direct answer) — don't start coding on substantive work except under the in-context carve-out; (3) get **plan approval** before editing production; (4) **execute**, comparing each stage's actual to its `Expected result image:`; (5) run the plan's `## Final verification` against the overall done criterion before declaring done.
 
@@ -141,33 +141,11 @@ A substantive task is **resolved** only when the user explicitly confirms it —
 3. **Artifacts** — paths, links, commands. When referencing an external run / job / PR / CI task (Nirvana WI, Sandbox, CI), give the **clickable URL to the actual run**, never a truncated id fragment — in status reports and user-facing comments (tracker, PR review) alike.
 4. **Next steps** — only if the task is *not* done. When it is done and accepted, **stop**: do not tee up the next roadmap phase / future work, and do not restate a pointer that already lives in its canonical place (e.g. the plan file) — the user decides when to continue.
 
-#### Quality bar (decide before writing)
+#### Recording the experience
 
-Record only if a future you, opening a similar task, would actually want to **read** this leaf first. Concrete tests — at least one must be a clear "yes":
+Once confirmed, **decide whether to record** (quality bar): record only if a future similar task would want to **read** it first — a non-obvious choice invisible from code/commits, a reusable difficulty overcome, a revealed missing tool/memory/instruction, or ≥ `rediscovery-threshold-min` min of saved rediscovery. Else don't — memory bloat is worse than a gap; the git log + code are the default record. Skip entirely for trivial Q&A / one-line tasks.
 
-- Was there a non-obvious choice that would not be visible from the code / commit log alone?
-- Was a difficulty encountered and overcome in a way that is reusable?
-- Did the task reveal a missing tool, missing memory, or missing instruction?
-- Would skipping this leaf cost a future similar task at least `rediscovery-threshold-min` minutes of rediscovery (see `~/.claude/config.md`)?
-
-If none — do not record. Memory bloat is worse than memory gap. The git log + the code are the default record.
-
-#### What to record
-
-The unit of experience is a **recurring difficulty** (a plan-vs-reality divergence — the object `overcome-difficulty` localizes), not a one-off task. One leaf records one difficulty and accumulates every context it arose in, plus the plan that removed it in each.
-
-- **Search before recording (mandatory; engine-gated).** `scripts/record-experience.py search "<keywords>"` ranks existing leaves by `description` + `## Difficulty`. If an analogous leaf exists, **extend** it (`record-experience.py extend …`) rather than duplicate — accumulated contexts of one difficulty expose recurring patterns and justify a general solution; else create a new leaf (`record-experience.py new …`).
-- **Scope.** Cross-project → `~/.claude/memory-global/leaves/experience/`. Project-specific → `<project_cwd>/.claude/agent-memory/experience/`.
-- **Schema and tooling.** Leaves follow `schema: difficulty/v1` (sections **Difficulty / Order & criterion / Contexts / Cost**, free-form `refs:` into the difficulty graph — cycles allowed, the framework is self-referential). Full schema + search / extend / new / ticket flow: [experience-leaf-schema.md](memory-global/leaves/experience-leaf-schema.md). Generate via `scripts/record-experience.py` (auto-updates the `experience/MEMORY.md` sub-index); `verify-experience-leaf.py` enforces the shape.
-- **Ticket-driven work → thin leaf.** When the task is a ticket, the full structured record lives **in the ticket** (the `tracker-management` skill posts it via `record-experience.py ticket`); the leaf is a thin pointer (`ticket:` frontmatter + one-line reusable hook). Single source of truth — no duplication.
-- **Required frontmatter `resolution_confirmed_by_user: "<quote>"`** — enforced by `verify-experience-leaf.py` (PreToolUse hook + `verify-all.py`). Writing on assumed resolution is a recurring failure mode; the check makes "confirm → record" mechanical.
-- **Self-critique feeds self-improvement.** Agent-system friction is itself a difficulty about the agent system — record/extend its leaf (context = this task) and invoke `self-improvement` the same turn (§ Auto-trigger below). For friction recurring across ≥2 leaves, run `Skill(overcome-difficulty)` against the agent-system-as-plan first — the replanning task is an architectural improvement, not a rule tweak. Full discipline: [systemic-pattern-scan.md](memory-global/leaves/systemic-pattern-scan.md).
-
-#### Auto-trigger self-improvement from the self-critique
-
-If § **Self-critique** names concrete agent-system friction, **invoke `self-improvement` the same turn** (after writing the leaf, before the final reply) — treat the self-critique as if the user said "that was annoying because X, fix it". This turns experience into actual instruction changes instead of dead text. **For systemic patterns** (friction recurring across leaves), invoke `overcome-difficulty` against the agent-system-as-plan first; its replanning task is the architectural proposal `self-improvement` then writes — see [systemic-pattern-scan.md](memory-global/leaves/systemic-pattern-scan.md).
-
-Skip the leaf entirely for trivial Q&A turns and one-line tasks. The whole rule applies only to substantive work where you planned, delegated, or hit a difficulty.
+Then record per [recording-experience.md](memory-global/leaves/recording-experience.md): the unit is a **recurring difficulty**, not a one-off; **search before recording** (`record-experience.py search` → `extend` an analogous leaf, else `new`); scope (global vs project); `difficulty/v1` schema; ticket-driven → thin leaf (full record in the ticket); required `resolution_confirmed_by_user` frontmatter; and the **self-critique → `self-improvement` auto-trigger** (systemic friction across ≥2 leaves → `overcome-difficulty` first).
 
 ### Limits
 
@@ -218,16 +196,7 @@ Project memory is shared via the project's git: `scripts/setup-project-memory.sh
 
 ### `system-knowledge/` leaves
 
-Record durable facts about systems, processes, org structure, component interrelations, codebase architecture that isn't self-evident. **Lead each leaf with the difficulty it removes** — describe the component/process by the divergence it resolves (its functional ground), not as a free-floating fact; the rediscovery cost the leaf spares *is* that difficulty. A fact whose difficulty you can't name fails criterion 1 below anyway. Filename is a content-keyed slug, no date (`auth-team-ownership.md`). Same frontmatter as other leaves (`name` / `description` / `type: reference`).
-
-Record only if **all four** apply:
-
-1. **Not reachable in 1–2 hops** of internet / intranet / `git log` / repo search.
-2. **Not explicitly documented** in code, README, ADR, or known design docs.
-3. **Not a duplicate** of an existing leaf — search `system-knowledge/` (and adjacent memory) before writing; update an existing leaf instead of creating a parallel one.
-4. **Specific, not a principle** — names a concrete component / process / person / dataflow boundary. Generic patterns and reasoning practices belong in `leaves/*.md` (evergreen reference), not here.
-
-Cite the source where possible (`> verified by: <commit>/<URL>/<conversation>`).
+Durable, non-self-evident facts about systems / processes / org structure / codebase architecture, each **led by the difficulty it removes**. Record only if **all four** apply: not reachable in 1–2 search hops, not already documented, not a duplicate, and specific (a concrete component / dataflow, not a principle). Cite the source. Full criteria: [system-knowledge/MEMORY.md](memory-global/leaves/system-knowledge/MEMORY.md) § Recording criteria.
 
 ---
 
