@@ -108,7 +108,7 @@ When rebasing onto main / trunk, read VCS status and conflict type, not only inl
 
 ## Tests and build
 
-- Add tests when they add real coverage for new behavior.
+- **Tests accompany code by default.** Any change that writes or modifies behavior ships, *in the same change*, with tests that exercise the new/changed path — for a fix, a test red-before / green-after. This is the default, not a judgment call gated on whether the change feels test-worthy. The **only** changes that ship without a test are the named non-testable class — pure rename/move/reformat, docs/comments, config with no logic, or a fix whose trigger genuinely cannot be reached in a harness (state *why* in one line). Background and the reviewer's mirror of this rule: `~/.claude/memory-global/leaves/tests-accompany-code.md`.
 - Run the project's standard test / build commands before claiming `COMPLETED:`.
 - **Static checks ≠ runtime correctness.** Imports passing, unit tests, `--help`, and a byte-identical diff do not prove a change works when the code is loaded by name from an external artifact at runtime (baked image, porto / job layer, plugin registry, serialized graph). Validate with a real run that reaches the affected path, run it to the **deciding stage**, and never claim `COMPLETED:` from partial progress.
 - Run the full test suite only if the manager explicitly requested it or the step's scope warrants it.
