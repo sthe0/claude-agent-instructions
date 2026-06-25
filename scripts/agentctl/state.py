@@ -250,6 +250,10 @@ class Stage:
     conditions: str | None = None
     supplies: list[Supply] = field(default_factory=list)
     outcome: Outcome = field(default_factory=Outcome)
+    # General control-criterion attestation (element #3 of the plan activity ontology).
+    # Optional on any stage; required non-empty for spawn:developer when recording passed,
+    # because review is the value the control criterion takes for the developer special case.
+    control: str | None = None
 
     @property
     def depends_on(self) -> list[int]:
@@ -261,6 +265,19 @@ class Stage:
 
     def spawn_kind(self) -> str | None:
         return self.actor.executor.split(":", 1)[1] if self.is_spawn() else None
+
+    def needs_control(self) -> bool:
+        """True iff a non-empty control attestation is required to record status=passed.
+
+        Review is the control criterion of a developer-actor stage: a reviewer is a
+        special case of the controller, a developer a special case of the executor.
+        The precondition fires only for spawn:developer + passed; failed records and
+        all non-developer stages are unaffected."""
+        return self.is_spawn() and self.spawn_kind() == "developer"
+
+    def has_control(self) -> bool:
+        """True iff a non-empty control attestation has been recorded."""
+        return bool(self.control and self.control.strip())
 
     @classmethod
     def from_dict(cls, d: dict) -> "Stage":
@@ -281,6 +298,7 @@ class Stage:
                 conditions=d.get("conditions"),
                 supplies=[Supply(**s) for s in d.get("supplies", [])],
                 outcome=Outcome(**d["outcome"]) if d.get("outcome") else Outcome(),
+                control=d.get("control"),
             )
         # legacy FLAT shape -> nested groups (migration shim)
         return cls(
@@ -308,6 +326,7 @@ class Stage:
                 actual=d.get("actual"),
                 fail_digests=list(d.get("fail_digests", [])),
             ),
+            control=d.get("control"),
         )
 
 

@@ -52,7 +52,8 @@ def _to_resolution(store, sid, plan):
     # pass both stages of the two-stage fixture
     for _ in range(2):
         cli.cmd_next_stage(ns(session=sid), store=store)
-        cli.cmd_record_result(ns(session=sid, status="passed", actual="ok"), store=store)
+        cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
+                                  control="reviewed: ok"), store=store)
     cli.cmd_verify_final(ns(session=sid), store=store)
     # experience auto-activates for substantive sessions and gates resolution
     cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="searched"), store=store)

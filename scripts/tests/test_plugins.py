@@ -195,7 +195,7 @@ def test_cli_main_plugin_gate_blocks_resolve_then_passes(capsys, tmp_path, fixtu
     _run(capsys, root, "partition", "--session", sid)
     for _ in range(2):
         _run(capsys, root, "next-stage", "--session", sid)
-        _run(capsys, root, "record-result", "--session", sid, "--status", "passed", "--actual", "ok")
+        _run(capsys, root, "record-result", "--session", sid, "--status", "passed", "--actual", "ok", "--control", "reviewed: ok")
     _run(capsys, root, "verify-final", "--session", sid)
     # dummy's resolution gate blocks the final resolve
     rc, d = _run(capsys, root, "resolve", "--session", sid, "--by", "user")

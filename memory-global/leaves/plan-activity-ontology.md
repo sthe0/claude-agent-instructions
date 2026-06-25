@@ -40,6 +40,10 @@ A plan has a `[meta]` head and one or more `[[stage]]` blocks; each stage is a f
 
 The full element set is **mandatory for substantive plans** (`meta.weight_class = "substantive"`) and optional/lighter for `small_change` / `chat`. When `weight_class` is absent, treat the plan **leniently** (new fields optional) so legacy plans keep parsing — strictness applies only where substantive is declared. This mirrors the `schema:leaf/v1` grandfathering: opt-in enforcement, grandfather the rest. See [[leaf-schema]].
 
+### Element 3 — a machine-enforced instance: review of a developer-actor stage
+
+The control criterion (element #3) is normally a per-plan text the manager checks by hand. One instance is enforced by the engine: when the **actor** (element #6, the `executor`) is `spawn:developer`, the criterion's value is **code review**, and `record-result` refuses to record that stage PASSED without a non-empty general `--control` attestation (`Stage.needs_control()` in `state.py`, the precondition in `cmd_record_result`). Review is not a separate obligation bolted on — it is the value element #3 takes when the result is delegated code, with the reviewer a special case of the controller and the developer (element #6) a special case of the executor. The engine enforces the general structural fact (a developer-produced result needs a control attestation); the content stays free-text cognition. There is deliberately **no** review-specific command — the obligation rides the general `record-result --control`. See `scripts/agentctl/README.md` § *Control attestation*.
+
 ### Element 7 — the refutable-principle discipline
 
 Material and method must be chosen by *inference*, not "from the ceiling". State the principle, its **source** (where the regularity comes from), its **confidence**, and what observation would **refute** it. This is the same epistemics already required of rules and memory ("name the difficulty", "cite the source for version-dependent claims", "any principle is potentially refutable") applied to the choice of transformation. It ties to the planner's existing "no numbers/claims without a source" rule.

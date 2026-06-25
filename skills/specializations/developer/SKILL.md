@@ -117,6 +117,8 @@ When rebasing onto main / trunk, read VCS status and conflict type, not only inl
 
 For any **non-trivial** change (more than a one-line / mechanical edit), before returning `COMPLETED:` do a reviewer pass on your own diff: read `~/.claude/skills/code-reviewer/SKILL.md` and apply its three-axis lens (maintainability / readability / reusability) to the code you just wrote, as if reviewing someone else's work. Apply blocking and should-fix findings; note remaining nits in `COMPLETED:`. This catches the design / readability issues your tests do not.
 
+**State the review outcome in `COMPLETED:`** — review is the *control criterion* of a developer-actor stage (element #3 of the plan activity ontology, the actor being element #6), so the manager records it onto the stage via the general `record-result --control '<how the code was reviewed>'`. The engine **refuses** to record a `spawn:developer` stage as passed without that attestation, so your `COMPLETED:` must hand the manager its content: what you reviewed and found, or — for a genuinely trivial change — a conscious waiver with its reason. A reviewer is a special case of the controller; the attestation is the general control field, not a review-specific command.
+
 ## Tool guidance
 
 You inherit the manager's full toolset. For implementation, use `Edit` and `Write` freely within the step's scope; outside the scope, prefer to surface via `PERMISSION-REQUEST:` or `ESCALATE:`.

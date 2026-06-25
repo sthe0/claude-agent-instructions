@@ -125,7 +125,7 @@ def _drive_to_resolution(capsys, root, sid, plan, *, chat=False):
     _run(capsys, root, "partition", "--session", sid)
     for _ in range(2):
         _run(capsys, root, "next-stage", "--session", sid)
-        _run(capsys, root, "record-result", "--session", sid, "--status", "passed", "--actual", "ok")
+        _run(capsys, root, "record-result", "--session", sid, "--status", "passed", "--actual", "ok", "--control", "reviewed: ok")
     _run(capsys, root, "verify-final", "--session", sid)
 
 

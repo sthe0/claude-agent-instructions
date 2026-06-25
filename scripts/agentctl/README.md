@@ -73,7 +73,7 @@ start → classify → plan → submit-plan → approve → partition → next-s
 | `partition` | Record the M1–M4 **delivery-partition** assessment — into how many independently-shippable, separately-reviewable units (PRs/tickets) the approved plan is cut. Delivery segmentation, **not** the planner's step-level decomposition (`APPROVED → PARTITIONED`). |
 | `next-stage` | Select the next ready stage and enter execution (`→ EXECUTING`). |
 | `dispatch` | At `EXECUTING`, route the active stage to its actor (`in_thread` / `spawn:<specialization>`) and return the cognitive leaf + return-marker handling; no node change. |
-| `record-result` | Record a stage's actual result + status. PASSED → `VERIFYING`; FAILED → `DIAGNOSING` (enter the overcome-difficulty sub-spine). |
+| `record-result` | Record a stage's actual result + status, plus an optional general `--control` attestation (how element #3, the control criterion, was met). PASSED → `VERIFYING`; FAILED → `DIAGNOSING` (enter the overcome-difficulty sub-spine). A `spawn:developer` stage is **refused** PASSED without a non-empty `--control` — see *Control attestation* below. |
 | `declare` / `investigate` / `critique` | In `DIAGNOSING`, fill the three sections of the `Difficulty` record **in order** (the engine refuses out-of-order calls). Each records one phase's artifact; the content is the `overcome-difficulty` skill's cognition. |
 | `verify-final` | Pass the final-verification gate: all stages PASSED + the plan's *Final verification* (`VERIFYING → RESOLUTION`). |
 | `resolve` | Pass the resolution gate; `--by` names the confirmer (`RESOLUTION → RESOLVED`). |
@@ -81,6 +81,12 @@ start → classify → plan → submit-plan → approve → partition → next-s
 | `block` / `unblock` | Mark a difficulty (`any → BLOCKED`) and return to the prior node. |
 | `resolve-permission` | Record the decision on a specialist's `PERMISSION-REQUEST`. |
 | `status` | Inspect the current node + directive; no transition. |
+
+### Control attestation (`record-result --control`)
+
+The **control criterion** (element #3 of the plan activity ontology) is a general property of *every* stage: how the result's conformance to the order is checked. `record-result` carries it as an optional general field, `--control <attestation>`, stored on the stage. It is mandatory in exactly one data-driven case: a stage whose **actor** (element #6) is `spawn:developer`. Recording such a stage PASSED without a non-empty `--control` is **refused** (a Directive, no node transition) — `Stage.needs_control()` is true iff the actor is `spawn:developer`, and the precondition lives in `cmd_record_result` as the single chokepoint where PASSED is set. `status=failed` and every non-developer stage (`in_thread`, other `spawn:*`) are unaffected, and `--control` stays optional-and-accepted on them (any stage may attest its control).
+
+**Why no `review`/`record-review` command.** Review is the *value the control criterion takes* when the actor is a delegated code producer: a reviewer is a special case of the controller, a developer a special case of the executor. Carving a review-specific verb out of the **general** command set for that one specialization would be the wrong cut — the engine enforces the general structural fact (a developer-produced result needs a control attestation), while the specific content (reviewed by whom, or a conscious trivial waiver with its reason) is cognition supplied as free text, per the canon **code = control-flow, prose = cognition**. If free-text attestations prove too weak, the escalation is to *structure* the attestation (a controller actor distinct from the producer, or a paired control sub-stage), still without a review-specific command.
 
 ## Modules
 

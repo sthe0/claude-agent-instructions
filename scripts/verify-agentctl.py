@@ -235,6 +235,118 @@ def check_plugins() -> list[str]:
     return problems
 
 
+def check_control_precondition() -> list[str]:
+    """Verify the record-result --control precondition for spawn:developer stages.
+
+    A spawn:developer stage must refuse record-result --status passed unless a
+    non-empty --control attestation has been supplied. Non-developer stages and
+    failed records are always allowed through. No new command must exist for this
+    feature — the precondition rides the general record-result command.
+    """
+    from argparse import Namespace
+    from agentctl import cli
+    from agentctl.state import (
+        Actor, Criterion, GateRecord, Means, Node, Outcome, Partition,
+        SessionState, Stage, StageStatus, Subject,
+    )
+
+    problems: list[str] = []
+
+    def _dev_stage(index=1, executor="spawn:developer") -> Stage:
+        return Stage(
+            index=index, title="dev stage",
+            subject=Subject(material="m", result="img"),
+            means=Means(means="Edit", method="do"),
+            actor=Actor(executor=executor),
+            criterion=Criterion(criterion_type="measurable", done_criterion="dc"),
+            outcome=Outcome(status=StageStatus.ACTIVE.value),
+        )
+
+    def _executing_state(stage: Stage) -> SessionState:
+        return SessionState(
+            session_id="ctrl-check", task_id="ctrl-task",
+            node=Node.EXECUTING.value,
+            weight_class="SUBSTANTIVE",
+            route="SPAWN",
+            approval=GateRecord("plan_approval", armed=True, passed=True, by="user"),
+            partition=Partition(verdict="not-recommended"),
+            stages=[stage],
+            current_stage=stage.index,
+        )
+
+    class _Mem:
+        def __init__(self, s): self.s = s
+        def load(self, _): return self.s
+        def save(self, s): self.s = s
+
+    # 1. spawn:developer + passed + no --control -> REFUSED
+    store = _Mem(_executing_state(_dev_stage()))
+    d = cli.cmd_record_result(
+        Namespace(session="ctrl-check", status="passed", actual="done", control=None),
+        store=store,
+    )
+    if d.ok:
+        problems.append(
+            "record-result --status passed on a spawn:developer stage without --control "
+            "was not refused (expected ok=False)"
+        )
+    if "record-result" not in d.detail or "--control" not in d.detail:
+        problems.append(
+            f"refusal directive does not name 'record-result --control' in its detail: {d.detail!r}"
+        )
+
+    # 2. spawn:developer + passed + --control -> ALLOWED (transitions to VERIFYING)
+    store2 = _Mem(_executing_state(_dev_stage()))
+    d2 = cli.cmd_record_result(
+        Namespace(session="ctrl-check", status="passed", actual="done",
+                  control="reviewed: self-review ok"),
+        store=store2,
+    )
+    if not d2.ok:
+        problems.append(
+            f"record-result --status passed with --control was refused unexpectedly: {d2.detail}"
+        )
+    if d2.ok and store2.s.node != Node.VERIFYING.value:
+        problems.append(
+            f"after --control accepted, node should be VERIFYING, got {store2.s.node}"
+        )
+
+    # 3. spawn:developer + failed + no --control -> enters DIAGNOSING (not a control refusal)
+    store3 = _Mem(_executing_state(_dev_stage()))
+    d3 = cli.cmd_record_result(
+        Namespace(session="ctrl-check", status="failed", actual="boom", control=None),
+        store=store3,
+    )
+    if d3.action == "attest_control":
+        problems.append(
+            "record-result --status failed on a spawn:developer stage was refused "
+            "by the control precondition (control must only block passed, not failed)"
+        )
+
+    # 4. in_thread + passed + no --control -> ALLOWED
+    store4 = _Mem(_executing_state(_dev_stage(executor="in_thread")))
+    d4 = cli.cmd_record_result(
+        Namespace(session="ctrl-check", status="passed", actual="done", control=None),
+        store=store4,
+    )
+    if not d4.ok:
+        problems.append(
+            f"record-result --status passed on an in_thread stage without --control "
+            f"was refused unexpectedly (control not required for in_thread): {d4.detail}"
+        )
+
+    # 5. no new command carved out for the control feature
+    forbidden = {"attest-control", "record-review", "review-result"}
+    found = sorted(forbidden & set(cli.COMMANDS))
+    if found:
+        problems.append(
+            f"forbidden new command(s) in COMMANDS (control must ride record-result, "
+            f"not a new verb): {found}"
+        )
+
+    return problems
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--staged", action="store_true", help="ignored; accepted for verify-all uniformity")
@@ -264,6 +376,7 @@ def main(argv: list[str] | None = None) -> int:
     problems += check_gate_guardians(GATE_TO_HOOK, desired)
 
     problems += check_plugins()
+    problems += check_control_precondition()
 
     if problems:
         print("verify-agentctl: FAIL")

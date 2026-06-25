@@ -63,7 +63,8 @@ def test_full_substantive_cycle(store, fixtures_dir):
     d = cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium",
                             dry_run=True), store=store, runner=fake_runner)
     assert d.ok
-    d = cli.cmd_record_result(ns(session=sid, status="passed", actual="import ok"), store=store)
+    d = cli.cmd_record_result(ns(session=sid, status="passed", actual="import ok",
+                               control="reviewed: ok"), store=store)
     assert d.node == Node.VERIFYING.value
     assert d.action == "next_stage"
 
@@ -73,7 +74,8 @@ def test_full_substantive_cycle(store, fixtures_dir):
     d = cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium",
                             dry_run=True), store=store, runner=fake_runner)
     assert d.ok
-    d = cli.cmd_record_result(ns(session=sid, status="passed", actual="tests green"), store=store)
+    d = cli.cmd_record_result(ns(session=sid, status="passed", actual="tests green",
+                               control="reviewed: ok"), store=store)
     assert d.action == "verify_final"
 
     d = cli.cmd_verify_final(ns(session=sid), store=store)

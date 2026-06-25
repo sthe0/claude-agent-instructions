@@ -64,7 +64,8 @@ def test_resolve_completed_marker(store, fixtures_dir):
                          m3_severe=False, m4_severe=False), store=store)
     for _ in range(2):
         cli.cmd_next_stage(ns(session=sid), store=store)
-        cli.cmd_record_result(ns(session=sid, status="passed", actual="ok"), store=store)
+        cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
+                               control="reviewed: ok"), store=store)
     cli.cmd_verify_final(ns(session=sid), store=store)
     # experience auto-activates for substantive sessions and gates resolution
     cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="searched"), store=store)
@@ -159,7 +160,8 @@ def test_reset_from_resolved_rearms(store, fixtures_dir):
                          m3_severe=False, m4_severe=False), store=store)
     for _ in range(2):
         cli.cmd_next_stage(ns(session=sid), store=store)
-        cli.cmd_record_result(ns(session=sid, status="passed", actual="ok"), store=store)
+        cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
+                               control="reviewed: ok"), store=store)
     cli.cmd_verify_final(ns(session=sid), store=store)
     # experience auto-activates for substantive sessions and gates resolution
     cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="searched"), store=store)

@@ -534,6 +534,21 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
     actual = args.actual or ""
     stage.outcome.actual = actual
     passed = args.status == "passed"
+
+    # General control-criterion attestation: optional on any stage, but required
+    # non-empty for spawn:developer + passed (review is the control criterion of a
+    # developer-actor stage; reviewer ⊂ controller, developer ⊂ executor).
+    control = getattr(args, "control", None) or None
+    if control:
+        stage.control = control
+    if passed and stage.needs_control() and not stage.has_control():
+        return Directive(
+            False, state.node, "attest_control",
+            f"stage {stage.index} is a spawn:developer stage; the control criterion of a "
+            "developer-produced result is review — supply it via: "
+            "record-result --control '<how the code was reviewed>'",
+        )
+
     state.node = transition(state.node, "verify")  # EXECUTING -> VERIFYING
 
     if passed:
@@ -874,6 +889,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("record-result"); sp.add_argument("--session", required=True)
     sp.add_argument("--status", choices=["passed", "failed"], required=True)
     sp.add_argument("--actual", default="")
+    sp.add_argument("--control", default=None,
+                    help="control-criterion attestation (required for spawn:developer stages "
+                         "when recording passed; accepted on any stage)")
     sp = add("declare"); sp.add_argument("--session", required=True)
     sp.add_argument("--expected", required=True); sp.add_argument("--actual", required=True)
     sp.add_argument("--mismatch", required=True)
