@@ -35,6 +35,11 @@ DESIRED = [
     ("PreToolUse",       "Edit|Write", "hook-prewrite-plan-check.py", 5),
     ("PreToolUse",       "Edit|Write", "hook-state-gate.py",          5),
     ("PreToolUse",       "Bash",  "hook-retry-detector.py",          5),
+    # Advisory determinization nudges (never block): arm long-job monitoring,
+    # prefer a domain Skill over hand-rolled CLI, reply in the user's language.
+    ("PreToolUse",       "Bash",  "hook-long-job-arm.py",            5),
+    ("PreToolUse",       "Bash",  "hook-skill-first.py",             5),
+    ("UserPromptSubmit", None,    "hook-language-reminder.py",       5),
     ("PreToolUse",       "Bash|Grep|Glob", "hook-arc-mount-search-guard.py", 5),
     ("PostToolUse",      "Write", "hook-self-critique-reminder.py",  5),
     ("SessionStart",     None,    "hook-policy-scorecard-due.py",    5),
