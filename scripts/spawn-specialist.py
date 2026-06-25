@@ -230,7 +230,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--constraints", default="", help="scope / do-not-touch / deadlines (inline)")
     p.add_argument("--context-dossier", type=Path, help="path to a file with the conversation-context digest")
-    p.add_argument("--budget", choices=("small", "medium", "large"), default="medium", help="budget tier from config.md")
+    p.add_argument("--budget", choices=("small", "medium", "large"), default="medium", help="budget tier from config.md (kind=developer floors small->medium: the static prefix alone ~$1)")
     p.add_argument("--project-permissions", type=Path, help="project-scope permissions.json to also include in the digest")
     p.add_argument(
         "--permission-mode",
@@ -395,6 +395,18 @@ def main(argv: list[str] | None = None) -> int:
         )
         log_refused("recursion-cap", {"kind": args.kind, "depth_attempted": depth_next, "cap": cap})
         return 3
+
+    # A developer spawn's static prefix (skill body + context dossier) alone burns
+    # ~$1 in cache reads before the first edit, so budget-small ($1) is exhausted
+    # mid-flight (error_max_budget_usd) even on a trivial fix. Floor developer at
+    # medium. See experience leaf 2026-06-24-developer-marker-not-on-line-1-false-block.
+    if args.kind == "developer" and args.budget == "small":
+        print(
+            "notice: kind=developer with --budget small is structurally insufficient "
+            "(static prefix alone ~$1); bumping to medium.",
+            file=sys.stderr,
+        )
+        args.budget = "medium"
 
     budget = budget_value(args.budget, constants)
     perms = permissions_digest(args.project_permissions)
