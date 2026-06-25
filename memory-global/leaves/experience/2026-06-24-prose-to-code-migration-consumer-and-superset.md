@@ -23,8 +23,20 @@ When moving a prose process into code: (1) find a consumer that calls the new co
 - Where it arose: agentctl prose->code roadmap, Phase 4: extracting the side-effect-free verb taxonomy
 - Working plan: Reframed Phase 4 from 'write advisory classify_action' to 'extract the verb taxonomy already duplicated ad-hoc in lint-settings-base.py into classify_action, and make the linter delegate' — real consumer (the linter, run by verify-all) today. Step 2 prose: cross-referenced classify_action as canonical from CLAUDE.md/acting-without-asking.md WITHOUT deleting the richer verb heuristics (prose is a superset).
 
+
+### 2026-06-25 — code-primary plan structure (8-element grouped model)
+- Where it arose: agentctl prose->code: make plan structure (simple + composite) defined primarily by typed code, not text. 8 activity elements -> grouped dataclasses; composite DAG edges -> typed Supply
+- Working plan: Both failure modes were live and addressed. (1) Dead-consumer: the grouped typed model (Subject/Means/Actor/Criterion/Principle + separate Outcome) is not advisory — parse_plan BUILDS it from the flat author TOML and _validate_graph / diff_plans / _structural_signature / build_argv / gates / cli all READ it today; the runtime axis was exercised by running record-result, which loaded the live persisted session through Stage.from_dict's flat->nested migration shim. (2) Superset-collapse: did NOT delete the prose verifier or the ontology leaf — kept verify-plan-file.py + plan-activity-ontology.md as a human-readable MIRROR with an explicit 'code wins on divergence' cross-reference. New refinement over Phase 4: when codifying, also (a) split the immutable DECLARATION from the mutable execution RECORD (Outcome) so they can't be conflated, and (b) make any second representation DERIVED, not hand-maintained in parallel — depends_on became an @property projecting the typed Supply edges (Supply is the sole edge source), so ordering can't drift from provision. Author TOML deliberately stays FLAT (bootstrap: the running flat parser must keep orchestrating the plan that rebuilds it; final design: grouping lives in the in-memory model).
+
+## Common core & variations
+**Common:** Porting a prose process into agentctl code must clear the same two traps every time: secure a real runtime consumer for the new code TODAY (else it's advisory dead code), and verify the code is a true superset before collapsing the prose (else keep the richer prose as a mirror with a code-wins cross-reference).
+
+**Variations:** Phase 4 extracted a verb taxonomy into a function and made a linter delegate; this context restructured a whole multi-field schema into grouped types + a derived edge projection + a declaration/record split. Same two traps, plus two new codify-time disciplines surfaced here: split the immutable declaration from the mutable record, and make any second representation derived rather than parallel-maintained.
+
 ## Cost
 grounding Explore (sonnet) ~$0.5; developer (sonnet, code) $0.94; manager prose edits in-thread. 2 commits 2be4afd+bd33469.
+
+2026-06-25 context: developer (sonnet) stage 1 (state.py+plan.py grouped model, migration shim, tests); manager stages 2-3 in-thread (prose mirror + parse_marker fix). 2 commits 29c5d59 (stages 1-2) + 79f51a1 (stage 3, [self-improvement-reviewed]); verify-all 12/12, pytest 362 passed.
 
 ## Self-critique of the agent system
 The approved plan literally said 'collapse prose to a pointer'; I almost executed that verbatim, which would have deleted the §3 verb heuristics. Caught it only by reading the trim targets before editing. Lesson: read the prose-trim target and compare its coverage to the code BEFORE assuming redundancy.
