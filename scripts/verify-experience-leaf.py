@@ -22,7 +22,12 @@ Invocation modes:
   --hook      PreToolUse mode. Reads the tool-input JSON on stdin and
               validates if it is a Write tool call targeting
               `**/experience/*.md`. Exit 2 (block + stderr to model)
-              on violation.
+              on violation. Beyond the frontmatter-presence check, this mode
+              also validates the `resolution_confirmed_by_user` quote against
+              the session transcript (`transcript_path` in the payload): a
+              quote absent from every user message is treated as fabricated
+              and blocked. When the transcript cannot be resolved the check
+              degrades to advisory (warn, never block).
   <path>      Ad-hoc CLI check for a single file path.
 
 Exit codes:
@@ -60,6 +65,68 @@ V1_SECTIONS = [
 
 def is_experience_leaf(path: str) -> bool:
     return bool(EXPERIENCE_PATH_RE.search(path))
+
+
+def _normalize(text: str) -> str:
+    """Collapse whitespace + lowercase so quote matching tolerates reflowing."""
+    return re.sub(r"\s+", " ", text or "").strip().lower()
+
+
+def _iter_user_text(transcript_path: str):
+    """Yield user-authored prose from a session transcript JSONL.
+
+    Only `type == "user"` records, and within them only string content or
+    `text` blocks — tool_result blocks are the harness echoing tool output,
+    not something the user typed, so they cannot stand in for a confirmation.
+    """
+    try:
+        lines = Path(transcript_path).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if rec.get("type") != "user":
+            continue
+        content = (rec.get("message") or {}).get("content")
+        if isinstance(content, str):
+            yield content
+        elif isinstance(content, list):
+            for block in content:
+                if isinstance(block, str):
+                    yield block
+                elif isinstance(block, dict) and block.get("type") == "text":
+                    yield block.get("text", "")
+
+
+def transcript_confirms(quote: str, transcript_path: str | None):
+    """Validate the confirmation quote actually appears in the session transcript.
+
+    Returns (status, detail):
+      (True,  ...)  quote found in a user message (normalized substring)
+      (False, ...)  transcript resolved but quote absent — likely fabricated
+      (None,  ...)  transcript unresolvable — graceful degrade, advisory only
+
+    The (None, ...) degrade is deliberate: outside `--hook` mode there is no
+    session context, and even in-hook the path may be missing on older
+    harnesses. We never block when we cannot actually look.
+    """
+    if not transcript_path:
+        return None, "no transcript_path available"
+    if not Path(transcript_path).exists():
+        return None, f"transcript not found: {transcript_path}"
+    needle = _normalize(quote)
+    if not needle:
+        return None, "empty confirmation quote after normalization"
+    for text in _iter_user_text(transcript_path):
+        if needle in _normalize(text):
+            return True, "quote found in transcript"
+    return False, "confirmation quote not present in any user message of the transcript"
 
 
 def _fm_field(fm_body: str, regex: re.Pattern) -> str:
@@ -171,19 +238,45 @@ def cmd_hook() -> int:
         return 0
     content = tool_input.get("content", "") or ""
     err = check_content(content)
-    if err is None:
-        return 0
-    print(
-        "verify-experience-leaf: BLOCK\n"
-        f"  Write target: {file_path}\n"
-        f"  reason: {err}\n"
-        "  rule: CLAUDE.md § On task resolution — experience leaves must include\n"
-        "        resolution_confirmed_by_user: \"<user quote>\" in YAML frontmatter.\n"
-        "  recovery: confirm resolution with the user, copy their literal\n"
-        "            confirmation into the field, retry the Write.\n",
-        file=sys.stderr,
-    )
-    return 2
+    if err is not None:
+        print(
+            "verify-experience-leaf: BLOCK\n"
+            f"  Write target: {file_path}\n"
+            f"  reason: {err}\n"
+            "  rule: CLAUDE.md § On task resolution — experience leaves must include\n"
+            "        resolution_confirmed_by_user: \"<user quote>\" in YAML frontmatter.\n"
+            "  recovery: confirm resolution with the user, copy their literal\n"
+            "            confirmation into the field, retry the Write.\n",
+            file=sys.stderr,
+        )
+        return 2
+
+    # Frontmatter is well-formed. Second teeth: the quote must actually be
+    # something the user said in this session — a frontmatter field is trivial
+    # to fabricate, the transcript is not. Graceful degrade when unresolvable.
+    fm = FRONTMATTER_RE.match(content)
+    quote = _fm_field(fm.group(1), FIELD_RE) if fm else ""
+    status, detail = transcript_confirms(quote, payload.get("transcript_path"))
+    if status is False:
+        print(
+            "verify-experience-leaf: BLOCK\n"
+            f"  Write target: {file_path}\n"
+            f"  reason: {detail}\n"
+            f"  quote: {quote!r}\n"
+            "  rule: CLAUDE.md § On task resolution — the confirmation quote must be\n"
+            "        the user's literal words, present in the session transcript.\n"
+            "  recovery: confirm resolution with the user, copy their actual\n"
+            "            confirmation verbatim into the field, retry the Write.\n",
+            file=sys.stderr,
+        )
+        return 2
+    if status is None:
+        print(
+            f"verify-experience-leaf: ADVISORY — could not verify quote against "
+            f"transcript ({detail}); allowing write.",
+            file=sys.stderr,
+        )
+    return 0
 
 
 def cmd_file(path_str: str) -> int:
