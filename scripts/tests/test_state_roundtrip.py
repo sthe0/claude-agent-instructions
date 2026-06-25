@@ -44,6 +44,49 @@ def test_json_roundtrip_equality():
     assert back == s
 
 
+def test_json_roundtrip_preserves_verify_command():
+    s = SessionState(
+        session_id="sess",
+        task_id="task",
+        weight_class=WeightClass.SUBSTANTIVE.value,
+        route=Route.SPAWN.value,
+        stages=[
+            Stage(
+                index=1,
+                title="stage 1",
+                subject=Subject(material="m", result="img"),
+                means=Means(means="Edit", method="do it"),
+                actor=Actor(executor="in_thread"),
+                criterion=Criterion(
+                    criterion_type="measurable",
+                    done_criterion="crit",
+                    verify_command="pytest -q tests/test_x.py",
+                    expected_exit=0,
+                ),
+            ),
+        ],
+    )
+    back = SessionState.from_json(s.to_json())
+    assert back == s
+    assert back.stage(1).criterion.verify_command == "pytest -q tests/test_x.py"
+    assert back.stage(1).criterion.expected_exit == 0
+
+
+def test_legacy_flat_stage_without_verify_command_loads():
+    """A pre-existing FLAT stage dict (no verify_command) rebuilds with defaults."""
+    flat = {
+        "index": 1,
+        "title": "legacy",
+        "executor": "in_thread",
+        "expected_result_image": "img",
+        "done_criterion": "crit",
+        "criterion_type": "measurable",
+    }
+    stage = Stage.from_dict(flat)
+    assert stage.criterion.verify_command is None
+    assert stage.criterion.expected_exit == 0
+
+
 def test_executing_requires_approval():
     with pytest.raises(InvariantError):
         SessionState(session_id="s", task_id="t", node=Node.EXECUTING.value)

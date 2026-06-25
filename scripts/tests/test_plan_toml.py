@@ -59,6 +59,49 @@ def test_diff_substantive(fixtures_dir):
     assert diff_plans(a, b) == "substantive"
 
 
+# --- optional executable verify_command / expected_exit on a stage criterion ---
+
+def test_verify_command_parsed():
+    data = {
+        "meta": {"task_id": "t"},
+        "stage": [{
+            "index": 1, "title": "x", "executor": "in_thread",
+            "expected_result_image": "i", "done_criterion": "c",
+            "verify_command": "pytest -q", "expected_exit": 0,
+        }],
+    }
+    doc = parse_plan(data)
+    assert doc.stages[0].criterion.verify_command == "pytest -q"
+    assert doc.stages[0].criterion.expected_exit == 0
+
+
+def test_verify_command_nonzero_expected_exit_parsed():
+    data = {
+        "meta": {"task_id": "t"},
+        "stage": [{
+            "index": 1, "title": "x", "executor": "in_thread",
+            "expected_result_image": "i", "done_criterion": "c",
+            "verify_command": "test -f missing", "expected_exit": 1,
+        }],
+    }
+    doc = parse_plan(data)
+    assert doc.stages[0].criterion.expected_exit == 1
+
+
+def test_verify_command_absent_defaults():
+    """A stage without verify_command parses with None / exit 0 defaults (legacy plans)."""
+    data = {
+        "meta": {"task_id": "t"},
+        "stage": [{
+            "index": 1, "title": "x", "executor": "in_thread",
+            "expected_result_image": "i", "done_criterion": "c",
+        }],
+    }
+    doc = parse_plan(data)
+    assert doc.stages[0].criterion.verify_command is None
+    assert doc.stages[0].criterion.expected_exit == 0
+
+
 # --- 8-element activity-structure (weight_class = "substantive") ---
 
 def _minimal_stage(index=1, **overrides):

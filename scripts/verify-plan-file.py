@@ -28,6 +28,11 @@ For **substantive** plans — those containing a line that matches
 Legacy / non-substantive plans (no weight_class marker) are validated only
 against the 4-section baseline, preserving backward compatibility.
 
+A stage MAY optionally carry an executable form of its done criterion via a
+`Verify command:` line (and the TOML keys `verify_command` / `expected_exit`):
+when present on a measurable stage the engine runs it and gates the stage's
+PASSED on the actual exit code. This is optional and not structurally required.
+
 This is a structural check only — it cannot verify that the *content*
 of each field is meaningful. The point is to make "did you remember
 the verification image" mechanical instead of recall-dependent.

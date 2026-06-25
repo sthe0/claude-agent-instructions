@@ -206,9 +206,18 @@ class Actor:
 
 @dataclass
 class Criterion:
-    """How the result is judged: criterion type + the concrete done criterion."""
+    """How the result is judged: criterion type + the concrete done criterion.
+
+    For a measurable criterion the done_criterion MAY be made executable: when
+    `verify_command` is set, the engine runs it and accepts the stage as passed
+    only if the process exit code equals `expected_exit` (default 0). This moves
+    "verify the right axis, report honestly" from discipline into an invariant —
+    the model is removed from the trust path for the measurable subset. Absent a
+    command (the default) the engine keeps its flag-only behaviour."""
     criterion_type: str  # CriterionType value
     done_criterion: str
+    verify_command: str | None = None
+    expected_exit: int = 0
 
 
 @dataclass
@@ -317,6 +326,8 @@ class Stage:
             criterion=Criterion(
                 criterion_type=d.get("criterion_type", CriterionType.MEASURABLE.value),
                 done_criterion=d.get("done_criterion", ""),
+                verify_command=d.get("verify_command"),
+                expected_exit=int(d.get("expected_exit", 0)),
             ),
             principle=None,  # flat states predate the principle element
             conditions=d.get("conditions"),

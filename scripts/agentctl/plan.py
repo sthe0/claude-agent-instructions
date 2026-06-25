@@ -20,6 +20,8 @@ TOML shape (minimal):
     expected_result_image = "package imports, status runs on empty state"
     criterion_type = "measurable"
     done_criterion = "python3 -m agentctl status exits 0"
+    verify_command = "python3 -m agentctl status"  # optional; executable form of done_criterion
+    expected_exit = 0                     # optional (default 0); engine gates passed on this exit
     depends_on = []                       # optional
     output_artifacts = ["scripts/agentctl/"]  # optional
 
@@ -244,6 +246,10 @@ def parse_plan(data: dict) -> PlanDoc:
                 criterion=Criterion(
                     criterion_type=str(s.get("criterion_type", CriterionType.MEASURABLE.value)),
                     done_criterion=str(s["done_criterion"]),
+                    verify_command=(
+                        str(s["verify_command"]) if s.get("verify_command") else None
+                    ),
+                    expected_exit=int(s.get("expected_exit", 0)),
                 ),
                 principle=principle,
                 conditions=str(s["conditions"]) if s.get("conditions") else None,
