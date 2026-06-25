@@ -61,5 +61,6 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 | [verify-memory-index.py](verify-memory-index.py) | Verify every memory-global leaf is referenced from an index and carries a valid top-level `type:` frontmatter key |
 | [verify-plan-file.py](verify-plan-file.py) | Structural validator for planner output (per `planner` SKILL.md § Plan format) |
 | [verify-readme.py](verify-readme.py) | Verify the README inventory sentinels (scripts / flat skills / specializations) match the filesystem; `--fix` reconciles, `--root` for project repos |
+| [verify-doc-concepts.py](verify-doc-concepts.py) | Verify foundational-concept doc-bindings: each registered concept's doc section heading exists and its code anchors are importable |
 | [verify-self-improvement-edit.py](verify-self-improvement-edit.py) | `commit-msg` gate: require `[self-improvement-reviewed]` in commits that touch `skills/self-improvement/` |
 <!-- inventory:scripts:end -->
