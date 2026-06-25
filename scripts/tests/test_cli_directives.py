@@ -60,7 +60,7 @@ def test_resolve_completed_marker(store, fixtures_dir):
     sid = "d4"
     _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
-    cli.cmd_decompose(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
+    cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
     for _ in range(2):
         cli.cmd_next_stage(ns(session=sid), store=store)
@@ -76,7 +76,7 @@ def test_record_result_loop_guard_escalate_marker(store, fixtures_dir):
     sid = "d5"
     _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
-    cli.cmd_decompose(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
+    cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
     cli.cmd_next_stage(ns(session=sid), store=store)
     d = cli.cmd_record_result(ns(session=sid, status="failed", actual="boom"), store=store)
@@ -150,7 +150,7 @@ def test_reset_from_resolved_rearms(store, fixtures_dir):
     sid = "rs1"
     _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
-    cli.cmd_decompose(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
+    cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
     for _ in range(2):
         cli.cmd_next_stage(ns(session=sid), store=store)

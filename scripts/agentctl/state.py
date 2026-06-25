@@ -28,7 +28,7 @@ class Node(str, Enum):
     PLANNING = "PLANNING"
     PLAN_READY = "PLAN_READY"
     APPROVED = "APPROVED"
-    DECOMPOSED = "DECOMPOSED"
+    PARTITIONED = "PARTITIONED"
     EXECUTING = "EXECUTING"
     VERIFYING = "VERIFYING"
     RESOLUTION = "RESOLUTION"
@@ -37,7 +37,7 @@ class Node(str, Enum):
 
 
 # Nodes at or past EXECUTING on the spawn path — once here, a SPAWN route must
-# have recorded its decomposition assessment.
+# have recorded its partition assessment.
 _EXECUTION_NODES = frozenset(
     {
         Node.EXECUTING.value,
@@ -95,10 +95,10 @@ class GateRecord:
 
 
 @dataclass
-class Decomposition:
-    """The M1–M4 decomposition assessment recorded between APPROVED and EXECUTING
+class Partition:
+    """The M1–M4 partition assessment recorded between APPROVED and EXECUTING
     on the spawn path. The markers are cognitive inputs; the verdict is computed
-    by decompose.verdict()."""
+    by partition.verdict()."""
     m1: bool = False
     m2: bool = False
     m3: bool = False
@@ -264,7 +264,7 @@ class SessionState:
     blocked_from: str | None = None
     plan_path: str | None = None
     plan_verified: bool = False
-    decomposition: "Decomposition | None" = None
+    partition: "Partition | None" = None
     permission_request: "PermissionRequest | None" = None
     approval: GateRecord = field(default_factory=lambda: GateRecord("plan_approval"))
     resolution: GateRecord = field(default_factory=lambda: GateRecord("resolution"))
@@ -292,10 +292,10 @@ class SessionState:
         if (
             self.route == Route.SPAWN.value
             and self.node in _EXECUTION_NODES
-            and self.decomposition is None
+            and self.partition is None
         ):
             raise InvariantError(
-                "route=SPAWN at or past EXECUTING requires decomposition (run decompose)"
+                "route=SPAWN at or past EXECUTING requires partition (run partition)"
             )
         if self.weight_class == WeightClass.CHAT.value and self.node not in (
             Node.CLASSIFIED.value,
@@ -346,8 +346,8 @@ class SessionState:
         data["resolution"] = GateRecord(**data["resolution"])
         data.pop("self_improvement", None)  # legacy field (schema <=4); self-improvement now runs on the standard spine
         data["stages"] = [Stage.from_dict(s) for s in data.get("stages", [])]
-        decomp = data.get("decomposition")
-        data["decomposition"] = Decomposition(**decomp) if decomp else None
+        decomp = data.get("partition")
+        data["partition"] = Partition(**decomp) if decomp else None
         pr = data.get("permission_request")
         data["permission_request"] = PermissionRequest(**pr) if pr else None
         return cls(**data)

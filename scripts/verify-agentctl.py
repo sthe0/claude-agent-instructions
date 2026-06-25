@@ -62,7 +62,7 @@ def check_state_roundtrip() -> list[str]:
     from agentctl.state import (
         Actor,
         Criterion,
-        Decomposition,
+        Partition,
         GateRecord,
         Means,
         Node,
@@ -89,7 +89,7 @@ def check_state_roundtrip() -> list[str]:
         weight_class="SUBSTANTIVE",
         route="SPAWN",
         approval=GateRecord("plan_approval", armed=True, passed=True, by="user"),
-        decomposition=Decomposition(m1=True, m2=True, verdict="recommended"),
+        partition=Partition(m1=True, m2=True, verdict="recommended"),
         stages=[
             Stage(
                 index=1,

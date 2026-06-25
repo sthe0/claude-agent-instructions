@@ -1,12 +1,12 @@
-"""Decomposition assessment (M1–M4): the pure truth-table + section renderer.
+"""Partition assessment (M1–M4): the pure truth-table + section renderer.
 
-This is the deterministic half of the decomposition step. The four markers are
+This is the deterministic half of the partition step. The four markers are
 cognitive inputs the LLM coordinator supplies (it judges standalone value,
 heterogeneity, blocking dependencies, and rollback risk); the verdict that
-follows from them, and the rendered `## Decomposition` skeleton, are mechanical
+follows from them, and the rendered `## Partition` skeleton, are mechanical
 and live here so the rule cannot drift between sessions.
 
-Markers (see memory-global/leaves/decomposition-markers.md):
+Markers (see memory-global/leaves/partition-markers.md):
   M1 = independent standalone-value deliverables
   M2 = heterogeneous work (different skills / areas)
   M3 = blocking dependencies between parts
@@ -61,11 +61,11 @@ def render_section(
     m4_severe: bool = False,
     verdict_value: str | None = None,
 ) -> str:
-    """Render the deterministic `## Decomposition` skeleton; the LLM fills sub-PR
+    """Render the deterministic `## Partition` skeleton; the LLM fills sub-PR
     specifics during cognition."""
     v = verdict_value or verdict(m1, m2, m3, m4, m3_severe, m4_severe)
     lines = [
-        "## Decomposition",
+        "## Partition",
         "",
         f"Verdict: {v}",
         (

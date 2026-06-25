@@ -32,7 +32,7 @@ When in doubt between two classes, pick the heavier one once; if the work then v
 
 **Tracker tasks are substantive by definition.** Any task that arrives via a tracker ticket (DEEPAGENT-*, LOGOS-*, or any `ABC-123` key) routes through `planner` → user approval → `developer`. The in-thread carve-out does **not** apply to tracker work, regardless of apparent scope. Rationale: the ticket boundary is the scope boundary; multi-file changes inside a ticket frequently exceed `small-change-max-lines` in aggregate even when individual steps look small.
 
-**Decomposition is a separate axis.** Weight class decides routing; **decomposition markers** decide whether a substantive task ships as one PR or several. `agentctl decompose` gates execution on an M1–M4 assessment (machine-enforced, post-approval, pre-EXECUTING) and computes the verdict; you evaluate each marker (the cognition) — criteria in `~/.claude/memory-global/leaves/decomposition-markers.md`.
+**Delivery partition is a separate axis.** Weight class decides routing; **partition markers** decide whether a substantive task ships as one PR or several — this is *delivery* segmentation of the approved plan, distinct from the planner's step-level decomposition. `agentctl partition` gates execution on an M1–M4 assessment (machine-enforced, post-approval, pre-EXECUTING) and computes the verdict; you evaluate each marker (the cognition) — criteria in `~/.claude/memory-global/leaves/partition-markers.md`.
 
 ### Coordination spine — driven by `agentctl`
 

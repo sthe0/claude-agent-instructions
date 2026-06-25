@@ -16,7 +16,7 @@ Loaded into every session via `@~/.claude/memory-global/MEMORY.md` import in `CL
 - [Reasoning and task solving](leaves/reasoning-and-task-solving.md) — understand before acting, plan and approval, when stuck, memory vs prompts, self-check before first production edit.
 - [Typical coordinator pitfalls](leaves/coordinator-pitfalls.md) — anti-patterns to avoid as the root coordinator; signals that point to specific corrective actions.
 - [Workflow debug investigation](leaves/workflow-debug-investigation.md) — ordered checklist for orchestrated pipeline failures: reference baseline, topology/causality, code delta, then infra logs; hypothesis portfolio.
-- [Decomposition markers (M1–M4)](leaves/decomposition-markers.md) — when to split a substantive task into multiple PRs/tickets; applied after plan approval, before implementation.
+- [Partition markers (M1–M4)](leaves/partition-markers.md) — delivery partition: into how many independently-shippable PRs/tickets the approved plan is cut; applied after plan approval, before implementation. Distinct from the planner's step-level decomposition.
 - [Log-reading discipline](leaves/log-reading-discipline.md) — 10-line cap per tool call when reading logs; aggregate first, surface digests.
 - [Acting without asking](leaves/acting-without-asking.md) — side-effect-free actions and plan-scope-declared changes are pre-authorized; 1-lookup budget for unknown tools; substantive plan changes still require approval.
 - [Code comment discipline](leaves/code-comment-discipline.md) — default no comments; comment only when the *why* is non-obvious; build / config files (`ya.make`, `Dockerfile`, …) are not exceptions; concrete antipatterns from DEEPAGENT-414 PR review.

@@ -86,5 +86,5 @@ The actor must have the **whole** plan before it, to be guided by it — not onl
 
 - [[leaf-schema]] — the `leaf/v1` shape this leaf itself follows; the opt-in-enforcement / grandfather pattern reused for weight gating.
 - [[experience-leaf-schema]] — the `difficulty/v1` schema; the difficulty graph (cycles allowed) that recursive sub-ordering mirrors (order → plan → difficulty → induced order → …).
-- [[decomposition-markers]] — M1–M4 decide whether a substantive plan ships as one PR or several; orthogonal to this element-completeness axis.
+- [[partition-markers]] — M1–M4 decide whether a substantive plan ships as one PR or several (delivery partition); orthogonal to this element-completeness axis.
 - [[coordinator-objective]] — the objective function a plan's choices are weighed against.

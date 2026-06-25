@@ -40,7 +40,7 @@ _NEXT_HINTS = {
     "CLASSIFIED": "run `agentctl classify`",
     "PLAN_READY": "get explicit user approval, then `agentctl approve --by <user>`",
     "APPROVED": "`agentctl next-stage` to enter EXECUTING",
-    "DECOMPOSED": "`agentctl next-stage` to enter EXECUTING",
+    "PARTITIONED": "`agentctl next-stage` to enter EXECUTING",
     "EXECUTING": "production edits allowed; `agentctl record-result` after the stage",
 }
 

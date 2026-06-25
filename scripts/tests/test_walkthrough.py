@@ -42,19 +42,19 @@ def test_full_substantive_cycle(store, fixtures_dir):
 
     d = cli.cmd_approve(ns(session=sid, by="user"), store=store)
     assert d.node == Node.APPROVED.value
-    assert d.action == "decompose"
+    assert d.action == "partition"
 
-    # skipping decompose cannot reach EXECUTING — next_stage is refused at APPROVED
+    # skipping partition cannot reach EXECUTING — next_stage is refused at APPROVED
     d = cli.cmd_next_stage(ns(session=sid), store=store)
     assert d.ok is False
     assert store.load(sid).node == Node.APPROVED.value
 
-    # decomposition assessment (M1–M4) between APPROVED and EXECUTING
-    d = cli.cmd_decompose(ns(session=sid, m1=True, m2=False, m3=True, m4=False,
+    # partition assessment (M1–M4) between APPROVED and EXECUTING
+    d = cli.cmd_partition(ns(session=sid, m1=True, m2=False, m3=True, m4=False,
                              m3_severe=False, m4_severe=False), store=store)
-    assert d.node == Node.DECOMPOSED.value
+    assert d.node == Node.PARTITIONED.value
     assert d.data["verdict"] == "recommended"
-    assert "## Decomposition" in d.data["section"]
+    assert "## Partition" in d.data["section"]
 
     # stage 1
     d = cli.cmd_next_stage(ns(session=sid), store=store)

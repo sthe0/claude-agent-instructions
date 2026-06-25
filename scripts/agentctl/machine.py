@@ -14,8 +14,8 @@ The graph (happy path + carve-outs):
   ROUTED --(chat)                       terminal
   PLANNING --submit_plan--> PLAN_READY
   PLAN_READY --approve--> APPROVED      (plan-approval gate passes)
-  APPROVED --decompose--> DECOMPOSED    (M1–M4 assessment recorded)
-  DECOMPOSED --execute--> EXECUTING     (spawn path passes through decomposition)
+  APPROVED --partition--> PARTITIONED    (M1–M4 assessment recorded)
+  PARTITIONED --execute--> EXECUTING     (spawn path passes through partition)
   EXECUTING --verify--> VERIFYING       (a stage result recorded)
   VERIFYING --next_stage--> EXECUTING   (more ready stages remain)
   VERIFYING --final--> RESOLUTION       (all stages PASSED)
@@ -34,8 +34,8 @@ TRANSITIONS: dict[str, tuple[str, str]] = {
     "plan": (Node.ROUTED.value, Node.PLANNING.value),
     "submit_plan": (Node.PLANNING.value, Node.PLAN_READY.value),
     "approve": (Node.PLAN_READY.value, Node.APPROVED.value),
-    "decompose": (Node.APPROVED.value, Node.DECOMPOSED.value),
-    "execute_approved": (Node.DECOMPOSED.value, Node.EXECUTING.value),
+    "partition": (Node.APPROVED.value, Node.PARTITIONED.value),
+    "execute_approved": (Node.PARTITIONED.value, Node.EXECUTING.value),
     "execute_small": (Node.ROUTED.value, Node.EXECUTING.value),
     "verify": (Node.EXECUTING.value, Node.VERIFYING.value),
     "next_stage": (Node.VERIFYING.value, Node.EXECUTING.value),

@@ -17,7 +17,7 @@ A substantive task moves through this node lifecycle (`agentctl.state.Node`):
 ```text
 start → CLASSIFIED → ROUTED → PLANNING → PLAN_READY ──■APPROVAL GATE■──→ APPROVED
                        │                                                    │
-        small change ──┘                                              DECOMPOSED
+        small change ──┘                                              PARTITIONED
                        │                                                    │
                        └──────────────────────────────→  EXECUTING  ⇄  VERIFYING
                                                               │             │
@@ -44,7 +44,7 @@ Each node is a phase in the task lifecycle (`Node` in `state.py`). The *route* p
 | `PLANNING` | Authoring the plan (stages, each with its result image + done criterion). |
 | `PLAN_READY` | Plan authored; **held at the approval gate** until the user approves. |
 | `APPROVED` | Plan-approval gate passed. |
-| `DECOMPOSED` | M1–M4 decomposition verdict recorded (ship as one PR or several). |
+| `PARTITIONED` | M1–M4 **delivery-partition** verdict recorded — into how many independently-shippable units (PRs/tickets) the approved plan is cut. |
 | `EXECUTING` | Running the active stage — in-thread or via a dispatched specialist. |
 | `VERIFYING` | A stage result was recorded; checking it, then choosing next stage vs final. |
 | `RESOLUTION` | All stages PASSED; **held at the resolution gate** awaiting user confirmation. |
@@ -56,7 +56,7 @@ Each node is a phase in the task lifecycle (`Node` in `state.py`). The *route* p
 The happy-path spine, in order:
 
 ```text
-start → classify → plan → submit-plan → approve → decompose → next-stage
+start → classify → plan → submit-plan → approve → partition → next-stage
       → dispatch → record-result → verify-final → resolve
 ```
 
@@ -68,7 +68,7 @@ start → classify → plan → submit-plan → approve → decompose → next-s
 | `plan` | Enter planning for a substantive task (`ROUTED → PLANNING`). |
 | `submit-plan` | Mark the plan authored and ready for approval (`PLANNING → PLAN_READY`). |
 | `approve` | Pass the plan-approval gate; `--by` names the approver (`PLAN_READY → APPROVED`). |
-| `decompose` | Record the M1–M4 decomposition verdict (`APPROVED → DECOMPOSED`). |
+| `partition` | Record the M1–M4 **delivery-partition** assessment — into how many independently-shippable, separately-reviewable units (PRs/tickets) the approved plan is cut. Delivery segmentation, **not** the planner's step-level decomposition (`APPROVED → PARTITIONED`). |
 | `next-stage` | Select the next ready stage and enter execution (`→ EXECUTING`). |
 | `dispatch` | At `EXECUTING`, route the active stage to its actor (`in_thread` / `spawn:<specialization>`) and return the cognitive leaf + return-marker handling; no node change. |
 | `record-result` | Record a stage's actual result + status (PASSED/FAILED) (`EXECUTING → VERIFYING`). |
@@ -81,7 +81,7 @@ start → classify → plan → submit-plan → approve → decompose → next-s
 
 ## Modules
 
-`classify`, `config`, `state`, `store`, `machine`, `gates`, `directive`, `cli`, `dispatch`, `decompose`, `permissions`, `plan`, `continuations`.
+`classify`, `config`, `state`, `store`, `machine`, `gates`, `directive`, `cli`, `dispatch`, `partition`, `permissions`, `plan`, `continuations`.
 
 Two modules carry the load-bearing invariants:
 

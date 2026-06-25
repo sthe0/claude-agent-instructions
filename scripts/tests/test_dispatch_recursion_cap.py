@@ -27,7 +27,7 @@ def _start_substantive(store, fixtures_dir):
     cli.cmd_plan(ns(session=sid), store=store)
     cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
-    cli.cmd_decompose(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
+    cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
     cli.cmd_next_stage(ns(session=sid), store=store)
     return sid

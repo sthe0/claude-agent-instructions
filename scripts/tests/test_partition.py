@@ -1,11 +1,11 @@
-"""Decomposition step: the pure M1–M4 truth-table + the cmd_decompose transition
+"""Partition step: the pure M1–M4 truth-table + the cmd_partition transition
 gating EXECUTING behind an assessment on the spawn route."""
 from argparse import Namespace
 
 import pytest
 
 from agentctl import cli
-from agentctl.decompose import render_section, verdict
+from agentctl.partition import render_section, verdict
 from agentctl.state import Node
 
 
@@ -44,13 +44,13 @@ def test_severity_forces_recommended_even_without_m1(m3_severe, m4_severe):
 
 def test_render_section_shape():
     section = render_section(True, False, True, False, verdict_value="recommended")
-    assert section.startswith("## Decomposition")
+    assert section.startswith("## Partition")
     assert "Verdict: recommended" in section
     assert "M1 independent deliverables: yes" in section
     assert "M3 blocking deps: yes (severe: no)" in section
 
 
-# --- cmd_decompose transition --------------------------------------------
+# --- cmd_partition transition --------------------------------------------
 
 def _to_approved(store, sid, fixtures_dir):
     plan = str(fixtures_dir / "plan_two_stage.toml")
@@ -65,45 +65,45 @@ def _to_approved(store, sid, fixtures_dir):
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
 
 
-def test_decompose_records_state_and_advances(store, fixtures_dir):
+def test_partition_records_state_and_advances(store, fixtures_dir):
     sid = "dc1"
     _to_approved(store, sid, fixtures_dir)
-    d = cli.cmd_decompose(ns(session=sid, m1=True, m2=True, m3=False, m4=False,
+    d = cli.cmd_partition(ns(session=sid, m1=True, m2=True, m3=False, m4=False,
                              m3_severe=False, m4_severe=False), store=store)
     assert d.ok
-    assert d.node == Node.DECOMPOSED.value
+    assert d.node == Node.PARTITIONED.value
     assert d.data["verdict"] == "recommended"
-    assert "## Decomposition" in d.data["section"]
+    assert "## Partition" in d.data["section"]
 
     state = store.load(sid)
-    assert state.decomposition is not None
-    assert state.decomposition.verdict == "recommended"
-    assert state.decomposition.m1 is True
+    assert state.partition is not None
+    assert state.partition.verdict == "recommended"
+    assert state.partition.m1 is True
 
 
-def test_decompose_not_required_advances_to_next_stage(store, fixtures_dir):
+def test_partition_not_required_advances_to_next_stage(store, fixtures_dir):
     sid = "dc2"
     _to_approved(store, sid, fixtures_dir)
-    d = cli.cmd_decompose(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
+    d = cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                              m3_severe=False, m4_severe=False), store=store)
     assert d.data["verdict"] == "not_required"
     assert d.action == "next_stage"
 
 
-def test_decompose_recommended_surfaces_to_user(store, fixtures_dir):
+def test_partition_recommended_surfaces_to_user(store, fixtures_dir):
     sid = "dc3"
     _to_approved(store, sid, fixtures_dir)
-    d = cli.cmd_decompose(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
+    d = cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                              m3_severe=True, m4_severe=False), store=store)
     assert d.data["verdict"] == "recommended"
-    assert d.action == "surface_decomposition"
+    assert d.action == "surface_partition"
 
 
-def test_decompose_refused_off_approved(store, fixtures_dir):
+def test_partition_refused_off_approved(store, fixtures_dir):
     sid = "dc4"
     cli.cmd_start(ns(session=sid, task="demo", goal="", done_criterion="",
                      criterion_type="measurable", recursion_depth=0), store=store)
-    d = cli.cmd_decompose(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
+    d = cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                              m3_severe=False, m4_severe=False), store=store)
     assert d.ok is False
     assert d.action == "noop"

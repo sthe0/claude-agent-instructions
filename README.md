@@ -69,7 +69,7 @@ The state machine a substantive task moves through:
 ```text
 start → CLASSIFIED → ROUTED → PLANNING → PLAN_READY ──■APPROVAL GATE■──→ APPROVED
                        │                                                    │
-        small change ──┘                                              DECOMPOSED
+        small change ──┘                                              PARTITIONED
                        │                                                    │
                        └──────────────────────────────→  EXECUTING  ⇄  VERIFYING
                                                               │             │
@@ -79,7 +79,7 @@ start → CLASSIFIED → ROUTED → PLANNING → PLAN_READY ──■APPROVAL GA
                                                             ──■RESOLUTION GATE■──→ RESOLVED
 ```
 
-The two gates (`■`) are **non-skippable**, enforced by guardian hooks ([hook-state-gate.py](scripts/hook-state-gate.py) hard-denies production edits until the engine reaches an execution node; the resolution gate requires explicit user confirmation). [verify-agentctl.py](scripts/verify-agentctl.py) checks that every gate has its guardian hook and that the schema, transitions, and cognitive leaves stay consistent. State lives at `~/.claude/agentctl/state/<session_id>.json`. Engine modules under `scripts/agentctl/`: `classify`, `config`, `state`, `store`, `machine`, `gates`, `directive`, `cli`, `dispatch`, `decompose`, `permissions`, `plan`, `continuations`. The engine has its own README — [scripts/agentctl/README.md](scripts/agentctl/README.md) — covering the command sequence, the `gates.py` purity invariant, and the state file; and the typed **plan model** it builds (the 8-element activity ontology) is documented in [plan-activity-ontology.md](memory-global/leaves/plan-activity-ontology.md).
+The two gates (`■`) are **non-skippable**, enforced by guardian hooks ([hook-state-gate.py](scripts/hook-state-gate.py) hard-denies production edits until the engine reaches an execution node; the resolution gate requires explicit user confirmation). [verify-agentctl.py](scripts/verify-agentctl.py) checks that every gate has its guardian hook and that the schema, transitions, and cognitive leaves stay consistent. State lives at `~/.claude/agentctl/state/<session_id>.json`. Engine modules under `scripts/agentctl/`: `classify`, `config`, `state`, `store`, `machine`, `gates`, `directive`, `cli`, `dispatch`, `partition`, `permissions`, `plan`, `continuations`. The engine has its own README — [scripts/agentctl/README.md](scripts/agentctl/README.md) — covering the command sequence, the `gates.py` purity invariant, and the state file; and the typed **plan model** it builds (the 8-element activity ontology) is documented in [plan-activity-ontology.md](memory-global/leaves/plan-activity-ontology.md).
 
 If the engine is unavailable, the manager walks the same steps by hand in the same order — the engine automates the spine, it does not replace the cognition.
 

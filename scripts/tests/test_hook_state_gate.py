@@ -142,7 +142,7 @@ def test_allow_plan_at_every_planning_position_node(tmp_path, node):
     assert not _is_deny(proc), node
 
 
-@pytest.mark.parametrize("node", ["APPROVED", "DECOMPOSED", "EXECUTING", "VERIFYING", "RESOLUTION", "RESOLVED"])
+@pytest.mark.parametrize("node", ["APPROVED", "PARTITIONED", "EXECUTING", "VERIFYING", "RESOLUTION", "RESOLVED"])
 def test_deny_plan_outside_planning_position(tmp_path, node):
     # changing a plan once past the planning position is a difficulty to overcome
     # reflexively (replan / overcome-difficulty), not an in-place edit — even at
@@ -217,7 +217,7 @@ def test_gate_decision_rows(weight_class, node, expected, needle):
         ("PLANNING", "allow"),
         ("PLAN_READY", "allow"),
         ("APPROVED", "deny"),
-        ("DECOMPOSED", "deny"),
+        ("PARTITIONED", "deny"),
         ("EXECUTING", "deny"),   # in ALLOW_NODES for prod files, but denied for plans
         ("VERIFYING", "deny"),
         ("RESOLUTION", "deny"),
