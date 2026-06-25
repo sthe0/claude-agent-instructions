@@ -74,7 +74,7 @@ The engine drives the *shell*: a FAILED stage routes to `DIAGNOSING`, where it e
 
 Use the **self-improvement** skill (see `~/.claude/skills/self-improvement/`). Triggers: user corrects/rejects/clarifies your action, states a principle ("don't do that", "prefer X"), evaluates agent quality, proposes changes to instructions/agents/skills/memory/workflow, or reminds you it should have run.
 
-Run **in the same dialog turn** as the trigger, before the final reply. A reminder ("did you run self-improvement?") counts as the trigger. Editing the agent's own config / instructions is **state-changing production work** and rides the standard plan-approval spine like any other task (the dedicated `si-propose`/`si-apply` side-gate was retired); the skill's beat-1 `AskUserQuestion` **is** that gate, and only memory writes bypass it.
+Run **in the same dialog turn** as the trigger, before the final reply. A reminder ("did you run self-improvement?") counts as the trigger (`hook-self-improvement-reminder.py` nudges likely feedback turns). Editing the agent's own config / instructions is **state-changing production work** and rides the standard plan-approval spine like any other task (the dedicated `si-propose`/`si-apply` side-gate was retired); the skill's beat-1 `AskUserQuestion` **is** that gate, and only memory writes bypass it.
 
 **In-task corrections are themselves triggers** — "you did only part", "wrong scope", "answer in my language" are self-improvement signals, not mere task tweaks; run it the same turn. Before recording a lesson, **classify**: behavioral rule (always/never, process, delegation, verification) → instructions via this skill; domain fact → memory leaf. A behavioral rule filed as a memory leaf is misplaced.
 

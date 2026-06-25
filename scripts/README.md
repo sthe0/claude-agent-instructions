@@ -23,6 +23,7 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 | [hook-resolution-reminder.py](hook-resolution-reminder.py) | UserPromptSubmit: nudge to ask for explicit resolution when the user's prompt is brief gratitude |
 | [hook-retry-detector.py](hook-retry-detector.py) | PreToolUse Bash: same normalized command 3+ times → nudge to invoke overcome-difficulty |
 | [hook-self-critique-reminder.py](hook-self-critique-reminder.py) | PostToolUse Write: nudge to invoke `self-improvement` after writing an experience leaf with a substantive § Self-critique |
+| [hook-self-improvement-reminder.py](hook-self-improvement-reminder.py) | UserPromptSubmit: precision-first two-tier scan for agent-behavior feedback in the prompt (explicit self-improvement mention; strong imperatives; corrective patterns gated on an agent-ref) → nudge to invoke `self-improvement` |
 | [hook-state-gate.py](hook-state-gate.py) | PreToolUse Edit/Write: deny production-file edits unless agentctl state is at an execution node; weight-aware per-case reason (unclassified → classify, small-change → next-stage, substantive → approve plan, closed → reset) |
 | [hook-tracker-reminder.py](hook-tracker-reminder.py) | UserPromptSubmit: detect tracker references in the prompt and remind to invoke `tracker-management` |
 | [install-git-hooks.sh](install-git-hooks.sh) | Install `pre-commit` (run `verify-all.py --staged`) and `post-commit` (push reminder) |
