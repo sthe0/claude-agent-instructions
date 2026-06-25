@@ -15,7 +15,7 @@ import pytest
 
 from agentctl import cli, plugins
 from agentctl.directive import Directive
-from agentctl.state import Node, SessionState
+from agentctl.state import Node, SessionState, WeightClass
 
 
 def ns(**kw):
@@ -201,8 +201,11 @@ def test_cli_main_plugin_gate_blocks_resolve_then_passes(capsys, tmp_path, fixtu
     rc, d = _run(capsys, root, "resolve", "--session", sid, "--by", "user")
     assert rc == 1
     assert any("dummy" in b for b in d["data"]["blockers"])
-    # manual deactivate removes the gate -> resolve passes
+    # manual deactivate removes the dummy gate; experience auto-activated for this
+    # substantive session and still gates resolution, so satisfy it too
     _run(capsys, root, "plugin-deactivate", "--session", sid, "--plugin", "dummy")
+    _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "experience", "--phase", "searched")
+    _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "experience", "--phase", "recorded")
     rc, d = _run(capsys, root, "resolve", "--session", sid, "--by", "user")
     assert rc == 0
     assert d["node"] == Node.RESOLVED.value
@@ -217,3 +220,107 @@ def test_cli_main_plugin_less_session_has_no_plugin_directives(capsys, tmp_path,
     rc, d = _run(capsys, root, "approve", "--session", sid, "--by", "user")
     assert rc == 0
     assert "plugin_directives" not in d["data"]  # no plugin active -> byte-identical behavior
+
+
+# --- auto_activate_for (engine-driven activation) ----------------------------
+
+def test_auto_activate_for_activates_on_substantive():
+    name = "_aa_subst"
+    plugins.register(plugins.Plugin(
+        name=name,
+        auto_activate=lambda state: getattr(state, "weight_class", None) == WeightClass.SUBSTANTIVE.value,
+    ))
+    try:
+        state = _new_state(weight_class=WeightClass.SUBSTANTIVE.value)
+        activated = plugins.auto_activate_for(state)
+        assert name in activated
+        assert name in state.plugins
+    finally:
+        plugins.REGISTRY.pop(name, None)
+
+
+def test_auto_activate_for_silent_on_chat():
+    name = "_aa_chat"
+    plugins.register(plugins.Plugin(
+        name=name,
+        auto_activate=lambda state: getattr(state, "weight_class", None) == WeightClass.SUBSTANTIVE.value,
+    ))
+    try:
+        state = _new_state(weight_class=WeightClass.CHAT.value)
+        activated = plugins.auto_activate_for(state)
+        assert name not in activated
+        assert name not in state.plugins
+    finally:
+        plugins.REGISTRY.pop(name, None)
+
+
+def test_auto_activate_for_skips_already_active():
+    name = "_aa_idem"
+    plugins.register(plugins.Plugin(
+        name=name,
+        auto_activate=lambda state: True,
+    ))
+    try:
+        state = _new_state()
+        plugins.activate(state, name)
+        activated = plugins.auto_activate_for(state)
+        assert name not in activated
+    finally:
+        plugins.REGISTRY.pop(name, None)
+
+
+def test_auto_activate_for_skips_archived():
+    name = "_aa_arch"
+    plugins.register(plugins.Plugin(
+        name=name,
+        auto_activate=lambda state: True,
+    ))
+    try:
+        state = _new_state()
+        state.plugins_archive[name] = {}
+        activated = plugins.auto_activate_for(state)
+        assert name not in activated
+    finally:
+        plugins.REGISTRY.pop(name, None)
+
+
+def test_cli_classify_substantive_auto_activates(capsys, tmp_path):
+    from agentctl.store import FileStateStore
+    name = "_aa_e2e"
+    plugins.register(plugins.Plugin(
+        name=name,
+        auto_activate=lambda state: getattr(state, "weight_class", None) == WeightClass.SUBSTANTIVE.value,
+    ))
+    try:
+        root = str(tmp_path / "state")
+        sid = "aa_e2e"
+        _run(capsys, root, "start", "--session", sid, "--task", "t")
+        rc, d = _run(capsys, root, "classify", "--session", sid, "--architectural")
+        assert rc == 0
+        store = FileStateStore(tmp_path / "state")
+        state = store.load(sid)
+        assert state is not None
+        assert name in state.plugins
+    finally:
+        plugins.REGISTRY.pop(name, None)
+
+
+def test_cli_classify_chat_does_not_auto_activate(capsys, tmp_path):
+    from agentctl.store import FileStateStore
+    name = "_aa_e2e_chat"
+    plugins.register(plugins.Plugin(
+        name=name,
+        auto_activate=lambda state: getattr(state, "weight_class", None) == WeightClass.SUBSTANTIVE.value,
+    ))
+    try:
+        root = str(tmp_path / "state")
+        sid = "aa_e2e_chat"
+        _run(capsys, root, "start", "--session", sid, "--task", "t")
+        rc, d = _run(capsys, root, "classify", "--session", sid, "--chat")
+        assert rc == 0
+        store = FileStateStore(tmp_path / "state")
+        state = store.load(sid)
+        assert state is not None
+        assert name not in state.plugins
+    finally:
+        plugins.REGISTRY.pop(name, None)

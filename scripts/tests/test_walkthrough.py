@@ -79,6 +79,10 @@ def test_full_substantive_cycle(store, fixtures_dir):
     d = cli.cmd_verify_final(ns(session=sid), store=store)
     assert d.node == Node.RESOLUTION.value
 
+    # experience auto-activates for substantive sessions and gates resolution
+    cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="searched"), store=store)
+    cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="recorded"), store=store)
+
     d = cli.cmd_resolve(ns(session=sid, by="user"), store=store)
     assert d.node == Node.RESOLVED.value
     assert d.marker == "COMPLETED"

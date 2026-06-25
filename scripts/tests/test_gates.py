@@ -54,6 +54,9 @@ def _to_resolution(store, sid, plan):
         cli.cmd_next_stage(ns(session=sid), store=store)
         cli.cmd_record_result(ns(session=sid, status="passed", actual="ok"), store=store)
     cli.cmd_verify_final(ns(session=sid), store=store)
+    # experience auto-activates for substantive sessions and gates resolution
+    cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="searched"), store=store)
+    cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="recorded"), store=store)
 
 
 # --- empty --by refused at the plan-approval gate ------------------------

@@ -16,6 +16,8 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 | [hook-arc-mount-search-guard.py](hook-arc-mount-search-guard.py) | PreToolUse `Bash`/`Grep`/`Glob`: deny recursive searches spanning ≥2 arc FUSE mounts under `$HOME` |
 | [hook-context-growth-reminder.py](hook-context-growth-reminder.py) | UserPromptSubmit: nudge when live context size crosses a band (reads transcript usage); throttled per band per session |
 | [hook-engine-start.py](hook-engine-start.py) | UserPromptSubmit: keep the agentctl engine the default control path — auto-start a session via `start --if-absent` (no state) then steer to `classify`, `reset` line (prior task closed), or a status+next-step hint (live); only mutates via idempotent start, never classify |
+| [hook-experience-record-reminder.py](hook-experience-record-reminder.py) | UserPromptSubmit: state-aware nudge (reads the agentctl `experience` plugin bag) when the experience leaf flow is incomplete; loudest at RESOLUTION where `resolve` is blocked, silent when the plugin is inactive or the flow is complete |
+| [hook-memory-consistency.py](hook-memory-consistency.py) | PreToolUse Write/Edit: non-blocking reminder (exit 0 always) when a memory leaf being written has missing or invalid frontmatter (`name`, `description`, `type`); covers all three memory scopes (global, project, personal) |
 | [hook-policy-scorecard-due.py](hook-policy-scorecard-due.py) | SessionStart: weekly throttled stderr nudge to run `policy-scorecard.py` (stamp `~/.local/state/claude-policy-scorecard.stamp`); nudge only, does not auto-scan |
 | [hook-prewrite-plan-check.py](hook-prewrite-plan-check.py) | PreToolUse Edit/Write: after 3 code edits with no plan file, one-time nudge to invoke planner |
 | [hook-push-confirmation-reminder.py](hook-push-confirmation-reminder.py) | PreToolUse Bash: nudge to verify user push-confirmation before `git push` / `sync-instructions-repo.sh push` |
@@ -25,8 +27,8 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 | [hook-self-critique-reminder.py](hook-self-critique-reminder.py) | PostToolUse Write: nudge to invoke `self-improvement` after writing an experience leaf with a substantive § Self-critique |
 | [hook-self-improvement-reminder.py](hook-self-improvement-reminder.py) | UserPromptSubmit: precision-first two-tier scan for agent-behavior feedback in the prompt (explicit self-improvement mention; strong imperatives; corrective patterns gated on an agent-ref) → nudge to invoke `self-improvement` |
 | [hook-state-gate.py](hook-state-gate.py) | PreToolUse Edit/Write: deny production-file edits unless agentctl state is at an execution node; weight-aware per-case reason (unclassified → classify, small-change → next-stage, substantive → approve plan, closed → reset) |
-| [hook-tracker-reminder.py](hook-tracker-reminder.py) | UserPromptSubmit: detect tracker references in the prompt and remind to invoke `tracker-management` |
 | [hook-tracker-publish-reminder.py](hook-tracker-publish-reminder.py) | UserPromptSubmit: state-aware nudge (reads the agentctl `tracker` plugin bag) when mandatory ticket publications are unrecorded; loudest at RESOLUTION, silent when the tracker plugin is inactive or complete |
+| [hook-tracker-reminder.py](hook-tracker-reminder.py) | UserPromptSubmit: detect tracker references in the prompt and remind to invoke `tracker-management` |
 | [install-git-hooks.sh](install-git-hooks.sh) | Install `pre-commit` (run `verify-all.py --staged`) and `post-commit` (push reminder) |
 | [install-reminder-hooks.sh](install-reminder-hooks.sh) | Idempotently wire the canonical reminder-hook set into machine-local `settings.json` (hooks are not merged from `base.json`) |
 | [install-sync-cron.sh](install-sync-cron.sh) | Cron: git pull every 10 min (opt-in; not installed by `setup-symlinks.sh`) |
@@ -55,6 +57,7 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 | [verify-agentctl.py](verify-agentctl.py) | Verify the agentctl engine: schema, transitions, leaves, gate↔guardian-hook consistency |
 | [verify-all.py](verify-all.py) | Run all instruction-policy checks (entry point; pre-commit hook uses `--staged`) |
 | [verify-cross-refs.py](verify-cross-refs.py) | Catch broken intra-repo Markdown links and inline-code path references |
+| [verify-doc-concepts.py](verify-doc-concepts.py) | Verify foundational-concept doc-bindings: each registered concept's doc section heading exists and its code anchors are importable |
 | [verify-experience-leaf.py](verify-experience-leaf.py) | Verify experience-leaf schema (`difficulty/v1`, required `resolution_confirmed_by_user` frontmatter) |
 | [verify-instructions-sync.sh](verify-instructions-sync.sh) | Check global symlinks and drift |
 | [verify-language.py](verify-language.py) | Enforce English-by-default policy with adjacent-exception rule |
@@ -63,6 +66,5 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 | [verify-memory-index.py](verify-memory-index.py) | Verify every memory-global leaf is referenced from an index and carries a valid top-level `type:` frontmatter key |
 | [verify-plan-file.py](verify-plan-file.py) | Structural validator for planner output (per `planner` SKILL.md § Plan format) |
 | [verify-readme.py](verify-readme.py) | Verify the README inventory sentinels (scripts / flat skills / specializations) match the filesystem; `--fix` reconciles, `--root` for project repos |
-| [verify-doc-concepts.py](verify-doc-concepts.py) | Verify foundational-concept doc-bindings: each registered concept's doc section heading exists and its code anchors are importable |
 | [verify-self-improvement-edit.py](verify-self-improvement-edit.py) | `commit-msg` gate: require `[self-improvement-reviewed]` in commits that touch `skills/self-improvement/` |
 <!-- inventory:scripts:end -->

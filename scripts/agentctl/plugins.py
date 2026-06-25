@@ -39,6 +39,9 @@ Observer = Callable[["object", dict], "list[PluginDirective] | None"]
 Guardian = Callable[["object", dict], "list[str]"]
 # A terminal predicate: has this plugin's sub-workflow finished as of `event`?
 Terminal = Callable[["object", str], bool]
+# A predicate for engine-driven auto-activation: True if the plugin should
+# auto-activate for the given session state. Called at classify for SUBSTANTIVE sessions.
+AutoActivate = Callable[["object"], bool]
 
 
 @dataclass
@@ -68,6 +71,7 @@ class Plugin:
     state_factory: Callable[[], dict] = dict
     terminal: Terminal | None = None
     commands: dict[str, Callable] = field(default_factory=dict)
+    auto_activate: "AutoActivate | None" = None
 
 
 # event name a plugin observes <- coordination command that produces it. Only
@@ -136,6 +140,23 @@ def deactivate(state, name: str) -> bool:
         return False
     state.plugins_archive[name] = bag
     return True
+
+
+def auto_activate_for(state) -> list[str]:
+    """Engine-driven activation: activate every registered plugin whose
+    `auto_activate` predicate returns True for `state` and that is not already
+    active or archived. Called by cmd_classify when route=SUBSTANTIVE.
+    Returns the names of newly activated plugins."""
+    activated = []
+    for name, plugin in REGISTRY.items():
+        if plugin.auto_activate is None:
+            continue
+        if name in state.plugins or name in state.plugins_archive:
+            continue
+        if plugin.auto_activate(state):
+            activate(state, name)
+            activated.append(name)
+    return activated
 
 
 def fire(event: str, state, directive) -> list[dict]:
@@ -225,3 +246,4 @@ register(
 # the consumer module imports from here (Plugin/PluginDirective/register) are
 # already defined when its `from .plugins import ...` runs.
 from . import plugins_tracker as _plugins_tracker  # noqa: E402,F401
+from . import plugins_experience as _plugins_experience  # noqa: E402,F401

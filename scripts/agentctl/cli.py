@@ -190,13 +190,27 @@ def cmd_plugin_record(args, *, store: StateStore, runner: Runner | None = None) 
     bag = state.plugins.get(args.plugin)
     if bag is None:
         return Directive(False, state.node, "noop", f"plugin {args.plugin!r} is not active")
+    phase = args.phase
+    note = getattr(args, "note", None)
+    if phase == "skipped" and not (note and note.strip()):
+        return Directive(False, state.node, "noop", "a skip must carry a reason: pass --note")
     published = bag.setdefault("published_phases", {})
-    published[args.phase] = True
-    state.log("plugin_record", plugin=args.plugin, phase=args.phase)
+    published[phase] = True
+    # top-level bool-flag convention: a plugin whose bag seeds a bool keyed by the
+    # phase name (e.g. experience: searched/recorded/skipped) reads those flags in
+    # its gate; flip it true. Tracker's bag has no such keys, so it is untouched.
+    if isinstance(bag.get(phase), bool):
+        bag[phase] = True
+    if note:
+        if phase == "skipped":
+            bag["skip_reason"] = note
+        elif phase == "searched":
+            bag["decision"] = note
+    state.log("plugin_record", plugin=args.plugin, phase=phase)
     store.save(state)
     return Directive(
         True, state.node, "continue",
-        f"plugin {args.plugin!r}: phase {args.phase!r} recorded as published",
+        f"plugin {args.plugin!r}: phase {phase!r} recorded as published",
         data={"published_phases": sorted(published)},
     )
 
@@ -245,6 +259,9 @@ def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Di
         action, detail = "answer_in_thread", "chat: answer directly; terminal at ROUTED"
     else:
         action, detail = "plan", "substantive: route to planner, then submit-plan"
+
+    if result.weight_class == WeightClass.SUBSTANTIVE.value:
+        plugins.auto_activate_for(state)
 
     store.save(state)
     return Directive(True, state.node, action, detail, data={"reasons": result.reasons})
@@ -826,6 +843,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--plugin", required=True)
     sp = add("plugin-record"); sp.add_argument("--session", required=True)
     sp.add_argument("--plugin", required=True); sp.add_argument("--phase", required=True)
+    sp.add_argument("--note", default=None)
 
     sp = add("classify"); sp.add_argument("--session", required=True)
     sp.add_argument("--chat", action="store_true")

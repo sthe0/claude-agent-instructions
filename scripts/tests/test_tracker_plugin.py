@@ -129,6 +129,10 @@ def _drive_to_resolution(capsys, root, sid, plan, *, activate_tracker):
         _run(capsys, root, "next-stage", "--session", sid)
         _run(capsys, root, "record-result", "--session", sid, "--status", "passed", "--actual", "ok")
     _run(capsys, root, "verify-final", "--session", sid)
+    # experience auto-activates for every substantive session; satisfy its gate so
+    # these tests isolate the tracker plugin's own gating behavior
+    _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "experience", "--phase", "searched")
+    _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "experience", "--phase", "recorded")
 
 
 def test_e2e_resolve_blocked_until_published_then_passes_and_retires(capsys, tmp_path, fixtures_dir):
