@@ -56,6 +56,44 @@ def test_submit_plan_is_hard_gate_directive(store, fixtures_dir):
     assert d.marker == "PLAN-READY"
 
 
+def test_failed_submit_plan_does_not_strand(store, fixtures_dir, tmp_path):
+    """Regression: a failed plan verification must NOT advance to PLAN_READY.
+
+    The strand bug (recovered by hand on 2026-06-25 via `reset --force`):
+    cmd_submit_plan transitioned to PLAN_READY and armed the approval gate
+    *unconditionally*, so a structure-check failure left the session parked at
+    PLAN_READY with an armed gate and no edge back to PLANNING — every retry
+    bounced. The fix keeps a failed submit at PLANNING so the agent can fix the
+    plan and re-submit in place.
+    """
+    sid = "strand"
+    _start(store, sid)
+    cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
+                        wall_clock_min=60, tracker_key=None, architectural=True,
+                        external_effect=False, new_dependency=False,
+                        public_api_change=False), store=store)
+    cli.cmd_plan(ns(session=sid), store=store)
+
+    bad = tmp_path / "bad_plan.md"
+    bad.write_text("this is not a structurally valid plan\n", encoding="utf-8")
+    d = cli.cmd_submit_plan(ns(session=sid, plan=str(bad)), store=store)
+
+    assert d.ok is False
+    assert d.action == "fix_plan"
+    state = store.load(sid)
+    assert state.node == Node.PLANNING.value          # NOT stranded at PLAN_READY
+    assert not state.plan_verified
+    # gate must not be armed-and-passed on a failed plan
+    assert not (state.approval and state.approval.passed)
+
+    # recovery: a corrected plan submitted from PLANNING advances normally
+    d2 = cli.cmd_submit_plan(ns(session=sid, plan=str(fixtures_dir / "plan_two_stage.toml")),
+                             store=store)
+    assert d2.ok is True
+    assert d2.marker == "PLAN-READY"
+    assert store.load(sid).node == Node.PLAN_READY.value
+
+
 def test_resolve_completed_marker(store, fixtures_dir):
     sid = "d4"
     _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage.toml"))

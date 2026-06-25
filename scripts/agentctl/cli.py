@@ -319,13 +319,21 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
         state.plan_verified = not problems
 
     state.plan_path = plan_path
-    state.node = transition(state.node, "submit_plan")
-    state.approval = GateRecord("plan_approval", armed=True, passed=False)
-    state.log("submit_plan", plan=plan_path, verified=state.plan_verified)
-    store.save(state)
 
     if not state.plan_verified:
+        # Stay at PLANNING — do NOT transition or arm the gate. Advancing to
+        # PLAN_READY on a failed structure check strands the session there with
+        # an armed gate and no recovery edge back (every retry bounced; had to
+        # be unstuck by hand via `reset --force`). The agent fixes the plan and
+        # re-runs submit-plan in place from PLANNING.
+        state.log("submit_plan", plan=plan_path, verified=False)
+        store.save(state)
         return Directive(False, state.node, "fix_plan", "plan failed verification", data={"problems": problems})
+
+    state.node = transition(state.node, "submit_plan")
+    state.approval = GateRecord("plan_approval", armed=True, passed=False)
+    state.log("submit_plan", plan=plan_path, verified=True)
+    store.save(state)
     return Directive(
         True, state.node, "await_user_approval",
         "plan ready; HARD GATE — get explicit user approval before approve",
