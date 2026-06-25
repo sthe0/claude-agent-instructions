@@ -70,4 +70,5 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 | [verify-plan-file.py](verify-plan-file.py) | Structural validator for planner output (per `planner` SKILL.md § Plan format) |
 | [verify-readme.py](verify-readme.py) | Verify the README inventory sentinels (scripts / flat skills / specializations) match the filesystem; `--fix` reconciles, `--root` for project repos |
 | [verify-self-improvement-edit.py](verify-self-improvement-edit.py) | `commit-msg` gate: require `[self-improvement-reviewed]` in commits that touch `skills/self-improvement/` |
+| [verify-tests-accompany-code.py](verify-tests-accompany-code.py) | `commit-msg` advisory (warn-only, never blocks): nudge when staged non-test `scripts/**.py` carries no test delta; `[skip-test-guard: <reason>]` trailer suppresses it |
 <!-- inventory:scripts:end -->

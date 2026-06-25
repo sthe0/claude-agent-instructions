@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# commit-msg: gate edits to the self-improvement skill.
-# See scripts/verify-self-improvement-edit.py for the rationale.
+# commit-msg hooks. Order: advisory nudges first (never block), then the
+# blocking self-improvement-edit gate (exec, terminates the hook).
 set -e
 REPO_ROOT="$(git rev-parse --show-toplevel)"
+# Advisory (warn-only, exit 0): staged code without an accompanying test.
+# See scripts/verify-tests-accompany-code.py + leaf tests-accompany-code.md.
+python3 "$REPO_ROOT/scripts/verify-tests-accompany-code.py" "$1" || true
+# Blocking gate: self-improvement skill edits. See verify-self-improvement-edit.py.
 exec python3 "$REPO_ROOT/scripts/verify-self-improvement-edit.py" "$1"

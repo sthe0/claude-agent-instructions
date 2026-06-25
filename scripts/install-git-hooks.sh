@@ -10,6 +10,7 @@ chmod +x "$HOOKS/post-commit" "$HOOKS/pre-commit" "$HOOKS/commit-msg" \
   "$REPO/scripts/permissions-cli.py" \
   "$REPO/scripts/spawn-specialist.py" \
   "$REPO/scripts/verify-cross-refs.py" \
+  "$REPO/scripts/verify-tests-accompany-code.py" \
   "$REPO/cursor/scripts/lint-cursor-mirror.py" \
   "$REPO/cursor/scripts/install-cursor-links.sh" \
   "$REPO/cursor/scripts/migrate-cursor-namespace.sh" \
