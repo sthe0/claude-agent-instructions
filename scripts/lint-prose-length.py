@@ -16,6 +16,7 @@ Governed files (per `config.md` keys):
   skills/*/SKILL.md                      skill-md-max-lines
   skills/specializations/*/SKILL.md      skill-md-max-lines
   skills/*/policy.md                     policy-md-max-lines
+  skills/specializations/*/policy.md     policy-md-max-lines
 
 CLAUDE.md also has a UTF-8 byte ceiling (`claude-md-max-bytes`): the harness
 silently truncates CLAUDE.md past ~40 000 bytes, losing tail rules, and the
@@ -38,6 +39,7 @@ GOVERNED = [
     ("skills/*/SKILL.md", "skill-md-max-lines"),
     ("skills/specializations/*/SKILL.md", "skill-md-max-lines"),
     ("skills/*/policy.md", "policy-md-max-lines"),
+    ("skills/specializations/*/policy.md", "policy-md-max-lines"),
 ]
 
 CONFIG_KEY_RE = re.compile(r"^\|\s*`([a-z0-9-]+)`\s*\|\s*`([^`]+)`\s*\|")

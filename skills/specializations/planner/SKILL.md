@@ -69,19 +69,11 @@ Before decomposing anything, state explicitly for yourself and in the plan:
 
 ### Numbers and deadlines without a source
 
-If the task has concrete numbers, deadlines, TTLs, or limits **without** an explicit link to a field / config / document:
-
-1. **Do not guess** a match to a constant in code "by proximity".
-2. **Find the source** — domain docs, wiki, project memory leaf, MCP query, semantic search, comments on the source artifact.
-3. If no source — return `ESCALATE:` with the specific question; do not commit a numeric value in the plan without basis.
-4. In "Problem and done criteria" record: **what each key number means** and **which system layer** it affects.
+Concrete numbers / deadlines / TTLs / limits **without** an explicit source link: **do not guess** by proximity — find the source (domain docs, wiki, project memory, MCP, semantic search, source-artifact comments), else return `ESCALATE:`; never commit a numeric value without basis, and record what each key number means + which layer it affects. Detail: see [policy.md](policy.md) § Numbers and deadlines without a source.
 
 ### Gathering context
 
-- Read the user's request and any linked source artifacts (tickets, RFCs, parent tasks) for the full picture.
-- Comments on those artifacts — accepted decisions and links.
-- Wiki / docs linked from them — read them.
-- Familiar domain → relevant project memory leaves only.
+Read the user's request and all linked source artifacts (tickets, RFCs, parent tasks), their comments, and the wiki/docs they link; for a familiar domain read the relevant project memory leaves only. Detail: see [policy.md](policy.md) § Gathering context.
 
 ### Research existing solutions and best practices
 
@@ -103,19 +95,7 @@ In the plan, state **explicitly** what is reused vs. built from scratch. If you 
 
 ### Reuse vs generalization
 
-If the search above surfaces a precedent for the current task, two outcomes:
-
-1. **Reuse.** The prior solution applies almost as-is. The plan becomes "apply the recipe from `<source>` with these adjustments: …".
-
-2. **Generalize.** The current task is the second (or third) instance of the same kind, and the precedent solved it as a one-off. Present **two alternatives** to the manager:
-   - **(a) One-off** — solve this instance the same way as the precedent. Cheaper now, repeats the work next time.
-   - **(b) Generalized** — extract the shared piece into a reusable abstraction (script, skill, leaf) and apply it here as its first consumer. Heavier now, cheaper later.
-
-   Generalization is only applicable to systems we have edit access to (the instructions repo, project memory, project scripts, etc.). If the shared piece lives in a system we cannot modify, plan = (a) only — state the constraint explicitly.
-
-   The manager surfaces both alternatives to the user for the choice; do not pre-decide.
-
-If no precedent surfaces — no extra step; plan from scratch.
+If the search surfaces a precedent: either **reuse** it (apply the recipe with adjustments) or, when this is the second/third instance the precedent solved as a one-off, present **two alternatives** to the manager — (a) one-off vs (b) generalized abstraction — with a recommendation; do not pre-decide. Detail (edit-access constraint, surfacing rule): see [policy.md](policy.md) § Reuse vs generalization.
 
 ### Consult specialists on technical decisions
 
@@ -179,7 +159,7 @@ For each stage that calls for a specialist (developer, thinker, yandex-cloud-exp
 
 ### Large plans — split into index + per-stage files
 
-For plans expected to exceed ~20 KB / ~600 lines, or with > 3 stages each accruing `Actual effort:` updates, split into an index file (keeping the four required `##` sections so `verify-plan-file.py` passes) plus per-stage files under `~/.claude/plans/<slug>-stage-<N>-<short>.md`, into which each stage's detailed `Output` / `Expected result image` / `Actual effort` moves — later Reads then pull only the active stage. Layout and section template: [plan-file-split.md](../../../memory-global/leaves/plan-file-split.md). For ≤ 3 stages or < 10 KB the single-file default stands.
+For plans > ~20 KB / ~600 lines or > 3 stages accruing `Actual effort:` updates, split into an index + per-stage files so later Reads pull only the active stage; for ≤ 3 stages or < 10 KB the single-file default stands. Layout and section template: [plan-file-split.md](../../../memory-global/leaves/plan-file-split.md).
 
 ### Tool guidance
 

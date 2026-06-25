@@ -147,127 +147,13 @@ commit with an unannotated violation.
 
 ## File structure
 
-The repository layout below is canonical. If disk disagrees — fix **either** this document **or** the file tree and symlinks. Do not leave the two diverging.
+The repository layout is canonical and lives in one leaf. If disk disagrees — fix **either** the leaf **or** the file tree and symlinks. Do not leave the two diverging.
 
-### Global tree (`~/claude-agent-instructions/`)
+The full contract is `memory-global/leaves/system-knowledge/instructions-repo-layout.md`:
 
-```
-CLAUDE.md
-config.md                            # numeric coordination constants — single source of truth
-README.md
-agents/                              # reserved for future Task-spawned subagents
-  README.md
-agents-local/                        # gitignored; per-machine subagents
-  README.md
-skills/                              # flat skills + specializations container
-  overcome-difficulty/SKILL.md       # flat skill (invoked inline)
-  self-improvement/SKILL.md + policy.md
-  tracker-management/SKILL.md
-  ccgram-management/SKILL.md         # CCGram Telegram bridge ops (per-machine setup, daily ops, troubleshooting)
-  specializations/
-    planner/SKILL.md                 # specialization skill (spawned as claude -p)
-    developer/SKILL.md
-    thinker/SKILL.md
-    yandex-cloud-expert/SKILL.md
-    tech-writer/SKILL.md             # Russian technical writer / editor (README, docs, plan & comment polishing)
-skills-local/                        # gitignored; machine-local single-file skills
-mcp-local/                           # gitignored; applied to settings.local.json
-cursor/
-  README.md
-  rules/
-    claude-code-sync.mdc             # global Cursor rule (alwaysApply); mirrors CLAUDE.md
-  agents/
-    README.md
-    developer-spawn.md               # Cursor-only specialization wrapper over ~/.claude/skills/developer/SKILL.md
-    planner-spawn.md                 # Cursor-only specialization wrapper over ~/.claude/skills/planner/SKILL.md
-    thinker-spawn.md                 # Cursor-only specialization wrapper over ~/.claude/skills/thinker/SKILL.md
-  scripts/
-    install-cursor-links.sh          # wires ~/.cursor/rules/* and ~/.cursor/agents/*
-    migrate-cursor-namespace.sh      # helper for migrating other machines / project roots
-memory-global/
-  MEMORY.md                          # global memory index (auto-memory format)
-  leaves/*.md                        # evergreen reference leaves
-  leaves/experience/*.md             # post-resolution task experiences (see CLAUDE.md § On task resolution); named YYYY-MM-DD-<slug>.md
-  leaves/system-knowledge/*.md       # durable facts about systems/processes/components (see CLAUDE.md § Memory § system-knowledge); slug-only filenames
-permissions/                         # operational workflow-level grants (not memory)
-  global.json                        # cross-machine grants
-  README.md                          # schema + CLI usage
-docs/                                # optional documentation
-scripts/
-  setup-symlinks.sh
-  setup-project-memory.sh
-  setup-ccgram.sh                      # bootstrap CCGram on a new machine (uv + ccgram + autostart + hooks)
-  verify-instructions-sync.sh
-  verify-layout-contract.sh
-  verify-all.py                        # entry point for instruction-policy checks
-  verify-language.py                   # English-by-default policy
-  verify-cross-refs.py                 # intra-repo link / inline-path resolution check
-  # Cursor mirror lint moved to cursor/scripts/lint-cursor-mirror.py
-  verify-self-improvement-edit.py      # commit-msg gate: requires review marker for self-improvement edits
-  lint-prose-length.py                 # hard ceiling on CLAUDE.md / cursor mirror / SKILL.md / policy.md
-  verify-experience-leaf.py            # require `resolution_confirmed_by_user` + (for schema:difficulty/v1) the difficulty-centric sections on `**/experience/*.md` (PreToolUse hook + verify-all)
-  verify-leaf-structure.py             # verify non-experience leaves: schema:leaf/v1 enforces ## Difficulty/Guidance/See also; grandfathered SK leaves keep the difficulty-lead baseline (subsumes verify-difficulty-lead.py)
-  record-experience.py                 # generate / extend difficulty-centric experience leaves (search/new/extend/ticket); auto-maintains the experience/MEMORY.md sub-index (see memory-global/leaves/experience-leaf-schema.md)
-  hook-self-critique-reminder.py       # PostToolUse Write: nudge to invoke `self-improvement` when an experience leaf has substantive § Self-critique
-  hook-tracker-reminder.py             # UserPromptSubmit: detect tracker references (ticket keys, keywords) and nudge to invoke `tracker-management`
-  hook-push-confirmation-reminder.py   # PreToolUse Bash: nudge to verify user push-confirmation before `git push` / `sync-instructions-repo.sh push`
-  hook-readme-currency-reminder.py     # PreToolUse Bash: before git/arc commit, list READMEs next to changed code that aren't in the changeset — verify currency
-  verify-plan-file.py                  # validate planner plan file structure (Problem/Stages/Final verification/Risks + Expected result image lines); run from spawn-specialist.py after PLAN-READY:
-  hook-resolution-reminder.py          # UserPromptSubmit: nudge when user reply is brief gratitude — do NOT treat as resolution confirmation
-  hook-context-growth-reminder.py      # UserPromptSubmit: nudge when live context size crosses a band (reads transcript usage); throttled per band per session
-  install-reminder-hooks.sh            # idempotently wire the canonical reminder-hook set into machine-local settings.json (hooks are not merged from base.json)
-  set-context-cap.sh                   # set an arbitrary context-size cap (auto-compaction trigger) by computing CLAUDE_CODE_DISABLE_1M_CONTEXT + CLAUDE_AUTOCOMPACT_PCT_OVERRIDE into base.json
-  lint-permissions.py                  # permissions JSON schema check
-  permissions-cli.py                   # CLI for permissions/*.json
-  spawn-specialist.py                  # `claude -p` spawn wrapper (recursion cap, budget, permissions, cost log)
-  cost-report.py                       # aggregate spawn cost log
-  tool-usage-report.py                 # aggregate Skill / Agent / spawn invocations per task — feeds experience leaf § Cost, effort, and tool usage
-  memory-audit.py                      # informational memory leaves audit
-  skill-usage-audit.py                 # informational: which user-invocable skills are actually invoked vs only catalog-loaded (see memory-global/leaves/skill-catalog-curation.md)
-  offload-large.sh                     # pipe-through wrapper for Bash outputs > N bytes → /tmp/cc-scratch/ + head+tail digest (see memory-global/leaves/large-tool-output-discipline.md)
-  session-start-digest.sh              # bootstrap aggregator: cwd + arc/git state + agent-memory listing in one call (replaces 4–5 separate startup Bash calls)
-  sync-instructions-repo.sh
-  install-git-hooks.sh
-  install-sync-cron.sh
-  install-sync-systemd-timer.sh
-  apply-mcp-local.sh
-githooks/
-  pre-commit                           # runs verify-all.py --staged
-  commit-msg                           # runs verify-self-improvement-edit.py
-  post-commit                          # push reminder
-```
-
-**Forbidden in global `scripts/`:** project-specific or machine-specific scripts (Arcadia mount helpers, deepagent runbook scripts, etc.) — those belong in the relevant project's own `.claude/scripts/` tree.
-
-### Runtime symlinks after `setup-symlinks.sh`
-
-| Runtime path | Source in repo |
-|---|---|
-| `~/.claude/CLAUDE.md` | `CLAUDE.md` |
-| `~/.claude/config.md` | `config.md` |
-| `~/.claude/agents/<global>.md` | `agents/<name>.md` (currently none — directory reserved) |
-| `~/.claude/agents/<local>.md` | `agents-local/*.md` (gitignored) |
-| `~/.claude/skills/<flat>/` | `skills/<name>/` (excluding the `specializations/` container) |
-| `~/.claude/skills/<specialization>/` | `skills/specializations/<name>/` — flattened so the catalog sees them by name |
-| `~/.claude/skills/<local>.md` | `skills-local/*.md` (gitignored) |
-| `~/.claude/memory-global/` | `memory-global/` |
-| `~/.cursor/rules/claude-code-sync.mdc` | `cursor/rules/claude-code-sync.mdc` |
-| `~/.cursor/agents/<name>.md` | `cursor/agents/<name>.md` |
-
-Project-specific rules / agents / skills / memory live in **each project's own** `<project_cwd>/.claude/` tree (not in this repo), and are wired by the project's own setup or by `scripts/setup-project-memory.sh` for memory.
-
-### Project memory symlink (per project, not in this repo)
-
-For each project where shared agent memory is desired:
-
-```
-<project_cwd>/.claude/agent-memory/        ← committed in the project's git
-~/.claude/projects/<cwd-hash>/memory  →  <project_cwd>/.claude/agent-memory
-```
-
-The symlink is created by `scripts/setup-project-memory.sh`, usually invoked from `<project>/.claude/scripts/setup-local.sh`. The native Claude Code auto-memory mechanism then reads and writes through the symlink, so the actual files live in the project tree and other developers inherit them on clone.
-
-Each product repo may ship `.claude/scripts/setup-local.sh` (Cursor symlinks, skills, memory) and `.claude/scripts/README.md` — not in this global repository.
+- **§ Global tree (`~/claude-agent-instructions/`)** — the annotated directory listing + the "forbidden in global `scripts/`" rule.
+- **§ Runtime symlinks after `setup-symlinks.sh`** — the runtime-path → repo-source table.
+- **§ Project memory symlink (per project, not in this repo)** — the per-project `agent-memory/` symlink wiring.
 
 ### On structure change
 
