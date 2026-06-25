@@ -114,12 +114,16 @@ Each scope is a short `MEMORY.md` index plus `leaves/` detail files. The key kin
 
 ```bash
 git clone git@github.com:sthe0/claude-agent-instructions.git ~/claude-agent-instructions
+# …no SSH key or no push access? a read-only HTTPS clone works just as well:
+#   git clone https://github.com/sthe0/claude-agent-instructions.git ~/claude-agent-instructions
 ~/claude-agent-instructions/scripts/setup-symlinks.sh        # symlinks + settings + reminder/git hooks (one command does all)
 ~/claude-agent-instructions/scripts/verify-instructions-sync.sh   # symlink integrity (repo-developer's view)
 ~/claude-agent-instructions/scripts/doctor.sh                # "am I ready to start?" — run this once, expect all [ OK ]
 ```
 
 `setup-symlinks.sh` is the single wiring command: besides the symlinks below it merges the policy `settings` and installs the reminder + engine-gate hooks and the git hooks (it calls `apply-settings.sh`, `install-reminder-hooks.sh`, and `install-git-hooks.sh` for you). `doctor.sh` then confirms the runtime is actually ready — the `claude` CLI is on PATH, the constitution is loaded, the engine hooks are armed, and `agentctl` runs; fix any `[FAIL]` line (usually by re-running `setup-symlinks.sh`) before your first task.
+
+You do **not** need push rights to this repo to use the system — it reads the instructions locally and runs fully from a read-only clone. Self-improvement edits land as local commits; the upstream push is always gated behind your explicit confirmation and degrades to a graceful skip when you can't push (your commit stays local, just like Tracker updates are skipped without tracker credentials). To send improvements upstream without push rights, fork `sthe0/claude-agent-instructions`, push to your fork, and open a PR. Full rule: [skills/self-improvement/policy.md](skills/self-improvement/policy.md) § Git sync.
 
 Per-project local setup (from each product repo root; scripts live in that repo's `.claude/scripts/`):
 

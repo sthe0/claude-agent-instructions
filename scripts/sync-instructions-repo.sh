@@ -110,8 +110,23 @@ cmd_push() {
     log "push: nothing to push"
     return 0
   fi
-  git push "$REMOTE" "$BRANCH"
-  log "push: done ($ahead commit(s))"
+  # Capture output so a "no push rights" failure degrades into a graceful skip
+  # (the local commit(s) stay intact and the agent keeps working) instead of a
+  # cryptic set -euo pipefail abort. Other failures (e.g. remote moved ahead)
+  # still propagate so the pull → resolve → push guidance applies.
+  local out rc=0
+  out="$(git push "$REMOTE" "$BRANCH" 2>&1)" || rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    log "push: done ($ahead commit(s))"
+    return 0
+  fi
+  printf '%s\n' "$out" | tee -a "$LOG_FILE" >&2
+  if printf '%s' "$out" | grep -qiE 'permission|denied|forbidden|403|read[ -]?only|not authorized|access rights'; then
+    log "push: SKIPPED — no push rights to $REMOTE/$BRANCH. Your $ahead local commit(s) stay in $REPO and the system keeps working. To contribute upstream, fork sthe0/claude-agent-instructions, push to your fork, and open a PR."
+    return 0
+  fi
+  log "push: FAILED (rc=$rc). If '$REMOTE/$BRANCH' moved ahead, run '$0 pull', resolve, then '$0 push'."
+  return "$rc"
 }
 
 cmd_sync() {

@@ -230,6 +230,23 @@ explicitly reviewed before it lands.
 
 If push is rejected (remote ahead): `pull` → resolve conflicts → ask for confirmation again → `push`.
 
+**No push rights to the canonical repo.** Not every operator of these
+instructions can push to `origin/main` (read-only clone, untrusted machine, or
+simply not a collaborator on `sthe0/claude-agent-instructions`). This is a
+supported mode, not an error:
+
+1. Everything up to **commit** is identical — self-improvement edits land as
+   **local** commits and the system keeps working from them; push rights are
+   never required to *use* the instructions.
+2. `sync-instructions-repo.sh push` detects a permission/access failure and
+   **degrades to a graceful skip** (logs the reason, keeps the local commit)
+   rather than aborting — so a no-rights operator is never left with a cryptic
+   crash. Only genuine "remote moved ahead" failures still ask for a `pull`.
+3. To get local improvements **upstream** without push rights: fork
+   `sthe0/claude-agent-instructions`, push the commit to your fork, and open a
+   PR — or hand the commit/patch to someone who can push. Tell the user this is
+   the path instead of reporting the push as failed.
+
 ### Background pull (opt-in, every 10 minutes)
 
 Background auto-pull is **not installed by default**; `setup-symlinks.sh` does not enable it. Install manually only if you want it:
