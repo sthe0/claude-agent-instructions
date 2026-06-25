@@ -710,6 +710,7 @@ def cmd_investigate(args, *, store: StateStore, runner: Runner | None = None) ->
     state.difficulty.investigation = Investigation(
         localized_expectation=args.localized_expectation,
         localized_actual=args.localized_actual,
+        hypotheses=list(getattr(args, "hypotheses", None) or []),
     )
     state.log("investigate")
     store.save(state)
@@ -946,6 +947,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("investigate"); sp.add_argument("--session", required=True)
     sp.add_argument("--localized-expectation", dest="localized_expectation", required=True)
     sp.add_argument("--localized-actual", dest="localized_actual", required=True)
+    sp.add_argument("--hypothesis", dest="hypotheses", action="append", default=None,
+                    help="a candidate hypothesis (repeatable; >=2 required for a complete record)")
     sp = add("critique"); sp.add_argument("--session", required=True)
     sp.add_argument("--functional-ground", dest="functional_ground", required=True)
     sp.add_argument("--replanning-task", dest="replanning_task", required=True)

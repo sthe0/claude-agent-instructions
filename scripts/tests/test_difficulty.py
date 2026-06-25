@@ -42,9 +42,10 @@ def _declare(store, sid):
     return cli.cmd_declare(ns(session=sid, expected="e", actual="a", mismatch="m"), store=store)
 
 
-def _investigate(store, sid):
+def _investigate(store, sid, hypotheses=("h1", "h2")):
     return cli.cmd_investigate(ns(session=sid, localized_expectation="le",
-                                  localized_actual="la"), store=store)
+                                  localized_actual="la",
+                                  hypotheses=list(hypotheses)), store=store)
 
 
 def _critique(store, sid):
@@ -158,7 +159,46 @@ def test_difficulty_blockers_unit():
     s2.difficulty = Difficulty(declaration=Declaration("e", "a", "m"))
     assert gates.difficulty_blockers(s2)
 
-    # complete -> clear
-    s2.difficulty.investigation = Investigation("le", "la")
+    # complete + well-formed -> clear
+    s2.difficulty.investigation = Investigation("le", "la", hypotheses=["h1", "h2"])
     s2.difficulty.critique = Critique("fg", "rt")
     assert gates.difficulty_blockers(s2) == []
+
+
+# --- shape enforcement: presence is necessary but not sufficient -------------
+
+def _complete_difficulty(*, expected="e", actual="a", mismatch="m", hypotheses=("h1", "h2")):
+    return Difficulty(
+        declaration=Declaration(expected, actual, mismatch),
+        investigation=Investigation("le", "la", hypotheses=list(hypotheses)),
+        critique=Critique("fg", "rt"),
+    )
+
+
+def _diagnosing_with(diff):
+    s = SessionState(session_id="sh", task_id="t", node=Node.DIAGNOSING.value)
+    s.difficulty = diff
+    return s
+
+
+def test_blockers_reject_empty_declaration_field():
+    s = _diagnosing_with(_complete_difficulty(mismatch="   "))
+    blockers = gates.difficulty_blockers(s)
+    assert blockers and "mismatch" in blockers[0]
+
+
+def test_blockers_reject_single_hypothesis():
+    s = _diagnosing_with(_complete_difficulty(hypotheses=("only one",)))
+    blockers = gates.difficulty_blockers(s)
+    assert blockers and "hypotheses" in blockers[0]
+
+
+def test_blockers_reject_blank_hypotheses():
+    s = _diagnosing_with(_complete_difficulty(hypotheses=("h1", "   ")))
+    blockers = gates.difficulty_blockers(s)
+    assert blockers and "hypotheses" in blockers[0]
+
+
+def test_blockers_accept_well_formed_record():
+    s = _diagnosing_with(_complete_difficulty())
+    assert gates.difficulty_blockers(s) == []

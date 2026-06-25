@@ -137,9 +137,12 @@ class Declaration:
 
 @dataclass
 class Investigation:
-    """Phase 2: localize the divergence to the smallest expectation/actual pair."""
+    """Phase 2: localize the divergence to the smallest expectation/actual pair,
+    carrying a portfolio of >=2 candidate hypotheses (the overcome-difficulty skill
+    requires more than one so the diagnosis is not a single-track guess)."""
     localized_expectation: str
     localized_actual: str
+    hypotheses: list[str] = field(default_factory=list)
 
 
 @dataclass

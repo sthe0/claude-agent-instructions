@@ -57,6 +57,19 @@ def difficulty_blockers(state: SessionState) -> list[str]:
         missing.append("critique (run: critique)")
     if missing:
         return ["difficulty record incomplete — replan blocked until: " + ", ".join(missing)]
+    # Shape enforcement: presence of the three sections is not enough — the record
+    # must be well-formed. Mechanical shape only (non-empty fields, hypothesis count);
+    # the engine never judges the *quality* of the content.
+    shape: list[str] = []
+    decl = d.declaration
+    for label, value in (("expected", decl.expected), ("actual", decl.actual), ("mismatch", decl.mismatch)):
+        if not (value or "").strip():
+            shape.append(f"declaration.{label} is empty")
+    good_hyps = [h for h in (d.investigation.hypotheses or []) if (h or "").strip()]
+    if len(good_hyps) < 2:
+        shape.append(f"investigation needs >=2 hypotheses (have {len(good_hyps)})")
+    if shape:
+        return ["difficulty record under-specified — replan blocked: " + "; ".join(shape)]
     return []
 
 

@@ -71,7 +71,8 @@ def test_refinement_after_failure_rearms_the_stage(store, fixtures_dir):
     assert "blockers" in blocked.data
 
     cli.cmd_declare(ns(session=sid, expected="e", actual="a", mismatch="m"), store=store)
-    cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la"), store=store)
+    cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
+                           hypotheses=["h1", "h2"]), store=store)
     cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt"), store=store)
 
     # now a refinement replan must re-arm the failed stage and point back at it
