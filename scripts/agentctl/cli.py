@@ -17,7 +17,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import continuations, gates, permissions
+from . import continuations, gates, permissions, plugins
 from .classify import Signals, classify
 from .config import Thresholds
 from .partition import render_section, verdict
@@ -139,6 +139,46 @@ def cmd_reset(args, *, store: StateStore, runner: Runner | None = None) -> Direc
     )
 
 
+def cmd_plugin_activate(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Attach a registered plugin to THIS session (the per-session counterpart of
+    import-time registration). The owning skill runs this on invocation. Plugin-
+    specific kwargs (e.g. --tracker-key) are stashed in the seeded bag. Idempotent
+    — safe to re-run on resume; merges new kwargs into the existing bag."""
+    state = _require(store, args.session)
+    name = args.plugin
+    if name not in plugins.REGISTRY:
+        return Directive(
+            False, state.node, "noop",
+            f"unknown plugin {name!r}; registered: {sorted(plugins.REGISTRY)}",
+        )
+    seed = dict(getattr(args, "seed", None) or {})
+    if getattr(args, "tracker_key", None):
+        seed["tracker_key"] = args.tracker_key
+    plugins.activate(state, name, seed)
+    state.log("plugin_activate", plugin=name)
+    store.save(state)
+    return Directive(
+        True, state.node, "continue",
+        f"plugin {name!r} activated for this session",
+        data={"active": sorted(state.plugins)},
+    )
+
+
+def cmd_plugin_deactivate(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Manual retire (escape hatch: 'stop touching the tracker'). Engine-driven
+    auto-retire (terminal) is the normal path; this is for a lapsed trigger or a
+    user change of mind. Archives the bag for audit."""
+    state = _require(store, args.session)
+    ok = plugins.deactivate(state, args.plugin)
+    state.log("plugin_deactivate", plugin=args.plugin, was_active=ok)
+    store.save(state)
+    detail = (
+        f"plugin {args.plugin!r} deactivated (archived)" if ok
+        else f"plugin {args.plugin!r} was not active"
+    )
+    return Directive(ok, state.node, "continue", detail, data={"active": sorted(state.plugins)})
+
+
 def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     thr = Thresholds()
@@ -239,7 +279,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
 
 def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
-    blockers = gates.blockers(state, "plan_approval")
+    blockers = gates.blockers(state, "plan_approval") + plugins.plugin_gate_blockers(state, "plan_approval")
     if not args.by or not args.by.strip():
         blockers = blockers + ["empty approver: --by must name who approved"]
     if blockers:
@@ -511,7 +551,10 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
 
 def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
-    blockers = gates.blockers(state, "resolution")
+    # plugin gates fold into resolve (not verify_final) so a plugin can let the
+    # session reach RESOLUTION — where its publish-directive fires — yet still
+    # block the final resolve until its sub-condition is met.
+    blockers = gates.blockers(state, "resolution") + plugins.plugin_gate_blockers(state, "resolution")
     if not args.by or not args.by.strip():
         blockers = blockers + ["empty confirmer: --by must name who confirmed resolution"]
     if blockers:
@@ -710,6 +753,8 @@ def cmd_status(args, *, store: StateStore, runner: Runner | None = None) -> Dire
 COMMANDS = {
     "start": cmd_start,
     "reset": cmd_reset,
+    "plugin-activate": cmd_plugin_activate,
+    "plugin-deactivate": cmd_plugin_deactivate,
     "classify": cmd_classify,
     "plan": cmd_plan,
     "submit-plan": cmd_submit_plan,
@@ -750,6 +795,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--criterion-type", dest="criterion_type", default=CriterionType.MEASURABLE.value)
     sp.add_argument("--recursion-depth", dest="recursion_depth", type=int, default=0)
     sp.add_argument("--force", action="store_true")
+
+    sp = add("plugin-activate"); sp.add_argument("--session", required=True)
+    sp.add_argument("--plugin", required=True)
+    sp.add_argument("--tracker-key", dest="tracker_key", default=None)
+    sp = add("plugin-deactivate"); sp.add_argument("--session", required=True)
+    sp.add_argument("--plugin", required=True)
 
     sp = add("classify"); sp.add_argument("--session", required=True)
     sp.add_argument("--chat", action="store_true")
@@ -806,8 +857,33 @@ def main(argv: list[str] | None = None) -> int:
         directive = fn(args, store=store)
     except Exception as exc:  # surface as a failed directive, not a traceback
         directive = Directive(False, "(error)", "error", str(exc))
+    else:
+        _fire_plugins(args, store, directive)
     print(json.dumps(directive.to_dict(), ensure_ascii=False, indent=2))
     return 0 if directive.ok else 1
+
+
+def _fire_plugins(args, store: StateStore, directive: Directive) -> None:
+    """After a command runs, fire the matching plugin event on the (just-saved)
+    state so active plugins can observe, gate, and auto-retire. Central wiring —
+    the command bodies stay plugin-agnostic. Fires regardless of directive.ok
+    (a blocked resolve must still surface its publish nudge). A plugin-less session
+    skips entirely (no reload, no behavior change). Plugin faults never crash the
+    engine."""
+    event = plugins.event_for(args.command)
+    if event is None:
+        return
+    session = getattr(args, "session", None)
+    if not session:
+        return
+    try:
+        state = store.load(session)
+        if state is None or not plugins.active(state):
+            return
+        plugins.fire(event, state, directive)
+        store.save(state)
+    except Exception as exc:  # observability without aborting the directive
+        directive.data.setdefault("plugin_errors", []).append(str(exc))
 
 
 if __name__ == "__main__":

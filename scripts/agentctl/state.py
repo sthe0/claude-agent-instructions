@@ -19,7 +19,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 class Node(str, Enum):
@@ -334,6 +334,13 @@ class SessionState:
     recursion_depth: int = 0
     artifacts: list[str] = field(default_factory=list)
     history: list[dict] = field(default_factory=list)
+    # Plugin layer (schema 6): non-core sub-state-machines attach here per session.
+    # `plugins` is the ACTIVE set — name -> that plugin's opaque state bag; presence
+    # of a key == activated. `plugins_archive` holds bags of auto-retired plugins
+    # (terminal reached) for audit. Both are free-form dict-of-dict so asdict /
+    # cls(**data) round-trips them untouched; the framework lives in plugins.py.
+    plugins: dict[str, dict] = field(default_factory=dict)
+    plugins_archive: dict[str, dict] = field(default_factory=dict)
     schema_version: int = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -406,6 +413,8 @@ class SessionState:
         data["approval"] = GateRecord(**data["approval"])
         data["resolution"] = GateRecord(**data["resolution"])
         data.pop("self_improvement", None)  # legacy field (schema <=4); self-improvement now runs on the standard spine
+        data.setdefault("plugins", {})            # migration: schema <=5 has no plugin layer
+        data.setdefault("plugins_archive", {})
         data["stages"] = [Stage.from_dict(s) for s in data.get("stages", [])]
         decomp = data.get("partition")
         data["partition"] = Partition(**decomp) if decomp else None
