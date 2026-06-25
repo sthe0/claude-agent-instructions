@@ -73,7 +73,8 @@ start → CLASSIFIED → ROUTED → PLANNING → PLAN_READY ──■APPROVAL GA
                        │                                                    │
                        └──────────────────────────────→  EXECUTING  ⇄  VERIFYING
                                                               │             │
-                                  (difficulty → BLOCKED → replan → PLANNING)│
+       (stage FAILED → DIAGNOSING: declare→investigate→critique → replan ──┘
+                          → retry, or PLANNING on a substantive replan)      │
                                                                        RESOLUTION
                                                                             │
                                                             ──■RESOLUTION GATE■──→ RESOLVED
@@ -92,7 +93,7 @@ What happens when you give the agent a substantive task:
 3. **Plan** — for substantive work, the agent (often via the `planner` skill) writes a plan with stages, each carrying an *expected result image* and a *done criterion*.
 4. **Approval gate** — the plan is shown to you; nothing touches production code until you approve. The `hook-state-gate` enforces this.
 5. **Execute** — the manager runs each stage itself (small steps) or **dispatches** a `developer` / other specialist (larger steps).
-6. **Difficulty?** If a stage's actual result diverges from its expected image, the `overcome-difficulty` skill localizes the divergence and produces a **replanning** task; the plan is fixed and work resumes.
+6. **Difficulty?** If a stage's actual result diverges from its expected image, a FAILED result routes the engine into the `DIAGNOSING` sub-spine: the `overcome-difficulty` skill supplies the cognition while the engine enforces `declare → investigate → critique` and **blocks `replan` until that record is complete**. The replanning task fixes the plan and work resumes.
 7. **Verify** each stage against its done criterion, then the whole plan against the overall criterion.
 8. **Resolution gate** — the agent recaps and **asks you to confirm** the task is resolved (it does not assume it from silence or thanks).
 9. **Record experience** — if the task taught something reusable, the agent writes an experience leaf to memory.

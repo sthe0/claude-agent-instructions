@@ -81,10 +81,12 @@ def test_record_result_loop_guard_escalate_marker(store, fixtures_dir):
     cli.cmd_next_stage(ns(session=sid), store=store)
     d = cli.cmd_record_result(ns(session=sid, status="failed", actual="boom"), store=store)
     assert d.ok is False
-    assert d.action == "replan"
-    assert d.marker is None
+    assert d.action == "declare"  # FAILED enters the DIAGNOSING sub-spine, not straight to replan
+    assert d.node == Node.DIAGNOSING.value
+    assert d.marker == "OVERCOME-DIFFICULTY"
 
-    # restart the same stage, fail identically -> ESCALATE marker
+    # restart the same stage, fail identically -> ESCALATE marker (loop guard wins
+    # before the diagnose transition)
     state = store.load(sid)
     from agentctl.state import StageStatus
     state.stage(1).outcome.status = StageStatus.ACTIVE.value

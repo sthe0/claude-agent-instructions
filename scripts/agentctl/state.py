@@ -34,6 +34,7 @@ class Node(str, Enum):
     RESOLUTION = "RESOLUTION"
     RESOLVED = "RESOLVED"
     BLOCKED = "BLOCKED"
+    DIAGNOSING = "DIAGNOSING"  # difficulty cycle active: declare -> investigate -> critique -> replan
 
 
 # Nodes at or past EXECUTING on the spawn path — once here, a SPAWN route must
@@ -116,6 +117,65 @@ class PermissionRequest:
     action: str
     stage_index: int
     raw: str = ""
+
+
+# --- the difficulty record (overcome-difficulty sub-spine) -------------------
+# The deterministic SHELL of the overcome-difficulty cycle: the engine enforces
+# the ordering (declaration -> investigation -> critique) and that each phase
+# produced its artifact, while the COGNITION (what the divergence is, the >=2
+# hypotheses, the functional-ground critique) lives in the overcome-difficulty
+# skill. Each section is filled by its command (declare / investigate / critique)
+# and the record gates `replan`: a plan may not be re-normed until the cycle is
+# complete. Sections are artifact-EXISTENCE checks, not artifact-correctness.
+@dataclass
+class Declaration:
+    """Phase 1: name the divergence — expected vs actual and the mismatch."""
+    expected: str
+    actual: str
+    mismatch: str
+
+
+@dataclass
+class Investigation:
+    """Phase 2: localize the divergence to the smallest expectation/actual pair."""
+    localized_expectation: str
+    localized_actual: str
+
+
+@dataclass
+class Critique:
+    """Phase 3: the functional ground and the replanning task it induces."""
+    functional_ground: str
+    replanning_task: str
+
+
+@dataclass
+class Difficulty:
+    """One active difficulty: a plan-vs-reality divergence being worked through.
+    `complete()` is the precondition `replan` checks (see gates.difficulty_blockers)."""
+    declaration: Declaration | None = None
+    investigation: Investigation | None = None
+    critique: Critique | None = None
+
+    def complete(self) -> bool:
+        return (
+            self.declaration is not None
+            and self.investigation is not None
+            and self.critique is not None
+        )
+
+    @classmethod
+    def from_dict(cls, d: dict | None) -> "Difficulty | None":
+        if not d:
+            return None
+        decl = d.get("declaration")
+        inv = d.get("investigation")
+        crit = d.get("critique")
+        return cls(
+            declaration=Declaration(**decl) if decl else None,
+            investigation=Investigation(**inv) if inv else None,
+            critique=Critique(**crit) if crit else None,
+        )
 
 
 # --- the 8 activity elements, grouped by the ontology's clusters -------------
@@ -266,6 +326,7 @@ class SessionState:
     plan_verified: bool = False
     partition: "Partition | None" = None
     permission_request: "PermissionRequest | None" = None
+    difficulty: "Difficulty | None" = None
     approval: GateRecord = field(default_factory=lambda: GateRecord("plan_approval"))
     resolution: GateRecord = field(default_factory=lambda: GateRecord("resolution"))
     stages: list[Stage] = field(default_factory=list)
@@ -350,6 +411,7 @@ class SessionState:
         data["partition"] = Partition(**decomp) if decomp else None
         pr = data.get("permission_request")
         data["permission_request"] = PermissionRequest(**pr) if pr else None
+        data["difficulty"] = Difficulty.from_dict(data.get("difficulty"))
         return cls(**data)
 
     @classmethod

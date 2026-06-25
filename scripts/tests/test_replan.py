@@ -59,15 +59,27 @@ def test_refinement_after_failure_rearms_the_stage(store, fixtures_dir):
     refined = str(fixtures_dir / "plan_two_stage_refined.toml")
     _to_executing_stage1(store, sid, plan)
 
-    # stage 1 fails -> FAILED, node VERIFYING
+    # stage 1 fails -> FAILED, node DIAGNOSING (the overcome-difficulty sub-spine)
     cli.cmd_record_result(ns(session=sid, status="failed", actual="boom"), store=store)
     state = store.load(sid)
     assert state.stage(1).outcome.status == StageStatus.FAILED.value
+    assert state.node == Node.DIAGNOSING.value
 
-    # a refinement replan must re-arm the failed stage and point back at it
+    # replan is blocked until the difficulty cycle is worked through
+    blocked = cli.cmd_replan(ns(session=sid, plan=refined), store=store)
+    assert blocked.ok is False
+    assert "blockers" in blocked.data
+
+    cli.cmd_declare(ns(session=sid, expected="e", actual="a", mismatch="m"), store=store)
+    cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la"), store=store)
+    cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt"), store=store)
+
+    # now a refinement replan must re-arm the failed stage and point back at it
     d = cli.cmd_replan(ns(session=sid, plan=refined), store=store)
     assert d.action == "next_stage"
     state = store.load(sid)
+    assert state.node == Node.VERIFYING.value
+    assert state.difficulty is None  # cleared on exit
     assert state.stage(1).outcome.status == StageStatus.PENDING.value
     assert state.ready_stages()[0].index == 1  # the retried stage is selectable again
 
@@ -78,7 +90,7 @@ def test_loop_guard_escalates_on_repeated_failure(store, fixtures_dir):
     _to_executing_stage1(store, sid, plan)
 
     d = cli.cmd_record_result(ns(session=sid, status="failed", actual="same error"), store=store)
-    assert d.action == "replan"
+    assert d.action == "declare"  # first failure enters DIAGNOSING
 
     # restart the same stage, fail with the identical digest -> escalate
     state = store.load(sid)

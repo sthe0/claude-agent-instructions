@@ -15,7 +15,7 @@ the guardian before flipping `passed`, so an illegal pass is impossible.
 """
 from __future__ import annotations
 
-from .state import SessionState, StageStatus
+from .state import Node, SessionState, StageStatus
 
 
 def plan_approval_blockers(state: SessionState) -> list[str]:
@@ -35,6 +35,29 @@ def resolution_blockers(state: SessionState) -> list[str]:
     if unpassed:
         out.append(f"stages not PASSED: {unpassed}")
     return out
+
+
+def difficulty_blockers(state: SessionState) -> list[str]:
+    """Precondition guardian for `replan` while in the DIAGNOSING sub-spine: the
+    overcome-difficulty cycle (declaration -> investigation -> critique) must be
+    complete before a plan may be re-normed. This is an INTERNAL command
+    precondition, NOT a tool-intercepting gate — it is deliberately absent from
+    GUARDIANS so verify-agentctl does not require a hook to cover it. [] == ok."""
+    if state.node != Node.DIAGNOSING.value:
+        return []  # replan outside the difficulty cycle (e.g. spawn REPLAN marker) is unconstrained
+    d = state.difficulty
+    if d is None:
+        return ["difficulty cycle not started: run declare, then investigate, then critique"]
+    missing: list[str] = []
+    if d.declaration is None:
+        missing.append("declaration (run: declare)")
+    if d.investigation is None:
+        missing.append("investigation (run: investigate)")
+    if d.critique is None:
+        missing.append("critique (run: critique)")
+    if missing:
+        return ["difficulty record incomplete — replan blocked until: " + ", ".join(missing)]
+    return []
 
 
 # gate name -> guardian predicate

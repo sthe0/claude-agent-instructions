@@ -18,9 +18,9 @@ Surface signals (verification failed, blocker, repeated error, surprising output
 
 ## What this skill does
 
-You are invoking this skill because either of the above happened. Work through three phases in order: **declaration**, **investigation**, **critique**. At the end, hand a concrete replanning task back to yourself — you are the root coordinator — and resume the original user task on the corrected plan.
+You are invoking this skill because either of the above happened. There are three phases — **declaration**, **investigation**, **critique** — each ending in a concrete replanning task you (the root coordinator) then apply, resuming the original user task on the corrected plan.
 
-Do not start the next round of execution until the corrected plan addresses the localized gap.
+**The engine owns the sequencing; this skill owns the cognition.** When `agentctl` is driving the session, a failed stage (`record-result --status failed`) routes to the `DIAGNOSING` node and the engine enforces the order and that each phase recorded its artifact: `declare` → `investigate` → `critique`, with `replan` machine-blocked until all three are present (`gates.difficulty_blockers`). So you do not police the ordering yourself — the engine does. What this skill supplies is the *content* of each phase: what the divergence actually is, the ≥2 competing hypotheses, the functional-ground critique, and the recursive escape when the thread won't converge. Each phase below names the command that records its artifact; if the engine is not driving this session, produce the same three artifacts in-thread.
 
 ## 1. Declaration
 
@@ -31,6 +31,8 @@ State, here in the conversation, three things — at the **global** level, the w
 - **Mismatch:** one or two sentences naming the gap between expected and actual.
 
 Do not yet try to explain the cause. Cause is what investigation will find. Declaration only fixes that there **is** a divergence and frames it.
+
+Record it: `agentctl declare --session <id> --expected … --actual … --mismatch …` (the engine refuses `investigate`/`critique`/`replan` until this exists).
 
 ## 2. Investigation
 
@@ -65,6 +67,8 @@ If the reasoning gets non-trivial — `Task → thinker` with the localized fact
 
 Output of this phase: a localized expectation and a localized actual result, in the most narrow form you can produce. If you cannot localize beyond "the whole stage was wrong", the investigation is not done — keep narrowing.
 
+Record it: `agentctl investigate --session <id> --localized-expectation … --localized-actual …`.
+
 You may legitimately conclude: the **plan itself** was the problem — incomplete, wrong dependencies, wrong executor, unrealistic estimate. Name this explicitly; do not pin the failure only on "bad execution" when the means were misassigned.
 
 ## 3. Critique
@@ -88,9 +92,11 @@ Then derive a **replanning task** for the root coordinator. The task must name:
 
 End with one explicit sentence: **"Replanning task for the root: …"**.
 
+Record it: `agentctl critique --session <id> --functional-ground … --replanning-task …`. This completes the difficulty record and unblocks `replan`.
+
 ## Handoff back to the root
 
-End the skill here. The replanning task you just wrote is now the input for the root coordinator (you, in the main thread). The root takes that task, produces a corrected plan that **replaces** the prior plan, and continues solving the **original** user task on the new plan.
+The replanning task you just wrote is now the input for the root coordinator (you, in the main thread). Apply it with `agentctl replan --session <id> --plan <corrected-plan>`: a *refinement* re-arms the failed stage and returns to execution; a *substantive* change re-arms the plan-approval hard gate (PLAN_READY) for re-approval. Either way the engine clears the difficulty record on exit, so a later failure starts a fresh cycle. The corrected plan **replaces** the prior plan, and you continue solving the **original** user task on it.
 
 Verification after the next round of action loops back to declaration if a new divergence appears.
 

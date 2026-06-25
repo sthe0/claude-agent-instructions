@@ -27,8 +27,12 @@ from .machine import transition
 from .plan import load_plan
 from .state import (
     Actor,
+    Critique,
     Criterion,
     CriterionType,
+    Declaration,
+    Difficulty,
+    Investigation,
     Partition,
     GateRecord,
     Means,
@@ -468,14 +472,24 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
     stage.outcome.fail_digests.append(dig)
     stage.outcome.status = StageStatus.FAILED.value
     state.log("record_result", stage=stage.index, status="failed", repeat=repeat)
-    store.save(state)
     if repeat:
+        store.save(state)
         return Directive(
             False, state.node, "escalate",
             f"stage {stage.index} failed twice with same result digest; stop retrying",
             marker="ESCALATE",
         )
-    return Directive(False, state.node, "replan", f"stage {stage.index} failed; run overcome-difficulty / replan")
+    # enter the overcome-difficulty sub-spine: a fresh Difficulty record must be
+    # worked through (declare -> investigate -> critique) before replan is allowed.
+    state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
+    state.difficulty = Difficulty()
+    store.save(state)
+    return Directive(
+        False, state.node, "declare",
+        f"stage {stage.index} failed; run overcome-difficulty — declare the divergence, "
+        "then investigate, then critique; replan is blocked until the cycle is complete",
+        marker="OVERCOME-DIFFICULTY",
+    )
 
 
 def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -509,9 +523,84 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     return Directive(True, state.node, "done", "task resolved", marker="COMPLETED")
 
 
+# --- overcome-difficulty sub-spine: declare -> investigate -> critique --------
+# Each command fills one section of the active Difficulty record in order. The
+# engine enforces the ORDERING and that each section's artifact exists; the
+# CONTENT (what the divergence is, the >=2 hypotheses, the functional ground) is
+# the cognition the overcome-difficulty skill supplies.
+
+def _require_diagnosing(state: SessionState) -> Directive | None:
+    if state.node != Node.DIAGNOSING.value:
+        return Directive(
+            False, state.node, "noop",
+            f"difficulty commands run only in the DIAGNOSING cycle; node={state.node}",
+        )
+    if state.difficulty is None:
+        state.difficulty = Difficulty()
+    return None
+
+
+def cmd_declare(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    state = _require(store, args.session)
+    bad = _require_diagnosing(state)
+    if bad:
+        return bad
+    state.difficulty.declaration = Declaration(
+        expected=args.expected, actual=args.actual, mismatch=args.mismatch
+    )
+    state.log("declare")
+    store.save(state)
+    return Directive(True, state.node, "investigate",
+                     "declaration recorded; localize the divergence next (investigate)")
+
+
+def cmd_investigate(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    state = _require(store, args.session)
+    bad = _require_diagnosing(state)
+    if bad:
+        return bad
+    if state.difficulty.declaration is None:
+        return Directive(False, state.node, "declare",
+                         "investigate is out of order: declare the divergence first")
+    state.difficulty.investigation = Investigation(
+        localized_expectation=args.localized_expectation,
+        localized_actual=args.localized_actual,
+    )
+    state.log("investigate")
+    store.save(state)
+    return Directive(True, state.node, "critique",
+                     "investigation recorded; state the functional ground + replanning task (critique)")
+
+
+def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    state = _require(store, args.session)
+    bad = _require_diagnosing(state)
+    if bad:
+        return bad
+    if state.difficulty.declaration is None or state.difficulty.investigation is None:
+        return Directive(False, state.node, "declare",
+                         "critique is out of order: declaration and investigation must come first")
+    state.difficulty.critique = Critique(
+        functional_ground=args.functional_ground,
+        replanning_task=args.replanning_task,
+    )
+    state.log("critique")
+    store.save(state)
+    return Directive(True, state.node, "replan",
+                     "difficulty cycle complete; replan is now unblocked")
+
+
 def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     from .plan import diff_plans, load_plan as _load
+
+    # precondition: inside the DIAGNOSING cycle, the difficulty record must be
+    # complete before a plan may be re-normed (variant (b) — internal command
+    # precondition, not a tool-hook gate). [] outside DIAGNOSING.
+    dblock = gates.difficulty_blockers(state)
+    if dblock:
+        return Directive(False, state.node, "declare", "replan blocked by incomplete difficulty record",
+                         data={"blockers": dblock})
 
     if not state.plan_path:
         return Directive(False, state.node, "submit_plan", "no current plan to replan against")
@@ -519,7 +608,24 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     new = _load(args.plan)
     kind = diff_plans(old, new)
 
+    # if we are exiting the DIAGNOSING cycle (difficulty complete), the failed
+    # stage is re-armed and we leave the cycle back to VERIFYING so next_stage can
+    # retry it; the difficulty record is cleared so a later failure starts fresh.
+    diagnosing = state.node == Node.DIAGNOSING.value
+
     if kind == "no_change":
+        if diagnosing:
+            for s in state.stages:
+                if s.outcome.status == StageStatus.FAILED.value:
+                    s.outcome.status = StageStatus.PENDING.value
+            state.difficulty = None
+            state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
+            state.log("replan", kind="no_change", exited_diagnosing=True)
+            store.save(state)
+            if state.ready_stages():
+                return Directive(True, state.node, "next_stage",
+                                 "difficulty worked through; plan unchanged — retry the re-armed stage")
+            return Directive(True, state.node, "continue", "difficulty worked through; resume execution")
         return Directive(True, state.node, "continue", "replan is a no-op; plan unchanged")
 
     if kind == "refinement":
@@ -534,7 +640,10 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             if cur.outcome.status == StageStatus.FAILED.value:
                 cur.outcome.status = StageStatus.PENDING.value
         state.plan_path = args.plan
-        state.log("replan", kind="refinement")
+        if diagnosing:
+            state.difficulty = None
+            state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
+        state.log("replan", kind="refinement", exited_diagnosing=diagnosing)
         store.save(state)
         if state.node == Node.VERIFYING.value and state.ready_stages():
             return Directive(True, state.node, "next_stage", "refinement applied; retry the ready stage")
@@ -546,6 +655,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     state.plan_verified = True
     state.overall_done_criterion = new.meta.done_criterion or state.overall_done_criterion
     state.current_stage = None
+    state.difficulty = None
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
     state.node = Node.PLAN_READY.value
     state.log("replan", kind="substantive")
@@ -609,6 +719,9 @@ COMMANDS = {
     "dispatch": cmd_dispatch,
     "resolve-permission": cmd_resolve_permission,
     "record-result": cmd_record_result,
+    "declare": cmd_declare,
+    "investigate": cmd_investigate,
+    "critique": cmd_critique,
     "verify-final": cmd_verify_final,
     "resolve": cmd_resolve,
     "replan": cmd_replan,
@@ -667,6 +780,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("record-result"); sp.add_argument("--session", required=True)
     sp.add_argument("--status", choices=["passed", "failed"], required=True)
     sp.add_argument("--actual", default="")
+    sp = add("declare"); sp.add_argument("--session", required=True)
+    sp.add_argument("--expected", required=True); sp.add_argument("--actual", required=True)
+    sp.add_argument("--mismatch", required=True)
+    sp = add("investigate"); sp.add_argument("--session", required=True)
+    sp.add_argument("--localized-expectation", dest="localized_expectation", required=True)
+    sp.add_argument("--localized-actual", dest="localized_actual", required=True)
+    sp = add("critique"); sp.add_argument("--session", required=True)
+    sp.add_argument("--functional-ground", dest="functional_ground", required=True)
+    sp.add_argument("--replanning-task", dest="replanning_task", required=True)
     sp = add("verify-final"); sp.add_argument("--session", required=True)
     sp = add("resolve"); sp.add_argument("--session", required=True); sp.add_argument("--by", required=True)
     sp = add("replan"); sp.add_argument("--session", required=True); sp.add_argument("--plan", required=True)

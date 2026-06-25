@@ -61,7 +61,11 @@ SIDE_CHANNEL_REACHABLE = {"BLOCKED"}
 def check_state_roundtrip() -> list[str]:
     from agentctl.state import (
         Actor,
+        Critique,
         Criterion,
+        Declaration,
+        Difficulty,
+        Investigation,
         Partition,
         GateRecord,
         Means,
@@ -105,6 +109,24 @@ def check_state_roundtrip() -> list[str]:
     )
     if SessionState.from_json(s2.to_json()) != s2:
         problems.append("from_json(to_json(s2)) != s2 for a populated SessionState")
+
+    # round-trip a DIAGNOSING state carrying a complete Difficulty record — the
+    # overcome-difficulty sub-spine's serialization seam
+    s3 = SessionState(
+        session_id="vfy3",
+        task_id="vfy3-task",
+        node=Node.DIAGNOSING.value,
+        difficulty=Difficulty(
+            declaration=Declaration(expected="e", actual="a", mismatch="m"),
+            investigation=Investigation(localized_expectation="le", localized_actual="la"),
+            critique=Critique(functional_ground="fg", replanning_task="rt"),
+        ),
+    )
+    rt3 = SessionState.from_json(s3.to_json())
+    if rt3 != s3:
+        problems.append("from_json(to_json(s3)) != s3 for a DIAGNOSING state with a Difficulty")
+    if not (rt3.difficulty and rt3.difficulty.complete()):
+        problems.append("round-tripped Difficulty did not report complete()")
     return problems
 
 

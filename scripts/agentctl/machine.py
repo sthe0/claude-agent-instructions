@@ -19,10 +19,18 @@ The graph (happy path + carve-outs):
   EXECUTING --verify--> VERIFYING       (a stage result recorded)
   VERIFYING --next_stage--> EXECUTING   (more ready stages remain)
   VERIFYING --final--> RESOLUTION       (all stages PASSED)
+  VERIFYING --diagnose--> DIAGNOSING    (a stage FAILED: enter the difficulty cycle)
+  DIAGNOSING --replan_refine--> VERIFYING  (difficulty worked through; retry the re-armed stage)
+  DIAGNOSING --(replan substantive)        direct set to PLAN_READY (re-arm plan-approval gate)
   RESOLUTION --resolve--> RESOLVED      (resolution gate passes)
   any --block--> BLOCKED ; BLOCKED --unblock--> <prior>
-  EXECUTING/VERIFYING --replan_refine--> BLOCKED   (then back to EXECUTING)
-  PLAN_READY/APPROVED <--replan_substantive-- (re-arm plan-approval gate)
+
+DIAGNOSING is the overcome-difficulty sub-spine. Inside it the engine runs the
+declare -> investigate -> critique commands (which fill the Difficulty record but
+do NOT change node); `replan` is the SOLE exit and is precondition-gated on a
+complete Difficulty record (see gates.difficulty_blockers). The cognition of each
+phase lives in the overcome-difficulty skill; the ordering and artifact-existence
+are enforced here and in cli.py.
 """
 from __future__ import annotations
 
@@ -40,6 +48,8 @@ TRANSITIONS: dict[str, tuple[str, str]] = {
     "verify": (Node.EXECUTING.value, Node.VERIFYING.value),
     "next_stage": (Node.VERIFYING.value, Node.EXECUTING.value),
     "final": (Node.VERIFYING.value, Node.RESOLUTION.value),
+    "diagnose": (Node.VERIFYING.value, Node.DIAGNOSING.value),
+    "replan_refine": (Node.DIAGNOSING.value, Node.VERIFYING.value),
     "resolve": (Node.RESOLUTION.value, Node.RESOLVED.value),
 }
 

@@ -68,7 +68,7 @@ A **difficulty** is a divergence between reality and the plan. The canonical for
 
 Use the **overcome-difficulty** skill (see `~/.claude/skills/overcome-difficulty/`). Surface signals: verification failed, blocker, repeated error, plan mismatch, two or more process corrections in a row, **same root-cause narrative repeated without new evidence**, before retrying an external workflow / VCS / mount / CLI after failure, session review, missing observable to verify a step.
 
-The skill localizes the divergence (declaration → investigation → critique) and produces a **replanning task** that you (still as root) then apply to fix the plan and resume the original user task on the new plan.
+The engine drives the *shell*: a FAILED stage routes to `DIAGNOSING`, where it enforces `declare → investigate → critique` and **blocks `replan` until the difficulty record is complete** (`gates.difficulty_blockers`). The skill supplies each phase's *cognition* and the **replanning task** you (still as root) apply to fix the plan and resume the original user task on the new plan.
 
 ### When the user corrects agent behavior
 

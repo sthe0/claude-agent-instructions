@@ -21,7 +21,8 @@ start → CLASSIFIED → ROUTED → PLANNING → PLAN_READY ──■APPROVAL GA
                        │                                                    │
                        └──────────────────────────────→  EXECUTING  ⇄  VERIFYING
                                                               │             │
-                                  (difficulty → BLOCKED → replan → PLANNING)│
+       (stage FAILED → DIAGNOSING: declare→investigate→critique → replan ──┘
+                          → retry, or PLANNING on a substantive replan)      │
                                                                        RESOLUTION
                                                             ──■RESOLUTION GATE■──→ RESOLVED
 ```
@@ -49,7 +50,8 @@ Each node is a phase in the task lifecycle (`Node` in `state.py`). The *route* p
 | `VERIFYING` | A stage result was recorded; checking it, then choosing next stage vs final. |
 | `RESOLUTION` | All stages PASSED; **held at the resolution gate** awaiting user confirmation. |
 | `RESOLVED` | User confirmed the task is done (terminal). |
-| `BLOCKED` | A difficulty interrupted the flow; `unblock` / `replan` returns to the prior node. |
+| `DIAGNOSING` | A stage FAILED: the **overcome-difficulty** sub-spine. The engine runs `declare → investigate → critique` (filling the `Difficulty` record) and **blocks `replan` until the record is complete** (`gates.difficulty_blockers`). `replan` is the sole exit — back to `VERIFYING` to retry, or to `PLAN_READY` for a substantive re-plan. The *cognition* of each phase lives in the `overcome-difficulty` skill. |
+| `BLOCKED` | A structural blocker (spawn refusal, escalation) interrupted the flow; `unblock` / `replan` returns to the prior node. |
 
 ## Commands
 
@@ -71,10 +73,11 @@ start → classify → plan → submit-plan → approve → partition → next-s
 | `partition` | Record the M1–M4 **delivery-partition** assessment — into how many independently-shippable, separately-reviewable units (PRs/tickets) the approved plan is cut. Delivery segmentation, **not** the planner's step-level decomposition (`APPROVED → PARTITIONED`). |
 | `next-stage` | Select the next ready stage and enter execution (`→ EXECUTING`). |
 | `dispatch` | At `EXECUTING`, route the active stage to its actor (`in_thread` / `spawn:<specialization>`) and return the cognitive leaf + return-marker handling; no node change. |
-| `record-result` | Record a stage's actual result + status (PASSED/FAILED) (`EXECUTING → VERIFYING`). |
+| `record-result` | Record a stage's actual result + status. PASSED → `VERIFYING`; FAILED → `DIAGNOSING` (enter the overcome-difficulty sub-spine). |
+| `declare` / `investigate` / `critique` | In `DIAGNOSING`, fill the three sections of the `Difficulty` record **in order** (the engine refuses out-of-order calls). Each records one phase's artifact; the content is the `overcome-difficulty` skill's cognition. |
 | `verify-final` | Pass the final-verification gate: all stages PASSED + the plan's *Final verification* (`VERIFYING → RESOLUTION`). |
 | `resolve` | Pass the resolution gate; `--by` names the confirmer (`RESOLUTION → RESOLVED`). |
-| `replan` | On a difficulty, re-arm planning at `PLAN_READY` with a revised `--plan`. |
+| `replan` | Apply a revised `--plan`. **Precondition-gated** in `DIAGNOSING`: refused until the `Difficulty` record is complete. A refinement retries the re-armed stage (`→ VERIFYING`); a substantive change re-arms the approval gate (`→ PLAN_READY`). |
 | `block` / `unblock` | Mark a difficulty (`any → BLOCKED`) and return to the prior node. |
 | `resolve-permission` | Record the decision on a specialist's `PERMISSION-REQUEST`. |
 | `status` | Inspect the current node + directive; no transition. |
