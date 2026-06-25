@@ -16,6 +16,9 @@ consistent:
   4. Every engine gate has a guardian hook wired in install-reminder-hooks.sh
      DESIRED (plan_approval -> hook-state-gate.py; resolution ->
      hook-resolution-reminder.py).
+  5. The required built-in plugins (dummy, tracker) register at import, extend
+     only existing core gates (the scope fence — no new gate), and observe only
+     events the engine actually emits.
 
 The reachability / dead-end / gate checks are pure functions taking the table
 and node set as arguments so tests can feed a deliberately broken table and
@@ -198,6 +201,40 @@ def check_gate_guardians(gate_to_hook: dict, desired_hooks: set[str]) -> list[st
     return problems
 
 
+# Plugins that must be registered at import (importing the plugins module pulls
+# every built-in consumer into REGISTRY). Each entry: (name, gate-it-must-extend).
+# None == the plugin contributes no gate. A new built-in plugin without an entry
+# here is fine; this only pins the ones the engine documents.
+REQUIRED_PLUGINS = {"dummy": "resolution", "tracker": "resolution"}
+# Plugin observer events must be a subset of the events the engine can emit, or a
+# plugin would silently never fire. The event vocabulary is EVENT_FOR_COMMAND.
+def check_plugins() -> list[str]:
+    from agentctl import gates, plugins
+
+    problems: list[str] = []
+    valid_events = set(plugins.EVENT_FOR_COMMAND.values())
+    core_gates = set(gates.GUARDIANS)
+    for name, gate in REQUIRED_PLUGINS.items():
+        plugin = plugins.REGISTRY.get(name)
+        if plugin is None:
+            problems.append(f"required plugin {name!r} not registered at import (REGISTRY)")
+            continue
+        if gate is not None and gate not in plugin.gates:
+            problems.append(f"plugin {name!r} must extend the {gate!r} gate but does not")
+        bad_events = sorted(set(plugin.observers) - valid_events)
+        if bad_events:
+            problems.append(
+                f"plugin {name!r} observes event(s) the engine never emits: {bad_events}"
+            )
+        # the scope fence: a plugin extends only existing core gates, never a new one
+        unknown_gates = sorted(set(plugin.gates) - core_gates)
+        if unknown_gates:
+            problems.append(
+                f"plugin {name!r} keys gate(s) that are not core gates: {unknown_gates}"
+            )
+    return problems
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--staged", action="store_true", help="ignored; accepted for verify-all uniformity")
@@ -225,6 +262,8 @@ def main(argv: list[str] | None = None) -> int:
         problems.append(f"engine gate(s) with no guardian-hook mapping: {unmapped}")
     desired = parse_desired_hooks(INSTALL_SCRIPT.read_text(encoding="utf-8"))
     problems += check_gate_guardians(GATE_TO_HOOK, desired)
+
+    problems += check_plugins()
 
     if problems:
         print("verify-agentctl: FAIL")

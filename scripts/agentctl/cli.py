@@ -179,6 +179,28 @@ def cmd_plugin_deactivate(args, *, store: StateStore, runner: Runner | None = No
     return Directive(ok, state.node, "continue", detail, data={"active": sorted(state.plugins)})
 
 
+def cmd_plugin_record(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Record that a plugin-side publication actually happened: marks
+    bag['published_phases'][phase]=True. The coordinator runs this AFTER the
+    comment lands, so a publish gate (e.g. tracker's) reflects a real post rather
+    than an intention. Generic — any publish-style plugin shares the convention;
+    it does NOT fire a plugin event (recording a publish must not re-trigger
+    observers). No-op-with-error if the plugin is not active."""
+    state = _require(store, args.session)
+    bag = state.plugins.get(args.plugin)
+    if bag is None:
+        return Directive(False, state.node, "noop", f"plugin {args.plugin!r} is not active")
+    published = bag.setdefault("published_phases", {})
+    published[args.phase] = True
+    state.log("plugin_record", plugin=args.plugin, phase=args.phase)
+    store.save(state)
+    return Directive(
+        True, state.node, "continue",
+        f"plugin {args.plugin!r}: phase {args.phase!r} recorded as published",
+        data={"published_phases": sorted(published)},
+    )
+
+
 def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     thr = Thresholds()
@@ -755,6 +777,7 @@ COMMANDS = {
     "reset": cmd_reset,
     "plugin-activate": cmd_plugin_activate,
     "plugin-deactivate": cmd_plugin_deactivate,
+    "plugin-record": cmd_plugin_record,
     "classify": cmd_classify,
     "plan": cmd_plan,
     "submit-plan": cmd_submit_plan,
@@ -801,6 +824,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--tracker-key", dest="tracker_key", default=None)
     sp = add("plugin-deactivate"); sp.add_argument("--session", required=True)
     sp.add_argument("--plugin", required=True)
+    sp = add("plugin-record"); sp.add_argument("--session", required=True)
+    sp.add_argument("--plugin", required=True); sp.add_argument("--phase", required=True)
 
     sp = add("classify"); sp.add_argument("--session", required=True)
     sp.add_argument("--chat", action="store_true")

@@ -26,6 +26,7 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 | [hook-self-improvement-reminder.py](hook-self-improvement-reminder.py) | UserPromptSubmit: precision-first two-tier scan for agent-behavior feedback in the prompt (explicit self-improvement mention; strong imperatives; corrective patterns gated on an agent-ref) → nudge to invoke `self-improvement` |
 | [hook-state-gate.py](hook-state-gate.py) | PreToolUse Edit/Write: deny production-file edits unless agentctl state is at an execution node; weight-aware per-case reason (unclassified → classify, small-change → next-stage, substantive → approve plan, closed → reset) |
 | [hook-tracker-reminder.py](hook-tracker-reminder.py) | UserPromptSubmit: detect tracker references in the prompt and remind to invoke `tracker-management` |
+| [hook-tracker-publish-reminder.py](hook-tracker-publish-reminder.py) | UserPromptSubmit: state-aware nudge (reads the agentctl `tracker` plugin bag) when mandatory ticket publications are unrecorded; loudest at RESOLUTION, silent when the tracker plugin is inactive or complete |
 | [install-git-hooks.sh](install-git-hooks.sh) | Install `pre-commit` (run `verify-all.py --staged`) and `post-commit` (push reminder) |
 | [install-reminder-hooks.sh](install-reminder-hooks.sh) | Idempotently wire the canonical reminder-hook set into machine-local `settings.json` (hooks are not merged from `base.json`) |
 | [install-sync-cron.sh](install-sync-cron.sh) | Cron: git pull every 10 min (opt-in; not installed by `setup-symlinks.sh`) |

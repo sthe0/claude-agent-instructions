@@ -11,28 +11,27 @@ This skill is **tracker-agnostic**. Specific API conventions, status transitions
 
 ## Responsibilities
 
+0. **Activate the engine plugin (first, on invocation)** — run `agentctl plugin-activate --plugin tracker --tracker-key <KEY>` (idempotent; re-run safely on session resume). This attaches the `tracker` sub-state-machine to the session so the **engine drives publication timing**: it surfaces a `publish_*` directive at each phase boundary and its resolution gate blocks `resolve` until the mandatory phases are recorded. You no longer have to *remember* when to post — the engine tells you; this skill supplies the **content and transport**.
 1. **Load ticket context** — fetch the ticket and its links / comments / parent tasks via whatever tooling the project provides.
 2. **Publish the plan** — before non-trivial execution begins, post the plan (or its summary + link) as a comment on the ticket.
 3. **Publish key progress updates** — at meaningful boundaries, post a short status.
 4. **Publish the final result** — at the end, post the resolution with all artifacts.
 
-## Phase hooks (when each publication fires)
+## Phase hooks — engine owns *when*, this skill owns *what*
 
-This skill is layered on top of the root coordination cycle in `CLAUDE.md`. Each tracker action is tied to a specific phase — not done ad-hoc.
+Once the plugin is active (Responsibility 0), the engine emits a `publish_*` directive (under `Directive.data.plugin_directives`) at each boundary. **Act on the directive when it appears**; this table maps directive → content. After a publication actually lands, record it with `agentctl plugin-record --plugin tracker --phase <p>` (the gate counts only recorded phases).
 
-| Coordination phase | Tracker action |
+| Engine signal (`publish_*` directive / state) | What to post |
 |---|---|
-| **Ticket loaded** (first turn referencing the ticket) | Internal: read ticket + links + recent comments. Confirm to the user you have the context. No comment yet. |
-| **Ticket work resumed** (first turn of a new session continuing a ticket already in flight) | To keep the ticket reflecting real progress across session boundaries: before continuing, reconcile the ticket's last comment against the **actual current state** — branch commits (`arc log trunk..HEAD`), PR status, prod runs, populated tables. For every meaningful boundary crossed since the last post (stage completed, first green run, prod cutover) that the per-stage hook would have fired in one continuous session, **backfill a catch-up status comment now**. The across-session gap is exactly where progress posts silently vanish — the skipped-phase memory of row "Stage `COMPLETED`" does not survive a new session, so resume is its own trigger. |
-| **PLAN-READY** received from `planner` (or in-thread plan finished) | Post the plan as a comment, **before** asking the user for approval. The user reviews the plan on the ticket as well as in chat. |
-| **User approval** received on the plan | Optional one-line ack ("approved, starting"). Begin execution. |
-| **Stage `COMPLETED`** (specialist returns `COMPLETED:`) | One-line status + artifact link (PR, dashboard, file path, measurement). |
-| **`REPLAN:` from a specialist** | Post: what changed in the plan, why, link to the revised plan. |
-| **`overcome-difficulty` invoked** | One-line note that a difficulty arose; the resolution belongs to a later post (no recursion mechanics on the ticket). |
-| **Blocker** (specialist returned `INCOMPLETE:` with a blocker, or escalation to user) | What blocks, what is needed to unblock, who can unblock. |
-| **Task resolution** (user confirmed the task is done) | Final result: resolution summary + all artifacts (merged PRs, dashboards, measurements), **plus the structured difficulty record** (Difficulty / Order & criterion / Context / Working plan) — the ticket is its single source of truth. Then any tracker-side close action that project memory specifies. |
+| (no directive) **Ticket loaded** — first turn referencing the ticket | Internal: read ticket + links + recent comments; confirm context to the user. No comment yet. |
+| `publish_plan` (on `submit_plan`) | Post the plan as a comment **before** asking for approval, then `plugin-record --phase plan`. The user reviews the plan on the ticket as well as in chat. |
+| `publish_progress` (on a passed stage) | One-line status + artifact link (PR, dashboard, file path, measurement). In PR-stage work, route to the PR instead (see the Special case below). |
+| `publish_replan` (on `replan`) | What changed in the plan, why, link to the revised plan. |
+| `publish_result` (on `resolve`, before the gate passes) | Final result: resolution summary + all artifacts (merged PRs, dashboards, measurements), **plus the structured difficulty record** (Difficulty / Order & criterion / Context / Working plan) — the ticket is its single source of truth. Then `plugin-record --phase result`, then any tracker-side close action project memory specifies. |
 
-If a phase fires and you skipped the tracker action, post it on the next opportunity rather than dropping it — the ticket should reflect the actual sequence of events.
+**Resume across sessions.** Plugin state is per-session: a new session continuing an in-flight ticket starts with no tracker bag. Re-run Responsibility 0, then reconcile the ticket's last comment against the **actual current state** — branch commits (`arc log trunk..HEAD`), PR status, prod runs, populated tables — and backfill a catch-up status comment for every meaningful boundary crossed since the last post. The across-session gap is exactly where progress posts silently vanish.
+
+**Blocker / overcome-difficulty.** No dedicated directive: on a blocker post what blocks, what is needed, who can unblock; on a difficulty post one short note (no recursion mechanics on the ticket). If any publication was skipped, post it on the next opportunity rather than dropping it — the ticket should reflect the actual sequence of events.
 
 ## Special case: an open PR carries the work
 

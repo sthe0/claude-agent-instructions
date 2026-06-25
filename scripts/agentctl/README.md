@@ -95,6 +95,25 @@ Two modules carry the load-bearing invariants:
 
 Plan structure is defined **primarily by typed code**, not prose. `plan.py`'s `parse_plan` builds grouped dataclasses (`Subject`, `Means`, `Actor`, `Criterion`, `Principle`, `Supply`, `Outcome`) from the flat author TOML and validates the 8-element activity ontology for substantive plans. The canonical description of the 8 elements and where each lives in the schema is [`memory-global/leaves/plan-activity-ontology.md`](../../memory-global/leaves/plan-activity-ontology.md); [`verify-plan-file.py`](../verify-plan-file.py) is a prose mirror. On any divergence, the code wins.
 
+## Plugins
+
+The core spine above is a **closed monolith** — its nodes and gates are the contract every session obeys, edited only via `self-improvement`. But a skill/tool/specialization whose own workflow is deterministic (most acutely `tracker-management`) can hang a **sub-state-machine** off that spine without touching the three core literals (`machine.TRANSITIONS`, `gates.GUARDIANS`, `cli.COMMANDS`). That mechanism is [`plugins.py`](plugins.py).
+
+A `Plugin` (registered into the module-level `REGISTRY` at import) carries:
+
+- **observers** — `{event: fn(state, bag) -> [PluginDirective]}`. Each coordination command maps to one event (`EVENT_FOR_COMMAND`); after the command runs, `cli._fire_plugins` fires the event on every *active* plugin and appends any `PluginDirective`s under `Directive.data.plugin_directives` (nudges the coordinator surfaces). A plugin-less session is byte-identical — no key added.
+- **gates** — `{core_gate: fn(state, bag) -> [blocker]}`. A plugin folds extra blockers into an existing core gate (`resolution` / `plan_approval`) via `plugin_gate_blockers`; it never adds a new gate.
+- a per-session **bag** — `state.plugins[name]`, opaque to the core, seeded by `state_factory`.
+- a **lifecycle** — `scope` `task` | `phase` and an optional `terminal(state, event)` predicate that auto-retires the plugin mid-task (bag archived into `state.plugins_archive`).
+
+**Registration vs activation** are distinct: registration (import-time, into `REGISTRY`) means the engine *knows* the plugin; activation (`agentctl plugin-activate --plugin <name>`, presence of the name in `state.plugins`) means it *participates in this session*. The owning skill activates on invocation; `plugin-deactivate` is the manual escape hatch, `plugin-record` marks a publish-style phase done. **State is per-session** (keyed by `session_id`), so subtasks share the session's active set while spawned/parallel agents are isolated.
+
+**Scope fence (deliberate):** a plugin introduces **no new `Node`** and **no new gate** — it only reacts to existing transitions and extends existing gates. New control-flow primitives belong in the core spine via `self-improvement`, not in a plugin. This keeps the lifecycle the core can reason about finite.
+
+Two plugins ship in-tree: a built-in **`dummy`** (proves the framework end-to-end with zero core edits; phase-scoped, exercises auto-retire) and **`tracker`** ([`plugins_tracker.py`](plugins_tracker.py)) — the first real consumer. `tracker` observes `submit_plan`/`record_result`/`replan`/`resolve` to surface `publish_*` directives and gates `resolution` until the mandatory ticket publications (plan + result) are recorded; the `tracker-management` skill owns the comment content and transport (engine owns *when*, skill owns *what*). `verify-agentctl.py` asserts both register and that the tracker gate is wired.
+
+*Future work:* an experience-leaf `search → extend-vs-new` flow is a natural second consumer (see the backlog leaf); it would observe `resolve` and gate on a completed search, same pattern as `tracker`.
+
 ## State location
 
 Session state is JSON at `~/.claude/agentctl/state/<session_id>.json` (the durable machine-written record, kept separate from the human/LLM-authored TOML plan).

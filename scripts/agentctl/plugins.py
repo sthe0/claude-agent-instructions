@@ -216,3 +216,12 @@ register(
         terminal=_dummy_terminal,
     )
 )
+
+
+# --- built-in consumers ------------------------------------------------------
+# Imported for the side effect of registering into REGISTRY, so any importer of
+# this module gets the full catalog of available plugins (the contract
+# verify-agentctl.py and the tests rely on). Placed at the bottom so the names
+# the consumer module imports from here (Plugin/PluginDirective/register) are
+# already defined when its `from .plugins import ...` runs.
+from . import plugins_tracker as _plugins_tracker  # noqa: E402,F401

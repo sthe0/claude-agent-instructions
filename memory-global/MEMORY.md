@@ -47,6 +47,8 @@ Loaded into every session via `@~/.claude/memory-global/MEMORY.md` import in `CL
 - [Auto-compaction threshold policy](leaves/autocompact-threshold-policy.md) — keep the autocompact trigger comfortably ABOVE the ~90–97k post-compaction floor (a trigger at the floor thrashes — DEEPAGENT-430); verified trigger ≈ round((window−20k)·0.8), frac 0.2 server-tunable; /context "buffer" (33k) is a display reserve, NOT window−trigger; current 210k window → trigger ~152k, min safe window ~210k; `apply-settings.sh` is additive so dropping a key doesn't clear it from live.
 - [Policy effectiveness tracking](leaves/policy-effectiveness-tracking.md) — standing instrument (`scripts/policy-scorecard.py` + per-session ledger + weekly SessionStart nudge) tracking the model/sub-agent policy along efficiency (tokens/$/attention) and effectiveness (resolution proxies + batch manual rating); closes the "policy → measured outcome → adjustment" loop via a Flags-fire → self-improvement → record-movement procedure.
 
+- [Backlog: experience-search determinization](leaves/backlog-experience-search-determinization.md) — deferred task: turn the mandatory "search before record → extend-vs-new" experience-leaf step into a guided agentctl flow (a consumer of the plugin layer). Separate plan from the modular-state-machine work.
+
 Workflow-level permissions (separate from memory): `~/claude-agent-instructions/permissions/` + `scripts/permissions-cli.py`. Not a memory leaf — operational config.
 
 ## System knowledge
