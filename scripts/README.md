@@ -53,11 +53,11 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 | [verify-agentctl.py](verify-agentctl.py) | Verify the agentctl engine: schema, transitions, leaves, gate↔guardian-hook consistency |
 | [verify-all.py](verify-all.py) | Run all instruction-policy checks (entry point; pre-commit hook uses `--staged`) |
 | [verify-cross-refs.py](verify-cross-refs.py) | Catch broken intra-repo Markdown links and inline-code path references |
-| [verify-leaf-structure.py](verify-leaf-structure.py) | Verify non-experience leaves: `schema:leaf/v1` enforces 3 sections; grandfathered SK leaves get the difficulty-lead baseline |
 | [verify-experience-leaf.py](verify-experience-leaf.py) | Verify experience-leaf schema (`difficulty/v1`, required `resolution_confirmed_by_user` frontmatter) |
 | [verify-instructions-sync.sh](verify-instructions-sync.sh) | Check global symlinks and drift |
 | [verify-language.py](verify-language.py) | Enforce English-by-default policy with adjacent-exception rule |
 | [verify-layout-contract.sh](verify-layout-contract.sh) | Compare tree to the layout in `skills/self-improvement/policy.md` |
+| [verify-leaf-structure.py](verify-leaf-structure.py) | Verify non-experience leaves: `schema:leaf/v1` enforces 3 sections; grandfathered SK leaves get the difficulty-lead baseline |
 | [verify-memory-index.py](verify-memory-index.py) | Verify every memory-global leaf is referenced from an index and carries a valid top-level `type:` frontmatter key |
 | [verify-plan-file.py](verify-plan-file.py) | Structural validator for planner output (per `planner` SKILL.md § Plan format) |
 | [verify-readme.py](verify-readme.py) | Verify the README inventory sentinels (scripts / flat skills / specializations) match the filesystem; `--fix` reconciles, `--root` for project repos |
