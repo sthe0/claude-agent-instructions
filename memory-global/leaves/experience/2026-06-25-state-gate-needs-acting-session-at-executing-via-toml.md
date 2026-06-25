@@ -23,8 +23,12 @@ Before relying on in-thread carve-out or a spawned developer for gated writes: (
 - Where it arose: DEEPAGENT self-improvement: adding hook-self-improvement-reminder.py. Spawned developer denied all writes + hit $3 budget (engine not at EXECUTING; markdown plan -> no stages; spawned session unclassified). Recovered by switching to a .toml plan and applying the reviewed code in-thread after driving the manager session to EXECUTING.
 - Working plan: Diagnose deny reason -> recognize stages empty -> author .toml plan with in_thread stages -> reset to CLASSIFIED to write the plan -> walk classify/plan/submit-plan/approve/next-stage/dispatch to EXECUTING -> apply reviewed code in-thread -> record-result per stage -> verify-final -> resolve.
 
+### 2026-06-26 — recurrence (decompose 4 near-ceiling instruction surfaces)
+- Where it arose: DEEPAGENT instruction-decomposition task (4 files -> sibling policy.md / leaf). A developer spawned for the file moves (ID byvunrgrr) was again denied every production Write to skills/** and burned its medium ($3) budget; only the gate-exempt memory-global leaf it wrote survived. Same root cause: the spawned session's engine was never classified/approved.
+- Resolution: applied the whole decomposition in-thread (the manager session was already at EXECUTING via the .toml plan, so the gate was open). Net effect of the wasted spawn: ~$3 + ~23 min, zero usable production files. Confirms the rule: **instruction-repo refactors (production writes under skills/**, cursor/**, scripts/**) must run in-thread once the manager session is at EXECUTING — do not spawn a developer for them.**
+
 ## Cost
-~$3 wasted on a spawned developer that was gate-denied throughout; recovered in-thread.
+~$3 wasted on a gate-denied spawned developer in BOTH occurrences (2026-06-25 and 2026-06-26); each recovered in-thread. The repeat is direct evidence the spawn-for-gated-writes anti-pattern is easy to fall back into.
 
 ## Self-critique of the agent system
 Should have checked the acting session's engine node + stages BEFORE spawning a developer for gated writes; spawning into an unclassified child session guaranteed denial. The markdown-vs-toml stages distinction is under-documented at the dispatch step.
