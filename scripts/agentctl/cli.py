@@ -22,7 +22,7 @@ from .classify import Signals, classify
 from .config import Thresholds
 from .partition import render_section, verdict
 from .directive import Directive
-from .dispatch import Runner, dispatch_stage, parse_marker
+from .dispatch import Runner, dispatch_stage, parse_marker, subprocess_runner
 from .machine import transition
 from .plan import load_plan
 from .state import (
@@ -53,6 +53,23 @@ VERIFY_PLAN_CLI = REPO_ROOT / "scripts" / "verify-plan-file.py"
 
 def _digest(text: str) -> str:
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:12]
+
+
+def _verify_command_result(stage, runner: Runner | None):
+    """Execute a measurable stage's `verify_command`, if it has one.
+
+    Returns (ok, result). When the stage carries no command, or its criterion is
+    not measurable, returns (True, None) — there is nothing executable to gate on,
+    so the engine keeps its flag-only behaviour. Otherwise runs the command via the
+    injected runner (tests pass a fake; the default shells out) and reports whether
+    the exit code matched `expected_exit`. This is the seam that removes the model
+    from the trust path for the measurable subset."""
+    crit = stage.criterion
+    if not crit.verify_command or crit.criterion_type != CriterionType.MEASURABLE.value:
+        return True, None
+    run = runner or subprocess_runner
+    result = run(["bash", "-c", crit.verify_command])
+    return result.returncode == crit.expected_exit, result
 
 
 def _is_recursion_refusal(result) -> bool:
@@ -549,6 +566,21 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
             "record-result --control '<how the code was reviewed>'",
         )
 
+    # Machine-executed verification: for a measurable stage carrying a verify_command,
+    # the engine runs it and OVERRIDES a 'passed' claim the command contradicts. A
+    # contradicted pass becomes a real failure (digest + DIAGNOSING), so "report
+    # honestly" is an invariant for the measurable subset, not a discipline.
+    if passed:
+        ok, result = _verify_command_result(stage, runner)
+        if not ok:
+            passed = False
+            note = (
+                f"verify_command exit {result.returncode} != expected "
+                f"{stage.criterion.expected_exit}: {stage.criterion.verify_command}"
+            )
+            actual = (actual + "\n" + note) if actual else note
+            stage.outcome.actual = actual
+
     state.node = transition(state.node, "verify")  # EXECUTING -> VERIFYING
 
     if passed:
@@ -591,6 +623,22 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     blockers = gates.blockers(state, "resolution")
     if blockers:
         return Directive(False, state.node, "fix_stages", "not ready for resolution", data={"blockers": blockers})
+    # Final-gate execution (defense in depth): re-run every measurable stage's
+    # verify_command — a later stage may have regressed an earlier one. Any
+    # non-match refuses RESOLUTION rather than trusting the recorded PASSED flags.
+    failures: list[str] = []
+    for stage in state.stages:
+        ok, result = _verify_command_result(stage, runner)
+        if not ok:
+            failures.append(
+                f"stage {stage.index}: exit {result.returncode} != "
+                f"{stage.criterion.expected_exit} ({stage.criterion.verify_command})"
+            )
+    if failures:
+        return Directive(
+            False, state.node, "fix_stages",
+            "final verification command(s) failed", data={"failures": failures},
+        )
     state.node = transition(state.node, "final")  # VERIFYING -> RESOLUTION
     state.resolution = GateRecord("resolution", armed=True, passed=False)
     state.log("verify_final")
