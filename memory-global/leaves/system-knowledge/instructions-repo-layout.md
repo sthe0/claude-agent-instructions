@@ -59,6 +59,7 @@ scripts/
   setup-symlinks.sh
   setup-project-memory.sh
   setup-ccgram.sh                      # bootstrap CCGram on a new machine (uv + ccgram + autostart + hooks)
+  doctor.sh                            # new-user readiness preflight ("am I ready to start?"): claude CLI, ~/.claude/CLAUDE.md symlink, engine hooks in settings.json, agentctl, git hooks — read-only
   verify-instructions-sync.sh
   verify-layout-contract.sh
   verify-all.py                        # entry point for instruction-policy checks

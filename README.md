@@ -114,9 +114,12 @@ Each scope is a short `MEMORY.md` index plus `leaves/` detail files. The key kin
 
 ```bash
 git clone git@github.com:sthe0/claude-agent-instructions.git ~/claude-agent-instructions
-~/claude-agent-instructions/scripts/setup-symlinks.sh
-~/claude-agent-instructions/scripts/verify-instructions-sync.sh
+~/claude-agent-instructions/scripts/setup-symlinks.sh        # symlinks + settings + reminder/git hooks (one command does all)
+~/claude-agent-instructions/scripts/verify-instructions-sync.sh   # symlink integrity (repo-developer's view)
+~/claude-agent-instructions/scripts/doctor.sh                # "am I ready to start?" — run this once, expect all [ OK ]
 ```
+
+`setup-symlinks.sh` is the single wiring command: besides the symlinks below it merges the policy `settings` and installs the reminder + engine-gate hooks and the git hooks (it calls `apply-settings.sh`, `install-reminder-hooks.sh`, and `install-git-hooks.sh` for you). `doctor.sh` then confirms the runtime is actually ready — the `claude` CLI is on PATH, the constitution is loaded, the engine hooks are armed, and `agentctl` runs; fix any `[FAIL]` line (usually by re-running `setup-symlinks.sh`) before your first task.
 
 Per-project local setup (from each product repo root; scripts live in that repo's `.claude/scripts/`):
 
@@ -145,6 +148,28 @@ Project-specific Cursor rules live in the project's own `<project>/.claude/rules
 ### Scripts
 
 Full inventory (machine-checked against the filesystem by [verify-readme.py](scripts/verify-readme.py)) lives in [scripts/README.md](scripts/README.md).
+
+## Getting started — your first task
+
+Once `doctor.sh` shows all `[ OK ]`, you start a task the same way every time: open `claude` in the directory you want to work in and describe what you need in plain language (English or Russian — the agent replies in the language you write). You do **not** invoke the engine, pick a skill, or write a plan by hand — a hook arms the coordination engine on your first message and the agent routes the work itself. The conceptual walkthrough of what then happens is [§ A task, end to end](#a-task-end-to-end) above; the two flows below are what you actually do.
+
+**Without a ticket — a regular task.** Just describe the task:
+
+```
+cd ~/my-project && claude
+> Add retry-with-backoff to the HTTP client and cover it with a test.
+```
+
+For anything beyond a quick question or a ≤20-line one-file change, the agent classifies the task as *substantive*, writes a plan, and **stops at the approval gate** — it shows you the plan and changes nothing in your code until you approve (you click `Approve`, or ask for changes). After approval it executes, verifies, and asks you to confirm the task is resolved. Use `/clear` between unrelated tasks so each starts with clean context.
+
+**With a ticket.** Mention the ticket key (e.g. `ABC-123`) anywhere in your request:
+
+```
+cd ~/my-project && claude
+> Implement ABC-123.
+```
+
+The key triggers the `tracker-management` skill, which loads the ticket's context, and — for a substantive ticket — publishes the plan and posts progress back to the ticket. A ticket task always goes through the plan → approval → execution spine (no in-thread shortcut), so you still approve the plan before any code changes. Posting back to a tracker needs that tracker's credentials configured on your machine; without them the work still proceeds locally, only the ticket updates are skipped — see the `tracker-management` skill for the credential setup.
 
 ## Skills
 
