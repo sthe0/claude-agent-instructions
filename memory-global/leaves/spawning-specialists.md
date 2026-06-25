@@ -14,6 +14,10 @@ Means is chosen by *what the work needs to hold in context*, not only by work ty
 
 To remove this divergence: when the edit is surgical (≤ a few lines) but the target file is large, or the change is "restore an existing commit", **do it in-thread** — `arc cherry-pick <sha>` recovers a commit without dumping its diff into context; a ranged Read (`offset`/`limit`) + Edit touches only the edit region, never the whole file. If a spawn is genuinely unavoidable (multi-file, needs fresh context), the dossier **must** forbid full-file Reads (ranged only) and route large command outputs through `head` / `scripts/offload-large.sh`. Two consecutive `MALFORMED`-with-thrash on the same step is the overcome-difficulty signal — switch means, do not re-spawn a third time.
 
+## Spawn-readiness for gated writes (state-gate)
+
+`hook-state-gate.py` authorizes production Edit/Write by the **acting session's own** engine node — and a spawned specialist runs under a **fresh, unclassified** session that inherits none of the parent's execution authority. So spawning a `developer` for gated writes while the child has no plan/classification → every write is denied and the spawn burns its whole budget. Before such a spawn, ensure the child can reach `EXECUTING` in its own session: a `.toml` plan (markdown plans are structure-verified but do **not** populate `state.stages`, so `next-stage`/`dispatch` never reach an execution node — only `.toml` does). If you can't guarantee that, apply the reviewed code in-thread after driving *your* session to `EXECUTING` instead. See [experience/2026-06-25-state-gate-needs-acting-session-at-executing-via-toml.md](experience/2026-06-25-state-gate-needs-acting-session-at-executing-via-toml.md).
+
 ## Spawn template
 
 Use `scripts/spawn-specialist.py` — it handles process concerns (recursion-cap check, budget-tier resolution, permission digest, return-marker validation, cost log). Run `--help` for the flag list; `--dry-run` previews the assembled prompt and command.
