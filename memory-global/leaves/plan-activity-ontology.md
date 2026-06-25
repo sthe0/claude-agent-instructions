@@ -48,6 +48,17 @@ Material and method must be chosen by *inference*, not "from the ceiling". State
 
 The means does not change during the transformation it serves. If the means itself must be built, acquired, or modified, that is **not** part of the consuming stage — it is a separate service stage (see recursive sub-ordering below).
 
+### Documentation projection is a preserved invariant (element 5)
+
+When an activity transforms an object that has bound documentation, that documentation is a **projection of the object that must stay consistent with it** — i.e. a *preserved invariant* (element 5) of the activity, not an optional follow-up. **Code is a special case of a documented object; a README / concept doc is a special case of documentation.** Changing the object without updating its documentation leaves the invariant violated.
+
+Two currencies, two enforcement grains:
+
+- **Structural currency** — the doc still names code landmarks (sections, symbols) that still exist — is *mechanically* guaranteeable at the **concept grain** (not per-symbol, which rots). The registry [`scripts/doc-bindings.json`](../../scripts/doc-bindings.json) binds each foundational concept to a doc section + a few representative code anchors; [`verify-doc-concepts.py`](../../scripts/verify-doc-concepts.py) (in `verify-all`) asserts the section is present and the anchors resolve.
+- **Semantic currency** — the prose *meaning* matches the code *intent* — is **not** mechanically guaranteeable; it is carried by the actor rule (developer SKILL § While developing) and a commit-time soft reminder (`hook-readme-currency-reminder.py`, registry-driven) that names which concept's doc to review when its code changes.
+
+So documentation currency is the same element-5 discipline as any preserved invariant: the control criterion (element 3) at final verification should treat "the changed object's bound documentation is still consistent" as part of conformance, with the registry making *which* documentation explicit.
+
 ### Recursive sub-ordering — the genesis of composite plans
 
 Element 8 is **not an independent eighth thing**; it is the *consequence* of one rule:

@@ -4,8 +4,8 @@
       "id": "coordination-state-machine",
       "concept": "The agentctl coordination engine state machine (Node lifecycle).",
       "doc": {
-        "file": "README.md",
-        "section": "The coordination engine and its state machine"
+        "file": "scripts/agentctl/README.md",
+        "section": "State machine"
       },
       "object_glob": "scripts/agentctl/*.py",
       "anchors": [
