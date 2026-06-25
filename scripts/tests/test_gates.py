@@ -4,16 +4,33 @@ from argparse import Namespace
 
 from agentctl import cli, gates
 from agentctl.state import (
+    Actor,
+    Criterion,
     GateRecord,
+    Means,
     Node,
+    Outcome,
     SessionState,
     Stage,
     StageStatus,
+    Subject,
 )
 
 
 def ns(**kw):
     return Namespace(**kw)
+
+
+def _stage(index, status):
+    return Stage(
+        index=index,
+        title="a",
+        subject=Subject(material="m", result="img"),
+        means=Means(means="Edit", method="do"),
+        actor=Actor(executor="in_thread"),
+        criterion=Criterion(criterion_type="measurable", done_criterion="dc"),
+        outcome=Outcome(status=status),
+    )
 
 
 def _to_plan_ready(store, sid, plan):
@@ -103,10 +120,8 @@ def test_resolution_blockers_reports_unpassed_stages():
     s = SessionState(
         session_id="x", task_id="t",
         stages=[
-            Stage(1, "a", "in_thread", "img", "measurable", "dc",
-                  status=StageStatus.PASSED.value),
-            Stage(2, "b", "in_thread", "img", "measurable", "dc",
-                  status=StageStatus.PENDING.value),
+            _stage(1, StageStatus.PASSED.value),
+            _stage(2, StageStatus.PENDING.value),
         ],
     )
     blockers = gates.resolution_blockers(s)
@@ -122,8 +137,7 @@ def test_resolution_blockers_empty_when_all_passed():
     s = SessionState(
         session_id="x", task_id="t",
         approval=GateRecord("plan_approval", armed=True, passed=True),
-        stages=[Stage(1, "a", "in_thread", "img", "measurable", "dc",
-                      status=StageStatus.PASSED.value)],
+        stages=[_stage(1, StageStatus.PASSED.value)],
     )
     assert gates.resolution_blockers(s) == []
 

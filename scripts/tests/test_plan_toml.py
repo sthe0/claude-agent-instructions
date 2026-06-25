@@ -148,3 +148,63 @@ def test_diff_weight_class_change_is_substantive(fixtures_dir):
     b_doc.meta.weight_class = "substantive"
     from agentctl.plan import diff_plans as _diff
     assert _diff(a, b_doc) == "substantive"
+
+
+# --- typed provision-graph and confidence-enum validators ---
+
+def test_substantive_bad_confidence_raises():
+    stage = _full_substantive_stage()
+    stage["principle"]["confidence"] = "very-sure"
+    with pytest.raises(PlanError, match="confidence"):
+        parse_plan({"meta": _substantive_meta(), "stage": [stage]})
+
+
+def test_dangling_supply_on_raises():
+    data = {
+        "meta": {"task_id": "t"},
+        "stage": [_minimal_stage(1, supplies=[{"on": 9}])],
+    }
+    with pytest.raises(PlanError, match="dangling"):
+        parse_plan(data)
+
+
+def test_unknown_substantive_element_raises():
+    s1 = _full_substantive_stage(1)
+    s2 = _full_substantive_stage(2)
+    s2["supplies"] = [{"on": 1, "element": "bogus-element"}]
+    with pytest.raises(PlanError, match="element"):
+        parse_plan({"meta": _substantive_meta(), "stage": [s1, s2]})
+
+
+def test_known_substantive_element_ok():
+    s1 = _full_substantive_stage(1)
+    s2 = _full_substantive_stage(2)
+    s2["supplies"] = [{"on": 1, "element": "result"}]
+    doc = parse_plan({"meta": _substantive_meta(), "stage": [s1, s2]})
+    assert doc.stages[1].depends_on == [1]
+
+
+def test_dependency_cycle_raises():
+    data = {
+        "meta": {"task_id": "t"},
+        "stage": [
+            _minimal_stage(1, supplies=[{"on": 2}]),
+            _minimal_stage(2, supplies=[{"on": 1}]),
+        ],
+    }
+    with pytest.raises(PlanError, match="cycle"):
+        parse_plan(data)
+
+
+def test_supplies_derive_depends_on():
+    """Explicit supplies feed the derived depends_on projection."""
+    data = {
+        "meta": {"task_id": "t"},
+        "stage": [
+            _minimal_stage(1),
+            _minimal_stage(2, supplies=[{"on": 1, "artifact": "x.py"}]),
+        ],
+    }
+    doc = parse_plan(data)
+    assert doc.stages[1].depends_on == [1]
+    assert doc.stages[1].supplies[0].artifact == "x.py"

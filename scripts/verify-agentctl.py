@@ -60,12 +60,17 @@ SIDE_CHANNEL_REACHABLE = {"BLOCKED"}
 
 def check_state_roundtrip() -> list[str]:
     from agentctl.state import (
+        Actor,
+        Criterion,
         Decomposition,
         GateRecord,
+        Means,
         Node,
+        Outcome,
         SessionState,
         Stage,
         StageStatus,
+        Subject,
     )
 
     problems: list[str] = []
@@ -89,11 +94,11 @@ def check_state_roundtrip() -> list[str]:
             Stage(
                 index=1,
                 title="t",
-                executor="spawn:developer",
-                expected_result_image="img",
-                criterion_type="measurable",
-                done_criterion="dc",
-                status=StageStatus.ACTIVE.value,
+                subject=Subject(material="m", result="img"),
+                means=Means(means="Edit", method="do"),
+                actor=Actor(executor="spawn:developer"),
+                criterion=Criterion(criterion_type="measurable", done_criterion="dc"),
+                outcome=Outcome(status=StageStatus.ACTIVE.value),
             )
         ],
         current_stage=1,

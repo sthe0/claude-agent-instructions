@@ -31,7 +31,7 @@ def resolution_blockers(state: SessionState) -> list[str]:
     out: list[str] = []
     if not state.stages:
         out.append("no stages defined")
-    unpassed = [s.index for s in state.stages if s.status != StageStatus.PASSED.value]
+    unpassed = [s.index for s in state.stages if s.outcome.status != StageStatus.PASSED.value]
     if unpassed:
         out.append(f"stages not PASSED: {unpassed}")
     return out

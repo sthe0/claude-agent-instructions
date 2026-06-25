@@ -26,15 +26,19 @@ from .dispatch import Runner, dispatch_stage, parse_marker
 from .machine import transition
 from .plan import load_plan
 from .state import (
+    Actor,
+    Criterion,
     CriterionType,
     Decomposition,
     GateRecord,
+    Means,
     Node,
     PermissionRequest,
     Route,
     SessionState,
     Stage,
     StageStatus,
+    Subject,
     WeightClass,
 )
 from .store import FileStateStore, StateStore
@@ -158,10 +162,16 @@ def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Di
             Stage(
                 index=1,
                 title=state.goal or "small change",
-                executor="in_thread",
-                expected_result_image=state.goal or "change applied",
-                criterion_type=state.overall_criterion_type,
-                done_criterion=state.overall_done_criterion or "change applied and self-checked",
+                subject=Subject(
+                    material=state.goal or "target",
+                    result=state.goal or "change applied",
+                ),
+                means=Means(means="Edit tool", method="apply the small change in-thread"),
+                actor=Actor(executor="in_thread"),
+                criterion=Criterion(
+                    criterion_type=state.overall_criterion_type,
+                    done_criterion=state.overall_done_criterion or "change applied and self-checked",
+                ),
             )
         ]
         action, detail = "execute_in_thread", "small change: execute in-thread, then record-result"
@@ -289,16 +299,16 @@ def cmd_next_stage(args, *, store: StateStore, runner: Runner | None = None) -> 
     else:
         return Directive(False, state.node, "blocked", f"cannot start a stage from node={state.node}")
     state.node = transition(state.node, event)
-    stage.status = StageStatus.ACTIVE.value
+    stage.outcome.status = StageStatus.ACTIVE.value
     state.current_stage = stage.index
-    state.log("next_stage", stage=stage.index, executor=stage.executor)
+    state.log("next_stage", stage=stage.index, executor=stage.actor.executor)
     store.save(state)
     action = "dispatch" if stage.is_spawn() else "execute_in_thread"
     return Directive(
         True, state.node, action,
         f"stage {stage.index} active: {stage.title}",
-        data={"stage": stage.index, "executor": stage.executor,
-              "expected_result_image": stage.expected_result_image},
+        data={"stage": stage.index, "executor": stage.actor.executor,
+              "expected_result_image": stage.subject.result},
     )
 
 
@@ -439,12 +449,12 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
     if stage is None:
         return Directive(False, state.node, "next_stage", "no active stage to record")
     actual = args.actual or ""
-    stage.actual = actual
+    stage.outcome.actual = actual
     passed = args.status == "passed"
     state.node = transition(state.node, "verify")  # EXECUTING -> VERIFYING
 
     if passed:
-        stage.status = StageStatus.PASSED.value
+        stage.outcome.status = StageStatus.PASSED.value
         state.current_stage = None
         state.log("record_result", stage=stage.index, status="passed")
         store.save(state)
@@ -454,9 +464,9 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
 
     # failed: loop guard — same stage failing twice on the same actual digest -> escalate
     dig = _digest(actual)
-    repeat = dig in stage.fail_digests
-    stage.fail_digests.append(dig)
-    stage.status = StageStatus.FAILED.value
+    repeat = dig in stage.outcome.fail_digests
+    stage.outcome.fail_digests.append(dig)
+    stage.outcome.status = StageStatus.FAILED.value
     state.log("record_result", stage=stage.index, status="failed", repeat=repeat)
     store.save(state)
     if repeat:
@@ -520,9 +530,9 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             except KeyError:
                 continue
             cur.title = ns.title
-            cur.expected_result_image = ns.expected_result_image
-            if cur.status == StageStatus.FAILED.value:
-                cur.status = StageStatus.PENDING.value
+            cur.subject.result = ns.subject.result
+            if cur.outcome.status == StageStatus.FAILED.value:
+                cur.outcome.status = StageStatus.PENDING.value
         state.plan_path = args.plan
         state.log("replan", kind="refinement")
         store.save(state)
@@ -580,7 +590,7 @@ def cmd_status(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             "weight_class": state.weight_class,
             "route": state.route,
             "current_stage": state.current_stage,
-            "stages": [{"index": s.index, "status": s.status, "title": s.title} for s in state.stages],
+            "stages": [{"index": s.index, "status": s.outcome.status, "title": s.title} for s in state.stages],
             "approval_passed": state.approval.passed,
             "resolution_passed": state.resolution.passed,
         },

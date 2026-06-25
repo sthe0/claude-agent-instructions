@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 """Structural validator for planner output (per skills/specializations/planner/SKILL.md § Plan format).
 
+NOTE — this is the PROSE MIRROR, not the canonical contract. The canonical
+definition and enforcer of plan structure is the typed model in
+`agentctl/state.py` + `agentctl/plan.py` (grouped dataclasses Subject/Means/
+Actor/Criterion/Principle/Supply/Outcome + the substantive, confidence-enum,
+dangling-ref, unknown-element and acyclicity validators). This script only
+checks that a human-readable plan file carries the matching prose labels; on
+any divergence the code wins. See memory-global/leaves/plan-activity-ontology.md.
+
 A plan file must contain, at minimum:
   - `## Problem and done criteria` section
   - `## Stages` section, with at least one stage and at least one

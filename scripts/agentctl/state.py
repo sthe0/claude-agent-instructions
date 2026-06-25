@@ -72,6 +72,12 @@ class StageStatus(str, Enum):
     FAILED = "FAILED"
 
 
+class Confidence(str, Enum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
 class InvariantError(Exception):
     """A SessionState violates a documented coordination invariant."""
 
@@ -112,25 +118,137 @@ class PermissionRequest:
     raw: str = ""
 
 
+# --- the 8 activity elements, grouped by the ontology's clusters -------------
+# Each cluster is a typed sub-structure of Stage; the grouping makes the model
+# self-documenting and splits the immutable DECLARATION (subject/means/actor/
+# criterion/principle/conditions) from the mutable execution RECORD (outcome).
+@dataclass
+class Subject:
+    """The material worked on and the result image it should become."""
+    material: str
+    result: str
+    invariants: str | None = None
+
+
+@dataclass
+class Means:
+    """The fixed instruments (means) and the procedure over them (method)."""
+    means: str
+    method: str
+
+
+@dataclass
+class Actor:
+    """Who executes the stage and what capability that demands."""
+    executor: str  # "in_thread" | "spawn:<spec>"
+    capability_required: str | None = None
+
+
+@dataclass
+class Criterion:
+    """How the result is judged: criterion type + the concrete done criterion."""
+    criterion_type: str  # CriterionType value
+    done_criterion: str
+
+
+@dataclass
+class Principle:
+    """The refutable principle the stage rests on (confidence is a Confidence value)."""
+    statement: str
+    source: str
+    confidence: str
+    refutation: str
+
+
+@dataclass
+class Supply:
+    """A typed provision edge: stage `on` supplies `element` (optionally a named
+    `artifact`) to the stage that owns this Supply. The SOLE source of stage
+    edges — Stage.depends_on is a derived projection over these."""
+    on: int
+    element: str | None = None
+    artifact: str | None = None
+
+
+@dataclass
+class Outcome:
+    """The mutable execution record — distinct from the immutable declaration."""
+    status: str = StageStatus.PENDING.value
+    actual: str | None = None
+    fail_digests: list[str] = field(default_factory=list)
+
+
 @dataclass
 class Stage:
     index: int
     title: str
-    executor: str  # "in_thread" | "spawn:<spec>"
-    expected_result_image: str
-    criterion_type: str  # CriterionType value
-    done_criterion: str
-    depends_on: list[int] = field(default_factory=list)
-    output_artifacts: list[str] = field(default_factory=list)
-    actual: str | None = None
-    status: str = StageStatus.PENDING.value
-    fail_digests: list[str] = field(default_factory=list)
+    subject: Subject
+    means: Means
+    actor: Actor
+    criterion: Criterion
+    principle: Principle | None = None
+    conditions: str | None = None
+    supplies: list[Supply] = field(default_factory=list)
+    outcome: Outcome = field(default_factory=Outcome)
+
+    @property
+    def depends_on(self) -> list[int]:
+        """Derived: the set of stages this one waits on, projected from supplies."""
+        return sorted({s.on for s in self.supplies})
 
     def is_spawn(self) -> bool:
-        return self.executor.startswith("spawn:")
+        return self.actor.executor.startswith("spawn:")
 
     def spawn_kind(self) -> str | None:
-        return self.executor.split(":", 1)[1] if self.is_spawn() else None
+        return self.actor.executor.split(":", 1)[1] if self.is_spawn() else None
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Stage":
+        """Rebuild a Stage from its JSON dict. Accepts BOTH the grouped shape
+        (asdict of this class) and the legacy FLAT shape (top-level executor/
+        status/depends_on/...) written by a prior schema — the migration shim
+        lets current live state load unchanged."""
+        d = dict(d)
+        if "subject" in d or "actor" in d:  # grouped (current) shape
+            return cls(
+                index=int(d["index"]),
+                title=str(d["title"]),
+                subject=Subject(**d["subject"]),
+                means=Means(**d["means"]),
+                actor=Actor(**d["actor"]),
+                criterion=Criterion(**d["criterion"]),
+                principle=Principle(**d["principle"]) if d.get("principle") else None,
+                conditions=d.get("conditions"),
+                supplies=[Supply(**s) for s in d.get("supplies", [])],
+                outcome=Outcome(**d["outcome"]) if d.get("outcome") else Outcome(),
+            )
+        # legacy FLAT shape -> nested groups (migration shim)
+        return cls(
+            index=int(d["index"]),
+            title=str(d["title"]),
+            subject=Subject(
+                material=d.get("material", ""),
+                result=d.get("expected_result_image", ""),
+                invariants=d.get("invariants"),
+            ),
+            means=Means(means=d.get("means", ""), method=d.get("method", "")),
+            actor=Actor(
+                executor=d["executor"],
+                capability_required=d.get("capability_required"),
+            ),
+            criterion=Criterion(
+                criterion_type=d.get("criterion_type", CriterionType.MEASURABLE.value),
+                done_criterion=d.get("done_criterion", ""),
+            ),
+            principle=None,  # flat states predate the principle element
+            conditions=d.get("conditions"),
+            supplies=[Supply(on=int(x)) for x in d.get("depends_on", [])],
+            outcome=Outcome(
+                status=d.get("status", StageStatus.PENDING.value),
+                actual=d.get("actual"),
+                fail_digests=list(d.get("fail_digests", [])),
+            ),
+        )
 
 
 @dataclass
@@ -167,7 +285,7 @@ class SessionState:
         if self.node == Node.RESOLVED.value:
             if not self.resolution.passed:
                 raise InvariantError("node=RESOLVED requires resolution.passed")
-            if any(s.status != StageStatus.PASSED.value for s in self.stages):
+            if any(s.outcome.status != StageStatus.PASSED.value for s in self.stages):
                 raise InvariantError("node=RESOLVED requires every stage PASSED")
         if self.route == Route.SPAWN.value and self.weight_class != WeightClass.SUBSTANTIVE.value:
             raise InvariantError("route=SPAWN requires weight_class=SUBSTANTIVE")
@@ -199,16 +317,16 @@ class SessionState:
 
     def ready_stages(self) -> list[Stage]:
         """PENDING stages whose dependencies are all PASSED."""
-        passed = {s.index for s in self.stages if s.status == StageStatus.PASSED.value}
+        passed = {s.index for s in self.stages if s.outcome.status == StageStatus.PASSED.value}
         out = []
         for s in self.stages:
-            if s.status == StageStatus.PENDING.value and all(d in passed for d in s.depends_on):
+            if s.outcome.status == StageStatus.PENDING.value and all(d in passed for d in s.depends_on):
                 out.append(s)
         return out
 
     def all_stages_passed(self) -> bool:
         return bool(self.stages) and all(
-            s.status == StageStatus.PASSED.value for s in self.stages
+            s.outcome.status == StageStatus.PASSED.value for s in self.stages
         )
 
     def log(self, event: str, **fields) -> None:
@@ -227,7 +345,7 @@ class SessionState:
         data["approval"] = GateRecord(**data["approval"])
         data["resolution"] = GateRecord(**data["resolution"])
         data.pop("self_improvement", None)  # legacy field (schema <=4); self-improvement now runs on the standard spine
-        data["stages"] = [Stage(**s) for s in data.get("stages", [])]
+        data["stages"] = [Stage.from_dict(s) for s in data.get("stages", [])]
         decomp = data.get("decomposition")
         data["decomposition"] = Decomposition(**decomp) if decomp else None
         pr = data.get("permission_request")

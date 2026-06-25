@@ -1,26 +1,33 @@
 import pytest
 
 from agentctl.state import (
+    Actor,
+    Criterion,
     GateRecord,
     InvariantError,
+    Means,
     Node,
+    Outcome,
     Route,
     SessionState,
     Stage,
     StageStatus,
+    Subject,
+    Supply,
     WeightClass,
 )
 
 
-def _stage(i, status=StageStatus.PENDING.value):
+def _stage(i, status=StageStatus.PENDING.value, supplies=None):
     return Stage(
         index=i,
         title=f"stage {i}",
-        executor="spawn:developer",
-        expected_result_image="img",
-        criterion_type="measurable",
-        done_criterion="crit",
-        status=status,
+        subject=Subject(material="m", result="img"),
+        means=Means(means="Edit", method="do it"),
+        actor=Actor(executor="spawn:developer"),
+        criterion=Criterion(criterion_type="measurable", done_criterion="crit"),
+        supplies=supplies or [],
+        outcome=Outcome(status=status),
     )
 
 
@@ -78,12 +85,10 @@ def test_chat_is_terminal_at_routed():
 def test_ready_stages_respects_dependencies():
     s = SessionState(session_id="s", task_id="t")
     s.stages = [
-        Stage(index=1, title="a", executor="in_thread", expected_result_image="i",
-              criterion_type="measurable", done_criterion="c"),
-        Stage(index=2, title="b", executor="in_thread", expected_result_image="i",
-              criterion_type="measurable", done_criterion="c", depends_on=[1]),
+        _stage(1),
+        _stage(2, supplies=[Supply(on=1)]),
     ]
     ready = [s_.index for s_ in s.ready_stages()]
     assert ready == [1]
-    s.stage(1).status = StageStatus.PASSED.value
+    s.stage(1).outcome.status = StageStatus.PASSED.value
     assert [s_.index for s_ in s.ready_stages()] == [2]

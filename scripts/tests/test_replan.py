@@ -62,13 +62,13 @@ def test_refinement_after_failure_rearms_the_stage(store, fixtures_dir):
     # stage 1 fails -> FAILED, node VERIFYING
     cli.cmd_record_result(ns(session=sid, status="failed", actual="boom"), store=store)
     state = store.load(sid)
-    assert state.stage(1).status == StageStatus.FAILED.value
+    assert state.stage(1).outcome.status == StageStatus.FAILED.value
 
     # a refinement replan must re-arm the failed stage and point back at it
     d = cli.cmd_replan(ns(session=sid, plan=refined), store=store)
     assert d.action == "next_stage"
     state = store.load(sid)
-    assert state.stage(1).status == StageStatus.PENDING.value
+    assert state.stage(1).outcome.status == StageStatus.PENDING.value
     assert state.ready_stages()[0].index == 1  # the retried stage is selectable again
 
 
@@ -82,7 +82,7 @@ def test_loop_guard_escalates_on_repeated_failure(store, fixtures_dir):
 
     # restart the same stage, fail with the identical digest -> escalate
     state = store.load(sid)
-    state.stage(1).status = StageStatus.ACTIVE.value
+    state.stage(1).outcome.status = StageStatus.ACTIVE.value
     state.current_stage = 1
     state.node = Node.EXECUTING.value
     store.save(state)

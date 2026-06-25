@@ -87,7 +87,7 @@ def test_record_result_loop_guard_escalate_marker(store, fixtures_dir):
     # restart the same stage, fail identically -> ESCALATE marker
     state = store.load(sid)
     from agentctl.state import StageStatus
-    state.stage(1).status = StageStatus.ACTIVE.value
+    state.stage(1).outcome.status = StageStatus.ACTIVE.value
     state.current_stage = 1
     state.node = Node.EXECUTING.value
     store.save(state)

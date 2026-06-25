@@ -82,7 +82,7 @@ def build_argv(
 ) -> list[str]:
     kind = stage.spawn_kind()
     if not kind:
-        raise ValueError(f"stage {stage.index} is not a spawn stage (executor={stage.executor!r})")
+        raise ValueError(f"stage {stage.index} is not a spawn stage (executor={stage.actor.executor!r})")
     argv = [
         "python3",
         str(SPAWN_CLI),
@@ -91,9 +91,9 @@ def build_argv(
         "--plan",
         plan_path,
         "--done-criterion",
-        stage.done_criterion,
+        stage.criterion.done_criterion,
         "--criterion-type",
-        _CRITERION_FLAG.get(stage.criterion_type, "measurable"),
+        _CRITERION_FLAG.get(stage.criterion.criterion_type, "measurable"),
         "--budget",
         budget,
         "--complexity",

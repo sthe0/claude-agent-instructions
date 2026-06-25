@@ -50,7 +50,19 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .state import CriterionType, Stage, StageStatus
+from .state import (
+    Actor,
+    Confidence,
+    Criterion,
+    CriterionType,
+    Means,
+    Outcome,
+    Principle,
+    Stage,
+    StageStatus,
+    Subject,
+    Supply,
+)
 
 
 @dataclass
@@ -76,6 +88,18 @@ class PlanError(Exception):
 _SUBSTANTIVE_STAGE_FIELDS = ("material", "means", "method", "conditions", "invariants")
 _PRINCIPLE_SUBFIELDS = ("statement", "source", "confidence", "refutation")
 
+# The activity-ontology elements a stage may supply to a dependent stage. A
+# substantive stage's Supply.element must name one of these (or be absent).
+_ELEMENT_NAMES = frozenset(
+    {
+        "material", "result", "invariants",   # subject cluster
+        "means", "method",                    # means cluster
+        "executor", "capability",             # actor cluster
+        "criterion", "done_criterion",        # criterion cluster
+        "principle", "conditions",
+    }
+)
+
 
 def _validate_substantive_stage(s: dict, index: int) -> None:
     """Raise PlanError if a substantive stage is missing any activity-structure field."""
@@ -94,6 +118,67 @@ def _validate_substantive_stage(s: dict, index: int) -> None:
             raise PlanError(
                 f"stage {index} [stage.principle] missing {sub!r} (required for substantive plans)"
             )
+    conf = principle.get("confidence")
+    if conf not in {c.value for c in Confidence}:
+        raise PlanError(
+            f"stage {index} [stage.principle] confidence {conf!r} is not one of "
+            f"{sorted(c.value for c in Confidence)}"
+        )
+
+
+def _build_supplies(s: dict, index: int) -> list[Supply]:
+    """Build typed Supply edges. Explicit [[stage.supplies]] wins; otherwise the
+    flat `depends_on` list is lifted into element-less edges."""
+    raw = s.get("supplies")
+    if raw:
+        supplies = []
+        for edge in raw:
+            if "on" not in edge:
+                raise PlanError(f"stage {index} supply missing 'on'")
+            supplies.append(
+                Supply(
+                    on=int(edge["on"]),
+                    element=edge.get("element"),
+                    artifact=edge.get("artifact"),
+                )
+            )
+        return supplies
+    return [Supply(on=int(d)) for d in s.get("depends_on", [])]
+
+
+def _validate_graph(stages: list[Stage], *, is_substantive: bool) -> None:
+    """Validate the derived provision graph: (iii) no dangling Supply.on, (iv) for
+    substantive stages every named element is known, (v) the graph is acyclic."""
+    known = {s.index for s in stages}
+    for s in stages:
+        for sup in s.supplies:
+            if sup.on not in known:
+                raise PlanError(
+                    f"stage {s.index} supplies from stage {sup.on} which does not exist (dangling edge)"
+                )
+            if is_substantive and sup.element is not None and sup.element not in _ELEMENT_NAMES:
+                raise PlanError(
+                    f"stage {s.index} supply element {sup.element!r} is not a known "
+                    f"activity element {sorted(_ELEMENT_NAMES)}"
+                )
+    # (v) acyclicity over the derived depends_on projection (DFS 3-colour).
+    adj = {s.index: s.depends_on for s in stages}
+    WHITE, GRAY, BLACK = 0, 1, 2
+    colour = {i: WHITE for i in known}
+
+    def visit(node: int, trail: list[int]) -> None:
+        colour[node] = GRAY
+        for dep in adj.get(node, []):
+            if colour[dep] == GRAY:
+                cycle = trail[trail.index(dep):] + [dep]
+                raise PlanError(f"stage dependency cycle: {' -> '.join(map(str, cycle))}")
+            if colour[dep] == WHITE:
+                visit(dep, trail + [dep])
+        colour[node] = BLACK
+
+    for i in known:
+        if colour[i] == WHITE:
+            visit(i, [i])
 
 
 def parse_plan(data: dict) -> PlanDoc:
@@ -126,23 +211,51 @@ def parse_plan(data: dict) -> PlanDoc:
                 raise PlanError(f"stage {index} missing {required!r}")
         if is_substantive:
             _validate_substantive_stage(s, index)
+        raw_principle = s.get("principle")
+        principle = (
+            Principle(
+                statement=str(raw_principle["statement"]),
+                source=str(raw_principle["source"]),
+                confidence=str(raw_principle["confidence"]),
+                refutation=str(raw_principle["refutation"]),
+            )
+            if isinstance(raw_principle, dict) and raw_principle
+            else None
+        )
         stages.append(
             Stage(
                 index=index,
                 title=str(s["title"]),
-                executor=str(s["executor"]),
-                expected_result_image=str(s["expected_result_image"]),
-                criterion_type=str(s.get("criterion_type", CriterionType.MEASURABLE.value)),
-                done_criterion=str(s["done_criterion"]),
-                depends_on=[int(d) for d in s.get("depends_on", [])],
-                output_artifacts=[str(a) for a in s.get("output_artifacts", [])],
-                status=StageStatus.PENDING.value,
+                subject=Subject(
+                    material=str(s.get("material", "")),
+                    result=str(s["expected_result_image"]),
+                    invariants=str(s["invariants"]) if s.get("invariants") else None,
+                ),
+                means=Means(
+                    means=str(s.get("means", "")),
+                    method=str(s.get("method", "")),
+                ),
+                actor=Actor(
+                    executor=str(s["executor"]),
+                    capability_required=(
+                        str(s["capability_required"]) if s.get("capability_required") else None
+                    ),
+                ),
+                criterion=Criterion(
+                    criterion_type=str(s.get("criterion_type", CriterionType.MEASURABLE.value)),
+                    done_criterion=str(s["done_criterion"]),
+                ),
+                principle=principle,
+                conditions=str(s["conditions"]) if s.get("conditions") else None,
+                supplies=_build_supplies(s, index),
+                outcome=Outcome(status=StageStatus.PENDING.value),
             )
         )
 
     indices = [s.index for s in stages]
     if len(set(indices)) != len(indices):
         raise PlanError(f"duplicate stage indices: {indices}")
+    _validate_graph(stages, is_substantive=is_substantive)
     return PlanDoc(meta=meta, stages=stages)
 
 
@@ -162,7 +275,12 @@ def _structural_signature(doc: PlanDoc) -> dict:
         "criterion_type": doc.meta.criterion_type,
         "weight_class": doc.meta.weight_class,
         "stages": {
-            s.index: (s.executor, tuple(sorted(s.depends_on)), s.done_criterion, s.criterion_type)
+            s.index: (
+                s.actor.executor,
+                tuple(sorted(s.depends_on)),
+                s.criterion.done_criterion,
+                s.criterion.criterion_type,
+            )
             for s in doc.stages
         },
     }
@@ -173,8 +291,8 @@ def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
     if _structural_signature(old) != _structural_signature(new):
         return "substantive"
     # structurally identical — any prose change (titles, expected-result images) is a refinement
-    old_prose = [(s.index, s.title, s.expected_result_image) for s in old.stages]
-    new_prose = [(s.index, s.title, s.expected_result_image) for s in new.stages]
+    old_prose = [(s.index, s.title, s.subject.result) for s in old.stages]
+    new_prose = [(s.index, s.title, s.subject.result) for s in new.stages]
     if old_prose != new_prose or old.meta.goal != new.meta.goal:
         return "refinement"
     return "no_change"
