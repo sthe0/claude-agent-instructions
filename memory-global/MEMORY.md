@@ -56,6 +56,10 @@ Workflow-level permissions (separate from memory): `~/claude-agent-instructions/
 
 - [Team layer sub-index](leaves/team/MEMORY.md) — scope/authority of the Team precedence layer (EDIT, shared via the project repo) in the `Core < Team < Personal` ladder; the precedence + replace-vs-merge contract is in `docs/instruction-layering.md`, the rebase/`rerere` maintenance recipe in `docs/layer-maintenance.md`.
 
+## Principles (ADR-0001 generality tier)
+
+- [Principles sub-index](leaves/principles/MEMORY.md) — generality-graded, provenance-rooted, refutable principles induced from recurring difficulties; the planner retrieves them at a plan's `refutable principle` element (retrieval-augmented planning). Schema: [principle-leaf-schema.md](leaves/principle-leaf-schema.md).
+
 ## System knowledge
 
 - [System-knowledge sub-index](leaves/system-knowledge/MEMORY.md) — durable facts about systems, processes, org structure, codebase architecture that aren't self-evident; recording criteria in `~/.claude/CLAUDE.md` § Memory.
