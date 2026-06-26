@@ -183,13 +183,28 @@ def update_subindex(exp_dir: Path, date: str, title: str, filename: str,
 
 
 # --------------------------------------------------------------------------
+# ranking primitive (the search-before-record scorer)
+# --------------------------------------------------------------------------
+def tokenize(text: str) -> list[str]:
+    """The single tokenizer behind both search-before-record and difficulty clustering."""
+    return [t.lower() for t in re.findall(r"\w+", text)]
+
+
+def term_score(haystack: str, terms: list[str]) -> int:
+    """Count term occurrences — the identical ranking the digest reuses as its clustering join,
+    so there is exactly one ranking engine (ADR-0001: 'that search IS the clustering')."""
+    hay = haystack.lower()
+    return sum(hay.count(t) for t in terms)
+
+
+# --------------------------------------------------------------------------
 # subcommands
 # --------------------------------------------------------------------------
 def cmd_search(a) -> int:
     tier = getattr(a, "tier", "experience")
     root = search_root(a.scope, a.project_dir, tier)
     section = TIER_SECTION[tier]
-    terms = [t.lower() for t in re.findall(r"\w+", a.keywords)]
+    terms = tokenize(a.keywords)
     if not terms:
         sys.exit("search needs keywords")
     scored: list[tuple[int, Path, str]] = []
@@ -204,8 +219,7 @@ def cmd_search(a) -> int:
             desc = dm.group(1) if dm else ""
         sec_span = section_span(text, section)
         sec = text[sec_span[0]:sec_span[1]] if sec_span else ""
-        hay = (desc + " " + sec).lower()
-        score = sum(hay.count(t) for t in terms)
+        score = term_score(desc + " " + sec, terms)
         if score:
             scored.append((score, leaf, desc.strip()))
     scored.sort(key=lambda x: -x[0])
