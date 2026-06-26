@@ -85,6 +85,16 @@ require_file "$REPO/scripts/hook-context-growth-reminder.py"
 require_file "$REPO/scripts/hook-prewrite-plan-check.py"
 require_file "$REPO/scripts/hook-retry-detector.py"
 require_file "$REPO/scripts/hook-policy-scorecard-due.py"
+require_file "$REPO/scripts/hook-arc-mount-search-guard.py"
+require_file "$REPO/scripts/hook-engine-start.py"
+require_file "$REPO/scripts/hook-experience-record-reminder.py"
+require_file "$REPO/scripts/hook-language-reminder.py"
+require_file "$REPO/scripts/hook-long-job-arm.py"
+require_file "$REPO/scripts/hook-memory-consistency.py"
+require_file "$REPO/scripts/hook-self-improvement-reminder.py"
+require_file "$REPO/scripts/hook-skill-first.py"
+require_file "$REPO/scripts/hook-state-gate.py"
+require_file "$REPO/scripts/hook-tracker-publish-reminder.py"
 require_file "$REPO/scripts/install-reminder-hooks.sh"
 require_file "$REPO/scripts/set-context-cap.sh"
 require_file "$REPO/githooks/commit-msg"
@@ -128,18 +138,20 @@ ok "no local arc scripts in global scripts/"
 
 echo "=== Hook registration (bidirectional) ==="
 # Every scripts/hook-*.py must be registered in BOTH this contract's require_file
-# lines AND README.md. A one-directional allowlist makes newly-added hooks
-# invisible (observed 2026-06-11: two hooks shipped unregistered); this turns a
-# forgotten registration into a hard pre-commit failure.
+# lines AND the canonical scripts/README.md inventory (the top-level README.md is a
+# thin pointer to it, so the inventory — not the overview — is where hooks live). A
+# one-directional allowlist makes newly-added hooks invisible (observed 2026-06-11:
+# two hooks shipped unregistered); this turns a forgotten registration into a hard
+# pre-commit failure.
 for hookpath in "$REPO"/scripts/hook-*.py; do
   [[ -e "$hookpath" ]] || continue
   base="$(basename "$hookpath")"
   grep -qF "require_file \"\$REPO/scripts/$base\"" "$REPO/scripts/verify-layout-contract.sh" \
     || fail "hook $base not registered in verify-layout-contract.sh require_file lines"
-  grep -qF "$base" "$REPO/README.md" \
-    || fail "hook $base not documented in README.md scripts table"
+  grep -qF "$base" "$REPO/scripts/README.md" \
+    || fail "hook $base not documented in scripts/README.md inventory"
 done
-ok "all scripts/hook-*.py registered in contract + README"
+ok "all scripts/hook-*.py registered in contract + scripts/README.md"
 
 echo "=== Runtime symlinks ==="
 if [[ -L "$HOME/.claude/CLAUDE.md" ]]; then ok "~/.claude/CLAUDE.md"; else fail "~/.claude/CLAUDE.md not symlink"; fi
