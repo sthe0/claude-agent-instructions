@@ -1,6 +1,6 @@
 # Maintaining a layer over a moving Core
 
-> Companion to `docs/instruction-layering.md` (the precedence contract) and ADR-0001. This is the
+> Companion to `docs/architecture/instruction-layering.md` (the precedence contract) and ADR-0001. This is the
 > operational recipe for keeping a **Team** or **Personal** layer current as the shared **Core**
 > evolves. The compose model is **override + rebase**, not merge (see the layering contract).
 
@@ -37,7 +37,7 @@ conflicts; it does not decide novel ones.
 
 ## See also
 
-- `docs/instruction-layering.md` — the `Core < Team < Personal` precedence + replace-vs-merge contract.
-- `docs/personal-layer.md` — scope of a Personal layer (EDIT-in-scope, lives on the developer's machine).
+- `docs/architecture/instruction-layering.md` — the `Core < Team < Personal` precedence + replace-vs-merge contract.
+- `docs/architecture/personal-layer.md` — scope of a Personal layer (EDIT-in-scope, lives on the developer's machine).
 - `memory-global/leaves/team/MEMORY.md` — scope of the Team layer (EDIT, shared via the project repo).
 - `docs/adr/0001-consensus-architecture.md` § *Substrate — precedence layers*.

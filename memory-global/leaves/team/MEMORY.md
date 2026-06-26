@@ -1,7 +1,7 @@
 # Team layer
 
 Scope note + sub-index for the **Team** precedence layer (ADR-0001 `Core < Team < Personal`;
-`docs/instruction-layering.md`). Pointed at from `memory-global/MEMORY.md`. Not auto-loaded by the
+`docs/architecture/instruction-layering.md`). Pointed at from `memory-global/MEMORY.md`. Not auto-loaded by the
 harness.
 
 ## Scope and authority
@@ -21,6 +21,6 @@ None yet. Team-scoped global leaves (rare — most Team content lives in a proje
 
 ## See also
 
-- `docs/instruction-layering.md` — the precedence + replace-vs-merge contract.
-- `docs/personal-layer.md` — the Personal layer counterpart.
+- `docs/architecture/instruction-layering.md` — the precedence + replace-vs-merge contract.
+- `docs/architecture/personal-layer.md` — the Personal layer counterpart.
 - `docs/layer-maintenance.md` — the rebase/`rerere` maintenance recipe.

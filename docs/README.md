@@ -15,6 +15,13 @@ The whole system rests on these. Everything else exists to serve one of them.
 
 How the layers compose, the coordination engine and its state machine, and the consensus architecture for distributing instructions across developers.
 
+- [The seven-layer model](architecture/layers.md) — the seven layers (substrate → distribution) and how each constrains the one below it.
+- [The coordination engine and its state machine](architecture/coordination-engine.md) — `agentctl`, the spine it drives, and the two non-skippable gates.
+- [The consensus architecture](architecture/consensus-architecture.md) — the canonical narrative of distributing one evolving Core across a team.
+- [Instruction layering](architecture/instruction-layering.md) — the applicable Core < Team < Personal precedence + replace-vs-merge contract.
+- [Personal layer](architecture/personal-layer.md) — the highest-precedence, machine-local layer's scope and authority.
+- [Core-difficulty mass threshold](architecture/core-difficulty-calibration.md) — calibration of the flagging threshold for the difficulty-accumulation channel.
+
 ## Processes — how a task moves through the system
 
 The task lifecycle and the sub-processes it invokes: planning, difficulty/replan, self-improvement, resolution, partition.

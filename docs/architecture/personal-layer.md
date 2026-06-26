@@ -1,6 +1,6 @@
 # Personal layer — scaffold and scope
 
-> Part of the `Core < Team < Personal` substrate (ADR-0001; `docs/instruction-layering.md`). The
+> Part of the `Core < Team < Personal` substrate (ADR-0001; `docs/architecture/instruction-layering.md`). The
 > Personal layer is the **highest-precedence** layer and is **not** shared through this repository —
 > it lives on a single developer's machine.
 
@@ -22,6 +22,6 @@ overrides themselves; committing personal overrides into the shared Core would d
 
 ## See also
 
-- `docs/instruction-layering.md` — the precedence + replace-vs-merge contract.
+- `docs/architecture/instruction-layering.md` — the precedence + replace-vs-merge contract.
 - `docs/layer-maintenance.md` — the rebase/`rerere` maintenance recipe.
 - `memory-global/leaves/team/MEMORY.md` — the Team layer counterpart.

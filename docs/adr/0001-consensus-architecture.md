@@ -228,7 +228,7 @@ End-to-end: **submit (audience adapter, no push) → pull + normalize + cluster-
    (`core-difficulty-mass-threshold`).~~ **Resolved:** weighted count over the geometric severity
    ladder (low 1 / medium 2 / high 4 / critical 8), threshold `8` (four mediums / two highs / any
    single critical), recency-decay deferred. Basis and recalibration procedure in
-   `docs/core-difficulty-calibration.md`; value in `config.md`; summed by
+   `docs/architecture/core-difficulty-calibration.md`; value in `config.md`; summed by
    `scripts/core-difficulty-digest.py`.
 3. ~~The substrate for the behavioural eval of semantic conflicts (a tenet test-suite).~~
    **Resolved:** `scripts/consensus_eval/` — tenets as named behavioural assertions, a runner that
