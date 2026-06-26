@@ -63,9 +63,12 @@ it uses the sections below instead).
 | **3** | cross-domain invariant | "every produced result is critiqued against its declared result-image" |
 
 **Consumption.** At a plan's `refutable principle` element, the planner retrieves relevant principles
-to ground each stage (retrieval-augmented planning). Promotion: when a difficulty recurs across
-contexts (an experience leaf accumulates contexts), its commonality is lifted into a principle leaf
-here at the appropriate level, with `induced_from` pointing back down.
+to ground each stage (retrieval-augmented planning). **Promotion:** `record-experience.py promote-scan`
+computes the recurrence signal — it clusters the experience corpus by functional ground, sums the `### `
+context blocks across each cluster's leaves (Σ occurrences), and flags every cluster whose total reaches
+`principle-promotion-threshold` (config key; default 3, the Rule-of-Three) as a principle-induction
+candidate. Induction itself stays a human step: author a `principle/v1` leaf at the appropriate
+generality level with `induced_from` pointing back to the member experience leaves.
 
 ## See also
 

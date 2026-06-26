@@ -34,6 +34,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+CONFIG_PATH = REPO_ROOT / "config.md"
 H2 = re.compile(r"^##\s", re.MULTILINE)
 FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 
@@ -204,6 +205,65 @@ def term_score(haystack: str, terms: list[str]) -> int:
     return sum(hay.count(t) for t in terms)
 
 
+# Join ratio: shared-term overlap above which two functional grounds are the same cluster.
+# Consumed by core-difficulty-digest (channel records) and promote-scan (experience leaves).
+JOIN_RATIO = 0.6
+
+
+def _similarity(ground_a: str, ground_b: str) -> float:
+    """Symmetric term-overlap ratio using the reused ranking scorer. 1.0 == identical terms."""
+    terms_b = tokenize(ground_b)
+    if not terms_b:
+        return 0.0
+    # term_score counts occurrences; normalise by the smaller token count for a 0..1 ratio.
+    matched = sum(1 for t in set(terms_b) if term_score(ground_a, [t]) > 0)
+    denom = max(len(set(tokenize(ground_a))), len(set(terms_b))) or 1  # larger (union) set size
+    return matched / denom
+
+
+def cluster_by_ground(items, ground_fn, join_ratio=JOIN_RATIO) -> list[list]:
+    """Group items by functional ground using the shared ranking engine.
+
+    An item joins the best-matching existing group when _similarity >= join_ratio,
+    else opens a new group. ground_fn(item) -> str yields the comparison ground.
+    Returns list[list]; the first item in each group is the representative."""
+    groups: list[list] = []
+    grounds: list[str] = []
+    for item in items:
+        g = ground_fn(item)
+        best_idx, best_sim = -1, 0.0
+        for i, rep in enumerate(grounds):
+            sim = _similarity(rep, g)
+            if sim > best_sim:
+                best_idx, best_sim = i, sim
+        if best_idx >= 0 and best_sim >= join_ratio:
+            groups[best_idx].append(item)
+        else:
+            groups.append([item])
+            grounds.append(g)
+    return groups
+
+
+DEFAULT_PRINCIPLE_PROMOTION_THRESHOLD = 3
+
+
+def read_threshold(key: str, default: int, config_path: Path = CONFIG_PATH) -> int:
+    """Read a numeric threshold from the config.md constants table by key name.
+
+    Non-integer values (e.g. placeholders) and missing keys fall back to default.
+    """
+    try:
+        for line in config_path.read_text(encoding="utf-8").splitlines():
+            if "`" + key + "`" in line and line.lstrip().startswith("|"):
+                cells = [c.strip().strip("`") for c in line.split("|")]
+                for cell in cells:
+                    if cell.isdigit():
+                        return int(cell)
+    except FileNotFoundError:
+        pass
+    return default
+
+
 # --------------------------------------------------------------------------
 # subcommands
 # --------------------------------------------------------------------------
@@ -241,6 +301,82 @@ def cmd_search(a) -> int:
     return 0
 
 
+def cmd_promote_scan(a) -> int:
+    """Cluster the experience corpus by functional ground; flag clusters >= threshold."""
+    import json as _json
+
+    exp_dir = experience_dir(a.scope, a.project_dir)
+    threshold = read_threshold(
+        "principle-promotion-threshold", DEFAULT_PRINCIPLE_PROMOTION_THRESHOLD
+    )
+    if getattr(a, "threshold", None) is not None:
+        threshold = a.threshold
+
+    if not exp_dir.is_dir():
+        print("no experience leaves found")
+        return 0
+
+    class _Rec:
+        __slots__ = ("name", "ground", "occurrences")
+
+        def __init__(self, name: str, ground: str, occurrences: int) -> None:
+            self.name = name
+            self.ground = ground
+            self.occurrences = occurrences
+
+    records = []
+    for leaf in sorted(exp_dir.glob("*.md")):
+        if leaf.name == "MEMORY.md":
+            continue
+        text = leaf.read_text(encoding="utf-8")
+        fm = FRONTMATTER.match(text)
+        desc = ""
+        if fm:
+            dm = re.search(r"^description:\s*(.*)$", fm.group(1), re.MULTILINE)
+            desc = dm.group(1).strip() if dm else ""
+        diff_span = section_span(text, "Difficulty")
+        diff_body = text[diff_span[0]:diff_span[1]] if diff_span else ""
+        ground = desc + " " + diff_body
+        ctx_span = section_span(text, "Contexts")
+        occurrences = 0
+        if ctx_span:
+            ctx_body = text[ctx_span[0]:ctx_span[1]]
+            occurrences = len(re.findall(r"^###\s", ctx_body, re.MULTILINE))
+        occurrences = max(1, occurrences)
+        records.append(_Rec(leaf.name, ground, occurrences))
+
+    if not records:
+        print("no experience leaves found")
+        return 0
+
+    groups = cluster_by_ground(records, lambda r: r.ground)
+    clusters = []
+    for group in groups:
+        total = sum(r.occurrences for r in group)
+        members = [r.name for r in group]
+        clusters.append({
+            "occurrences_total": total,
+            "members": members,
+            "flagged": total >= threshold,
+            "fragmented": len(members) >= 2,
+        })
+    clusters.sort(key=lambda c: -c["occurrences_total"])
+
+    if getattr(a, "json_out", False):
+        print(_json.dumps(clusters, indent=2))
+        return 0
+
+    for c in clusters:
+        print(f"[{c['occurrences_total']} occurrence(s)] {', '.join(c['members'])}")
+        if c["flagged"]:
+            print(f"  → candidate: lift into a principle/v1 leaf "
+                  f"(induced_from = {c['members']})")
+        if c["fragmented"]:
+            print(f"  → fragmented across {len(c['members'])} leaves "
+                  f"— consider merging via extend")
+    return 0
+
+
 def cmd_new(a) -> int:
     exp_dir = experience_dir(a.scope, a.project_dir)
     exp_dir.mkdir(parents=True, exist_ok=True)
@@ -248,6 +384,31 @@ def cmd_new(a) -> int:
     path = exp_dir / filename
     if path.exists():
         sys.exit(f"refusing to overwrite existing leaf: {path}")
+    # Fragmentation guard: refuse silent duplication of an analogous difficulty.
+    justify_new = getattr(a, "justify_new", None)
+    best_sim, best_name = 0.0, None
+    for leaf in sorted(exp_dir.glob("*.md")):
+        if leaf.name == "MEMORY.md" or leaf.name == filename:
+            continue
+        text = leaf.read_text(encoding="utf-8")
+        fm = FRONTMATTER.match(text)
+        desc = ""
+        if fm:
+            dm = re.search(r"^description:\s*(.*)$", fm.group(1), re.MULTILINE)
+            desc = dm.group(1).strip() if dm else ""
+        diff_span = section_span(text, "Difficulty")
+        diff_body = text[diff_span[0]:diff_span[1]] if diff_span else ""
+        existing_ground = desc + " " + diff_body
+        sim = _similarity(existing_ground, a.difficulty)
+        if sim > best_sim:
+            best_sim, best_name = sim, leaf.name
+    if best_sim >= JOIN_RATIO and not justify_new:
+        sys.exit(
+            f"refusing to fragment: analogous leaf {best_name!r} already exists "
+            f"(similarity {best_sim:.2f} >= {JOIN_RATIO:.2f}). "
+            f"Use `extend --leaf {best_name}` to add a context, "
+            f"or pass `--justify-new \"<reason>\"` for a genuinely distinct difficulty."
+        )
     path.write_text(standalone_body(a), encoding="utf-8")
     update_subindex(exp_dir, a.date, a.title, filename, a.description)
     print(f"wrote {path}\nupdated {exp_dir / 'MEMORY.md'}")
@@ -343,6 +504,10 @@ def build_parser() -> argparse.ArgumentParser:
     n.add_argument("--plan-file", dest="plan_file")
     n.add_argument("--cost")
     n.add_argument("--self-critique", dest="self_critique")
+    n.add_argument(
+        "--justify-new", dest="justify_new", metavar="REASON",
+        help="override the fragmentation guard when this difficulty is genuinely distinct",
+    )
     n.set_defaults(func=cmd_new)
 
     e = sub.add_parser("extend")
@@ -363,6 +528,20 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--context-label", default="initial", dest="context_label")
     t.add_argument("--distill")
     t.set_defaults(func=cmd_ticket)
+
+    ps = sub.add_parser("promote-scan",
+                        help="cluster experience leaves by functional ground and flag "
+                             "principle-induction candidates")
+    add_scope(ps)
+    ps.add_argument(
+        "--threshold", type=int, default=None,
+        help="override principle-promotion-threshold from config.md",
+    )
+    ps.add_argument(
+        "--json", action="store_true", dest="json_out", default=False,
+        help="emit clusters as JSON instead of human-readable text",
+    )
+    ps.set_defaults(func=cmd_promote_scan)
     return p
 
 

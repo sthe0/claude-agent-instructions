@@ -31,10 +31,8 @@ REPO_ROOT = SCRIPTS_DIR.parent
 CONFIG_PATH = REPO_ROOT / "config.md"
 MASS_THRESHOLD_KEY = "core-difficulty-mass-threshold"
 DEFAULT_MASS_THRESHOLD = 8  # safe fallback until stage 13 calibrates the config value
-# Join ratio: shared-term overlap above which two functional grounds are the same cluster.
-JOIN_RATIO = 0.6
 
-# Reuse the record-experience ranking primitive (hyphenated module -> load by path).
+# Reuse the record-experience ranking + clustering primitive (hyphenated module -> load by path).
 _REC_SPEC = importlib.util.spec_from_file_location(
     "record_experience", SCRIPTS_DIR / "record-experience.py"
 )
@@ -42,6 +40,9 @@ _rec = importlib.util.module_from_spec(_REC_SPEC)
 _REC_SPEC.loader.exec_module(_rec)
 tokenize = _rec.tokenize
 term_score = _rec.term_score
+JOIN_RATIO = _rec.JOIN_RATIO
+_similarity = _rec._similarity
+cluster_by_ground = _rec.cluster_by_ground
 
 
 @dataclass
@@ -64,32 +65,11 @@ class Cluster:
         return {r.reporter for r in self.items}
 
 
-def _similarity(ground_a: str, ground_b: str) -> float:
-    """Symmetric term-overlap ratio using the reused ranking scorer. 1.0 == identical terms."""
-    terms_b = tokenize(ground_b)
-    if not terms_b:
-        return 0.0
-    # term_score counts occurrences; normalise by the smaller token count for a 0..1 ratio.
-    matched = sum(1 for t in set(terms_b) if term_score(ground_a, [t]) > 0)
-    denom = max(len(set(tokenize(ground_a))), len(set(terms_b))) or 1  # larger (union) set size
-    return matched / denom
-
-
 def cluster_records(records: list[DifficultyRecord], join_ratio: float = JOIN_RATIO) -> list[Cluster]:
     """Group records by functional ground. A record joins the best-matching existing cluster
     when overlap ≥ join_ratio, else opens a new one. Same ground from two channels → one cluster."""
-    clusters: list[Cluster] = []
-    for rec in records:
-        best, best_sim = None, 0.0
-        for c in clusters:
-            sim = _similarity(c.functional_ground, rec.functional_ground)
-            if sim > best_sim:
-                best, best_sim = c, sim
-        if best is not None and best_sim >= join_ratio:
-            best.items.append(rec)
-        else:
-            clusters.append(Cluster(functional_ground=rec.functional_ground, items=[rec]))
-    return clusters
+    groups = cluster_by_ground(records, lambda r: r.functional_ground, join_ratio)
+    return [Cluster(functional_ground=g[0].functional_ground, items=g) for g in groups]
 
 
 def is_flagged(cluster: Cluster, threshold: int) -> bool:
