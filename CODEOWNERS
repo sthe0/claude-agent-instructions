@@ -1,0 +1,17 @@
+# CODEOWNERS — protected Core (ADR-0001 § Governance over the core slice).
+#
+# Core is a shared resource: an uncontrolled edit breaks everyone. These paths are
+# owned by the system author(s) and change only via the planner -> approval -> developer
+# spine. Non-author contributors append to the difficulty inbox instead of editing Core
+# (ADR-0001 § Difficulty-accumulation mechanism). Non-Core paths
+# (memory-global/leaves/**, docs/**) are deliberately NOT owner-restricted here.
+#
+# For now there is a single author (ADR-0001).
+
+/CLAUDE.md            @sthe0
+/config.md            @sthe0
+/skills/              @sthe0
+/agents/              @sthe0
+/cursor/              @sthe0
+*.mdc                 @sthe0
+/scripts/agentctl/    @sthe0
