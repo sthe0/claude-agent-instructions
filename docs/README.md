@@ -26,6 +26,13 @@ How the layers compose, the coordination engine and its state machine, and the c
 
 The task lifecycle and the sub-processes it invokes: planning, difficulty/replan, self-improvement, resolution, partition.
 
+- [The task lifecycle](processes/task-lifecycle.md) — end to end: weight classification → routing → the coordination spine → resolution.
+- [Planning](processes/planning.md) — when a plan is required, the planner specialist, the activity ontology a plan must cover, and the approval gate.
+- [Difficulty and replan](processes/difficulty-and-replan.md) — what happens when a stage diverges: declare → investigate → critique, then revise the plan.
+- [Self-improvement](processes/self-improvement.md) — how a user's correction of agent behaviour becomes a durable instruction or memory change.
+- [Resolution and experience](processes/resolution-and-experience.md) — closing a task: the resolution gate, criterion types, and recording experience.
+- [Partition](processes/partition.md) — cutting an approved plan into independently-shippable units via markers M1–M4.
+
 ## Components — the parts and where they live
 
 The skills, agents, hooks, scripts, memory scopes, settings, and the Cursor mirror.
