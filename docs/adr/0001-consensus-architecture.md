@@ -1,6 +1,6 @@
 # ADR-0001 — Consensus architecture for a distributed agent system
 
-- **Status:** Proposed (2026-06-26)
+- **Status:** Accepted (2026-06-26) — implemented in slices S1–S4; open questions #2/#3 resolved.
 - **Deciders:** system authors (commit-rights holders to this repo)
 - **Difficulty removed:** when the agent system is handed to several developers, edits to its instructions (`CLAUDE.md`, `skills/`, `memory-*`, `config.md`) from different people conflict, and there is no systematic way to reach consensus.
 
@@ -224,9 +224,16 @@ End-to-end: **submit (audience adapter, no push) → pull + normalize + cluster-
    submission is decoupled from push via a pluggable `DifficultyChannel` (Startrek for internal devs,
    an external tracker for external devs); the author-side digest aggregates across all channels by
    functional ground.
-2. Exact critical-mass formula (weighted count vs. recency-decayed) and threshold value
-   (`core-difficulty-mass-threshold`).
-3. The substrate for the behavioural eval of semantic conflicts (a tenet test-suite).
+2. ~~Exact critical-mass formula (weighted count vs. recency-decayed) and threshold value
+   (`core-difficulty-mass-threshold`).~~ **Resolved:** weighted count over the geometric severity
+   ladder (low 1 / medium 2 / high 4 / critical 8), threshold `8` (four mediums / two highs / any
+   single critical), recency-decay deferred. Basis and recalibration procedure in
+   `docs/core-difficulty-calibration.md`; value in `config.md`; summed by
+   `scripts/core-difficulty-digest.py`.
+3. ~~The substrate for the behavioural eval of semantic conflicts (a tenet test-suite).~~
+   **Resolved:** `scripts/consensus_eval/` — tenets as named behavioural assertions, a runner that
+   flags a candidate invariant violating a tenet (the class-2 conflict git cannot see), seeded
+   with two real-rule tenets. Scaffold scope (seed tenets, grown from observed conflicts).
 4. Approval workflows of Humanloop / Agenta / LangSmith remain publicly undocumented (an industry
    gap, not a blocker).
 
