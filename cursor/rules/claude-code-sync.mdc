@@ -60,6 +60,8 @@ Carve-outs that minimize per-action confirmation (full policy: `~/.claude/memory
 
 **Do not** ask the user to confirm individual actions already covered above — structured confirms are for decisions the user has not already made (plan approval, irreversible ops, substantive replan).
 
+**Formalize deterministic action sequences as code.** A fixed-order sequence with no per-step judgement (multi-command CLI ceremonies, repeated verify / setup / teardown chains) belongs in a script / wrapper command / workflow you invoke — not hand-issued one tool call at a time. Hand-walking such a chain burns tokens/turns/attention, is error-prone and non-reproducible; it is itself a difficulty signal. Full rule: `~/.claude/CLAUDE.md` preamble.
+
 ## What counts as a difficulty
 
 A **difficulty** is a divergence between reality and the plan. Two forms qualify:
