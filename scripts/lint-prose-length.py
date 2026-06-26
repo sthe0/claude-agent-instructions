@@ -12,6 +12,7 @@ file with a one-line pointer.
 Governed files (per `config.md` keys):
 
   CLAUDE.md                              claude-md-max-lines, claude-md-max-bytes
+  README.md                              readme-max-lines
   cursor/rules/claude-code-sync.mdc      cursor-mirror-max-lines
   skills/*/SKILL.md                      skill-md-max-lines
   skills/specializations/*/SKILL.md      skill-md-max-lines
@@ -35,6 +36,7 @@ CONFIG_MD = REPO_ROOT / "config.md"
 # (glob pattern relative to repo root, config-key for the limit).
 GOVERNED = [
     ("CLAUDE.md", "claude-md-max-lines"),
+    ("README.md", "readme-max-lines"),
     ("cursor/rules/claude-code-sync.mdc", "cursor-mirror-max-lines"),
     ("skills/*/SKILL.md", "skill-md-max-lines"),
     ("skills/specializations/*/SKILL.md", "skill-md-max-lines"),

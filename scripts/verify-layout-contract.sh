@@ -30,6 +30,7 @@ echo "=== Global repo tree ==="
 require_file "$REPO/CLAUDE.md"
 require_file "$REPO/config.md"
 require_file "$REPO/README.md"
+require_file "$REPO/docs/README.md"
 require_dir "$REPO/agents"
 require_file "$REPO/agents/README.md"
 # No shipped Task-spawned subagents currently — these specialists moved to skills/specializations/
