@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -56,7 +57,7 @@ def _digest(text: str) -> str:
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:12]
 
 
-def _verify_command_result(stage, runner: Runner | None):
+def _verify_command_result(stage, runner: Runner | None, cwd: str | None = None):
     """Execute a measurable stage's `verify_command`, if it has one.
 
     Returns (ok, result). When the stage carries no command, or its criterion is
@@ -64,12 +65,22 @@ def _verify_command_result(stage, runner: Runner | None):
     so the engine keeps its flag-only behaviour. Otherwise runs the command via the
     injected runner (tests pass a fake; the default shells out) and reports whether
     the exit code matched `expected_exit`. This is the seam that removes the model
-    from the trust path for the measurable subset."""
+    from the trust path for the measurable subset.
+
+    When `cwd` (the plan's repo_root) is set, the command runs there via a
+    `cd <cwd> && ` prefix inside the existing `bash -c` string — so the Runner
+    protocol (argv -> RunResult) and every injected fake stay unchanged. With cwd
+    None the string is byte-identical to the pre-repo_root behaviour (inherit the
+    invoker's cwd). A non-existent cwd makes `cd` fail and `&&` short-circuit, so a
+    misconfigured root surfaces as a verify failure rather than silently passing."""
     crit = stage.criterion
     if not crit.verify_command or crit.criterion_type != CriterionType.MEASURABLE.value:
         return True, None
     run = runner or subprocess_runner
-    result = run(["bash", "-c", crit.verify_command])
+    command = crit.verify_command
+    if cwd:
+        command = f"cd {shlex.quote(cwd)} && {command}"
+    result = run(["bash", "-c", command])
     return result.returncode == crit.expected_exit, result
 
 
@@ -581,7 +592,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
     # contradicted pass becomes a real failure (digest + DIAGNOSING), so "report
     # honestly" is an invariant for the measurable subset, not a discipline.
     if passed:
-        ok, result = _verify_command_result(stage, runner)
+        ok, result = _verify_command_result(stage, runner, cwd=state.repo_root)
         if not ok:
             passed = False
             note = (
@@ -638,7 +649,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     # non-match refuses RESOLUTION rather than trusting the recorded PASSED flags.
     failures: list[str] = []
     for stage in state.stages:
-        ok, result = _verify_command_result(stage, runner)
+        ok, result = _verify_command_result(stage, runner, cwd=state.repo_root)
         if not ok:
             failures.append(
                 f"stage {stage.index}: exit {result.returncode} != "
