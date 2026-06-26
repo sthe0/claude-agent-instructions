@@ -26,6 +26,7 @@ from .dispatch import Runner, dispatch_stage, parse_marker, subprocess_runner
 from .machine import transition
 from .plan import load_plan
 from .state import (
+    _EXECUTION_NODES,
     Actor,
     Critique,
     Criterion,
@@ -861,6 +862,216 @@ def cmd_status(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     )
 
 
+# --- spine orchestrators: collapse the deterministic ceremony into one call -----
+# `drive` (opening) and `close` (closing) are THIN orchestrators: they sequence the
+# existing cmd_* functions and branch on the Directives those return. They add no
+# Node, no machine edge, and no gate of their own — every state mutation is performed
+# by a delegated cmd_*, so the engine's invariants hold by construction. Their ONE
+# rule beyond sequencing: never auto-cross a human gate. `drive` stops at PLAN_READY
+# unless given --approved-by; `close` stops at the resolution gate unless given
+# --confirmed-by, and it surfaces resolution blockers (core + plugin-phase) by
+# delegating to cmd_resolve, which already aggregates and refuses an empty --by.
+
+def _run_step(fn, args, *, store: StateStore, runner: Runner | None, trace: list) -> Directive:
+    """Call a cmd_* function, append a compact crumb to `trace`, return its Directive."""
+    d = fn(args, store=store, runner=runner)
+    trace.append({"command": fn.__name__.removeprefix("cmd_"), "node": d.node,
+                  "action": d.action, "ok": d.ok})
+    return d
+
+
+def cmd_drive(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Walk the OPENING spine from the session's current node, firing only legal
+    forward edges, and STOP at the plan-approval gate (PLAN_READY) by default.
+    Cross it only when given --approved-by <who>, threaded into cmd_approve --by:
+    the flag does not make approval implicit — it is the human token authorizing the
+    wrapper to collapse the post-approval ceremony (approve -> partition -> next-stage
+    -> EXECUTING) into the same call. Idempotent: re-running at/after EXECUTING is a
+    no-op that reports the node."""
+    state = _require(store, args.session)
+    trace: list = []
+    node = state.node
+
+    # idempotency / guard: opening spine is done (or the session is parked elsewhere)
+    if node in _EXECUTION_NODES:
+        return Directive(True, node, "noop",
+                         f"drive: session already at {node}; opening spine complete",
+                         data={"trace": trace})
+    if node in (Node.BLOCKED.value, Node.DIAGNOSING.value):
+        return Directive(False, node, "noop",
+                         f"drive: session at {node}; resolve that before driving",
+                         data={"trace": trace})
+
+    # --- classify (at CLASSIFIED) ---
+    if node == Node.CLASSIFIED.value:
+        d = _run_step(cmd_classify, args, store=store, runner=runner, trace=trace)
+        if not d.ok:
+            return Directive(d.ok, d.node, d.action, f"drive: classify failed: {d.detail}",
+                             marker=d.marker, data={**d.data, "trace": trace})
+        node = d.node
+
+    state = _require(store, args.session)
+    wc = state.weight_class
+
+    # --- route on weight class (at ROUTED) ---
+    if node == Node.ROUTED.value:
+        if wc == WeightClass.CHAT.value:
+            return Directive(True, node, "answer_in_thread",
+                             "drive: chat — answer in-thread (terminal at ROUTED)",
+                             data={"trace": trace})
+        if wc == WeightClass.SMALL_CHANGE.value:
+            d = _run_step(cmd_next_stage, args, store=store, runner=runner, trace=trace)
+            return Directive(d.ok, d.node, d.action,
+                             f"drive: small change to EXECUTING — {d.detail}",
+                             marker=d.marker, data={**d.data, "trace": trace})
+        # substantive: plan -> submit_plan
+        d = _run_step(cmd_plan, args, store=store, runner=runner, trace=trace)
+        if not d.ok:
+            return Directive(d.ok, d.node, d.action, f"drive: plan failed: {d.detail}",
+                             marker=d.marker, data={**d.data, "trace": trace})
+        node = d.node
+
+    # --- submit plan (at PLANNING) ---
+    if node == Node.PLANNING.value:
+        if not getattr(args, "plan", None):
+            return Directive(False, node, "fix_plan",
+                             "drive: at PLANNING but no --plan provided",
+                             data={"trace": trace})
+        d = _run_step(cmd_submit_plan, args, store=store, runner=runner, trace=trace)
+        if not d.ok:
+            return Directive(False, d.node, d.action,
+                             f"drive: plan failed verification: {d.detail}",
+                             data={**d.data, "trace": trace})
+        node = d.node
+
+    # --- the plan-approval GATE-STOP (at PLAN_READY) ---
+    if node == Node.PLAN_READY.value:
+        approver = getattr(args, "approved_by", None)
+        if not (approver and approver.strip()):
+            return Directive(True, node, "await_user_approval",
+                             "drive: plan ready — HARD GATE; get explicit user approval, then "
+                             "re-run drive with --approved-by <who>",
+                             marker="PLAN-READY", data={"trace": trace})
+        ap = argparse.Namespace(session=args.session, by=approver)
+        d = _run_step(cmd_approve, ap, store=store, runner=runner, trace=trace)
+        if not d.ok:
+            return Directive(False, d.node, d.action, f"drive: approve failed: {d.detail}",
+                             data={**d.data, "trace": trace})
+        node = d.node
+
+    # --- partition (at APPROVED) ---
+    if node == Node.APPROVED.value:
+        pa = argparse.Namespace(
+            session=args.session,
+            m1=getattr(args, "m1", False), m2=getattr(args, "m2", False),
+            m3=getattr(args, "m3", False), m4=getattr(args, "m4", False),
+            m3_severe=getattr(args, "m3_severe", False),
+            m4_severe=getattr(args, "m4_severe", False),
+        )
+        d = _run_step(cmd_partition, pa, store=store, runner=runner, trace=trace)
+        if not d.ok:
+            return Directive(False, d.node, d.action, f"drive: partition failed: {d.detail}",
+                             data={**d.data, "trace": trace})
+        node = d.node
+        if d.action == "surface_partition":
+            # a split is suggested — STOP for the user; do not auto-advance (not a gate,
+            # but the M1–M4 verdict is cognition the wrapper must not paper over)
+            return Directive(True, node, "surface_partition",
+                             f"drive: {d.detail}",
+                             data={**d.data, "trace": trace})
+
+    # --- enter the first stage (at PARTITIONED) ---
+    if node == Node.PARTITIONED.value:
+        d = _run_step(cmd_next_stage, args, store=store, runner=runner, trace=trace)
+        return Directive(d.ok, d.node, d.action,
+                         f"drive: first stage active — {d.detail}",
+                         marker=d.marker, data={**d.data, "trace": trace})
+
+    return Directive(True, node, "inspect", f"drive: stopped at {node}", data={"trace": trace})
+
+
+def cmd_close(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Walk the CLOSING spine and STOP at the resolution gate. record-result for the
+    active stage (only with an explicit --status; a failed result routes to DIAGNOSING
+    and is surfaced, never swallowed) -> verify-final (when all stages passed) -> a
+    read-only PROBE of cmd_resolve. With no --confirmed-by the probe leaves the session
+    at RESOLUTION and close reports what still blocks resolve (core + experience-plugin-
+    phase blockers); with --confirmed-by it resolves. Idempotent at RESOLVED.
+
+    Note: plugin OBSERVER nudges (PluginDirectives, e.g. the experience plugin's
+    record_experience nudge) are not emitted through this path — they require the
+    main()/_fire_plugins wiring. Resolution gates still hold, because cmd_resolve reads
+    plugin_gate_blockers directly; only the advisory nudge directives are silent here."""
+    state = _require(store, args.session)
+    trace: list = []
+    node = state.node
+
+    if node == Node.RESOLVED.value:
+        return Directive(True, node, "noop", "close: already RESOLVED", data={"trace": trace})
+    if node not in (Node.EXECUTING.value, Node.VERIFYING.value, Node.RESOLUTION.value):
+        return Directive(False, node, "noop",
+                         f"close: nothing to close yet (node={node}); drive to EXECUTING first",
+                         data={"trace": trace})
+
+    # --- record the active stage's result (only with an explicit status) ---
+    if node == Node.EXECUTING.value:
+        status = getattr(args, "status", None)
+        if not status:
+            return Directive(False, node, "record_result",
+                             "close: stage is EXECUTING — supply --status passed|failed "
+                             "(and --control for a spawn:developer stage)",
+                             data={"trace": trace})
+        rr = argparse.Namespace(
+            session=args.session, status=status,
+            actual=getattr(args, "actual", "") or "",
+            control=getattr(args, "control", None),
+        )
+        d = _run_step(cmd_record_result, rr, store=store, runner=runner, trace=trace)
+        if not d.ok:
+            # failed result -> DIAGNOSING (overcome-difficulty), or attest_control needed
+            return Directive(False, d.node, d.action, f"close: {d.detail}",
+                             marker=d.marker, data={**d.data, "trace": trace})
+        node = d.node
+        if d.action == "next_stage":
+            return Directive(True, node, "next_stage",
+                             "close: stage recorded; more stages remain — execute them, then "
+                             "close again (close does not auto-run remaining stages)",
+                             data={"trace": trace})
+
+    # --- final verification (at VERIFYING, all stages passed) ---
+    if node == Node.VERIFYING.value:
+        d = _run_step(cmd_verify_final, args, store=store, runner=runner, trace=trace)
+        if not d.ok:
+            return Directive(False, d.node, d.action, f"close: {d.detail}",
+                             data={**d.data, "trace": trace})
+        node = d.node
+
+    # --- resolution GATE-STOP: probe cmd_resolve (constraints 1 + 3) ---
+    if node == Node.RESOLUTION.value:
+        confirmer = getattr(args, "confirmed_by", None)
+        rs = argparse.Namespace(session=args.session, by=(confirmer or ""))
+        d = _run_step(cmd_resolve, rs, store=store, runner=runner, trace=trace)
+        if d.ok:
+            return Directive(True, d.node, d.action, "close: task resolved",
+                             marker=d.marker, data={"trace": trace})
+        # blocked: separate the empty-confirmer sentinel from real blockers
+        blockers = d.data.get("blockers", [])
+        real = [b for b in blockers if "empty confirmer" not in b]
+        if confirmer and confirmer.strip():
+            return Directive(False, node, "fix_stages",
+                             "close: confirmer given but resolution still blocked",
+                             data={"blockers": real, "trace": trace})
+        if not real:
+            return Directive(True, node, "await_user_confirmation",
+                             "close: ready to resolve — get explicit user confirmation, then "
+                             "re-run close with --confirmed-by <who>",
+                             data={"trace": trace})
+        return Directive(False, node, "fix_stages", "close: resolution blocked",
+                         data={"blockers": real, "trace": trace})
+
+    return Directive(True, node, "inspect", f"close: stopped at {node}", data={"trace": trace})
+
+
 COMMANDS = {
     "start": cmd_start,
     "reset": cmd_reset,
@@ -885,6 +1096,8 @@ COMMANDS = {
     "block": cmd_block,
     "unblock": cmd_unblock,
     "status": cmd_status,
+    "drive": cmd_drive,
+    "close": cmd_close,
 }
 
 
@@ -966,6 +1179,37 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("block"); sp.add_argument("--session", required=True); sp.add_argument("--reason", default="")
     sp = add("unblock"); sp.add_argument("--session", required=True)
     sp = add("status"); sp.add_argument("--session", required=False)
+
+    # drive: opening-spine orchestrator — union of classify signals + --plan +
+    # --approved-by (the gate-cross token) + the M1–M4 partition markers.
+    sp = add("drive"); sp.add_argument("--session", required=True)
+    sp.add_argument("--chat", action="store_true")
+    sp.add_argument("--changed-lines", dest="changed_lines", type=int, default=0)
+    sp.add_argument("--files", type=int, default=1)
+    sp.add_argument("--wall-clock-min", dest="wall_clock_min", type=int, default=0)
+    sp.add_argument("--tracker-key", dest="tracker_key", default=None)
+    sp.add_argument("--architectural", action="store_true")
+    sp.add_argument("--external-effect", dest="external_effect", action="store_true")
+    sp.add_argument("--new-dependency", dest="new_dependency", action="store_true")
+    sp.add_argument("--public-api-change", dest="public_api_change", action="store_true")
+    sp.add_argument("--plan", default=None)
+    sp.add_argument("--approved-by", dest="approved_by", default=None,
+                    help="human token authorizing the wrapper to cross the plan-approval "
+                         "gate; pass ONLY after a real user-approval round")
+    sp.add_argument("--m1", action="store_true"); sp.add_argument("--m2", action="store_true")
+    sp.add_argument("--m3", action="store_true"); sp.add_argument("--m4", action="store_true")
+    sp.add_argument("--m3-severe", dest="m3_severe", action="store_true")
+    sp.add_argument("--m4-severe", dest="m4_severe", action="store_true")
+
+    # close: closing-spine orchestrator — record-result inputs + --confirmed-by
+    # (the resolution-gate-cross token).
+    sp = add("close"); sp.add_argument("--session", required=True)
+    sp.add_argument("--status", choices=["passed", "failed"], default=None)
+    sp.add_argument("--actual", default="")
+    sp.add_argument("--control", default=None)
+    sp.add_argument("--confirmed-by", dest="confirmed_by", default=None,
+                    help="human token authorizing the wrapper to cross the resolution "
+                         "gate; pass ONLY after explicit user confirmation")
     return p
 
 

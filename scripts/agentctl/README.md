@@ -81,6 +81,12 @@ start → classify → plan → submit-plan → approve → partition → next-s
 | `block` / `unblock` | Mark a difficulty (`any → BLOCKED`) and return to the prior node. |
 | `resolve-permission` | Record the decision on a specialist's `PERMISSION-REQUEST`. |
 | `status` | Inspect the current node + directive; no transition. |
+| `drive` | **Orchestrator** — walk the *opening* spine (`classify → … → next-stage`) in one call, firing only legal forward edges from the current node. **Stops at the plan-approval gate** (`PLAN_READY`) unless given `--approved-by <who>` (threaded into `approve --by`). Routes chat/small-change without a plan gate; stops at `PARTITIONED` when the M1–M4 verdict suggests a split. Idempotent (no-op at/after `EXECUTING`). Adds **no** node/transition/gate. |
+| `close` | **Orchestrator** — walk the *closing* spine (`record-result → verify-final → resolution-probe`) in one call. **Stops at the resolution gate** (`RESOLUTION`) unless given `--confirmed-by <who>`. Surfaces resolution blockers — core **and** plugin-phase (e.g. `experience`) — by delegating to `cmd_resolve` (empty `--by` = read-only probe). A FAILED stage routes to `DIAGNOSING` and is surfaced, never swallowed; remaining stages are never auto-run. Idempotent (no-op at `RESOLVED`). Adds **no** node/transition/gate. |
+
+### Spine orchestrators (`drive` / `close`)
+
+`drive` and `close` are **thin orchestrators**: they sequence the existing `cmd_*` commands above and branch on the `Directive` each returns — collapsing the ~15–20 hand-issued calls per task into two invocations (the [CLAUDE.md root principle](../../CLAUDE.md) *"Formalize deterministic action sequences as code"*, whose named canonical instance is this spine). They introduce **no new node, machine edge, or gate**: every state mutation is performed by a delegated `cmd_*`, so the engine's invariants hold by construction. Their one rule beyond sequencing is to **never auto-cross a human gate** — `drive` halts at `PLAN_READY` and `close` at `RESOLUTION` unless handed the explicit `--approved-by` / `--confirmed-by` token, which the coordinator may pass **only after** the real user-approval / confirmation round. Each returns the full step `trace` under `Directive.data`.
 
 ### Control attestation (`record-result --control`)
 
