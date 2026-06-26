@@ -138,6 +138,56 @@ applying the single primitive to the *Core* slice. This is what removes the orig
 Core changes only via a distilled, accumulated, author-approved principle — never via a raw one-off
 edit.
 
+### Difficulty-accumulation mechanism (how Core difficulties accumulate)
+
+A non-author has **no push rights** to the instructions repo, so submission must be **decoupled from
+push** and from the protected Core. Two stages, never conflated:
+
+**1. Submission (non-author, no push).** When `self-improvement` on a non-author's machine detects a
+**Core-target** difficulty, it does **not** propose a Core edit — it files the difficulty to a
+channel the contributor *already* has write access to. Authority is detected per machine
+(`git push --dry-run` capability / a `config.md` `is_author` flag): a non-author's Core difficulties
+always go to the channel; an author may additionally run the digest and the Core change.
+
+The channel is a **pluggable port** — `DifficultyChannel` with one contract (`submit(record)` /
+`pull(since)`) and a channel-agnostic record:
+
+```
+{ ts, layer: "core", target: "<file#section>", functional_ground, severity, reporter, evidence }
+```
+
+Per-audience adapters map that record onto each tracker's native fields, routed by config:
+
+| Adapter | Audience | Mapping |
+|---|---|---|
+| **Startrek** | internal developers | queue `CORE-INSTR`; `severity→priority`; `functional_ground→component/tag`; `evidence→description` (token `~/.tracker-token`, `tracker-management` skill) |
+| **External** (GitHub Issues / Linear / Jira) | external developers | same record → issue + labels |
+
+This satisfies the constraint that the submission surface be one the contributor already has, while
+the protected Core (`CLAUDE.md`, `skills/**`) stays edit-restricted by `CODEOWNERS`. New adapters are
+added without touching the submission logic.
+
+**2. Aggregation (author, has push).** `core-difficulty-digest.py` **pulls from every configured
+channel**, normalizes each adapter's records to the common schema, and **clusters by functional
+ground — a channel-agnostic join key**. The same difficulty reported via Startrek *and* the external
+tracker therefore lands in **one** cluster, not two: functional ground unifies reports across sources
+exactly as it unifies divergent edits (the commonality primitive applied to *sources*). Cluster mass
+= Σ `severity`-weight (optionally recency-decayed); the digest flags any cluster with
+`mass ≥ core-difficulty-mass-threshold` (a new `config.md` constant) **or** any `critical` item.
+
+Clustering reuses the existing `record-experience.py` search-before-record — that search *is* the
+clustering, so no new clustering engine is introduced.
+
+**3. Trigger → principle.** A flagged cluster is surfaced to a system author, who runs
+`self-improvement` on the **whole cluster** (its entries are the beat-1 signal set) through the normal
+`planner → approval → developer` spine. Once the Core change lands, the cluster is **archived** with
+the resolving commit linked — that archival is the *difficulty → principle* transition: the cluster's
+commonality becomes a `principles/` leaf, with provenance links down to the difficulties it
+generalizes.
+
+End-to-end: **submit (audience adapter, no push) → pull + normalize + cluster-by-functional-ground
+(digest) → mass / trigger → Core self-improvement by an author → cluster archived to a principle.**
+
 ## Considered options
 
 - **A. Git / textual merge only** — misses semantic conflicts (class 2). Insufficient.
@@ -163,16 +213,19 @@ edit.
 
 - Critique-as-a-service for semantic conflicts needs a behavioural eval suite (run cost).
 - The critical-mass formula is a heuristic and needs calibration.
-- A multi-developer inbox must be shared (a file in the repo or a tracker), which moves it out of the
-  gate-exempt memory scope.
+- The submission channel must be operated and maintained per audience (a Startrek queue, an external
+  tracker), and each new audience adds an adapter.
 - The active synthesizer is the original, non-off-the-shelf part of this design → higher risk; it
   needs validation against real conflict streams.
 
 ## Open questions
 
-1. Physical home of the difficulty inbox for multiple developers (shared file in the repo vs. a
-   tracker).
-2. Exact critical-mass formula (weighted count vs. recency-decayed) and threshold value.
+1. ~~Physical home of the difficulty inbox.~~ **Resolved** (see *Difficulty-accumulation mechanism*):
+   submission is decoupled from push via a pluggable `DifficultyChannel` (Startrek for internal devs,
+   an external tracker for external devs); the author-side digest aggregates across all channels by
+   functional ground.
+2. Exact critical-mass formula (weighted count vs. recency-decayed) and threshold value
+   (`core-difficulty-mass-threshold`).
 3. The substrate for the behavioural eval of semantic conflicts (a tenet test-suite).
 4. Approval workflows of Humanloop / Agenta / LangSmith remain publicly undocumented (an industry
    gap, not a blocker).
