@@ -1,6 +1,17 @@
 #!/usr/bin/env python3
 """Verify experience leaves carry an explicit user-confirmation quote.
 
+One model, two profiles. This verifier guards the `schema: difficulty/v1`
+leaf — the **generality-0 profile** of a single difficulty-record model
+(a recorded difficulty is a principle at generality level 0). Its sibling
+`verify-leaf-structure.py` guards the **generality>=1 profile**, the
+`schema: principle/v1` leaf under `principles/` (grandfathered there). The two
+schemas are two faces of one continuum keyed by the `generality` field, not
+unrelated types; `leaf/v1` (also handled by verify-leaf-structure.py) is a
+separate, unrelated ordinary-leaf shape. `generality` is accepted but NOT
+required here — its absence implies 0, which is exactly what lets existing
+leaves stay valid without migration (no conditional-required logic).
+
 Rule (CLAUDE.md § On task resolution):
   An experience leaf — any markdown file inside an `experience/` directory —
   may only be written after the user explicitly confirms task resolution.

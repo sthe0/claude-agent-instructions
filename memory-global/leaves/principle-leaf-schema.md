@@ -22,6 +22,16 @@ that machine-recordable.
 
 ## Guidance
 
+`principle/v1` is the **generality≥1 profile** of a single difficulty-record model whose
+**generality-0 profile** is the `difficulty/v1` experience leaf
+([experience-leaf-schema.md](experience-leaf-schema.md)): an experience leaf *is* a principle at
+level 0 ("worked once, here"), and lifting its accumulated commonality up the generality axis
+produces a leaf in this profile. Same model, two physical profiles keyed by the `generality` field —
+they live in different directories and carry different section sets because each answers a different
+question, but they are two faces of one continuum, not unrelated types. The `leaf/v1` ordinary-leaf
+shape ([leaf-schema.md](leaf-schema.md)) is **separate and unrelated** — it is not a point on this
+continuum.
+
 A principle leaf lives under `memory-global/leaves/principles/` and carries `schema: principle/v1`
 (grandfathered by `verify-leaf-structure.py`, so it is **not** held to the `leaf/v1` section set —
 it uses the sections below instead).
@@ -60,6 +70,6 @@ here at the appropriate level, with `induced_from` pointing back down.
 ## See also
 
 - `docs/adr/0001-consensus-architecture.md` § *Principle as a concept with a generality gradient*.
-- [experience-leaf-schema.md](experience-leaf-schema.md) — `difficulty/v1`; principles at level 0.
-- [leaf-schema.md](leaf-schema.md) — the `leaf/v1` shape ordinary reference leaves use.
+- [experience-leaf-schema.md](experience-leaf-schema.md) — the `difficulty/v1` **generality-0 profile** of this same difficulty-record model (an experience leaf is a principle at level 0); a `principle/v1` leaf graduates **up** from there.
+- [leaf-schema.md](leaf-schema.md) — the `leaf/v1` shape ordinary reference leaves use (a separate, unrelated shape).
 - [principles/MEMORY.md](principles/MEMORY.md) — the sub-index of principle leaves.

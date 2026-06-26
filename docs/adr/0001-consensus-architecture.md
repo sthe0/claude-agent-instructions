@@ -92,9 +92,12 @@ and the active consensus-forging agent *is* the generalization engine — not a 
 - Repetition + diff (critique) lifts a principle up the generality axis. **Refutation ≡
   generalization** — one operation: the *difference* found when repetition fails to reproduce the
   result is exactly what drives the principle to a broader form.
-- `difficulty/v1` experience leaves are principles at level 0. Storage is a **fractal `principles/`
-  tier** (the same `MEMORY.md → sub-index → leaf` shape), with provenance links down to the
-  difficulties a principle was induced from and a refutation condition attached to each.
+- `difficulty/v1` experience leaves and `principle/v1` principle leaves are **two profiles of one
+  difficulty-record model**, keyed by a `generality` field: an experience leaf is the generality-0
+  profile (a principle at level 0), the principle leaf the generality≥1 profile. Storage keeps them
+  physically separate in a **fractal `principles/` tier** (the same `MEMORY.md → sub-index → leaf`
+  shape), with provenance links down to the difficulties a principle was induced from and a
+  refutation condition attached to each.
 - Consumption: at the plan's `refutable principle` element, the planner **retrieves** relevant
   principles to ground each stage (retrieval-augmented planning over a principle library). The
   existing `coordinator-pitfalls.md` "symptom → better" table is the informal proto-version of this

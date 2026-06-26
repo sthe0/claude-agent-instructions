@@ -59,7 +59,7 @@ Workflow-level permissions (separate from memory): `~/claude-agent-instructions/
 
 ## Principles (ADR-0001 generality tier)
 
-- [Principles sub-index](leaves/principles/MEMORY.md) — generality-graded, provenance-rooted, refutable principles induced from recurring difficulties; the planner retrieves them at a plan's `refutable principle` element (retrieval-augmented planning). Schema: [principle-leaf-schema.md](leaves/principle-leaf-schema.md).
+- [Principles sub-index](leaves/principles/MEMORY.md) — generality-graded, provenance-rooted, refutable principles induced from recurring difficulties; the planner retrieves them at a plan's `refutable principle` element (retrieval-augmented planning). The **generality≥1 profile** of one difficulty-record model whose generality-0 profile is the experience leaf (two physically-separate sub-indexes, one model). Schema: [principle-leaf-schema.md](leaves/principle-leaf-schema.md).
 
 ## System knowledge
 
@@ -68,4 +68,4 @@ Workflow-level permissions (separate from memory): `~/claude-agent-instructions/
 ## Resolved-task experience
 
 - [Experience sub-index](leaves/experience/MEMORY.md) — chronological log of resolved-task experience leaves (one per non-trivial task — final plan, difficulties, artifacts, lessons, self-critique, cost).
-- [Experience leaf schema](leaves/experience-leaf-schema.md) — the `difficulty/v1` leaf schema (Difficulty / Order & criterion / Contexts / Cost) + `record-experience.py` tooling for resolved-task leaves.
+- [Experience leaf schema](leaves/experience-leaf-schema.md) — the `difficulty/v1` leaf schema (Difficulty / Order & criterion / Contexts / Cost) + `record-experience.py` tooling for resolved-task leaves; the **generality-0 profile** of one difficulty-record model whose generality≥1 profile is the principle leaf (`principle/v1`), keyed by an optional `generality` field (implied 0).

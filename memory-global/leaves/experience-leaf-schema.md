@@ -10,6 +10,8 @@ The atomic unit of recorded experience is a **recurring difficulty**, not a one-
 
 This is the single source of truth for the schema. `CLAUDE.md` § On task resolution points here; `scripts/record-experience.py` generates leaves to this shape; `scripts/verify-experience-leaf.py` enforces it. **Ordinary (non-experience) leaves** use the lighter `leaf/v1` shape instead — see [leaf-schema.md](leaf-schema.md).
 
+**One difficulty-record model, two profiles.** `difficulty/v1` is the **generality-0 profile** of a single difficulty-record model: a recorded difficulty *is* a principle at generality level 0 — "worked once, here." When a difficulty recurs across contexts and its commonality is lifted into a rule a *different* task can consume, it graduates **up** to the **generality≥1 profile** — `schema: principle/v1`, stored under `principles/` (schema: [principle-leaf-schema.md](principle-leaf-schema.md)). Same model, two physical profiles distinguished by the `generality` field; the section sets differ because each profile answers a different question (this profile records *what worked in which context*, the principle profile records *the refutable rule it generalizes to*). The `leaf/v1` ordinary-leaf shape above is **separate and unrelated** — it is not a point on this continuum.
+
 ## The difficulty graph (cycles allowed)
 
 Leaves link to each other via the `refs:` frontmatter list and inline `[[slug]]` references. The links form a **graph, not a DAG** — cycles are expected, because the framework is self-referential:
@@ -35,6 +37,7 @@ name: <slug>                              # kebab; for new leaves the file is YY
 description: <one-line hook = the recurring difficulty>
 type: reference
 schema: difficulty/v1
+generality: 0                             # optional; implied 0 when absent (this is the generality-0 profile)
 resolution_confirmed_by_user: "<user's literal confirmation quote>"
 refs: [<slug § stage>, …]                 # optional; free-form links into the difficulty graph (cycles OK)
 plan_file: <abs path>                     # optional; the as-executed planner plan, if one exists
@@ -64,6 +67,8 @@ Per occurrence: `$` on `claude -p` spawns + wall-clock + user-intervention count
 ## Self-critique of the agent system    (optional)
 Agent-system friction observed while resolving this task — missing affordance, stale guidance, wrong default; name the file/section/behavior. This is itself a difficulty **about the agent system**: record or extend a separate difficulty leaf for it (context = this task) and invoke `self-improvement` in the same turn. `hook-self-critique-reminder.py` nudges when this section is substantive. For friction recurring across ≥2 leaves, run `overcome-difficulty` against the agent-system-as-plan first (see [systemic-pattern-scan.md](systemic-pattern-scan.md)).
 ```
+
+`generality` is **optional and implied 0** on an experience leaf — its absence *means* generality 0. This is deliberate: making it optional is precisely what avoids migration. Existing experience leaves carry no `generality` field and stay valid unchanged; `record-experience.py` emits `generality: 0` on **newly** created leaves only. There is no forced re-stamping and no conditional-required validator logic — a leaf without the field is the generality-0 profile by default.
 
 ## Ticket-driven work
 
@@ -95,3 +100,4 @@ This keeps a single source of truth (the ticket), avoids context spent re-typing
   - **standalone** (no `ticket:`): require `## Difficulty`, `## Order & criterion`, `## Contexts`, `## Cost`.
   - **ticket** (`ticket:` non-empty): require the `ticket:` value to appear in the body (the pointer); sections relaxed — the record lives in the ticket.
 - Leaves **without** a `schema:` field keep the legacy confirmation-only check (grandfathered).
+- **`generality`** is accepted but **not required** on an experience leaf; its absence means generality 0 (the verifier ignores unknown/absent frontmatter keys, so no code change is needed to accept it). A leaf carrying `generality: 0` validates exactly as one without the field — this is the generality-0 profile of the unified model.

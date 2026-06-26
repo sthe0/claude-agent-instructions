@@ -3,10 +3,12 @@
 
 The unit of experience is a recurring difficulty (see
 memory-global/leaves/experience-leaf-schema.md). This tool guarantees the
-`schema: difficulty/v1` structure, auto-dates filenames, maintains the
-`experience/MEMORY.md` sub-index, and implements the search-before-record /
-extend-with-a-new-context flow that lets one difficulty accumulate several
-contexts.
+`schema: difficulty/v1` structure (the generality-0 profile of the unified
+difficulty-record model — it stamps `generality: 0` on newly created leaves;
+the generality>=1 profile is the principle/v1 leaf), auto-dates filenames,
+maintains the `experience/MEMORY.md` sub-index, and implements the
+search-before-record / extend-with-a-new-context flow that lets one difficulty
+accumulate several contexts.
 
 Subcommands:
   search <keywords>   Rank existing experience leaves by description +
@@ -94,6 +96,11 @@ def frontmatter(name: str, description: str, confirmed_by: str,
         f"description: {description}",
         "type: reference",
         "schema: difficulty/v1",
+        # Emitted on newly created leaves only; existing leaves are left
+        # untouched (absence implies 0). An experience leaf is the generality-0
+        # profile of the unified difficulty-record model whose generality>=1
+        # profile is the principle/v1 leaf — see experience-leaf-schema.md.
+        "generality: 0",
         f'resolution_confirmed_by_user: "{confirmed_by}"',
     ]
     if refs:

@@ -10,6 +10,10 @@ Sub-index of `memory-global/leaves/principles/`. Pointed at from `memory-global/
 auto-loaded by the harness. **Consumption:** at a plan's `refutable principle` element the planner
 retrieves the relevant principle(s) to ground each stage (retrieval-augmented planning).
 
+These principle leaves are the **generality≥1 profile** of one difficulty-record model whose
+**generality-0 profile** is the `difficulty/v1` experience leaf ([experience/MEMORY.md](../experience/MEMORY.md));
+the two sub-indexes stay physically separate but record two profiles of the same model.
+
 ## Level 3 — cross-domain invariants
 
 - [Every result is critiqued against its declared result-image](result-checked-against-its-result-image.md) — the critique primitive (compare expected vs actual, extract the difference) applied to one stage; skipping the check is itself a difficulty. ← `coordinator-pitfalls`, `2026-06-24-gate-exemption-is-category-error-for-result-images`.

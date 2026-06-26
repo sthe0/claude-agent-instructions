@@ -55,5 +55,6 @@ Migrate a grandfathered leaf to `leaf/v1` opportunistically when you next touch 
 
 ## See also
 
-- [[experience-leaf-schema]] — the `difficulty/v1` schema for experience leaves (out of scope for `leaf/v1`).
+- [[experience-leaf-schema]] — the `difficulty/v1` schema for experience leaves (out of scope for `leaf/v1`). It and the `principle/v1` principle leaf are two profiles — generality 0 vs ≥1 — of one difficulty-record model; `leaf/v1` here is a separate, unrelated shape, not a point on that continuum.
+- [[principle-leaf-schema]] — the `principle/v1` schema (the generality≥1 profile of that same model).
 - [[memory-hierarchy]] — when to spin off `<subdir>/MEMORY.md` sub-indexes.
