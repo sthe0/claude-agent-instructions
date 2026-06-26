@@ -145,9 +145,9 @@ push** and from the protected Core. Two stages, never conflated:
 
 **1. Submission (non-author, no push).** When `self-improvement` on a non-author's machine detects a
 **Core-target** difficulty, it does **not** propose a Core edit — it files the difficulty to a
-channel the contributor *already* has write access to. Authority is detected per machine
-(`git push --dry-run` capability / a `config.md` `is_author` flag): a non-author's Core difficulties
-always go to the channel; an author may additionally run the digest and the Core change.
+channel the contributor *already* has write access to. Authority is detected per machine via
+`git push --dry-run` capability: a non-author's Core difficulties always go to the channel; an
+author may additionally run the digest and the Core change.
 
 The channel is a **pluggable port** — `DifficultyChannel` with one contract (`submit(record)` /
 `pull(since)`) and a channel-agnostic record:
@@ -160,8 +160,8 @@ Per-audience adapters map that record onto each tracker's native fields, routed 
 
 | Adapter | Audience | Mapping |
 |---|---|---|
-| **Startrek** | internal developers | queue `CORE-INSTR`; `severity→priority`; `functional_ground→component/tag`; `evidence→description` (token `~/.tracker-token`, `tracker-management` skill) |
-| **External** (GitHub Issues / Linear / Jira) | external developers | same record → issue + labels |
+| **Startrek** | internal developers | queue `OOSEVENREPORT`; `severity→priority`; `functional_ground→tag`; `evidence→description` (token `~/.tracker-token`, `tracker-management` skill) |
+| **GitHub** (Issues, `sthe0/claude-agent-instructions`) | external developers | same record → issue title + body + labels (token: `GITHUB_TOKEN` or `gh auth`) |
 
 This satisfies the constraint that the submission surface be one the contributor already has, while
 the protected Core (`CLAUDE.md`, `skills/**`) stays edit-restricted by `CODEOWNERS`. New adapters are

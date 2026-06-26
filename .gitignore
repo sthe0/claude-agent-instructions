@@ -5,6 +5,7 @@ __pycache__/
 *.pyc
 .env
 *.local.json
+agent-identity.local
 secrets/
 agents-local/*
 !agents-local/README.md

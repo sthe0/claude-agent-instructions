@@ -94,3 +94,17 @@ def test_pull_all_via_in_memory_double():
     dc.register_channel("seeded", lambda: ch)
     recs = digest_mod.pull_all(["seeded"])
     assert len(recs) == 1 and recs[0].functional_ground == "seeded ground"
+
+
+def test_default_channels_include_startrek_and_github(monkeypatch):
+    """When no --channel args are given, both startrek and github are attempted."""
+    attempted = []
+
+    def fake_pull_all(channel_names, since=None):
+        attempted.extend(channel_names)
+        return []
+
+    monkeypatch.setattr(digest_mod, "pull_all", fake_pull_all)
+    digest_mod.main([])
+    assert "startrek" in attempted
+    assert "github" in attempted

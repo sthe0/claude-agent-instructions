@@ -1,11 +1,16 @@
 """Core commit-authority detection (ADR-0001 § Submission (non-author, no push)).
 
-A machine either holds Core commit authority or it does not. ``is_author()`` decides:
-the explicit ``is_author`` flag in config.md WINS when set; absent the flag it falls back to a
-``git push --dry-run`` capability probe. The decision drives self-improvement routing: a
-non-author NEVER edits Core — it files a DifficultyRecord to the configured channel instead.
+A machine either holds Core commit authority or it does not. ``is_author()`` decides via a
+``git push --dry-run`` capability probe — push access IS the authority. The explicit ``flag``
+param is a test seam only; the config-flag branch (``is_author`` row in config.md) was removed
+because config.md is git-shared and therefore identical on every clone, making the flag useless
+as a per-machine discriminator.
 
-Both the config read and the push probe are injectable so tests run offline with no real push.
+Channel selection: the machine's preferred channel is read from ``~/.claude/agent-identity.local``
+(``difficulty_channel=<name>``); the default is ``startrek`` (internal Yandex Tracker queue
+OOSEVENREPORT). External contributors set ``difficulty_channel=github``.
+
+Both the push probe and the HTTP clients are injectable so tests run offline with no real push.
 """
 from __future__ import annotations
 
@@ -14,26 +19,11 @@ from pathlib import Path
 from typing import Callable
 
 from .port import DifficultyRecord, get_channel
-from . import adapters as _adapters  # noqa: F401  — registers startrek/external in the registry
+from . import adapters as _adapters  # noqa: F401  — registers startrek/github/external in the registry
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CONFIG_PATH = REPO_ROOT / "config.md"
-IS_AUTHOR_KEY = "is_author"
+LOCAL_IDENTITY_PATH = Path.home() / ".claude" / "agent-identity.local"
 DEFAULT_CHANNEL = "startrek"
-
-
-def read_is_author_flag(config_path: Path = CONFIG_PATH) -> bool | None:
-    """Parse the config.md ``is_author`` row -> True/False, or None if absent/unparseable."""
-    try:
-        for line in config_path.read_text(encoding="utf-8").splitlines():
-            if "`" + IS_AUTHOR_KEY + "`" in line and line.lstrip().startswith("|"):
-                cells = [c.strip().strip("`").lower() for c in line.split("|")]
-                for cell in cells:
-                    if cell in ("true", "false"):
-                        return cell == "true"
-    except FileNotFoundError:
-        pass
-    return None
 
 
 def probe_push_capability(
@@ -50,14 +40,12 @@ def probe_push_capability(
 
 
 def is_author(
-    config_path: Path = CONFIG_PATH,
     probe: Callable[[], bool] | None = None,
     flag: bool | None = None,
 ) -> bool:
-    """Flag wins when set (explicit or read from config); else fall back to the push probe."""
-    decided = flag if flag is not None else read_is_author_flag(config_path)
-    if decided is not None:
-        return decided
+    """Push-capability is the authoritative source. ``flag`` is a test seam only."""
+    if flag is not None:
+        return flag
     probe_fn = probe or probe_push_capability
     return probe_fn()
 
@@ -71,7 +59,29 @@ def route_for_core_difficulty(author: bool) -> str:
     return ROUTE_EDIT_CORE if author else ROUTE_TO_CHANNEL
 
 
-def file_core_difficulty(record: DifficultyRecord, channel: str = DEFAULT_CHANNEL) -> str:
+def read_local_identity(path: Path = LOCAL_IDENTITY_PATH) -> dict[str, str]:
+    """Parse key=value lines from the machine-local identity file; skip blank lines and comments."""
+    result: dict[str, str] = {}
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                k, _, v = line.partition("=")
+                result[k.strip()] = v.strip()
+    except FileNotFoundError:
+        pass
+    return result
+
+
+def read_configured_channel(path: Path = LOCAL_IDENTITY_PATH) -> str:
+    """Return the machine's preferred channel from agent-identity.local; default: startrek."""
+    return read_local_identity(path).get("difficulty_channel", DEFAULT_CHANNEL)
+
+
+def file_core_difficulty(record: DifficultyRecord, channel: str | None = None) -> str:
     """Non-author path: submit the difficulty to a channel the machine already has write to.
-    Returns the channel-native handle. NEVER edits Core."""
-    return get_channel(channel).submit(record)
+    Returns the channel-native handle (ST key or GitHub issue URL). NEVER edits Core."""
+    ch = channel if channel is not None else read_configured_channel()
+    return get_channel(ch).submit(record)

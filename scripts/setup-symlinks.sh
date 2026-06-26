@@ -148,6 +148,9 @@ chmod +x "$REPO/scripts/hook-"*.py
 # machine-local ~/.claude/settings.json; machine-specific keys are preserved.
 "$REPO/scripts/apply-settings.sh"
 
+# Create ~/.claude/agent-identity.local (per-machine difficulty channel) if absent.
+"$REPO/scripts/configure-identity.sh"
+
 # Wire the canonical reminder-hook set into settings.json. Hooks are a
 # machine-specific key (apply-settings.sh does not merge them), so the repo's
 # hook scripts stay dead without this idempotent installer.

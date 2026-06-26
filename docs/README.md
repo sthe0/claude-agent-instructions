@@ -54,6 +54,7 @@ Setup and distribution, the git workflow, the verification-guard suite, and laye
 - [The git workflow](operations/git-workflow.md) — the instruction-repo git discipline: pull before editing, commit after a change, push only after explicit confirmation.
 - [Verification guards](operations/guards.md) — the verify / lint suite that keeps the repo internally consistent, and how the pre-commit and standalone checks compose.
 - [Maintaining a layer over a moving Core](operations/layer-maintenance.md) — the rebase and rerere recipe for keeping a Team or Personal layer current as Core evolves.
+- [Difficulty-channel onboarding](operations/difficulty-channel-onboarding.md) — configuring the Core-difficulty filing channel on a new machine (credentials, channel selection, the file-difficulty.py CLI, and the author-side digest).
 
 ## Decisions — architecture decision records
 

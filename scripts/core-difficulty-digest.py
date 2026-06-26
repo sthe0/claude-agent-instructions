@@ -152,7 +152,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--since", default=None)
     p.add_argument("--threshold", type=int, default=None, help="override mass threshold")
     a = p.parse_args(argv)
-    channels = a.channels or ["startrek"]  # implemented channels only; stubs added explicitly
+    channels = a.channels or ["startrek", "github"]  # both implemented channels by default
     threshold = read_mass_threshold(override=a.threshold)
     records = pull_all(channels, since=a.since)
     print(_format(digest(records, threshold)))

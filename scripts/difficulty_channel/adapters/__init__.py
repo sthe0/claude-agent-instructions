@@ -6,6 +6,7 @@ Importing this package registers the adapters with the port registry.
 """
 
 from .startrek import StartrekChannel
-from .external import ExternalChannel
+from .github import GitHubChannel
+from .external import ExternalChannel  # back-compat alias for GitHubChannel
 
-__all__ = ["StartrekChannel", "ExternalChannel"]
+__all__ = ["StartrekChannel", "GitHubChannel", "ExternalChannel"]

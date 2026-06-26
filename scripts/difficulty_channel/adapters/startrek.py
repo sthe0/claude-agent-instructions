@@ -1,12 +1,12 @@
 """Startrek (Yandex Tracker) adapter for the difficulty channel.
 
-Maps a DifficultyRecord onto an issue in queue CORE-INSTR — the surface an internal
+Maps a DifficultyRecord onto an issue in queue OOSEVENREPORT — the surface an internal
 contributor already has write access to (never the protected Core). The mapping is a pure
 function (``record_to_fields``) so it is tested without network; the actual POST goes through
 an injectable HTTP client so the test substitutes a fake. Auth uses ~/.tracker-token (the
 documented Startrek *write* credential; $OAUTH_TOKEN is read-only).
 
-No live POST is performed during construction or in tests — creating CORE-INSTR issues is an
+No live POST is performed during construction or in tests — creating OOSEVENREPORT issues is an
 outward effect deferred to an explicit, separately-authorized run.
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ from typing import Callable
 
 from ..port import DifficultyChannel, DifficultyRecord, Severity, register_channel
 
-QUEUE = "CORE-INSTR"
+QUEUE = "OOSEVENREPORT"
 API_BASE = "https://st-api.yandex-team.ru/v2"
 TOKEN_PATH = Path.home() / ".tracker-token"
 
@@ -68,7 +68,7 @@ def _read_token() -> str:
 
 
 class StartrekChannel(DifficultyChannel):
-    """Submits difficulties as CORE-INSTR issues. The HTTP client is injectable for tests."""
+    """Submits difficulties as OOSEVENREPORT issues. The HTTP client is injectable for tests."""
 
     def __init__(
         self,
