@@ -52,6 +52,10 @@ Loaded into every session via `@~/.claude/memory-global/MEMORY.md` import in `CL
 
 Workflow-level permissions (separate from memory): `~/claude-agent-instructions/permissions/` + `scripts/permissions-cli.py`. Not a memory leaf — operational config.
 
+## Layers (ADR-0001 substrate)
+
+- [Team layer sub-index](leaves/team/MEMORY.md) — scope/authority of the Team precedence layer (EDIT, shared via the project repo) in the `Core < Team < Personal` ladder; the precedence + replace-vs-merge contract is in `docs/instruction-layering.md`, the rebase/`rerere` maintenance recipe in `docs/layer-maintenance.md`.
+
 ## System knowledge
 
 - [System-knowledge sub-index](leaves/system-knowledge/MEMORY.md) — durable facts about systems, processes, org structure, codebase architecture that aren't self-evident; recording criteria in `~/.claude/CLAUDE.md` § Memory.

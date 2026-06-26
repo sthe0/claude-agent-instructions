@@ -63,21 +63,16 @@ ordering inside a `MEMORY.md` index. For these, pin the insertion operation and 
   altered results). Pin the strategy explicitly and treat any change to it as a breaking change to
   the layering contract, not a transparent upgrade.
 
-## Maintaining a Personal layer over a moving Core
+## Maintaining a layer over a moving Core
 
-The personal layer is kept current against the evolving Core with:
-
-```bash
-git pull --autostash --rebase
-```
-
-plus **`git rerere`** enabled, so a personal override rebased onto a moving Core does not force the
-developer to re-resolve the *identical* recurring conflict on every rebase. Caveat: `rerere` only
-replays *identical* recurring resolutions — if Core alters the same hunk, a human (or the active
-synthesizer of ADR-0001 § *Active synthesizer*) is still required.
+A Team or Personal layer is kept current against the evolving Core with `git pull --autostash
+--rebase` + `git rerere` — the full recipe, the one-time setup, and the `rerere` identical-conflict
+caveat live in `docs/layer-maintenance.md` (kept in one place to avoid drift).
 
 ## See also
 
 - `docs/adr/0001-consensus-architecture.md` — the decision this contract implements.
+- `docs/layer-maintenance.md` — the rebase/`rerere` maintenance recipe for Team/Personal layers.
+- `docs/personal-layer.md` / `memory-global/leaves/team/MEMORY.md` — the Personal and Team layer scopes.
 - `memory-global/leaves/memory-usage.md` — the "one fact = one file" leaf convention that makes the
   leaf the unit of replacement.
