@@ -68,7 +68,7 @@ start → classify → plan → submit-plan → approve → partition → next-s
 | `reset` | Re-arm for a new task at a task boundary; refuses mid-substantive without `--force`. |
 | `classify` | Record weight class + route (`CLASSIFIED → ROUTED`). |
 | `plan` | Enter planning for a substantive task (`ROUTED → PLANNING`). |
-| `submit-plan` | Mark the plan authored and ready for approval (`PLANNING → PLAN_READY`). |
+| `submit-plan` | Mark the plan authored and ready for approval (`PLANNING → PLAN_READY`). A TOML plan may set `[meta] repo_root` — the directory every stage's `verify_command` runs in (as `cd <repo_root> && <cmd>`); unset, commands inherit the invoker's cwd, so their paths must then be absolute. |
 | `approve` | Pass the plan-approval gate; `--by` names the approver (`PLAN_READY → APPROVED`). |
 | `partition` | Record the M1–M4 **delivery-partition** assessment — into how many independently-shippable, separately-reviewable units (PRs/tickets) the approved plan is cut. Delivery segmentation, **not** the planner's step-level decomposition (`APPROVED → PARTITIONED`). |
 | `next-stage` | Select the next ready stage and enter execution (`→ EXECUTING`). |
