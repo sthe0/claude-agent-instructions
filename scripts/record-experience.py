@@ -48,6 +48,19 @@ def experience_dir(scope: str, project_dir: str | None) -> Path:
     return REPO_ROOT / "memory-global/leaves/experience"
 
 
+# The ranking section per tier: experience leaves rank on their `## Difficulty`,
+# principles on their `## Principle`. The term-counting ranking itself is identical.
+TIER_SECTION = {"experience": "Difficulty", "principles": "Principle"}
+
+
+def search_root(scope: str, project_dir: str | None, tier: str) -> Path:
+    # principles are a global-only tier (ADR-0001 generality gradient); experience
+    # keeps its existing global/project split.
+    if tier == "principles":
+        return REPO_ROOT / "memory-global/leaves/principles"
+    return experience_dir(scope, project_dir)
+
+
 # --------------------------------------------------------------------------
 # section helpers
 # --------------------------------------------------------------------------
@@ -173,12 +186,14 @@ def update_subindex(exp_dir: Path, date: str, title: str, filename: str,
 # subcommands
 # --------------------------------------------------------------------------
 def cmd_search(a) -> int:
-    exp_dir = experience_dir(a.scope, a.project_dir)
+    tier = getattr(a, "tier", "experience")
+    root = search_root(a.scope, a.project_dir, tier)
+    section = TIER_SECTION[tier]
     terms = [t.lower() for t in re.findall(r"\w+", a.keywords)]
     if not terms:
         sys.exit("search needs keywords")
     scored: list[tuple[int, Path, str]] = []
-    for leaf in sorted(exp_dir.glob("*.md")):
+    for leaf in sorted(root.glob("*.md")):
         if leaf.name == "MEMORY.md":
             continue
         text = leaf.read_text(encoding="utf-8")
@@ -187,17 +202,19 @@ def cmd_search(a) -> int:
         if fm:
             dm = re.search(r"^description:\s*(.*)$", fm.group(1), re.MULTILINE)
             desc = dm.group(1) if dm else ""
-        diff_span = section_span(text, "Difficulty")
-        diff = text[diff_span[0]:diff_span[1]] if diff_span else ""
-        hay = (desc + " " + diff).lower()
+        sec_span = section_span(text, section)
+        sec = text[sec_span[0]:sec_span[1]] if sec_span else ""
+        hay = (desc + " " + sec).lower()
         score = sum(hay.count(t) for t in terms)
         if score:
             scored.append((score, leaf, desc.strip()))
     scored.sort(key=lambda x: -x[0])
+    noun = "principle" if tier == "principles" else "experience leaf"
     if not scored:
-        print("no analogous experience leaf found — record a NEW leaf")
+        print(f"no analogous {noun} found — record a NEW leaf")
         return 0
-    print(f"analogous leaves (extend one instead of duplicating):")
+    verb = "ground a stage in" if tier == "principles" else "extend"
+    print(f"analogous {noun}s ({verb} one instead of duplicating):")
     for score, leaf, desc in scored[:8]:
         print(f"  [{score:>3}] {leaf.name}\n        {desc}")
     return 0
@@ -277,6 +294,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("search")
     add_scope(s)
+    s.add_argument(
+        "--tier",
+        choices=["experience", "principles"],
+        default="experience",
+        help="which leaf tier to search: experience (default) or the principles generality tier",
+    )
     s.add_argument("keywords")
     s.set_defaults(func=cmd_search)
 
