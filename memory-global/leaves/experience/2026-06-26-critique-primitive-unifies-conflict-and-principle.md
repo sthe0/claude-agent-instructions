@@ -33,6 +33,16 @@ When the agent system is distributed to multiple developers, edits to its instru
 - **Reuse discipline that held:** one ranking engine — `tokenize()`/`term_score()` extracted into `record-experience.py`, reused verbatim by digest clustering and synthesizer; no second similarity engine was written. The same primitive backs search-before-record, cluster-by-functional-ground, and the critique commonality/difference split.
 - Mechanical: every new `scripts/*.py` with a shebang needs `chmod +x` (lint-hooks-executable) + a `scripts/README.md` row (verify-readme); package modules (no shebang) need neither.
 
+
+### 2026-06-27 — principle-induction recurrence signal made machine-computable
+- Where it arose: Implementing the principle-induction arm of ADR-0001: accumulated difficulty recurrence produced no machine signal, so 'lift a recurring difficulty into a principle' never fired automatically and fragmented similar leaves were invisible to each other (the clustering/mass/flag code ran only over external channels, never the experience corpus).
+- Working plan: Factor the single cluster-by-functional-ground primitive into record-experience.py (one ranking/clustering engine); add promote-scan (clusters corpus, sums Σ '### ' contexts derived from the body, flags clusters >= principle-promotion-threshold=3 [Rule of Three] as principle/v1 candidates, surfaces fragmentation); add a deterministic cmd_new fragmentation guard (refuse forking an analogous leaf at _similarity >= JOIN_RATIO unless --justify-new). Key lessons: count derived from body not a frontmatter field (no drift); JOIN_RATIO=0.6 catches near-duplicates (lexical overlap) only, not mere topical similarity, so it is a speed-bump atop search-before, not a replacement; reuse the existing ranking engine rather than a second clustering copy.
+
+## Common core & variations
+**Common:** Principle induction from experience is the critique primitive (commonality across recurrences) made operational: a recurrence COUNT over functional-ground clusters is the machine signal that drives promotion; the same _similarity/JOIN_RATIO clusters, guards new, and (via the digest) flags Core difficulties — one engine.
+
+**Variations:** ADR-0001 establishes the unifying primitive conceptually; this task makes the experience→principle promotion signal computable (promote-scan) and adds write-time anti-fragmentation (cmd_new guard). Threshold semantics differ from the digest's severity-mass: recurrence count (rule-of-three) vs Σ severity.
+
 ## Cost
 manager in-thread, engine-driven (design: multiple reset/classify/plan/approve/partition spine runs; implementation: 14-stage per-stage next-stage/verify/commit/record-result loop), one independent `code-reviewer` spawn at final verification (2 blocking + 6 non-blocking findings, all addressed). Design commits bd1dc0b, d9b77da, 8568a84, 51f623a; implementation shipped as 4 logical slices (S1–S4) over ~14 commits ending abc3560. All pushed to origin/main. 638 tests green, verify-all OK.
 
