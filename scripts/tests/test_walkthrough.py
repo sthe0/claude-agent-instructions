@@ -95,6 +95,33 @@ def test_full_substantive_cycle(store, fixtures_dir):
     assert final.all_stages_passed()
 
 
+def test_submit_plan_carries_repo_root_into_state(store, tmp_path):
+    """A plan declaring [meta] repo_root sets state.repo_root; absence leaves it None."""
+    sid = "rr"
+    plan = tmp_path / "p.toml"
+    plan.write_text(
+        '[meta]\n'
+        'task_id = "rr"\n'
+        'repo_root = "/abs/repo"\n'
+        '[[stage]]\n'
+        'index = 1\n'
+        'title = "x"\n'
+        'executor = "in_thread"\n'
+        'expected_result_image = "i"\n'
+        'done_criterion = "c"\n',
+        encoding="utf-8",
+    )
+    cli.cmd_start(ns(session=sid, task="rr", goal="g", done_criterion="dc",
+                     criterion_type="measurable", recursion_depth=0), store=store)
+    cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
+                        wall_clock_min=60, tracker_key=None, architectural=True,
+                        external_effect=False, new_dependency=False,
+                        public_api_change=False), store=store)
+    cli.cmd_plan(ns(session=sid), store=store)
+    cli.cmd_submit_plan(ns(session=sid, plan=str(plan)), store=store)
+    assert store.load(sid).repo_root == "/abs/repo"
+
+
 def test_small_change_skips_plan_gate(store):
     sid = "sc"
     cli.cmd_start(ns(session=sid, task="tiny", goal="fix typo",

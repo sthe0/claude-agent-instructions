@@ -102,6 +102,31 @@ def test_verify_command_absent_defaults():
     assert doc.stages[0].criterion.expected_exit == 0
 
 
+# --- optional plan-level repo_root (verify_command working directory) ---
+
+def test_repo_root_parsed():
+    data = {
+        "meta": {"task_id": "t", "repo_root": "/abs/repo"},
+        "stage": [{
+            "index": 1, "title": "x", "executor": "in_thread",
+            "expected_result_image": "i", "done_criterion": "c",
+        }],
+    }
+    assert parse_plan(data).meta.repo_root == "/abs/repo"
+
+
+def test_repo_root_absent_defaults_none():
+    """A plan without repo_root parses with None — byte-identical to legacy plans."""
+    data = {
+        "meta": {"task_id": "t"},
+        "stage": [{
+            "index": 1, "title": "x", "executor": "in_thread",
+            "expected_result_image": "i", "done_criterion": "c",
+        }],
+    }
+    assert parse_plan(data).meta.repo_root is None
+
+
 # --- 8-element activity-structure (weight_class = "substantive") ---
 
 def _minimal_stage(index=1, **overrides):

@@ -12,6 +12,10 @@ TOML shape (minimal):
     goal = "..."
     done_criterion = "pytest green ..."
     criterion_type = "measurable"        # or "acceptance_review"
+    repo_root = "/abs/path/to/repo"      # optional; each verify_command runs here
+                                         # (cd repo_root && cmd). Unset -> inherit
+                                         # invoker cwd, so verify paths must then be
+                                         # absolute. Byte-identical to pre-field default.
 
     [[stage]]
     index = 1
@@ -74,6 +78,10 @@ class PlanMeta:
     done_criterion: str = ""
     criterion_type: str = CriterionType.MEASURABLE.value
     weight_class: str | None = None
+    # Directory each stage's verify_command runs in. None (default) inherits the
+    # invoker's cwd — byte-identical to pre-repo_root behaviour. Set it so a plan's
+    # repo-relative verify paths resolve no matter where the engine is driven from.
+    repo_root: str | None = None
 
 
 @dataclass
@@ -197,6 +205,7 @@ def parse_plan(data: dict) -> PlanDoc:
         done_criterion=str(m.get("done_criterion", "")),
         criterion_type=str(m.get("criterion_type", CriterionType.MEASURABLE.value)),
         weight_class=str(raw_weight) if raw_weight is not None else None,
+        repo_root=str(m["repo_root"]) if m.get("repo_root") else None,
     )
 
     raw_stages = data.get("stage", [])

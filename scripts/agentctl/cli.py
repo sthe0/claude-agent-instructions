@@ -308,6 +308,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     if plan_path.endswith(".toml"):
         doc = load_plan(plan_path)
         state.stages = doc.stages
+        state.repo_root = doc.meta.repo_root
         if not state.goal:
             state.goal = doc.meta.goal
         if not state.overall_done_criterion:
@@ -806,6 +807,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
 
     # substantive: re-arm the plan-approval gate, reload stages, return to PLAN_READY
     state.stages = new.stages
+    state.repo_root = new.meta.repo_root
     state.plan_path = args.plan
     state.plan_verified = True
     state.overall_done_criterion = new.meta.done_criterion or state.overall_done_criterion

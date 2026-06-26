@@ -352,6 +352,10 @@ class SessionState:
     overall_done_criterion: str = ""
     overall_criterion_type: str = CriterionType.MEASURABLE.value
     weight_class: str | None = None
+    # Directory the engine runs each stage's verify_command in (from plan [meta].
+    # repo_root). None inherits the invoker's cwd — byte-identical to the pre-field
+    # behaviour, so live states predating the field load unchanged.
+    repo_root: str | None = None
     route: str | None = None
     node: str = Node.CLASSIFIED.value
     blocked_from: str | None = None
