@@ -4,20 +4,10 @@ The port is transport-agnostic: these tests exercise the in-memory NullChannel d
 never external I/O. They pin the record schema (the single join contract), the severity enum,
 the submit/pull(since) round-trip, and config-routed registry resolution.
 """
-import importlib.util
-from pathlib import Path
-
+# scripts/ is on sys.path via conftest.py, so the package imports normally.
 import pytest
 
-_PKG = Path(__file__).resolve().parents[1] / "difficulty_channel"
-_SPEC = importlib.util.spec_from_file_location(
-    "difficulty_channel", _PKG / "__init__.py", submodule_search_locations=[str(_PKG)]
-)
-dc = importlib.util.module_from_spec(_SPEC)
-import sys
-
-sys.modules["difficulty_channel"] = dc
-_SPEC.loader.exec_module(dc)
+import difficulty_channel as dc
 
 
 def _rec(ts="2026-06-26T00:00:00", ground="gate denies a legit write", sev=dc.Severity.HIGH):
