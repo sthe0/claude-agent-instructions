@@ -212,33 +212,9 @@ The key triggers the `tracker-management` skill, which loads the ticket's contex
 
 ## Skills
 
-A **skill** is a packaged procedure or role under `skills/`. Flat skills run inline; specializations are spawned as separate processes.
+A **skill** is a packaged procedure or role under `skills/`. Flat skills run **inline** in the current process; specializations are **spawned** as separate `claude -p` processes per plan step (canonical path `skills/specializations/<name>/SKILL.md`, symlinked flat into `~/.claude/skills/<name>/` by `setup-symlinks.sh`).
 
-### Flat skills (invoked inline in the current process)
-
-<!-- inventory:skills:begin -->
-| name | Triggers (summary) | File |
-|---|---|---|
-| `ccgram-management` | Manage the CCGram (Telegram) bridge — send / read messages, session mapping | [skills/ccgram-management/SKILL.md](skills/ccgram-management/SKILL.md) |
-| `overcome-difficulty` | Reality diverges from the plan; verification failed; repeated error; missing observable | [skills/overcome-difficulty/SKILL.md](skills/overcome-difficulty/SKILL.md) |
-| `self-improvement` | User correction or feedback about agent behavior | [skills/self-improvement/SKILL.md](skills/self-improvement/SKILL.md) |
-| `tracker-management` | User mentions a ticket / issue / tracker, or a ticket key like `ABC-123` | [skills/tracker-management/SKILL.md](skills/tracker-management/SKILL.md) |
-<!-- inventory:skills:end -->
-
-### Specialization skills (spawned as `claude -p` per plan step)
-
-Canonical path in repo: `skills/specializations/<name>/SKILL.md`. Symlinked flat into `~/.claude/skills/<name>/` by `setup-symlinks.sh`.
-
-<!-- inventory:specializations:begin -->
-| name | Spawns when a plan step calls for | File |
-|---|---|---|
-| `code-reviewer` | Maintainability / readability / reusability review of a diff (self-review or independent) | [skills/specializations/code-reviewer/SKILL.md](skills/specializations/code-reviewer/SKILL.md) |
-| `developer` | Writing, refactoring, debugging, reviewing production code | [skills/specializations/developer/SKILL.md](skills/specializations/developer/SKILL.md) |
-| `planner` | Decomposition, stages, dependencies, risks, done criteria | [skills/specializations/planner/SKILL.md](skills/specializations/planner/SKILL.md) |
-| `tech-writer` | Russian README / documentation authoring; polishing plans & long comments | [skills/specializations/tech-writer/SKILL.md](skills/specializations/tech-writer/SKILL.md) |
-| `thinker` | Independent reasoning check on a non-trivial chain | [skills/specializations/thinker/SKILL.md](skills/specializations/thinker/SKILL.md) |
-| `yandex-cloud-expert` | Yandex Cloud / `yc` operations | [skills/specializations/yandex-cloud-expert/SKILL.md](skills/specializations/yandex-cloud-expert/SKILL.md) |
-<!-- inventory:specializations:end -->
+The full, machine-checked inventory of both kinds — every flat skill and every specialization, with triggers and file links — lives in [docs/components/skills.md](docs/components/skills.md).
 
 Full spawn template and return-marker handling: [CLAUDE.md](CLAUDE.md) § Spawning specialists.
 

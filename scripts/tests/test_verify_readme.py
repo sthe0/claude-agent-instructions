@@ -1,8 +1,9 @@
 """Tests for verify-readme.py sentinel-region verifier.
 
 The scripts inventory lives in scripts/README.md (link targets relative to
-scripts/), the flat-skills and specializations inventories live in the root
-README.md. The tests build that split layout under tmp_path.
+scripts/); the flat-skills and specializations inventories live in
+docs/components/skills.md (link targets relative to docs/components/, i.e.
+prefixed with ../../). The tests build that split layout under tmp_path.
 """
 from __future__ import annotations
 
@@ -57,7 +58,9 @@ def _write_readmes(
     extra_script_row: str = "",
     missing_marker: str = "",
 ) -> None:
-    """Write scripts/README.md (scripts region) and README.md (skills+specs)."""
+    """Write scripts/README.md (scripts region) and docs/components/skills.md
+    (skills + specs regions, File links prefixed ../../ to resolve from
+    docs/components/ back to the repo root)."""
 
     def scripts_region() -> str:
         rows = "| Script | Purpose |\n|---|---|\n"
@@ -70,21 +73,23 @@ def _write_readmes(
     def skills_region() -> str:
         rows = "| name | Triggers | File |\n|---|---|---|\n"
         for sk in sorted(skills):
-            rows += f"| `{sk}` | test trigger | [skills/{sk}/SKILL.md](skills/{sk}/SKILL.md) |\n"
+            rows += f"| `{sk}` | test trigger | [../../skills/{sk}/SKILL.md](../../skills/{sk}/SKILL.md) |\n"
         return f"<!-- inventory:skills:begin -->\n{rows}<!-- inventory:skills:end -->\n"
 
     def specs_region() -> str:
         rows = "| name | Spawns when | File |\n|---|---|---|\n"
         for sp in sorted(specs):
-            rows += f"| `{sp}` | test | [skills/specializations/{sp}/SKILL.md](skills/specializations/{sp}/SKILL.md) |\n"
+            rows += f"| `{sp}` | test | [../../skills/specializations/{sp}/SKILL.md](../../skills/specializations/{sp}/SKILL.md) |\n"
         return f"<!-- inventory:specializations:begin -->\n{rows}<!-- inventory:specializations:end -->\n"
 
-    # Root README: skills + specializations regions.
-    root_skills = "" if missing_marker == "skills" else skills_region()
-    root_specs = "" if missing_marker == "specializations" else specs_region()
-    (tmp / "README.md").write_text(
-        f"# Test README\n\n{root_skills}\n{root_specs}\n"
-    )
+    (tmp / "README.md").write_text("# Test README\n")
+
+    # docs/components/skills.md: skills + specializations regions.
+    comp_skills = "" if missing_marker == "skills" else skills_region()
+    comp_specs = "" if missing_marker == "specializations" else specs_region()
+    comp = tmp / "docs" / "components"
+    comp.mkdir(parents=True, exist_ok=True)
+    (comp / "skills.md").write_text(f"# Skills\n\n{comp_skills}\n{comp_specs}\n")
 
     # scripts/README.md: scripts region (markers omitted when missing_marker).
     if missing_marker == "scripts":
@@ -138,3 +143,32 @@ def test_missing_marker_returns_1(tmp_path):
     scripts, skills, specs = _make_tree(tmp_path)
     _write_readmes(tmp_path, scripts, skills, specs, missing_marker="scripts")
     assert main(["--root", str(tmp_path)]) == 1
+
+
+def test_synthesize_row_path_is_region_relative():
+    """skills/specializations rows resolve from the region file's own dir.
+
+    REGION_FILES maps both to docs/components/skills.md, two levels below the
+    repo root, so a synthesized File link must be prefixed with ../../ to point
+    back at the repo-root-relative skills/ tree."""
+    sk = _mod._synthesize_row("my-skill", "skills")
+    assert "[../../skills/my-skill/SKILL.md](../../skills/my-skill/SKILL.md)" in sk
+    sp = _mod._synthesize_row("my-spec", "specializations")
+    assert (
+        "[../../skills/specializations/my-spec/SKILL.md]"
+        "(../../skills/specializations/my-spec/SKILL.md)" in sp
+    )
+
+
+def test_fix_synthesizes_region_relative_skill_row(tmp_path):
+    """--fix adds a missing skill with a region-relative (cross-ref-correct) link."""
+    scripts, skills, specs = _make_tree(tmp_path)
+    _write_readmes(tmp_path, scripts, skills, specs)
+    # New skill on FS, not yet in the inventory.
+    (tmp_path / "skills" / "fresh-skill").mkdir()
+    assert main(["--root", str(tmp_path)]) == 1
+    assert main(["--root", str(tmp_path), "--fix"]) == 0
+    content = (tmp_path / "docs" / "components" / "skills.md").read_text()
+    assert "(../../skills/fresh-skill/SKILL.md)" in content
+    # A repo-root-relative path would be a broken cross-ref from docs/components/.
+    assert "(skills/fresh-skill/SKILL.md)" not in content

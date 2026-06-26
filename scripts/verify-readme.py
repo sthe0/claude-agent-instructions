@@ -20,8 +20,8 @@ REGIONS = ("scripts", "skills", "specializations")
 # is heavy and operational, so it lives in scripts/README.md, not the conceptual root README.
 REGION_FILES = {
     "scripts": "scripts/README.md",
-    "skills": "README.md",
-    "specializations": "README.md",
+    "skills": "docs/components/skills.md",
+    "specializations": "docs/components/skills.md",
 }
 
 _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
@@ -124,12 +124,16 @@ def _synthesize_row(ident: str, name: str) -> str:
     if name == "scripts":
         base = Path(ident).name
         return f"| [{base}]({ident}) | TODO |"
-    elif name == "skills":
-        path = f"skills/{ident}/SKILL.md"
-        return f"| `{ident}` | TODO | [{path}]({path}) |"
-    else:
-        path = f"skills/specializations/{ident}/SKILL.md"
-        return f"| `{ident}` | TODO | [{path}]({path}) |"
+    # skills / specializations: the File link must resolve relative to the
+    # region file's own directory (verify-cross-refs resolves it there), so
+    # prefix the repo-root-relative target with one `../` per directory level
+    # of REGION_FILES[name]. Derived, not a literal, so it stays correct if the
+    # region file moves again.
+    region_dir = os.path.dirname(REGION_FILES[name])
+    prefix = "../" * len(Path(region_dir).parts)
+    subdir = "skills" if name == "skills" else "skills/specializations"
+    path = f"{prefix}{subdir}/{ident}/SKILL.md"
+    return f"| `{ident}` | TODO | [{path}]({path}) |"
 
 
 def _fix_region(

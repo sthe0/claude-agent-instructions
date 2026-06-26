@@ -37,6 +37,15 @@ The task lifecycle and the sub-processes it invokes: planning, difficulty/replan
 
 The skills, agents, hooks, scripts, memory scopes, settings, and the Cursor mirror.
 
+- [Skills](components/skills.md) — the machine-checked inventory of flat skills (inline) and specializations (spawned).
+- [Agents and the spawn model](components/agents.md) — the specialization roles the manager delegates to, and how each is spawned.
+- [Hooks](components/hooks.md) — the harness-run scripts that enforce the non-skippable gates and fire the reminders.
+- [Scripts](components/scripts.md) — the coordination engine, the verification guards, the setup wiring, and the experience tooling.
+- [Memory scopes](components/memory-scopes.md) — the three scopes (personal / global / project) and the shared leaf-and-index shape.
+- [Settings and permissions](components/settings-and-permissions.md) — the layered settings.json, the permissions CLI, and the action taxonomy.
+- [The Cursor mirror](components/cursor-mirror.md) — the thin Cursor rule and its sync discipline.
+- [Skills (symlinks)](components/skills-symlinks.md) — how the runtime `~/.claude/skills/` symlink tree is laid out.
+
 ## Operations — running and maintaining the repo
 
 Setup and distribution, the git workflow, the verification-guard suite, and layer maintenance.
