@@ -50,7 +50,7 @@ Each node is a phase in the task lifecycle (`Node` in `state.py`). The *route* p
 | `VERIFYING` | A stage result was recorded; checking it, then choosing next stage vs final. |
 | `RESOLUTION` | All stages PASSED; **held at the resolution gate** awaiting user confirmation. |
 | `RESOLVED` | User confirmed the task is done (terminal). |
-| `DIAGNOSING` | A stage FAILED: the **overcome-difficulty** sub-spine. The engine runs `declare → investigate → critique` (filling the `Difficulty` record) and **blocks `replan` until the record is complete** (`gates.difficulty_blockers`). `replan` is the sole exit — back to `VERIFYING` to retry, or to `PLAN_READY` for a substantive re-plan. The *cognition* of each phase lives in the `overcome-difficulty` skill. |
+| `DIAGNOSING` | A stage FAILED: the **overcome-difficulty** sub-spine. The engine runs `declare → investigate → critique` (filling the `Difficulty` record) and **blocks `replan` until the record is complete** (`gates.difficulty_blockers`). When `critique` records the structured similarities/differences split, `replan` additionally enforces a **coverage gate** (`gates.replan_coverage_blockers`): every named similarity must reappear as a stage condition/invariant and naming any difference forces a means/method to change. `replan` is the sole exit — back to `VERIFYING` to retry, or to `PLAN_READY` for a substantive re-plan. The *cognition* of each phase lives in the `overcome-difficulty` skill. |
 | `BLOCKED` | A structural blocker (spawn refusal, escalation) interrupted the flow; `unblock` / `replan` returns to the prior node. |
 
 ## Commands
@@ -74,10 +74,10 @@ start → classify → plan → submit-plan → approve → partition → next-s
 | `next-stage` | Select the next ready stage and enter execution (`→ EXECUTING`). |
 | `dispatch` | At `EXECUTING`, route the active stage to its actor (`in_thread` / `spawn:<specialization>`) and return the cognitive leaf + return-marker handling; no node change. |
 | `record-result` | Record a stage's actual result + status, plus an optional general `--control` attestation (how element #3, the control criterion, was met). PASSED → `VERIFYING`; FAILED → `DIAGNOSING` (enter the overcome-difficulty sub-spine). A `spawn:developer` stage is **refused** PASSED without a non-empty `--control` — see *Control attestation* below. |
-| `declare` / `investigate` / `critique` | In `DIAGNOSING`, fill the three sections of the `Difficulty` record **in order** (the engine refuses out-of-order calls). Each records one phase's artifact; the content is the `overcome-difficulty` skill's cognition. |
+| `declare` / `investigate` / `critique` | In `DIAGNOSING`, fill the three sections of the `Difficulty` record **in order** (the engine refuses out-of-order calls). Each records one phase's artifact; the content is the `overcome-difficulty` skill's cognition. `critique` also accepts the structured split `--invariant-to-preserve` / `--difference-to-remove` (both repeatable) that the `replan` coverage gate checks. |
 | `verify-final` | Pass the final-verification gate: all stages PASSED + the plan's *Final verification* (`VERIFYING → RESOLUTION`). |
 | `resolve` | Pass the resolution gate; `--by` names the confirmer (`RESOLUTION → RESOLVED`). |
-| `replan` | Apply a revised `--plan`. **Precondition-gated** in `DIAGNOSING`: refused until the `Difficulty` record is complete. A refinement retries the re-armed stage (`→ VERIFYING`); a substantive change re-arms the approval gate (`→ PLAN_READY`). |
+| `replan` | Apply a revised `--plan`. **Precondition-gated** in `DIAGNOSING`: refused until the `Difficulty` record is complete, and — when the critique recorded a split — until the **coverage gate** passes (similarities carried into conditions/invariants; a means/method changed for the declared differences). A means/method/conditions/invariants-only delta is a **refinement** (retries the re-armed stage, `→ VERIFYING`); executor/done-criterion changes are **substantive** (re-arm the approval gate, `→ PLAN_READY`). |
 | `block` / `unblock` | Mark a difficulty (`any → BLOCKED`) and return to the prior node. |
 | `resolve-permission` | Record the decision on a specialist's `PERMISSION-REQUEST`. |
 | `status` | Inspect the current node + directive; no transition. |

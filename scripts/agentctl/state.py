@@ -147,9 +147,18 @@ class Investigation:
 
 @dataclass
 class Critique:
-    """Phase 3: the functional ground and the replanning task it induces."""
+    """Phase 3: the functional ground and the replanning task it induces.
+
+    The similarities/differences split the overcome-difficulty skill produces is
+    recorded structurally so the engine can verify replan COVERAGE (gates.
+    replan_coverage_blockers): similarities -> conditions/invariants that must be
+    PRESERVED, differences -> means/method that must CHANGE. Both default to []
+    so a critique that omits them (and any pre-change persisted state) loads and
+    replans exactly as before."""
     functional_ground: str
     replanning_task: str
+    invariants_to_preserve: list[str] = field(default_factory=list)
+    differences_to_remove: list[str] = field(default_factory=list)
 
 
 @dataclass

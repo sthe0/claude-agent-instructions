@@ -305,9 +305,16 @@ def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
     """Return 'no_change' | 'refinement' | 'substantive'."""
     if _structural_signature(old) != _structural_signature(new):
         return "substantive"
-    # structurally identical — any prose change (titles, expected-result images) is a refinement
-    old_prose = [(s.index, s.title, s.subject.result) for s in old.stages]
-    new_prose = [(s.index, s.title, s.subject.result) for s in new.stages]
-    if old_prose != new_prose or old.meta.goal != new.meta.goal:
+    # Structurally identical — any other change is a refinement. The means/method/
+    # conditions/invariants are included so that adjusting a stage's MEANS to remove
+    # a difficulty (the overcome-difficulty replan) classifies as 'refinement', not
+    # 'no_change' — otherwise the corrected means would be silently dropped.
+    def _prose(doc: PlanDoc):
+        return [
+            (s.index, s.title, s.subject.result, s.subject.invariants,
+             s.means.means, s.means.method, s.conditions)
+            for s in doc.stages
+        ]
+    if _prose(old) != _prose(new) or old.meta.goal != new.meta.goal:
         return "refinement"
     return "no_change"

@@ -73,6 +73,52 @@ def difficulty_blockers(state: SessionState) -> list[str]:
     return []
 
 
+def replan_coverage_blockers(old_doc, new_doc, critique) -> list[str]:
+    """Verify the critique's similarities/differences split is COVERED by the
+    corrected plan — the dataflow, NOT the cognitive item->field mapping (that
+    stays prose: the gate never decides WHICH stage an item belongs to).
+
+      - PRESERVE: every declared similarity (critique.invariants_to_preserve) must
+        appear as a substring of the new plan's conditions + invariants text;
+        missing => a blocker naming the item.
+      - CHANGE: if any difference is declared (critique.differences_to_remove is
+        non-empty), the multiset of (means, method) across the new stages must
+        differ from the old plan's — proof some means/method was re-selected to
+        remove the difference; unchanged => one blocker.
+
+    Declared-item-scoped: empty lists pass vacuously, so a critique that records no
+    split (or, via the cmd_replan guard, a replan with no difficulty present)
+    behaves exactly as before. Membership is plain substring; no fuzzy matching.
+
+    Unlike the two hard gates this takes PlanDocs, not just state — it is therefore
+    NOT registered in GUARDIANS and is called directly from cmd_replan."""
+    out: list[str] = []
+    if critique is None:
+        return out
+    haystack = " \n ".join(
+        part
+        for s in new_doc.stages
+        for part in (s.conditions or "", s.subject.invariants or "")
+    )
+    for item in critique.invariants_to_preserve:
+        if not (item or "").strip():
+            continue
+        if item not in haystack:
+            out.append(
+                f"similarity to preserve not carried into any stage conditions/invariants: {item!r}"
+            )
+    diffs = [d for d in critique.differences_to_remove if (d or "").strip()]
+    if diffs:
+        old_mm = sorted((s.means.means, s.means.method) for s in old_doc.stages)
+        new_mm = sorted((s.means.means, s.means.method) for s in new_doc.stages)
+        if old_mm == new_mm:
+            out.append(
+                "differences_to_remove is non-empty but no stage means/method changed "
+                "— a difference cannot be removed without re-selecting a means/method"
+            )
+    return out
+
+
 # gate name -> guardian predicate
 GUARDIANS = {
     "plan_approval": plan_approval_blockers,

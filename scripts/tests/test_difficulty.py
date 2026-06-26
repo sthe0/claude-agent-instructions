@@ -202,3 +202,48 @@ def test_blockers_reject_blank_hypotheses():
 def test_blockers_accept_well_formed_record():
     s = _diagnosing_with(_complete_difficulty())
     assert gates.difficulty_blockers(s) == []
+
+
+# --- structured critique split: round-trip + backward-compat migration -------
+
+def test_critique_split_round_trips():
+    """A SessionState carrying a Critique with both split lists survives
+    from_json(to_json(s))==s and the lists are preserved verbatim."""
+    crit = Critique(
+        functional_ground="fg",
+        replanning_task="rt",
+        invariants_to_preserve=["legacy plans still load", "round-trip holds"],
+        differences_to_remove=["means: ad-hoc retry", "method: blind reload"],
+    )
+    s = SessionState(
+        session_id="rt1", task_id="t", node=Node.DIAGNOSING.value,
+        difficulty=Difficulty(
+            declaration=Declaration("e", "a", "m"),
+            investigation=Investigation("le", "la", hypotheses=["h1", "h2"]),
+            critique=crit,
+        ),
+    )
+    restored = SessionState.from_json(s.to_json())
+    assert restored == s
+    rc = restored.difficulty.critique
+    assert rc.invariants_to_preserve == ["legacy plans still load", "round-trip holds"]
+    assert rc.differences_to_remove == ["means: ad-hoc retry", "method: blind reload"]
+
+
+def test_old_critique_without_split_migrates_to_empty_lists():
+    """A persisted state whose critique omits the new keys (pre-change JSON) loads
+    with both split lists defaulting to []."""
+    s = SessionState(
+        session_id="mig1", task_id="t", node=Node.DIAGNOSING.value,
+        difficulty=Difficulty(
+            declaration=Declaration("e", "a", "m"),
+            investigation=Investigation("le", "la", hypotheses=["h1", "h2"]),
+            critique=Critique(functional_ground="fg", replanning_task="rt"),
+        ),
+    )
+    data = s.to_dict()
+    data["difficulty"]["critique"].pop("invariants_to_preserve")
+    data["difficulty"]["critique"].pop("differences_to_remove")
+    restored = SessionState.from_dict(data)
+    assert restored.difficulty.critique.invariants_to_preserve == []
+    assert restored.difficulty.critique.differences_to_remove == []

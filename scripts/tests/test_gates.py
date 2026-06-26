@@ -149,3 +149,60 @@ def test_resolution_blockers_empty_when_all_passed():
 def test_blockers_unknown_gate():
     s = SessionState(session_id="x", task_id="t")
     assert gates.blockers(s, "nope") == ["unknown gate 'nope'"]
+
+
+# --- replan coverage gate: similarities preserved, differences change a means ---
+
+def _cov_stage(index, *, means="Edit", method="do", conditions=None, invariants=None):
+    s = {"index": index, "title": "s", "executor": "in_thread",
+         "expected_result_image": "img", "done_criterion": "dc",
+         "means": means, "method": method}
+    if conditions is not None:
+        s["conditions"] = conditions
+    if invariants is not None:
+        s["invariants"] = invariants
+    return s
+
+
+def _cov_doc(stages):
+    from agentctl.plan import parse_plan
+    return parse_plan({"meta": {"task_id": "t"}, "stage": stages})
+
+
+def _critique(**kw):
+    from agentctl.state import Critique
+    base = dict(functional_ground="fg", replanning_task="rt",
+                invariants_to_preserve=[], differences_to_remove=[])
+    base.update(kw)
+    return Critique(**base)
+
+
+def test_coverage_uncovered_similarity_blocks():
+    old = _cov_doc([_cov_stage(1)])
+    new = _cov_doc([_cov_stage(1, conditions="something else")])
+    crit = _critique(invariants_to_preserve=["keep idempotency"])
+    blockers = gates.replan_coverage_blockers(old, new, crit)
+    assert blockers and "keep idempotency" in blockers[0]
+
+
+def test_coverage_unchanged_means_for_declared_difference_blocks():
+    old = _cov_doc([_cov_stage(1, means="Edit", method="do")])
+    new = _cov_doc([_cov_stage(1, means="Edit", method="do")])  # means identical
+    crit = _critique(differences_to_remove=["ad-hoc retry"])
+    blockers = gates.replan_coverage_blockers(old, new, crit)
+    assert blockers and "means/method" in blockers[0]
+
+
+def test_coverage_correct_plan_passes():
+    old = _cov_doc([_cov_stage(1, means="Edit", method="blind reload")])
+    new = _cov_doc([_cov_stage(1, means="Edit", method="mirror working caller",
+                               conditions="keep idempotency")])
+    crit = _critique(invariants_to_preserve=["keep idempotency"],
+                     differences_to_remove=["blind reload"])
+    assert gates.replan_coverage_blockers(old, new, crit) == []
+
+
+def test_coverage_empty_split_passes_even_with_identical_means():
+    old = _cov_doc([_cov_stage(1)])
+    new = _cov_doc([_cov_stage(1)])  # nothing changed
+    assert gates.replan_coverage_blockers(old, new, _critique()) == []

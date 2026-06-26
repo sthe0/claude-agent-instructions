@@ -59,6 +59,15 @@ def test_diff_substantive(fixtures_dir):
     assert diff_plans(a, b) == "substantive"
 
 
+def test_diff_means_only_change_is_refinement(fixtures_dir):
+    """A stage whose means/method change but whose structural signature
+    (executor/depends_on/done_criterion/...) is unchanged is a refinement — the
+    overcome-difficulty replan adjusts the means without re-arming approval."""
+    a = load_plan(fixtures_dir / "plan_two_stage_means.toml")
+    b = load_plan(fixtures_dir / "plan_two_stage_means_changed.toml")
+    assert diff_plans(a, b) == "refinement"
+
+
 # --- optional executable verify_command / expected_exit on a stage criterion ---
 
 def test_verify_command_parsed():

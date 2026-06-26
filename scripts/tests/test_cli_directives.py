@@ -140,6 +140,28 @@ def test_record_result_loop_guard_escalate_marker(store, fixtures_dir):
     assert d.marker == "ESCALATE"
 
 
+def test_critique_persists_the_structured_split(store, fixtures_dir):
+    """A critique invocation carrying repeatable --invariant-to-preserve /
+    --difference-to-remove persists both lists on the Critique."""
+    sid = "csplit"
+    _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
+    cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
+                         m3_severe=False, m4_severe=False), store=store)
+    cli.cmd_next_stage(ns(session=sid), store=store)
+    cli.cmd_record_result(ns(session=sid, status="failed", actual="boom"), store=store)
+    cli.cmd_declare(ns(session=sid, expected="e", actual="a", mismatch="m"), store=store)
+    cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
+                           hypotheses=["h1", "h2"]), store=store)
+    d = cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
+                            invariants_to_preserve=["stage 1 done criterion"],
+                            differences_to_remove=["means: ad-hoc retry"]), store=store)
+    assert d.action == "replan"
+    crit = store.load(sid).difficulty.critique
+    assert crit.invariants_to_preserve == ["stage 1 done criterion"]
+    assert crit.differences_to_remove == ["means: ad-hoc retry"]
+
+
 def test_status_directive_on_empty_session(store):
     d = cli.cmd_status(ns(session="nope"), store=store)
     assert d.ok is True

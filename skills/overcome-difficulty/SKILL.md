@@ -75,12 +75,12 @@ You may legitimately conclude: the **plan itself** was the problem — incomplet
 
 Formulate the **essence** of the local mismatch — split it cleanly into two parts:
 
-| | |
-|---|---|
-| **What matched expectation** | Inside the local result, what did happen as planned |
-| **What did not match** | What did not happen, happened differently, or arrived with unacceptable quality/timeline |
+| | structured as | role on replan |
+|---|---|---|
+| **What matched expectation** | `--invariant-to-preserve` (repeatable) | each must reappear as a stage **condition/invariant** in the corrected plan |
+| **What did not match** | `--difference-to-remove` (repeatable) | their presence requires a **changed means/method** in the corrected plan |
 
-State concretely as `local fact → local expectation → local gap`.
+State concretely as `local fact → local expectation → local gap`. The split is recorded **structurally** (not just prose): the engine verifies *coverage* on `replan` — every similarity you name must be carried into some stage's conditions/invariants, and naming any difference forces a means/method to actually change. It does **not** author the item→stage mapping (that is your cognition); it only checks the dataflow lands.
 
 Before concluding a difficulty is intractable or that the only options are costly, restate the **functional ground** (the underlying desired-vs-actual, stripped of any framed mechanism) and enumerate the **simplest primitive** that removes it — especially one already demonstrated in code/artifacts you've read. Mechanism-fixation (solving "can API X pin the path?" instead of "how do I get real data to a controlled path?") is a common way investigation declares a false dead-end.
 
@@ -92,7 +92,7 @@ Then derive a **replanning task** for the root coordinator. The task must name:
 
 End with one explicit sentence: **"Replanning task for the root: …"**.
 
-Record it: `agentctl critique --session <id> --functional-ground … --replanning-task …`. This completes the difficulty record and unblocks `replan`.
+Record it: `agentctl critique --session <id> --functional-ground … --replanning-task … [--invariant-to-preserve …]… [--difference-to-remove …]…`. This completes the difficulty record and unblocks `replan`.
 
 ## Handoff back to the root
 

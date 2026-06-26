@@ -1,0 +1,33 @@
+[meta]
+task_id = "demo-two-stage"
+goal = "Demonstrate a means-only refinement"
+done_criterion = "both stages PASSED and resolution confirmed"
+criterion_type = "measurable"
+
+[[stage]]
+index = 1
+title = "Scaffold module"
+executor = "spawn:developer"
+expected_result_image = "module file exists and imports cleanly"
+criterion_type = "measurable"
+done_criterion = "python -c 'import mod' exits 0"
+means = "mirror the working caller"
+method = "establish the import context the working caller uses"
+conditions = "EXECUTING node"
+invariants = "legacy plans load"
+depends_on = []
+output_artifacts = ["mod.py"]
+
+[[stage]]
+index = 2
+title = "Add tests"
+executor = "spawn:developer"
+expected_result_image = "pytest green for the new module"
+criterion_type = "measurable"
+done_criterion = "pytest tests/test_mod.py green"
+means = "pytest"
+method = "write a unit test"
+conditions = "stage 1 PASSED"
+invariants = "no regressions"
+depends_on = [1]
+output_artifacts = ["tests/test_mod.py"]

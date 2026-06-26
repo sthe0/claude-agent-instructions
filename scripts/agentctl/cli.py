@@ -750,6 +750,10 @@ def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Di
     state.difficulty.critique = Critique(
         functional_ground=args.functional_ground,
         replanning_task=args.replanning_task,
+        # getattr-with-default: in-process Namespace callers (test_replan.py builds
+        # one by hand with only the two required fields) must keep working.
+        invariants_to_preserve=list(getattr(args, "invariants_to_preserve", None) or []),
+        differences_to_remove=list(getattr(args, "differences_to_remove", None) or []),
     )
     state.log("critique")
     store.save(state)
@@ -773,6 +777,16 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         return Directive(False, state.node, "submit_plan", "no current plan to replan against")
     old = _load(state.plan_path)
     new = _load(args.plan)
+
+    # coverage gate: inside the difficulty flow, the corrected plan must CARRY the
+    # critique's similarities into conditions/invariants and CHANGE a means/method
+    # for the declared differences. Empty split -> [] -> behaves exactly as before.
+    if state.difficulty and state.difficulty.critique:
+        cov = gates.replan_coverage_blockers(old, new, state.difficulty.critique)
+        if cov:
+            return Directive(False, state.node, "declare", "replan blocked: critique coverage",
+                             data={"coverage_blockers": cov})
+
     kind = diff_plans(old, new)
 
     # if we are exiting the DIAGNOSING cycle (difficulty complete), the failed
@@ -804,6 +818,12 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
                 continue
             cur.title = ns.title
             cur.subject.result = ns.subject.result
+            # carry the corrected means/method/conditions/invariants into state so a
+            # difficulty-driven refinement actually re-selects the means (not just prose).
+            cur.means.means = ns.means.means
+            cur.means.method = ns.means.method
+            cur.subject.invariants = ns.subject.invariants
+            cur.conditions = ns.conditions
             if cur.outcome.status == StageStatus.FAILED.value:
                 cur.outcome.status = StageStatus.PENDING.value
         state.plan_path = args.plan
@@ -1186,6 +1206,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("critique"); sp.add_argument("--session", required=True)
     sp.add_argument("--functional-ground", dest="functional_ground", required=True)
     sp.add_argument("--replanning-task", dest="replanning_task", required=True)
+    sp.add_argument("--invariant-to-preserve", dest="invariants_to_preserve",
+                    action="append", default=None,
+                    help="a similarity the corrected plan must PRESERVE as a condition/"
+                         "invariant (repeatable); the engine verifies coverage on replan")
+    sp.add_argument("--difference-to-remove", dest="differences_to_remove",
+                    action="append", default=None,
+                    help="a difference whose removal requires a CHANGED means/method "
+                         "(repeatable); the engine verifies a means/method changed on replan")
     sp = add("verify-final"); sp.add_argument("--session", required=True)
     sp = add("resolve"); sp.add_argument("--session", required=True); sp.add_argument("--by", required=True)
     sp = add("replan"); sp.add_argument("--session", required=True); sp.add_argument("--plan", required=True)

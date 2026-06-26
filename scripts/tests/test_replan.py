@@ -85,6 +85,24 @@ def test_refinement_after_failure_rearms_the_stage(store, fixtures_dir):
     assert state.ready_stages()[0].index == 1  # the retried stage is selectable again
 
 
+def test_refinement_applies_changed_means_to_state(store, fixtures_dir):
+    """A means-only refinement must land the new means/method in state (not just
+    title + result image) so the corrected means actually takes effect."""
+    sid = "mc"
+    base = str(fixtures_dir / "plan_two_stage_means.toml")
+    changed = str(fixtures_dir / "plan_two_stage_means_changed.toml")
+    _to_executing_stage1(store, sid, base)
+    assert store.load(sid).stage(1).means.means == "blind reload"
+
+    d = cli.cmd_replan(ns(session=sid, plan=changed), store=store)
+    assert d.action == "continue"  # refinement resumes execution, no re-approval
+    state = store.load(sid)
+    assert state.node == Node.EXECUTING.value
+    assert state.approval.passed
+    assert state.stage(1).means.means == "mirror the working caller"
+    assert state.stage(1).means.method == "establish the import context the working caller uses"
+
+
 def test_loop_guard_escalates_on_repeated_failure(store, fixtures_dir):
     sid = "lg"
     plan = str(fixtures_dir / "plan_two_stage.toml")
