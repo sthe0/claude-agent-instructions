@@ -73,10 +73,10 @@ Every instruction here is a step in the plan for removing an arbitrary difficult
 
 ## Authority before a Core edit (ADR-0001)
 
-A protected-Core artifact (`CLAUDE.md`, `config.md`, `skills/**`, `agents/**`, `cursor/**`, `*.mdc`, `scripts/agentctl/**`) can only be landed by a machine with Core commit authority. Before authoring such an edit, gate on `difficulty_channel.authority.is_author()` (config `is_author` flag wins; else `git push --dry-run` probe):
+A protected-Core artifact (`CLAUDE.md`, `config.md`, `skills/**`, `agents/**`, `cursor/**`, `*.mdc`, `scripts/agentctl/**`) can only be landed by a machine with Core commit authority. Before authoring such an edit, gate on `difficulty_channel.authority.is_author()` (a `git push --dry-run` capability probe):
 
 - **Author** → normal spine (`core-difficulty-digest.py` to review clustered difficulties, then `planner → approval → developer`).
-- **Non-author** → do **not** edit Core. Build a `DifficultyRecord` (functional ground = the feedback's desired-vs-actual) and `authority.file_core_difficulty(record)` to the configured channel. Submission is decoupled from push; an author lands the change later from the accumulated digest. Non-Core targets (memory leaves, project files) are exempt — they are not edit-restricted.
+- **Non-author** → do **not** edit Core. Run `python3 ~/claude-agent-instructions/scripts/file-difficulty.py --target <artifact> --ground '<desired-vs-actual>' --severity <lvl>` — the machine's channel is auto-selected from `~/.claude/agent-identity.local`. Submission is decoupled from push; an author lands the change later from the accumulated digest. Non-Core targets (memory leaves, project files) are exempt — they are not edit-restricted.
 
 This is the propose-not-execute / no-veto driver: a non-author surfaces difficulties, never blocks or bypasses the human gate. SKILL.md § Non-author machines route Core difficulties to a channel is the operational beat.
 

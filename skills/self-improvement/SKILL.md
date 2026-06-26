@@ -47,7 +47,16 @@ A bare reminder ("did you run self-improvement?") is **not** pre-approval — ru
 
 *Difficulty removed: a machine without Core commit authority cannot land a Core edit, so proposing one there dead-ends the feedback instead of recording it where an author will see it.*
 
-Before proposing an edit to a **protected-Core** artifact (the CODEOWNERS-guarded set: `CLAUDE.md`, `config.md`, `skills/**`, `agents/**`, `cursor/**`, `*.mdc`, `scripts/agentctl/**`), check authority with `difficulty_channel.authority.is_author()` (the `is_author` flag in `config.md` wins; else a `git push --dry-run` capability probe). On a **non-author** machine, do **not** author a Core edit — instead build a `DifficultyRecord` (functional ground = the desired-vs-actual the feedback names) and `authority.file_core_difficulty(record)` to the configured channel (submission, never a push). An **author** runs the normal spine: `core-difficulty-digest.py` to see the accumulated + clustered difficulties, then `planner → approval → developer` for the batched Core change. Non-Core targets (memory leaves, project files) are unaffected — they are not edit-restricted. This is the propose-not-execute / no-veto rule: a non-author surfaces the difficulty, only an author lands the change.
+Before proposing an edit to a **protected-Core** artifact (the CODEOWNERS-guarded set: `CLAUDE.md`, `config.md`, `skills/**`, `agents/**`, `cursor/**`, `*.mdc`, `scripts/agentctl/**`), check authority with `difficulty_channel.authority.is_author()` (a `git push --dry-run` capability probe — the machine either has push rights or it does not). On a **non-author** machine, do **not** author a Core edit — instead run:
+
+```bash
+python3 ~/claude-agent-instructions/scripts/file-difficulty.py \
+  --target <artifact> \
+  --ground '<desired-vs-actual the feedback names>' \
+  --severity <low|medium|high|critical>
+```
+
+The machine's channel is auto-selected from `~/.claude/agent-identity.local` (`difficulty_channel=startrek` or `difficulty_channel=github`); override with `--channel` if needed. An **author** runs the normal spine: `core-difficulty-digest.py` to see the accumulated + clustered difficulties, then `planner → approval → developer` for the batched Core change. Non-Core targets (memory leaves, project files) are unaffected — they are not edit-restricted. This is the propose-not-execute / no-veto rule: a non-author surfaces the difficulty, only an author lands the change.
 
 ## Source of truth
 
