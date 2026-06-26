@@ -103,7 +103,7 @@ How a non-author's improvement reaches the shared Core **without anyone editing 
 3. [`scripts/consensus-synthesizer.py`](scripts/consensus-synthesizer.py) turns a flagged cluster into a ranked menu of proposed resolutions for a Core author — it **proposes, never executes**: the human author still reviews and commits.
 4. The most general, refutable lessons are induced into the fractal **`principles/`** tier ([memory-global/leaves/principles/](memory-global/leaves/principles/)), which the `planner` retrieves at a plan's *refutable-principle* element (retrieval-augmented planning).
 
-This is recorded as a design decision in [docs/adr/0001-consensus-architecture.md](docs/adr/README.md) and distilled into an applicable contract in [docs/architecture/instruction-layering.md](docs/architecture/instruction-layering.md); the rebase / maintenance recipes live in [docs/layer-maintenance.md](docs/layer-maintenance.md) and [docs/architecture/personal-layer.md](docs/architecture/personal-layer.md).
+This is recorded as a design decision in [docs/adr/0001-consensus-architecture.md](docs/adr/README.md) and distilled into an applicable contract in [docs/architecture/instruction-layering.md](docs/architecture/instruction-layering.md); the rebase / maintenance recipes live in [docs/operations/layer-maintenance.md](docs/operations/layer-maintenance.md) and [docs/architecture/personal-layer.md](docs/architecture/personal-layer.md).
 
 ## A task, end to end
 

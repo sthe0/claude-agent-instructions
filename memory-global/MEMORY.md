@@ -55,7 +55,7 @@ Workflow-level permissions (separate from memory): `~/claude-agent-instructions/
 
 ## Layers (ADR-0001 substrate)
 
-- [Team layer sub-index](leaves/team/MEMORY.md) — scope/authority of the Team precedence layer (EDIT, shared via the project repo) in the `Core < Team < Personal` ladder; the precedence + replace-vs-merge contract is in `docs/architecture/instruction-layering.md`, the rebase/`rerere` maintenance recipe in `docs/layer-maintenance.md`.
+- [Team layer sub-index](leaves/team/MEMORY.md) — scope/authority of the Team precedence layer (EDIT, shared via the project repo) in the `Core < Team < Personal` ladder; the precedence + replace-vs-merge contract is in `docs/architecture/instruction-layering.md`, the rebase/`rerere` maintenance recipe in `docs/operations/layer-maintenance.md`.
 
 ## Principles (ADR-0001 generality tier)
 

@@ -16,7 +16,7 @@ Core < Team < Personal
 - **Team** — project-scoped overrides shared via a project's own git (`<project>/.claude/agent-memory/**`, `<project>/.claude/rules/*.mdc`, `<project>/.claude/skills/**`).
 - **Personal** — a single developer's machine-local overrides.
 
-When two layers speak to the same point, the higher (nearer) layer wins. A higher layer may add to Core and may locally override it, but may **not** edit the Core artifact in place. The exact replace-vs-merge rule per artifact class, the tiebreak, and the ordered-list insertion semantics are the **applicable contract**, described in [instruction-layering.md](instruction-layering.md); the rebase / `rerere` recipe for keeping a layer current lives in [layer-maintenance.md](../layer-maintenance.md); the highest-precedence layer's scope is in [personal-layer.md](personal-layer.md).
+When two layers speak to the same point, the higher (nearer) layer wins. A higher layer may add to Core and may locally override it, but may **not** edit the Core artifact in place. The exact replace-vs-merge rule per artifact class, the tiebreak, and the ordered-list insertion semantics are the **applicable contract**, described in [instruction-layering.md](instruction-layering.md); the rebase / `rerere` recipe for keeping a layer current lives in [layer-maintenance.md](../operations/layer-maintenance.md); the highest-precedence layer's scope is in [personal-layer.md](personal-layer.md).
 
 ## How a non-author's improvement reaches the Core
 
@@ -33,6 +33,6 @@ The flow is deliberately one-directional from report to author: the channel deco
 
 - [docs/adr/README.md](../adr/README.md) — ADR-0001 is the decision this architecture implements; the ADR is the source of truth and this page is its canonical narrative home in the docs tree.
 - [instruction-layering.md](instruction-layering.md) — the applicable precedence + replace-vs-merge contract.
-- [layer-maintenance.md](../layer-maintenance.md) — the rebase / `rerere` maintenance recipe for Team / Personal layers.
+- [layer-maintenance.md](../operations/layer-maintenance.md) — the rebase / `rerere` maintenance recipe for Team / Personal layers.
 - [personal-layer.md](personal-layer.md) — the highest-precedence layer's scope and authority.
 - [The seven-layer model](layers.md) — the single-machine shape this architecture distributes.

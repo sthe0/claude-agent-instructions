@@ -16,12 +16,12 @@
 ## Where it lives
 
 The Personal layer is the developer's own `~/.claude/` tree (the live install), maintained against
-the moving Core with `git pull --autostash --rebase` + `git rerere` — see `docs/layer-maintenance.md`.
+the moving Core with `git pull --autostash --rebase` + `git rerere` — see `docs/operations/layer-maintenance.md`.
 Because it is per-machine, this repository carries only this scope note, **not** the personal
 overrides themselves; committing personal overrides into the shared Core would defeat the layering.
 
 ## See also
 
 - `docs/architecture/instruction-layering.md` — the precedence + replace-vs-merge contract.
-- `docs/layer-maintenance.md` — the rebase/`rerere` maintenance recipe.
+- `docs/operations/layer-maintenance.md` — the rebase/`rerere` maintenance recipe.
 - `memory-global/leaves/team/MEMORY.md` — the Team layer counterpart.

@@ -23,4 +23,4 @@ None yet. Team-scoped global leaves (rare — most Team content lives in a proje
 
 - `docs/architecture/instruction-layering.md` — the precedence + replace-vs-merge contract.
 - `docs/architecture/personal-layer.md` — the Personal layer counterpart.
-- `docs/layer-maintenance.md` — the rebase/`rerere` maintenance recipe.
+- `docs/operations/layer-maintenance.md` — the rebase/`rerere` maintenance recipe.

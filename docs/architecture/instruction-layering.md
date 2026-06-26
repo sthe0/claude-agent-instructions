@@ -67,12 +67,12 @@ ordering inside a `MEMORY.md` index. For these, pin the insertion operation and 
 
 A Team or Personal layer is kept current against the evolving Core with `git pull --autostash
 --rebase` + `git rerere` — the full recipe, the one-time setup, and the `rerere` identical-conflict
-caveat live in `docs/layer-maintenance.md` (kept in one place to avoid drift).
+caveat live in `docs/operations/layer-maintenance.md` (kept in one place to avoid drift).
 
 ## See also
 
 - `docs/adr/0001-consensus-architecture.md` — the decision this contract implements.
-- `docs/layer-maintenance.md` — the rebase/`rerere` maintenance recipe for Team/Personal layers.
+- `docs/operations/layer-maintenance.md` — the rebase/`rerere` maintenance recipe for Team/Personal layers.
 - `docs/architecture/personal-layer.md` / `memory-global/leaves/team/MEMORY.md` — the Personal and Team layer scopes.
 - `memory-global/leaves/memory-usage.md` — the "one fact = one file" leaf convention that makes the
   leaf the unit of replacement.
