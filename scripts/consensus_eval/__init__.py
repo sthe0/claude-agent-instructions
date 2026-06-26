@@ -7,7 +7,9 @@ evaluates a candidate synthesized invariant (from the synthesizer, stage 11) aga
 set; a candidate that violates a tenet is a semantic conflict.
 
 This is a SUBSTRATE/scaffold — seed tenets, not exhaustive coverage (scope stated, not silently
-capped). It gates nothing automatically; it informs the synthesizer's ranked menu and the human.
+capped). It gates nothing automatically. It is a standalone check an author (or a future
+synthesizer wiring) consults on a candidate invariant; it is NOT yet auto-invoked by
+consensus-synthesizer.py — wiring it into the ranked menu is deliberate follow-up work.
 """
 
 from .runner import (

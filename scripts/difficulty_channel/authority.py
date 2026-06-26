@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Callable
 
 from .port import DifficultyRecord, get_channel
+from . import adapters as _adapters  # noqa: F401  — registers startrek/external in the registry
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = REPO_ROOT / "config.md"

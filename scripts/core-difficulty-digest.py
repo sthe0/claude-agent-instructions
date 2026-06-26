@@ -58,7 +58,9 @@ class Cluster:
         return any(r.severity is Severity.CRITICAL for r in self.items)
 
     @property
-    def channels(self) -> set[str]:
+    def reporters(self) -> set[str]:
+        # who/what filed the reports in this cluster (a record carries a reporter, not a channel
+        # name — a live adapter sets reporter from the submitting identity).
         return {r.reporter for r in self.items}
 
 
@@ -69,7 +71,7 @@ def _similarity(ground_a: str, ground_b: str) -> float:
         return 0.0
     # term_score counts occurrences; normalise by the smaller token count for a 0..1 ratio.
     matched = sum(1 for t in set(terms_b) if term_score(ground_a, [t]) > 0)
-    denom = max(len(set(tokenize(ground_a))), len(set(terms_b))) or 1
+    denom = max(len(set(tokenize(ground_a))), len(set(terms_b))) or 1  # larger (union) set size
     return matched / denom
 
 
@@ -113,7 +115,11 @@ def read_mass_threshold(config_path: Path = CONFIG_PATH, override: int | None = 
 def pull_all(channel_names: list[str], since: str | None = None) -> list[DifficultyRecord]:
     records: list[DifficultyRecord] = []
     for name in channel_names:
-        records.extend(get_channel(name).pull(since=since))
+        try:
+            records.extend(get_channel(name).pull(since=since))
+        except NotImplementedError:
+            # a stub adapter (e.g. external) is configured but not yet pullable — skip it
+            print(f"core-difficulty-digest: channel {name!r} is a stub (skipped)", file=sys.stderr)
     return records
 
 
@@ -133,7 +139,7 @@ def _format(flagged: list[Cluster]) -> str:
         crit = " CRITICAL" if c.has_critical else ""
         lines.append(
             f"  [mass {c.mass}{crit}] {c.functional_ground!r} "
-            f"— {len(c.items)} report(s) via {sorted(c.channels)}"
+            f"— {len(c.items)} report(s) by {sorted(c.reporters)}"
         )
     lines.append("  → route each through planner → approval → developer (the digest only flags).")
     return "\n".join(lines)
@@ -146,7 +152,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--since", default=None)
     p.add_argument("--threshold", type=int, default=None, help="override mass threshold")
     a = p.parse_args(argv)
-    channels = a.channels or ["startrek", "external"]
+    channels = a.channels or ["startrek"]  # implemented channels only; stubs added explicitly
     threshold = read_mass_threshold(override=a.threshold)
     records = pull_all(channels, since=a.since)
     print(_format(digest(records, threshold)))

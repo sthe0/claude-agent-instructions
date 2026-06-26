@@ -96,7 +96,7 @@ class Proposal:
     mass: int
     has_critical: bool
     n_reports: int
-    channels: list[str]
+    reporters: list[str]
     invariant: dict | None = None  # induced when the cluster carries divergent grounds
 
 
@@ -114,7 +114,7 @@ def rank_menu(records: list[DifficultyRecord], threshold: int) -> list[Proposal]
     for c in flagged:
         invariant = None
         if len(c.items) >= 2:
-            # apply the critique primitive to the two most-divergent grounds in the cluster
+            # apply the critique primitive to the first and last grounds in the cluster
             a = Edit(target=c.items[0].target, directive=c.items[0].functional_ground)
             b = Edit(target=c.items[-1].target, directive=c.items[-1].functional_ground)
             invariant = induce_invariant(a, b)
@@ -123,7 +123,7 @@ def rank_menu(records: list[DifficultyRecord], threshold: int) -> list[Proposal]
             mass=c.mass,
             has_critical=c.has_critical,
             n_reports=len(c.items),
-            channels=sorted(c.channels),
+            reporters=sorted(c.reporters),
             invariant=invariant,
         ))
     return menu
@@ -151,7 +151,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--channel", action="append", default=[], dest="channels")
     p.add_argument("--threshold", type=int, default=None)
     a = p.parse_args(argv)
-    channels = a.channels or ["startrek", "external"]
+    channels = a.channels or ["startrek"]  # implemented channels only; stubs added explicitly
     threshold = read_mass_threshold(override=a.threshold)
     records = _digest.pull_all(channels)
     result = run_synthesis(records, threshold)
@@ -162,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
     for i, prop in enumerate(result.menu, 1):
         crit = " CRITICAL" if prop.has_critical else ""
         print(f"  {i}. [mass {prop.mass}{crit}] {prop.functional_ground!r} "
-              f"({prop.n_reports} report(s) via {prop.channels})")
+              f"({prop.n_reports} report(s) by {prop.reporters})")
         if prop.invariant:
             print(f"     invariant(commonality)={prop.invariant['commonality']}")
     print("  → choose via AskUserQuestion; promotion routes through planner → approval → developer.")

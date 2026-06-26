@@ -98,7 +98,9 @@ class StartrekChannel(DifficultyChannel):
         url = f"{API_BASE}/issues/_search"
         body = json.dumps({"query": query}).encode("utf-8")
         issues = self._http("POST", url, self._headers(), body)
-        return [_issue_to_record(i) for i in (issues or [])]
+        if not isinstance(issues, list):  # an error body is a dict — don't iterate its keys
+            return []
+        return [_issue_to_record(i) for i in issues]
 
 
 def _issue_to_record(issue: dict) -> DifficultyRecord:

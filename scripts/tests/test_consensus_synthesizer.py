@@ -38,7 +38,7 @@ def test_cluster_reuses_digest_stage9():
     recs = [_rec("same ground here", reporter="startrek"),
             _rec("same ground here", reporter="external")]
     clusters = syn.cluster_records(recs)
-    assert len(clusters) == 1 and clusters[0].channels == {"startrek", "external"}
+    assert len(clusters) == 1 and clusters[0].reporters == {"startrek", "external"}
 
 
 def test_detect_conflict_on_a_vs_not_a():

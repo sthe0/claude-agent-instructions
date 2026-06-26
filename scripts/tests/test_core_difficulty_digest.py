@@ -34,7 +34,7 @@ def test_same_ground_two_channels_one_cluster():
     ]
     clusters = digest_mod.cluster_records(recs)
     assert len(clusters) == 1
-    assert clusters[0].channels == {"startrek", "external"}
+    assert clusters[0].reporters == {"startrek", "external"}
 
 
 def test_mass_sums_severity_weights():
