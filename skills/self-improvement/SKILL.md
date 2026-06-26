@@ -43,6 +43,12 @@ If the user's message **already contains explicit approval to edit** ("сдел�
 
 A bare reminder ("did you run self-improvement?") is **not** pre-approval — run beat 1 only and wait.
 
+### Non-author machines route Core difficulties to a channel (ADR-0001)
+
+*Difficulty removed: a machine without Core commit authority cannot land a Core edit, so proposing one there dead-ends the feedback instead of recording it where an author will see it.*
+
+Before proposing an edit to a **protected-Core** artifact (the CODEOWNERS-guarded set: `CLAUDE.md`, `config.md`, `skills/**`, `agents/**`, `cursor/**`, `*.mdc`, `scripts/agentctl/**`), check authority with `difficulty_channel.authority.is_author()` (the `is_author` flag in `config.md` wins; else a `git push --dry-run` capability probe). On a **non-author** machine, do **not** author a Core edit — instead build a `DifficultyRecord` (functional ground = the desired-vs-actual the feedback names) and `authority.file_core_difficulty(record)` to the configured channel (submission, never a push). An **author** runs the normal spine: `core-difficulty-digest.py` to see the accumulated + clustered difficulties, then `planner → approval → developer` for the batched Core change. Non-Core targets (memory leaves, project files) are unaffected — they are not edit-restricted. This is the propose-not-execute / no-veto rule: a non-author surfaces the difficulty, only an author lands the change.
+
 ## Source of truth
 
 | Component | Path |
