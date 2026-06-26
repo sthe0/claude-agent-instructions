@@ -84,6 +84,27 @@ The two gates (`■`) are **non-skippable**, enforced by guardian hooks ([hook-s
 
 If the engine is unavailable, the manager walks the same steps by hand in the same order — the engine automates the spine, it does not replace the cognition.
 
+## Distributing to a team — the consensus architecture
+
+The repo is consumed by several developers at once: one shared core evolves while each developer keeps personal and project-scoped overrides on top. The reconciliation contract is **override + rebase**, not a blind merge — organized as one fixed precedence ladder, lowest → highest:
+
+```text
+Core < Team < Personal
+```
+
+- **Core** — the shared, protected instructions ([CLAUDE.md](CLAUDE.md), [config.md](config.md), `skills/**`, `agents/**`, `memory-global/**`, the `agentctl` engine). Edited only by commit-authorized authors (`CODEOWNERS`); an uncontrolled edit breaks everyone.
+- **Team** — project-scoped overrides shared via a project's own git (`<project>/.claude/agent-memory/**`, `<project>/.claude/rules/*.mdc`, `<project>/.claude/skills/**`).
+- **Personal** — a single developer's machine-local overrides.
+
+How a non-author's improvement reaches the shared Core **without anyone editing Core directly**:
+
+1. A recurring **difficulty** a developer hits is reported to a **difficulty-accumulation channel** (`scripts/difficulty_channel/` — a port with adapters) rather than as an ad-hoc Core edit.
+2. [`scripts/core-difficulty-digest.py`](scripts/core-difficulty-digest.py) clusters the reports by root cause; a cluster whose mass (Σ severity over the low/medium/high/critical ladder) reaches `core-difficulty-mass-threshold` (see [config.md](config.md)) is flagged for a batched Core change.
+3. [`scripts/consensus-synthesizer.py`](scripts/consensus-synthesizer.py) turns a flagged cluster into a ranked menu of proposed resolutions for a Core author — it **proposes, never executes**: the human author still reviews and commits.
+4. The most general, refutable lessons are induced into the fractal **`principles/`** tier ([memory-global/leaves/principles/](memory-global/leaves/principles/)), which the `planner` retrieves at a plan's *refutable-principle* element (retrieval-augmented planning).
+
+This is recorded as a design decision in [docs/adr/0001-consensus-architecture.md](docs/adr/README.md) and distilled into an applicable contract in [docs/instruction-layering.md](docs/instruction-layering.md); the rebase / maintenance recipes live in [docs/layer-maintenance.md](docs/layer-maintenance.md) and [docs/personal-layer.md](docs/personal-layer.md).
+
 ## A task, end to end
 
 What happens when you give the agent a substantive task:
