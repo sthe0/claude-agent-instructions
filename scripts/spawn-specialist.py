@@ -32,6 +32,8 @@ import sys
 import time
 from pathlib import Path
 
+import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILLS_DIR = Path.home() / ".claude" / "skills"
 CONFIG_MD = REPO_ROOT / "config.md"
@@ -463,15 +465,28 @@ def main(argv: list[str] | None = None) -> int:
 
     # Use Popen so we can print the child's transcript path to stderr early —
     # the parent (manager) can then tail it for monitoring while we block on
-    # the child's final JSON output.
-    proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    transcript_path = _discover_transcript_path(transcripts_before, timeout=10.0)
-    if transcript_path is not None:
-        print(f"spawn-specialist: transcript={transcript_path}", file=sys.stderr, flush=True)
-    else:
-        print("spawn-specialist: transcript=<not-found-within-10s>", file=sys.stderr, flush=True)
+    # the child's final JSON output. launch_supervised makes the child a
+    # session/process-group leader; install_teardown then reaps that whole group
+    # if this wrapper is killed (the harness sends SIGTERM ~5s before SIGKILL, and
+    # a manual `kill` of the wrapper lands the same SIGTERM), so the claude -p
+    # subtree is never orphaned.
+    proc = proc_tree.launch_supervised(
+        cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
+    proc_tree.install_teardown(proc)
+    try:
+        transcript_path = _discover_transcript_path(transcripts_before, timeout=10.0)
+        if transcript_path is not None:
+            print(f"spawn-specialist: transcript={transcript_path}", file=sys.stderr, flush=True)
+        else:
+            print("spawn-specialist: transcript=<not-found-within-10s>", file=sys.stderr, flush=True)
 
-    stdout_str, stderr_str = proc.communicate()
+        stdout_str, stderr_str = proc.communicate()
+    finally:
+        # Normal completion already reaped the child (no-op here); any abnormal
+        # exit (exception, KeyboardInterrupt, timeout) still tears down the whole
+        # subtree instead of leaking the claude -p children.
+        proc_tree.kill_tree(proc)
     completed = subprocess.CompletedProcess(args=cmd, returncode=proc.returncode, stdout=stdout_str, stderr=stderr_str)
     duration_ms = int((time.monotonic() - started) * 1000)
 
