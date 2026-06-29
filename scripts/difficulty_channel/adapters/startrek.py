@@ -32,6 +32,19 @@ _PRIORITY = {
 }
 
 
+# Tracker rejects tags containing a comma, tab, or newline, or longer than 480 UTF-8 bytes
+# (HTTP 422). Functional grounds routinely contain commas, so the tag is a sanitized
+# projection of the ground; the unconstrained full text still lives in summary/description.
+_TAG_MAX_BYTES = 480
+_TAG_FORBIDDEN = str.maketrans({",": " ", "\t": " ", "\n": " ", "\r": " "})
+
+
+def _sanitize_tag(ground: str) -> str:
+    """Project a functional ground onto a Tracker-legal tag: drop forbidden chars, cap bytes."""
+    collapsed = " ".join(ground.translate(_TAG_FORBIDDEN).split())
+    return collapsed.encode("utf-8")[:_TAG_MAX_BYTES].decode("utf-8", "ignore")
+
+
 def record_to_fields(record: DifficultyRecord) -> dict:
     """Pure record -> Startrek issue-fields mapping. No I/O. The single tested contract."""
     return {
@@ -39,7 +52,7 @@ def record_to_fields(record: DifficultyRecord) -> dict:
         "type": {"key": "task"},
         "summary": f"[{record.layer}] {record.functional_ground}"[:254],
         # functional_ground also becomes a tag so the digest's cluster key survives in Tracker.
-        "tags": [record.functional_ground],
+        "tags": [_sanitize_tag(record.functional_ground)],
         "priority": {"key": _PRIORITY[record.severity]},
         "description": (
             f"Difficulty against `{record.target}` (layer: {record.layer}).\n\n"

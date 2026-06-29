@@ -34,6 +34,25 @@ def test_startrek_pure_mapping_targets_oosevenreport():
     assert "CLAUDE.md" in fields["description"]
 
 
+def test_startrek_tag_is_sanitized_to_a_tracker_legal_value():
+    # Tracker 422s on a tag with a comma/tab/newline or >480 UTF-8 bytes; a real
+    # functional ground has commas, so the tag must be a sanitized projection.
+    rec = dc.DifficultyRecord(
+        ts="2026-06-26T00:00:00",
+        layer="core",
+        target="scripts/agentctl/plan.py",
+        functional_ground="a, b\tc\nd, " + "x" * 600,
+        severity=dc.Severity.MEDIUM,
+        reporter="agent",
+        evidence="e",
+    )
+    tag = startrek.record_to_fields(rec)["tags"][0]
+    assert "," not in tag and "\t" not in tag and "\n" not in tag and "\r" not in tag
+    assert tag  # non-empty for a non-empty ground
+    assert len(tag.encode("utf-8")) <= 480
+    assert tag.startswith("a b c d")  # forbidden chars collapsed to single spaces
+
+
 def test_startrek_submit_uses_injected_http_no_network():
     calls = []
 
