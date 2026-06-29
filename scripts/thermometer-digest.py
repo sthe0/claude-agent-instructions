@@ -38,6 +38,8 @@ PRINCIPLES_DIR = REPO_ROOT / "memory-global/leaves/principles"
 
 # Reuse record-experience.py's ranking + clustering primitives (hyphenated module → load
 # by path). No new similarity measure, no new threshold — same engine as promote-scan.
+# NB: a caller that importlib-loads *this* module must register it in sys.modules before
+# exec_module — the @dataclass classes below resolve cls.__module__ through sys.modules.
 _REC_SPEC = importlib.util.spec_from_file_location(
     "record_experience", SCRIPTS_DIR / "record-experience.py"
 )

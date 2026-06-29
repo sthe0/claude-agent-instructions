@@ -137,7 +137,7 @@ def test_read_leaf_parses_tier(tmp_path: Path) -> None:
 
 def test_format_mentions_deferred_and_readonly() -> None:
     """The human digest names the deferred signals and the read-only contract (verify grep)."""
-    d = td.build_digest("project", None, threshold=3) if False else {
+    d = {
         "threshold": 3,
         "condition_a": {"tier1_leaves": 0, "promoted_principles": 0, "hits": [],
                         "flagged": [], "fired": False},

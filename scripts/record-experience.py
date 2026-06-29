@@ -107,7 +107,7 @@ def frontmatter(name: str, description: str, confirmed_by: str,
     # Difficulty tier (ADR-0002): emitted only when explicitly tier-1. Absence
     # implies tier 0 (state-level), so a clean run needs no tag — the thermometer
     # (thermometer-digest.py) treats untagged leaves as tier 0.
-    if tier:
+    if tier == 1:
         lines.append(f"tier: {tier}")
     if refs:
         lines.append("refs: [" + ", ".join(refs) + "]")
