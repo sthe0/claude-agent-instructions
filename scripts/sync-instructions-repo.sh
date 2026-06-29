@@ -104,10 +104,18 @@ cmd_pull() {
 
 cmd_push() {
   log "push start"
-  local ahead
-  ahead="$(git rev-list --count "$REMOTE/$BRANCH"..HEAD 2>/dev/null || echo 0)"
+  # This command pushes $BRANCH (origin/$BRANCH), NOT the current HEAD. On a feature
+  # branch your HEAD commits are not what gets published — warn so a no-op push to
+  # $BRANCH is never mistaken for "work published" (the posted != published trap).
+  local cur ahead
+  cur="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+  [[ "$cur" != "$BRANCH" ]] && \
+    log "push: WARNING — HEAD is '$cur', not '$BRANCH'; this pushes '$BRANCH' only. Commits on '$cur' are NOT published here — push that branch directly if intended."
+  # Count what ACTUALLY goes to $BRANCH (origin/$BRANCH..$BRANCH), not origin/$BRANCH..HEAD:
+  # with HEAD != $BRANCH the two diverge and a HEAD-based count reports a false success.
+  ahead="$(git rev-list --count "$REMOTE/$BRANCH".."$BRANCH" 2>/dev/null || echo 0)"
   if [[ "$ahead" -eq 0 ]]; then
-    log "push: nothing to push"
+    log "push: nothing to push ($BRANCH up to date with $REMOTE/$BRANCH)"
     return 0
   fi
   # Capture output so a "no push rights" failure degrades into a graceful skip
@@ -117,7 +125,7 @@ cmd_push() {
   local out rc=0
   out="$(git push "$REMOTE" "$BRANCH" 2>&1)" || rc=$?
   if [[ "$rc" -eq 0 ]]; then
-    log "push: done ($ahead commit(s))"
+    log "push: done ($ahead commit(s) to $BRANCH)"
     return 0
   fi
   printf '%s\n' "$out" | tee -a "$LOG_FILE" >&2
