@@ -5,5 +5,6 @@ Significant, hard-to-reverse design decisions for the agent system. An ADR is im
 | ADR | Title | Status |
 |---|---|---|
 | [0001](0001-consensus-architecture.md) | Consensus architecture for a distributed agent system | Accepted (2026-06-26) — implemented in slices S1–S4 |
+| [0002](0002-dialectical-transition.md) | Dialectical transition: the σ operator and principle revision | Accepted (2026-06-29) — thermometer slice implemented; σ deferred behind the build-trigger |
 
-The operational distillations of an ADR (the contracts a tool or developer applies) live alongside it under [docs/](../): e.g. [instruction-layering.md](../architecture/instruction-layering.md), [layer-maintenance.md](../operations/layer-maintenance.md), [personal-layer.md](../architecture/personal-layer.md), [core-difficulty-calibration.md](../architecture/core-difficulty-calibration.md) all distil ADR-0001.
+The operational distillations of an ADR (the contracts a tool or developer applies) live alongside it under [docs/](../): e.g. [instruction-layering.md](../architecture/instruction-layering.md), [layer-maintenance.md](../operations/layer-maintenance.md), [personal-layer.md](../architecture/personal-layer.md), [core-difficulty-calibration.md](../architecture/core-difficulty-calibration.md) all distil ADR-0001; [trigger-thermometer.md](../trigger-thermometer.md) distils ADR-0002.

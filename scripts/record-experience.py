@@ -90,7 +90,7 @@ def context_block(date: str, label: str, where: str, plan: str) -> str:
 # --------------------------------------------------------------------------
 def frontmatter(name: str, description: str, confirmed_by: str,
                 refs: list[str] | None, plan_file: str | None,
-                ticket: str | None) -> str:
+                ticket: str | None, tier: int | None = None) -> str:
     lines = [
         "---",
         f"name: {name}",
@@ -104,6 +104,11 @@ def frontmatter(name: str, description: str, confirmed_by: str,
         "generality: 0",
         f'resolution_confirmed_by_user: "{confirmed_by}"',
     ]
+    # Difficulty tier (ADR-0002): emitted only when explicitly tier-1. Absence
+    # implies tier 0 (state-level), so a clean run needs no tag — the thermometer
+    # (thermometer-digest.py) treats untagged leaves as tier 0.
+    if tier:
+        lines.append(f"tier: {tier}")
     if refs:
         lines.append("refs: [" + ", ".join(refs) + "]")
     if plan_file:
@@ -117,7 +122,8 @@ def frontmatter(name: str, description: str, confirmed_by: str,
 def standalone_body(a) -> str:
     name = f"{a.date}-{a.slug}"
     parts = [
-        frontmatter(name, a.description, a.confirmed_by, a.refs, a.plan_file, None),
+        frontmatter(name, a.description, a.confirmed_by, a.refs, a.plan_file,
+                    None, getattr(a, "tier", None)),
         f"\n# {a.title}\n",
         "\n## Difficulty\n", f"{a.difficulty}\n",
         "\n## Order & criterion\n", f"{a.order}\n",
@@ -135,7 +141,8 @@ def ticket_leaf_body(a) -> str:
     name = f"{a.date}-{a.slug}"
     url = a.ticket_url or a.ticket
     body = [
-        frontmatter(name, a.description, a.confirmed_by, a.refs, None, a.ticket),
+        frontmatter(name, a.description, a.confirmed_by, a.refs, None, a.ticket,
+                    getattr(a, "tier", None)),
         f"\n# {a.title}\n",
         "\nFull structured record (Difficulty / Order & criterion / Context / "
         f"Working plan) — in the ticket: {url}.\n",
@@ -496,6 +503,14 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--context-where", required=True, dest="context_where")
         sp.add_argument("--plan", required=True)
         sp.add_argument("--refs", nargs="*", default=[])
+        # Difficulty tier (ADR-0002): 0 = state-level (the default; omitted from
+        # frontmatter, absence implies 0), 1 = principle-level — a tier-1
+        # difficulty whose P0/P1 are principles, the fuel the sigma operator
+        # would consume. The thermometer (thermometer-digest.py) reads this tag.
+        sp.add_argument(
+            "--tier", type=int, choices=[0, 1], default=None,
+            help="difficulty tier: 0 state-level (default/omitted), 1 principle-level (sigma fuel)",
+        )
 
     n = sub.add_parser("new")
     add_scope(n)

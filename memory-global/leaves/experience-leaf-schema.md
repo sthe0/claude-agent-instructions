@@ -39,6 +39,7 @@ description: <one-line hook = the recurring difficulty>
 type: reference
 schema: difficulty/v1
 generality: 0                             # optional; implied 0 when absent (this is the generality-0 profile)
+tier: 1                                   # optional; implied 0 when absent — difficulty tier (ADR-0002), emit only for tier-1
 resolution_confirmed_by_user: "<user's literal confirmation quote>"
 refs: [<slug § stage>, …]                 # optional; free-form links into the difficulty graph (cycles OK)
 plan_file: <abs path>                     # optional; the as-executed planner plan, if one exists
@@ -70,6 +71,12 @@ Agent-system friction observed while resolving this task — missing affordance,
 ```
 
 `generality` is **optional and implied 0** on an experience leaf — its absence *means* generality 0. This is deliberate: making it optional is precisely what avoids migration. Existing experience leaves carry no `generality` field and stay valid unchanged; `record-experience.py` emits `generality: 0` on **newly** created leaves only. There is no forced re-stamping and no conditional-required validator logic — a leaf without the field is the generality-0 profile by default.
+
+### The `tier` field (difficulty tier, ADR-0002)
+
+`tier` is **optional and implied 0** — the same migration-free contract as `generality`. It records the **tier of the difficulty** in the lifting hierarchy of [ADR-0002](../../docs/adr/0002-dialectical-transition.md): **tier 0** is a state-level difficulty `D=(s*,s)` (a divergence between desired and actual *states* — the overwhelming majority); **tier 1** is a difficulty `D⁽¹⁾=(P1,P0)` whose terms are *principles* — a refuted or sought rule, the fuel the σ (principle-revision) operator would consume. A clean run needs no tag: `record-experience.py` emits `tier:` only when `--tier 1` is passed, so absence reads as tier 0. The field is **not** the same axis as `generality` (which grades a record's *reusability*); `tier` grades *what the difficulty is about* (a state vs a principle).
+
+The tag is a **thermometer, not σ machinery** — its sole present purpose is to let `scripts/thermometer-digest.py` measure the build-trigger for σ (condition **(A)**, re-refutation of an already-promoted principle) without yet building the operator. See [trigger-thermometer.md](../../docs/trigger-thermometer.md). `verify-experience-leaf.py` accepts it as an unknown-but-valid key (no validator change), exactly like `generality`.
 
 ## Ticket-driven work
 

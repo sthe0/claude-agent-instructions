@@ -34,7 +34,7 @@ Expected at dispatch: a successful stage returns its marker and the engine recor
 **Variations:** Cause of the missing marker differs: 2026-06-24 = prose preamble before the marker (formatting); 2026-06-25 = budget exhaustion / mid-flight error so no marker emitted at all. Recovery is identical (verify artifact → finish residual in-thread → record-result); the budget case adds a calibration fix (raise small-spawn budget to medium) on top of the marker-contract fix.
 
 ## Cost
-TODO — fill via cost-report.py / tool-usage-report.py
+Ticket-driven leaf — per-session token/$ figures live in DEEPAGENT-436, not separately recaptured here. The qualitative cost this leaf records: two manual unblock + independent-re-verify + record-result recovery loops forced on the manager within one task by the same false-negative.
 
 ## Self-critique of the agent system
 The manager (me) absorbed a recurring engine false-negative as manual recovery toil twice in one task instead of treating the first occurrence as the difficulty signal it was. The wrapper's first-line-marker contract is too strict for the developer's natural output shape; this is agent-system friction that should be fixed at the wrapper or SKILL level, not papered over per-occurrence. Triggers self-improvement the same turn.
