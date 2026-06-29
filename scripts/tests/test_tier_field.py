@@ -51,16 +51,16 @@ def _new_args(tmp_path: Path, slug: str, *, tier: int | None) -> SimpleNamespace
 
 def test_frontmatter_emits_tier_one() -> None:
     """(i) tier == 1 → a `tier: 1` line appears."""
-    fm = rec.frontmatter("n", "d", "tester", None, None, None, 1)
+    fm = rec.frontmatter("n", "d", "tester", None, None, None, date="2026-06-29", tier=1)
     assert "tier: 1" in fm
 
 
 def test_frontmatter_omits_tier_zero_and_none() -> None:
     """(ii) tier 0 and tier None both omit the key — absence implies 0."""
-    assert "tier:" not in rec.frontmatter("n", "d", "tester", None, None, None, 0)
-    assert "tier:" not in rec.frontmatter("n", "d", "tester", None, None, None, None)
+    assert "tier:" not in rec.frontmatter("n", "d", "tester", None, None, None, date="2026-06-29", tier=0)
+    assert "tier:" not in rec.frontmatter("n", "d", "tester", None, None, None, date="2026-06-29", tier=None)
     # default arg (caller never passes tier) also omits
-    assert "tier:" not in rec.frontmatter("n", "d", "tester", None, None, None)
+    assert "tier:" not in rec.frontmatter("n", "d", "tester", None, None, None, date="2026-06-29")
 
 
 # ---------------------------------------------------------------------------
