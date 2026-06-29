@@ -52,6 +52,8 @@ DESIRED = [
     # memory (whose own git pre-commit does not run verify-all).
     ("PreToolUse",       "Write", "verify-leaf-structure.py --hook", 5),
     ("PreToolUse",       "Write", "verify-experience-leaf.py --hook", 5),
+    # Reject a Write that would carry a git conflict marker into any file.
+    ("PreToolUse",       "Write", "verify-no-conflict-markers.py --hook", 5),
 ]
 
 with open(settings_path, encoding="utf-8") as fh:

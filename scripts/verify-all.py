@@ -29,6 +29,7 @@ CHECKS: list[str] = [
     "verify-memory-index",
     "lint-hooks-executable",
     "verify-doc-concepts",
+    "verify-no-conflict-markers",
 ]
 
 
