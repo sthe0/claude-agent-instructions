@@ -42,9 +42,8 @@ it uses the sections below instead).
 - `generality: <0–3>` — the generality level (see the ladder below).
 - `induced_from: [<slug>, …]` — provenance **down** to the difficulty / experience / pitfall leaves
   this principle was induced from. A principle is never rootless; every one cites what it generalizes.
-- `created: YYYY-MM-DD` — date the principle was first recorded (ISO date; set by tooling).
-- `last_verified: YYYY-MM-DD` — date its content was last confirmed still true; equals `created` at birth; required; invariant: `last_verified >= created`.
-- `last_accessed: YYYY-MM-DD` — optional; managed by the `PostToolUse(Read)` stamping hook, never hand-edited. "Accessed" means an explicit `Read` tool call — auto-memory surfacing of the index is not hookable and does not count.
+- `created` / `last_verified` (required) and optional `last_accessed` — the temporal fields common to
+  every leaf, defined in [memory-temporal-frontmatter.md](memory-temporal-frontmatter.md).
 
 **Body sections** (in order):
 

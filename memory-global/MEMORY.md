@@ -7,7 +7,7 @@ Loaded into every session via `@~/.claude/memory-global/MEMORY.md` import in `CL
 ## How to use
 
 - **Read:** open this file, then the relevant leaf. Do not load every leaf at session start.
-- **Write:** when you learn a fact that applies across projects (user role, machine-wide tools, cross-project workflow), add a leaf in `leaves/` with the auto-memory frontmatter (`name`, `description`, `type` — `user` / `feedback` / `project` / `reference`; also stamp `created` and `last_verified` = today in ISO `YYYY-MM-DD`) and add a one-line pointer here.
+- **Write:** when you learn a fact that applies across projects (user role, machine-wide tools, cross-project workflow), add a leaf in `leaves/` with the auto-memory frontmatter (`name`, `description`, `type` — `user` / `feedback` / `project` / `reference`, plus the `created` / `last_verified` date fields — see [memory-temporal-frontmatter.md](leaves/memory-temporal-frontmatter.md)) and add a one-line pointer here.
 - **Project-only facts** belong in `<project_cwd>/.claude/agent-memory/` instead.
 
 ## Reasoning and coordination practices
@@ -29,6 +29,7 @@ Loaded into every session via `@~/.claude/memory-global/MEMORY.md` import in `CL
 - [Memory hierarchy](leaves/memory-hierarchy.md) — when to spin off `<subdir>/MEMORY.md` sub-indexes (monotonic / domain-coherent / display pressure); mechanics, anti-patterns, retire procedure.
 - [Memory usage](leaves/memory-usage.md) — when to read / verify / write memory and what never to persist (reconcile mutable-state leaves against live source; cite OS/version claims; behavioral rules go to CLAUDE.md not memory); the hygiene rules behind the three-scope table.
 - [Leaf schema (`leaf/v1`)](leaves/leaf-schema.md) — rigid section shape for ordinary reference/feedback/system-knowledge leaves (`## Difficulty` / `## Guidance` / `## See also`); `verify-leaf-structure.py` enforces opted-in leaves, grandfathers the rest; experience leaves use `difficulty/v1` instead.
+- [Memory temporal frontmatter](leaves/memory-temporal-frontmatter.md) — the `created` / `last_verified` / `last_accessed` date fields every leaf carries (all 3 scopes, all schemas); `created`+`last_verified` required and tool-stamped, `last_accessed` optional and written by the PostToolUse(Read) hook; "accessed" = an explicit Read, not a recall (recall is not hookable).
 - [Plan activity ontology](leaves/plan-activity-ontology.md) — the 8 elements a plan must cover (order; material+result; control criterion; means [immutable]; method; conditions+invariants; actor+capability; refutable principle) mapped to `agentctl/plan.py` + `verify-plan-file.py` fields; substantive-only; recursive sub-ordering (any unmet element → service sub-plan) as the genesis of composite plans.
 - [Systemic pattern scan](leaves/systemic-pattern-scan.md) — at resolution: scan experience for recurring friction; run overcome-difficulty against the agent-system-as-plan; route the resulting architectural proposal through self-improvement.
 - [Specialization & skill usage tracking](leaves/specialization-skill-usage-tracking.md) — at resolution, generate `name | count | purpose` table for every specialization spawn and `Skill` / `Agent` invocation via `scripts/tool-usage-report.py`; feeds the experience leaf's "Cost, effort, and tool usage" section.

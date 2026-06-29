@@ -41,6 +41,9 @@ schema: difficulty/v1
 generality: 0                             # optional; implied 0 when absent (this is the generality-0 profile)
 tier: 1                                   # optional; implied 0 when absent — difficulty tier (ADR-0002), emit only for tier-1
 resolution_confirmed_by_user: "<user's literal confirmation quote>"
+created: <YYYY-MM-DD>                      # required — date first recorded (record-experience stamps it)
+last_verified: <YYYY-MM-DD>               # required — date content last confirmed true; >= created
+last_accessed: <YYYY-MM-DD>               # optional — written only by the PostToolUse(Read) hook
 refs: [<slug § stage>, …]                 # optional; free-form links into the difficulty graph (cycles OK)
 plan_file: <abs path>                     # optional; the as-executed planner plan, if one exists
 created: YYYY-MM-DD
@@ -95,6 +98,8 @@ type: reference
 schema: difficulty/v1
 resolution_confirmed_by_user: "<quote>"
 ticket: <KEY or URL>
+created: <YYYY-MM-DD>
+last_verified: <YYYY-MM-DD>
 ---
 
 # <title>
@@ -113,4 +118,5 @@ This keeps a single source of truth (the ticket), avoids context spent re-typing
   - **standalone** (no `ticket:`): require `## Difficulty`, `## Order & criterion`, `## Contexts`, `## Cost` — and the `## Cost` section must not contain an unreplaced TODO placeholder; `agentctl resolve` auto-surfaces the plan cost figure, so the writer can fill the real value immediately.
   - **ticket** (`ticket:` non-empty): require the `ticket:` value to appear in the body (the pointer); sections relaxed — the record lives in the ticket.
 - Leaves **without** a `schema:` field keep the legacy confirmation-only check (grandfathered).
+- **Temporal fields:** like every leaf, an experience leaf carries `created` / `last_verified` (required) and optional `last_accessed`; `record-experience.py` stamps `created`+`last_verified` on `new`/`extend`. Definition + the recall-is-not-hookable rationale: [memory-temporal-frontmatter.md](memory-temporal-frontmatter.md).
 - **`generality`** is accepted but **not required** on an experience leaf; its absence means generality 0 (the verifier ignores unknown/absent frontmatter keys, so no code change is needed to accept it). A leaf carrying `generality: 0` validates exactly as one without the field — this is the generality-0 profile of the unified model.
