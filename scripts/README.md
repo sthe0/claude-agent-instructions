@@ -11,7 +11,7 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 | [migrate-cursor-namespace.sh](../cursor/scripts/migrate-cursor-namespace.sh) | Migrate global + all `~/arcadia*/robot/deepagent` mounts (`--all-deepagent-mounts`) |
 | [apply-mcp-local.sh](apply-mcp-local.sh) | Merge `mcp-local/*.json` into `~/.claude/settings.local.json` under `mcpServers` (idempotent) |
 | [apply-settings.sh](apply-settings.sh) | Merge the versioned policy base (`settings/base.json`) into machine-local `~/.claude/settings.json` (additive, idempotent) |
-| [configure-identity.sh](configure-identity.sh) | Idempotent: create `~/.claude/agent-identity.local` with a default `difficulty_channel=startrek` template if the file is absent; called by `setup-symlinks.sh` |
+| [configure-identity.sh](configure-identity.sh) | Idempotent: create `~/.claude/agent-identity.local` with an auto-detected `difficulty_channel` (`github` off-corp, `startrek` on internal Yandex signals) if the file is absent; called by `setup-symlinks.sh` |
 | [consensus-synthesizer.py](consensus-synthesizer.py) | Active synthesizer (ADR-0001 Variant D): normalize → cluster (reuses the digest) → detect-conflict → induce-invariant (critique primitive: commonality/difference) → ranked menu → promote-to-layer. PROPOSES only — no veto, no auto-edit; Core stays byte-unchanged until a human approves via planner → approval → developer |
 | [coordinate-task.py](coordinate-task.py) | Drive the coordination cycle: `plan` (spawn planner, verify plan, print approval-gated run cmd) / `run --approved` (spawn developer, parse marker → exit code) |
 | [core-difficulty-digest.py](core-difficulty-digest.py) | Pull difficulty records from every configured channel, cluster by functional ground (reusing `record-experience.py` search), compute mass = Σseverity, and flag clusters ≥ `core-difficulty-mass-threshold` or any critical (ADR-0001 difficulty-accumulation); flags only — never edits Core |
@@ -58,6 +58,7 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 | [session-start-digest.sh](session-start-digest.sh) | SessionStart bootstrap: cwd, VCS branch / status / log, project-memory listing, in-progress markers in one digest |
 | [set-context-cap.sh](set-context-cap.sh) | Set an arbitrary context-size cap (auto-compaction trigger) in tokens — computes `CLAUDE_CODE_DISABLE_1M_CONTEXT` + `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` into `base.json`; max ~830k (83% clamp) |
 | [setup-ccgram.sh](setup-ccgram.sh) | Bootstrap CCGram (Telegram bridge) on a machine; idempotent, does not touch secrets |
+| [setup-org.sh](setup-org.sh) | One-command org-portable onboarding wizard: wraps `configure-identity.sh` (channel auto-detect → per-machine identity) and prints an onboarding checklist; idempotent, no network |
 | [setup-project-memory.sh](setup-project-memory.sh) | Per-project: symlink shared agent memory into the project tree |
 | [setup-symlinks.sh](setup-symlinks.sh) | Apply runtime symlinks for agents, skills, memory-global |
 | [skill-usage-audit.py](skill-usage-audit.py) | Audit which user-invocable skills are actually used (catalog curation) |

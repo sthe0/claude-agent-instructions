@@ -11,9 +11,14 @@ deterministic launch-pattern scan.
 
 Detection (any one fires):
   - `nohup ` — a detached background process.
-  - an orchestrator launch verb: (nirvana|sandbox|reactor|vh3|hitman|yt)
-    paired with (start|launch|submit|create|run|exec|operation) in either
-    order, e.g. `nirvana ... start`, `yt start-op`, `sandbox create`.
+  - an orchestrator launch verb: a name from the orchestrator list paired with
+    (start|launch|submit|create|run|exec|operation) in either order, e.g.
+    `nirvana ... start`, `yt start-op`, `sandbox create`.
+
+The orchestrator name list is operator-configurable so this works in any org:
+set `long_job_orchestrators=name1,name2` (comma/space-separated) in
+`~/.claude/agent-identity.local`. When the key is absent the built-in default
+(Yandex orchestrators) is used, so an unconfigured machine behaves unchanged.
 
 Advisory only: prints to stdout (model context), exit 0 always, never blocks.
 Fires once per session (state file) so a launch loop doesn't flood context.
@@ -26,8 +31,38 @@ import sys
 from pathlib import Path
 
 NOHUP_RE = re.compile(r"\bnohup\b")
+
+# Built-in default orchestrator names (Yandex). An unconfigured machine uses these,
+# so behaviour is byte-identical to before the list became configurable.
+DEFAULT_ORCHESTRATORS = ("nirvana", "sandbox", "reactor", "vh3", "hitman", "yt")
+
+
+def _orchestrator_names(identity_path=None) -> tuple[str, ...]:
+    """Resolve the orchestrator name list. Reads `long_job_orchestrators=`
+    (comma/space-separated) from ~/.claude/agent-identity.local, falling back to
+    DEFAULT_ORCHESTRATORS. Fail-open: any error yields the default (a hook must
+    never crash the Bash call it advises on)."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from difficulty_channel.authority import read_local_identity, LOCAL_IDENTITY_PATH
+
+        raw = read_local_identity(identity_path or LOCAL_IDENTITY_PATH).get(
+            "long_job_orchestrators", ""
+        )
+        names = tuple(n for n in re.split(r"[,\s]+", raw.strip()) if n)
+        return names or DEFAULT_ORCHESTRATORS
+    except Exception:
+        return DEFAULT_ORCHESTRATORS
+
+
+def _build_tool_re(names=None) -> "re.Pattern[str]":
+    """Compile the orchestrator-name alternation from the resolved (or given) list."""
+    alts = "|".join(re.escape(n) for n in (names or _orchestrator_names()))
+    return re.compile(rf"\b({alts})\b", re.IGNORECASE)
+
+
 # orchestration tool + a launch verb, in either order, within the command
-TOOL_RE = re.compile(r"\b(nirvana|sandbox|reactor|vh3|hitman|yt)\b", re.IGNORECASE)
+TOOL_RE = _build_tool_re()
 VERB_RE = re.compile(
     r"\b(start[-_]?op|start|launch|submit|create|run|exec|operation|vanilla)\b",
     re.IGNORECASE,

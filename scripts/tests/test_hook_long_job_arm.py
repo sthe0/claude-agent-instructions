@@ -39,6 +39,34 @@ def test_detect_silent_on_plain_command():
     assert mod.detect("cat nirvana_notes.md") is None  # tool word, no launch verb
 
 
+# --- configurable orchestrator list ------------------------------------------
+
+def test_default_orchestrator_list_unconfigured(tmp_path):
+    """No long_job_orchestrators= key -> built-in Yandex default, behaviour unchanged."""
+    idf = tmp_path / "agent-identity.local"
+    idf.write_text("difficulty_channel=github\n")
+    assert mod._orchestrator_names(idf) == mod.DEFAULT_ORCHESTRATORS
+    # the default-built regex still matches a Yandex orchestrator launch
+    assert mod.detect("nirvana workflow start --id abc")
+
+
+def test_operator_override_replaces_list(tmp_path):
+    """An operator-supplied list matches its own names, not the Yandex defaults."""
+    idf = tmp_path / "agent-identity.local"
+    idf.write_text("long_job_orchestrators=airflow, dagster prefect\n")
+    names = mod._orchestrator_names(idf)
+    assert names == ("airflow", "dagster", "prefect")
+    tool_re = mod._build_tool_re(names)
+    assert tool_re.search("airflow dags trigger my_dag")
+    assert tool_re.search("dagster job launch")
+    assert tool_re.search("nirvana workflow start") is None  # Yandex name no longer matched
+
+
+def test_missing_identity_file_falls_back(tmp_path):
+    """A non-existent identity file is fail-open to the default list."""
+    assert mod._orchestrator_names(tmp_path / "nope.local") == mod.DEFAULT_ORCHESTRATORS
+
+
 # --- hook behaviour -----------------------------------------------------------
 
 def test_fires_once_and_is_advisory(monkeypatch, capsys):

@@ -15,10 +15,11 @@ fi
 
 mkdir -p "$(dirname "$IDENTITY_FILE")"
 
-# Detect difficulty channel from hardware signals; fall back to startrek if detection fails.
+# Detect difficulty channel from hardware signals; fall back to the org-neutral
+# github default if detection fails (mirrors difficulty_channel.detect's default arm).
 _detect_tmp="$(mktemp)"
-_channel="startrek"
-_detect_header="# detection failed, defaulted to startrek"
+_channel="github"
+_detect_header="# detection failed, defaulted to github"
 if _detect_out="$(cd "$SCRIPTS_DIR" && python3 -m difficulty_channel.detect 2>"$_detect_tmp")" \
    && [[ -n "$_detect_out" ]]; then
   _channel="$_detect_out"

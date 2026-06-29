@@ -49,6 +49,18 @@ git clone git@github.com:sthe0/claude-agent-instructions.git ~/claude-agent-inst
 
 You do **not** need push rights to use the system — it runs fully from a read-only clone; self-improvement edits land as local commits and the upstream push is always gated behind your explicit confirmation. The full procedure (symlink table, per-machine settings merge, per-project local setup, and how the root and project trees compose) is in [docs/operations/setup.md](docs/operations/setup.md).
 
+### Using this in another organization
+
+Core is org-neutral by default — only **internal-only** Yandex facilities (Arcadia `arc`, Startrek) are couplings, and they are **opt-in**, not assumed. Publicly-reachable services stay available (e.g. `yandex-cloud-expert`, since `yandex.cloud` is public). Onboarding in a non-Yandex org is three commands:
+
+```bash
+~/claude-agent-instructions/scripts/setup-symlinks.sh   # symlinks + settings + hooks
+~/claude-agent-instructions/scripts/setup-org.sh        # detects the difficulty channel (→ github off-corp), writes per-machine identity
+~/claude-agent-instructions/scripts/doctor.sh           # expect all [ OK ]
+```
+
+Git itself needs no special setup — Claude uses `git`/`gh` natively. Org-specific runbooks go in each project's `<project>/.claude/`, never in Core. The opt-in surface and what stays Yandex-flavored (and why it's harmless) are in [docs/operations/org-portability.md](docs/operations/org-portability.md).
+
 ## Getting started — your first task
 
 Once `doctor.sh` shows all `[ OK ]`, start a task the same way every time: open `claude` in the directory you want to work in and describe what you need in plain language (English or Russian — the agent replies in the language you write). You do **not** invoke the engine, pick a skill, or write a plan by hand — a hook arms the coordination engine on your first message and the agent routes the work itself.

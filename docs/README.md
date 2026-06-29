@@ -51,6 +51,7 @@ The skills, agents, hooks, scripts, memory scopes, settings, and the Cursor mirr
 Setup and distribution, the git workflow, the verification-guard suite, and layer maintenance.
 
 - [Setup and distribution](operations/setup.md) — wiring the repo onto a machine: the symlink setup, the per-machine settings merge, and how the root and project trees compose.
+- [Using Core in another organization](operations/org-portability.md) — the org-portable profile: which internal-only Yandex couplings are opt-in, what stays public, and the three-command non-Yandex onboarding via `setup-org.sh`.
 - [The git workflow](operations/git-workflow.md) — the instruction-repo git discipline: pull before editing, commit after a change, push only after explicit confirmation.
 - [Verification guards](operations/guards.md) — the verify / lint suite that keeps the repo internally consistent, and how the pre-commit and standalone checks compose.
 - [Maintaining a layer over a moving Core](operations/layer-maintenance.md) — the rebase and rerere recipe for keeping a Team or Personal layer current as Core evolves.
