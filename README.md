@@ -22,6 +22,8 @@ The whole system rests on four ideas. Everything else — every rule, skill, hoo
 
 The instructions are layered by scope. The **root** (this repo) defines the **universal** properties of the manager-actor — the ones that hold for every task on the machine. A **project** adds its own properties on top of the root, so the effective agent is *root ⊕ project-specifics*. Project-specific runbooks, memory, and skills live in each project's own `<project>/.claude/` tree (committed to that project's git), never in this root repo.
 
+Several projects can be grouped into a shared **workspace** (a storage tree outside Core, with its own onboarding) that composes on top of the root — see [Multi-project workspaces](docs/operations/setup.md#multi-project-workspaces-optional).
+
 ## Documentation map
 
 [docs/README.md](docs/README.md) is **the** documentation index — read it top-to-bottom for a guided path, or jump to the section you need.

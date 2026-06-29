@@ -36,6 +36,12 @@ Project-specific Cursor rules live in the project's own `<project>/.claude/rules
 
 Each product repo has its own `.claude/scripts/setup-local.sh`. Run it from the project root after the global setup above. It calls the global `scripts/setup-project-memory.sh` where applicable and creates any project-level Cursor symlinks.
 
+## Multi-project workspaces (optional)
+
+When you maintain agent configs for several projects, you can group them in a single **workspace storage tree** layered *outside* Core. A workspace holds a shared layer (hooks, org rules, shared permissions, scaffolding scripts) plus one thin tree per project; each project's tree carries its own `<project>/.claude/` (a `CLAUDE.md` contract, `agent-memory/`, and an optional project `setup-local.sh`). At a working mount, the project's `.claude/` is **composed** on top of Core, so the effective agent is *Core ⊕ workspace-shared ⊕ project*. Adding a project is one scaffolding step from the shared layer's template.
+
+A workspace is self-describing: it ships its **own onboarding README that slots under the Core quick-start** — bring up Core first (the setup above), then run the workspace's onboarding to mount its storage and wire each project. Core stays unaware of any particular workspace; this is purely an additive composition pattern on top of the root.
+
 ## Distribution — no push rights required
 
 You do **not** need push rights to use the system. Instructions are read locally from the clone. Self-improvement edits land as local commits; the upstream push is gated behind explicit user confirmation and degrades to a graceful skip when you can't push.
