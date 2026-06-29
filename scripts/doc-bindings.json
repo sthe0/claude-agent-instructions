@@ -24,6 +24,30 @@
         {"module": "agentctl.state", "symbols": ["Subject", "Outcome"]},
         {"module": "agentctl.plan", "symbols": ["parse_plan"]}
       ]
+    },
+    {
+      "id": "advisor-warn-only-contract",
+      "concept": "The warn-only advisory LLM judge: attaches advisories to directives without ever blocking control flow.",
+      "doc": {
+        "file": "scripts/agentctl/README.md",
+        "section": "Advisory judge (warn-only)"
+      },
+      "object_glob": "scripts/agentctl/advisor.py",
+      "anchors": [
+        {"module": "agentctl.advisor", "symbols": ["judge"]}
+      ]
+    },
+    {
+      "id": "subplan-stack",
+      "concept": "The service sub-plan frame stack: push/pop for nested fractal service sub-plans.",
+      "doc": {
+        "file": "scripts/agentctl/README.md",
+        "section": "Sub-plan stack"
+      },
+      "object_glob": "scripts/agentctl/state.py",
+      "anchors": [
+        {"module": "agentctl.state", "symbols": ["PlanFrame"]}
+      ]
     }
   ]
 }

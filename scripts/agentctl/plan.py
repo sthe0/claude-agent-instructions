@@ -37,7 +37,7 @@ carry the 8-element activity-structure fields:
     method = "..."
     conditions = "..."
     invariants = "..."
-    capability_required = "..."          # optional even for substantive
+    capability_required = "..."          # required for substantive
 
     [stage.principle]
     statement = "..."
@@ -61,6 +61,7 @@ from .state import (
     Confidence,
     Criterion,
     CriterionType,
+    FinalCheck,
     Means,
     Outcome,
     Principle,
@@ -82,6 +83,9 @@ class PlanMeta:
     # invoker's cwd — byte-identical to pre-repo_root behaviour. Set it so a plan's
     # repo-relative verify paths resolve no matter where the engine is driven from.
     repo_root: str | None = None
+    # Optional typed end-to-end checks run by verify-final after per-stage re-runs.
+    # Absent => [] (back-compat). Parsed from top-level [[final_check]] tables.
+    final_check: list[FinalCheck] = field(default_factory=list)
 
 
 @dataclass
@@ -95,7 +99,7 @@ class PlanError(Exception):
 
 
 # Extra stage fields required for substantive plans (8-element activity structure).
-_SUBSTANTIVE_STAGE_FIELDS = ("material", "means", "method", "conditions", "invariants")
+_SUBSTANTIVE_STAGE_FIELDS = ("material", "means", "method", "conditions", "invariants", "capability_required")
 _PRINCIPLE_SUBFIELDS = ("statement", "source", "confidence", "refutation")
 
 # The activity-ontology elements a stage may supply to a dependent stage. A
@@ -118,6 +122,12 @@ def _validate_substantive_stage(s: dict, index: int) -> None:
             raise PlanError(
                 f"stage {index} missing {field_name!r} (required for substantive plans)"
             )
+    crit_type = str(s.get("criterion_type", CriterionType.MEASURABLE.value))
+    if crit_type == CriterionType.MEASURABLE.value and not s.get("verify_command"):
+        raise PlanError(
+            f"stage {index} is a substantive measurable stage but has no verify_command "
+            f"(a measurable criterion you cannot execute is really acceptance_review)"
+        )
     principle = s.get("principle")
     if not isinstance(principle, dict):
         raise PlanError(
@@ -199,6 +209,17 @@ def parse_plan(data: dict) -> PlanDoc:
     if not m.get("task_id"):
         raise PlanError("[meta] missing task_id")
     raw_weight = m.get("weight_class")
+    raw_fcs = data.get("final_check", [])
+    final_checks: list[FinalCheck] = []
+    for fi, fc in enumerate(raw_fcs, 1):
+        cmd = fc.get("command", "")
+        if not cmd or not isinstance(cmd, str):
+            raise PlanError(f"final_check {fi} missing 'command' (required, non-empty string)")
+        xc = fc.get("expected_exit", 0)
+        if not isinstance(xc, int):
+            raise PlanError(f"final_check {fi} expected_exit must be an int")
+        final_checks.append(FinalCheck(command=cmd, expected_exit=xc, label=str(fc.get("label", ""))))
+
     meta = PlanMeta(
         task_id=str(m["task_id"]),
         goal=str(m.get("goal", "")),
@@ -206,6 +227,7 @@ def parse_plan(data: dict) -> PlanDoc:
         criterion_type=str(m.get("criterion_type", CriterionType.MEASURABLE.value)),
         weight_class=str(raw_weight) if raw_weight is not None else None,
         repo_root=str(m["repo_root"]) if m.get("repo_root") else None,
+        final_check=final_checks,
     )
 
     raw_stages = data.get("stage", [])

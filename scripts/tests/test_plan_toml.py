@@ -159,6 +159,7 @@ def _full_substantive_stage(index=1):
         "conditions": "EXECUTING node",
         "invariants": "legacy plans unchanged",
         "capability_required": "Python",
+        "verify_command": "python3 -m pytest tests/ -q",
         "principle": {
             "statement": "additive-optional keeps backward compat",
             "source": "leaf-schema.md precedent",
@@ -190,6 +191,13 @@ def test_substantive_missing_principle_subfield_raises():
     stage = _full_substantive_stage()
     del stage["principle"]["source"]
     with pytest.raises(PlanError, match="source"):
+        parse_plan({"meta": _substantive_meta(), "stage": [stage]})
+
+
+def test_substantive_missing_capability_required_raises():
+    stage = _full_substantive_stage()
+    del stage["capability_required"]
+    with pytest.raises(PlanError, match="capability_required"):
         parse_plan({"meta": _substantive_meta(), "stage": [stage]})
 
 
@@ -271,6 +279,29 @@ def test_dependency_cycle_raises():
     }
     with pytest.raises(PlanError, match="cycle"):
         parse_plan(data)
+
+
+def test_substantive_measurable_requires_verify_command():
+    """A substantive measurable stage without verify_command is a PlanError."""
+    stage = _full_substantive_stage()
+    del stage["verify_command"]
+    with pytest.raises(PlanError, match="verify_command"):
+        parse_plan({"meta": _substantive_meta(), "stage": [stage]})
+
+
+def test_substantive_measurable_with_verify_command_ok():
+    """A substantive measurable stage WITH verify_command parses without error."""
+    doc = parse_plan({"meta": _substantive_meta(), "stage": [_full_substantive_stage()]})
+    assert doc.stages[0].criterion.verify_command == "python3 -m pytest tests/ -q"
+
+
+def test_substantive_acceptance_review_without_verify_command_ok():
+    """A substantive acceptance_review stage does NOT need verify_command."""
+    stage = _full_substantive_stage()
+    del stage["verify_command"]
+    stage["criterion_type"] = "acceptance_review"
+    doc = parse_plan({"meta": _substantive_meta(), "stage": [stage]})
+    assert doc.stages[0].criterion.criterion_type == "acceptance_review"
 
 
 def test_supplies_derive_depends_on():

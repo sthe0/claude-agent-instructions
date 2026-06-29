@@ -75,6 +75,7 @@ _METHOD_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Method\**\s*:")
 _CONDITIONS_AND_INVARIANTS_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Conditions\s*&\s*invariants\**\s*:")
 _CONDITIONS_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Conditions\**\s*:")
 _INVARIANTS_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Invariants\**\s*:")
+_CAPABILITY_RE = re.compile(r"(?im)^\s*[-*]?\s*\**(?:Capability|Actor)\**\s*:")
 _PRINCIPLE_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Principle\**\s*:")
 _SOURCE_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Source\**\s*:")
 _CONFIDENCE_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Confidence\**\s*:")
@@ -145,6 +146,12 @@ def check(path: Path) -> list[str]:
                 "use `Conditions & invariants:` or both `Conditions:` and `Invariants:` separately)"
             )
 
+        if not _CAPABILITY_RE.search(stages_text):
+            errors.append(
+                "substantive plan: missing `Capability:` label inside `## Stages` "
+                "(element 6 — actor capability required to execute; use `Capability:` or `Actor:`)"
+            )
+
         if not _PRINCIPLE_RE.search(stages_text):
             errors.append(
                 "substantive plan: missing `Principle:` label inside `## Stages` "
@@ -181,8 +188,8 @@ def main(argv: list[str] | None = None) -> int:
             "A plan needs Problem/done-criteria, Stages (with Expected result\n"
             "image lines), Final verification, and Risks sections.\n"
             "Substantive plans (weight_class: substantive) additionally require\n"
-            "Material, Means & method, Conditions & invariants, and Principle\n"
-            "(with Source, Confidence, Refutation) inside ## Stages.",
+            "Capability (or Actor), Material, Means & method, Conditions & invariants,\n"
+            "and Principle (with Source, Confidence, Refutation) inside ## Stages.",
             file=sys.stderr,
         )
         return 1

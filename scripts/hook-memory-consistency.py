@@ -17,6 +17,7 @@ edit would create constant noise without surfacing new information.
 """
 from __future__ import annotations
 
+import datetime
 import json
 import re
 import sys
@@ -26,6 +27,16 @@ import memory_dates as md
 
 FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 VALID_TYPES = frozenset({"user", "feedback", "project", "reference"})
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _parse_date(s: str) -> datetime.date | None:
+    if not s or not _ISO_DATE_RE.match(s):
+        return None
+    try:
+        return datetime.date.fromisoformat(s)
+    except ValueError:
+        return None
 
 
 def is_memory_leaf(path: str) -> bool:

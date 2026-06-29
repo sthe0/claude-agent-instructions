@@ -29,6 +29,7 @@ def _write(tmp_path: Path, content: str) -> Path:
 # ---------------------------------------------------------------------------
 
 _ACTIVITY_LABELS = (
+    "Capability: Python\n"
     "Material: src/foo.py in its current state\n"
     "Means & method: Edit tool\n"
     "Conditions & invariants: no other files changed\n"
@@ -229,3 +230,34 @@ def test_substantive_multiple_missing_labels_all_reported(tmp_path):
     assert any("Material" in e for e in errors)
     assert any("Means" in e for e in errors)
     assert any("Principle" in e for e in errors)
+
+
+# ---------------------------------------------------------------------------
+# 4. Capability / Actor label (element 6 — actor capability)
+# ---------------------------------------------------------------------------
+
+
+def test_substantive_missing_capability_label(tmp_path):
+    """Missing Capability: label on a substantive plan emits a clear error."""
+    mod = _load()
+    labels = _ACTIVITY_LABELS.replace("Capability: Python\n", "")
+    content = "weight_class: substantive\n\n" + _make_body(stage_extra=labels)
+    plan = _write(tmp_path, content)
+    errors = mod.check(plan)
+    assert any("Capability" in e or "Actor" in e for e in errors), errors
+
+
+def test_substantive_actor_label_satisfies_capability(tmp_path):
+    """Actor: is an accepted alternative to Capability: for element 6."""
+    mod = _load()
+    labels = _ACTIVITY_LABELS.replace("Capability: Python\n", "Actor: developer with Python\n")
+    content = "weight_class: substantive\n\n" + _make_body(stage_extra=labels)
+    plan = _write(tmp_path, content)
+    assert mod.check(plan) == []
+
+
+def test_non_substantive_missing_capability_label_ok(tmp_path):
+    """Legacy plan without weight_class does not require Capability:."""
+    mod = _load()
+    plan = _write(tmp_path, _BASELINE_BODY)
+    assert mod.check(plan) == []

@@ -20,6 +20,7 @@ Exit code 1 if any invariant is violated. --root for project-repo reuse;
 from __future__ import annotations
 
 import argparse
+import datetime
 import re
 import sys
 from pathlib import Path
@@ -32,6 +33,61 @@ ALLOWED_TYPES = {"user", "feedback", "project", "reference"}
 _LINK_RE = re.compile(r"\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 _FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 _TOP_TYPE_RE = re.compile(r"^type:\s*(\S+)", re.MULTILINE)
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _parse_date(s: str) -> datetime.date | None:
+    """Return a date for a YYYY-MM-DD string, or None if invalid/missing."""
+    if not s or not _ISO_DATE_RE.match(s):
+        return None
+    try:
+        return datetime.date.fromisoformat(s)
+    except ValueError:
+        return None
+
+
+def _fm_field(fm_body: str, key: str) -> str:
+    m = re.search(rf"^{key}\s*:\s*(.*?)\s*$", fm_body, re.MULTILINE)
+    return m.group(1).strip().strip("\"'") if m else ""
+
+
+def _date_violations(rel: str, fm_body: str) -> list[str]:
+    """Return a list of temporal-date violations for a leaf frontmatter block."""
+    issues: list[str] = []
+    created_s = _fm_field(fm_body, "created")
+    last_verified_s = _fm_field(fm_body, "last_verified")
+    last_accessed_s = _fm_field(fm_body, "last_accessed")
+
+    if not created_s:
+        issues.append(f"  dates: {rel} — missing required `created:` (ISO YYYY-MM-DD)")
+    else:
+        created = _parse_date(created_s)
+        if created is None:
+            issues.append(
+                f"  dates: {rel} — `created: {created_s}` is not a valid ISO date (YYYY-MM-DD)"
+            )
+
+    if not last_verified_s:
+        issues.append(f"  dates: {rel} — missing required `last_verified:` (ISO YYYY-MM-DD)")
+    else:
+        last_verified = _parse_date(last_verified_s)
+        if last_verified is None:
+            issues.append(
+                f"  dates: {rel} — `last_verified: {last_verified_s}` is not a valid ISO date (YYYY-MM-DD)"
+            )
+        elif created_s:
+            created = _parse_date(created_s)
+            if created is not None and last_verified < created:
+                issues.append(
+                    f"  dates: {rel} — `last_verified` ({last_verified_s}) is before `created` ({created_s})"
+                )
+
+    if last_accessed_s and _parse_date(last_accessed_s) is None:
+        issues.append(
+            f"  dates: {rel} — `last_accessed: {last_accessed_s}` is not a valid ISO date (YYYY-MM-DD)"
+        )
+
+    return issues
 
 
 def _leaf_files(leaves: Path) -> list[Path]:
@@ -79,6 +135,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--root", type=Path, default=None)
     parser.add_argument("--staged", action="store_true", help="Accepted but ignored")
+    parser.add_argument(
+        "--require-dates", action="store_true", default=False,
+        help="Enforce created+last_verified temporal frontmatter on every leaf. "
+             "Off by default until all existing leaves are backfilled (stage 4).",
+    )
     args = parser.parse_args(argv)
 
     root = args.root if args.root is not None else Path(__file__).resolve().parent.parent

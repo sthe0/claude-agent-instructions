@@ -204,6 +204,97 @@ def test_blockers_accept_well_formed_record():
     assert gates.difficulty_blockers(s) == []
 
 
+# --- hypothesis distinctness check -----------------------------------------------
+
+def test_blockers_reject_duplicate_hypotheses():
+    """Hypotheses must be distinct after normalization."""
+    s = _diagnosing_with(_complete_difficulty(hypotheses=("h1", "h1")))
+    blockers = gates.difficulty_blockers(s)
+    assert blockers and "distinct" in blockers[0]
+
+
+def test_blockers_reject_case_insensitive_duplicate_hypotheses():
+    """Hypotheses must be distinct after casefold normalization."""
+    s = _diagnosing_with(_complete_difficulty(hypotheses=("H1", "h1")))
+    blockers = gates.difficulty_blockers(s)
+    assert blockers and "distinct" in blockers[0]
+
+
+def test_blockers_reject_whitespace_insensitive_duplicate_hypotheses():
+    """Hypotheses must be distinct after whitespace normalization."""
+    s = _diagnosing_with(_complete_difficulty(hypotheses=("hypothesis 1", "hypothesis  1")))
+    blockers = gates.difficulty_blockers(s)
+    assert blockers and "distinct" in blockers[0]
+
+
+def test_blockers_accept_genuinely_distinct_hypotheses():
+    """Distinct hypotheses pass the check."""
+    s = _diagnosing_with(_complete_difficulty(hypotheses=("H1", "h2  ")))
+    assert gates.difficulty_blockers(s) == []
+
+
+# --- declaration anti-template check ----------------------------------------------
+
+def test_blockers_reject_placeholder_todo():
+    """Declaration fields must not be 'todo' placeholder."""
+    s = _diagnosing_with(_complete_difficulty(expected="TODO"))
+    blockers = gates.difficulty_blockers(s)
+    assert blockers and "placeholder" in blockers[0] and "expected" in blockers[0]
+
+
+def test_blockers_reject_placeholder_tbd():
+    """Declaration fields must not be 'tbd' placeholder."""
+    s = _diagnosing_with(_complete_difficulty(actual="TBD"))
+    blockers = gates.difficulty_blockers(s)
+    assert blockers and "placeholder" in blockers[0] and "actual" in blockers[0]
+
+
+def test_blockers_reject_placeholder_na():
+    """Declaration fields must not be 'n/a' placeholder."""
+    s = _diagnosing_with(_complete_difficulty(mismatch="N/A"))
+    blockers = gates.difficulty_blockers(s)
+    assert blockers and "placeholder" in blockers[0] and "mismatch" in blockers[0]
+
+
+def test_blockers_reject_placeholder_ellipsis():
+    """Declaration fields must not be '...' placeholder."""
+    s = _diagnosing_with(_complete_difficulty(expected="..."))
+    blockers = gates.difficulty_blockers(s)
+    assert blockers and "placeholder" in blockers[0]
+
+
+def test_blockers_reject_placeholder_literal_field_name():
+    """Declaration fields must not use literal field names as placeholders."""
+    s = _diagnosing_with(_complete_difficulty(expected="expected"))
+    blockers = gates.difficulty_blockers(s)
+    assert blockers and "placeholder" in blockers[0]
+
+
+def test_blockers_reject_identical_expected_actual():
+    """Declaration expected and actual must differ (normalized)."""
+    s = _diagnosing_with(_complete_difficulty(expected="same", actual="same"))
+    blockers = gates.difficulty_blockers(s)
+    assert blockers and "must be distinct" in blockers[0]
+
+
+def test_blockers_reject_identical_expected_actual_case_insensitive():
+    """Declaration expected and actual must differ (case-insensitive)."""
+    s = _diagnosing_with(_complete_difficulty(expected="Same", actual="same"))
+    blockers = gates.difficulty_blockers(s)
+    assert blockers and "must be distinct" in blockers[0]
+
+
+def test_blockers_accept_real_observations():
+    """Real, distinct observations pass all checks."""
+    s = _diagnosing_with(_complete_difficulty(
+        expected="expected output",
+        actual="actual output",
+        mismatch="the difference",
+        hypotheses=("hypothesis 1", "hypothesis 2")
+    ))
+    assert gates.difficulty_blockers(s) == []
+
+
 # --- structured critique split: round-trip + backward-compat migration -------
 
 def test_critique_split_round_trips():

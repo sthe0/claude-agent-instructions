@@ -51,6 +51,11 @@ TRANSITIONS: dict[str, tuple[str, str]] = {
     "diagnose": (Node.VERIFYING.value, Node.DIAGNOSING.value),
     "replan_refine": (Node.DIAGNOSING.value, Node.VERIFYING.value),
     "resolve": (Node.RESOLUTION.value, Node.RESOLVED.value),
+    # Sub-plan stack edges: push starts a fresh child cycle; pop restores the parent.
+    # "no auto-pop across an unresolved child" is structural — pop_subplan's frm is
+    # RESOLVED, and check_invariants already requires resolution.passed at RESOLVED.
+    "push_subplan": (Node.EXECUTING.value, Node.CLASSIFIED.value),
+    "pop_subplan": (Node.RESOLVED.value, Node.EXECUTING.value),
 }
 
 

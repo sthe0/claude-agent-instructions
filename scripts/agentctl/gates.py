@@ -18,6 +18,17 @@ from __future__ import annotations
 from .state import Node, SessionState, StageStatus
 
 
+def _normalize_string(s: str) -> str:
+    """Normalize a string for comparison: casefold, strip, and collapse internal whitespace."""
+    return " ".join((s or "").casefold().split())
+
+
+# Placeholder values that declaration fields must not use
+_PLACEHOLDER_SET = frozenset({
+    "todo", "tbd", "n/a", "na", "...", "expected", "actual", "mismatch", "-"
+})
+
+
 def plan_approval_blockers(state: SessionState) -> list[str]:
     out: list[str] = []
     if not state.plan_path:
@@ -58,8 +69,8 @@ def difficulty_blockers(state: SessionState) -> list[str]:
     if missing:
         return ["difficulty record incomplete — replan blocked until: " + ", ".join(missing)]
     # Shape enforcement: presence of the three sections is not enough — the record
-    # must be well-formed. Mechanical shape only (non-empty fields, hypothesis count);
-    # the engine never judges the *quality* of the content.
+    # must be well-formed. Mechanical shape only (non-empty fields, hypothesis count,
+    # distinctness, anti-template); the engine never judges the *quality* of the content.
     shape: list[str] = []
     decl = d.declaration
     for label, value in (("expected", decl.expected), ("actual", decl.actual), ("mismatch", decl.mismatch)):
@@ -68,6 +79,27 @@ def difficulty_blockers(state: SessionState) -> list[str]:
     good_hyps = [h for h in (d.investigation.hypotheses or []) if (h or "").strip()]
     if len(good_hyps) < 2:
         shape.append(f"investigation needs >=2 hypotheses (have {len(good_hyps)})")
+
+    # Hypothesis distinctness: they must be pairwise distinct after normalization
+    distinct_hyps = set(_normalize_string(h) for h in good_hyps)
+    if len(distinct_hyps) < len(good_hyps):
+        shape.append(f"investigation hypotheses must be distinct after normalization (have {len(good_hyps)}, but only {len(distinct_hyps)} distinct)")
+
+    # Declaration anti-template: fields must not be placeholders and must be distinct
+    normalized_decl = {
+        "expected": _normalize_string(decl.expected),
+        "actual": _normalize_string(decl.actual),
+        "mismatch": _normalize_string(decl.mismatch),
+    }
+
+    for label, norm_value in normalized_decl.items():
+        if norm_value in _PLACEHOLDER_SET:
+            shape.append(f"declaration.{label} is a placeholder (must be a real observation: {norm_value!r})")
+
+    # Check if expected == actual (normalized) and non-empty
+    if normalized_decl["expected"] == normalized_decl["actual"] and normalized_decl["expected"]:
+        shape.append("declaration fields must be distinct (expected and actual must differ)")
+
     if shape:
         return ["difficulty record under-specified — replan blocked: " + "; ".join(shape)]
     return []
