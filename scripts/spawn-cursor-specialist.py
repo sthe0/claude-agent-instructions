@@ -30,6 +30,8 @@ import sys
 import time
 from pathlib import Path
 
+import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILLS_DIR = Path.home() / ".claude" / "skills"
 CURSOR_AGENTS_DIR = REPO_ROOT / "cursor" / "agents"
@@ -425,7 +427,21 @@ def main(argv: list[str] | None = None) -> int:
 
     env = {**os.environ, "AGENT_RECURSION_DEPTH": str(depth_next), "CURSOR_API_KEY": api_key}
     started = time.monotonic()
-    completed = subprocess.run(cmd, env=env, capture_output=True, text=True, check=False)
+    # launch_supervised makes the `agent` child a session/process-group leader;
+    # install_teardown then reaps that whole group if this wrapper is killed (the
+    # harness sends SIGTERM ~5s before SIGKILL, and a manual `kill` lands the same
+    # SIGTERM), so the agent subtree is never orphaned.
+    proc = proc_tree.launch_supervised(
+        cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
+    proc_tree.install_teardown(proc)
+    try:
+        stdout_str, stderr_str = proc.communicate()
+    finally:
+        proc_tree.kill_tree(proc)
+    completed = subprocess.CompletedProcess(
+        args=cmd, returncode=proc.returncode, stdout=stdout_str, stderr=stderr_str
+    )
     duration_ms = int((time.monotonic() - started) * 1000)
 
     result_text = completed.stdout
