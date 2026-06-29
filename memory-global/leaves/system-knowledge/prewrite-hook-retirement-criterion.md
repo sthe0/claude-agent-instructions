@@ -3,6 +3,8 @@ name: prewrite-hook-retirement-criterion
 description: Difficulty — `hook-prewrite-plan-check.py` is the OLD non-agentctl fallback plan-check; retiring it on a guess could drop plan-gate coverage for sessions still on the prose fallback. Fact — it now logs every firing to a JSONL ledger; retire only when the report shows zero firings for ≥ a full window after engine auto-start ships.
 type: reference
 schema: leaf/v1
+created: 2026-06-24
+last_verified: 2026-06-24
 ---
 
 # When to retire `hook-prewrite-plan-check.py`

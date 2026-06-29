@@ -2,6 +2,8 @@
 name: large-tool-output-discipline
 description: When a single tool call (Bash, MCP query, file Read of a huge file) is about to return more than ~4 KB of content, pipe it through scripts/offload-large.sh so the context window receives a head+tail digest and the full bytes live in /tmp/cc-scratch/. Reading the digest is the fast path; Read(offset, limit) on the scratch file is the escape hatch.
 type: reference
+created: 2026-05-27
+last_verified: 2026-05-27
 ---
 
 # Large tool-output discipline

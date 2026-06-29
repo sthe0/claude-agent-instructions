@@ -2,6 +2,8 @@
 name: long-job-monitoring
 description: Drive a long external job (hours/days) to terminal state and report transitions proactively WITHOUT burning opus on polling and WITHOUT making the user prompt you. Recipe — detached OS poller (zero model tokens) + self-scheduled ScheduleWakeup/CronCreate wakeups + cheap Agent only at the judgment milestone. Anti-pattern: "ping me when it's done".
 type: feedback
+created: 2026-06-22
+last_verified: 2026-06-24
 ---
 
 **Difficulty:** a long-running external job (Nirvana meta-graph, CI, training run — hours to days) must reach terminal state **and** have its key transitions reported proactively, while satisfying two constraints that pull against each other: do not burn the expensive opus main thread on waiting, and do not make the user prompt you to keep watching. Under cost pressure the wrong resolution is seductive — "I'll stop polling to save money; ping me when it reaches stage X" — which offloads the monitoring cadence onto the user and violates the coordinator objective (autonomy / drive-to-resolution) and `CLAUDE.md` § Long-running jobs.

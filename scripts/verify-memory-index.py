@@ -24,6 +24,8 @@ import re
 import sys
 from pathlib import Path
 
+import memory_dates as md
+
 LEAVES_REL = "memory-global/leaves"
 ALLOWED_TYPES = {"user", "feedback", "project", "reference"}
 
@@ -57,12 +59,16 @@ def _referenced_leaves(index_files: list[Path]) -> set[Path]:
     return refs
 
 
-def _frontmatter_type(path: Path) -> str | None:
-    """Return the top-level `type:` value, or None if absent at top level."""
+def _frontmatter_body(path: Path) -> str | None:
+    """Return the raw YAML frontmatter body, or None if there is no block."""
     m = _FRONTMATTER_RE.match(path.read_text(encoding="utf-8"))
-    if not m:
+    return m.group(1) if m else None
+
+
+def _frontmatter_type(fm: str | None) -> str | None:
+    """Return the top-level `type:` value, or None if absent at top level."""
+    if fm is None:
         return None
-    fm = m.group(1)
     # Only top-level keys: lines that start at column 0 (no leading indent).
     top_level = "\n".join(l for l in fm.splitlines() if l[:1] not in (" ", "\t"))
     tm = _TOP_TYPE_RE.search(top_level)
@@ -89,11 +95,16 @@ def main(argv: list[str] | None = None) -> int:
         rel = leaf.relative_to(root)
         if leaf.resolve() not in referenced:
             failures.append(f"  unindexed: {rel} — add a pointer in MEMORY.md (main or a sub-index)")
-        t = _frontmatter_type(leaf)
+        fm = _frontmatter_body(leaf)
+        t = _frontmatter_type(fm)
         if t is None:
             failures.append(f"  frontmatter: {rel} — missing top-level `type:` key (nested metadata.type is not read)")
         elif t not in ALLOWED_TYPES:
             failures.append(f"  frontmatter: {rel} — type '{t}' not in {sorted(ALLOWED_TYPES)}")
+        # Temporal frontmatter: created + last_verified required & well-formed;
+        # last_accessed optional but format-checked (memory-temporal-frontmatter.md).
+        for issue in md.validate_temporal(fm or "", require=True):
+            failures.append(f"  frontmatter: {rel} — {issue}")
 
     if failures:
         print("verify-memory-index: FAIL")

@@ -3,6 +3,8 @@ name: docs-accompany-architectural-change
 description: An architectural change (ADR, new subsystem, changed coordination model) is not delivered until the canonical read-first surface (README) reflects it — symmetric to tests-accompany-code; a design record only the implementer can find does not count as documented
 type: feedback
 schema: leaf/v1
+created: 2026-06-26
+last_verified: 2026-06-26
 ---
 
 ## Difficulty

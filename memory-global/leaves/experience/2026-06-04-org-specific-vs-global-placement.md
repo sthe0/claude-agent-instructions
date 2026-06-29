@@ -5,6 +5,8 @@ type: reference
 schema: difficulty/v1
 resolution_confirmed_by_user: "Да, решено (Recommended)"
 refs: [2026-05-26-agent-system-plan-vs-reality-drift]
+created: 2026-06-11
+last_verified: 2026-06-11
 ---
 
 # Org-specific vs. global instruction placement

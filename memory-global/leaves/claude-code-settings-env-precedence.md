@@ -2,6 +2,8 @@
 name: Claude Code — settings.json env wins over shell env
 description: Env vars in settings.json `env` block are applied by Claude Code after process start and override the shell environment, including `env -u`. Auth precedence ladder and consequences.
 type: reference
+created: 2026-05-24
+last_verified: 2026-06-15
 ---
 
 # `settings.json` `env` precedence in Claude Code

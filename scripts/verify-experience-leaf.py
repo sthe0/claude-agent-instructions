@@ -55,6 +55,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import memory_dates as md
+
 EXPERIENCE_PATH_RE = re.compile(r"(^|/)experience/(?!MEMORY\.md$)[^/]+\.md$")
 FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 FIELD_RE = re.compile(
@@ -161,6 +163,12 @@ def check_content(content: str) -> str | None:
     if not fm:
         return "no YAML frontmatter block at top of file"
     fm_body = fm.group(1)
+    # Mirror-validate the temporal fields: malformed dates are rejected, but a
+    # leaf is NOT rejected merely for lacking them (require=False) — the
+    # universal requirer is verify-memory-index. See memory_dates.py.
+    temporal = md.validate_temporal(fm_body, require=False)
+    if temporal:
+        return "temporal frontmatter — " + "; ".join(temporal)
     if not _fm_field(fm_body, FIELD_RE):
         return ("frontmatter missing/empty required field "
                 "`resolution_confirmed_by_user`")

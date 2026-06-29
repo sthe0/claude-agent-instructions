@@ -5,6 +5,8 @@ type: reference
 schema: difficulty/v1
 resolution_confirmed_by_user: "Да, решено"
 refs: [2026-06-04-org-specific-vs-global-placement.md, memory-hierarchy.md]
+created: 2026-06-11
+last_verified: 2026-06-11
 ---
 
 # Migrating populated native auto-memory into the project tree

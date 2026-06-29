@@ -3,6 +3,8 @@ name: instructions-repo-layout
 description: Canonical layout of ~/claude-agent-instructions/ — global tree, runtime symlinks, and project-memory symlink. Prevents layout/disk mismatch when adding, moving, or deleting files.
 type: reference
 schema: leaf/v1
+created: 2026-06-26
+last_verified: 2026-06-26
 ---
 
 ## Difficulty

@@ -2,6 +2,8 @@
 name: partition-markers
 description: Markers M1-M4 for deciding into how many independently-shippable PRs/tickets a substantive task is partitioned. Apply after a plan exists, before starting implementation. Delivery partition, not the planner's step-level decomposition.
 type: reference
+created: 2026-05-26
+last_verified: 2026-06-25
 ---
 
 # Partition markers (M1–M4)

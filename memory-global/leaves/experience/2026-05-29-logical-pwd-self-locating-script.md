@@ -4,6 +4,8 @@ description: Difficulty — a script that derives its own base dir via logical p
 type: reference
 schema: difficulty/v1
 resolution_confirmed_by_user: "Push и закрыть (Recommended)"
+created: 2026-06-11
+last_verified: 2026-06-11
 ---
 
 # Logical-pwd self-locating script footgun (ELOOP)

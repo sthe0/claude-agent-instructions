@@ -2,6 +2,8 @@
 name: handling-escalations
 description: The cognition the manager supplies for each specialist return marker (PLAN-READY / CLARIFY / REPLAN / PERMISSION-REQUEST / ESCALATE / INCOMPLETE / COMPLETED). The engine owns the routing + continuation-prompt assembly; this leaf is the judgment it cannot.
 type: reference
+created: 2026-06-04
+last_verified: 2026-06-23
 ---
 
 # Handling specialist escalations

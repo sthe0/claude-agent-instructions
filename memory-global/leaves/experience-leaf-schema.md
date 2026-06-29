@@ -2,6 +2,8 @@
 name: experience-leaf-schema
 description: The difficulty-centric schema for experience leaves (schema:difficulty/v1) — sections, the difficulty graph (cycles allowed), search-before-record + multi-context merge, ticket-thin-leaf rule, and what verify-experience-leaf.py enforces.
 type: reference
+created: 2026-06-11
+last_verified: 2026-06-29
 ---
 
 # Experience leaf schema (`difficulty/v1`)

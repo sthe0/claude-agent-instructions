@@ -3,6 +3,8 @@ name: memory-usage
 description: When to read / verify / write memory and what never to persist — the hygiene rules behind the CLAUDE.md three-scope table
 type: reference
 schema: leaf/v1
+created: 2026-06-25
+last_verified: 2026-06-25
 ---
 
 ## Difficulty

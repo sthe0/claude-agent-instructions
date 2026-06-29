@@ -2,6 +2,8 @@
 name: skill_first_dispatch
 description: Discipline for picking a skill before hand-rolling Bash for known domain operations — and the fewer-permission-prompts audit habit
 type: feedback
+created: 2026-05-27
+last_verified: 2026-06-04
 ---
 
 Before issuing a `Bash` sequence for a **known domain operation**, scan the system-reminder skill list for a matching skill and prefer it over raw CLI. The Skill tool is the cheaper, more auditable path; raw CLI is the fallback.

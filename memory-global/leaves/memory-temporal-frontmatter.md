@@ -3,6 +3,8 @@ name: memory-temporal-frontmatter
 description: The created / last_verified / last_accessed date fields every memory leaf carries — what each means, the ISO format, who writes each (recording tooling vs the PostToolUse Read hook), and why "accessed" means an explicit Read, not a recall (recall is not hookable).
 type: reference
 schema: leaf/v1
+created: 2026-06-29
+last_verified: 2026-06-29
 ---
 
 # Memory temporal frontmatter (`created` / `last_verified` / `last_accessed`)

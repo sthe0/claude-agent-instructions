@@ -3,6 +3,8 @@ name: principle-leaf-schema
 description: The schema for principle leaves (schema:principle/v1) — a generality-graded, provenance-rooted, refutable principle induced from one or more difficulties. The fractal principles/ tier that ADR-0001 § "Principle as a concept with a generality gradient" mandates. Experience leaves (difficulty/v1) are principles at generality level 0.
 type: reference
 schema: leaf/v1
+created: 2026-06-26
+last_verified: 2026-06-29
 ---
 
 # Principle leaf schema (`principle/v1`)

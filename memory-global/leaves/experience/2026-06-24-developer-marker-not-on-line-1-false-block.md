@@ -5,6 +5,8 @@ type: reference
 schema: difficulty/v1
 resolution_confirmed_by_user: "давай закроем задачу"
 refs: [2026-06-24-gate-exemption-is-category-error-for-result-images, 2026-05-26-agent-system-plan-vs-reality-drift]
+created: 2026-06-24
+last_verified: 2026-06-25
 ---
 
 # Spawned developer's return marker after a prose preamble false-BLOCKs the engine

@@ -30,6 +30,8 @@ _GOOD_LEAF = """\
 name: test-leaf
 description: a test memory leaf for unit tests
 type: reference
+created: 2026-06-01
+last_verified: 2026-06-29
 ---
 
 Body content here.

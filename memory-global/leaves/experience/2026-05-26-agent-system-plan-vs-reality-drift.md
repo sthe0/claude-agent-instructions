@@ -5,6 +5,8 @@ type: reference
 schema: difficulty/v1
 resolution_confirmed_by_user: "<migrated 2026-06-11 to difficulty/v1; per-context confirmations preserved inline>"
 refs: [2026-05-25-resolution-gate-confirm-before-record, 2026-06-04-verify-load-bearing-axis, systemic-pattern-scan]
+created: 2026-06-11
+last_verified: 2026-06-24
 ---
 
 # Agent-system plan vs. reality drift

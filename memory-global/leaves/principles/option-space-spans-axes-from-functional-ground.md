@@ -5,6 +5,8 @@ type: reference
 schema: principle/v1
 generality: 3
 induced_from: [coordinator-pitfalls, 2026-06-26-critique-primitive-unifies-conflict-and-principle]
+created: 2026-06-26
+last_verified: 2026-06-26
 ---
 
 # A complete option space is generated from the functional ground, not a mechanism catalog

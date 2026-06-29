@@ -2,6 +2,8 @@
 name: plan-file-split
 description: For substantive multi-stage plans that grow above ~20 KB, split the single plan markdown into an index file (`<slug>.md`) plus per-stage files (`<slug>-stage-<N>.md`). The index carries the structural sections (Problem, Stages-overview pointers, Final verification, Risks); each stage file carries that stage's Output / Expected result image / Actual effort. This lets later Read calls pull only the active stage instead of re-loading the entire plan.
 type: reference
+created: 2026-05-27
+last_verified: 2026-05-27
 ---
 
 # Plan-file split

@@ -8,6 +8,8 @@ refs:
   - token-economy-plan
   - coordinator-objective
   - self-improvement
+created: 2026-06-17
+last_verified: 2026-06-24
 ---
 
 ## Difficulty

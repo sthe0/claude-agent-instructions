@@ -3,6 +3,8 @@ name: plan-activity-ontology
 description: The 8-element activity-structure ontology a plan must cover, mapped to concrete agentctl/plan.py + verify-plan-file.py fields; substantive-only requirement; recursive sub-ordering as the genesis of composite (multi-stage) plans.
 type: reference
 schema: leaf/v1
+created: 2026-06-25
+last_verified: 2026-06-25
 ---
 
 # Plan activity ontology (the 8 elements a plan must cover)

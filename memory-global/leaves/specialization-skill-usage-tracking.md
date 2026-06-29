@@ -2,6 +2,8 @@
 name: specialization-skill-usage-tracking
 description: At task resolution, emit a `name | count | purpose` table for every specialization spawn and `Skill` / `Agent` invocation during the task — feeds the experience leaf's "Cost, effort, and tool usage" section so future similar tasks can analyze where agent effort actually went.
 type: reference
+created: 2026-05-27
+last_verified: 2026-05-27
 ---
 
 # Specialization & skill usage tracking

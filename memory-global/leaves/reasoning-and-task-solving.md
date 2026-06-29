@@ -2,6 +2,8 @@
 name: reasoning-and-task-solving
 description: How the root coordinator should reason on new tasks — understand before acting, plan and approval, when stuck, memory vs prompts, self-check before first production edit.
 type: reference
+created: 2026-05-22
+last_verified: 2026-05-24
 ---
 
 # Reasoning and task solving

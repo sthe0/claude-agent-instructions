@@ -2,6 +2,8 @@
 name: skill-catalog-curation
 description: Discipline for keeping the user-invocable skill catalog lean. Every catalog line is text in the session system reminder — paid by every turn's cache prefix and re-paid in full on every cache_create event. Use scripts/skill-usage-audit.py to surface skills that are never invoked, then remove or de-symlink them.
 type: reference
+created: 2026-05-27
+last_verified: 2026-05-27
 ---
 
 # Skill catalog curation

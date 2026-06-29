@@ -2,6 +2,8 @@
 name: robot-run-acl-access
 description: When YT/Nirvana operations run under a robot identity, set an explicit read ACL for the team's idm-group on EVERY op — else humans can't read stderr/logs/artifacts with their own token and debugging needs robot-token gymnastics.
 type: reference
+created: 2026-06-16
+last_verified: 2026-06-16
 ---
 
 # Robot-launched runs: set team-readable ACL on every operation

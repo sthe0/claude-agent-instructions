@@ -5,6 +5,8 @@ type: reference
 schema: difficulty/v1
 resolution_confirmed_by_user: "Да, решена (Recommended)"
 refs: [2026-06-24-developer-marker-not-on-line-1-false-block.md, 2026-06-24-gate-exemption-is-category-error-for-result-images.md]
+created: 2026-06-25
+last_verified: 2026-06-26
 ---
 
 # hook-state-gate authorizes by the ACTING session's engine node, reached only via a .toml plan

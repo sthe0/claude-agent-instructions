@@ -2,6 +2,8 @@
 name: memory-hierarchy
 description: When and how to split memory into sub-indexes — default 2 levels (MEMORY.md + leaves), spin off sub-indexes for monotonic/domain-coherent/large content
 type: reference
+created: 2026-05-27
+last_verified: 2026-05-27
 ---
 
 # Memory hierarchy

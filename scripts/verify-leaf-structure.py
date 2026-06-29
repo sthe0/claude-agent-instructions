@@ -44,6 +44,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import memory_dates as md
+
 FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 SCHEMA_RE = re.compile(r"^schema\s*:\s*(.*?)\s*$", re.MULTILINE)
 
@@ -90,6 +92,13 @@ def check_content(content: str, path: str = "") -> str | None:
     fm = FRONTMATTER_RE.match(content)
     fm_body = fm.group(1) if fm else ""
     body = content[fm.end():] if fm else content
+
+    # Mirror-validate temporal frontmatter: reject malformed dates, but never a
+    # leaf merely lacking them (require=False) — verify-memory-index is the
+    # universal requirer. See memory_dates.py.
+    temporal = md.validate_temporal(fm_body, require=False)
+    if temporal:
+        return "temporal frontmatter — " + "; ".join(temporal)
 
     schema_m = SCHEMA_RE.search(fm_body)
     schema = schema_m.group(1).strip().strip("\"'") if schema_m else ""

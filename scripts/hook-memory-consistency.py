@@ -22,6 +22,8 @@ import re
 import sys
 from pathlib import Path
 
+import memory_dates as md
+
 FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 VALID_TYPES = frozenset({"user", "feedback", "project", "reference"})
 
@@ -84,6 +86,9 @@ def _check_frontmatter(content: str) -> list[str]:
         issues.append(
             f"`type: {typ}` is not one of: {', '.join(sorted(VALID_TYPES))}"
         )
+    # Temporal frontmatter (memory-temporal-frontmatter.md): created +
+    # last_verified required & well-formed, last_accessed format-checked.
+    issues.extend(md.validate_temporal(fm_body, require=True))
     return issues
 
 

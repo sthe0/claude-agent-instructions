@@ -2,6 +2,8 @@
 name: log-reading-discipline
 description: Hard limit on how many lines you may dump from a single log file per tool call. Aggregate first, then surface counters and short summaries — context is the scarce resource.
 type: reference
+created: 2026-05-26
+last_verified: 2026-05-26
 ---
 
 # Log-reading discipline

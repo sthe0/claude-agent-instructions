@@ -2,6 +2,8 @@
 name: spawning-specialists
 description: Full mechanics of spawning a specialist via claude -p — spawn template inputs, budget tiers, recursion cap, monitoring a running spawn, after-spawn checks, bypassPermissions discipline, return markers.
 type: reference
+created: 2026-06-04
+last_verified: 2026-06-25
 ---
 
 # Spawning specialists

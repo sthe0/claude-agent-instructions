@@ -3,6 +3,8 @@ name: DeepSeek v4 API specifics
 description: Difficulty it removes — you need to call DeepSeek v4 but don't know the model ids, how to toggle thinking-mode, or the reasoning_effort levels. Fact — model identifiers, thinking-mode parameter shape (extra_body), and reasoning_effort levels for DeepSeek's OpenAI-compatible API as of 2026-05.
 type: reference
 schema: leaf/v1
+created: 2026-05-29
+last_verified: 2026-06-24
 ---
 
 # DeepSeek v4 API specifics

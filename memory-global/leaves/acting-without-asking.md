@@ -2,6 +2,8 @@
 name: acting-without-asking
 description: Carve-outs that let the agent act without a per-action confirmation — side-effect-free classes, plan-scope-declared changes, and the budget for estimating an unknown tool's side-effect class. Substantive plan changes still require approval.
 type: reference
+created: 2026-05-26
+last_verified: 2026-06-24
 ---
 
 # Acting without asking

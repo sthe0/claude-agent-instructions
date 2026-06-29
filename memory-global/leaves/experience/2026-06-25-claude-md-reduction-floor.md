@@ -5,6 +5,8 @@ type: reference
 schema: difficulty/v1
 resolution_confirmed_by_user: "Решено"
 refs: [2026-06-04-non-english-skill-content-language-wall.md]
+created: 2026-06-25
+last_verified: 2026-06-25
 ---
 
 # Always-loaded policy shrink hits a dedup floor where size-target meets no-rule-loss

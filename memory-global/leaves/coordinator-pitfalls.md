@@ -2,6 +2,8 @@
 name: coordinator-pitfalls
 description: Anti-patterns the root coordinator must avoid, with the corrective action for each. Read when sensing drift in your own coordination behavior, or when reviewing a session.
 type: reference
+created: 2026-05-22
+last_verified: 2026-06-26
 ---
 
 # Typical coordinator pitfalls

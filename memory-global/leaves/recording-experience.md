@@ -3,6 +3,8 @@ name: recording-experience
 description: The discipline for recording a resolved-task experience leaf — the quality bar (decide before writing), what to record (search-before, scope, schema, ticket-thin, required frontmatter, self-critique), and the auto-trigger of self-improvement from the self-critique. The resolution gate itself stays in CLAUDE.md § On task resolution; this leaf is the execution-time how-to.
 type: reference
 schema: leaf/v1
+created: 2026-06-25
+last_verified: 2026-06-27
 ---
 
 # Recording a resolved-task experience leaf

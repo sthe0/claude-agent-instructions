@@ -5,6 +5,8 @@ type: reference
 schema: difficulty/v1
 resolution_confirmed_by_user: "<retroactive: rule introduced 2026-05-26; original confirmation not captured at write time>"
 refs: [2026-05-26-agent-system-plan-vs-reality-drift]
+created: 2026-06-11
+last_verified: 2026-06-11
 ---
 
 # Silent architectural decision + "config" means a file

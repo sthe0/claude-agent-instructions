@@ -27,7 +27,8 @@ main = _mod.main
 
 
 def _leaf(text_type: str = "type: reference") -> str:
-    return f"---\nname: x\ndescription: d\n{text_type}\n---\n\nbody\n"
+    return (f"---\nname: x\ndescription: d\n{text_type}\n"
+            "created: 2026-06-01\nlast_verified: 2026-06-29\n---\n\nbody\n")
 
 
 def _make_tree(tmp: Path) -> Path:
@@ -85,3 +86,25 @@ def test_bad_type_value_returns_1(tmp_path):
 
 def test_missing_tree_returns_0(tmp_path):
     assert main(["--root", str(tmp_path)]) == 0
+
+
+def test_missing_temporal_dates_returns_1(tmp_path):
+    leaves = _make_tree(tmp_path)
+    # A leaf with valid type but no created/last_verified must be rejected.
+    (leaves / "alpha.md").write_text(
+        "---\nname: x\ndescription: d\ntype: reference\n---\n\nbody\n")
+    (tmp_path / "memory-global" / "MEMORY.md").write_text(
+        "# Global memory\n\n- [Alpha](leaves/alpha.md) — a\n"
+        "- [Beta](leaves/beta.md) — b\n")
+    assert main(["--root", str(tmp_path)]) == 1
+
+
+def test_last_verified_before_created_returns_1(tmp_path):
+    leaves = _make_tree(tmp_path)
+    (leaves / "alpha.md").write_text(
+        "---\nname: x\ndescription: d\ntype: reference\n"
+        "created: 2026-06-29\nlast_verified: 2026-06-01\n---\n\nbody\n")
+    (tmp_path / "memory-global" / "MEMORY.md").write_text(
+        "# Global memory\n\n- [Alpha](leaves/alpha.md) — a\n"
+        "- [Beta](leaves/beta.md) — b\n")
+    assert main(["--root", str(tmp_path)]) == 1

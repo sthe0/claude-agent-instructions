@@ -3,6 +3,8 @@ name: Cursor agent model/key config is client-side, not server-side
 description: Difficulty it removes — you try to configure Cursor's custom LLM provider server-side (~/.cursor-server/) and it has no effect. Fact — that config lives client-side in Cursor.app on the local machine; only terminal-side CLI env vars can be set server-side.
 type: reference
 schema: leaf/v1
+created: 2026-05-29
+last_verified: 2026-06-24
 ---
 
 # Cursor agent mode: where the model/key actually lives

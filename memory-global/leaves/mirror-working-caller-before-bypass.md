@@ -2,6 +2,8 @@
 name: mirror-working-caller-before-bypass
 description: When code fails for missing ambient context inside a constrained environment, mirror the existing working caller that establishes that context before inventing an env/quota/path bypass.
 type: feedback
+created: 2026-06-14
+last_verified: 2026-06-24
 ---
 
 # Mirror the working caller before inventing a bypass

@@ -2,6 +2,8 @@
 name: token-economy-plan
 description: Prioritized plan to reduce token/cache cost in Claude Code sessions without sacrificing autonomy. Items map to concrete artifacts; self-improvement reads this leaf before proposing further token-economy changes so it does not duplicate or conflict with the existing programme.
 type: reference
+created: 2026-05-27
+last_verified: 2026-06-17
 ---
 
 # Token-economy improvement plan

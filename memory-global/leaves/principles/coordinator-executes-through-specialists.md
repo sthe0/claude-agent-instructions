@@ -5,6 +5,8 @@ type: reference
 schema: principle/v1
 generality: 2
 induced_from: [coordinator-pitfalls]
+created: 2026-06-26
+last_verified: 2026-06-26
 ---
 
 # The coordinator executes through specialists

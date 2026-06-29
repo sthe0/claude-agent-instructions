@@ -2,6 +2,8 @@
 name: systemic-pattern-scan
 description: At task resolution — scan experience for systemic friction patterns and run overcome-difficulty against the agent-system-as-plan to produce architectural proposals, not rule tweaks
 type: reference
+created: 2026-05-27
+last_verified: 2026-05-27
 ---
 
 # Systemic pattern scan

@@ -2,6 +2,8 @@
 name: delegatable-work-patterns
 description: Two recurring work shapes the opus main thread must hand to a CHEAP-model sub-agent instead of doing inline — (A) post-spawn monitoring loops, (B) initial codebase/data exploration before editing — plus the model-tier heuristic for any spawn. Delegation today fires only for "open research question → return digest"; these two shapes are missed because they don't feel like research.
 type: feedback
+created: 2026-06-17
+last_verified: 2026-06-24
 ---
 
 **Difficulty:** the main thread runs on the expensive Opus model, yet routinely does high-volume mechanical work **inline** (so the volume stays in opus context and bills opus rates) when it should hand that work to a cheap-model sub-agent that returns only the conclusion. A 48h audit (2026-06-17, 65 sessions) found **~2150 main-thread Read+Bash calls**, the `Agent` tool used in only **~21/65 sessions**, and of 48 sub-agent spawns: **27 opus / 21 haiku / 0 sonnet**, with **44/48 spawned without an explicit `model:`** — but "no explicit model" ≠ "ran opus": the 21 haiku were `Explore`-type spawns that default to haiku on their own, so only **~23/48 actually inherited opus**. In zero cases did the coordinator *deliberately* choose a cheap model — that is the real finding. (`policy-scorecard.py` prints both `no_explicit_model` and the precise `inherit_opus` to keep this distinction; see [[policy-effectiveness-tracking]].)

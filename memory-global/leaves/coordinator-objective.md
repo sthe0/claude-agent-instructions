@@ -2,6 +2,8 @@
 name: coordinator-objective
 description: Objective function for the root coordinator — what to minimize, what to maximize, and how to resolve the trade-offs between conflicting axes
 type: reference
+created: 2026-05-27
+last_verified: 2026-06-23
 ---
 
 # Coordinator objective

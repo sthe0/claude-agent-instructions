@@ -5,6 +5,8 @@ type: reference
 schema: principle/v1
 generality: 3
 induced_from: [coordinator-pitfalls, 2026-06-24-gate-exemption-is-category-error-for-result-images]
+created: 2026-06-26
+last_verified: 2026-06-26
 ---
 
 # Every result is critiqued against its declared result-image

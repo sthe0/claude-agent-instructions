@@ -3,6 +3,8 @@ name: tests-accompany-code
 description: Any change to code ships with tests that verify the change — the default for both the developer (who writes them) and the reviewer (who rejects a code diff lacking them); narrow named escape class for the genuinely non-testable
 type: feedback
 schema: leaf/v1
+created: 2026-06-25
+last_verified: 2026-06-25
 ---
 
 ## Difficulty

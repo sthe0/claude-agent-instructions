@@ -3,6 +3,8 @@ name: arcanum-api-readonly-pr-fields
 description: "Arcanum API: the review-request resource is read-only, BUT its sub-resources /summary and /description accept PUT — edit a published PR's title/body programmatically, no web UI or force-push needed."
 type: reference
 schema: leaf/v1
+created: 2026-06-15
+last_verified: 2026-06-24
 ---
 
 # Arcanum public API: edit PR title/description via the /summary and /description sub-resources

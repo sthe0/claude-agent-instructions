@@ -3,6 +3,8 @@ name: harness-read-dedup
 description: Difficulty it removes — you are tempted to build a hook to dedup re-Reads, or you burn tokens re-reading an unchanged file. Fact — the Claude Code harness already returns a "Wasted call" stub for a re-Read of an unchanged file (whether first loaded via Read or via a system-reminder), so no custom hook is needed; grounds the no-rereads rule in CLAUDE.md.
 type: reference
 schema: leaf/v1
+created: 2026-05-27
+last_verified: 2026-06-24
 ---
 
 # Harness built-in Read dedup

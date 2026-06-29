@@ -2,6 +2,8 @@
 name: tracker-write-token
 description: Yandex Tracker (Startrek) writes need ~/.tracker-token, not $OAUTH_TOKEN; MCP tracker tools are read-only.
 type: reference
+created: 2026-06-16
+last_verified: 2026-06-16
 ---
 
 # Tracker (Startrek) write path on this machine

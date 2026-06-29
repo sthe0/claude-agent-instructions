@@ -3,6 +3,8 @@ name: leaf-schema
 description: The rigid section schema for ordinary memory leaves (schema:leaf/v1) — required ## Difficulty / ## Guidance / ## See also, the grandfather rule for un-migrated leaves, and what verify-leaf-structure.py enforces. Experience leaves use difficulty/v1 instead (see experience-leaf-schema.md).
 type: reference
 schema: leaf/v1
+created: 2026-06-24
+last_verified: 2026-06-29
 ---
 
 # Memory leaf schema (`leaf/v1`)

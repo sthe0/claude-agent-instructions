@@ -2,6 +2,8 @@
 name: autocompact-threshold-policy
 description: Keep the auto-compaction trigger comfortably ABOVE the ~90–97k post-compaction floor — a trigger at/below the floor re-fires every turn (thrash). Primary knob CLAUDE_CODE_AUTO_COMPACT_WINDOW pins the effective window (precedence, value auto|100k–1M). Verified trigger = min(round((window−20k)·(1−frac)), window−33k), frac≈0.2 default (server-tunable). The /context "Autocompact buffer" (33k = 20k+13k, window-independent) is a DISPLAY reserve, NOT window−trigger. Current: window=210k, 1M on, no PCT -> trigger ~152k (= the minimum safe window; floor ~100k + 50k margin).
 type: feedback
+created: 2026-06-15
+last_verified: 2026-06-24
 ---
 
 **Difficulty:** keep the working context bounded before auto-compaction **without** destabilizing the session — and the hard constraint is that the auto-compaction *trigger* cannot live near the **~90–97k post-compaction floor**. That floor is structural and remarkably stable: static prefix ~60k (system prompt + tools + MCP + memory + skills) + the compaction summary ~14–20k + first reads ≈ **~90–97k** (measured across 5 sessions, 2026-06-17). It can be pushed *higher* by large retained tool outputs (the harness itself warns "a file/tool output is likely too large"). Env is read **once at session start**; a hook cannot re-threshold a live session.

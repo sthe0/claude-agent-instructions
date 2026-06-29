@@ -2,6 +2,8 @@
 name: subagent-resume-and-transcripts
 description: How to resume a previously spawned Claude Code subagent (SendMessage + agent ID, requires CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1) and where subagent transcripts live on disk. Two operational nuances — subagent auto-compaction and transcript cleanup — that matter for long-running or post-mortem work.
 type: reference
+created: 2026-05-22
+last_verified: 2026-05-22
 ---
 
 # Subagent: resume and transcripts

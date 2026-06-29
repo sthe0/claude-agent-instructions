@@ -2,6 +2,8 @@
 name: Remote sudo fast-paths for Claude sessions
 description: Cheapest ways to get sudo access on a remote host through Claude when you can ssh as one user but the target work is in another user's space — pick by task duration.
 type: reference
+created: 2026-05-29
+last_verified: 2026-05-29
 ---
 
 # Remote sudo fast-paths

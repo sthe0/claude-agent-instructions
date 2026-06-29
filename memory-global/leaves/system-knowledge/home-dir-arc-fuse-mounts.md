@@ -3,6 +3,8 @@ name: home-dir-arc-fuse-mounts
 description: difficulty — a broad find/grep/Grep/Glob rooted at /home/the0, ~, or $HOME silently fans out across several network-backed arc FUSE mounts and is pathologically slow / hammers the mount. Fact — the home dir holds multiple fuse.arc mountpoints as direct children; scope every recursive search to a specific repo or subdir, never to the home root.
 type: reference
 schema: leaf/v1
+created: 2026-06-23
+last_verified: 2026-06-24
 ---
 
 # `/home/the0` holds multiple arc FUSE mounts — never root a recursive search there
