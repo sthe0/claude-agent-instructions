@@ -23,18 +23,34 @@ automatically via `git push --dry-run`. If that succeeds, you are an author; no 
 ## Per-machine setup
 
 `setup-symlinks.sh` calls `configure-identity.sh` automatically, which creates
-`~/.claude/agent-identity.local` with the default channel (`startrek`) if the file is absent. To
-switch channel, edit the file:
+`~/.claude/agent-identity.local` if the file is absent. The channel is **auto-detected** at that
+point from hardware signals (via `difficulty_channel.detect`) — you normally do not set it by hand.
+
+Detection precedence (first match wins), written into the file as `# detected:` comments so you can
+see why a channel was chosen:
+
+1. **Any strong internal signal → `startrek`.** Signals: a corp hostname (`*.yandex.net` /
+   `*.yandex-team.ru`), the Arcadia toolchain (`ya` **and** `arc` on `PATH`), skotty
+   (`~/.skotty` or a `skotty` binary), or `/etc/yandex`.
+2. Else, **any GitHub credential → `github`** (`~/.github-token`, `$GITHUB_TOKEN`, or `gh`).
+3. Else, **a tracker token alone** (`~/.tracker-token`, no GitHub cred) → `startrek`.
+4. Else → `github` (safe public default), with a warning that no credential was found.
+
+If the chosen channel lacks its own write credential, the created file carries a `# detected: warning:`
+line so the omission is visible before the first filing.
+
+To **override** the detected value (or switch later), edit the `difficulty_channel=` line:
 
 ```bash
-# For external contributors — GitHub Issues
+# Force the external GitHub Issues channel
 echo "difficulty_channel=github" > ~/.claude/agent-identity.local
 
-# For internal Yandex developers (default)
+# Force the internal Yandex Tracker channel
 echo "difficulty_channel=startrek" > ~/.claude/agent-identity.local
 ```
 
-The file is machine-local and gitignored; it is never committed.
+`configure-identity.sh` **never overwrites an existing file**, so a manual choice (or a prior
+detection) is always preserved. The file is machine-local and gitignored; it is never committed.
 
 ## Credential setup
 
