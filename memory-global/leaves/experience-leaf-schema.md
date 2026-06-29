@@ -98,7 +98,7 @@ This keeps a single source of truth (the ticket), avoids context spent re-typing
 
 - **Every** experience leaf: non-empty `resolution_confirmed_by_user` frontmatter (PreToolUse `Write` hook + `verify-all`). Writing on assumed resolution is a recurring failure mode.
 - **`schema: difficulty/v1`** leaves additionally:
-  - **standalone** (no `ticket:`): require `## Difficulty`, `## Order & criterion`, `## Contexts`, `## Cost`.
+  - **standalone** (no `ticket:`): require `## Difficulty`, `## Order & criterion`, `## Contexts`, `## Cost` — and the `## Cost` section must not contain an unreplaced TODO placeholder; `agentctl resolve` auto-surfaces the plan cost figure, so the writer can fill the real value immediately.
   - **ticket** (`ticket:` non-empty): require the `ticket:` value to appear in the body (the pointer); sections relaxed — the record lives in the ticket.
 - Leaves **without** a `schema:` field keep the legacy confirmation-only check (grandfathered).
 - **`generality`** is accepted but **not required** on an experience leaf; its absence means generality 0 (the verifier ignores unknown/absent frontmatter keys, so no code change is needed to accept it). A leaf carrying `generality: 0` validates exactly as one without the field — this is the generality-0 profile of the unified model.

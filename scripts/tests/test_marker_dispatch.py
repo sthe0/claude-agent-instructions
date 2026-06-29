@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 
 from agentctl import cli, dispatch
-from agentctl.dispatch import RunResult, parse_marker
-from agentctl.state import Node
+from agentctl.dispatch import RunResult, build_argv, parse_marker
+from agentctl.state import Actor, Criterion, Means, Node, Stage, Subject
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -52,6 +52,33 @@ def test_parse_marker_finds_marker_after_preamble():
     assert parse_marker("preamble text\nmore notes\nstill nothing\n") == (None, "")
     # and a MALFORMED wrapper anywhere is detected
     assert parse_marker("summary line\nMALFORMED: no marker\n") == ("MALFORMED", "no marker")
+
+
+# --- build_argv -------------------------------------------------------------
+
+def _make_spawn_stage(index: int = 3) -> Stage:
+    return Stage(
+        index=index,
+        title="test stage",
+        subject=Subject(material="m", result="r"),
+        means=Means(means="Edit", method="apply"),
+        actor=Actor(executor="spawn:developer"),
+        criterion=Criterion(criterion_type="measurable", done_criterion="tests green"),
+    )
+
+
+def test_build_argv_includes_stage_index():
+    stage = _make_spawn_stage(index=7)
+    argv = build_argv(stage, "/tmp/plan.toml")
+    assert "--stage-index" in argv
+    assert argv[argv.index("--stage-index") + 1] == "7"
+
+
+def test_build_argv_stage_index_matches_stage():
+    for idx in (1, 2, 5):
+        stage = _make_spawn_stage(index=idx)
+        argv = build_argv(stage, "/tmp/plan.toml")
+        assert argv[argv.index("--stage-index") + 1] == str(idx)
 
 
 # --- drift guard ------------------------------------------------------------

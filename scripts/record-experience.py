@@ -124,7 +124,7 @@ def standalone_body(a) -> str:
         f"\n**Acceptance check:** {a.criterion}\n",
         "\n## Contexts\n",
         context_block(a.date, a.context_label, a.context_where, a.plan),
-        "\n## Cost\n", f"{a.cost or 'TODO — fill via cost-report.py / tool-usage-report.py'}\n",
+        "\n## Cost\n", f"{a.cost or 'TODO — fill from the figure surfaced by `agentctl resolve` (see also scripts/cost-report.py)'}\n",
     ]
     if a.self_critique:
         parts += ["\n## Self-critique of the agent system\n", f"{a.self_critique}\n"]

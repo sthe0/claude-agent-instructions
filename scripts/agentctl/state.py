@@ -19,7 +19,11 @@ import json
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 9
+
+# Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
+# prevents unbounded service-sub-plan recursion.
+_MAX_PLAN_STACK = 5
 
 
 class Node(str, Enum):
@@ -225,11 +229,17 @@ class Criterion:
     only if the process exit code equals `expected_exit` (default 0). This moves
     "verify the right axis, report honestly" from discipline into an invariant —
     the model is removed from the trust path for the measurable subset. Absent a
-    command (the default) the engine keeps its flag-only behaviour."""
+    command (the default) the engine keeps its flag-only behaviour.
+
+    For an acceptance_review criterion, `observation` records WHAT the reviewer
+    actually saw — distinct from `result` (the expected image). The engine requires
+    a non-empty, non-echoed observation when recording a passed acceptance stage so
+    the "actual" side is never just a restatement of the target."""
     criterion_type: str  # CriterionType value
     done_criterion: str
     verify_command: str | None = None
     expected_exit: int = 0
+    observation: str = ""
 
 
 @dataclass
@@ -252,11 +262,59 @@ class Supply:
 
 
 @dataclass
+class FinalCheck:
+    """A typed end-to-end check the engine runs at verify-final.
+
+    Runs via `bash -c` in repo_root (if set). `label` is a human-readable name
+    for failure messages; when empty the command string is used instead."""
+    command: str
+    expected_exit: int = 0
+    label: str = ""
+
+
+@dataclass
+class PlanFrame:
+    """A snapshot of the parent execution context pushed onto plan_stack when a
+    service sub-plan starts. Restored in full on pop so the parent resumes exactly
+    where it left off. `originating_stage` is the parent stage whose missing element
+    the sub-plan supplies; it is marked PASSED on successful pop."""
+    plan_path: str | None
+    node: str
+    task_id: str
+    goal: str
+    overall_done_criterion: str
+    overall_criterion_type: str
+    weight_class: str | None
+    route: str | None
+    repo_root: str | None
+    final_check: list[FinalCheck]
+    partition: "Partition | None"
+    approval: GateRecord
+    resolution: GateRecord
+    stages: list["Stage"]
+    current_stage: int | None
+    originating_stage: int
+
+
+@dataclass
 class Outcome:
     """The mutable execution record — distinct from the immutable declaration."""
     status: str = StageStatus.PENDING.value
     actual: str | None = None
     fail_digests: list[str] = field(default_factory=list)
+    cost_usd: float | None = None
+    duration_ms: int | None = None
+    spawn_count: int = 0
+
+
+@dataclass
+class CostRollup:
+    """Aggregated execution cost for the whole plan, surfaced at verify-final/resolve."""
+    total_cost_usd: float | None = None
+    total_duration_ms: int | None = None
+    spawn_count: int = 0
+    attributed_stages: int = 0
+    note: str = ""
 
 
 @dataclass
@@ -340,6 +398,7 @@ class Stage:
                 done_criterion=d.get("done_criterion", ""),
                 verify_command=d.get("verify_command"),
                 expected_exit=int(d.get("expected_exit", 0)),
+                observation=d.get("observation", ""),
             ),
             principle=None,  # flat states predate the principle element
             conditions=d.get("conditions"),
@@ -365,6 +424,9 @@ class SessionState:
     # repo_root). None inherits the invoker's cwd — byte-identical to the pre-field
     # behaviour, so live states predating the field load unchanged.
     repo_root: str | None = None
+    # Typed end-to-end checks run at verify-final after per-stage re-runs.
+    # Absent in legacy states (schema_version <= 7): from_dict defaults to [].
+    final_check: list[FinalCheck] = field(default_factory=list)
     route: str | None = None
     node: str = Node.CLASSIFIED.value
     blocked_from: str | None = None
@@ -387,6 +449,13 @@ class SessionState:
     # cls(**data) round-trips them untouched; the framework lives in plugins.py.
     plugins: dict[str, dict] = field(default_factory=dict)
     plugins_archive: dict[str, dict] = field(default_factory=dict)
+    # Service sub-plan frame stack (schema 9): each push-subplan appends a PlanFrame
+    # snapshot of the parent; pop-subplan restores it. Empty list is byte-identical
+    # to pre-schema-9 behaviour — legacy states load with [].
+    plan_stack: list[PlanFrame] = field(default_factory=list)
+    # Aggregated execution cost, populated at verify-final/resolve. None until then.
+    # Absent in pre-schema-10 states: from_dict defaults to None.
+    cost: "CostRollup | None" = None
     schema_version: int = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -416,6 +485,10 @@ class SessionState:
             Node.ROUTED.value,
         ):
             raise InvariantError("weight_class=CHAT is terminal at ROUTED")
+        if len(self.plan_stack) > _MAX_PLAN_STACK:
+            raise InvariantError(
+                f"plan_stack depth {len(self.plan_stack)} exceeds _MAX_PLAN_STACK={_MAX_PLAN_STACK}"
+            )
 
     # --- stage helpers ----------------------------------------------------
     def stage(self, index: int) -> Stage:
@@ -461,12 +534,36 @@ class SessionState:
         data.pop("self_improvement", None)  # legacy field (schema <=4); self-improvement now runs on the standard spine
         data.setdefault("plugins", {})            # migration: schema <=5 has no plugin layer
         data.setdefault("plugins_archive", {})
+        data["final_check"] = [FinalCheck(**fc) for fc in data.get("final_check", [])]
         data["stages"] = [Stage.from_dict(s) for s in data.get("stages", [])]
         decomp = data.get("partition")
         data["partition"] = Partition(**decomp) if decomp else None
         pr = data.get("permission_request")
         data["permission_request"] = PermissionRequest(**pr) if pr else None
         data["difficulty"] = Difficulty.from_dict(data.get("difficulty"))
+        cost_raw = data.get("cost")
+        data["cost"] = CostRollup(**cost_raw) if cost_raw else None
+        data["plan_stack"] = [
+            PlanFrame(
+                plan_path=f.get("plan_path"),
+                node=f["node"],
+                task_id=f.get("task_id", ""),
+                goal=f.get("goal", ""),
+                overall_done_criterion=f.get("overall_done_criterion", ""),
+                overall_criterion_type=f.get("overall_criterion_type", CriterionType.MEASURABLE.value),
+                weight_class=f.get("weight_class"),
+                route=f.get("route"),
+                repo_root=f.get("repo_root"),
+                final_check=[FinalCheck(**fc) for fc in f.get("final_check", [])],
+                partition=Partition(**f["partition"]) if f.get("partition") else None,
+                approval=GateRecord(**f["approval"]),
+                resolution=GateRecord(**f["resolution"]),
+                stages=[Stage.from_dict(s) for s in f.get("stages", [])],
+                current_stage=f.get("current_stage"),
+                originating_stage=int(f["originating_stage"]),
+            )
+            for f in data.get("plan_stack", [])
+        ]
         return cls(**data)
 
     @classmethod

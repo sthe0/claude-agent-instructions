@@ -1,7 +1,10 @@
 """Directive contract for the key commands: every command returns a Directive with
 ok/node/action set, and the gate commands carry their return markers (submit-plan ->
 PLAN-READY hard gate; resolve -> COMPLETED; loop guard -> ESCALATE)."""
+import json as _json
 from argparse import Namespace
+
+import pytest
 
 from agentctl import cli
 from agentctl.directive import Directive
@@ -94,6 +97,40 @@ def test_failed_submit_plan_does_not_strand(store, fixtures_dir, tmp_path):
     assert store.load(sid).node == Node.PLAN_READY.value
 
 
+def test_substantive_markdown_plan_refused(store, tmp_path):
+    """A substantive plan submitted as .md is refused; session stays at PLANNING."""
+    sid = "subst-md"
+    _start(store, sid)
+    cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
+                        wall_clock_min=60, tracker_key=None, architectural=True,
+                        external_effect=False, new_dependency=False,
+                        public_api_change=False), store=store)
+    cli.cmd_plan(ns(session=sid), store=store)
+
+    md_plan = tmp_path / "plan.md"
+    md_plan.write_text(
+        "## Problem and done criteria\nFix.\n\n"
+        "## Stages\nExpected result image: done\n\n"
+        "## Final verification\nrun.\n\n"
+        "## Risks\nnone\n",
+        encoding="utf-8",
+    )
+    d = cli.cmd_submit_plan(ns(session=sid, plan=str(md_plan)), store=store)
+
+    assert d.ok is False
+    assert d.action == "fix_plan"
+    assert "toml" in d.detail.lower() or "toml" in str(d.data).lower()
+    state = store.load(sid)
+    assert state.node == Node.PLANNING.value   # NOT stranded at PLAN_READY
+
+
+def test_substantive_toml_plan_still_accepted(store, fixtures_dir):
+    """A substantive session with a .toml plan still advances to PLAN_READY (regression guard)."""
+    d = _to_plan_ready(store, "subst-toml", str(fixtures_dir / "plan_two_stage.toml"))
+    assert d.ok is True
+    assert d.marker == "PLAN-READY"
+
+
 def test_resolve_completed_marker(store, fixtures_dir):
     sid = "d4"
     _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
@@ -160,6 +197,19 @@ def test_critique_persists_the_structured_split(store, fixtures_dir):
     crit = store.load(sid).difficulty.critique
     assert crit.invariants_to_preserve == ["stage 1 done criterion"]
     assert crit.differences_to_remove == ["means: ad-hoc retry"]
+
+
+def test_measurable_record_result_unchanged_without_observation(store, fixtures_dir):
+    """Regression: measurable record-result passes without --observation (unchanged behaviour)."""
+    sid = "meas-obs"
+    _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
+    cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
+                         m3_severe=False, m4_severe=False), store=store)
+    cli.cmd_next_stage(ns(session=sid), store=store)
+    d = cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
+                               control="reviewed: ok"), store=store)
+    assert d.ok is True
 
 
 def test_status_directive_on_empty_session(store):
@@ -274,3 +324,254 @@ def test_reset_from_live_with_force_rearms(store, fixtures_dir):
     fresh = store.load(sid)
     assert fresh.node == Node.CLASSIFIED.value
     assert fresh.task_id == "demo2"
+
+
+def test_final_check_carried_to_state_at_submit(store, tmp_path):
+    """[[final_check]] tables in a TOML plan are parsed and carried to session state."""
+    plan = tmp_path / "plan_with_fc.toml"
+    plan.write_text(
+        '[meta]\ntask_id = "fc-test"\ngoal = "g"\ndone_criterion = "dc"\n'
+        'criterion_type = "measurable"\n\n'
+        '[[stage]]\nindex = 1\ntitle = "s"\nexecutor = "in_thread"\n'
+        'expected_result_image = "img"\ndone_criterion = "dc"\n\n'
+        '[[final_check]]\ncommand = "pytest -q"\nexpected_exit = 0\nlabel = "suite"\n',
+        encoding="utf-8",
+    )
+    sid = "fc-carry"
+    _start(store, sid)
+    cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
+                        wall_clock_min=60, tracker_key=None, architectural=True,
+                        external_effect=False, new_dependency=False,
+                        public_api_change=False), store=store)
+    cli.cmd_plan(ns(session=sid), store=store)
+    d = cli.cmd_submit_plan(ns(session=sid, plan=str(plan)), store=store)
+    assert d.ok is True
+    state = store.load(sid)
+    assert len(state.final_check) == 1
+    assert state.final_check[0].command == "pytest -q"
+    assert state.final_check[0].expected_exit == 0
+    assert state.final_check[0].label == "suite"
+
+
+# --- cost attribution via --cost-log -----------------------------------------
+
+def _to_executing_spawn(store, sid, fixtures_dir):
+    """Drive a session to EXECUTING with a spawn:developer stage 1 active."""
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    _to_plan_ready(store, sid, plan)
+    cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
+                         m3_severe=False, m4_severe=False), store=store)
+    cli.cmd_next_stage(ns(session=sid), store=store)
+    return plan
+
+
+def test_record_result_spawn_stage_attributes_cost(store, fixtures_dir, tmp_path):
+    """record-result with --cost-log populates Outcome cost fields on spawn stages."""
+    sid = "cost-attr"
+    plan = _to_executing_spawn(store, sid, fixtures_dir)
+
+    cost_log = tmp_path / "costs.jsonl"
+    cost_log.write_text(
+        _json.dumps({"plan_path": plan, "stage_index": 1,
+                     "cost_usd": 0.75, "duration_ms": 1200}) + "\n",
+        encoding="utf-8",
+    )
+
+    d = cli.cmd_record_result(
+        ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
+           cost_log=str(cost_log)),
+        store=store,
+    )
+    assert d.ok is True
+    state = store.load(sid)
+    stage1 = state.stage(1)
+    assert stage1.outcome.status == "PASSED"
+    assert stage1.outcome.cost_usd == pytest.approx(0.75)
+    assert stage1.outcome.duration_ms == 1200
+    assert stage1.outcome.spawn_count == 1
+
+
+def test_record_result_spawn_stage_sums_multiple_log_rows(store, fixtures_dir, tmp_path):
+    """Multiple log rows for the same stage are summed (retries)."""
+    sid = "cost-sum"
+    plan = _to_executing_spawn(store, sid, fixtures_dir)
+
+    cost_log = tmp_path / "costs.jsonl"
+    cost_log.write_text(
+        _json.dumps({"plan_path": plan, "stage_index": 1,
+                     "cost_usd": 0.5, "duration_ms": 800}) + "\n" +
+        _json.dumps({"plan_path": plan, "stage_index": 1,
+                     "cost_usd": 0.3, "duration_ms": 400}) + "\n",
+        encoding="utf-8",
+    )
+
+    d = cli.cmd_record_result(
+        ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
+           cost_log=str(cost_log)),
+        store=store,
+    )
+    assert d.ok is True
+    state = store.load(sid)
+    stage1 = state.stage(1)
+    assert stage1.outcome.cost_usd == pytest.approx(0.8)
+    assert stage1.outcome.duration_ms == 1200
+    assert stage1.outcome.spawn_count == 2
+
+
+def test_record_result_missing_cost_log_leaves_none(store, fixtures_dir, tmp_path):
+    """A non-existent cost log degrades gracefully — cost fields stay None."""
+    sid = "cost-none"
+    _to_executing_spawn(store, sid, fixtures_dir)
+
+    missing = tmp_path / "no_such_file.jsonl"
+
+    d = cli.cmd_record_result(
+        ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
+           cost_log=str(missing)),
+        store=store,
+    )
+    assert d.ok is True
+    state = store.load(sid)
+    stage1 = state.stage(1)
+    assert stage1.outcome.cost_usd is None
+    assert stage1.outcome.duration_ms is None
+    assert stage1.outcome.spawn_count == 0
+
+
+def test_verify_final_populates_state_cost(store, fixtures_dir, tmp_path):
+    """verify-final computes a CostRollup and stores it on state.cost."""
+    sid = "cost-vf"
+    plan = _to_executing_spawn(store, sid, fixtures_dir)
+
+    cost_log = tmp_path / "costs.jsonl"
+    cost_log.write_text(
+        _json.dumps({"plan_path": plan, "stage_index": 1,
+                     "cost_usd": 1.0, "duration_ms": 2000}) + "\n",
+        encoding="utf-8",
+    )
+
+    # Pass stage 1
+    cli.cmd_record_result(
+        ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
+           cost_log=str(cost_log)),
+        store=store,
+    )
+    # Pass stage 2 (no cost log for this one)
+    cli.cmd_next_stage(ns(session=sid), store=store)
+    cli.cmd_record_result(
+        ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
+           cost_log=str(tmp_path / "empty.jsonl")),
+        store=store,
+    )
+
+    d = cli.cmd_verify_final(ns(session=sid), store=store)
+    assert d.ok is True
+    state = store.load(sid)
+    assert state.cost is not None
+    assert state.cost.total_cost_usd == pytest.approx(1.0)
+    assert state.cost.total_duration_ms == 2000
+    assert state.cost.spawn_count == 1
+    assert state.cost.attributed_stages == 1
+    assert state.cost.note != ""
+    # Directive carries the rollup
+    assert "cost" in d.data
+    assert d.data["cost"]["total_cost_usd"] == pytest.approx(1.0)
+    assert d.data["cost"]["attributed_stages"] == 1
+
+
+def test_resolve_directive_carries_cost(store, fixtures_dir, tmp_path):
+    """resolve Directive.data includes the plan cost total."""
+    sid = "cost-res"
+    plan = _to_executing_spawn(store, sid, fixtures_dir)
+
+    cost_log = tmp_path / "costs.jsonl"
+    cost_log.write_text(
+        _json.dumps({"plan_path": plan, "stage_index": 1,
+                     "cost_usd": 0.5, "duration_ms": 1000}) + "\n" +
+        _json.dumps({"plan_path": plan, "stage_index": 2,
+                     "cost_usd": 0.25, "duration_ms": 500}) + "\n",
+        encoding="utf-8",
+    )
+
+    for _ in range(2):
+        cli.cmd_record_result(
+            ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
+               cost_log=str(cost_log)),
+            store=store,
+        )
+        cli.cmd_next_stage(ns(session=sid), store=store)
+
+    # All stages passed; verify-final arms the resolution gate
+    d_vf = cli.cmd_verify_final(ns(session=sid), store=store)
+    assert d_vf.ok is True
+
+    # Satisfy experience plugin gate
+    cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="searched"), store=store)
+    cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="recorded"), store=store)
+
+    d = cli.cmd_resolve(ns(session=sid, by="user"), store=store)
+    assert d.ok is True
+    assert "cost" in d.data
+    assert d.data["cost"]["total_cost_usd"] == pytest.approx(0.75)
+    assert d.data["cost"]["total_duration_ms"] == 1500
+    assert d.data["cost"]["spawn_count"] == 2
+    assert d.data["cost"]["attributed_stages"] == 2
+
+
+def test_resolve_without_attributed_cost_has_empty_cost_dict(store, fixtures_dir):
+    """When no cost was attributed, resolve Directive still carries cost key (empty)."""
+    sid = "cost-empty"
+    _to_executing_spawn(store, sid, fixtures_dir)
+
+    for _ in range(2):
+        cli.cmd_record_result(
+            ns(session=sid, status="passed", actual="ok", control="reviewed: ok"),
+            store=store,
+        )
+        cli.cmd_next_stage(ns(session=sid), store=store)
+
+    cli.cmd_verify_final(ns(session=sid), store=store)
+    cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="searched"), store=store)
+    cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="recorded"), store=store)
+
+    d = cli.cmd_resolve(ns(session=sid, by="user"), store=store)
+    assert d.ok is True
+    # cost key is present but values are None/zero
+    assert "cost" in d.data
+    assert d.data["cost"].get("total_cost_usd") is None
+    assert d.data["cost"].get("spawn_count") == 0
+
+
+def test_record_result_inthread_stage_leaves_cost_none(store, tmp_path):
+    """An in-thread (small-change) stage always leaves cost fields None."""
+    sid = "cost-inthread"
+    _start(store, sid)
+    cli.cmd_classify(ns(session=sid, chat=False, changed_lines=5, files=1,
+                        wall_clock_min=5, tracker_key=None, architectural=False,
+                        external_effect=False, new_dependency=False,
+                        public_api_change=False), store=store)
+    cli.cmd_next_stage(ns(session=sid), store=store)
+
+    # write a log that has a matching row — it must be ignored for in-thread stages
+    cost_log = tmp_path / "costs.jsonl"
+    cost_log.write_text(
+        _json.dumps({"plan_path": "whatever", "stage_index": 1,
+                     "cost_usd": 1.0, "duration_ms": 500}) + "\n",
+        encoding="utf-8",
+    )
+
+    state = store.load(sid)
+    assert not state.active_stage().is_spawn()
+
+    d = cli.cmd_record_result(
+        ns(session=sid, status="passed", actual="ok", control=None,
+           cost_log=str(cost_log)),
+        store=store,
+    )
+    assert d.ok is True
+    state = store.load(sid)
+    s = state.stage(1)
+    assert s.outcome.cost_usd is None
+    assert s.outcome.duration_ms is None
+    assert s.outcome.spawn_count == 0

@@ -53,6 +53,10 @@ Each node is a phase in the task lifecycle (`Node` in `state.py`). The *route* p
 | `DIAGNOSING` | A stage FAILED: the **overcome-difficulty** sub-spine. The engine runs `declare → investigate → critique` (filling the `Difficulty` record) and **blocks `replan` until the record is complete** (`gates.difficulty_blockers`). When `critique` records the structured similarities/differences split, `replan` additionally enforces a **coverage gate** (`gates.replan_coverage_blockers`): every named similarity must reappear as a stage condition/invariant and naming any difference forces a means/method to change. `replan` is the sole exit — back to `VERIFYING` to retry, or to `PLAN_READY` for a substantive re-plan. The *cognition* of each phase lives in the `overcome-difficulty` skill. |
 | `BLOCKED` | A structural blocker (spawn refusal, escalation) interrupted the flow; `unblock` / `replan` returns to the prior node. |
 
+### Sub-plan stack
+
+When a stage's unmet element requires a full substantive plan to supply it, the engine nests a **service sub-plan** via `push-subplan` / `pop-subplan`. On `push-subplan` a `PlanFrame` snapshot of the current parent context (plan path, node, stages, gates, repo root, `final_check`, `partition`, `originating_stage`) is pushed onto `state.plan_stack`; the child starts a fresh `CLASSIFIED → … → RESOLVED` cycle. On `pop-subplan` the parent frame is restored and the originating stage is marked `PASSED`. **No auto-pop across an unresolved child** — `pop-subplan`'s source node is `RESOLVED`, which already requires `resolution.passed`, so the guarantee is structural (machine transition table), not an extra check. Stack depth is bounded by `_MAX_PLAN_STACK` (mirrors `max-recursion-depth` from `~/.claude/config.md`).
+
 ## Commands
 
 The happy-path spine, in order:
@@ -80,6 +84,8 @@ start → classify → plan → submit-plan → approve → partition → next-s
 | `replan` | Apply a revised `--plan`. **Precondition-gated** in `DIAGNOSING`: refused until the `Difficulty` record is complete, and — when the critique recorded a split — until the **coverage gate** passes (similarities carried into conditions/invariants; a means/method changed for the declared differences). A means/method/conditions/invariants-only delta is a **refinement** (retries the re-armed stage, `→ VERIFYING`); executor/done-criterion changes are **substantive** (re-arm the approval gate, `→ PLAN_READY`). |
 | `block` / `unblock` | Mark a difficulty (`any → BLOCKED`) and return to the prior node. |
 | `resolve-permission` | Record the decision on a specialist's `PERMISSION-REQUEST`. |
+| `push-subplan` | Start a service sub-plan: snapshot parent context onto `plan_stack`, arm child plan (`EXECUTING → CLASSIFIED`). Requires `--plan <path>` and `--originating-stage <n>`. |
+| `pop-subplan` | Finish a service sub-plan: restore parent frame from `plan_stack`, mark originating stage PASSED (`RESOLVED → EXECUTING`). |
 | `status` | Inspect the current node + directive; no transition. |
 | `drive` | **Orchestrator** — walk the *opening* spine (`classify → … → next-stage`) in one call, firing only legal forward edges from the current node. **Stops at the plan-approval gate** (`PLAN_READY`) unless given `--approved-by <who>` (threaded into `approve --by`). Routes chat/small-change without a plan gate; stops at `PARTITIONED` when the M1–M4 verdict suggests a split. Idempotent (no-op at/after `EXECUTING`). Adds **no** node/transition/gate. |
 | `close` | **Orchestrator** — walk the *closing* spine (`record-result → verify-final → resolution-probe`) in one call. **Stops at the resolution gate** (`RESOLUTION`) unless given `--confirmed-by <who>`. Surfaces resolution blockers — core **and** plugin-phase (e.g. `experience`) — by delegating to `cmd_resolve` (empty `--by` = read-only probe). A FAILED stage routes to `DIAGNOSING` and is surfaced, never swallowed; remaining stages are never auto-run. Idempotent (no-op at `RESOLVED`). Adds **no** node/transition/gate. |
@@ -92,9 +98,13 @@ start → classify → plan → submit-plan → approve → partition → next-s
 
 The **control criterion** (element #3 of the plan activity ontology) is a general property of *every* stage: how the result's conformance to the order is checked. `record-result` carries it as an optional general field, `--control <attestation>`, stored on the stage. It is mandatory in exactly one data-driven case: a stage whose **actor** (element #6) is `spawn:developer`. Recording such a stage PASSED without a non-empty `--control` is **refused** (a Directive, no node transition) — `Stage.needs_control()` is true iff the actor is `spawn:developer`, and the precondition lives in `cmd_record_result` as the single chokepoint where PASSED is set. `status=failed` and every non-developer stage (`in_thread`, other `spawn:*`) are unaffected, and `--control` stays optional-and-accepted on them (any stage may attest its control). Review is the value this control criterion takes for a delegated code producer — there is deliberately no review-specific command: the engine enforces the general structural fact, the specific content (reviewed by whom, or a waiver with its reason) is free-text cognition (**code = control-flow, prose = cognition**).
 
+### Advisory judge (warn-only)
+
+`advisor.judge(kind, payload, runner)` shells an opt-in (`AGENTCTL_ADVISOR=1`), fail-open `claude -p` judgment at four cognition points: weight classification, plan completeness, hypothesis genuine-distinctness, and acceptance-observation adequacy. Results (a `list[str]` of advisory strings) are attached under `directive.data['advisories']` by `_attach_advisories`. **Non-blocking contract: `judge` never sets `directive.ok = False` and never changes `directive.node`.** With the advisor disabled (default) or errored the return is `[]` and control flow is byte-identical to advisor-absent — preserving the engine's determinism canon (**code = deterministic control-flow, prose = cognition**). The advisor is the cognition half of the hybrid design: deterministic gates **block**; the advisor **warns**.
+
 ## Modules
 
-`classify`, `config`, `state`, `store`, `machine`, `gates`, `directive`, `cli`, `dispatch`, `partition`, `permissions`, `plan`, `continuations`.
+`classify`, `config`, `state`, `store`, `machine`, `gates`, `directive`, `cli`, `dispatch`, `partition`, `permissions`, `plan`, `continuations`, `advisor`.
 
 Two modules carry the load-bearing invariants:
 
@@ -104,6 +114,14 @@ Two modules carry the load-bearing invariants:
 ## The plan model
 
 Plan structure is defined **primarily by typed code**, not prose. `plan.py`'s `parse_plan` builds grouped dataclasses (`Subject`, `Means`, `Actor`, `Criterion`, `Principle`, `Supply`, `Outcome`) from the flat author TOML and validates the 8-element activity ontology for substantive plans. The canonical description of the 8 elements and where each lives in the schema is [`memory-global/leaves/plan-activity-ontology.md`](../../memory-global/leaves/plan-activity-ontology.md); [`verify-plan-file.py`](../verify-plan-file.py) is a prose mirror. On any divergence, the code wins.
+
+**Substantive plans must be TOML.** `submit-plan` refuses a substantive plan whose path does not end in `.toml` — markdown may mirror a plan as prose but cannot carry typed stages the engine tracks. Every substantive stage must also declare `capability_required` (Actor-cluster: the skill or knowledge the executor needs); `parse_plan` raises `PlanError` on any missing field.
+
+**`verify_command` is mandatory on measurable substantive stages.** A measurable criterion you cannot execute is really `acceptance_review` — `_validate_substantive_stage` raises `PlanError` if `criterion_type == measurable` and `verify_command` is absent.
+
+**Acceptance-review passes require a distinct recorded observation.** When a stage's `criterion_type` is `acceptance_review`, `record-result --status passed` requires `--observation <text>` that (after normalization) differs from `subject.result` (the expected image). The reviewer records what they actually observed, not an echo of the target.
+
+**Executable end-to-end checks (`[[final_check]]`).** An optional typed `[[final_check]]` list (each entry: `command`, `expected_exit`, `label`) may be added to the plan. `verify-final` runs each entry after the per-stage re-runs; any mismatch refuses the `RESOLUTION` transition. Absent: back-compat (empty list, behaviour unchanged). Turns the plan's *Final verification* from prose the engine never reads into a machine fact.
 
 ## Plugins
 
@@ -130,6 +148,12 @@ A third plugin, **`experience`** ([`plugins_experience.py`](plugins_experience.p
 
 - [`hook-memory-consistency.py`](../hook-memory-consistency.py) (`PreToolUse` Write/Edit) classifies the target as a memory leaf in any of the **three** scopes (instruction-repo `memory-global/leaves/`, project `.claude/agent-memory/`, personal `~/.claude/projects/*/memory/` — the last is invisible to `verify-leaf-structure.py`) and surfaces missing/malformed frontmatter (`name`/`description`/`type`) plus an index-pointer reminder. It only informs; it never denies.
 - [`hook-experience-record-reminder.py`](../hook-experience-record-reminder.py) (`UserPromptSubmit`) reads the `experience` plugin bag and nudges to record before close — loudest at `node == RESOLUTION` (naming the exact missing phase and the `record-experience.py search …` → `plugin-record` commands), a soft nudge otherwise, silent when the flow is complete or the plugin is inactive. It mirrors `hook-tracker-publish-reminder.py`.
+
+## Cost tracking
+
+`record-result` attributes spawn-stage cost from `~/.local/log/claude-spawn-costs.jsonl` (written by `spawn-specialist.py`) and stamps `cost_usd / duration_ms / spawn_count` on each spawn stage's `Outcome`. In-thread and main-session tokens are **not** split per stage — use `scripts/cost-report.py` for the whole-session estimate.
+
+`verify-final` aggregates per-stage attributed costs into `SessionState.cost` (a `CostRollup`). `resolve` includes the `CostRollup` in `Directive.data` so the manager can fill the experience-leaf `## Cost` section from real figures rather than a TODO placeholder.
 
 ## State location
 

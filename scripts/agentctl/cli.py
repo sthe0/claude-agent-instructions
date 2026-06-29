@@ -18,7 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import continuations, gates, permissions, plugins
+from . import advisor, continuations, cost, gates, permissions, plugins
 from .classify import Signals, classify
 from .config import Thresholds
 from .partition import render_section, verdict
@@ -28,18 +28,21 @@ from .machine import transition
 from .plan import load_plan
 from .state import (
     _EXECUTION_NODES,
+    _MAX_PLAN_STACK,
     Actor,
     Critique,
     Criterion,
     CriterionType,
     Declaration,
     Difficulty,
+    FinalCheck,
     Investigation,
     Partition,
     GateRecord,
     Means,
     Node,
     PermissionRequest,
+    PlanFrame,
     Route,
     SessionState,
     Stage,
@@ -57,31 +60,37 @@ def _digest(text: str) -> str:
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:12]
 
 
+def _attach_advisories(d: Directive, kind: str, payload: dict, runner: Runner | None) -> None:
+    """Attach warn-only advisory strings to d.data['advisories']. Never changes d.ok or d.node."""
+    advisories = advisor.judge(kind, payload, runner)
+    if advisories:
+        d.data.setdefault("advisories", []).extend(advisories)
+
+
+def _run_check(command: str, expected_exit: int, runner: Runner | None, cwd: str | None = None):
+    """Run `command` via the injected runner; return (ok, result).
+
+    When `cwd` is set, prefixes `cd <cwd> && ` so the Runner protocol
+    (argv -> RunResult) and every injected fake stay unchanged. With cwd None the
+    string is byte-identical to the pre-repo_root behaviour. A non-existent cwd
+    makes `cd` fail and `&&` short-circuit, surfacing as a verify failure."""
+    run = runner or subprocess_runner
+    cmd = f"cd {shlex.quote(cwd)} && {command}" if cwd else command
+    result = run(["bash", "-c", cmd])
+    return result.returncode == expected_exit, result
+
+
 def _verify_command_result(stage, runner: Runner | None, cwd: str | None = None):
     """Execute a measurable stage's `verify_command`, if it has one.
 
     Returns (ok, result). When the stage carries no command, or its criterion is
     not measurable, returns (True, None) — there is nothing executable to gate on,
-    so the engine keeps its flag-only behaviour. Otherwise runs the command via the
-    injected runner (tests pass a fake; the default shells out) and reports whether
-    the exit code matched `expected_exit`. This is the seam that removes the model
-    from the trust path for the measurable subset.
-
-    When `cwd` (the plan's repo_root) is set, the command runs there via a
-    `cd <cwd> && ` prefix inside the existing `bash -c` string — so the Runner
-    protocol (argv -> RunResult) and every injected fake stay unchanged. With cwd
-    None the string is byte-identical to the pre-repo_root behaviour (inherit the
-    invoker's cwd). A non-existent cwd makes `cd` fail and `&&` short-circuit, so a
-    misconfigured root surfaces as a verify failure rather than silently passing."""
+    so the engine keeps its flag-only behaviour. Otherwise delegates to _run_check,
+    which is also used for typed final_check entries at verify-final."""
     crit = stage.criterion
     if not crit.verify_command or crit.criterion_type != CriterionType.MEASURABLE.value:
         return True, None
-    run = runner or subprocess_runner
-    command = crit.verify_command
-    if cwd:
-        command = f"cd {shlex.quote(cwd)} && {command}"
-    result = run(["bash", "-c", command])
-    return result.returncode == crit.expected_exit, result
+    return _run_check(crit.verify_command, crit.expected_exit, runner, cwd)
 
 
 def _is_recursion_refusal(result) -> bool:
@@ -293,7 +302,11 @@ def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Di
         plugins.auto_activate_for(state)
 
     store.save(state)
-    return Directive(True, state.node, action, detail, data={"reasons": result.reasons})
+    d = Directive(True, state.node, action, detail, data={"reasons": result.reasons})
+    _attach_advisories(d, "weight_classification",
+                       {"goal": state.goal, "weight_class": state.weight_class, "route": state.route},
+                       runner)
+    return d
 
 
 def cmd_plan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -316,10 +329,19 @@ def _verify_markdown_plan(path: str) -> list[str]:
 def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     plan_path = args.plan
+    if state.weight_class == WeightClass.SUBSTANTIVE.value and not plan_path.endswith(".toml"):
+        state.log("submit_plan", plan=plan_path, verified=False)
+        store.save(state)
+        return Directive(
+            False, state.node, "fix_plan",
+            "substantive plan must be TOML (markdown is the prose mirror only and cannot track typed stages)",
+            data={"problems": ["substantive plan must be a .toml file; rewrite as TOML with typed stages"]},
+        )
     if plan_path.endswith(".toml"):
         doc = load_plan(plan_path)
         state.stages = doc.stages
         state.repo_root = doc.meta.repo_root
+        state.final_check = doc.meta.final_check
         if not state.goal:
             state.goal = doc.meta.goal
         if not state.overall_done_criterion:
@@ -347,11 +369,16 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
     state.log("submit_plan", plan=plan_path, verified=True)
     store.save(state)
-    return Directive(
+    d = Directive(
         True, state.node, "await_user_approval",
         "plan ready; HARD GATE — get explicit user approval before approve",
         marker="PLAN-READY",
     )
+    _attach_advisories(d, "plan_completeness",
+                       {"plan": plan_path, "stage_count": len(state.stages),
+                        "titles": [s.title for s in state.stages]},
+                       runner)
+    return d
 
 
 def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -587,6 +614,29 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
             "record-result --control '<how the code was reviewed>'",
         )
 
+    # Acceptance-review observation gate: recording a PASSED acceptance stage requires
+    # a non-empty observation that differs (normalized) from the expected image.
+    # An echoed target ("I saw the expected result") is no observation at all.
+    observation = getattr(args, "observation", None) or ""
+    if passed and stage.criterion.criterion_type == CriterionType.ACCEPTANCE_REVIEW.value:
+        norm_obs = gates._normalize_string(observation)
+        norm_img = gates._normalize_string(stage.subject.result)
+        if not norm_obs:
+            return Directive(
+                False, state.node, "attest_observation",
+                f"stage {stage.index} is acceptance_review; acceptance pass requires "
+                "recording WHAT you observed, distinct from the expected image "
+                "(supply: record-result --observation '<what you observed>')",
+            )
+        if norm_obs == norm_img:
+            return Directive(
+                False, state.node, "attest_observation",
+                f"stage {stage.index} is acceptance_review; acceptance pass requires "
+                "recording WHAT you observed, distinct from the expected image — "
+                "echoing the target does not count "
+                "(supply: record-result --observation '<what you observed>')",
+            )
+
     # Machine-executed verification: for a measurable stage carrying a verify_command,
     # the engine runs it and OVERRIDES a 'passed' claim the command contradicts. A
     # contradicted pass becomes a real failure (digest + DIAGNOSING), so "report
@@ -602,16 +652,35 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
             actual = (actual + "\n" + note) if actual else note
             stage.outcome.actual = actual
 
+    # Attribute cost for spawn stages from the cost log. In-thread stages leave
+    # None — cost splitting per in-thread stage is out of scope for this attribution.
+    if stage.is_spawn():
+        _cost_log = getattr(args, "cost_log", None)
+        _log_path = Path(_cost_log) if _cost_log else cost.COST_LOG
+        _rows = cost.read_rows(_log_path)
+        _attr = cost.attribute_stage(_rows, state.plan_path, stage.index)
+        stage.outcome.cost_usd = _attr["cost_usd"]
+        stage.outcome.duration_ms = _attr["duration_ms"]
+        stage.outcome.spawn_count = _attr["spawn_count"]
+
     state.node = transition(state.node, "verify")  # EXECUTING -> VERIFYING
 
     if passed:
         stage.outcome.status = StageStatus.PASSED.value
+        if observation:
+            stage.criterion.observation = observation
         state.current_stage = None
         state.log("record_result", stage=stage.index, status="passed")
         store.save(state)
         if state.all_stages_passed():
-            return Directive(True, state.node, "verify_final", f"stage {stage.index} passed; all stages passed")
-        return Directive(True, state.node, "next_stage", f"stage {stage.index} passed; more stages ready")
+            d = Directive(True, state.node, "verify_final", f"stage {stage.index} passed; all stages passed")
+        else:
+            d = Directive(True, state.node, "next_stage", f"stage {stage.index} passed; more stages ready")
+        if stage.criterion.criterion_type == CriterionType.ACCEPTANCE_REVIEW.value:
+            _attach_advisories(d, "acceptance_observation",
+                               {"expected": stage.subject.result, "observation": observation},
+                               runner)
+        return d
 
     # failed: loop guard — same stage failing twice on the same actual digest -> escalate
     dig = _digest(actual)
@@ -655,11 +724,22 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
                 f"stage {stage.index}: exit {result.returncode} != "
                 f"{stage.criterion.expected_exit} ({stage.criterion.verify_command})"
             )
+    for fc in state.final_check:
+        ok, result = _run_check(fc.command, fc.expected_exit, runner, cwd=state.repo_root)
+        if not ok:
+            label = fc.label or fc.command
+            failures.append(
+                f"final_check '{label}': exit {result.returncode} != {fc.expected_exit}"
+            )
     if failures:
         return Directive(
             False, state.node, "fix_stages",
             "final verification command(s) failed", data={"failures": failures},
         )
+    # Compute whole-plan cost rollup from already-attributed stage outcomes.
+    # No second log read — record-result already stored the costs on each Outcome.
+    rollup = cost.rollup_plan([], state.plan_path, state.stages)
+    state.cost = rollup
     state.node = transition(state.node, "final")  # VERIFYING -> RESOLUTION
     state.resolution = GateRecord("resolution", armed=True, passed=False)
     state.log("verify_final")
@@ -669,6 +749,15 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     return Directive(
         True, state.node, "await_user_confirmation",
         f"all stages passed; resolution gate armed — {kind}",
+        data={
+            "cost": {
+                "total_cost_usd": rollup.total_cost_usd,
+                "total_duration_ms": rollup.total_duration_ms,
+                "spawn_count": rollup.spawn_count,
+                "attributed_stages": rollup.attributed_stages,
+                "note": rollup.note,
+            }
+        },
     )
 
 
@@ -684,9 +773,20 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         return Directive(False, state.node, "fix_stages", "cannot resolve", data={"blockers": blockers})
     state.resolution = GateRecord("resolution", armed=True, passed=True, by=args.by)
     state.node = transition(state.node, "resolve")  # RESOLUTION -> RESOLVED
+    cost_surface: dict = {}
+    if state.cost is not None:
+        cost_surface = {
+            "total_cost_usd": state.cost.total_cost_usd,
+            "total_duration_ms": state.cost.total_duration_ms,
+            "spawn_count": state.cost.spawn_count,
+            "attributed_stages": state.cost.attributed_stages,
+            "note": state.cost.note,
+        }
+        state.log("cost", **{k: v for k, v in cost_surface.items() if k != "note"})
     state.log("resolve", by=args.by)
     store.save(state)
-    return Directive(True, state.node, "done", "task resolved", marker="COMPLETED")
+    return Directive(True, state.node, "done", "task resolved", marker="COMPLETED",
+                     data={"cost": cost_surface})
 
 
 # --- overcome-difficulty sub-spine: declare -> investigate -> critique --------
@@ -757,8 +857,16 @@ def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Di
     )
     state.log("critique")
     store.save(state)
-    return Directive(True, state.node, "replan",
-                     "difficulty cycle complete; replan is now unblocked")
+    d = Directive(True, state.node, "replan",
+                  "difficulty cycle complete; replan is now unblocked")
+    inv = state.difficulty.investigation
+    decl = state.difficulty.declaration
+    _attach_advisories(d, "hypothesis_distinctness", {
+        "hypotheses": inv.hypotheses if inv else [],
+        "declaration": {"expected": decl.expected, "actual": decl.actual, "mismatch": decl.mismatch}
+        if decl else {},
+    }, runner)
+    return d
 
 
 def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -839,6 +947,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # substantive: re-arm the plan-approval gate, reload stages, return to PLAN_READY
     state.stages = new.stages
     state.repo_root = new.meta.repo_root
+    state.final_check = new.meta.final_check
     state.plan_path = args.plan
     state.plan_verified = True
     state.overall_done_criterion = new.meta.done_criterion or state.overall_done_criterion
@@ -892,6 +1001,123 @@ def cmd_status(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             "approval_passed": state.approval.passed,
             "resolution_passed": state.resolution.passed,
         },
+    )
+
+
+# --- sub-plan stack: push_subplan / pop_subplan --------------------------------
+
+def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Start a service sub-plan: snapshot the parent into plan_stack, then reset
+    the live state to a fresh child CLASSIFIED cycle. The child runs its normal
+    classify->...->resolve spine; pop-subplan restores the parent on resolution."""
+    state = _require(store, args.session)
+    if state.node != Node.EXECUTING.value:
+        return Directive(
+            False, state.node, "noop",
+            f"push-subplan requires node=EXECUTING; current node={state.node}",
+        )
+    originating = int(getattr(args, "originating_stage", None) or state.current_stage or 0)
+    if not originating:
+        return Directive(False, state.node, "noop", "cannot determine originating stage; pass --originating-stage")
+    child_plan = args.plan
+    child_task = getattr(args, "task", None) or f"sub:{Path(child_plan).stem}"
+
+    frame = PlanFrame(
+        plan_path=state.plan_path,
+        node=state.node,
+        task_id=state.task_id,
+        goal=state.goal,
+        overall_done_criterion=state.overall_done_criterion,
+        overall_criterion_type=state.overall_criterion_type,
+        weight_class=state.weight_class,
+        route=state.route,
+        repo_root=state.repo_root,
+        final_check=list(state.final_check),
+        partition=state.partition,
+        approval=state.approval,
+        resolution=state.resolution,
+        stages=list(state.stages),
+        current_stage=state.current_stage,
+        originating_stage=originating,
+    )
+    state.plan_stack.append(frame)
+    # Reset to a fresh child cycle — the child re-classifies and plans normally.
+    state.node = transition(Node.EXECUTING.value, "push_subplan")  # EXECUTING -> CLASSIFIED
+    state.task_id = child_task
+    state.plan_path = child_plan
+    state.plan_verified = False
+    state.goal = ""
+    state.overall_done_criterion = ""
+    state.overall_criterion_type = CriterionType.MEASURABLE.value
+    state.weight_class = None
+    state.route = None
+    state.repo_root = None
+    state.final_check = []
+    state.partition = None
+    state.approval = GateRecord("plan_approval")
+    state.resolution = GateRecord("resolution")
+    state.stages = []
+    state.current_stage = None
+    state.difficulty = None
+    state.permission_request = None
+    state.blocked_from = None
+    state.log("push_subplan", child_plan=child_plan, originating_stage=originating, depth=len(state.plan_stack))
+    store.save(state)
+    return Directive(
+        True, state.node, "classify",
+        f"sub-plan pushed (depth={len(state.plan_stack)}); child at CLASSIFIED — run classify next",
+        data={"child_plan": child_plan, "originating_stage": originating,
+              "parent_task": frame.task_id, "stack_depth": len(state.plan_stack)},
+    )
+
+
+def cmd_pop_subplan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Restore the parent after a service sub-plan resolves. Requires node=RESOLVED;
+    the RESOLVED-frm structural guarantee enforces 'no auto-pop across an unresolved
+    child' — check_invariants already mandates resolution.passed at RESOLVED."""
+    state = _require(store, args.session)
+    if not state.plan_stack:
+        return Directive(False, state.node, "noop", "plan_stack is empty; nothing to pop")
+    if state.node != Node.RESOLVED.value:
+        return Directive(
+            False, state.node, "noop",
+            f"pop-subplan requires node=RESOLVED (child must fully resolve first); current node={state.node}",
+        )
+    child_task_id = state.task_id
+    new_node = transition(state.node, "pop_subplan")  # RESOLVED -> EXECUTING
+    frame = state.plan_stack.pop()
+    # Restore all parent plan-level fields from the frame.
+    state.plan_path = frame.plan_path
+    state.task_id = frame.task_id
+    state.goal = frame.goal
+    state.overall_done_criterion = frame.overall_done_criterion
+    state.overall_criterion_type = frame.overall_criterion_type
+    state.weight_class = frame.weight_class
+    state.route = frame.route
+    state.repo_root = frame.repo_root
+    state.final_check = frame.final_check
+    state.partition = frame.partition
+    state.approval = frame.approval
+    state.resolution = frame.resolution
+    state.stages = frame.stages
+    state.node = new_node
+    # Mark the originating stage as satisfied and clear the active-stage pointer.
+    try:
+        orig = state.stage(frame.originating_stage)
+        orig.outcome.status = StageStatus.PASSED.value
+        orig.control = f"satisfied by sub-plan {child_task_id}"
+    except KeyError:
+        pass
+    state.current_stage = None
+    state.log("pop_subplan", child_task_id=child_task_id, originating_stage=frame.originating_stage,
+              depth=len(state.plan_stack))
+    store.save(state)
+    return Directive(
+        True, state.node, "next_stage",
+        f"sub-plan {child_task_id!r} resolved; parent restored at EXECUTING; "
+        f"stage {frame.originating_stage} satisfied — run next-stage to continue",
+        data={"originating_stage": frame.originating_stage, "child_task_id": child_task_id,
+              "stack_depth": len(state.plan_stack)},
     )
 
 
@@ -1058,6 +1284,7 @@ def cmd_close(args, *, store: StateStore, runner: Runner | None = None) -> Direc
             session=args.session, status=status,
             actual=getattr(args, "actual", "") or "",
             control=getattr(args, "control", None),
+            observation=getattr(args, "observation", "") or "",
         )
         d = _run_step(cmd_record_result, rr, store=store, runner=runner, trace=trace)
         if not d.ok:
@@ -1131,6 +1358,8 @@ COMMANDS = {
     "status": cmd_status,
     "drive": cmd_drive,
     "close": cmd_close,
+    "push-subplan": cmd_push_subplan,
+    "pop-subplan": cmd_pop_subplan,
 }
 
 
@@ -1195,6 +1424,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--control", default=None,
                     help="control-criterion attestation (required for spawn:developer stages "
                          "when recording passed; accepted on any stage)")
+    sp.add_argument("--observation", default="",
+                    help="for acceptance_review stages: what you actually observed "
+                         "(required when recording passed; must differ from the expected image)")
+    sp.add_argument("--cost-log", dest="cost_log", default=None,
+                    help="override cost log path for tests (defaults to cost.COST_LOG)")
     sp = add("declare"); sp.add_argument("--session", required=True)
     sp.add_argument("--expected", required=True); sp.add_argument("--actual", required=True)
     sp.add_argument("--mismatch", required=True)
@@ -1248,9 +1482,21 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--status", choices=["passed", "failed"], default=None)
     sp.add_argument("--actual", default="")
     sp.add_argument("--control", default=None)
+    sp.add_argument("--observation", default="",
+                    help="for acceptance_review stages: what you actually observed "
+                         "(threaded to record-result)")
     sp.add_argument("--confirmed-by", dest="confirmed_by", default=None,
                     help="human token authorizing the wrapper to cross the resolution "
                          "gate; pass ONLY after explicit user confirmation")
+
+    sp = add("push-subplan"); sp.add_argument("--session", required=True)
+    sp.add_argument("--plan", required=True, help="path to the child service sub-plan TOML")
+    sp.add_argument("--task", default=None, help="task_id for the child (defaults to sub:<plan-stem>)")
+    sp.add_argument("--originating-stage", dest="originating_stage", type=int, default=None,
+                    help="parent stage whose missing element the sub-plan supplies "
+                         "(defaults to state.current_stage)")
+
+    sp = add("pop-subplan"); sp.add_argument("--session", required=True)
     return p
 
 

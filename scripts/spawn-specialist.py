@@ -258,6 +258,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="explicit model alias (e.g. sonnet, haiku, opus). Wins over --complexity "
         "and the per-kind default. Prefer --complexity unless you need an exact model.",
     )
+    p.add_argument("--stage-index", type=int, default=None, help="index of the plan stage this spawn serves (optional; enables per-stage cost attribution)")
     p.add_argument("--dry-run", action="store_true", help="print the prompt and the command that would run, then exit")
     return p
 
@@ -523,6 +524,8 @@ def main(argv: list[str] | None = None) -> int:
         "return_marker": parsed_marker,
         "exit_code": completed.returncode,
         "malformed": not ok,
+        "stage_index": args.stage_index,
+        "plan_path": str(args.plan),
         **_spawn_tags(),
     })
 

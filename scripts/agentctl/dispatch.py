@@ -99,6 +99,7 @@ def build_argv(
         "--complexity",
         complexity,
     ]
+    argv.extend(["--stage-index", str(stage.index)])
     if dry_run:
         argv.append("--dry-run")
     return argv

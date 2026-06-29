@@ -78,6 +78,16 @@ def is_experience_leaf(path: str) -> bool:
     return bool(EXPERIENCE_PATH_RE.search(path))
 
 
+def _section_body(body: str, heading_rx: re.Pattern) -> str | None:
+    """Return the text between a heading match and the next ## heading (or EOF)."""
+    m = heading_rx.search(body)
+    if not m:
+        return None
+    after_heading = body[m.end():]
+    next_heading = re.search(r"^##\s+", after_heading, re.MULTILINE)
+    return after_heading[:next_heading.start()] if next_heading else after_heading
+
+
 def _normalize(text: str) -> str:
     """Collapse whitespace + lowercase so quote matching tolerates reflowing."""
     return re.sub(r"\s+", " ", text or "").strip().lower()
@@ -175,6 +185,17 @@ def check_content(content: str) -> str | None:
     if missing:
         return ("schema:difficulty/v1 leaf missing required section(s): "
                 + ", ".join(missing))
+
+    # record-experience.py new emits a TODO here; agentctl resolve surfaces the real figure.
+    _cost_rx = next(rx for name, rx in V1_SECTIONS if name == "## Cost")
+    cost_text = _section_body(body, _cost_rx) or ""
+    if re.search(r"\bTODO\b", cost_text):
+        return (
+            "schema:difficulty/v1 standalone leaf has an unreplaced TODO in "
+            "## Cost — replace it with the real figure "
+            "(now auto-surfaced by `agentctl resolve`)"
+        )
+
     return None
 
 
