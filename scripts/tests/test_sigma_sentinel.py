@@ -1,4 +1,4 @@
-"""Tests for thermometer-digest.py — the read-only σ build-trigger instrument (S3, ADR-0002).
+"""Tests for sigma-sentinel.py — the read-only σ build-trigger instrument (S3, ADR-0002).
 
 Spec requirements:
   (i)   a tier-1 leaf whose ground matches a promoted principle counts as one re-refutation
@@ -16,8 +16,8 @@ import sys
 from pathlib import Path
 
 _SPEC = importlib.util.spec_from_file_location(
-    "thermometer_digest",
-    Path(__file__).resolve().parents[1] / "thermometer-digest.py",
+    "sigma_sentinel",
+    Path(__file__).resolve().parents[1] / "sigma-sentinel.py",
 )
 td = importlib.util.module_from_spec(_SPEC)
 # Register before exec so the module's @dataclass decorators can resolve __module__.

@@ -1,4 +1,4 @@
-# Trigger-thermometer — when to build the σ operator
+# σ build-trigger — when to build the σ operator
 
 > Operational distillation of [ADR-0002](adr/0002-dialectical-transition.md). The ADR records the *model* (the difficulty-primitive-by-tier; κ vs σ; the dialectical transition). This document records the *decision criterion*: under what observable conditions the σ operator stops being premature and gets built — and the kill-condition under which the idea is archived instead.
 
@@ -24,9 +24,9 @@ Why (A) is measurable now and (B) is not: (A) is a **static cross-check** — ma
 
 ## Bootstrap caveat
 
-To *see* (A)/(B) at all, a minimal instrument is needed. The near-zero **`tier` tag** ("clean run, difficulty stands") plus a periodic read-only scan is **a thermometer, not σ machinery** — its justification today is to measure the trigger, not to build the operator. Without it, only (C) (a ceiling linter) and partly (A) (a duplicate surfacing during search-before-write) are visible; (B) is invisible. Hence the split:
+To *see* (A)/(B) at all, a minimal instrument is needed. The near-zero **`tier` tag** ("clean run, difficulty stands") plus a periodic read-only scan is **a σ-sentinel, not σ machinery** — its justification today is to measure the trigger, not to build the operator. Without it, only (C) (a ceiling linter) and partly (A) (a duplicate surfacing during search-before-write) are visible; (B) is invisible. Hence the split:
 
-- **justified now:** the thermometer (the optional `tier` tag + `thermometer-digest.py`);
+- **justified now:** the σ-sentinel (the optional `tier` tag + `sigma-sentinel.py`);
 - **deferred until the first trigger fires:** the build itself, and only the seam that fired.
 
 ## Deferred increment → activation trigger
@@ -42,8 +42,8 @@ The deferred work is **scheduled, not dropped**. Each item names the observable 
 
 ## Kill-condition (falsifiable in both directions)
 
-If, over **~1 year** of the thermometer running, none of (A)/(B)/(C) ever fires and the manual path does not leak, then **P0 "the manual path suffices" is corroborated** — the σ idea is archived (ADR-0002 superseded by a short note), and the thermometer may itself be retired. Pre-registering the corroboration that kills the project is the symmetric half of pre-registering the refutation that starts it.
+If, over **~1 year** of the σ-sentinel running, none of (A)/(B)/(C) ever fires and the manual path does not leak, then **P0 "the manual path suffices" is corroborated** — the σ idea is archived (ADR-0002 superseded by a short note), and the σ-sentinel may itself be retired. Pre-registering the corroboration that kills the project is the symmetric half of pre-registering the refutation that starts it.
 
 ## What the digest measures vs decides
 
-`scripts/thermometer-digest.py` is **read-only**. It *measures* condition (A), *reports* the cheap (C) proxy as numbers, and *logs* (B) and the dear-(C) discriminator as out-of-scope (no silent cap). It **does not decide** to build σ and **does not build** anything — the decision, when a trigger fires, routes through the normal `planner → approval → developer` spine like any other Core change.
+`scripts/sigma-sentinel.py` is **read-only**. It *measures* condition (A), *reports* the cheap (C) proxy as numbers, and *logs* (B) and the dear-(C) discriminator as out-of-scope (no silent cap). It **does not decide** to build σ and **does not build** anything — the decision, when a trigger fires, routes through the normal `planner → approval → developer` spine like any other Core change.

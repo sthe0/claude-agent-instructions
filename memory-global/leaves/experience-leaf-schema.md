@@ -81,7 +81,7 @@ Agent-system friction observed while resolving this task — missing affordance,
 
 `tier` is **optional and implied 0** — the same migration-free contract as `generality`. It records the **tier of the difficulty** in the lifting hierarchy of [ADR-0002](../../docs/adr/0002-dialectical-transition.md): **tier 0** is a state-level difficulty `D=(s*,s)` (a divergence between desired and actual *states* — the overwhelming majority); **tier 1** is a difficulty `D⁽¹⁾=(P1,P0)` whose terms are *principles* — a refuted or sought rule, the fuel the σ (principle-revision) operator would consume. A clean run needs no tag: `record-experience.py` emits `tier:` only when `--tier 1` is passed, so absence reads as tier 0. The field is **not** the same axis as `generality` (which grades a record's *reusability*); `tier` grades *what the difficulty is about* (a state vs a principle).
 
-The tag is a **thermometer, not σ machinery** — its sole present purpose is to let `scripts/thermometer-digest.py` measure the build-trigger for σ (condition **(A)**, re-refutation of an already-promoted principle) without yet building the operator. See [trigger-thermometer.md](../../docs/trigger-thermometer.md). `verify-experience-leaf.py` accepts it as an unknown-but-valid key (no validator change), exactly like `generality`.
+The tag is a **σ-sentinel, not σ machinery** — its sole present purpose is to let `scripts/sigma-sentinel.py` measure the build-trigger for σ (condition **(A)**, re-refutation of an already-promoted principle) without yet building the operator. See [sigma-build-trigger.md](../../docs/sigma-build-trigger.md). `verify-experience-leaf.py` accepts it as an unknown-but-valid key (no validator change), exactly like `generality`.
 
 ## Ticket-driven work
 

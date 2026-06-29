@@ -1,6 +1,6 @@
 # ADR-0002 — Dialectical transition: the σ operator and principle revision
 
-- **Status:** Accepted (2026-06-29) — first slice (the trigger-thermometer) implemented; the σ operator itself is **deferred behind a pre-registered build-trigger** (see `docs/trigger-thermometer.md`).
+- **Status:** Accepted (2026-06-29) — first slice (the σ-sentinel) implemented; the σ operator itself is **deferred behind a pre-registered build-trigger** (see `docs/sigma-build-trigger.md`).
 - **Deciders:** system authors (commit-rights holders to this repo)
 - **Difficulty removed:** the system can *split* a tension within a fixed vocabulary (critique) and can *aggregate* repeated experience into a principle (induction), but it has **no operator that produces a new higher-level concept out of a contradiction between two existing commitments** — the dialectical transition (Aufhebung: preserve + cancel + lift). This ADR names that operator, shows it already lives implicitly in the system, and records the decision to make it observable now and buildable later.
 
@@ -120,7 +120,7 @@ This is the Duhem-Quine caveat and the experimenter's regress: a botched experim
 
 Adopt the model above (the difficulty-primitive-by-tier; κ vs σ; the correspondence principle + experimentum crucis; the four tests; the two divergence detectors). Then, on building σ itself:
 
-- **Build the thermometer now, defer σ.** The decision "build σ or not" is itself a tier-1 difficulty with `P0` = "the manual path (κ/critique + manual `promote-scan`) suffices". Rather than decide by intuition, **pre-register the experimentum crucis that would refute `P0`** — the three build-trigger conditions and the kill-condition recorded in the operational distillation `docs/trigger-thermometer.md`.
+- **Build the σ-sentinel now, defer σ.** The decision "build σ or not" is itself a tier-1 difficulty with `P0` = "the manual path (κ/critique + manual `promote-scan`) suffices". Rather than decide by intuition, **pre-register the experimentum crucis that would refute `P0`** — the three build-trigger conditions and the kill-condition recorded in the operational distillation `docs/sigma-build-trigger.md`.
 - The **empirical probe** (below) shows the σ-fuel is real but **rare in product work and concentrated in self-improvement** — so σ is, in effect, the operator *of self-improvement itself*, and the manual path handles the rare product case. This justifies deferral, not abandonment.
 - When a trigger fires, build is **incremental** — only the seam that the fired condition lights up (§ the three seams), never the whole rig at once.
 
@@ -132,15 +132,15 @@ There is a real project tension: *safety* wants to **quench** contradictions fas
 
 - **A. Do nothing — keep κ + inductive promotion only.** Cannot generate a new predicate; the residual class of principle-refutations stays flattened into tier-0 replans. Rejected as the status quo this ADR is about.
 - **B. Build σ now (full rig).** The probe shows the fuel is rare in product work; calibrating thresholds with no data and shipping a partly non-algorithmic operator speculatively risks false universals. Rejected as premature.
-- **C. Record the model + build the thermometer, defer σ behind a pre-registered trigger (chosen).** Makes the build decision falsifiable in both directions (the trigger fires → build the lit seam; the kill-condition elapses → `P0` corroborated, archive), at near-zero cost, without perturbing the hot path.
+- **C. Record the model + build the σ-sentinel, defer σ behind a pre-registered trigger (chosen).** Makes the build decision falsifiable in both directions (the trigger fires → build the lit seam; the kill-condition elapses → `P0` corroborated, archive), at near-zero cost, without perturbing the hot path.
 
 ## Consequences
 
 **Positive**
 
-- The model is recorded as a citable decision; the operational doc and the thermometer code are its distillations (mirroring ADR-0001's ADR-plus-distillations shape).
+- The model is recorded as a citable decision; the operational doc and the σ-sentinel code are its distillations (mirroring ADR-0001's ADR-plus-distillations shape).
 - The build decision is falsifiable in both directions; no speculative machinery ships.
-- The thermometer's tag accumulates exactly the baseline data the deferred signals (B, the dear-C discriminator) will later need.
+- The σ-sentinel's tag accumulates exactly the baseline data the deferred signals (B, the dear-C discriminator) will later need.
 
 **Negative / risks**
 
@@ -163,13 +163,13 @@ Two surveys with one classifier (tier 0 = state/execution; tier 1 = refuted prin
 
 ## Open questions
 
-1. The exact thresholds for trigger conditions (B) and the dear-(C) discriminator — deferred until the tag accumulates a baseline (calibration-without-data is explicitly avoided; see `docs/trigger-thermometer.md`).
+1. The exact thresholds for trigger conditions (B) and the dear-(C) discriminator — deferred until the tag accumulates a baseline (calibration-without-data is explicitly avoided; see `docs/sigma-build-trigger.md`).
 2. The reflexive horizon — σ taking *operators* (not rules) as input, so that `σ(κ, σ)` would yield a higher-order operator (a system editing its own ways of editing itself). The most powerful and least-constrained part of the design; not to be touched without hard boundaries. Recorded as a horizon, not a plan.
 
 ## References
 
 - Source of record: the design reflection of 2026-06-27/29 (consolidated; the Russian original is the working draft, this ADR is its English decision-of-record).
 - `docs/adr/0001-consensus-architecture.md` — the critique primitive and the generality gradient this ADR extends with σ.
-- `docs/trigger-thermometer.md` — the operational distillation: P0, the (A)/(B)/(C) build-trigger, the kill-condition, the deferred-increment schedule.
+- `docs/sigma-build-trigger.md` — the operational distillation: P0, the (A)/(B)/(C) build-trigger, the kill-condition, the deferred-increment schedule.
 - `memory-global/leaves/plan-activity-ontology.md` — the 8 plan elements that supply the fidelity descent; `memory-global/leaves/coordinator-objective.md` — the structural trade-off axes that bound σ.
 - Intellectual lineage: Hegel (Aufhebung, determinate negation, negation of negation, bad infinity, concrete-universal) → Marx → Vygotsky → Leontiev (activity) → Shchedrovitsky (rupture → reflection → norming). Popper/Lakatos/Kuhn/Quine (falsification, protective belt, crucial experiment, underdetermination, "blame the core last"). Peirce (abduction). Duhem-Quine and the experimenter's regress (the competent-experiment condition).

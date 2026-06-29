@@ -105,8 +105,8 @@ def frontmatter(name: str, description: str, confirmed_by: str,
         f'resolution_confirmed_by_user: "{confirmed_by}"',
     ]
     # Difficulty tier (ADR-0002): emitted only when explicitly tier-1. Absence
-    # implies tier 0 (state-level), so a clean run needs no tag — the thermometer
-    # (thermometer-digest.py) treats untagged leaves as tier 0.
+    # implies tier 0 (state-level), so a clean run needs no tag — the σ-sentinel
+    # (sigma-sentinel.py) treats untagged leaves as tier 0.
     if tier == 1:
         lines.append(f"tier: {tier}")
     if refs:
@@ -506,7 +506,7 @@ def build_parser() -> argparse.ArgumentParser:
         # Difficulty tier (ADR-0002): 0 = state-level (the default; omitted from
         # frontmatter, absence implies 0), 1 = principle-level — a tier-1
         # difficulty whose P0/P1 are principles, the fuel the sigma operator
-        # would consume. The thermometer (thermometer-digest.py) reads this tag.
+        # would consume. The σ-sentinel (sigma-sentinel.py) reads this tag.
         sp.add_argument(
             "--tier", type=int, choices=[0, 1], default=None,
             help="difficulty tier: 0 state-level (default/omitted), 1 principle-level (sigma fuel)",

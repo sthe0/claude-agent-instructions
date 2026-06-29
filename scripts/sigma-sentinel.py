@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""thermometer-digest — read-only instrument for the σ build-trigger (ADR-0002).
+"""sigma-sentinel — read-only instrument for the σ build-trigger (ADR-0002).
 
 The σ (principle-revision) operator is *deferred* behind a pre-registered build-trigger
-(docs/trigger-thermometer.md). This digest is the thermometer that makes that trigger
+(docs/sigma-build-trigger.md). This digest is the σ-sentinel that makes that trigger
 observable without building σ. It:
 
   - **measures condition (A)** — re-refutation of an *already-promoted* principle: a
@@ -13,7 +13,7 @@ observable without building σ. It:
   - **reports the cheap (C) proxy** — corpus size + near-duplicate density — as plain
     numbers (report-only, never a flag on its own);
   - **logs (B) and the dear-(C) discriminator as DEFERRED** (out of scope), naming the
-    observable that activates each — no silent cap (ADR-0002 / trigger-thermometer.md).
+    observable that activates each — no silent cap (ADR-0002 / sigma-build-trigger.md).
 
 It is strictly READ-ONLY: it measures and surfaces, it **does not decide** to build σ and
 **builds nothing**. When (A) flags, the decision routes through the normal
@@ -204,7 +204,7 @@ def build_digest(scope: str, project_dir: str | None, threshold: int | None) -> 
 def _format(d: dict) -> str:
     a = d["condition_a"]
     c = d["cheap_c"]
-    lines = ["thermometer-digest (σ build-trigger, ADR-0002) — read-only; measures, never decides."]
+    lines = ["sigma-sentinel (σ build-trigger, ADR-0002) — read-only; measures, never decides."]
     lines.append(f"  threshold (principle-promotion-threshold): {d['threshold']}")
     lines.append(
         f"  (A) re-refutation: {a['tier1_leaves']} tier-1 leaf/leaves vs "
