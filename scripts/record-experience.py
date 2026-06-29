@@ -77,6 +77,24 @@ def section_span(text: str, heading: str) -> tuple[int, int] | None:
     return m.start(), (nxt.start() if nxt else len(text))
 
 
+def set_fm_field(text: str, key: str, value: str) -> str:
+    """Insert or replace a top-level `key: value` line in the YAML frontmatter.
+
+    Replaces the first existing top-level occurrence; otherwise appends the line
+    just before the closing `---`. Returns text unchanged if there is no
+    frontmatter block (callers handle that case explicitly)."""
+    m = FRONTMATTER.match(text)
+    if not m:
+        return text
+    fm_body = m.group(1)
+    line_re = re.compile(rf"^{re.escape(key)}\s*:.*$", re.MULTILINE)
+    if line_re.search(fm_body):
+        new_fm = line_re.sub(f"{key}: {value}", fm_body, count=1)
+    else:
+        new_fm = fm_body.rstrip("\n") + f"\n{key}: {value}"
+    return text[: m.start(1)] + new_fm + text[m.end(1):]
+
+
 def context_block(date: str, label: str, where: str, plan: str) -> str:
     return (
         f"\n### {date} — {label}\n"
@@ -90,7 +108,7 @@ def context_block(date: str, label: str, where: str, plan: str) -> str:
 # --------------------------------------------------------------------------
 def frontmatter(name: str, description: str, confirmed_by: str,
                 refs: list[str] | None, plan_file: str | None,
-                ticket: str | None, tier: int | None = None) -> str:
+                ticket: str | None, date: str, tier: int | None = None) -> str:
     lines = [
         "---",
         f"name: {name}",
@@ -115,6 +133,10 @@ def frontmatter(name: str, description: str, confirmed_by: str,
         lines.append(f"plan_file: {plan_file}")
     if ticket:
         lines.append(f"ticket: {ticket}")
+    # Temporal frontmatter (memory-temporal-frontmatter.md): created is set once
+    # at birth; last_verified equals created at birth and is bumped on revision.
+    lines.append(f"created: {date}")
+    lines.append(f"last_verified: {date}")
     lines.append("---\n")
     return "\n".join(lines)
 
@@ -123,7 +145,7 @@ def standalone_body(a) -> str:
     name = f"{a.date}-{a.slug}"
     parts = [
         frontmatter(name, a.description, a.confirmed_by, a.refs, a.plan_file,
-                    None, getattr(a, "tier", None)),
+                    None, a.date, getattr(a, "tier", None)),
         f"\n# {a.title}\n",
         "\n## Difficulty\n", f"{a.difficulty}\n",
         "\n## Order & criterion\n", f"{a.order}\n",
@@ -142,7 +164,7 @@ def ticket_leaf_body(a) -> str:
     url = a.ticket_url or a.ticket
     body = [
         frontmatter(name, a.description, a.confirmed_by, a.refs, None, a.ticket,
-                    getattr(a, "tier", None)),
+                    a.date, getattr(a, "tier", None)),
         f"\n# {a.title}\n",
         "\nFull structured record (Difficulty / Order & criterion / Context / "
         f"Working plan) — in the ticket: {url}.\n",
@@ -443,10 +465,29 @@ def cmd_extend(a) -> int:
             f"**Common:** {common}\n\n**Variations:** {variations}\n\n"
         )
         text = text[:new_span[1]] + synth + text[new_span[1]:]
+    # Extending a leaf re-confirms it: bump last_verified to the extend date, and
+    # backfill created if a legacy leaf predates the temporal-frontmatter contract.
+    if FRONTMATTER.match(text):
+        if not re.search(r"^created\s*:", FRONTMATTER.match(text).group(1), re.MULTILINE):
+            text = set_fm_field(text, "created", a.date)
+        text = set_fm_field(text, "last_verified", a.date)
     path.write_text(text, encoding="utf-8")
     print(f"extended {path} (now {n_ctx} context(s))")
     if n_ctx >= 2 and (not a.common or not a.variations):
         print("→ fill `## Common core & variations` to distill the general solution")
+    return 0
+
+
+def cmd_set_last_verified(a) -> int:
+    path = Path(a.leaf)
+    if not path.exists():
+        sys.exit(f"leaf not found: {path}")
+    text = path.read_text(encoding="utf-8")
+    if not FRONTMATTER.match(text):
+        sys.exit(f"leaf has no YAML frontmatter block: {path}")
+    new_text = set_fm_field(text, "last_verified", a.date)
+    path.write_text(new_text, encoding="utf-8")
+    print(f"set last_verified: {a.date} on {path}")
     return 0
 
 
@@ -534,6 +575,12 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--common")
     e.add_argument("--variations")
     e.set_defaults(func=cmd_extend)
+
+    slv = sub.add_parser("set-last-verified",
+                         help="bump last_verified on an existing leaf (re-confirmation)")
+    slv.add_argument("--leaf", required=True)
+    slv.add_argument("--date", default=today())
+    slv.set_defaults(func=cmd_set_last_verified)
 
     t = sub.add_parser("ticket")
     add_scope(t)
