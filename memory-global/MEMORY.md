@@ -7,7 +7,7 @@ Loaded into every session via `@~/.claude/memory-global/MEMORY.md` import in `CL
 ## How to use
 
 - **Read:** open this file, then the relevant leaf. Do not load every leaf at session start.
-- **Write:** when you learn a fact that applies across projects (user role, machine-wide tools, cross-project workflow), add a leaf in `leaves/` with the auto-memory frontmatter (`name`, `description`, `type` — `user` / `feedback` / `project` / `reference`) and add a one-line pointer here.
+- **Write:** when you learn a fact that applies across projects (user role, machine-wide tools, cross-project workflow), add a leaf in `leaves/` with the auto-memory frontmatter (`name`, `description`, `type` — `user` / `feedback` / `project` / `reference`; also stamp `created` and `last_verified` = today in ISO `YYYY-MM-DD`) and add a one-line pointer here.
 - **Project-only facts** belong in `<project_cwd>/.claude/agent-memory/` instead.
 
 ## Reasoning and coordination practices

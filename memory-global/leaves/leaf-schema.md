@@ -17,7 +17,7 @@ This is the single source of truth for the **ordinary-leaf** schema. It covers r
 
 ### Frontmatter
 
-Standard auto-memory frontmatter plus the schema tag:
+Standard auto-memory frontmatter plus the schema tag and temporal fields:
 
 ```
 ---
@@ -25,8 +25,21 @@ name: <human title>
 description: <one line — used for recall; for system-knowledge, name the difficulty>
 type: reference | feedback
 schema: leaf/v1
+created: YYYY-MM-DD
+last_verified: YYYY-MM-DD
+last_accessed: YYYY-MM-DD     # optional; hook-managed, never hand-edited
 ---
 ```
+
+### Temporal frontmatter
+
+Three date fields (ISO `YYYY-MM-DD`) apply across all leaf shapes:
+
+- **`created`** — date the fact was first recorded; set by recording tooling, do not hand-edit.
+- **`last_verified`** — date the content was last confirmed still true; equals `created` at birth; required; invariant: `last_verified >= created`.
+- **`last_accessed`** — date the leaf was last explicitly opened via the `Read` tool; optional; managed entirely by the `PostToolUse(Read)` stamping hook — **never hand-edit**; day-granular (same-day re-reads produce no diff).
+
+> **Why "accessed" means explicit Read only:** the auto-memory mechanism surfaces `MEMORY.md` automatically at session load — this does not pass through the `Read` tool and fires no hook. No "memory-recall hook" exists in the Claude Code hook system. The only hookable access event is an explicit `Read` call.
 
 ### Required sections
 

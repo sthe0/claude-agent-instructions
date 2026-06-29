@@ -43,6 +43,9 @@ tier: 1                                   # optional; implied 0 when absent — 
 resolution_confirmed_by_user: "<user's literal confirmation quote>"
 refs: [<slug § stage>, …]                 # optional; free-form links into the difficulty graph (cycles OK)
 plan_file: <abs path>                     # optional; the as-executed planner plan, if one exists
+created: YYYY-MM-DD
+last_verified: YYYY-MM-DD
+last_accessed: YYYY-MM-DD                 # optional; hook-managed via PostToolUse(Read), never hand-edited
 ---
 
 # <difficulty title>
@@ -69,6 +72,8 @@ Per occurrence: `$` on `claude -p` spawns + wall-clock + user-intervention count
 ## Self-critique of the agent system    (optional)
 Agent-system friction observed while resolving this task — missing affordance, stale guidance, wrong default; name the file/section/behavior. This is itself a difficulty **about the agent system**: record or extend a separate difficulty leaf for it (context = this task) and invoke `self-improvement` in the same turn. `hook-self-critique-reminder.py` nudges when this section is substantive. For friction recurring across ≥2 leaves, run `overcome-difficulty` against the agent-system-as-plan first (see [systemic-pattern-scan.md](systemic-pattern-scan.md)).
 ```
+
+**Temporal frontmatter** (`created`, `last_verified`, `last_accessed`) follows the same contract as `leaf/v1` (see [leaf-schema.md](leaf-schema.md) § Temporal frontmatter): `created` and `last_verified` (ISO `YYYY-MM-DD`) are required and set/bumped by tooling; `last_accessed` is optional and managed by the `PostToolUse(Read)` hook — never hand-edited. `record-experience.py` stamps `created=last_verified=<today>` on every new/extended leaf.
 
 `generality` is **optional and implied 0** on an experience leaf — its absence *means* generality 0. This is deliberate: making it optional is precisely what avoids migration. Existing experience leaves carry no `generality` field and stay valid unchanged; `record-experience.py` emits `generality: 0` on **newly** created leaves only. There is no forced re-stamping and no conditional-required validator logic — a leaf without the field is the generality-0 profile by default.
 
