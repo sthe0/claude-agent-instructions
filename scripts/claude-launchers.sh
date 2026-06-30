@@ -76,9 +76,12 @@ Usage: $_cmd [<name> | <TICKET-123> | --new "<title>"] [claude args...]
                            under this command's auth profile, in normal mode
   $_cmd <name>             named scratch workspace, then launch claude in it
   $_cmd <TICKET-123>       resolve a tracker ticket -> isolated workspace
-  $_cmd --new "<title>"    create a tracker issue, then enter its workspace
+  $_cmd --new "<title>"    create a tracker issue (confirms first), then enter
   $_cmd --list-projects    list registered projects and their tracker queues
   $_cmd -h | --help        show this help
+
+--new performs an irreversible tracker write: interactively it asks to confirm;
+non-interactively it requires CLAUDE_LAUNCH_ASSUME_YES=1.
 
 With no task (or a bare 'claude' flag such as -c / -p) the command does NOT
 create a workspace; it launches plain 'claude' in the current directory under
@@ -152,14 +155,38 @@ _dispatch_with_profile() {
     _spec=(--name "$_tok"); shift; _cargs=("$@")
   fi
 
+  # --new is an irreversible tracker write. enter-task guards it behind
+  # CLAUDE_LAUNCH_ASSUME_YES=1; confirm interactively (or honor a pre-set gate /
+  # non-interactive abort) and forward the gate so the create can proceed.
+  local _assume_yes="${CLAUDE_LAUNCH_ASSUME_YES:-}"
+  if [[ "$_tok" == "--new" && -z "${CLAUDE_LAUNCH_DRYRUN:-}" && "$_assume_yes" != "1" ]]; then
+    if [[ -t 0 ]]; then
+      printf '%s --new will CREATE a tracker task. Proceed? [y/N] ' "$_cmd" >&2
+      local _ans; read -r _ans
+      case "$_ans" in
+        [yY]|[yY][eE][sS]) _assume_yes=1 ;;
+        *) printf '%s: aborted (no task created).\n' "$_cmd" >&2; return 1 ;;
+      esac
+    else
+      printf '%s: --new creates a tracker task; set CLAUDE_LAUNCH_ASSUME_YES=1 to confirm (non-interactive).\n' "$_cmd" >&2
+      return 1
+    fi
+  fi
+
   # Resolve the project directory.  --dry-run is forwarded so enter-task skips
-  # external side effects while still printing the would-be directory.
-  local _dir
-  _dir="$("$_LAUNCHERS_ENTER_TASK" "${_spec[@]}" ${CLAUDE_LAUNCH_DRYRUN:+--dry-run} 2>/dev/null | tail -1)"
+  # external side effects while still printing the would-be directory. Capture
+  # enter-task's stderr so a failure surfaces ITS explanation instead of a
+  # generic message (the hint used to be swallowed by 2>/dev/null).
+  local _dir _errfile
+  _errfile="$(mktemp)"
+  _dir="$(CLAUDE_LAUNCH_ASSUME_YES="$_assume_yes" "$_LAUNCHERS_ENTER_TASK" "${_spec[@]}" ${CLAUDE_LAUNCH_DRYRUN:+--dry-run} 2>"$_errfile" | tail -1)"
   if [[ -z "$_dir" ]]; then
-    printf '%s: workspace entry failed. Run enter-task.sh directly for details.\n' "$_cmd" >&2
+    printf '%s: workspace entry failed:\n' "$_cmd" >&2
+    sed 's/^/  /' "$_errfile" >&2
+    rm -f "$_errfile"
     return 1
   fi
+  rm -f "$_errfile"
 
   # Dry-run: report the resolved dir and profile, then return without cd or launch.
   if [[ -n "${CLAUDE_LAUNCH_DRYRUN:-}" ]]; then

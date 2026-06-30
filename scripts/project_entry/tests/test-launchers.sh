@@ -471,6 +471,75 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Test 11 — --new confirmation gate + stderr surfacing
+# ═══════════════════════════════════════════════════════════════════════════
+printf '\n--- --new confirm gate + stderr surfacing ---\n'
+
+# Case (a): non-interactive (</dev/null) --new WITHOUT the gate -> abort with a
+# hint, and enter-task is NOT called.
+reset_logs
+_se_a="$TMP/stderr-11a.txt"
+CLAUDE_SKIP_ONBOARD=1 claude-task --new 'Risky task' </dev/null >/dev/null 2>"$_se_a" || true
+if [[ -s "$ET_CALLS" ]]; then
+  fail "11a: --new without gate should NOT call enter-task (et-calls: $(cat "$ET_CALLS"))"
+else
+  ok "11a: non-interactive --new without gate: enter-task not called"
+fi
+if grep -q 'CLAUDE_LAUNCH_ASSUME_YES=1' "$_se_a"; then
+  ok "11a: abort message names CLAUDE_LAUNCH_ASSUME_YES=1"
+else
+  fail "11a: abort message missing the gate hint (stderr: $(cat "$_se_a"))"
+fi
+
+# Case (b): --new WITH CLAUDE_LAUNCH_ASSUME_YES=1 -> enter-task called and the
+# gate is forwarded into its environment.
+reset_logs
+FAKE_ET_NEW="$TMP/fake-et-new.sh"
+cat >"$FAKE_ET_NEW" <<'SCRIPT'
+#!/usr/bin/env bash
+printf 'assume=%s\n' "${CLAUDE_LAUNCH_ASSUME_YES:-unset}" >> "$ET_CALLS"
+printf '%s\n' "$*" >> "$ET_CALLS"
+printf '%s\n' "$ET_DIR"
+SCRIPT
+chmod +x "$FAKE_ET_NEW"
+_saved_et_b="$_LAUNCHERS_ENTER_TASK"
+_LAUNCHERS_ENTER_TASK="$FAKE_ET_NEW"
+CLAUDE_SKIP_ONBOARD=1 CLAUDE_LAUNCH_ASSUME_YES=1 \
+  claude-task --new 'Confirmed task' </dev/null >/dev/null 2>/dev/null || true
+_LAUNCHERS_ENTER_TASK="$_saved_et_b"
+if grep -qF -- '--new' "$ET_CALLS"; then
+  ok "11b: --new with gate calls enter-task"
+else
+  fail "11b: --new with gate did not call enter-task (et-calls: $(cat "$ET_CALLS"))"
+fi
+if grep -qx 'assume=1' "$ET_CALLS"; then
+  ok "11b: CLAUDE_LAUNCH_ASSUME_YES=1 forwarded to enter-task env"
+else
+  fail "11b: gate not forwarded to enter-task (et-calls: $(cat "$ET_CALLS"))"
+fi
+
+# Case (c): a failing enter-task stub's stderr is surfaced by the launcher
+# (no longer swallowed by 2>/dev/null).
+reset_logs
+FAKE_ET_FAIL="$TMP/fake-et-fail.sh"
+cat >"$FAKE_ET_FAIL" <<'SCRIPT'
+#!/usr/bin/env bash
+printf 'enter-task: explanatory failure reason\n' >&2
+exit 1
+SCRIPT
+chmod +x "$FAKE_ET_FAIL"
+_saved_et_c="$_LAUNCHERS_ENTER_TASK"
+_LAUNCHERS_ENTER_TASK="$FAKE_ET_FAIL"
+_se_c="$TMP/stderr-11c.txt"
+CLAUDE_SKIP_ONBOARD=1 claude-task somename </dev/null >/dev/null 2>"$_se_c" || true
+_LAUNCHERS_ENTER_TASK="$_saved_et_c"
+if grep -q 'explanatory failure reason' "$_se_c"; then
+  ok "11c: launcher surfaces enter-task stderr on failure"
+else
+  fail "11c: enter-task stderr was swallowed (stderr: $(cat "$_se_c"))"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════════
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
