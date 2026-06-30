@@ -132,7 +132,8 @@ _dispatch_with_profile() {
     printf '     %s <NAME>           # named scratch workspace\n' "$_cmd" >&2
     printf '     %s <TICKET-123>     # a tracker ticket\n' "$_cmd" >&2
     printf '     %s --new "title"    # create a ticket, then enter\n' "$_cmd" >&2
-    _auth_apply "$_profile" -- command claude "${_cargs[@]}"
+    # ${_cargs[@]+...}: bash 3.2 (macOS) errors on "${empty[@]}" under set -u.
+    _auth_apply "$_profile" -- command claude ${_cargs[@]+"${_cargs[@]}"}
     return
   fi
 
@@ -169,7 +170,7 @@ _dispatch_with_profile() {
   # Apply auth profile and run claude inside the resolved directory.
   # bash -c receives the dir as $1 (shifted away before command claude "$@").
   _auth_apply "$_profile" -- \
-    bash -c 'cd "$1" && shift && command claude "$@"' -- "$_dir" "${_cargs[@]}"
+    bash -c 'cd "$1" && shift && command claude "$@"' -- "$_dir" ${_cargs[@]+"${_cargs[@]}"}
 }
 
 # ── claude-task (default auth profile) ───────────────────────────────────────

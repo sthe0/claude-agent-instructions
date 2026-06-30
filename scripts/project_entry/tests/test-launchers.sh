@@ -235,7 +235,11 @@ else
   ok "--help: claude not launched"
 fi
 reset_logs
-if claude-task -h 2>/dev/null | grep -q 'Usage: claude-task'; then
+# Capture then grep (not a pipe): under `set -o pipefail`, grep -q closes the
+# pipe on first match and _launcher_usage's trailing project_list write takes
+# SIGPIPE (141), which pipefail would surface as a spurious failure.
+_h_out="$(claude-task -h 2>/dev/null)"
+if printf '%s\n' "$_h_out" | grep -q 'Usage: claude-task'; then
   ok "-h prints usage (claude-task)"
 else
   fail "-h did not print usage (claude-task)"
