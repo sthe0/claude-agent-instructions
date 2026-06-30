@@ -9,7 +9,6 @@ generality: 0
 resolution_confirmed_by_user: "user"
 refs: [scripts/agentctl/cost.py, scripts/agentctl/state.py, memory-global/leaves/system-knowledge/MEMORY.md, 2026-05-26-agent-system-plan-vs-reality-drift.md]
 plan_file: /home/the0/.claude/plans/cost-tracking-three-levels.toml
-last_accessed: 2026-06-29
 ---
 
 # Multi-level cost tracking: stamp the unit's identity at the write source, fold upward at finalize

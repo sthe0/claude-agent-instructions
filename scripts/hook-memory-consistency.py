@@ -98,7 +98,7 @@ def _check_frontmatter(content: str) -> list[str]:
             f"`type: {typ}` is not one of: {', '.join(sorted(VALID_TYPES))}"
         )
     # Temporal frontmatter (memory-temporal-frontmatter.md): created +
-    # last_verified required & well-formed, last_accessed format-checked.
+    # last_verified required & well-formed; last_accessed is RETIRED (rejected if present).
     issues.extend(md.validate_temporal(fm_body, require=True))
     return issues
 

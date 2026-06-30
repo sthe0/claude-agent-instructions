@@ -9,7 +9,6 @@ refs: [2026-06-27-stub-mechanism-not-deployable-until-caller-cli-onboarding.md, 
 plan_file: /home/the0/.claude/plans/org-portable-core.toml
 created: 2026-06-29
 last_verified: 2026-06-29
-last_accessed: 2026-06-30
 ---
 
 # Make a single-org tool portable by the reachability dividing line: generic default in the shared layer, internal-only as per-machine opt-in

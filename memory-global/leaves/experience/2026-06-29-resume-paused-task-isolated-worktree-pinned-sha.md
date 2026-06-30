@@ -8,7 +8,6 @@ resolution_confirmed_by_user: "fedor.solovyev@gmail.com (user, 2026-06-29)"
 refs: [memory-global/leaves/spawning-specialists.md, memory-global/leaves/coordinator-pitfalls.md, memory-global/leaves/experience/2026-06-30-shared-tree-suite-failure-wrong-ownership-attribution.md, memory-global/leaves/experience/2026-06-30-2026-06-30-verify-spawned-developer-commit-scope-shared-tree.md]
 created: 2026-06-29
 last_verified: 2026-06-30
-last_accessed: 2026-06-30
 ---
 
 # Resume a paused task sharing a git tree with a live parallel session via an isolated worktree off a pinned clean SHA

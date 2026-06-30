@@ -7,7 +7,6 @@ resolution_confirmed_by_user: "Да, решена"
 refs: [2026-06-24-gate-exemption-is-category-error-for-result-images, 2026-05-26-agent-system-plan-vs-reality-drift, 2026-06-04-org-specific-vs-global-placement]
 created: 2026-06-26
 last_verified: 2026-06-27
-last_accessed: 2026-06-30
 ---
 
 # One critique primitive (commonality / difference) unifies conflict resolution, principle induction, and refutation

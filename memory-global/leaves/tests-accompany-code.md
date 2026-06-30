@@ -5,7 +5,6 @@ type: feedback
 schema: leaf/v1
 created: 2026-06-25
 last_verified: 2026-06-25
-last_accessed: 2026-06-30
 ---
 
 ## Difficulty

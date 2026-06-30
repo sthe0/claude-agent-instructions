@@ -7,7 +7,6 @@ resolution_confirmed_by_user: "<migrated 2026-06-11 to difficulty/v1; per-contex
 refs: [2026-05-26-agent-system-plan-vs-reality-drift]
 created: 2026-06-11
 last_verified: 2026-06-30
-last_accessed: 2026-06-30
 ---
 
 # Verify the load-bearing axis, not the surface signal

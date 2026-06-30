@@ -29,11 +29,10 @@ type: reference | feedback
 schema: leaf/v1
 created: <YYYY-MM-DD>          # required — date first recorded; see memory-temporal-frontmatter
 last_verified: <YYYY-MM-DD>    # required — date content last confirmed true; >= created
-last_accessed: <YYYY-MM-DD>    # optional — written only by the PostToolUse(Read) hook
 ---
 ```
 
-The three date fields (`created` / `last_verified` / `last_accessed`) are common to **every** leaf schema and defined once in [memory-temporal-frontmatter.md](memory-temporal-frontmatter.md) — `created`+`last_verified` are required and tool-stamped; `last_accessed` is optional and owned by the access-stamping hook ("accessed" = an explicit Read, not a recall).
+The two required date fields (`created` / `last_verified`) are common to every leaf schema and defined once in [memory-temporal-frontmatter.md](memory-temporal-frontmatter.md) — both required and tool-stamped. `last_accessed` is retired; validators reject it if present (see memory-temporal-frontmatter.md § last_accessed — retired).
 
 ### Required sections
 

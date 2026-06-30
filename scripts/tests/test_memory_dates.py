@@ -48,12 +48,11 @@ def test_last_verified_before_created_rejected():
     assert any("before" in i for i in issues)
 
 
-def test_last_accessed_only_format_checked():
-    # present + malformed -> issue; present + valid -> none (still optional)
-    bad = "created: 2026-06-01\nlast_verified: 2026-06-01\nlast_accessed: nope\n"
-    assert any("last_accessed" in i for i in md.validate_temporal(bad, require=True))
-    good = "created: 2026-06-01\nlast_verified: 2026-06-01\nlast_accessed: 2026-06-29\n"
-    assert md.validate_temporal(good, require=True) == []
+def test_last_accessed_present_rejected_as_retired():
+    # any present last_accessed (even valid ISO) is now a retired-field error
+    fm = "created: 2026-06-01\nlast_verified: 2026-06-01\nlast_accessed: 2026-06-29\n"
+    issues = md.validate_temporal(fm, require=True)
+    assert any("last_accessed" in i and "RETIRED" in i for i in issues)
 
 
 def test_last_accessed_only_still_requires_the_two():
@@ -61,6 +60,8 @@ def test_last_accessed_only_still_requires_the_two():
     issues = md.validate_temporal(fm, require=True)
     assert any("created" in i for i in issues)
     assert any("last_verified" in i for i in issues)
+    # also flags last_accessed as retired
+    assert any("last_accessed" in i and "RETIRED" in i for i in issues)
 
 
 def test_malformed_created_rejected():

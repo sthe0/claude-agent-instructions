@@ -5,7 +5,6 @@ type: reference
 schema: leaf/v1
 created: 2026-06-26
 last_verified: 2026-06-29
-last_accessed: 2026-06-30
 ---
 
 # Principle leaf schema (`principle/v1`)
@@ -50,8 +49,8 @@ it uses the sections below instead).
   coordination rule are both possible. Absent = cross-domain / unscoped, retrievable under any
   `--domain` filter (absence is the permissive default, not an error). Consumed by
   `record-experience.py search --domain`.
-- `created` / `last_verified` (required) and optional `last_accessed` — the temporal fields common to
-  every leaf, defined in [memory-temporal-frontmatter.md](memory-temporal-frontmatter.md).
+- `created` / `last_verified` (required) — the temporal fields common to every leaf, defined in
+  [memory-temporal-frontmatter.md](memory-temporal-frontmatter.md). `last_accessed` is retired.
 
 **Domain specialization (orthogonal to generality).** The optional `domain:` tag lets a specialist
 (e.g. developer) retrieve domain-specialized principles atop general ones via

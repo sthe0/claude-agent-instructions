@@ -8,7 +8,6 @@ resolution_confirmed_by_user: "user"
 refs: [https://a.yandex-team.ru/review/14170183, trunk r20151520, Core dae4558..a0bdbf1, leaves/pr-land-review-gate.md]
 created: 2026-06-30
 last_verified: 2026-06-30
-last_accessed: 2026-06-30
 ---
 
 # Verbal policy -> auto-applying code: split judgment from mechanism; ship the verifiable layer, defer the platform-blocked one

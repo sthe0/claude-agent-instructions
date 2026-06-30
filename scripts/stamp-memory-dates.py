@@ -13,8 +13,8 @@ The dates are inserted into the existing frontmatter without reordering or
 rewriting the body. A leaf with NO YAML frontmatter (common in project /
 personal scope) gets a minimal block synthesized and prepended (name=slug,
 description=first heading/sentence, type=reference, created, last_verified);
-its body is left untouched. `last_accessed` is never set here — it is owned by
-the PostToolUse(Read) hook.
+its body is left untouched. (`last_accessed` is a retired field — it is never
+written anywhere; the former PostToolUse(Read) stamp hook was removed.)
 
 Idempotent: a leaf that already carries both dates is left unchanged, so a second
 run is a no-op. Dry-run by default; pass --apply to write.

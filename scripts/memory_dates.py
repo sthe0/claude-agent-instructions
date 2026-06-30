@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Shared validation for the memory-leaf temporal frontmatter fields.
 
-`created` / `last_verified` / `last_accessed` — see
-memory-global/leaves/memory-temporal-frontmatter.md for the contract (field
-semantics, the ISO `YYYY-MM-DD` format, who writes each). One helper so the three
-verifiers (verify-memory-index, verify-experience-leaf, verify-leaf-structure)
-and the PreToolUse reminder hook validate the dates identically instead of
-drifting their own copies.
+Two-field contract: `created` / `last_verified` — see
+memory-global/leaves/memory-temporal-frontmatter.md for the semantics, the ISO
+`YYYY-MM-DD` format, and who writes each. `last_accessed` is RETIRED: its presence
+now triggers a rejection error (see the retired note in memory-temporal-frontmatter.md).
+One helper so the three verifiers (verify-memory-index, verify-experience-leaf,
+verify-leaf-structure) and the PreToolUse reminder hook validate the dates
+identically instead of drifting their own copies.
 
 Importable as ``memory_dates`` from any scripts/ context: every invocation path
 (verify-all run from scripts/, a standalone verifier, a hook, pytest with the
@@ -56,7 +57,8 @@ def validate_temporal(fm_body: str, *, require: bool) -> list[str]:
                     used by the schema-specific verifiers, which must not reject
                     a leaf merely for not yet carrying the dates).
 
-    `last_accessed` is always optional and only format-checked when present.
+    `last_accessed` is RETIRED: if present (any value), an error is emitted citing
+    memory-temporal-frontmatter.md and instructing removal.
     Whenever both `created` and `last_verified` parse, `last_verified >= created`
     is enforced.
     """
@@ -83,8 +85,11 @@ def validate_temporal(fm_body: str, *, require: bool) -> list[str]:
         if verified is None:
             issues.append(f"`last_verified: {verified_raw}` is not a valid ISO YYYY-MM-DD date")
 
-    if accessed_raw is not None and parse_iso(accessed_raw) is None:
-        issues.append(f"`last_accessed: {accessed_raw}` is not a valid ISO YYYY-MM-DD date")
+    if accessed_raw is not None:
+        issues.append(
+            "`last_accessed` is a RETIRED field (removed; see memory-temporal-frontmatter.md)"
+            " — delete this line"
+        )
 
     if created is not None and verified is not None and verified < created:
         issues.append(

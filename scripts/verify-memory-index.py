@@ -82,9 +82,10 @@ def _date_violations(rel: str, fm_body: str) -> list[str]:
                     f"  dates: {rel} — `last_verified` ({last_verified_s}) is before `created` ({created_s})"
                 )
 
-    if last_accessed_s and _parse_date(last_accessed_s) is None:
+    if last_accessed_s:
         issues.append(
-            f"  dates: {rel} — `last_accessed: {last_accessed_s}` is not a valid ISO date (YYYY-MM-DD)"
+            f"  dates: {rel} — `last_accessed` is a RETIRED field (removed;"
+            " see memory-temporal-frontmatter.md) — delete this line"
         )
 
     return issues
@@ -163,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
         elif t not in ALLOWED_TYPES:
             failures.append(f"  frontmatter: {rel} — type '{t}' not in {sorted(ALLOWED_TYPES)}")
         # Temporal frontmatter: created + last_verified required & well-formed;
-        # last_accessed optional but format-checked (memory-temporal-frontmatter.md).
+        # last_accessed RETIRED: rejected if present (memory-temporal-frontmatter.md).
         for issue in md.validate_temporal(fm or "", require=True):
             failures.append(f"  frontmatter: {rel} — {issue}")
 

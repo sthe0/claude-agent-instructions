@@ -4,7 +4,6 @@ description: Carve-outs that let the agent act without a per-action confirmation
 type: reference
 created: 2026-05-26
 last_verified: 2026-06-24
-last_accessed: 2026-06-30
 ---
 
 # Acting without asking

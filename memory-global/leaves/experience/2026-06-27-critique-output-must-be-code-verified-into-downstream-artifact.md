@@ -8,7 +8,6 @@ schema: difficulty/v1
 generality: 0
 resolution_confirmed_by_user: "user"
 refs: [2026-06-26-critique-primitive-unifies-conflict-and-principle.md, 2026-06-25-state-gate-needs-acting-session-at-executing-via-toml.md]
-last_accessed: 2026-06-29
 ---
 
 # A structured diagnostic split is inert until code verifies its landing in the artifact it should shape

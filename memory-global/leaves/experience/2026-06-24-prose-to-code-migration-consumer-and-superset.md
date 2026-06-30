@@ -7,7 +7,6 @@ resolution_confirmed_by_user: "Принять и запушить"
 refs: [2026-05-26-agent-system-plan-vs-reality-drift]
 created: 2026-06-24
 last_verified: 2026-06-30
-last_accessed: 2026-06-30
 ---
 
 # Porting a prose process to code: secure a real consumer, don't collapse a prose superset

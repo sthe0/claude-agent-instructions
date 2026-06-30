@@ -42,9 +42,6 @@ DESIRED = [
     ("UserPromptSubmit", None,    "hook-language-reminder.py",       5),
     ("PreToolUse",       "Bash|Grep|Glob", "hook-arc-mount-search-guard.py", 5),
     ("PostToolUse",      "Write", "hook-self-critique-reminder.py",  5),
-    # Stamp last_accessed on a memory leaf when it is opened with Read (the only
-    # writer of the temporal-frontmatter usage signal; idempotent, never blocks).
-    ("PostToolUse",      "Read",  "hook-memory-accessed-stamp.py",   5),
     ("SessionStart",     None,    "hook-policy-scorecard-due.py",    5),
     ("SessionStart",     None,    "hook-sigma-sentinel-due.py",  5),
     # Structure/confirmation gates on memory-leaf Writes. These run on ANY
