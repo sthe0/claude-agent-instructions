@@ -4,6 +4,7 @@ description: Carve-outs that let the agent act without a per-action confirmation
 type: reference
 created: 2026-05-26
 last_verified: 2026-06-24
+last_accessed: 2026-06-30
 ---
 
 # Acting without asking
@@ -90,6 +91,10 @@ Update the plan file in place; mention the refinement in passing in your reply i
 - **Any scope expansion or contraction** beyond what the user approved.
 
 For these: state the diff (was → now → why), present via `AskUserQuestion` (`Apply revised plan / Refine / Stick with original`), wait for confirmation. This is exactly the `REPLAN:` flow when it originates from `overcome-difficulty`; the same gate applies when the manager realizes the substantive change in-thread.
+
+### A correction directive *at the approval gate* is not approval
+
+When the plan is at `PLAN_READY` and the user replies with an instruction to *change* it ("make the sandbox the0-only", "tie X to Y", "also forbid Z") rather than an affirmative "go", that directive is a **refinement request, not approval to execute**. Apply the correction, re-present the corrected plan, and wait for an explicit affirmative approval on the plan *as it now stands*. Do not infer "approved" from the act of correcting — a user still shaping the plan has not yet signed off on running it. (Difficulty this removes: treating "here's how to fix the plan" as "start building it" — caught 2026-06-30 when a the0-only refinement was misread as a green light, costing a stopped spawn and an engine rollback.)
 
 ## In-context carve-out — manager implements substantive work in-thread
 
