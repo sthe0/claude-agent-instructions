@@ -334,9 +334,11 @@ def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
     def _prose(doc: PlanDoc):
         return [
             (s.index, s.title, s.subject.result, s.subject.invariants,
-             s.means.means, s.means.method, s.conditions)
+             s.means.means, s.means.method, s.conditions,
+             s.criterion.verify_command, s.criterion.expected_exit)
             for s in doc.stages
         ]
-    if _prose(old) != _prose(new) or old.meta.goal != new.meta.goal:
+    if (_prose(old) != _prose(new) or old.meta.goal != new.meta.goal
+            or old.meta.repo_root != new.meta.repo_root):
         return "refinement"
     return "no_change"

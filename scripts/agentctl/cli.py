@@ -932,9 +932,12 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             cur.means.method = ns.means.method
             cur.subject.invariants = ns.subject.invariants
             cur.conditions = ns.conditions
+            cur.criterion.verify_command = ns.criterion.verify_command
+            cur.criterion.expected_exit = ns.criterion.expected_exit
             if cur.outcome.status == StageStatus.FAILED.value:
                 cur.outcome.status = StageStatus.PENDING.value
         state.plan_path = args.plan
+        state.repo_root = new.meta.repo_root
         if diagnosing:
             state.difficulty = None
             state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
