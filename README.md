@@ -39,6 +39,24 @@ Several projects can be grouped into a shared **workspace** (a storage tree outs
 
 ## Setup
 
+### Fastest path — one command
+
+```bash
+git clone git@github.com:sthe0/claude-agent-instructions.git ~/claude-agent-instructions
+echo 'source ~/claude-agent-instructions/scripts/claude-launchers.sh' >> ~/.bashrc && source ~/.bashrc
+onboard   # setup-symlinks + readiness check + any machine-local onboard.d/*.sh hooks
+```
+
+Core already cloned: just `onboard`. On a machine with org-specific workspace storage,
+a machine-local `onboard.d/` hook mounts storage and wires project configs automatically
+(see [Multi-project workspaces](docs/operations/setup.md#multi-project-workspaces-optional)).
+
+After setup, `claude-task` self-initializes: it probes `onboard.d/` hooks with
+`--needs-init` and runs `onboard` automatically when initialization is needed (e.g.
+after a reboot that dropped a storage mount).
+
+### Equivalent steps
+
 ```bash
 git clone git@github.com:sthe0/claude-agent-instructions.git ~/claude-agent-instructions
 # …no SSH key or no push access? a read-only HTTPS clone works just as well:

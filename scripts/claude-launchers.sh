@@ -16,9 +16,12 @@
 # so that cd can persist in the caller's shell if callers extend the dispatch.
 #
 # Env seams for tests:
-#   ENTER_TASK_BIN   override the enter-task.sh path (default: co-located script)
-#   CLAUDE_AUTH_PROFILE_DIR  override the profile dir (consumed by auth-profiles.sh)
-#   CLAUDE_LAUNCH_DRYRUN     set to any non-empty value to engage dry-run mode
+#   ENTER_TASK_BIN          override the enter-task.sh path (default: co-located script)
+#   CLAUDE_AUTH_PROFILE_DIR override the profile dir (consumed by auth-profiles.sh)
+#   CLAUDE_LAUNCH_DRYRUN    set to any non-empty value to engage dry-run mode
+#   CLAUDE_ONBOARD_HOOK_DIR override the onboard hook dir (default: ~/.config/claude/onboard.d)
+#   CLAUDE_SKIP_ONBOARD     set to any non-empty value to skip the init probe
+#   CLAUDE_ONBOARD_BIN      override the onboard.sh path (default: co-located onboard.sh)
 
 # Self-locate: Core scripts/ dir (where enter-task.sh and project_entry/ live).
 _LAUNCHERS_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -29,6 +32,34 @@ source "$_LAUNCHERS_SCRIPTS_DIR/project_entry/auth-profiles.sh"
 
 # enter-task binary; ENTER_TASK_BIN overrides for tests.
 _LAUNCHERS_ENTER_TASK="${ENTER_TASK_BIN:-$_LAUNCHERS_SCRIPTS_DIR/enter-task.sh}"
+
+# ── Self-init probe ────────────────────────────────────────────────────────────
+# Probes machine-local onboard.d hooks for --needs-init and runs onboard when
+# any hook signals that initialization is required.  Core-neutral: only the
+# hook directory + contract are named; the org-specific details live in the hook.
+_maybe_onboard() {
+  [[ -n "${CLAUDE_SKIP_ONBOARD:-}" ]] && return 0
+  local _hook_dir="${CLAUDE_ONBOARD_HOOK_DIR:-$HOME/.config/claude/onboard.d}"
+  local _need=0
+  if [[ -d "$_hook_dir" ]]; then
+    local _h
+    for _h in "$_hook_dir"/*.sh; do
+      [[ -f "$_h" ]] || continue
+      if "${_h}" --needs-init 2>/dev/null; then
+        _need=1
+        break
+      fi
+    done
+  fi
+  if [[ $_need -eq 1 ]]; then
+    printf 'environment not initialized — running onboard (this may mount storage and compose project configs)…\n' >&2
+    "${CLAUDE_ONBOARD_BIN:-$_LAUNCHERS_SCRIPTS_DIR/onboard.sh}" || \
+      printf 'onboard: warning: initialization failed (continuing)\n' >&2
+  fi
+}
+
+# ── onboard (user-callable wrapper) ───────────────────────────────────────────
+onboard() { command "${CLAUDE_ONBOARD_BIN:-$_LAUNCHERS_SCRIPTS_DIR/onboard.sh}" "$@"; }
 
 # ── Usage ─────────────────────────────────────────────────────────────────────
 # _launcher_usage <cmd> -> print this launcher's help to stdout.
@@ -63,6 +94,8 @@ _dispatch_with_profile() {
   local _tok="${1:-}"
   local _cmd; [[ "$_profile" == "default" ]] && _cmd="claude-task" || _cmd="claude-$_profile"
   local -a _spec _cargs=()
+
+  _maybe_onboard
 
   # -h/--help: print usage and stop. No workspace entry, no claude launch.
   if [[ "$_tok" == "-h" || "$_tok" == "--help" ]]; then

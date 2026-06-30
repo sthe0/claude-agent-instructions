@@ -67,20 +67,36 @@ chmod +x "$FAKE_CLAUDE"
 # Prepend TMP so command claude finds the stub.
 export PATH="$TMP:$PATH"
 
+# Onboard call-log (defined before reset_logs so the function can clear it).
+export ONBOARD_LOG="$TMP/onboard.log"
+: >"$ONBOARD_LOG"
+
 # ── Source the launchers (profile dir is already set via env) ────────────────
 # shellcheck source=scripts/claude-launchers.sh
 source "$SCRIPTS_DIR/claude-launchers.sh"
 
 # ── Helper: reset per-test log files ─────────────────────────────────────────
 reset_logs() {
-  : >"$ET_CALLS" >"$CLAUDE_ENV_RECORDED" >"$CLAUDE_ARGS"
+  : >"$ET_CALLS" >"$CLAUDE_ENV_RECORDED" >"$CLAUDE_ARGS" >"$ONBOARD_LOG"
 }
+
+# ── Onboard global setup — empty hook dir so existing tests are unaffected ───
+export EMPTY_HOOK_DIR="$TMP/empty-onboard.d"
+mkdir -p "$EMPTY_HOOK_DIR"
+export CLAUDE_ONBOARD_HOOK_DIR="$EMPTY_HOOK_DIR"
+FAKE_ONBOARD="$TMP/fake-onboard.sh"
+cat >"$FAKE_ONBOARD" <<HOOKSCRIPT
+#!/usr/bin/env bash
+printf 'onboard\n' >> "$ONBOARD_LOG"
+HOOKSCRIPT
+chmod +x "$FAKE_ONBOARD"
+export CLAUDE_ONBOARD_BIN="$FAKE_ONBOARD"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Test 1 — all expected functions are defined
 # ═══════════════════════════════════════════════════════════════════════════
 printf '\n--- function presence ---\n'
-for _fn in claude-task claude-eliza claude-team claude-personal; do
+for _fn in claude-task claude-eliza claude-team claude-personal onboard; do
   if declare -f "$_fn" &>/dev/null; then
     ok "$_fn is defined"
   else
@@ -254,6 +270,102 @@ if grep -qx -- '-c' "$CLAUDE_ARGS"; then
   ok "claude-task -c: -c forwarded to claude"
 else
   fail "claude-task -c: -c not forwarded (args: $(cat "$CLAUDE_ARGS"))"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Test 7 — onboard probe: _maybe_onboard integration
+# ═══════════════════════════════════════════════════════════════════════════
+printf '\n--- onboard probe ---\n'
+
+# Case (a): empty hook dir -> onboard NOT called
+reset_logs
+CLAUDE_LAUNCH_DRYRUN=1 claude-task DEEPAGENT-1 >/dev/null 2>/dev/null || true
+if [[ -s "$ONBOARD_LOG" ]]; then
+  fail "empty hook dir: onboard should NOT be called (log: $(cat "$ONBOARD_LOG"))"
+else
+  ok "empty hook dir: onboard not called"
+fi
+
+# Case (b): hook --needs-init=0 -> onboard called once, BEFORE enter-task + banner printed
+# _LAUNCHERS_ENTER_TASK is set at source time so we temporarily override it directly.
+reset_logs
+HOOK_DIR_B="$TMP/hook-b.d"; mkdir -p "$HOOK_DIR_B"
+ORDER_LOG_B="$TMP/order-b.log"; : >"$ORDER_LOG_B"
+cat >"$HOOK_DIR_B/10-init.sh" <<'HSCRIPT'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--needs-init" ]]; then exit 0; fi
+HSCRIPT
+chmod +x "$HOOK_DIR_B/10-init.sh"
+FAKE_ONBOARD_B="$TMP/fake-onboard-b.sh"
+cat >"$FAKE_ONBOARD_B" <<HSCRIPT
+#!/usr/bin/env bash
+printf 'onboard\n' >> "$ONBOARD_LOG"
+printf 'onboard\n' >> "$ORDER_LOG_B"
+HSCRIPT
+chmod +x "$FAKE_ONBOARD_B"
+FAKE_ET_B="$TMP/fake-et-b.sh"
+cat >"$FAKE_ET_B" <<HSCRIPT
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$ET_CALLS"
+printf 'enter-task\n' >> "$ORDER_LOG_B"
+printf '%s\n' "$ET_DIR"
+HSCRIPT
+chmod +x "$FAKE_ET_B"
+_stderr_b="$TMP/stderr-b.txt"
+_saved_et="$_LAUNCHERS_ENTER_TASK"
+_LAUNCHERS_ENTER_TASK="$FAKE_ET_B"
+CLAUDE_ONBOARD_HOOK_DIR="$HOOK_DIR_B" CLAUDE_ONBOARD_BIN="$FAKE_ONBOARD_B" \
+  CLAUDE_LAUNCH_DRYRUN=1 \
+  claude-task DEEPAGENT-1 >/dev/null 2>"$_stderr_b" || true
+_LAUNCHERS_ENTER_TASK="$_saved_et"
+if grep -q 'environment not initialized' "$_stderr_b"; then
+  ok "needs-init=0: banner printed"
+else
+  fail "needs-init=0: banner not printed (stderr: $(cat "$_stderr_b"))"
+fi
+if [[ "$(grep -c '^onboard$' "$ONBOARD_LOG" 2>/dev/null || echo 0)" -eq 1 ]]; then
+  ok "needs-init=0: onboard called exactly once"
+else
+  fail "needs-init=0: onboard call count wrong (log: $(cat "$ONBOARD_LOG"))"
+fi
+_ob_line="$(grep -n '^onboard$' "$ORDER_LOG_B" | head -1 | cut -d: -f1)"
+_et_line="$(grep -n '^enter-task$' "$ORDER_LOG_B" | head -1 | cut -d: -f1)"
+if [[ -n "$_ob_line" && -n "$_et_line" && "$_ob_line" -lt "$_et_line" ]]; then
+  ok "needs-init=0: onboard called before enter-task"
+else
+  fail "needs-init=0: ordering wrong (onboard@${_ob_line:-none}, enter-task@${_et_line:-none})"
+fi
+
+# Case (c): hook --needs-init=1 (already initialized) -> onboard NOT called
+reset_logs
+HOOK_DIR_C="$TMP/hook-c.d"; mkdir -p "$HOOK_DIR_C"
+cat >"$HOOK_DIR_C/10-already.sh" <<'HSCRIPT'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--needs-init" ]]; then exit 1; fi
+HSCRIPT
+chmod +x "$HOOK_DIR_C/10-already.sh"
+CLAUDE_ONBOARD_HOOK_DIR="$HOOK_DIR_C" CLAUDE_LAUNCH_DRYRUN=1 \
+  claude-task DEEPAGENT-1 >/dev/null 2>/dev/null || true
+if [[ -s "$ONBOARD_LOG" ]]; then
+  fail "needs-init=1: onboard should NOT be called (log: $(cat "$ONBOARD_LOG"))"
+else
+  ok "needs-init=1: onboard not called (already initialized)"
+fi
+
+# Case (d): CLAUDE_SKIP_ONBOARD=1 -> probe suppressed entirely
+reset_logs
+HOOK_DIR_D="$TMP/hook-d.d"; mkdir -p "$HOOK_DIR_D"
+cat >"$HOOK_DIR_D/10-init.sh" <<'HSCRIPT'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--needs-init" ]]; then exit 0; fi
+HSCRIPT
+chmod +x "$HOOK_DIR_D/10-init.sh"
+CLAUDE_ONBOARD_HOOK_DIR="$HOOK_DIR_D" CLAUDE_SKIP_ONBOARD=1 CLAUDE_LAUNCH_DRYRUN=1 \
+  claude-task DEEPAGENT-1 >/dev/null 2>/dev/null || true
+if [[ -s "$ONBOARD_LOG" ]]; then
+  fail "CLAUDE_SKIP_ONBOARD: onboard should NOT be called (log: $(cat "$ONBOARD_LOG"))"
+else
+  ok "CLAUDE_SKIP_ONBOARD=1: probe suppressed"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
