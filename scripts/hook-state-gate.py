@@ -25,6 +25,7 @@ missing/corrupt state, or non-production path falls through to allow.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -102,6 +103,15 @@ def gate_decision(weight_class: str | None, node: str, is_plan: bool = False) ->
     return "deny", f"plan-approval gate not passed (node={node}); approve the plan first"
 
 
+def recursion_depth() -> int:
+    """AGENT_RECURSION_DEPTH (0 for a top-level/root session). A spawned
+    specialist runs at depth >= 1. Non-int/unset -> 0."""
+    try:
+        return int(os.environ.get("AGENT_RECURSION_DEPTH", "0"))
+    except (TypeError, ValueError):
+        return 0
+
+
 def deny_with(node: str, reason: str) -> None:
     print(json.dumps({
         "hookSpecificOutput": {
@@ -140,7 +150,26 @@ def main() -> int:
         return 0
     weight_class, node = fields
 
-    decision, reason = gate_decision(weight_class, node, is_plan=is_plan_file(file_path))
+    is_plan = is_plan_file(file_path)
+
+    # A spawned specialist (AGENT_RECURSION_DEPTH >= 1) is an EXECUTOR of an
+    # already-approved stage, not a coordinator: its production-edit authority is
+    # inherited from the parent coordinator that passed the plan-approval gate
+    # before spawning it (the parent only spawns per an approved stage and verifies
+    # the output before record-result). Its own engine auto-starts at UNCLASSIFIED,
+    # which would otherwise deny every production write and force the child to fight
+    # the gate. So allow a depth>=1 session to edit production CODE.
+    #
+    # NARROW BY DESIGN: this bypass excludes plan files. is_plan keeps flowing
+    # through gate_decision's node-aware plan rule, whose PLAN_MUTABLE_NODES does
+    # not include the child's UNCLASSIFIED node -> a spawned executor can never
+    # alter an approved plan. Plan integrity is the guarantee; only code editing is
+    # unblocked. (A spawned *planner* legitimately reaches a PLAN_MUTABLE node and
+    # is governed by the same rule, unchanged.)
+    if not is_plan and recursion_depth() >= 1:
+        return 0
+
+    decision, reason = gate_decision(weight_class, node, is_plan=is_plan)
     if decision == "deny":
         deny_with(node, reason)
     return 0

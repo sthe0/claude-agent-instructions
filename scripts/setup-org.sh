@@ -31,11 +31,28 @@ IDENTITY_FILE="$HOME/.claude/agent-identity.local"
 _channel="$(sed -n 's/^difficulty_channel=//p' "$IDENTITY_FILE" 2>/dev/null || true)"
 [[ -n "$_channel" ]] || _channel="(unset)"
 
+# 1b. Write project_backend/tracker_backend if unset (idempotent; mirrors difficulty_channel).
+_det_ws="git" _det_tr="none"
+if _det_out="$(cd "$SCRIPTS_DIR" && python3 -m project_entry.detect_backend 2>/dev/null)"; then
+  read -r _det_ws _det_tr <<<"$_det_out" || true
+fi
+_id_ws="$(sed -n 's/^project_backend=//p' "$IDENTITY_FILE" 2>/dev/null | head -1 || true)"
+_id_tr="$(sed -n 's/^tracker_backend=//p' "$IDENTITY_FILE" 2>/dev/null | head -1 || true)"
+if [[ -z "$_id_ws" ]]; then
+  printf 'project_backend=%s\n' "$_det_ws" >> "$IDENTITY_FILE"
+  _id_ws="$_det_ws"
+fi
+if [[ -z "$_id_tr" ]]; then
+  printf 'tracker_backend=%s\n' "$_det_tr" >> "$IDENTITY_FILE"
+  _id_tr="$_det_tr"
+fi
+
 # 2. Onboarding checklist.
 cat <<EOF
 
 -- Onboarding checklist (org-portable) ------------------------------
   difficulty channel : ${_channel}   (auto-detected; edit ${IDENTITY_FILE} to change)
+  project backend    : ${_id_ws}/${_id_tr}   (auto-detected; edit ${IDENTITY_FILE} to change)
   [done] clone + setup-symlinks.sh   (symlinks, settings, hooks)
   [done] setup-org.sh                (this wizard -- identity written)
   [todo] scripts/doctor.sh           (expect all [ OK ])

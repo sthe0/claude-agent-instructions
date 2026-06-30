@@ -68,6 +68,27 @@ else
   warn "git hooks not installed — only needed to commit instruction edits: scripts/install-git-hooks.sh"
 fi
 
+# 6. Project-entry backend pair (identity-or-detected, informational).
+_id_file="${CLAUDE_AGENT_IDENTITY:-$HOME/.claude/agent-identity.local}"
+_id_ws="" _id_tr=""
+if [[ -r "$_id_file" ]]; then
+  _tmp="$(sed -n 's/^project_backend=//p' "$_id_file" | head -1 || true)"
+  [[ -n "$_tmp" ]] && _id_ws="$_tmp"
+  _tmp="$(sed -n 's/^tracker_backend=//p' "$_id_file" | head -1 || true)"
+  [[ -n "$_tmp" ]] && _id_tr="$_tmp"
+fi
+_resolved_ws="$_id_ws" _resolved_tr="$_id_tr"
+if [[ -z "$_resolved_ws" || -z "$_resolved_tr" ]]; then
+  if _det="$(cd "$REPO/scripts" && python3 -m project_entry.detect_backend 2>/dev/null)"; then
+    read -r _det_ws _det_tr <<<"$_det" || true
+    [[ -z "$_resolved_ws" ]] && _resolved_ws="${_det_ws:-git}"
+    [[ -z "$_resolved_tr" ]] && _resolved_tr="${_det_tr:-none}"
+  fi
+fi
+_resolved_ws="${_resolved_ws:-git}"
+_resolved_tr="${_resolved_tr:-none}"
+pass "project backend: ${_resolved_ws}/${_resolved_tr}"
+
 echo
 if [[ "$FAIL" -eq 0 ]]; then
   echo "Ready. Open 'claude' in your working directory and describe your task in plain language."

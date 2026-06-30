@@ -76,6 +76,18 @@ For anything beyond a quick question or a small one-file change, the agent class
 
 Mention a ticket key (e.g. `ABC-123`) anywhere in your request and the `tracker-management` skill loads the ticket's context and posts progress back. A ticket task always goes through the plan → approval → execution spine. The full walkthrough of what happens end to end is the task lifecycle in [docs/processes/task-lifecycle.md](docs/processes/task-lifecycle.md).
 
+### Task-entry wrappers (optional)
+
+Instead of `cd`-ing into a working copy by hand, the `claude-task` wrapper does the whole entry in one step — resolve the task name / issue, make an isolated working copy, `cd` into it, and launch `claude`:
+
+```
+claude-task <name>         # named scratch workspace
+claude-task ABC-123        # resolve a tracker issue → workspace
+claude-task --new "title"  # create an issue, then enter
+```
+
+It selects a **workspace** backend (a `git` worktree by default; an `arc` mount where `ya`+`arc` are present) and a **tracker** backend (GitHub Issues, or Startrek on a Yandex machine) — auto-detected and overridable via the `project_backend` / `tracker_backend` keys in `~/.claude/agent-identity.local`. Auth variants `claude-<profile>` (e.g. `claude-team`, `claude-personal`) are the same entry on a machine-local auth profile. Core ships only the `git`/`github` defaults and the `default` profile; specialized backends install from workspace storage — see [docs/operations/org-portability.md](docs/operations/org-portability.md).
+
 ## Pointers
 
 - **Skills** — a packaged procedure or role under `skills/`. Flat skills run inline; specializations are spawned per plan step. The full, machine-checked inventory of both kinds lives in [docs/components/skills.md](docs/components/skills.md).

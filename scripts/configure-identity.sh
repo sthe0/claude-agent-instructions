@@ -31,6 +31,12 @@ if _detect_out="$(cd "$SCRIPTS_DIR" && python3 -m difficulty_channel.detect 2>"$
 fi
 rm -f "$_detect_tmp"
 
+# Detect project-entry backends; fall back to git/none if detection fails.
+_det_ws="git" _det_tr="none"
+if _det_out="$(cd "$SCRIPTS_DIR" && python3 -m project_entry.detect_backend 2>/dev/null)"; then
+  read -r _det_ws _det_tr <<<"$_det_out" || true
+fi
+
 cat > "$IDENTITY_FILE" <<EOF
 # Per-machine identity for the claude-agent-instructions difficulty channel.
 # This file is NOT committed (it is machine-local, never git-tracked).
@@ -47,6 +53,18 @@ ${_detect_header}
 #
 # To switch channel, change the line below and save. No other file needs editing.
 difficulty_channel=${_channel}
+#
+# project_backend — workspace backend for task entry (enter-task.sh):
+#   git  → git worktree (org-neutral default)
+#   arc  → Arcadia arc mount (internal Yandex; requires arc + ya on PATH)
+# tracker_backend — tracker backend for task entry:
+#   none     → no tracker integration
+#   github   → GitHub Issues (requires gh CLI + auth)
+#   startrek → Yandex Tracker (internal Yandex; requires ~/.tracker-token)
+#
+# To override, change the lines below and save.
+project_backend=${_det_ws}
+tracker_backend=${_det_tr}
 EOF
 
 echo "agent-identity.local: created at $IDENTITY_FILE (channel: ${_channel})"

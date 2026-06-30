@@ -23,8 +23,10 @@ def _load_module():
     return mod
 
 
-def run_hook(payload: dict, home: Path) -> subprocess.CompletedProcess:
+def run_hook(payload: dict, home: Path, extra_env: dict | None = None) -> subprocess.CompletedProcess:
     env = {"HOME": str(home), "PATH": "/usr/bin:/bin"}
+    if extra_env:
+        env.update(extra_env)
     return subprocess.run(
         [sys.executable, str(HOOK)],
         input=json.dumps(payload),
@@ -181,6 +183,66 @@ def test_malformed_stdin_allows(tmp_path):
     )
     assert proc.returncode == 0
     assert proc.stdout.strip() == ""
+
+
+# --- spawned-executor depth bypass: code allowed, plan still gated ---------
+
+def test_depth_allows_production_code_before_executing(tmp_path):
+    # a spawned specialist's own engine auto-starts at UNCLASSIFIED, which would
+    # otherwise deny its production writes; depth>=1 unblocks production CODE so
+    # the executor of an approved stage can do its job without fighting the gate
+    write_state(tmp_path, "d1", "UNCLASSIFIED", weight_class=None)
+    proc = run_hook(
+        edit_payload("d1", "/work/project/module.py"), tmp_path,
+        extra_env={"AGENT_RECURSION_DEPTH": "1"},
+    )
+    assert proc.returncode == 0
+    assert not _is_deny(proc)
+
+
+def test_depth_allows_code_at_plan_ready_too(tmp_path):
+    write_state(tmp_path, "d1b", "PLAN_READY", weight_class="SUBSTANTIVE")
+    proc = run_hook(
+        edit_payload("d1b", "/home/u/claude-agent-instructions/scripts/x.py"), tmp_path,
+        extra_env={"AGENT_RECURSION_DEPTH": "2"},
+    )
+    assert proc.returncode == 0
+    assert not _is_deny(proc)
+
+
+def test_depth_does_not_unblock_plan_files(tmp_path):
+    # NARROW BY DESIGN: the depth bypass excludes plan artifacts. A spawned
+    # executor at a non-planning node can never alter an approved plan.
+    write_state(tmp_path, "d2", "UNCLASSIFIED", weight_class=None)
+    proc = run_hook(
+        edit_payload("d2", "/home/u/.claude/plans/task.md"), tmp_path,
+        extra_env={"AGENT_RECURSION_DEPTH": "1"},
+    )
+    assert proc.returncode == 0
+    assert _is_deny(proc)
+    assert "replan" in _deny_reason(proc).lower()
+
+
+def test_depth_zero_root_still_gated(tmp_path):
+    # the bypass is depth-conditioned: a depth-0 (root) session at PLAN_READY is
+    # still gated on production code exactly as before
+    write_state(tmp_path, "d3", "PLAN_READY", weight_class="SUBSTANTIVE")
+    proc = run_hook(
+        edit_payload("d3", "/work/project/module.py"), tmp_path,
+        extra_env={"AGENT_RECURSION_DEPTH": "0"},
+    )
+    assert proc.returncode == 0
+    assert _is_deny(proc)
+
+
+def test_depth_garbage_value_treated_as_zero(tmp_path):
+    write_state(tmp_path, "d4", "PLAN_READY", weight_class="SUBSTANTIVE")
+    proc = run_hook(
+        edit_payload("d4", "/work/project/module.py"), tmp_path,
+        extra_env={"AGENT_RECURSION_DEPTH": "not-a-number"},
+    )
+    assert proc.returncode == 0
+    assert _is_deny(proc)
 
 
 # --- gate_decision pure-function table ------------------------------------
