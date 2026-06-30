@@ -78,15 +78,18 @@ Mention a ticket key (e.g. `ABC-123`) anywhere in your request and the `tracker-
 
 ### Task-entry wrappers (optional)
 
-Instead of `cd`-ing into a working copy by hand, the `claude-task` wrapper does the whole entry in one step — resolve the task name / issue, make an isolated working copy, `cd` into it, and launch `claude`:
+Instead of `cd`-ing into a working copy by hand, `claude-task` does the whole entry in one step — resolves the issue, makes an isolated working copy, `cd`s into it, and launches `claude`:
 
 ```
-claude-task <name>         # named scratch workspace
-claude-task ABC-123        # resolve a tracker issue → workspace
-claude-task --new "title"  # create an issue, then enter
+claude-task DEEPAGENT-123        # resolve a tracker issue → isolated git worktree + launch
+claude-team DEEPAGENT-123        # same, on the "team" auth profile
+claude-task --new "title"        # create an issue, then enter
+claude-task <name>               # named scratch workspace (no tracker)
 ```
 
-It selects a **workspace** backend (a `git` worktree by default; an `arc` mount where `ya`+`arc` are present) and a **tracker** backend (GitHub Issues, or Startrek on a Yandex machine) — auto-detected and overridable via the `project_backend` / `tracker_backend` keys in `~/.claude/agent-identity.local`. Auth variants `claude-<profile>` (e.g. `claude-team`, `claude-personal`) are the same entry on a machine-local auth profile. Core ships only the `git`/`github` defaults and the `default` profile; specialized backends install from workspace storage — see [docs/operations/org-portability.md](docs/operations/org-portability.md).
+The bare `cd ~/my-project && claude` flow still works exactly as before — `claude-task` is an optional shortcut.
+
+It selects a **workspace** backend (a `git` worktree by default; an `arc` mount where `ya`+`arc` are present) and a **tracker** backend (GitHub Issues by default) — auto-detected and overridable via the `project_backend` / `tracker_backend` keys in `~/.claude/agent-identity.local`. Auth variants `claude-<profile>` (e.g. `claude-team`, `claude-personal`) are the same entry on a machine-local auth profile. Core ships only the `git`/`github` defaults and the `default` profile; specialized backends install from workspace storage — see [docs/operations/org-portability.md](docs/operations/org-portability.md).
 
 ## Pointers
 

@@ -89,6 +89,30 @@ _resolved_ws="${_resolved_ws:-git}"
 _resolved_tr="${_resolved_tr:-none}"
 pass "project backend: ${_resolved_ws}/${_resolved_tr}"
 
+# 6b. Optional per-tracker self-check (warn-only). If the resolved tracker
+#     backend ships a `tracker_doctor` hook, run it and surface its verdict as
+#     [OK]/[WARN] — it can NEVER flip a passing doctor to FAIL. Core defines no
+#     tracker_doctor; this is the generic "run the backend's own self-check if
+#     it has one" seam. Silently skips when tracker=none or no plugin/hook.
+if [[ "$_resolved_tr" != "none" ]]; then
+  _tr_self="$(
+    source "$REPO/scripts/project_entry/registry.sh" 2>/dev/null || exit 0
+    _tf="$(registry_resolve_tracker "$_resolved_tr" 2>/dev/null)" || exit 0
+    source "$_tf" 2>/dev/null || exit 0
+    declare -F tracker_doctor >/dev/null 2>&1 || exit 0
+    if _out="$(tracker_doctor 2>&1)"; then printf 'OK\t%s' "$_out"
+    else printf 'WARN\t%s' "$_out"; fi
+  )"
+  if [[ -n "$_tr_self" ]]; then
+    _tr_msg="${_tr_self#*$'\t'}"
+    if [[ "${_tr_self%%$'\t'*}" == "OK" ]]; then
+      pass "tracker '$_resolved_tr' self-check: ${_tr_msg:-ok}"
+    else
+      warn "tracker '$_resolved_tr' self-check: ${_tr_msg:-failed}"
+    fi
+  fi
+fi
+
 echo
 if [[ "$FAIL" -eq 0 ]]; then
   echo "Ready. Open 'claude' in your working directory and describe your task in plain language."

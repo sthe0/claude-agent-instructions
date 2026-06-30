@@ -4,6 +4,8 @@
 
 Every request the system handles is a [task](../concepts/task.md). Its journey is shaped first by **weight**, then driven — for substantive work — by the coordination engine.
 
+> **Fastest entry:** `claude-task DEEPAGENT-123` resolves the issue, creates an isolated working copy, and launches `claude` in one step — see [setup.md § Starting a task with claude-task](../operations/setup.md#starting-a-task-with-claude-task).
+
 ## Classify, then route
 
 The first act on any task is to classify its weight, because the class determines the route:

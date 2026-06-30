@@ -48,6 +48,23 @@ You do **not** need push rights to use the system. Instructions are read locally
 
 To send improvements upstream without push rights: fork `sthe0/claude-agent-instructions`, push to your fork, and open a PR. Full rule: [skills/self-improvement/policy.md](../../skills/self-improvement/policy.md) § Git sync.
 
+## Starting a task with `claude-task`
+
+Once setup is complete, the fastest way to start working on a tracker issue is:
+
+```
+claude-task DEEPAGENT-123        # resolve issue → isolated git worktree → launch claude
+claude-team DEEPAGENT-123        # same, using the "team" auth profile
+```
+
+The wrapper resolves the issue, creates an isolated working copy (`git worktree` by default), `cd`s into it, and launches `claude`. The bare `cd <dir> && claude` flow still works and is not replaced.
+
+`claude-task` selects backends automatically. To override, add these keys to `~/.claude/agent-identity.local`:
+- `project_backend` — workspace isolation mechanism (`git` by default; `arc` where `ya`+`arc` are present)
+- `tracker_backend` — issue source (`github` by default)
+
+Core ships the `git`/`github` defaults and the `default` auth profile; specialized backends install automatically from workspace storage. See [org-portability.md](org-portability.md) for the opt-in surface.
+
 ## Troubleshooting a fresh machine
 
 If `verify-layout-contract.sh` fails on a freshly pulled machine (stale directories or dangling symlinks from an old layout), see [docs/migrations/](../migrations/README.md) for per-refactor runbooks.

@@ -30,13 +30,11 @@ source "$_SCRIPT_DIR/project_entry/registry.sh"
 log() { printf '%s\n' "$*" >&2; }
 die() { printf 'enter-task: %s\n' "$*" >&2; exit 1; }
 
-# slug: lowercase, non-alnum -> '-', squeeze/trim dashes, truncate ~40 chars.
+# slug: delegate to slugify.py — transliterates Cyrillic, folds accents, and may
+# return empty (caller handles the empty-slug fallback). python3 is a hard system
+# dependency here, so no bash fallback is needed.
 slug() {
-  printf '%s' "$1" \
-    | tr '[:upper:]' '[:lower:]' \
-    | sed -e 's/[^a-z0-9]\+/-/g' -e 's/^-\+//' -e 's/-\+$//' \
-    | cut -c1-40 \
-    | sed -e 's/-\+$//'
+  python3 "$_SCRIPT_DIR/project_entry/slugify.py" "$1"
 }
 
 # ── Parse arguments ─────────────────────────────────────────────────────────
@@ -66,6 +64,8 @@ done
 
 [[ -n "$selector" ]] || die "specify one of --key / --new / --reuse / --name"
 export CLAUDE_DRY_RUN="$DRY_RUN"
+# Contract seam: a sourced tracker plugin can locate Core's slugify.py via this.
+export CLAUDE_ENTER_TASK_DIR="$_SCRIPT_DIR"
 
 # ── Resolve backend NAMES (precedence: flag > env > identity > detector) ─────
 # The detector's own else-branch (git/none) is the final fallback, so there is
@@ -145,7 +145,7 @@ case "$selector" in
     [[ -n "$sel_arg" ]] || die "--key needs a value"
     [[ "$tr_name" != "none" ]] || die "--key requires a tracker backend (got none)"
     IFS=$'\t' read -r tkey tslug < <(tracker_resolve "$sel_arg") || die "tracker_resolve failed for '$sel_arg'"
-    name="$tkey-$tslug"; branch="$name"
+    name="$tkey${tslug:+-$tslug}"; branch="$name"
     ;;
   new)
     [[ -n "$sel_arg" ]] || die "--new needs a title"
@@ -154,7 +154,7 @@ case "$selector" in
       die "--new creates a tracker task; set CLAUDE_LAUNCH_ASSUME_YES=1 to confirm"
     fi
     IFS=$'\t' read -r tkey tslug < <(tracker_create "$sel_arg") || die "tracker_create failed"
-    name="$tkey-$tslug"; branch="$name"
+    name="$tkey${tslug:+-$tslug}"; branch="$name"
     ;;
   reuse)
     # Derive the name from $PWD when it sits under a recognizable worktree dir

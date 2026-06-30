@@ -121,6 +121,19 @@ run --name plug-me --workspace fake --dry-run
 check "plugin discovery: --workspace fake resolves the machine-local file" \
   '[[ "$REPLY" == "/plugin/ws-plug-me" ]]'
 
+# 6c. empty-slug key path: a tracker whose resolve returns 'KEY<TAB>' (no slug,
+#     e.g. a non-Latin summary that slugifies to nothing) must yield a dir named
+#     <repo>-KEY with NO trailing dash.
+mkdir -p "$CLAUDE_PROJECT_PLUGIN_DIR/trackers"
+cat >"$CLAUDE_PROJECT_PLUGIN_DIR/trackers/emptyslug.sh" <<'EOF'
+tracker_resolve() { printf '%s\t\n' "$1"; }   # key, empty slug
+tracker_create()  { printf '%s\t\n' "DEEPAGENT-7"; }
+EOF
+: >"$WT_LIST"
+run --key DEEPAGENT-7 --tracker emptyslug --dry-run
+check "empty slug: key path yields <repo>-KEY with no trailing dash" \
+  '[[ "$REPLY" == "$TMP/myrepo-DEEPAGENT-7" ]]'
+
 # 7. dry-run end to end records zero EXTERNAL (mutating) calls.
 : >"$GIT_CALLS"; : >"$GH_CALLS"; : >"$WT_LIST"
 run --name nothing --dry-run
