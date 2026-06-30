@@ -359,7 +359,10 @@ def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
              s.criterion.verify_command, s.criterion.expected_exit)
             for s in doc.stages
         ]
+    def _fc(doc: PlanDoc):
+        return [(fc.command, fc.expected_exit, fc.label) for fc in doc.meta.final_check]
     if (_prose(old) != _prose(new) or old.meta.goal != new.meta.goal
-            or old.meta.repo_root != new.meta.repo_root):
+            or old.meta.repo_root != new.meta.repo_root
+            or _fc(old) != _fc(new)):
         return "refinement"
     return "no_change"

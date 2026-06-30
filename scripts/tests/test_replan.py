@@ -161,6 +161,48 @@ def test_repo_root_change_classifies_as_refinement_and_updates_state(store, fixt
     assert store.load(sid).repo_root == "/tmp/test-repo-root"
 
 
+def test_final_check_change_classifies_as_refinement(fixtures_dir):
+    """diff_plans returns 'refinement' (not 'no_change') when only final_check differs."""
+    base = load_plan(str(fixtures_dir / "plan_two_stage_finalcheck.toml"))
+    changed = load_plan(str(fixtures_dir / "plan_two_stage_finalcheck_changed.toml"))
+    assert diff_plans(base, changed) == "refinement"
+
+
+def test_refinement_carries_final_check_into_state(store, fixtures_dir):
+    """refinement replan must land the new final_check in live state."""
+    sid = "fc"
+    base = str(fixtures_dir / "plan_two_stage_finalcheck.toml")
+    changed = str(fixtures_dir / "plan_two_stage_finalcheck_changed.toml")
+    _to_executing_stage1(store, sid, base)
+
+    assert store.load(sid).final_check[0].command == "true"
+
+    d = cli.cmd_replan(ns(session=sid, plan=changed), store=store)
+    assert d.action == "continue"
+    state = store.load(sid)
+    assert state.node == Node.EXECUTING.value
+    assert state.final_check[0].command == "echo changed"
+
+
+def test_refinement_preserves_passed_stage_on_final_check_change(store, fixtures_dir):
+    """A final_check-only refinement must not reset an already-PASSED stage."""
+    sid = "fcp"
+    base = str(fixtures_dir / "plan_two_stage_finalcheck.toml")
+    changed = str(fixtures_dir / "plan_two_stage_finalcheck_changed.toml")
+    _to_executing_stage1(store, sid, base)
+
+    state = store.load(sid)
+    state.stage(1).outcome.status = StageStatus.PASSED.value
+    state.current_stage = 2
+    store.save(state)
+
+    d = cli.cmd_replan(ns(session=sid, plan=changed), store=store)
+    assert d.action == "continue"
+    state = store.load(sid)
+    assert state.stage(1).outcome.status == StageStatus.PASSED.value
+    assert state.final_check[0].command == "echo changed"
+
+
 def test_loop_guard_escalates_on_repeated_failure(store, fixtures_dir):
     sid = "lg"
     plan = str(fixtures_dir / "plan_two_stage.toml")
