@@ -41,6 +41,7 @@ Loaded into every session via `@~/.claude/memory-global/MEMORY.md` import in `CL
 - [Handling escalations](leaves/handling-escalations.md) — how the manager resolves each specialist return marker (PLAN-READY / CLARIFY / REPLAN / PERMISSION-REQUEST / ESCALATE / INCOMPLETE / COMPLETED) and the continuation-prompt templates for re-spawning.
 - [Recording experience](leaves/recording-experience.md) — the execution-time how-to that follows the CLAUDE.md resolution gate: quality bar (decide whether to record), search-before (extend|new), `difficulty/v1` schema, ticket-thin leaf, required `resolution_confirmed_by_user` frontmatter, self-critique → self-improvement auto-trigger.
 - [Robot-run ACL access](leaves/robot-run-acl-access.md) — when YT/Nirvana ops run under a robot identity, set a team idm-group read ACL on EVERY op (named constant, all ops not a subset) or humans can't read stderr/logs/artifacts; verify a human token actually reads a finished op.
+- [Instruction-development queues](leaves/instruction-dev-queues.md) — the 3-tier tracking model (Core / Org-Yandex / Project): each tier has an internal backlog + a report inbox; collapse rule when filers==editors (Project→one queue); stream-separation by queue (Org: OOSEVEN backlog / OOSEVENREPORT reports) or by label (Core GitHub Issues: `difficulty` reports / `backlog`); per-project queue via the `agent-project.json` `instruction_queue` field.
 
 ## Tooling and mechanics
 

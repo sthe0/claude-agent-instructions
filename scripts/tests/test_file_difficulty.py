@@ -1,11 +1,12 @@
 """Tests for the file-difficulty.py CLI (ADR-0001 S3 stage 5).
 
 Covers: dry-run output, null-channel submit, bad-severity rejection, --functional-ground alias,
-default severity, --channel override.
+default severity, --channel override, --queue/--stream routing.
 """
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from io import StringIO
 from pathlib import Path
@@ -124,3 +125,74 @@ def test_missing_ground_exits_nonzero():
     with pytest.raises(SystemExit) as exc:
         main(["--target", "CLAUDE.md"])
     assert exc.value.code != 0
+
+
+# ── routing: --queue / --stream dry-run output ───────────────────────────────
+
+def test_dry_run_queue_override_shows_queue(capsys):
+    rc = _run("--target", "CLAUDE.md", "--ground", "x",
+              "--channel", "startrek", "--queue", "OOSEVEN", "--dry-run")
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "queue: OOSEVEN" in out
+
+
+def test_dry_run_startrek_default_shows_oosevenreport(capsys):
+    rc = _run("--target", "CLAUDE.md", "--ground", "x",
+              "--channel", "startrek", "--dry-run")
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "queue: OOSEVENREPORT" in out
+
+
+def test_dry_run_startrek_backlog_stream_shows_ooseven(capsys):
+    rc = _run("--target", "CLAUDE.md", "--ground", "x",
+              "--channel", "startrek", "--stream", "backlog", "--dry-run")
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "queue: OOSEVEN" in out
+
+
+def test_dry_run_github_default_shows_difficulty_label(capsys):
+    rc = _run("--target", "CLAUDE.md", "--ground", "x",
+              "--channel", "github", "--dry-run")
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "label: difficulty" in out
+
+
+def test_dry_run_github_backlog_stream_shows_backlog_label(capsys):
+    rc = _run("--target", "CLAUDE.md", "--ground", "x",
+              "--channel", "github", "--stream", "backlog", "--dry-run")
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "label: backlog" in out
+    assert "difficulty" not in out.split("label:")[1]
+
+
+def test_dry_run_project_target_resolves_queue(tmp_path, capsys):
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "agent-project.json").write_text(
+        json.dumps({"instruction_queue": "DEEPAGENT"}), encoding="utf-8"
+    )
+    target_file = tmp_path / "CLAUDE.md"
+    target_file.write_text("# test", encoding="utf-8")
+    rc = _run("--target", str(target_file), "--ground", "x",
+              "--channel", "startrek", "--dry-run")
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "queue: DEEPAGENT" in out
+
+
+def test_dry_run_explicit_queue_overrides_project_field(tmp_path, capsys):
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "agent-project.json").write_text(
+        json.dumps({"instruction_queue": "DEEPAGENT"}), encoding="utf-8"
+    )
+    target_file = tmp_path / "CLAUDE.md"
+    target_file.write_text("# test", encoding="utf-8")
+    rc = _run("--target", str(target_file), "--ground", "x",
+              "--channel", "startrek", "--queue", "MYQUEUE", "--dry-run")
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "queue: MYQUEUE" in out

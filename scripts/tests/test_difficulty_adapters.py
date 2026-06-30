@@ -5,6 +5,8 @@ its submit()/pull() are exercised through an injected fake HTTP client. Likewise
 GitHub adapter.
 """
 # scripts/ is on sys.path via conftest.py, so the package imports normally.
+import json
+
 import pytest
 
 import difficulty_channel as dc
@@ -192,3 +194,93 @@ def test_external_is_back_compat_alias_for_github():
     """'external' channel key still resolves; ExternalChannel is GitHubChannel."""
     assert isinstance(dc.get_channel("external"), github.GitHubChannel)
     assert external.ExternalChannel is github.GitHubChannel
+
+
+# ── Startrek queue parameterization ──────────────────────────────────────────
+
+def test_startrek_record_to_fields_accepts_queue_override():
+    fields = startrek.record_to_fields(_rec(), queue="OOSEVEN")
+    assert fields["queue"] == "OOSEVEN"
+
+
+def test_startrek_record_to_fields_default_queue_unchanged():
+    fields = startrek.record_to_fields(_rec())
+    assert fields["queue"] == "OOSEVENREPORT"
+
+
+def test_startrek_channel_queue_param_used_in_submit():
+    calls = []
+
+    def fake_http(method, url, headers, body):
+        calls.append(json.loads(body))
+        return {"key": "OOSEVEN-1"}
+
+    ch = startrek.StartrekChannel(http=fake_http, token="t", queue="OOSEVEN")
+    ch.submit(_rec())
+    assert calls[0]["queue"] == "OOSEVEN"
+
+
+def test_startrek_channel_queue_param_used_in_pull():
+    queries = []
+
+    def fake_http(method, url, headers, body):
+        queries.append(json.loads(body)["query"])
+        return []
+
+    ch = startrek.StartrekChannel(http=fake_http, token="t", queue="OOSEVEN")
+    ch.pull()
+    assert queries[0].startswith("Queue: OOSEVEN")
+
+
+def test_startrek_backlog_queue_constant():
+    assert startrek.BACKLOG_QUEUE == "OOSEVEN"
+
+
+# ── GitHub backlog stream ─────────────────────────────────────────────────────
+
+def test_github_backlog_stream_includes_backlog_label():
+    fields = github.record_to_fields(_rec(), stream="backlog")
+    assert github.BACKLOG_LABEL in fields["labels"]
+    assert github.DIFFICULTY_LABEL not in fields["labels"]
+
+
+def test_github_report_stream_includes_difficulty_label():
+    fields = github.record_to_fields(_rec(), stream="report")
+    assert github.DIFFICULTY_LABEL in fields["labels"]
+    assert github.BACKLOG_LABEL not in fields["labels"]
+
+
+def test_github_record_to_fields_default_stream_is_report():
+    fields = github.record_to_fields(_rec())
+    assert github.DIFFICULTY_LABEL in fields["labels"]
+    assert github.BACKLOG_LABEL not in fields["labels"]
+
+
+def test_github_pull_always_filters_by_difficulty_label():
+    """pull() always queries labels=difficulty regardless of channel stream (digest read path)."""
+    urls = []
+
+    def fake_http(method, url, headers, body):
+        urls.append(url)
+        return []
+
+    ch_report = github.GitHubChannel(http=fake_http, token="t", stream="report")
+    ch_report.pull()
+    assert f"labels={github.DIFFICULTY_LABEL}" in urls[-1]
+
+    ch_backlog = github.GitHubChannel(http=fake_http, token="t", stream="backlog")
+    ch_backlog.pull()
+    assert f"labels={github.DIFFICULTY_LABEL}" in urls[-1]
+
+
+def test_github_channel_stream_param_forwarded_in_submit():
+    calls = []
+
+    def fake_http(method, url, headers, body):
+        calls.append(json.loads(body))
+        return {"html_url": "https://github.com/sthe0/claude-agent-instructions/issues/99"}
+
+    ch = github.GitHubChannel(http=fake_http, token="t", stream="backlog")
+    ch.submit(_rec())
+    assert github.BACKLOG_LABEL in calls[0]["labels"]
+    assert github.DIFFICULTY_LABEL not in calls[0]["labels"]

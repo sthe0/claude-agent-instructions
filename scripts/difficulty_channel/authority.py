@@ -80,8 +80,8 @@ def read_configured_channel(path: Path = LOCAL_IDENTITY_PATH) -> str:
     return read_local_identity(path).get("difficulty_channel", DEFAULT_CHANNEL)
 
 
-def file_core_difficulty(record: DifficultyRecord, channel: str | None = None) -> str:
+def file_core_difficulty(record: DifficultyRecord, channel: str | None = None, **kwargs) -> str:
     """Non-author path: submit the difficulty to a channel the machine already has write to.
     Returns the channel-native handle (ST key or GitHub issue URL). NEVER edits Core."""
     ch = channel if channel is not None else read_configured_channel()
-    return get_channel(ch).submit(record)
+    return get_channel(ch, **kwargs).submit(record)

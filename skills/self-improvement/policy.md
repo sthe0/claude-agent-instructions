@@ -82,6 +82,20 @@ This is the propose-not-execute / no-veto driver: a non-author surfaces difficul
 
 ---
 
+## Routing a difficulty to its queue by tier
+
+*Difficulty removed: a difficulty filed against the wrong tier's tracker (or with the wrong stream) is invisible to the people who can act on it — an Org-specific refinement filed as a Core GitHub Issue is read by no Yandex author; a planning item filed with the report label pollutes the difficulty digest.*
+
+A difficulty's **tier** decides its destination; the destination's mechanics are structural (the 3-tier model is in [instruction-dev-queues.md](../../memory-global/leaves/instruction-dev-queues.md)). Classifying the tier is **cognition** (the model reads the target and decides); the queue/label **lookup and routing** is **structure** (the per-project field + `file-difficulty.py --queue/--stream` from that leaf's wiring) — do not hand-encode a binding the field already carries.
+
+- **Core** (org-neutral artifact) → the difficulty-channel (GitHub Issues), per § Authority above. Reports carry the `difficulty` label; a planned backlog item carries `backlog` (`--stream backlog`) so the digest never pulls it.
+- **Org** (Yandex-specific but cross-project) → Startrek: a **report** to `OOSEVENREPORT` (default `--stream report`), a planned **backlog** item to `OOSEVEN` (`--stream backlog`).
+- **Project** (e.g. `robot/deepagent`) → the single queue named by the project's `instruction_queue` field (`agent-project.json`), resolved automatically from the target path by `file-difficulty.py`; backlog and reports collapse onto it because project participants edit project instructions directly.
+
+The model classifies the tier; `--queue`/`--stream` (or the resolved project field) carry it to the right surface.
+
+---
+
 ## Cache-aware editing
 
 Anthropic prompt caching is **strict-prefix**: any byte change in a file that sits in the cached prompt prefix forces `cache_create` on every byte that follows. Observed cost in the 2026-05-27 deepagent sessions was 1.5M–2.8M `cache_create` tokens per long session, traced largely to mid-task edits of `CLAUDE.md` and `MEMORY.md`. See [token-economy-plan.md](../../memory-global/leaves/token-economy-plan.md).

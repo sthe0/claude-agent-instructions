@@ -24,6 +24,9 @@ if str(SCRIPTS_DIR) not in sys.path:
 import difficulty_channel as dc  # noqa: E402
 import difficulty_channel.adapters  # noqa: E402,F401
 from difficulty_channel import authority  # noqa: E402
+from difficulty_channel.adapters.startrek import QUEUE as _ST_QUEUE, BACKLOG_QUEUE as _ST_BACKLOG_QUEUE  # noqa: E402
+from difficulty_channel.adapters.github import DIFFICULTY_LABEL as _GH_DIFFICULTY_LABEL, BACKLOG_LABEL as _GH_BACKLOG_LABEL  # noqa: E402
+from difficulty_channel.project_queue import resolve_project_queue  # noqa: E402
 
 
 def _now_iso() -> str:
@@ -75,8 +78,12 @@ def main(argv: list[str] | None = None, _ts: str | None = None) -> int:
                    help="who/what is filing (default: $USER)")
     p.add_argument("--channel", default=None,
                    help="channel override; default: from agent-identity.local")
+    p.add_argument("--queue", default=None,
+                   help="explicit startrek queue override (e.g. DEEPAGENT)")
+    p.add_argument("--stream", default="report", choices=["report", "backlog"],
+                   help="flow selector: report (default) or backlog")
     p.add_argument("--dry-run", action="store_true",
-                   help="print the record without submitting")
+                   help="print the record and resolved routing without submitting")
     args = p.parse_args(argv)
 
     try:
@@ -85,15 +92,37 @@ def main(argv: list[str] | None = None, _ts: str | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
+    channel_name = args.channel or authority.read_configured_channel()
+
+    # Resolve effective routing destination before submit or print.
+    if channel_name == "startrek":
+        if args.queue:
+            resolved_queue = args.queue
+        else:
+            project_q = resolve_project_queue(Path(args.target).resolve())
+            resolved_queue = project_q or (_ST_BACKLOG_QUEUE if args.stream == "backlog" else _ST_QUEUE)
+        submit_kwargs: dict = {"queue": resolved_queue}
+        routing_lines = [f"queue: {resolved_queue}"]
+    elif channel_name in ("github", "external"):
+        resolved_label = _GH_BACKLOG_LABEL if args.stream == "backlog" else _GH_DIFFICULTY_LABEL
+        submit_kwargs = {"stream": args.stream}
+        routing_lines = [f"label: {resolved_label}"]
+    else:
+        submit_kwargs = {}
+        routing_lines = []
+
     if args.dry_run:
         _print_record(record)
+        print(f"channel: {channel_name}")
+        print(f"stream: {args.stream}")
+        for line in routing_lines:
+            print(line)
         return 0
 
-    channel = args.channel or authority.read_configured_channel()
     try:
-        handle = authority.file_core_difficulty(record, channel=channel)
+        handle = authority.file_core_difficulty(record, channel=channel_name, **submit_kwargs)
     except Exception as exc:
-        print(f"error submitting to channel {channel!r}: {exc}", file=sys.stderr)
+        print(f"error submitting to channel {channel_name!r}: {exc}", file=sys.stderr)
         return 1
 
     print(handle)

@@ -26,9 +26,10 @@ TOKEN_PATH = Path.home() / ".github-token"
 
 # Always-present label so the digest can filter difficulty records in one query.
 DIFFICULTY_LABEL = "difficulty"
+BACKLOG_LABEL = "backlog"
 
 
-def record_to_fields(record: DifficultyRecord) -> dict:
+def record_to_fields(record: DifficultyRecord, stream: str = "report") -> dict:
     """Pure record -> GitHub issue fields mapping. No I/O. The single tested contract."""
     body = (
         f"**Target:** `{record.target}`\n"
@@ -39,13 +40,14 @@ def record_to_fields(record: DifficultyRecord) -> dict:
         f"**Observed:** {record.ts}\n\n"
         f"**Evidence:**\n{record.evidence}"
     )
+    stream_label = BACKLOG_LABEL if stream == "backlog" else DIFFICULTY_LABEL
     return {
         "title": f"[{record.layer}] {record.functional_ground}"[:256],
         "body": body,
         "labels": [
             f"severity:{record.severity.value}",
             f"layer:{record.layer}",
-            DIFFICULTY_LABEL,
+            stream_label,
         ],
     }
 
@@ -76,15 +78,17 @@ def _read_token() -> str:
 
 
 class GitHubChannel(DifficultyChannel):
-    """Submits difficulties as GitHub issues. The HTTP client is injectable for tests."""
+    """Submits difficulties as GitHub issues. HTTP client and stream are injectable for tests."""
 
     def __init__(
         self,
         http: Callable[[str, str, dict, bytes | None], object] | None = None,
         token: str | None = None,
+        stream: str = "report",
     ) -> None:
         self._http = http or _default_http
         self._token = token  # lazily read on first real call if None
+        self._stream = stream
 
     def _headers(self) -> dict:
         token = self._token or _read_token()
@@ -96,7 +100,7 @@ class GitHubChannel(DifficultyChannel):
         }
 
     def submit(self, record: DifficultyRecord) -> str:
-        fields = record_to_fields(record)
+        fields = record_to_fields(record, stream=self._stream)
         body = json.dumps(fields).encode("utf-8")
         url = f"{API_BASE}/repos/{REPO}/issues"
         resp = self._http("POST", url, self._headers(), body)

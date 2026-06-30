@@ -20,6 +20,7 @@ from typing import Callable
 from ..port import DifficultyChannel, DifficultyRecord, Severity, register_channel
 
 QUEUE = "OOSEVENREPORT"
+BACKLOG_QUEUE = "OOSEVEN"
 API_BASE = "https://st-api.yandex-team.ru/v2"
 TOKEN_PATH = Path.home() / ".tracker-token"
 
@@ -45,10 +46,10 @@ def _sanitize_tag(ground: str) -> str:
     return collapsed.encode("utf-8")[:_TAG_MAX_BYTES].decode("utf-8", "ignore")
 
 
-def record_to_fields(record: DifficultyRecord) -> dict:
+def record_to_fields(record: DifficultyRecord, queue: str = QUEUE) -> dict:
     """Pure record -> Startrek issue-fields mapping. No I/O. The single tested contract."""
     return {
-        "queue": QUEUE,
+        "queue": queue,
         "type": {"key": "task"},
         "summary": f"[{record.layer}] {record.functional_ground}"[:254],
         # functional_ground also becomes a tag so the digest's cluster key survives in Tracker.
@@ -81,15 +82,17 @@ def _read_token() -> str:
 
 
 class StartrekChannel(DifficultyChannel):
-    """Submits difficulties as OOSEVENREPORT issues. The HTTP client is injectable for tests."""
+    """Submits difficulties as Startrek issues. Queue and HTTP client are injectable for tests."""
 
     def __init__(
         self,
         http: Callable[[str, str, dict, bytes | None], dict] | None = None,
         token: str | None = None,
+        queue: str = QUEUE,
     ) -> None:
         self._http = http or _default_http
         self._token = token  # lazily read on first real call if None
+        self._queue = queue
 
     def _headers(self) -> dict:
         token = self._token or _read_token()
@@ -99,13 +102,13 @@ class StartrekChannel(DifficultyChannel):
         }
 
     def submit(self, record: DifficultyRecord) -> str:
-        fields = record_to_fields(record)
+        fields = record_to_fields(record, queue=self._queue)
         body = json.dumps(fields).encode("utf-8")
         resp = self._http("POST", f"{API_BASE}/issues", self._headers(), body)
         return resp.get("key", "")
 
     def pull(self, since: str | None = None) -> list[DifficultyRecord]:
-        query = f"Queue: {QUEUE}"
+        query = f"Queue: {self._queue}"
         if since:
             query += f' AND Created: >= "{since}"'
         url = f"{API_BASE}/issues/_search"

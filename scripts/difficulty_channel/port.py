@@ -97,11 +97,11 @@ def register_channel(name: str, factory: Callable[[], DifficultyChannel]) -> Non
     _REGISTRY[name] = factory
 
 
-def get_channel(name: str) -> DifficultyChannel:
+def get_channel(name: str, **kwargs) -> DifficultyChannel:
     if name not in _REGISTRY:
         known = ", ".join(sorted(_REGISTRY)) or "(none registered)"
         raise KeyError(f"unknown difficulty channel {name!r}; registered: {known}")
-    return _REGISTRY[name]()
+    return _REGISTRY[name](**kwargs)
 
 
 # The in-memory double is always available as a channel for tests and dry-runs.

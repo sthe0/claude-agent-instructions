@@ -191,6 +191,14 @@ generalizes.
 End-to-end: **submit (audience adapter, no push) → pull + normalize + cluster-by-functional-ground
 (digest) → mass / trigger → Core self-improvement by an author → cluster archived to a principle.**
 
+**Report inbox vs planned backlog.** The channel above is the **report inbox** (reactive, filed by
+contributors). It is distinct from the tier's **internal backlog** (proactive items the tier's authors
+plan). When a flagged cluster is surfaced, it **graduates** from the inbox into a backlog item the
+author plans against. The two streams stay formally separable: where a tier owns two trackers (Org:
+`OOSEVENREPORT` reports / `OOSEVEN` backlog) the **queues** separate them; where one tracker holds both
+(Core GitHub Issues) a **label** does — reports carry `difficulty` (the digest pulls only these),
+backlog items carry `backlog`. The full per-tier model is `memory-global/leaves/instruction-dev-queues.md`.
+
 ## Considered options
 
 - **A. Git / textual merge only** — misses semantic conflicts (class 2). Insufficient.
