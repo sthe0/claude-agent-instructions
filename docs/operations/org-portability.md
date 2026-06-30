@@ -32,6 +32,7 @@ Everything org-specific is steered by per-machine keys in `~/.claude/agent-ident
 | `long_job_orchestrators` | built-in Yandex list | — | Comma/space-separated orchestrator names the `hook-long-job-arm.py` advisory hook watches for. Unset → the built-in default (Nirvana, Sandbox, Reactor, vh3, hitman, yt), so an unconfigured machine is unchanged. Set e.g. `airflow,dagster` for your org's job runners. |
 | `project_backend` | `git` | `arc` | Workspace backend the task-entry subsystem uses to make an isolated working copy: `git` worktree (Core default) or `arc` parallel mount (Yandex plugin). **Auto-detected** by `scripts/project_entry/detect_backend.py` (`ya`+`arc` present → `arc`, else `git`). Override per machine. |
 | `tracker_backend` | `github` / `none` | `startrek` | Tracker backend that resolves an issue key → slug: GitHub Issues (when `gh` is present), `none` (name pass-through), or Startrek (Yandex plugin). Auto-detected alongside `project_backend`. |
+| `projects_dir` | unset (machine-local root only) | shared records root | Optional **shared** root of the named project registry (see below). A team distributes portable project records here; `claude-task --register` always writes absolute checkout paths to the machine-local `~/.claude/projects.d` regardless. On a `ya`+`arc` machine `setup-local.sh` sets this to the workspace-storage `projects/` dir automatically. |
 
 Authority to commit to Core directly is **not** a config flag — it is determined solely by `git push --dry-run` capability on the instructions repo. A read-only clone is fully functional; self-improvement edits land as local commits and any upstream push is gated behind explicit confirmation.
 
@@ -47,6 +48,10 @@ Specialized adapters are **not** committed to Core. The Yandex adapter (the `arc
 Core's `registry.sh` resolves a backend **name** by checking its built-in directory first, then this plugin dir — so a fresh plugin name (`arc`, `startrek`) attaches with **zero edits to Core**. The install is idempotent and fires only on a machine where `ya`+`arc` are detected; on any other machine the plugin dir stays empty and only the Core defaults are available.
 
 **Plugin-installed vs Core-resident.** A backend is Core-resident only when it is org-neutral and useful to anyone (`git`, `github`). Anything reachable only from inside a specific org (`arc`, `startrek`, `eliza`) is plugin-installed from workspace storage — the same reachability line that governs the rest of this page.
+
+### Named project registry
+
+Which workspace subpath and tracker queue a key resolves to is **data, not hardcode**: a named project registry maps each project key (e.g. `robot/deepagent`) to its `{workspace_backend, workspace_subpath, tracker_backend, tracker_queue}`. Core merges two roots by key — a **machine-local** root (`~/.claude/projects.d`, holding absolute checkout paths written by `claude-task --register`, never versioned) and an optional **shared/versioned** root (`projects_dir` above, holding only portable fields, distributable to a team). `claude-task --list-projects` prints the merged table; `--project <key>` selects a record explicitly when invoked from outside any working copy. Absent a record, selection falls through to the auto-detect defaults, so a fresh org clone needs no registry to function.
 
 ## What stays Yandex-flavored (and why it's harmless)
 

@@ -103,6 +103,7 @@ claude-task DEEPAGENT-123        # resolve a tracker issue → isolated git work
 claude-team DEEPAGENT-123        # same, on the "team" auth profile
 claude-task --new "title"        # create an issue, then enter
 claude-task <name>               # named scratch workspace (no tracker)
+claude-task --list-projects      # show the named project registry (key → workspace + queue)
 ```
 
 The bare `cd ~/my-project && claude` flow still works exactly as before — `claude-task` is an optional shortcut.
