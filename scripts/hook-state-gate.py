@@ -56,10 +56,10 @@ ALLOW_NODES = {"EXECUTING", "VERIFYING", "RESOLUTION"}
 PLAN_MUTABLE_NODES = {"CLASSIFIED", "ROUTED", "PLANNING", "PLAN_READY"}
 
 
-def load_gate_fields(path: Path) -> tuple[str | None, str] | None:
-    """Return (weight_class, node) from the state file. weight_class may be None
-    (session not yet classified). Corrupt/unreadable state or a missing/non-string
-    node -> None, so main() falls through to allow (unchanged safety)."""
+def load_gate_fields(path: Path) -> tuple[str | None, str, str | None] | None:
+    """Return (weight_class, node, plan_path) from the state file. weight_class and
+    plan_path may be None. Corrupt/unreadable state or a missing/non-string node ->
+    None, so main() falls through to allow (unchanged safety)."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
@@ -69,7 +69,8 @@ def load_gate_fields(path: Path) -> tuple[str | None, str] | None:
         return None
     weight = data.get("weight_class")
     weight = weight if isinstance(weight, str) else None
-    return weight, node
+    plan_path = data.get("plan_path")
+    return weight, node, plan_path
 
 
 def gate_decision(weight_class: str | None, node: str, is_plan: bool = False) -> tuple[str, str]:
@@ -148,9 +149,11 @@ def main() -> int:
     fields = load_gate_fields(sp)
     if fields is None:
         return 0
-    weight_class, node = fields
+    weight_class, node, plan_path = fields
 
-    is_plan = is_plan_file(file_path)
+    in_plans_dir = is_plan_file(file_path)
+    is_tracked = bool(plan_path) and os.path.realpath(file_path) == os.path.realpath(plan_path)
+    is_plan = in_plans_dir and (node in PLAN_MUTABLE_NODES or is_tracked)
 
     # A spawned specialist (AGENT_RECURSION_DEPTH >= 1) is an EXECUTOR of an
     # already-approved stage, not a coordinator: its production-edit authority is

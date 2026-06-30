@@ -36,12 +36,14 @@ def run_hook(payload: dict, home: Path, extra_env: dict | None = None) -> subpro
     )
 
 
-def write_state(home: Path, session_id: str, node: str, weight_class: str | None = None) -> None:
+def write_state(home: Path, session_id: str, node: str, weight_class: str | None = None, plan_path: str | None = None) -> None:
     state_dir = home / ".claude" / "agentctl" / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
     data: dict = {"node": node}
     if weight_class is not None:
         data["weight_class"] = weight_class
+    if plan_path is not None:
+        data["plan_path"] = plan_path
     (state_dir / f"{session_id}.json").write_text(json.dumps(data))
 
 
@@ -149,8 +151,9 @@ def test_deny_plan_outside_planning_position(tmp_path, node):
     # changing a plan once past the planning position is a difficulty to overcome
     # reflexively (replan / overcome-difficulty), not an in-place edit — even at
     # EXECUTING (which is in ALLOW_NODES for ordinary prod files)
-    write_state(tmp_path, f"planno-{node}", node, weight_class="SUBSTANTIVE")
-    proc = run_hook(edit_payload(f"planno-{node}", "/home/u/.claude/plans/task.md"), tmp_path)
+    plan_file = "/home/u/.claude/plans/task.md"
+    write_state(tmp_path, f"planno-{node}", node, weight_class="SUBSTANTIVE", plan_path=plan_file)
+    proc = run_hook(edit_payload(f"planno-{node}", plan_file), tmp_path)
     assert proc.returncode == 0, node
     assert _is_deny(proc), node
     assert "replan" in _deny_reason(proc).lower()
@@ -213,9 +216,10 @@ def test_depth_allows_code_at_plan_ready_too(tmp_path):
 def test_depth_does_not_unblock_plan_files(tmp_path):
     # NARROW BY DESIGN: the depth bypass excludes plan artifacts. A spawned
     # executor at a non-planning node can never alter an approved plan.
-    write_state(tmp_path, "d2", "UNCLASSIFIED", weight_class=None)
+    plan_file = "/home/u/.claude/plans/task.md"
+    write_state(tmp_path, "d2", "UNCLASSIFIED", weight_class=None, plan_path=plan_file)
     proc = run_hook(
-        edit_payload("d2", "/home/u/.claude/plans/task.md"), tmp_path,
+        edit_payload("d2", plan_file), tmp_path,
         extra_env={"AGENT_RECURSION_DEPTH": "1"},
     )
     assert proc.returncode == 0
@@ -333,3 +337,35 @@ def test_e2e_resolved_denies_with_reset(tmp_path):
     assert proc.returncode == 0
     assert _is_deny(proc)
     assert "reset" in _deny_reason(proc).lower()
+
+
+# --- N1/N2/N3: plan-freeze narrowed to state.plan_path (tracked plan only) ---
+
+def test_n1_tracked_plan_denied_at_executing(tmp_path):
+    # the engine's tracked plan is frozen at EXECUTING even though EXECUTING is in
+    # ALLOW_NODES for ordinary prod files; reason must point back to replan
+    plan_file = "/home/u/.claude/plans/task.toml"
+    write_state(tmp_path, "n1", "EXECUTING", weight_class="SUBSTANTIVE", plan_path=plan_file)
+    proc = run_hook(edit_payload("n1", plan_file), tmp_path)
+    assert proc.returncode == 0
+    assert _is_deny(proc)
+    assert "replan" in _deny_reason(proc).lower()
+
+
+def test_n2_nontracked_plans_file_allowed_at_executing(tmp_path):
+    # a different file under plans/ (stage output, another task's plan) is writable
+    # at EXECUTING — only the tracked plan (plan_path) is frozen
+    plan_file = "/home/u/.claude/plans/task.toml"
+    write_state(tmp_path, "n2", "EXECUTING", weight_class="SUBSTANTIVE", plan_path=plan_file)
+    proc = run_hook(edit_payload("n2", "/home/u/.claude/plans/other.md"), tmp_path)
+    assert proc.returncode == 0
+    assert not _is_deny(proc)
+
+
+def test_n3_unset_plan_path_plans_file_allowed_at_executing(tmp_path):
+    # plan_path absent (session never ran submit-plan) + edit of a plans/ file at
+    # EXECUTING: no tracked plan to freeze, so the file is not gated as a plan
+    write_state(tmp_path, "n3", "EXECUTING", weight_class="SUBSTANTIVE")
+    proc = run_hook(edit_payload("n3", "/home/u/.claude/plans/any.toml"), tmp_path)
+    assert proc.returncode == 0
+    assert not _is_deny(proc)
