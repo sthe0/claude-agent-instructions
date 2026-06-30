@@ -22,8 +22,9 @@ org-neutral: it carries no project, tracker, or org-specific constants — only 
 mechanism that finds and resolves records by name.
 
 CLI (host I/O lives only here, in __main__):
-  projects.py list                       -> print the registry table
-  projects.py resolve [SELECTOR]         -> print the resolved key (exit 1 if none)
+  projects.py list                        -> print the registry table
+  projects.py resolve [SELECTOR]          -> print the resolved key (exit 1 if none)
+  projects.py fields [SELECTOR]           -> print resolved record as key=value lines (exit 1 if none)
   projects.py register ROOT KEY [k=v ...] -> write a machine-local record, print its path
 """
 from __future__ import annotations
@@ -260,6 +261,19 @@ def main(argv: "list[str]") -> int:
         if rec is None:
             return 1
         print(rec.get(KEY_FIELD, ""))
+        return 0
+
+    if cmd == "fields":
+        # Output resolved record as key=value lines; exit 1 if nothing resolves.
+        selector = rest[0] if rest else None
+        rec = resolve(_load_default(), selector=selector, pwd=os.getcwd())
+        if rec is None:
+            return 1
+        print(f"{KEY_FIELD}={rec.get(KEY_FIELD, '')}")
+        for field in _KNOWN_FIELDS:
+            val = rec.get(field)
+            if val is not None and isinstance(val, str):
+                print(f"{field}={val}")
         return 0
 
     if cmd == "register":

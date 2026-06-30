@@ -56,3 +56,13 @@ project_resolve() {
 project_register() {
   python3 "$_PROJECTS_PY" register "$@"
 }
+
+# project_local_root — print the machine-local registry root path.
+project_local_root() {
+  printf '%s\n' "${CLAUDE_PROJECTS_LOCAL_DIR:-$HOME/.claude/projects.d}"
+}
+
+# project_get_fields [selector] — print resolved record fields as key=value lines, or return non-zero.
+project_get_fields() {
+  CLAUDE_PROJECT_ROOTS="$(_projects_roots_env)" python3 "$_PROJECTS_PY" fields "$@"
+}
