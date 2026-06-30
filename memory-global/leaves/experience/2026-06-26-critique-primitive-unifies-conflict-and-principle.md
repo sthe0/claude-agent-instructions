@@ -7,6 +7,7 @@ resolution_confirmed_by_user: "Да, решена"
 refs: [2026-06-24-gate-exemption-is-category-error-for-result-images, 2026-05-26-agent-system-plan-vs-reality-drift, 2026-06-04-org-specific-vs-global-placement]
 created: 2026-06-26
 last_verified: 2026-06-27
+last_accessed: 2026-06-30
 ---
 
 # One critique primitive (commonality / difference) unifies conflict resolution, principle induction, and refutation
@@ -31,7 +32,7 @@ When the agent system is distributed to multiple developers, edits to its instru
 
 ### 2026-06-26 — S1–S4 implementation (the design built out)
 - ADR-0001 implemented whole as one approved 14-stage plan (S1 precedence layers + fractal `principles/`; S2 `difficulty_channel` port + Startrek/external adapters; S3 `core-difficulty-digest` clustering + `authority` routing; S4 `consensus-synthesizer` propose-only + `consensus_eval` semantic-conflict substrate + threshold calibration). Code is the record — read `scripts/difficulty_channel/`, `scripts/core-difficulty-digest.py`, `scripts/consensus-synthesizer.py`, `scripts/consensus_eval/`, ADR status now Accepted.
-- **Reusable implementation gotcha (cost real debug time):** loading a *hyphenated* script (`core-difficulty-digest.py`) via `importlib.util` for reuse in tests/other scripts — a `@dataclass` inside it fails with `AttributeError: 'NoneType' has no '__dict__'` because the dataclass machinery resolves `cls.__module__` through `sys.modules`, which the spec-loader hasn't populated yet. Fix: register `sys.modules[mod_name] = mod` **before** `spec.loader.exec_module(mod)`. Subpackages (`difficulty_channel.adapters`) should instead be imported normally (conftest puts `scripts/` on `sys.path`) — don't importlib-load a package by file path.
+- **Reusable implementation gotcha (cost real debug time):** loading a *hyphenated* script (`core-difficulty-digest.py`) via `importlib.util` for reuse in tests/other scripts — a `@dataclass` inside it fails with `AttributeError: 'NoneType' has no '__dict__'` because the dataclass machinery resolves `cls.__module__` through `sys.modules`, which the spec-loader hasn't populated yet. Fix: register `sys.modules[mod_name] = mod` **before** `spec.loader.exec_module(mod)`. Subpackages (`difficulty_channel.adapters`) should instead be imported normally (conftest puts `scripts/` on `sys.path`) — don't importlib-load a package by file path. Now extracted to its own searchable leaf: [[importlib-hyphenated-script-dataclass-sys-modules]].
 - **Reuse discipline that held:** one ranking engine — `tokenize()`/`term_score()` extracted into `record-experience.py`, reused verbatim by digest clustering and synthesizer; no second similarity engine was written. The same primitive backs search-before-record, cluster-by-functional-ground, and the critique commonality/difference split.
 - Mechanical: every new `scripts/*.py` with a shebang needs `chmod +x` (lint-hooks-executable) + a `scripts/README.md` row (verify-readme); package modules (no shebang) need neither.
 

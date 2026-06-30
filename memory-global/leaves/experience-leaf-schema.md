@@ -4,6 +4,7 @@ description: The difficulty-centric schema for experience leaves (schema:difficu
 type: reference
 created: 2026-06-11
 last_verified: 2026-06-29
+last_accessed: 2026-06-30
 ---
 
 # Experience leaf schema (`difficulty/v1`)
@@ -22,7 +23,7 @@ Leaves link to each other via the `refs:` frontmatter list and inline `[[slug]]`
 order → plan → implementation → difficulty → induced order → plan → …
 ```
 
-A child difficulty that arose while resolving a parent is referenced, never inlined: record it as its own leaf (or extend an existing one) and link it from the parent's `## Contexts` at the point it arose. No tooling assumes acyclicity.
+A child difficulty that arose while resolving a parent is referenced, never inlined: record it as its own leaf (or extend an existing one) and link it from the parent's `## Contexts` at the point it arose. `verify-experience-leaf.py` enforces this: a standalone leaf that names side/child difficulties in prose without an inline `[[slug]]` link is rejected (advisory in the full-corpus scan, blocking at write/commit time). No tooling assumes acyclicity.
 
 ## Record flow — search before write
 

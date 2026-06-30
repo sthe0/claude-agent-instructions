@@ -75,6 +75,16 @@ V1_SECTIONS = [
     ("## Cost", re.compile(r"^##\s+Cost\b", re.MULTILINE)),
 ]
 
+# Sub-difficulty discipline: a child difficulty mentioned in a leaf body must be
+# extracted to its own leaf and referenced via [[slug]], never described inline.
+# SIDE_DIFFICULTY_MARKER detects the textual signal; INLINE_LINK_RE detects the
+# correct form. The gate: marker present AND no inline link = violation.
+SIDE_DIFFICULTY_MARKER = re.compile(
+    r"\b(?:side|sub|child)[- ]difficult|child difficult|подзатрудн|дочерн\w*\s+затрудн",
+    re.IGNORECASE,
+)
+INLINE_LINK_RE = re.compile(r"\[\[[\w-]+\]\]")
+
 
 def is_experience_leaf(path: str) -> bool:
     return bool(EXPERIENCE_PATH_RE.search(path))
@@ -207,6 +217,34 @@ def check_content(content: str) -> str | None:
     return None
 
 
+def side_difficulty_issue(content: str) -> str | None:
+    """Return an error if a standalone difficulty/v1 leaf names sub-difficulties
+    without [[slug]] inline links. Returns None if OK or not applicable.
+
+    Only runs on standalone difficulty/v1 leaves (not ticket-thin, not legacy).
+    Kept separate from check_content so each call site controls severity.
+    """
+    fm = FRONTMATTER_RE.match(content)
+    if not fm:
+        return None
+    fm_body = fm.group(1)
+    if "difficulty/v1" not in _fm_field(fm_body, SCHEMA_RE):
+        return None
+    if _fm_field(fm_body, TICKET_RE):
+        return None
+    body = content[fm.end():]
+    if not SIDE_DIFFICULTY_MARKER.search(body):
+        return None
+    if INLINE_LINK_RE.search(body):
+        return None
+    return (
+        "difficulty/v1 leaf names side-difficulties inline without [[slug]] links — "
+        "extract each sub-difficulty as its own leaf and reference it as [[slug]] "
+        "in ## Contexts where it arose "
+        "(see experience-leaf-schema.md § The difficulty graph)"
+    )
+
+
 def _list_paths(mode: str) -> list[str]:
     if mode == "staged":
         cmd = ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"]
@@ -240,29 +278,52 @@ def _scan(mode: str) -> int:
     if not paths:
         print(f"verify-experience-leaf: OK — no experience leaves ({mode} mode)")
         return 0
-    failed: list[str] = []
+    struct_failed: list[str] = []
+    side_failed: list[str] = []
+    warned: list[str] = []
     for path in paths:
         content, read_err = _read_blob(path, mode)
         if read_err is not None:
             print(f"verify-experience-leaf: FAIL {path}: {read_err}")
-            failed.append(path)
+            struct_failed.append(path)
             continue
         err = check_content(content or "")
         if err:
             print(f"verify-experience-leaf: FAIL {path}: {err}")
-            failed.append(path)
+            struct_failed.append(path)
+            continue
+        issue = side_difficulty_issue(content or "")
+        if issue:
+            if mode == "staged":
+                print(f"verify-experience-leaf: FAIL {path}: {issue}")
+                side_failed.append(path)
+            else:
+                print(f"verify-experience-leaf: WARN {path}: {issue}")
+                warned.append(path)
         else:
             print(f"verify-experience-leaf: OK {path}")
-    if failed:
+    if warned:
         print(
-            f"\n{len(failed)} experience leaf/leaves missing user-confirmation "
+            f"\n{len(warned)} experience leaf/leaves mention side-difficulties inline "
+            f"(advisory WARN in scan mode — fatal in --staged / --hook). "
+            f"To fix: extract each sub-difficulty as its own leaf, link as [[slug]]."
+        )
+    if side_failed:
+        print(
+            f"\n{len(side_failed)} staged experience leaf/leaves name sub-difficulties "
+            f"inline without [[slug]] links. Extract each as its own leaf and reference "
+            f"as [[slug]] in ## Contexts "
+            f"(see experience-leaf-schema.md § The difficulty graph)."
+        )
+    if struct_failed:
+        print(
+            f"\n{len(struct_failed)} experience leaf/leaves missing user-confirmation "
             f"frontmatter. Add\n"
             f"  resolution_confirmed_by_user: \"<user's literal confirmation quote>\"\n"
             f"to the frontmatter. The field exists because writing a leaf on\n"
             f"assumed resolution is a recurring failure mode."
         )
-        return 1
-    return 0
+    return 1 if (struct_failed or side_failed) else 0
 
 
 def cmd_hook() -> int:
@@ -316,6 +377,20 @@ def cmd_hook() -> int:
             f"transcript ({detail}); allowing write.",
             file=sys.stderr,
         )
+
+    issue = side_difficulty_issue(content)
+    if issue is not None:
+        print(
+            "verify-experience-leaf: BLOCK\n"
+            f"  Write target: {file_path}\n"
+            f"  reason: {issue}\n"
+            "  rule: experience-leaf-schema.md § The difficulty graph — child\n"
+            "        difficulties must be extracted as separate leaves, not inlined.\n"
+            "  recovery: for each side-difficulty, run record-experience.py new/extend,\n"
+            "            add [[slug]] link in ## Contexts, then retry the Write.\n",
+            file=sys.stderr,
+        )
+        return 2
     return 0
 
 
@@ -327,9 +402,14 @@ def cmd_file(path_str: str) -> int:
     if not p.exists():
         print(f"verify-experience-leaf: FAIL {p}: file not found", file=sys.stderr)
         return 1
-    err = check_content(p.read_text(encoding="utf-8"))
+    content = p.read_text(encoding="utf-8")
+    err = check_content(content)
     if err:
         print(f"verify-experience-leaf: FAIL {p}: {err}")
+        return 1
+    issue = side_difficulty_issue(content)
+    if issue:
+        print(f"verify-experience-leaf: FAIL {p}: {issue}")
         return 1
     print(f"verify-experience-leaf: OK {p}")
     return 0

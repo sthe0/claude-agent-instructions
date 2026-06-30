@@ -5,6 +5,7 @@ type: reference
 schema: leaf/v1
 created: 2026-06-25
 last_verified: 2026-06-27
+last_accessed: 2026-06-30
 ---
 
 # Recording a resolved-task experience leaf
@@ -31,6 +32,7 @@ If none — do not record. Memory bloat is worse than memory gap. The git log + 
 The unit of experience is a **recurring difficulty** (a plan-vs-reality divergence — the object `overcome-difficulty` localizes), not a one-off task. One leaf records one difficulty and accumulates every context it arose in, plus the plan that removed it in each.
 
 - **Search before recording (mandatory; engine-gated).** `scripts/record-experience.py search "<keywords>"` ranks existing leaves by `description` + `## Difficulty`. If an analogous leaf exists, **extend** it (`record-experience.py extend …`) rather than duplicate — accumulated contexts of one difficulty expose recurring patterns and justify a general solution; else create a new leaf (`record-experience.py new …`). This discipline is also **enforced at write time**: `new` refuses to fragment an analogous leaf without `--justify-new "<reason>"`, so the search step cannot be bypassed by omission.
+- **Child difficulties: extract, never inline.** A side/child difficulty met while resolving the parent is recorded as its own leaf (or `extend` an analogous one) and linked inline `[[slug]]` from the parent's `## Contexts` at the point it arose — never described in prose inside `## Contexts` / `## Cost`, where `record-experience.py search` (it ranks only `description` + `## Difficulty`) cannot find it. `verify-experience-leaf.py` blocks a leaf that names side/child difficulties without an inline `[[slug]]` link (advisory in the full-corpus scan, blocking at write/commit time).
 - **Scope.** Cross-project → `~/.claude/memory-global/leaves/experience/`. Project-specific → `<project_cwd>/.claude/agent-memory/experience/`.
 - **Schema and tooling.** Leaves follow `schema: difficulty/v1` (sections **Difficulty / Order & criterion / Contexts / Cost**, free-form `refs:` into the difficulty graph — cycles allowed, the framework is self-referential) — the **generality-0 profile** of one difficulty-record model whose generality≥1 profile is the `principle/v1` principle leaf ([principle-leaf-schema.md](principle-leaf-schema.md)). Full schema + search / extend / new / ticket flow: [experience-leaf-schema.md](experience-leaf-schema.md). Generate via `scripts/record-experience.py` (auto-updates the `experience/MEMORY.md` sub-index); `verify-experience-leaf.py` enforces the shape. For standalone leaves, the **`## Cost` section must not contain an unreplaced TODO** — fill it from the figure surfaced by `agentctl resolve` (the plan/task `CostRollup`); `verify-experience-leaf.py` rejects the generated placeholder.
 - **Ticket-driven work → thin leaf.** When the task is a ticket, the full structured record lives **in the ticket** (the `tracker-management` skill posts it via `record-experience.py ticket`); the leaf is a thin pointer (`ticket:` frontmatter + one-line reusable hook). Single source of truth — no duplication.

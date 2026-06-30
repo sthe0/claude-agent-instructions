@@ -1,10 +1,12 @@
-"""Tests for the unreplaced-TODO-in-## Cost check added to verify-experience-leaf.py.
+"""Tests for verify-experience-leaf.py — unreplaced-TODO check and side-difficulty gate.
 
 Verifies that:
   - A standalone difficulty/v1 leaf with a TODO in ## Cost is rejected.
   - A standalone leaf with a real Cost figure passes.
   - A ticket leaf (sections relaxed) passes even if Cost section is absent.
   - Legacy leaves (no schema) are exempt from the check.
+  - side_difficulty_issue() detects inlined sub-difficulties without [[slug]] links.
+  - side_difficulty_issue() is NOT part of check_content (per-mode severity).
 """
 from __future__ import annotations
 
@@ -159,3 +161,132 @@ def test_section_body_returns_none_when_heading_absent():
     import re
     rx = re.compile(r"^##\s+Cost\b", re.MULTILINE)
     assert vel._section_body(body, rx) is None
+
+
+# ---------------------------------------------------------------------------
+# side_difficulty_issue — tests for the sub-difficulty-inline gate
+# ---------------------------------------------------------------------------
+
+_SIDE_DIFFICULTY_NO_LINK = f"""---
+schema: difficulty/v1
+{_CONFIRMED}
+---
+
+# Difficulty with inlined side-difficulty
+
+## Difficulty
+Main divergence.
+
+## Order & criterion
+The order.
+
+## Contexts
+### 2026-01-01 — context
+- Where: here
+- Working plan: did this
+Side-difficulties met: (1) something bad happened; (2) another issue arose.
+
+## Cost
+$1.00 on spawns. The overhead from side-difficulties: (1) bad thing; (2) other thing.
+"""
+
+_SIDE_DIFFICULTY_WITH_LINK = f"""---
+schema: difficulty/v1
+{_CONFIRMED}
+---
+
+# Difficulty with linked side-difficulty
+
+## Difficulty
+Main divergence.
+
+## Order & criterion
+The order.
+
+## Contexts
+### 2026-01-01 — context
+- Where: here
+- Working plan: did this
+Side-difficulties met: see [[some-other-difficulty]].
+
+## Cost
+$1.00 on spawns.
+"""
+
+
+def test_side_difficulty_no_link_detected():
+    issue = vel.side_difficulty_issue(_SIDE_DIFFICULTY_NO_LINK)
+    assert issue is not None
+    assert "[[slug]]" in issue
+
+
+def test_side_difficulty_with_link_passes():
+    assert vel.side_difficulty_issue(_SIDE_DIFFICULTY_WITH_LINK) is None
+
+
+def test_side_difficulty_ticket_exempt():
+    content = f"""---
+schema: difficulty/v1
+{_CONFIRMED}
+ticket: PROJ-42
+---
+
+# Difficulty
+
+Full record in ticket PROJ-42. Side-difficulties met: (1) foo happened.
+"""
+    assert vel.side_difficulty_issue(content) is None
+
+
+def test_side_difficulty_legacy_exempt():
+    content = f"""---
+{_CONFIRMED}
+---
+
+Side-difficulties met: (1) foo happened.
+"""
+    assert vel.side_difficulty_issue(content) is None
+
+
+def test_side_difficulty_no_marker_passes():
+    assert vel.side_difficulty_issue(_STANDALONE_OK) is None
+
+
+def test_side_difficulty_marker_variants_detected():
+    # The marker must catch the natural English phrasings the docs use
+    # ("a child difficulty", "side/child difficulties") and the Cyrillic forms,
+    # not only "side-difficulty".
+    for phrase in (
+        "A child difficulty arose: foo broke.",
+        "Sub-difficulty met: bar regressed.",
+        "Встретилось подзатруднение: baz.",
+        "Возникло дочернее затруднение здесь.",
+    ):
+        content = _SIDE_DIFFICULTY_NO_LINK.replace(
+            "Side-difficulties met: (1) something bad happened; (2) another issue arose.",
+            phrase,
+        )
+        assert vel.side_difficulty_issue(content) is not None, phrase
+
+
+def test_side_difficulty_not_in_check_content():
+    # side_difficulty_issue is separate from check_content — check_content must
+    # still pass for a leaf that side_difficulty_issue would flag, so per-mode
+    # severity is controlled at each call site.
+    assert vel.check_content(_SIDE_DIFFICULTY_NO_LINK) is None
+
+
+def test_cmd_file_side_difficulty_exits_1(tmp_path):
+    exp_dir = tmp_path / "experience"
+    exp_dir.mkdir()
+    leaf = exp_dir / "2026-01-01-test.md"
+    leaf.write_text(_SIDE_DIFFICULTY_NO_LINK)
+    assert vel.cmd_file(str(leaf)) == 1
+
+
+def test_cmd_file_linked_side_difficulty_exits_0(tmp_path):
+    exp_dir = tmp_path / "experience"
+    exp_dir.mkdir()
+    leaf = exp_dir / "2026-01-01-test.md"
+    leaf.write_text(_SIDE_DIFFICULTY_WITH_LINK)
+    assert vel.cmd_file(str(leaf)) == 0
