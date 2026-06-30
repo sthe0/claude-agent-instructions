@@ -105,6 +105,8 @@ Classify before placing:
 
 Do not push domain runbooks into generic agent prompts or CLAUDE.md. If the user says "remember" or "too specific for an agent" — memory only; revert agent edit.
 
+**Structural form before prose — for a deterministically-decidable rule.** When the behavioral rule is decidable from observable inputs (an ordering, a classification, a gate, a validation, a dispatch — its *rule* part, as opposed to a *perception* part only the model can supply), do not settle for adding prose. Per the CLAUDE.md root principle *"Separate rule from perception; determinize the rule at its proper structural level"*, propose mechanizing the rule part at its proper structural level (engine state / state machine / typed contract / gate / hook) and keep prose only for the perception the model genuinely owns — and **propose that structural form yourself**, do not wait for the user to ask. A local hook or script is a stopgap until a structural home exists; a one-off crutch when a reusable primitive fits is a prune candidate, not the target.
+
 ## Improvement areas beyond text
 
 - **Hooks** in `~/.claude/settings.json` (`PreToolUse`, `PostToolUse`, `Stop`, `UserPromptSubmit`) — for automation that must run between turns.

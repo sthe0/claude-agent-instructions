@@ -60,7 +60,7 @@ Carve-outs that minimize per-action confirmation (full policy: `~/.claude/memory
 
 **Do not** ask the user to confirm individual actions already covered above — structured confirms are for decisions the user has not already made (plan approval, irreversible ops, substantive replan).
 
-**Formalize deterministic action sequences as code.** A fixed-order sequence with no per-step judgement (multi-command CLI ceremonies, repeated verify / setup / teardown chains) belongs in a script / wrapper command / workflow you invoke — not hand-issued one tool call at a time. Hand-walking such a chain burns tokens/turns/attention, is error-prone and non-reproducible; it is itself a difficulty signal. Full rule: `~/.claude/CLAUDE.md` preamble.
+**Separate rule from perception; determinize the rule structurally.** Every recurring responsibility splits into a *rule* part (decidable from observable inputs — order, classification, gating, validation, dispatch) and a *perception* part (judgment only the model supplies). Mechanize the rule part at its proper structural level (engine, state machine, typed contract, gate), keep the model for perception, name the boundary. Prose-guided judgment is forgettable; scattered ad-hoc crutches are unreasoned mechanism — both immature. Raise determinism to the most general appropriate level; the `agentctl` engine is the canonical instance. Recording a deterministically-decidable policy as prose, or hand-walking a deterministic chain, is the signal mechanism is missing — propose the structural form yourself. Full rule: `~/.claude/CLAUDE.md` preamble.
 
 ## What counts as a difficulty
 
