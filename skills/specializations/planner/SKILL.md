@@ -75,9 +75,9 @@ Concrete numbers / deadlines / TTLs / limits **without** an explicit source link
 
 Read the user's request and all linked source artifacts (tickets, RFCs, parent tasks), their comments, and the wiki/docs they link; for a familiar domain read the relevant project memory leaves only. Detail: see [policy.md](policy.md) § Gathering context.
 
-### Research existing solutions and best practices
+### Research existing solutions, information, and ideas
 
-**Reuse beats invention.** Before designing from scratch, actively look for existing solutions and best practices using every tool the task warrants.
+**Reuse beats invention — and external ideas beat blank-slate guessing.** Before designing from scratch, actively look across the internet and intranet for existing solutions, best practices, and *ideas / approaches* that could improve the plan, using every tool the task warrants. **For every substantive plan, considering this is mandatory, not optional:** explicitly decide whether internet/intranet research (for information or ideas) could help — if yes, do it and cite the sources below; if no, record a one-line reason it is not warranted. State the decision on a plan-level `External research:` line (see § Plan format). *(Difficulty: a plan built only from prior knowledge + the local repo silently misses a readily-available solution or idea — making the consideration mandatory and auditable removes that.)*
 
 | Source | Tools |
 |---|---|
@@ -130,7 +130,7 @@ From experience with this task type, past similar tasks (read experience leaves)
 Required `##` sections (in this order; `verify-plan-file.py` enforces presence):
 
 1. **Problem and done criteria.** State both (1) a plain-language description of the end result and (2) a verifiable definition-of-done criterion for the task as a whole.
-2. **Context.** Write for an executor who has **not** read the originating dialogue: define domain terms on first use, state why the task exists and the current-vs-target state. No references to conversation-only artifacts ("option B", "Q1", "as agreed") — inline the actual decision and its rationale so the plan stands alone.
+2. **Context.** Write for an executor who has **not** read the originating dialogue: define domain terms on first use, state why the task exists and the current-vs-target state. No references to conversation-only artifacts ("option B", "Q1", "as agreed") — inline the actual decision and its rationale so the plan stands alone. **Substantive plans must carry a plain-text `External research:` line here** (the typed-TOML equivalent is the `[meta] external_research` key) recording the § Research decision — what internet/intranet research was done and found, or one line on why it is not warranted; `verify-plan-file.py` / `plan.py` reject a substantive plan that omits it.
 3. **Stages.** Each stage is a full *elementary plan* whose constituents are the 8 activity elements — see [plan-activity-ontology](../../../memory-global/leaves/plan-activity-ontology.md). **Substantive** plans must declare all 8 per stage (the canonical model is `agentctl/plan.py`+`state.py`'s typed grouped structs — `Subject`/`Means`/`Actor`/`Criterion`/`Principle`/`Supply`/`Outcome`; `verify-plan-file.py` mirrors them in prose); lighter classes may omit them. If any element below is not a given, split it out as a **service stage** with a `depends_on` edge — any unmet element (material, means, even the actor/capability) becomes the order of a sub-plan, which is how a composite plan grows.
    - **Who executes** — actor + the capability to wield the means (element 6); the manager spawns the named specialization, or manager in-thread.
    - **Material:** what this stage transforms and its relevant initial state (element 2).
@@ -171,6 +171,7 @@ You inherit the manager's full toolset. For planning work, prefer **read-only** 
 - Add stages the user did not approve — decomposing into stages is your job, but stages beyond the approved scope are scope creep past the approval gate; return `ESCALATE:` instead.
 - Break markdown links with backticks around link text — backticks inside the link-text brackets stop the link from rendering in the plan the user reads.
 - Cite a "best practice" without a concrete source — that's opinion, not research.
+- Finalize a substantive plan without having decided whether internet/intranet research (for information or ideas) would improve it — either do it and cite sources, or record one line on why it is not warranted (the `External research:` line).
 - Write or modify production code during planning. If the plan needs validation by reading code, that's allowed; modifying code is the developer specialization's job.
 - Optimize cost by cutting tests, documentation, boundary error handling, or rollback paths. That's regression, not optimization — count the deferred work as part of the option's cost.
 

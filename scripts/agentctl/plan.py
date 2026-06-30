@@ -29,8 +29,17 @@ TOML shape (minimal):
     depends_on = []                       # optional
     output_artifacts = ["scripts/agentctl/"]  # optional
 
-For substantive plans (meta.weight_class = "substantive") every stage must also
-carry the 8-element activity-structure fields:
+For substantive plans (meta.weight_class = "substantive") the [meta] table must
+also carry a plan-level external-research decision:
+
+    external_research = "checked internal wiki + WebSearch; no prior art applies"
+                                         # required for substantive; what
+                                         # internet/intranet research found, or
+                                         # why it is not warranted. Mirrors the
+                                         # markdown `External research:` line
+                                         # checked by verify-plan-file.py.
+
+and every stage must also carry the 8-element activity-structure fields:
 
     material = "..."
     means = "..."
@@ -79,6 +88,10 @@ class PlanMeta:
     done_criterion: str = ""
     criterion_type: str = CriterionType.MEASURABLE.value
     weight_class: str | None = None
+    # Plan-level external-research decision (planner SKILL.md § Research). Required
+    # non-empty for substantive plans; None for legacy/non-substantive. Mirrors the
+    # markdown `External research:` line checked by verify-plan-file.py.
+    external_research: str | None = None
     # Directory each stage's verify_command runs in. None (default) inherits the
     # invoker's cwd — byte-identical to pre-repo_root behaviour. Set it so a plan's
     # repo-relative verify paths resolve no matter where the engine is driven from.
@@ -226,6 +239,7 @@ def parse_plan(data: dict) -> PlanDoc:
         done_criterion=str(m.get("done_criterion", "")),
         criterion_type=str(m.get("criterion_type", CriterionType.MEASURABLE.value)),
         weight_class=str(raw_weight) if raw_weight is not None else None,
+        external_research=str(m["external_research"]) if m.get("external_research") else None,
         repo_root=str(m["repo_root"]) if m.get("repo_root") else None,
         final_check=final_checks,
     )
@@ -235,6 +249,13 @@ def parse_plan(data: dict) -> PlanDoc:
         raise PlanError("plan defines no [[stage]] entries")
 
     is_substantive = meta.weight_class is not None and meta.weight_class.lower() == "substantive"
+
+    if is_substantive and not meta.external_research:
+        raise PlanError(
+            "[meta] missing 'external_research' (required for substantive plans): "
+            "record whether internet/intranet research for information or ideas would "
+            "improve the plan, or one line on why it is not warranted"
+        )
 
     stages: list[Stage] = []
     for i, s in enumerate(raw_stages, start=1):

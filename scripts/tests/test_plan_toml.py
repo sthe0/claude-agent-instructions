@@ -170,14 +170,28 @@ def _full_substantive_stage(index=1):
 
 
 def _substantive_meta():
-    return {"task_id": "t", "weight_class": "substantive"}
+    return {"task_id": "t", "weight_class": "substantive", "external_research": "checked wiki; none applies"}
 
 
 def test_substantive_full_parses_ok():
     data = {"meta": _substantive_meta(), "stage": [_full_substantive_stage()]}
     doc = parse_plan(data)
     assert doc.meta.weight_class == "substantive"
+    assert doc.meta.external_research == "checked wiki; none applies"
     assert doc.stages[0].index == 1
+
+
+def test_substantive_missing_external_research_raises():
+    meta = _substantive_meta()
+    del meta["external_research"]
+    with pytest.raises(PlanError, match="external_research"):
+        parse_plan({"meta": meta, "stage": [_full_substantive_stage()]})
+
+
+def test_non_substantive_without_external_research_ok():
+    """Legacy/non-substantive plans do not require external_research."""
+    doc = parse_plan({"meta": {"task_id": "t"}, "stage": [_minimal_stage()]})
+    assert doc.meta.external_research is None
 
 
 def test_substantive_missing_principle_raises():

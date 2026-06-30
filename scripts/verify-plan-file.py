@@ -25,6 +25,13 @@ For **substantive** plans — those containing a line that matches
   - `Conditions & invariants:` *or* both `Conditions:` and `Invariants:` (element 5)
   - `Principle:` containing `Source:`, `Confidence:`, and `Refutation:` (element 7)
 
+Substantive plans must also carry, at plan level (anywhere in the file):
+  - `External research:` — the planner's recorded decision on whether
+    internet/intranet research (for information or ideas) would improve the
+    plan: what was found, or one line on why it is not warranted. Mirrors the
+    `[meta] external_research` TOML key enforced by `agentctl/plan.py`. See
+    planner SKILL.md § Research existing solutions, information, and ideas.
+
 Legacy / non-substantive plans (no weight_class marker) are validated only
 against the 4-section baseline, preserving backward compatibility.
 
@@ -77,6 +84,8 @@ _CONDITIONS_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Conditions\**\s*:")
 _INVARIANTS_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Invariants\**\s*:")
 _CAPABILITY_RE = re.compile(r"(?im)^\s*[-*]?\s*\**(?:Capability|Actor)\**\s*:")
 _PRINCIPLE_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Principle\**\s*:")
+# Plan-level (not per-stage) external-research decision, required for substantive plans.
+_EXTERNAL_RESEARCH_RE = re.compile(r"(?im)^\s*[-*]?\s*\**External research\**\s*:")
 _SOURCE_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Source\**\s*:")
 _CONFIDENCE_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Confidence\**\s*:")
 _REFUTATION_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Refutation\**\s*:")
@@ -119,6 +128,15 @@ def check(path: Path) -> list[str]:
 
     if SUBSTANTIVE_RE.search(text):
         stages_text = stages or ""
+
+        # Plan-level: the planner must have recorded an external-research decision.
+        if not _EXTERNAL_RESEARCH_RE.search(text):
+            errors.append(
+                "substantive plan: missing plan-level `External research:` line. "
+                "Record whether internet/intranet research (for information or ideas) "
+                "would improve the plan — what was found, or one line on why it is "
+                "not warranted (planner SKILL.md § Research)."
+            )
 
         if not _MATERIAL_RE.search(stages_text):
             errors.append(
@@ -189,7 +207,8 @@ def main(argv: list[str] | None = None) -> int:
             "image lines), Final verification, and Risks sections.\n"
             "Substantive plans (weight_class: substantive) additionally require\n"
             "Capability (or Actor), Material, Means & method, Conditions & invariants,\n"
-            "and Principle (with Source, Confidence, Refutation) inside ## Stages.",
+            "and Principle (with Source, Confidence, Refutation) inside ## Stages,\n"
+            "plus a plan-level External research: line.",
             file=sys.stderr,
         )
         return 1

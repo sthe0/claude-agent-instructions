@@ -60,7 +60,9 @@ def _make_body(stage_extra: str = "") -> str:
 
 
 _BASELINE_BODY = _make_body()
-_SUBSTANTIVE_BODY = _make_body(stage_extra=_ACTIVITY_LABELS)
+# Substantive plans must carry a plan-level `External research:` line.
+_EXTERNAL_RESEARCH_LINE = "External research: checked internal wiki + WebSearch; no prior art applies.\n\n"
+_SUBSTANTIVE_BODY = _EXTERNAL_RESEARCH_LINE + _make_body(stage_extra=_ACTIVITY_LABELS)
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +122,7 @@ def test_substantive_with_separate_means_method(tmp_path):
         "Means & method: Edit tool",
         "Means: Edit tool\nMethod: direct Edit call",
     )
-    content = "weight_class: substantive\n\n" + _make_body(stage_extra=labels)
+    content = "weight_class: substantive\n\n" + _EXTERNAL_RESEARCH_LINE + _make_body(stage_extra=labels)
     plan = _write(tmp_path, content)
     assert mod.check(plan) == []
 
@@ -132,7 +134,7 @@ def test_substantive_with_separate_conditions_invariants(tmp_path):
         "Conditions & invariants: no other files changed",
         "Conditions: CI must be green\nInvariants: no other files changed",
     )
-    content = "weight_class: substantive\n\n" + _make_body(stage_extra=labels)
+    content = "weight_class: substantive\n\n" + _EXTERNAL_RESEARCH_LINE + _make_body(stage_extra=labels)
     plan = _write(tmp_path, content)
     assert mod.check(plan) == []
 
@@ -251,7 +253,7 @@ def test_substantive_actor_label_satisfies_capability(tmp_path):
     """Actor: is an accepted alternative to Capability: for element 6."""
     mod = _load()
     labels = _ACTIVITY_LABELS.replace("Capability: Python\n", "Actor: developer with Python\n")
-    content = "weight_class: substantive\n\n" + _make_body(stage_extra=labels)
+    content = "weight_class: substantive\n\n" + _EXTERNAL_RESEARCH_LINE + _make_body(stage_extra=labels)
     plan = _write(tmp_path, content)
     assert mod.check(plan) == []
 
@@ -261,3 +263,32 @@ def test_non_substantive_missing_capability_label_ok(tmp_path):
     mod = _load()
     plan = _write(tmp_path, _BASELINE_BODY)
     assert mod.check(plan) == []
+
+
+# ---------------------------------------------------------------------------
+# 5. External research line (plan-level, required for substantive plans)
+# ---------------------------------------------------------------------------
+
+
+def test_substantive_missing_external_research_fails(tmp_path):
+    """Substantive plan without the plan-level External research line fails."""
+    mod = _load()
+    content = "weight_class: substantive\n\n" + _make_body(stage_extra=_ACTIVITY_LABELS)
+    plan = _write(tmp_path, content)
+    errors = mod.check(plan)
+    assert any("External research" in e for e in errors), errors
+
+
+def test_substantive_with_external_research_passes(tmp_path):
+    """Substantive plan carrying the External research line passes."""
+    mod = _load()
+    content = "weight_class: substantive\n\n" + _SUBSTANTIVE_BODY
+    plan = _write(tmp_path, content)
+    assert mod.check(plan) == []
+
+
+def test_non_substantive_missing_external_research_ok(tmp_path):
+    """Legacy plan without weight_class does not require External research."""
+    mod = _load()
+    plan = _write(tmp_path, _BASELINE_BODY)
+    assert not any("External research" in e for e in mod.check(plan))
