@@ -17,12 +17,13 @@
 GH_BIN="${GH_BIN:-gh}"
 
 # kebab: lowercase, non-alnum -> '-', squeeze/trim dashes, truncate ~40 chars.
+# Uses ERE (sed -E, '+'): BSD sed (macOS) does not honor GNU's BRE '\+'.
 _gh_slug() {
   printf '%s' "$1" \
     | tr '[:upper:]' '[:lower:]' \
-    | sed -e 's/[^a-z0-9]\+/-/g' -e 's/^-\+//' -e 's/-\+$//' \
+    | sed -E -e 's/[^a-z0-9]+/-/g' -e 's/^-+//' -e 's/-+$//' \
     | cut -c1-40 \
-    | sed -e 's/-\+$//'
+    | sed -E -e 's/-+$//'
 }
 
 # tracker_resolve <issue-number> -> 'number<TAB>slug'
