@@ -119,7 +119,7 @@ A substantive task is **resolved** only when the user explicitly confirms it —
 
 #### Outcome format
 
-A report the user (or the next step) can act on without re-asking: **(1)** status — done / in progress / blocked; **(2)** what was done, by step + who executed; **(3)** artifacts — paths, links, commands, with the **clickable URL to the actual run** (never a truncated id fragment) for any external job / PR / CI, in status reports and user-facing comments alike; **(4)** next steps **only if not done** — when done and accepted, **stop** (no teeing up the next roadmap phase, no restating a pointer that already lives in its canonical place).
+A report the user (or the next step) can act on without re-asking: **(1)** status — done / in progress / blocked; **(2)** what was done, by step + who executed; **(3)** artifacts — paths, links, commands, with the **clickable URL to the actual run** (never a truncated id fragment) for any external job / PR / CI, in status reports and user-facing comments alike — and present every URL / link as a bare or markdown link, **never wrapped in backticks** (inline-code formatting strips the link affordance, so it no longer reads or clicks as a link); **(4)** next steps **only if not done** — when done and accepted, **stop** (no teeing up the next roadmap phase, no restating a pointer that already lives in its canonical place).
 
 #### Recording the experience
 
