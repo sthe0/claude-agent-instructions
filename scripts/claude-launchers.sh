@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # claude-launchers.sh — sourced launcher functions for Claude Code sessions.
 #
-# Source this file from ~/.bashrc (or equivalent). It defines:
+# Source this file from ~/.bashrc or ~/.zshrc (or equivalent). It defines:
 #   claude-task      dispatch with the 'default' auth profile
 #   claude-<P>       dispatch with machine-local profile P (generated per profile
 #                    listed by _auth_list at source time; unconfigured machine
@@ -12,7 +12,7 @@
 # that sources a proxy env file) lives in ~/.bashrc, not here, so this file stays
 # org-neutral.
 #
-# Requires bash; uses BASH_SOURCE for self-location. These are sourced functions
+# Works in bash and zsh: self-locates via BASH_SOURCE (bash) or $0 (zsh). Sourced functions
 # so that cd can persist in the caller's shell if callers extend the dispatch.
 #
 # Env seams for tests:
@@ -24,7 +24,7 @@
 #   CLAUDE_ONBOARD_BIN      override the onboard.sh path (default: co-located onboard.sh)
 
 # Self-locate: Core scripts/ dir (where enter-task.sh and project_entry/ live).
-_LAUNCHERS_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_LAUNCHERS_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
 # Source the auth-profile framework.
 # shellcheck source=project_entry/auth-profiles.sh

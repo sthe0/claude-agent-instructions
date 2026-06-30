@@ -12,7 +12,7 @@
 # A later root completes/overrides an earlier one, so a machine-local record can
 # attach an absolute workspace_path to a shared, portable definition.
 
-_PROJECTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_PROJECTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 _PROJECTS_PY="$_PROJECTS_DIR/projects.py"
 
 # Read a key from the machine-local identity file (same file enter-task.sh uses).
