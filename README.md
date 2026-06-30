@@ -55,6 +55,14 @@ After setup, `claude-task` self-initializes: it probes `onboard.d/` hooks with
 `--needs-init` and runs `onboard` automatically when initialization is needed (e.g.
 after a reboot that dropped a storage mount).
 
+### Or — let Claude bootstrap itself
+
+Nothing to copy. Open Claude Code anywhere and send it the repo URL:
+
+> Look at https://github.com/sthe0/claude-agent-instructions and initialize yourself per the README.
+
+A stock Claude fetches this README, runs the Setup steps (clone, `setup-symlinks.sh`, `doctor.sh`), and reports when it is green — showing what it will run before changing anything. Works in any language you write in.
+
 ### Equivalent steps
 
 ```bash
