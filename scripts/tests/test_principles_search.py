@@ -22,8 +22,8 @@ _SPEC.loader.exec_module(rec)
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _args(keywords, *, tier="experience", scope="global"):
-    return SimpleNamespace(keywords=keywords, tier=tier, scope=scope, project_dir=None)
+def _args(keywords, *, tier="experience", scope="global", domain=None):
+    return SimpleNamespace(keywords=keywords, tier=tier, scope=scope, project_dir=None, domain=domain)
 
 
 def test_principles_tier_root_resolves():
@@ -53,3 +53,33 @@ def test_experience_tier_is_default_and_uses_experience_dir():
     # getattr fallback in cmd_search means a namespace without .tier still works as experience.
     assert rec.TIER_SECTION["experience"] == "Difficulty"
     assert rec.TIER_SECTION["principles"] == "Principle"
+
+
+def test_domain_coordination_returns_tagged_leaf(capsys):
+    # coordinator-executes-through-specialists.md is tagged domain: coordination
+    rc = rec.cmd_search(_args("coordinator specialists dispatch", tier="principles", domain="coordination"))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "coordinator-executes-through-specialists.md" in out
+
+
+def test_domain_coordination_returns_untagged_leaf(capsys):
+    # Untagged leaves (option-space) must always be returned regardless of --domain filter.
+    rc = rec.cmd_search(_args("option space functional ground axes", tier="principles", domain="coordination"))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "option-space-spans-axes-from-functional-ground.md" in out
+
+
+def test_domain_development_excludes_coordination_tagged_leaf(capsys):
+    # coordinator-executes (domain: coordination) must be excluded when --domain development.
+    rec.cmd_search(_args("coordinator specialists dispatch", tier="principles", domain="development"))
+    out = capsys.readouterr().out
+    assert "coordinator-executes-through-specialists.md" not in out
+
+
+def test_no_domain_returns_all_tiers_unchanged(capsys):
+    # Default (no --domain): coordinator-executes is still returned; no filtering.
+    rec.cmd_search(_args("coordinator specialists dispatch", tier="principles"))
+    out = capsys.readouterr().out
+    assert "coordinator-executes-through-specialists.md" in out

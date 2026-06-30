@@ -5,6 +5,7 @@ type: feedback
 schema: leaf/v1
 created: 2026-06-25
 last_verified: 2026-06-25
+last_accessed: 2026-06-30
 ---
 
 ## Difficulty
@@ -16,7 +17,7 @@ Nothing mechanically couples a code change to a test of that change — the disc
 **The rule is symmetric and applies to all code changes, not a bugfix subclass.**
 
 - **Author (developer).** Any change that writes or modifies behavior ships, in the same change, with tests that exercise the new/changed path — for a fix, a test that is red before and green after. This is the default, not a judgment call gated on whether the change "feels" test-worthy.
-- **Reviewer (code-reviewer).** A code diff with no corresponding test delta is a **should-fix** (escalating to **blocking** for behavioral changes) finding — the reviewer asks for the test rather than approving on the author's say-so. Symmetry: the author writes, the reviewer checks; neither side waives silently.
+- **Reviewer (code-reviewer).** A code diff with no corresponding test delta is a **should-fix** (escalating to **blocking** for behavioral changes) finding — the reviewer asks for the test rather than approving on the author's say-so, and checks the tests cover the changed/new paths (completeness, not just presence — a test added for an unrelated path does not satisfy this). Symmetry: the author writes, the reviewer checks; neither side waives silently.
 
 **Named non-testable escape class** (the only changes that legitimately ship without a test, and they must be *named as such*, not assumed):
 

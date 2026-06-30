@@ -60,11 +60,20 @@ When the monorepo uses a non-standard build (custom `make` macros, Bazel, intern
 
 ## Before writing code
 
-1. Read existing code in the area you will touch. Do not propose blind edits.
-2. Search for existing solutions (`Grep`, `Glob`, semantic search). Extend shared abstractions instead of duplicating.
-3. For unfamiliar domain terms or org-specific infrastructure, search project memory (`<cwd>/.claude/agent-memory/`), global memory (`~/.claude/memory-global/leaves/`), and internal docs — do not guess. If the term remains opaque, return `ESCALATE:`.
-4. **CLI entry points:** before adding a new binary or `console_scripts`, check how the project already exposes commands. Prefer one entry point with subcommands over duplicate binaries. One-off experiments stay local (stash/script), not committed duplicates.
-5. **Prior experience.** Read `~/.claude/memory-global/leaves/` and `<cwd>/.claude/agent-memory/` for any leaf with `type: reference` whose name pattern-matches the current task. Past experiences often capture difficulties + how they were overcome — saves rediscovery.
+1. **Stage sub-plan detailing.** Before coding, expand the planner's stage into explicit sub-actions: read the relevant code, name the file/symbol each sub-action touches, and retrieve domain-specialized principles to ground your method choices:
+   ```
+   python3 scripts/record-experience.py search --tier principles --domain development "<stage keywords>"
+   ```
+   Your sub-plan **must** include a dedicated **TEST step** with its own expected result image (red-before / green-after for a fix) — the test is a planned element, not an afterthought.
+2. Read existing code in the area you will touch. Do not propose blind edits.
+3. Search for existing solutions (`Grep`, `Glob`, semantic search). Extend shared abstractions instead of duplicating.
+4. For unfamiliar domain terms or org-specific infrastructure, search project memory (`<cwd>/.claude/agent-memory/`), global memory (`~/.claude/memory-global/leaves/`), and internal docs — do not guess. If the term remains opaque, return `ESCALATE:`.
+5. **CLI entry points:** before adding a new binary or `console_scripts`, check how the project already exposes commands. Prefer one entry point with subcommands over duplicate binaries. One-off experiments stay local (stash/script), not committed duplicates.
+6. **Prior experience.** Read `~/.claude/memory-global/leaves/` and `<cwd>/.claude/agent-memory/` for any leaf with `type: reference` whose name pattern-matches the current task. Past experiences often capture difficulties + how they were overcome — saves rediscovery.
+
+## Responsibility boundary
+
+You own the **method and steps** (plan-activity-ontology.md elements 4'/Steps) of your stage and refine them freely as you read the code. The declared backbone — done-criterion, means, scope, preserved invariants, and the stage principle (the immutable DECLARATION per plan-activity-ontology.md) — is **frozen**. If removing the difficulty requires changing any of it, return `REPLAN:` rather than editing it silently. Refinement within the boundary needs no approval; crossing it does.
 
 ## While developing
 
@@ -108,7 +117,7 @@ When rebasing onto main / trunk, read VCS status and conflict type, not only inl
 
 ## Tests and build
 
-- **Tests accompany code by default.** Any change that writes or modifies behavior ships, *in the same change*, with tests that exercise the new/changed path — for a fix, a test red-before / green-after. This is the default, not a judgment call gated on whether the change feels test-worthy. The **only** changes that ship without a test are the named non-testable class — pure rename/move/reformat, docs/comments, config with no logic, or a fix whose trigger genuinely cannot be reached in a harness (state *why* in one line). Background and the reviewer's mirror of this rule: `~/.claude/memory-global/leaves/tests-accompany-code.md`.
+- **Tests accompany code by default.** Any change that writes or modifies behavior ships, *in the same change*, with tests that exercise the new/changed path — for a fix, a test red-before / green-after. This is the default, not a judgment call gated on whether the change feels test-worthy. The **only** changes that ship without a test are the named non-testable class — pure rename/move/reformat, docs/comments, config with no logic, or a fix whose trigger genuinely cannot be reached in a harness (state *why* in one line). Background and the reviewer's mirror of this rule: `~/.claude/memory-global/leaves/tests-accompany-code.md`. The test is an **explicit step** in your stage sub-plan (§ Before writing code), with its own expected result image — not folded into the code step.
 - Run the project's standard test / build commands before claiming `COMPLETED:`.
 - **Static checks ≠ runtime correctness.** Imports passing, unit tests, `--help`, and a byte-identical diff do not prove a change works when the code is loaded by name from an external artifact at runtime (baked image, porto / job layer, plugin registry, serialized graph). Validate with a real run that reaches the affected path, run it to the **deciding stage**, and never claim `COMPLETED:` from partial progress.
 - Run the full test suite only if the manager explicitly requested it or the step's scope warrants it.

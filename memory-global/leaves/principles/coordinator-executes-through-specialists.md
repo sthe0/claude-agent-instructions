@@ -4,9 +4,11 @@ description: The root coordinator achieves change by dispatching specialists, no
 type: reference
 schema: principle/v1
 generality: 2
+domain: coordination
 induced_from: [coordinator-pitfalls]
 created: 2026-06-26
 last_verified: 2026-06-26
+last_accessed: 2026-06-30
 ---
 
 # The coordinator executes through specialists

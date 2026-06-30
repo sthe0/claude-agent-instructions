@@ -298,6 +298,7 @@ def read_threshold(key: str, default: int, config_path: Path = CONFIG_PATH) -> i
 # --------------------------------------------------------------------------
 def cmd_search(a) -> int:
     tier = getattr(a, "tier", "experience")
+    dom = getattr(a, "domain", None)
     root = search_root(a.scope, a.project_dir, tier)
     section = TIER_SECTION[tier]
     terms = tokenize(a.keywords)
@@ -310,9 +311,14 @@ def cmd_search(a) -> int:
         text = leaf.read_text(encoding="utf-8")
         fm = FRONTMATTER.match(text)
         desc = ""
+        leaf_domain = None
         if fm:
             dm = re.search(r"^description:\s*(.*)$", fm.group(1), re.MULTILINE)
             desc = dm.group(1) if dm else ""
+            ddm = re.search(r"^domain:\s*(\S+)", fm.group(1), re.MULTILINE)
+            leaf_domain = ddm.group(1) if ddm else None
+        if dom and tier == "principles" and leaf_domain and leaf_domain != dom:
+            continue
         sec_span = section_span(text, section)
         sec = text[sec_span[0]:sec_span[1]] if sec_span else ""
         score = term_score(desc + " " + sec, terms)
@@ -529,6 +535,15 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["experience", "principles"],
         default="experience",
         help="which leaf tier to search: experience (default) or the principles generality tier",
+    )
+    s.add_argument(
+        "--domain",
+        default=None,
+        help=(
+            "filter principle leaves by their domain: frontmatter tag; "
+            "untagged leaves always match; a differently-tagged leaf is excluded. "
+            "Only applied when --tier principles is set."
+        ),
     )
     s.add_argument("keywords")
     s.set_defaults(func=cmd_search)

@@ -8,7 +8,10 @@ principle/v1` — a statement at its generality level (0 trivial → 3 cross-dom
 
 Sub-index of `memory-global/leaves/principles/`. Pointed at from `memory-global/MEMORY.md`. Not
 auto-loaded by the harness. **Consumption:** at a plan's `refutable principle` element the planner
-retrieves the relevant principle(s) to ground each stage (retrieval-augmented planning).
+retrieves the relevant principle(s) to ground each stage (retrieval-augmented planning). Leaves MAY
+carry an optional `domain:` tag (e.g. `domain: coordination`) consumed by
+`record-experience.py search --domain`; untagged leaves match any domain filter (orthogonal to the
+Level grouping below).
 
 These principle leaves are the **generality≥1 profile** of one difficulty-record model whose
 **generality-0 profile** is the `difficulty/v1` experience leaf ([experience/MEMORY.md](../experience/MEMORY.md));

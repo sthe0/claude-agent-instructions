@@ -5,6 +5,7 @@ type: reference
 schema: leaf/v1
 created: 2026-06-26
 last_verified: 2026-06-29
+last_accessed: 2026-06-30
 ---
 
 # Principle leaf schema (`principle/v1`)
@@ -44,8 +45,19 @@ it uses the sections below instead).
 - `generality: <0–3>` — the generality level (see the ladder below).
 - `induced_from: [<slug>, …]` — provenance **down** to the difficulty / experience / pitfall leaves
   this principle was induced from. A principle is never rootless; every one cites what it generalizes.
+- `domain: <development | planning | coordination | infra>` — **optional**; the practice domain this
+  principle specializes. **Orthogonal to `generality`**: a level-2 development rule and a level-2
+  coordination rule are both possible. Absent = cross-domain / unscoped, retrievable under any
+  `--domain` filter (absence is the permissive default, not an error). Consumed by
+  `record-experience.py search --domain`.
 - `created` / `last_verified` (required) and optional `last_accessed` — the temporal fields common to
   every leaf, defined in [memory-temporal-frontmatter.md](memory-temporal-frontmatter.md).
+
+**Domain specialization (orthogonal to generality).** The optional `domain:` tag lets a specialist
+(e.g. developer) retrieve domain-specialized principles atop general ones via
+`record-experience.py search --domain <domain>`. Every existing leaf without a `domain:` key stays
+fully valid — absence means "matches any domain filter". `verify-leaf-structure.py` grandfathers
+`principle/v1` and adds no required field; `domain:` is strictly optional.
 
 **Body sections** (in order):
 
