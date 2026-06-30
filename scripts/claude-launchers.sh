@@ -30,6 +30,10 @@ _LAUNCHERS_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=project_entry/auth-profiles.sh
 source "$_LAUNCHERS_SCRIPTS_DIR/project_entry/auth-profiles.sh"
 
+# Source the project registry seam for _launcher_usage + dispatch routing.
+# shellcheck source=project_entry/projects.sh
+source "$_LAUNCHERS_SCRIPTS_DIR/project_entry/projects.sh"
+
 # enter-task binary; ENTER_TASK_BIN overrides for tests.
 _LAUNCHERS_ENTER_TASK="${ENTER_TASK_BIN:-$_LAUNCHERS_SCRIPTS_DIR/enter-task.sh}"
 
@@ -73,12 +77,17 @@ Usage: $_cmd [<name> | <TICKET-123> | --new "<title>"] [claude args...]
   $_cmd <name>             named scratch workspace, then launch claude in it
   $_cmd <TICKET-123>       resolve a tracker ticket -> isolated workspace
   $_cmd --new "<title>"    create a tracker issue, then enter its workspace
+  $_cmd --list-projects    list registered projects and their tracker queues
   $_cmd -h | --help        show this help
 
 With no task (or a bare 'claude' flag such as -c / -p) the command does NOT
 create a workspace; it launches plain 'claude' in the current directory under
 the auth profile. Pass a name or ticket above to start work in an isolated copy.
 USAGE
+  # Dynamic projects line — degrade silently if registry unavailable or empty.
+  local _proj_line
+  _proj_line="$(project_list 2>/dev/null | awk 'NR>1{printf "%s%s",sep,$1;sep=", "}')" || true
+  [[ -n "$_proj_line" ]] && printf 'Projects: %s (see --list-projects)\n' "$_proj_line"
 }
 
 # ── Core dispatch function ────────────────────────────────────────────────────
@@ -101,6 +110,12 @@ _dispatch_with_profile() {
   if [[ "$_tok" == "-h" || "$_tok" == "--help" ]]; then
     _launcher_usage "$_cmd"
     return 0
+  fi
+
+  # --list-projects / --register: forward directly to enter-task and return.
+  if [[ "$_tok" == "--list-projects" || "$_tok" == "--register" ]]; then
+    "$_LAUNCHERS_ENTER_TASK" "$@"
+    return $?
   fi
 
   # No task specified (bare invocation), or a bare claude flag (e.g. -c / -p, but

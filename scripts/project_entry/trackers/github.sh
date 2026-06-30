@@ -34,22 +34,29 @@ tracker_resolve() {
 }
 
 # tracker_create <title> -> 'number<TAB>slug'  (confirmation-gated)
+# Reads CLAUDE_TRACKER_QUEUE for the target GitHub repo (owner/repo); when unset,
+# gh uses the current git context (existing behaviour).
 tracker_create() {
   local title="$1" slug out key
+  local _queue="${CLAUDE_TRACKER_QUEUE:-}"
   slug="$(_gh_slug "$title")"
 
   if [[ -n "${CLAUDE_DRY_RUN:-}" ]]; then
-    printf 'github tracker: [dry-run] would create issue %q\n' "$title" >&2
+    printf 'github tracker: [dry-run] would create issue %q%s\n' \
+      "$title" "${_queue:+ (queue=$_queue)}" >&2
     printf 'DRYRUN\t%s\n' "$slug"
     return 0
   fi
 
   if [[ "${CLAUDE_LAUNCH_ASSUME_YES:-}" != "1" ]]; then
-    printf 'github tracker: create issue %q? set CLAUDE_LAUNCH_ASSUME_YES=1 to proceed.\n' "$title" >&2
+    printf 'github tracker: create issue %q%s? set CLAUDE_LAUNCH_ASSUME_YES=1 to proceed.\n' \
+      "$title" "${_queue:+ (queue=$_queue)}" >&2
     return 1
   fi
 
-  out="$("$GH_BIN" issue create --title "$title")" || return 1
+  local -a _gh_args=(--title "$title")
+  [[ -n "$_queue" ]] && _gh_args+=(--repo "$_queue")
+  out="$("$GH_BIN" issue create "${_gh_args[@]}")" || return 1
   # `gh issue create` prints the new issue URL (…/issues/<n>) on success.
   key="$(printf '%s' "$out" | grep -oE '[0-9]+$' | tail -1)"
   [[ -n "$key" ]] || key="$out"

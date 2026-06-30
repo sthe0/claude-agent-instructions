@@ -21,7 +21,9 @@
 #
 # A TRACKER backend file (trackers/<name>.sh) defines:
 #   tracker_resolve <key>                -> print 'key<TAB>slug' for an existing task
-#   tracker_create  <title>             -> print 'key<TAB>slug' for a newly created task
+#   tracker_create  <title>             -> print 'key<TAB>slug' for a newly created task;
+#                                          target queue from $CLAUDE_TRACKER_QUEUE (set by
+#                                          enter-task.sh from the resolved project record)
 #
 # Every external tool a backend calls MUST go through a *_BIN env seam (GIT_BIN,
 # GH_BIN, …) so the hermetic tests can stub it. Backends must honour CLAUDE_DRY_RUN

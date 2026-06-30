@@ -369,6 +369,104 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Test 8 — --list-projects routes to enter-task
+# ═══════════════════════════════════════════════════════════════════════════
+printf '\n--- --list-projects routing ---\n'
+reset_logs
+CLAUDE_SKIP_ONBOARD=1 claude-task --list-projects >/dev/null 2>/dev/null || true
+if grep -qF -- '--list-projects' "$ET_CALLS"; then
+  ok "--list-projects: forwarded to enter-task"
+else
+  fail "--list-projects: not forwarded to enter-task (et-calls: $(cat "$ET_CALLS"))"
+fi
+# Confirm enter-task was called (not bypassed or sent to claude)
+if [[ -s "$CLAUDE_ARGS" ]]; then
+  fail "--list-projects: should not launch claude (args: $(cat "$CLAUDE_ARGS"))"
+else
+  ok "--list-projects: claude not launched"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Test 9 — --help shows Projects: line when registry has entries
+# ═══════════════════════════════════════════════════════════════════════════
+printf '\n--- --help Projects: line ---\n'
+PROJ_TEST_DIR="$TMP/test-projects.d"
+mkdir -p "$PROJ_TEST_DIR/myteam/svc"
+printf '{"tracker_queue":"SVCQ","tracker_backend":"github"}\n' \
+  >"$PROJ_TEST_DIR/myteam/svc/agent-project.json"
+
+reset_logs
+_help_out="$(CLAUDE_PROJECTS_DIR="$PROJ_TEST_DIR" \
+              CLAUDE_PROJECTS_LOCAL_DIR="$TMP/empty-local.d" \
+              CLAUDE_SKIP_ONBOARD=1 \
+              claude-task --help 2>/dev/null)"
+if printf '%s\n' "$_help_out" | grep -q 'Projects:'; then
+  ok "--help: Projects: line present"
+else
+  fail "--help: Projects: line absent (got: $_help_out)"
+fi
+if printf '%s\n' "$_help_out" | grep -q 'myteam/svc'; then
+  ok "--help: Projects: line contains the project key"
+else
+  fail "--help: Projects: line missing project key (got: $_help_out)"
+fi
+if printf '%s\n' "$_help_out" | grep -q 'list-projects'; then
+  ok "--help: Projects: line mentions --list-projects"
+else
+  fail "--help: Projects: line missing --list-projects hint (got: $_help_out)"
+fi
+
+# When registry is empty/unavailable, the Projects: line must NOT appear and --help
+# must not error.
+reset_logs
+_help_out2="$(CLAUDE_PROJECTS_DIR="$TMP/nonexistent-dir" \
+               CLAUDE_PROJECTS_LOCAL_DIR="$TMP/also-nonexistent" \
+               CLAUDE_SKIP_ONBOARD=1 \
+               claude-task --help 2>/dev/null)"
+if printf '%s\n' "$_help_out2" | grep -q 'Projects:'; then
+  fail "--help: Projects: line should not appear when registry is empty"
+else
+  ok "--help: Projects: line absent when registry empty (degrade silently)"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Test 10 — github tracker_create echoes CLAUDE_TRACKER_QUEUE in dry-run
+# ═══════════════════════════════════════════════════════════════════════════
+printf '\n--- github tracker: queue in dry-run ---\n'
+# Source github.sh to get tracker_create and _gh_slug.
+GH_BIN="$TMP/stub-gh-unused"
+# shellcheck source=scripts/project_entry/trackers/github.sh
+source "$SCRIPTS_DIR/project_entry/trackers/github.sh"
+
+_tr_out="$(CLAUDE_DRY_RUN=1 CLAUDE_TRACKER_QUEUE=TESTQ tracker_create 'My issue' 2>&1)"
+if printf '%s\n' "$_tr_out" | grep -q 'queue=TESTQ'; then
+  ok "github tracker_create: dry-run echoes queue"
+else
+  fail "github tracker_create: dry-run missing queue (got: $_tr_out)"
+fi
+# The stdout line must still be DRYRUN<TAB>slug.
+_tr_stdout="$(CLAUDE_DRY_RUN=1 CLAUDE_TRACKER_QUEUE=TESTQ tracker_create 'My issue' 2>/dev/null)"
+if printf '%s\n' "$_tr_stdout" | grep -q 'DRYRUN'; then
+  ok "github tracker_create: dry-run stdout DRYRUN line present"
+else
+  fail "github tracker_create: dry-run stdout wrong (got: $_tr_stdout)"
+fi
+
+# Without CLAUDE_TRACKER_QUEUE: the confirmation-gate message must still work (no
+# queue suffix), and unset var must not error.
+_tr_no_q="$(CLAUDE_DRY_RUN=1 tracker_create 'No-queue issue' 2>&1)"
+if printf '%s\n' "$_tr_no_q" | grep -q 'would create issue'; then
+  ok "github tracker_create: no queue -> dry-run message still present"
+else
+  fail "github tracker_create: no queue -> dry-run message missing (got: $_tr_no_q)"
+fi
+if printf '%s\n' "$_tr_no_q" | grep -q 'queue='; then
+  fail "github tracker_create: no queue -> queue suffix must not appear"
+else
+  ok "github tracker_create: no queue -> no queue= suffix"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════════
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
