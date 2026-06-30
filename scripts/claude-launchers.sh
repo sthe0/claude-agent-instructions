@@ -30,26 +30,71 @@ source "$_LAUNCHERS_SCRIPTS_DIR/project_entry/auth-profiles.sh"
 # enter-task binary; ENTER_TASK_BIN overrides for tests.
 _LAUNCHERS_ENTER_TASK="${ENTER_TASK_BIN:-$_LAUNCHERS_SCRIPTS_DIR/enter-task.sh}"
 
+# ── Usage ─────────────────────────────────────────────────────────────────────
+# _launcher_usage <cmd> -> print this launcher's help to stdout.
+_launcher_usage() {
+  local _cmd="$1"
+  cat <<USAGE
+Usage: $_cmd [<name> | <TICKET-123> | --new "<title>"] [claude args...]
+
+  $_cmd                    no task -> run plain 'claude' here (current dir)
+                           under this command's auth profile, in normal mode
+  $_cmd <name>             named scratch workspace, then launch claude in it
+  $_cmd <TICKET-123>       resolve a tracker ticket -> isolated workspace
+  $_cmd --new "<title>"    create a tracker issue, then enter its workspace
+  $_cmd -h | --help        show this help
+
+With no task (or a bare 'claude' flag such as -c / -p) the command does NOT
+create a workspace; it launches plain 'claude' in the current directory under
+the auth profile. Pass a name or ticket above to start work in an isolated copy.
+USAGE
+}
+
 # ── Core dispatch function ────────────────────────────────────────────────────
 # _dispatch_with_profile <profile> [first-token] [remaining-claude-args...]
 #
-# Classifies the first token into an enter-task spec, resolves the project
-# directory, then (unless CLAUDE_LAUNCH_DRYRUN is set) applies the auth profile
-# and runs claude in that directory.
+# Routes the first token: -h/--help prints usage; no task (or a bare claude flag)
+# launches plain claude in the current dir under the auth profile (with a hint on
+# how to start a real task); a ticket / --new / plain name enters an isolated
+# workspace via enter-task and launches claude there. The auth profile is applied
+# on BOTH paths.
 _dispatch_with_profile() {
   local _profile="$1"; shift
   local _tok="${1:-}"
+  local _cmd; [[ "$_profile" == "default" ]] && _cmd="claude-task" || _cmd="claude-$_profile"
   local -a _spec _cargs=()
 
-  # Classify the first token into an enter-task spec flag.
-  if [[ -z "$_tok" ]]; then
-    _spec=(--reuse)
-  elif [[ "$_tok" =~ ^[A-Z][A-Z0-9]+-[0-9]+$ ]]; then
+  # -h/--help: print usage and stop. No workspace entry, no claude launch.
+  if [[ "$_tok" == "-h" || "$_tok" == "--help" ]]; then
+    _launcher_usage "$_cmd"
+    return 0
+  fi
+
+  # No task specified (bare invocation), or a bare claude flag (e.g. -c / -p, but
+  # NOT our --new selector): do NOT enter a workspace. Launch plain claude in the
+  # current directory under the auth profile, after a one-time how-to warning.
+  if [[ -z "$_tok" || ( "$_tok" == -* && "$_tok" != "--new" ) ]]; then
+    [[ -z "$_tok" ]] || _cargs=("$@")   # forward flags to claude; bare -> none
+    if [[ -n "${CLAUDE_LAUNCH_DRYRUN:-}" ]]; then
+      printf 'inplace profile=%s dir=%s\n' "$_profile" "$PWD"
+      return 0
+    fi
+    printf "%s: no task specified — starting plain 'claude' in normal mode here (%s).\n" "$_cmd" "$PWD" >&2
+    printf '  To start work on a task in an isolated workspace, run:\n' >&2
+    printf '     %s <NAME>           # named scratch workspace\n' "$_cmd" >&2
+    printf '     %s <TICKET-123>     # a tracker ticket\n' "$_cmd" >&2
+    printf '     %s --new "title"    # create a ticket, then enter\n' "$_cmd" >&2
+    _auth_apply "$_profile" -- command claude "${_cargs[@]}"
+    return
+  fi
+
+  # Classify the first token into an enter-task spec flag (workspace entry).
+  if [[ "$_tok" =~ ^[A-Z][A-Z0-9]+-[0-9]+$ ]]; then
     # Tracker key (e.g. DEEPAGENT-7)
     _spec=(--key "$_tok"); shift; _cargs=("$@")
   elif [[ "$_tok" == "--new" ]]; then
     local _title="${2:-}"
-    [[ -n "$_title" ]] || { printf 'usage: claude-task --new <title>\n' >&2; return 1; }
+    [[ -n "$_title" ]] || { printf 'usage: %s --new <title>\n' "$_cmd" >&2; return 1; }
     _spec=(--new "$_title"); shift 2; _cargs=("$@")
   elif [[ "$_tok" =~ ^[0-9]+$ ]]; then
     # Bare integer treated as a tracker issue number
@@ -63,7 +108,7 @@ _dispatch_with_profile() {
   local _dir
   _dir="$("$_LAUNCHERS_ENTER_TASK" "${_spec[@]}" ${CLAUDE_LAUNCH_DRYRUN:+--dry-run} 2>/dev/null | tail -1)"
   if [[ -z "$_dir" ]]; then
-    printf 'claude-task: workspace entry failed. Run enter-task.sh directly for details.\n' >&2
+    printf '%s: workspace entry failed. Run enter-task.sh directly for details.\n' "$_cmd" >&2
     return 1
   fi
 

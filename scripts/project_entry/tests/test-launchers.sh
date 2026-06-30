@@ -133,13 +133,18 @@ else
   fail "--new title not forwarded (et-calls: $(cat "$ET_CALLS"))"
 fi
 
-# Test 2d — empty args -> --reuse
+# Test 2d — empty args -> in-place launch (NO workspace entry)
 reset_logs
-CLAUDE_LAUNCH_DRYRUN=1 claude-task >/dev/null 2>&1 || true
-if grep -qF -- '--reuse' "$ET_CALLS"; then
-  ok "empty args classified as --reuse"
+out="$(CLAUDE_LAUNCH_DRYRUN=1 claude-task 2>/dev/null)"
+if [[ -s "$ET_CALLS" ]]; then
+  fail "empty args should NOT call enter-task (et-calls: $(cat "$ET_CALLS"))"
 else
-  fail "empty args not classified as --reuse (et-calls: $(cat "$ET_CALLS"))"
+  ok "empty args: enter-task not called (in-place)"
+fi
+if printf '%s\n' "$out" | grep -q '^inplace profile=default dir='; then
+  ok "empty args: in-place dry-run line printed"
+else
+  fail "empty args: missing in-place dry-run line (got: $out)"
 fi
 
 # Test 2e — plain word -> --name
@@ -190,6 +195,65 @@ if grep -q 'TEST_TEAM_VAR' "$CLAUDE_ENV_RECORDED"; then
   fail "default profile should not expose TEST_TEAM_VAR"
 else
   ok "default profile: no TEST_TEAM_VAR leakage"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Test 5 — -h/--help prints usage; calls neither enter-task nor claude
+# ═══════════════════════════════════════════════════════════════════════════
+printf '\n--- help ---\n'
+reset_logs
+out="$(claude-personal --help 2>/dev/null)"
+if printf '%s\n' "$out" | grep -q 'Usage: claude-personal'; then
+  ok "--help prints usage with the command name"
+else
+  fail "--help did not print usage (got: $out)"
+fi
+if [[ -s "$ET_CALLS" ]]; then
+  fail "--help should not call enter-task (et-calls: $(cat "$ET_CALLS"))"
+else
+  ok "--help: enter-task not called"
+fi
+if [[ -s "$CLAUDE_ARGS" ]]; then
+  fail "--help should not launch claude (args: $(cat "$CLAUDE_ARGS"))"
+else
+  ok "--help: claude not launched"
+fi
+reset_logs
+if claude-task -h 2>/dev/null | grep -q 'Usage: claude-task'; then
+  ok "-h prints usage (claude-task)"
+else
+  fail "-h did not print usage (claude-task)"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Test 6 — bare invocation launches plain claude in-place WITH the auth profile
+# ═══════════════════════════════════════════════════════════════════════════
+printf '\n--- bare in-place launch applies auth profile ---\n'
+reset_logs
+claude-team 2>/dev/null || true
+if [[ -s "$ET_CALLS" ]]; then
+  fail "bare claude-team should NOT call enter-task (et-calls: $(cat "$ET_CALLS"))"
+else
+  ok "bare claude-team: enter-task not called"
+fi
+if grep -q 'TEST_TEAM_VAR=ya-pool-active' "$CLAUDE_ENV_RECORDED"; then
+  ok "bare claude-team: team.sh env applied to in-place claude"
+else
+  fail "bare claude-team: TEST_TEAM_VAR not in claude env (recorded: $(grep TEST "$CLAUDE_ENV_RECORDED" || echo none))"
+fi
+
+# Test 6b — a bare claude flag (-c) is forwarded to claude, not treated as a name
+reset_logs
+claude-task -c 2>/dev/null || true
+if [[ -s "$ET_CALLS" ]]; then
+  fail "claude-task -c should NOT call enter-task (et-calls: $(cat "$ET_CALLS"))"
+else
+  ok "claude-task -c: enter-task not called (flag passthrough)"
+fi
+if grep -qx -- '-c' "$CLAUDE_ARGS"; then
+  ok "claude-task -c: -c forwarded to claude"
+else
+  fail "claude-task -c: -c not forwarded (args: $(cat "$CLAUDE_ARGS"))"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
