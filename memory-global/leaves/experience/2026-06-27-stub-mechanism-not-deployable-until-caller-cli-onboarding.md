@@ -7,7 +7,8 @@ generality: 0
 resolution_confirmed_by_user: "fedor.solovyev"
 refs: [docs/adr/0001-consensus-architecture.md, scripts/difficulty_channel/, scripts/file-difficulty.py, 2026-06-25-critique-primitive-unifies-conflict-and-principle.md, 2026-06-25-state-gate-needs-acting-session-at-executing-via-toml.md, 2026-06-24-gate-exemption-is-category-error-for-result-images.md]
 created: 2026-06-29
-last_verified: 2026-06-29
+last_verified: 2026-06-30
+last_accessed: 2026-06-30
 ---
 
 # A designed port/adapter mechanism is not deployable until it has a production caller, a CLI, live preconditions, and onboarding
@@ -31,6 +32,10 @@ Sequenced as a TOML plan the agentctl engine could track stage-by-stage: (1) pro
 - Where it arose: ~/claude-agent-instructions; scripts/difficulty_channel/detect.py (new, pure+injected probes) + tests/test_detect.py; scripts/configure-identity.sh wired to it; docs/operations/difficulty-channel-onboarding.md
 - Working plan: /home/the0/.claude/plans/difficulty-channel-autodetect.toml
 
+
+### 2026-06-30 — instruction-dev tier model — one queue/stream selector, each channel realizes it natively (DEEPAGENT-any session)
+- Where it arose: difficulty_channel adapters + file-difficulty.py CLI + per-project agent-project.json + self-improvement skill/policy + config.md + ADR-0001; two repos (git claude-agent-instructions, arc arcadia_claude_local)
+- Working plan: Model instruction-development tracking as a 3-tier (Core/Org/Project) x 2-stream (report inbox vs planned backlog) matrix with a collapse rule (when filers==editors the two streams fuse onto one queue -> Project=DEEPAGENT). Realize the report/backlog split with ONE '--stream {report,backlog}' selector that each DifficultyChannel adapter renders natively: startrek -> separate QUEUE (OOSEVENREPORT report / OOSEVEN backlog); github -> separate LABEL in one repo (difficulty report / backlog), digest pull keeps filtering labels=difficulty so backlog is excluded by construction. Bind the project queue structurally, not in prose: a machine-readable agent-project.json {instruction_queue} resolved by resolve_project_queue() walking up from a --target; setup-local.sh composes the optional link. Document the model once in a leaf/v1 reference (instruction-dev-queues.md) + a self-improvement section + ADR note; classify-the-tier stays model cognition, queue/label lookup is structure.
 ## Common core & variations
 **Common:** Continues lesson (3): per-machine config must derive from machine-local signals, not git-shared config. The earlier step replaced the is_author flag with a push-probe and made the channel manually selectable in a gitignored file; this step removes the manual step — configure-identity.sh auto-detects the channel at install from hardware signals (corp hostname, ya+arc, skotty, /etc/yandex, tracker/github tokens) via a pure injection-tested detect_channel().
 
