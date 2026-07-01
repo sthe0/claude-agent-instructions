@@ -168,3 +168,24 @@ echo "Global symlinks ok. Per-project setup (run from each repo root):"
 echo "  robot/deepagent  →  .claude/scripts/setup-local.sh"
 echo "  logos            →  .claude/scripts/setup-local.sh"
 ls -la "$CLAUDE_AGENT_HOME/memory-global" "$CLAUDE_AGENT_HOME/skills" "$CLAUDE_AGENT_HOME/agents" 2>/dev/null || true
+
+# ── One-time login hint (auth is per-config-root) ─────────────────────────────
+# The CLI records a completed login for a config root as an "oauthAccount" block
+# in <root>/.claude.json. Auth/session is PER-ROOT: the macOS Keychain token alone
+# does not authenticate a fresh root (verified empirically, Stage A), and by
+# binding user decision we copy/symlink NO credential and add NO apiKeyHelper —
+# so the isolated system root needs its own one-time login. Detection is
+# side-effect-free (a grep on one file); we never run `claude`, which would need a
+# TTY this setup shell lacks. Absence of the recorded account => print the login
+# command for the user to run once.
+if [[ ! -f "$CLAUDE_AGENT_HOME/.claude.json" ]] \
+   || ! grep -q '"oauthAccount"' "$CLAUDE_AGENT_HOME/.claude.json" 2>/dev/null; then
+  # Show ~/.claude-agent for the default root; the real path for an overridden one.
+  _login_root="$CLAUDE_AGENT_HOME"
+  [[ "$CLAUDE_AGENT_HOME" == "$HOME/.claude-agent" ]] && _login_root="~/.claude-agent"
+  echo
+  echo "The agent system uses its own config root, separate from your personal ~/.claude."
+  echo "Log in to it ONCE (nothing is copied from ~/.claude; the token stays in your Keychain):"
+  echo "    CLAUDE_CONFIG_DIR=$_login_root claude auth login"
+  echo "(or 'claude-agent /login' if you source scripts/claude-launchers.sh)"
+fi

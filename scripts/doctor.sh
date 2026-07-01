@@ -115,6 +115,21 @@ if [[ "$_resolved_tr" != "none" ]]; then
   fi
 fi
 
+# 7. Soft: is the isolated system root logged in? Auth is per-config-root and by
+#    policy no credential is copied/symlinked into it, so the root needs its own
+#    one-time login. The CLI records a completed login as an "oauthAccount" block
+#    in <root>/.claude.json; detection is side-effect-free (grep on one file) — we
+#    never run `claude`, which needs a TTY doctor lacks. Warn-only: an
+#    unauthenticated root is expected right after setup, not a hard failure.
+if [[ -f "$CLAUDE_AGENT_HOME/.claude.json" ]] \
+   && grep -q '"oauthAccount"' "$CLAUDE_AGENT_HOME/.claude.json" 2>/dev/null; then
+  pass "system config root is logged in ($CLAUDE_AGENT_HOME)"
+else
+  _login_root="$CLAUDE_AGENT_HOME"
+  [[ "$CLAUDE_AGENT_HOME" == "$HOME/.claude-agent" ]] && _login_root="~/.claude-agent"
+  warn "system config root not logged in — run once: CLAUDE_CONFIG_DIR=$_login_root claude auth login"
+fi
+
 echo
 if [[ "$FAIL" -eq 0 ]]; then
   echo "Ready. Open 'claude' in your working directory and describe your task in plain language."

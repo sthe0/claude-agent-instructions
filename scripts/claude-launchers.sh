@@ -2,10 +2,15 @@
 # claude-launchers.sh — sourced launcher functions for Claude Code sessions.
 #
 # Source this file from ~/.bashrc or ~/.zshrc (or equivalent). It defines:
-#   claude-task      dispatch with the 'default' auth profile
+#   claude-task      dispatch with the 'default' auth profile (workspace management)
 #   claude-<P>       dispatch with machine-local profile P (generated per profile
 #                    listed by _auth_list at source time; unconfigured machine
 #                    exposes only claude-task)
+#   claude-agent     plain launch on the system config root (no workspace management;
+#                    for scripted -p/-c use). First use: claude-agent /login
+#
+# All launchers run on the isolated system config root (CLAUDE_AGENT_HOME,
+# default ~/.claude-agent). Bare `claude` uses the user's personal ~/.claude.
 #
 # Core ships only the 'default' profile + the apply/list framework; no
 # specialized auth. Any pre-existing machine-local raw claude() fallback (e.g. one
@@ -25,6 +30,10 @@
 
 # Self-locate: Core scripts/ dir (where enter-task.sh and project_entry/ live).
 _LAUNCHERS_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+
+# Resolve the system config root (CLAUDE_AGENT_HOME, default ~/.claude-agent).
+# shellcheck source=lib/config-root.sh
+source "$_LAUNCHERS_SCRIPTS_DIR/lib/config-root.sh"
 
 # Source the auth-profile framework.
 # shellcheck source=project_entry/auth-profiles.sh
@@ -88,6 +97,10 @@ non-interactively it requires CLAUDE_LAUNCH_ASSUME_YES=1.
 With no task (or a bare 'claude' flag such as -c / -p) the command does NOT
 create a workspace; it launches plain 'claude' in the current directory under
 the auth profile. Pass a name or ticket above to start work in an isolated copy.
+
+System config root: ${CLAUDE_AGENT_HOME}
+See also: claude-agent — plain launch on the system root (for scripted -p/-c use;
+          no workspace management). First use: claude-agent /login
 USAGE
   # Dynamic projects line — degrade silently if registry unavailable or empty.
   local _proj_line
@@ -144,7 +157,7 @@ _dispatch_with_profile() {
   if [[ -z "$_tok" || ( "$_tok" == -* && "$_tok" != "--new" && "$_tok" != "--init" ) ]]; then
     [[ -z "$_tok" ]] || _cargs=("$@")   # forward flags to claude; bare -> none
     if [[ -n "${CLAUDE_LAUNCH_DRYRUN:-}" ]]; then
-      printf 'inplace profile=%s dir=%s\n' "$_profile" "$PWD"
+      printf 'inplace profile=%s dir=%s config=%s\n' "$_profile" "$PWD" "$CLAUDE_AGENT_HOME"
       return 0
     fi
     printf "%s: no task specified — starting plain 'claude' in normal mode here (%s).\n" "$_cmd" "$PWD" >&2
@@ -153,7 +166,14 @@ _dispatch_with_profile() {
     printf '     %s <TICKET-123>     # a tracker ticket\n' "$_cmd" >&2
     printf '     %s --new "title"    # create a ticket, then enter\n' "$_cmd" >&2
     # ${_cargs[@]+...}: bash 3.2 (macOS) errors on "${empty[@]}" under set -u.
-    _auth_apply "$_profile" -- command claude ${_cargs[@]+"${_cargs[@]}"}
+    # Run the system on its isolated config root. `env` (not a VAR=val prefix on
+    # the _auth_apply *function* call) is required for portability: in zsh a
+    # prefix assignment on a function call is a function-local and is NOT exported
+    # to the function's children; in bash it PERSISTS into the caller's interactive
+    # shell — both wrong. env scopes CLAUDE_CONFIG_DIR to this exec only, the same
+    # in bash 3.2 and zsh, and its exec of `claude` bypasses a user claude()/alias
+    # exactly as `command` did.
+    _auth_apply "$_profile" -- env CLAUDE_CONFIG_DIR="$CLAUDE_AGENT_HOME" claude ${_cargs[@]+"${_cargs[@]}"}
     return
   fi
 
@@ -211,18 +231,28 @@ _dispatch_with_profile() {
 
   # Dry-run: report the resolved dir and profile, then return without cd or launch.
   if [[ -n "${CLAUDE_LAUNCH_DRYRUN:-}" ]]; then
-    printf 'enter=%s profile=%s\n' "$_dir" "$_profile"
+    printf 'enter=%s profile=%s config=%s\n' "$_dir" "$_profile" "$CLAUDE_AGENT_HOME"
     return 0
   fi
 
   # Apply auth profile and run claude inside the resolved directory.
   # bash -c receives the dir as $1 (shifted away before command claude "$@").
+  # env scopes CLAUDE_CONFIG_DIR to this launch only (see the in-place branch for
+  # why a VAR=val prefix on the _auth_apply function call is not portable).
   _auth_apply "$_profile" -- \
+    env CLAUDE_CONFIG_DIR="$CLAUDE_AGENT_HOME" \
     bash -c 'cd "$1" && shift && command claude "$@"' -- "$_dir" ${_cargs[@]+"${_cargs[@]}"}
 }
 
 # ── claude-task (default auth profile) ───────────────────────────────────────
 claude-task() { _dispatch_with_profile default "$@"; }
+
+# ── claude-agent (system plain-launch, isolated config root) ──────────────────
+# Direct launch on the system config root without workspace management.
+# Use for scripted -p / -c invocations where workspace isolation is not needed.
+# Auth: if the system root is not yet authenticated, run `claude-agent /login`
+# once (or set CLAUDE_CONFIG_DIR=$CLAUDE_AGENT_HOME and run `claude /login`).
+claude-agent() { env CLAUDE_CONFIG_DIR="$CLAUDE_AGENT_HOME" claude "$@"; }
 
 # ── claude-<P> (one per machine-local profile, induced at source time) ────────
 # On an unconfigured machine (_auth_list returns only 'default'), this loop
