@@ -23,7 +23,7 @@ isolation — the model's call).
 | **A — scope-track hook** | `scripts/hook-scope-track.py` (PostToolUse Edit\|Write + Bash) | Heartbeats the session and accumulates touched paths. Non-blocking. |
 | **B — conflict detector** | `scripts/session_scope/detector.py` | Pure path-prefix overlap + severity classification over the registry records. VCS-agnostic. |
 | **B — conflict hook** | `scripts/hook-scope-conflict.py` (PreToolUse Edit\|Write) | On a write, asks the detector whether the target overlaps another **live** session's scope, then denies / warns / allows. |
-| **C — isolation router** | `session-isolate.sh` (+ `project_entry` backends) | Routes a contended task into its own git worktree / arc mount. *(Later slice — PR2/PR3.)* |
+| **C — isolation router** | `scripts/session-isolate.sh` (+ `project_entry` backends) | Routes a contended task into its own workspace by reusing `project_entry`'s workspace-backend contract (`backend_ensure_workspace`), then re-registers the session's scope at the new root. Git backend only so far; arc is a later slice. |
 
 ## How the conflict hook decides
 
@@ -65,12 +65,52 @@ When the hook blocks or warns, the remedy is to move the contended task into its
 own workspace rather than fight over the shared tree:
 
 ```bash
-scripts/session-isolate.sh <task-name>   # git worktree / arc mount (later slice)
+scripts/session-isolate.sh <task-name>
 ```
 
-Integration back to the shared branch happens at the land point (`land-on-main.sh`
-for git). *(The router and the arc backend are subsequent slices; this page will
-gain their step-by-step flow when they land.)*
+This reuses `project_entry`'s workspace-backend contract — it does **not**
+invent a new isolation mechanism:
+
+1. Resolve the workspace backend name (`$CLAUDE_WORKSPACE_BACKEND` override, else
+   `project_entry/detect_backend.py`, else the git default) and `source` its
+   `backends/<name>.sh` via `project_entry/registry.sh`.
+2. Call that backend's `backend_ensure_workspace <name> <branch>` — for git, a
+   `git worktree add` at `<repo-parent>/<repo>-<name>` on a new branch, or a
+   no-op reuse if that worktree already exists. Under `CLAUDE_DRY_RUN` no
+   mutating git call is made; the would-be worktree path is still reported.
+3. Re-register this session's scope (`session_scope.registry.set_context`) at
+   the new workspace root, read from `$CLAUDE_SESSION_ID`. This is what makes
+   the isolation take effect *immediately*: two disjoint worktree roots never
+   path-overlap, so `detector.detect_conflicts` stops flagging this session
+   against the holder on the very next write — no heartbeat cycle needed to
+   wait out. Re-registration is local bookkeeping under
+   `~/.claude/agentctl/scopes/`, not a mutation of the task's tree, so it runs
+   even under `CLAUDE_DRY_RUN`.
+4. Print the new workspace directory (as the final stdout line, so it can be
+   captured with `project_dir="$(scripts/session-isolate.sh <task-name>)"`)
+   plus a continuation instruction to `cd` there and continue the task.
+
+Only git is wired up so far (`backends/git.sh`); arc is a later slice, added
+purely by dropping in `backends/arc.sh` — `session-isolate.sh` needs no change
+because it resolves the backend by name through `project_entry/registry.sh`.
+
+### Landing back
+
+Integration back to the shared branch happens at the land point, **not** by
+merging the isolated worktree back in place. Once the isolated task is done and
+its result is staged there:
+
+```bash
+cd <isolated-project-dir>
+git add <files>
+scripts/land-on-main.sh -C <isolated-project-dir> -m "<message>"
+```
+
+`land-on-main.sh` applies the staged patch onto `origin/main` through its own
+isolated detached worktree and pushes (retrying on a rebase if the remote
+moved) — it never touches the *caller's* branch, worktree, or index, so this
+step is itself safe to run from inside the isolated workspace `session-isolate`
+created.
 
 ## See also
 
