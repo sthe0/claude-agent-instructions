@@ -9,6 +9,7 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 | [link-project-cursor-agents.sh](../cursor/scripts/link-project-cursor-agents.sh) | Symlink `<project>/.cursor/agents/*` → `cursor/agents/` (used by deepagent `setup-local.sh`) |
 | [lint-cursor-mirror.py](../cursor/scripts/lint-cursor-mirror.py) | Detect structural drift between `skills/` and the cursor mirror (flat-skill parity, specialization parity, trigger markers) |
 | [migrate-cursor-namespace.sh](../cursor/scripts/migrate-cursor-namespace.sh) | Migrate global + all `~/arcadia*/robot/deepagent` mounts (`--all-deepagent-mounts`) |
+| [migrate-to-isolated.sh](migrate-to-isolated.sh) | Relocate an in-place `~/.claude` system install to the isolated root `$CLAUDE_AGENT_HOME`: moves only repo-pointing symlinks + `agent-identity.local`, leaves personal files and the merged `settings.json`; preview by default, `--apply` to move, timestamped backup, idempotent |
 | [apply-mcp-local.sh](apply-mcp-local.sh) | Merge `mcp-local/*.json` into `~/.claude/settings.local.json` under `mcpServers` (idempotent) |
 | [apply-settings.sh](apply-settings.sh) | Merge the versioned policy base (`settings/base.json`) into machine-local `~/.claude/settings.json` (additive, idempotent) |
 | [claude-launchers.sh](claude-launchers.sh) | Sourced shell functions for Claude Code sessions (`claude-task` and per-profile `claude-<P>` launchers); source from `~/.bashrc`; org-neutral Core with machine-local profile plugins |
