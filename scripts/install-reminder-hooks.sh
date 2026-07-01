@@ -42,6 +42,10 @@ DESIRED = [
     ("UserPromptSubmit", None,    "hook-language-reminder.py",       5),
     ("PreToolUse",       "Bash|Grep|Glob", "hook-arc-mount-search-guard.py", 5),
     ("PostToolUse",      "Write", "hook-self-critique-reminder.py",  5),
+    # session_scope: heartbeat + touched-path accumulation (Component A wiring).
+    # Non-blocking by design — never emits a permissionDecision.
+    ("PostToolUse",      "Edit|Write", "hook-scope-track.py",        5),
+    ("PostToolUse",      "Bash",  "hook-scope-track.py",             5),
     ("SessionStart",     None,    "hook-policy-scorecard-due.py",    5),
     ("SessionStart",     None,    "hook-sigma-sentinel-due.py",  5),
     # Structure/confirmation gates on memory-leaf Writes. These run on ANY
