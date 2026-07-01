@@ -41,3 +41,5 @@ On any red full-suite/gate in a shared tree: (1) git status — list dirty + unt
 
 ## Self-critique of the agent system
 Panicked at the SyntaxError before checking ownership; the 30-second ownership check must precede any the-suite-is-broken conclusion.
+
+> Deterministic mechanism (2026-07-01): the shared-tree contamination behind this wrong-ownership detour is now surfaced proactively by the deterministic cross-session scope subsystem — a session-scope registry + online conflict detector that warns/blocks on a live cross-session overlap, plus a backend-blind `session-isolate.sh` router (git worktree / arc mount) to isolate instead of serialize. See `memory-global/leaves/system-knowledge/cross-session-scope-isolation.md` and `docs/operations/cross-session-scope-isolation.md`.

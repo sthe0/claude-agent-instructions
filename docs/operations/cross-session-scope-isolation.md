@@ -23,7 +23,7 @@ isolation — the model's call).
 | **A — scope-track hook** | `scripts/hook-scope-track.py` (PostToolUse Edit\|Write + Bash) | Heartbeats the session and accumulates touched paths. Non-blocking. |
 | **B — conflict detector** | `scripts/session_scope/detector.py` | Pure path-prefix overlap + severity classification over the registry records. VCS-agnostic. |
 | **B — conflict hook** | `scripts/hook-scope-conflict.py` (PreToolUse Edit\|Write) | On a write, asks the detector whether the target overlaps another **live** session's scope, then denies / warns / allows. |
-| **C — isolation router** | `scripts/session-isolate.sh` (+ `project_entry` backends) | Routes a contended task into its own workspace by reusing `project_entry`'s workspace-backend contract (`backend_ensure_workspace`), then re-registers the session's scope at the new root. Git backend only so far; arc is a later slice. |
+| **C — isolation router** | `scripts/session-isolate.sh` (+ `project_entry` backends) | Routes a contended task into its own workspace by reusing `project_entry`'s workspace-backend contract (`backend_ensure_workspace`), then re-registers the session's scope at the new root. Git (`backends/git.sh`) and arc (`backends/arc.sh`) backends, resolved by name — the router is backend-blind. |
 
 ## How the conflict hook decides
 
@@ -90,9 +90,36 @@ invent a new isolation mechanism:
    captured with `project_dir="$(scripts/session-isolate.sh <task-name>)"`)
    plus a continuation instruction to `cd` there and continue the task.
 
-Only git is wired up so far (`backends/git.sh`); arc is a later slice, added
-purely by dropping in `backends/arc.sh` — `session-isolate.sh` needs no change
-because it resolves the backend by name through `project_entry/registry.sh`.
+The router is **backend-blind**: it resolves a backend *name*
+(`$CLAUDE_WORKSPACE_BACKEND` override, else `detect_backend.py`, else git) through
+`project_entry/registry.sh` and calls the same three contract functions
+regardless of which backend answers. Both the git worktree backend
+(`backends/git.sh`) and the arc mount backend (`backends/arc.sh`) are drop-in
+implementations of that one contract, so a future backend attaches with no change
+to `session-isolate.sh`.
+
+#### The arc backend
+
+arc has no `worktree` command; its equivalent is a second `arc mount` that shares
+the main mount's `--object-store` (the `using-arc-multiple-mounts` skill). So on
+arc, `backend_ensure_workspace <name> <branch>`:
+
+1. Reads `arc mount --list --json`, finds the mounted entry that is an ancestor of
+   the anchor directory (`$CLAUDE_WORKSPACE_ROOT` when set, else `$PWD`), and
+   extracts its `mount` path (`MAIN_MOUNT`) and `object-store`.
+2. Targets a new mount at `<MAIN_MOUNT>_<name>` — reused as-is if a mount already
+   exists there, never recreated.
+3. Otherwise creates it: `mkdir` the path, `arc mount -m <path> --object-store
+   <store> --override-object-store`, then `arc checkout -b <branch>` inside it.
+
+Every `arc` call goes through the `ARC_BIN` seam (default `arc`) so the tests can
+stub it, and under `CLAUDE_DRY_RUN` no mount-creating command runs and no
+directory is made — the would-be mount path is still reported so the detector can
+be shown the isolated root. Two arc mounts are physically distinct directories, so
+the same path-prefix overlap logic that separates two git worktrees separates two
+arc mounts — the detector needs no arc-specific branch dimension. The mount, like a
+git worktree, already carries the repo's `.claude` tree, so `backend_compose` is a
+no-op.
 
 ### Landing back
 

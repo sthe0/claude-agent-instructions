@@ -10,9 +10,10 @@
 # session and the holder as non-overlapping: two disjoint worktree roots never
 # path-overlap, which is what stops the conflict hook from firing again.
 #
-# git backend only in this slice (arc is a later slice); the workspace-backend
-# name still resolves through registry.sh so a future arc backend attaches with
-# no change to this file.
+# Backend-blind: the workspace-backend name resolves through registry.sh, so both
+# the built-in git (backends/git.sh) and arc (backends/arc.sh) backends attach with
+# no change to this file — detect_backend.py picks the name, registry.sh finds the
+# implementation, and this script calls the same contract functions either way.
 #
 # Usage: session-isolate.sh <task-name>
 #

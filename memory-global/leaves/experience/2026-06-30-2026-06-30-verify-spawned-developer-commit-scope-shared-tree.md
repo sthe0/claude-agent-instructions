@@ -31,3 +31,5 @@ After a spawned developer returns COMPLETED with a commit: (1) git show --stat H
 
 ## Self-critique of the agent system
 The spawn constraints told the developer not to touch the 4 NAMED foreign files but did not forbid running the full-tree validator or committing OTHER untracked files; a tighter constraint ('git add only these explicit paths; never run verify-all without --staged in a shared tree') would have prevented the entanglement at the source.
+
+> Deterministic mechanism (2026-07-01): the shared-tree collision this leaf diagnoses is now excluded up front by the deterministic cross-session scope subsystem — a session-scope registry + online conflict detector (warn/block on a live cross-session overlap) + a backend-blind `session-isolate.sh` router (git worktree / arc mount) that isolates rather than serializes. See `memory-global/leaves/system-knowledge/cross-session-scope-isolation.md` and `docs/operations/cross-session-scope-isolation.md`.

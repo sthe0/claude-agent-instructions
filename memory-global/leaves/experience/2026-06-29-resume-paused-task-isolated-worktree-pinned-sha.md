@@ -38,3 +38,5 @@ A paused task (recursive-kill-spawns, stages 1-2 on branch recursive-kill-spawns
 
 ## Self-critique of the agent system
 My live-demo harness first under-tested (exec -a collapsed the tree to 1 process and a pid-mismatch marker found 0) — caught and fixed to a genuine 3-process tree before trusting the PASS. Lesson: sanity-check that the verification harness actually exercises the claimed shape before reporting green.
+
+> Deterministic mechanism (2026-07-01): this manual isolate-off-a-pinned-SHA playbook is now backed by the deterministic cross-session scope subsystem — a session-scope registry + online conflict detector + a backend-blind `session-isolate.sh` router (git worktree / arc mount). See `memory-global/leaves/system-knowledge/cross-session-scope-isolation.md` and `docs/operations/cross-session-scope-isolation.md`.
