@@ -153,7 +153,18 @@ def assemble_prompt(args: argparse.Namespace, depth: int, permissions: str) -> s
 
 
 def skill_path(kind: str) -> Path:
-    return SKILLS_DIR / kind / "SKILL.md"
+    """Resolve a specialization's SKILL.md. Global (~/.claude/skills/<kind>/) wins;
+    project-local (<cwd>/.claude/skills/specializations/<kind>/) is the documented
+    fallback (CLAUDE.md dispatch table) so a project ships domain experts spawnable
+    with the same claude -p isolation, without polluting the global catalog. Returns
+    the global path when neither exists, so the caller's not-found error names it."""
+    global_path = SKILLS_DIR / kind / "SKILL.md"
+    if global_path.exists():
+        return global_path
+    project_path = Path.cwd() / ".claude" / "skills" / "specializations" / kind / "SKILL.md"
+    if project_path.exists():
+        return project_path
+    return global_path
 
 
 def validate_marker(result_text: str) -> tuple[str, bool]:
