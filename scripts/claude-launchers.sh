@@ -77,6 +77,7 @@ Usage: $_cmd [<name> | <TICKET-123> | --new "<title>"] [claude args...]
   $_cmd <name>             named scratch workspace, then launch claude in it
   $_cmd <TICKET-123>       resolve a tracker ticket -> isolated workspace
   $_cmd --new "<title>"    create a tracker issue (confirms first), then enter
+  $_cmd --project <key> ...   resolve project explicitly (else auto-detected from cwd)
   $_cmd --list-projects    list registered projects and their tracker queues
   $_cmd -h | --help        show this help
 
@@ -105,7 +106,7 @@ _dispatch_with_profile() {
   local _profile="$1"; shift
   local _tok="${1:-}"
   local _cmd; [[ "$_profile" == "default" ]] && _cmd="claude-task" || _cmd="claude-$_profile"
-  local -a _spec _cargs=()
+  local -a _spec _cargs=() _pass=()
 
   _maybe_onboard
 
@@ -120,6 +121,21 @@ _dispatch_with_profile() {
     "$_LAUNCHERS_ENTER_TASK" "$@"
     return $?
   fi
+
+  # Extract a leading run of enter-task modifier flags (--project/--workspace/
+  # --tracker) BEFORE classifying the task token, so e.g.
+  # `claude-personal --project robot/deepagent --new "Title"` forwards --project
+  # instead of the classifier swallowing it as part of --new's positional args.
+  while [[ "${1:-}" == "--project" || "${1:-}" == "--workspace" || "${1:-}" == "--tracker" ]]; do
+    local _mflag="$1"
+    if [[ -z "${2:-}" ]]; then
+      printf '%s: %s needs a value\n' "$_cmd" "$_mflag" >&2
+      return 1
+    fi
+    _pass+=("$_mflag" "$2")
+    shift 2
+  done
+  _tok="${1:-}"
 
   # No task specified (bare invocation), or a bare claude flag (e.g. -c / -p, but
   # NOT our --new selector): do NOT enter a workspace. Launch plain claude in the
@@ -179,7 +195,7 @@ _dispatch_with_profile() {
   # generic message (the hint used to be swallowed by 2>/dev/null).
   local _dir _errfile
   _errfile="$(mktemp)"
-  _dir="$(CLAUDE_LAUNCH_ASSUME_YES="$_assume_yes" "$_LAUNCHERS_ENTER_TASK" "${_spec[@]}" ${CLAUDE_LAUNCH_DRYRUN:+--dry-run} 2>"$_errfile" | tail -1)"
+  _dir="$(CLAUDE_LAUNCH_ASSUME_YES="$_assume_yes" "$_LAUNCHERS_ENTER_TASK" ${_pass[@]+"${_pass[@]}"} "${_spec[@]}" ${CLAUDE_LAUNCH_DRYRUN:+--dry-run} 2>"$_errfile" | tail -1)"
   if [[ -z "$_dir" ]]; then
     printf '%s: workspace entry failed:\n' "$_cmd" >&2
     sed 's/^/  /' "$_errfile" >&2

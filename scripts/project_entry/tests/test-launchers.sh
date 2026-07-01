@@ -540,6 +540,40 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Test 12 — --project/--workspace/--tracker modifier-flag forwarding
+# ═══════════════════════════════════════════════════════════════════════════
+printf '\n--- --project modifier-flag forwarding ---\n'
+
+# Case (c): --project is forwarded to enter-task alongside --new.
+reset_logs
+CLAUDE_LAUNCH_DRYRUN=1 CLAUDE_LAUNCH_ASSUME_YES=1 \
+  claude-task --project robot/deepagent --new 'T' </dev/null >/dev/null 2>/dev/null || true
+if grep -qF -- '--project robot/deepagent' "$ET_CALLS"; then
+  ok "12c: --project forwarded to enter-task"
+else
+  fail "12c: --project not forwarded (et-calls: $(cat "$ET_CALLS"))"
+fi
+if grep -qF -- '--new' "$ET_CALLS" && grep -qF 'T' "$ET_CALLS"; then
+  ok "12c: --new + title still forwarded alongside --project"
+else
+  fail "12c: --new/title not forwarded (et-calls: $(cat "$ET_CALLS"))"
+fi
+
+# Case (d): --project is forwarded to enter-task alongside a tracker key.
+reset_logs
+CLAUDE_LAUNCH_DRYRUN=1 claude-task --project robot/deepagent DEEPAGENT-7 >/dev/null 2>/dev/null || true
+if grep -qF -- '--project robot/deepagent' "$ET_CALLS"; then
+  ok "12d: --project forwarded alongside a ticket key"
+else
+  fail "12d: --project not forwarded (et-calls: $(cat "$ET_CALLS"))"
+fi
+if grep -qF -- '--key DEEPAGENT-7' "$ET_CALLS"; then
+  ok "12d: ticket key still classified as --key"
+else
+  fail "12d: ticket key not forwarded as --key (et-calls: $(cat "$ET_CALLS"))"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════════
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
