@@ -45,6 +45,7 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 | [install-sync-cron.sh](install-sync-cron.sh) | Cron: git pull every 10 min (opt-in; not installed by `setup-symlinks.sh`) |
 | [install-sync-systemd-timer.sh](install-sync-systemd-timer.sh) | User systemd timer: git pull every 10 min (fallback when crontab is denied) |
 | [kill-tree.py](kill-tree.py) | Standalone recursive reaper CLI: `kill-tree.py <pid> [--grace S] [--signal TERM\|KILL]` reaps a process subtree via `proc_tree.kill_tree` (group-leader killpg, else /proc walk); guards pid≤1 / self / caller's own group; for killing a spawn without orphaning its `claude -p` children |
+| [land-on-main.sh](land-on-main.sh) | Land the currently staged change (`git diff --cached`) onto `origin/main` as one commit via an isolated `git worktree`, without touching the caller's branch/working tree/index; `-m/--message` required, `--dry-run`, non-fast-forward retry. Tests: [tests/test-land-on-main.sh](tests/test-land-on-main.sh) |
 | [lint-hooks-executable.py](lint-hooks-executable.py) | Verify every `hook-*.py` carries the executable bit on disk and in git (a non-+x hook fails silently with "Permission denied") |
 | [lint-permissions.py](lint-permissions.py) | Lint `permissions/*.json` schema (structure, fields, dates, duplicates) |
 | [lint-prose-length.py](lint-prose-length.py) | Hard ceiling on instruction-file line counts (`CLAUDE.md`, cursor mirror, skill SKILL.md, policy.md) per `config.md` limits |
