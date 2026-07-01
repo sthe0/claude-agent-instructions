@@ -4,7 +4,7 @@
 set -euo pipefail
 
 REPO="${CLAUDE_INSTRUCTIONS_REPO:-$HOME/claude-agent-instructions}"
-BRANCH="${CLAUDE_INSTRUCTIONS_BRANCH:-main}"
+BRANCH="${CLAUDE_INSTRUCTIONS_BRANCH:-}"
 REMOTE="${CLAUDE_INSTRUCTIONS_REMOTE:-origin}"
 LOG_DIR="$HOME/.local/log"
 LOG_FILE="$LOG_DIR/claude-agent-instructions-sync.log"
@@ -20,6 +20,14 @@ die() {
 }
 
 cd "$REPO" || die "repo not found: $REPO"
+
+if [[ -z "$BRANCH" ]]; then
+  # Reconcile the branch actually checked out, not a hardcoded trunk — otherwise
+  # running sync from a feature branch rebases its commits onto origin/main and
+  # diverges from the branch's own upstream (origin/<branch>).
+  BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  [[ -z "$BRANCH" || "$BRANCH" == HEAD ]] && BRANCH=main
+fi
 
 has_uncommitted() {
   ! git diff --quiet || return 0
@@ -63,7 +71,14 @@ resolve_rebase_conflicts_prefer_incoming() {
 
 cmd_pull() {
   log "pull start ($REPO)"
-  git fetch "$REMOTE" "$BRANCH"
+
+  local fetch_out fetch_rc=0
+  fetch_out="$(git fetch "$REMOTE" "$BRANCH" 2>&1)" || fetch_rc=$?
+  if [[ "$fetch_rc" -ne 0 ]]; then
+    printf '%s\n' "$fetch_out" | tee -a "$LOG_FILE" >&2
+    log "pull: $REMOTE/$BRANCH not found — nothing to reconcile (branch not pushed yet)"
+    return 0
+  fi
 
   local behind ahead
   behind="$(git rev-list --count HEAD.."$REMOTE"/"$BRANCH" 2>/dev/null || echo 0)"
@@ -106,35 +121,60 @@ cmd_pull() {
   log "pull: done"
 }
 
+# Run `git push "$@"`, capturing output so a "no push rights" failure degrades
+# into a graceful skip (the local commit(s) stay intact and the agent keeps
+# working) instead of a cryptic set -euo pipefail abort. Other failures (e.g.
+# remote moved ahead) still propagate so the pull → resolve → push guidance
+# applies. Returns 0 on push or graceful skip, the git rc on any other failure.
+push_and_degrade() {
+  local out rc=0
+  out="$(git push "$@" 2>&1)" || rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    return 0
+  fi
+  printf '%s\n' "$out" | tee -a "$LOG_FILE" >&2
+  if printf '%s' "$out" | grep -qiE 'permission|denied|forbidden|403|read[ -]?only|not authorized|access rights'; then
+    log "push: SKIPPED — no push rights to $REMOTE/$BRANCH. Local commit(s) stay in $REPO and the system keeps working. To contribute upstream, fork sthe0/claude-agent-instructions, push to your fork, and open a PR."
+    return 0
+  fi
+  return "$rc"
+}
+
 cmd_push() {
   log "push start"
   # This command pushes $BRANCH (origin/$BRANCH), NOT the current HEAD. On a feature
   # branch your HEAD commits are not what gets published — warn so a no-op push to
   # $BRANCH is never mistaken for "work published" (the posted != published trap).
-  local cur ahead
+  local cur
   cur="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
   [[ "$cur" != "$BRANCH" ]] && \
     log "push: WARNING — HEAD is '$cur', not '$BRANCH'; this pushes '$BRANCH' only. Commits on '$cur' are NOT published here — push that branch directly if intended."
+
+  if ! git rev-parse --verify --quiet "$REMOTE/$BRANCH" >/dev/null; then
+    log "push: $REMOTE/$BRANCH does not exist yet — publishing $BRANCH via 'git push -u'"
+    local rc=0
+    push_and_degrade -u "$REMOTE" "$BRANCH" || rc=$?
+    if [[ "$rc" -eq 0 ]]; then
+      log "push: done (published $BRANCH)"
+      return 0
+    fi
+    log "push: FAILED (rc=$rc) publishing $BRANCH."
+    return "$rc"
+  fi
+
   # Count what ACTUALLY goes to $BRANCH (origin/$BRANCH..$BRANCH), not origin/$BRANCH..HEAD:
   # with HEAD != $BRANCH the two diverge and a HEAD-based count reports a false success.
+  local ahead
   ahead="$(git rev-list --count "$REMOTE/$BRANCH".."$BRANCH" 2>/dev/null || echo 0)"
   if [[ "$ahead" -eq 0 ]]; then
     log "push: nothing to push ($BRANCH up to date with $REMOTE/$BRANCH)"
     return 0
   fi
-  # Capture output so a "no push rights" failure degrades into a graceful skip
-  # (the local commit(s) stay intact and the agent keeps working) instead of a
-  # cryptic set -euo pipefail abort. Other failures (e.g. remote moved ahead)
-  # still propagate so the pull → resolve → push guidance applies.
-  local out rc=0
-  out="$(git push "$REMOTE" "$BRANCH" 2>&1)" || rc=$?
+
+  local rc=0
+  push_and_degrade "$REMOTE" "$BRANCH" || rc=$?
   if [[ "$rc" -eq 0 ]]; then
     log "push: done ($ahead commit(s) to $BRANCH)"
-    return 0
-  fi
-  printf '%s\n' "$out" | tee -a "$LOG_FILE" >&2
-  if printf '%s' "$out" | grep -qiE 'permission|denied|forbidden|403|read[ -]?only|not authorized|access rights'; then
-    log "push: SKIPPED — no push rights to $REMOTE/$BRANCH. Your $ahead local commit(s) stay in $REPO and the system keeps working. To contribute upstream, fork sthe0/claude-agent-instructions, push to your fork, and open a PR."
     return 0
   fi
   log "push: FAILED (rc=$rc). If '$REMOTE/$BRANCH' moved ahead, run '$0 pull', resolve, then '$0 push'."
