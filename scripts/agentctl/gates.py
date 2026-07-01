@@ -16,17 +16,8 @@ the guardian before flipping `passed`, so an illegal pass is impossible.
 from __future__ import annotations
 
 from .state import Node, SessionState, StageStatus
-
-
-def _normalize_string(s: str) -> str:
-    """Normalize a string for comparison: casefold, strip, and collapse internal whitespace."""
-    return " ".join((s or "").casefold().split())
-
-
-# Placeholder values that declaration fields must not use
-_PLACEHOLDER_SET = frozenset({
-    "todo", "tbd", "n/a", "na", "...", "expected", "actual", "mismatch", "-"
-})
+from .text_shape import PLACEHOLDER_SET as _PLACEHOLDER_SET
+from .text_shape import normalize_string as _normalize_string
 
 
 def plan_approval_blockers(state: SessionState) -> list[str]:

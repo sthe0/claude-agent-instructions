@@ -79,6 +79,8 @@ from .state import (
     Subject,
     Supply,
 )
+from .text_shape import PLACEHOLDER_SET as _PLACEHOLDER_SET
+from .text_shape import normalize_string as _normalize_string
 
 
 @dataclass
@@ -156,6 +158,29 @@ def _validate_substantive_stage(s: dict, index: int) -> None:
         raise PlanError(
             f"stage {index} [stage.principle] confidence {conf!r} is not one of "
             f"{sorted(c.value for c in Confidence)}"
+        )
+    # Anti-template: the cheapest degradation of a required free-text field is
+    # boilerplate. Reject placeholder values and reject a principle that merely
+    # echoes another field back at itself (refutation == statement, or the
+    # principle collapsing into a restatement of the stage's own method).
+    for sub in _PRINCIPLE_SUBFIELDS:
+        if _normalize_string(str(principle.get(sub, ""))) in _PLACEHOLDER_SET:
+            raise PlanError(
+                f"stage {index} [stage.principle] {sub!r} is a placeholder "
+                f"(must be a real value, not {principle.get(sub)!r})"
+            )
+    norm_statement = _normalize_string(str(principle.get("statement", "")))
+    norm_refutation = _normalize_string(str(principle.get("refutation", "")))
+    if norm_statement and norm_statement == norm_refutation:
+        raise PlanError(
+            f"stage {index} [stage.principle] refutation must differ from statement "
+            f"(a refutation identical to the claim it refutes proves nothing)"
+        )
+    norm_method = _normalize_string(str(s.get("method", "")))
+    if norm_statement and norm_statement == norm_method:
+        raise PlanError(
+            f"stage {index} [stage.principle] statement must differ from the stage's "
+            f"method (a principle that only restates the method is not a principle)"
         )
 
 

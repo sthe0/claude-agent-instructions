@@ -318,6 +318,59 @@ def test_substantive_acceptance_review_without_verify_command_ok():
     assert doc.stages[0].criterion.criterion_type == "acceptance_review"
 
 
+# --- Principle anti-template (placeholder / self-echoing fields) ---
+
+@pytest.mark.parametrize("sub,placeholder", [
+    ("statement", "TBD"),
+    ("source", "N/A"),
+    ("refutation", "todo"),
+])
+def test_substantive_placeholder_principle_field_raises(sub, placeholder):
+    stage = _full_substantive_stage()
+    stage["principle"][sub] = placeholder
+    with pytest.raises(PlanError, match="placeholder"):
+        parse_plan({"meta": _substantive_meta(), "stage": [stage]})
+
+
+def test_substantive_refutation_identical_to_statement_raises():
+    stage = _full_substantive_stage()
+    stage["principle"]["refutation"] = stage["principle"]["statement"]
+    with pytest.raises(PlanError, match="refutation"):
+        parse_plan({"meta": _substantive_meta(), "stage": [stage]})
+
+
+def test_substantive_refutation_identical_to_statement_after_normalization_raises():
+    """Case/whitespace-only rephrasing must not defeat the distinctness check."""
+    stage = _full_substantive_stage()
+    stage["principle"]["refutation"] = "  " + stage["principle"]["statement"].upper() + "  "
+    with pytest.raises(PlanError, match="refutation"):
+        parse_plan({"meta": _substantive_meta(), "stage": [stage]})
+
+
+def test_substantive_statement_identical_to_method_raises():
+    stage = _full_substantive_stage()
+    stage["principle"]["statement"] = stage["method"]
+    with pytest.raises(PlanError, match="method"):
+        parse_plan({"meta": _substantive_meta(), "stage": [stage]})
+
+
+def test_substantive_genuine_principle_passes():
+    """A principle whose fields are non-placeholder and mutually distinct parses fine."""
+    doc = parse_plan({"meta": _substantive_meta(), "stage": [_full_substantive_stage()]})
+    assert doc.stages[0].principle.statement == "additive-optional keeps backward compat"
+
+
+def test_non_substantive_placeholder_principle_field_ok():
+    """Anti-template validation only applies to substantive plans; legacy/small-change
+    plans with a principle table (or none at all) are unaffected."""
+    stage = _minimal_stage()
+    stage["principle"] = {
+        "statement": "TBD", "source": "TBD", "confidence": "high", "refutation": "TBD",
+    }
+    doc = parse_plan({"meta": {"task_id": "t"}, "stage": [stage]})
+    assert doc.stages[0].principle.statement == "TBD"
+
+
 def test_supplies_derive_depends_on():
     """Explicit supplies feed the derived depends_on projection."""
     data = {
