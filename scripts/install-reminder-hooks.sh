@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Idempotently wire the canonical reminder-hook set into the machine-local
-# ~/.claude/settings.json. Hooks are a machine-specific settings key (see
+# $CLAUDE_AGENT_HOME/settings.json. Hooks are a machine-specific settings key (see
 # apply-settings.sh) — they are NOT merged from settings/base.json, so without
 # this installer the reminder-hook scripts that live in the repo stay dead on a
 # fresh machine (observed 2026-06-09: hook-resolution-reminder.py documented as
@@ -9,7 +9,8 @@
 set -euo pipefail
 
 REPO="${CLAUDE_INSTRUCTIONS_REPO:-$HOME/claude-agent-instructions}"
-SETTINGS="$HOME/.claude/settings.json"
+source "$REPO/scripts/lib/config-root.sh"
+SETTINGS="$CLAUDE_AGENT_HOME/settings.json"
 command -v python3 >/dev/null || { echo "install-reminder-hooks: python3 required" >&2; exit 1; }
 
 [[ -f "$SETTINGS" ]] || echo '{}' > "$SETTINGS"

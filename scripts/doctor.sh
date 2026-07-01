@@ -16,7 +16,8 @@
 set -uo pipefail
 
 REPO="${CLAUDE_INSTRUCTIONS_REPO:-$HOME/claude-agent-instructions}"
-SETTINGS="$HOME/.claude/settings.json"
+source "$REPO/scripts/lib/config-root.sh"
+SETTINGS="$CLAUDE_AGENT_HOME/settings.json"
 FAIL=0
 
 pass() { printf '  [ OK ] %s\n' "$1"; }
@@ -35,11 +36,11 @@ else
 fi
 
 # 2. The constitution is loaded: ~/.claude/CLAUDE.md must symlink into this repo.
-if [[ -L "$HOME/.claude/CLAUDE.md" ]] \
-   && [[ "$(_realpath "$HOME/.claude/CLAUDE.md")" == "$(_realpath "$REPO/CLAUDE.md")" ]]; then
-  pass "~/.claude/CLAUDE.md -> repo CLAUDE.md"
+if [[ -L "$CLAUDE_AGENT_HOME/CLAUDE.md" ]] \
+   && [[ "$(_realpath "$CLAUDE_AGENT_HOME/CLAUDE.md")" == "$(_realpath "$REPO/CLAUDE.md")" ]]; then
+  pass "$CLAUDE_AGENT_HOME/CLAUDE.md -> repo CLAUDE.md"
 else
-  fail "~/.claude/CLAUDE.md does not point at the repo — run scripts/setup-symlinks.sh"
+  fail "$CLAUDE_AGENT_HOME/CLAUDE.md does not point at the repo — run scripts/setup-symlinks.sh"
 fi
 
 # 3. Engine + gate hooks wired into settings.json (apply-settings.sh does NOT
@@ -70,7 +71,7 @@ else
 fi
 
 # 6. Project-entry backend pair (identity-or-detected, informational).
-_id_file="${CLAUDE_AGENT_IDENTITY:-$HOME/.claude/agent-identity.local}"
+_id_file="${CLAUDE_AGENT_IDENTITY:-$CLAUDE_AGENT_HOME/agent-identity.local}"
 _id_ws="" _id_tr=""
 if [[ -r "$_id_file" ]]; then
   _tmp="$(sed -n 's/^project_backend=//p' "$_id_file" | head -1 || true)"

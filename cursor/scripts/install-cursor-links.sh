@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="${CLAUDE_INSTRUCTIONS_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}"
+REPO="${CLAUDE_INSTRUCTIONS_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/../.." && pwd)}"
+source "$REPO/scripts/lib/config-root.sh"
 _realpath() { python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$1"; }
 
 link() {
@@ -34,7 +35,7 @@ mkdir -p "$HOME/.cursor/rules"
 # Migrate away from legacy ~/.cursor/agents -> ~/.claude/agents symlink.
 if [[ -L "$HOME/.cursor/agents" ]]; then
   legacy_target="$(_realpath "$HOME/.cursor/agents" 2>/dev/null || true)"
-  claude_agents_target="$(_realpath "$HOME/.claude/agents" 2>/dev/null || true)"
+  claude_agents_target="$(_realpath "$CLAUDE_AGENT_HOME/agents" 2>/dev/null || true)"
   if [[ -n "$legacy_target" && -n "$claude_agents_target" && "$legacy_target" == "$claude_agents_target" ]]; then
     rm -f "$HOME/.cursor/agents"
   else

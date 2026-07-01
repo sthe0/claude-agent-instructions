@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Idempotent: creates ~/.claude/agent-identity.local from a template if absent.
+# Idempotent: creates $CLAUDE_AGENT_HOME/agent-identity.local from a template if absent.
 # Never overwrites an existing file — the operator's channel choice is preserved.
 #
 # Called by setup-symlinks.sh. Safe to re-run at any time.
 set -euo pipefail
 
-IDENTITY_FILE="$HOME/.claude/agent-identity.local"
-SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$SCRIPTS_DIR/lib/config-root.sh"
+IDENTITY_FILE="$CLAUDE_AGENT_HOME/agent-identity.local"
 
 if [[ -f "$IDENTITY_FILE" ]]; then
   echo "agent-identity.local: already present, skipping (channel: $(grep '^difficulty_channel' "$IDENTITY_FILE" || echo '(unset)'))"

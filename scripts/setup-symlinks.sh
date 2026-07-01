@@ -2,7 +2,11 @@
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
-mkdir -p "$HOME/.claude" "$HOME/.cursor"
+# Single source of truth for the agent config root (default: ~/.claude-agent).
+# Override with CLAUDE_AGENT_HOME=/path for tests or the Yandex overlay.
+source "$REPO/scripts/lib/config-root.sh"
+
+mkdir -p "$CLAUDE_AGENT_HOME" "$HOME/.cursor"
 
 link() {
   local target="$1" linkpath="$2"
@@ -18,14 +22,14 @@ link_agent_md() {
   local base
   base="$(basename "$file_path")"
   [[ "$base" == "README.md" ]] && return 0
-  link "$file_path" "$HOME/.claude/agents/$base"
+  link "$file_path" "$CLAUDE_AGENT_HOME/agents/$base"
 }
 
 link_skill_dir() {
   local dir_path="$1"
   local base
   base="$(basename "$dir_path")"
-  link "$dir_path" "$HOME/.claude/skills/$base"
+  link "$dir_path" "$CLAUDE_AGENT_HOME/skills/$base"
 }
 
 prune_dangling() {
@@ -43,20 +47,20 @@ prune_dangling() {
 }
 
 # Core global symlinks
-link "$REPO/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
-link "$REPO/config.md" "$HOME/.claude/config.md"
-link "$REPO/memory-global" "$HOME/.claude/memory-global"
+link "$REPO/CLAUDE.md" "$CLAUDE_AGENT_HOME/CLAUDE.md"
+link "$REPO/config.md" "$CLAUDE_AGENT_HOME/config.md"
+link "$REPO/memory-global" "$CLAUDE_AGENT_HOME/memory-global"
 
 # Do not install org-yandex globally — it lives in robot/deepagent/.claude/rules/
 rm -f "$HOME/.cursor/rules/org-yandex.mdc"
-rm -rf "$HOME/.claude/scripts-local" 2>/dev/null || true
+rm -rf "$CLAUDE_AGENT_HOME/scripts-local" 2>/dev/null || true
 
-# Agents: global only in ~/.claude/agents/
-if [[ -L "$HOME/.claude/agents" ]]; then
-  rm "$HOME/.claude/agents"
+# Agents: global only in $CLAUDE_AGENT_HOME/agents/
+if [[ -L "$CLAUDE_AGENT_HOME/agents" ]]; then
+  rm "$CLAUDE_AGENT_HOME/agents"
 fi
-mkdir -p "$HOME/.claude/agents"
-prune_dangling "$HOME/.claude/agents"
+mkdir -p "$CLAUDE_AGENT_HOME/agents"
+prune_dangling "$CLAUDE_AGENT_HOME/agents"
 
 for file_path in "$REPO/agents/"*.md; do
   [[ -f "$file_path" ]] && link_agent_md "$file_path"
@@ -68,15 +72,15 @@ if [[ -d "$REPO/agents-local" ]]; then
   done
 fi
 
-# Skills: global instruction skills only in ~/.claude/skills/
-if [[ -L "$HOME/.claude/skills" ]]; then
-  rm "$HOME/.claude/skills"
+# Skills: global instruction skills only in $CLAUDE_AGENT_HOME/skills/
+if [[ -L "$CLAUDE_AGENT_HOME/skills" ]]; then
+  rm "$CLAUDE_AGENT_HOME/skills"
 fi
-mkdir -p "$HOME/.claude/skills"
-prune_dangling "$HOME/.claude/skills"
+mkdir -p "$CLAUDE_AGENT_HOME/skills"
+prune_dangling "$CLAUDE_AGENT_HOME/skills"
 
 # Remove legacy home symlinks to Arcadia artifacts or the0-agents
-for entry in "$HOME/.claude/skills/"*; do
+for entry in "$CLAUDE_AGENT_HOME/skills/"*; do
   [[ -e "$entry" ]] || continue
   base="$(basename "$entry")"
   [[ "$base" == "overcome-difficulty" || "$base" == "self-improvement" || "$base" == "README.md" ]] && continue
@@ -102,7 +106,7 @@ if [[ -d "$REPO/skills" ]]; then
 fi
 
 # Specializations live in skills/specializations/ but are symlinked flat into
-# ~/.claude/skills/<name>/ so the Claude Code skill catalog sees them by name.
+# $CLAUDE_AGENT_HOME/skills/<name>/ so the Claude Code skill catalog sees them by name.
 if [[ -d "$REPO/skills/specializations" ]]; then
   for dir_path in "$REPO/skills/specializations/"*/; do
     [[ -d "$dir_path" ]] || continue
@@ -118,16 +122,16 @@ if [[ -d "$REPO/skills-local" ]]; then
     [[ "$base" == "README.md" ]] && continue
     if [[ -f "$entry" && "$entry" == *.md ]]; then
       # Single-file skill — link the .md directly.
-      link "$entry" "$HOME/.claude/skills/$base"
+      link "$entry" "$CLAUDE_AGENT_HOME/skills/$base"
     elif [[ -d "$entry" && -f "$entry/SKILL.md" ]]; then
       # Multi-file skill — link the whole directory (mirrors how skills/ are linked).
-      link "$entry" "$HOME/.claude/skills/$base"
+      link "$entry" "$CLAUDE_AGENT_HOME/skills/$base"
     fi
   done
 fi
 
 # Drop legacy per-agent symlinks to the0-agents / logos / deepagent project agents
-for entry in "$HOME/.claude/agents/"*.md; do
+for entry in "$CLAUDE_AGENT_HOME/agents/"*.md; do
   [[ -L "$entry" ]] || continue
   target="$(readlink "$entry")"
   if [[ "$target" == *"arcadia_the0-agents"* ]] || [[ "$target" == *"/logos/"* ]] || [[ "$target" == *"/robot/deepagent/.claude/agents"* ]]; then
@@ -145,10 +149,10 @@ chmod +x "$REPO/scripts/hook-"*.py
 "$REPO/cursor/scripts/install-cursor-links.sh"
 
 # Merge versioned policy permissions (read-only allowlist + env) into the
-# machine-local ~/.claude/settings.json; machine-specific keys are preserved.
-"$REPO/scripts/apply-settings.sh"
+# machine-local $CLAUDE_AGENT_HOME/settings.json; machine-specific keys are preserved.
+CLAUDE_SETTINGS="$CLAUDE_AGENT_HOME/settings.json" "$REPO/scripts/apply-settings.sh"
 
-# Create ~/.claude/agent-identity.local (per-machine difficulty channel) if absent.
+# Create $CLAUDE_AGENT_HOME/agent-identity.local (per-machine difficulty channel) if absent.
 "$REPO/scripts/configure-identity.sh"
 
 # Wire the canonical reminder-hook set into settings.json. Hooks are a
@@ -163,4 +167,4 @@ chmod +x "$REPO/scripts/hook-"*.py
 echo "Global symlinks ok. Per-project setup (run from each repo root):"
 echo "  robot/deepagent  →  .claude/scripts/setup-local.sh"
 echo "  logos            →  .claude/scripts/setup-local.sh"
-ls -la "$HOME/.claude/memory-global" "$HOME/.claude/skills" "$HOME/.claude/agents" 2>/dev/null || true
+ls -la "$CLAUDE_AGENT_HOME/memory-global" "$CLAUDE_AGENT_HOME/skills" "$CLAUDE_AGENT_HOME/agents" 2>/dev/null || true

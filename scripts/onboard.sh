@@ -24,7 +24,8 @@
 #   CLAUDE_DRY_RUN           set to any non-empty value: print plan, no side effects
 set -uo pipefail
 
-_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$_SCRIPT_DIR/lib/config-root.sh"
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   grep '^#' "${BASH_SOURCE[0]}" | sed 's/^#\{0,1\} \{0,1\}//'
