@@ -55,9 +55,12 @@ Once setup is complete, the fastest way to start working on a tracker issue is:
 ```
 claude-task DEEPAGENT-123        # resolve issue → isolated git worktree → launch claude
 claude-team DEEPAGENT-123        # same, using the "team" auth profile
+claude-task --init <name>        # create a NEW local git repo, register it, then enter
 ```
 
 The wrapper resolves the issue, creates an isolated working copy (`git worktree` by default), `cd`s into it, and launches `claude`. The bare `cd <dir> && claude` flow still works and is not replaced.
+
+`--init <name>` creates a brand-new local git repository (git init + project memory scaffold + initial commit), registers it in the project registry, and enters it. The target directory defaults to `$PWD/<name>`; override the base with `CLAUDE_PROJECT_INIT_BASE=/some/dir`. You may also pass an absolute path or a path containing a slash as the name argument (e.g. `--init /path/to/myproject` or `--init projects/foo`) — in that case the path is used verbatim as the target and the last component becomes the project name.
 
 `claude-task` selects backends automatically. To override, add these keys to `~/.claude/agent-identity.local`:
 - `project_backend` — workspace isolation mechanism (`git` by default; `arc` where `ya`+`arc` are present)

@@ -12,7 +12,7 @@
 # machine-local plugins discovered by registry.sh — no edit to this file needed.
 #
 # Usage:
-#   enter-task.sh (--key <K> | --new <title> | --reuse | --name <plain>)
+#   enter-task.sh (--key <K> | --new <title> | --reuse | --name <plain> | --init <name-or-path>)
 #                 [--workspace <backend>] [--tracker <backend>]
 #                 [--project <registry-key>] [--dry-run]
 #                 [--list-projects]
@@ -43,10 +43,11 @@ slug() {
 }
 
 # ── Parse arguments ─────────────────────────────────────────────────────────
-selector="" sel_arg=""           # one of: key|new|reuse|name + its value
+selector="" sel_arg=""           # one of: key|new|reuse|name|init + its value
 ws_flag="" tr_flag="" project=""
 DRY_RUN=""
 do_list_projects="" do_register="" register_path="" register_as=""
+init_target=""
 
 set_selector() {
   [[ -z "$selector" ]] || die "--key/--new/--reuse/--name are mutually exclusive"
@@ -59,6 +60,7 @@ while [[ $# -gt 0 ]]; do
     --new)       set_selector new "${2:-}"; shift 2 ;;
     --reuse)     set_selector reuse "";     shift 1 ;;
     --name)      set_selector name "${2:-}"; shift 2 ;;
+    --init)      set_selector init "${2:-}"; shift 2 ;;
     --workspace) ws_flag="${2:-}"; shift 2 ;;
     --tracker)   tr_flag="${2:-}"; shift 2 ;;
     --project)        project="${2:-}"; shift 2 ;;
@@ -160,8 +162,8 @@ fi
 [[ -z "${CLAUDE_WORKSPACE_ROOT:-}"  && -n "$_rec_ws_path"    ]] && export CLAUDE_WORKSPACE_ROOT="$_rec_ws_path"
 [[ -z "${CLAUDE_TRACKER_QUEUE:-}"   && -n "$_rec_queue"      ]] && export CLAUDE_TRACKER_QUEUE="$_rec_queue"
 
-# A --name / --reuse selector never wants a tracker; force 'none' for them.
-case "$selector" in name|reuse) tr_name="none" ;; esac
+# A --name / --reuse / --init selector never wants a tracker; force 'none' for them.
+case "$selector" in name|reuse|init) tr_name="none" ;; esac
 
 log "enter-task: workspace=$ws_name tracker=$tr_name selector=$selector${DRY_RUN:+ (dry-run)}"
 # When a registry record resolved, surface its provenance fields so callers (and
@@ -196,6 +198,12 @@ if ! ws_file="$(registry_resolve_workspace "$ws_name")"; then
 fi
 # shellcheck source=/dev/null
 source "$ws_file"
+
+# Guard: --init requires init-only extensions not present in all backends.
+if [[ "$selector" == "init" ]]; then
+  declare -F backend_init_workspace >/dev/null || die "workspace backend '$ws_name' does not support --init"
+  declare -F backend_seal_workspace  >/dev/null || die "workspace backend '$ws_name' does not support --init"
+fi
 
 # Source the tracker backend only when one is actually requested.
 if [[ "$tr_name" != "none" ]]; then
@@ -242,18 +250,64 @@ case "$selector" in
     [[ -n "$sel_arg" ]] || die "--name needs a value"
     name="$(slug "$sel_arg")"; branch="$name"
     ;;
+  init)
+    [[ -n "$sel_arg" ]] || die "--init needs a name or path"
+    case "$sel_arg" in
+      /*|*/*)
+        init_target="$sel_arg"
+        name="$(slug "$(basename "$sel_arg")")"
+        ;;
+      *)
+        name="$(slug "$sel_arg")"
+        init_target="${CLAUDE_PROJECT_INIT_BASE:-$PWD}/$name"
+        ;;
+    esac
+    branch="$name"
+    ;;
 esac
 
 [[ -n "$name" ]] || die "could not derive a task name"
 
-# ── Ensure the workspace, compose, print the dir ────────────────────────────
-project_dir="$(backend_ensure_workspace "$name" "$branch")" || die "backend_ensure_workspace failed"
-project_dir="$(printf '%s' "$project_dir" | tail -1)"
+# ── Ensure the workspace (or init a new one), compose, print the dir ─────────
+if [[ "$selector" == "init" ]]; then
+  # Normalize init_target to absolute path.
+  case "$init_target" in
+    /*) : ;;
+    *)  init_target="$PWD/$init_target" ;;
+  esac
 
-if [[ -z "$DRY_RUN" ]]; then
-  backend_compose "$project_dir" || die "backend_compose failed"
+  # Refuse a non-empty existing directory.
+  if [[ -e "$init_target" && -n "$(ls -A "$init_target" 2>/dev/null)" ]]; then
+    die "target '$init_target' exists and is non-empty"
+  fi
+
+  project_dir="$(backend_init_workspace "$name" "$init_target")" \
+    || die "backend_init_workspace failed"
+  project_dir="$(printf '%s' "$project_dir" | tail -1)"
+
+  if [[ -z "$DRY_RUN" ]]; then
+    "${CLAUDE_SETUP_PROJECT_MEMORY_BIN:-$_SCRIPT_DIR/setup-project-memory.sh}" "$project_dir" >&2 \
+      || die "setup-project-memory failed"
+    # Initial commit is best-effort: a fresh machine may lack git user.name/email.
+    # The repo, project memory and registration are the essential tracked state;
+    # the commit can be made later, so warn and continue rather than abort.
+    backend_seal_workspace "$project_dir" "Initial commit" \
+      || log "enter-task: warning: initial commit skipped (configure git user.name/user.email, then commit — changes are staged). Continuing."
+    project_register "$(project_local_root)" "$name" \
+      "workspace_path=$project_dir" "workspace_backend=$ws_name" >&2 \
+      || die "project_register failed"
+  else
+    log "enter-task: [dry-run] skipping memory-setup, seal, and register for $project_dir"
+  fi
 else
-  log "enter-task: [dry-run] skipping compose for $project_dir"
+  project_dir="$(backend_ensure_workspace "$name" "$branch")" || die "backend_ensure_workspace failed"
+  project_dir="$(printf '%s' "$project_dir" | tail -1)"
+
+  if [[ -z "$DRY_RUN" ]]; then
+    backend_compose "$project_dir" || die "backend_compose failed"
+  else
+    log "enter-task: [dry-run] skipping compose for $project_dir"
+  fi
 fi
 
 # project_dir is ALWAYS the final stdout line.

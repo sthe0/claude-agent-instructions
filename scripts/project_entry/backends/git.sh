@@ -48,3 +48,26 @@ backend_ensure_workspace() {
 
 # backend_compose <project_dir> -> no-op for git (worktree already carries .claude).
 backend_compose() { :; }
+
+# backend_init_workspace <name> <target> -> create a fresh git repo at <target>.
+# Prints <target> as the final stdout line. Dry-run: logs + prints, no mkdir/git.
+backend_init_workspace() {
+  local name="$1" target="$2"
+  if [[ -n "${CLAUDE_DRY_RUN:-}" ]]; then
+    printf 'git backend: [dry-run] would init workspace %s (name=%s)\n' "$target" "$name" >&2
+    printf '%s\n' "$target"
+    return 0
+  fi
+  mkdir -p "$target" || return 1
+  "$GIT_BIN" init "$target" >&2 || return 1
+  printf '%s\n' "$target"
+}
+
+# backend_seal_workspace <dir> <msg> -> stage-all + initial commit in an init'd repo.
+# Dry-run: no-op (nothing to seal yet).
+backend_seal_workspace() {
+  local dir="$1" msg="$2"
+  [[ -n "${CLAUDE_DRY_RUN:-}" ]] && return 0
+  "$GIT_BIN" -C "$dir" add -A >&2 || return 1
+  "$GIT_BIN" -C "$dir" commit -m "$msg" >&2 || return 1
+}

@@ -540,6 +540,52 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Test 12 — --init classification and dry-run output
+# ═══════════════════════════════════════════════════════════════════════════
+printf '\n--- --init classification ---\n'
+INIT_TMP="$TMP/init-base"
+mkdir -p "$INIT_TMP"
+
+# 12a: CLAUDE_LAUNCH_DRYRUN=1 with --init demo -> enter=<ET_DIR> profile=default
+# (fake-enter-task.sh always echoes ET_DIR regardless of args; the assertion
+# confirms --init reaches the normal dir-resolve+launch tail, not an early exit)
+reset_logs
+_init_out="$(CLAUDE_PROJECT_INIT_BASE="$INIT_TMP" CLAUDE_LAUNCH_DRYRUN=1 \
+  CLAUDE_SKIP_ONBOARD=1 claude-task --init demo 2>/dev/null)"
+if [[ "$_init_out" == "enter=${ET_DIR} profile=default" ]]; then
+  ok "--init dry-run: output is enter=<stub-dir> profile=default"
+else
+  fail "--init dry-run: wrong output (got: '$_init_out')"
+fi
+if grep -qF -- '--init demo' "$ET_CALLS"; then
+  ok "--init: forwarded to enter-task as --init demo"
+else
+  fail "--init: not forwarded (et-calls: $(cat "$ET_CALLS"))"
+fi
+
+# 12b: --help mentions --init
+reset_logs
+_help_init="$(CLAUDE_SKIP_ONBOARD=1 claude-task --help 2>/dev/null)"
+if printf '%s\n' "$_help_init" | grep -q -- '--init'; then
+  ok "--help: mentions --init"
+else
+  fail "--help: does not mention --init (got: $_help_init)"
+fi
+
+# 12c: --init without a name -> error, no enter-task call
+reset_logs
+if CLAUDE_SKIP_ONBOARD=1 claude-task --init 2>/dev/null; then
+  fail "--init without name should return non-zero"
+else
+  ok "--init without name: returns non-zero"
+fi
+if [[ -s "$ET_CALLS" ]]; then
+  fail "--init without name: should NOT call enter-task"
+else
+  ok "--init without name: enter-task not called"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════════
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"

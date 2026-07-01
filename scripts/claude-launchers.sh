@@ -77,6 +77,7 @@ Usage: $_cmd [<name> | <TICKET-123> | --new "<title>"] [claude args...]
   $_cmd <name>             named scratch workspace, then launch claude in it
   $_cmd <TICKET-123>       resolve a tracker ticket -> isolated workspace
   $_cmd --new "<title>"    create a tracker issue (confirms first), then enter
+  $_cmd --init <name>      create a NEW local git project, register it, then enter
   $_cmd --list-projects    list registered projects and their tracker queues
   $_cmd -h | --help        show this help
 
@@ -124,7 +125,7 @@ _dispatch_with_profile() {
   # No task specified (bare invocation), or a bare claude flag (e.g. -c / -p, but
   # NOT our --new selector): do NOT enter a workspace. Launch plain claude in the
   # current directory under the auth profile, after a one-time how-to warning.
-  if [[ -z "$_tok" || ( "$_tok" == -* && "$_tok" != "--new" ) ]]; then
+  if [[ -z "$_tok" || ( "$_tok" == -* && "$_tok" != "--new" && "$_tok" != "--init" ) ]]; then
     [[ -z "$_tok" ]] || _cargs=("$@")   # forward flags to claude; bare -> none
     if [[ -n "${CLAUDE_LAUNCH_DRYRUN:-}" ]]; then
       printf 'inplace profile=%s dir=%s\n' "$_profile" "$PWD"
@@ -148,6 +149,10 @@ _dispatch_with_profile() {
     local _title="${2:-}"
     [[ -n "$_title" ]] || { printf 'usage: %s --new <title>\n' "$_cmd" >&2; return 1; }
     _spec=(--new "$_title"); shift 2; _cargs=("$@")
+  elif [[ "$_tok" == "--init" ]]; then
+    local _initname="${2:-}"
+    [[ -n "$_initname" ]] || { printf 'usage: %s --init <name-or-path>\n' "$_cmd" >&2; return 1; }
+    _spec=(--init "$_initname"); shift 2; _cargs=("$@")
   elif [[ "$_tok" =~ ^[0-9]+$ ]]; then
     # Bare integer treated as a tracker issue number
     _spec=(--key "$_tok"); shift; _cargs=("$@")
