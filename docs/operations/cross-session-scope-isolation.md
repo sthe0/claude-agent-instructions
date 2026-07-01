@@ -23,7 +23,7 @@ isolation — the model's call).
 | **A — scope-track hook** | `scripts/hook-scope-track.py` (PostToolUse Edit\|Write + Bash) | Heartbeats the session and accumulates touched paths. Non-blocking. |
 | **B — conflict detector** | `scripts/session_scope/detector.py` | Pure path-prefix overlap + severity classification over the registry records. VCS-agnostic. |
 | **B — conflict hook** | `scripts/hook-scope-conflict.py` (PreToolUse Edit\|Write) | On a write, asks the detector whether the target overlaps another **live** session's scope, then denies / warns / allows. |
-| **C — isolation router** | `scripts/session-isolate.sh` (+ `project_entry` backends) | Routes a contended task into its own workspace by reusing `project_entry`'s workspace-backend contract (`backend_ensure_workspace`), then re-registers the session's scope at the new root. Git (`backends/git.sh`) and arc (`backends/arc.sh`) backends, resolved by name — the router is backend-blind. |
+| **C — isolation router** | `scripts/session-isolate.sh` (+ `project_entry` backends) | Routes a contended task into its own workspace by reusing `project_entry`'s workspace-backend contract (`backend_ensure_workspace`), then re-registers the session's scope at the new root. The built-in git backend (`backends/git.sh`) and a machine-local plugin backend such as arc (registered at `${CLAUDE_PROJECT_PLUGIN_DIR:-…}/backends/arc.sh`), resolved by name — the router is backend-blind. |
 
 ## How the conflict hook decides
 
@@ -93,16 +93,23 @@ invent a new isolation mechanism:
 The router is **backend-blind**: it resolves a backend *name*
 (`$CLAUDE_WORKSPACE_BACKEND` override, else `detect_backend.py`, else git) through
 `project_entry/registry.sh` and calls the same three contract functions
-regardless of which backend answers. Both the git worktree backend
-(`backends/git.sh`) and the arc mount backend (`backends/arc.sh`) are drop-in
-implementations of that one contract, so a future backend attaches with no change
-to `session-isolate.sh`.
+regardless of which backend answers. The built-in git worktree backend
+(`backends/git.sh`, the org-neutral default Core ships) and a machine-local plugin
+backend such as the arc mount backend (registered at
+`${CLAUDE_PROJECT_PLUGIN_DIR:-$HOME/.claude/project-entry-plugins}/backends/arc.sh`)
+are drop-in implementations of that one contract, so a new backend attaches with no
+change to `session-isolate.sh`.
 
-#### The arc backend
+#### The arc backend (a machine-local plugin)
 
-arc has no `worktree` command; its equivalent is a second `arc mount` that shares
-the main mount's `--object-store` (the `using-arc-multiple-mounts` skill). So on
-arc, `backend_ensure_workspace <name> <branch>`:
+arc is Yandex-specific, so Core ships no arc backend: it is installed as a
+machine-local plugin at `${CLAUDE_PROJECT_PLUGIN_DIR:-…}/backends/arc.sh` and
+resolved by name through `registry.sh` (which searches the Core built-ins first,
+then the plugin dir). On a machine without that plugin, `session-isolate.sh`
+degrades to the git default. Where the plugin is installed, arc has no `worktree`
+command; its equivalent is a second `arc mount` that shares the main mount's
+`--object-store` (the `using-arc-multiple-mounts` skill). So on arc,
+`backend_ensure_workspace <name> <branch>`:
 
 1. Reads `arc mount --list --json`, finds the mounted entry that is an ancestor of
    the anchor directory (`$CLAUDE_WORKSPACE_ROOT` when set, else `$PWD`), and

@@ -11,9 +11,10 @@
 # path-overlap, which is what stops the conflict hook from firing again.
 #
 # Backend-blind: the workspace-backend name resolves through registry.sh, so both
-# the built-in git (backends/git.sh) and arc (backends/arc.sh) backends attach with
-# no change to this file — detect_backend.py picks the name, registry.sh finds the
-# implementation, and this script calls the same contract functions either way.
+# the built-in git (backends/git.sh) and a machine-local plugin backend such as arc
+# (registered at ${CLAUDE_PROJECT_PLUGIN_DIR:-$HOME/.claude/project-entry-plugins}/backends/arc.sh)
+# attach with no change to this file — detect_backend.py picks the name, registry.sh
+# finds the implementation, and this script calls the same contract functions either way.
 #
 # Usage: session-isolate.sh <task-name>
 #
