@@ -34,6 +34,11 @@ DESIRED = [
     ("PreToolUse",       "Edit|Write", "hook-memory-consistency.py",         5),
     ("PreToolUse",       "Edit|Write", "hook-prewrite-plan-check.py", 5),
     ("PreToolUse",       "Edit|Write", "hook-state-gate.py",          5),
+    # session_scope: deny/warn on a LIVE cross-session filesystem-scope overlap
+    # (Component B wiring). Runs AFTER the plan-approval gate above; blocks only a
+    # gated path already held by another live session, otherwise warns — silent
+    # single-session (isolate, don't serialize).
+    ("PreToolUse",       "Edit|Write", "hook-scope-conflict.py",      5),
     ("PreToolUse",       "Bash",  "hook-retry-detector.py",          5),
     # Advisory determinization nudges (never block): arm long-job monitoring,
     # prefer a domain Skill over hand-rolled CLI, reply in the user's language.

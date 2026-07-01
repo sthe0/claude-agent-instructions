@@ -56,6 +56,7 @@ Setup and distribution, the git workflow, the verification-guard suite, and laye
 - [Verification guards](operations/guards.md) — the verify / lint suite that keeps the repo internally consistent, and how the pre-commit and standalone checks compose.
 - [Maintaining a layer over a moving Core](operations/layer-maintenance.md) — the rebase and rerere recipe for keeping a Team or Personal layer current as Core evolves.
 - [Difficulty-channel onboarding](operations/difficulty-channel-onboarding.md) — configuring the Core-difficulty filing channel on a new machine (credentials, channel selection, the file-difficulty.py CLI, and the author-side digest).
+- [Cross-session filesystem-scope isolation](operations/cross-session-scope-isolation.md) — the deterministic session-scope registry + conflict detector + PreToolUse hook that denies/warns when two live sessions overlap the same working tree/mount; isolate, not serialize.
 
 ## Decisions — architecture decision records
 
