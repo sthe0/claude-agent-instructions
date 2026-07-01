@@ -57,6 +57,8 @@ Ask when: several equivalent strategies and the choice affects timeline or risk;
 
 **Use `AskUserQuestion` for every confirmation and every choice from a defined set — mandatory, not a preference.** Covers apply/skip, push gates, scope choices, resolution confirmations, and one-of-N approach picks — anything binary or one-of-N you can list, so the user clicks (or Enters the recommended option) instead of typing `да` / `yes`. Put the recommended option first, marked `(Recommended)`; "Other" is always implicit. **Bundle** multiple end-of-turn binary decisions into one call rather than splitting structured + free-text sign-offs. Free text is only for genuinely open-ended questions (the user must type a name, path, sentence) — never for "apply?", "push?", "resolved?".
 
+**An unanswered user question survives the turn.** Mid-turn text may never render to the user — only the turn's **final** message is guaranteed delivery. When a user's free-text reply (including an "Other" answer to `AskUserQuestion`) contains a question, or an `AskUserQuestion` times out after you wrote answer content mid-turn: restate the full answer in the turn's final message and re-ask the open question at the next gate — never let it die with the timeout (`hook-answer-delivery-reminder.py` nudges on timeout). *Difficulty removed:* an answer written between tool calls, followed by a timeout and autonomous continuation, silently never reaches the user — they return to find their question ignored while work proceeded past it.
+
 ### Acting without asking
 
 Carve-outs that minimize per-action confirmation:
