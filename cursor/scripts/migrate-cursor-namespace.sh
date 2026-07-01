@@ -2,6 +2,7 @@
 set -euo pipefail
 
 REPO="${CLAUDE_INSTRUCTIONS_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}"
+_realpath() { python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$1"; }
 
 discover_deepagent_project_roots() {
   local candidate
@@ -69,8 +70,10 @@ EOF
 fi
 
 echo "== Project links =="
-# Deduplicate roots (bash 4+ associative array or sort -u)
-mapfile -t PROJECT_ROOTS < <(printf '%s\n' "${PROJECT_ROOTS[@]}" | sort -u)
+# Deduplicate roots (bash 3.2-compatible while-read dedup)
+_deduped=()
+while IFS= read -r r; do _deduped+=("$r"); done < <(printf '%s\n' "${PROJECT_ROOTS[@]}" | sort -u)
+PROJECT_ROOTS=("${_deduped[@]+"${_deduped[@]}"}")
 
 for project_root in "${PROJECT_ROOTS[@]}"; do
   setup_local="$project_root/.claude/scripts/setup-local.sh"
@@ -79,7 +82,7 @@ for project_root in "${PROJECT_ROOTS[@]}"; do
     # setup-local.sh derives STORAGE from "$(dirname "$0")/.." with a logical
     # pwd, so calling it through .claude/scripts/ resolves STORAGE back to the
     # .claude symlink and makes step 1 relink .claude onto itself (ELOOP).
-    real_setup="$(readlink -f "$setup_local")"
+    real_setup="$(_realpath "$setup_local")"
     echo "project: $project_root (setup-local: $real_setup)"
     (cd "$project_root" && "$real_setup")
   else

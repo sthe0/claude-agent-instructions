@@ -41,6 +41,8 @@ def arc_mounts_from_text(text: str) -> list[str]:
 
 
 def arc_mounts(proc_path: str = "/proc/self/mounts") -> list[str]:
+    if not os.path.exists(proc_path):
+        return []  # no /proc (e.g. macOS) -> no arc mounts to guard
     try:
         with open(proc_path, encoding="utf-8", errors="replace") as fh:
             return arc_mounts_from_text(fh.read())

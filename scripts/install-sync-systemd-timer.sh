@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # User systemd timer: pull every 10 min (fallback when crontab is denied).
 set -euo pipefail
+[[ "$(uname -s)" == "Linux" ]] || { echo 'systemd timer: Linux only — use install-sync-cron.sh / launchd on macOS' >&2; exit 1; }
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 SYNC="$REPO/scripts/sync-instructions-repo.sh"
 chmod +x "$SYNC" "$REPO/scripts/install-sync-systemd-timer.sh"

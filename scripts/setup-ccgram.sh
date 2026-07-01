@@ -190,7 +190,8 @@ EOF
   systemctl --user daemon-reload
   systemctl --user enable --now ccgram.service
   say "systemd unit enabled and started"
-  if ! loginctl show-user "$USER" 2>/dev/null | grep -q '^Linger=yes'; then
+  linger="$(loginctl show-user "$USER" 2>/dev/null || true)"
+  if ! printf '%s' "$linger" | grep -q '^Linger=yes'; then
     cat <<EOF >&2
 
 NOTE: linger is not enabled for this user. Without linger, the systemd-user
