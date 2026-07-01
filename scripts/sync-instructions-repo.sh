@@ -11,7 +11,7 @@ LOG_FILE="$LOG_DIR/claude-agent-instructions-sync.log"
 
 log() {
   mkdir -p "$LOG_DIR"
-  printf '%s %s\n' "$(date -Is)" "$*" | tee -a "$LOG_FILE"
+  printf '%s %s\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$*" | tee -a "$LOG_FILE"
 }
 
 die() {
@@ -30,13 +30,15 @@ has_uncommitted() {
 stash_if_dirty() {
   if has_uncommitted; then
     log "stash uncommitted changes"
-    git stash push -u -m "sync-instructions-repo $(date -Is)"
+    git stash push -u -m "sync-instructions-repo $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     echo stashed
   fi
 }
 
 pop_stash_if_any() {
-  if git stash list | grep -q .; then
+  local stash_out
+  stash_out="$(git stash list 2>/dev/null || true)"
+  if [[ -n "$stash_out" ]]; then
     log "stash pop"
     if ! git stash pop; then
       log "WARN: stash pop conflict — resolve manually in $REPO"
@@ -84,7 +86,9 @@ cmd_pull() {
     log "pull: rebase $ahead local commit(s) onto $REMOTE/$BRANCH"
     if ! git rebase "$REMOTE/$BRANCH"; then
       resolve_rebase_conflicts_prefer_incoming || true
-      if git diff --name-only --diff-filter=U 2>/dev/null | grep -q .; then
+      local conflict_out
+      conflict_out="$(git diff --name-only --diff-filter=U 2>/dev/null || true)"
+      if [[ -n "$conflict_out" ]]; then
         log "WARN: unresolved rebase conflicts — aborting rebase"
         git rebase --abort 2>/dev/null || true
         [[ "$did_stash" == true ]] && pop_stash_if_any || true

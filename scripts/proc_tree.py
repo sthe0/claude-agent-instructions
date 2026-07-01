@@ -11,6 +11,10 @@ pgid, so the group stays reapable even after the leader exits.
 > verified by: empirical A/B test on Linux 5.4 (2026-06-27) — a parent-only
 > SIGTERM left 2 of 3 grandchildren alive; start_new_session + killpg left zero.
 
+Process topology (pid → ppid/pgid) comes from a single ``ps -Ao pid=,ppid=,pgid=``
+snapshot rather than a per-process kernel-table walk, so the same code runs on
+macOS and Linux.
+
 POSIX only. setsid/killpg have no portable Windows equivalent, so the public
 entry points raise NotImplementedError off POSIX rather than pretend to work.
 """
@@ -25,7 +29,6 @@ from collections import defaultdict
 
 __all__ = ["launch_supervised", "kill_tree", "install_teardown"]
 
-_PROC = "/proc"
 # Procs we have already wired teardown for, keyed by id(); makes install_teardown
 # idempotent so repeated calls don't stack handlers.
 _teardown_installed: set[int] = set()
@@ -37,7 +40,7 @@ def _require_posix(fn: str) -> None:
 
 
 def launch_supervised(cmd, **popen_kwargs) -> subprocess.Popen:
-    """Popen(cmd) forced into its own session/process group.
+    """Popen(cmd) forced into its own session and process group.
 
     ``start_new_session=True`` is forced regardless of what the caller passes, so
     the child is a group leader and ``kill_tree`` can reap its whole subtree.
@@ -47,38 +50,45 @@ def launch_supervised(cmd, **popen_kwargs) -> subprocess.Popen:
     return subprocess.Popen(cmd, **popen_kwargs)
 
 
+def _ps_snapshot() -> dict[int, tuple[int, int]]:
+    """One ``ps`` snapshot as ``{pid: (ppid, pgid)}``. Portable across macOS and
+    Linux; the empty-header ``=`` form prints three bare numeric columns."""
+    res = subprocess.run(
+        ["ps", "-Ao", "pid=,ppid=,pgid="], capture_output=True, text=True
+    )
+    snap: dict[int, tuple[int, int]] = {}
+    for line in res.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        try:
+            pid, ppid, pgid = int(parts[0]), int(parts[1]), int(parts[2])
+        except ValueError:
+            continue
+        snap[pid] = (ppid, pgid)
+    return snap
+
+
 def _all_pids() -> list[int]:
-    return [int(e) for e in os.listdir(_PROC) if e.isdigit()]
+    return list(_ps_snapshot().keys())
 
 
 def _ppid(pid: int) -> int:
-    """Parent pid from /proc/<pid>/stat. comm (field 2) may contain spaces and
-    parens, so parse the tail after the final ')'."""
-    with open(f"{_PROC}/{pid}/stat", "r") as fh:
-        data = fh.read()
-    after = data[data.rindex(")") + 1:].split()
-    return int(after[1])  # field 4 (ppid); after[0] is state (field 3)
+    """Parent pid of pid, or 0 if it is gone from the snapshot."""
+    entry = _ps_snapshot().get(pid)
+    return entry[0] if entry else 0
 
 
 def _group_members(pgid: int) -> set[int]:
-    members: set[int] = set()
-    for p in _all_pids():
-        try:
-            if os.getpgid(p) == pgid:
-                members.add(p)
-        except (ProcessLookupError, PermissionError):
-            continue
-    return members
+    return {p for p, (_ppid_, pg) in _ps_snapshot().items() if pg == pgid}
 
 
 def _descendants(root: int) -> set[int]:
-    """All transitive children of root via a /proc PPID walk (root excluded)."""
+    """All transitive children of root via a PPID walk over one ps snapshot
+    (root excluded)."""
     children: dict[int, list[int]] = defaultdict(list)
-    for p in _all_pids():
-        try:
-            children[_ppid(p)].append(p)
-        except (FileNotFoundError, ProcessLookupError, ValueError, PermissionError):
-            continue
+    for p, (ppid, _pgid) in _ps_snapshot().items():
+        children[ppid].append(p)
     out: set[int] = set()
     stack = [root]
     while stack:
@@ -98,6 +108,31 @@ def _is_alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True
+
+
+def _zombie_pids() -> set[int]:
+    """Pids currently in the zombie/defunct state (stat starts with ``Z``). A
+    zombie answers ``os.kill(pid, 0)`` as alive and can't be signalled (macOS
+    ``killpg`` returns EPERM), yet it runs no code — treat it as not-alive when
+    deciding whether the reap is done."""
+    res = subprocess.run(
+        ["ps", "-Ao", "pid=,stat="], capture_output=True, text=True
+    )
+    out: set[int] = set()
+    for line in res.stdout.splitlines():
+        parts = line.split(maxsplit=1)
+        if len(parts) == 2 and parts[1].startswith("Z"):
+            try:
+                out.add(int(parts[0]))
+            except ValueError:
+                continue
+    return out
+
+
+def _any_live(pids) -> bool:
+    """True if any pid in pids is alive and not a zombie (one ps snapshot)."""
+    zombies = _zombie_pids()
+    return any(_is_alive(p) and p not in zombies for p in pids)
 
 
 def _leader_pgid(pid: int) -> int | None:
@@ -142,7 +177,9 @@ def kill_tree(proc_or_pid, grace_s: float = 5.0) -> set[int]:
         def send(sig: int) -> None:
             try:
                 os.killpg(pgid, sig)
-            except ProcessLookupError:
+            except (ProcessLookupError, PermissionError):
+                # EPERM: the group's only survivors are zombies (macOS returns
+                # EPERM, not ESRCH, for a defunct-only group) — nothing to reap.
                 pass
     else:
         targets = _descendants(pid) | {pid}
@@ -151,20 +188,20 @@ def kill_tree(proc_or_pid, grace_s: float = 5.0) -> set[int]:
             for p in targets:
                 try:
                     os.kill(p, sig)
-                except ProcessLookupError:
+                except (ProcessLookupError, PermissionError):
                     pass
 
     send(signal.SIGTERM)
     deadline = time.monotonic() + grace_s
     while time.monotonic() < deadline:
-        if not any(_is_alive(p) for p in targets):
+        if not _any_live(targets):
             break
         time.sleep(0.05)
 
-    if any(_is_alive(p) for p in targets):
+    if _any_live(targets):
         send(signal.SIGKILL)
         hard_deadline = time.monotonic() + 1.0
-        while time.monotonic() < hard_deadline and any(_is_alive(p) for p in targets):
+        while time.monotonic() < hard_deadline and _any_live(targets):
             time.sleep(0.02)
 
     # Reap the direct child's zombie so it doesn't linger as defunct.

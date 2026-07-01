@@ -19,6 +19,14 @@
 #                                           (no-op when the working copy already
 #                                           carries .claude, as a git worktree does).
 #
+# Optional init-only extensions (declared only by backends that support --init):
+#   backend_init_workspace <name> <target>
+#                                        -> create a fresh repo at <target>;
+#                                           print <target> as the final stdout line;
+#                                           honour CLAUDE_DRY_RUN (log+print, no mkdir/vcs).
+#   backend_seal_workspace <dir> <msg>   -> stage all + initial commit in the new repo;
+#                                           no-op under CLAUDE_DRY_RUN.
+#
 # A TRACKER backend file (trackers/<name>.sh) defines:
 #   tracker_resolve <key>                -> print 'key<TAB>slug' for an existing task
 #   tracker_create  <title>             -> print 'key<TAB>slug' for a newly created task;

@@ -22,6 +22,7 @@ FAIL=0
 pass() { printf '  [ OK ] %s\n' "$1"; }
 fail() { printf '  [FAIL] %s\n' "$1"; FAIL=1; }
 warn() { printf '  [WARN] %s\n' "$1"; }
+_realpath() { python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$1"; }
 
 echo "Agent readiness check (repo: $REPO)"
 echo
@@ -35,7 +36,7 @@ fi
 
 # 2. The constitution is loaded: ~/.claude/CLAUDE.md must symlink into this repo.
 if [[ -L "$HOME/.claude/CLAUDE.md" ]] \
-   && [[ "$(readlink -f "$HOME/.claude/CLAUDE.md")" == "$(readlink -f "$REPO/CLAUDE.md")" ]]; then
+   && [[ "$(_realpath "$HOME/.claude/CLAUDE.md")" == "$(_realpath "$REPO/CLAUDE.md")" ]]; then
   pass "~/.claude/CLAUDE.md -> repo CLAUDE.md"
 else
   fail "~/.claude/CLAUDE.md does not point at the repo — run scripts/setup-symlinks.sh"

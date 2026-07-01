@@ -4,6 +4,7 @@ set -euo pipefail
 
 REPO="${CLAUDE_INSTRUCTIONS_REPO:-$HOME/claude-agent-instructions}"
 FAIL=0
+_realpath() { python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$1"; }
 
 check_link() {
   local linkpath="$1" expected_target="$2"
@@ -13,8 +14,8 @@ check_link() {
     return
   fi
   local actual expected
-  actual="$(readlink -f "$linkpath")"
-  expected="$(readlink -f "$expected_target")"
+  actual="$(_realpath "$linkpath")"
+  expected="$(_realpath "$expected_target")"
   if [[ "$actual" != "$expected" ]]; then
     echo "FAIL: $linkpath -> $actual (expected $expected)"
     FAIL=1

@@ -33,6 +33,10 @@ BASE = REPO_ROOT / "settings" / "base.json"
 
 READONLY_PYTHON3 = ('-c "', "-m json.tool")
 
+# Autocompaction pins the base OWNS (single source of truth for this file).
+AUTOCOMPACT_WINDOW = 210000
+DEPRECATED_ENV_KEYS = ("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "CLAUDE_CODE_DISABLE_1M_CONTEXT")
+
 
 def _bash_ok(inner: str) -> bool:
     # Bash entries are exact commands or "<prefix>:*" arg-wildcards; strip ":*".
@@ -70,6 +74,24 @@ def entry_ok(entry: str) -> bool:
     return False
 
 
+def _autocompact_ok(data: dict) -> list[str]:
+    env = data.get("env", {})
+    violations: list[str] = []
+    if data.get("autoCompactWindow") != AUTOCOMPACT_WINDOW:
+        violations.append(
+            f"autoCompactWindow is {data.get('autoCompactWindow')!r}, expected {AUTOCOMPACT_WINDOW}"
+        )
+    if env.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW") != str(AUTOCOMPACT_WINDOW):
+        violations.append(
+            f"env.CLAUDE_CODE_AUTO_COMPACT_WINDOW is "
+            f"{env.get('CLAUDE_CODE_AUTO_COMPACT_WINDOW')!r}, expected {str(AUTOCOMPACT_WINDOW)!r}"
+        )
+    for key in DEPRECATED_ENV_KEYS:
+        if key in env:
+            violations.append(f"deprecated env key {key} must not be present")
+    return violations
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--staged", action="store_true")  # base is small; scan always
@@ -86,10 +108,19 @@ def main(argv: list[str] | None = None) -> int:
 
     allow = (data.get("permissions") or {}).get("allow") or []
     bad = [e for e in allow if not (isinstance(e, str) and entry_ok(e))]
+    autocompact_violations = _autocompact_ok(data)
+    failed = False
     if bad:
         print(f"lint-settings-base: FAIL — {len(bad)} non-read-only entry(ies) in base.json:")
         for e in bad:
             print(f"  {e}")
+        failed = True
+    if autocompact_violations:
+        print(f"lint-settings-base: FAIL — {len(autocompact_violations)} autocompact violation(s) in base.json:")
+        for v in autocompact_violations:
+            print(f"  {v}")
+        failed = True
+    if failed:
         return 1
     print(f"lint-settings-base: OK — {len(allow)} read-only allow entry(ies)")
     return 0

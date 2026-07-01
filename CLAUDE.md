@@ -133,6 +133,7 @@ Then record per [recording-experience.md](memory-global/leaves/recording-experie
 
 - **Substantive** production code → spawn `developer`, never write it yourself; the *small change* class (§ Classify task weight) you may do in-thread, following the developer code-quality rules (`skills/specializations/developer/SKILL.md` § While developing: dedup, comment discipline, shared-entry-point defaults, mirror-the-working-caller, log-reading).
 - **No** domain runbooks (pipeline stages, relaunches, prod names) in this or other generic prompts — they belong in memory; **no** instruction changes without `self-improvement` (or an explicit user edit request).
+- **Destructive commands built from variables** (`rm -rf`, `git clean -fdx`, `find … -delete`, truncate/overwrite): guard every interpolated path variable for non-emptiness (`[[ -n "$VAR" ]]`) and never target a path that could collapse to `$HOME`, `~/.claude`, or a repo root — an empty `$VAR` in `rm -rf "$HOME/.claude/projects/$HASH"` becomes `rm -rf "$HOME/.claude/projects/"` and wipes the agent's own memory. Prefer deleting **literal** paths, or `trap`-cleanup on the exact `mktemp` path captured at creation. *(A `hook-guard-destructive-rm.py` PreToolUse gate denies the protected-path denylist, but the discipline is yours — the gate only covers the agent's own critical dirs.)*
 
 ---
 

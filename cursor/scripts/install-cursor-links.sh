@@ -2,6 +2,7 @@
 set -euo pipefail
 
 REPO="${CLAUDE_INSTRUCTIONS_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}"
+_realpath() { python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$1"; }
 
 link() {
   local target="$1" linkpath="$2"
@@ -32,8 +33,8 @@ mkdir -p "$HOME/.cursor/rules"
 
 # Migrate away from legacy ~/.cursor/agents -> ~/.claude/agents symlink.
 if [[ -L "$HOME/.cursor/agents" ]]; then
-  legacy_target="$(readlink -f "$HOME/.cursor/agents" || true)"
-  claude_agents_target="$(readlink -f "$HOME/.claude/agents" || true)"
+  legacy_target="$(_realpath "$HOME/.cursor/agents" 2>/dev/null || true)"
+  claude_agents_target="$(_realpath "$HOME/.claude/agents" 2>/dev/null || true)"
   if [[ -n "$legacy_target" && -n "$claude_agents_target" && "$legacy_target" == "$claude_agents_target" ]]; then
     rm -f "$HOME/.cursor/agents"
   else

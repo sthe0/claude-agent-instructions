@@ -72,6 +72,28 @@ def test_kill_tree_reaps_whole_subtree():
         _cleanup(marker)
 
 
+def test_kill_tree_reaps_returned_targets():
+    """Live reap on a POSIX host: launch two backgrounded sleeps under a group
+    leader, kill the tree, and assert every returned target pid is dead within
+    the grace window. Exercises the real ps-snapshot + killpg path on macOS."""
+    proc = proc_tree.launch_supervised(
+        ["sh", "-c", "sleep 30 & sleep 30 & wait"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    time.sleep(0.5)
+    targets = proc_tree.kill_tree(proc, grace_s=3.0)
+    assert targets, "kill_tree returned no targets"
+
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline and any(
+        proc_tree._is_alive(p) for p in targets
+    ):
+        time.sleep(0.05)
+    survivors = [p for p in targets if proc_tree._is_alive(p)]
+    assert survivors == [], f"kill_tree left survivors: {survivors}"
+
+
 def test_kill_tree_on_dead_proc_is_noop():
     proc = proc_tree.launch_supervised(
         ["bash", "-c", "true"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL

@@ -34,6 +34,9 @@ case "\$1 \$2" in
   "rev-parse --show-toplevel") printf '%s\n' "$FAKE_TOPLEVEL" ;;
   "worktree list")             cat "$WT_LIST" ;;
   "worktree add")              : ;;   # recorded above; succeed silently
+  init*)                       mkdir -p "\${2:-}" ;;   # create target dir for --init
+  "add -A")                    : ;;
+  "commit -m")                 [[ -n "\${GIT_FAIL_COMMIT:-}" ]] && exit 1 || : ;;
   *) : ;;
 esac
 EOF
@@ -145,6 +148,93 @@ check "dry-run: zero mutating git calls" \
   '! grep -qE "worktree add" "$GIT_CALLS"'
 check "dry-run: zero gh calls" \
   '[[ ! -s "$GH_CALLS" ]]'
+
+# === --init tests ===========================================================
+# Set up isolated registry roots and a CLAUDE_SETUP_PROJECT_MEMORY_BIN stub
+# before running --init cases. We need CLAUDE_PROJECTS_LOCAL_DIR for project_register
+# and CLAUDE_PROJECT_INIT_BASE for target-path resolution.
+INIT_PROJECTS_DIR="$TMP/init-projects"
+INIT_LOCAL_DIR="$TMP/init-local"
+INIT_BASE="$TMP/init-base"
+INIT_MEMORY_LOG="$TMP/memory-setup.log"
+mkdir -p "$INIT_PROJECTS_DIR" "$INIT_LOCAL_DIR" "$INIT_BASE"
+: >"$INIT_MEMORY_LOG"
+
+# Stub for setup-project-memory.sh: records invocation and creates the expected scaffold.
+FAKE_SETUP_MEM="$TMP/fake-setup-project-memory.sh"
+cat >"$FAKE_SETUP_MEM" <<'MEMSCRIPT'
+#!/usr/bin/env bash
+printf '%s\n' "$1" >>"$MEMORY_LOG"
+mkdir -p "$1/.claude/agent-memory"
+printf '# Memory\n' >"$1/.claude/agent-memory/MEMORY.md"
+MEMSCRIPT
+chmod +x "$FAKE_SETUP_MEM"
+
+# Blank identity so no real machine config leaks.
+INIT_FAKE_ID="$TMP/init-fake-identity.local"; : >"$INIT_FAKE_ID"
+
+# 14. --init demo --dry-run: final stdout = $INIT_BASE/demo; no git init/commit; no registry.
+printf '\n--- --init dry-run ---\n'
+: >"$GIT_CALLS"
+_init_dr_out="$(CLAUDE_AGENT_IDENTITY="$INIT_FAKE_ID" \
+  CLAUDE_PROJECTS_DIR="$INIT_PROJECTS_DIR" \
+  CLAUDE_PROJECTS_LOCAL_DIR="$INIT_LOCAL_DIR" \
+  CLAUDE_PROJECT_INIT_BASE="$INIT_BASE" \
+  CLAUDE_SETUP_PROJECT_MEMORY_BIN="$FAKE_SETUP_MEM" \
+  MEMORY_LOG="$INIT_MEMORY_LOG" \
+  bash "$ENTER" --init demo --dry-run 2>/dev/null | tail -1)"
+check "--init dry-run: final stdout line equals \$INIT_BASE/demo" \
+  '[[ "$_init_dr_out" == "$INIT_BASE/demo" ]]'
+check "--init dry-run: no git init call" \
+  '! grep -qE "^init " "$GIT_CALLS"'
+check "--init dry-run: no git commit call" \
+  '! grep -q "commit" "$GIT_CALLS"'
+check "--init dry-run: no agent-project.json written" \
+  '[[ ! -f "$INIT_LOCAL_DIR/demo/agent-project.json" ]]'
+
+# 15. --init demo (stubbed-real): git init+commit called; memory-setup ran; registry written.
+printf '\n--- --init stubbed-real ---\n'
+: >"$GIT_CALLS"; : >"$INIT_MEMORY_LOG"
+_init_real_out="$(CLAUDE_AGENT_IDENTITY="$INIT_FAKE_ID" \
+  CLAUDE_PROJECTS_DIR="$INIT_PROJECTS_DIR" \
+  CLAUDE_PROJECTS_LOCAL_DIR="$INIT_LOCAL_DIR" \
+  CLAUDE_PROJECT_INIT_BASE="$INIT_BASE" \
+  CLAUDE_SETUP_PROJECT_MEMORY_BIN="$FAKE_SETUP_MEM" \
+  MEMORY_LOG="$INIT_MEMORY_LOG" \
+  bash "$ENTER" --init demo 2>/dev/null | tail -1)"
+check "--init real: final stdout line equals \$INIT_BASE/demo" \
+  '[[ "$_init_real_out" == "$INIT_BASE/demo" ]]'
+check "--init real: git init called" \
+  'grep -qE "^init " "$GIT_CALLS"'
+check "--init real: git commit called" \
+  'grep -qF "commit -m" "$GIT_CALLS"'
+check "--init real: memory-setup stub ran" \
+  '[[ -s "$INIT_MEMORY_LOG" ]]'
+check "--init real: agent-project.json written" \
+  '[[ -f "$INIT_LOCAL_DIR/demo/agent-project.json" ]]'
+check "--init real: agent-project.json contains workspace_path" \
+  'grep -q "workspace_path" "$INIT_LOCAL_DIR/demo/agent-project.json"'
+check "--init real: agent-project.json contains the target path" \
+  'grep -q "init-base/demo" "$INIT_LOCAL_DIR/demo/agent-project.json"'
+
+# 16. --init demo2 with commit failing (no git identity): repo+memory+register still
+#     succeed (commit is best-effort), dir still printed. Guards the resilient path.
+printf '\n--- --init resilient (commit fails) ---\n'
+: >"$GIT_CALLS"; : >"$INIT_MEMORY_LOG"
+_init_nc_out="$(CLAUDE_AGENT_IDENTITY="$INIT_FAKE_ID" \
+  CLAUDE_PROJECTS_DIR="$INIT_PROJECTS_DIR" \
+  CLAUDE_PROJECTS_LOCAL_DIR="$INIT_LOCAL_DIR" \
+  CLAUDE_PROJECT_INIT_BASE="$INIT_BASE" \
+  CLAUDE_SETUP_PROJECT_MEMORY_BIN="$FAKE_SETUP_MEM" \
+  MEMORY_LOG="$INIT_MEMORY_LOG" \
+  GIT_FAIL_COMMIT=1 \
+  bash "$ENTER" --init demo2 2>/dev/null | tail -1)"
+check "--init resilient: final stdout line equals \$INIT_BASE/demo2" \
+  '[[ "$_init_nc_out" == "$INIT_BASE/demo2" ]]'
+check "--init resilient: commit was attempted" \
+  'grep -qF "commit -m" "$GIT_CALLS"'
+check "--init resilient: registration still happened despite commit failure" \
+  '[[ -f "$INIT_LOCAL_DIR/demo2/agent-project.json" ]]'
 
 # === Registry-wired tests ===================================================
 # Set up isolated registry roots and blank identity so nothing from the real
