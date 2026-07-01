@@ -16,6 +16,7 @@ from project_entry.detect_backend import detect_backends
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 ENTER_TASK = SCRIPTS / "enter-task.sh"
+PROJECTS_PY = SCRIPTS / "project_entry" / "projects.py"
 
 
 # ── Pure-function tests ────────────────────────────────────────────────────
@@ -158,6 +159,22 @@ def _base_env(tmp: Path, git_stub: Path) -> dict:
     return env
 
 
+def _register_no_tracker_project(tmp: Path, key: str = "P1") -> Path:
+    """Register a project with NO tracker binding in a fresh tmp registry and
+    return that registry root (for CLAUDE_PROJECTS_DIR). A resolvable project
+    satisfies enter-task's empty-context guard for --key/--new, while the empty
+    tracker_backend lets tracker resolution fall through to identity/detector —
+    so the detect/identity-is-last-resort precedence under test is preserved."""
+    reg = tmp / "registry"
+    reg.mkdir(exist_ok=True)
+    subprocess.run(
+        ["python3", str(PROJECTS_PY), "register", str(reg), key,
+         f"workspace_path={tmp / 'myrepo'}"],
+        check=True, capture_output=True, text=True,
+    )
+    return reg
+
+
 def _run(args: list[str], env: dict) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["bash", str(ENTER_TASK)] + args,
@@ -251,7 +268,8 @@ def test_tr_detect_is_last_resort(env_tr):
     env, tmp = env_tr
     env["CLAUDE_BACKEND_DETECTOR"] = _make_detector_stub(tmp, "bktest", "trtest")
     env["CLAUDE_AGENT_IDENTITY"] = _make_identity(tmp)
-    r = _run(["--key", "T1", "--workspace", "bktest", "--dry-run"], env)
+    env["CLAUDE_PROJECTS_DIR"] = str(_register_no_tracker_project(tmp))
+    r = _run(["--key", "T1", "--workspace", "bktest", "--project", "P1", "--dry-run"], env)
     assert r.returncode == 0, r.stderr
     assert _log_tr(r.stderr) == "trtest"
 
@@ -260,7 +278,8 @@ def test_tr_identity_overrides_detect(env_tr):
     env, tmp = env_tr
     env["CLAUDE_BACKEND_DETECTOR"] = _make_detector_stub(tmp, "bktest", "none")
     env["CLAUDE_AGENT_IDENTITY"] = _make_identity(tmp, ws="bktest", tr="trtest")
-    r = _run(["--key", "T1", "--workspace", "bktest", "--dry-run"], env)
+    env["CLAUDE_PROJECTS_DIR"] = str(_register_no_tracker_project(tmp))
+    r = _run(["--key", "T1", "--workspace", "bktest", "--project", "P1", "--dry-run"], env)
     assert r.returncode == 0, r.stderr
     assert _log_tr(r.stderr) == "trtest"
 
