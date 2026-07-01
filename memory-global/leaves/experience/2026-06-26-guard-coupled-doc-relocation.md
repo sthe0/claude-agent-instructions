@@ -6,7 +6,7 @@ schema: difficulty/v1
 resolution_confirmed_by_user: "Да, решено"
 refs: [2026-06-24-developer-marker-not-on-line-1-false-block]
 created: 2026-06-27
-last_verified: 2026-06-27
+last_verified: 2026-07-01
 ---
 
 # Relocating guard-pinned docs: move + repoint the guard in lockstep, watch region-relative paths
@@ -26,6 +26,12 @@ A large docs restructure (shrink a 251-line README to a 78-line entry point; gro
 **The staged-mode gotcha (cost me a pre-commit failure):** `verify-cross-refs` in `--staged` mode only scans *tracked* files. A newly-authored, still-untracked doc passes a full-mode run but fails the pre-commit staged-mode hook once staged — so run the guard the same way the hook does before committing, and beware illustrative markdown links or backtick-wrapped paths starting with a top-level directory name (such as `scripts/` or `docs/`) that the cross-ref checker reads as real paths.
 
 ## Contexts
+
+### 2026-07-01 — landing a NEW script to `origin/main` trips `verify-readme` (registry coupling), and `land-on-main.sh` can't isolate the row off a WIP branch
+- Where it arose: after building `scripts/land-on-main.sh` (a determinized "land the staged diff onto origin/main via an isolated worktree" command) I dogfooded it to land *itself*. The worktree pre-commit hook failed `verify-readme` — `scripts/README.md`'s script inventory pins every `scripts/*` file, so a new script must carry its README registry row in the **same commit**.
+- The determinized-script trap: `land-on-main.sh` lands exactly `git diff --cached`. To satisfy the guard I'd have to also stage the README row — but on a shared **WIP feature branch** `scripts/README.md` already carried unrelated concurrent edits (reordered rows, a `sigma-sentinel` row), so there was no clean way to stage *only* my row. The staged-diff mechanism is blind to "just my hunk".
+- Fix (mirrors this leaf's lockstep rule): fall back to the **manual worktree recipe** — `git worktree add --detach $WT origin/main`, copy the new files in, insert **only** the one registry row into the worktree's (pristine `origin/main`) `README.md`, then commit (hook runs `verify-all --staged` → 14/14) and `git push origin HEAD:main`. Constructing the isolated 3-file hunk against clean `origin/main` sidesteps the branch's WIP entirely. Landed `02a9b81..c67367d`.
+- Generalized lesson: a registry/inventory guard (`verify-readme`) is one more instance of "guard pins content to a file"; **any** flow that lands a new guarded file to main (including a determinized staged-diff lander) must carry the registry edit in the same commit — and when your branch's copy of the registry file is dirty with foreign WIP, the isolated worktree is the only clean carrier. A staged-diff lander is the right tool only when your change does **not** also touch a WIP-contaminated registry file.
 
 ### 2026-06-26 — README→docs restructure (6 stages, agentctl-driven)
 - Where it arose: shrink README to an entry-point; build `docs/{concepts,architecture,processes,components,operations}` + index, all guards green.
