@@ -2,8 +2,9 @@
 
 `base.json` is the **machine-independent, policy-grade** slice of Claude Code's
 `~/.claude/settings.json`: the read-only `permissions.allow` allowlist (the
-mechanical form of `CLAUDE.md` § Acting without asking carve-out #1) plus the
-universal `env` block. It is merged into each machine's live settings by
+mechanical form of `CLAUDE.md` § Acting without asking carve-out #1), the
+default permission mode (`permissions.defaultMode`), plus the universal `env`
+block. It is merged into each machine's live settings by
 `scripts/apply-settings.sh` (invoked from `setup-symlinks.sh`).
 
 ## What belongs here
@@ -26,9 +27,10 @@ any `allow` entry is not read-only. Keep the base side-effect-free.
 ## Merge semantics
 
 `apply-settings.sh` is idempotent and additive: it unions `permissions.allow`
-(base entries first), overlays `env` (local keys win on conflict), and leaves
-every other key in the live file untouched. A backup is written to
-`<settings>.bak` before each swap.
+(base entries first), overlays `env` (local keys win on conflict), sets
+`permissions.defaultMode` from base only when the live file has none (a local
+value always wins; omitted if neither has it), and leaves every other key in the
+live file untouched. A backup is written to `<settings>.bak` before each swap.
 
 Not to be confused with `permissions/` — that is **workflow-level** permissions
 (higher-level granted actions), a different layer with its own CLI.
