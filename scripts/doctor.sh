@@ -25,12 +25,43 @@ fail() { printf '  [FAIL] %s\n' "$1"; FAIL=1; }
 warn() { printf '  [WARN] %s\n' "$1"; }
 _realpath() { python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$1"; }
 
+# Minimum Claude Code version the system requires. Source: the whole system is
+# skill-driven (the Skill tool) and uses plugins + hooks. Per the Claude Code
+# changelog, the Skill tool ("Added support for Claude Skills") landed in 2.0.20
+# and the plugin system in 2.0.12 — so 2.0.20 is the binding floor. Overridable
+# via the CLAUDE_MIN_VERSION env var (used by tests to exercise the FAIL path).
+CLAUDE_MIN_VERSION="${CLAUDE_MIN_VERSION:-2.0.20}"
+
+# version_ge A B → true when semver A >= B (uses `sort -V`; the lower of the two
+# sorts first, so if B sorts first then A >= B).
+version_ge() { [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)" == "$2" ]]; }
+
 echo "Agent readiness check (repo: $REPO)"
 echo
 
-# 1. Claude Code CLI on PATH — without it there is no main dialog to talk to.
+# 0. Requirements — external dependencies the system needs before anything else.
+#    Missing git/python3 makes the launchers, engine, and git workflow unusable.
+for _dep in git python3; do
+  if command -v "$_dep" >/dev/null 2>&1; then
+    pass "dependency '$_dep' found ($(command -v "$_dep"))"
+  else
+    fail "dependency '$_dep' not on PATH — install it before setup"
+  fi
+done
+
+# 1. Claude Code CLI on PATH + minimum version — without it there is no main
+#    dialog to talk to, and below CLAUDE_MIN_VERSION the Skill/plugin/hook
+#    surface the system depends on is absent.
 if command -v claude >/dev/null 2>&1; then
   pass "Claude Code CLI found ($(command -v claude))"
+  _claude_ver="$(claude --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+  if [[ -z "$_claude_ver" ]]; then
+    warn "could not parse 'claude --version' — need >= $CLAUDE_MIN_VERSION (Skill tool + plugins)"
+  elif version_ge "$_claude_ver" "$CLAUDE_MIN_VERSION"; then
+    pass "Claude Code version $_claude_ver (>= $CLAUDE_MIN_VERSION)"
+  else
+    fail "Claude Code $_claude_ver < required $CLAUDE_MIN_VERSION — upgrade Claude Code (Skill tool + plugins)"
+  fi
 else
   fail "Claude Code CLI ('claude') not on PATH — install Claude Code first"
 fi
@@ -152,10 +183,14 @@ fi
 
 echo
 if [[ "$FAIL" -eq 0 ]]; then
-  echo "Ready. Open 'claude' in your working directory and describe your task in plain language."
-  echo "  - No ticket: just describe it; a substantive task auto-plans and stops at the approval gate."
-  echo "  - With a ticket: mention the key (e.g. ABC-123) so tracker-management loads its context."
-  echo "    (Posting to a tracker needs that tracker's credentials configured — see the tracker-management skill.)"
+  echo "Ready. How to start working on tasks:"
+  echo "  - Run the SYSTEM with 'claude-task' (or 'claude-agent' for scripted -p/-c) — this is the"
+  echo "    disciplined agent on the isolated root ($CLAUDE_AGENT_HOME). Bare 'claude' stays your"
+  echo "    OWN personal ~/.claude, untouched — that is the user↔core switch."
+  echo "  - Then just describe your task in plain language (English or Russian):"
+  echo "      • No ticket: a substantive task auto-plans and stops at the approval gate."
+  echo "      • With a ticket: mention the key (e.g. ABC-123) so tracker-management loads its context."
+  echo "        (Posting to a tracker needs that tracker's credentials — see the tracker-management skill.)"
   echo "See README.md § Getting started — your first task."
 else
   echo "Not ready: fix the [FAIL] lines above (usually: re-run scripts/setup-symlinks.sh), then run this again."

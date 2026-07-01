@@ -79,3 +79,18 @@ if [[ -d "$_hook_dir" ]]; then
 fi
 
 printf 'onboard: done\n' >&2
+
+# Closing guidance: the user↔core switch + how to start. Printed only on a clean
+# run (doctor's own "Ready" block carries the full version). Kept short — the
+# single fact a new user must not miss is that the system is a SEPARATE install
+# from their personal claude, driven by claude-task / claude-agent.
+if [[ -z "$_dry" ]]; then
+  printf '\n' >&2
+  printf 'How to start working on tasks:\n' >&2
+  printf '  - Run the SYSTEM with "claude-task" (or "claude-agent" for scripted -p/-c).\n' >&2
+  printf '    Bare "claude" stays your OWN personal ~/.claude, untouched — that is the\n' >&2
+  printf '    user<->core switch: system lives in %s.\n' "$CLAUDE_AGENT_HOME" >&2
+  printf '  - Then describe your task in plain language; a substantive task auto-plans\n' >&2
+  printf '    and stops at the approval gate. Mention a ticket key to load its context.\n' >&2
+  printf '  (If any [FAIL] appeared above, fix it first — usually re-run setup-symlinks.sh.)\n' >&2
+fi

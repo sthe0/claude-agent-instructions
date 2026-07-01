@@ -39,6 +39,12 @@ Several projects can be grouped into a shared **workspace** (a storage tree outs
 
 ## Setup
 
+> **User install vs Core install — how to switch (read this first).** This system installs into its **own** config root (`~/.claude-agent`, override with `CLAUDE_AGENT_HOME`) and you run it with **`claude-task`** / **`claude-agent`**. Your **personal** `claude` on `~/.claude` is never touched. **That is the switch: bare `claude` = your personal install; `claude-task` / `claude-agent` = the Core system.** Auth is per-root, so you log the Core root in once (see [One-time login](docs/operations/setup.md#one-time-login-auth-is-per-root)). Every install path below — command or conversation — leaves bare `claude` yours and adds the Core entry points alongside it.
+
+### Requirements
+
+`doctor.sh` **fails** (not just warns) on a new machine if any is missing: **Claude Code ≥ 2.0.20** (the Skill tool landed in 2.0.20, plugins in 2.0.12 per the Claude Code changelog — the system is skill/plugin/hook-driven, so 2.0.20 is the floor; below it `doctor.sh` reports `[FAIL]`), plus **git** and **python3** on `PATH` (needed by the launchers, the `agentctl` engine, and the git workflow).
+
 ### Fastest path — one command
 
 ```bash
@@ -61,7 +67,7 @@ Nothing to copy. Open Claude Code anywhere and send it the repo URL:
 
 > Look at https://github.com/sthe0/claude-agent-instructions and initialize yourself per the README.
 
-A stock Claude fetches this README, runs the Setup steps (clone, `setup-symlinks.sh`, `doctor.sh`), and reports when it is green — showing what it will run before changing anything. Works in any language you write in.
+A stock Claude fetches this README, **checks the Requirements above first** (Claude Code ≥ 2.0.20, `git`, `python3`), runs the Setup steps (clone, `setup-symlinks.sh`, `doctor.sh`), and reports when it is green — showing what it will run before changing anything. It **calls out the user↔Core switch explicitly** (bare `claude` stays yours; the system runs under `claude-task` / `claude-agent`) and, once green, **finishes by telling you how to start your first task** (below). Works in any language you write in.
 
 ### Equivalent steps
 

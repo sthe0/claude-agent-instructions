@@ -2,6 +2,13 @@
 
 > How to wire the agent system on a new machine, confirm the runtime is ready, and distribute instructions to developers who can't push to Core.
 
+## Requirements
+
+Before wiring Core on a new machine, confirm the prerequisites — `doctor.sh` checks all three and **fails** (not just warns) if any is missing:
+
+- **Claude Code ≥ 2.0.20** — the system is skill-driven and uses plugins + hooks; per the Claude Code changelog the Skill tool landed in **2.0.20** and the plugin system in 2.0.12, so 2.0.20 is the binding floor. `doctor.sh` parses `claude --version` and reports `[FAIL]` below it; override the floor for tests with the `CLAUDE_MIN_VERSION` env var.
+- **git** and **python3** on `PATH` — the launchers, the `agentctl` engine, and the git workflow all need them.
+
 ## Initial setup
 
 ```bash
@@ -20,6 +27,8 @@ git clone git@github.com:sthe0/claude-agent-instructions.git ~/claude-agent-inst
 `doctor.sh` confirms the runtime is actually ready: the `claude` CLI is on PATH, the constitution is loaded, the engine hooks are armed, and `agentctl` runs. Fix any `[FAIL]` line (usually by re-running `setup-symlinks.sh`) before the first task.
 
 ## Isolated config root
+
+> **The user↔Core switch (the one thing not to miss).** Bare **`claude` = your personal install** on `~/.claude`, never touched. **`claude-task` / `claude-agent` = the Core system** on `~/.claude-agent`. Switching between the two is just choosing which entry point you launch — nothing is shared, copied, or overwritten between them. On a clean install `doctor.sh` and `onboard` print this switch and how to start your first task at the end (see [Starting a task](#starting-a-task-with-claude-task)).
 
 The system installs into and runs from its **own config root**, separate from your personal Claude config, so installing it never clobbers a pre-existing `~/.claude` and your personal settings never interfere with the system:
 
