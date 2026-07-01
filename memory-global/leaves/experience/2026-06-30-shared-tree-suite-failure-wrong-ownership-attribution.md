@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "user (inherited from parent 2026-06-29-org-portable-core-internal-coupling-opt-in; re-confirmed live this session)"
 refs: [2026-06-29-org-portable-core-internal-coupling-opt-in.md, 2026-06-29-resume-paused-task-isolated-worktree-pinned-sha.md]
 created: 2026-06-30
-last_verified: 2026-06-30
+last_verified: 2026-07-01
 ---
 
 # Diagnose ownership before treating a shared-tree red suite as your own regression
@@ -31,6 +31,10 @@ On any red full-suite/gate in a shared tree: (1) git status — list dirty + unt
 - Where it arose: enforce-subdifficulty-extraction Stage 1: verify-all.py came back red (verify-readme + lint-hooks-executable) right after the gate change landed — looked like the new gate broke CI
 - Working plan: git stash my two changed files and re-ran verify-all at HEAD: still red with the SAME 2 checks, caused by an unrelated parallel-session feature left untracked (scripts/enter-task.sh + scripts/project_entry/). Confirmed pre-existing/foreign, not my regression; committed only my own paths.
 
+
+### 2026-07-01 — A plausible PRIOR narrative reinforced the mis-attribution — 7 foreign failing tests were nearly taken as my blocker
+- Where it arose: Core task complete-config-root-isolation (session 4445f907): finishing a 6-stage runtime-reader migration on the isolate-agent-config-root branch, shared tree with a live parallel session building auto-migrate-on-pull.
+- Working plan: At the resolution gate, the full suite showed 7 NEW failures in test_sync_instructions_repo.py (incl. a broken plain push) plus modified sync-instructions-repo.sh, config-root.sh, doctor.sh, git-workflow.md, setup.md — none in my 6-stage file set. Because a REAL earlier fact held ('the stage-4 developer over-reached, doing stages 4+5'), I confidently mis-attributed this NEW foreign WIP to that same developer and spent tool-calls diagnosing it as my own broken deliverable (root-causing the push regression, weighing complete/exclude/revert). The user corrected the attribution in one line (paraphrased from Russian: "the auto-migration is happening in the neighboring session, not here"). Only then did ownership-diagnosis land: git status file set vs my plan's stages, timestamps (config-root.sh written 21:23 by the neighbor), and the foreign experience-leaf diff documenting THEIR task. Recovery: commit ONLY my explicit paths (git add <25 files>, never -A), leaving the neighbor's WIP + an unrelated Cloudflare leaf untouched; the 7 failures are the neighbor's incomplete feature, not my regression.
 ## Common core & variations
 **Common:** A red shared-tree gate misattributed to your change; the stash-baseline re-run isolates foreign from own.
 
