@@ -11,6 +11,7 @@ Every command function has the signature cmd_x(args, *, store, runner) -> Direct
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import hashlib
 import json
 import shlex
@@ -54,10 +55,34 @@ from .store import FileStateStore, StateStore
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 VERIFY_PLAN_CLI = REPO_ROOT / "scripts" / "verify-plan-file.py"
+GATE_LOG = Path.home() / ".claude" / "agentctl" / "gate-log.jsonl"
 
 
 def _digest(text: str) -> str:
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:12]
+
+
+def _log_gate(state: SessionState, gate: str, blockers: list[str], *, passed: bool) -> None:
+    """Append one {ts, session, node, gate, blockers, passed} line to GATE_LOG.
+
+    Fail-open: any I/O error is swallowed so telemetry never blocks a gate
+    transition. Mirrors cost.py's tolerant append-only JSONL-ledger idiom. Reads
+    GATE_LOG as a module global (not a captured default) so tests can monkeypatch
+    cli.GATE_LOG and have this pick it up on the next call."""
+    row = {
+        "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "session": state.session_id,
+        "node": state.node,
+        "gate": gate,
+        "blockers": list(blockers),
+        "passed": passed,
+    }
+    try:
+        GATE_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with GATE_LOG.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
 
 
 def _attach_advisories(d: Directive, kind: str, payload: dict, runner: Runner | None,
@@ -392,6 +417,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     blockers = gates.blockers(state, "plan_approval") + plugins.plugin_gate_blockers(state, "plan_approval")
     if not args.by or not args.by.strip():
         blockers = blockers + ["empty approver: --by must name who approved"]
+    _log_gate(state, "plan_approval", blockers, passed=not blockers)
     if blockers:
         return Directive(False, state.node, "fix_plan", "cannot approve", data={"blockers": blockers})
     state.approval = GateRecord("plan_approval", armed=True, passed=True, by=args.by)
@@ -717,6 +743,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
 def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     blockers = gates.blockers(state, "resolution")
+    _log_gate(state, "resolution", blockers, passed=not blockers)
     if blockers:
         return Directive(False, state.node, "fix_stages", "not ready for resolution", data={"blockers": blockers})
     # Final-gate execution (defense in depth): re-run every measurable stage's
@@ -775,6 +802,7 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     blockers = gates.blockers(state, "resolution") + plugins.plugin_gate_blockers(state, "resolution")
     if not args.by or not args.by.strip():
         blockers = blockers + ["empty confirmer: --by must name who confirmed resolution"]
+    _log_gate(state, "resolution", blockers, passed=not blockers)
     if blockers:
         return Directive(False, state.node, "fix_stages", "cannot resolve", data={"blockers": blockers})
     state.resolution = GateRecord("resolution", armed=True, passed=True, by=args.by)
@@ -883,6 +911,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # complete before a plan may be re-normed (variant (b) — internal command
     # precondition, not a tool-hook gate). [] outside DIAGNOSING.
     dblock = gates.difficulty_blockers(state)
+    _log_gate(state, "difficulty_blockers", dblock, passed=not dblock)
     if dblock:
         return Directive(False, state.node, "declare", "replan blocked by incomplete difficulty record",
                          data={"blockers": dblock})
@@ -897,6 +926,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # for the declared differences. Empty split -> [] -> behaves exactly as before.
     if state.difficulty and state.difficulty.critique:
         cov = gates.replan_coverage_blockers(old, new, state.difficulty.critique)
+        _log_gate(state, "replan_coverage", cov, passed=not cov)
         if cov:
             return Directive(False, state.node, "declare", "replan blocked: critique coverage",
                              data={"coverage_blockers": cov})
