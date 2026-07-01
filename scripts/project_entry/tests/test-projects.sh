@@ -41,6 +41,11 @@ printf '%s\n' 'not json {' > "$SHARED/broken/agent-project.json"
 # Machine-local record COMPLETES the shared beta/two with an absolute path.
 rec "$LOCAL" "beta/two" '{"workspace_path":"/abs/checkout/beta"}'
 
+# Colliding key across roots with DIVERGENT backend (arc shared, git local): must
+# warn on load and be disambiguable by an explicit backend qualifier.
+rec "$SHARED" "gamma/dup" '{"workspace_subpath":"gamma/dup","workspace_backend":"arc","tracker_queue":"Q-GAMMA-ARC"}'
+rec "$LOCAL"  "gamma/dup" '{"workspace_backend":"git"}'
+
 # Point the seam at the temp roots (shared first, machine-local last).
 export CLAUDE_PROJECTS_DIR="$SHARED"
 export CLAUDE_PROJECTS_LOCAL_DIR="$LOCAL"
@@ -123,6 +128,47 @@ if [[ "$got" == "delta/new" ]]; then ok "registered record is resolvable by key"
 else bad "registered record not resolvable — got '$got'"; fi
 if project_list 2>/dev/null | grep -q 'Q-DELTA'; then ok "registered record appears in list (Q-DELTA)"
 else bad "registered record missing from list"; fi
+
+# ── 8. divergent-backend collision warns; legitimate merge stays silent ─────
+coll_log="$TMP/coll.log"
+project_list >/dev/null 2>"$coll_log"
+if grep -q 'conflicting workspace_backend' "$coll_log" && grep 'conflicting workspace_backend' "$coll_log" | grep -q 'gamma/dup'; then
+  ok "divergent-backend collision warns (gamma/dup, arc vs git)"
+else
+  bad "no collision warning for gamma/dup — stderr: $(cat "$coll_log")"
+fi
+# beta/two is a legitimate completion merge (no backend divergence) — no warning.
+if grep 'conflicting workspace_backend' "$coll_log" | grep -q 'beta/two'; then
+  bad "legitimate completion merge (beta/two) wrongly flagged as a collision"
+else
+  ok "legitimate completion merge (beta/two) does not warn"
+fi
+
+# ── 9. explicit backend qualifier disambiguates the collision ───────────────
+got="$(project_get_fields "arc:gamma/dup" 2>/dev/null)"
+if grep -q '^workspace_backend=arc$' <<<"$got" && grep -q '^_key=gamma/dup$' <<<"$got"; then
+  ok "qualifier arc:gamma/dup selects the arc record"
+else
+  bad "qualifier arc:gamma/dup — got: $(printf '%s' "$got" | tr '\n' '|')"
+fi
+
+# Bare selector still resolves (later-root-wins merge -> git backend), unchanged.
+got="$(project_resolve "gamma/dup" 2>/dev/null)"
+if [[ "$got" == "gamma/dup" ]]; then ok "bare gamma/dup still resolves (later-root-wins)"
+else bad "bare gamma/dup — got '$got'"; fi
+
+# Qualifier on a unique, non-colliding key is a harmless no-op (alpha/one is git).
+got="$(project_resolve "git:alpha/one" 2>/dev/null)"
+if [[ "$got" == "alpha/one" ]]; then ok "qualifier git:alpha/one no-op on unique key"
+else bad "qualifier git:alpha/one — got '$got'"; fi
+
+# Qualifier naming a backend no record under the key has -> nothing (exit 1),
+# never a silent wrong pick. 'short' has no workspace_backend at all.
+if project_resolve "git:short" >/dev/null 2>&1; then
+  bad "qualifier git:short unexpectedly matched a backend-less record"
+else
+  ok "qualifier for an absent backend resolves to nothing (exit 1)"
+fi
 
 echo
 printf 'projects tests: %d passed, %d failed\n' "$PASS" "$FAIL"

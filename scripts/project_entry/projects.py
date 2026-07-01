@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from typing import Callable, Iterable
 
@@ -68,11 +69,16 @@ def load_records(
     on_warn    -- (message) sink for malformed/skipped records; default no-op.
 
     Returns a list of merged record dicts, each carrying its key under KEY_FIELD,
-    in first-seen key order. Never raises on a bad record — it is skipped with a
-    warning so one broken file cannot hide the rest of the registry.
+    in first-seen key order. Usually one record per key — but a key whose roots
+    disagree on workspace_backend yields multiple records for that key (older
+    variants followed by the final, later-root one), so callers must not assume
+    KEY_FIELD is unique across the returned list. Never raises on a bad record —
+    it is skipped with a warning so one broken file cannot hide the rest of the
+    registry.
     """
     merged: "dict[str, dict]" = {}
     order: "list[str]" = []
+    extra_by_key: "dict[str, list[dict]]" = {}
     for root in roots:
         for key, path in walk(root):
             text = read_file(path)
@@ -90,12 +96,31 @@ def load_records(
             if key not in merged:
                 merged[key] = {}
                 order.append(key)
+            # Same key across roots is a legitimate completion merge, but two
+            # roots disagreeing on the backend produce a silent chimera — warn,
+            # and keep the backend variants as separate records (instead of
+            # field-merging them) so each stays distinguishable by qualifier.
+            old_backend = merged[key].get("workspace_backend")
+            new_backend = raw.get("workspace_backend")
+            if old_backend and new_backend and old_backend != new_backend:
+                on_warn(
+                    f"projects: key {key!r} has conflicting workspace_backend "
+                    f"across roots ({old_backend!r} vs {new_backend!r}), later root wins"
+                )
+                snapshot = dict(merged[key])
+                snapshot[KEY_FIELD] = key
+                extra_by_key.setdefault(key, []).append(snapshot)
+                merged[key] = {}
             for field, value in raw.items():
                 if field == KEY_FIELD:
                     continue
                 merged[key][field] = value
             merged[key][KEY_FIELD] = key
-    return [merged[k] for k in order]
+    result: "list[dict]" = []
+    for key in order:
+        result.extend(extra_by_key.get(key, []))
+        result.append(merged[key])
+    return result
 
 
 def _is_path_suffix(pwd: str, cand: str) -> bool:
@@ -111,6 +136,27 @@ def _is_path_suffix(pwd: str, cand: str) -> bool:
     return pwd == cand or pwd.endswith("/" + cand)
 
 
+# A backend qualifier is a leading lowercase token followed by a colon, e.g.
+# 'arc:'. The remainder must be non-empty. Directory-path keys ('robot/deepagent')
+# never match — their first colon, if any, follows a slash.
+_BACKEND_QUALIFIER_RE = re.compile(r"^[a-z][a-z0-9]*:.+")
+
+
+def split_backend_qualifier(selector: str) -> "tuple[str | None, str]":
+    """Split an optional 'backend:' qualifier off the front of a selector.
+
+    Reserves a leading ``^[a-z][a-z0-9]*:`` prefix on selector strings to pin a
+    project's installation, e.g. ``arc:robot/deepagent`` -> ``("arc", "robot/deepagent")``.
+    A selector without that shape (including directory-path keys like
+    ``robot/deepagent``, whose first colon — if any — follows a slash) returns
+    ``(None, selector)`` unchanged, so the qualifier is purely opt-in.
+    """
+    if _BACKEND_QUALIFIER_RE.match(selector):
+        backend, bare = selector.split(":", 1)
+        return backend, bare
+    return None, selector
+
+
 def resolve(
     records: "list[dict]",
     selector: "str | None" = None,
@@ -118,18 +164,35 @@ def resolve(
 ) -> "dict | None":
     """Resolve a single record.
 
-    With a selector: match it against the record key first, then workspace_path.
-    Without a selector: pick the record whose workspace_subpath or workspace_path
-    is the LONGEST path-suffix of pwd. Returns None when nothing matches.
+    With a selector: an optional 'backend:' qualifier (e.g. 'arc:robot/deepagent')
+    pins the installation — match key/workspace_path filtered by workspace_backend.
+    Without a qualifier: match the selector against the record key first, then
+    workspace_path. Without a selector: pick the record whose workspace_subpath or
+    workspace_path is the LONGEST path-suffix of pwd. Returns None when nothing matches.
     """
     if selector:
+        qualifier, bare = split_backend_qualifier(selector)
+        if qualifier is not None:
+            for rec in records:
+                if (
+                    rec.get(KEY_FIELD) == bare or rec.get("workspace_path") == bare
+                ) and rec.get("workspace_backend") == qualifier:
+                    return rec
+            return None
+        # Later-root-wins: when a key has multiple separate records (a
+        # divergent-backend collision), the last one in load order is the
+        # one from the later root — match by scanning to the end, not
+        # stopping at the first hit.
+        match: "dict | None" = None
         for rec in records:
             if rec.get(KEY_FIELD) == selector:
-                return rec
+                match = rec
+        if match is not None:
+            return match
         for rec in records:
             if rec.get("workspace_path") == selector:
-                return rec
-        return None
+                match = rec
+        return match
 
     if not pwd:
         return None
