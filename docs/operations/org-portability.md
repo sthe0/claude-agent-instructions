@@ -20,11 +20,11 @@ This means a fresh clone in another org needs **zero edits** to Core.
 ~/claude-agent-instructions/scripts/doctor.sh           # expect all [ OK ]
 ```
 
-`setup-org.sh` is a thin, idempotent wrapper over `configure-identity.sh`: it runs the channel auto-detector, writes `~/.claude/agent-identity.local` (never overwriting an existing one), and prints an onboarding checklist. Git needs no special wiring — Claude uses `git`/`gh` directly; just have your VCS auth configured.
+`setup-org.sh` is a thin, idempotent wrapper over `configure-identity.sh`: it runs the channel auto-detector, writes the system root's `agent-identity.local` (`$CLAUDE_AGENT_HOME/agent-identity.local`, default `~/.claude-agent/…`; never overwriting an existing one), and prints an onboarding checklist. Git needs no special wiring — Claude uses `git`/`gh` directly; just have your VCS auth configured.
 
 ## The opt-in surface
 
-Everything org-specific is steered by per-machine keys in `~/.claude/agent-identity.local` (machine-local, never committed):
+Everything org-specific is steered by per-machine keys in the system root's `agent-identity.local` (`$CLAUDE_AGENT_HOME/agent-identity.local`, machine-local, never committed):
 
 | Key | Default (off-corp) | Internal Yandex | What it controls |
 |---|---|---|---|
@@ -52,6 +52,17 @@ Core's `registry.sh` resolves a backend **name** by checking its built-in direct
 ### Named project registry
 
 Which workspace subpath and tracker queue a key resolves to is **data, not hardcode**: a named project registry maps each project key (e.g. `robot/deepagent`) to its `{workspace_backend, workspace_subpath, tracker_backend, tracker_queue}`. Core merges two roots by key — a **machine-local** root (`~/.claude/projects.d`, holding absolute checkout paths written by `claude-task --register`, never versioned) and an optional **shared/versioned** root (`projects_dir` above, holding only portable fields, distributable to a team). `claude-task --list-projects` prints the merged table; `--project <key>` selects a record explicitly when invoked from outside any working copy. Absent a record, selection falls through to the auto-detect defaults, so a fresh org clone needs no registry to function.
+
+## Downstream overlay: the isolated-root contract
+
+A downstream org overlay (e.g. the Yandex `junk/the0/agents` tree) composes on top of Core and installs into the **same** isolated config root — it must **not** re-hardcode its own root. Core exposes the root as a single source of truth (`scripts/lib/config-root.sh`, which exports `CLAUDE_AGENT_HOME`, default `~/.claude-agent`); the overlay's own setup sources it and reuses the variable rather than writing `~/.claude` or a private path:
+
+```bash
+source "$CORE/scripts/lib/config-root.sh"     # exports CLAUDE_AGENT_HOME
+# install overlay symlinks under "$CLAUDE_AGENT_HOME/…", never ~/.claude
+```
+
+Because every Core setup script and launcher already honors `CLAUDE_AGENT_HOME`, an overlay that reuses it **inherits isolation with zero divergence**: bare `claude` stays personal, `claude-task` / `claude-agent` run Core ⊕ overlay on `~/.claude-agent`, and a single `CLAUDE_AGENT_HOME=/some/root` override relocates both in lockstep. An overlay that hardcodes a root instead re-introduces the clobber it was built to avoid and breaks the one-switch model — so reusing Core's resolver is the contract, not an optimization.
 
 ## What stays Yandex-flavored (and why it's harmless)
 

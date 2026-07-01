@@ -13,20 +13,51 @@ git clone git@github.com:sthe0/claude-agent-instructions.git ~/claude-agent-inst
 ~/claude-agent-instructions/scripts/doctor.sh
 ```
 
-`setup-symlinks.sh` is the single wiring command. It creates the symlinks under `~/.claude/` and `~/.cursor/`, merges the policy settings, and installs the reminder, engine-gate, and git hooks (via `apply-settings.sh`, `install-reminder-hooks.sh`, and `install-git-hooks.sh`). Re-run it whenever the repo layout changes.
+`setup-symlinks.sh` is the single wiring command. It creates the symlinks under the isolated system root (`$CLAUDE_AGENT_HOME`, default `~/.claude-agent`) and `~/.cursor/`, merges the policy settings, and installs the reminder, engine-gate, and git hooks (via `apply-settings.sh`, `install-reminder-hooks.sh`, and `install-git-hooks.sh`). Re-run it whenever the repo layout changes.
 
 `verify-instructions-sync.sh` confirms symlink integrity from the repo-developer's perspective.
 
 `doctor.sh` confirms the runtime is actually ready: the `claude` CLI is on PATH, the constitution is loaded, the engine hooks are armed, and `agentctl` runs. Fix any `[FAIL]` line (usually by re-running `setup-symlinks.sh`) before the first task.
 
+## Isolated config root
+
+The system installs into and runs from its **own config root**, separate from your personal Claude config, so installing it never clobbers a pre-existing `~/.claude` and your personal settings never interfere with the system:
+
+- **`CLAUDE_AGENT_HOME`** — the system root, `~/.claude-agent` by default; override the variable to relocate it. Single source of truth: `scripts/lib/config-root.sh`, sourced by every setup script and launcher.
+- **Bare `claude`** uses your personal `~/.claude` and is never modified — install, re-run, and self-improvement edits all land under `~/.claude-agent`.
+- **`claude-task` / `claude-agent`** run the system: the launchers export `CLAUDE_CONFIG_DIR=$CLAUDE_AGENT_HOME` around the `claude` exec (scoped to that process via `env`, so it never leaks into your interactive shell). `claude-agent` is a plain launch on the system root for scripted `-p`/`-c` use; `claude-task` adds workspace management.
+
+### One-time login (auth is per-root)
+
+`CLAUDE_CONFIG_DIR` relocates the entire config root, and **auth is per-root** — a fresh `~/.claude-agent` starts unauthenticated. By design **no credential is copied** out of `~/.claude` and no API key is written anywhere (an API key would lose the claude.ai subscription tier); instead you log the system root in once:
+
+```bash
+CLAUDE_CONFIG_DIR=~/.claude-agent claude auth login   # or: claude-agent /login
+```
+
+The token then lives in your OS keychain (encrypted). `setup-symlinks.sh` and `doctor.sh` print this command when the system root isn't logged in yet.
+
+### Migrating an older in-place install
+
+Machines set up before isolation have the system symlinks directly in `~/.claude`. Move them into the isolated root with:
+
+```bash
+scripts/migrate-to-isolated.sh            # preview — lists what would move, changes nothing
+scripts/migrate-to-isolated.sh --apply    # back up, then move
+```
+
+It relocates **only** system-owned entries (repo-pointing symlinks + `agent-identity.local`), leaves your personal files and the merged `settings.json` in place, backs up first, and is idempotent. `doctor.sh` warns while a legacy in-place layout is detected.
+
 ## Symlinks wired by `setup-symlinks.sh`
+
+`$AGENT` below is `$CLAUDE_AGENT_HOME` (default `~/.claude-agent`).
 
 | In repo | Runtime path |
 |---|---|
-| `CLAUDE.md` | `~/.claude/CLAUDE.md` |
-| `agents/*.md` | `~/.claude/agents/<name>.md` |
-| `skills/<name>/` | `~/.claude/skills/<name>/` |
-| `memory-global/` | `~/.claude/memory-global/` |
+| `CLAUDE.md` | `$AGENT/CLAUDE.md` |
+| `agents/*.md` | `$AGENT/agents/<name>.md` |
+| `skills/<name>/` | `$AGENT/skills/<name>/` |
+| `memory-global/` | `$AGENT/memory-global/` |
 | `cursor/rules/claude-code-sync.mdc` | `~/.cursor/rules/claude-code-sync.mdc` |
 | `cursor/agents/*.md` | `~/.cursor/agents/<name>.md` |
 
@@ -62,7 +93,7 @@ The wrapper resolves the issue, creates an isolated working copy (`git worktree`
 
 `--init <name>` creates a brand-new local git repository (git init + project memory scaffold + initial commit), registers it in the project registry, and enters it. The target directory defaults to `$PWD/<name>`; override the base with `CLAUDE_PROJECT_INIT_BASE=/some/dir`. You may also pass an absolute path or a path containing a slash as the name argument (e.g. `--init /path/to/myproject` or `--init projects/foo`) — in that case the path is used verbatim as the target and the last component becomes the project name.
 
-`claude-task` selects backends automatically. To override, add these keys to `~/.claude/agent-identity.local`:
+`claude-task` selects backends automatically. To override, add these keys to `$CLAUDE_AGENT_HOME/agent-identity.local` (default `~/.claude-agent/agent-identity.local`):
 - `project_backend` — workspace isolation mechanism (`git` by default; `arc` where `ya`+`arc` are present)
 - `tracker_backend` — issue source (`github` by default)
 

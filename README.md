@@ -2,7 +2,7 @@
 
 This repository turns a stock **Claude Code** (and, through a thin mirror, **Cursor**) into a disciplined **universal manager-actor**: one agent that takes any task and drives it to a verified result — planning, delegating to specialists, checking its own work, and accumulating reusable experience as it goes. The instructions, skills, coordination engine, and memory in this repo are what impose that discipline.
 
-The repo is the single source of truth for both tools. Edits appear at runtime via symlinks under `~/.claude/` and `~/.cursor/`. The canonical instruction file for both is the same [CLAUDE.md](CLAUDE.md); the Cursor rule (`cursor/rules/claude-code-sync.mdc`) is a thin mirror for the things Cursor cannot do natively (no Skill tool, no auto-memory writes).
+The repo is the single source of truth for both tools. It installs into its **own isolated config root** — `~/.claude-agent` by default, overridable with `CLAUDE_AGENT_HOME` — so a stock `claude` on your personal `~/.claude` is never touched; you run the system with `claude-task` / `claude-agent`. Edits appear at runtime via symlinks under that root (and `~/.cursor/` for Cursor). The canonical instruction file for both is the same [CLAUDE.md](CLAUDE.md); the Cursor rule (`cursor/rules/claude-code-sync.mdc`) is a thin mirror for the things Cursor cannot do natively (no Skill tool, no auto-memory writes).
 
 This README is the minimal entry point — what the system is, the core mental model, and how to start. Everything below that lives in [docs/](docs/README.md), the full documentation tree organized general → specific.
 
@@ -73,7 +73,7 @@ git clone git@github.com:sthe0/claude-agent-instructions.git ~/claude-agent-inst
 ~/claude-agent-instructions/scripts/doctor.sh                # "am I ready to start?" — run this once, expect all [ OK ]
 ```
 
-`setup-symlinks.sh` is the single wiring command: it lays the symlinks, merges the policy settings, and installs the reminder + engine-gate hooks and the git hooks. `doctor.sh` then confirms the runtime is ready — fix any `[FAIL]` line (usually by re-running `setup-symlinks.sh`) before your first task.
+`setup-symlinks.sh` is the single wiring command: it lays the symlinks, merges the policy settings, and installs the reminder + engine-gate hooks and the git hooks — all under the isolated root (`~/.claude-agent`), leaving your personal `~/.claude` untouched. Because auth is per-root, log the system root in once — `CLAUDE_CONFIG_DIR=~/.claude-agent claude auth login` (setup and `doctor.sh` print this when needed; nothing is copied out of `~/.claude`). Then start work with `claude-task`; bare `claude` stays your own. Upgrading from an older in-place install (symlinks already in `~/.claude`)? Run [`scripts/migrate-to-isolated.sh`](scripts/migrate-to-isolated.sh) (preview by default, `--apply` to move). `doctor.sh` then confirms the runtime is ready — fix any `[FAIL]` line (usually by re-running `setup-symlinks.sh`) before your first task.
 
 You do **not** need push rights to use the system — it runs fully from a read-only clone; self-improvement edits land as local commits and the upstream push is always gated behind your explicit confirmation. The full procedure (symlink table, per-machine settings merge, per-project local setup, and how the root and project trees compose) is in [docs/operations/setup.md](docs/operations/setup.md).
 
