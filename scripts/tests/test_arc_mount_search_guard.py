@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 HOOK = Path(__file__).resolve().parent.parent / "hook-arc-mount-search-guard.py"
 
 spec = importlib.util.spec_from_file_location("hook_arc_mount_search_guard", str(HOOK))
@@ -32,6 +34,18 @@ PROJ = f"{HOME}/claude-agent-instructions"
 
 def _is_deny(reason):
     return reason is not None
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_home(monkeypatch):
+    """decide() resolves roots via os.path.expanduser/expandvars/realpath, so on a
+    host whose real home is not /home/the0 (macOS: ~ -> /Users/..., /home is a
+    symlink into /System/Volumes/Data) every deny assertion below silently stops
+    matching the fixture mounts. Pin resolution to the fixture's world."""
+    monkeypatch.setenv("HOME", HOME)
+    monkeypatch.setattr(_mod.os.path, "expanduser",
+                        lambda p: HOME + p[1:] if p.startswith("~") else p)
+    monkeypatch.setattr(_mod.os.path, "realpath", lambda p, **kw: p)
 
 
 # --- arc_mounts_from_text ---
