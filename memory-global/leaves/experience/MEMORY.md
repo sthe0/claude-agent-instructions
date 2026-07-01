@@ -6,6 +6,10 @@ Sub-index of `memory-global/leaves/experience/`. Pointed at from `memory-global/
 
 Most recent first. (Migrated 2026-06-11 from the older task-centric format — the prior 12 leaves were merged into these 7 by recurring difficulty.)
 
+## 2026-07
+
+- [2026-07-01 — Engine specialist-spawn breaks on macOS (proc_tree /proc), and destructive rm from an empty var wiped ~/.claude](2026-07-01-2026-07-01-engine-spawn-proc-tree-macos-and-rm-empty-var.md) — Two macOS-surfaced difficulties in one substantive task. (1) agentctl dispatch auto-spawns via spawn-specialist.py, whose proc_tree.py cleanup reads Linux-only /proc; on macOS kill_tree raises FileNotFoundError so every spawn returns rc=1 with no marker and the engine mis-reports a completed stage as a spawn failure. (2) A live-verification cleanup rm -rf built with an interpolated $HASH that turned out empty collapsed to rm -rf $HOME/.claude/projects/ and deleted the personal auto-memory + all transcripts.
+
 ## 2026-06
 
 - [2026-06-30 — Mechanize 'child difficulties referenced, never inlined' as a write-time gate, then audit the corpus and extract the reusable ones](2026-06-30-mechanize-subdifficulty-extraction-and-audit.md) — Difficulty — a design rule (an experience leaf's child/sub-difficulties each get their OWN searchable difficulty/v1 leaf linked inline [[slug]], never buried in prose) lived in two docs but had NO enforcement, so it silently did not happen: the rule-exists-trigger-does-not-fire class. Consequence: buried child difficulties are unfindable by record-experience.py search (it ranks description + ## Difficulty only), so each is rediscovered from scratch. Fix mechanizes the decidable rule part as a gate in verify-experience-leaf.py (marker-in-prose AND no inline [[link]] -> reject at write/commit, advisory in the full-corpus scan), co-locates the rule with its enforcement in the two docs, then audits every difficulty-built leaf (experience/principles/system-knowledge/leaf-with-Difficulty, global+project) and extracts the genuinely reusable buried difficulties into their own leaves linked inline from where they arose.
