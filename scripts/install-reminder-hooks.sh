@@ -41,6 +41,9 @@ DESIRED = [
     ("PreToolUse",       "Bash",  "hook-skill-first.py",             5),
     ("UserPromptSubmit", None,    "hook-language-reminder.py",       5),
     ("PreToolUse",       "Bash|Grep|Glob", "hook-arc-mount-search-guard.py", 5),
+    # Hard gate: deny a recursive rm that (worst-case, with any empty $VAR) targets
+    # /, $HOME, ~/.claude, or the instruction repo — the agent's own memory/config.
+    ("PreToolUse",       "Bash",  "hook-guard-destructive-rm.py",    5),
     ("PostToolUse",      "Write", "hook-self-critique-reminder.py",  5),
     ("SessionStart",     None,    "hook-policy-scorecard-due.py",    5),
     ("SessionStart",     None,    "hook-sigma-sentinel-due.py",  5),
