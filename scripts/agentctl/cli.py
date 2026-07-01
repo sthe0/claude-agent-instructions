@@ -928,8 +928,18 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         cov = gates.replan_coverage_blockers(old, new, state.difficulty.critique)
         _log_gate(state, "replan_coverage", cov, passed=not cov)
         if cov:
-            return Directive(False, state.node, "declare", "replan blocked: critique coverage",
-                             data={"coverage_blockers": cov})
+            waiver = getattr(args, "coverage_waiver", None)
+            if waiver is None:
+                return Directive(False, state.node, "declare", "replan blocked: critique coverage",
+                                 data={"coverage_blockers": cov})
+            if not waiver.strip():
+                return Directive(False, state.node, "declare",
+                                 "coverage waiver reason must not be empty",
+                                 data={"coverage_blockers": cov})
+            # a conscious, recorded bypass — only the coverage gate, never the
+            # difficulty-record completeness precondition checked above.
+            state.log("replan_coverage_waived", reason=waiver, blockers=list(cov))
+            _log_gate(state, "replan_coverage_waiver", cov, passed=True)
 
     kind = diff_plans(old, new)
 
@@ -1491,6 +1501,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("verify-final"); sp.add_argument("--session", required=True)
     sp = add("resolve"); sp.add_argument("--session", required=True); sp.add_argument("--by", required=True)
     sp = add("replan"); sp.add_argument("--session", required=True); sp.add_argument("--plan", required=True)
+    sp.add_argument("--coverage-waiver", dest="coverage_waiver", default=None,
+                    help="bypass a failing coverage gate with a recorded reason (refused if empty); "
+                         "never bypasses the difficulty-record completeness precondition")
     sp = add("block"); sp.add_argument("--session", required=True); sp.add_argument("--reason", default="")
     sp = add("unblock"); sp.add_argument("--session", required=True)
     sp = add("status"); sp.add_argument("--session", required=False)

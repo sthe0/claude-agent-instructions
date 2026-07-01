@@ -1,5 +1,7 @@
 """Replan diff routing: refinement resumes execution; substantive re-arms the gate.
-Also covers the loop guard on repeated identical stage failures."""
+Also covers the loop guard on repeated identical stage failures, and the
+--coverage-waiver bypass of the replan coverage gate."""
+import json
 from argparse import Namespace
 
 from agentctl import cli
@@ -9,6 +11,12 @@ from agentctl.state import Node, StageStatus
 
 def ns(**kw):
     return Namespace(**kw)
+
+
+def _read_gate_log(path):
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def _to_executing_stage1(store, sid, plan):
@@ -220,3 +228,75 @@ def test_loop_guard_escalates_on_repeated_failure(store, fixtures_dir):
 
     d = cli.cmd_record_result(ns(session=sid, status="failed", actual="same error"), store=store)
     assert d.marker == "ESCALATE"
+
+
+# --- --coverage-waiver: bypass of the replan coverage gate -------------------
+
+def _to_diagnosing_with_critique(store, sid, plan, *, invariants_to_preserve=None):
+    """Drive a session into DIAGNOSING with a critique that declares a similarity
+    neither fixture plan carries as a stage condition/invariant, guaranteeing the
+    coverage gate blocks."""
+    _to_executing_stage1(store, sid, plan)
+    cli.cmd_record_result(ns(session=sid, status="failed", actual="boom"), store=store)
+    cli.cmd_declare(ns(session=sid, expected="e", actual="a", mismatch="m"), store=store)
+    cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
+                           hypotheses=["h1", "h2"]), store=store)
+    cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
+                        invariants_to_preserve=invariants_to_preserve or ["keep idempotency"],
+                        differences_to_remove=[]), store=store)
+
+
+def test_coverage_waiver_bypasses_block_and_is_recorded(store, monkeypatch, tmp_path, fixtures_dir):
+    log_path = tmp_path / "gate-log.jsonl"
+    monkeypatch.setattr(cli, "GATE_LOG", log_path)
+    sid = "cw1"
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    _to_diagnosing_with_critique(store, sid, plan)
+
+    blocked = cli.cmd_replan(ns(session=sid, plan=refined, coverage_waiver=None), store=store)
+    assert blocked.ok is False
+    assert "coverage_blockers" in blocked.data
+
+    d = cli.cmd_replan(
+        ns(session=sid, plan=refined, coverage_waiver="accepted risk, tracked in ABC-1"),
+        store=store,
+    )
+    assert d.ok is True
+
+    state = store.load(sid)
+    waived = [h for h in state.history if h.get("event") == "replan_coverage_waived"]
+    assert len(waived) == 1
+    assert waived[0]["reason"] == "accepted risk, tracked in ABC-1"
+
+    rows = _read_gate_log(log_path)
+    assert "replan_coverage_waiver" in [r["gate"] for r in rows]
+
+
+def test_coverage_waiver_empty_reason_refused(store, fixtures_dir):
+    sid = "cw2"
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    _to_diagnosing_with_critique(store, sid, plan)
+
+    d = cli.cmd_replan(ns(session=sid, plan=refined, coverage_waiver="   "), store=store)
+    assert d.ok is False
+    assert "coverage_blockers" in d.data
+    state = store.load(sid)
+    assert not any(h.get("event") == "replan_coverage_waived" for h in state.history)
+
+
+def test_coverage_waiver_does_not_bypass_difficulty_completeness(store, fixtures_dir):
+    """A waiver only lifts the coverage gate — it must not let a replan through
+    while the difficulty record (declare/investigate/critique) is incomplete."""
+    sid = "cw3"
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    _to_executing_stage1(store, sid, plan)
+    cli.cmd_record_result(ns(session=sid, status="failed", actual="boom"), store=store)
+    # difficulty record left incomplete: no declare/investigate/critique yet
+
+    d = cli.cmd_replan(ns(session=sid, plan=refined, coverage_waiver="whatever reason"), store=store)
+    assert d.ok is False
+    assert "blockers" in d.data
+    assert d.action == "declare"

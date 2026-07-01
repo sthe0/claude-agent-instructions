@@ -206,3 +206,22 @@ def test_coverage_empty_split_passes_even_with_identical_means():
     old = _cov_doc([_cov_stage(1)])
     new = _cov_doc([_cov_stage(1)])  # nothing changed
     assert gates.replan_coverage_blockers(old, new, _critique()) == []
+
+
+def test_coverage_rephrased_similarity_passes_after_normalization():
+    """Case/whitespace-only rephrasing of a carried invariant must not block —
+    the gate checks substance, not verbatim text."""
+    old = _cov_doc([_cov_stage(1)])
+    new = _cov_doc([_cov_stage(1, conditions="  Keep   Idempotency  ")])
+    crit = _critique(invariants_to_preserve=["keep idempotency"])
+    assert gates.replan_coverage_blockers(old, new, crit) == []
+
+
+def test_coverage_missing_invariant_still_blocks_after_normalization():
+    """Normalization must not turn the gate into a rubber stamp: an invariant
+    genuinely absent from the corrected plan still blocks."""
+    old = _cov_doc([_cov_stage(1)])
+    new = _cov_doc([_cov_stage(1, conditions="totally unrelated text")])
+    crit = _critique(invariants_to_preserve=["keep idempotency"])
+    blockers = gates.replan_coverage_blockers(old, new, crit)
+    assert blockers and "keep idempotency" in blockers[0]

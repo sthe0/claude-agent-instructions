@@ -120,7 +120,9 @@ def replan_coverage_blockers(old_doc, new_doc, critique) -> list[str]:
 
     Declared-item-scoped: empty lists pass vacuously, so a critique that records no
     split (or, via the cmd_replan guard, a replan with no difficulty present)
-    behaves exactly as before. Membership is plain substring; no fuzzy matching.
+    behaves exactly as before. Membership is substring after `_normalize_string`
+    on both sides (casefold + collapsed whitespace) — an honest rephrasing of the
+    same invariant passes; a genuinely absent one still blocks.
 
     Unlike the two hard gates this takes PlanDocs, not just state — it is therefore
     NOT registered in GUARDIANS and is called directly from cmd_replan."""
@@ -132,10 +134,11 @@ def replan_coverage_blockers(old_doc, new_doc, critique) -> list[str]:
         for s in new_doc.stages
         for part in (s.conditions or "", s.subject.invariants or "")
     )
+    norm_haystack = _normalize_string(haystack)
     for item in critique.invariants_to_preserve:
         if not (item or "").strip():
             continue
-        if item not in haystack:
+        if _normalize_string(item) not in norm_haystack:
             out.append(
                 f"similarity to preserve not carried into any stage conditions/invariants: {item!r}"
             )
