@@ -31,9 +31,10 @@ import time
 from pathlib import Path
 
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
+from lib.config_root import skills_dir  # config-root resolver (isolated system root)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SKILLS_DIR = Path.home() / ".claude" / "skills"
+SKILLS_DIR = skills_dir()
 CURSOR_AGENTS_DIR = REPO_ROOT / "cursor" / "agents"
 CONFIG_MD = REPO_ROOT / "config.md"
 PERMISSIONS_CLI = REPO_ROOT / "scripts" / "permissions-cli.py"

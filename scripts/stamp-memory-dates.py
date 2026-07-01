@@ -34,6 +34,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.config_root import agent_home
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 FILENAME_DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})")
@@ -143,7 +146,7 @@ def iter_leaves(scope: str, project_dir: str | None):
         if project_dir:
             roots.append(Path(project_dir) / ".claude" / "agent-memory")
     if scope in ("personal", "all"):
-        projects = Path.home() / ".claude" / "projects"
+        projects = agent_home() / "projects"  # system root (isolated or legacy)
         if projects.is_dir():
             roots += sorted(projects.glob("*/memory"))
     for root in roots:

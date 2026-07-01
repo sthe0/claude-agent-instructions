@@ -31,8 +31,11 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.config_root import agent_home
+
 COST_LOG = Path.home() / ".local" / "log" / "claude-spawn-costs.jsonl"
-PROJECTS_ROOT = Path.home() / ".claude" / "projects"
+PROJECTS_ROOT = agent_home() / "projects"  # system root (isolated or legacy)
 
 # Tool names whose tool_use entries are counted as inline invocations.
 SKILL_TOOL = "Skill"

@@ -3,6 +3,9 @@
 set -euo pipefail
 
 REPO="${CLAUDE_INSTRUCTIONS_REPO:-$HOME/claude-agent-instructions}"
+SCRIPTS_DIR="$(dirname "${BASH_SOURCE[0]}")" || SCRIPTS_DIR="."
+# shellcheck source=scripts/lib/config-root.sh
+source "$SCRIPTS_DIR/lib/config-root.sh"  # exports CLAUDE_AGENT_HOME (system root — isolated or legacy)
 FAIL=0
 _realpath() { python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$1"; }
 
@@ -30,15 +33,15 @@ if [[ -x "$REPO/scripts/verify-layout-contract.sh" ]]; then
 fi
 
 echo "=== Global symlinks ==="
-check_link "$HOME/.claude/CLAUDE.md" "$REPO/CLAUDE.md"
+check_link "$CLAUDE_AGENT_HOME/CLAUDE.md" "$REPO/CLAUDE.md"
 check_link "$HOME/.cursor/rules/claude-code-sync.mdc" "$REPO/cursor/rules/claude-code-sync.mdc"
-check_link "$HOME/.claude/memory-global" "$REPO/memory-global"
+check_link "$CLAUDE_AGENT_HOME/memory-global" "$REPO/memory-global"
 
 for f in "$REPO/agents/"*.md; do
   [[ -f "$f" ]] || continue
   base="$(basename "$f")"
   [[ "$base" == "README.md" ]] && continue
-  check_link "$HOME/.claude/agents/$base" "$f"
+  check_link "$CLAUDE_AGENT_HOME/agents/$base" "$f"
 done
 
 for f in "$REPO/cursor/agents/"*.md; do
@@ -60,7 +63,7 @@ if [[ -d "$REPO/skills" ]]; then
     base="$(basename "$d")"
     # The specializations/ container is not symlinked; its contents are flattened.
     [[ "$base" == "specializations" ]] && continue
-    check_link "$HOME/.claude/skills/$base" "$d"
+    check_link "$CLAUDE_AGENT_HOME/skills/$base" "$d"
   done
 fi
 
@@ -68,13 +71,13 @@ if [[ -d "$REPO/skills/specializations" ]]; then
   for d in "$REPO/skills/specializations/"*/; do
     [[ -d "$d" ]] || continue
     d="${d%/}"
-    check_link "$HOME/.claude/skills/$(basename "$d")" "$d"
+    check_link "$CLAUDE_AGENT_HOME/skills/$(basename "$d")" "$d"
   done
 fi
 
 # Stale agents that should no longer exist
 for stale in manager.md memory.md self-improvement.md yandex-developer.md; do
-  if [[ -L "$HOME/.claude/agents/$stale" || -f "$HOME/.claude/agents/$stale" ]]; then
+  if [[ -L "$CLAUDE_AGENT_HOME/agents/$stale" || -f "$CLAUDE_AGENT_HOME/agents/$stale" ]]; then
     echo "FAIL: stale agent symlink $stale"
     FAIL=1
   fi

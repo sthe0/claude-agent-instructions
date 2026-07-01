@@ -9,11 +9,13 @@
 # Usage:
 #   setup-org.sh [--non-interactive]
 #
-# Idempotent: never overwrites an existing ~/.claude/agent-identity.local
-# (that guarantee is delegated to configure-identity.sh). No network calls.
+# Idempotent: never overwrites an existing agent-identity.local in the system
+# config root (that guarantee is delegated to configure-identity.sh). No network calls.
 set -euo pipefail
 
 SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/config-root.sh
+source "$SCRIPTS_DIR/lib/config-root.sh"   # exports CLAUDE_AGENT_HOME (isolated root)
 
 for arg in "$@"; do
   case "$arg" in
@@ -23,7 +25,7 @@ for arg in "$@"; do
   esac
 done
 
-IDENTITY_FILE="$HOME/.claude/agent-identity.local"
+IDENTITY_FILE="$CLAUDE_AGENT_HOME/agent-identity.local"
 
 # 1. Detect + write the per-machine identity (idempotent; never overwrites).
 "$SCRIPTS_DIR/configure-identity.sh"

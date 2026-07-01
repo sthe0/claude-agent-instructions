@@ -5,7 +5,9 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 MCP_DIR="$REPO/mcp-local"
-SETTINGS="$HOME/.claude/settings.local.json"
+# shellcheck source=scripts/lib/config-root.sh
+source "$REPO/scripts/lib/config-root.sh"  # exports CLAUDE_AGENT_HOME (system root)
+SETTINGS="${CLAUDE_SETTINGS_LOCAL:-$CLAUDE_AGENT_HOME/settings.local.json}"  # system root (isolated or legacy)
 
 if [[ ! -d "$MCP_DIR" ]]; then
   echo "mcp-local/ not found, nothing to do"

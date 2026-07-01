@@ -24,8 +24,11 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.config_root import agent_home
+
 COST_LOG = Path.home() / ".local" / "log" / "claude-spawn-costs.jsonl"
-PROJECTS_DIR = Path.home() / ".claude" / "projects"
+PROJECTS_DIR = agent_home() / "projects"  # system root (isolated or legacy)
 
 # USD per 1M tokens. Rates change — refresh via the `claude-api` skill.
 # cache_write = 5-minute cache-creation rate (1.25x base input); cache_read = 0.1x base input.

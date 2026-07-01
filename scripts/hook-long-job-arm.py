@@ -16,8 +16,9 @@ Detection (any one fires):
     `nirvana ... start`, `yt start-op`, `sandbox create`.
 
 The orchestrator name list is operator-configurable so this works in any org:
-set `long_job_orchestrators=name1,name2` (comma/space-separated) in
-`~/.claude/agent-identity.local`. When the key is absent the built-in default
+set `long_job_orchestrators=name1,name2` (comma/space-separated) in the system
+config root's `agent-identity.local` (resolved via scripts/lib/config_root.py:
+`~/.claude-agent` when isolated). When the key is absent the built-in default
 (Yandex orchestrators) is used, so an unconfigured machine behaves unchanged.
 
 Advisory only: prints to stdout (model context), exit 0 always, never blocks.
@@ -39,7 +40,7 @@ DEFAULT_ORCHESTRATORS = ("nirvana", "sandbox", "reactor", "vh3", "hitman", "yt")
 
 def _orchestrator_names(identity_path=None) -> tuple[str, ...]:
     """Resolve the orchestrator name list. Reads `long_job_orchestrators=`
-    (comma/space-separated) from ~/.claude/agent-identity.local, falling back to
+    (comma/space-separated) from the resolved agent-identity.local, falling back to
     DEFAULT_ORCHESTRATORS. Fail-open: any error yields the default (a hook must
     never crash the Bash call it advises on)."""
     try:

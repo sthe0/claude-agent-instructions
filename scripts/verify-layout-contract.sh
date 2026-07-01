@@ -3,6 +3,9 @@
 set -euo pipefail
 
 REPO="${CLAUDE_INSTRUCTIONS_REPO:-$HOME/claude-agent-instructions}"
+SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/config-root.sh
+source "$SCRIPTS_DIR/lib/config-root.sh"  # exports CLAUDE_AGENT_HOME (system root — isolated or legacy)
 FAIL=0
 
 fail() {
@@ -159,18 +162,20 @@ done
 ok "all scripts/hook-*.py registered in contract + scripts/README.md"
 
 echo "=== Runtime symlinks ==="
-if [[ -L "$HOME/.claude/CLAUDE.md" ]]; then ok "~/.claude/CLAUDE.md"; else fail "~/.claude/CLAUDE.md not symlink"; fi
-if [[ -L "$HOME/.claude/config.md" ]]; then ok "~/.claude/config.md"; else fail "~/.claude/config.md not symlink"; fi
-if [[ -L "$HOME/.claude/memory-global" ]]; then ok "~/.claude/memory-global"; else fail "~/.claude/memory-global"; fi
-if [[ -d "$HOME/.claude/skills" ]]; then ok "~/.claude/skills"; else fail "~/.claude/skills"; fi
+# System root (isolated: ~/.claude-agent, or legacy non-isolated: ~/.claude)
+if [[ -L "$CLAUDE_AGENT_HOME/CLAUDE.md" ]]; then ok "CLAUDE.md (in $CLAUDE_AGENT_HOME)"; else fail "CLAUDE.md not symlink in $CLAUDE_AGENT_HOME"; fi
+if [[ -L "$CLAUDE_AGENT_HOME/config.md" ]]; then ok "config.md (in $CLAUDE_AGENT_HOME)"; else fail "config.md not symlink in $CLAUDE_AGENT_HOME"; fi
+if [[ -L "$CLAUDE_AGENT_HOME/memory-global" ]]; then ok "memory-global (in $CLAUDE_AGENT_HOME)"; else fail "memory-global not symlink in $CLAUDE_AGENT_HOME"; fi
+if [[ -d "$CLAUDE_AGENT_HOME/skills" ]]; then ok "skills (in $CLAUDE_AGENT_HOME)"; else fail "skills not dir in $CLAUDE_AGENT_HOME"; fi
 
 # ~/.claude/memory (old local memory dir) must be gone in the new model
 if [[ -e "$HOME/.claude/memory" ]]; then
   fail "~/.claude/memory exists — superseded by ~/.claude/memory-global and <project>/.claude/agent-memory. Remove it."
 fi
 
+# scripts-local is personal-scoped (machine-local only, not in the system root)
 if [[ -L "$HOME/.claude/scripts-local" ]]; then
-  ok "~/.claude/scripts-local"
+  ok "~/.claude/scripts-local (personal)"
 fi
 
 if [[ "$FAIL" -eq 0 ]]; then

@@ -54,7 +54,10 @@ INTERRUPT_SENTINEL = cost_report.INTERRUPT_SENTINEL
 CORRECTION_RE = cost_report.CORRECTION_RE
 PRICING = cost_report.PRICING_USD_PER_MTOK
 
-PROJECTS_DIR = Path.home() / ".claude" / "projects"
+# System root (resolved via config_root) for transcripts
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.config_root import agent_home
+PROJECTS_DIR = agent_home() / "projects"
 LEDGER = Path.home() / ".local" / "log" / "claude-policy-ledger.jsonl"
 
 MODEL_KEYS = ("opus", "sonnet", "haiku")

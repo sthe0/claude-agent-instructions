@@ -23,7 +23,7 @@ automatically via `git push --dry-run`. If that succeeds, you are an author; no 
 ## Per-machine setup
 
 `setup-symlinks.sh` calls `configure-identity.sh` automatically, which creates
-`~/.claude/agent-identity.local` if the file is absent. The channel is **auto-detected** at that
+`~/.claude-agent/agent-identity.local` if the file is absent. The channel is **auto-detected** at that
 point from hardware signals (via `difficulty_channel.detect`) — you normally do not set it by hand.
 
 Detection precedence (first match wins), written into the file as `# detected:` comments so you can
@@ -43,10 +43,10 @@ To **override** the detected value (or switch later), edit the `difficulty_chann
 
 ```bash
 # Force the external GitHub Issues channel
-echo "difficulty_channel=github" > ~/.claude/agent-identity.local
+echo "difficulty_channel=github" > ~/.claude-agent/agent-identity.local
 
 # Force the internal Yandex Tracker channel
-echo "difficulty_channel=startrek" > ~/.claude/agent-identity.local
+echo "difficulty_channel=startrek" > ~/.claude-agent/agent-identity.local
 ```
 
 `configure-identity.sh` **never overwrites an existing file**, so a manual choice (or a prior

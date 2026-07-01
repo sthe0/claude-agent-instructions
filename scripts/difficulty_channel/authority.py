@@ -6,8 +6,10 @@ param is a test seam only; the config-flag branch (``is_author`` row in config.m
 because config.md is git-shared and therefore identical on every clone, making the flag useless
 as a per-machine discriminator.
 
-Channel selection: the machine's preferred channel is read from ``~/.claude/agent-identity.local``
-(``difficulty_channel=<name>``); the default is ``startrek`` (internal Yandex Tracker queue
+Channel selection: the machine's preferred channel is read from the system config root's
+``agent-identity.local`` (resolved via ``scripts/lib/config_root.py`` — ``~/.claude-agent`` when
+isolated, ``~/.claude`` on a legacy machine); (``difficulty_channel=<name>``); the default is
+``startrek`` (internal Yandex Tracker queue
 OOSEVENREPORT). External contributors set ``difficulty_channel=github``.
 
 Both the push probe and the HTTP clients are injectable so tests run offline with no real push.
@@ -15,6 +17,7 @@ Both the push probe and the HTTP clients are injectable so tests run offline wit
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 from typing import Callable
 
@@ -22,7 +25,10 @@ from .port import DifficultyRecord, get_channel
 from . import adapters as _adapters  # noqa: F401  — registers startrek/github/external in the registry
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-LOCAL_IDENTITY_PATH = Path.home() / ".claude" / "agent-identity.local"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # scripts/ for lib.config_root
+from lib.config_root import identity_file  # noqa: E402
+
+LOCAL_IDENTITY_PATH = identity_file()
 DEFAULT_CHANNEL = "startrek"
 
 

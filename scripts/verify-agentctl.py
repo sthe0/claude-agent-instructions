@@ -12,7 +12,8 @@ consistent:
      (BLOCKED via the block side-channel, which is intentional and not in the
      pure table) and no non-terminal Node is a dead end with no outgoing edge.
   3. Every cognitive leaf the engine can emit (spawn kinds + the difficulty
-     skill) resolves to an existing ~/.claude/skills/<name>/SKILL.md.
+     skill) resolves to an existing <config-root>/skills/<name>/SKILL.md
+     (config-root resolved via scripts/lib/config_root.py, not hardcoded).
   4. Every engine gate has a guardian hook wired in install-reminder-hooks.sh
      DESIRED (plan_approval -> hook-state-gate.py; resolution ->
      hook-resolution-reminder.py).
@@ -36,11 +37,14 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
-SKILLS_ROOT = Path.home() / ".claude" / "skills"
 INSTALL_SCRIPT = SCRIPTS_DIR / "install-reminder-hooks.sh"
 
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
+
+from lib.config_root import skills_dir  # noqa: E402  (needs SCRIPTS_DIR on sys.path)
+
+SKILLS_ROOT = skills_dir()  # isolated system root, not hardcoded ~/.claude
 
 # Skill / specialist names the engine can emit: spawn kinds dispatched via
 # spawn-specialist.py (`spawn:<kind>` stage executors) plus the difficulty skill

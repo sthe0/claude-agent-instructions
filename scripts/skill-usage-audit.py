@@ -30,7 +30,10 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-PROJECTS_ROOT = Path.home() / ".claude" / "projects"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.config_root import agent_home
+
+PROJECTS_ROOT = agent_home() / "projects"  # system root (isolated or legacy)
 # Two layouts seen in jsonl transcripts:
 #   1. attachment of type "skill_listing" carrying the bullet list as a string.
 #   2. Inline system-reminder text starting with "The following skills are available...".

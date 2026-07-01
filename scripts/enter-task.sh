@@ -27,6 +27,8 @@
 set -uo pipefail
 
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/config-root.sh
+source "$_SCRIPT_DIR/lib/config-root.sh"   # exports CLAUDE_AGENT_HOME (isolated root)
 # shellcheck source=scripts/project_entry/registry.sh
 source "$_SCRIPT_DIR/project_entry/registry.sh"
 # shellcheck source=scripts/project_entry/projects.sh
@@ -127,7 +129,7 @@ fi
 # difficulty_channel in the machine-local agent-identity file.
 GH_BIN="${GH_BIN:-gh}"   # consumed by trackers/github.sh
 
-_identity_file="${CLAUDE_AGENT_IDENTITY:-$HOME/.claude/agent-identity.local}"
+_identity_file="${CLAUDE_AGENT_IDENTITY:-$CLAUDE_AGENT_HOME/agent-identity.local}"
 _id_get() { [[ -r "$_identity_file" ]] && sed -n "s/^$1=//p" "$_identity_file" | head -1; }
 id_ws="$(_id_get project_backend)"
 id_tr="$(_id_get tracker_backend)"

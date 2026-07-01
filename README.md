@@ -79,7 +79,7 @@ git clone git@github.com:sthe0/claude-agent-instructions.git ~/claude-agent-inst
 ~/claude-agent-instructions/scripts/doctor.sh                # "am I ready to start?" — run this once, expect all [ OK ]
 ```
 
-`setup-symlinks.sh` is the single wiring command: it lays the symlinks, merges the policy settings, and installs the reminder + engine-gate hooks and the git hooks — all under the isolated root (`~/.claude-agent`), leaving your personal `~/.claude` untouched. Because auth is per-root, log the system root in once — `CLAUDE_CONFIG_DIR=~/.claude-agent claude auth login` (setup and `doctor.sh` print this when needed; nothing is copied out of `~/.claude`). Then start work with `claude-task`; bare `claude` stays your own. Upgrading from an older in-place install (symlinks already in `~/.claude`)? Run [`scripts/migrate-to-isolated.sh`](scripts/migrate-to-isolated.sh) (preview by default, `--apply` to move). `doctor.sh` then confirms the runtime is ready — fix any `[FAIL]` line (usually by re-running `setup-symlinks.sh`) before your first task.
+`setup-symlinks.sh` is the single wiring command: it lays the symlinks, merges the policy settings, and installs the reminder + engine-gate hooks and the git hooks — all under the isolated root (`~/.claude-agent`), leaving your personal `~/.claude` untouched. Because auth is per-root, log the system root in once — `CLAUDE_CONFIG_DIR=~/.claude-agent claude auth login` (setup and `doctor.sh` print this when needed; nothing is copied out of `~/.claude`). Then start work with `claude-task`; bare `claude` stays your own. Upgrading from an older in-place install (symlinks already in `~/.claude`)? You normally do nothing: a `sync-instructions-repo.sh pull` (or `onboard`) in an interactive terminal auto-migrates you to the isolated root — a cron/headless pull prints an `ACTION NEEDED` line instead of moving files — or run [`scripts/migrate-to-isolated.sh`](scripts/migrate-to-isolated.sh) yourself (`--apply` to move). `doctor.sh` then confirms the runtime is ready — fix any `[FAIL]` line (usually by re-running `setup-symlinks.sh`) before your first task.
 
 You do **not** need push rights to use the system — it runs fully from a read-only clone; self-improvement edits land as local commits and the upstream push is always gated behind your explicit confirmation. The full procedure (symlink table, per-machine settings merge, per-project local setup, and how the root and project trees compose) is in [docs/operations/setup.md](docs/operations/setup.md).
 
@@ -122,7 +122,7 @@ claude-task --list-projects      # show the named project registry (key → work
 
 The bare `cd ~/my-project && claude` flow still works exactly as before — `claude-task` is an optional shortcut.
 
-It selects a **workspace** backend (a `git` worktree by default; an `arc` mount where `ya`+`arc` are present) and a **tracker** backend (GitHub Issues by default) — auto-detected and overridable via the `project_backend` / `tracker_backend` keys in `~/.claude/agent-identity.local`. Auth variants `claude-<profile>` (e.g. `claude-team`, `claude-personal`) are the same entry on a machine-local auth profile. Core ships only the `git`/`github` defaults and the `default` profile; specialized backends install from workspace storage — see [docs/operations/org-portability.md](docs/operations/org-portability.md).
+It selects a **workspace** backend (a `git` worktree by default; an `arc` mount where `ya`+`arc` are present) and a **tracker** backend (GitHub Issues by default) — auto-detected and overridable via the `project_backend` / `tracker_backend` keys in `~/.claude-agent/agent-identity.local`. Auth variants `claude-<profile>` (e.g. `claude-team`, `claude-personal`) are the same entry on a machine-local auth profile. Core ships only the `git`/`github` defaults and the `default` profile; specialized backends install from workspace storage — see [docs/operations/org-portability.md](docs/operations/org-portability.md).
 
 ## Pointers
 
@@ -135,6 +135,6 @@ It selects a **workspace** backend (a `git` worktree by default; an `arc` mount 
 | What | Where |
 |---|---|
 | Project memory & runbooks | `<project_cwd>/.claude/agent-memory/` (project's git) |
-| Extra agents | `~/.claude/agents/` |
-| Local scripts | `~/.claude/scripts-local/` |
-| Local skills | `~/.claude/skills/` (single-file `skills-local/*.md`, gitignored fallback) |
+| Extra agents | `~/.claude-agent/agents/` (system root) |
+| Local scripts | `~/.claude/scripts-local/` (personal — machine-local, never in the system root) |
+| Local skills | `~/.claude-agent/skills/` (system root; single-file `skills-local/*.md`, gitignored fallback) |

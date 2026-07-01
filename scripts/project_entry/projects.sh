@@ -14,10 +14,12 @@
 
 _PROJECTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 _PROJECTS_PY="$_PROJECTS_DIR/projects.py"
+# shellcheck source=scripts/lib/config-root.sh
+source "$_PROJECTS_DIR/../lib/config-root.sh"   # exports CLAUDE_AGENT_HOME (idempotent)
 
 # Read a key from the machine-local identity file (same file enter-task.sh uses).
 _projects_id_get() {
-  local f="${CLAUDE_AGENT_IDENTITY:-$HOME/.claude/agent-identity.local}"
+  local f="${CLAUDE_AGENT_IDENTITY:-$CLAUDE_AGENT_HOME/agent-identity.local}"
   [[ -r "$f" ]] && sed -n "s/^$1=//p" "$f" | head -1
 }
 

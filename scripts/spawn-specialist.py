@@ -33,9 +33,10 @@ import time
 from pathlib import Path
 
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
+from lib.config_root import skills_dir  # config-root resolver (isolated system root)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SKILLS_DIR = Path.home() / ".claude" / "skills"
+SKILLS_DIR = skills_dir()
 CONFIG_MD = REPO_ROOT / "config.md"
 PERMISSIONS_CLI = REPO_ROOT / "scripts" / "permissions-cli.py"
 COST_LOG = Path.home() / ".local" / "log" / "claude-spawn-costs.jsonl"
@@ -332,22 +333,24 @@ def autocompact_pct_for_model(model: str | None) -> str:
 
 
 def _snapshot_transcripts() -> set[Path]:
-    """Set of `~/.claude/projects/**/*.jsonl` that exist right now."""
-    root = Path.home() / ".claude" / "projects"
+    """Set of `<system-root>/projects/**/*.jsonl` that exist right now (isolated or legacy)."""
+    from lib.config_root import agent_home as _agent_home
+    root = _agent_home() / "projects"
     if not root.is_dir():
         return set()
     return set(root.rglob("*.jsonl"))
 
 
 def _discover_transcript_path(known_before: set[Path], timeout: float = 10.0) -> Path | None:
-    """Find a new `~/.claude/projects/**/*.jsonl` that didn't exist before the
+    """Find a new `<system-root>/projects/**/*.jsonl` that didn't exist before the
     spawn. Polls every 0.5s up to `timeout` seconds.
 
     Filtering by "not in known_before" avoids picking the parent manager's own
     live transcript (which is being touched concurrently and would otherwise
     win on mtime). Returns the freshest new jsonl, or None on timeout.
     """
-    root = Path.home() / ".claude" / "projects"
+    from lib.config_root import agent_home as _agent_home
+    root = _agent_home() / "projects"
     deadline = time.time() + timeout
     while time.time() < deadline:
         if root.is_dir():

@@ -44,7 +44,7 @@ The skills, agents, hooks, scripts, memory scopes, settings, and the Cursor mirr
 - [Memory scopes](components/memory-scopes.md) — the three scopes (personal / global / project) and the shared leaf-and-index shape.
 - [Settings and permissions](components/settings-and-permissions.md) — the layered settings.json, the permissions CLI, and the action taxonomy.
 - [The Cursor mirror](components/cursor-mirror.md) — the thin Cursor rule and its sync discipline.
-- [Skills (symlinks)](components/skills-symlinks.md) — how the runtime `~/.claude/skills/` symlink tree is laid out.
+- [Skills (symlinks)](components/skills-symlinks.md) — how the runtime `~/.claude-agent/skills/` symlink tree is laid out.
 
 ## Operations — running and maintaining the repo
 
