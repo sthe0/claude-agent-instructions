@@ -60,9 +60,15 @@ def _digest(text: str) -> str:
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:12]
 
 
-def _attach_advisories(d: Directive, kind: str, payload: dict, runner: Runner | None) -> None:
-    """Attach warn-only advisory strings to d.data['advisories']. Never changes d.ok or d.node."""
-    advisories = advisor.judge(kind, payload, runner)
+def _attach_advisories(d: Directive, kind: str, payload: dict, runner: Runner | None,
+                       *, weight_class: str | None = None) -> None:
+    """Attach warn-only advisory strings to d.data['advisories']. Never changes d.ok or d.node.
+
+    Single chokepoint for the enabled resolution: env override, else config-mode +
+    weight_class (advisor.resolve_enabled) — every call site threads its session's
+    weight_class through here rather than re-deriving the rule per site."""
+    enabled = advisor.resolve_enabled(weight_class)
+    advisories = advisor.judge(kind, payload, runner, enabled=enabled)
     if advisories:
         d.data.setdefault("advisories", []).extend(advisories)
 
@@ -305,7 +311,7 @@ def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Di
     d = Directive(True, state.node, action, detail, data={"reasons": result.reasons})
     _attach_advisories(d, "weight_classification",
                        {"goal": state.goal, "weight_class": state.weight_class, "route": state.route},
-                       runner)
+                       runner, weight_class=state.weight_class)
     return d
 
 
@@ -377,7 +383,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     _attach_advisories(d, "plan_completeness",
                        {"plan": plan_path, "stage_count": len(state.stages),
                         "titles": [s.title for s in state.stages]},
-                       runner)
+                       runner, weight_class=state.weight_class)
     return d
 
 
@@ -679,7 +685,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
         if stage.criterion.criterion_type == CriterionType.ACCEPTANCE_REVIEW.value:
             _attach_advisories(d, "acceptance_observation",
                                {"expected": stage.subject.result, "observation": observation},
-                               runner)
+                               runner, weight_class=state.weight_class)
         return d
 
     # failed: loop guard — same stage failing twice on the same actual digest -> escalate
@@ -865,7 +871,7 @@ def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Di
         "hypotheses": inv.hypotheses if inv else [],
         "declaration": {"expected": decl.expected, "actual": decl.actual, "mismatch": decl.mismatch}
         if decl else {},
-    }, runner)
+    }, runner, weight_class=state.weight_class)
     return d
 
 

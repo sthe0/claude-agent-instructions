@@ -61,3 +61,8 @@ class Thresholds:
 
     def budget_usd(self, tier: str) -> str:
         return self._str(f"budget-{tier}-usd")
+
+    @property
+    def advisor_mode(self) -> str:
+        """'off' or 'substantive' — gates advisor.resolve_enabled's config layer."""
+        return self._str("advisor-mode")

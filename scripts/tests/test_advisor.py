@@ -9,6 +9,7 @@ from argparse import Namespace
 import pytest
 
 from agentctl import advisor, cli
+from agentctl.config import Thresholds
 from agentctl.dispatch import RunResult
 from agentctl.state import (
     Actor,
@@ -95,6 +96,64 @@ class TestJudgeUnit:
     def test_env_toggle_not_set_disables(self, monkeypatch):
         monkeypatch.delenv("AGENTCTL_ADVISOR", raising=False)
         assert advisor.judge("weight_classification", {}, _fake_runner("x")) == []
+
+    def test_argv_carries_explicit_cheap_model(self):
+        seen = {}
+
+        def recording_runner(argv):
+            seen["argv"] = argv
+            return RunResult(0, stdout="ok")
+
+        advisor.judge("weight_classification", {}, recording_runner, enabled=True)
+        assert seen["argv"][:4] == ["claude", "-p", "--model", "sonnet"]
+
+
+# ── resolve_enabled: env override + config-mode/weight-class layering ────────
+
+class TestResolveEnabled:
+    def test_env_force_on_overrides_config_off(self, monkeypatch):
+        monkeypatch.setenv("AGENTCTL_ADVISOR", "1")
+        thr = Thresholds({"advisor-mode": "off"})
+        assert advisor.resolve_enabled("SMALL_CHANGE", thresholds=thr) is True
+
+    def test_env_force_off_overrides_config_substantive(self, monkeypatch):
+        monkeypatch.setenv("AGENTCTL_ADVISOR", "0")
+        thr = Thresholds({"advisor-mode": "substantive"})
+        assert advisor.resolve_enabled("SUBSTANTIVE", thresholds=thr) is False
+
+    def test_config_on_substantive_enables(self, monkeypatch):
+        monkeypatch.delenv("AGENTCTL_ADVISOR", raising=False)
+        thr = Thresholds({"advisor-mode": "substantive"})
+        assert advisor.resolve_enabled("SUBSTANTIVE", thresholds=thr) is True
+
+    def test_config_on_small_change_disables(self, monkeypatch):
+        monkeypatch.delenv("AGENTCTL_ADVISOR", raising=False)
+        thr = Thresholds({"advisor-mode": "substantive"})
+        assert advisor.resolve_enabled("SMALL_CHANGE", thresholds=thr) is False
+
+    def test_config_off_disables(self, monkeypatch):
+        monkeypatch.delenv("AGENTCTL_ADVISOR", raising=False)
+        thr = Thresholds({"advisor-mode": "off"})
+        assert advisor.resolve_enabled("SUBSTANTIVE", thresholds=thr) is False
+
+    def test_missing_advisor_mode_key_fails_closed(self, monkeypatch):
+        monkeypatch.delenv("AGENTCTL_ADVISOR", raising=False)
+        thr = Thresholds({})
+        assert advisor.resolve_enabled("SUBSTANTIVE", thresholds=thr) is False
+
+
+# ── subprocess_runner: hard timeout ───────────────────────────────────────────
+
+class TestSubprocessRunner:
+    def test_timeout_returns_failed_result_not_raise(self, monkeypatch):
+        import subprocess as _subprocess
+
+        def raise_timeout(*a, **kw):
+            raise _subprocess.TimeoutExpired(cmd="claude", timeout=1)
+
+        monkeypatch.setattr(_subprocess, "run", raise_timeout)
+        result = advisor.subprocess_runner(["claude", "-p", "x"], timeout=1)
+        assert result.returncode != 0
 
 
 # ── cmd_classify wiring ───────────────────────────────────────────────────────
