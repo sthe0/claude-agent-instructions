@@ -22,7 +22,7 @@ CCGram bridges Telegram ↔ tmux on each of the user's machines. Each machine ru
 | Machine | Autostart | tmux | Notes |
 |---|---|---|---|
 | Mac (current laptop) | `launchd`: `~/Library/LaunchAgents/com.ccgram.daemon.plist`, label `com.ccgram.daemon` | brew-installed | `claude` from `/opt/homebrew/bin/claude` |
-| Linux VPSes (`the0.fun`, `the0.klg.yp-c.yandex.net`) | `systemd --user`: `~/.config/systemd/user/ccgram.service`. Requires `sudo loginctl enable-linger the0` to persist past logout. | apt-installed | On `the0.fun`, `claude` is under `~/.nvm/...` — only available in interactive bash (`bash -ic` / `bash -lc`). The systemd unit explicitly adds the nvm bin to PATH. |
+| Linux VPSes (`the0.fun`, `the0.klg.yp-c.yandex.net`) | `systemd --user`: `~/.config/systemd/user/ccgram.service`. Requires `sudo loginctl enable-linger the0` to persist past logout. | apt-installed | On `the0.fun`, `claude` is under `~/.nvm/...` — only available in interactive bash (`bash -ic` / `bash -lc`). The systemd unit explicitly adds the nvm bin to PATH. `the0.klg.yp-c.yandex.net` runs ccgram **4.3.5** (`uv tool install ccgram==4.3.5`); check other machines' version with `ccgram --version` before assuming parity. |
 
 ## Common operations
 
@@ -61,7 +61,13 @@ CCGram bridges Telegram ↔ tmux on each of the user's machines. Each machine ru
 
 ## Monitoring (the0.klg host)
 
-`~/bin/ccgram-watchdog.sh` + `ccgram-watchdog.timer` (systemd --user, every 10 min) alert into the bridge's own Telegram group on: disk `/` ≥ 90%, `No space left` in the log, ≥ 10 polling timeouts/hour, or a dead daemon. Anti-spam: re-alerts a standing condition at most once per 2 h, sends a `✓` on recovery. Timeout count is parsed from `ccgram.log` (dateless `HH:MM:SS`, UTC) via `tail -n 2000` + awk windowing — the daemon's structlog output does **not** reach the systemd journal, so `journalctl` cannot be used for it. Not yet deployed to Mac / `the0.fun`.
+`~/bin/ccgram-watchdog.sh` + `ccgram-watchdog.timer` (systemd --user, every 10 min) alert into the bridge's own Telegram group on: disk `/` ≥ 90%, `No space left` in the log, ≥ 10 polling timeouts/hour, a dead daemon, or a **dead poll/autoclose loop** (below). Anti-spam: re-alerts a standing condition at most once per 2 h, sends a `✓` on recovery. Timeout count is parsed from `ccgram.log` (dateless `HH:MM:SS`, UTC) via `tail -n 2000` + awk windowing — the daemon's structlog output does **not** reach the systemd journal, so `journalctl` cannot be used for it. Not yet deployed to Mac / `the0.fun`.
+
+### Poll-loop-liveness check
+
+4.3.5's `status_poll_loop` (which also drives autoclose via `run_lifecycle_tasks` in the same loop body) still does **not** self-heal if the logging call inside its `except` handlers itself raises (e.g. `OSError [Errno 28]` on a full disk): the exception escapes both handlers and kills the asyncio task silently, with no supervisor to restart it — confirmed by reading 4.3.5's `polling_coordinator.py` / `utils.py` / `bootstrap.py`. So this check is **PRIMARY**, not a backstop: it is the only thing that notices "daemon process active, but the poll/autoclose loop is dead."
+
+Detection: the newest poll-loop lifecycle line in the log (`Status polling started` vs a death marker — `Background task .* failed` / `Unexpected error in status poll loop` / `Status poll loop error`) is a death marker not followed by a later restart, while the daemon itself is still `active`. Alert text: "цикл опроса/автозакрытия … не восстановился после сбоя". **Fix: `systemctl --user restart ccgram.service`** — same as any other dead-loop symptom in the Troubleshooting table above.
 
 ## Set up a new machine
 
