@@ -10,6 +10,8 @@
 
 `sync-instructions-repo.sh pull` fetches from the remote, rebases local commits on top, and resolves any conflicts. Run it before starting self-improvement work to avoid edit conflicts.
 
+**Auto-migration to the isolated root.** After a successful pull, the script detects the old **in-place** layout (system symlinks written directly into `~/.claude` instead of the isolated `~/.claude-agent`) via the shared `agent_legacy_inplace_layout` helper. In an **interactive terminal** it automatically completes the one-time migration for you — `migrate-to-isolated.sh --apply` followed by `setup-symlinks.sh` (both idempotent and backed up). In a **cron / headless** run it never moves files unattended; it only logs a loud `ACTION NEEDED` line telling you to run `scripts/migrate-to-isolated.sh --apply && scripts/setup-symlinks.sh` (or just `onboard`) in a terminal. On a machine already on the isolated root it is a silent no-op. See [Migrating an older in-place install](setup.md#migrating-an-older-in-place-install).
+
 ## Making and committing edits
 
 Self-improvement edits follow the standard coordination spine: the `self-improvement` skill fires, writes a plan, and dispatches `developer` to apply the changes. Commits are made after each coherent change.

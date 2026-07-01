@@ -162,23 +162,11 @@ else
 fi
 
 # 8. Legacy layout advisory: if ~/.claude (the old in-place location) still holds
-#    repo-pointing system symlinks, the isolated root may be incomplete.
-if [[ -d "$HOME/.claude" && "$HOME/.claude" != "$CLAUDE_AGENT_HOME" ]]; then
-  _repo_real="$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$REPO")"
-  _found_legacy=0
-  for _check_name in CLAUDE.md config.md memory-global; do
-    _check_p="$HOME/.claude/$_check_name"
-    if [[ -L "$_check_p" ]]; then
-      _check_tgt="$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$_check_p" 2>/dev/null)" || continue
-      if [[ -n "$_check_tgt" && "$_check_tgt" == "$_repo_real"* ]]; then
-        _found_legacy=1
-        break
-      fi
-    fi
-  done
-  if [[ "$_found_legacy" -eq 1 ]]; then
-    warn "legacy in-place layout detected in $HOME/.claude — run scripts/migrate-to-isolated.sh"
-  fi
+#    repo-pointing system symlinks, the isolated root may be incomplete. Detection
+#    is the shared agent_legacy_inplace_layout helper (config-root.sh) — the single
+#    source of truth also used by sync-instructions-repo.sh.
+if agent_legacy_inplace_layout "$REPO"; then
+  warn "legacy in-place layout detected in $HOME/.claude — run scripts/migrate-to-isolated.sh"
 fi
 
 echo

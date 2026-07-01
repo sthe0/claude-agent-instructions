@@ -9,6 +9,14 @@ REMOTE="${CLAUDE_INSTRUCTIONS_REMOTE:-origin}"
 LOG_DIR="$HOME/.local/log"
 LOG_FILE="$LOG_DIR/claude-agent-instructions-sync.log"
 
+# Shared legacy-layout detector (agent_legacy_inplace_layout) + CLAUDE_AGENT_HOME.
+# Guard with a file check first: a missing lib must never break a plain pull/push,
+# and bash 3.2 (macOS) exits a `set -e` shell on `source <missing>` even with `|| true`.
+# shellcheck source=lib/config-root.sh
+if [[ -f "$REPO/scripts/lib/config-root.sh" ]]; then
+  source "$REPO/scripts/lib/config-root.sh"
+fi
+
 log() {
   mkdir -p "$LOG_DIR"
   printf '%s %s\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$*" | tee -a "$LOG_FILE"
@@ -67,6 +75,41 @@ resolve_rebase_conflicts_prefer_incoming() {
     git add -- "$file"
   done <<< "$unresolved"
   GIT_EDITOR=true git rebase --continue 2>/dev/null || true
+}
+
+# Interactive when both stdin and stdout are TTYs. Overridable for tests/automation:
+#   CLAUDE_SYNC_NONINTERACTIVE=1   force the cron/notify-only path
+#   CLAUDE_SYNC_FORCE_INTERACTIVE=1 force the auto-migrate path
+is_interactive() {
+  [[ -n "${CLAUDE_SYNC_NONINTERACTIVE:-}" ]] && return 1
+  [[ -n "${CLAUDE_SYNC_FORCE_INTERACTIVE:-}" ]] && return 0
+  [[ -t 0 && -t 1 ]]
+}
+
+# After a successful pull, ease the one-time migration from the old in-place
+# ~/.claude layout to the isolated root. In an interactive terminal we run the
+# (idempotent, backed-up) migration for the user; in cron/headless we NEVER move
+# files unattended — only emit a loud ACTION NEEDED line so the next interactive
+# run (or the user) completes it. No-op when no legacy layout is present.
+# migrate/setup are indirected through env seams so tests can stub them.
+maybe_migrate_isolated() {
+  declare -F agent_legacy_inplace_layout >/dev/null 2>&1 || return 0
+  agent_legacy_inplace_layout "$REPO" || return 0
+
+  local migrate="${CLAUDE_MIGRATE_BIN:-$REPO/scripts/migrate-to-isolated.sh}"
+  local setup="${SETUP_SYMLINKS_BIN:-$REPO/scripts/setup-symlinks.sh}"
+
+  if is_interactive; then
+    log "pull: legacy in-place ~/.claude layout detected — migrating to ${CLAUDE_AGENT_HOME:-~/.claude-agent}"
+    if "$migrate" --apply && "$setup"; then
+      log "pull: migration to isolated root complete — run the system with claude-task / claude-agent"
+    else
+      log "pull: WARN migration did not finish — run manually: $migrate --apply && $setup"
+      return 1
+    fi
+  else
+    log "pull: ACTION NEEDED — legacy in-place ~/.claude layout detected but NOT migrated (non-interactive run). Migrate to the isolated root with: $migrate --apply && $setup   (or just run 'onboard' in a terminal)."
+  fi
 }
 
 cmd_pull() {
@@ -183,6 +226,7 @@ cmd_push() {
 
 cmd_sync() {
   cmd_pull || true
+  maybe_migrate_isolated || true
   cmd_push || true
 }
 
@@ -203,7 +247,7 @@ usage() {
 main() {
   local cmd="${1:-sync}"
   case "$cmd" in
-    pull) cmd_pull ;;
+    pull) cmd_pull && maybe_migrate_isolated ;;
     push) cmd_push ;;
     sync) cmd_sync ;;
     status) cmd_status ;;

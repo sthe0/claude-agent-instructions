@@ -57,6 +57,8 @@ scripts/migrate-to-isolated.sh --apply    # back up, then move
 
 It relocates **only** system-owned entries (repo-pointing symlinks + `agent-identity.local`), leaves your personal files and the merged `settings.json` in place, backs up first, and is idempotent. `doctor.sh` warns while a legacy in-place layout is detected.
 
+You usually don't run this by hand: after a successful `sync-instructions-repo.sh pull` (the normal way you take Core updates) the script auto-detects the legacy layout and, **in an interactive terminal**, runs the migration for you (`migrate-to-isolated.sh --apply` + `setup-symlinks.sh`). In a **cron / headless** pull it never moves files unattended — it logs a loud `ACTION NEEDED` line so the next interactive `pull` or `onboard` completes it. So on an existing machine, simply pulling in a terminal is enough to land on the isolated root. Detection is the shared `agent_legacy_inplace_layout` helper in `scripts/lib/config-root.sh` (also used by `doctor.sh`).
+
 ## Symlinks wired by `setup-symlinks.sh`
 
 `$AGENT` below is `$CLAUDE_AGENT_HOME` (default `~/.claude-agent`).

@@ -134,6 +134,96 @@ def test_pull_detached_head_targets_main(tmp_path, home):
     assert "main: advance while detached" in log_subjects(clone)
 
 
+# ── Auto-migration to the isolated root on pull ───────────────────────────────
+
+def _make_stub(path: Path, marker: Path) -> Path:
+    """A stub launcher that records it was invoked by touching `marker`."""
+    path.write_text(f'#!/usr/bin/env bash\ntouch "{marker}"\nexit 0\n')
+    path.chmod(0o755)
+    return path
+
+
+def _seed_config_root_lib(repo: Path) -> None:
+    """Copy the real config-root.sh into a test clone so the sourced detector
+    (agent_legacy_inplace_layout) is defined — clones from make_bare_and_clone
+    have no scripts/ tree of their own."""
+    lib = repo / "scripts" / "lib"
+    lib.mkdir(parents=True, exist_ok=True)
+    (lib / "config-root.sh").write_text(
+        (SCRIPT.parent / "lib" / "config-root.sh").read_text()
+    )
+
+
+def _legacy_home(home: Path, repo: Path) -> None:
+    """Fake the old in-place layout: ~/.claude/CLAUDE.md symlinked into the repo."""
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    (home / ".claude" / "CLAUDE.md").symlink_to(repo / "CLAUDE.md")
+
+
+def _run_pull_with_stubs(repo, home, tmp_path, extra_env):
+    _seed_config_root_lib(repo)
+    migrate_marker = tmp_path / "migrate.called"
+    setup_marker = tmp_path / "setup.called"
+    migrate = _make_stub(tmp_path / "stub-migrate.sh", migrate_marker)
+    setup = _make_stub(tmp_path / "stub-setup.sh", setup_marker)
+    env = {
+        **os.environ, **GIT_ENV,
+        "HOME": str(home),
+        "CLAUDE_INSTRUCTIONS_REPO": str(repo),
+        "CLAUDE_MIGRATE_BIN": str(migrate),
+        "SETUP_SYMLINKS_BIN": str(setup),
+        **extra_env,
+    }
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "pull"], env=env, capture_output=True, text=True
+    )
+    return result, migrate_marker, setup_marker
+
+
+def test_pull_auto_migrates_when_interactive(tmp_path, home):
+    """Interactive pull on a legacy layout auto-runs migrate + setup stubs."""
+    origin, clone = make_bare_and_clone(tmp_path)
+    _legacy_home(home, clone)
+
+    result, migrate_marker, setup_marker = _run_pull_with_stubs(
+        clone, home, tmp_path, {"CLAUDE_SYNC_FORCE_INTERACTIVE": "1"}
+    )
+    assert result.returncode == 0, result.stderr
+    assert migrate_marker.exists(), "migrate stub should run in interactive mode"
+    assert setup_marker.exists(), "setup stub should run in interactive mode"
+    assert "migrating to" in (result.stdout + result.stderr)
+
+
+def test_pull_notifies_not_migrates_when_noninteractive(tmp_path, home):
+    """Cron/headless pull on a legacy layout notifies but moves NOTHING."""
+    origin, clone = make_bare_and_clone(tmp_path)
+    _legacy_home(home, clone)
+
+    result, migrate_marker, setup_marker = _run_pull_with_stubs(
+        clone, home, tmp_path, {"CLAUDE_SYNC_NONINTERACTIVE": "1"}
+    )
+    assert result.returncode == 0, result.stderr
+    assert not migrate_marker.exists(), "migrate must NOT run unattended"
+    assert not setup_marker.exists(), "setup must NOT run unattended"
+    assert "ACTION NEEDED" in (result.stdout + result.stderr)
+
+
+def test_pull_no_migration_when_no_legacy_layout(tmp_path, home):
+    """Fresh isolated machine (no ~/.claude symlinks) → migration is a no-op."""
+    origin, clone = make_bare_and_clone(tmp_path)
+    # no _legacy_home: ~/.claude does not exist
+
+    result, migrate_marker, setup_marker = _run_pull_with_stubs(
+        clone, home, tmp_path, {"CLAUDE_SYNC_FORCE_INTERACTIVE": "1"}
+    )
+    assert result.returncode == 0, result.stderr
+    assert not migrate_marker.exists()
+    assert not setup_marker.exists()
+    _out = result.stdout + result.stderr
+    assert "ACTION NEEDED" not in _out
+    assert "migrating to" not in _out
+
+
 def test_push_publishes_new_branch_via_dash_u(tmp_path, home):
     origin, clone = make_bare_and_clone(tmp_path)
     git("checkout", "--quiet", "-b", "new-feature", cwd=clone)
