@@ -40,7 +40,9 @@
 #
 # ── Resolution order ────────────────────────────────────────────────────────
 #   1. built-in:      scripts/project_entry/backends/<name>.sh  (resp. trackers/)
-#   2. machine-local: ${CLAUDE_PROJECT_PLUGIN_DIR:-$HOME/.claude/project-entry-plugins}/backends/<name>.sh
+#   2. machine-local: ${CLAUDE_PROJECT_PLUGIN_DIR:-<agent-home>/project-entry-plugins}/backends/<name>.sh
+#      (<agent-home> is $CLAUDE_AGENT_HOME when isolated, else the legacy
+#      ~/.claude/project-entry-plugins — see _plugin_dir below)
 # A built-in name is stable (checked first); a plugin ADDS a new name. A fresh
 # plugin name not shipped in Core is discovered from the machine-local dir — the
 # coupling-free way a specialized backend (arc, …) attaches without editing Core.
@@ -49,8 +51,25 @@
 _REGISTRY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Machine-local plugin root (overridable for tests / per-machine installs).
+# Read-time resolution (same order as lib/config_root.py's agent_home()): an
+# explicit override wins; else prefer an existing isolated root; else fall
+# back to the legacy ~/.claude location for a not-yet-migrated machine; else
+# default to the isolated root (so a fresh machine's first lookup still names
+# the isolated path, not the dead one).
 _plugin_dir() {
-  printf '%s' "${CLAUDE_PROJECT_PLUGIN_DIR:-$HOME/.claude/project-entry-plugins}"
+  if [[ -n "${CLAUDE_PROJECT_PLUGIN_DIR:-}" ]]; then
+    printf '%s' "$CLAUDE_PROJECT_PLUGIN_DIR"
+    return
+  fi
+  local isolated="${CLAUDE_AGENT_HOME:-$HOME/.claude-agent}/project-entry-plugins"
+  local legacy="$HOME/.claude/project-entry-plugins"
+  if [[ -d "$isolated" ]]; then
+    printf '%s' "$isolated"
+  elif [[ -d "$legacy" ]]; then
+    printf '%s' "$legacy"
+  else
+    printf '%s' "$isolated"
+  fi
 }
 
 # _registry_resolve <kind> <name>  where <kind> is 'backends' or 'trackers'.

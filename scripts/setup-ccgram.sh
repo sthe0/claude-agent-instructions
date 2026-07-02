@@ -24,9 +24,12 @@
 #   setup-ccgram.sh             # bootstrap
 #   setup-ccgram.sh --upgrade   # upgrade ccgram to the latest version
 #
-# See ~/.claude/skills/ccgram-management/SKILL.md for ongoing-ops reference.
+# See $CLAUDE_AGENT_HOME/skills/ccgram-management/SKILL.md for ongoing-ops reference.
 
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/config-root.sh"
 
 UPGRADE=0
 if [[ "${1:-}" == "--upgrade" ]]; then
@@ -205,7 +208,7 @@ EOF
 fi
 
 # 6. Hook install
-if [[ -f "$HOME/.claude/settings.json" ]] || command -v claude >/dev/null 2>&1; then
+if [[ -f "$CLAUDE_AGENT_HOME/settings.json" || -f "$HOME/.claude/settings.json" ]] || command -v claude >/dev/null 2>&1; then
   say "installing Claude Code hooks (idempotent)"
   ccgram hook --install || say "hook install failed — non-fatal, run manually later"
 else

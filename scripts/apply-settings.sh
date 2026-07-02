@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Merge the versioned policy base (settings/base.json) into this machine's
-# ~/.claude/settings.json. Idempotent and additive:
+# $CLAUDE_AGENT_HOME/settings.json (default ~/.claude-agent/settings.json; see
+# lib/config-root.sh). Idempotent and additive:
 #   - env:                     base keys added; existing local keys win on conflict,
 #                              EXCEPT the autocompact keys below which base OWNS
 #   - autoCompactWindow:       base wins when base defines it (active pin, not just
@@ -17,13 +18,15 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
+source "$REPO/scripts/lib/config-root.sh"
 BASE="$REPO/settings/base.json"
-TARGET="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
+TARGET="${CLAUDE_SETTINGS:-$CLAUDE_AGENT_HOME/settings.json}"
 
 command -v jq >/dev/null || { echo "apply-settings: jq required" >&2; exit 1; }
 [[ -f "$BASE" ]] || { echo "apply-settings: missing $BASE" >&2; exit 1; }
 
 if [[ ! -f "$TARGET" ]]; then
+  mkdir -p "$(dirname "$TARGET")"
   echo '{}' > "$TARGET"
 fi
 

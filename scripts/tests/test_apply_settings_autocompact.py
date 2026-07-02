@@ -78,3 +78,23 @@ def test_idempotent(fixture):
     assert _run(fixture).returncode == 0
     after_second = json.loads(fixture.read_text(encoding="utf-8"))
     assert after_first == after_second
+
+
+def test_default_target_is_isolated_root_not_home_claude(tmp_path):
+    """Without CLAUDE_SETTINGS, TARGET must resolve under CLAUDE_AGENT_HOME —
+    never fall back to $HOME/.claude/settings.json (the dead root)."""
+    if shutil.which("bash") is None or shutil.which("jq") is None:
+        pytest.skip("bash and jq required for apply-settings.sh")
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    agent_home = tmp_path / "agent-root"
+    env = {**os.environ, "HOME": str(fake_home), "CLAUDE_AGENT_HOME": str(agent_home)}
+    env.pop("CLAUDE_SETTINGS", None)
+
+    result = subprocess.run(
+        ["bash", str(APPLY)], env=env, capture_output=True, text=True
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (agent_home / "settings.json").exists()
+    assert not (fake_home / ".claude").exists()
