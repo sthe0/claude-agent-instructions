@@ -54,10 +54,20 @@ def _run(monkeypatch, capsys, mod, payload):
     return rc, capsys.readouterr().out
 
 
+def _point_roots_at(monkeypatch, tmp_path: Path) -> Path:
+    """The hook resolves its state file via config_root at call time from env:
+    CLAUDE_AGENT_HOME is the current root, HOME the legacy fallback — point
+    both into tmp so no real machine state leaks in. Returns the current
+    root's state dir."""
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("CLAUDE_AGENT_HOME", str(tmp_path / "root"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    return tmp_path / "root" / "agentctl" / "state"
+
+
 def _arm_gate(mod, monkeypatch, tmp_path, session_id="sess-res"):
-    state_dir = tmp_path / "state"
+    state_dir = _point_roots_at(monkeypatch, tmp_path)
     _write_state(state_dir, session_id, "RESOLUTION", resolution_passed=False)
-    monkeypatch.setattr(mod, "STATE_ROOT", state_dir)
     return session_id
 
 
@@ -129,9 +139,7 @@ def test_land_branch_check_actually_failing_subprocess_no_branch_line(monkeypatc
 
 def test_non_gate_gratitude_path_unchanged_no_branch_line(monkeypatch, capsys, tmp_path):
     mod = _load_module()
-    state_dir = tmp_path / "state"
-    state_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(mod, "STATE_ROOT", state_dir)
+    _point_roots_at(monkeypatch, tmp_path)
     # Even if the check would report LANDABLE, the gratitude fallback path
     # must never invoke it.
     monkeypatch.setattr(
@@ -149,9 +157,7 @@ def test_non_gate_gratitude_path_unchanged_no_branch_line(monkeypatch, capsys, t
 
 def test_gate_closed_ordinary_prompt_no_output(monkeypatch, capsys, tmp_path):
     mod = _load_module()
-    state_dir = tmp_path / "state"
-    state_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(mod, "STATE_ROOT", state_dir)
+    _point_roots_at(monkeypatch, tmp_path)
 
     rc, out = _run(
         monkeypatch, capsys, mod, {"session_id": "no-state", "prompt": "please add a test"}
