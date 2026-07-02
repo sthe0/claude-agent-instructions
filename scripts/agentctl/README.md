@@ -5,7 +5,7 @@
 Run it from the repo `scripts/` dir:
 
 ```bash
-cd scripts && PYTHONPATH=scripts python3 -m agentctl <cmd>
+cd ~/claude-agent-instructions/scripts && python3 -m agentctl <cmd>
 ```
 
 Each command returns a **Directive** (JSON): the next node, which cognitive leaf to run, and whether a gate blocks.
@@ -84,7 +84,10 @@ start → classify → plan → submit-plan → approve → partition → next-s
 | `replan` | Apply a revised `--plan`. **Precondition-gated** in `DIAGNOSING`: refused until the `Difficulty` record is complete, and — when the critique recorded a split — until the **coverage gate** passes (similarities carried into conditions/invariants, matched by substring after normalizing case/whitespace on both sides; a means/method changed for the declared differences). A failing coverage gate can be bypassed with `--coverage-waiver <reason>` — refused if the reason is empty, recorded in session history and the gate log (`replan_coverage_waiver`), and never bypasses the difficulty-record completeness precondition. A means/method/conditions/invariants/verify_command/expected_exit-only delta (or a `[meta] repo_root` change) is a **refinement** (retries the re-armed stage, `→ VERIFYING`; carries the corrected check command into live state without resetting PASSED stages); executor/done-criterion changes are **substantive** (re-arm the approval gate, `→ PLAN_READY`). |
 | `block` / `unblock` | Mark a difficulty (`any → BLOCKED`) and return to the prior node. |
 | `resolve-permission` | Record the decision on a specialist's `PERMISSION-REQUEST`. |
-| `push-subplan` | Start a service sub-plan: snapshot parent context onto `plan_stack`, arm child plan (`EXECUTING → CLASSIFIED`). Requires `--plan <path>` and `--originating-stage <n>`. |
+| `plugin-activate` | Activate a registered plugin for this session (`--plugin <name>`); the owning skill calls it on invocation. See § Plugins. |
+| `plugin-deactivate` | Manual escape hatch: deactivate an active plugin (`--plugin <name>`). |
+| `plugin-record` | Mark a plugin phase done (`--plugin <name> --phase <…>`, e.g. `experience`'s `searched` / `recorded` / `skipped`; a `skipped` requires `--note`). |
+| `push-subplan` | Start a service sub-plan: snapshot parent context onto `plan_stack`, arm child plan (`EXECUTING → CLASSIFIED`). Requires `--plan <path>`; `--originating-stage <n>` is optional, defaulting to the session's current stage. |
 | `pop-subplan` | Finish a service sub-plan: restore parent frame from `plan_stack`, mark originating stage PASSED (`RESOLVED → EXECUTING`). |
 | `status` | Inspect the current node + directive; no transition. |
 | `drive` | **Orchestrator** — walk the *opening* spine (`classify → … → next-stage`) in one call, firing only legal forward edges from the current node. **Stops at the plan-approval gate** (`PLAN_READY`) unless given `--approved-by <who>` (threaded into `approve --by`). Routes chat/small-change without a plan gate; stops at `PARTITIONED` when the M1–M4 verdict suggests a split. Idempotent (no-op at/after `EXECUTING`). Adds **no** node/transition/gate. |
@@ -106,7 +109,7 @@ The **control criterion** (element #3 of the plan activity ontology) is a genera
 
 ## Modules
 
-`classify`, `config`, `state`, `store`, `machine`, `gates`, `directive`, `cli`, `dispatch`, `partition`, `permissions`, `plan`, `continuations`, `advisor`.
+Core spine: `classify`, `config`, `state`, `store`, `machine`, `gates`, `directive`, `cli`, `dispatch`, `partition`, `permissions`, `plan`, `continuations`, `advisor`, `cost`, `exempt_paths`, `text_shape`. Plugin framework: `plugins`, `plugins_tracker`, `plugins_experience` (§ Plugins). `cost` is covered in § Cost tracking; `exempt_paths` backs the `hook-state-gate.py` production-path lockstep, `text_shape` renders Directive text.
 
 Two modules carry the load-bearing invariants:
 
