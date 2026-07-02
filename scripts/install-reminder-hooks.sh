@@ -54,6 +54,9 @@ DESIRED = [
     # /, $HOME, ~/.claude, or the instruction repo — the agent's own memory/config.
     ("PreToolUse",       "Bash",  "hook-guard-destructive-rm.py",    5),
     ("PostToolUse",      "Write", "hook-self-critique-reminder.py",  5),
+    # Nudge when AskUserQuestion times out: any answer written mid-turn must be
+    # restated in the turn's FINAL message or it never reaches the user.
+    ("PostToolUse",      "AskUserQuestion", "hook-answer-delivery-reminder.py", 5),
     # session_scope: heartbeat + touched-path accumulation (Component A wiring).
     # Non-blocking by design — never emits a permissionDecision.
     ("PostToolUse",      "Edit|Write", "hook-scope-track.py",        5),

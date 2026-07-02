@@ -45,3 +45,9 @@ def test_dict_response_and_garbage_input_fail_open():
     r2 = _run("not json")
     assert r2.returncode == 0
     assert r2.stderr == ""
+
+
+def test_registered_in_installer_desired():
+    installer = Path(__file__).resolve().parent.parent / "install-reminder-hooks.sh"
+    text = installer.read_text(encoding="utf-8")
+    assert '"PostToolUse",      "AskUserQuestion", "hook-answer-delivery-reminder.py"' in text
