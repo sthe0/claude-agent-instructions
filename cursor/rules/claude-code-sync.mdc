@@ -100,6 +100,14 @@ When triggered → read `~/.claude/skills/tracker-management/SKILL.md` and layer
 
 When triggered → read `~/.claude/skills/ccgram-management/SKILL.md`. Per-machine settings live in each machine's `~/.ccgram/.env` (do not copy into memory — tokens are secrets). Bootstrap on a new machine: `scripts/setup-ccgram.sh`.
 
+### `instruction-grooming`
+
+**TRIGGER:** an instruction file crosses `lint-prose-length.py`'s 90% WARN threshold (`CLAUDE.md`, `README.md`, the cursor mirror, any `SKILL.md`/`policy.md`) — flagged directly by the linter or via the `hook-instruction-grooming-due.py` OFFER — or the user asks to slim / groom / consolidate / deduplicate a bloated instruction file.
+
+**SKIP** when the file is comfortably under 90% of its ceiling and no user request references grooming.
+
+When triggered → read `~/.claude/skills/instruction-grooming/SKILL.md` and work through measure → survey → verify consumers → plan; the actual edit still rides the standard plan-approval spine like any other production change to instructions.
+
 ## On task resolution (record experience)
 
 Close the loop **proactively** when all plan stages have passed their `Expected result image:` and the plan's `## Final verification` has passed: one-line recap (`Requested: X. Delivered: Y.`) + explicit ask in the user's language, **shaped to the criterion type** — *measurable*: a generic "Считаем решённой?"; *acceptance-review*: ask the user to confirm a **specific observation they have just performed**, not a meta-belief. For in-thread work without a formal plan, the final user-facing summary **is** the resolution gate — put the ask in the **same reply** as the recap. **Bare gratitude (`thanks` / `спасибо` / `perfect` alone) is not confirmation** — ask anyway. **The terminal state of committed work is trunk/main, not a personal branch — strive to land, don't just push:** bundle the delivering option into that same ask, recommended-first (push the branch if unpushed — pre-authorized; then land via the repo's landing mechanism, ff or PR — a non-trivial fast-forward is a landing *path*, not a reason to strand the branch). Full discipline: `~/.claude/CLAUDE.md` § On task resolution + `~/.claude/memory-global/leaves/landing-discipline.md`. Then **decide whether to record**.

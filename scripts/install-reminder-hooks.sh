@@ -49,6 +49,9 @@ DESIRED = [
     # Daily proactive OFFER to refresh Core + project-layer instructions (replaces the
     # silent 10-min auto-pull cron/timer). Higher timeout: up to two bounded git fetches.
     ("UserPromptSubmit", None,    "hook-instructions-refresh-due.py", 10),
+    # Proactive OFFER (per-file debounced) to run the instruction-grooming skill once
+    # a governed file crosses lint-prose-length.py's 90% WARN threshold.
+    ("UserPromptSubmit", None,    "hook-instruction-grooming-due.py", 5),
     ("PreToolUse",       "Bash|Grep|Glob", "hook-arc-mount-search-guard.py", 5),
     # Hard gate: deny a recursive rm that (worst-case, with any empty $VAR) targets
     # /, $HOME, ~/.claude, or the instruction repo — the agent's own memory/config.
