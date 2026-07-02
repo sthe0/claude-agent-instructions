@@ -69,7 +69,8 @@ BRANCH_HYGIENE_HINT = (
     "`python3 scripts/land-branch.py --check` to preview, then bundle a "
     "land+delete option into the SAME resolution AskUserQuestion (ref-only "
     "ff; trunk-push needs explicit confirmation). Don't leave the branch "
-    "hanging."
+    "hanging. Full landing discipline: "
+    "memory-global/leaves/landing-discipline.md."
 )
 
 UNPUSHED_BRANCH_HINT = (
@@ -79,7 +80,8 @@ UNPUSHED_BRANCH_HINT = (
     "proactively: bundle a **push** option into the SAME resolution "
     "AskUserQuestion, recommended-first — pushing a personal / working "
     "branch is pre-authorized (§ Acting without asking #4). Never leave the "
-    "push as a passive 'tell me if you want to push'."
+    "push as a passive 'tell me if you want to push'. Full landing "
+    "discipline: memory-global/leaves/landing-discipline.md."
 )
 
 MAX_WORDS = 6
