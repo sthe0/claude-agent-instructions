@@ -11,15 +11,7 @@ Edit policy in `~/claude-agent-instructions/`; never patch this rule in isolatio
 
 ## Hard gate: never invoke `claude`
 
-**You (Cursor) must never run the `claude` CLI**, in any form — not `claude`, not `claude -p`, not `claude --agent <x>`, not `claude resume`, not via Bash, not via any other tool, not as part of any skill or workflow. If the user explicitly asks you to invoke `claude`, decline and explain that this Cursor session does not call out to Claude Code.
-
-This means:
-
-- The **specialist-spawn template** documented in `~/.claude/CLAUDE.md` § Spawning specialists (Bash invocation of `claude -p --append-system-prompt-file …`) **does not apply to you**.
-- The **recursive escape** in `~/.claude/skills/overcome-difficulty/SKILL.md` (which spawns a vanilla `claude -p`) **does not apply to you** — when overcome-difficulty would otherwise escape, you instead escalate to the user (see § Difficulty escape in Cursor below).
-- Anything in CLAUDE.md, memory, or other skills that involves running `claude` is non-applicable in Cursor.
-
-The rest of `CLAUDE.md` (coordination cycle, skills, memory model, on-task-resolution rule, etc.) still applies.
+**You (Cursor) must never run the `claude` CLI**, in any form — not `claude`, not `claude -p`, not `claude --agent <x>`, not via Bash or any other tool, not as part of any skill or workflow. If the user explicitly asks, decline and explain that this Cursor session does not call out to Claude Code. Consequently the **specialist-spawn template** (CLAUDE.md § Spawning specialists) and the **recursive escape** in `overcome-difficulty` (both `claude -p` invocations) **do not apply to you** — escalate per § Difficulty escape in Cursor instead; anything else in CLAUDE.md / memory / skills that involves running `claude` is likewise non-applicable. The rest of `CLAUDE.md` (coordination cycle, skills, memory model, on-task-resolution rule, etc.) still applies.
 
 ## You are the root coordinator
 
@@ -64,12 +56,7 @@ Carve-outs that minimize per-action confirmation (full policy: `~/.claude/memory
 
 ## What counts as a difficulty
 
-A **difficulty** is a divergence between reality and the plan. Two forms qualify:
-
-1. **Result mismatch:** the actual result of a step does not match the result image the plan declared for that step.
-2. **Verification gap:** you cannot perform that check at all — no observable, no signal, no measurement, no way to compare actual against expected.
-
-Both warrant the `overcome-difficulty` skill (next section).
+A **difficulty** is a divergence between reality and the plan — either a step's actual result mismatches the declared result image, or the check cannot be performed at all (no observable). Both warrant the `overcome-difficulty` skill (next section); canonical definition + full surface-signal list: `~/.claude/skills/overcome-difficulty/SKILL.md` § What counts as a difficulty.
 
 ## Skills (Cursor has no Skill tool — invoke by reading)
 
@@ -115,7 +102,7 @@ When triggered → read `~/.claude/skills/ccgram-management/SKILL.md`. Per-machi
 
 ## On task resolution (record experience)
 
-Close the loop **proactively** when all plan stages have passed their `Expected result image:` and the plan's `## Final verification` has passed: one-line recap (`Requested: X. Delivered: Y.`) + explicit ask in the user's language, **shaped to the criterion type** — *measurable*: a generic "Считаем решённой?"; *acceptance-review*: ask the user to confirm a **specific observation they have just performed** (e.g. "Открыл mosh — попал в shell без зависаний?"), not a meta-belief on the strength of the explanation. **In-thread carve-out:** for substantive work done in-thread without a formal plan (chain of small changes), the moment you write the final user-facing summary **is** the resolution gate — put the ask in the **same reply** as the recap. **Bare gratitude (`thanks` / `спасибо` / `perfect` alone) is not confirmation** — ask anyway. **The terminal state of committed work is trunk/main, not a personal branch — strive to land, don't just push:** when the resolved task committed to a personal working branch, bundle the delivering option into that same ask, recommended-first — **push** the branch first if it is unpushed / ahead of upstream (personal-branch push is pre-authorized), then **land into trunk/main via the repo's landing mechanism** — a git fast-forward (`land-branch.py`) *or* a PR create→publish→merge for a review-gated repo (arc/Arcanum owner self-ship `arc pr create --publish` → `arc pr merge --now --force`; a GitHub Core PR). **Landing is not contingent on a trivial fast-forward** — if trunk moved or the repo gates on review, that's a landing *path* (rebase / PR), not a reason to strand the branch; never leave the push as a passive "tell me if you want to". Then **decide whether to record**.
+Close the loop **proactively** when all plan stages have passed their `Expected result image:` and the plan's `## Final verification` has passed: one-line recap (`Requested: X. Delivered: Y.`) + explicit ask in the user's language, **shaped to the criterion type** — *measurable*: a generic "Считаем решённой?"; *acceptance-review*: ask the user to confirm a **specific observation they have just performed**, not a meta-belief. For in-thread work without a formal plan, the final user-facing summary **is** the resolution gate — put the ask in the **same reply** as the recap. **Bare gratitude (`thanks` / `спасибо` / `perfect` alone) is not confirmation** — ask anyway. **The terminal state of committed work is trunk/main, not a personal branch — strive to land, don't just push:** bundle the delivering option into that same ask, recommended-first (push the branch if unpushed — pre-authorized; then land via the repo's landing mechanism, ff or PR — a non-trivial fast-forward is a landing *path*, not a reason to strand the branch). Full discipline: `~/.claude/CLAUDE.md` § On task resolution + `~/.claude/memory-global/leaves/landing-discipline.md`. Then **decide whether to record**.
 
 **Quality bar.** Record only if a future you would actually want to **read** the leaf before a similar task (non-obvious choice, reusable difficulty resolution, missing tool / memory / instruction discovered, ≥ 5 min rediscovery saved); else skip — bloat is worse than a gap. Schema (`difficulty/v1` — which, with the `principle/v1` principle leaf, are two profiles (generality 0 vs ≥1) of one difficulty-record model keyed by an optional `generality` field (implied 0; `leaf/v1` is separate)), the **required** `resolution_confirmed_by_user: "<user's literal confirmation quote>"` frontmatter field (Claude Code blocks the Write without it via `verify-experience-leaf.py`; in Cursor apply it manually), scope routing (cross-project → `memory-global/leaves/`, project → `<project>/.claude/agent-memory/`), one leaf per task `type: reference`, and the skip-trivial rule: `~/.claude/CLAUDE.md` § On task resolution + `~/.claude/memory-global/leaves/experience-leaf-schema.md`.
 
@@ -137,11 +124,7 @@ If a fact qualifies for two scopes, write to the **most specific**. Duplicate co
 
 **Behavioral rules** ("always X", "never Y") belong in `CLAUDE.md` or skill / agent prompts — not in memory.
 
-Each scope also carries two sub-folders for specialized content:
-- `experience/` — per-task post-resolution leaves (see § On task resolution above).
-- `system-knowledge/` — durable, non-self-evident facts about systems / processes / org structure / codebase architecture (slug-only filenames; recording criteria in `~/.claude/CLAUDE.md` § Memory § system-knowledge).
-
-Cursor has no auto-memory write mechanism — write memory files directly when triggered.
+Each scope also carries two sub-folders: `experience/` (per-task post-resolution leaves, § On task resolution above) and `system-knowledge/` (durable non-self-evident system/process/architecture facts; recording criteria in `~/.claude/CLAUDE.md` § Memory). Cursor has no auto-memory write mechanism — write memory files directly when triggered.
 
 ## Specializations in Cursor (read inline, do not spawn)
 
@@ -158,19 +141,11 @@ When a plan step calls for a specialization, **read the SKILL.md inline** and ap
 | `yandex-cloud-expert` | Yandex Cloud setup / `yc` operations | `~/.claude/skills/yandex-cloud-expert/SKILL.md` |
 | `tech-writer` | Russian README / docs authoring; polishing a plan or a detailed Russian comment (clear, concise Russian, no calques/jargon) | `~/.claude/skills/tech-writer/SKILL.md` |
 
-The SKILL.md bodies are written for the spawned-process model (they say "you have been spawned as a fresh manager"). In Cursor, treat that framing as guidance about the **role** to adopt and the **working principles** to follow, not literal instructions about a separate process. Return markers (`COMPLETED:` / `PLAN-READY:` / `INCOMPLETE:` / `CLARIFY:` / `REPLAN:` / `PERMISSION-REQUEST:` / `ESCALATE:`) are meaningful as **internal phase markers** in your in-thread work — they tell you when to pause and check with the user.
-
-Two markers behave specially in-thread:
-- `PLAN-READY:` — when you finish a plan, treat it as a hard gate: stop and ask the user for explicit approval before executing the first step.
-- `CLARIFY:` — when you need one small specific fact to continue (file path, number, choice between named options), ask the user; resume immediately on the answer.
-
-You lose the fresh-context property of spawning, but you stay entirely within Cursor and never invoke `claude`.
+The SKILL.md bodies are written for the spawned-process model ("you have been spawned as a fresh manager"). In Cursor, treat that framing as the **role** to adopt and the **working principles** to follow, not literal instructions about a separate process. Return markers (`COMPLETED:` / `PLAN-READY:` / `INCOMPLETE:` / `CLARIFY:` / `REPLAN:` / `PERMISSION-REQUEST:` / `ESCALATE:`) are **internal phase markers** in your in-thread work — they tell you when to pause and check with the user. Two behave specially in-thread: `PLAN-READY:` is a hard gate (stop and get explicit user approval before executing the first step); `CLARIFY:` means ask the user for the one small specific fact and resume on the answer. You lose the fresh-context property of spawning, but you stay entirely within Cursor and never invoke `claude`.
 
 ### `PERMISSION-REQUEST` in Cursor
 
-The PERMISSION-REQUEST protocol from `CLAUDE.md` § Handling specialist escalations still applies, just in-thread: when about to take an external / irreversible action, check the granted-permissions leaves first; ask the user if not covered; record `always` grants; continue (no re-spawn — you are already in the same thread).
-
-`Task`-spawned subagents (`~/.claude/agents/`) are currently empty.
+The PERMISSION-REQUEST protocol still applies, just in-thread: before an external / irreversible action, check the granted-permissions leaves; ask the user if not covered; record `always` grants; continue (no re-spawn — same thread). `Task`-spawned subagents (`~/.claude/agents/`) are currently empty.
 
 ## Difficulty escape in Cursor
 
@@ -189,12 +164,6 @@ Edit policy for `~/claude-agent-instructions/`: `sync-instructions-repo.sh pull`
 
 ## Project / org gates
 
-There is no global `org-yandex.mdc` or single Arcadia mount. Project-specific gates (Tracker workflows, mount procedures, deepagent runbooks, etc.) live **inside each project's own `.claude/`** tree:
-
-- `<project_cwd>/.claude/rules/*.mdc` — Cursor project rules (symlinked into `<project>/.cursor/rules/` by the project's own setup, or for `robot/deepagent` by `scripts/setup-symlinks.sh`).
-- `<project_cwd>/.claude/agent-memory/` — project memory (symlinked from `~/.claude/projects/<cwd-hash>/memory/` by `scripts/setup-project-memory.sh`).
-- `<project_cwd>/.claude/agents/`, `<project_cwd>/.claude/skills/` — project-local agents and skills.
-
-When you open a project, those rules and memory apply alongside this global rule.
+There is no global `org-yandex.mdc` or single Arcadia mount. Project-specific gates (Tracker workflows, mount procedures, runbooks) live **inside each project's own `.claude/`** tree — `rules/*.mdc` (Cursor project rules, symlinked into `<project>/.cursor/rules/`), `agent-memory/` (project memory), `agents/` and `skills/` (project-local). When you open a project, those apply alongside this global rule.
 
 **Not mirrored in Cursor:** the `Skill` tool (invoke skills by reading `SKILL.md`), native auto-memory writing (write memory files directly), and the `@~/.claude/memory-global/MEMORY.md` import (read it directly when relevant).
