@@ -6,6 +6,7 @@ scopes_dir via tmp_path and an explicit now_ts) instead of ambient state.
 from __future__ import annotations
 
 import json
+import os
 
 from session_scope import registry
 from session_scope.registry import ScopeRecord
@@ -149,6 +150,95 @@ def test_live_sessions_extra_live_check_gates_further():
     records = [_rec("a", 100.0), _rec("b", 100.0)]
     live = registry.live_sessions(
         records, now_ts=100.0, ttl_s=30.0, extra_live_check=lambda sid: sid == "a"
+    )
+    assert [r.session_id for r in live] == ["a"]
+
+
+# ── pid: schema back-compat, heartbeat, pid_alive, live_pid_check ──────────
+
+def test_from_dict_defaults_pid_to_none_for_legacy_record():
+    rec = ScopeRecord.from_dict({"session_id": "s1", "heartbeat_ts": 1.0})
+    assert rec.pid is None
+
+
+def test_to_dict_round_trips_pid():
+    rec = ScopeRecord(session_id="s1", pid=4242)
+    assert ScopeRecord.from_dict(rec.to_dict()).pid == 4242
+
+
+def test_heartbeat_without_pid_leaves_existing_pid_untouched(tmp_path):
+    registry.heartbeat("s1", 10.0, scopes_dir=tmp_path, pid=555)
+    registry.heartbeat("s1", 20.0, scopes_dir=tmp_path)
+    rec = registry.load(tmp_path, "s1")
+    assert rec.heartbeat_ts == 20.0
+    assert rec.pid == 555
+
+
+def test_heartbeat_with_pid_records_it(tmp_path):
+    registry.heartbeat("s1", 10.0, scopes_dir=tmp_path, pid=777)
+    rec = registry.load(tmp_path, "s1")
+    assert rec.pid == 777
+
+
+def test_pid_alive_true_for_own_pid():
+    assert registry.pid_alive(os.getpid()) is True
+
+
+def test_pid_alive_false_for_dead_pid(monkeypatch):
+    def fake_kill(pid, sig):
+        raise ProcessLookupError()
+
+    monkeypatch.setattr(registry.os, "kill", fake_kill)
+    assert registry.pid_alive(999999) is False
+
+
+def test_pid_alive_true_on_permission_error(monkeypatch):
+    def fake_kill(pid, sig):
+        raise PermissionError()
+
+    monkeypatch.setattr(registry.os, "kill", fake_kill)
+    assert registry.pid_alive(1) is True
+
+
+def test_live_pid_check_excludes_dead_pid(monkeypatch):
+    records = [_rec("a", 100.0), _rec("b", 100.0)]
+    records[0].pid = 111
+    records[1].pid = 222
+
+    monkeypatch.setattr(registry, "pid_alive", lambda pid: pid == 222)
+    check = registry.live_pid_check(records)
+    assert check("a") is False
+    assert check("b") is True
+
+
+def test_live_pid_check_treats_no_pid_as_alive(monkeypatch):
+    records = [_rec("a", 100.0)]  # no pid set -> None
+
+    monkeypatch.setattr(registry, "pid_alive", lambda pid: False)
+    check = registry.live_pid_check(records)
+    assert check("a") is True
+
+
+def test_live_pid_check_unknown_session_is_alive():
+    check = registry.live_pid_check([])
+    assert check("nope") is True
+
+
+def test_live_sessions_with_dead_pid_check_excludes_record(monkeypatch):
+    records = [_rec("a", 100.0)]
+    records[0].pid = 111
+    monkeypatch.setattr(registry, "pid_alive", lambda pid: False)
+
+    live = registry.live_sessions(
+        records, now_ts=100.0, ttl_s=30.0, extra_live_check=registry.live_pid_check(records)
+    )
+    assert live == []
+
+
+def test_live_sessions_legacy_no_pid_record_keeps_heartbeat_only_behavior():
+    records = [_rec("a", 95.0), _rec("stale", 10.0)]  # neither has a pid
+    live = registry.live_sessions(
+        records, now_ts=100.0, ttl_s=30.0, extra_live_check=registry.live_pid_check(records)
     )
     assert [r.session_id for r in live] == ["a"]
 

@@ -52,6 +52,7 @@ class ScopeRecord:
     repo_root: "str | None" = None
     vcs: str = "none"
     touched_paths: "list[str]" = field(default_factory=list)
+    pid: "int | None" = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -61,6 +62,7 @@ class ScopeRecord:
 
     @classmethod
     def from_dict(cls, d: dict) -> "ScopeRecord":
+        pid = d.get("pid")
         return cls(
             session_id=str(d["session_id"]),
             heartbeat_ts=float(d.get("heartbeat_ts", 0.0)),
@@ -68,6 +70,7 @@ class ScopeRecord:
             repo_root=d.get("repo_root"),
             vcs=str(d.get("vcs", "none")),
             touched_paths=[str(p) for p in d.get("touched_paths", [])],
+            pid=int(pid) if pid is not None else None,
         )
 
     @classmethod
@@ -139,13 +142,63 @@ def set_context(
 
 
 def heartbeat(
-    session_id: str, now_ts: float, scopes_dir: "str | Path" = DEFAULT_SCOPES_DIR
+    session_id: str,
+    now_ts: float,
+    scopes_dir: "str | Path" = DEFAULT_SCOPES_DIR,
+    pid: "int | None" = None,
 ) -> ScopeRecord:
-    """Mark the session live as of now_ts (caller-supplied clock)."""
+    """Mark the session live as of now_ts (caller-supplied clock).
+
+    pid, when given, is recorded onto the session's process id (used by
+    live_pid_check to narrow heartbeat-freshness with an actual liveness
+    probe). Omitting pid (the default) leaves any previously recorded pid
+    untouched — a caller that heartbeats without knowing the pid never erases
+    one a prior call already resolved.
+    """
     rec = load(scopes_dir, session_id) or ScopeRecord(session_id=session_id)
     rec.heartbeat_ts = now_ts
+    if pid is not None:
+        rec.pid = pid
     save(scopes_dir, rec)
     return rec
+
+
+def pid_alive(pid: int) -> bool:
+    """Probe process liveness via os.kill(pid, 0) semantics.
+
+    True if the process exists (signal delivery would succeed) or if we lack
+    permission to signal it (EPERM implies it exists under another uid, e.g. a
+    root-owned process) — permission failure is not evidence of absence.
+    False only on a confirmed-absent process (ESRCH / ProcessLookupError).
+    """
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def live_pid_check(records: "list[ScopeRecord]") -> "Callable[[str], bool]":
+    """Build an extra_live_check callable (for live_sessions/detect_conflicts)
+    that probes each session's recorded pid via pid_alive.
+
+    A session with no recorded pid (a legacy record, or a session whose pid
+    capture never resolved) is treated as alive by this check alone — pid
+    liveness only NARROWS what heartbeat freshness already allows through, it
+    never widens it. That asymmetry matters: a false "dead" verdict here
+    silently disables conflict detection for a session that is actually live,
+    while a false "alive" verdict merely falls back to today's heartbeat-only
+    behavior.
+    """
+    pid_by_session = {r.session_id: r.pid for r in records}
+
+    def check(session_id: str) -> bool:
+        pid = pid_by_session.get(session_id)
+        return pid is None or pid_alive(pid)
+
+    return check
 
 
 def load_all(scopes_dir: "str | Path" = DEFAULT_SCOPES_DIR) -> "list[ScopeRecord]":

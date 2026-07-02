@@ -6,6 +6,7 @@ technique) so VCS detection is deterministic and offline.
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import sys
@@ -16,6 +17,10 @@ from session_scope import registry
 
 HOOK = Path(__file__).resolve().parent.parent / "hook-scope-track.py"
 INSTALLER = Path(__file__).resolve().parent.parent / "install-reminder-hooks.sh"
+
+_SPEC = importlib.util.spec_from_file_location("hook_scope_track", str(HOOK))
+track_mod = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(track_mod)
 
 
 def _write_exec(path: Path, content: str) -> Path:
@@ -259,6 +264,73 @@ def test_never_emits_permission_decision(tmp_path):
     proc = run_hook(edit_payload("s1", str(repo), str(target)), home, str(bin_dir))
     assert proc.returncode == 0
     assert "permissionDecision" not in proc.stdout
+
+
+def test_parse_etime_formats():
+    assert track_mod.parse_etime("05") == 5.0
+    assert track_mod.parse_etime("07:44") == 7 * 60 + 44
+    assert track_mod.parse_etime("01:02:03") == 3600 + 2 * 60 + 3
+    assert track_mod.parse_etime("2-01:02:03") == 2 * 86400 + 3600 + 2 * 60 + 3
+    assert track_mod.parse_etime("  07:44 \n") == 7 * 60 + 44
+    assert track_mod.parse_etime("") is None
+    assert track_mod.parse_etime("garbage") is None
+    assert track_mod.parse_etime("x-01:02") is None
+    assert track_mod.parse_etime("1:2:3:4") is None
+
+
+def _patch_ancestry(monkeypatch, my_pid: int, parents: dict, ages: dict) -> None:
+    monkeypatch.setattr(track_mod.os, "getpid", lambda: my_pid)
+    monkeypatch.setattr(track_mod, "_ppid_of", lambda pid: parents.get(pid))
+    monkeypatch.setattr(track_mod, "_elapsed_s", lambda pid: ages.get(pid))
+
+
+def test_session_pid_picks_first_measurably_older_ancestor(monkeypatch):
+    # hook(100, 1s) <- wrapper shell(90, 1s, same age) <- session(80, 3600s)
+    _patch_ancestry(
+        monkeypatch,
+        my_pid=100,
+        parents={100: 90, 90: 80, 80: 1},
+        ages={100: 1.0, 90: 1.0, 80: 3600.0},
+    )
+    assert track_mod.session_pid() == 80
+
+
+def test_session_pid_none_when_no_ancestor_qualifies(monkeypatch):
+    # every ancestor is as young as the hook itself, chain ends at init
+    _patch_ancestry(
+        monkeypatch,
+        my_pid=100,
+        parents={100: 90, 90: 1},
+        ages={100: 1.0, 90: 1.5},
+    )
+    assert track_mod.session_pid() is None
+
+
+def test_session_pid_none_when_own_age_unresolvable(monkeypatch):
+    _patch_ancestry(monkeypatch, my_pid=100, parents={100: 90}, ages={90: 3600.0})
+    assert track_mod.session_pid() is None
+
+
+def test_session_pid_skips_unresolvable_ancestor_age(monkeypatch):
+    # wrapper's age can't be read; the older grandparent still qualifies
+    _patch_ancestry(
+        monkeypatch,
+        my_pid=100,
+        parents={100: 90, 90: 80, 80: 1},
+        ages={100: 1.0, 80: 3600.0},
+    )
+    assert track_mod.session_pid() == 80
+
+
+def test_session_pid_respects_max_depth(monkeypatch):
+    _patch_ancestry(
+        monkeypatch,
+        my_pid=100,
+        parents={100: 99, 99: 98, 98: 97, 97: 80, 80: 1},
+        ages={100: 1.0, 99: 1.0, 98: 1.0, 97: 1.0, 80: 3600.0},
+    )
+    assert track_mod.session_pid(max_depth=2) is None
+    assert track_mod.session_pid(max_depth=4) == 80
 
 
 def test_installer_registers_scope_track_for_edit_write_and_bash():

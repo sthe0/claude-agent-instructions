@@ -62,10 +62,11 @@ def detect_conflicts(
 
     A session never conflicts with itself (this_session is excluded before
     overlap is even checked). Liveness is delegated entirely to
-    registry.live_sessions, so a stale record — or, with extra_live_check, one
-    whose backing process is gone — never produces a conflict. Two sessions
-    rooted in distinct worktrees/mounts naturally hold disjoint paths, so no
-    repo_root/vcs special-casing is needed here for isolate-not-serialize.
+    registry.live_sessions, so a stale record — or, with extra_live_check
+    (e.g. registry.live_pid_check), one whose backing process is confirmed
+    gone — never produces a conflict. Two sessions rooted in distinct
+    worktrees/mounts naturally hold disjoint paths, so no repo_root/vcs
+    special-casing is needed here for isolate-not-serialize.
     """
     conflicts: "list[Conflict]" = []
     for rec in live_sessions(records, now_ts, ttl_s, extra_live_check=extra_live_check):

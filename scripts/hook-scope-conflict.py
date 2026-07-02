@@ -5,7 +5,10 @@
 Fires on Edit|Write. Loads every session's scope record (written by
 hook-scope-track.py), then asks session_scope.detector whether realpath(file_path)
 overlaps a path already held by ANOTHER live session — liveness being a heartbeat
-within LIVE_TTL_S of now. Severity is delegated to detector.classify_severity:
+within LIVE_TTL_S of now AND, when the record carries a pid, that pid still being
+alive per registry.live_pid_check (a session whose process is confirmed dead can no
+longer shadow the tree for the rest of the TTL window). Severity is delegated to
+detector.classify_severity:
 
   - 'block' → a gated path already held by another live session: emit a PreToolUse
     permissionDecision deny naming the holding session and pointing at
@@ -66,7 +69,10 @@ def evaluate(
     sd = registry.DEFAULT_SCOPES_DIR if scopes_dir is None else scopes_dir
 
     records = registry.load_all(sd)
-    conflicts = detect_conflicts(records, session_id, [candidate], now_ts, LIVE_TTL_S)
+    extra_live_check = registry.live_pid_check(records)
+    conflicts = detect_conflicts(
+        records, session_id, [candidate], now_ts, LIVE_TTL_S, extra_live_check=extra_live_check
+    )
     if not conflicts:
         return "allow", ""
 

@@ -137,6 +137,31 @@ def test_silent_allow_distinct_worktrees(tmp_path):
     assert proc.stdout.strip() == ""
 
 
+def test_dead_pid_excludes_heartbeat_fresh_record(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    shared = repo / "shared.py"
+    shared.write_text("x")
+
+    rec = registry.ScopeRecord(
+        session_id="other",
+        heartbeat_ts=time.time(),
+        cwd="/somewhere",
+        repo_root="/somewhere",
+        vcs="git",
+        touched_paths=[os.path.realpath(str(shared))],
+        pid=999999999,  # astronomically unlikely to be a live pid
+    )
+    registry.save(_scopes_dir(home), rec)
+
+    proc = run_hook(_payload("me", str(shared)), home)
+    assert proc.returncode == 0
+    assert _decision(proc.stdout) is None
+    assert proc.stdout.strip() == ""
+
+
 def test_stale_other_session_ignored(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
