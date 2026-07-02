@@ -95,6 +95,15 @@ For these: state the diff (was → now → why), present via `AskUserQuestion` (
 
 When the plan is at `PLAN_READY` and the user replies with an instruction to *change* it ("make the sandbox the0-only", "tie X to Y", "also forbid Z") rather than an affirmative "go", that directive is a **refinement request, not approval to execute**. Apply the correction, re-present the corrected plan, and wait for an explicit affirmative approval on the plan *as it now stands*. Do not infer "approved" from the act of correcting — a user still shaping the plan has not yet signed off on running it. (Difficulty this removes: treating "here's how to fix the plan" as "start building it" — caught 2026-06-30 when a the0-only refinement was misread as a green light, costing a stopped spawn and an engine rollback.)
 
+## "Approved plan" defined
+
+The carve-out phrase "after the plan is approved" (see § In-context carve-out below and CLAUDE.md § Classify task weight) means one of:
+
+- **(a)** a `~/.claude-agent/plans/<slug>.md` file written and shown to the user — *shown* = a faithful human-readable rendering of every stage (ideas, method, checks, risks) delivered in a message the user actually receives, i.e. the turn's **final** message (text emitted before a tool call may never render — see the `claude-code-drops-pre-tool-call-text` leaf and its text-then-buttons timer split for still gating via `AskUserQuestion`); neither a terse digest nor a raw plan-file dump counts as "shown" — or
+- **(b)** an in-conversation plan text the user has explicitly confirmed ("ok, proceed", "looks good", etc.).
+
+Deciding what to do in your own head is **not** an approved plan. If you are about to Edit a production file and neither (a) nor (b) exists, you are outside the carve-out — stop, invoke `planner`, present the plan, wait for approval.
+
 ## In-context carve-out — manager implements substantive work in-thread
 
 Referenced from CLAUDE.md § Classify task weight ("Carve-out for in-context substantive plans"). A substantive task whose individual implementation steps each fit the *small change* row (≤ `small-change-max-lines` per step, single file each, no irreversible action) may be executed by the manager in-thread, **after the plan is approved**. Rationale: the plan/approval gate already protects against scope drift; the `developer` spawn primarily protects against context drift, which does not apply when the manager has explored the affected files this session. Default to spawning if any step exceeds those bounds, or if the manager has not read the target files in this session.
