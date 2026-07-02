@@ -22,6 +22,10 @@ Governed files (per `config.md` keys):
 CLAUDE.md also has a UTF-8 byte ceiling (`claude-md-max-bytes`): the harness
 silently truncates CLAUDE.md past ~40 000 bytes, losing tail rules, and the
 line-count guard does not catch byte growth.
+
+At or above WARN_FRACTION of any ceiling a non-fatal WARN line is printed
+(exit code unchanged): a limit that only signals at 100% is discovered as a
+crisis; the early warning turns it into routine maintenance.
 """
 from __future__ import annotations
 
@@ -46,6 +50,18 @@ GOVERNED = [
 
 CONFIG_KEY_RE = re.compile(r"^\|\s*`([a-z0-9-]+)`\s*\|\s*`([^`]+)`\s*\|")
 
+# Fraction of a ceiling at which a non-fatal WARN is emitted.
+WARN_FRACTION = 0.90
+
+
+def check_level(value: int, limit: int) -> str:
+    """Classify a measured value against its ceiling: 'ok' | 'warn' | 'fail'."""
+    if value > limit:
+        return "fail"
+    if value >= limit * WARN_FRACTION:
+        return "warn"
+    return "ok"
+
 
 def parse_config_md() -> dict[str, str]:
     constants: dict[str, str] = {}
@@ -68,6 +84,7 @@ def main(argv: list[str] | None = None) -> int:
     constants = parse_config_md()
 
     failures: list[str] = []
+    warnings: list[str] = []
     scanned = 0
 
     # Byte-size ceiling for CLAUDE.md. The harness silently truncates CLAUDE.md
@@ -88,9 +105,15 @@ def main(argv: list[str] | None = None) -> int:
             if claude_md.is_file():
                 scanned += 1
                 nbytes = len(claude_md.read_text(encoding="utf-8").encode("utf-8"))
-                if nbytes > byte_limit:
+                level = check_level(nbytes, byte_limit)
+                if level == "fail":
                     failures.append(
                         f"CLAUDE.md: {nbytes} bytes, limit {byte_limit} ({byte_key})"
+                    )
+                elif level == "warn":
+                    warnings.append(
+                        f"CLAUDE.md: {nbytes} bytes, {nbytes * 100 // byte_limit}% "
+                        f"of limit {byte_limit} ({byte_key})"
                     )
 
     for glob_pat, key in GOVERNED:
@@ -108,9 +131,17 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             scanned += 1
             n = len(path.read_text(encoding="utf-8").splitlines())
-            if n > limit:
-                rel = path.relative_to(REPO_ROOT)
+            rel = path.relative_to(REPO_ROOT)
+            level = check_level(n, limit)
+            if level == "fail":
                 failures.append(f"{rel}: {n} lines, limit {limit} ({key})")
+            elif level == "warn":
+                warnings.append(
+                    f"{rel}: {n} lines, {n * 100 // limit}% of limit {limit} ({key})"
+                )
+
+    for w in warnings:
+        print(f"lint-prose-length: WARN — {w}")
 
     if failures:
         print(f"lint-prose-length: FAIL — {len(failures)} issue(s)")
