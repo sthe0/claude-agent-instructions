@@ -242,3 +242,11 @@ def test_main_unpushed_hint_when_not_landable(monkeypatch, capsys, tmp_path):
     assert rc == 0
     assert "[resolution-reminder]" in out
     assert mod.UNPUSHED_BRANCH_HINT in out
+
+
+def test_hints_cite_landing_discipline_leaf():
+    """Both delivery nudges name the landing-discipline leaf so the agent can
+    load the full rule at the gate (CLAUDE.md keeps only the short pointer)."""
+    mod = _load_module()
+    for hint in (mod.BRANCH_HYGIENE_HINT, mod.UNPUSHED_BRANCH_HINT):
+        assert "memory-global/leaves/landing-discipline.md" in hint
