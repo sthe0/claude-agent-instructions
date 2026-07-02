@@ -24,22 +24,20 @@ import json
 import sys
 from pathlib import Path
 
-STATE_ROOT = Path.home() / ".claude" / "agentctl" / "state"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import config_root  # noqa: E402
 
 # Must mirror plugins_tracker.MANDATORY_PHASES. Duplicated (not imported) so the
 # hook stays a dependency-free stdin filter that never imports the engine.
 MANDATORY_PHASES = ("plan", "result")
 
 
-def _safe(session_id: str) -> str:
-    safe = "".join(c for c in (session_id or "") if c.isalnum() or c in "-_")
-    return safe or "nosession"
-
-
 def _load_state(session_id: str) -> dict | None:
     if not session_id:
         return None
-    path = STATE_ROOT / f"{_safe(session_id)}.json"
+    path = config_root.resolve_agentctl_state_file(session_id)
+    if path is None:
+        return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:

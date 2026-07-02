@@ -15,7 +15,11 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-LEDGER = Path.home() / ".claude" / "agentctl" / "prewrite-fallback.jsonl"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import config_root  # noqa: E402
+
+LEDGER = config_root.agentctl_dir() / "prewrite-fallback.jsonl"
+LEGACY_LEDGER = config_root.agentctl_legacy_state_dir().parent / "prewrite-fallback.jsonl"
 
 
 def load_ledger(path: Path) -> list[dict]:

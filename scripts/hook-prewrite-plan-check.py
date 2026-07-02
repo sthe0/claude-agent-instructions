@@ -36,11 +36,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agentctl.exempt_paths import is_gated_path  # noqa: E402
+from lib import config_root  # noqa: E402
 
 EDIT_THRESHOLD = 3
 
-PLAN_DIR = Path.home() / ".claude" / "plans"
-PLAN_PATH_RE = re.compile(r"(^|/)\.claude/plans/")
+PLAN_DIR = config_root.plans_dir()
+LEGACY_PLAN_DIR = config_root.legacy_home() / "plans"
+PLAN_PATH_RE = re.compile(r"(^|/)\.claude(-agent)?/plans/")
 
 
 def state_path(session_id: str) -> Path:
@@ -63,9 +65,8 @@ def save_state(path: Path, state: dict) -> None:
 
 
 def plan_files_exist() -> bool:
-    if not PLAN_DIR.exists():
-        return False
-    return any(PLAN_DIR.glob("*.md"))
+    dirs = {PLAN_DIR, LEGACY_PLAN_DIR}
+    return any(d.exists() and any(d.glob("*.md")) for d in dirs)
 
 
 def main() -> int:
@@ -116,7 +117,7 @@ def main() -> int:
     save_state(sp, state)
 
     try:
-        ledger = Path.home() / ".claude" / "agentctl" / "prewrite-fallback.jsonl"
+        ledger = config_root.agentctl_dir() / "prewrite-fallback.jsonl"
         ledger.parent.mkdir(parents=True, exist_ok=True)
         with ledger.open("a", encoding="utf-8") as _fh:
             _fh.write(json.dumps({

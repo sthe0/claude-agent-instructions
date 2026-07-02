@@ -10,9 +10,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
+from lib import config_root
+
 from .state import SessionState
 
-DEFAULT_ROOT = Path.home() / ".claude" / "agentctl" / "state"
+DEFAULT_ROOT = config_root.agentctl_state_dir()
 
 
 def _safe(session_id: str) -> str:

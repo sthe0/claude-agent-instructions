@@ -11,8 +11,11 @@
 # System-owned detection:
 #   - a symlink in ~/.claude whose resolved target is under the
 #     claude-agent-instructions repo (CLAUDE.md, config.md, memory-global, and the
-#     per-file agents/*, per-dir skills/* symlinks), and
-#   - the purely system-managed plain file agent-identity.local.
+#     per-file agents/*, per-dir skills/* symlinks),
+#   - the purely system-managed plain file agent-identity.local, and
+#   - the coordination engine's state: ~/.claude/agentctl/{state,scopes,
+#     gate-log.jsonl,prewrite-fallback.jsonl} and ~/.claude/plans (the latter is
+#     replaced by a compat symlink so stored absolute plan paths keep resolving).
 #
 # NOT moved (deliberately):
 #   - settings.json — an ADDITIVE MERGE of the user's personal settings + system
@@ -41,7 +44,7 @@ for _arg in "$@"; do
     --apply)   APPLY=1 ;;
     --dry-run) APPLY=0 ;;  # explicit preview; same as the default
     -h|--help)
-      sed -n '2,32p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//'
+      sed -n '2,35p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//'
       exit 0 ;;
     *)
       echo "error: unknown argument '$_arg' (use --apply or --dry-run)" >&2
@@ -117,13 +120,59 @@ for _name in agent-identity.local; do
   [[ -f "$_p" && ! -L "$_p" ]] && PLAIN_FILES+=("$_name")
 done
 
+# ── Engine state (agentctl + plans) ─────────────────────────────────────────────
+# The coordination engine's persisted state is system-owned real files (not repo
+# symlinks): per-session state JSONs, scope records, telemetry jsonl, and the
+# coordination plan artifacts. Writers resolve the isolated root via
+# lib/config-root; this section relocates what an older install left behind.
+#
+# Conflict rule: dest wins. All writers switched to the isolated root before this
+# migration path existed, so a file present on both roots is newer at dest; the
+# legacy copy is backed up and dropped. Telemetry jsonl is the exception — the
+# two logs hold disjoint eras (legacy rows are older), so they are concatenated
+# legacy-first instead of dropped.
+#
+# ~/.claude/plans is replaced by a SYMLINK to the isolated plans dir after its
+# contents move: session state files and hooks may still hold absolute legacy
+# plan paths (data, not code) — the symlink keeps those references resolving.
+
+ENGINE_STATE_FILES=()   # relative to $SRC, moved per-file with dest-wins
+ENGINE_MERGE_FILES=()   # relative to $SRC, concat-merged into dest
+PLAN_FILES=()           # entries under $SRC/plans, moved per-file with dest-wins
+
+if [[ -d "$SRC/agentctl" && ! -L "$SRC/agentctl" ]]; then
+  for _sub in state scopes; do
+    _dir="$SRC/agentctl/$_sub"
+    [[ -d "$_dir" && ! -L "$_dir" ]] || continue
+    while IFS= read -r -d '' _entry; do
+      [[ -n "$_entry" ]] || continue
+      ENGINE_STATE_FILES+=("agentctl/$_sub/$(basename "$_entry")")
+    done < <(find "$_dir" -maxdepth 1 -mindepth 1 -type f -print0 2>/dev/null)
+  done
+  for _name in gate-log.jsonl prewrite-fallback.jsonl; do
+    _p="$SRC/agentctl/$_name"
+    [[ -f "$_p" && ! -L "$_p" ]] && ENGINE_MERGE_FILES+=("agentctl/$_name")
+  done
+fi
+
+if [[ -d "$SRC/plans" && ! -L "$SRC/plans" ]]; then
+  while IFS= read -r -d '' _entry; do
+    [[ -n "$_entry" ]] || continue
+    PLAN_FILES+=("plans/$(basename "$_entry")")
+  done < <(find "$SRC/plans" -maxdepth 1 -mindepth 1 -print0 2>/dev/null)
+fi
+
 # ── Early exit if nothing found ─────────────────────────────────────────────────
 
 _count_top=${#TOP_SYMLINKS[@]}
 _count_agent=${#AGENT_SYMLINKS[@]}
 _count_skill=${#SKILL_SYMLINKS[@]}
 _count_plain=${#PLAIN_FILES[@]}
-_total=$(( _count_top + _count_agent + _count_skill + _count_plain ))
+_count_engine=${#ENGINE_STATE_FILES[@]}
+_count_merge=${#ENGINE_MERGE_FILES[@]}
+_count_plans=${#PLAN_FILES[@]}
+_total=$(( _count_top + _count_agent + _count_skill + _count_plain \
+           + _count_engine + _count_merge + _count_plans ))
 
 if [[ "$_total" -eq 0 ]]; then
   echo "Nothing system-owned found in $SRC — already migrated or never in-place."
@@ -145,6 +194,18 @@ done
 for _name in "${PLAIN_FILES[@]+"${PLAIN_FILES[@]}"}"; do
   printf '  file     %s/%s\n' "$SRC" "$_name"
 done
+for _name in "${ENGINE_STATE_FILES[@]+"${ENGINE_STATE_FILES[@]}"}"; do
+  printf '  state    %s/%s\n' "$SRC" "$_name"
+done
+for _name in "${ENGINE_MERGE_FILES[@]+"${ENGINE_MERGE_FILES[@]}"}"; do
+  printf '  merge    %s/%s\n' "$SRC" "$_name"
+done
+for _name in "${PLAN_FILES[@]+"${PLAN_FILES[@]}"}"; do
+  printf '  plan     %s/%s\n' "$SRC" "$_name"
+done
+if [[ "$_count_plans" -gt 0 ]]; then
+  printf '  symlink  %s/plans -> %s/plans (left as compat pointer)\n' "$SRC" "$DEST"
+fi
 echo
 
 # Advisory: a legacy merged settings.json is LEFT in place (it now holds the user's
@@ -196,6 +257,14 @@ for _name in "${PLAIN_FILES[@]+"${PLAIN_FILES[@]}"}"; do
   [[ -n "$_name" ]] || continue
   cp -a "$SRC/$_name" "$BAK/$_name" 2>/dev/null || true
 done
+# Engine state is backed up wholesale (small dirs, and a per-file backup would
+# miss the concat-merge sources).
+if [[ $(( _count_engine + _count_merge )) -gt 0 ]]; then
+  cp -a "$SRC/agentctl" "$BAK/agentctl" 2>/dev/null || true
+fi
+if [[ "$_count_plans" -gt 0 ]]; then
+  cp -a "$SRC/plans" "$BAK/plans" 2>/dev/null || true
+fi
 
 # ── Move ────────────────────────────────────────────────────────────────────────
 
@@ -252,6 +321,55 @@ for _name in "${PLAIN_FILES[@]+"${PLAIN_FILES[@]}"}"; do
   [[ -n "$_name" ]] || continue
   _move_entry "$SRC/$_name" "$DEST/$_name"
 done
+
+# Engine state: per-file moves with dest-wins (see the collection section for
+# why dest wins), telemetry concat-merge, then the plans compat symlink.
+for _name in "${ENGINE_STATE_FILES[@]+"${ENGINE_STATE_FILES[@]}"}"; do
+  [[ -n "$_name" ]] || continue
+  mkdir -p "$DEST/$(dirname "$_name")"
+  _move_entry "$SRC/$_name" "$DEST/$_name"
+done
+
+for _name in "${ENGINE_MERGE_FILES[@]+"${ENGINE_MERGE_FILES[@]}"}"; do
+  [[ -n "$_name" ]] || continue
+  _s="$SRC/$_name"; _d="$DEST/$_name"
+  [[ -f "$_s" ]] || continue
+  mkdir -p "$DEST/$(dirname "$_name")"
+  if [[ -f "$_d" ]]; then
+    # Disjoint eras: legacy rows predate the isolated-root cutover, so
+    # legacy-first concatenation preserves chronological order.
+    cat "$_s" "$_d" > "$_d.migrate-tmp"
+    mv "$_d.migrate-tmp" "$_d"
+    rm -f "$_s"
+    printf '  merged: %s -> %s\n' "$_s" "$_d"
+    MOVED=$(( MOVED + 1 ))
+  else
+    _move_entry "$_s" "$_d"
+  fi
+done
+
+for _name in "${PLAN_FILES[@]+"${PLAN_FILES[@]}"}"; do
+  [[ -n "$_name" ]] || continue
+  mkdir -p "$DEST/plans"
+  _move_entry "$SRC/$_name" "$DEST/$_name"
+done
+
+# Drop now-empty legacy engine dirs; replace plans with a compat symlink (state
+# files may hold absolute legacy plan paths — data this script must not rewrite).
+if [[ -d "$SRC/agentctl" && ! -L "$SRC/agentctl" ]]; then
+  find "$SRC/agentctl" -type d -empty -delete 2>/dev/null || true
+  if [[ -d "$SRC/agentctl" ]]; then
+    printf '  note: %s/agentctl not empty after migration — left in place\n' "$SRC"
+  fi
+fi
+if [[ "$_count_plans" -gt 0 && -d "$SRC/plans" && ! -L "$SRC/plans" ]]; then
+  if rmdir "$SRC/plans" 2>/dev/null; then
+    ln -s "$DEST/plans" "$SRC/plans"
+    printf '  symlinked: %s/plans -> %s/plans\n' "$SRC" "$DEST"
+  else
+    printf '  note: %s/plans not empty after migration — left in place (no symlink)\n' "$SRC"
+  fi
+fi
 
 echo
 if [[ "$MOVED" -gt 0 ]]; then

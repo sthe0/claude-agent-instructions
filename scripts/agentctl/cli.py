@@ -19,6 +19,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from lib import config_root
+
 from . import advisor, continuations, cost, gates, permissions, plugins
 from .classify import Signals, classify
 from .config import Thresholds
@@ -55,7 +57,7 @@ from .store import FileStateStore, StateStore
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 VERIFY_PLAN_CLI = REPO_ROOT / "scripts" / "verify-plan-file.py"
-GATE_LOG = Path.home() / ".claude" / "agentctl" / "gate-log.jsonl"
+GATE_LOG = config_root.agentctl_gate_log()
 
 
 def _digest(text: str) -> str:

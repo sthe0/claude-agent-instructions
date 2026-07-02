@@ -50,7 +50,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-STATE_ROOT = Path.home() / ".claude" / "agentctl" / "state"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import config_root  # noqa: E402
+
 LAND_BRANCH_SCRIPT = Path(__file__).resolve().parent / "land-branch.py"
 LAND_BRANCH_TIMEOUT_SEC = 5
 GIT_TIMEOUT_SEC = 5
@@ -120,17 +122,14 @@ def is_resolution_meta_question(prompt: str) -> bool:
     return bool(GRATITUDE_RE.search(prompt) and META_RE.search(prompt))
 
 
-def _safe(session_id: str) -> str:
-    safe = "".join(c for c in (session_id or "") if c.isalnum() or c in "-_")
-    return safe or "nosession"
-
-
 def resolution_gate_open(session_id: str) -> bool:
     """True iff an agentctl state file says node==RESOLUTION and the resolution
     gate has not passed. Missing/corrupt state -> False (fall back to prose)."""
     if not session_id:
         return False
-    path = STATE_ROOT / f"{_safe(session_id)}.json"
+    path = config_root.resolve_agentctl_state_file(session_id)
+    if path is None:
+        return False
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:

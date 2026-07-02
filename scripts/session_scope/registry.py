@@ -23,7 +23,9 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
 
-DEFAULT_SCOPES_DIR = Path.home() / ".claude" / "agentctl" / "scopes"
+from lib import config_root
+
+DEFAULT_SCOPES_DIR = config_root.agentctl_scopes_dir()
 
 # Cap on touched_paths so a long-running session's record can't grow unbounded.
 # Oldest entries are dropped first (FIFO) when the cap is exceeded.

@@ -99,6 +99,8 @@ def test_plan_md_is_gated():
         "/home/u/.claude/plans/task.md",
         "/home/u/.claude/plans/some-task/stage-1.md",
         "/home/u/.claude/plans/nested/deep/x.toml",
+        "/home/u/.claude-agent/plans/task.md",
+        "/home/u/.claude-agent/plans/some-task/stage-1.md",
     ],
 )
 def test_is_plan_file_true(path):

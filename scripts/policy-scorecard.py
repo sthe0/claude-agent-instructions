@@ -56,12 +56,15 @@ PRICING = cost_report.PRICING_USD_PER_MTOK
 
 # System root (resolved via config_root) for transcripts
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib.config_root import agent_home
+from lib.config_root import agent_home, agentctl_gate_log, legacy_home
 PROJECTS_DIR = agent_home() / "projects"
 LEDGER = Path.home() / ".local" / "log" / "claude-policy-ledger.jsonl"
 # Written by agentctl cli._log_gate: one {ts, session, node, gate, blockers,
-# passed} row per gate evaluation. Read-only here.
-GATE_LOG = Path.home() / ".claude" / "agentctl" / "gate-log.jsonl"
+# passed} row per gate evaluation. Read-only here. Both the resolved root and
+# the legacy pre-isolation root are read so history spanning the migration
+# (old rows under ~/.claude, new rows under the isolated root) stays complete.
+GATE_LOGS = tuple(dict.fromkeys(
+    (agentctl_gate_log(), legacy_home() / "agentctl" / "gate-log.jsonl")))
 
 MODEL_KEYS = ("opus", "sonnet", "haiku")
 USAGE_FIELDS = (
@@ -474,25 +477,26 @@ def _fmt_tokens(tok: dict) -> list[str]:
 
 
 def _gate_events(days: int, now: dt.datetime) -> list[dict]:
-    """In-window gate evaluations from GATE_LOG; [] when absent/unreadable."""
-    if not GATE_LOG.exists():
-        return []
+    """In-window gate evaluations from GATE_LOGS; [] when absent/unreadable."""
     cutoff = now - dt.timedelta(days=days)
     events: list[dict] = []
-    try:
-        lines = GATE_LOG.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return []
-    for line in lines:
-        line = line.strip()
-        if not line:
+    for log in GATE_LOGS:
+        if not log.exists():
             continue
         try:
-            row = json.loads(line)
-            if parse_ts(row.get("ts", "")) >= cutoff:
-                events.append(row)
-        except (json.JSONDecodeError, ValueError):
+            lines = log.read_text(encoding="utf-8").splitlines()
+        except OSError:
             continue
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+                if parse_ts(row.get("ts", "")) >= cutoff:
+                    events.append(row)
+            except (json.JSONDecodeError, ValueError):
+                continue
     return events
 
 
@@ -502,7 +506,7 @@ def _gates_lines(days: int, now: dt.datetime) -> list[str]:
     (policy-effectiveness-tracking loop applied to the engine's gates)."""
     events = _gate_events(days, now)
     if not events:
-        return [f"- no gate events in the last {days}d ({GATE_LOG})."]
+        return [f"- no gate events in the last {days}d ({GATE_LOGS[0]})."]
     per_gate: dict[str, Counter] = defaultdict(Counter)
     for e in events:
         per_gate[e.get("gate", "?")]["fired"] += 1

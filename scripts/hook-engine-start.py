@@ -29,7 +29,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-STATE_ROOT = Path.home() / ".claude" / "agentctl" / "state"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import config_root  # noqa: E402
+
 SCRIPTS_DIR = Path(__file__).resolve().parent  # `python3 -m agentctl` runs from here
 
 # Nodes from which a fresh prompt may legitimately re-arm the engine for a NEW task.
@@ -45,21 +47,15 @@ _NEXT_HINTS = {
 }
 
 
-def _safe(session_id: str) -> str:
-    safe = "".join(c for c in (session_id or "") if c.isalnum() or c in "-_")
-    return safe or "nosession"
-
-
-def _state_path(session_id: str) -> Path:
-    return STATE_ROOT / f"{_safe(session_id)}.json"
-
-
 def _load_state(session_id: str) -> dict | None:
     """Return the parsed state dict, or None when missing / corrupt / unreadable."""
     if not session_id:
         return None
+    p = config_root.resolve_agentctl_state_file(session_id)
+    if p is None:
+        return None
     try:
-        data = json.loads(_state_path(session_id).read_text(encoding="utf-8"))
+        data = json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return None
     return data if isinstance(data, dict) else None

@@ -226,3 +226,43 @@ def test_py_identity_file_override(monkeypatch, tmp_path):
         CLAUDE_AGENT_IDENTITY=str(ident),
     )
     assert config_root.identity_file() == ident
+
+
+# ── resolve_agentctl_state_file: current root first, legacy fallback ─────────
+
+def _touch_state(root: Path, session_id: str) -> Path:
+    d = root / "agentctl" / "state"
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / f"{session_id}.json"
+    f.write_text("{}", encoding="utf-8")
+    return f
+
+
+def test_py_state_file_current_root_wins(monkeypatch, tmp_path):
+    _reload_env(monkeypatch, tmp_path, CLAUDE_AGENT_HOME=str(tmp_path / "root"))
+    current = _touch_state(tmp_path / "root", "s-both")
+    _touch_state(tmp_path / ".claude", "s-both")
+    assert config_root.resolve_agentctl_state_file("s-both") == current
+
+
+def test_py_state_file_legacy_fallback(monkeypatch, tmp_path):
+    # A pre-migration session lives only under ~/.claude — must still resolve
+    # (fail closed: gates read this; 'missing on the new root' must not mean 'allow').
+    _reload_env(monkeypatch, tmp_path, CLAUDE_AGENT_HOME=str(tmp_path / "root"))
+    legacy = _touch_state(tmp_path / ".claude", "s-old")
+    assert config_root.resolve_agentctl_state_file("s-old") == legacy
+
+
+def test_py_state_file_none_when_absent_everywhere(monkeypatch, tmp_path):
+    _reload_env(monkeypatch, tmp_path, CLAUDE_AGENT_HOME=str(tmp_path / "root"))
+    assert config_root.resolve_agentctl_state_file("s-none") is None
+
+
+def test_py_state_file_sanitizes_session_id(monkeypatch, tmp_path):
+    # Matches agentctl/store.py's FileStateStore sanitization: path-hostile
+    # characters are stripped, an empty id maps to "nosession".
+    _reload_env(monkeypatch, tmp_path, CLAUDE_AGENT_HOME=str(tmp_path / "root"))
+    hostile = _touch_state(tmp_path / "root", "ab")
+    assert config_root.resolve_agentctl_state_file("a/../b") == hostile
+    empty = _touch_state(tmp_path / "root", "nosession")
+    assert config_root.resolve_agentctl_state_file(None) == empty

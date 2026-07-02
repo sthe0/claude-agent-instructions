@@ -63,6 +63,11 @@ def _run(
 ) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env["HOME"] = str(home)
+    # config_root resolves CLAUDE_CONFIG_DIR/CLAUDE_AGENT_HOME before HOME —
+    # strip them so the child derives its root from the tmp HOME, not the
+    # developer machine's real isolated root.
+    env.pop("CLAUDE_CONFIG_DIR", None)
+    env.pop("CLAUDE_AGENT_HOME", None)
     env["GIT_BIN"] = str(_stub_git(tmp_path, fake_toplevel, git_calls, wt_list))
     env["PATH"] = "/usr/bin:/bin"
     if session_id is not None:

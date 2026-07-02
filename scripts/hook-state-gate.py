@@ -12,8 +12,12 @@ no agentctl session exists (prose fallback); this one hard-blocks when one does.
 The two run in parallel — if there is no agentctl state file for the session this
 hook exits 0 (allow) and the prose-fallback nudge still applies.
 
-State file: ~/.claude/agentctl/state/<session_id>.json (see scripts/agentctl/store.py;
-the session_id is sanitized to alnum/-/_ exactly as FileStateStore does).
+State file: <agent-home>/agentctl/state/<session_id>.json (see scripts/agentctl/store.py;
+the session_id is sanitized to alnum/-/_ exactly as FileStateStore does). <agent-home>
+resolves via lib/config_root.py (isolated ~/.claude-agent when present, else legacy
+~/.claude). A session file left behind by a not-yet-migrated root is still found —
+resolve_state_path() checks the legacy root too — so the gate fails CLOSED (keeps
+blocking) rather than open during a half-migrated transition.
 
 DENY is signaled with the PreToolUse permissionDecision JSON on stdout:
   {"hookSpecificOutput": {"hookEventName": "PreToolUse",
@@ -31,17 +35,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agentctl.exempt_paths import is_gated_path, is_plan_file  # noqa: E402
+from lib import config_root  # noqa: E402
 
-STATE_ROOT = Path.home() / ".claude" / "agentctl" / "state"
-
-
-def _safe(session_id: str) -> str:
-    safe = "".join(c for c in (session_id or "") if c.isalnum() or c in "-_")
-    return safe or "nosession"
-
-
-def state_path(session_id: str) -> Path:
-    return STATE_ROOT / f"{_safe(session_id)}.json"
+# Current-vs-legacy-root fallback lookup lives in lib/config_root.py (shared
+# with the other state-reading hooks); resolve_state_path is a thin alias kept
+# here so this hook's own docstring reference to it still resolves.
+resolve_state_path = config_root.resolve_agentctl_state_file
 
 
 # Nodes where production edits are legitimate regardless of weight class: the
@@ -139,8 +138,8 @@ def main() -> int:
     file_path = tool_input.get("file_path") or ""
     session_id = payload.get("session_id") or ""
 
-    sp = state_path(session_id)
-    if not sp.exists():
+    sp = resolve_state_path(session_id)
+    if sp is None:
         return 0
 
     if not is_gated_path(file_path):

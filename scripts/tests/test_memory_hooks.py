@@ -190,8 +190,19 @@ class TestMemoryConsistencyHook:
 # hook-experience-record-reminder.py
 # ---------------------------------------------------------------------------
 
+def _point_roots_at(monkeypatch, tmp_path: Path) -> Path:
+    """The hook resolves its state file via config_root at call time from env:
+    CLAUDE_AGENT_HOME is the current root, HOME the legacy fallback — point
+    both into tmp so no real machine state leaks in. Returns the current
+    root's state dir."""
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("CLAUDE_AGENT_HOME", str(tmp_path / "root"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    return tmp_path / "root" / "agentctl" / "state"
+
+
 def _make_state(tmp_path: Path, session_id: str, node: str, bag: dict | None) -> Path:
-    state_dir = tmp_path / "state"
+    state_dir = tmp_path / "root" / "agentctl" / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
     data: dict = {"node": node}
     if bag is not None:
@@ -203,8 +214,8 @@ def _make_state(tmp_path: Path, session_id: str, node: str, bag: dict | None) ->
 def _run_exp(monkeypatch, tmp_path: Path, session_id: str, node: str,
              bag: dict | None) -> tuple[str, int]:
     mod = _load("hook-experience-record-reminder.py")
-    state_dir = _make_state(tmp_path, session_id, node, bag)
-    monkeypatch.setattr(mod, "STATE_ROOT", state_dir)
+    _point_roots_at(monkeypatch, tmp_path)
+    _make_state(tmp_path, session_id, node, bag)
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"session_id": session_id})))
     printed = []
     monkeypatch.setattr("builtins.print", lambda *a, **kw: printed.append(" ".join(str(x) for x in a)))
@@ -257,9 +268,7 @@ class TestExperienceRecordReminder:
 
     def test_silent_when_no_state_file(self, monkeypatch, tmp_path):
         mod = _load("hook-experience-record-reminder.py")
-        state_dir = tmp_path / "empty-state"
-        state_dir.mkdir()
-        monkeypatch.setattr(mod, "STATE_ROOT", state_dir)
+        _point_roots_at(monkeypatch, tmp_path)
         monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"session_id": "nosuchsession"})))
         printed = []
         monkeypatch.setattr("builtins.print", lambda *a, **kw: printed.append(str(a)))
@@ -273,9 +282,7 @@ class TestExperienceRecordReminder:
 
     def test_corrupt_json_input_is_silent(self, monkeypatch, tmp_path):
         mod = _load("hook-experience-record-reminder.py")
-        state_dir = tmp_path / "s"
-        state_dir.mkdir()
-        monkeypatch.setattr(mod, "STATE_ROOT", state_dir)
+        _point_roots_at(monkeypatch, tmp_path)
         monkeypatch.setattr("sys.stdin", io.StringIO("not-json{{{"))
         printed = []
         monkeypatch.setattr("builtins.print", lambda *a, **kw: printed.append(str(a)))

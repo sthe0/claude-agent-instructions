@@ -171,6 +171,11 @@ def _run_wrapper(tmp_path: Path, home: Path, bin_dir: Path) -> subprocess.Comple
         "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
         "AGENT_RECURSION_DEPTH": "0",
     }
+    # config_root resolves CLAUDE_CONFIG_DIR/CLAUDE_AGENT_HOME before HOME —
+    # strip them so the child derives its root from the tmp HOME, not the
+    # developer machine's real isolated root.
+    env.pop("CLAUDE_CONFIG_DIR", None)
+    env.pop("CLAUDE_AGENT_HOME", None)
     cmd = [
         "python3",
         str(SCRIPT),
