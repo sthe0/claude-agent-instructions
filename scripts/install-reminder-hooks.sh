@@ -46,6 +46,9 @@ DESIRED = [
     ("PreToolUse",       "Bash",  "hook-long-job-arm.py",            5),
     ("PreToolUse",       "Bash",  "hook-skill-first.py",             5),
     ("UserPromptSubmit", None,    "hook-language-reminder.py",       5),
+    # Daily proactive OFFER to refresh Core + project-layer instructions (replaces the
+    # silent 10-min auto-pull cron/timer). Higher timeout: up to two bounded git fetches.
+    ("UserPromptSubmit", None,    "hook-instructions-refresh-due.py", 10),
     ("PreToolUse",       "Bash|Grep|Glob", "hook-arc-mount-search-guard.py", 5),
     # Hard gate: deny a recursive rm that (worst-case, with any empty $VAR) targets
     # /, $HOME, ~/.claude, or the instruction repo — the agent's own memory/config.

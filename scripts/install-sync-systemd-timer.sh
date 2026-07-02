@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 # User systemd timer: pull every 10 min (fallback when crontab is denied).
+#
+# DEPRECATED: superseded by the daily explicit refresh OFFER
+# (hook-instructions-refresh-due.py, a UserPromptSubmit hook that nudges the
+# agent to ask before pulling, once per calendar day) — see
+# docs/architecture/instruction-layering.md. This silent 10-min background
+# pull can stash/rebase into a conflict on top of uncommitted local work with
+# no one watching. To uninstall:
+#   systemctl --user disable --now claude-agent-instructions-pull.timer
 set -euo pipefail
 [[ "$(uname -s)" == "Linux" ]] || { echo 'systemd timer: Linux only — use install-sync-cron.sh / launchd on macOS' >&2; exit 1; }
 REPO="$(cd "$(dirname "$0")/.." && pwd)"

@@ -69,6 +69,19 @@ A Team or Personal layer is kept current against the evolving Core with `git pul
 --rebase` + `git rerere` — the full recipe, the one-time setup, and the `rerere` identical-conflict
 caveat live in `docs/operations/layer-maintenance.md` (kept in one place to avoid drift).
 
+## Staying current: the daily refresh offer
+
+Both a moving Core and a moving Team layer need pulling, but a *silent* background pull risks
+stashing/rebasing over uncommitted local work with no one watching. Instead, `hook-instructions-refresh-due.py`
+(a `UserPromptSubmit` hook) checks once per calendar day, on the day's first prompt, whether the
+Core repo and — if the current project carries a git-tracked `.claude/` Team layer distinct from
+Core — that project's own repo are behind their upstream (`git fetch` + `rev-list --count`, bounded
+and fail-open: any git error is treated as not-behind and stays silent). When a layer is behind, it
+prints a nudge naming the layer and its exact pull command; the agent must **offer** the pull via
+`AskUserQuestion` before running it — the hook itself never pulls. This supersedes the older silent
+10-min cron/systemd timer (`install-sync-cron.sh` / `install-sync-systemd-timer.sh`), which is now
+deprecated in favor of this explicit, opt-in cadence.
+
 ## See also
 
 - `docs/adr/0001-consensus-architecture.md` — the decision this contract implements.
