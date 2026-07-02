@@ -45,23 +45,7 @@ A bare reminder ("did you run self-improvement?") is **not** pre-approval — ru
 
 ### Non-author machines route Core difficulties to a channel (ADR-0001)
 
-*Difficulty removed: a machine without Core commit authority cannot land a Core edit, so proposing one there dead-ends the feedback instead of recording it where an author will see it.*
-
-Before proposing an edit to a **protected-Core** artifact (the CODEOWNERS-guarded set: `CLAUDE.md`, `config.md`, `skills/**`, `agents/**`, `cursor/**`, `*.mdc`, `scripts/agentctl/**`), check authority with `difficulty_channel.authority.is_author()` (a `git push --dry-run` capability probe — the machine either has push rights or it does not). On a **non-author** machine, do **not** author a Core edit — instead run:
-
-```bash
-python3 ~/claude-agent-instructions/scripts/file-difficulty.py \
-  --target <artifact> \
-  --ground '<desired-vs-actual the feedback names>' \
-  --severity <low|medium|high|critical>
-```
-
-The machine's channel is auto-selected from `~/.claude/agent-identity.local` (`difficulty_channel=startrek` or `difficulty_channel=github`); override with `--channel` if needed. An **author** runs the normal spine: `core-difficulty-digest.py` to see the accumulated + clustered difficulties, then `planner → approval → developer` for the batched Core change. Non-Core targets (memory leaves, project files) are unaffected — they are not edit-restricted. This is the propose-not-execute / no-veto rule: a non-author surfaces the difficulty, only an author lands the change.
-
-**Tier routing (queue/stream).** The same command files to the right tier's surface — classify the target's tier, the structure carries the rest (full model: [instruction-dev-queues.md](../../memory-global/leaves/instruction-dev-queues.md), policy.md § Routing a difficulty to its queue by tier):
-- **Org**-specific (Yandex, cross-project): `--channel startrek` files a report to `OOSEVENREPORT`; a planned backlog item uses `--stream backlog` (→ `OOSEVEN`).
-- **Project** (e.g. `robot/deepagent`): pass a `--target` **under the project tree** — `file-difficulty.py` resolves the project's `instruction_queue` field (`agent-project.json`, e.g. `DEEPAGENT`) automatically, or pass `--queue <KEY>` explicitly. Backlog and reports collapse onto that one queue.
-- **Core**: a backlog item (not a reactive report) uses `--stream backlog` so the digest's `difficulty`-label pull skips it.
+Before proposing an edit to a **protected-Core** artifact, check authority with `difficulty_channel.authority.is_author()`. A **non-author** never authors a Core edit — it files the difficulty via `scripts/file-difficulty.py` (propose-not-execute / no-veto); an **author** runs the normal spine off `core-difficulty-digest.py`. Canonical rule, the exact command, and the tier/queue routing table: [policy.md](policy.md) § Authority before a Core edit + § Routing a difficulty to its queue by tier; the 3-tier queue model: [instruction-dev-queues.md](../../memory-global/leaves/instruction-dev-queues.md).
 
 ## Source of truth
 
