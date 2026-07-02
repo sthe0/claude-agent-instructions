@@ -1,0 +1,30 @@
+---
+name: 2026-07-02-dead-spawn-scope-file-blocks-next-writer
+description: A spawned specialist session that dies (budget exhaustion, kill) leaves its scope registration under ~/.claude/agentctl/scopes/<session>.json; hook-scope-conflict.py judges liveness by heartbeat age alone (LIVE_TTL_S=1800), so for up to 30 min every writer overlapping the same files is denied. Bit three times in one task: two dispatched developers hit predecessors' ghost scopes (one burned its whole $3 budget in a denial spiral, zero edits) and the manager's own Edit was denied by a dead spawn's scope. Mitigation: rm dead spawn sessions' scope files before dispatch and before manager edits (encoded as plan conditions in r1). Structural fix: spawn-specialist.py must deregister the scope on spawn exit, and the detector must check process liveness rather than only heartbeat age.
+type: reference
+schema: difficulty/v1
+generality: 0
+resolution_confirmed_by_user: "Fedor (2026-07-02: 'да на все три вопроса')"
+refs: [scripts/hook-scope-conflict.py, docs/operations/cross-session-scope-isolation.md]
+created: 2026-07-02
+last_verified: 2026-07-02
+---
+
+# Ghost scope: a dead spawn session's scope file blocks the next writer for the full heartbeat TTL
+
+## Difficulty
+Desired: the scope registry reflects only live sessions, so writers are blocked only by genuinely concurrent work. Actual: dead spawn sessions' scope files persist up to LIVE_TTL_S=1800s and deny all overlapping writers; one $3 developer spawn died entirely in the denial spiral before producing a single edit.
+
+## Order & criterion
+Execute plan agentctl-gate-quality stage-by-stage via dispatched developer spawns sharing the instructions-repo working tree
+
+**Acceptance check:** Dispatched spawns and manager edits proceed without scope-conflict denials from sessions that are no longer running; no spawn budget burned on denial spirals
+
+## Contexts
+
+### 2026-07-02 — initial
+- Where it arose: ~/claude-agent-instructions shared tree; agentctl dispatch -> spawn-specialist.py; hook-scope-conflict.py + scope registry ~/.claude/agentctl/scopes/
+- Working plan: Interim (applied): before each dispatch and before manager edits on contested files, rm the dead spawn sessions' scope files under ~/.claude/agentctl/scopes/ (verify the session is dead via its transcript/process first). Structural (planned as follow-up task): (1) spawn-specialist.py deregisters the spawn session's scope on exit, success or failure; (2) hook-scope-conflict.py checks process liveness (pid probe) in addition to heartbeat age before treating a registration as live.
+
+## Cost
+Task spawn total $11.10 across 4 dispatched stages (agentctl resolve); of that, $3.01 was pure ghost-scope loss (one developer spawn died in the denial spiral with zero edits), plus ~2 manager diagnosis/replan cycles.
