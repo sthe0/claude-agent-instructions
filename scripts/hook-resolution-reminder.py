@@ -3,6 +3,12 @@
 when the user's prompt is brief gratitude — ambiguous between "thanks
 for the work" and "task is over".
 
+At the resolution gate, also checks whether the working branch is
+cleanly landable into trunk (`land-branch.py --check`) and, if so,
+appends a branch-hygiene line so a confirmed-resolved task doesn't
+leave an unmerged branch behind. The check is best-effort and silent
+on any failure — it never blocks or alters the gate nudge itself.
+
 Safety net for the prose rule in CLAUDE.md § On task resolution:
 the agent should close substantive tasks proactively when the plan's
 `## Final verification` has passed (recap + explicit ask). If that
@@ -40,10 +46,21 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
 STATE_ROOT = Path.home() / ".claude" / "agentctl" / "state"
+LAND_BRANCH_SCRIPT = Path(__file__).resolve().parent / "land-branch.py"
+LAND_BRANCH_TIMEOUT_SEC = 5
+
+BRANCH_HYGIENE_HINT = (
+    "Also — a working branch is cleanly landable into trunk: run "
+    "`python3 scripts/land-branch.py --check` to preview, then bundle a "
+    "land+delete option into the SAME resolution AskUserQuestion (ref-only "
+    "ff; trunk-push needs explicit confirmation). Don't leave the branch "
+    "hanging."
+)
 
 MAX_WORDS = 6
 META_MAX_WORDS = 20
@@ -106,6 +123,24 @@ def resolution_gate_open(session_id: str) -> bool:
     return not bool(resolution.get("passed"))
 
 
+def landable_branch_hint(repo_dir: str) -> str | None:
+    """Best-effort: BRANCH_HYGIENE_HINT if `land-branch.py --check` reports
+    LANDABLE in repo_dir, else None. Any failure (missing script, timeout,
+    non-zero exit, exception) degrades silently to None."""
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(LAND_BRANCH_SCRIPT), "--check", "-C", repo_dir],
+            capture_output=True,
+            text=True,
+            timeout=LAND_BRANCH_TIMEOUT_SEC,
+        )
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    return BRANCH_HYGIENE_HINT
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -122,6 +157,13 @@ def main() -> int:
             "explicitly via AskUserQuestion, then run `agentctl resolve "
             "--by <user>` only after an unambiguous confirmation."
         )
+        repo_dir = payload.get("cwd") or str(Path(__file__).resolve().parent)
+        try:
+            hint = landable_branch_hint(repo_dir)
+        except Exception:
+            hint = None
+        if hint:
+            print(hint)
         return 0
 
     prompt = payload.get("prompt") or ""
