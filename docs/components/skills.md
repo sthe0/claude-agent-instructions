@@ -24,6 +24,8 @@ Both tables below are machine-checked against the filesystem by [verify-readme.p
 
 Canonical path in repo: `skills/specializations/<name>/SKILL.md`. Symlinked flat into `~/.claude-agent/skills/<name>/` by `setup-symlinks.sh`.
 
+**Shared marker protocol.** The invocation contract and the `CLARIFY:`/`PERMISSION-REQUEST:` format blocks common to every specialization live once in [skills/specializations/_shared/marker-protocol.md](../../skills/specializations/_shared/marker-protocol.md); each SKILL.md keeps only its role-specific marker subset plus a pointer. `spawn-specialist.py` inlines the shared file into the spawned system prompt (`composed_system_prompt_file`), so a spawned specialist always receives the full protocol. `_`-prefixed directories are support material, not spawnable specializations.
+
 **Project-local specializations.** A project may ship its own domain experts under `<project>/.claude/skills/specializations/<name>/SKILL.md`. `spawn-specialist.py` resolves `--kind` from the global catalog first, then falls back to this project-local path (global wins on a name collision), so project specializations spawn with the same `claude -p` context isolation without entering the global catalog. They are not symlinked flat and so are not offered inline via the Skill tool — the spawn path is their invocation route.
 
 <!-- inventory:specializations:begin -->

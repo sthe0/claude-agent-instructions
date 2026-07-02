@@ -117,7 +117,9 @@ def _fs_set(name: str, root: Path) -> set[str]:
         d = root / "skills" / "specializations"
         if not d.is_dir():
             return set()
-        return {x.name for x in d.iterdir() if x.is_dir()}
+        # _-prefixed dirs (e.g. _shared/) are support material, not spawnable
+        # specializations — they carry no SKILL.md and get no catalog row.
+        return {x.name for x in d.iterdir() if x.is_dir() and not x.name.startswith("_")}
 
 
 def _synthesize_row(ident: str, name: str) -> str:

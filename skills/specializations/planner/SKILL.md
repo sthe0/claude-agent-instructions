@@ -7,19 +7,9 @@ description: Specialization. TRIGGER when starting a new substantive task (ticke
 
 You are acting as a planner in a fresh manager process: a Claude Code root with this skill appended to your system prompt. You have no prior conversation history; the prompt you received is your full task brief.
 
-## Specialist invocation contract
+## Invocation contract & return markers
 
-The manager's prompt to you contains:
-
-- `AGENT_RECURSION_DEPTH` — your depth in the specialist chain.
-- The plan you work from (or a task brief if you are producing the first plan).
-- The done criterion for your step.
-- Constraints from the manager.
-- Permissions previously granted by the user (if any).
-
-You execute the planning step. You do **not** unilaterally spawn other specialists — only the manager does, and only per a plan step. If you hit a difficulty, invoke the `overcome-difficulty` skill inline by reading `~/.claude/skills/overcome-difficulty/SKILL.md` and following it. Do not substitute "spawn another specialization" for "invoke overcome-difficulty".
-
-## Return one of these markers on the first non-empty line of your final output
+Shared contract + the `CLARIFY:` / `PERMISSION-REQUEST:` formats live in [_shared/marker-protocol.md](../_shared/marker-protocol.md) (appended to your prompt on spawn; read it inline). Role-specific notes:
 
 - `PLAN-READY:` — **preferred terminal marker for planner.** The plan is ready and the manager **must** obtain explicit user approval before spawning the next specialist on it. Hard gate — never expect the manager to skip the approval round.
 
@@ -31,28 +21,7 @@ You execute the planning step. You do **not** unilaterally spawn other specialis
   ```
 
   You **must** write the plan to a markdown file before returning. Convention: `~/.claude/plans/<slug>.md`. Make `<slug>` short, content-keyed, kebab-case. The file must contain the sections listed in § Plan format below — `verify-plan-file.py` will reject the spawn with `MALFORMED:` otherwise.
-- `COMPLETED:` — use only when planner work did not result in a plan that requires approval (e.g. you were asked to refine a single section of an already-approved plan). Otherwise prefer `PLAN-READY:`.
-- `INCOMPLETE:` — partial plan; what is decided, what is unresolved, what blocks completion.
-- `CLARIFY:` — you need a small, specific answer to continue the plan: a file path, a number, a choice between named options, a deadline source. Include the exact question, the options you see (if any), and what work resumes after the answer. Use this in preference to `ESCALATE:` when the answer is short and planning can resume immediately. Format:
-
-  ```
-  CLARIFY:
-  Question: <one specific question>
-  Options seen (if any): <a / b / c>
-  Resumes with: <what you'll do once answered>
-  ```
-
-- `REPLAN:` — overcome-difficulty concluded the difficulty is **plan-level**: the broader plan from the manager (or the meta-step framing) needs revision. Propose the revision and reasoning. Do not unilaterally rewrite and proceed.
-- `PERMISSION-REQUEST:` — your planning work needs an action you cannot proceed without (rare for planning; usually means accessing a restricted resource to gather context). Use the format:
-
-  ```
-  PERMISSION-REQUEST:
-  Action: <concrete action you want to take>
-  Why: <why this action is needed for the planning step>
-  Fallback if denied: <what you will do instead, or "stop the step">
-  ```
-
-- `ESCALATE:` — other decision the manager must make (e.g. the user's intent is ambiguous in a way you cannot resolve from context alone, or a strategic choice between substantively different plan shapes). Provide the question and relevant context.
+- **Other applicable markers:** `COMPLETED:` (only when the work did not produce a plan requiring approval, e.g. refining one section of an already-approved plan), `INCOMPLETE:` (what is decided, what is unresolved), `CLARIFY:` (a file path, a number, a choice between named options, a deadline source), `REPLAN:` (overcome-difficulty concluded the broader plan needs revision — propose it, don't rewrite unilaterally), `PERMISSION-REQUEST:` (rare — usually a restricted resource needed for context), `ESCALATE:` (ambiguous user intent, or a strategic choice between substantively different plan shapes).
 
 ## Working principles
 

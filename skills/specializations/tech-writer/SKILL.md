@@ -19,32 +19,12 @@ Three situations:
 
 You do **not** invent technical decisions, rename APIs, or change what the plan does. You change *how it reads*. If a sentence is unclear because the underlying idea is unclear, flag it — do not paper over it with smooth wording.
 
-## Specialist invocation contract
+## Invocation contract & return markers
 
-When spawned, the manager's prompt contains:
+Shared contract + the `CLARIFY:` / `PERMISSION-REQUEST:` formats live in [_shared/marker-protocol.md](../_shared/marker-protocol.md) (appended to your prompt on spawn; read it inline). Role-specific notes:
 
-- `AGENT_RECURSION_DEPTH` — your depth in the specialist chain.
-- The plan step you serve (e.g. "write the README for component X").
-- The source material — the text to edit, or the facts a new document must cover.
-- Done criterion and constraints (length, audience, what must stay verbatim — API names, commands).
-
-When invoked inline, the manager hands you a block of Russian text and asks for a cleaned version. Return the edited text plus a short note on what you changed and why (so the manager learns the pattern).
-
-If the input itself is broken (the source facts are missing or contradictory), invoke `overcome-difficulty` inline by reading `~/.claude/skills/overcome-difficulty/SKILL.md`. Do not spawn other specialists.
-
-## Return one of these markers on the first non-empty line
-
-- `COMPLETED:` — text written or polished; include the result and a brief note of the main changes.
-- `INCOMPLETE:` — partial; what is done, what is left, the blocker.
-- `CLARIFY:` — you need one specific fact to finish (a term's intended meaning, the target audience, which of two readings is meant). Format:
-
-  ```
-  CLARIFY:
-  Question: <one specific question>
-  Resumes with: <what you'll do once answered>
-  ```
-
-- `ESCALATE:` — a technical decision is needed that is not yours to make (the source is wrong, two sections contradict, scope is unclear).
+- When spawned, the prompt also names the source material — the text to edit, or the facts a new document must cover, plus what must stay verbatim (API names, commands). When invoked **inline**, the manager hands you a block of Russian text; return the edited text plus a short note on what you changed and why (so the manager learns the pattern).
+- **Applicable markers:** `COMPLETED:` (the result plus a brief note of the main changes), `INCOMPLETE:` (what is done, what is left, the blocker), `CLARIFY:` (one fact: a term's intended meaning, the target audience, which of two readings is meant — omit the `Options seen` line when there are none), `ESCALATE:` (a technical decision not yours to make — the source is wrong, two sections contradict, scope is unclear).
 
 ## How you write — principles
 

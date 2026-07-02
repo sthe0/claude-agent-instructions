@@ -29,6 +29,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -167,6 +168,36 @@ def skill_path(kind: str) -> Path:
     if project_path.exists():
         return project_path
     return global_path
+
+
+def composed_system_prompt_file(skill: Path) -> Path:
+    """SKILL.md with the shared marker-protocol appended, as a temp file.
+
+    Specialization SKILL.md files reference skills/specializations/_shared/
+    marker-protocol.md instead of each repeating the invocation contract and
+    the CLARIFY:/PERMISSION-REQUEST: format blocks. A spawned specialist gets
+    its SKILL.md as the system prompt and has no guarantee of reading linked
+    files, so the spawn is the composition point that must inline the shared
+    text (invariant: no information loss at spawn time). Falls back to the
+    bare SKILL.md when no shared file exists (project-local skills that carry
+    their own contract).
+    """
+    shared = skill.resolve().parent.parent / "_shared" / "marker-protocol.md"
+    if not shared.exists():
+        shared = REPO_ROOT / "skills" / "specializations" / "_shared" / "marker-protocol.md"
+    if not shared.exists():
+        return skill
+    combined = (
+        skill.read_text(encoding="utf-8")
+        + "\n\n---\n\n"
+        + shared.read_text(encoding="utf-8")
+    )
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".md", prefix="skill-composed-", delete=False, encoding="utf-8"
+    )
+    with tmp:
+        tmp.write(combined)
+    return Path(tmp.name)
 
 
 def validate_marker(result_text: str) -> tuple[str, bool]:
@@ -487,7 +518,7 @@ def main(argv: list[str] | None = None) -> int:
         "claude",
         "-p",
         "--append-system-prompt-file",
-        str(skill),
+        str(composed_system_prompt_file(skill)),
         "--max-budget-usd",
         budget,
         "--output-format",
