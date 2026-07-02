@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "user"
 refs: [scripts/lib/config-root.sh, scripts/migrate-to-isolated.sh, scripts/sync-instructions-repo.sh]
 created: 2026-07-01
-last_verified: 2026-07-01
+last_verified: 2026-07-02
 ---
 
 # Isolate a tool's config root instead of clobbering a same-named personal one; auth is per-root
@@ -33,6 +33,16 @@ Installing a tool into a config dir that a same-named pre-existing personal conf
 - **Portability gotcha (cost the only real difficulty cycle here): macOS bash 3.2 exits a `set -euo pipefail` shell on `source <missing-file>` EVEN WITH `|| true`.** `source "$REPO/scripts/lib/config-root.sh" 2>/dev/null || true` looked safe but terminated the whole script the moment the file was absent (surfaced when tests pointed `$REPO` at a bare clone with no `scripts/` tree — every test false-failed with empty stderr). `bash 3.2.57`'s `.`/`source` builtin, on a not-found file in a non-interactive shell, exits the shell before the `||` runs. Fix: guard with an explicit existence test — `if [[ -f "$lib" ]]; then source "$lib"; fi` — never rely on `|| true` to neutralize a missing-source on bash 3.2. (Linux bash 4/5 tolerates the `|| true`, so this only bites on macOS dev machines — exactly where tests run.)
 - **Hermetic test seam:** the migrate/setup binaries are indirected through env vars (`CLAUDE_MIGRATE_BIN`, `SETUP_SYMLINKS_BIN`, mirroring onboard.sh's `SETUP_SYMLINKS_BIN`/`DOCTOR_BIN`) so tests substitute marker-touching stubs and never mutate the real HOME/repo; the test clone is seeded with a copy of config-root.sh so the sourced detector is actually defined. log() tees to STDOUT (not stderr) — assert on stdout (or combined).
 - Verification: bash -n on all changed scripts; test_config_root.py (4 new detector tests) + test_sync_instructions_repo.py (3 new: interactive auto-migrate, headless notify-only, no-legacy no-op) green; verify-all.py 14/14.
+
+
+### 2026-07-02 — isolated-install-audit: full-system sweep + remote arc layer
+- Where it arose: claude-agent-instructions main c9dd276..e08a6b7; the0.klg.yp-c.yandex.net; arc junk/the0/agents PR 14223053 merged to trunk
+- Working plan: Sweep every writer/reader to read-time root resolution (CLAUDE_CONFIG_DIR -> CLAUDE_AGENT_HOME -> ~/.claude-agent if present -> legacy ~/.claude) via one seam (lib/config-root.sh agent_home_read + lib/config_root.py); add a mechanical enumerator test (regex over all *.sh/*.py + currency-checked allowlist of 7 intentional legacy fallbacks) so new hardcodes fail CI; fix silently-broken CLAUDE.md @-imports still pointing at ~/.claude; reconcile the remote machine (re-run fixed setup-project-memory.sh per live mount, merge both-sides-content memory into the in-tree store before relinking, remove dangling legacy symlinks, migrate legacy realdirs); patch the arc layer at its CANONICAL trunk location (common/scripts + projects/), not the stale per-branch copy.
+
+## Common core & variations
+**Common:** The migration is only done when (a) every writer resolves the root at read time through the single seam, (b) a mechanical enumerator makes regressions impossible, and (c) every machine's live state (symlinks, legacy realdirs, staged copies) is reconciled — prose fixes without (b) and (c) rot silently.
+
+**Variations:** Arc-layer trap: storage layout had moved on trunk (robot/deepagent/scripts -> common/scripts + projects/), so the first patch landed on a DEAD copy on a stale working branch, and stash-apply onto fresh trunk resurrected deleted files as whole-file conflicts — locate the canonical trunk path (find / arc show trunk:) before patching a long-lived mount. Remote memory trap: per-cwd auto-memory realdirs duplicated byte-identical personal leaves across cwd hashes; merge into the in-tree store once, back up realdirs, let the setup script relink. Delivery gates: the auto-mode classifier independently re-gates arc pr merge --now --force even when the user's AskUserQuestion option named self-ship (bundle the merge as its own click-gate option); text before AskUserQuestion in the same turn was dropped again — background-sleep timer split (recap as final message, buttons on wake) worked.
 
 ## Cost
 6 spawns; ~$23 attributed; multi-session (spanned a compaction). Stage C/D spawns hit budget/sandbox limits so the manager verified + committed independently.
