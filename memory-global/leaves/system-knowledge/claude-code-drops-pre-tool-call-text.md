@@ -20,7 +20,8 @@ The user reports this worked in earlier client versions (summary text + AskUserQ
 ## Guidance
 
 - Put every deliverable (answers, summaries, findings, plan renderings) in the turn's **final** message, with no tool calls after it.
-- At an approval gate, either (a) ask in final-message **text** and accept a typed reply, or (b) put the content the user must read into the AskUserQuestion `question`/option `description`/`preview` fields — those render; the text before the call does not.
+- **Text-then-buttons workaround (user-confirmed 2026-07-02):** to deliver long content AND still gate with AskUserQuestion, split them across two turns automatically — end turn N with the content as the final message after starting a background timer (`Bash sleep 2, run_in_background=true`); the timer's completion notification returns the turn, and turn N+1 opens **directly** with the AskUserQuestion (zero preceding text, so nothing is lost). The user sees: full rendered message → ~2 s pause → buttons.
+- For short confirmations, embedding content in the AskUserQuestion `question`/option `description`/`preview` fields also works (previews render side-by-side) but reads poorly and truncates for long content — prefer the timer split.
 - If an AskUserQuestion timed out or a question arrived mid-turn, restate the full answer in the final message (CLAUDE.md § Escalation, "an unanswered user question survives the turn").
 - Re-verify against newer client versions before relying on this leaf; if fixed upstream, update `last_verified` and note the fixed version.
 
