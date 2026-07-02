@@ -9,10 +9,27 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import subprocess
 from pathlib import Path
+
+import pytest
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 HOOK_SCRIPT = SCRIPTS_DIR / "hook-resolution-reminder.py"
+
+
+def _git_repo(path: Path, branch: str, *, commit: bool = True) -> Path:
+    """Init a throwaway git repo at `path` on `branch` with one commit."""
+    path.mkdir(parents=True, exist_ok=True)
+    run = lambda *a: subprocess.run(["git", "-C", str(path), *a], check=True,
+                                    capture_output=True)
+    run("init", "-q")
+    run("config", "user.email", "t@t.t")
+    run("config", "user.name", "t")
+    run("checkout", "-q", "-b", branch)
+    if commit:
+        run("commit", "-q", "--allow-empty", "-m", "x")
+    return path
 
 
 def _load_module():
@@ -142,3 +159,80 @@ def test_gate_closed_ordinary_prompt_no_output(monkeypatch, capsys, tmp_path):
 
     assert rc == 0
     assert out == ""
+
+
+# --- unpushed_branch_hint(): detect committed-but-unpushed personal branch ---
+
+pytestmark_git = pytest.mark.skipif(
+    subprocess.run(["git", "--version"], capture_output=True).returncode != 0,
+    reason="git not available",
+)
+
+
+@pytestmark_git
+def test_unpushed_hint_fires_on_personal_branch_with_unpushed_commit(tmp_path):
+    """No upstream + a local commit on a personal branch -> nudge push."""
+    mod = _load_module()
+    repo = _git_repo(tmp_path / "r", "users/the0/feature")
+    assert mod.unpushed_branch_hint(str(repo)) == mod.UNPUSHED_BRANCH_HINT
+
+
+@pytestmark_git
+def test_unpushed_hint_silent_on_shared_branch(tmp_path):
+    """A trunk/shared branch name is suppressed — trunk push needs explicit
+    confirmation, so we must not recommend it as a default."""
+    mod = _load_module()
+    for shared in ("master", "main", "trunk", "release-25.3"):
+        repo = _git_repo(tmp_path / shared.replace("/", "_"), shared)
+        assert mod.unpushed_branch_hint(str(repo)) is None, shared
+
+
+@pytestmark_git
+def test_unpushed_hint_silent_when_upstream_up_to_date(tmp_path):
+    """Upstream configured and HEAD == @{u} (nothing ahead) -> no nudge."""
+    mod = _load_module()
+    origin = _git_repo(tmp_path / "origin", "users/the0/feat")
+    # bare clone acting as remote, then a working clone tracking it
+    subprocess.run(["git", "clone", "-q", "--bare", str(origin), str(tmp_path / "bare")],
+                   check=True, capture_output=True)
+    work = tmp_path / "work"
+    subprocess.run(["git", "clone", "-q", str(tmp_path / "bare"), str(work)],
+                   check=True, capture_output=True)
+    # default branch is checked out with an upstream and is up to date
+    assert mod.unpushed_branch_hint(str(work)) is None
+
+
+def test_unpushed_hint_silent_on_non_git_dir(tmp_path):
+    mod = _load_module()
+    assert mod.unpushed_branch_hint(str(tmp_path / "not-a-repo")) is None
+
+
+@pytestmark_git
+def test_main_prefers_landable_over_unpushed(monkeypatch, capsys, tmp_path):
+    """When the branch is cleanly landable, the land hint fires and the plain
+    push hint is suppressed (landable already covers delivery)."""
+    mod = _load_module()
+    session_id = _arm_gate(mod, monkeypatch, tmp_path)
+    repo = _git_repo(tmp_path / "r", "users/the0/feature")
+    monkeypatch.setattr(mod, "landable_branch_hint", lambda repo_dir: mod.BRANCH_HYGIENE_HINT)
+
+    rc, out = _run(monkeypatch, capsys, mod, {"session_id": session_id, "cwd": str(repo)})
+
+    assert rc == 0
+    assert mod.BRANCH_HYGIENE_HINT in out
+    assert mod.UNPUSHED_BRANCH_HINT not in out
+
+
+@pytestmark_git
+def test_main_unpushed_hint_when_not_landable(monkeypatch, capsys, tmp_path):
+    """Not landable but unpushed commits on a personal branch -> push hint."""
+    mod = _load_module()
+    session_id = _arm_gate(mod, monkeypatch, tmp_path)
+    repo = _git_repo(tmp_path / "r", "users/the0/feature")
+    monkeypatch.setattr(mod, "landable_branch_hint", lambda repo_dir: None)
+
+    rc, out = _run(monkeypatch, capsys, mod, {"session_id": session_id, "cwd": str(repo)})
+
+    assert rc == 0
+    assert "[resolution-reminder]" in out
+    assert mod.UNPUSHED_BRANCH_HINT in out

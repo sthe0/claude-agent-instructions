@@ -53,6 +53,14 @@ from pathlib import Path
 STATE_ROOT = Path.home() / ".claude" / "agentctl" / "state"
 LAND_BRANCH_SCRIPT = Path(__file__).resolve().parent / "land-branch.py"
 LAND_BRANCH_TIMEOUT_SEC = 5
+GIT_TIMEOUT_SEC = 5
+
+# Branch names that are trunk / shared — a push to these needs explicit
+# confirmation, so we do NOT nudge a proactive push for them.
+SHARED_BRANCH_RE = re.compile(
+    r"^(trunk|master|main|develop|release[-/]|releases[-/]|stable)",
+    re.IGNORECASE,
+)
 
 BRANCH_HYGIENE_HINT = (
     "Also — a working branch is cleanly landable into trunk: run "
@@ -60,6 +68,16 @@ BRANCH_HYGIENE_HINT = (
     "land+delete option into the SAME resolution AskUserQuestion (ref-only "
     "ff; trunk-push needs explicit confirmation). Don't leave the branch "
     "hanging."
+)
+
+UNPUSHED_BRANCH_HINT = (
+    "Also — the current working branch has commits not on its remote "
+    "(unpushed / ahead of upstream, or no upstream yet). Per CLAUDE.md "
+    "§ On task resolution, deliver committed work to its terminal VCS state "
+    "proactively: bundle a **push** option into the SAME resolution "
+    "AskUserQuestion, recommended-first — pushing a personal / working "
+    "branch is pre-authorized (§ Acting without asking #4). Never leave the "
+    "push as a passive 'tell me if you want to push'."
 )
 
 MAX_WORDS = 6
@@ -141,6 +159,49 @@ def landable_branch_hint(repo_dir: str) -> str | None:
     return BRANCH_HYGIENE_HINT
 
 
+def _git(repo_dir: str, *args: str) -> str | None:
+    """Best-effort `git -C repo_dir <args>` -> stripped stdout, or None on any
+    failure (non-zero exit, timeout, git absent, exception)."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", repo_dir, *args],
+            capture_output=True,
+            text=True,
+            timeout=GIT_TIMEOUT_SEC,
+        )
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip()
+
+
+def unpushed_branch_hint(repo_dir: str) -> str | None:
+    """Best-effort UNPUSHED_BRANCH_HINT when the current branch is a personal
+    working branch (not trunk/shared) carrying commits that are not on its
+    remote — either ahead of its upstream, or with no upstream configured
+    while local commits exist. Any failure degrades silently to None so the
+    hook never breaks a resolution turn."""
+    branch = _git(repo_dir, "rev-parse", "--abbrev-ref", "HEAD")
+    if not branch or branch == "HEAD":  # empty repo / detached HEAD
+        return None
+    if SHARED_BRANCH_RE.match(branch):
+        return None
+    # Upstream configured? If so, compare ahead-count; else treat any local
+    # commit as unpushed.
+    upstream = _git(repo_dir, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+    if upstream:
+        ahead = _git(repo_dir, "rev-list", "--count", "@{u}..HEAD")
+        if ahead and ahead.isdigit() and int(ahead) > 0:
+            return UNPUSHED_BRANCH_HINT
+        return None
+    # No upstream — is there at least one commit to push?
+    head = _git(repo_dir, "rev-list", "--count", "HEAD")
+    if head and head.isdigit() and int(head) > 0:
+        return UNPUSHED_BRANCH_HINT
+    return None
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -164,6 +225,15 @@ def main() -> int:
             hint = None
         if hint:
             print(hint)
+        else:
+            # Only nudge the plain push when the branch is not cleanly
+            # landable (else the landable hint already covers delivery).
+            try:
+                push_hint = unpushed_branch_hint(repo_dir)
+            except Exception:
+                push_hint = None
+            if push_hint:
+                print(push_hint)
         return 0
 
     prompt = payload.get("prompt") or ""
