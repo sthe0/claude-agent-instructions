@@ -202,6 +202,20 @@ _dispatch_with_profile() {
   local _assume_yes="${CLAUDE_LAUNCH_ASSUME_YES:-}"
   if [[ "$_tok" == "--new" && -z "${CLAUDE_LAUNCH_DRYRUN:-}" && "$_assume_yes" != "1" ]]; then
     if [[ -t 0 ]]; then
+      # Fail fast: validate the workspace context BEFORE asking the user to
+      # confirm the irreversible tracker create — enter-task's empty-context
+      # guard fires under --dry-run too, so a doomed entry (e.g. no project
+      # resolvable from cwd) aborts here with its explanation instead of
+      # after a wasted "y".
+      local _pf_err
+      _pf_err="$(mktemp)"
+      if ! "$_LAUNCHERS_ENTER_TASK" ${_pass[@]+"${_pass[@]}"} "${_spec[@]}" --dry-run >/dev/null 2>"$_pf_err"; then
+        printf '%s: workspace entry failed:\n' "$_cmd" >&2
+        sed 's/^/  /' "$_pf_err" >&2
+        rm -f "$_pf_err"
+        return 1
+      fi
+      rm -f "$_pf_err"
       printf '%s --new will CREATE a tracker task. Proceed? [y/N] ' "$_cmd" >&2
       local _ans; read -r _ans
       case "$_ans" in
