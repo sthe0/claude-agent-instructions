@@ -1,6 +1,6 @@
 ---
 name: 2026-07-02-dead-spawn-scope-file-blocks-next-writer
-description: A spawned specialist session that dies (budget exhaustion, kill) leaves its scope registration under ~/.claude/agentctl/scopes/<session>.json; hook-scope-conflict.py judges liveness by heartbeat age alone (LIVE_TTL_S=1800), so for up to 30 min every writer overlapping the same files is denied. Bit three times in one task: two dispatched developers hit predecessors' ghost scopes (one burned its whole $3 budget in a denial spiral, zero edits) and the manager's own Edit was denied by a dead spawn's scope. Mitigation: rm dead spawn sessions' scope files before dispatch and before manager edits (encoded as plan conditions in r1). Structural fix: spawn-specialist.py must deregister the scope on spawn exit, and the detector must check process liveness rather than only heartbeat age.
+description: A spawned specialist session that dies (budget exhaustion, kill) leaves its scope registration under ~/.claude/agentctl/scopes/<session>.json; hook-scope-conflict.py judges liveness by heartbeat age alone (LIVE_TTL_S=1800), so for up to 30 min every writer overlapping the same files is denied. Bit three times in one task: two dispatched developers hit predecessors' ghost scopes (one burned its whole $3 budget in a denial spiral, zero edits) and the manager's own Edit was denied by a dead spawn's scope. Mitigation: rm dead spawn sessions' scope files before dispatch and before manager edits (encoded as plan conditions in r1). Structural fix LANDED (task ghost-scope-fix, commits c743452+b1413a3): spawn-specialist deregisters the child's scope on every exit path, hook-scope-conflict probes pid liveness, TTL demoted to backstop.
 type: reference
 schema: difficulty/v1
 generality: 0
@@ -25,6 +25,16 @@ Execute plan agentctl-gate-quality stage-by-stage via dispatched developer spawn
 ### 2026-07-02 — initial
 - Where it arose: ~/claude-agent-instructions shared tree; agentctl dispatch -> spawn-specialist.py; hook-scope-conflict.py + scope registry ~/.claude/agentctl/scopes/
 - Working plan: Interim (applied): before each dispatch and before manager edits on contested files, rm the dead spawn sessions' scope files under ~/.claude/agentctl/scopes/ (verify the session is dead via its transcript/process first). Structural (planned as follow-up task): (1) spawn-specialist.py deregisters the spawn session's scope on exit, success or failure; (2) hook-scope-conflict.py checks process liveness (pid probe) in addition to heartbeat age before treating a registration as live.
+
+
+### 2026-07-02 — structural fix landed (task ghost-scope-fix)
+- Where it arose: ~/claude-agent-instructions commits c743452 + b1413a3; plan ~/.claude/plans/ghost-scope-fix.toml; docs/operations/cross-session-scope-isolation.md § Liveness
+- Working plan: Resolved structurally, three liveness layers: (1) spawn-specialist deregisters the child's scope in the same finally as kill_tree (all exit paths; child id from result-JSON session_id else transcript stem; failures stderr-logged, never alter marker/rc); (2) hook-scope-conflict narrows heartbeat freshness with an os.kill(pid,0) probe (EPERM=alive) — hook-scope-track records the durable session pid once per session via an age-based ancestor walk (first ancestor measurably older than the per-call hook process; verified on a real hook invocation), no-pid records keep heartbeat-only semantics so a false verdict only degrades to old behavior; (3) LIVE_TTL_S demoted to backstop. Sub-difficulty during the fix: [[2026-07-02-spawn-sandbox-excludes-declared-stage-material]] — stage-2 spawn died on budget ($3.23) burning 13 permission denials on plan material outside its scripts/ sandbox; manager salvaged the delivered code, wrote the doc section, verified (147 scope/spawn + 1149 full).
+
+## Common core & variations
+**Common:** Dead-session scope files no longer require manual rm before dispatch: deregistration covers supervised exits, the pid probe covers unsupervised deaths within the same heartbeat window
+
+**Variations:** context 1 (defect) needed the manual-rm mitigation encoded as plan conditions; context 2 (fix) retires that mitigation but surfaced a new dispatch trap ([[2026-07-02-spawn-sandbox-excludes-declared-stage-material]]) — stage material outside the spawn sandbox burns the spawn's budget on permission denials.
 
 ## Cost
 Task spawn total $11.10 across 4 dispatched stages (agentctl resolve); of that, $3.01 was pure ghost-scope loss (one developer spawn died in the denial spiral with zero edits), plus ~2 manager diagnosis/replan cycles.
