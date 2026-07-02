@@ -17,6 +17,7 @@ Record only if **all four** apply:
 
 Cite the source where possible (`> verified by: <commit>/<URL>/<conversation>`).
 
+- [Claude Code drops pre-tool-call text](claude-code-drops-pre-tool-call-text.md) — difficulty: a deliverable (plan rendering, answer) written before a tool call in the same turn silently never reaches the user, who reacts as if it was never written. Fact: the CLI (confirmed v2.1.198) renders only the turn's final message and the AskUserQuestion question/options; deliver content in the final message or inside the question fields.
 - [Harness built-in Read dedup](harness-read-dedup.md) — difficulty: tempted to build a re-Read dedup hook / burning tokens on re-Reads. Fact: the harness already returns a "Wasted call" stub for re-Read of an unchanged file (Read or system-reminder), so no hook is needed.
 - [DeepSeek v4 API specifics](deepseek-v4-api.md) — difficulty: need to call DeepSeek v4 without knowing the knobs. Fact: model names (`deepseek-v4-pro`/`deepseek-v4-flash`), thinking-mode via `extra_body`, `reasoning_effort` levels, `openai-agents` SDK pattern.
 - [Cursor Agent CLI spawn](cursor-agent-cli-spawn.md) — difficulty: need a headless spawn in Cursor where `claude -p` is unavailable. Fact: `agent -p`, `~/.cursor_api_key`, install via `curl … | gunzip | bash`, wrapped by `spawn-cursor-escape.py`.
