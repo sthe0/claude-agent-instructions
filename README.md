@@ -11,18 +11,13 @@ This README is the minimal entry point — what the system is, the core mental m
 The whole system rests on four ideas. Everything else — every rule, skill, hook, and memory file — exists to serve one of them.
 
 1. **Difficulty** — the foundational object: *a divergence between a desired state and the actual state.* The agent's universal job is to remove difficulties; every rule and component has a **functional ground**, the specific difficulty it removes. Full concept: [docs/concepts/difficulty.md](docs/concepts/difficulty.md).
-
 2. **Task** — the form every action takes. Removing a difficulty is framed as a task, classified by weight — **chat**, **small change**, **substantive** — with routing following from the class. Full concept: [docs/concepts/task.md](docs/concepts/task.md).
-
 3. **Universal manager-actor** — the single executor. The main Claude Code dialog *is* the manager; it resolves a task itself when small, or coordinates specialists when large. One disciplined actor wearing different hats, not a swarm. Full concept: [docs/concepts/manager-actor.md](docs/concepts/manager-actor.md).
-
 4. **Memory** — the means of **accumulating experience in overcoming difficulties.** It closes the learning loop *difficulty → overcame it → recorded how → reused it next time.* Full concept: [docs/concepts/memory-model.md](docs/concepts/memory-model.md).
 
 ### Root + projects
 
-The instructions are layered by scope. The **root** (this repo) defines the **universal** properties of the manager-actor — the ones that hold for every task on the machine. A **project** adds its own properties on top of the root, so the effective agent is *root ⊕ project-specifics*. Project-specific runbooks, memory, and skills live in each project's own `<project>/.claude/` tree (committed to that project's git), never in this root repo.
-
-Several projects can be grouped into a shared **workspace** (a storage tree outside Core, with its own onboarding) that composes on top of the root — see [Multi-project workspaces](docs/operations/setup.md#multi-project-workspaces-optional).
+The instructions are layered by scope. The **root** (this repo) defines the **universal** properties of the manager-actor — the ones that hold for every task on the machine. A **project** adds its own properties on top of the root, so the effective agent is *root ⊕ project-specifics*. Project-specific runbooks, memory, and skills live in each project's own `<project>/.claude/` tree (committed to that project's git), never in this root repo. Several projects can be grouped into a shared **workspace** (a storage tree outside Core, with its own onboarding) that composes on top of the root — see [Multi-project workspaces](docs/operations/setup.md#multi-project-workspaces-optional).
 
 ## Documentation map
 
@@ -41,9 +36,7 @@ Several projects can be grouped into a shared **workspace** (a storage tree outs
 
 > **User install vs Core install — how to switch (read this first).** This system installs into its **own** config root (`~/.claude-agent`, override with `CLAUDE_AGENT_HOME`) and you run it with **`claude-task`** / **`claude-agent`**. Your **personal** `claude` on `~/.claude` is never touched. **That is the switch: bare `claude` = your personal install; `claude-task` / `claude-agent` = the Core system.** Auth is per-root, so you log the Core root in once (see [One-time login](docs/operations/setup.md#one-time-login-auth-is-per-root)). Every install path below — command or conversation — leaves bare `claude` yours and adds the Core entry points alongside it.
 
-### Requirements
-
-`doctor.sh` **fails** (not just warns) on a new machine if any is missing: **Claude Code ≥ 2.0.20** (the Skill tool landed in 2.0.20, plugins in 2.0.12 per the Claude Code changelog — the system is skill/plugin/hook-driven, so 2.0.20 is the floor; below it `doctor.sh` reports `[FAIL]`), plus **git** and **python3** on `PATH` (needed by the launchers, the `agentctl` engine, and the git workflow).
+**Requirements** — `doctor.sh` **fails** (not just warns) if any is missing: **Claude Code ≥ 2.0.20** (the system is skill/plugin/hook-driven; the Skill tool landed in 2.0.20, so that is the floor), plus **git** and **python3** on `PATH` (needed by the launchers, the `agentctl` engine, and the git workflow).
 
 ### Fastest path — one command
 
@@ -53,13 +46,7 @@ echo 'source ~/claude-agent-instructions/scripts/claude-launchers.sh' >> ~/.bash
 onboard   # setup-symlinks + readiness check + any machine-local onboard.d/*.sh hooks
 ```
 
-Core already cloned: just `onboard`. On a machine with org-specific workspace storage,
-a machine-local `onboard.d/` hook mounts storage and wires project configs automatically
-(see [Multi-project workspaces](docs/operations/setup.md#multi-project-workspaces-optional)).
-
-After setup, `claude-task` self-initializes: it probes `onboard.d/` hooks with
-`--needs-init` and runs `onboard` automatically when initialization is needed (e.g.
-after a reboot that dropped a storage mount).
+Core already cloned: just `onboard`. On a machine with org-specific workspace storage, a machine-local `onboard.d/` hook mounts storage and wires project configs automatically (see [Multi-project workspaces](docs/operations/setup.md#multi-project-workspaces-optional)). After setup, `claude-task` self-initializes: it probes `onboard.d/` hooks with `--needs-init` and runs `onboard` when initialization is needed (e.g. after a reboot dropped a storage mount).
 
 ### Or — let Claude bootstrap itself
 
@@ -67,21 +54,17 @@ Nothing to copy. Open Claude Code anywhere and send it the repo URL:
 
 > Look at https://github.com/sthe0/claude-agent-instructions and initialize yourself per the README.
 
-A stock Claude fetches this README, **checks the Requirements above first** (Claude Code ≥ 2.0.20, `git`, `python3`), runs the Setup steps (clone, `setup-symlinks.sh`, `doctor.sh`), and reports when it is green — showing what it will run before changing anything. It **calls out the user↔Core switch explicitly** (bare `claude` stays yours; the system runs under `claude-task` / `claude-agent`) and, once green, **finishes by telling you how to start your first task** (below). Works in any language you write in.
+A stock Claude fetches this README, **checks the Requirements above first**, runs the Setup steps (clone, `setup-symlinks.sh`, `doctor.sh`), and reports when it is green — showing what it will run before changing anything, calling out the user↔Core switch explicitly, and finishing by telling you how to start your first task (below). Works in any language you write in.
 
 ### Equivalent steps
 
 ```bash
-git clone git@github.com:sthe0/claude-agent-instructions.git ~/claude-agent-instructions
-# …no SSH key or no push access? a read-only HTTPS clone works just as well:
-#   git clone https://github.com/sthe0/claude-agent-instructions.git ~/claude-agent-instructions
+git clone git@github.com:sthe0/claude-agent-instructions.git ~/claude-agent-instructions   # read-only HTTPS clone works too
 ~/claude-agent-instructions/scripts/setup-symlinks.sh        # symlinks + settings + reminder/git hooks (one command does all)
-~/claude-agent-instructions/scripts/doctor.sh                # "am I ready to start?" — run this once, expect all [ OK ]
+~/claude-agent-instructions/scripts/doctor.sh                # "am I ready to start?" — expect all [ OK ]
 ```
 
-`setup-symlinks.sh` is the single wiring command: it lays the symlinks, merges the policy settings, and installs the reminder + engine-gate hooks and the git hooks — all under the isolated root (`~/.claude-agent`), leaving your personal `~/.claude` untouched. Because auth is per-root, log the system root in once — `CLAUDE_CONFIG_DIR=~/.claude-agent claude auth login` (setup and `doctor.sh` print this when needed; nothing is copied out of `~/.claude`). Then start work with `claude-task`; bare `claude` stays your own. Upgrading from an older in-place install (symlinks already in `~/.claude`)? You normally do nothing: a `sync-instructions-repo.sh pull` (or `onboard`) in an interactive terminal auto-migrates you to the isolated root — a cron/headless pull prints an `ACTION NEEDED` line instead of moving files — or run [`scripts/migrate-to-isolated.sh`](scripts/migrate-to-isolated.sh) yourself (`--apply` to move). `doctor.sh` then confirms the runtime is ready — fix any `[FAIL]` line (usually by re-running `setup-symlinks.sh`) before your first task.
-
-You do **not** need push rights to use the system — it runs fully from a read-only clone; self-improvement edits land as local commits and the upstream push is always gated behind your explicit confirmation. The full procedure (symlink table, per-machine settings merge, per-project local setup, and how the root and project trees compose) is in [docs/operations/setup.md](docs/operations/setup.md).
+Auth is per-root — log the system root in once with `CLAUDE_CONFIG_DIR=~/.claude-agent claude auth login`, then work with `claude-task`; bare `claude` stays your own. An older in-place install (symlinks in `~/.claude`) auto-migrates on an interactive `sync-instructions-repo.sh pull` / `onboard`. Push rights are **not** required — the system runs fully from a read-only clone; any upstream push is gated behind your explicit confirmation. Full procedure — symlink table, settings merge, login, migration ([migrate-to-isolated.sh](scripts/migrate-to-isolated.sh)), per-project setup, root⊕project composition: [docs/operations/setup.md](docs/operations/setup.md).
 
 ### Using this in another organization
 
@@ -114,15 +97,11 @@ Instead of `cd`-ing into a working copy by hand, `claude-task` does the whole en
 
 ```
 claude-task DEEPAGENT-123        # resolve a tracker issue → isolated git worktree + launch
-claude-team DEEPAGENT-123        # same, on the "team" auth profile
 claude-task --new "title"        # create an issue, then enter
 claude-task <name>               # named scratch workspace (no tracker)
-claude-task --list-projects      # show the named project registry (key → workspace + queue)
 ```
 
-The bare `cd ~/my-project && claude` flow still works exactly as before — `claude-task` is an optional shortcut.
-
-It selects a **workspace** backend (a `git` worktree by default; an `arc` mount where `ya`+`arc` are present) and a **tracker** backend (GitHub Issues by default) — auto-detected and overridable via the `project_backend` / `tracker_backend` keys in `~/.claude-agent/agent-identity.local`. Auth variants `claude-<profile>` (e.g. `claude-team`, `claude-personal`) are the same entry on a machine-local auth profile. Core ships only the `git`/`github` defaults and the `default` profile; specialized backends install from workspace storage — see [docs/operations/org-portability.md](docs/operations/org-portability.md).
+The bare `cd ~/my-project && claude` flow still works — `claude-task` is an optional shortcut. It selects a **workspace** backend (`git` worktree by default; `arc` mount where present) and a **tracker** backend (GitHub Issues by default), auto-detected and overridable; auth variants `claude-<profile>` (e.g. `claude-team`) are the same entry on a machine-local auth profile. Backend/registry detail: [docs/operations/setup.md](docs/operations/setup.md#starting-a-task-with-claude-task) and [docs/operations/org-portability.md](docs/operations/org-portability.md).
 
 ## Pointers
 
