@@ -30,6 +30,10 @@ CASES = [
     ("rm -rf /Users", True, "ancestor of home"),
     ("rm -rf ~/claude-agent-instructions", True, "delete instruction repo"),
     ("rm -rf ~/claude-agent-instructions/scripts", True, "inside instruction repo"),
+    # Isolated config root — protected the same as the legacy one.
+    ("rm -rf ~/.claude-agent", True, "delete ~/.claude-agent"),
+    ("rm -rf ~/.claude-agent/agentctl", True, "delete inside ~/.claude-agent"),
+    ('rm -rf "$HOME/.claude-agent/projects/$HASH"', True, "empty-var collapse under ~/.claude-agent"),
     ("rm -fr ~/.claude", True, "-fr flag order"),
     ("rm -r -f ~/.claude", True, "separate -r -f"),
     ("rm --recursive --force ~/.claude", True, "long flags"),

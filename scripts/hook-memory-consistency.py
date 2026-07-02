@@ -4,7 +4,8 @@
 Classifies the target path as a memory leaf in any of the three scopes:
   1. global engineering:  …/memory-global/leaves/…
   2. project:             …/.claude/agent-memory/…
-  3. personal (auto):     …/.claude/projects/*/memory/…
+  3. personal (auto):     …/<config root>/projects/*/memory/… where the config
+     root component is .claude (legacy) or .claude-agent (isolated)
 
 If the file is a memory leaf, validates the YAML frontmatter being written and
 emits a [memory-consistency] reminder for any issues found. Always exits 0 —
@@ -53,13 +54,15 @@ def is_memory_leaf(path: str) -> bool:
     # scope 1: …/memory-global/leaves/… (any depth, incl experience/ system-knowledge/)
     if "memory-global" in parts and "leaves" in parts:
         return True
-    # scope 2: …/.claude/agent-memory/…
+    # Config-root path component: legacy in-place or the isolated root.
+    root_part = next((c for c in (".claude", ".claude-agent") if c in parts), None)
+    # scope 2: …/.claude/agent-memory/… (project trees always use plain .claude)
     if ".claude" in parts and "agent-memory" in parts:
         return True
-    # scope 3: …/.claude/projects/<hash>/memory/…
-    if ".claude" in parts:
+    # scope 3: …/<config root>/projects/<hash>/memory/…
+    if root_part:
         try:
-            ci = list(parts).index(".claude")
+            ci = list(parts).index(root_part)
             remaining = parts[ci + 1:]
             if (len(remaining) >= 3
                     and remaining[0] == "projects"

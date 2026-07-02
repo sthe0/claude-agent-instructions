@@ -8,7 +8,7 @@
 #
 # ── Root order (shared first, machine-local last) ───────────────────────────
 #   1. shared / versioned:  $CLAUDE_PROJECTS_DIR  (else identity `projects_dir`)
-#   2. machine-local:        $CLAUDE_PROJECTS_LOCAL_DIR  (else ~/.claude/projects.d)
+#   2. machine-local:        $CLAUDE_PROJECTS_LOCAL_DIR  (else <config root>/projects.d)
 # A later root completes/overrides an earlier one, so a machine-local record can
 # attach an absolute workspace_path to a shared, portable definition.
 
@@ -23,13 +23,29 @@ _projects_id_get() {
   [[ -r "$f" ]] && sed -n "s/^$1=//p" "$f" | head -1
 }
 
+# Machine-local registry root: $CLAUDE_PROJECTS_LOCAL_DIR, else the read-time
+# config root's projects.d. A not-yet-migrated ~/.claude/projects.d is still
+# honored when the current root has none (migrate-to-isolated.sh moves it).
+_projects_local_dir() {
+  if [[ -n "${CLAUDE_PROJECTS_LOCAL_DIR:-}" ]]; then
+    printf '%s\n' "$CLAUDE_PROJECTS_LOCAL_DIR"
+    return
+  fi
+  local d
+  d="$(agent_home_read)/projects.d"
+  if [[ ! -d "$d" && -d "$HOME/.claude/projects.d" ]]; then
+    printf '%s\n' "$HOME/.claude/projects.d"
+    return
+  fi
+  printf '%s\n' "$d"
+}
+
 # project_roots — print the ordered root list, one per line (shared then local).
 project_roots() {
-  local shared local_dir
+  local shared
   shared="${CLAUDE_PROJECTS_DIR:-$(_projects_id_get projects_dir)}"
-  local_dir="${CLAUDE_PROJECTS_LOCAL_DIR:-$HOME/.claude/projects.d}"
   [[ -n "$shared" ]] && printf '%s\n' "$shared"
-  printf '%s\n' "$local_dir"
+  _projects_local_dir
 }
 
 # Join project_roots with the OS path separator into CLAUDE_PROJECT_ROOTS so the
@@ -61,7 +77,7 @@ project_register() {
 
 # project_local_root — print the machine-local registry root path.
 project_local_root() {
-  printf '%s\n' "${CLAUDE_PROJECTS_LOCAL_DIR:-$HOME/.claude/projects.d}"
+  _projects_local_dir
 }
 
 # project_get_fields [selector] — print resolved record fields as key=value lines, or return non-zero.

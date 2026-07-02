@@ -210,7 +210,11 @@ fi
 # 6. Hook install
 if [[ -f "$CLAUDE_AGENT_HOME/settings.json" || -f "$HOME/.claude/settings.json" ]] || command -v claude >/dev/null 2>&1; then
   say "installing Claude Code hooks (idempotent)"
-  ccgram hook --install || say "hook install failed — non-fatal, run manually later"
+  # ccgram resolves the settings file from CLAUDE_CONFIG_DIR and defaults to the
+  # personal ~/.claude — pin it to the read-time root (the launchers export
+  # CLAUDE_CONFIG_DIR at runtime, but this setup script may run from a plain shell).
+  CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$(agent_home_read)}" ccgram hook --install \
+    || say "hook install failed — non-fatal, run manually later"
 else
   say "Claude Code not detected — skip hook install (run 'ccgram hook --install' after installing Claude Code)"
 fi

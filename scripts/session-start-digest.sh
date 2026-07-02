@@ -18,6 +18,11 @@
 
 set -uo pipefail
 
+# Resolve before the cd below — $0 may be relative to the launch directory.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=lib/config-root.sh
+. "$SCRIPT_DIR/lib/config-root.sh"
+
 ROOT="${1:-$PWD}"
 cd "$ROOT" 2>/dev/null || { echo "[digest] cannot cd into $ROOT" >&2; exit 1; }
 
@@ -47,8 +52,10 @@ fi
 
 # Agent memory layer: look for the project's .claude/agent-memory/ (the leaf
 # location after the per-project symlink is set up). Fall back to the
-# auto-memory mirror under ~/.claude/projects/ if the project tree has no
-# direct .claude/.
+# auto-memory mirror under <config root>/projects/ if the project tree has no
+# direct .claude/ — resolved at read time (override -> isolated -> legacy),
+# with the legacy ~/.claude/projects/ still probed for a not-yet-migrated
+# mirror on a half-migrated machine.
 mem=""
 if [ -d .claude/agent-memory ]; then
     mem=".claude/agent-memory"
@@ -57,7 +64,9 @@ elif [ -d ../.claude/agent-memory ]; then
 fi
 if [ -z "$mem" ]; then
     san=$(printf '%s' "$ROOT" | sed 's|/|-|g')
-    if [ -d "$HOME/.claude/projects/$san/memory" ]; then
+    if [ -d "$(agent_home_read)/projects/$san/memory" ]; then
+        mem="$(agent_home_read)/projects/$san/memory"
+    elif [ -d "$HOME/.claude/projects/$san/memory" ]; then
         mem="$HOME/.claude/projects/$san/memory"
     fi
 fi

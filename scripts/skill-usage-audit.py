@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Audit: which user-invocable skills are actually being used.
 
-Scans recent session transcripts (under `~/.claude/projects/<hash>/*.jsonl`)
+Scans recent session transcripts (under `<config root>/projects/<hash>/*.jsonl`)
 and counts:
   - Skills explicitly invoked via the `Skill` tool.
   - Skills mentioned by name in any `tool_use.input` (catches Bash invocations
@@ -17,7 +17,7 @@ the audit window. The actual removal decision stays with the user — this
 script is informational, see `skill-catalog-curation.md`.
 
 Default window: last 30 days. Override with `--days N` or `--since YYYY-MM-DD`.
-Default scope: every project under `~/.claude/projects/`. Override with
+Default scope: every project under `<config root>/projects/`. Override with
 `--cwd <abs-path>` to limit to one project.
 """
 from __future__ import annotations

@@ -10,7 +10,8 @@ transcripts. A prose "be careful" rule did not prevent this; a mechanical gate d
 The gate is decidable from the command text: fire on a recursive `rm`, then for each
 target argument simulate the WORST CASE (every unknown `$VAR` expands to empty) and
 deny if the resulting path is — or is an ancestor of, or lies inside — a protected
-critical directory: `/`, `$HOME`, `$HOME/.claude` (+ subpaths), `$HOME/claude-agent-instructions`.
+critical directory: `/`, `$HOME`, `$HOME/.claude` and `$HOME/.claude-agent`
+(+ subpaths), `$HOME/claude-agent-instructions`.
 
 Narrow by design: legitimate cleanup of mktemp / build / project paths is untouched;
 only the agent's own root/home/config trees are protected. Always exits 0 — a hook
@@ -39,7 +40,13 @@ _VAR_RE = re.compile(r"\$\{?\w+\}?")
 #           must NOT match, only deleting $HOME itself or a parent of it).
 def _protected_trees(home: str) -> list[str]:
     home = home.rstrip("/") or "/"
-    return [os.path.join(home, ".claude"), os.path.join(home, "claude-agent-instructions")]
+    # Both config roots: the isolated ~/.claude-agent (post-migration home of the
+    # agent's memory/state) and the legacy/personal ~/.claude.
+    return [
+        os.path.join(home, ".claude"),
+        os.path.join(home, ".claude-agent"),
+        os.path.join(home, "claude-agent-instructions"),
+    ]
 
 
 def _protected_points(home: str) -> list[str]:

@@ -10,8 +10,8 @@ its root (e.g. ``team/web``) — the location IS the name.
 Two roots, merged by key:
   1. shared / versioned root(s) first — portable definitions distributed to the
      team (no machine-local absolute paths);
-  2. machine-local ``~/.claude/projects.d`` last — absolute git checkout paths
-     written by ``--register`` on this machine.
+  2. machine-local ``<config root>/projects.d`` last — absolute git checkout
+     paths written by ``--register`` on this machine.
 A later root completes/overrides an earlier one field-by-field, so a local
 record can attach a machine-specific ``workspace_path`` to a portable record.
 
@@ -288,8 +288,12 @@ def _default_roots(getenv: Callable[[str], "str | None"]) -> "list[str]":
 
     CLAUDE_PROJECT_ROOTS (os.pathsep-joined) wins when set — projects.sh builds
     the full ordered list (shared > identity, then machine-local) and exports it.
-    Otherwise fall back to [CLAUDE_PROJECTS_DIR?, ~/.claude/projects.d] so the
-    Python CLI is usable standalone.
+    Otherwise fall back to [CLAUDE_PROJECTS_DIR?, <config root>/projects.d] so
+    the Python CLI is usable standalone. The machine-local root mirrors
+    lib/config_root.py's read-time resolution (override -> isolated -> legacy)
+    plus a legacy ~/.claude/projects.d fallback for a not-yet-migrated
+    registry, matching projects.sh's _projects_local_dir; kept inline (getenv +
+    isdir) so the function stays injectable for offline tests.
     """
     explicit = getenv("CLAUDE_PROJECT_ROOTS")
     if explicit:
@@ -298,8 +302,18 @@ def _default_roots(getenv: Callable[[str], "str | None"]) -> "list[str]":
     shared = getenv("CLAUDE_PROJECTS_DIR")
     if shared:
         roots.append(shared)
-    home = getenv("HOME") or os.path.expanduser("~")
-    roots.append(os.path.join(home, ".claude", "projects.d"))
+    local_dir = getenv("CLAUDE_PROJECTS_LOCAL_DIR")
+    if not local_dir:
+        home = getenv("HOME") or os.path.expanduser("~")
+        config_home = getenv("CLAUDE_CONFIG_DIR") or getenv("CLAUDE_AGENT_HOME")
+        if not config_home:
+            isolated = os.path.join(home, ".claude-agent")
+            config_home = isolated if os.path.isdir(isolated) else os.path.join(home, ".claude")
+        local_dir = os.path.join(config_home, "projects.d")
+        legacy = os.path.join(home, ".claude", "projects.d")
+        if local_dir != legacy and not os.path.isdir(local_dir) and os.path.isdir(legacy):
+            local_dir = legacy
+    roots.append(local_dir)
     return roots
 
 

@@ -62,6 +62,7 @@ Body.
 _SCOPE1 = "/home/user/.claude/memory-global/leaves/some-leaf.md"
 _SCOPE2 = "/home/user/project/.claude/agent-memory/some-leaf.md"
 _SCOPE3 = "/home/user/.claude/projects/abc123def456/memory/some-leaf.md"
+_SCOPE3_ISOLATED = "/home/user/.claude-agent/projects/abc123def456/memory/some-leaf.md"
 _NON_MEMORY_TMP = "/tmp/x.md"
 _NON_MEMORY_SRC = "/home/user/project/src/main.py"
 
@@ -94,6 +95,10 @@ class TestIsMemoryLeaf:
 
     def test_scope3_detected(self):
         assert self._mod().is_memory_leaf(_SCOPE3)
+
+    def test_scope3_isolated_root_detected(self):
+        """Auto-memory under the isolated ~/.claude-agent root is scope 3 too."""
+        assert self._mod().is_memory_leaf(_SCOPE3_ISOLATED)
 
     def test_memory_md_excluded(self):
         assert not self._mod().is_memory_leaf(

@@ -42,6 +42,8 @@ set -euo pipefail
 
 REPO="${CLAUDE_INSTRUCTIONS_REPO:-$HOME/claude-agent-instructions}"
 BASE="$REPO/settings/base.json"
+# shellcheck source=lib/config-root.sh
+source "$REPO/scripts/lib/config-root.sh"
 command -v python3 >/dev/null || { echo "set-context-cap: python3 required" >&2; exit 1; }
 
 [[ $# -ge 1 ]] || { echo "usage: set-context-cap.sh <window-tokens> [--dry-run]" >&2; exit 2; }
@@ -107,7 +109,9 @@ if [[ -z "$DRY" ]]; then
   # apply-settings.sh is additive and LIVE WINS on conflict — including on the window
   # key we own. Force the authoritative window into the live file directly, and prune
   # the deprecated knobs there too.
-  TARGET="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
+  # Live settings file at the READ-time root — on a migrated machine the CLI's
+  # settings live under the isolated root, not the personal ~/.claude.
+  TARGET="${CLAUDE_SETTINGS:-$(agent_home_read)/settings.json}"
   if [[ -f "$TARGET" ]] && command -v jq >/dev/null; then
     tmp="$(mktemp)"
     jq --argjson w "$WINDOW" '

@@ -3,7 +3,34 @@
 #
 # Override for tests or the Yandex overlay:  export CLAUDE_AGENT_HOME=/path
 # Default: ~/.claude-agent  (isolated from the user's personal ~/.claude)
+#
+# Snapshot the caller's explicit override BEFORE the install-time default is
+# applied, so agent_home_read below can distinguish "caller exported a root"
+# from "this file defaulted it". Guarded so re-sourcing keeps the first value.
+if [[ -z "${_AGENT_HOME_PRESET+x}" ]]; then
+  _AGENT_HOME_PRESET="${CLAUDE_AGENT_HOME:-}"
+fi
 export CLAUDE_AGENT_HOME="${CLAUDE_AGENT_HOME:-$HOME/.claude-agent}"
+
+# agent_home_read — READ-time root resolution, the shell analog of
+# lib/config_root.py:agent_home(). The export above is the INSTALL-time
+# answer (always the isolated root, so setup can create it); readers instead
+# need where artifacts actually live on this machine:
+#   1. $CLAUDE_CONFIG_DIR          (CLI relocated its whole config root)
+#   2. explicit $CLAUDE_AGENT_HOME (caller override, per the snapshot above)
+#   3. ~/.claude-agent             when it exists (migrated machine)
+#   4. ~/.claude                   legacy not-yet-migrated fallback
+agent_home_read() {
+  if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then
+    printf '%s\n' "$CLAUDE_CONFIG_DIR"
+  elif [[ -n "$_AGENT_HOME_PRESET" ]]; then
+    printf '%s\n' "$_AGENT_HOME_PRESET"
+  elif [[ -d "$HOME/.claude-agent" ]]; then
+    printf '%s\n' "$HOME/.claude-agent"
+  else
+    printf '%s\n' "$HOME/.claude"
+  fi
+}
 
 # agent_legacy_inplace_layout [repo] — single source of truth for detecting the
 # OLD in-place install: system symlinks written directly into ~/.claude instead

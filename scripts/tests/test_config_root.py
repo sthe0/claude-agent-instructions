@@ -8,17 +8,6 @@ from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 RESOLVER = SCRIPTS / "lib" / "config-root.sh"
-SETUP_SYMLINKS = SCRIPTS / "setup-symlinks.sh"
-CONFIGURE_IDENTITY = SCRIPTS / "configure-identity.sh"
-INSTALL_HOOKS = SCRIPTS / "install-reminder-hooks.sh"
-DOCTOR = SCRIPTS / "doctor.sh"
-ONBOARD = SCRIPTS / "onboard.sh"
-INSTALL_CURSOR = SCRIPTS.parent / "cursor" / "scripts" / "install-cursor-links.sh"
-
-_INSTALL_TARGET_PATTERN = re.compile(
-    r'\$HOME/\.claude/'
-    r'(CLAUDE\.md|config\.md|memory-global|skills|agents|settings\.json|agent-identity\.local)'
-)
 
 
 def _source_and_echo(env_extra=None):
@@ -62,6 +51,66 @@ def test_resolver_is_idempotent(tmp_path):
     )
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == custom
+
+
+# ── agent_home_read: read-time root resolution (mirrors config_root.py) ───────
+
+def _run_agent_home_read(home: Path, config_dir=None, agent_home=None) -> str:
+    """Source the resolver in a fresh bash and call agent_home_read."""
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("CLAUDE_AGENT_HOME", "CLAUDE_CONFIG_DIR")}
+    env["HOME"] = str(home)
+    if config_dir is not None:
+        env["CLAUDE_CONFIG_DIR"] = str(config_dir)
+    if agent_home is not None:
+        env["CLAUDE_AGENT_HOME"] = str(agent_home)
+    r = subprocess.run(
+        ["bash", "-c", f'source "{RESOLVER}" && agent_home_read'],
+        env=env, capture_output=True, text=True,
+    )
+    assert r.returncode == 0, r.stderr
+    return r.stdout.strip()
+
+
+def test_read_config_dir_wins(tmp_path):
+    got = _run_agent_home_read(
+        tmp_path, config_dir=tmp_path / "cfg", agent_home=tmp_path / "ah")
+    assert got == str(tmp_path / "cfg")
+
+
+def test_read_explicit_agent_home_wins_over_dirs(tmp_path):
+    """An explicit caller CLAUDE_AGENT_HOME is honored even when ~/.claude-agent exists."""
+    (tmp_path / ".claude-agent").mkdir()
+    got = _run_agent_home_read(tmp_path, agent_home=tmp_path / "custom")
+    assert got == str(tmp_path / "custom")
+
+
+def test_read_isolated_root_when_present(tmp_path):
+    """No overrides: an existing ~/.claude-agent is the read root."""
+    (tmp_path / ".claude-agent").mkdir()
+    assert _run_agent_home_read(tmp_path) == str(tmp_path / ".claude-agent")
+
+
+def test_read_legacy_root_when_no_isolated(tmp_path):
+    """No overrides, no ~/.claude-agent: fall back to the legacy ~/.claude."""
+    assert _run_agent_home_read(tmp_path) == str(tmp_path / ".claude")
+
+
+def test_read_ignores_installtime_default(tmp_path):
+    """The resolver's own install-time export (CLAUDE_AGENT_HOME default) must NOT
+    leak into read-time resolution — only a PRE-source caller value counts."""
+    r = subprocess.run(
+        ["bash", "-c",
+         f'source "{RESOLVER}" && source "{RESOLVER}" && agent_home_read'],
+        env={**{k: v for k, v in os.environ.items()
+                if k not in ("CLAUDE_AGENT_HOME", "CLAUDE_CONFIG_DIR")},
+             "HOME": str(tmp_path)},
+        capture_output=True, text=True,
+    )
+    assert r.returncode == 0, r.stderr
+    # No ~/.claude-agent dir exists, so read-time resolution says legacy —
+    # even though sourcing exported CLAUDE_AGENT_HOME=$HOME/.claude-agent.
+    assert r.stdout.strip() == str(tmp_path / ".claude")
 
 
 # ── agent_legacy_inplace_layout: shared legacy-layout detector ────────────────
@@ -121,35 +170,76 @@ def test_legacy_detect_false_when_claude_is_the_isolated_root(tmp_path):
     assert _run_legacy_detect(home, repo, agent_home=home / ".claude") == 1
 
 
-# ── Structural audit: no hardcoded install-target $HOME/.claude/<name> ────────
+# ── Structural audit: no hardcoded config-root path outside the resolvers ─────
+#
+# Mechanical enumerator over every *.sh / *.py under scripts/ and cursor/scripts/
+# (tests excluded): a config-root artifact spelled with the legacy $HOME/.claude
+# (shell) or a home-joined ".claude" (python) must either go through the
+# resolvers (lib/config-root.sh, lib/config_root.py) or be an explicitly
+# allowlisted INTENTIONAL legacy reference (migration source, read-time legacy
+# fallback, protective denylist). New scripts are enumerated automatically —
+# the audit can no longer silently miss a file the way the old fixed five-file
+# list missed set-context-cap.sh.
 
-def _find_install_targets(path: Path) -> list[str]:
-    return _INSTALL_TARGET_PATTERN.findall(path.read_text())
+_SH_ROOT_TARGET_RE = re.compile(
+    r'\$HOME/\.claude/'
+    r'(?:CLAUDE\.md|config\.md|memory-global|skills|agents|settings\.json|'
+    r'agent-identity\.local|projects\.d|projects|agentctl|plans)'
+)
+_PY_ROOT_TARGET_RE = re.compile(
+    r'(?:Path\.home\(\)\s*/\s*["\']\.claude["\']'
+    r'|os\.path\.join\([^)]*["\']\.claude["\'])'
+)
+
+# Repo-relative paths whose legacy-root references are intentional.
+_LEGACY_REF_ALLOWLIST = {
+    "scripts/session-start-digest.sh":       "read-time legacy auto-memory mirror fallback",
+    "scripts/setup-ccgram.sh":               "Claude Code presence probe checks both roots",
+    "scripts/setup-project-memory.sh":       "legacy auto-memory dir is its migration source",
+    "scripts/project_entry/projects.sh":     "legacy projects.d read fallback",
+    "scripts/project_entry/projects.py":     "legacy projects.d read fallback (python side)",
+    "scripts/lib/config_root.py":            "the canonical legacy_home() accessor",
+    "scripts/hook-guard-destructive-rm.py":  "protective denylist covers BOTH roots",
+}
 
 
-def test_no_hardcoded_install_target_in_setup_symlinks():
-    found = _find_install_targets(SETUP_SYMLINKS)
-    assert not found, f"Hardcoded install-target refs in setup-symlinks.sh: {found}"
+def _iter_root_scripts():
+    repo = SCRIPTS.parent
+    for base in (SCRIPTS, repo / "cursor" / "scripts"):
+        for p in sorted(base.rglob("*")):
+            if p.suffix not in (".sh", ".py") or not p.is_file():
+                continue
+            if "tests" in p.parts or "__pycache__" in p.parts:
+                continue
+            yield p
 
 
-def test_no_hardcoded_install_target_in_configure_identity():
-    found = _find_install_targets(CONFIGURE_IDENTITY)
-    assert not found, f"Hardcoded install-target refs in configure-identity.sh: {found}"
+def _root_offenders() -> "dict[str, list[str]]":
+    repo = SCRIPTS.parent
+    offenders: "dict[str, list[str]]" = {}
+    for p in _iter_root_scripts():
+        pat = _SH_ROOT_TARGET_RE if p.suffix == ".sh" else _PY_ROOT_TARGET_RE
+        found = pat.findall(p.read_text(encoding="utf-8", errors="replace"))
+        if found:
+            offenders[p.relative_to(repo).as_posix()] = found
+    return offenders
 
 
-def test_no_hardcoded_install_target_in_install_reminder_hooks():
-    found = _find_install_targets(INSTALL_HOOKS)
-    assert not found, f"Hardcoded install-target refs in install-reminder-hooks.sh: {found}"
+def test_no_unlisted_config_root_hardcodes():
+    offenders = _root_offenders()
+    unlisted = {f: m for f, m in offenders.items() if f not in _LEGACY_REF_ALLOWLIST}
+    assert not unlisted, (
+        "Hardcoded legacy config-root references outside the allowlist — route "
+        f"them through lib/config-root.sh / lib/config_root.py: {unlisted}"
+    )
 
 
-def test_no_hardcoded_install_target_in_doctor():
-    found = _find_install_targets(DOCTOR)
-    assert not found, f"Hardcoded install-target refs in doctor.sh: {found}"
-
-
-def test_no_hardcoded_install_target_in_install_cursor():
-    found = _find_install_targets(INSTALL_CURSOR)
-    assert not found, f"Hardcoded install-target refs in install-cursor-links.sh: {found}"
+def test_legacy_ref_allowlist_is_current():
+    """Every allowlist entry must still contain a legacy reference — a stale
+    entry would silently re-open the audit hole for that file."""
+    offenders = set(_root_offenders())
+    stale = set(_LEGACY_REF_ALLOWLIST) - offenders
+    assert not stale, f"Allowlist entries with no legacy reference left (remove them): {stale}"
 
 
 # ── Python resolver: scripts/lib/config_root.py (read-time analog) ────────────

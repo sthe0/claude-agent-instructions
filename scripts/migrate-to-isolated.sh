@@ -15,7 +15,9 @@
 #   - the purely system-managed plain file agent-identity.local, and
 #   - the coordination engine's state: ~/.claude/agentctl/{state,scopes,
 #     gate-log.jsonl,prewrite-fallback.jsonl} and ~/.claude/plans (the latter is
-#     replaced by a compat symlink so stored absolute plan paths keep resolving).
+#     replaced by a compat symlink so stored absolute plan paths keep resolving),
+#   - the machine-local project registry ~/.claude/projects.d (per-record
+#     agent-project.json files, moved preserving their directory keys).
 #
 # NOT moved (deliberately):
 #   - settings.json — an ADDITIVE MERGE of the user's personal settings + system
@@ -44,7 +46,7 @@ for _arg in "$@"; do
     --apply)   APPLY=1 ;;
     --dry-run) APPLY=0 ;;  # explicit preview; same as the default
     -h|--help)
-      sed -n '2,35p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//'
+      sed -n '2,37p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//'
       exit 0 ;;
     *)
       echo "error: unknown argument '$_arg' (use --apply or --dry-run)" >&2
@@ -162,6 +164,17 @@ if [[ -d "$SRC/plans" && ! -L "$SRC/plans" ]]; then
   done < <(find "$SRC/plans" -maxdepth 1 -mindepth 1 -print0 2>/dev/null)
 fi
 
+# Machine-local project registry: records live at arbitrary depth
+# (<key>/agent-project.json where the key is a directory path), so collect
+# per-file at any depth; the relative path IS the record's key.
+PROJECTSD_FILES=()      # relative to $SRC, moved per-file with dest-wins
+if [[ -d "$SRC/projects.d" && ! -L "$SRC/projects.d" ]]; then
+  while IFS= read -r -d '' _entry; do
+    [[ -n "$_entry" ]] || continue
+    PROJECTSD_FILES+=("${_entry#"$SRC"/}")
+  done < <(find "$SRC/projects.d" -type f -print0 2>/dev/null)
+fi
+
 # ── Early exit if nothing found ─────────────────────────────────────────────────
 
 _count_top=${#TOP_SYMLINKS[@]}
@@ -171,8 +184,9 @@ _count_plain=${#PLAIN_FILES[@]}
 _count_engine=${#ENGINE_STATE_FILES[@]}
 _count_merge=${#ENGINE_MERGE_FILES[@]}
 _count_plans=${#PLAN_FILES[@]}
+_count_projd=${#PROJECTSD_FILES[@]}
 _total=$(( _count_top + _count_agent + _count_skill + _count_plain \
-           + _count_engine + _count_merge + _count_plans ))
+           + _count_engine + _count_merge + _count_plans + _count_projd ))
 
 if [[ "$_total" -eq 0 ]]; then
   echo "Nothing system-owned found in $SRC — already migrated or never in-place."
@@ -206,6 +220,9 @@ done
 if [[ "$_count_plans" -gt 0 ]]; then
   printf '  symlink  %s/plans -> %s/plans (left as compat pointer)\n' "$SRC" "$DEST"
 fi
+for _name in "${PROJECTSD_FILES[@]+"${PROJECTSD_FILES[@]}"}"; do
+  printf '  registry %s/%s\n' "$SRC" "$_name"
+done
 echo
 
 # Advisory: a legacy merged settings.json is LEFT in place (it now holds the user's
@@ -264,6 +281,9 @@ if [[ $(( _count_engine + _count_merge )) -gt 0 ]]; then
 fi
 if [[ "$_count_plans" -gt 0 ]]; then
   cp -a "$SRC/plans" "$BAK/plans" 2>/dev/null || true
+fi
+if [[ "$_count_projd" -gt 0 ]]; then
+  cp -a "$SRC/projects.d" "$BAK/projects.d" 2>/dev/null || true
 fi
 
 # ── Move ────────────────────────────────────────────────────────────────────────
@@ -353,6 +373,20 @@ for _name in "${PLAN_FILES[@]+"${PLAN_FILES[@]}"}"; do
   mkdir -p "$DEST/plans"
   _move_entry "$SRC/$_name" "$DEST/$_name"
 done
+
+# Machine-local project registry: per-file dest-wins moves preserving the
+# record's key (its directory path relative to projects.d).
+for _name in "${PROJECTSD_FILES[@]+"${PROJECTSD_FILES[@]}"}"; do
+  [[ -n "$_name" ]] || continue
+  mkdir -p "$DEST/$(dirname "$_name")"
+  _move_entry "$SRC/$_name" "$DEST/$_name"
+done
+if [[ -d "$SRC/projects.d" && ! -L "$SRC/projects.d" ]]; then
+  find "$SRC/projects.d" -type d -empty -delete 2>/dev/null || true
+  if [[ -d "$SRC/projects.d" ]]; then
+    printf '  note: %s/projects.d not empty after migration — left in place\n' "$SRC"
+  fi
+fi
 
 # Drop now-empty legacy engine dirs; replace plans with a compat symlink (state
 # files may hold absolute legacy plan paths — data this script must not rewrite).
