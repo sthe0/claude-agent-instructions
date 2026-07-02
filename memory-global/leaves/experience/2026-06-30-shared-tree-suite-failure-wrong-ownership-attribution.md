@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "user (inherited from parent 2026-06-29-org-portable-core-internal-coupling-opt-in; re-confirmed live this session)"
 refs: [2026-06-29-org-portable-core-internal-coupling-opt-in.md, 2026-06-29-resume-paused-task-isolated-worktree-pinned-sha.md]
 created: 2026-06-30
-last_verified: 2026-07-01
+last_verified: 2026-07-02
 ---
 
 # Diagnose ownership before treating a shared-tree red suite as your own regression
@@ -35,6 +35,10 @@ On any red full-suite/gate in a shared tree: (1) git status — list dirty + unt
 ### 2026-07-01 — A plausible PRIOR narrative reinforced the mis-attribution — 7 foreign failing tests were nearly taken as my blocker
 - Where it arose: Core task complete-config-root-isolation (session 4445f907): finishing a 6-stage runtime-reader migration on the isolate-agent-config-root branch, shared tree with a live parallel session building auto-migrate-on-pull.
 - Working plan: At the resolution gate, the full suite showed 7 NEW failures in test_sync_instructions_repo.py (incl. a broken plain push) plus modified sync-instructions-repo.sh, config-root.sh, doctor.sh, git-workflow.md, setup.md — none in my 6-stage file set. Because a REAL earlier fact held ('the stage-4 developer over-reached, doing stages 4+5'), I confidently mis-attributed this NEW foreign WIP to that same developer and spent tool-calls diagnosing it as my own broken deliverable (root-causing the push regression, weighing complete/exclude/revert). The user corrected the attribution in one line (paraphrased from Russian: "the auto-migration is happening in the neighboring session, not here"). Only then did ownership-diagnosis land: git status file set vs my plan's stages, timestamps (config-root.sh written 21:23 by the neighbor), and the foreign experience-leaf diff documenting THEIR task. Recovery: commit ONLY my explicit paths (git add <25 files>, never -A), leaving the neighbor's WIP + an unrelated Cloudflare leaf untouched; the 7 failures are the neighbor's incomplete feature, not my regression.
+
+### 2026-07-02 — Destructive sync op (reset --hard) needlessly reverted a parallel session's uncommitted tracked WIP
+- Where it arose: claude-agent-instructions shared tree — merging all remote branches into main trunk. To advance local main I ran 'git checkout main' + 'git reset --hard origin/main' before an ff-merge, while a parallel session held uncommitted WIP in the tracked scripts/hook-tracker-reminder.py (a new mount-hygiene feature).
+- Working plan: The whole local-main dance was UNNECESSARY: I was already on the rebased working branch (= origin/main + the registry commit), so a single ref-only push — 'git push origin HEAD:main' — would have advanced trunk WITHOUT touching the working tree. Instead reset --hard reverted the neighbor's tracked-file WIP to the committed version (untracked files survive reset --hard; tracked modifications do not); it only reappeared because the neighbor's editor re-saved it — recovery by luck, not design. Rule: in a KNOWN-shared tree, advance/sync a branch with REF-ONLY ops ('git push <remote> HEAD:<b>', 'git branch -f <b> <ref>', 'git update-ref'), never working-tree-touching destructive ops ('git reset --hard', 'git checkout -f', 'git clean'). If a destructive op is truly unavoidable, 'git status' for foreign dirt and 'git stash' it first.
 ## Common core & variations
 **Common:** A red shared-tree gate misattributed to your change; the stash-baseline re-run isolates foreign from own.
 

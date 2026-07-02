@@ -11,7 +11,8 @@
     "BASH_MAX_OUTPUT_LENGTH": "30000",
     "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "210000",
     "MCP_TIMEOUT": "10000",
-    "MCP_TOOL_TIMEOUT": "10000"
+    "MCP_TOOL_TIMEOUT": "10000",
+    "CLAUDE_AFK_TIMEOUT_MS": "2000000000"
   },
   "permissions": {
     "allow": [
