@@ -76,6 +76,6 @@
       "mcp__tracker__GetIssueLinks",
       "mcp__wiki__GetPageDetails"
     ],
-    "defaultMode": "acceptEdits"
+    "defaultMode": "auto"
   }
 }
