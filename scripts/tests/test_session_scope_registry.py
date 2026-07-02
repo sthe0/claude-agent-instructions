@@ -243,6 +243,28 @@ def test_live_sessions_legacy_no_pid_record_keeps_heartbeat_only_behavior():
     assert [r.session_id for r in live] == ["a"]
 
 
+# ── delete ────────────────────────────────────────────────────────────────
+
+def test_delete_removes_existing_file(tmp_path):
+    registry.heartbeat("s1", 1.0, scopes_dir=tmp_path)
+    assert registry.scope_path(tmp_path, "s1").exists()
+    registry.delete(tmp_path, "s1")
+    assert not registry.scope_path(tmp_path, "s1").exists()
+
+
+def test_delete_is_noop_on_missing_file(tmp_path):
+    assert not registry.scope_path(tmp_path, "nope").exists()
+    registry.delete(tmp_path, "nope")  # must not raise
+
+
+def test_delete_does_not_disturb_other_sessions(tmp_path):
+    registry.heartbeat("a", 1.0, scopes_dir=tmp_path)
+    registry.heartbeat("b", 1.0, scopes_dir=tmp_path)
+    registry.delete(tmp_path, "a")
+    remaining = {r.session_id for r in registry.load_all(tmp_path)}
+    assert remaining == {"b"}
+
+
 # ── prune_stale ───────────────────────────────────────────────────────────
 
 def test_prune_stale_removes_only_expired_files(tmp_path):

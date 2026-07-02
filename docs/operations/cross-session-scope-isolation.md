@@ -19,8 +19,8 @@ isolation — the model's call).
 
 | Part | Where | Role |
 |---|---|---|
-| **A — scope registry** | `scripts/session_scope/registry.py` | One JSON record per session under `~/.claude/agentctl/scopes/<session>.json`: `{heartbeat_ts, cwd, repo_root, vcs, touched_paths[]}`. Pure module; the clock is injected. |
-| **A — scope-track hook** | `scripts/hook-scope-track.py` (PostToolUse Edit\|Write + Bash) | Heartbeats the session and accumulates touched paths. Non-blocking. |
+| **A — scope registry** | `scripts/session_scope/registry.py` | One JSON record per session under `~/.claude/agentctl/scopes/<session>.json`: `{heartbeat_ts, cwd, repo_root, vcs, touched_paths[], pid}`. Pure module; the clock and the liveness probe are injected. |
+| **A — scope-track hook** | `scripts/hook-scope-track.py` (PostToolUse Edit\|Write + Bash) | Heartbeats the session, accumulates touched paths, and records the durable session process's pid (resolved once per session via an age-based ancestor walk — see `session_pid()`). Non-blocking. |
 | **B — conflict detector** | `scripts/session_scope/detector.py` | Pure path-prefix overlap + severity classification over the registry records. VCS-agnostic. |
 | **B — conflict hook** | `scripts/hook-scope-conflict.py` (PreToolUse Edit\|Write) | On a write, asks the detector whether the target overlaps another **live** session's scope, then denies / warns / allows. |
 | **C — isolation router** | `scripts/session-isolate.sh` (+ `project_entry` backends) | Routes a contended task into its own workspace by reusing `project_entry`'s workspace-backend contract (`backend_ensure_workspace`), then re-registers the session's scope at the new root. The built-in git backend (`backends/git.sh`) and a machine-local plugin backend such as arc (registered at `${CLAUDE_PROJECT_PLUGIN_DIR:-…}/backends/arc.sh`), resolved by name — the router is backend-blind. |
@@ -30,7 +30,7 @@ isolation — the model's call).
 `hook-scope-conflict.py` runs on every `Edit`/`Write`, **after** the plan-approval
 gate (`hook-state-gate.py`). It resolves the target to a realpath, loads all scope
 records, and asks `detector.detect_conflicts` whether the target overlaps a path
-already held by **another live session** (liveness = heartbeat within 30 min):
+already held by **another live session** (liveness — see § Liveness below):
 
 - **block** — the target is a *gated* path (a production file governed by the
   coordination engine, per `agentctl/exempt_paths.is_gated_path`) already held by
@@ -51,6 +51,34 @@ paths alone, never a VCS's own diff/status. A git working tree and an arc mount
 are both just directories at this layer; two sessions rooted in physically
 distinct worktrees / mounts naturally produce non-overlapping paths, which is
 exactly why isolating a task stops the detector from firing again.
+
+## Liveness — three layers, TTL last
+
+A scope record used to be "live" on heartbeat age alone (within `LIVE_TTL_S` =
+30 min), so a session that died without cleaning up — most commonly a spawned
+specialist killed by budget exhaustion — kept blocking every overlapping writer
+for the rest of the window (the *ghost scope* defect, recorded in
+`memory-global/leaves/experience/2026-07-02-dead-spawn-scope-file-blocks-next-writer.md`).
+Liveness is now decided in three layers, ordered by how directly each observes
+the session:
+
+1. **Deregistration at spawn exit** (primary, for supervised spawns).
+   `spawn-specialist.py` removes the child session's scope file in the same
+   `finally` that tears down the process tree, on every exit path — normal
+   completion, budget death, kill. The child's session id comes from the
+   result JSON's `session_id`, falling back to the transcript filename stem;
+   a deregistration failure is logged to stderr and never alters the spawn's
+   own exit code. The common case therefore never reaches the layers below.
+2. **Pid probe** (for sessions that die without a supervisor — including the
+   supervisor itself). When a record carries a pid, `registry.live_pid_check`
+   probes it with `os.kill(pid, 0)` semantics (EPERM counts as alive). The
+   probe only **narrows** what heartbeat freshness allows through: a record
+   with no pid (legacy, or pid capture unresolved) keeps heartbeat-only
+   semantics, so a false verdict degrades to the old behavior rather than
+   suppressing detection for a live session.
+3. **Heartbeat TTL** (fallback outer bound). `LIVE_TTL_S` still expires
+   records whose pid was never captured or was reused by an unrelated
+   process — it is no longer the primary liveness signal, just the backstop.
 
 ## Fail-open guarantee
 

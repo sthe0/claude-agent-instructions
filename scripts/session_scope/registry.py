@@ -238,6 +238,20 @@ def live_sessions(
     return out
 
 
+def delete(scopes_dir: "str | Path", session_id: str) -> None:
+    """Remove one session's scope file, if present.
+
+    No-op when the file is already absent (never written, already pruned, or
+    deregistered twice) — mirrors load's absent-is-not-an-error contract, so
+    a caller (e.g. spawn-specialist's child-exit deregistration) never has to
+    special-case "already gone".
+    """
+    try:
+        scope_path(scopes_dir, session_id).unlink()
+    except FileNotFoundError:
+        pass
+
+
 def prune_stale(
     scopes_dir: "str | Path", now_ts: float, ttl_s: float
 ) -> "list[str]":

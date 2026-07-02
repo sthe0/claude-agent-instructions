@@ -34,6 +34,7 @@ from pathlib import Path
 
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
 from lib.config_root import skills_dir  # config-root resolver (isolated system root)
+from session_scope import registry  # scope registry: deregister the child's scope on exit
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILLS_DIR = skills_dir()
@@ -370,6 +371,58 @@ def _discover_transcript_path(known_before: set[Path], timeout: float = 10.0) ->
     return None
 
 
+def _load_json_payload(text: str) -> "dict | None":
+    """Best-effort JSON parse of the child's stdout. None on any parse
+    failure (empty stdout from a communicate() exception, truncated output,
+    plain-text output) — every caller already has a degrade path for "no
+    payload"."""
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def resolve_child_session_id(stdout_text: str, transcript_path: "Path | None") -> "str | None":
+    """Child spawn's session id, for scope deregistration on exit.
+
+    The result JSON's session_id field wins — it's authoritative and
+    available even when transcript discovery timed out. The transcript
+    filename stem is the fallback (the harness names each transcript
+    <session-id>.jsonl), recovering the id when stdout never parsed as JSON,
+    e.g. the child was killed before writing a result.
+    """
+    payload = _load_json_payload(stdout_text)
+    if payload:
+        sid = payload.get("session_id")
+        if sid:
+            return str(sid)
+    return transcript_path.stem if transcript_path is not None else None
+
+
+def deregister_child_scope(
+    session_id: "str | None", scopes_dir: "Path" = registry.DEFAULT_SCOPES_DIR
+) -> None:
+    """Remove the child spawn's scope registration on exit, so a dead
+    session never blocks a writer for the rest of its heartbeat TTL (stage
+    1's pid probe narrows that window; this closes it outright for the
+    common supervised-exit case, leaving TTL/probe expiry as the fallback
+    for a supervisor that itself dies mid-spawn).
+
+    Best-effort: an unresolved session_id or any deregistration failure is
+    swallowed and logged to stderr — it must never affect the spawn's own
+    exit code.
+    """
+    if not session_id:
+        return
+    try:
+        registry.delete(scopes_dir, session_id)
+    except Exception as exc:  # noqa: BLE001 - must never affect the spawn's own exit code
+        print(
+            f"spawn-specialist: scope deregistration failed for session {session_id}: {exc}",
+            file=sys.stderr,
+        )
+
+
 def resolve_permission_mode(args: argparse.Namespace) -> str | None:
     """Pick the permission mode passed to `claude -p`.
 
@@ -489,6 +542,8 @@ def main(argv: list[str] | None = None) -> int:
         cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
     proc_tree.install_teardown(proc)
+    transcript_path: Path | None = None
+    stdout_str, stderr_str = "", ""
     try:
         transcript_path = _discover_transcript_path(transcripts_before, timeout=10.0)
         if transcript_path is not None:
@@ -500,21 +555,23 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         # Normal completion already reaped the child (no-op here); any abnormal
         # exit (exception, KeyboardInterrupt, timeout) still tears down the whole
-        # subtree instead of leaking the claude -p children.
+        # subtree instead of leaking the claude -p children. Scope deregistration
+        # lives in this same finally (not after it) so it fires on every exit
+        # path — including one that raises before the result JSON is parsed
+        # below — using whatever of {stdout, transcript_path} it managed to get.
         proc_tree.kill_tree(proc)
+        deregister_child_scope(resolve_child_session_id(stdout_str, transcript_path))
     completed = subprocess.CompletedProcess(args=cmd, returncode=proc.returncode, stdout=stdout_str, stderr=stderr_str)
     duration_ms = int((time.monotonic() - started) * 1000)
 
     cost_usd: float | None = None
     result_text = completed.stdout
     parsed_marker: str | None = None
-    try:
-        payload = json.loads(completed.stdout)
+    payload = _load_json_payload(completed.stdout)
+    if payload:
         # Tolerant field lookup — schema may differ across versions.
         result_text = payload.get("result") or payload.get("output") or completed.stdout
         cost_usd = payload.get("cost_usd") or payload.get("total_cost_usd")
-    except json.JSONDecodeError:
-        pass
 
     forwarded, ok = validate_marker(result_text)
     if ok:
