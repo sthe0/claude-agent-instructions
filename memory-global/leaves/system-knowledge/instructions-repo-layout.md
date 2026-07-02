@@ -4,7 +4,7 @@ description: Canonical layout of ~/claude-agent-instructions/ — global tree, r
 type: reference
 schema: leaf/v1
 created: 2026-06-26
-last_verified: 2026-06-26
+last_verified: 2026-07-02
 ---
 
 ## Difficulty
@@ -42,9 +42,9 @@ cursor/
     claude-code-sync.mdc             # global Cursor rule (alwaysApply); mirrors CLAUDE.md
   agents/
     README.md
-    developer-spawn.md               # Cursor-only specialization wrapper over ~/.claude/skills/developer/SKILL.md
-    planner-spawn.md                 # Cursor-only specialization wrapper over ~/.claude/skills/planner/SKILL.md
-    thinker-spawn.md                 # Cursor-only specialization wrapper over ~/.claude/skills/thinker/SKILL.md
+    developer-spawn.md               # Cursor-only specialization wrapper over $CLAUDE_AGENT_HOME/skills/developer/SKILL.md
+    planner-spawn.md                 # Cursor-only specialization wrapper over $CLAUDE_AGENT_HOME/skills/planner/SKILL.md
+    thinker-spawn.md                 # Cursor-only specialization wrapper over $CLAUDE_AGENT_HOME/skills/thinker/SKILL.md
   scripts/
     install-cursor-links.sh          # wires ~/.cursor/rules/* and ~/.cursor/agents/*
     migrate-cursor-namespace.sh      # helper for migrating other machines / project roots
@@ -61,7 +61,7 @@ scripts/
   setup-symlinks.sh
   setup-project-memory.sh
   setup-ccgram.sh                      # bootstrap CCGram on a new machine (uv + ccgram + autostart + hooks)
-  doctor.sh                            # new-user readiness preflight ("am I ready to start?"): claude CLI, ~/.claude/CLAUDE.md symlink, engine hooks in settings.json, agentctl, git hooks — read-only
+  doctor.sh                            # new-user readiness preflight ("am I ready to start?"): claude CLI, $CLAUDE_AGENT_HOME/CLAUDE.md symlink, engine hooks in settings.json, agentctl, git hooks — read-only
   verify-instructions-sync.sh
   verify-layout-contract.sh
   verify-all.py                        # entry point for instruction-policy checks
@@ -106,16 +106,18 @@ githooks/
 
 ### Runtime symlinks after `setup-symlinks.sh`
 
+`$CLAUDE_AGENT_HOME` is the isolated config root — `~/.claude-agent` by default (`scripts/lib/config-root.sh` / `lib/config_root.py`); the personal `~/.claude` is only a legacy fallback read on not-yet-migrated machines. Runtime state (`agentctl/`, `plans/`, `projects/`, `projects.d/`) lives beside these symlinks under the same root.
+
 | Runtime path | Source in repo |
 |---|---|
-| `~/.claude/CLAUDE.md` | `CLAUDE.md` |
-| `~/.claude/config.md` | `config.md` |
-| `~/.claude/agents/<global>.md` | `agents/<name>.md` (currently none — directory reserved) |
-| `~/.claude/agents/<local>.md` | `agents-local/*.md` (gitignored) |
-| `~/.claude/skills/<flat>/` | `skills/<name>/` (excluding the `specializations/` container) |
-| `~/.claude/skills/<specialization>/` | `skills/specializations/<name>/` — flattened so the catalog sees them by name |
-| `~/.claude/skills/<local>.md` | `skills-local/*.md` (gitignored) |
-| `~/.claude/memory-global/` | `memory-global/` |
+| `$CLAUDE_AGENT_HOME/CLAUDE.md` | `CLAUDE.md` |
+| `$CLAUDE_AGENT_HOME/config.md` | `config.md` |
+| `$CLAUDE_AGENT_HOME/agents/<global>.md` | `agents/<name>.md` (currently none — directory reserved) |
+| `$CLAUDE_AGENT_HOME/agents/<local>.md` | `agents-local/*.md` (gitignored) |
+| `$CLAUDE_AGENT_HOME/skills/<flat>/` | `skills/<name>/` (excluding the `specializations/` container) |
+| `$CLAUDE_AGENT_HOME/skills/<specialization>/` | `skills/specializations/<name>/` — flattened so the catalog sees them by name |
+| `$CLAUDE_AGENT_HOME/skills/<local>.md` | `skills-local/*.md` (gitignored) |
+| `$CLAUDE_AGENT_HOME/memory-global/` | `memory-global/` |
 | `~/.cursor/rules/claude-code-sync.mdc` | `cursor/rules/claude-code-sync.mdc` |
 | `~/.cursor/agents/<name>.md` | `cursor/agents/<name>.md` |
 
@@ -127,7 +129,7 @@ For each project where shared agent memory is desired:
 
 ```
 <project_cwd>/.claude/agent-memory/        ← committed in the project's git
-~/.claude/projects/<cwd-hash>/memory  →  <project_cwd>/.claude/agent-memory
+$CLAUDE_AGENT_HOME/projects/<cwd-hash>/memory  →  <project_cwd>/.claude/agent-memory
 ```
 
 The symlink is created by `scripts/setup-project-memory.sh`, usually invoked from `<project>/.claude/scripts/setup-local.sh`. The native Claude Code auto-memory mechanism then reads and writes through the symlink, so the actual files live in the project tree and other developers inherit them on clone.

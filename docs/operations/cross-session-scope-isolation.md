@@ -19,7 +19,7 @@ isolation — the model's call).
 
 | Part | Where | Role |
 |---|---|---|
-| **A — scope registry** | `scripts/session_scope/registry.py` | One JSON record per session under `~/.claude/agentctl/scopes/<session>.json`: `{heartbeat_ts, cwd, repo_root, vcs, touched_paths[], pid}`. Pure module; the clock and the liveness probe are injected. |
+| **A — scope registry** | `scripts/session_scope/registry.py` | One JSON record per session under `~/.claude-agent/agentctl/scopes/<session>.json`: `{heartbeat_ts, cwd, repo_root, vcs, touched_paths[], pid}`. Pure module; the clock and the liveness probe are injected. |
 | **A — scope-track hook** | `scripts/hook-scope-track.py` (PostToolUse Edit\|Write + Bash) | Heartbeats the session, accumulates touched paths, and records the durable session process's pid (resolved once per session via an age-based ancestor walk — see `session_pid()`). Non-blocking. |
 | **B — conflict detector** | `scripts/session_scope/detector.py` | Pure path-prefix overlap + severity classification over the registry records. VCS-agnostic. |
 | **B — conflict hook** | `scripts/hook-scope-conflict.py` (PreToolUse Edit\|Write) | On a write, asks the detector whether the target overlaps another **live** session's scope, then denies / warns / allows. |
@@ -112,7 +112,7 @@ invent a new isolation mechanism:
    path-overlap, so `detector.detect_conflicts` stops flagging this session
    against the holder on the very next write — no heartbeat cycle needed to
    wait out. Re-registration is local bookkeeping under
-   `~/.claude/agentctl/scopes/`, not a mutation of the task's tree, so it runs
+   `~/.claude-agent/agentctl/scopes/`, not a mutation of the task's tree, so it runs
    even under `CLAUDE_DRY_RUN`.
 4. Print the new workspace directory (as the final stdout line, so it can be
    captured with `project_dir="$(scripts/session-isolate.sh <task-name>)"`)
@@ -124,7 +124,7 @@ The router is **backend-blind**: it resolves a backend *name*
 regardless of which backend answers. The built-in git worktree backend
 (`backends/git.sh`, the org-neutral default Core ships) and a machine-local plugin
 backend such as the arc mount backend (registered at
-`${CLAUDE_PROJECT_PLUGIN_DIR:-$HOME/.claude/project-entry-plugins}/backends/arc.sh`)
+`${CLAUDE_PROJECT_PLUGIN_DIR:-$CLAUDE_AGENT_HOME/project-entry-plugins}/backends/arc.sh`)
 are drop-in implementations of that one contract, so a new backend attaches with no
 change to `session-isolate.sh`.
 

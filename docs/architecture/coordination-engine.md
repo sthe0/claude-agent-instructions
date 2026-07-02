@@ -34,7 +34,7 @@ Two gates (marked `■`) are **non-skippable**, enforced by guardian hooks:
 - The **approval gate** holds at `PLAN_READY`: production edits are hard-denied until the engine reaches an execution node, so nothing touches production code (including the agent's own config) before the user approves the plan.
 - The **resolution gate** holds before `RESOLVED`: it requires explicit user confirmation that the task is resolved, never inferred from silence or thanks.
 
-State for a session lives at `~/.claude/agentctl/state/<session_id>.json`. The spine is **pluggable** — a skill can attach a per-session sub-state-machine.
+State for a session lives at `~/.claude-agent/agentctl/state/<session_id>.json`. The spine is **pluggable** — a skill can attach a per-session sub-state-machine.
 
 ## Where the detail lives
 

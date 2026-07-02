@@ -7,6 +7,6 @@ The same repo drives both Claude Code and Cursor, but the canonical instruction 
 Two disciplines keep the mirror honest:
 
 - **Thin by design.** The mirror has a hard line-count ceiling (`cursor-mirror-max-lines` in [config.md](../../config.md)) — it is not allowed to grow into a second copy of CLAUDE.md. Detail belongs in the canonical file; the mirror points at it.
-- **Updated in lockstep.** When the cooperation model changes, the mirror is updated in the **same** change as CLAUDE.md, so the two never describe different agents. The other Cursor-only assets it sits alongside are isolated under [cursor/](../../cursor/README.md), kept out of the `~/.claude/` tree.
+- **Updated in lockstep.** When the cooperation model changes, the mirror is updated in the **same** change as CLAUDE.md, so the two never describe different agents. The other Cursor-only assets it sits alongside are isolated under [cursor/](../../cursor/README.md), kept out of the `~/.claude-agent/` tree.
 
 At runtime the rule is wired to `~/.cursor/rules/claude-code-sync.mdc` by `setup-symlinks.sh`, the same single wiring command that installs the Claude-side symlinks.

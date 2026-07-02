@@ -6,7 +6,7 @@ Memory is how the system gets better at removing difficulties over time; the *wh
 
 | Scope | Where | Purpose |
 |---|---|---|
-| **Personal (auto-memory)** | `~/.claude/projects/<cwd-hash>/memory/` | Facts about the user, conversational preferences, "what we agreed on" continuity. |
+| **Personal (auto-memory)** | `~/.claude-agent/projects/<cwd-hash>/memory/` | Facts about the user, conversational preferences, "what we agreed on" continuity. |
 | **Global engineering** | [memory-global/](../../memory-global/) (imported into every session) | Cross-project engineering patterns, runbooks, retrospectives. |
 | **Project** | `<project>/.claude/agent-memory/` (shared via the project's git) | Project-specific runbooks — pipelines, ticket detail, repo conventions. |
 

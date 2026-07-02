@@ -22,7 +22,7 @@ Both tables below are machine-checked against the filesystem by [verify-readme.p
 
 ## Specialization skills (spawned as `claude -p` per plan step)
 
-Canonical path in repo: `skills/specializations/<name>/SKILL.md`. Symlinked flat into `~/.claude/skills/<name>/` by `setup-symlinks.sh`.
+Canonical path in repo: `skills/specializations/<name>/SKILL.md`. Symlinked flat into `~/.claude-agent/skills/<name>/` by `setup-symlinks.sh`.
 
 **Project-local specializations.** A project may ship its own domain experts under `<project>/.claude/skills/specializations/<name>/SKILL.md`. `spawn-specialist.py` resolves `--kind` from the global catalog first, then falls back to this project-local path (global wins on a name collision), so project specializations spawn with the same `claude -p` context isolation without entering the global catalog. They are not symlinked flat and so are not offered inline via the Skill tool — the spawn path is their invocation route.
 

@@ -15,7 +15,7 @@
 
 ## Where it lives
 
-The Personal layer is the developer's own `~/.claude/` tree (the live install), maintained against
+The Personal layer is the developer's own `~/.claude-agent/` tree (the live install, `$CLAUDE_AGENT_HOME`), maintained against
 the moving Core with `git pull --autostash --rebase` + `git rerere` — see `docs/operations/layer-maintenance.md`.
 Because it is per-machine, this repository carries only this scope note, **not** the personal
 overrides themselves; committing personal overrides into the shared Core would defeat the layering.

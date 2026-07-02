@@ -138,8 +138,8 @@ def _rm_recursive_targets(command: str) -> list[str]:
 def _deny_msg(token: str, resolved: str) -> str:
     return (
         f"Refusing a recursive rm whose target {token!r} resolves (worst-case, with any "
-        f"empty variable) to {resolved!r} — a protected path (/, $HOME, ~/.claude, or the "
-        f"instruction repo). An interpolated path variable that is empty collapses to a "
+        f"empty variable) to {resolved!r} — a protected path (/, $HOME, ~/.claude, "
+        f"~/.claude-agent, or the instruction repo). An interpolated path variable that is empty collapses to a "
         f"parent critical dir and would wipe the agent's own memory/config. Guard every "
         f"variable is non-empty (e.g. [[ -n \"$VAR\" ]]), delete literal paths, or use "
         f"trap-cleanup on the exact mktemp path you captured at creation."

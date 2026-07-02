@@ -14,11 +14,11 @@ The repository is built as **seven layers, numbered 0–6**. Layer 0 is the runt
 | **3 — Coordination engine** | `scripts/agentctl/` — a code state machine — see [the coordination engine](coordination-engine.md) | Deterministic control-flow for substantive tasks. |
 | **4 — Hooks** | `scripts/hook-*.py` | Enforce the non-skippable gates and the reminders deterministically — a hook can deny a tool call. |
 | **5 — Memory** | Personal auto-memory, global engineering memory (`memory-global/`), and project memory (`<project>/.claude/agent-memory/`) — see [memory model](../concepts/memory-model.md) | Accumulated experience and durable facts. |
-| **6 — Distribution** | `setup-symlinks.sh`, the Cursor mirror, the `verify-*.py` / `lint-*.py` guard suite, and the git hooks | Wires the repo into `~/.claude/` and `~/.cursor/` and keeps the runtime consistent with the source of truth. |
+| **6 — Distribution** | `setup-symlinks.sh`, the Cursor mirror, the `verify-*.py` / `lint-*.py` guard suite, and the git hooks | Wires the repo into `~/.claude-agent/` and `~/.cursor/` and keeps the runtime consistent with the source of truth. |
 
 ## How the layers compose
 
-The dependency runs downward: the **instruction surface** (Layer 1) tells the actor which **skills** (Layer 2) to invoke; the **coordination engine** (Layer 3) sequences a substantive task and is policed by the **hooks** (Layer 4); every layer reads from and writes to **memory** (Layer 5); and the **distribution** layer (Layer 6) is what makes the whole stack appear at runtime under `~/.claude/` and stay verifiably in sync with the repo.
+The dependency runs downward: the **instruction surface** (Layer 1) tells the actor which **skills** (Layer 2) to invoke; the **coordination engine** (Layer 3) sequences a substantive task and is policed by the **hooks** (Layer 4); every layer reads from and writes to **memory** (Layer 5); and the **distribution** layer (Layer 6) is what makes the whole stack appear at runtime under `~/.claude-agent/` and stay verifiably in sync with the repo.
 
 The seven-layer split is itself an instance of the system's own discipline: each layer has a single functional ground (the difficulty it removes) and one canonical home. The layers describe the *single-machine* shape of the system. How that shape is shared across many developers — one evolving Core with per-developer overrides on top — is a separate axis, described in [the consensus architecture](consensus-architecture.md).
 
