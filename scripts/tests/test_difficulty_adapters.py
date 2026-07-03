@@ -30,7 +30,7 @@ def _rec():
 def test_startrek_pure_mapping_targets_oosevenreport():
     fields = startrek.record_to_fields(_rec())
     assert fields["queue"] == "OOSEVENREPORT"
-    assert fields["priority"] == {"key": "major"}  # HIGH -> major
+    assert fields["priority"] == {"key": "critical"}  # HIGH -> critical (queue accepts only the standard five)
     assert "gate denies a legitimate memory write" in fields["tags"]
     assert "gate denies a legitimate memory write" in fields["summary"]
     assert "CLAUDE.md" in fields["description"]
@@ -77,7 +77,7 @@ def test_startrek_pull_round_trips_through_fake_http():
             "createdAt": "2026-06-26T00:00:00",
             "summary": "[core] some ground",
             "tags": ["some ground"],
-            "priority": {"key": "critical"},
+            "priority": {"key": "blocker"},
             "createdBy": {"id": "user1"},
             "description": "evidence body",
         }]

@@ -25,11 +25,15 @@ API_BASE = "https://st-api.yandex-team.ru/v2"
 TOKEN_PATH = Path.home() / ".tracker-token"
 
 # severity -> Startrek priority key (ADR-0001 adapter table: severity->priority).
+# Keys must be accepted by the TARGET QUEUE, not just present in the instance enum:
+# OOSEVEN (quickStartV2 preset workflow) takes only the standard five
+# (trivial, minor, normal, critical, blocker) — it 422'd both Jira's major and
+# the instance-level extra key important (verified live 2026-07-03).
 _PRIORITY = {
     Severity.LOW: "minor",
     Severity.MEDIUM: "normal",
-    Severity.HIGH: "major",
-    Severity.CRITICAL: "critical",
+    Severity.HIGH: "critical",
+    Severity.CRITICAL: "blocker",
 }
 
 
