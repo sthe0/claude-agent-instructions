@@ -17,6 +17,7 @@ import json
 import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from lib import config_root
@@ -400,6 +401,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
 
     state.node = transition(state.node, "submit_plan")
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
+    state.plan_submitted_ts = time.time()
     state.log("submit_plan", plan=plan_path, verified=True)
     store.save(state)
     d = Directive(

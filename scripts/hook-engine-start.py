@@ -13,10 +13,15 @@ user prompt and keeps the engine the default control path:
   - Live session         -> a status line (task / node / weight) plus a cheap node-derived
                            next-step hint, so the coordinator stays on the deterministic spine.
 
-Auto-start is the ONLY state mutation this hook performs, and only the idempotent
-`start --if-absent` (never classify — weight is a cognitive call the gate still enforces).
-It is best-effort: any failure is swallowed so a hook crash can never wedge the workflow.
-Corrupt/unreadable state behaves like "no state". Always exits 0.
+Besides auto-start (idempotent `start --if-absent`; never classify — weight is a cognitive
+call the gate still enforces), this hook stamps `last_user_prompt_ts` (time.time()) into the
+live session's state file on every prompt — a raw JSON patch, not a dataclass round-trip, so
+a stray/legacy state file can never fail to load here. That timestamp backs the plan-delivery
+gate (hook-plan-delivery-gate.py): compared against `plan_submitted_ts` at node PLAN_READY, it
+tells whether the plan was submitted THIS turn (the user cannot have seen it yet).
+
+Both mutations are best-effort: any failure is swallowed so a hook crash can never wedge the
+workflow. Corrupt/unreadable state behaves like "no state". Always exits 0.
 
 UserPromptSubmit stdin JSON carries session_id / cwd / prompt; stdout becomes additional
 turn context (mirrors hook-resolution-reminder.py).
@@ -27,6 +32,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -59,6 +65,29 @@ def _load_state(session_id: str) -> dict | None:
     except Exception:
         return None
     return data if isinstance(data, dict) else None
+
+
+def _stamp_prompt_ts(session_id: str, now: float) -> None:
+    """Best-effort: record `now` as last_user_prompt_ts in the session's state file.
+
+    A raw JSON patch (read dict, set one key, write back) — mirrors _load_state's
+    raw-dict style rather than a SessionState round-trip, so a legacy/partial state
+    file still gets the stamp instead of failing to load. Silent on any error: a
+    missed stamp only means the plan-delivery gate fails open (allow) this turn,
+    never a hard failure."""
+    if not session_id:
+        return
+    p = config_root.resolve_agentctl_state_file(session_id)
+    if p is None:
+        return
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return
+        data["last_user_prompt_ts"] = now
+        p.write_text(json.dumps(data), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def _task_slug(prompt: str) -> str:
@@ -139,6 +168,7 @@ def main(argv: list[str] | None = None) -> int:
     # (idempotent, best-effort) so the agent never has to remember `agentctl start`.
     if session_id and _load_state(session_id) is None:
         if _autostart(session_id, prompt):
+            _stamp_prompt_ts(session_id, time.time())
             print(
                 f"[engine-start] Auto-started agentctl session (task={_task_slug(prompt)}). "
                 f"Classify before any production edit: `agentctl classify --session {session_id} "
@@ -146,6 +176,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
 
+    _stamp_prompt_ts(session_id, time.time())
     print(build_message(session_id))
     return 0
 

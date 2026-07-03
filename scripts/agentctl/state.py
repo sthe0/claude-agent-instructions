@@ -19,7 +19,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -456,6 +456,16 @@ class SessionState:
     # Aggregated execution cost, populated at verify-final/resolve. None until then.
     # Absent in pre-schema-10 states: from_dict defaults to None.
     cost: "CostRollup | None" = None
+    # Turn-boundary timestamps (time.time(), schema 10) backing the plan-delivery
+    # gate (hook-plan-delivery-gate.py): last_user_prompt_ts is stamped by
+    # hook-engine-start.py on every UserPromptSubmit; plan_submitted_ts is stamped
+    # by cmd_submit_plan. plan_submitted_ts >= last_user_prompt_ts at node PLAN_READY
+    # means the plan was submitted THIS turn — the user cannot have seen it yet, so
+    # a same-turn approval AskUserQuestion is denied. Both None on legacy states
+    # (absent key -> dataclass default via from_dict's cls(**data)): the gate then
+    # has no observable and fails open (allow).
+    last_user_prompt_ts: float | None = None
+    plan_submitted_ts: float | None = None
     schema_version: int = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
