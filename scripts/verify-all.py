@@ -30,6 +30,7 @@ CHECKS: list[str] = [
     "lint-hooks-executable",
     "verify-doc-concepts",
     "verify-no-conflict-markers",
+    "verify-config-root-refs",
 ]
 
 

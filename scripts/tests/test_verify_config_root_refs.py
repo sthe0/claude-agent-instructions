@@ -96,3 +96,42 @@ def test_worklist_tsv_excluded_from_domain(tmp_path):
         "path\tline\tcategory\nfoo.md\t3\tkeep:harness-owned ~/.claude.json\n",
     )
     assert vcr.find_occurrences(tmp_path) == []
+
+
+# ── exhaustiveness cross-check (Stage 5) ──────────────────────────────────────
+
+def test_ungoverned_undecodable_file_fails(tmp_path):
+    """A file find_occurrences silently drops on a UnicodeDecodeError (not
+    *.py/*.sh, so the S2 code enumerator never looks at it either) must
+    surface as ungoverned rather than disappearing from both enumerators."""
+    p = tmp_path / "notes.md"
+    p.write_bytes(b"See ~/.claude for config.\n\xff\xfe garbage\n")
+    # Confirm the premise: find_occurrences really does drop it.
+    assert vcr.find_occurrences(tmp_path) == []
+    assert vcr.find_ungoverned(tmp_path) == ["notes.md"]
+    allowlist = _write(tmp_path, "allow.txt", "")
+    assert vcr.scan(tmp_path, allowlist) == 1
+
+
+def test_partition_green_case_passes(tmp_path):
+    """Doc-scope (allowlisted) + code-scope (*.py, ignored) together leave
+    nothing ungoverned."""
+    _write(tmp_path, "README.md", "See ~/.claude for config.\n")
+    _write(tmp_path, "scripts/tool.py", "# see ~/.claude for legacy behavior\n")
+    allowlist = _write(tmp_path, "allow.txt", "README.md:1  # legacy-fallback doc note\n")
+    assert vcr.find_ungoverned(tmp_path) == []
+    assert vcr.scan(tmp_path, allowlist) == 0
+
+
+def test_ungoverned_ignores_self_ref_excluded_paths(tmp_path):
+    """The two generated artifacts are domain-excluded outright, not
+    ungoverned, even though they quote the legacy pattern by construction."""
+    _write(
+        tmp_path, "scripts/config-root-refs-allowlist.txt",
+        "# reason keeps ~/.claude.json harness-owned (no real entries here)\n",
+    )
+    _write(
+        tmp_path, "docs/migrations/config-root-tails-worklist.tsv",
+        "path\tline\tcategory\nfoo.md\t3\tkeep:harness-owned ~/.claude.json\n",
+    )
+    assert vcr.find_ungoverned(tmp_path) == []

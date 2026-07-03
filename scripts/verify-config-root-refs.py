@@ -36,6 +36,24 @@ worklist artifact (which enumerates occurrences by construction — its rows
 and reasons routinely quote the very pattern being searched for), are
 excluded from the scanned domain outright rather than allowlisted line by
 line — otherwise the allowlist would need to cover itself circularly.
+
+Exhaustiveness cross-check (standing, default-on — runs every invocation):
+  ``iter_doc_files`` and the sibling S2 enumerator split the repo by suffix
+  (``*.py``/``*.sh`` vs everything else), so that split holds by construction
+  for any file this scan actually visits. The gap it does NOT cover on its
+  own: ``find_occurrences`` reads each doc-scope file with strict
+  ``read_text(encoding="utf-8")`` and silently skips one that fails to
+  decode — a file could carry a legacy reference and vanish from the doc
+  enumerator's occurrence list without a trace, while still not being
+  ``*.py``/``*.sh`` (so the S2 enumerator never looks at it either). That is
+  an ungoverned file: invisible to both enumerators at once.
+  ``find_ungoverned`` re-derives the domain independently — walking the
+  whole repo and decoding every file with ``errors="replace"`` instead of
+  strict UTF-8 — so a legacy reference in an undecodable file still surfaces
+  as text. It then asserts every file in that independently-derived domain is
+  covered by doc scope, code scope (``*.py``/``*.sh``, by suffix), or the two
+  named self-reference exclusions above — nothing else. Anything left over
+  is named in the failure output.
 """
 from __future__ import annotations
 
@@ -69,8 +87,8 @@ class AllowlistError(ValueError):
     """Raised on a malformed scripts/config-root-refs-allowlist.txt entry."""
 
 
-def iter_doc_files(repo_root: Path) -> "list[Path]":
-    """Repo-relative paths in doc scope: complement of the code enumerator."""
+def _iter_repo_files(repo_root: Path) -> "list[Path]":
+    """Every tracked-shape file under repo_root, skipping .git/__pycache__."""
     files = []
     for p in sorted(repo_root.rglob("*")):
         if not p.is_file():
@@ -78,7 +96,15 @@ def iter_doc_files(repo_root: Path) -> "list[Path]":
         rel = p.relative_to(repo_root)
         if ".git" in rel.parts or "__pycache__" in rel.parts:
             continue
-        if p.suffix.lower() in CODE_SUFFIXES:
+        files.append(rel)
+    return files
+
+
+def iter_doc_files(repo_root: Path) -> "list[Path]":
+    """Repo-relative paths in doc scope: complement of the code enumerator."""
+    files = []
+    for rel in _iter_repo_files(repo_root):
+        if rel.suffix.lower() in CODE_SUFFIXES:
             continue
         if rel.as_posix() in SELF_REF_EXCLUDED:
             continue
@@ -177,6 +203,43 @@ def find_stale_entries(entries, occurrences) -> "list[dict]":
     return stale
 
 
+def find_ungoverned(repo_root: Path, occurrences=None) -> "list[str]":
+    """Repo-relative paths carrying a legacy reference that fall into NEITHER
+    doc scope NOR code scope NOR the two self-reference exclusions.
+
+    Independently re-derives the domain (whole-repo walk, ``errors="replace"``
+    decode) rather than reusing ``find_occurrences``'s strict-UTF-8 read, so a
+    file that ``find_occurrences`` silently drops on a decode error still
+    counts here — proving the doc/code split is exhaustive, not just
+    self-consistent with its own blind spot.
+    """
+    if occurrences is None:
+        occurrences = find_occurrences(repo_root)
+    doc_scope_files = {rel for rel, _, _ in occurrences}
+
+    all_legacy_files: "set[str]" = set()
+    for p in sorted(repo_root.rglob("*")):
+        if not p.is_file():
+            continue
+        rel = p.relative_to(repo_root)
+        if ".git" in rel.parts or "__pycache__" in rel.parts:
+            continue
+        relpath = rel.as_posix()
+        if relpath in SELF_REF_EXCLUDED:
+            continue
+        try:
+            raw = p.read_bytes()
+        except OSError:
+            continue
+        text = raw.decode("utf-8", errors="replace")
+        if TILDE_RE.search(text) or HOME_RE.search(text):
+            all_legacy_files.add(relpath)
+
+    code_scope_files = {f for f in all_legacy_files if Path(f).suffix.lower() in CODE_SUFFIXES}
+    governed = doc_scope_files | code_scope_files
+    return sorted(all_legacy_files - governed)
+
+
 def scan(repo_root: Path = REPO_ROOT, allowlist_path: Path = ALLOWLIST_PATH) -> int:
     try:
         entries = parse_allowlist(allowlist_path)
@@ -187,6 +250,7 @@ def scan(repo_root: Path = REPO_ROOT, allowlist_path: Path = ALLOWLIST_PATH) -> 
     occurrences = find_occurrences(repo_root)
     unallowed = find_unallowed(occurrences, entries)
     stale = find_stale_entries(entries, occurrences)
+    ungoverned = find_ungoverned(repo_root, occurrences)
 
     if unallowed:
         print(f"verify-config-root-refs: {len(unallowed)} non-allowlisted legacy reference(s):")
@@ -196,18 +260,30 @@ def scan(repo_root: Path = REPO_ROOT, allowlist_path: Path = ALLOWLIST_PATH) -> 
         print(f"verify-config-root-refs: {len(stale)} stale allowlist entrie(s) (no longer match anything):")
         for e in stale:
             print(f"  {allowlist_path.name}:{e['lineno']}: {e['raw'].strip()}")
+    if ungoverned:
+        print(
+            f"verify-config-root-refs: {len(ungoverned)} ungoverned file(s) "
+            "(legacy reference invisible to BOTH the doc and code enumerators):"
+        )
+        for rel in ungoverned:
+            print(f"  {rel}")
 
-    if unallowed or stale:
+    if unallowed or stale or ungoverned:
         print(
             "\nConvert each non-allowlisted reference to the root-generic form "
             "($CLAUDE_CONFIG_DIR / 'the config root'), or add a path:line "
             "allowlist entry with a reason if the reference is legitimately "
             "about the legacy location. Prune any stale entry that no longer "
-            "matches anything."
+            "matches anything. An ungoverned file usually means it failed to "
+            "decode as UTF-8 in find_occurrences — fix its encoding or extend "
+            "the doc/code scope split so it is actually scanned."
         )
         return 1
 
-    print(f"verify-config-root-refs: OK — {len(occurrences)} reference(s), all allowlisted")
+    print(
+        f"verify-config-root-refs: OK — {len(occurrences)} reference(s), all "
+        "allowlisted; exhaustiveness cross-check clean"
+    )
     return 0
 
 
