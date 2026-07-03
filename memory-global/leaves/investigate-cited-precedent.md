@@ -19,6 +19,12 @@ On a **user-cited precedent**, read *that precedent* first — its ticket commen
 
 This is the positive-exemplar twin of [[doubt-own-snapshot]] (there the user asserts a requirement and you refresh your stale source; here the user hands you a prior success and you go study it). It is also the concrete form of the mini-OD **reference-baseline** pass ([[workflow-debug-investigation]] § Reference baseline): a known-good run *is* such a precedent — diff the failing run against it at block/param order before diving into infra logs.
 
+### Reconstruct the invariant, not the surface knob (ambient defaults drift)
+
+A precedent-type norm ("we did X at param P=v and it worked") often silently depends on an **ambient** parameter or default that was true then and has since drifted. Following the *surface knob* you remember reproduces the visible setting but not the *invariant* the precedent actually relied on. When you invoke a precedent, reconstruct the **invariant** — the relation over all the inputs that had to hold for the good outcome — and check whether it still holds under the **current** defaults, not just whether you set the one knob you recall.
+
+Worked case (DEEPAGENT-440 / 392): "we measured quality at `runs_per_instruct=1` in DEEPAGENT-392" — but the load-bearing invariant was `total = runs_per_instruct × judge_runs ≥ max(pass_n_params)`, not `runs_per_instruct=1`. 392 relied on the ambient `judge_runs` default = 3 (so total = 1×3 = 3, satisfying `assert k≤total` for pass@3). That default silently dropped to 1 on 2026-06-11 (commit `2c869732`, DEEPAGENT-367), so the same surface knob (`runs_per_instruct=1`) now yields total=1 and the eval cube hard-crashes on the pass@3 assert. The precedent was correct; the norm derived from it was under-specified because it named a knob instead of the invariant. Verify the invariant against current defaults before treating a precedent as a recipe.
+
 ## See also
 
 - [[doubt-own-snapshot]] — the requirement-side twin (refresh your own source before doubting).
