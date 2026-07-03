@@ -20,7 +20,7 @@ Shared contract + the `CLARIFY:` / `PERMISSION-REQUEST:` formats live in [_share
   Summary: <one paragraph>
   ```
 
-  You **must** write the plan to a markdown file before returning. Convention: `~/.claude/plans/<slug>.md`. Make `<slug>` short, content-keyed, kebab-case. The file must contain the sections listed in § Plan format below — `verify-plan-file.py` will reject the spawn with `MALFORMED:` otherwise.
+  You **must** write the plan to a markdown file before returning. Convention: `~/.claude-agent/plans/<slug>.md`. Make `<slug>` short, content-keyed, kebab-case. The file must contain the sections listed in § Plan format below — `verify-plan-file.py` will reject the spawn with `MALFORMED:` otherwise.
 - **Other applicable markers:** `COMPLETED:` (only when the work did not produce a plan requiring approval, e.g. refining one section of an already-approved plan), `INCOMPLETE:` (what is decided, what is unresolved), `CLARIFY:` (a file path, a number, a choice between named options, a deadline source), `REPLAN:` (overcome-difficulty concluded the broader plan needs revision — propose it, don't rewrite unilaterally), `PERMISSION-REQUEST:` (rare — usually a restricted resource needed for context), `ESCALATE:` (ambiguous user intent, or a strategic choice between substantively different plan shapes).
 
 ## Working principles
@@ -56,7 +56,7 @@ Read the user's request and all linked source artifacts (tickets, RFCs, parent t
 | Cross-project analogs | `mcp__intrasearch__semantic_code_search` |
 | Internal wiki and docs | `mcp__wiki__GetPageDetails`, `mcp__intrasearch__search` |
 | Public best practices, library docs, RFCs, Stack Overflow, GitHub | `WebSearch`, `WebFetch` |
-| Prior experience leaves | `~/.claude/memory-global/leaves/` and `<cwd>/.claude/agent-memory/` — read before designing |
+| Prior experience leaves | `~/.claude-agent/memory-global/leaves/` and `<cwd>/.claude/agent-memory/` — read before designing |
 
 In the plan, state **explicitly** what is reused vs. built from scratch. If you adopt a pattern from external research, link the source.
 
@@ -76,7 +76,7 @@ Before settling on an approach, estimate cost and resources for **each candidate
 
 | Dimension | What to estimate |
 |---|---|
-| **Implementation effort** | Wall-clock; specialist budget tier (`budget-small-usd` / `budget-medium-usd` / `budget-large-usd`, see `~/.claude/config.md`); spawn count; recursion depth |
+| **Implementation effort** | Wall-clock; specialist budget tier (`budget-small-usd` / `budget-medium-usd` / `budget-large-usd`, see `~/.claude-agent/config.md`); spawn count; recursion depth |
 | **Means reused** | Existing libraries / services / scripts / patterns vs new code; project CLI entry points extended vs duplicated |
 | **Ongoing resources** | Infra (CPU, storage, quota); operational load (oncall, dashboards, alerts); recurring API / cloud spend |
 | **Maintenance surface** | Lines, files, components, endpoints added; cognitive load on future readers; tests and docs required |
@@ -104,7 +104,7 @@ Required `##` sections (in this order; `verify-plan-file.py` enforces presence):
    - **Who executes** — actor + the capability to wield the means (element 6); the manager spawns the named specialization, or manager in-thread.
    - **Material:** what this stage transforms and its relevant initial state (element 2).
    - **Means & method:** reused tools / abstractions to extend (immutable means, element 4) and how applied — algorithm / pattern and where it lands (file · symbol), so execution is mechanical not design (method, element 4').
-   - **Cost tier** — `small` / `medium` / `large` (per `~/.claude/config.md`).
+   - **Cost tier** — `small` / `medium` / `large` (per `~/.claude-agent/config.md`).
    - **Steps:** an ordered checklist of concrete sub-actions, each naming the file / symbol it touches.
    - **Conditions & invariants:** conditions the stage runs under, and properties of the material that must stay unchanged (element 5).
    - **Output:** the artifact this stage produces (result, element 2) — also the element it supplies to dependent stages.
@@ -118,11 +118,11 @@ Required `##` sections (in this order; `verify-plan-file.py` enforces presence):
 
 Optional `##` sections (add when the task warrants them; not enforced by `verify-plan-file.py`):
 
-- **Required resources.** Non-trivial resources the plan depends on — skip the trivial (Read, built-in tools). Include: input artifacts (datasets, configs, tickets), tools or skills with non-default availability (specific MCP servers, CLI tooling like `ya tool *`, infra access), approvals or org gates (queue access, role grant, oncall sign-off), budget constraints (wall-clock deadline, $ cap per `~/.claude/config.md`). One bullet per resource, with a one-line "why non-trivial". Surface here so the user sees the dependency surface up-front, and the experience leaf can attribute cost to the resources that drove it.
+- **Required resources.** Non-trivial resources the plan depends on — skip the trivial (Read, built-in tools). Include: input artifacts (datasets, configs, tickets), tools or skills with non-default availability (specific MCP servers, CLI tooling like `ya tool *`, infra access), approvals or org gates (queue access, role grant, oncall sign-off), budget constraints (wall-clock deadline, $ cap per `~/.claude-agent/config.md`). One bullet per resource, with a one-line "why non-trivial". Surface here so the user sees the dependency surface up-front, and the experience leaf can attribute cost to the resources that drove it.
 - **Reference files** *(required when the task touches existing code)*. Subsections `### To modify` (file + line ranges that will change) and `### To read` (files, tests, configs needed for context) — a concrete file map is the cheapest way to anchor stages and give the developer an exact starting set.
 - **Contracts.** Only the contracts actually touched: API endpoints, method/service/repository signatures, models / DTOs, enums and interfaces, DB schema (tables, columns, indexes), events / queues, configs, external integrations. Add when the plan changes any interface.
 - **Operator questions.** Blocking questions the operator must answer before or during execution; persistent record (vs `CLARIFY:` which is one-shot). If you can make a reasonable assumption, fix it here marked `[assumption]` and proceed. New blocking questions discovered during solve are appended here too.
-- **Delivery partition.** If markers M1–M4 (see `~/.claude/memory-global/leaves/partition-markers.md`) push toward splitting the approved plan into separate PRs/tickets, record the verdict (`recommended` / `possible` / `not required`), the rationale citing which markers fired, and — if recommended — a numbered list of sub-PRs. (This is delivery partition of the plan into shippable units, distinct from your step-level decomposition above.)
+- **Delivery partition.** If markers M1–M4 (see `~/.claude-agent/memory-global/leaves/partition-markers.md`) push toward splitting the approved plan into separate PRs/tickets, record the verdict (`recommended` / `possible` / `not required`), the rationale citing which markers fired, and — if recommended — a numbered list of sub-PRs. (This is delivery partition of the plan into shippable units, distinct from your step-level decomposition above.)
 
 For each stage that calls for a specialist (developer, thinker, yandex-cloud-expert, …), the manager will spawn that specialization as a separate `claude -p` process — your plan only names which specialization is needed, not how to spawn it.
 

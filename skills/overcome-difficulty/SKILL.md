@@ -112,7 +112,7 @@ Each spawn can itself spawn another (overcome-difficulty escape can recurse) up 
 
 ### Invocation
 
-Before spawning, verify the would-be `AGENT_RECURSION_DEPTH` does not exceed `max-recursion-depth` (see `~/.claude/config.md`) — if it would, follow the hard depth cap below and do not spawn. Choose the budget tier per `CLAUDE.md` § Budget tier — `budget-medium-usd` is the default for overcome-difficulty escapes; `budget-large-usd` only when the difficulty likely needs deep exploration. The `claude -p` bash template (with the `AGENT_RECURSION_DEPTH` increment + the self-contained escape prompt) and how it works: [policy.md](policy.md) § Invocation.
+Before spawning, verify the would-be `AGENT_RECURSION_DEPTH` does not exceed `max-recursion-depth` (see `~/.claude-agent/config.md`) — if it would, follow the hard depth cap below and do not spawn. Choose the budget tier per `CLAUDE.md` § Budget tier — `budget-medium-usd` is the default for overcome-difficulty escapes; `budget-large-usd` only when the difficulty likely needs deep exploration. The `claude -p` bash template (with the `AGENT_RECURSION_DEPTH` increment + the self-contained escape prompt) and how it works: [policy.md](policy.md) § Invocation.
 
 ### Reading the result
 
@@ -120,7 +120,7 @@ The child returns one marker on stdout: **`RESOLVED:`** (apply + continue), **`I
 
 ### Safeguards
 
-- **Hard depth cap.** Before spawning, check `$AGENT_RECURSION_DEPTH`. If the spawn would push it **above** `max-recursion-depth` (see `~/.claude/config.md`), **do not spawn**. Instead: stop, summarize the chain for the user (original task, where the recursion is now, what the next spawn would have done), ask whether to continue manually, restart with a clean approach, or accept a partial result. This cap is shared with the global one in `CLAUDE.md` § Recursion cap.
+- **Hard depth cap.** Before spawning, check `$AGENT_RECURSION_DEPTH`. If the spawn would push it **above** `max-recursion-depth` (see `~/.claude-agent/config.md`), **do not spawn**. Instead: stop, summarize the chain for the user (original task, where the recursion is now, what the next spawn would have done), ask whether to continue manually, restart with a clean approach, or accept a partial result. This cap is shared with the global one in `CLAUDE.md` § Recursion cap.
 - Per-level budget, visible depth, loop sensitivity at depth ≥ `loop-sensitivity-depth`, persisted transcripts: [policy.md](policy.md) § Safeguards.
 
 ### When NOT to escalate

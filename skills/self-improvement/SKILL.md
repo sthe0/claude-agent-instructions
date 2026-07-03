@@ -51,12 +51,12 @@ Before proposing an edit to a **protected-Core** artifact, check authority with 
 
 | Component | Path |
 |---|---|
-| Global policy | `~/.claude/CLAUDE.md` |
-| Subagents | `~/claude-agent-instructions/agents/*.md` → `~/.claude/agents/` |
-| Skills | `~/claude-agent-instructions/skills/<name>/` → `~/.claude/skills/<name>/` |
-| Global memory | `~/.claude/memory-global/MEMORY.md` + leaves in `memory-global/leaves/` |
-| Project memory (local) | `<project_cwd>/.claude/agent-memory/MEMORY.md` (symlinked from `~/.claude/projects/<cwd-hash>/memory/`) |
-| Settings / hooks | `~/.claude/settings.json`, `settings.local.json` |
+| Global policy | `~/.claude-agent/CLAUDE.md` |
+| Subagents | `~/claude-agent-instructions/agents/*.md` → `~/.claude-agent/agents/` |
+| Skills | `~/claude-agent-instructions/skills/<name>/` → `~/.claude-agent/skills/<name>/` |
+| Global memory | `~/.claude-agent/memory-global/MEMORY.md` + leaves in `memory-global/leaves/` |
+| Project memory (local) | `<project_cwd>/.claude/agent-memory/MEMORY.md` (symlinked from `~/.claude-agent/projects/<cwd-hash>/memory/`) |
+| Settings / hooks | `~/.claude-agent/settings.json`, `settings.local.json` |
 | Cursor sync | `cursor/rules/claude-code-sync.mdc` (global) and project overlays in `<project>/.claude/rules/*.mdc` |
 | Versioning | git repo `~/claude-agent-instructions/` |
 
@@ -98,7 +98,7 @@ Do not push domain runbooks into generic agent prompts or CLAUDE.md. If the user
 
 ## Improvement areas beyond text
 
-- **Hooks** in `~/.claude/settings.json` (`PreToolUse`, `PostToolUse`, `Stop`, `UserPromptSubmit`) — for automation that must run between turns.
+- **Hooks** in `~/.claude-agent/settings.json` (`PreToolUse`, `PostToolUse`, `Stop`, `UserPromptSubmit`) — for automation that must run between turns.
 - **Scripts** (`verify-*`, `setup-*`, sync).
 - **Memory indexing** (search, tags, SQLite) if global memory grows large.
 - **Frontmatter validation** in CI for agents and skills.

@@ -12,7 +12,7 @@ Each `<name>.json` file is a config for one MCP server:
 }
 ```
 
-Apply all configs to `~/.claude/settings.local.json`:
+Apply all configs to `~/.claude-agent/settings.local.json`:
 
 ```bash
 ~/claude-agent-instructions/scripts/apply-mcp-local.sh

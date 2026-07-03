@@ -2,14 +2,14 @@
 
 Directory is **not versioned** (except this README).
 
-Two layouts are supported, both symlinked into `~/.claude/skills/` by
+Two layouts are supported, both symlinked into `~/.claude-agent/skills/` by
 `scripts/setup-symlinks.sh`:
 
 - **Single-file skill** — drop `<name>.md` directly here. Linked as
-  `~/.claude/skills/<name>.md`.
+  `~/.claude-agent/skills/<name>.md`.
 - **Multi-file skill** (preferred for anything with `policy.md`, helper
   files, or supporting data) — create `<name>/SKILL.md` with optional
-  siblings. The whole directory is symlinked as `~/.claude/skills/<name>/`,
+  siblings. The whole directory is symlinked as `~/.claude-agent/skills/<name>/`,
   mirroring how repo skills under `skills/` are linked.
 
 Use for skills specific to this machine — those that depend on local tooling

@@ -76,7 +76,7 @@ Every instruction here is a step in the plan for removing an arbitrary difficult
 A protected-Core artifact (`CLAUDE.md`, `config.md`, `skills/**`, `agents/**`, `cursor/**`, `*.mdc`, `scripts/agentctl/**`) can only be landed by a machine with Core commit authority. Before authoring such an edit, gate on `difficulty_channel.authority.is_author()` (a `git push --dry-run` capability probe):
 
 - **Author** → normal spine (`core-difficulty-digest.py` to review clustered difficulties, then `planner → approval → developer`).
-- **Non-author** → do **not** edit Core. Run `python3 ~/claude-agent-instructions/scripts/file-difficulty.py --target <artifact> --ground '<desired-vs-actual>' --severity <lvl>` — the machine's channel is auto-selected from `~/.claude/agent-identity.local`. Submission is decoupled from push; an author lands the change later from the accumulated digest. Non-Core targets (memory leaves, project files) are exempt — they are not edit-restricted.
+- **Non-author** → do **not** edit Core. Run `python3 ~/claude-agent-instructions/scripts/file-difficulty.py --target <artifact> --ground '<desired-vs-actual>' --severity <lvl>` — the machine's channel is auto-selected from `~/.claude-agent/agent-identity.local`. Submission is decoupled from push; an author lands the change later from the accumulated digest. Non-Core targets (memory leaves, project files) are exempt — they are not edit-restricted.
 
 This is the propose-not-execute / no-veto driver: a non-author surfaces difficulties, never blocks or bypasses the human gate. SKILL.md § Non-author machines route Core difficulties to a channel is the operational beat.
 
@@ -104,9 +104,9 @@ Anthropic prompt caching is **strict-prefix**: any byte change in a file that si
 
 These load into every session's prompt; any mid-session edit invalidates downstream cache:
 
-- `~/.claude/CLAUDE.md`
-- `~/.claude/config.md`
-- `~/.claude/memory-global/MEMORY.md` (auto-imported by `CLAUDE.md`)
+- `~/.claude-agent/CLAUDE.md`
+- `~/.claude-agent/config.md`
+- `~/.claude-agent/memory-global/MEMORY.md` (auto-imported by `CLAUDE.md`)
 - `<project>/.claude/CLAUDE.md` (project)
 - `<project>/.claude/agent-memory/MEMORY.md` (auto-loaded via the per-project memory symlink)
 - This `policy.md` and the `SKILL.md` files in `skills/<name>/` are loaded only when the skill triggers — but skill **catalog** lines (frontmatter `description`) are in every session's system reminder, so edits to frontmatter are prefix-invalidating.
@@ -135,7 +135,7 @@ All agent instructions — prompts in `agents/`, skill prompts in `skills/`, `CL
 ### Not covered by this rule
 
 - **User-facing replies** — same language as the user's request (the language the user writes in). That is output, not stored instruction text. This explicitly includes **technical / design narratives, analyses, and the question + option-label text of every `AskUserQuestion`** — structured or technical content is **not** an exemption.
-- **Plan files** in `~/.claude/plans/<name>.md` — per-session artefacts the user reviews and approves; follow the same-language-as-user rule (they are output, not stored instructions). Plans committed *into* the instructions repo or any `.claude/agent-memory/` still follow English-by-default.
+- **Plan files** in `~/.claude-agent/plans/<name>.md` — per-session artefacts the user reviews and approves; follow the same-language-as-user rule (they are output, not stored instructions). Plans committed *into* the instructions repo or any `.claude/agent-memory/` still follow English-by-default.
 - **Quoted examples** of what the user might say (`"ok"`, `"do it now"`) — keep quotes literal; surrounding prose stays English.
 - **Proper nouns and API identifiers** (Tracker, Arcadia, `arc`, ticket keys, model names) — not "another language".
 
@@ -201,7 +201,7 @@ Any add/move/delete of directory, script, or split:
 
 ## Git sync (instructions repo)
 
-The repo at `~/claude-agent-instructions/` is the single source of truth. Symlinks under `~/.claude/` and `~/.cursor/` point at it.
+The repo at `~/claude-agent-instructions/` is the single source of truth. Symlinks under `~/.claude-agent/` and `~/.cursor/` point at it.
 
 ### Before editing (mandatory)
 

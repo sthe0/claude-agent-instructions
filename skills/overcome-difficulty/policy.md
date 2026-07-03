@@ -4,12 +4,12 @@ Elaboration moved out of `SKILL.md` to keep that trigger surface lean. The skill
 
 ## Invocation
 
-Before spawning, verify the would-be `AGENT_RECURSION_DEPTH` does not exceed `max-recursion-depth` (see `~/.claude/config.md`). If it would, follow § Safeguards § Hard depth cap and do not spawn.
+Before spawning, verify the would-be `AGENT_RECURSION_DEPTH` does not exceed `max-recursion-depth` (see `~/.claude-agent/config.md`). If it would, follow § Safeguards § Hard depth cap and do not spawn.
 
 Choose the budget tier per `CLAUDE.md` § Budget tier — `budget-medium-usd` is the default for overcome-difficulty escapes; use `budget-large-usd` only when the difficulty likely needs deep exploration.
 
 ```bash
-# --max-budget-usd resolves to budget-medium-usd by default (~/.claude/config.md).
+# --max-budget-usd resolves to budget-medium-usd by default (~/.claude-agent/config.md).
 AGENT_RECURSION_DEPTH=$(( ${AGENT_RECURSION_DEPTH:-0} + 1 )) \
 claude -p \
   --max-budget-usd 3.00 \
@@ -34,7 +34,7 @@ What you are asked to do:
 Reply with one of these exact markers on the first non-empty line of your final output:
 - RESOLVED: <one paragraph resolution + concrete next action for the caller>
 - INVESTIGATION: <findings + what you would try next, if you investigated but could not resolve>
-- LOOP_DETECTED: <how this task mirrors an ancestor's task you noticed, if AGENT_RECURSION_DEPTH is at or above loop-sensitivity-depth (see ~/.claude/config.md) and the pattern repeats>"
+- LOOP_DETECTED: <how this task mirrors an ancestor's task you noticed, if AGENT_RECURSION_DEPTH is at or above loop-sensitivity-depth (see ~/.claude-agent/config.md) and the pattern repeats>"
 ```
 
 The env-var line at the top of the bash command increments `AGENT_RECURSION_DEPTH` from the current process's env (default 0 if unset), then exports it to the spawned `claude` process. The same value is embedded as text in the prompt so the spawned model can see its depth directly without reading env.
@@ -53,7 +53,7 @@ If the child hits its budget cap (`--max-budget-usd`) without emitting a marker,
 
 - **Per-level budget** — `--max-budget-usd` (see `CLAUDE.md` § Budget tier — default `budget-medium-usd` for overcome-difficulty spawns) caps API spend at each level. Hitting the cap returns control to the caller.
 - **Visible depth** — `AGENT_RECURSION_DEPTH` is in env and in the prompt; each level knows where it is in the stack.
-- **Loop sensitivity at depth ≥ `loop-sensitivity-depth`** (see `~/.claude/config.md`) — the spawned level must self-check whether its task is a re-framing of an ancestor's task. If yes, return `LOOP_DETECTED:` early rather than recursing further.
+- **Loop sensitivity at depth ≥ `loop-sensitivity-depth`** (see `~/.claude-agent/config.md`) — the spawned level must self-check whether its task is a re-framing of an ancestor's task. If yes, return `LOOP_DETECTED:` early rather than recursing further.
 - **Transcripts persist** — each spawned level leaves a session transcript at `~/.claude/projects/<cwd-hash>/<sid>.jsonl`. Useful for post-mortem if recursion was long.
 
 ## Cursor (use spawn-cursor-escape.py)

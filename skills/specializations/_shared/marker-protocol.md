@@ -14,7 +14,7 @@ You are a specialist running in a fresh manager process: a Claude Code root with
 
 Each role's SKILL.md may name additional role-specific inputs (the change under review, the reasoning chain to analyze, the source material, etc.).
 
-You execute the step. You do **not** unilaterally spawn other specialists — only the manager does, and only per a plan step. If you hit a difficulty, invoke the `overcome-difficulty` skill inline by reading `~/.claude/skills/overcome-difficulty/SKILL.md` and following it. Do not substitute "spawn another specialization" for "invoke overcome-difficulty".
+You execute the step. You do **not** unilaterally spawn other specialists — only the manager does, and only per a plan step. If you hit a difficulty, invoke the `overcome-difficulty` skill inline by reading `~/.claude-agent/skills/overcome-difficulty/SKILL.md` and following it. Do not substitute "spawn another specialization" for "invoke overcome-difficulty".
 
 ## Return markers
 
