@@ -1,0 +1,20 @@
+# scripts/config-root-refs-allowlist.txt
+#
+# Doc-side allowlist for scripts/verify-config-root-refs.py — the legacy
+# `~/.claude` / `$HOME/.claude` reference enumerator over the PROSE surface
+# (everything that is not *.py/*.sh; those are governed separately by
+# scripts/tests/test_config_root.py::_root_offenders).
+#
+# Grammar (one entry per line):
+#   path:line   # reason      repo-relative path + 1-based line number;
+#                              covers ALL occurrences on that line.
+#   glob        # reason      exceptional; matched with fnmatch against the
+#                              repo-relative path. Keep narrow — an
+#                              over-broad glob masks future regressions.
+#
+# A `# reason` is mandatory on every entry. An entry that no longer matches
+# any current occurrence is STALE and fails the check — prune it.
+#
+# Populated during the config-root-tails sweep (Stage 3 categorizes every
+# occurrence; Stage 4 converts the rest to root-generic form). Empty at
+# Stage 2 (skeleton only) — an empty allowlist is valid (zero entries).
