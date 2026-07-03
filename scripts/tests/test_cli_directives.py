@@ -145,7 +145,8 @@ def test_resolve_completed_marker(store, fixtures_dir):
     # experience auto-activates for substantive sessions and gates resolution
     cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="searched"), store=store)
     cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="recorded"), store=store)
-    d = cli.cmd_resolve(ns(session=sid, by="user"), store=store)
+    d = cli.cmd_resolve(ns(session=sid, by="user", quality=5, quality_by="user-confirmed",
+                           quality_note=None), store=store)
     assert d.ok is True
     assert d.node == Node.RESOLVED.value
     assert d.marker == "COMPLETED"
@@ -276,7 +277,8 @@ def test_reset_from_resolved_rearms(store, fixtures_dir):
     # experience auto-activates for substantive sessions and gates resolution
     cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="searched"), store=store)
     cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="recorded"), store=store)
-    cli.cmd_resolve(ns(session=sid, by="user"), store=store)
+    cli.cmd_resolve(ns(session=sid, by="user", quality=5, quality_by="user-confirmed",
+                       quality_note=None), store=store)
     assert store.load(sid).node == Node.RESOLVED.value
     d = cli.cmd_reset(_reset_ns(sid), store=store)
     assert d.ok is True
@@ -510,7 +512,8 @@ def test_resolve_directive_carries_cost(store, fixtures_dir, tmp_path):
     cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="searched"), store=store)
     cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="recorded"), store=store)
 
-    d = cli.cmd_resolve(ns(session=sid, by="user"), store=store)
+    d = cli.cmd_resolve(ns(session=sid, by="user", quality=5, quality_by="user-confirmed",
+                           quality_note=None), store=store)
     assert d.ok is True
     assert "cost" in d.data
     assert d.data["cost"]["total_cost_usd"] == pytest.approx(0.75)
@@ -535,7 +538,8 @@ def test_resolve_without_attributed_cost_has_empty_cost_dict(store, fixtures_dir
     cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="searched"), store=store)
     cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="recorded"), store=store)
 
-    d = cli.cmd_resolve(ns(session=sid, by="user"), store=store)
+    d = cli.cmd_resolve(ns(session=sid, by="user", quality=5, quality_by="user-confirmed",
+                           quality_note=None), store=store)
     assert d.ok is True
     # cost key is present but values are None/zero
     assert "cost" in d.data

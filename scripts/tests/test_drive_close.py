@@ -28,7 +28,8 @@ def _drive_ns(session, **over):
 
 
 def _close_ns(session, **over):
-    base = dict(session=session, status=None, actual="", control=None, confirmed_by=None)
+    base = dict(session=session, status=None, actual="", control=None, confirmed_by=None,
+                quality=None, quality_by=None, quality_note=None)
     base.update(over)
     return Namespace(**base)
 
@@ -150,7 +151,7 @@ def test_close_resolves_when_clean(store, fixtures_dir):
     cli.cmd_close(_close_ns("c3", status="passed", control="reviewed: ok"), store=store)
     cli.cmd_plugin_record(ns(session="c3", plugin="experience", phase="searched", note=None), store=store)
     cli.cmd_plugin_record(ns(session="c3", plugin="experience", phase="recorded", note=None), store=store)
-    d = cli.cmd_close(_close_ns("c3", confirmed_by="Fedor"), store=store)
+    d = cli.cmd_close(_close_ns("c3", confirmed_by="Fedor", quality=4), store=store)
     assert d.node == Node.RESOLVED.value
     assert d.marker == "COMPLETED"
 

@@ -61,7 +61,8 @@ def _full_session_to_resolved(store, sid, plan_path, cost_log_path, tmp_path):
     cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="recorded"), store=store)
 
     # Resolve
-    return cli.cmd_resolve(ns(session=sid, by="user"), store=store)
+    return cli.cmd_resolve(ns(session=sid, by="user", quality=5, quality_by="user-confirmed",
+                              quality_note=None), store=store)
 
 
 def test_resolve_surfaces_plan_total_equal_to_stage_sum(store, fixtures_dir, tmp_path):

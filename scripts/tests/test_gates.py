@@ -101,7 +101,8 @@ def test_resolve_empty_by_is_refused(store, fixtures_dir):
 def test_resolve_nonempty_by_passes(store, fixtures_dir):
     sid = "grp"
     _to_resolution(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
-    d = cli.cmd_resolve(ns(session=sid, by="user"), store=store)
+    d = cli.cmd_resolve(ns(session=sid, by="user", quality=5, quality_by="user-confirmed",
+                           quality_note=None), store=store)
     assert d.ok is True
     assert store.load(sid).node == Node.RESOLVED.value
 

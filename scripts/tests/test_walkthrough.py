@@ -85,7 +85,8 @@ def test_full_substantive_cycle(store, fixtures_dir):
     cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="searched"), store=store)
     cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="recorded"), store=store)
 
-    d = cli.cmd_resolve(ns(session=sid, by="user"), store=store)
+    d = cli.cmd_resolve(ns(session=sid, by="user", quality=5, quality_by="user-confirmed",
+                           quality_note=None), store=store)
     assert d.node == Node.RESOLVED.value
     assert d.marker == "COMPLETED"
 
@@ -140,5 +141,6 @@ def test_small_change_skips_plan_gate(store):
     d = cli.cmd_record_result(ns(session=sid, status="passed", actual="done"), store=store)
     assert d.action == "verify_final"
     cli.cmd_verify_final(ns(session=sid), store=store)
-    d = cli.cmd_resolve(ns(session=sid, by="user"), store=store)
+    d = cli.cmd_resolve(ns(session=sid, by="user", quality=5, quality_by="user-confirmed",
+                           quality_note=None), store=store)
     assert d.node == Node.RESOLVED.value

@@ -122,7 +122,8 @@ def test_walkthrough_logs_one_event_per_gate_evaluation(store, monkeypatch, tmp_
                              note=""), store=store)
     cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="skipped",
                              note="walkthrough fixture, nothing to record"), store=store)
-    cli.cmd_resolve(ns(session=sid, by="Fedor"), store=store)
+    cli.cmd_resolve(ns(session=sid, by="Fedor", quality=5, quality_by="user-confirmed",
+                       quality_note=None), store=store)
 
     rows = _read_gate_log(log_path)
     gates_fired = [r["gate"] for r in rows]

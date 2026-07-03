@@ -59,6 +59,13 @@ from .store import FileStateStore, StateStore
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 VERIFY_PLAN_CLI = REPO_ROOT / "scripts" / "verify-plan-file.py"
 GATE_LOG = config_root.agentctl_gate_log()
+# Per-task quality ledger (quality-regression-tracking): one row per resolved
+# task, stamped with the instructions-repo HEAD so a quality drop can be
+# correlated back to an instruction-commit range. Same fixed-path/append-only
+# idiom as ~/.local/log/claude-spawn-costs.jsonl (spawn-specialist.py).
+TASK_QUALITY_LOG = Path.home() / ".local" / "log" / "claude-task-quality.jsonl"
+_GIT_HEAD_TIMEOUT_S = 5
+_VALID_QUALITY_RATINGS = (1, 2, 3, 4, 5)
 
 
 def _digest(text: str) -> str:
@@ -83,6 +90,33 @@ def _log_gate(state: SessionState, gate: str, blockers: list[str], *, passed: bo
     try:
         GATE_LOG.parent.mkdir(parents=True, exist_ok=True)
         with GATE_LOG.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+def _instructions_head() -> str | None:
+    """Best-effort `git -C REPO_ROOT rev-parse HEAD` -> stripped stdout, or None
+    on any failure (git absent, not a repo, timeout). Never blocks resolution —
+    the ledger row simply carries instructions_head=null."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=_GIT_HEAD_TIMEOUT_S,
+        )
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip() or None
+
+
+def _write_quality_row(row: dict) -> None:
+    """Append one task-quality row to TASK_QUALITY_LOG. Fail-open like _log_gate:
+    an I/O error never blocks the resolve transition that already happened."""
+    try:
+        TASK_QUALITY_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with TASK_QUALITY_LOG.open("a", encoding="utf-8") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
     except OSError:
         pass
@@ -806,6 +840,16 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     blockers = gates.blockers(state, "resolution") + plugins.plugin_gate_blockers(state, "resolution")
     if not args.by or not args.by.strip():
         blockers = blockers + ["empty confirmer: --by must name who confirmed resolution"]
+    quality = getattr(args, "quality", None)
+    if quality is None:
+        blockers = blockers + [
+            "missing --quality: resolve requires a 1-5 rating (agent-proposed from the "
+            "rubric with an eye on this task's in-flight signals, confirmed or adjusted "
+            "by the user inside the same resolution AskUserQuestion — see the "
+            "quality-regression-investigation runbook)"
+        ]
+    elif quality not in _VALID_QUALITY_RATINGS:
+        blockers = blockers + [f"invalid --quality {quality!r}: must be an integer 1-5"]
     _log_gate(state, "resolution", blockers, passed=not blockers)
     if blockers:
         return Directive(False, state.node, "fix_stages", "cannot resolve", data={"blockers": blockers})
@@ -821,10 +865,32 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             "note": state.cost.note,
         }
         state.log("cost", **{k: v for k, v in cost_surface.items() if k != "note"})
-    state.log("resolve", by=args.by)
+    quality_by = getattr(args, "quality_by", None) or "user-confirmed"
+    quality_note = getattr(args, "quality_note", None)
+    state.log("resolve", by=args.by, quality=quality, quality_by=quality_by)
     store.save(state)
+    quality_row = {
+        "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "task_id": state.task_id,
+        "session": state.session_id,
+        "quality": quality,
+        "quality_by": quality_by,
+        "quality_note": quality_note,
+        "resolved_by": args.by,
+        "instructions_head": _instructions_head(),
+        "n_stages": len(state.stages),
+        "n_failed_stage_results": sum(
+            1 for h in state.history
+            if h.get("event") == "record_result" and h.get("status") == "failed"
+        ),
+        "n_replans": sum(1 for h in state.history if h.get("event") == "replan"),
+        "n_difficulty_records": sum(1 for h in state.history if h.get("event") == "declare"),
+        "spawn_count": cost_surface.get("spawn_count", 0),
+        "total_cost_usd": cost_surface.get("total_cost_usd"),
+    }
+    _write_quality_row(quality_row)
     return Directive(True, state.node, "done", "task resolved", marker="COMPLETED",
-                     data={"cost": cost_surface})
+                     data={"cost": cost_surface, "quality": quality_row})
 
 
 # --- overcome-difficulty sub-spine: declare -> investigate -> critique --------
@@ -1363,25 +1429,28 @@ def cmd_close(args, *, store: StateStore, runner: Runner | None = None) -> Direc
     # --- resolution GATE-STOP: probe cmd_resolve (constraints 1 + 3) ---
     if node == Node.RESOLUTION.value:
         confirmer = getattr(args, "confirmed_by", None)
-        rs = argparse.Namespace(session=args.session, by=(confirmer or ""))
+        rs = argparse.Namespace(session=args.session, by=(confirmer or ""),
+                                quality=getattr(args, "quality", None),
+                                quality_by=getattr(args, "quality_by", None),
+                                quality_note=getattr(args, "quality_note", None))
         d = _run_step(cmd_resolve, rs, store=store, runner=runner, trace=trace)
         if d.ok:
             return Directive(True, d.node, d.action, "close: task resolved",
                              marker=d.marker, data={"trace": trace})
-        # blocked: separate the empty-confirmer sentinel from real blockers
+        # blocked: separate the gate-stop sentinels (confirmer + rating, both
+        # supplied by the confirmed re-run itself) from real blockers
         blockers = d.data.get("blockers", [])
-        real = [b for b in blockers if "empty confirmer" not in b]
-        if confirmer and confirmer.strip():
-            return Directive(False, node, "fix_stages",
-                             "close: confirmer given but resolution still blocked",
+        real = [b for b in blockers
+                if "empty confirmer" not in b and "missing --quality" not in b]
+        if real:
+            detail = ("close: confirmer given but resolution still blocked"
+                      if confirmer and confirmer.strip() else "close: resolution blocked")
+            return Directive(False, node, "fix_stages", detail,
                              data={"blockers": real, "trace": trace})
-        if not real:
-            return Directive(True, node, "await_user_confirmation",
-                             "close: ready to resolve — get explicit user confirmation, then "
-                             "re-run close with --confirmed-by <who>",
-                             data={"trace": trace})
-        return Directive(False, node, "fix_stages", "close: resolution blocked",
-                         data={"blockers": real, "trace": trace})
+        return Directive(True, node, "await_user_confirmation",
+                         "close: ready to resolve — get explicit user confirmation, then "
+                         "re-run close with --confirmed-by <who> --quality <1-5>",
+                         data={"trace": trace})
 
     return Directive(True, node, "inspect", f"close: stopped at {node}", data={"trace": trace})
 
@@ -1504,6 +1573,13 @@ def build_parser() -> argparse.ArgumentParser:
                          "(repeatable); the engine verifies a means/method changed on replan")
     sp = add("verify-final"); sp.add_argument("--session", required=True)
     sp = add("resolve"); sp.add_argument("--session", required=True); sp.add_argument("--by", required=True)
+    sp.add_argument("--quality", type=int, choices=list(_VALID_QUALITY_RATINGS), default=None,
+                    help="1-5 rating, agent-proposed and user-confirmed/adjusted in the "
+                         "resolution AskUserQuestion; refused if absent")
+    sp.add_argument("--quality-by", dest="quality_by", default="user-confirmed",
+                    help="'user-confirmed' (default), 'user-adjusted', or 'user-other' "
+                         "(free-text answer)")
+    sp.add_argument("--quality-note", dest="quality_note", default=None)
     sp = add("replan"); sp.add_argument("--session", required=True); sp.add_argument("--plan", required=True)
     sp.add_argument("--coverage-waiver", dest="coverage_waiver", default=None,
                     help="bypass a failing coverage gate with a recorded reason (refused if empty); "
@@ -1545,6 +1621,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--confirmed-by", dest="confirmed_by", default=None,
                     help="human token authorizing the wrapper to cross the resolution "
                          "gate; pass ONLY after explicit user confirmation")
+    sp.add_argument("--quality", type=int, choices=list(_VALID_QUALITY_RATINGS), default=None,
+                    help="1-5 rating threaded to resolve (see resolve --quality)")
+    sp.add_argument("--quality-by", dest="quality_by", default="user-confirmed")
+    sp.add_argument("--quality-note", dest="quality_note", default=None)
 
     sp = add("push-subplan"); sp.add_argument("--session", required=True)
     sp.add_argument("--plan", required=True, help="path to the child service sub-plan TOML")

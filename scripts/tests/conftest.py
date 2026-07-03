@@ -13,6 +13,15 @@ if str(SCRIPTS_DIR) not in sys.path:
 from agentctl.store import FileStateStore  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _isolate_task_quality_ledger(tmp_path, monkeypatch):
+    """The scorecard aggregates the real ledger into degradation flags, so a
+    test resolve must never append to it (unlike GATE_LOG, which is inert
+    telemetry)."""
+    from agentctl import cli
+    monkeypatch.setattr(cli, "TASK_QUALITY_LOG", tmp_path / "task-quality.jsonl")
+
+
 @pytest.fixture
 def store(tmp_path):
     return FileStateStore(tmp_path / "state")

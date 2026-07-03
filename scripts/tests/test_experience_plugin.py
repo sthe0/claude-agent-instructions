@@ -148,7 +148,7 @@ def test_e2e_auto_activates_and_blocks_resolve_until_recorded(capsys, tmp_path, 
     # search + record, then resolve passes
     _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "experience", "--phase", "searched")
     _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "experience", "--phase", "recorded")
-    rc, d = _run(capsys, root, "resolve", "--session", sid, "--by", "user")
+    rc, d = _run(capsys, root, "resolve", "--session", sid, "--by", "user", "--quality", "4")
     assert rc == 0
     assert d["node"] == Node.RESOLVED.value
     assert d["marker"] == "COMPLETED"
@@ -177,7 +177,7 @@ def test_e2e_skip_requires_reason_then_passes(capsys, tmp_path, fixtures_dir):
          "--phase", "skipped", "--note", "below the quality bar")
     raw = json.loads((Path(root) / f"{sid}.json").read_text(encoding="utf-8"))
     assert raw["plugins"]["experience"]["skip_reason"] == "below the quality bar"
-    rc, d = _run(capsys, root, "resolve", "--session", sid, "--by", "user")
+    rc, d = _run(capsys, root, "resolve", "--session", sid, "--by", "user", "--quality", "4")
     assert rc == 0
     assert d["node"] == Node.RESOLVED.value
 

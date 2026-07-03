@@ -206,7 +206,7 @@ def test_cli_main_plugin_gate_blocks_resolve_then_passes(capsys, tmp_path, fixtu
     _run(capsys, root, "plugin-deactivate", "--session", sid, "--plugin", "dummy")
     _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "experience", "--phase", "searched")
     _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "experience", "--phase", "recorded")
-    rc, d = _run(capsys, root, "resolve", "--session", sid, "--by", "user")
+    rc, d = _run(capsys, root, "resolve", "--session", sid, "--by", "user", "--quality", "4")
     assert rc == 0
     assert d["node"] == Node.RESOLVED.value
     assert d["marker"] == "COMPLETED"

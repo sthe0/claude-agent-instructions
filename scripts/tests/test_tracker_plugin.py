@@ -152,7 +152,7 @@ def test_e2e_resolve_blocked_until_published_then_passes_and_retires(capsys, tmp
     # record the two mandatory publications, then resolve passes
     _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker", "--phase", "plan")
     _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker", "--phase", "result")
-    rc, d = _run(capsys, root, "resolve", "--session", sid, "--by", "user")
+    rc, d = _run(capsys, root, "resolve", "--session", sid, "--by", "user", "--quality", "4")
     assert rc == 0
     assert d["node"] == Node.RESOLVED.value
     assert d["marker"] == "COMPLETED"
@@ -168,7 +168,7 @@ def test_e2e_non_tracker_session_has_no_tracker_effect(capsys, tmp_path, fixture
     sid = "tk-none"
     plan = str(fixtures_dir / "plan_two_stage.toml")
     _drive_to_resolution(capsys, root, sid, plan, activate_tracker=False)
-    rc, d = _run(capsys, root, "resolve", "--session", sid, "--by", "user")
+    rc, d = _run(capsys, root, "resolve", "--session", sid, "--by", "user", "--quality", "4")
     assert rc == 0  # no tracker gate -> resolve passes immediately
     assert d["node"] == Node.RESOLVED.value
     assert "plugin_directives" not in d["data"]  # byte-identical to a plugin-less session
