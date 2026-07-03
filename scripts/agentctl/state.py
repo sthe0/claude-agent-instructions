@@ -19,7 +19,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -234,6 +234,42 @@ class Difficulty:
             declaration=Declaration(**decl) if decl else None,
             investigation=Investigation(**inv) if inv else None,
             critique=Critique(**crit) if crit else None,
+        )
+
+
+# --- the plan-review record (thinker-review gate) ----------------------------
+# The deterministic SHELL of the thinker-review gate: the engine records that a
+# thinker reasoning pass reviewed a specific plan VERSION and returned a verdict,
+# and binds that verdict to the exact plan_path so a stale review cannot approve a
+# later plan. The COGNITION (the thinker's actual reasoning, whether the plan is
+# sound) lives in the thinker leaf; the engine only checks the record exists, is
+# bound to the target plan, and carries a passing (or user-overridden) verdict.
+# Recorded by cmd_plan_review; gates cmd_approve and every cmd_replan (see
+# gates.plan_review_blockers). An artifact-EXISTENCE + binding check, never a
+# judgement of the review's quality.
+@dataclass
+class PlanReview:
+    """One thinker review of a plan version. `plan_path` binds the verdict to the
+    exact plan it examined — a review of an earlier plan does not clear the gate for
+    a later one. `verdict` is one of pass / revise / override (an override is the
+    user's explicit deadlock escape, which requires a non-empty `reviewer` and
+    `note`). `concerns` carries the thinker's blocking points for the audit trail."""
+    plan_path: str
+    verdict: str
+    reviewer: str
+    concerns: list[str] = field(default_factory=list)
+    note: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict | None) -> "PlanReview | None":
+        if not d:
+            return None
+        return cls(
+            plan_path=d["plan_path"],
+            verdict=d["verdict"],
+            reviewer=d.get("reviewer", ""),
+            concerns=list(d.get("concerns", [])),
+            note=d.get("note", ""),
         )
 
 
@@ -478,6 +514,12 @@ class SessionState:
     partition: "Partition | None" = None
     permission_request: "PermissionRequest | None" = None
     difficulty: "Difficulty | None" = None
+    # The thinker-review record backing the plan-review gate (schema 12): the last
+    # thinker review + its verdict, bound to the plan version it examined. None until
+    # a review is recorded; legacy pre-schema-12 states load with None (absent key ->
+    # dataclass default via from_dict), so the gate has no observable and — for a
+    # substantive session — blocks approval/replan until a review is recorded.
+    plan_review: "PlanReview | None" = None
     approval: GateRecord = field(default_factory=lambda: GateRecord("plan_approval"))
     resolution: GateRecord = field(default_factory=lambda: GateRecord("resolution"))
     stages: list[Stage] = field(default_factory=list)
@@ -594,6 +636,7 @@ class SessionState:
         pr = data.get("permission_request")
         data["permission_request"] = PermissionRequest(**pr) if pr else None
         data["difficulty"] = Difficulty.from_dict(data.get("difficulty"))
+        data["plan_review"] = PlanReview.from_dict(data.get("plan_review"))
         cost_raw = data.get("cost")
         data["cost"] = CostRollup(**cost_raw) if cost_raw else None
         data["plan_stack"] = [

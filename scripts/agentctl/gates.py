@@ -15,9 +15,19 @@ the guardian before flipping `passed`, so an illegal pass is impossible.
 """
 from __future__ import annotations
 
+import os
+
+from . import advisor
 from .state import Node, SessionState, StageStatus
 from .text_shape import PLACEHOLDER_SET as _PLACEHOLDER_SET
 from .text_shape import normalize_string as _normalize_string
+
+# Verdict vocabulary for the plan-review gate. `pass` clears it; `override` clears
+# it only as the user's explicit deadlock escape (requires reviewer + note);
+# anything else (`revise`, unknown) blocks.
+_PLAN_REVIEW_PASS = "pass"
+_PLAN_REVIEW_OVERRIDE = "override"
+PLAN_REVIEW_VERDICTS = (_PLAN_REVIEW_PASS, "revise", _PLAN_REVIEW_OVERRIDE)
 
 
 def plan_approval_blockers(state: SessionState) -> list[str]:
@@ -94,6 +104,62 @@ def difficulty_blockers(state: SessionState) -> list[str]:
     if shape:
         return ["difficulty record under-specified — replan blocked: " + "; ".join(shape)]
     return []
+
+
+def plan_review_active(state: SessionState) -> bool:
+    """Whether the thinker-review gate applies to this session.
+
+    Scoped to substantive work exactly like the advisor (reusing
+    advisor.resolve_enabled so the two share one activation rule): chat and
+    small-change sessions never pay the review cost. AGENTCTL_PLAN_REVIEW overrides
+    in both directions ("1" forces on, "0" forces off — the analogue of
+    AGENTCTL_ADVISOR); absent the override, resolve_enabled's config-mode +
+    weight-class rule decides. Env-only reads, no file/subprocess I/O, so the gate
+    stays pure."""
+    env = os.environ.get("AGENTCTL_PLAN_REVIEW")
+    if env == "1":
+        return True
+    if env == "0":
+        return False
+    return advisor.resolve_enabled(state.weight_class)
+
+
+def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[str]:
+    """Precondition guardian for `approve` and every `replan`: a thinker review with
+    a passing (or user-overridden) verdict, BOUND to the exact plan version being
+    approved/applied, must have been recorded. This is an INTERNAL command
+    precondition mirroring difficulty_blockers — deliberately absent from GUARDIANS
+    so verify-agentctl requires no new hook to cover it. [] == may pass.
+
+    Inactive (chat / small-change / AGENTCTL_PLAN_REVIEW=0) => [] always: the gate
+    is byte-identical to absent for non-substantive sessions. Active checks:
+      - a review must exist (state.plan_review) — else the gate is unmet;
+      - it must be bound to `target_plan` (pr.plan_path == target_plan) — a review
+        of an earlier plan version is stale and does not clear a later one;
+      - the verdict must be `pass`, or `override` with a non-empty reviewer AND note
+        (the explicit user deadlock escape); `revise`/unknown blocks."""
+    if not plan_review_active(state):
+        return []
+    pr = state.plan_review
+    if pr is None:
+        return ["no thinker review recorded — run: plan-review (thinker verdict required before this plan is approved/applied)"]
+    if not target_plan or pr.plan_path != target_plan:
+        return [
+            "thinker review is stale — it examined "
+            f"{pr.plan_path!r} but the target plan is {target_plan!r}; re-run plan-review on the current plan"
+        ]
+    if pr.verdict == _PLAN_REVIEW_PASS:
+        return []
+    if pr.verdict == _PLAN_REVIEW_OVERRIDE:
+        missing = []
+        if not (pr.reviewer or "").strip():
+            missing.append("reviewer")
+        if not (pr.note or "").strip():
+            missing.append("note")
+        if missing:
+            return ["thinker review override requires a non-empty " + " and ".join(missing) + " (the user's explicit escape reason)"]
+        return []
+    return [f"thinker review verdict is {pr.verdict!r} — plan blocked until a passing review (or an explicit override) is recorded"]
 
 
 def replan_coverage_blockers(old_doc, new_doc, critique) -> list[str]:

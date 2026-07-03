@@ -22,6 +22,25 @@ def _isolate_task_quality_ledger(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "TASK_QUALITY_LOG", tmp_path / "task-quality.jsonl")
 
 
+@pytest.fixture(autouse=True)
+def _plan_review_gate_off_by_default(monkeypatch):
+    """Default the thinker-review gate OFF for the suite at large.
+
+    The gate blocks `approve`/`replan` on every SUBSTANTIVE session until a bound
+    thinker review is recorded (gates.plan_review_blockers). The overwhelming
+    majority of substantive-flow tests exercise unrelated machinery (partition,
+    tracker plugin, cost, dispatch, coverage) and are not about the review gate;
+    coupling them all to it would make a plan-review change cascade failures across
+    a dozen unrelated modules. So we set the documented force-off knob
+    (AGENTCTL_PLAN_REVIEW=0) by default — byte-identical to the gate being absent —
+    exactly as the fixture above isolates the quality ledger.
+
+    The gate's real block/pass/stale/override/scope behaviour is proven end-to-end
+    by test_plan_review_gate.py and the test_spine_walk_* integration tests, which
+    explicitly re-enable it (setenv "1" / a live subprocess env)."""
+    monkeypatch.setenv("AGENTCTL_PLAN_REVIEW", "0")
+
+
 @pytest.fixture
 def store(tmp_path):
     return FileStateStore(tmp_path / "state")

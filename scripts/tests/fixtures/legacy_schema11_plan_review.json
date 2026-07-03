@@ -1,0 +1,51 @@
+{
+  "session_id": "legacy-schema11-fixture",
+  "task_id": "thinker-review-gate",
+  "goal": "",
+  "overall_done_criterion": "",
+  "overall_criterion_type": "measurable",
+  "weight_class": "SUBSTANTIVE",
+  "repo_root": null,
+  "final_check": [],
+  "route": null,
+  "node": "CLASSIFIED",
+  "blocked_from": null,
+  "plan_path": "/home/the0/.claude-agent/plans/thinker-review-gate-APPROVED.md",
+  "plan_verified": true,
+  "partition": null,
+  "permission_request": null,
+  "difficulty": null,
+  "plan_review": {
+    "plan_path": "/home/the0/.claude-agent/plans/thinker-review-gate-APPROVED.md",
+    "verdict": "pass",
+    "reviewer": "thinker-fixplan",
+    "concerns": [],
+    "note": "reviewed prior to approval"
+  },
+  "approval": {
+    "name": "plan_approval",
+    "armed": false,
+    "passed": false,
+    "by": null,
+    "note": null
+  },
+  "resolution": {
+    "name": "resolution",
+    "armed": false,
+    "passed": false,
+    "by": null,
+    "note": null
+  },
+  "stages": [],
+  "current_stage": null,
+  "recursion_depth": 0,
+  "artifacts": [],
+  "history": [],
+  "plugins": {},
+  "plugins_archive": {},
+  "plan_stack": [],
+  "cost": null,
+  "last_user_prompt_ts": null,
+  "plan_submitted_ts": null,
+  "schema_version": 11
+}

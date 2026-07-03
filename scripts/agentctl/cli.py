@@ -49,6 +49,7 @@ from .state import (
     Node,
     PermissionRequest,
     PlanFrame,
+    PlanReview,
     Route,
     SessionState,
     Stage,
@@ -452,9 +453,54 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     return d
 
 
+def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Record a thinker review of a plan version, backing the plan-review gate.
+
+    The COGNITION (the thinker's reasoning) happens in the thinker leaf; this only
+    records its verdict, bound to the plan file it examined (`--target`, defaulting
+    to the session's current plan_path — pass the NEW plan for a replan-time review).
+    Purely a recorder, mirroring declare/investigate/critique: gates.
+    plan_review_blockers enforces bind/verdict at approve/replan, so an incomplete
+    override recorded here simply fails to clear the gate rather than erroring."""
+    state = _require(store, args.session)
+    target = getattr(args, "target", None) or state.plan_path
+    if not target:
+        return Directive(
+            False, state.node, "noop",
+            "no plan to review: submit a plan first, or pass --target <plan.toml>",
+        )
+    state.plan_review = PlanReview(
+        plan_path=target,
+        verdict=args.verdict,
+        reviewer=getattr(args, "reviewer", "") or "",
+        concerns=list(getattr(args, "concerns", None) or []),
+        note=getattr(args, "note", "") or "",
+    )
+    blockers = gates.plan_review_blockers(state, target)
+    _log_gate(state, "plan_review", blockers, passed=not blockers)
+    state.log("plan_review", target=target, verdict=args.verdict,
+              reviewer=state.plan_review.reviewer)
+    store.save(state)
+    if blockers:
+        return Directive(
+            False, state.node, "plan_review",
+            "thinker review recorded but does not clear the gate",
+            data={"blockers": blockers},
+        )
+    return Directive(
+        True, state.node, "continue",
+        f"thinker review recorded for {target} (verdict={args.verdict}); "
+        "the plan-review gate is now satisfied for this plan version",
+    )
+
+
 def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
-    blockers = gates.blockers(state, "plan_approval") + plugins.plugin_gate_blockers(state, "plan_approval")
+    blockers = (
+        gates.blockers(state, "plan_approval")
+        + plugins.plugin_gate_blockers(state, "plan_approval")
+        + gates.plan_review_blockers(state, state.plan_path)
+    )
     if not args.by or not args.by.strip():
         blockers = blockers + ["empty approver: --by must name who approved"]
     _log_gate(state, "plan_approval", blockers, passed=not blockers)
@@ -1096,6 +1142,19 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         return Directive(False, state.node, "declare", "replan blocked by incomplete difficulty record",
                          data={"blockers": dblock})
 
+    # plan-review gate: the corrected plan (args.plan) must carry a thinker review
+    # with a passing/overridden verdict BOUND to it before it may be applied. Gates
+    # EVERY replan kind (refinement and substantive alike, per the user decision),
+    # inactive for non-substantive sessions. A genuine no-op replan (args.plan ==
+    # the already-reviewed plan_path) passes on the existing review.
+    prblock = gates.plan_review_blockers(state, args.plan)
+    _log_gate(state, "plan_review", prblock, passed=not prblock)
+    if prblock:
+        return Directive(False, state.node, "plan_review",
+                         "replan blocked: the corrected plan needs a thinker review "
+                         "(run: plan-review --target " + args.plan + ")",
+                         data={"blockers": prblock})
+
     if not state.plan_path:
         return Directive(False, state.node, "submit_plan", "no current plan to replan against")
     old = _load(state.plan_path)
@@ -1574,6 +1633,7 @@ COMMANDS = {
     "classify": cmd_classify,
     "plan": cmd_plan,
     "submit-plan": cmd_submit_plan,
+    "plan-review": cmd_plan_review,
     "approve": cmd_approve,
     "partition": cmd_partition,
     "partition-units": cmd_partition_units,
@@ -1639,6 +1699,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = add("plan"); sp.add_argument("--session", required=True)
     sp = add("submit-plan"); sp.add_argument("--session", required=True); sp.add_argument("--plan", required=True)
+    sp = add("plan-review"); sp.add_argument("--session", required=True)
+    sp.add_argument("--verdict", choices=list(gates.PLAN_REVIEW_VERDICTS), required=True,
+                    help="pass = clears the gate; revise = blocks; override = user's "
+                         "explicit deadlock escape (requires --reviewer and --note)")
+    sp.add_argument("--reviewer", default="",
+                    help="who performed the review (the user, for an override)")
+    sp.add_argument("--concern", dest="concerns", action="append", default=None,
+                    help="a blocking concern the thinker raised (repeatable; audit trail)")
+    sp.add_argument("--note", default="",
+                    help="override justification, or a free-text note")
+    sp.add_argument("--target", default=None,
+                    help="plan file reviewed (defaults to the session's current plan_path; "
+                         "pass the NEW plan for a replan-time review)")
     sp = add("approve"); sp.add_argument("--session", required=True); sp.add_argument("--by", required=True)
     _UNIT_HELP = ("delivery unit as '<mode>|<stages csv>|<title>[|<ref>]' "
                   "(mode: inline|spawn|subtask); repeatable")

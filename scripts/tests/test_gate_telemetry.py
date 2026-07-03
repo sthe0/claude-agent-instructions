@@ -160,8 +160,12 @@ def test_walkthrough_logs_difficulty_and_replan_coverage_gates(store, monkeypatc
 
     rows = _read_gate_log(log_path)
     gates_fired = [r["gate"] for r in rows]
+    # The completed replan also logs one plan_review evaluation (the thinker-review
+    # gate); here it passes vacuously (gate off by default in the suite), between the
+    # passing difficulty_blockers and the replan_coverage check.
     assert gates_fired == ["plan_approval", "difficulty_blockers",
-                           "difficulty_blockers", "replan_coverage"]
+                           "difficulty_blockers", "plan_review", "replan_coverage"]
     assert rows[1]["passed"] is False  # premature: record incomplete
     assert rows[2]["passed"] is True   # cycle complete
-    assert rows[3]["passed"] is True   # coverage satisfied
+    assert rows[3]["passed"] is True   # plan_review evaluated (vacuous, gate off)
+    assert rows[4]["passed"] is True   # coverage satisfied
