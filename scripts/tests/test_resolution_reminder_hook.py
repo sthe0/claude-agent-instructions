@@ -248,5 +248,92 @@ def test_hints_cite_landing_discipline_leaf():
     """Both delivery nudges name the landing-discipline leaf so the agent can
     load the full rule at the gate (CLAUDE.md keeps only the short pointer)."""
     mod = _load_module()
-    for hint in (mod.BRANCH_HYGIENE_HINT, mod.UNPUSHED_BRANCH_HINT):
+    for hint in (mod.BRANCH_HYGIENE_HINT, mod.UNPUSHED_BRANCH_HINT,
+                 mod.MERGED_LEFTOVER_HINT):
         assert "memory-global/leaves/landing-discipline.md" in hint
+
+
+# --- merged_leftover_hint(): merged-but-undeleted local branches ------------
+
+def _clone_with_tracking(tmp_path: Path) -> Path:
+    """A working clone whose origin/main tracking ref exists (bare origin +
+    one seed commit + clone), returned ready for `merge-base` ancestry tests."""
+    run = lambda *a, cwd: subprocess.run(["git", "-C", str(cwd), *a], check=True,
+                                         capture_output=True)
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)],
+                   check=True, capture_output=True)
+    seed = tmp_path / "seed"
+    subprocess.run(["git", "clone", "-q", str(origin), str(seed)], check=True,
+                   capture_output=True)
+    run("config", "user.email", "t@t.t", cwd=seed)
+    run("config", "user.name", "t", cwd=seed)
+    run("commit", "-q", "--allow-empty", "-m", "seed", cwd=seed)
+    run("push", "-q", "origin", "main", cwd=seed)
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "clone", "-q", str(origin), str(clone)], check=True,
+                   capture_output=True)
+    run("config", "user.email", "t@t.t", cwd=clone)
+    run("config", "user.name", "t", cwd=clone)
+    return clone
+
+
+@pytestmark_git
+def test_merged_leftover_hint_names_merged_branch(tmp_path):
+    """A local branch whose tip is reachable from origin/main (merged) but not
+    deleted is named in the hint."""
+    mod = _load_module()
+    clone = _clone_with_tracking(tmp_path)
+    subprocess.run(["git", "-C", str(clone), "branch", "landed-feature", "main"],
+                   check=True, capture_output=True)
+    hint = mod.merged_leftover_hint(str(clone))
+    assert hint is not None
+    assert "landed-feature" in hint
+    assert "memory-global/leaves/landing-discipline.md" in hint
+
+
+@pytestmark_git
+def test_merged_leftover_hint_silent_when_no_leftovers(tmp_path):
+    """An unmerged branch (a commit ahead of origin/main) is not flagged, and
+    with no leftover branches the hint is None."""
+    mod = _load_module()
+    clone = _clone_with_tracking(tmp_path)
+    subprocess.run(["git", "-C", str(clone), "checkout", "-q", "-b", "ahead"],
+                   check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(clone), "commit", "-q", "--allow-empty",
+                    "-m", "ahead"], check=True, capture_output=True)
+    assert mod.merged_leftover_hint(str(clone)) is None
+
+
+@pytestmark_git
+def test_merged_leftover_hint_excludes_shared_branch_names(tmp_path):
+    """`main` (== origin/main tip, technically an ancestor of itself) and other
+    shared names are never listed."""
+    mod = _load_module()
+    clone = _clone_with_tracking(tmp_path)
+    # main itself is present and reachable from origin/main but must be excluded.
+    assert mod.merged_leftover_hint(str(clone)) is None
+
+
+def test_merged_leftover_hint_silent_on_non_git_dir(tmp_path):
+    mod = _load_module()
+    assert mod.merged_leftover_hint(str(tmp_path / "not-a-repo")) is None
+
+
+@pytestmark_git
+def test_main_emits_merged_leftover_hint_at_open_gate(tmp_path, monkeypatch, capsys):
+    """End to end: at the open resolution gate, a merged leftover branch is
+    surfaced independently of the landable/unpushed nudges."""
+    mod = _load_module()
+    session_id = _arm_gate(mod, monkeypatch, tmp_path)
+    clone = _clone_with_tracking(tmp_path)
+    subprocess.run(["git", "-C", str(clone), "branch", "landed-feature", "main"],
+                   check=True, capture_output=True)
+    # Suppress the other two nudges so we isolate the leftover hint.
+    monkeypatch.setattr(mod, "landable_branch_hint", lambda repo_dir: None)
+    monkeypatch.setattr(mod, "unpushed_branch_hint", lambda repo_dir: None)
+
+    rc, out = _run(monkeypatch, capsys, mod, {"session_id": session_id, "cwd": str(clone)})
+
+    assert rc == 0
+    assert "landed-feature" in out

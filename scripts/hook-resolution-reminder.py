@@ -73,6 +73,15 @@ BRANCH_HYGIENE_HINT = (
     "memory-global/leaves/landing-discipline.md."
 )
 
+MERGED_LEFTOVER_HINT = (
+    "Also — these local branches are already merged into trunk (tips reachable "
+    "from origin/{trunk}) but not deleted: {branches}. Branch deletion is PART "
+    "of landing, not a separate ask (CLAUDE.md § On task resolution): delete "
+    "them via `python3 scripts/land-branch.py` (which deletes by default) or "
+    "raw git (`git branch -D <br>` + `git push origin --delete <br>`). Full "
+    "landing discipline: memory-global/leaves/landing-discipline.md."
+)
+
 UNPUSHED_BRANCH_HINT = (
     "Also — the current working branch has commits not on its remote "
     "(unpushed / ahead of upstream, or no upstream yet). Per CLAUDE.md "
@@ -203,6 +212,36 @@ def unpushed_branch_hint(repo_dir: str) -> str | None:
     return None
 
 
+def merged_leftover_hint(repo_dir: str, trunk: str = "main", remote: str = "origin") -> str | None:
+    """Best-effort MERGED_LEFTOVER_HINT naming local branches whose tips are
+    already reachable from <remote>/<trunk> (i.e. merged/landed) but not yet
+    deleted. Shared/trunk branch names are excluded; caps the list at 5.
+
+    Known limitation: the ancestry test uses the LOCAL <remote>/<trunk>
+    tracking ref, which can be stale without a fetch — a merged branch may be
+    missed until the next fetch. False negatives are acceptable for a
+    best-effort nudge. Any git failure -> None (silent degradation)."""
+    listing = _git(repo_dir, "for-each-ref", "--format=%(refname:short)", "refs/heads")
+    if not listing:
+        return None
+    leftovers = []
+    for branch in listing.splitlines():
+        branch = branch.strip()
+        if not branch or branch == trunk or SHARED_BRANCH_RE.match(branch):
+            continue
+        # merge-base --is-ancestor exits 0 iff the branch tip is reachable from
+        # the trunk tracking ref (merged). _git returns None on any non-zero
+        # exit, so an empty string ("" from a clean exit) marks "is ancestor".
+        anc = _git(repo_dir, "merge-base", "--is-ancestor", branch, f"{remote}/{trunk}")
+        if anc is not None:
+            leftovers.append(branch)
+        if len(leftovers) >= 5:
+            break
+    if not leftovers:
+        return None
+    return MERGED_LEFTOVER_HINT.format(trunk=trunk, branches=", ".join(leftovers))
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -235,6 +274,15 @@ def main() -> int:
                 push_hint = None
             if push_hint:
                 print(push_hint)
+        # Independent of the landable/unpushed nudges: name any already-merged
+        # local branches still hanging around, so deletion (part of landing)
+        # isn't skipped.
+        try:
+            leftover_hint = merged_leftover_hint(repo_dir)
+        except Exception:
+            leftover_hint = None
+        if leftover_hint:
+            print(leftover_hint)
         return 0
 
     prompt = payload.get("prompt") or ""

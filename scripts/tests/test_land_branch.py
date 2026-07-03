@@ -111,9 +111,43 @@ def test_assess_clean_ff_is_landable(tmp_path):
 
     assert a.ok, a.reason
     assert a.branch_sha == sha
+    # Deletion (remote branch, worktree, local branch) is part of landing, so
+    # the default command list carries the cleanup steps after the ff.
     assert a.commands() == [
         "git push origin feature:main",
         "git push origin --delete feature",
+        f"git branch -f main {sha}",
+        "git worktree remove <worktree-on-feature>",
+        "git branch -D feature",
+    ]
+
+
+def test_assess_remote_only_omits_local_trunk_ff(tmp_path):
+    _, clone = make_bare_and_clone(tmp_path)
+    make_feature_branch(clone)
+
+    a = land_branch.assess(clone, "feature", "main", "origin", remote_only=True)
+
+    assert a.ok, a.reason
+    # --remote-only drops ONLY the `git branch -f <trunk>` step; deletion stays.
+    assert a.commands() == [
+        "git push origin feature:main",
+        "git push origin --delete feature",
+        "git worktree remove <worktree-on-feature>",
+        "git branch -D feature",
+    ]
+
+
+def test_assess_keep_branch_omits_all_deletion(tmp_path):
+    _, clone = make_bare_and_clone(tmp_path)
+    sha = make_feature_branch(clone)
+
+    a = land_branch.assess(clone, "feature", "main", "origin", keep_branch=True)
+
+    assert a.ok, a.reason
+    # --keep-branch skips every deletion (remote branch, worktree, local branch).
+    assert a.commands() == [
+        "git push origin feature:main",
         f"git branch -f main {sha}",
     ]
 
@@ -267,3 +301,96 @@ def test_land_never_checks_out_or_resets(tmp_path):
     assert git("rev-parse", "--abbrev-ref", "HEAD", cwd=clone).stdout.strip() == "feature"
     assert git("rev-parse", "HEAD", cwd=clone).stdout.strip() == sha
     assert (clone / "untracked.txt").exists()
+
+
+# ── CLI: cleanup-by-default (delete the landed branch) ─────────────────────
+
+def test_check_remote_only_omits_local_trunk_ff(tmp_path):
+    _, clone = make_bare_and_clone(tmp_path)
+    make_feature_branch(clone)
+    before = snapshot(clone)
+
+    result = run_cli("--check", "--remote-only", "--branch", "feature",
+                     "--trunk", "main", cwd=clone)
+
+    assert result.returncode == 0, result.stderr
+    assert "LANDABLE" in result.stdout
+    assert "git branch -f main" not in result.stdout
+    assert "git branch -D feature" in result.stdout
+    assert snapshot(clone) == before
+
+
+def test_land_deletes_local_branch_when_not_checked_out(tmp_path):
+    """When the landed branch is not checked out anywhere, cleanup deletes the
+    local ref (and the remote branch). --remote-only keeps local trunk (main)
+    checked out here without a refused `git branch -f main`."""
+    origin, clone = make_bare_and_clone(tmp_path)
+    sha = make_feature_branch(clone)
+    git("push", "--quiet", "-u", "origin", "feature", cwd=clone)
+    git("checkout", "--quiet", "main", cwd=clone)
+
+    result = run_cli("--remote-only", "--branch", "feature", "--trunk", "main", cwd=clone)
+
+    assert result.returncode == 0, result.stderr
+    # Local branch deleted.
+    assert git("rev-parse", "--verify", "--quiet", "feature", cwd=clone, check=False).returncode != 0
+    # Remote branch gone; remote trunk advanced.
+    assert "feature" not in git("branch", "-a", cwd=origin).stdout
+    assert git("rev-parse", "refs/heads/main", cwd=origin).stdout.strip() == sha
+
+
+def test_land_removes_clean_linked_worktree_then_deletes_branch(tmp_path):
+    """A clean linked worktree checked out on the landed branch is removed
+    (non-force), after which the local branch is deleted."""
+    origin, clone = make_bare_and_clone(tmp_path)
+    sha = make_feature_branch(clone)
+    git("push", "--quiet", "-u", "origin", "feature", cwd=clone)
+    git("checkout", "--quiet", "main", cwd=clone)
+    wt = tmp_path / "linked-wt"
+    git("worktree", "add", str(wt), "feature", cwd=clone)
+    assert wt.exists()
+
+    result = run_cli("--remote-only", "--branch", "feature", "--trunk", "main", cwd=clone)
+
+    assert result.returncode == 0, result.stderr
+    assert not wt.exists()
+    assert git("rev-parse", "--verify", "--quiet", "feature", cwd=clone, check=False).returncode != 0
+
+
+def test_land_keep_branch_skips_all_deletion(tmp_path):
+    """--keep-branch lands the tip but leaves the remote branch and local
+    branch intact."""
+    origin, clone = make_bare_and_clone(tmp_path)
+    sha = make_feature_branch(clone)
+    git("push", "--quiet", "-u", "origin", "feature", cwd=clone)
+    git("checkout", "--quiet", "main", cwd=clone)
+
+    result = run_cli("--remote-only", "--keep-branch", "--branch", "feature",
+                     "--trunk", "main", cwd=clone)
+
+    assert result.returncode == 0, result.stderr
+    # Local + remote branch survive; trunk still advanced.
+    assert git("rev-parse", "--verify", "--quiet", "feature", cwd=clone).stdout.strip() == sha
+    assert "feature" in git("branch", "-a", cwd=origin).stdout
+    assert git("rev-parse", "refs/heads/main", cwd=origin).stdout.strip() == sha
+
+
+def test_land_skips_local_delete_when_branch_checked_out_here(tmp_path):
+    """Landing from the checked-out feature branch (main-worktree case): the
+    local branch is NOT deleted (git would refuse a checked-out branch); the
+    landing succeeds (exit 0) with a warning, leaving the ref for the
+    resolution-reminder probe to flag."""
+    origin, clone = make_bare_and_clone(tmp_path)
+    sha = make_feature_branch(clone)
+    git("push", "--quiet", "-u", "origin", "feature", cwd=clone)
+
+    result = run_cli("--branch", "feature", "--trunk", "main", cwd=clone)
+
+    assert result.returncode == 0, result.stderr
+    assert "checked out in this repo" in result.stderr
+    # Feature is still checked out and its ref survives.
+    assert git("rev-parse", "--abbrev-ref", "HEAD", cwd=clone).stdout.strip() == "feature"
+    assert git("rev-parse", "--verify", "--quiet", "feature", cwd=clone).stdout.strip() == sha
+    # But the remote branch was still deleted and local trunk advanced.
+    assert "feature" not in git("branch", "-a", cwd=origin).stdout
+    assert git("rev-parse", "main", cwd=clone).stdout.strip() == sha
