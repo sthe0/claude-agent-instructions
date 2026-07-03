@@ -9,18 +9,31 @@ live failures (2026-07-01..02) had the coordinator author a plan, call
 the SAME turn: the plan text never rendered, so the click-question arrived with
 nothing behind it ("Я не вижу плана").
 
-The machine-decidable proxy for "the user has had a turn to read the plan" is
-timestamp ordering: hook-engine-start.py stamps `last_user_prompt_ts` on every
-UserPromptSubmit; cmd_submit_plan stamps `plan_submitted_ts` when the plan is
-submitted. If the session is at node PLAN_READY and the plan was submitted AT OR
-AFTER the start of the current turn (plan_submitted_ts >= last_user_prompt_ts),
-the plan was authored this same turn — the user has not yet had a turn to read
-it, so an AskUserQuestion right now is denied. Once a new prompt arrives (a later
-turn), last_user_prompt_ts advances past plan_submitted_ts and the ask is allowed.
+The primary observable is the session transcript itself: was the plan submitted
+(plan_submitted_ts) before the start of the LATEST turn (transcript_turns.
+latest_turn_start)? A turn boundary is either a real user prompt or a
+`queued_command` attachment entry — the latter is how a background task-
+notification (the timer-split's `sleep 2` completion) opens the next turn
+WITHOUT firing a UserPromptSubmit, so hook-engine-start.py's `last_user_prompt_ts`
+never advances for it. A gate keyed on that stale timestamp alone would deny the
+correct timer-split sequence (plan delivered as the turn's final text, `sleep 2`
+started, next turn opens with the ask) as if it were still the submitting turn.
+The transcript observable fixes that: it sees the queued_command boundary
+directly. `last_user_prompt_ts` remains a fallback for when the transcript is
+unavailable (unreadable file, no boundary found — e.g. compaction dropped it) —
+in that degraded case the original same-turn check applies, which means the
+original false-deny can reappear; that is an accepted residual risk, not a
+fail-open hole (see runtime_check_plan_delivery_gate.py for the fallback tests).
 
-Fails open (allow) whenever the observable is missing: no live session, wrong
-node, or either timestamp absent (legacy state, or a plan submitted before this
-gate existed). Always exits 0 — a hook crash must never wedge the workflow.
+The `time.time()` epoch of plan_submitted_ts and the transcript's ISO timestamps
+are different clocks, compared with a bare `<`. That is acceptable by design:
+the timer split enforces a >=2s gap between plan submission and the next turn's
+boundary, well above any plausible clock skew between the two sources, so no
+epsilon is applied.
+
+Fails open (allow) whenever every observable is missing: no live session, wrong
+node, or (no transcript boundary AND no timestamp pair). Always exits 0 — a hook
+crash must never wedge the workflow.
 
 DENY uses the same PreToolUse permissionDecision JSON contract as hook-state-gate.py.
 """
@@ -32,6 +45,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib import config_root  # noqa: E402
+from lib.transcript_turns import latest_turn_start  # noqa: E402
 
 resolve_state_path = config_root.resolve_agentctl_state_file
 
@@ -57,20 +71,35 @@ def load_gate_fields(path: Path) -> tuple[str | None, float | None, float | None
 
 
 def gate_decision(
-    node: str, plan_submitted_ts: float | None, last_user_prompt_ts: float | None
+    node: str,
+    plan_submitted_ts: float | None,
+    last_user_prompt_ts: float | None,
+    turn_start_ts: float | None = None,
 ) -> tuple[str, str]:
-    """Pure decision. Returns ("allow"|"deny", reason)."""
+    """Pure decision. Returns ("allow"|"deny", reason).
+
+    turn_start_ts (from the transcript) is the primary observable when present:
+    the plan must have been submitted strictly before the latest turn started.
+    When it's unavailable, fall back to the legacy last_user_prompt_ts
+    comparison; when both are unavailable, fail open."""
     if node != GATED_NODE:
         return "allow", ""
-    if plan_submitted_ts is None or last_user_prompt_ts is None:
-        # no observable to compare -> cannot establish "same turn", fail open
+    if plan_submitted_ts is None:
+        # no submission timestamp to compare against -> cannot establish "same turn"
+        return "allow", ""
+    same_turn_reason = (
+        "the plan was submitted this same turn — it cannot have rendered to the "
+        "user yet (pre-tool-call text may never render); deliver the plan as this "
+        "turn's FINAL text message and ask for approval next turn"
+    )
+    if turn_start_ts is not None:
+        if plan_submitted_ts < turn_start_ts:
+            return "allow", ""
+        return "deny", same_turn_reason
+    if last_user_prompt_ts is None:
         return "allow", ""
     if plan_submitted_ts >= last_user_prompt_ts:
-        return "deny", (
-            "the plan was submitted this same turn — it cannot have rendered to the "
-            "user yet (pre-tool-call text may never render); deliver the plan as this "
-            "turn's FINAL text message and ask for approval next turn"
-        )
+        return "deny", same_turn_reason
     return "allow", ""
 
 
@@ -103,7 +132,12 @@ def main() -> int:
         return 0
     node, plan_ts, prompt_ts = fields
 
-    decision, reason = gate_decision(node, plan_ts, prompt_ts)
+    turn_start_ts = None
+    transcript_path = payload.get("transcript_path")
+    if isinstance(transcript_path, str) and transcript_path:
+        turn_start_ts = latest_turn_start(Path(transcript_path))
+
+    decision, reason = gate_decision(node, plan_ts, prompt_ts, turn_start_ts)
     if decision == "deny":
         deny_with(reason)
     return 0

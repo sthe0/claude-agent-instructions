@@ -30,44 +30,13 @@ import json
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.transcript_turns import _content_items, _is_real_user_prompt  # noqa: E402
+
 # Same-turn assistant text above this many chars is substantive: it was written
 # for the user and will be silently dropped by the client, so the ask is denied.
 # At or below it (a short status line) the loss is harmless and the ask proceeds.
 THRESHOLD_CHARS = 200
-
-
-def _content_items(message: dict) -> list:
-    content = message.get("content")
-    if isinstance(content, str):
-        return [{"type": "text", "text": content}]
-    if isinstance(content, list):
-        return content
-    return []
-
-
-def _is_real_user_prompt(entry: dict) -> bool:
-    """A turn boundary: an entry that opens a new turn. Two shapes exist in real
-    transcripts: (a) a user entry carrying actual text (a typed prompt, an
-    interjection) — not a bare tool_result batch; (b) an injected queued prompt —
-    an `attachment` entry with attachment.type == "queued_command" (how a
-    background task-notification opens the next turn; verified live 2026-07-03:
-    the notification is NOT a user-typed entry, and the mid-turn `queue-operation`
-    enqueue record is not the boundary — the queued_command injection is)."""
-    etype = entry.get("type")
-    if etype == "attachment":
-        att = entry.get("attachment")
-        return isinstance(att, dict) and att.get("type") == "queued_command"
-    if etype != "user":
-        return False
-    if entry.get("isMeta"):
-        return False
-    message = entry.get("message")
-    if not isinstance(message, dict):
-        return False
-    return any(
-        isinstance(item, dict) and item.get("type") == "text" and item.get("text")
-        for item in _content_items(message)
-    )
 
 
 def _assistant_text_len(entry: dict) -> int:
