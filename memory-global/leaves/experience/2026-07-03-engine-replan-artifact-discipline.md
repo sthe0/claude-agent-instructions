@@ -26,6 +26,16 @@ When correcting a plan under agentctl: author every revision at a NEW version-su
 - Where it arose: instruction-offload task, session 759b0d4b, agentctl engine v. current at commits 8bb18b6..801ac90; agentctl/cli.py cmd_replan (old = _load(state.plan_path)) and cmd_dispatch
 - Working plan: 1. Reproduce: stage 1 re-fail after in-place edit + replan no_change. 2. Read cmd_replan: old loaded from state.plan_path at call time — no stored snapshot. 3. Restore the baseline content at the old path, write the correction to /tmp/instruction-offload-v3.toml, replan → refinement applied, stage re-armed and passed. 4. Re-record stages 2-3 against durable checks. 5. Double-spawn: sibling developer discovered by the manual spawn, which stood down; let the dispatch-spawned one finish and land (801ac90).
 
+
+### 2026-07-03 — unknown executor token silently falls through to in-thread
+- Where it arose: si-mechanize-gates stage 1 dispatch, session 759b0d4b, 2026-07-03
+- Working plan: Plan TOML stage had executor = "developer" (bare specialization name); agentctl/plan.py:23 recognizes only "in_thread" and "spawn:<kind>", and an unknown token silently resolves to in-thread — dispatch answered 'stage 1 is in-thread; no spawn' with no warning, contradicting the approved plan's intent. Correction cost a full difficulty cycle (record-result failed -> declare/investigate/critique -> substantive replan v2 at a NEW path -> user re-approval), because changing the executor is a substantive plan change. Rule: author executor tokens as the exact typed values; structural fix queued for backlog — plan.py should REJECT an unknown executor token at load (validation, not fallthrough).
+
+## Common core & variations
+**Common:** engine consumes plan fields literally; a value outside the typed vocabulary must fail loudly at load, not degrade silently at dispatch
+
+**Variations:** prior contexts: replan self-diff / stage reset / double-spawn; this one: executor vocabulary fallthrough
+
 ## Cost
 Wall-clock ~1.5h across the recovery; $4.5 attributed to stage 5 dispatch spawn + ~$1.9 wasted on the duplicate manual spawn; 2 extra difficulty cycles
 

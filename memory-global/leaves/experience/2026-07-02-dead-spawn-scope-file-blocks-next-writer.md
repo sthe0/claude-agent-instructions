@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "Fedor (2026-07-02: 'да на все три вопроса')"
 refs: [scripts/hook-scope-conflict.py, docs/operations/cross-session-scope-isolation.md]
 created: 2026-07-02
-last_verified: 2026-07-02
+last_verified: 2026-07-03
 ---
 
 # Ghost scope: a dead spawn session's scope file blocks the next writer for the full heartbeat TTL
@@ -31,6 +31,10 @@ Execute plan agentctl-gate-quality stage-by-stage via dispatched developer spawn
 - Where it arose: ~/claude-agent-instructions commits c743452 + b1413a3; plan ~/.claude/plans/ghost-scope-fix.toml; docs/operations/cross-session-scope-isolation.md § Liveness
 - Working plan: Resolved structurally, three liveness layers: (1) spawn-specialist deregisters the child's scope in the same finally as kill_tree (all exit paths; child id from result-JSON session_id else transcript stem; failures stderr-logged, never alter marker/rc); (2) hook-scope-conflict narrows heartbeat freshness with an os.kill(pid,0) probe (EPERM=alive) — hook-scope-track records the durable session pid once per session via an age-based ancestor walk (first ancestor measurably older than the per-call hook process; verified on a real hook invocation), no-pid records keep heartbeat-only semantics so a false verdict only degrades to old behavior; (3) LIVE_TTL_S demoted to backstop. Sub-difficulty during the fix: [[2026-07-02-spawn-sandbox-excludes-declared-stage-material]] — stage-2 spawn died on budget ($3.23) burning 13 permission denials on plan material outside its scripts/ sandbox; manager salvaged the delivered code, wrote the doc section, verified (147 scope/spawn + 1149 full).
 
+
+### 2026-07-03 — live parent scope blocks its own spawned specialists (lineage blindness)
+- Where it arose: si-mechanize-gates stage 3, session 759b0d4b, 2026-07-03
+- Working plan: Inverse direction of the same registry gap: not a DEAD child's ghost scope, but the LIVE parent's own scope. After the manager merged the stage-2 branch in-thread, hook-scope-track put scripts/install-reminder-hooks.sh into the manager session's touched_paths; every subsequently dispatched developer (fresh session id, no lineage link) was denied Edit on that file by hook-scope-conflict and burned its full $3 budget — twice ($6 total, both died error_max_budget_usd with the work committed but the marker unsent). The registry keys scopes by bare CLAUDE_SESSION_ID with no parent-child lineage, so the coordinator blocks its own specialists on exactly the files the plan tells them to edit. Workaround used: complete the conflicting stage in-thread. Structural fix queued for backlog: spawn-specialist passes parent session id; hook-scope-conflict exempts a writer whose scope chain includes the holder.
 ## Common core & variations
 **Common:** Dead-session scope files no longer require manual rm before dispatch: deregistration covers supervised exits, the pid probe covers unsupervised deaths within the same heartbeat window
 
