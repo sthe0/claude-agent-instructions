@@ -83,6 +83,7 @@ EVENT_FOR_COMMAND: dict[str, str] = {
     "submit-plan": "submit_plan",
     "approve": "approve",
     "partition": "partition",
+    "partition-units": "partition_units",
     "next-stage": "next_stage",
     "dispatch": "dispatch",
     "record-result": "record_result",

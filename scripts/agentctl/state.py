@@ -19,7 +19,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -99,6 +99,33 @@ class GateRecord:
         return self.armed and not self.passed
 
 
+# Execution modes a delivery unit may take (org-neutral — NO tracker vocabulary):
+#   inline  — delivered in the root session
+#   spawn   — a specialist process WITHIN the root task (same tracking unit)
+#   subtask — a SEPARATE task/session with an INHERITED plan slice (own tracking);
+#             its per-environment materialization (tracker subticket, child session,
+#             …) is an observer's job, not the core's.
+PARTITION_UNIT_MODES = ("inline", "spawn", "subtask")
+
+
+@dataclass
+class PartitionUnit:
+    """One delivery unit: a GROUP OF STAGES of the already-approved plan, routed to
+    an execution context + tracking mode. The planner defines the stages (work
+    structure); partition only GROUPS approved stages and ROUTES each group, so the
+    boundary with decomposition stays sharp.
+
+    `stages` are the approved-plan stage indices this unit delivers; `mode` is one of
+    PARTITION_UNIT_MODES; `ref` is the org-neutral reference the environment's
+    materialization assigns (tracker key, issue URL, child session id) — None until
+    materialized. No tracker vocabulary lives here: 'subtask' is the generic
+    separate-task mode, materialized per environment by a plugin observer."""
+    title: str
+    stages: list[int] = field(default_factory=list)
+    mode: str = "inline"
+    ref: str | None = None
+
+
 @dataclass
 class Partition:
     """The M1–M4 partition assessment recorded between APPROVED and EXECUTING
@@ -111,6 +138,22 @@ class Partition:
     m3_severe: bool = False
     m4_severe: bool = False
     verdict: str = ""
+    # Per-unit delivery routing (optional): each unit groups a set of approved-plan
+    # stage indices and records HOW that group executes (inline | spawn | subtask).
+    # Empty by default — sessions that never record units serialize and render
+    # byte-identically to before. Recorded via `partition` / `partition-units`;
+    # validated against the loaded plan by the CLI (existing indices, disjoint sets).
+    units: list["PartitionUnit"] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Partition":
+        """Rebuild a Partition from its JSON dict, reconstructing nested `units` as
+        typed PartitionUnit objects rather than raw dicts. An absent 'units' key
+        (legacy/pre-units state) yields [] via the dataclass default, so old
+        state.json loads byte-compatibly."""
+        d = dict(d)
+        units = [PartitionUnit(**u) for u in d.pop("units", [])]
+        return cls(**d, units=units)
 
 
 @dataclass
@@ -547,7 +590,7 @@ class SessionState:
         data["final_check"] = [FinalCheck(**fc) for fc in data.get("final_check", [])]
         data["stages"] = [Stage.from_dict(s) for s in data.get("stages", [])]
         decomp = data.get("partition")
-        data["partition"] = Partition(**decomp) if decomp else None
+        data["partition"] = Partition.from_dict(decomp) if decomp else None
         pr = data.get("permission_request")
         data["permission_request"] = PermissionRequest(**pr) if pr else None
         data["difficulty"] = Difficulty.from_dict(data.get("difficulty"))
@@ -565,7 +608,7 @@ class SessionState:
                 route=f.get("route"),
                 repo_root=f.get("repo_root"),
                 final_check=[FinalCheck(**fc) for fc in f.get("final_check", [])],
-                partition=Partition(**f["partition"]) if f.get("partition") else None,
+                partition=Partition.from_dict(f["partition"]) if f.get("partition") else None,
                 approval=GateRecord(**f["approval"]),
                 resolution=GateRecord(**f["resolution"]),
                 stages=[Stage.from_dict(s) for s in f.get("stages", [])],

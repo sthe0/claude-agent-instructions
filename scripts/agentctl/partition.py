@@ -52,6 +52,55 @@ def _yn(b: bool) -> str:
     return "yes" if b else "no"
 
 
+def unit_delivery_order(units, stage_depends: dict[int, list[int]]) -> list[list[int]]:
+    """Derive the inter-unit delivery ORDER from cross-unit stage dependencies.
+
+    A partition unit groups approved-plan stages. When a stage in one unit
+    `depends_on` a stage owned by ANOTHER unit, that dependency imposes a delivery
+    order — the dependent unit is not independently shippable, it must land AFTER
+    the unit it draws from. This is order, NOT rejection (cross-unit edges are
+    allowed by design).
+
+    `units` is a sequence of objects exposing a `.stages` list of stage indices;
+    `stage_depends` maps each stage index to the stage indices it depends on.
+    Returns a list parallel to `units`: for each unit, the sorted 1-based unit
+    numbers it must be delivered after."""
+    owner: dict[int, int] = {}
+    for pos, u in enumerate(units, start=1):
+        for s in u.stages:
+            owner[s] = pos
+    order: list[list[int]] = []
+    for pos, u in enumerate(units, start=1):
+        afters: set[int] = set()
+        for s in u.stages:
+            for dep in stage_depends.get(s, []):
+                dep_owner = owner.get(dep)
+                if dep_owner is not None and dep_owner != pos:
+                    afters.add(dep_owner)
+        order.append(sorted(afters))
+    return order
+
+
+def render_units(units, stage_depends: dict[int, list[int]] | None = None) -> str:
+    """Render the `Units:` block: one numbered line per delivery unit, its mode,
+    title, grouped stages, optional materialization ref, and derived delivery order
+    ('after unit N') so a dependent unit is never presented as independently
+    shippable. Empty string when there are no units."""
+    if not units:
+        return ""
+    order = unit_delivery_order(units, stage_depends or {})
+    lines = ["Units:"]
+    for pos, (u, afters) in enumerate(zip(units, order), start=1):
+        stages_csv = ", ".join(str(s) for s in u.stages)
+        suffix = ""
+        if u.ref:
+            suffix += f" ref={u.ref}"
+        if afters:
+            suffix += " after unit " + ", ".join(str(a) for a in afters)
+        lines.append(f"  {pos}. [{u.mode}] {u.title} (stages: {stages_csv}){suffix}")
+    return "\n".join(lines)
+
+
 def render_section(
     m1: bool,
     m2: bool,
@@ -60,9 +109,12 @@ def render_section(
     m3_severe: bool = False,
     m4_severe: bool = False,
     verdict_value: str | None = None,
+    units=None,
+    stage_depends: dict[int, list[int]] | None = None,
 ) -> str:
     """Render the deterministic `## Partition` skeleton; the LLM fills sub-PR
-    specifics during cognition."""
+    specifics during cognition. When `units` are recorded, append the `Units:`
+    block; with no units the output is byte-identical to before."""
     v = verdict_value or verdict(m1, m2, m3, m4, m3_severe, m4_severe)
     lines = [
         "## Partition",
@@ -77,4 +129,7 @@ def render_section(
         ),
         _GUIDANCE[v],
     ]
+    units_block = render_units(units, stage_depends) if units else ""
+    if units_block:
+        lines.extend(["", units_block])
     return "\n".join(lines)

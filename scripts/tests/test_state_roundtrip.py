@@ -10,6 +10,9 @@ from agentctl.state import (
     Means,
     Node,
     Outcome,
+    Partition,
+    PartitionUnit,
+    PlanFrame,
     Route,
     SessionState,
     Stage,
@@ -247,6 +250,85 @@ def test_json_roundtrip_preserves_cost_fields():
     assert back.stage(1).outcome.spawn_count == 1
     assert back.cost.total_cost_usd == 1.23
     assert back.cost.attributed_stages == 1
+
+
+def test_json_roundtrip_preserves_partition_units():
+    """Partition.units round-trip through to_json / from_json as typed
+    PartitionUnit objects (not raw dicts), via Partition.from_dict."""
+    s = SessionState(
+        session_id="pu-rt",
+        task_id="task",
+        weight_class=WeightClass.SUBSTANTIVE.value,
+        route=Route.SPAWN.value,
+        node=Node.APPROVED.value,
+        approval=GateRecord("plan_approval", armed=True, passed=True),
+        stages=[_stage(1), _stage(2, supplies=[Supply(on=1)])],
+        partition=Partition(
+            m1=True, m2=True, verdict="recommended",
+            units=[
+                PartitionUnit(title="core", stages=[1], mode="inline"),
+                PartitionUnit(title="tests", stages=[2], mode="subtask", ref="ABC-42"),
+            ],
+        ),
+    )
+    back = SessionState.from_json(s.to_json())
+    assert back == s
+    assert all(isinstance(u, PartitionUnit) for u in back.partition.units)
+    assert back.partition.units[1].mode == "subtask"
+    assert back.partition.units[1].ref == "ABC-42"
+
+
+def test_legacy_partition_without_units_loads_with_default():
+    """A pre-units partition dict (no 'units' key) loads with [] via
+    Partition.from_dict, so old state.json remains loadable."""
+    import json
+    s = SessionState(
+        session_id="s", task_id="t",
+        node=Node.APPROVED.value,
+        approval=GateRecord("plan_approval", armed=True, passed=True),
+        partition=Partition(m1=True, verdict="possible"),
+    )
+    raw = json.loads(s.to_json())
+    raw["partition"].pop("units", None)  # simulate a pre-units state
+    loaded = SessionState.from_dict(raw)
+    assert loaded.partition.units == []
+
+
+def test_plan_stack_frame_preserves_partition_units():
+    """A PlanFrame on plan_stack carrying a partition with units round-trips its
+    units as typed PartitionUnit objects (the second Partition.from_dict site)."""
+    frame = PlanFrame(
+        plan_path="/tmp/parent.toml",
+        node=Node.EXECUTING.value,
+        task_id="parent",
+        goal="g",
+        overall_done_criterion="c",
+        overall_criterion_type="measurable",
+        weight_class=WeightClass.SUBSTANTIVE.value,
+        route=Route.SPAWN.value,
+        repo_root=None,
+        final_check=[],
+        partition=Partition(
+            m1=True, verdict="recommended",
+            units=[PartitionUnit(title="u1", stages=[1], mode="spawn", ref="child-sess")],
+        ),
+        approval=GateRecord("plan_approval", armed=True, passed=True),
+        resolution=GateRecord("resolution"),
+        stages=[_stage(1)],
+        current_stage=1,
+        originating_stage=1,
+    )
+    s = SessionState(
+        session_id="ps-rt", task_id="t",
+        weight_class=WeightClass.SUBSTANTIVE.value, route=Route.SPAWN.value,
+        plan_stack=[frame],
+    )
+    back = SessionState.from_json(s.to_json())
+    assert back == s
+    restored = back.plan_stack[0].partition
+    assert all(isinstance(u, PartitionUnit) for u in restored.units)
+    assert restored.units[0].mode == "spawn"
+    assert restored.units[0].ref == "child-sess"
 
 
 def test_legacy_state_without_cost_fields_loads_with_defaults():

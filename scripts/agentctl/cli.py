@@ -25,7 +25,7 @@ from lib import config_root
 from . import advisor, continuations, cost, gates, permissions, plugins
 from .classify import Signals, classify
 from .config import Thresholds
-from .partition import render_section, verdict
+from .partition import render_section, render_units, verdict
 from .directive import Directive
 from .dispatch import Runner, dispatch_stage, parse_marker, subprocess_runner
 from .machine import transition
@@ -42,6 +42,8 @@ from .state import (
     FinalCheck,
     Investigation,
     Partition,
+    PartitionUnit,
+    PARTITION_UNIT_MODES,
     GateRecord,
     Means,
     Node,
@@ -468,12 +470,75 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     )
 
 
+def _parse_partition_units(
+    raw_units: list[str], known_indices: set[int]
+) -> tuple[list[PartitionUnit], list[str]]:
+    """Parse repeatable ``--unit '<mode>|<stages csv>|<title>[|<ref>]'`` specs into
+    typed PartitionUnit objects, validating against the loaded plan. Returns
+    ``(units, errors)`` — a non-empty ``errors`` list means the caller must reject
+    with a failing Directive and record nothing.
+
+    Validation: mode ∈ PARTITION_UNIT_MODES; a non-empty title; ≥1 integer stage
+    index; every stage index exists in ``known_indices``; stage sets pairwise
+    disjoint across units (a stage belongs to at most one delivery unit — stages
+    left uncovered stay on the default single-PR path). ``ref`` is optional and
+    org-neutral (tracker key / issue URL / child session id, assigned at
+    materialization)."""
+    units: list[PartitionUnit] = []
+    errors: list[str] = []
+    seen_stages: dict[int, int] = {}  # stage index -> owning unit (1-based)
+    for pos, spec in enumerate(raw_units, start=1):
+        parts = spec.split("|")
+        if len(parts) < 3:
+            errors.append(
+                f"unit {pos}: expected '<mode>|<stages csv>|<title>[|<ref>]', got {spec!r}"
+            )
+            continue
+        mode = parts[0].strip()
+        stages_field = parts[1].strip()
+        title = parts[2].strip()
+        ref = parts[3].strip() if len(parts) >= 4 and parts[3].strip() else None
+        if mode not in PARTITION_UNIT_MODES:
+            errors.append(
+                f"unit {pos}: unknown mode {mode!r} (expected one of {', '.join(PARTITION_UNIT_MODES)})"
+            )
+        if not title:
+            errors.append(f"unit {pos}: empty title")
+        stages: list[int] = []
+        for tok in [t.strip() for t in stages_field.split(",") if t.strip()]:
+            try:
+                stages.append(int(tok))
+            except ValueError:
+                errors.append(f"unit {pos}: non-integer stage index {tok!r}")
+        if not stages:
+            errors.append(f"unit {pos}: no stage indices given")
+        for s in stages:
+            if s not in known_indices:
+                errors.append(f"unit {pos}: stage index {s} does not exist in the plan")
+            elif s in seen_stages:
+                errors.append(
+                    f"unit {pos}: stage index {s} already assigned to unit {seen_stages[s]} "
+                    "(units must be disjoint)"
+                )
+            else:
+                seen_stages[s] = pos
+        units.append(PartitionUnit(title=title, stages=stages, mode=mode, ref=ref))
+    return units, errors
+
+
 def cmd_partition(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     if state.node != Node.APPROVED.value:
         return Directive(
             False, state.node, "noop",
             f"partition runs after approval, before execution; node={state.node} is not APPROVED",
+        )
+    known = {s.index for s in state.stages}
+    units, unit_errors = _parse_partition_units(getattr(args, "unit", None) or [], known)
+    if unit_errors:
+        return Directive(
+            False, state.node, "fix_units",
+            "invalid partition units — nothing recorded", data={"errors": unit_errors},
         )
     m1 = bool(getattr(args, "m1", False))
     m2 = bool(getattr(args, "m2", False))
@@ -483,11 +548,14 @@ def cmd_partition(args, *, store: StateStore, runner: Runner | None = None) -> D
     m4_severe = bool(getattr(args, "m4_severe", False))
     v = verdict(m1, m2, m3, m4, m3_severe, m4_severe)
     state.partition = Partition(
-        m1=m1, m2=m2, m3=m3, m4=m4, m3_severe=m3_severe, m4_severe=m4_severe, verdict=v
+        m1=m1, m2=m2, m3=m3, m4=m4, m3_severe=m3_severe, m4_severe=m4_severe,
+        verdict=v, units=units,
     )
-    section = render_section(m1, m2, m3, m4, m3_severe, m4_severe, v)
+    stage_depends = {s.index: s.depends_on for s in state.stages}
+    section = render_section(m1, m2, m3, m4, m3_severe, m4_severe, v,
+                            units=units, stage_depends=stage_depends)
     state.node = transition(state.node, "partition")
-    state.log("partition", verdict=v, m1=m1, m2=m2, m3=m3, m4=m4)
+    state.log("partition", verdict=v, m1=m1, m2=m2, m3=m3, m4=m4, units=len(units))
     store.save(state)
     action = "surface_partition" if v in ("recommended", "possible") else "next_stage"
     detail = (
@@ -498,6 +566,48 @@ def cmd_partition(args, *, store: StateStore, runner: Runner | None = None) -> D
     return Directive(
         True, state.node, action, detail,
         data={"verdict": v, "section": section},
+    )
+
+
+def cmd_partition_units(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Record (or re-record) the per-unit delivery routing AFTER the verdict is
+    surfaced — the user's structure decision (subtickets vs several PRs vs one)
+    arrives once they have seen the M1–M4 verdict. Allowed only at PARTITIONED (just
+    after `partition`) or EXECUTING (mid-flight structure change); replaces the whole
+    units list with the parsed `--unit` specs and leaves the verdict + node
+    untouched.
+
+    Re-recording at EXECUTING replaces the list WITHOUT validating against
+    already-PASSED stages — a documented limitation, not a check."""
+    state = _require(store, args.session)
+    if state.node not in (Node.PARTITIONED.value, Node.EXECUTING.value):
+        return Directive(
+            False, state.node, "noop",
+            "partition-units runs after the partition verdict is surfaced; "
+            f"node={state.node} is neither PARTITIONED nor EXECUTING",
+        )
+    if state.partition is None:
+        return Directive(
+            False, state.node, "partition",
+            "no partition assessment recorded yet — run `partition` first",
+        )
+    known = {s.index for s in state.stages}
+    units, unit_errors = _parse_partition_units(getattr(args, "unit", None) or [], known)
+    if unit_errors:
+        return Directive(
+            False, state.node, "fix_units",
+            "invalid partition units — the recorded list is unchanged",
+            data={"errors": unit_errors},
+        )
+    state.partition.units = units
+    stage_depends = {s.index: s.depends_on for s in state.stages}
+    block = render_units(units, stage_depends)
+    state.log("partition_units", units=len(units))
+    store.save(state)
+    return Directive(
+        True, state.node, "continue",
+        f"recorded {len(units)} delivery unit(s)",
+        data={"units_block": block},
     )
 
 
@@ -1466,6 +1576,7 @@ COMMANDS = {
     "submit-plan": cmd_submit_plan,
     "approve": cmd_approve,
     "partition": cmd_partition,
+    "partition-units": cmd_partition_units,
     "next-stage": cmd_next_stage,
     "dispatch": cmd_dispatch,
     "resolve-permission": cmd_resolve_permission,
@@ -1529,11 +1640,16 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("plan"); sp.add_argument("--session", required=True)
     sp = add("submit-plan"); sp.add_argument("--session", required=True); sp.add_argument("--plan", required=True)
     sp = add("approve"); sp.add_argument("--session", required=True); sp.add_argument("--by", required=True)
+    _UNIT_HELP = ("delivery unit as '<mode>|<stages csv>|<title>[|<ref>]' "
+                  "(mode: inline|spawn|subtask); repeatable")
     sp = add("partition"); sp.add_argument("--session", required=True)
     sp.add_argument("--m1", action="store_true"); sp.add_argument("--m2", action="store_true")
     sp.add_argument("--m3", action="store_true"); sp.add_argument("--m4", action="store_true")
     sp.add_argument("--m3-severe", dest="m3_severe", action="store_true")
     sp.add_argument("--m4-severe", dest="m4_severe", action="store_true")
+    sp.add_argument("--unit", dest="unit", action="append", default=None, help=_UNIT_HELP)
+    sp = add("partition-units"); sp.add_argument("--session", required=True)
+    sp.add_argument("--unit", dest="unit", action="append", default=None, help=_UNIT_HELP)
     sp = add("next-stage"); sp.add_argument("--session", required=True)
     sp = add("dispatch"); sp.add_argument("--session", required=True)
     sp.add_argument("--budget", default="medium"); sp.add_argument("--complexity", default="medium")
