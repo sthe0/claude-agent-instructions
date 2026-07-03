@@ -4,7 +4,7 @@ Persistent `always`-scope permissions the user has granted for agent specialists
 Consulted by the manager before spawning a specialist; an action that matches
 an entry is treated as already granted (no re-ask).
 
-Not the same as Claude Code's tool-call permissions in `~/.claude/settings.json`
+Not the same as Claude Code's tool-call permissions in `~/.claude-agent/settings.json`
 — those gate individual tool calls at the harness level. This directory records
 **higher-level workflow actions** ("you may push to shared branches", "you may
 deploy to staging", etc.).

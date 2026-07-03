@@ -55,7 +55,7 @@ Each node is a phase in the task lifecycle (`Node` in `state.py`). The *route* p
 
 ### Sub-plan stack
 
-When a stage's unmet element requires a full substantive plan to supply it, the engine nests a **service sub-plan** via `push-subplan` / `pop-subplan`. On `push-subplan` a `PlanFrame` snapshot of the current parent context (plan path, node, stages, gates, repo root, `final_check`, `partition`, `originating_stage`) is pushed onto `state.plan_stack`; the child starts a fresh `CLASSIFIED → … → RESOLVED` cycle. On `pop-subplan` the parent frame is restored and the originating stage is marked `PASSED`. **No auto-pop across an unresolved child** — `pop-subplan`'s source node is `RESOLVED`, which already requires `resolution.passed`, so the guarantee is structural (machine transition table), not an extra check. Stack depth is bounded by `_MAX_PLAN_STACK` (mirrors `max-recursion-depth` from `~/.claude/config.md`).
+When a stage's unmet element requires a full substantive plan to supply it, the engine nests a **service sub-plan** via `push-subplan` / `pop-subplan`. On `push-subplan` a `PlanFrame` snapshot of the current parent context (plan path, node, stages, gates, repo root, `final_check`, `partition`, `originating_stage`) is pushed onto `state.plan_stack`; the child starts a fresh `CLASSIFIED → … → RESOLVED` cycle. On `pop-subplan` the parent frame is restored and the originating stage is marked `PASSED`. **No auto-pop across an unresolved child** — `pop-subplan`'s source node is `RESOLVED`, which already requires `resolution.passed`, so the guarantee is structural (machine transition table), not an extra check. Stack depth is bounded by `_MAX_PLAN_STACK` (mirrors `max-recursion-depth` from `~/.claude-agent/config.md`).
 
 ## Commands
 
@@ -151,7 +151,7 @@ A third plugin, **`experience`** ([`plugins_experience.py`](plugins_experience.p
 
 **Plugins vs hooks — two determinization surfaces.** A *plugin* hangs off the coordination spine: it fires on engine commands and folds gate blockers, so it fits obligations that live *on* the task lifecycle (publish-on-resolve, record-on-resolve). Obligations that fire *off* the spine — at tool-write time or prompt time — are **hooks** instead, because there is no coordination command to observe. Two ship for memory work, both **non-blocking** (exit 0 always, preserving memory's gate-exempt status):
 
-- [`hook-memory-consistency.py`](../hook-memory-consistency.py) (`PreToolUse` Write/Edit) classifies the target as a memory leaf in any of the **three** scopes (instruction-repo `memory-global/leaves/`, project `.claude/agent-memory/`, personal `~/.claude/projects/*/memory/` — the last is invisible to `verify-leaf-structure.py`) and surfaces missing/malformed frontmatter (`name`/`description`/`type`) plus an index-pointer reminder. It only informs; it never denies.
+- [`hook-memory-consistency.py`](../hook-memory-consistency.py) (`PreToolUse` Write/Edit) classifies the target as a memory leaf in any of the **three** scopes (instruction-repo `memory-global/leaves/`, project `.claude/agent-memory/`, personal `~/.claude-agent/projects/*/memory/` — the last is invisible to `verify-leaf-structure.py`) and surfaces missing/malformed frontmatter (`name`/`description`/`type`) plus an index-pointer reminder. It only informs; it never denies.
 - [`hook-experience-record-reminder.py`](../hook-experience-record-reminder.py) (`UserPromptSubmit`) reads the `experience` plugin bag and nudges to record before close — loudest at `node == RESOLUTION` (naming the exact missing phase and the `record-experience.py search …` → `plugin-record` commands), a soft nudge otherwise, silent when the flow is complete or the plugin is inactive. It mirrors `hook-tracker-publish-reminder.py`.
 
 ## Cost tracking
@@ -162,7 +162,7 @@ A third plugin, **`experience`** ([`plugins_experience.py`](plugins_experience.p
 
 ## State location
 
-Session state is JSON at `~/.claude/agentctl/state/<session_id>.json` (the durable machine-written record, kept separate from the human/LLM-authored TOML plan).
+Session state is JSON at `~/.claude-agent/agentctl/state/<session_id>.json` (the durable machine-written record, kept separate from the human/LLM-authored TOML plan).
 
 ## Keeping this doc current
 

@@ -1,7 +1,7 @@
 # Versioned settings base
 
 `base.json` is the **machine-independent, policy-grade** slice of Claude Code's
-`~/.claude/settings.json`: the read-only `permissions.allow` allowlist (the
+`~/.claude-agent/settings.json`: the read-only `permissions.allow` allowlist (the
 mechanical form of `CLAUDE.md` § Acting without asking carve-out #1), the
 default permission mode (`permissions.defaultMode`), plus the universal `env`
 block. It is merged into each machine's live settings by
@@ -15,7 +15,7 @@ block. It is merged into each machine's live settings by
 - **No:** anything that writes or mutates state, machine-specific absolute paths
   (`Read`/`Edit`/`Write` under `/home/<user>/…`), hooks, marketplaces, plugins,
   `model`, and ephemeral per-task grants (e.g. one-off `WebFetch` domains). Those
-  stay in the machine-local `~/.claude/settings.json` / `settings.local.json`,
+  stay in the machine-local `~/.claude-agent/settings.json` / `settings.local.json`,
   which are not tracked here.
 
 ## Guardrail
