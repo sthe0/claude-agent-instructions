@@ -6,7 +6,7 @@ schema: difficulty/v1
 resolution_confirmed_by_user: "Решено"
 refs: [2026-06-04-non-english-skill-content-language-wall.md]
 created: 2026-06-25
-last_verified: 2026-06-25
+last_verified: 2026-07-03
 ---
 
 # Always-loaded policy shrink hits a dedup floor where size-target meets no-rule-loss
@@ -20,6 +20,10 @@ Distinguish the two regimes before cutting. 1) Dedup regime (free): collapse N o
 **Acceptance check:** measurable: target byte size AND a no-rule-loss invariant; verify both — verify-all 13/13 + byte ceiling for the size axis, and a diff review (every trigger/invariant present inline or in a linked leaf) for the no-loss axis. The invariant wins when they conflict.
 
 ## Contexts
+
+### 2026-07-03 — post-slim salience drop observed (user-perceived quality regression)
+- Where it arose: same repo, first sessions after the 2026-07 instruction-offload slimming; user evaluation: "после правок инструкций ты стал хуже решать задачи"
+- What happened: a rule that survived slimming but was collapsed to a pointer paragraph (self-improvement SKILL.md Core-authority block → `is_author()` check) was NOT fired when applicable — the agent filed 4 non-author difficulty reports from the author machine. Confirms the leaf's core claim empirically: extraction/collapse of an inline rule costs firing reliability even when no rule is lost textually. Compensator chosen: mechanize the rule part in the tool itself (`file-difficulty.py` refuses on `is_author()==True` without `--force-report`) instead of re-inflating prose; regression to be measured via policy-scorecard windows before/after the slimming date rather than argued from impressions.
 
 ### 2026-06-25 — 2026-06-25 CLAUDE.md radical dedup
 - Where it arose: global instructions repo, CLAUDE.md radical decomposition (R1-R6)
