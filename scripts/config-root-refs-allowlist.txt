@@ -4,7 +4,7 @@
 # Categories mirror docs/migrations/config-root-tails-worklist.tsv.
 # Code scope (*.py/*.sh) is governed by S2's enumerator — never listed here.
 
-CLAUDE.md:145  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+CLAUDE.md:147  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
 README.md:5  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
 README.md:37  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
 README.md:67  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location

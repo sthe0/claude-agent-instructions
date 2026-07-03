@@ -20,6 +20,8 @@ Shared contract + the `CLARIFY:` / `PERMISSION-REQUEST:` formats live in [_share
   Summary: <one paragraph>
   ```
 
+  **Before the manager can `agentctl approve` this plan, a thinker review is mandatory, not optional.** For a SUBSTANTIVE session the manager spawns `Task → thinker` to check the plan's reasoning and adequacy/internal-consistency, then records the verdict with `agentctl plan-review --verdict pass|revise|override --reviewer thinker [--concern …]… [--note …]`. `approve` is engine-blocked (`gates.plan_review_blockers`) until a review bound to this exact plan path exists — a `revise` verdict blocks until re-reviewed; only an explicit user-authored `override` (distinct reviewer, non-empty note) bypasses it. This applies identically on every `replan` (see `overcome-difficulty/SKILL.md` § Handoff back to the root).
+
   You **must** write the plan to a markdown file before returning. Convention: `~/.claude-agent/plans/<slug>.md`. Make `<slug>` short, content-keyed, kebab-case. The file must contain the sections listed in § Plan format below — `verify-plan-file.py` will reject the spawn with `MALFORMED:` otherwise.
 - **Other applicable markers:** `COMPLETED:` (only when the work did not produce a plan requiring approval, e.g. refining one section of an already-approved plan), `INCOMPLETE:` (what is decided, what is unresolved), `CLARIFY:` (a file path, a number, a choice between named options, a deadline source), `REPLAN:` (overcome-difficulty concluded the broader plan needs revision — propose it, don't rewrite unilaterally), `PERMISSION-REQUEST:` (rare — usually a restricted resource needed for context), `ESCALATE:` (ambiguous user intent, or a strategic choice between substantively different plan shapes).
 

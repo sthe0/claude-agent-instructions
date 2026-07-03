@@ -33,7 +33,7 @@ Numeric thresholds (`small-change-max-lines`, `max-recursion-depth`, budget tier
 
 1. Restate the goal and a **done criterion** — mark as *measurable* (test, command output, file present) or *acceptance-review* (user accepts on review when no objective check exists).
 2. Produce a markdown plan in-thread (using `planner` principles, read inline — see § Specializations in Cursor).
-3. Get user approval on the plan before execution. This is a **hard gate** — never skip it.
+3. Run a critical **plan review** before presenting: an inline adversarial pass over the plan's reasoning and internal consistency (`thinker` principles — in Claude Code this is a machine-blocked gate, `agentctl plan-review`, before `approve` and before every `replan`; in Cursor apply it inline). Then get user approval on the plan before execution. This is a **hard gate** — never skip it.
 4. Carry out the plan step by step in this same Cursor session, applying the relevant specialization principles.
 
 Coordination cycle: Need → Options → Plan → Resources → Execution → Verification → (done? — no → back to Need).

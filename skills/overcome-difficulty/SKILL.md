@@ -96,7 +96,9 @@ Record it: `agentctl critique --session <id> --functional-ground … --replannin
 
 ## Handoff back to the root
 
-The replanning task you just wrote is now the input for the root coordinator (you, in the main thread). Apply it with `agentctl replan --session <id> --plan <corrected-plan>`: a *refinement* re-arms the failed stage and returns to execution; a *substantive* change re-arms the plan-approval hard gate (PLAN_READY) for re-approval. Either way the engine clears the difficulty record on exit, so a later failure starts a fresh cycle. The corrected plan **replaces** the prior plan, and you continue solving the **original** user task on it.
+The replanning task you just wrote is now the input for the root coordinator (you, in the main thread). **Before calling `agentctl replan`, a thinker review is mandatory for every replan — refinement or substantive, no exceptions.** Spawn `Task → thinker` with the critique's causal reasoning (functional ground, invariants-to-preserve, differences-to-remove) and the corrected plan, to check both the critique's reasoning and the corrected plan's adequacy/internal-consistency. Record the verdict with `agentctl plan-review --verdict pass|revise|override --reviewer thinker --target <corrected-plan> [--concern …]… [--note …]` — `replan` is engine-blocked (`gates.plan_review_blockers`) until this exists bound to the exact corrected-plan path; only an explicit user-authored `override` bypasses a `revise` verdict.
+
+Apply the replan with `agentctl replan --session <id> --plan <corrected-plan>`: a *refinement* re-arms the failed stage and returns to execution; a *substantive* change re-arms the plan-approval hard gate (PLAN_READY) for re-approval. Either way the engine clears the difficulty record on exit, so a later failure starts a fresh cycle. The corrected plan **replaces** the prior plan, and you continue solving the **original** user task on it.
 
 Verification after the next round of action loops back to declaration if a new divergence appears.
 
