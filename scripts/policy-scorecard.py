@@ -35,6 +35,7 @@ import datetime as dt
 import importlib.util
 import json
 import re
+import subprocess
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -54,11 +55,26 @@ INTERRUPT_SENTINEL = cost_report.INTERRUPT_SENTINEL
 CORRECTION_RE = cost_report.CORRECTION_RE
 PRICING = cost_report.PRICING_USD_PER_MTOK
 
+# --- reuse hook-si-freetext-answer.py's option-label comparison (no copy-paste) ---
+_FTA_PATH = Path(__file__).resolve().parent / "hook-si-freetext-answer.py"
+_fta_spec = importlib.util.spec_from_file_location("hook_si_freetext_answer", _FTA_PATH)
+hook_si_freetext_answer = importlib.util.module_from_spec(_fta_spec)
+_fta_spec.loader.exec_module(hook_si_freetext_answer)
+free_text_questions = hook_si_freetext_answer.free_text_questions
+
 # System root (resolved via config_root) for transcripts
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.config_root import agent_home, agentctl_gate_log, legacy_home
 PROJECTS_DIR = agent_home() / "projects"
 LEDGER = Path.home() / ".local" / "log" / "claude-policy-ledger.jsonl"
+# Per-task quality ledger written by `agentctl resolve --quality` (agentctl/cli.py
+# TASK_QUALITY_LOG) -- same path, independent constant so this reader has no
+# import dependency on the agentctl package.
+TASK_QUALITY_LEDGER = Path.home() / ".local" / "log" / "claude-task-quality.jsonl"
+# This script's own repo root, for instructions_head stamping / commit-range
+# lookups -- never hard-code a machine-specific path (worktrees move it).
+REPO_ROOT = Path(__file__).resolve().parent.parent
+_GIT_TIMEOUT_S = 5
 # Written by agentctl cli._log_gate: one {ts, session, node, gate, blockers,
 # passed} row per gate evaluation. Read-only here. Both the resolved root and
 # the legacy pre-isolation root are read so history spanning the migration
@@ -90,6 +106,8 @@ RESOLUTION_RE = re.compile(
     re.IGNORECASE)
 # Non-clean sub-agent return markers seen in a tool_result.
 SUBAGENT_FAIL_RE = re.compile(r"\b(?:MALFORMED|INCOMPLETE|ESCALATE):")
+# A real user prompt that asks something (crude but cheap: any "?").
+QUESTION_RE = re.compile(r"\?")
 
 
 def _model_key(model: str | None) -> str:
@@ -127,6 +145,42 @@ def _cache_read_cost(model_tokens: dict) -> float:
     return total / 1_000_000
 
 
+def _instructions_head_at(ts: dt.datetime) -> str | None:
+    """Best-effort instructions-repo HEAD as of `ts` (`git rev-list -1 --before`).
+    None on any failure -- git absent, REPO_ROOT not a repo, no commit before ts --
+    never blocks a session scan on the git call."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "rev-list", "-1",
+             f"--before={ts.isoformat()}", "HEAD"],
+            capture_output=True, text=True, timeout=_GIT_TIMEOUT_S,
+        )
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip() or None
+
+
+def _commit_range_lines(good: str | None, bad: str | None) -> list[str]:
+    """`git log --oneline good..bad` restricted to instruction-affecting paths,
+    capped at 20 lines. [] when either ref is missing/equal, or on any git
+    failure (never blocks the scorecard render)."""
+    if not good or not bad or good == bad:
+        return []
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "log", "--oneline", f"{good}..{bad}",
+             "--", "CLAUDE.md", "config.md", "skills", "agents", "scripts"],
+            capture_output=True, text=True, timeout=_GIT_TIMEOUT_S,
+        )
+    except Exception:
+        return []
+    if proc.returncode != 0:
+        return []
+    return [f"  {line}" for line in proc.stdout.splitlines()[:20]]
+
+
 def _scan_session(main_file: Path) -> dict | None:
     """Scan one session (main transcript + its sub-agent transcripts) -> ledger row."""
     session_id = main_file.stem
@@ -138,10 +192,12 @@ def _scan_session(main_file: Path) -> dict | None:
     clusters = 0
     run = 0                  # current consecutive-mechanical run length
     askq = prompts = interrupts = corrections = 0
+    user_questions = freetext_askuser_answers = 0
     replans = overcome_difficulty = subagent_failures = 0
     edits_per_path: Counter = Counter()
     resolution_confirmed = 0
     timestamps: list[dt.datetime] = []
+    pending_askq: dict[str, dict] = {}  # tool_use id -> AskUserQuestion input, awaiting its answer
 
     for d in _iter_jsonl(main_file):
         ts = d.get("timestamp") or (d.get("message") or {}).get("ts")
@@ -173,6 +229,9 @@ def _scan_session(main_file: Path) -> dict | None:
                     run = 0  # delegation breaks any cluster
                 elif name == "AskUserQuestion":
                     askq += 1
+                    tuid = c.get("id")
+                    if tuid:
+                        pending_askq[tuid] = c.get("input") or {}
                 elif name == "Skill":
                     if "overcome-difficulty" in json.dumps(c.get("input") or {}):
                         overcome_difficulty += 1
@@ -203,11 +262,19 @@ def _scan_session(main_file: Path) -> dict | None:
                 text = _msg_text(content) if isinstance(content, str) else ""
                 # tool_result text lives inside the list items
                 if isinstance(content, list):
-                    text = " ".join(
-                        (c.get("content") if isinstance(c.get("content"), str)
-                         else _msg_text(c.get("content")))
-                        for c in content
-                        if isinstance(c, dict) and c.get("type") == "tool_result")
+                    item_texts = []
+                    for c in content:
+                        if not (isinstance(c, dict) and c.get("type") == "tool_result"):
+                            continue
+                        item_text = (c.get("content") if isinstance(c.get("content"), str)
+                                     else _msg_text(c.get("content")))
+                        item_texts.append(item_text)
+                        tuid = c.get("tool_use_id")
+                        pending_input = pending_askq.pop(tuid, None) if tuid else None
+                        if pending_input is not None and item_text:
+                            freetext_askuser_answers += len(
+                                free_text_questions(pending_input, item_text))
+                    text = " ".join(item_texts)
                 if SUBAGENT_FAIL_RE.search(text or ""):
                     subagent_failures += 1
                 continue
@@ -220,6 +287,8 @@ def _scan_session(main_file: Path) -> dict | None:
                 prompts += 1
                 if CORRECTION_RE.search(text):
                     corrections += 1
+                if QUESTION_RE.search(text):
+                    user_questions += 1
                 if RESOLUTION_RE.search(text):
                     resolution_confirmed = 1
         # REPLAN can appear in assistant text or tool_result text
@@ -245,6 +314,7 @@ def _scan_session(main_file: Path) -> dict | None:
     rework_edits = sum(v - 1 for v in edits_per_path.values() if v > 1)
     if not timestamps:
         return None
+    first_ts = min(timestamps)
     last_ts = max(timestamps)
     project = main_file.parent.name
     return {
@@ -252,8 +322,9 @@ def _scan_session(main_file: Path) -> dict | None:
         "session_id": session_id,
         "project": project,
         "date": last_ts.date().isoformat(),
-        "first_ts": min(timestamps).isoformat(),
+        "first_ts": first_ts.isoformat(),
         "last_ts": last_ts.isoformat(),
+        "instructions_head": _instructions_head_at(first_ts),
         "mtime": main_file.stat().st_mtime,
         "model_tokens": model_tokens,
         "cost_usd": round(cost, 6),
@@ -273,6 +344,12 @@ def _scan_session(main_file: Path) -> dict | None:
             "prompts": prompts,
             "interrupts": interrupts,
             "corrections": corrections,
+        },
+        "user_signals": {
+            "n_user_corrections": corrections,
+            "n_user_questions": user_questions,
+            "n_freetext_askuser_answers": freetext_askuser_answers,
+            "n_interrupts": interrupts,
         },
         "effectiveness": {
             "resolution_confirmed": resolution_confirmed,
@@ -423,6 +500,67 @@ def _aggregate(window: list[dict]) -> dict:
     return a
 
 
+def load_quality_ledger() -> list[dict]:
+    """Rows from TASK_QUALITY_LEDGER (agentctl `resolve --quality`), tolerant of
+    a missing file (no task has resolved with --quality yet on this machine)."""
+    if not TASK_QUALITY_LEDGER.exists():
+        return []
+    rows: list[dict] = []
+    for line in TASK_QUALITY_LEDGER.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return rows
+
+
+def _quality_window_rows(qrows: list[dict], lo: dt.datetime, hi: dt.datetime) -> list[dict]:
+    out = []
+    for r in qrows:
+        try:
+            t = parse_ts(r.get("ts", ""))
+        except ValueError:
+            continue
+        if lo <= t < hi:
+            out.append(r)
+    return out
+
+
+def _aggregate_quality(window: list[dict], session_rows: dict[str, dict]) -> dict:
+    """Task-quality window aggregate, joined to the session ledger (by the task
+    row's `session` field) for the per-task user-signal averages."""
+    ratings = [r.get("quality") for r in window if isinstance(r.get("quality"), (int, float))]
+    joined = [session_rows[r["session"]]["user_signals"]
+              for r in window
+              if r.get("session") in session_rows
+              and "user_signals" in session_rows[r["session"]]]
+
+    def _avg(key: str) -> float | None:
+        vals = [j.get(key, 0) for j in joined]
+        return round(sum(vals) / len(vals), 2) if vals else None
+
+    avg_corrections = _avg("n_user_corrections")
+    avg_freetext = _avg("n_freetext_askuser_answers")
+    correction_rate = (round(avg_corrections + avg_freetext, 2)
+                       if avg_corrections is not None and avg_freetext is not None else None)
+    last_head = max(window, key=lambda r: r.get("ts", "")).get("instructions_head") if window else None
+    return {
+        "n_tasks": len(window),
+        "avg_rating": round(sum(ratings) / len(ratings), 2) if ratings else None,
+        "n_rated": len(ratings),
+        "n_joined": len(joined),
+        "avg_corrections": avg_corrections,
+        "avg_questions": _avg("n_user_questions"),
+        "avg_freetext": avg_freetext,
+        "avg_interrupts": _avg("n_interrupts"),
+        "correction_rate": correction_rate,
+        "last_instructions_head": last_head,
+    }
+
+
 def _arrow(cur: float, prev: float, higher_is_worse: bool = True) -> str:
     if prev == 0 and cur == 0:
         return "→ (0)"
@@ -437,7 +575,7 @@ def _arrow(cur: float, prev: float, higher_is_worse: bool = True) -> str:
     return f"{mark} {delta:+.0f}% ({prev:.3g}→{cur:.3g})"
 
 
-def _flags(cur: dict, prev: dict) -> list[str]:
+def _flags(cur: dict, prev: dict, cur_q: dict | None = None, prev_q: dict | None = None) -> list[str]:
     flags = []
     if cur["spawns_total"] and cur["inherit_opus_rate"] > 0.5:
         flags.append(
@@ -462,6 +600,22 @@ def _flags(cur: dict, prev: dict) -> list[str]:
     if (cur["avg_quality"] is not None and prev.get("avg_quality") is not None
             and cur["avg_quality"] < prev["avg_quality"] - 0.5):
         flags.append(f"avg manual quality down {prev['avg_quality']}→{cur['avg_quality']}.")
+    if cur_q and cur_q.get("avg_rating") is not None:
+        down = (prev_q is not None and prev_q.get("avg_rating") is not None
+                and cur_q["avg_rating"] < prev_q["avg_rating"] - 0.5)
+        if cur_q["avg_rating"] < 3.5 or down:
+            reason = (f"down {prev_q['avg_rating']}→{cur_q['avg_rating']}" if down
+                     else f"{cur_q['avg_rating']} < 3.5")
+            flags.append(
+                f"task quality avg over {cur_q['n_rated']} rated task(s): {reason} "
+                "— see Task quality section.")
+    if (cur_q and prev_q and cur_q.get("correction_rate") is not None
+            and prev_q.get("correction_rate")
+            and cur_q["correction_rate"] > prev_q["correction_rate"] * 1.5):
+        flags.append(
+            "user-correction/free-text-answer rate per task up "
+            f"{(cur_q['correction_rate'] / prev_q['correction_rate'] - 1) * 100:.0f}% "
+            f"({prev_q['correction_rate']}→{cur_q['correction_rate']}).")
     return flags
 
 
@@ -527,6 +681,9 @@ def scorecard(rows: dict[str, dict], days: int, project: str | None) -> str:
     prev_lo = now - dt.timedelta(days=2 * days)
     cur = _aggregate(_window_rows(rows, cur_lo, now))
     prev = _aggregate(_window_rows(rows, prev_lo, cur_lo))
+    qrows = load_quality_ledger()
+    cur_q = _aggregate_quality(_quality_window_rows(qrows, cur_lo, now), rows)
+    prev_q = _aggregate_quality(_quality_window_rows(qrows, prev_lo, cur_lo), rows)
 
     L = [f"# Policy scorecard — last {days}d"
          + (f" · project={project}" if project else "")
@@ -569,13 +726,50 @@ def scorecard(rows: dict[str, dict], days: int, project: str | None) -> str:
     L.append(f"- Manual quality (1–5): **{aq if aq is not None else '—'}**  "
              f"(rated {cur['n_rated']}/{cur['sessions']}; attach via `rate <session_id> <1-5>`)")
     L.append("")
+    L.append("## Task quality")
+    if not qrows:
+        L.append(f"- no task-quality rows found ({TASK_QUALITY_LEDGER}) — "
+                 "resolve a task with `agentctl resolve --quality` to start the series.")
+    else:
+        L.append(f"- Tasks: **{cur_q['n_tasks']}**  "
+                 f"{_arrow(cur_q['n_tasks'], prev_q['n_tasks'], higher_is_worse=False)}")
+        aqr = cur_q["avg_rating"]
+        arrow = (f"  {_arrow(aqr, prev_q['avg_rating'], higher_is_worse=False)}"
+                 if aqr is not None and prev_q["avg_rating"] is not None else "")
+        L.append(f"- Avg user rating (1–5): **{aqr if aqr is not None else '—'}**  "
+                 f"(rated {cur_q['n_rated']}/{cur_q['n_tasks']}){arrow}")
+        if cur_q["n_joined"]:
+            L.append(f"- Avg per-task user signals (joined {cur_q['n_joined']}/{cur_q['n_tasks']} "
+                     "to a session ledger row): "
+                     f"corrections **{cur_q['avg_corrections']}**  ·  "
+                     f"questions **{cur_q['avg_questions']}**  ·  "
+                     f"free-text answers **{cur_q['avg_freetext']}**  ·  "
+                     f"interrupts **{cur_q['avg_interrupts']}**")
+        else:
+            L.append("- no task row joined to a session ledger row this window.")
+    L.append("")
     L.append("## Gates (agentctl)")
     L.extend(_gates_lines(days, now))
     L.append("")
     L.append("## Flags")
-    fl = _flags(cur, prev)
+    fl = _flags(cur, prev, cur_q, prev_q)
     if fl:
         L.extend(f"- ⚠ {f}" for f in fl)
+        quality_flags = [f for f in fl if f.startswith("task quality")
+                         or f.startswith("user-correction")]
+        if quality_flags:
+            good = prev_q.get("last_instructions_head")
+            bad = cur_q.get("last_instructions_head")
+            L.append("")
+            range_lines = _commit_range_lines(good, bad)
+            if good and bad and good != bad:
+                L.append(f"Instruction-commit range `{good[:12]}..{bad[:12]}` "
+                         "(CLAUDE.md/config.md/skills/agents/scripts):")
+                L.extend(range_lines or ["  (no matching commits in range)"])
+            else:
+                L.append("Instruction-commit range unavailable "
+                         "(missing or equal instructions_head across windows).")
+            L.append("Run `scripts/quality-regression-investigate.py` to investigate further.")
         L.append("")
         L.append("When a flag fires: invoke `self-improvement` to adjust the policy, then record "
                  "the adjustment + observed metric movement in policy-effectiveness-tracking.md.")
