@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from agentctl.state import Critique, Declaration, Difficulty, Investigation, SessionState
+
 HOOK = Path(__file__).resolve().parent.parent / "hook-state-gate.py"
 
 
@@ -45,6 +47,41 @@ def write_state(home: Path, session_id: str, node: str, weight_class: str | None
     if plan_path is not None:
         data["plan_path"] = plan_path
     (state_dir / f"{session_id}.json").write_text(json.dumps(data))
+
+
+def _complete_difficulty() -> Difficulty:
+    """A shape-complete difficulty record (declaration + >=2 distinct non-placeholder
+    hypotheses + critique) — the exact shape gates.difficulty_blockers requires."""
+    return Difficulty(
+        declaration=Declaration(
+            expected="stage 1 verify_command exits 0",
+            actual="stage 1 verify_command exited 1: ModuleNotFoundError",
+            mismatch="the module is not importable",
+        ),
+        investigation=Investigation(
+            localized_expectation="mod.py declares its third-party dependency",
+            localized_actual="mod.py imports a package absent from requirements.txt",
+            hypotheses=["missing entry in requirements.txt", "typo'd package name in setup.py"],
+        ),
+        critique=Critique(
+            functional_ground="the dependency was never declared",
+            replanning_task="add the missing dependency to requirements.txt",
+        ),
+    )
+
+
+def write_diagnosing_state(home: Path, session_id: str, plan_path: str, *, difficulty: Difficulty | None) -> None:
+    """A full DIAGNOSING-node state.json, optionally carrying a difficulty record —
+    for #9 end-to-end tests of the plan-write gate at DIAGNOSING. Serialized via a
+    real SessionState (not a hand-rolled dict) so it satisfies from_dict's required
+    'approval'/'resolution' keys exactly like a genuine agentctl-written state."""
+    state_dir = home / ".claude" / "agentctl" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state = SessionState(
+        session_id=session_id, task_id="t", node="DIAGNOSING",
+        weight_class="SUBSTANTIVE", plan_path=plan_path, difficulty=difficulty,
+    )
+    (state_dir / f"{session_id}.json").write_text(state.to_json())
 
 
 def edit_payload(session_id: str, file_path: str) -> dict:
@@ -369,3 +406,72 @@ def test_n3_unset_plan_path_plans_file_allowed_at_executing(tmp_path):
     proc = run_hook(edit_payload("n3", "/home/u/.claude/plans/any.toml"), tmp_path)
     assert proc.returncode == 0
     assert not _is_deny(proc)
+
+
+# --- #9: the DIAGNOSING plan-write gate -------------------------------------
+
+def test_diagnosing_plan_write_ok_true_when_difficulty_complete(tmp_path):
+    mod = _load_module()
+    p = tmp_path / "state.json"
+    p.write_text(SessionState(
+        session_id="d", task_id="t", node="DIAGNOSING",
+        weight_class="SUBSTANTIVE", difficulty=_complete_difficulty(),
+    ).to_json())
+    assert mod.diagnosing_plan_write_ok(p) is True
+
+
+def test_diagnosing_plan_write_ok_false_when_difficulty_absent(tmp_path):
+    mod = _load_module()
+    p = tmp_path / "state.json"
+    p.write_text(SessionState(session_id="d", task_id="t", node="DIAGNOSING").to_json())
+    assert mod.diagnosing_plan_write_ok(p) is False
+
+
+def test_diagnosing_plan_write_ok_false_when_hypotheses_insufficient(tmp_path):
+    mod = _load_module()
+    incomplete = _complete_difficulty()
+    incomplete.investigation.hypotheses = ["only one"]
+    p = tmp_path / "state.json"
+    p.write_text(SessionState(
+        session_id="d", task_id="t", node="DIAGNOSING", difficulty=incomplete,
+    ).to_json())
+    assert mod.diagnosing_plan_write_ok(p) is False
+
+
+def test_diagnosing_plan_write_ok_false_on_load_error(tmp_path):
+    mod = _load_module()
+    p = tmp_path / "state.json"
+    p.write_text("{not valid json")
+    assert mod.diagnosing_plan_write_ok(p) is False
+
+
+def test_gate_decision_diagnosing_plan_allowed_when_ok():
+    mod = _load_module()
+    decision, reason = mod.gate_decision("SUBSTANTIVE", "DIAGNOSING", is_plan=True,
+                                         diagnosing_plan_ok=True)
+    assert decision == "allow"
+
+
+def test_gate_decision_diagnosing_plan_denied_by_default():
+    mod = _load_module()
+    decision, reason = mod.gate_decision("SUBSTANTIVE", "DIAGNOSING", is_plan=True,
+                                         diagnosing_plan_ok=False)
+    assert decision == "deny"
+    assert "difficulty record" in reason.lower()
+
+
+def test_e2e_allow_plan_write_at_diagnosing_when_difficulty_complete(tmp_path):
+    plan_file = "/home/u/.claude/plans/task.toml"
+    write_diagnosing_state(tmp_path, "diagok", plan_file, difficulty=_complete_difficulty())
+    proc = run_hook(edit_payload("diagok", plan_file), tmp_path)
+    assert proc.returncode == 0
+    assert not _is_deny(proc)
+
+
+def test_e2e_deny_plan_write_at_diagnosing_when_difficulty_missing(tmp_path):
+    plan_file = "/home/u/.claude/plans/task.toml"
+    write_diagnosing_state(tmp_path, "diagbad", plan_file, difficulty=None)
+    proc = run_hook(edit_payload("diagbad", plan_file), tmp_path)
+    assert proc.returncode == 0
+    assert _is_deny(proc)
+    assert "difficulty record" in _deny_reason(proc).lower()

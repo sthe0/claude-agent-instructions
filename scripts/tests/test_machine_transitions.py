@@ -49,3 +49,21 @@ def test_unknown_event_raises():
 def test_legal_targets_from_routed():
     targets = set(legal_targets(Node.ROUTED.value))
     assert targets == {Node.PLANNING.value, Node.EXECUTING.value}
+
+
+def test_reject_edge_resolution_to_diagnosing():
+    assert transition(Node.RESOLUTION.value, "reject") == Node.DIAGNOSING.value
+
+
+def test_reject_illegal_outside_resolution():
+    with pytest.raises(TransitionError):
+        transition(Node.EXECUTING.value, "reject")
+
+
+def test_revise_plan_edge_is_a_self_loop_at_plan_ready():
+    assert transition(Node.PLAN_READY.value, "revise_plan") == Node.PLAN_READY.value
+
+
+def test_revise_plan_illegal_outside_plan_ready():
+    with pytest.raises(TransitionError):
+        transition(Node.PLANNING.value, "revise_plan")

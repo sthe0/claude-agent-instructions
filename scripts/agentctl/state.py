@@ -551,6 +551,16 @@ class SessionState:
     # has no observable and fails open (allow).
     last_user_prompt_ts: float | None = None
     plan_submitted_ts: float | None = None
+    # The immutable snapshot of the plan AS APPROVED (#8): cmd_approve copies the
+    # plan file into the state dir and records its content hash here, so cmd_replan
+    # diffs the corrected plan against what was APPROVED — not against plan_path,
+    # which the coordinator may edit in place (an in-place edit would otherwise
+    # self-diff to no_change and silently drop the correction). Both None until the
+    # first approve; legacy pre-snapshot states load with None (absent key ->
+    # dataclass default via from_dict's cls(**data)), so cmd_replan falls back to
+    # plan_path (the prior behaviour) and old state.json loads byte-compatibly.
+    plan_snapshot_path: str | None = None
+    plan_snapshot_hash: str | None = None
     schema_version: int = SCHEMA_VERSION
 
     def __post_init__(self) -> None:

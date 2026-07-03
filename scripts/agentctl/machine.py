@@ -22,7 +22,9 @@ The graph (happy path + carve-outs):
   VERIFYING --diagnose--> DIAGNOSING    (a stage FAILED: enter the difficulty cycle)
   DIAGNOSING --replan_refine--> VERIFYING  (difficulty worked through; retry the re-armed stage)
   DIAGNOSING --(replan substantive)        direct set to PLAN_READY (re-arm plan-approval gate)
+  PLAN_READY --revise_plan--> PLAN_READY   (pre-approval revision: resubmit a corrected plan)
   RESOLUTION --resolve--> RESOLVED      (resolution gate passes)
+  RESOLUTION --reject--> DIAGNOSING     (user rejects the delivery: re-open the difficulty cycle)
   any --block--> BLOCKED ; BLOCKED --unblock--> <prior>
 
 DIAGNOSING is the overcome-difficulty sub-spine. Inside it the engine runs the
@@ -51,6 +53,15 @@ TRANSITIONS: dict[str, tuple[str, str]] = {
     "diagnose": (Node.VERIFYING.value, Node.DIAGNOSING.value),
     "replan_refine": (Node.DIAGNOSING.value, Node.VERIFYING.value),
     "resolve": (Node.RESOLUTION.value, Node.RESOLVED.value),
+    # #14 reject: the resolution gate's negative exit — the user rejects the
+    # delivery as not matching intent, re-opening the difficulty cycle so the
+    # mismatch is worked through (declare -> investigate -> critique -> replan).
+    "reject": (Node.RESOLUTION.value, Node.DIAGNOSING.value),
+    # #15 revise_plan: a pre-approval plan revision — resubmit a corrected plan
+    # from PLAN_READY without a reset --force. A DISTINCT event key landing back at
+    # PLAN_READY (the two-event idiom, cf. execute_approved/execute_small), NOT a
+    # second tuple on submit_plan's key (the one-tuple-per-key table can't hold it).
+    "revise_plan": (Node.PLAN_READY.value, Node.PLAN_READY.value),
     # Sub-plan stack edges: push starts a fresh child cycle; pop restores the parent.
     # "no auto-pop across an unresolved child" is structural — pop_subplan's frm is
     # RESOLVED, and check_invariants already requires resolution.passed at RESOLVED.

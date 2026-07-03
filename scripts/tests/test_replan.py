@@ -1,8 +1,10 @@
 """Replan diff routing: refinement resumes execution; substantive re-arms the gate.
-Also covers the loop guard on repeated identical stage failures, and the
---coverage-waiver bypass of the replan coverage gate."""
+Also covers the loop guard on repeated identical stage failures, the
+--coverage-waiver bypass of the replan coverage gate, the approved-plan snapshot
+(#8), and PASSED carry-forward across a substantive replan (#12)."""
 import json
 from argparse import Namespace
+from pathlib import Path
 
 from agentctl import cli
 from agentctl.plan import diff_plans, load_plan
@@ -284,6 +286,83 @@ def test_coverage_waiver_empty_reason_refused(store, fixtures_dir):
     assert "coverage_blockers" in d.data
     state = store.load(sid)
     assert not any(h.get("event") == "replan_coverage_waived" for h in state.history)
+
+
+
+# --- #8: cmd_approve snapshots the approved plan; cmd_replan diffs the snapshot ---
+
+def test_approve_snapshots_the_approved_plan(store, fixtures_dir):
+    sid = "snapA"
+    plan_file = fixtures_dir / "plan_two_stage.toml"
+    _to_executing_stage1(store, sid, str(plan_file))
+    state = store.load(sid)
+    assert state.plan_snapshot_path
+    assert state.plan_snapshot_hash
+    snap_path = Path(state.plan_snapshot_path)
+    assert snap_path.exists()
+    assert snap_path.read_bytes() == plan_file.read_bytes()
+
+
+def test_replan_uses_snapshot_when_plan_path_edited_in_place(store, fixtures_dir, tmp_path):
+    """Regression for #8: editing the tracked plan file IN PLACE after approval used
+    to self-diff to 'no_change' (old and new both read from the mutated plan_path),
+    silently dropping the correction. cmd_replan must diff against the immutable
+    approved-plan snapshot instead."""
+    sid = "snap1"
+    plan_path = tmp_path / "plan.toml"
+    plan_path.write_text((fixtures_dir / "plan_two_stage.toml").read_text())
+    _to_executing_stage1(store, sid, str(plan_path))
+
+    # simulate the bug scenario: the SAME path is overwritten with the substantive
+    # plan, so a plan_path-vs-plan_path diff would self-compare and see no_change.
+    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+
+    d = cli.cmd_replan(ns(session=sid, plan=str(plan_path)), store=store)
+    assert d.marker == "PLAN-READY"
+    state = store.load(sid)
+    assert state.node == Node.PLAN_READY.value
+    assert [s.index for s in state.stages] == [1, 2, 3]
+
+
+# --- #12: PASSED carry-forward across a substantive replan -----------------
+
+def test_substantive_replan_carries_forward_passed_unchanged_stage(store, fixtures_dir):
+    sid = "carry1"
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    bigger = str(fixtures_dir / "plan_two_stage_substantive.toml")
+    _to_executing_stage1(store, sid, plan)
+
+    state = store.load(sid)
+    state.stage(1).outcome.status = StageStatus.PASSED.value
+    state.stage(1).outcome.actual = "done"
+    store.save(state)
+
+    d = cli.cmd_replan(ns(session=sid, plan=bigger), store=store)
+    assert d.marker == "PLAN-READY"
+    state = store.load(sid)
+    assert state.stage(1).outcome.status == StageStatus.PASSED.value
+    assert state.stage(1).outcome.actual == "done"
+    assert state.stage(2).outcome.status == StageStatus.PENDING.value
+    assert state.stage(3).outcome.status == StageStatus.PENDING.value
+
+
+def test_substantive_replan_resets_passed_stage_whose_definition_changed(store, fixtures_dir):
+    """A stage's title changed -> its carry key no longer matches -> PASSED does
+    NOT carry forward, even though the stage survives at the same index."""
+    sid = "carry2"
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    retitled = str(fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml")
+    _to_executing_stage1(store, sid, plan)
+
+    state = store.load(sid)
+    state.stage(1).outcome.status = StageStatus.PASSED.value
+    store.save(state)
+
+    d = cli.cmd_replan(ns(session=sid, plan=retitled), store=store)
+    assert d.marker == "PLAN-READY"
+    state = store.load(sid)
+    assert state.stage(1).outcome.status == StageStatus.PENDING.value
+    assert state.stage(1).title == "Scaffold module (revised)"
 
 
 def test_coverage_waiver_does_not_bypass_difficulty_completeness(store, fixtures_dir):

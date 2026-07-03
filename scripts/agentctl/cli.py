@@ -75,6 +75,33 @@ def _digest(text: str) -> str:
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:12]
 
 
+def _snapshot_approved_plan(store: StateStore, state: SessionState) -> tuple[str, str] | None:
+    """Copy the plan AS APPROVED into the state dir and return (snapshot_path, hash).
+
+    #8: cmd_replan must diff the corrected plan against what was APPROVED — not
+    against state.plan_path, which the coordinator may edit in place (an in-place
+    edit would else self-diff to no_change and silently drop the correction). Taken
+    at every approve so a substantive-replan re-approval refreshes the baseline.
+
+    Best-effort: returns None (leaving cmd_replan to fall back to plan_path, the
+    prior behaviour) when there is no plan, the store exposes no on-disk path, or
+    the plan file is unreadable. Content-hash-named so identical plans share one
+    file; the per-session snapshot_path recorded on the state is the source of
+    truth for which snapshot to diff against."""
+    if not state.plan_path:
+        return None
+    src = Path(state.plan_path)
+    path_fn = getattr(store, "path", None)
+    if path_fn is None or not src.exists():
+        return None
+    data = src.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    snap = path_fn(state.session_id).parent / f"plan-approved-{digest[:16]}.toml"
+    snap.parent.mkdir(parents=True, exist_ok=True)
+    snap.write_bytes(data)
+    return str(snap), digest
+
+
 def _log_gate(state: SessionState, gate: str, blockers: list[str], *, passed: bool) -> None:
     """Append one {ts, session, node, gate, blockers, passed} line to GATE_LOG.
 
@@ -400,6 +427,11 @@ def _verify_markdown_plan(path: str) -> list[str]:
 def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     plan_path = args.plan
+    # #15: a resubmission — the coordinator revised the plan at PLAN_READY (after a
+    # thinker `revise` verdict, or the user's own pre-approval edit) and re-runs
+    # submit-plan without a reset --force. Distinguished by the source node; drives
+    # the `revise_plan` edge (PLAN_READY -> PLAN_READY) instead of `submit_plan`.
+    resubmitting = state.node == Node.PLAN_READY.value
     if state.weight_class == WeightClass.SUBSTANTIVE.value and not plan_path.endswith(".toml"):
         state.log("submit_plan", plan=plan_path, verified=False)
         store.save(state)
@@ -436,10 +468,15 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
         store.save(state)
         return Directive(False, state.node, "fix_plan", "plan failed verification", data={"problems": problems})
 
-    state.node = transition(state.node, "submit_plan")
+    state.node = transition(state.node, "revise_plan" if resubmitting else "submit_plan")
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
+    if resubmitting:
+        # The plan changed, so any recorded thinker review examined a now-stale
+        # version — clear it unconditionally so the plan-review gate re-arms for the
+        # new plan (a same-path in-place edit would slip a plan_path-bound check).
+        state.plan_review = None
     state.plan_submitted_ts = time.time()
-    state.log("submit_plan", plan=plan_path, verified=True)
+    state.log("submit_plan", plan=plan_path, verified=True, revised=resubmitting)
     store.save(state)
     d = Directive(
         True, state.node, "await_user_approval",
@@ -508,6 +545,9 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         return Directive(False, state.node, "fix_plan", "cannot approve", data={"blockers": blockers})
     state.approval = GateRecord("plan_approval", armed=True, passed=True, by=args.by)
     state.node = transition(state.node, "approve")
+    snap = _snapshot_approved_plan(store, state)
+    if snap:
+        state.plan_snapshot_path, state.plan_snapshot_hash = snap
     state.log("approve", by=args.by)
     store.save(state)
     return Directive(
@@ -1049,6 +1089,67 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
                      data={"cost": cost_surface, "quality": quality_row})
 
 
+def cmd_reject(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """The resolution gate's negative exit (#14): the user rejects the delivery as
+    not matching intent. RESOLUTION previously exited ONLY via resolve, so a rejected
+    delivery had no engine-tracked edge and stranded the session at the gate.
+
+    reject re-opens the difficulty cycle: it seeds the difficulty record with the
+    user's rejection reason AND marks the named stage(s) FAILED — default the final
+    stage — so the subsequent replan always has concrete rework to route (a reject is
+    never a structural no-op). It then hands off to overcome-difficulty exactly like
+    a stage failure: declare -> investigate -> critique -> replan."""
+    state = _require(store, args.session)
+    if state.node != Node.RESOLUTION.value:
+        return Directive(
+            False, state.node, "noop",
+            f"reject runs only at the resolution gate (node=RESOLUTION); node={state.node}",
+        )
+    reason = (getattr(args, "reason", None) or "").strip()
+    if not reason:
+        return Directive(
+            False, state.node, "noop",
+            "reject requires a non-empty --reason (the intent mismatch the user named)",
+        )
+    raw = getattr(args, "stage", None) or []
+    if raw:
+        targets: list[Stage] = []
+        for idx in raw:
+            try:
+                targets.append(state.stage(int(idx)))
+            except KeyError:
+                return Directive(
+                    False, state.node, "noop",
+                    f"reject --stage {idx} does not exist in the plan",
+                )
+    elif state.stages:
+        targets = [max(state.stages, key=lambda s: s.index)]  # default: the final stage
+    else:
+        return Directive(False, state.node, "noop", "reject has no stages to re-open")
+    state.node = transition(state.node, "reject")  # RESOLUTION -> DIAGNOSING
+    for s in targets:
+        s.outcome.status = StageStatus.FAILED.value
+    state.current_stage = None
+    # Seed the difficulty record with the rejection so the reason is durably
+    # captured; the coordinator refines it through declare -> investigate -> critique
+    # (which the difficulty_blockers gate still requires complete before replan).
+    state.difficulty = Difficulty(declaration=Declaration(
+        expected=state.overall_done_criterion or "delivery matches the user's approved intent",
+        actual=reason,
+        mismatch="user rejected the delivery at the resolution gate (delivered != approved intent)",
+    ))
+    idxs = [s.index for s in targets]
+    state.log("reject", reason=reason, stages=idxs)
+    store.save(state)
+    return Directive(
+        False, state.node, "declare",
+        f"delivery rejected: {reason}; stage(s) {idxs} re-opened as FAILED. Work the "
+        "difficulty (declare -> investigate -> critique), then replan.",
+        marker="OVERCOME-DIFFICULTY",
+        data={"rejected_stages": idxs, "reason": reason},
+    )
+
+
 # --- overcome-difficulty sub-spine: declare -> investigate -> critique --------
 # Each command fills one section of the active Difficulty record in order. The
 # engine enforces the ORDERING and that each section's artifact exists; the
@@ -1131,7 +1232,7 @@ def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Di
 
 def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
-    from .plan import diff_plans, load_plan as _load
+    from .plan import diff_plans, load_plan as _load, stage_carry_key
 
     # precondition: inside the DIAGNOSING cycle, the difficulty record must be
     # complete before a plan may be re-normed (variant (b) — internal command
@@ -1157,7 +1258,12 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
 
     if not state.plan_path:
         return Directive(False, state.node, "submit_plan", "no current plan to replan against")
-    old = _load(state.plan_path)
+    # #8: diff against the plan AS APPROVED (the immutable snapshot), not plan_path —
+    # which the coordinator may have edited in place. Absent a snapshot (legacy
+    # session, or an approve that predates the field) fall back to plan_path.
+    snap = state.plan_snapshot_path
+    old_path = snap if (snap and Path(snap).exists()) else state.plan_path
+    old = _load(old_path)
     new = _load(args.plan)
 
     # coverage gate: inside the difficulty flow, the corrected plan must CARRY the
@@ -1233,7 +1339,19 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             return Directive(True, state.node, "next_stage", "refinement applied; retry the ready stage")
         return Directive(True, state.node, "continue", "refinement applied; resume execution")
 
-    # substantive: re-arm the plan-approval gate, reload stages, return to PLAN_READY
+    # substantive: re-arm the plan-approval gate, reload stages, return to PLAN_READY.
+    # #12: carry PASSED status forward for any stage whose FULL definition is
+    # unchanged by the diff, so a substantive replan doesn't reset already-delivered
+    # work to PENDING and force needless re-verification. Compare each new stage
+    # against the LIVE stage (what actually ran) by the full-fidelity carry key; an
+    # unchanged, previously-PASSED stage keeps its recorded Outcome intact.
+    live_by_index = {s.index: s for s in state.stages}
+    for ns in new.stages:
+        prev = live_by_index.get(ns.index)
+        if (prev is not None
+                and prev.outcome.status == StageStatus.PASSED.value
+                and stage_carry_key(prev) == stage_carry_key(ns)):
+            ns.outcome = prev.outcome
     state.stages = new.stages
     state.repo_root = new.meta.repo_root
     state.final_check = new.meta.final_check
@@ -1646,6 +1764,7 @@ COMMANDS = {
     "critique": cmd_critique,
     "verify-final": cmd_verify_final,
     "resolve": cmd_resolve,
+    "reject": cmd_reject,
     "replan": cmd_replan,
     "block": cmd_block,
     "unblock": cmd_unblock,
@@ -1769,6 +1888,13 @@ def build_parser() -> argparse.ArgumentParser:
                     help="'user-confirmed' (default), 'user-adjusted', or 'user-other' "
                          "(free-text answer)")
     sp.add_argument("--quality-note", dest="quality_note", default=None)
+    sp = add("reject"); sp.add_argument("--session", required=True)
+    sp.add_argument("--reason", required=True,
+                    help="the intent mismatch the user named when rejecting the delivery "
+                         "(seeds the difficulty record)")
+    sp.add_argument("--stage", dest="stage", action="append", default=None, type=int,
+                    help="plan stage index to re-open as FAILED (repeatable; "
+                         "defaults to the final stage so a reject is never a no-op)")
     sp = add("replan"); sp.add_argument("--session", required=True); sp.add_argument("--plan", required=True)
     sp.add_argument("--coverage-waiver", dest="coverage_waiver", default=None,
                     help="bypass a failing coverage gate with a recorded reason (refused if empty); "

@@ -369,6 +369,35 @@ def _structural_signature(doc: PlanDoc) -> dict:
     }
 
 
+def stage_carry_key(stage) -> tuple:
+    """Full-fidelity per-stage identity for PASSED carry-forward across a
+    substantive replan (#12): a stage keeps its PASSED status only if NOTHING about
+    its definition changed.
+
+    A superset of `_structural_signature`'s per-stage tuple (executor / deps /
+    done_criterion / criterion_type) PLUS the prose fields (title / result /
+    invariants / means / method / conditions / verify_command / expected_exit).
+    Kept SEPARATE from `_structural_signature` (which drives diff_plans'
+    refinement-vs-substantive classification) so that extending the carry-forward
+    key never reclassifies a prose refinement as substantive — the two answer
+    different questions and must evolve independently. Operates on a Stage, so both
+    plan-doc stages and live SessionState stages key identically."""
+    return (
+        stage.actor.executor,
+        tuple(sorted(stage.depends_on)),
+        stage.criterion.done_criterion,
+        stage.criterion.criterion_type,
+        stage.criterion.verify_command,
+        stage.criterion.expected_exit,
+        stage.title,
+        stage.subject.result,
+        stage.subject.invariants,
+        stage.means.means,
+        stage.means.method,
+        stage.conditions,
+    )
+
+
 def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
     """Return 'no_change' | 'refinement' | 'substantive'."""
     if _structural_signature(old) != _structural_signature(new):

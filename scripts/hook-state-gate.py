@@ -34,7 +34,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from agentctl import gates as _gates  # noqa: E402
 from agentctl.exempt_paths import is_gated_path, is_plan_file  # noqa: E402
+from agentctl.state import SessionState as _SessionState  # noqa: E402
 from lib import config_root  # noqa: E402
 
 # Current-vs-legacy-root fallback lookup lives in lib/config_root.py (shared
@@ -54,6 +56,27 @@ ALLOW_NODES = {"EXECUTING", "VERIFYING", "RESOLUTION"}
 # every later node are denied with a pointer back to that path.
 PLAN_MUTABLE_NODES = {"CLASSIFIED", "ROUTED", "PLANNING", "PLAN_READY"}
 
+# Nodes where a plan-dir file is treated as the live plan being authored (so is_plan
+# routes it through the node-aware plan rule). Superset of PLAN_MUTABLE_NODES with
+# DIAGNOSING (#9): the corrected plan is authored there, but ONLY once the difficulty
+# record is complete — gate_decision applies that conditional guard, not blanket allow.
+PLAN_WRITE_POSITION_NODES = PLAN_MUTABLE_NODES | {"DIAGNOSING"}
+
+
+def diagnosing_plan_write_ok(path: Path) -> bool:
+    """At DIAGNOSING a plan write is authoring the CORRECTED plan — legitimate iff the
+    difficulty record is complete (the SAME predicate that unblocks `replan`). Reuse
+    gates.difficulty_blockers rather than re-deriving completeness from the raw JSON,
+    so the hook and the engine can never diverge on what 'complete' means. Any load
+    error -> False (keep blocking): a plan write is released only on a
+    positively-confirmed complete record."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        state = _SessionState.from_dict(data)
+    except Exception:
+        return False
+    return not _gates.difficulty_blockers(state)
+
 
 def load_gate_fields(path: Path) -> tuple[str | None, str, str | None] | None:
     """Return (weight_class, node, plan_path) from the state file. weight_class and
@@ -72,16 +95,30 @@ def load_gate_fields(path: Path) -> tuple[str | None, str, str | None] | None:
     return weight, node, plan_path
 
 
-def gate_decision(weight_class: str | None, node: str, is_plan: bool = False) -> tuple[str, str]:
+def gate_decision(weight_class: str | None, node: str, is_plan: bool = False,
+                  diagnosing_plan_ok: bool = False) -> tuple[str, str]:
     """Pure weight-aware gate. Returns ("allow"|"deny", reason).
 
     Plan files get a node-aware rule that overrides the standard one: a plan is the
     result-image of active planning, writable only at a planning-position node.
     This is checked first because EXECUTING is in ALLOW_NODES, yet a plan write at
-    EXECUTING must be denied (it is a difficulty to overcome via replan)."""
+    EXECUTING must be denied (it is a difficulty to overcome via replan).
+
+    DIAGNOSING is the one execution-side node where authoring a plan IS legitimate
+    (#9): it is where the corrected plan is written before `replan`. But only once
+    the difficulty record is complete — `diagnosing_plan_ok` (computed by the caller
+    from gates.difficulty_blockers) carries that predicate in."""
     if is_plan:
         if node in PLAN_MUTABLE_NODES:
             return "allow", ""
+        if node == "DIAGNOSING":
+            if diagnosing_plan_ok:
+                return "allow", ""
+            return "deny", (
+                "authoring the corrected plan at DIAGNOSING is allowed only once the "
+                "difficulty record is complete (declare -> investigate -> critique); "
+                "complete the cycle, then edit the plan"
+            )
         return "deny", (
             "a plan is the result-image of active planning; changing it now is a "
             "difficulty — step back via `agentctl replan` (re-arms at PLAN_READY) "
@@ -152,7 +189,7 @@ def main() -> int:
 
     in_plans_dir = is_plan_file(file_path)
     is_tracked = bool(plan_path) and os.path.realpath(file_path) == os.path.realpath(plan_path)
-    is_plan = in_plans_dir and (node in PLAN_MUTABLE_NODES or is_tracked)
+    is_plan = in_plans_dir and (node in PLAN_WRITE_POSITION_NODES or is_tracked)
 
     # A spawned specialist (AGENT_RECURSION_DEPTH >= 1) is an EXECUTOR of an
     # already-approved stage, not a coordinator: its production-edit authority is
@@ -171,7 +208,13 @@ def main() -> int:
     if not is_plan and recursion_depth() >= 1:
         return 0
 
-    decision, reason = gate_decision(weight_class, node, is_plan=is_plan)
+    # #9: at DIAGNOSING a plan write authors the CORRECTED plan — release it only
+    # when the difficulty record is complete, reusing the engine's own replan
+    # precondition (gates.difficulty_blockers) so the two never diverge.
+    diagnosing_plan_ok = node == "DIAGNOSING" and is_plan and diagnosing_plan_write_ok(sp)
+
+    decision, reason = gate_decision(weight_class, node, is_plan=is_plan,
+                                     diagnosing_plan_ok=diagnosing_plan_ok)
     if decision == "deny":
         deny_with(node, reason)
     return 0

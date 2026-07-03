@@ -348,3 +348,20 @@ def test_legacy_state_without_cost_fields_loads_with_defaults():
     assert loaded.stage(1).outcome.cost_usd is None
     assert loaded.stage(1).outcome.duration_ms is None
     assert loaded.stage(1).outcome.spawn_count == 0
+
+
+def test_legacy_state_without_plan_snapshot_fields_loads_with_defaults():
+    """A pre-schema-12 state dict without plan_snapshot_path/plan_snapshot_hash
+    (#8) loads with both defaulting to None."""
+    import json
+    s = SessionState(
+        session_id="s", task_id="t",
+        plan_snapshot_path="/home/u/.claude/plans/snap/plan-approved-abc.toml",
+        plan_snapshot_hash="abc123",
+    )
+    raw = json.loads(s.to_json())
+    raw.pop("plan_snapshot_path", None)
+    raw.pop("plan_snapshot_hash", None)
+    loaded = SessionState.from_dict(raw)
+    assert loaded.plan_snapshot_path is None
+    assert loaded.plan_snapshot_hash is None
