@@ -63,10 +63,11 @@ def decision_of(proc: subprocess.CompletedProcess) -> str:
 
 
 def test_denies_over_threshold(tmp_path):
+    # A true preamble: substantive assistant text emitted immediately before the
+    # ask, with no completed tool call between it and the ask -> at risk -> deny.
     t = write_transcript(tmp_path / "t.jsonl", [
         user_prompt("покажи план"),
         assistant_text("x" * 500),
-        tool_result_entry(),
     ])
     proc = run_hook(payload_for(t))
     assert proc.returncode == 0
@@ -122,16 +123,43 @@ def test_other_attachments_are_not_boundaries(tmp_path):
     assert decision_of(run_hook(payload_for(t))) == "deny"
 
 
-def test_tool_result_entries_are_not_boundaries(tmp_path):
-    # Text emitted before earlier tool calls in the same turn still counts:
-    # a bare tool_result batch does not start a new turn.
+def test_render_checkpoint_excludes_earlier_narration(tmp_path):
+    # Over-fire regression: a big narration block was emitted before an ordinary
+    # tool call (and rendered when the tool ran), then a SHORT text precedes the
+    # ask. Only the short text is at risk -> allow. Before the render-checkpoint
+    # fix the hook summed the big narration and over-fired the deny.
     t = write_transcript(tmp_path / "t.jsonl", [
         user_prompt("вопрос"),
-        assistant_text("x" * 150),
+        assistant_text("x" * 500),   # rendered when the tool below ran
+        tool_result_entry(),         # render checkpoint
+        assistant_text("y" * 150),   # the at-risk preamble, under threshold
+    ])
+    assert decision_of(run_hook(payload_for(t))) == "allow"
+
+
+def test_true_preamble_still_denied(tmp_path):
+    # No completed tool call between the substantive text and the ask -> the whole
+    # >200-char block is at risk -> deny.
+    t = write_transcript(tmp_path / "t.jsonl", [
+        user_prompt("вопрос"),
+        assistant_text("x" * 500),
         tool_result_entry(),
-        assistant_text("y" * 150),
+        assistant_text("y" * 300),   # emitted after the checkpoint, before the ask
     ])
     assert decision_of(run_hook(payload_for(t))) == "deny"
+
+
+def test_timer_split_allowed_zero_text(tmp_path):
+    # The timer split: the turn opens with a queued_command attachment boundary and
+    # the assistant emits ONLY the ask (zero text) -> total 0 -> allow.
+    t = write_transcript(tmp_path / "t.jsonl", [
+        user_prompt("покажи план"),
+        assistant_text("x" * 5000),
+        {"type": "attachment",
+         "attachment": {"type": "queued_command",
+                        "prompt": "<task-notification>timer done</task-notification>"}},
+    ])
+    assert decision_of(run_hook(payload_for(t))) == "allow"
 
 
 def test_fails_open_without_boundary(tmp_path):

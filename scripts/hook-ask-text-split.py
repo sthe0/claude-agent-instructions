@@ -10,9 +10,12 @@ the user sees bare buttons and asks "а где текст?". hook-plan-delivery-
 guards only the PLAN_READY node via engine timestamps; this hook is the general
 case for EVERY ask, decided from the session transcript itself.
 
-Decision: sum the assistant text emitted in the current turn (transcript entries
-after the last real user message — a user entry carrying actual text, not a bare
-tool_result batch). If the total exceeds THRESHOLD_CHARS, deny with a directive
+Decision: sum only the assistant text at risk — the text emitted since the last
+render checkpoint, the more recent of a turn boundary (a user entry carrying
+actual text, not a bare tool_result batch) or a completed tool call (a user entry
+carrying a tool_result). Narration emitted before an ordinary tool call IS
+rendered when that tool runs, so it is not at risk and does not count. If the
+total exceeds THRESHOLD_CHARS, deny with a directive
 to deliver the text as the turn's FINAL message and re-issue the ask next turn
 (the text-then-buttons timer split: end the turn after starting a background
 `sleep 2`; its completion notification opens the next turn, which starts directly
@@ -52,8 +55,26 @@ def _assistant_text_len(entry: dict) -> int:
     )
 
 
+def _is_render_checkpoint(entry: dict) -> bool:
+    """A completed-tool-call render point: a user entry carrying a tool_result.
+    The assistant text emitted before that tool call was flushed/rendered when the
+    tool ran, so it is NOT at risk of being dropped by a later AskUserQuestion."""
+    if entry.get("type") != "user":
+        return False
+    message = entry.get("message")
+    if not isinstance(message, dict):
+        return False
+    return any(
+        isinstance(item, dict) and item.get("type") == "tool_result"
+        for item in _content_items(message)
+    )
+
+
 def current_turn_text_len(transcript_path: Path) -> int | None:
-    """Chars of assistant text since the last real user prompt; None if the
+    """Chars of assistant text since the last render checkpoint — the more recent
+    of a turn boundary or a completed tool call. Text emitted before an already-
+    completed tool call was rendered when that tool ran, so only the assistant text
+    after the last checkpoint is at risk of being dropped by the ask. None if the
     observable is unavailable (unreadable file / no boundary found)."""
     try:
         lines = transcript_path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -68,7 +89,7 @@ def current_turn_text_len(transcript_path: Path) -> int | None:
             continue
         if not isinstance(entry, dict):
             continue
-        if _is_real_user_prompt(entry):
+        if _is_real_user_prompt(entry) or _is_render_checkpoint(entry):
             seen_boundary = True
             break
         total += _assistant_text_len(entry)
