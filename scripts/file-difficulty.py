@@ -84,6 +84,9 @@ def main(argv: list[str] | None = None, _ts: str | None = None) -> int:
                    help="flow selector: report (default) or backlog")
     p.add_argument("--dry-run", action="store_true",
                    help="print the record and resolved routing without submitting")
+    p.add_argument("--force-report", action="store_true",
+                   help="file via the report channel even though this machine has Core push "
+                        "rights (deliberate override, e.g. filing on behalf of another org)")
     args = p.parse_args(argv)
 
     try:
@@ -118,6 +121,15 @@ def main(argv: list[str] | None = None, _ts: str | None = None) -> int:
         for line in routing_lines:
             print(line)
         return 0
+
+    if authority.is_author() and not args.force_report:
+        print(
+            "error: this machine has Core push rights — edit Core directly via the "
+            "planner -> approval -> developer spine instead of filing a report "
+            "(use --force-report to file anyway)",
+            file=sys.stderr,
+        )
+        return 2
 
     try:
         handle = authority.file_core_difficulty(record, channel=channel_name, **submit_kwargs)

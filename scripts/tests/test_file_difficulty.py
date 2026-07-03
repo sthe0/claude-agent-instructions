@@ -80,7 +80,8 @@ def test_dry_run_omits_evidence_field_when_empty(capsys):
 
 # ── submit via null channel ───────────────────────────────────────────────────
 
-def test_submit_via_null_channel_returns_handle(capsys):
+def test_submit_via_null_channel_returns_handle(monkeypatch, capsys):
+    monkeypatch.setattr(_mod.authority, "is_author", lambda: False)
     dc.register_channel("null-test", dc.NullChannel)
     rc = _run("--target", "CLAUDE.md", "--ground", "gate wording ambiguous",
               "--severity", "high", "--channel", "null-test")
@@ -89,7 +90,8 @@ def test_submit_via_null_channel_returns_handle(capsys):
     assert "mem-" in capsys.readouterr().out
 
 
-def test_submit_via_null_channel_record_survives_round_trip():
+def test_submit_via_null_channel_record_survives_round_trip(monkeypatch):
+    monkeypatch.setattr(_mod.authority, "is_author", lambda: False)
     ch = dc.NullChannel()
     dc.register_channel("null-rt", lambda: ch)
     _run("--target", "docs/x.md", "--ground", "missing example",
@@ -182,6 +184,35 @@ def test_dry_run_project_target_resolves_queue(tmp_path, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "queue: DEEPAGENT" in out
+
+
+# ── authority gate (author machine refuses the non-author route) ────────────
+
+def test_author_machine_refuses_without_force_report(monkeypatch, capsys):
+    monkeypatch.setattr(_mod.authority, "is_author", lambda: True)
+    dc.register_channel("null-authority-1", dc.NullChannel)
+    rc = _run("--target", "CLAUDE.md", "--ground", "x", "--channel", "null-authority-1")
+    assert rc != 0
+    assert "force-report" in capsys.readouterr().err
+
+
+def test_author_machine_force_report_proceeds(monkeypatch, capsys):
+    monkeypatch.setattr(_mod.authority, "is_author", lambda: True)
+    ch = dc.NullChannel()
+    dc.register_channel("null-authority-2", lambda: ch)
+    rc = _run("--target", "CLAUDE.md", "--ground", "x", "--channel", "null-authority-2",
+              "--force-report")
+    assert rc == 0
+    assert len(ch.pull()) == 1
+
+
+def test_non_author_machine_proceeds_without_force_report(monkeypatch, capsys):
+    monkeypatch.setattr(_mod.authority, "is_author", lambda: False)
+    ch = dc.NullChannel()
+    dc.register_channel("null-authority-3", lambda: ch)
+    rc = _run("--target", "CLAUDE.md", "--ground", "x", "--channel", "null-authority-3")
+    assert rc == 0
+    assert len(ch.pull()) == 1
 
 
 def test_dry_run_explicit_queue_overrides_project_field(tmp_path, capsys):
