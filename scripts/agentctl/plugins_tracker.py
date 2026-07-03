@@ -88,6 +88,63 @@ def _observe_replan(state, bag) -> list[PluginDirective]:
     )]
 
 
+_MARKER_LABELS = (
+    ("m1", "M1 independent deliverables"),
+    ("m2", "M2 heterogeneous work"),
+    ("m3", "M3 blocking deps"),
+    ("m4", "M4 rollback risk"),
+)
+
+
+def _fired_markers(partition) -> str:
+    labels = []
+    for attr, label in _MARKER_LABELS:
+        if not getattr(partition, attr, False):
+            continue
+        severe = getattr(partition, f"{attr}_severe", False)
+        labels.append(f"{label} (severe)" if severe else label)
+    return ", ".join(labels) if labels else "severity override"
+
+
+def _observe_partition(state, bag) -> list[PluginDirective]:
+    # the generic 'subtask' mode materializes as a tracker subticket: when the
+    # M1-M4 verdict recommends a split, nudge the coordinator to PROPOSE (not
+    # decide) subtickets-vs-several-PRs to the user. Silent on 'possible' /
+    # 'not_required' — a mere maybe doesn't warrant interrupting the user.
+    partition = getattr(state, "partition", None)
+    if partition is None or partition.verdict != "recommended":
+        return []
+    return [PluginDirective(
+        "tracker", "propose_delivery_structure",
+        f"partition verdict is recommended ({_fired_markers(partition)}): propose to the "
+        "user via AskUserQuestion whether to split delivery into subtickets (M3 blocking "
+        "deps or distinct owners favor subtickets) or ship as several PRs under this "
+        "ticket — each subticket costs a full spine, so this is a nudge, not a gate",
+        data={"tracker_key": _key(bag), "verdict": partition.verdict},
+    )]
+
+
+def _observe_partition_units(state, bag) -> list[PluginDirective]:
+    # every recorded unit with mode == 'subtask' and no ref yet needs its subticket
+    # created; once the coordinator re-records the unit with the new key as ref,
+    # this unit converges silent (materialization done).
+    partition = getattr(state, "partition", None)
+    if partition is None:
+        return []
+    out: list[PluginDirective] = []
+    for pos, unit in enumerate(partition.units, start=1):
+        if unit.mode != "subtask" or unit.ref:
+            continue
+        out.append(PluginDirective(
+            "tracker", "create_subticket",
+            f"unit {pos} ({unit.title}) is mode=subtask with no ref yet: create the "
+            "subticket, then re-record the unit with its key as ref via "
+            "`agentctl partition-units` to silence this nudge",
+            data={"tracker_key": _key(bag), "unit_index": pos, "unit_title": unit.title},
+        ))
+    return out
+
+
 def _observe_resolve(state, bag) -> list[PluginDirective]:
     # fires on the (possibly gate-blocked) resolve attempt. Surface each
     # not-yet-published mandatory nudge independently; once a phase is recorded,
@@ -140,6 +197,8 @@ register(
         observers={
             "submit_plan": _observe_submit_plan,
             "approve": _observe_approve,
+            "partition": _observe_partition,
+            "partition_units": _observe_partition_units,
             "record_result": _observe_record_result,
             "replan": _observe_replan,
             "resolve": _observe_resolve,

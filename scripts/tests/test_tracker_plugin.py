@@ -15,10 +15,12 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 from agentctl import cli, plugins
 from agentctl import plugins_tracker as tp
 from agentctl.directive import Directive
-from agentctl.state import Node, SessionState
+from agentctl.state import Node, Partition, PartitionUnit, SessionState
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 HOOK_SCRIPT = SCRIPTS_DIR / "hook-tracker-publish-reminder.py"
@@ -116,6 +118,88 @@ def test_resolve_emits_publish_result_and_transition_status_until_recorded():
     state.plugins["tracker"]["published_phases"]["status"] = True
     d3 = Directive(True, state.node, "resolve")
     assert plugins.fire("resolve", state, d3) == []
+
+
+# --- partition: propose_delivery_structure on a recommended verdict -----------
+
+@pytest.mark.parametrize("verdict", ["possible", "not_required"])
+def test_partition_silent_unless_recommended(verdict):
+    state = _new_state(node=Node.PARTITIONED.value)
+    plugins.activate(state, "tracker")
+    state.partition = Partition(m1=True, m2=True, verdict=verdict)
+    fired = plugins.fire("partition", state, Directive(True, state.node, "partition"))
+    assert fired == []
+
+
+def test_partition_recommended_emits_propose_delivery_structure_non_blocking():
+    state = _new_state(node=Node.PARTITIONED.value)
+    plugins.activate(state, "tracker", {"tracker_key": "ABC-9"})
+    state.partition = Partition(m1=True, m3=True, verdict="recommended")
+    fired = plugins.fire("partition", state, Directive(True, state.node, "partition"))
+    assert [f["action"] for f in fired] == ["propose_delivery_structure"]
+    directive = fired[0]
+    assert directive["plugin"] == "tracker"
+    assert directive.get("blocking") is not True
+    assert directive["data"]["tracker_key"] == "ABC-9"
+    assert directive["data"]["verdict"] == "recommended"
+
+
+def test_partition_absent_is_silent():
+    # partition event can fire before state.partition is populated defensively —
+    # no assessment recorded yet must not raise or emit
+    state = _new_state(node=Node.APPROVED.value)
+    plugins.activate(state, "tracker")
+    assert state.partition is None
+    fired = plugins.fire("partition", state, Directive(True, state.node, "partition"))
+    assert fired == []
+
+
+# --- partition_units: create_subticket nudge for unmaterialized subtasks ------
+
+def test_partition_units_nudges_subtask_without_ref():
+    state = _new_state(node=Node.PARTITIONED.value)
+    plugins.activate(state, "tracker", {"tracker_key": "ABC-9"})
+    state.partition = Partition(verdict="recommended", units=[
+        PartitionUnit(title="core change", stages=[1], mode="inline"),
+        PartitionUnit(title="follow-up cleanup", stages=[2], mode="subtask"),
+    ])
+    fired = plugins.fire("partition_units", state, Directive(True, state.node, "partition_units"))
+    assert [f["action"] for f in fired] == ["create_subticket"]
+    directive = fired[0]
+    assert directive.get("blocking") is not True
+    assert directive["data"]["unit_index"] == 2
+    assert directive["data"]["unit_title"] == "follow-up cleanup"
+
+
+def test_partition_units_converges_silent_once_ref_recorded():
+    # a subtask unit with its ref already assigned (subticket created and
+    # re-recorded) must not re-nudge
+    state = _new_state(node=Node.PARTITIONED.value)
+    plugins.activate(state, "tracker")
+    state.partition = Partition(verdict="recommended", units=[
+        PartitionUnit(title="follow-up cleanup", stages=[2], mode="subtask", ref="ABC-10"),
+    ])
+    fired = plugins.fire("partition_units", state, Directive(True, state.node, "partition_units"))
+    assert fired == []
+
+
+def test_partition_units_ignores_non_subtask_modes():
+    state = _new_state(node=Node.PARTITIONED.value)
+    plugins.activate(state, "tracker")
+    state.partition = Partition(verdict="recommended", units=[
+        PartitionUnit(title="core change", stages=[1], mode="inline"),
+        PartitionUnit(title="side change", stages=[2], mode="spawn"),
+    ])
+    fired = plugins.fire("partition_units", state, Directive(True, state.node, "partition_units"))
+    assert fired == []
+
+
+def test_partition_units_no_units_is_silent():
+    state = _new_state(node=Node.PARTITIONED.value)
+    plugins.activate(state, "tracker")
+    state.partition = Partition(verdict="recommended")
+    fired = plugins.fire("partition_units", state, Directive(True, state.node, "partition_units"))
+    assert fired == []
 
 
 # --- gate ---------------------------------------------------------------------
