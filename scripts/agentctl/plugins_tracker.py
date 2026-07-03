@@ -7,7 +7,8 @@ task closes. Historically the skill's "Phase hooks" table told the *coordinator*
 to remember each of those moments. That is exactly the cognition the engine can
 own: this plugin OBSERVES the matching core transitions and surfaces a
 `publish_*` PluginDirective at each, and a gate keeps the task from closing until
-the mandatory publications (plan + result) are actually recorded.
+the mandatory publications (plan + result + the ticket status transition) are
+actually recorded.
 
 Division of labour (engine owns WHEN; the skill owns WHAT/WHERE):
   - WHEN — this plugin: which transition fires which publish nudge, and the
@@ -29,9 +30,9 @@ from .plugins import Plugin, PluginDirective, register
 from .state import Node
 
 # Phases the gate insists on before a tracker task may resolve. Progress and
-# replan posts are valuable but not load-bearing; the plan and the final result
-# are the ticket's minimum honest record.
-MANDATORY_PHASES = ("plan", "result")
+# replan posts are valuable but not load-bearing; the plan, the final result, and
+# the ticket status transition are the ticket's minimum honest record.
+MANDATORY_PHASES = ("plan", "result", "status")
 
 
 def _published(bag) -> dict:
@@ -75,17 +76,28 @@ def _observe_replan(state, bag) -> list[PluginDirective]:
 
 
 def _observe_resolve(state, bag) -> list[PluginDirective]:
-    # fires on the (possibly gate-blocked) resolve attempt. Surface the result
-    # nudge until the result is actually published; once recorded, stay silent so
-    # the successful second resolve does not re-nudge.
-    if "result" in _published(bag):
-        return []
-    return [PluginDirective(
-        "tracker", "publish_result",
-        "post the final result (resolution summary + all artifacts + structured "
-        "difficulty record), then `plugin-record --phase result`",
-        blocking=True, data={"tracker_key": _key(bag), "phase": "result"},
-    )]
+    # fires on the (possibly gate-blocked) resolve attempt. Surface each
+    # not-yet-published mandatory nudge independently; once a phase is recorded,
+    # it stays silent so the successful second resolve does not re-nudge.
+    pub = _published(bag)
+    out: list[PluginDirective] = []
+    if "result" not in pub:
+        out.append(PluginDirective(
+            "tracker", "publish_result",
+            "post the final result (resolution summary + all artifacts + structured "
+            "difficulty record), then `plugin-record --phase result`",
+            blocking=True, data={"tracker_key": _key(bag), "phase": "result"},
+        ))
+    if "status" not in pub:
+        out.append(PluginDirective(
+            "tracker", "transition_status",
+            "transition the ticket(s) to a terminal/resolved status (subtickets "
+            "before parent), then `plugin-record --phase status`. If the ticket is "
+            "legitimately left open (e.g. a follow-up PR still pending), record the "
+            "decision explicitly: `plugin-record --phase status --note \"<why open>\"`",
+            blocking=True, data={"tracker_key": _key(bag), "phase": "status"},
+        ))
+    return out
 
 
 # --- gate: block resolution until the mandatory phases are recorded -----------

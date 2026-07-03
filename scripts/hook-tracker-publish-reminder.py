@@ -8,11 +8,12 @@ guards the resolution gate). This one is the publish-side safety net for the
 `tracker` agentctl plugin (scripts/agentctl/plugins_tracker.py):
 
 When the acting session has the tracker plugin ACTIVE and one of its mandatory
-publications (the plan, the final result) has not been recorded via
-`agentctl plugin-record --plugin tracker --phase <p>`, this hook surfaces a
-reminder. The nudge is loudest at the resolution gate (node == RESOLUTION) — the
-plugin's gate will block `resolve` there until the phases are recorded, so the
-reminder tells the coordinator exactly what to post first.
+publications (the plan, the final result, the ticket status transition) has not
+been recorded via `agentctl plugin-record --plugin tracker --phase <p>`, this
+hook surfaces a reminder. The nudge is loudest at the resolution gate
+(node == RESOLUTION) — the plugin's gate will block `resolve` there until the
+phases are recorded, so the reminder tells the coordinator exactly what to post
+first.
 
 Mirrors hook-resolution-reminder.py: reads the agentctl state JSON keyed by
 session_id; missing/corrupt state or an inactive plugin -> silent (exit 0, no
@@ -29,7 +30,7 @@ from lib import config_root  # noqa: E402
 
 # Must mirror plugins_tracker.MANDATORY_PHASES. Duplicated (not imported) so the
 # hook stays a dependency-free stdin filter that never imports the engine.
-MANDATORY_PHASES = ("plan", "result")
+MANDATORY_PHASES = ("plan", "result", "status")
 
 
 def _load_state(session_id: str) -> dict | None:
@@ -81,9 +82,10 @@ def main() -> int:
         print(
             "[tracker-publish-reminder] The tracker plugin is active with "
             f"unpublished mandatory phase(s): {phases}. Post the corresponding "
-            "ticket comment at its phase boundary (plan before approval, result at "
-            "close) and record it via `agentctl plugin-record --plugin tracker "
-            "--phase <p>` — the resolution gate enforces this before the task closes."
+            "ticket comment at its phase boundary (plan before approval, result and "
+            "the status transition at close) and record it via `agentctl "
+            "plugin-record --plugin tracker --phase <p>` — the resolution gate "
+            "enforces this before the task closes."
         )
     return 0
 

@@ -77,15 +77,20 @@ def test_replan_emits_publish_replan():
     assert [f["action"] for f in fired] == ["publish_replan"]
 
 
-def test_resolve_emits_publish_result_until_recorded():
+def test_resolve_emits_publish_result_and_transition_status_until_recorded():
     state = _new_state(node=Node.RESOLUTION.value)
     plugins.activate(state, "tracker")
     d = Directive(False, state.node, "resolve")
-    assert [f["action"] for f in plugins.fire("resolve", state, d)] == ["publish_result"]
-    # once the result phase is recorded, the nudge goes silent
+    assert [f["action"] for f in plugins.fire("resolve", state, d)] == \
+        ["publish_result", "transition_status"]
+    # once the result phase is recorded, only the status nudge remains
     state.plugins["tracker"]["published_phases"]["result"] = True
-    d2 = Directive(True, state.node, "resolve")
-    assert plugins.fire("resolve", state, d2) == []
+    d2 = Directive(False, state.node, "resolve")
+    assert [f["action"] for f in plugins.fire("resolve", state, d2)] == ["transition_status"]
+    # once status is recorded too, the nudge goes fully silent
+    state.plugins["tracker"]["published_phases"]["status"] = True
+    d3 = Directive(True, state.node, "resolve")
+    assert plugins.fire("resolve", state, d3) == []
 
 
 # --- gate ---------------------------------------------------------------------
@@ -95,9 +100,24 @@ def test_publish_gate_blocks_until_mandatory_phases_recorded():
     plugins.activate(state, "tracker")
     assert plugins.plugin_gate_blockers(state, "resolution")  # nothing published yet
     state.plugins["tracker"]["published_phases"]["plan"] = True
-    assert plugins.plugin_gate_blockers(state, "resolution")  # result still missing
+    assert plugins.plugin_gate_blockers(state, "resolution")  # result, status still missing
     state.plugins["tracker"]["published_phases"]["result"] = True
-    assert plugins.plugin_gate_blockers(state, "resolution") == []  # both recorded -> passes
+    assert plugins.plugin_gate_blockers(state, "resolution")  # status still missing
+    state.plugins["tracker"]["published_phases"]["status"] = True
+    assert plugins.plugin_gate_blockers(state, "resolution") == []  # all three recorded -> passes
+
+
+def test_publish_gate_blocks_on_missing_status_alone():
+    # plan + result recorded, status not yet -> still blocked; status closes it
+    state = _new_state()
+    plugins.activate(state, "tracker")
+    state.plugins["tracker"]["published_phases"]["plan"] = True
+    state.plugins["tracker"]["published_phases"]["result"] = True
+    blockers = plugins.plugin_gate_blockers(state, "resolution")
+    assert blockers
+    assert any("status" in b for b in blockers)
+    state.plugins["tracker"]["published_phases"]["status"] = True
+    assert plugins.plugin_gate_blockers(state, "resolution") == []
 
 
 def test_publish_gate_does_not_touch_plan_approval():
@@ -149,9 +169,10 @@ def test_e2e_resolve_blocked_until_published_then_passes_and_retires(capsys, tmp
     # the blocked resolve still surfaces the publish_result nudge
     assert any(p["action"] == "publish_result" for p in d["data"]["plugin_directives"])
 
-    # record the two mandatory publications, then resolve passes
+    # record the three mandatory publications, then resolve passes
     _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker", "--phase", "plan")
     _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker", "--phase", "result")
+    _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker", "--phase", "status")
     rc, d = _run(capsys, root, "resolve", "--session", sid, "--by", "user", "--quality", "4")
     assert rc == 0
     assert d["node"] == Node.RESOLVED.value
@@ -186,11 +207,13 @@ def _load_hook():
 def test_hook_lists_unpublished_phases_when_tracker_active():
     mod = _load_hook()
     state = {"node": "RESOLUTION", "plugins": {"tracker": {"published_phases": {"plan": True}}}}
-    assert mod.unpublished_phases(state) == ["result"]
+    assert mod.unpublished_phases(state) == ["result", "status"]
 
 
 def test_hook_silent_when_tracker_inactive_or_complete():
     mod = _load_hook()
     assert mod.unpublished_phases({"plugins": {}}) == []
-    full = {"plugins": {"tracker": {"published_phases": {"plan": True, "result": True}}}}
+    full = {"plugins": {"tracker": {
+        "published_phases": {"plan": True, "result": True, "status": True},
+    }}}
     assert mod.unpublished_phases(full) == []
