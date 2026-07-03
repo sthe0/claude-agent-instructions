@@ -23,7 +23,7 @@ from pathlib import Path
 from lib import config_root
 
 from . import advisor, continuations, cost, gates, permissions, plugins
-from .classify import Signals, classify
+from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
 from .partition import render_section, render_units, verdict
 from .directive import Directive
@@ -368,6 +368,8 @@ def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Di
     result = classify(sig, thr)
     state.weight_class = result.weight_class
     state.route = result.route
+    if sig.tracker_key and TRACKER_KEY_RE.match(sig.tracker_key):
+        state.tracker_key = sig.tracker_key
     state.node = transition(state.node, "classify")
     state.log("classify", weight_class=result.weight_class, route=result.route, reasons=result.reasons)
 

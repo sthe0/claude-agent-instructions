@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+from argparse import Namespace
 from pathlib import Path
 
 import pytest
@@ -20,7 +21,7 @@ import pytest
 from agentctl import cli, plugins
 from agentctl import plugins_tracker as tp
 from agentctl.directive import Directive
-from agentctl.state import Node, Partition, PartitionUnit, SessionState
+from agentctl.state import Node, Partition, PartitionUnit, SessionState, WeightClass
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 HOOK_SCRIPT = SCRIPTS_DIR / "hook-tracker-publish-reminder.py"
@@ -44,6 +45,70 @@ def test_activate_seeds_bag_with_tracker_key():
     bag = state.plugins["tracker"]
     assert bag["tracker_key"] == "ABC-123"
     assert bag["published_phases"] == {}
+
+
+# --- auto-activation (#11 P1) --------------------------------------------------
+# The plugin must never stay dark on a tracker-driven task just because the
+# tracker-management skill was not explicitly invoked to plugin-activate it.
+
+def test_registered_with_auto_activate_predicate():
+    assert plugins.REGISTRY["tracker"].auto_activate is not None
+
+
+def test_auto_activate_true_when_tracker_key_and_substantive():
+    state = _new_state(tracker_key="ABC-9", weight_class=WeightClass.SUBSTANTIVE.value)
+    assert tp._auto_activate(state) is True
+
+
+def test_auto_activate_false_without_tracker_key():
+    state = _new_state(tracker_key=None, weight_class=WeightClass.SUBSTANTIVE.value)
+    assert tp._auto_activate(state) is False
+
+
+def test_auto_activate_false_when_not_substantive():
+    # a small-change session could in principle carry a tracker_key-shaped task id;
+    # classify.py itself already forces SUBSTANTIVE whenever tracker_key matches, so
+    # this only guards the predicate's own logic against a future relaxation there.
+    state = _new_state(tracker_key="ABC-9", weight_class=WeightClass.SMALL_CHANGE.value)
+    assert tp._auto_activate(state) is False
+
+
+def _classify(store, sid, *, tracker_key=None, architectural=False):
+    cli.cmd_start(Namespace(session=sid, task="demo", goal="g", done_criterion="dc",
+                            criterion_type="measurable", recursion_depth=0), store=store)
+    return cli.cmd_classify(Namespace(
+        session=sid, chat=False, changed_lines=200, files=5, wall_clock_min=60,
+        tracker_key=tracker_key, architectural=architectural, external_effect=False,
+        new_dependency=False, public_api_change=False,
+    ), store=store)
+
+
+def test_classify_with_tracker_key_auto_activates_plugin(store):
+    _classify(store, "ta-1", tracker_key="ABC-9")
+    state = store.load("ta-1")
+    assert "tracker" in state.plugins
+    assert state.tracker_key == "ABC-9"
+    # auto_seed mirrors plugin-activate --tracker-key: the bag carries the key,
+    # so every nudge names the ticket instead of an empty string
+    assert state.plugins["tracker"]["tracker_key"] == "ABC-9"
+
+
+def test_skill_activation_wins_over_later_auto_activation():
+    """auto_activate_for skips an already-active plugin — an explicit skill
+    activation's bag (key + recorded phases) is never reset by classify."""
+    state = _new_state(tracker_key="ABC-9", weight_class=WeightClass.SUBSTANTIVE.value)
+    plugins.activate(state, "tracker", {"tracker_key": "ABC-9"})
+    state.plugins["tracker"]["published_phases"]["plan"] = "comment-1"
+    assert "tracker" not in plugins.auto_activate_for(state)
+    assert state.plugins["tracker"]["published_phases"] == {"plan": "comment-1"}
+
+
+def test_classify_without_tracker_key_does_not_auto_activate(store):
+    # substantive via --architectural, no tracker key at all: must stay dark
+    _classify(store, "ta-2", architectural=True)
+    state = store.load("ta-2")
+    assert "tracker" not in state.plugins
+    assert state.tracker_key is None
 
 
 # --- observers ----------------------------------------------------------------

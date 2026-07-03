@@ -42,6 +42,10 @@ Terminal = Callable[["object", str], bool]
 # A predicate for engine-driven auto-activation: True if the plugin should
 # auto-activate for the given session state. Called at classify for SUBSTANTIVE sessions.
 AutoActivate = Callable[["object"], bool]
+# Seed for an engine-driven activation: state -> the bag overlay that an explicit
+# `plugin-activate` would have passed via its flags. Without it an auto-activated
+# bag holds only state_factory defaults (e.g. tracker_key "" — nudges lose the key).
+AutoSeed = Callable[["object"], dict]
 
 
 @dataclass
@@ -72,6 +76,7 @@ class Plugin:
     terminal: Terminal | None = None
     commands: dict[str, Callable] = field(default_factory=dict)
     auto_activate: "AutoActivate | None" = None
+    auto_seed: "AutoSeed | None" = None
 
 
 # event name a plugin observes <- coordination command that produces it. Only
@@ -155,7 +160,8 @@ def auto_activate_for(state) -> list[str]:
         if name in state.plugins or name in state.plugins_archive:
             continue
         if plugin.auto_activate(state):
-            activate(state, name)
+            seed = plugin.auto_seed(state) if plugin.auto_seed is not None else None
+            activate(state, name, seed=seed)
             activated.append(name)
     return activated
 

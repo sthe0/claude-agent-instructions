@@ -18,22 +18,35 @@ Division of labour (engine owns WHEN; the skill owns WHAT/WHERE):
     open-PR override (status to the PR, not the ticket). The plugin emits the
     same `publish_progress` nudge either way; the skill routes it.
 
-Lifecycle: task-scoped. Activated by the skill on invocation
-(`agentctl plugin-activate --plugin tracker --tracker-key <KEY>`), it rides the
-whole task and auto-retires once resolution actually passes (its bag is archived
-into state.plugins_archive for audit). A publication is only marked done by the
-coordinator calling `agentctl plugin-record --plugin tracker --phase <p>` AFTER
-the comment lands — so the gate reflects a real post, never a mere intention.
+Lifecycle: task-scoped. Activated either by the skill on invocation
+(`agentctl plugin-activate --plugin tracker --tracker-key <KEY>`) or by the engine
+itself at classify (#11 P1: `_auto_activate` fires whenever a tracker-key-shaped
+task id is detected on a SUBSTANTIVE session) — a tracker-driven task must never
+leave the publish layer dark just because the skill was not explicitly invoked.
+It rides the whole task and auto-retires once resolution actually passes (its bag
+is archived into state.plugins_archive for audit). A publication is only marked
+done by the coordinator calling `agentctl plugin-record --plugin tracker --phase
+<p>` AFTER the comment lands — so the gate reflects a real post, never a mere
+intention.
 """
 from __future__ import annotations
 
 from .plugins import Plugin, PluginDirective, register
-from .state import Node
+from .state import Node, WeightClass
 
 # Phases the gate insists on before a tracker task may resolve. Progress and
 # replan posts are valuable but not load-bearing; the plan, the final result, and
 # the ticket status transition are the ticket's minimum honest record.
 MANDATORY_PHASES = ("plan", "result", "status")
+
+
+def _auto_activate(state) -> bool:
+    """True when classify detected a ticket key (#11 P1): a tracker-driven task
+    must never leave the publish layer dark just because the tracker-management
+    skill was not explicitly invoked to `plugin-activate`."""
+    return bool(getattr(state, "tracker_key", None)) and (
+        getattr(state, "weight_class", None) == WeightClass.SUBSTANTIVE.value
+    )
 
 
 def _published(bag) -> dict:
@@ -206,5 +219,9 @@ register(
         gates={"resolution": _publish_gate},
         state_factory=lambda: {"tracker_key": "", "published_phases": {}},
         terminal=_terminal,
+        auto_activate=_auto_activate,
+        # mirror what an explicit `plugin-activate --tracker-key` would seed —
+        # without it the auto-activated bag's nudges carry an empty key
+        auto_seed=lambda state: {"tracker_key": getattr(state, "tracker_key", "") or ""},
     )
 )

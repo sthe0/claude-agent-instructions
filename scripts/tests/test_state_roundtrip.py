@@ -365,3 +365,20 @@ def test_legacy_state_without_plan_snapshot_fields_loads_with_defaults():
     loaded = SessionState.from_dict(raw)
     assert loaded.plan_snapshot_path is None
     assert loaded.plan_snapshot_hash is None
+
+
+def test_json_roundtrip_preserves_tracker_key():
+    s = SessionState(session_id="s", task_id="t", tracker_key="ABC-9")
+    back = SessionState.from_json(s.to_json())
+    assert back.tracker_key == "ABC-9"
+
+
+def test_legacy_state_without_tracker_key_field_loads_with_default():
+    """A pre-#11 state dict with no tracker_key key (absent, not even null) loads
+    with tracker_key defaulting to None."""
+    import json
+    s = SessionState(session_id="s", task_id="t", tracker_key="ABC-9")
+    raw = json.loads(s.to_json())
+    raw.pop("tracker_key", None)
+    loaded = SessionState.from_dict(raw)
+    assert loaded.tracker_key is None

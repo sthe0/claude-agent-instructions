@@ -561,6 +561,11 @@ class SessionState:
     # plan_path (the prior behaviour) and old state.json loads byte-compatibly.
     plan_snapshot_path: str | None = None
     plan_snapshot_hash: str | None = None
+    # The tracker key classify detected (#11): persisted so the tracker plugin's
+    # auto_activate predicate can read it without re-deriving it from task_id.
+    # None on legacy states and on sessions with no tracker-key-shaped task id
+    # (absent key -> dataclass default via from_dict's cls(**data)).
+    tracker_key: str | None = None
     schema_version: int = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
