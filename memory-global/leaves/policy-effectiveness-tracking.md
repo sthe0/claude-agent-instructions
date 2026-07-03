@@ -8,8 +8,9 @@ refs:
   - token-economy-plan
   - coordinator-objective
   - self-improvement
+  - quality-regression-investigation
 created: 2026-06-17
-last_verified: 2026-06-24
+last_verified: 2026-07-03
 ---
 
 ## Difficulty
@@ -44,6 +45,7 @@ The instrument is `scripts/policy-scorecard.py` over a per-session ledger `~/.lo
 ## Contexts
 
 - **2026-06-17 — instrument built (origin).** Created `policy-scorecard.py`, the ledger, the SessionStart nudge, and this leaf (plan `deep-watching-moore.md`). Baseline reproduction (`--days 2`) matched the hand-computed audit: 54 spawns (28 opus / 22 haiku / 4 sonnet), 46/54 no-explicit-model (24 resolved opus), 2446 main-thread Read+Bash, `Agent` in 23/77 sessions — every ratio matching the 65-session morning audit, absolute counts marginally higher only because the window is measured from wall-clock and captured ~12 newer sessions. First real review (thresholds, first ratings) is pending with the user. No metric-movement entry yet — the loop is armed, not yet closed once.
+- **2026-07-03 — per-task quality axis added (quality-regression-tracking).** Trigger: the user's evaluation «после правок инструкций ты стал хуже решать задачи» — the batch manual `quality_rating` was too coarse/late to catch an instruction-edit regression. Extension: `agentctl resolve --quality 1-5` (user-confirmed at every resolution gate) → `~/.local/log/claude-task-quality.jsonl` rows stamped with `instructions_head`; scorecard session rows gained `instructions_head` + user-signal counters (`n_user_questions`, `n_freetext_askuser_answers` beside the existing corrections/interrupts); new flags (task-quality avg < 3.5 or down > 0.5; correction/free-text rate up > 50%) print the suspect instruction-commit range + a hint to run `scripts/quality-regression-investigate.py`. Procedure and fix ladder: [[quality-regression-investigation]]. Metric movement to watch: the new flags stay silent over subsequent windows while instruction edits continue.
 
 ## Cost
 
