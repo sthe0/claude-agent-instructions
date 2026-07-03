@@ -33,7 +33,7 @@ def _to_executing(store, sid, fixtures_dir):
 def _dispatch(store, sid, stdout, perm_checker):
     runner = lambda argv: RunResult(0, stdout=stdout)
     return cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium",
-                               dry_run=True), store=store, runner=runner,
+                               dry_run=False), store=store, runner=runner,
                             perm_checker=perm_checker)
 
 

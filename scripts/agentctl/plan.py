@@ -61,6 +61,7 @@ gate; wording-only edits (titles, expected-result prose) are refinements.
 """
 from __future__ import annotations
 
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -112,6 +113,12 @@ class PlanDoc:
 class PlanError(Exception):
     """The TOML plan is missing required structure."""
 
+
+# The only two executor shapes the engine dispatches: in-thread, or a named spawn
+# kind matching a spawn-specialist.py --kind. Anything else (a typo, a free-text
+# description) must be rejected at submission — a silent default to in_thread
+# degrades the whole plan to in-thread execution with no visible error (#7).
+_EXECUTOR_RE = re.compile(r"^(in_thread|spawn:[a-z][a-z0-9_-]*)$")
 
 # Extra stage fields required for substantive plans (8-element activity structure).
 _SUBSTANTIVE_STAGE_FIELDS = ("material", "means", "method", "conditions", "invariants", "capability_required")
@@ -239,8 +246,16 @@ def _validate_graph(stages: list[Stage], *, is_substantive: bool) -> None:
             visit(i, [i])
 
 
-def parse_plan(data: dict) -> PlanDoc:
-    """Pure: a parsed-TOML dict -> PlanDoc. No filesystem."""
+def parse_plan(data: dict, *, strict_executor: bool = True) -> PlanDoc:
+    """Pure: a parsed-TOML dict -> PlanDoc. No filesystem.
+
+    strict_executor=True (default) rejects any stage executor outside the
+    {in_thread, spawn:<kind>} vocabulary — the path every newly authored or
+    resubmitted plan goes through (cmd_submit_plan, the new side of cmd_replan).
+    strict_executor=False tolerates legacy free-text executors when loading a
+    plan purely for read-only comparison (cmd_replan's OLD/approved-snapshot
+    side) — plans approved before this vocabulary existed must stay diffable
+    without retroactively bricking their session's replan flow."""
     if "meta" not in data:
         raise PlanError("plan missing [meta] table")
     m = data["meta"]
@@ -288,6 +303,11 @@ def parse_plan(data: dict) -> PlanDoc:
         for required in ("title", "executor", "expected_result_image", "done_criterion"):
             if not s.get(required):
                 raise PlanError(f"stage {index} missing {required!r}")
+        if strict_executor and not _EXECUTOR_RE.match(str(s["executor"])):
+            raise PlanError(
+                f"stage {index} executor {s['executor']!r} is outside the vocabulary "
+                "(expected 'in_thread' or 'spawn:<kind>')"
+            )
         if is_substantive:
             _validate_substantive_stage(s, index)
         raw_principle = s.get("principle")
@@ -342,13 +362,13 @@ def parse_plan(data: dict) -> PlanDoc:
     return PlanDoc(meta=meta, stages=stages)
 
 
-def load_plan(path: str | Path) -> PlanDoc:
+def load_plan(path: str | Path, *, strict_executor: bool = True) -> PlanDoc:
     p = Path(path)
     if not p.exists():
         raise PlanError(f"plan file not found: {p}")
     with p.open("rb") as fh:
         data = tomllib.load(fh)
-    return parse_plan(data)
+    return parse_plan(data, strict_executor=strict_executor)
 
 
 def _structural_signature(doc: PlanDoc) -> dict:

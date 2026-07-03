@@ -737,9 +737,19 @@ def cmd_next_stage(args, *, store: StateStore, runner: Runner | None = None) -> 
     state.log("next_stage", stage=stage.index, executor=stage.actor.executor)
     store.save(state)
     action = "dispatch" if stage.is_spawn() else "execute_in_thread"
+    if action == "dispatch":
+        # #13: the directive must be unambiguous that `agentctl dispatch` IS the
+        # spawn (synchronous, blocking) — a generic detail invited coordinators
+        # to spawn manually and then feed dispatch a second, duplicate spawn.
+        detail = (
+            f"stage {stage.index} active: {stage.title} — spawning "
+            f"{stage.actor.executor} now via agentctl dispatch (synchronous, "
+            "blocking); do NOT spawn manually with spawn-specialist.py or claude -p"
+        )
+    else:
+        detail = f"stage {stage.index} active: {stage.title}"
     return Directive(
-        True, state.node, action,
-        f"stage {stage.index} active: {stage.title}",
+        True, state.node, action, detail,
         data={"stage": stage.index, "executor": stage.actor.executor,
               "expected_result_image": stage.subject.result},
     )
@@ -753,13 +763,22 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
         return Directive(False, state.node, "next_stage", "no active stage to dispatch")
     if not stage.is_spawn():
         return Directive(True, state.node, "execute_in_thread", f"stage {stage.index} is in-thread; no spawn")
+    dry_run = bool(getattr(args, "dry_run", False))
     result = dispatch_stage(
         stage, state.plan_path or "",
         runner=runner,
         budget=getattr(args, "budget", "medium"),
         complexity=getattr(args, "complexity", "medium"),
-        dry_run=bool(getattr(args, "dry_run", False)),
+        dry_run=dry_run,
     )
+    if dry_run:
+        # #10: a dry-run is a pure preview — no event log, no state save, no
+        # marker routing. The echoed command is the whole result.
+        return Directive(
+            True, state.node, "preview",
+            f"stage {stage.index} dry-run preview (no state change)",
+            data={"returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr},
+        )
     state.log("dispatch", stage=stage.index, kind=stage.spawn_kind(), returncode=result.returncode)
     if result.returncode != 0 and _is_recursion_refusal(result):
         # spawn-specialist refused at the recursion cap — a structural blocker, not
@@ -1282,7 +1301,10 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # session, or an approve that predates the field) fall back to plan_path.
     snap = state.plan_snapshot_path
     old_path = snap if (snap and Path(snap).exists()) else state.plan_path
-    old = _load(old_path)
+    # OLD side is a read-only comparison baseline: plans approved before the
+    # executor vocabulary existed (#7) may carry free-text executors and must
+    # stay diffable — only the NEW side (and submit-plan) is strict.
+    old = _load(old_path, strict_executor=False)
     new = _load(args.plan)
 
     # coverage gate: inside the difficulty flow, the corrected plan must CARRY the

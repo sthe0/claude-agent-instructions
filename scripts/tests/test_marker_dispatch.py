@@ -114,7 +114,7 @@ def _to_executing(store, sid, fixtures_dir):
 def _dispatch_with(store, sid, stdout, returncode=0):
     runner = lambda argv: RunResult(returncode, stdout=stdout)
     return cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium",
-                               dry_run=True), store=store, runner=runner)
+                               dry_run=False), store=store, runner=runner)
 
 
 def test_completed_routes_to_record_result(store, fixtures_dir):

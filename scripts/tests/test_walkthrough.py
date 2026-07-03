@@ -8,8 +8,9 @@ from agentctl.state import Node
 
 
 def fake_runner(argv):
-    # spawn-specialist would print a COMPLETED marker; we just succeed.
-    assert "--dry-run" in argv  # walkthrough must never spend
+    # spawn-specialist would print a COMPLETED marker; we just succeed. The fake
+    # runner itself is the no-spend guarantee (dry_run=True would short-circuit
+    # into a preview and never reach marker routing — #10).
     return RunResult(0, stdout="COMPLETED: stage done\n")
 
 
@@ -61,7 +62,7 @@ def test_full_substantive_cycle(store, fixtures_dir):
     assert d.node == Node.EXECUTING.value
     assert d.action == "dispatch"
     d = cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium",
-                            dry_run=True), store=store, runner=fake_runner)
+                            dry_run=False), store=store, runner=fake_runner)
     assert d.ok
     d = cli.cmd_record_result(ns(session=sid, status="passed", actual="import ok",
                                control="reviewed: ok"), store=store)
@@ -72,7 +73,7 @@ def test_full_substantive_cycle(store, fixtures_dir):
     d = cli.cmd_next_stage(ns(session=sid), store=store)
     assert d.node == Node.EXECUTING.value
     d = cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium",
-                            dry_run=True), store=store, runner=fake_runner)
+                            dry_run=False), store=store, runner=fake_runner)
     assert d.ok
     d = cli.cmd_record_result(ns(session=sid, status="passed", actual="tests green",
                                control="reviewed: ok"), store=store)
