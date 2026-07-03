@@ -17,8 +17,7 @@ from __future__ import annotations
 
 import os
 
-from . import advisor
-from .state import Node, SessionState, StageStatus
+from .state import Node, SessionState, StageStatus, WeightClass
 from .text_shape import PLACEHOLDER_SET as _PLACEHOLDER_SET
 from .text_shape import normalize_string as _normalize_string
 
@@ -26,8 +25,9 @@ from .text_shape import normalize_string as _normalize_string
 # it only as the user's explicit deadlock escape (requires reviewer + note);
 # anything else (`revise`, unknown) blocks.
 _PLAN_REVIEW_PASS = "pass"
+_PLAN_REVIEW_REVISE = "revise"
 _PLAN_REVIEW_OVERRIDE = "override"
-PLAN_REVIEW_VERDICTS = (_PLAN_REVIEW_PASS, "revise", _PLAN_REVIEW_OVERRIDE)
+PLAN_REVIEW_VERDICTS = (_PLAN_REVIEW_PASS, _PLAN_REVIEW_REVISE, _PLAN_REVIEW_OVERRIDE)
 
 
 def plan_approval_blockers(state: SessionState) -> list[str]:
@@ -109,19 +109,19 @@ def difficulty_blockers(state: SessionState) -> list[str]:
 def plan_review_active(state: SessionState) -> bool:
     """Whether the thinker-review gate applies to this session.
 
-    Scoped to substantive work exactly like the advisor (reusing
-    advisor.resolve_enabled so the two share one activation rule): chat and
-    small-change sessions never pay the review cost. AGENTCTL_PLAN_REVIEW overrides
-    in both directions ("1" forces on, "0" forces off — the analogue of
-    AGENTCTL_ADVISOR); absent the override, resolve_enabled's config-mode +
-    weight-class rule decides. Env-only reads, no file/subprocess I/O, so the gate
-    stays pure."""
+    Scoped by weight class alone: chat and small-change sessions never pay the
+    review cost; SUBSTANTIVE sessions always do. AGENTCTL_PLAN_REVIEW overrides in
+    both directions ("1" forces on, "0" forces off). Deliberately NOT routed
+    through advisor.resolve_enabled: the advisor is an optional cost knob and its
+    kill switch (AGENTCTL_ADVISOR=0 / advisor-mode=off) must not silently defeat a
+    mandatory review gate — the gate's only off switch is its own env var.
+    Env-only reads, no file/subprocess I/O, so the gate stays pure."""
     env = os.environ.get("AGENTCTL_PLAN_REVIEW")
     if env == "1":
         return True
     if env == "0":
         return False
-    return advisor.resolve_enabled(state.weight_class)
+    return state.weight_class == WeightClass.SUBSTANTIVE.value
 
 
 def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[str]:

@@ -506,6 +506,25 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
             False, state.node, "noop",
             "no plan to review: submit a plan first, or pass --target <plan.toml>",
         )
+    # An override is the USER's escape from a reviewer's `revise` deadlock — the
+    # reviewer who issued the blocking verdict cannot override themselves. Checked
+    # here, before the record is overwritten and the prior reviewer's identity lost.
+    if args.verdict == gates._PLAN_REVIEW_OVERRIDE:
+        prev = state.plan_review
+        new_reviewer = (getattr(args, "reviewer", "") or "").strip()
+        if (
+            prev is not None
+            and prev.plan_path == target
+            and prev.verdict == gates._PLAN_REVIEW_REVISE
+            and new_reviewer
+            and new_reviewer == (prev.reviewer or "").strip()
+        ):
+            return Directive(
+                False, state.node, "noop",
+                f"override must come from a distinct reviewer: {new_reviewer!r} is the "
+                "reviewer whose 'revise' verdict it would override (the user is the "
+                "expected override author)",
+            )
     state.plan_review = PlanReview(
         plan_path=target,
         verdict=args.verdict,
@@ -1243,6 +1262,9 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         return Directive(False, state.node, "declare", "replan blocked by incomplete difficulty record",
                          data={"blockers": dblock})
 
+    if not state.plan_path:
+        return Directive(False, state.node, "submit_plan", "no current plan to replan against")
+
     # plan-review gate: the corrected plan (args.plan) must carry a thinker review
     # with a passing/overridden verdict BOUND to it before it may be applied. Gates
     # EVERY replan kind (refinement and substantive alike, per the user decision),
@@ -1255,9 +1277,6 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
                          "replan blocked: the corrected plan needs a thinker review "
                          "(run: plan-review --target " + args.plan + ")",
                          data={"blockers": prblock})
-
-    if not state.plan_path:
-        return Directive(False, state.node, "submit_plan", "no current plan to replan against")
     # #8: diff against the plan AS APPROVED (the immutable snapshot), not plan_path —
     # which the coordinator may have edited in place. Absent a snapshot (legacy
     # session, or an approve that predates the field) fall back to plan_path.

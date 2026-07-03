@@ -80,11 +80,8 @@ def test_f_override_missing_reviewer_or_note_blocks(gate_on):
 # --- scope-off (g,h) ---------------------------------------------------------
 
 def test_g_small_change_gate_vacuous(gate_on):
-    """Even with the gate forced on, a non-substantive session never activates it
-    (resolve_enabled is weight-scoped): AGENTCTL_PLAN_REVIEW="1" forces on only
-    when the weight class would otherwise decide — for SMALL_CHANGE the env "1"
-    does force it, so this asserts the resolve_enabled weight rule via env-unset."""
-    # With env unset and advisor-mode=substantive, SMALL_CHANGE is inactive.
+    """With the gate's own env unset, activation is weight-scoped: a SMALL_CHANGE
+    session never activates it."""
     os.environ.pop("AGENTCTL_PLAN_REVIEW", None)
     s = SessionState(session_id="s", task_id="t", weight_class="SMALL_CHANGE",
                      plan_path="/plan.toml")
@@ -97,6 +94,17 @@ def test_h_force_off_env_makes_gate_vacuous(monkeypatch):
     s = _subst()  # no review recorded
     assert gates.plan_review_active(s) is False
     assert gates.plan_review_blockers(s, s.plan_path) == []
+
+
+def test_i_advisor_kill_switch_does_not_disable_gate(monkeypatch):
+    """AGENTCTL_ADVISOR=0 (the advisory judge's cost knob) must not silently
+    defeat the mandatory review gate: with the gate's own env unset, a
+    SUBSTANTIVE session keeps the gate active regardless of advisor state."""
+    monkeypatch.delenv("AGENTCTL_PLAN_REVIEW", raising=False)
+    monkeypatch.setenv("AGENTCTL_ADVISOR", "0")
+    s = _subst()  # no review recorded
+    assert gates.plan_review_active(s) is True
+    assert gates.plan_review_blockers(s, s.plan_path)  # blocks: no review yet
 
 
 # --- in-process approve / replan wiring (b-integration, i2) ------------------
@@ -131,6 +139,27 @@ def test_review_recorded_binds_to_current_plan_path(store, fixtures_dir, gate_on
     cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker",
                            concerns=None, note="", target=None), store=store)
     assert store.load(sid).plan_review.plan_path == plan
+
+
+def test_override_by_same_reviewer_refused(store, fixtures_dir, gate_on):
+    """The reviewer whose `revise` blocks the plan cannot override themselves —
+    override is the USER's escape hatch. The refusal happens before the record
+    is overwritten, so the blocking `revise` (and its author) survive."""
+    sid = "selfov"
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    _to_plan_ready(store, sid, plan)
+    cli.cmd_plan_review(ns(session=sid, verdict="revise", reviewer="thinker",
+                           concerns=None, note="", target=None), store=store)
+    d = cli.cmd_plan_review(ns(session=sid, verdict="override", reviewer="thinker",
+                               concerns=None, note="self-stamp", target=None), store=store)
+    assert d.ok is False and "distinct reviewer" in d.detail
+    assert store.load(sid).plan_review.verdict == "revise"  # record preserved
+    d = cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    assert d.node == Node.PLAN_READY.value  # still blocked
+    cli.cmd_plan_review(ns(session=sid, verdict="override", reviewer="fedor",
+                           concerns=None, note="user escape", target=None), store=store)
+    d = cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    assert d.node == Node.APPROVED.value
 
 
 # --- backward-compat / round-trip (j,k) --------------------------------------
