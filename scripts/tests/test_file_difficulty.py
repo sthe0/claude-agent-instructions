@@ -27,6 +27,14 @@ main = _mod.main
 FIXED_TS = "2026-06-27T00:00:00+00:00"
 
 
+@pytest.fixture(autouse=True)
+def _non_author(monkeypatch):
+    """Hermetic default: the real is_author() probes `git push --dry-run` over
+    the network (and its answer depends on the machine). Tests that exercise
+    the author path override with their own monkeypatch."""
+    monkeypatch.setattr(_mod.authority, "is_author", lambda: False)
+
+
 def _run(*args, **kw):
     """Run main() with FIXED_TS so timestamps are deterministic in output assertions."""
     return main(list(args), _ts=FIXED_TS, **kw)
@@ -213,6 +221,48 @@ def test_non_author_machine_proceeds_without_force_report(monkeypatch, capsys):
     rc = _run("--target", "CLAUDE.md", "--ground", "x", "--channel", "null-authority-3")
     assert rc == 0
     assert len(ch.pull()) == 1
+
+
+# ── fix-first guard (author + core-tier startrek filing refused) ─────────────
+
+def test_author_startrek_core_target_refused_fix_first(monkeypatch, capsys):
+    monkeypatch.setattr(_mod.authority, "is_author", lambda: True)
+    rc = _run("--target", "CLAUDE.md", "--ground", "x",
+              "--channel", "startrek", "--dry-run")
+    assert rc == 2
+    assert "fix-first" in capsys.readouterr().err
+
+
+def test_author_startrek_explicit_queue_bypasses_guard(monkeypatch, capsys):
+    monkeypatch.setattr(_mod.authority, "is_author", lambda: True)
+    rc = _run("--target", "CLAUDE.md", "--ground", "x",
+              "--channel", "startrek", "--queue", "OOSEVEN", "--dry-run")
+    assert rc == 0
+    assert "queue: OOSEVEN" in capsys.readouterr().out
+
+
+def test_author_startrek_force_report_bypasses_guard(monkeypatch, capsys):
+    monkeypatch.setattr(_mod.authority, "is_author", lambda: True)
+    rc = _run("--target", "CLAUDE.md", "--ground", "x",
+              "--channel", "startrek", "--force-report", "--dry-run")
+    assert rc == 0
+    assert "queue: OOSEVENREPORT" in capsys.readouterr().out
+
+
+def test_author_startrek_project_target_bypasses_guard(monkeypatch, tmp_path, capsys):
+    # a project-queue resolution means the filing is project-tier work, not a
+    # deferred Core edit — the guard must not fire
+    monkeypatch.setattr(_mod.authority, "is_author", lambda: True)
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "agent-project.json").write_text(
+        json.dumps({"instruction_queue": "DEEPAGENT"}), encoding="utf-8"
+    )
+    target_file = tmp_path / "CLAUDE.md"
+    target_file.write_text("# test", encoding="utf-8")
+    rc = _run("--target", str(target_file), "--ground", "x",
+              "--channel", "startrek", "--dry-run")
+    assert rc == 0
+    assert "queue: DEEPAGENT" in capsys.readouterr().out
 
 
 def test_dry_run_explicit_queue_overrides_project_field(tmp_path, capsys):

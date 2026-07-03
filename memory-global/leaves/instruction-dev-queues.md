@@ -15,6 +15,8 @@ To achieve **a planned destination for every instruction-development idea** — 
 
 ## Guidance
 
+**Working the queues:** before planning any queued item, verify it is still actual against the current artifact; on an author machine, fix-first — the backlog is the explicit second choice, never the silent default. Both rules (with their difficulties): `skills/self-improvement/policy.md` § Working a queued difficulty / § Author machine: fix-first, backlog-second.
+
 The instruction system has three editable tiers (the `Core < Team < Personal` substrate of ADR-0001; "Org" and "Project" are the Yandex/`robot/deepagent` instances of the editable middle/leaf). **Each tier has two tracking flows:**
 
 - **Internal backlog** — what the tier's *editors* (those with edit authority over that tier's instructions) proactively plan to build. Author-created planning items.

@@ -101,9 +101,24 @@ def main(argv: list[str] | None = None, _ts: str | None = None) -> int:
     if channel_name == "startrek":
         if args.queue:
             resolved_queue = args.queue
+            project_q = None
         else:
             project_q = resolve_project_queue(Path(args.target).resolve())
             resolved_queue = project_q or (_ST_BACKLOG_QUEUE if args.stream == "backlog" else _ST_QUEUE)
+        # Fix-first guard (policy.md § Author machine: fix-first, backlog-second):
+        # a core-tier filing (no explicit --queue, no project-queue resolution)
+        # headed for the org-wide startrek queues from a machine that can edit
+        # Core directly is a deferral-by-default — refuse with the hint. Fires on
+        # --dry-run too (the preview must show the refusal, not fake a routing).
+        if (args.layer == "core" and project_q is None and not args.queue
+                and not args.force_report and authority.is_author()):
+            print(
+                "error: author machine: propose the fix directly (fix-first); "
+                "backlog -> --channel github --stream backlog "
+                "(or name a queue explicitly with --queue)",
+                file=sys.stderr,
+            )
+            return 2
         submit_kwargs: dict = {"queue": resolved_queue}
         routing_lines = [f"queue: {resolved_queue}"]
     elif channel_name in ("github", "external"):

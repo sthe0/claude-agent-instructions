@@ -94,6 +94,18 @@ A difficulty's **tier** decides its destination; the destination's mechanics are
 
 The model classifies the tier; `--queue`/`--stream` (or the resolved project field) carry it to the right surface.
 
+### Working a queued difficulty: verify actuality first
+
+*Difficulty removed: a queued difficulty records the desired-vs-actual as of filing time; the configuration keeps evolving, so planning work from the ticket text alone spends a full plan-approval-develop cycle on a divergence that may no longer exist.*
+
+Before planning any work on a backlog/report item (any tier), re-verify the recorded desired-vs-actual against the **current** artifact — a cheap subagent returning a `file:line` verdict per item is enough. Already-fixed → close the item citing the evidence (commit / current line), with no plan; still-present → the verdict becomes the plan's triage material. (User-stated rule, 2026-07-03.)
+
+### Author machine: fix-first, backlog-second
+
+*Difficulty removed: an author machine that routes its own core-improvement ideas to the backlog by default converts immediately-actionable fixes into queue latency — the queue exists for machines that CANNOT edit, not as a deferral device for those that can.*
+
+On a machine with Core edit authority (`is_author()` true), the **first** proposal for a core-improvement idea is the immediate fix — now, or right after the current task when the idea is non-critical to it. Routing to the backlog is the explicitly-offered **second** choice ("fix now / queue it?"), never the silent default. The deterministic part is mechanized: `file-difficulty.py` refuses a core-tier filing from an author machine unless the queue choice is explicit (`--queue`). (User-stated rule, 2026-07-03.)
+
 ---
 
 ## Cache-aware editing
