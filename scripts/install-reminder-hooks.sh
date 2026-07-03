@@ -60,6 +60,10 @@ DESIRED = [
     # Nudge when AskUserQuestion times out: any answer written mid-turn must be
     # restated in the turn's FINAL message or it never reaches the user.
     ("PostToolUse",      "AskUserQuestion", "hook-answer-delivery-reminder.py", 5),
+    # Nudge when an AskUserQuestion answer is free text rather than an offered
+    # option label: a correction delivered this way bypasses the
+    # UserPromptSubmit self-improvement reminder, which only sees prompts.
+    ("PostToolUse",      "AskUserQuestion", "hook-si-freetext-answer.py", 5),
     # session_scope: heartbeat + touched-path accumulation (Component A wiring).
     # Non-blocking by design — never emits a permissionDecision.
     ("PostToolUse",      "Edit|Write", "hook-scope-track.py",        5),
