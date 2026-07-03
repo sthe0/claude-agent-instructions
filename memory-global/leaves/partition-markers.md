@@ -39,5 +39,5 @@ You set the markers (cognition); the engine owns the derivation — do not re-de
 
 ## See also
 
-- `~/.claude/CLAUDE.md` § Classify task weight — chat / small / substantive routing (orthogonal axis).
+- `~/.claude-agent/CLAUDE.md` § Classify task weight — chat / small / substantive routing (orthogonal axis).
 - `<arcadia>/ai/artifacts/skills/gena/gena-decompose/SKILL.md` — the upstream skill this is adapted from.

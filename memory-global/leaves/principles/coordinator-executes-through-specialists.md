@@ -40,6 +40,6 @@ instruction-repo work that must run in-thread — the principle is too coarse an
 
 ## See also
 
-- `~/.claude/CLAUDE.md` § Coordination — you are the manager.
+- `~/.claude-agent/CLAUDE.md` § Coordination — you are the manager.
 - [[result-checked-against-its-result-image]] — the verification half of the same loop.
 - `docs/adr/0001-consensus-architecture.md`.

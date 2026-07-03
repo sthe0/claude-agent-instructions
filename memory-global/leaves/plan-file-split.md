@@ -8,7 +8,7 @@ last_verified: 2026-05-27
 
 # Plan-file split
 
-The planner skill (`skills/specializations/planner/SKILL.md`) writes plans to `~/.claude/plans/<slug>.md`. For a typical 4–6-stage plan this is fine. For larger plans, observed cost in the 2026-05-27 deepagent sessions reached **25 KB per plan file, re-read 3–10 times** as the work moved through stages. See [token-economy-plan.md](token-economy-plan.md) item 6.
+The planner skill (`skills/specializations/planner/SKILL.md`) writes plans to `~/.claude-agent/plans/<slug>.md`. For a typical 4–6-stage plan this is fine. For larger plans, observed cost in the 2026-05-27 deepagent sessions reached **25 KB per plan file, re-read 3–10 times** as the work moved through stages. See [token-economy-plan.md](token-economy-plan.md) item 6.
 
 The harness Read dedup ([system-knowledge/harness-read-dedup.md](system-knowledge/harness-read-dedup.md)) suppresses redundant Reads of an unchanged plan. The split still helps the **changed-plan** path: when the manager appends `Actual effort:` for stage N or refines stage N+1, the entire single-file plan is considered changed, and the next Read returns the full 25 KB again. With per-stage files, only the touched stage file changes and the next Read of an untouched stage stays deduped.
 
@@ -25,11 +25,11 @@ For small plans (single sprint, ≤ 3 stages, < 10 KB): keep the single file. Sp
 ## Layout
 
 ```
-~/.claude/plans/<slug>.md                    # index
-~/.claude/plans/<slug>-stage-1-<short>.md    # stage 1 detail
-~/.claude/plans/<slug>-stage-2-<short>.md
-~/.claude/plans/<slug>-stage-3-<short>.md
-~/.claude/plans/<slug>-final-verification.md # if Final verification block is long
+~/.claude-agent/plans/<slug>.md                    # index
+~/.claude-agent/plans/<slug>-stage-1-<short>.md    # stage 1 detail
+~/.claude-agent/plans/<slug>-stage-2-<short>.md
+~/.claude-agent/plans/<slug>-stage-3-<short>.md
+~/.claude-agent/plans/<slug>-final-verification.md # if Final verification block is long
 ```
 
 ### Index file (`<slug>.md`)
@@ -87,8 +87,8 @@ When spawning a specialist for stage N, pass the index plus only that stage's fi
 ```bash
 spawn-specialist.py \
   --kind developer \
-  --plan ~/.claude/plans/<slug>.md \
-  --plan ~/.claude/plans/<slug>-stage-<N>-<short>.md \
+  --plan ~/.claude-agent/plans/<slug>.md \
+  --plan ~/.claude-agent/plans/<slug>-stage-<N>-<short>.md \
   ...
 ```
 

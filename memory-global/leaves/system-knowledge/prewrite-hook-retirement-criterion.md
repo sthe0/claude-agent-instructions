@@ -18,7 +18,7 @@ last_verified: 2026-06-24
 **Background.** On `PreToolUse` Edit/Write the hook counts consecutive production-file edits without a plan file and emits a one-time nudge. Once `hook-state-gate.py` covers the `EXECUTING`-node plan gate, this hook's role is superseded — but only for sessions that auto-started the engine.
 
 **Fact / criterion.** The hook now appends one JSON line per firing to
-`~/.claude/agentctl/prewrite-fallback.jsonl` (best-effort, inside `try/except`, never breaks the hook — commit `d9972a3`). `scripts/prewrite-fallback-report.py [--days N] [--ledger PATH]` aggregates it (total firings, unique sessions, per-cwd breakdown).
+`~/.claude-agent/agentctl/prewrite-fallback.jsonl` (best-effort, inside `try/except`, never breaks the hook — commit `d9972a3`). `scripts/prewrite-fallback-report.py [--days N] [--ledger PATH]` aggregates it (total firings, unique sessions, per-cwd breakdown).
 
 **Retire `hook-prewrite-plan-check.py` (drop it from `install-reminder-hooks.sh` DESIRED and delete the script) only when ALL hold:**
 1. Engine auto-start has shipped and been live for ≥ one full reporting window (so sessions default to agentctl, not the prose fallback).
@@ -27,7 +27,7 @@ last_verified: 2026-06-24
 
 Until then the hook stays as the safety net for any non-agentctl session. The ledger is the data that turns "probably safe to remove" into a measurable check.
 
-> verified by: commit d9972a3 (ledger instrumentation); plan `~/.claude/plans/task8-hygiene.md` Stage A; depends on the auto-start enabler (roadmap `steady-riding-dragonfly.md` cross-cutting enabler).
+> verified by: commit d9972a3 (ledger instrumentation); plan `~/.claude-agent/plans/task8-hygiene.md` Stage A; depends on the auto-start enabler (roadmap `steady-riding-dragonfly.md` cross-cutting enabler).
 
 ## See also
 

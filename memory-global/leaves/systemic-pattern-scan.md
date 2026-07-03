@@ -91,8 +91,8 @@ All four are architectural, not patches. None would have been produced by a simp
 
 ## See also
 
-- `~/.claude/CLAUDE.md` § On task resolution § What to record § Self-critique — the trigger.
-- `~/.claude/CLAUDE.md` § On task resolution § Auto-trigger self-improvement — the routing.
-- `~/.claude/skills/overcome-difficulty/SKILL.md` — the analysis tool (applies naturally to agent-system-as-plan).
-- `~/.claude/skills/self-improvement/SKILL.md` — the writer of the architectural change.
+- `~/.claude-agent/CLAUDE.md` § On task resolution § What to record § Self-critique — the trigger.
+- `~/.claude-agent/CLAUDE.md` § On task resolution § Auto-trigger self-improvement — the routing.
+- `~/.claude-agent/skills/overcome-difficulty/SKILL.md` — the analysis tool (applies naturally to agent-system-as-plan).
+- `~/.claude-agent/skills/self-improvement/SKILL.md` — the writer of the architectural change.
 - [memory-hierarchy.md](memory-hierarchy.md) — sister leaf produced by the same kind of analysis; demonstrates the "architectural, not patch" distinction.

@@ -15,7 +15,7 @@ You are tempted to build a PreToolUse hook to block re-Read of unchanged files â
 
 ## Guidance
 
-The Claude Code harness tracks file content shown to the model and short-circuits redundant Read calls. Verified live 2026-05-27 in session `eae4ea0f-...`: an explicit `Read` of `~/.claude/projects/.../memory/MEMORY.md` returned
+The Claude Code harness tracks file content shown to the model and short-circuits redundant Read calls. Verified live 2026-05-27 in session `eae4ea0f-...`: an explicit `Read` of `~/.claude-agent/projects/.../memory/MEMORY.md` returned
 
 > `Wasted call â€” file unchanged since your last Read. Refer to that earlier tool_result instead.`
 

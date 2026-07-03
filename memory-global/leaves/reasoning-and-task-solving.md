@@ -29,7 +29,7 @@ last_verified: 2026-05-24
 
 ## Memory vs prompts
 
-- Durable cross-project facts → global memory (`~/.claude/memory-global/MEMORY.md` + leaves).
+- Durable cross-project facts → global memory (`~/.claude-agent/memory-global/MEMORY.md` + leaves).
 - Project-only facts and runbooks → project memory (`<project_cwd>/.claude/agent-memory/`).
 - Generic agent prompts and `CLAUDE.md` stay free of domain runbooks — they hold behavioral rules only.
 
@@ -37,5 +37,5 @@ last_verified: 2026-05-24
 
 - [ ] Goal and criteria clear.
 - [ ] Plan shown and confirmed (if required).
-- [ ] Right specialist delegated (`~/.claude/agents/`).
+- [ ] Right specialist delegated (`~/.claude-agent/agents/`).
 - [ ] Not duplicating a full pipeline when only one stage needs retest.

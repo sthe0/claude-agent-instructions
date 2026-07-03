@@ -27,5 +27,5 @@ Walk the same steps by hand, same order:
 
 ## See also
 
-- `~/.claude/CLAUDE.md` § Coordination spine — the engine-driven form this fallback mirrors.
+- `~/.claude-agent/CLAUDE.md` § Coordination spine — the engine-driven form this fallback mirrors.
 - `scripts/agentctl/README.md` § State machine — the engine that drives the spine when available.

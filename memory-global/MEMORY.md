@@ -2,7 +2,7 @@
 
 Index of memories applicable across all projects on this machine. Entries are pointer lines to leaf files in `leaves/`.
 
-Loaded into every session via `@~/.claude/memory-global/MEMORY.md` import in `CLAUDE.md`. Keep this index under ~200 lines — anything past the first 200 lines is truncated by the harness.
+Loaded into every session via `@~/.claude-agent/memory-global/MEMORY.md` import in `CLAUDE.md`. Keep this index under ~200 lines — anything past the first 200 lines is truncated by the harness.
 
 ## How to use
 
@@ -75,7 +75,7 @@ Workflow-level permissions (separate from memory): `~/claude-agent-instructions/
 
 ## System knowledge
 
-- [System-knowledge sub-index](leaves/system-knowledge/MEMORY.md) — durable facts about systems, processes, org structure, codebase architecture that aren't self-evident; recording criteria in `~/.claude/CLAUDE.md` § Memory.
+- [System-knowledge sub-index](leaves/system-knowledge/MEMORY.md) — durable facts about systems, processes, org structure, codebase architecture that aren't self-evident; recording criteria in `~/.claude-agent/CLAUDE.md` § Memory.
 
 ## Resolved-task experience
 

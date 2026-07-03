@@ -14,9 +14,9 @@ The "user-invocable skills" section in every session's system reminder is render
 
 A skill appears in the system reminder when:
 
-- It is a directory under `~/.claude/skills/<name>/` with a `SKILL.md` (or it is a single-file skill `~/.claude/skills/<name>.md`).
+- It is a directory under `~/.claude-agent/skills/<name>/` with a `SKILL.md` (or it is a single-file skill `~/.claude-agent/skills/<name>.md`).
 - Project-local skills under `<project>/.claude/skills/` extend the catalog in that project's sessions.
-- Plugins enabled in `~/.claude/settings.json` (`enabledPlugins`) and skills exposed by extra marketplaces likewise contribute lines.
+- Plugins enabled in `~/.claude-agent/settings.json` (`enabledPlugins`) and skills exposed by extra marketplaces likewise contribute lines.
 
 Removing the symlink (or disabling the plugin / marketplace) is what removes the line from future system reminders.
 
@@ -41,7 +41,7 @@ The audit does **not** delete anything — it only reports. Removal is a manual 
 ## How to act on the report
 
 1. Filter for `consider removing from catalog`.
-2. For each, decide: is the skill imported via a marketplace plugin (turn off via `enabledPlugins`), via a symlink under `~/.claude/skills/` (delete the symlink — the source stays where it is), or via a project-local mount?
+2. For each, decide: is the skill imported via a marketplace plugin (turn off via `enabledPlugins`), via a symlink under `~/.claude-agent/skills/` (delete the symlink — the source stays where it is), or via a project-local mount?
 3. For corporate / org skills that we want to keep available but not in the global catalog: move them under a topic-specific path and load only via the relevant project's `.claude/skills/` symlink.
 4. Re-run the audit after a few sessions to confirm the removal didn't break any workflow.
 

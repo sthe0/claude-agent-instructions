@@ -143,11 +143,11 @@ then in-thread execution can beat a cold spawn that would only re-derive the pre
 
 ## Policy ↔ settings.json alignment
 
-The carve-outs in § 1 are **policy**; the **harness** only honors them when the matching patterns are present in `~/.claude/settings.json` `permissions.allow`. If you see permission prompts for items § 1 calls side-effect-free (`ls`, `head`, `cat`, `find`, `wc`, `grep`, `git status`, `arc log`, etc.), the policy is current but the settings haven't caught up — add the patterns. Maintain global read-only Bash idioms in **global** settings.json (cross-machine, cross-project), and project-specific Edit/Write paths in `<cwd>/.claude/settings.local.json`. Audit habit: `Skill(skill="fewer-permission-prompts")` after a click-heavy session.
+The carve-outs in § 1 are **policy**; the **harness** only honors them when the matching patterns are present in `~/.claude-agent/settings.json` `permissions.allow`. If you see permission prompts for items § 1 calls side-effect-free (`ls`, `head`, `cat`, `find`, `wc`, `grep`, `git status`, `arc log`, etc.), the policy is current but the settings haven't caught up — add the patterns. Maintain global read-only Bash idioms in **global** settings.json (cross-machine, cross-project), and project-specific Edit/Write paths in `<cwd>/.claude/settings.local.json`. Audit habit: `Skill(skill="fewer-permission-prompts")` after a click-heavy session.
 
 ## See also
 
-- `~/.claude/CLAUDE.md` § Acting without asking — the short pointer that loads this leaf.
-- `~/.claude/CLAUDE.md` § On task resolution § Cost & effort — per-stage `Actual effort:` from the plan file is the breakdown referenced from the experience leaf.
-- `~/.claude/skills/specializations/planner/SKILL.md` § Plan format — Required resources (optional) and the per-stage `Actual effort:` field.
+- `~/.claude-agent/CLAUDE.md` § Acting without asking — the short pointer that loads this leaf.
+- `~/.claude-agent/CLAUDE.md` § On task resolution § Cost & effort — per-stage `Actual effort:` from the plan file is the breakdown referenced from the experience leaf.
+- `~/.claude-agent/skills/specializations/planner/SKILL.md` § Plan format — Required resources (optional) and the per-stage `Actual effort:` field.
 - `~/claude-agent-instructions/permissions/README.md` — for **specific named** persistent grants (`arc push origin/main`), not for categorical pre-authorizations like the ones in this leaf.

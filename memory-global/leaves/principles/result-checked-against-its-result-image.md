@@ -43,6 +43,6 @@ which point the engine's measurable-vs-acceptance split is where that exception 
 
 ## See also
 
-- `~/.claude/CLAUDE.md` § Coordination spine; § On task resolution.
+- `~/.claude-agent/CLAUDE.md` § Coordination spine; § On task resolution.
 - [[coordinator-executes-through-specialists]] — the dispatch half of the same loop.
 - `docs/adr/0001-consensus-architecture.md` § *The single primitive*.

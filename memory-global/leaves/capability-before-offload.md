@@ -28,6 +28,6 @@ A capability gap asserted without both checks is unverified.
 
 ## See also
 
-- `~/.claude/CLAUDE.md` § Acting without asking — the short pointer that loads this leaf.
+- `~/.claude-agent/CLAUDE.md` § Acting without asking — the short pointer that loads this leaf.
 - [[doubt-own-snapshot]] — the perception-side twin: doubt your own stale snapshot before doubting the user's requirement.
 - [[acting-without-asking]] — the pre-authorization carve-outs that make "just do it" safe.

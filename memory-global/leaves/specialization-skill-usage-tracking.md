@@ -8,7 +8,7 @@ last_verified: 2026-05-27
 
 # Specialization & skill usage tracking
 
-The post-resolution experience leaf (see `~/.claude/CLAUDE.md` § On task resolution → § What to record, section #6) carries a structured tally of every specialization spawn and inline skill / subagent invocation made during the task. The goal is **analyzable per-task data on agent-system effectiveness**: which specializations actually pull weight, which skills get invoked but skipped in similar future tasks, which subagents are reached for and why.
+The post-resolution experience leaf (see `~/.claude-agent/CLAUDE.md` § On task resolution → § What to record, section #6) carries a structured tally of every specialization spawn and inline skill / subagent invocation made during the task. The goal is **analyzable per-task data on agent-system effectiveness**: which specializations actually pull weight, which skills get invoked but skipped in similar future tasks, which subagents are reached for and why.
 
 ## What counts
 

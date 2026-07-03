@@ -43,6 +43,6 @@ ground fixes the rest."
 
 ## See also
 
-- `~/.claude/CLAUDE.md` § Coordination — escalation; § Reasoning practices.
+- `~/.claude-agent/CLAUDE.md` § Coordination — escalation; § Reasoning practices.
 - [[result-checked-against-its-result-image]] — the critique primitive applied to verification.
 - `docs/adr/0001-consensus-architecture.md` § *The single primitive* / § *Considered options*.

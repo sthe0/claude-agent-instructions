@@ -1,11 +1,11 @@
 ---
-description: Global agent instructions, mirrored from Claude Code (~/.claude/CLAUDE.md). Apply to every conversation.
+description: Global agent instructions, mirrored from Claude Code (~/.claude-agent/CLAUDE.md). Apply to every conversation.
 alwaysApply: true
 ---
 
 # Claude Code parity (global rule)
 
-**Canonical source:** `~/.claude/CLAUDE.md` (symlink → `~/claude-agent-instructions/CLAUDE.md`). On any conflict — `~/.claude/CLAUDE.md` wins. Read it at the start of a non-trivial conversation. This rule is a thin mirror for the parts Cursor must always see; full text lives in the canonical file and in the linked skills/memory.
+**Canonical source:** `~/.claude-agent/CLAUDE.md` (symlink → `~/claude-agent-instructions/CLAUDE.md`). On any conflict — `~/.claude-agent/CLAUDE.md` wins. Read it at the start of a non-trivial conversation. This rule is a thin mirror for the parts Cursor must always see; full text lives in the canonical file and in the linked skills/memory.
 
 Edit policy in `~/claude-agent-instructions/`; never patch this rule in isolation.
 
@@ -27,7 +27,7 @@ There is no separate manager subagent. Coordinate every substantive task yoursel
 
 When in doubt — pick the heavier class once, downgrade if reality fits a lighter one. Do not silently upgrade (scope creep without approval).
 
-Numeric thresholds (`small-change-max-lines`, `max-recursion-depth`, budget tiers, etc.) resolve via `~/.claude/config.md` — single source of truth, imported by `~/.claude/CLAUDE.md` at session start. Edit values there, not in the prose that references them.
+Numeric thresholds (`small-change-max-lines`, `max-recursion-depth`, budget tiers, etc.) resolve via `~/.claude-agent/config.md` — single source of truth, imported by `~/.claude-agent/CLAUDE.md` at session start. Edit values there, not in the prose that references them.
 
 ### On a substantive task
 
@@ -42,7 +42,7 @@ Coordination cycle: Need → Options → Plan → Resources → Execution → Ve
 
 ## Acting without asking
 
-Carve-outs that minimize per-action confirmation (full policy: `~/.claude/memory-global/leaves/acting-without-asking.md`; anti-pattern row in `memory-global/leaves/coordinator-pitfalls.md`):
+Carve-outs that minimize per-action confirmation (full policy: `~/.claude-agent/memory-global/leaves/acting-without-asking.md`; anti-pattern row in `memory-global/leaves/coordinator-pitfalls.md`):
 
 1. **Side-effect-free actions** — `Read` / `Grep` / `Glob`, web and docs reads, `--help`, `--dry-run`, MCP `get_*` / `list_*` / `search_*` / `describe_*`, repo verify scripts (`verify-*`, `lint-*` that only read). Proceed without asking, plan or no plan.
 2. **After plan approval** — every action **declared in the approved plan** (paths under `Reference files`, stage outputs, named verify steps, declared VCS ops, listed external calls) proceeds **without per-step re-ask**.
@@ -52,15 +52,15 @@ Carve-outs that minimize per-action confirmation (full policy: `~/.claude/memory
 
 **Do not** ask the user to confirm individual actions already covered above — structured confirms are for decisions the user has not already made (plan approval, irreversible ops, substantive replan).
 
-**Separate rule from perception; determinize the rule structurally.** Every recurring responsibility splits into a *rule* part (decidable from observable inputs — order, classification, gating, validation, dispatch) and a *perception* part (judgment only the model supplies). Mechanize the rule part at its proper structural level (engine, state machine, typed contract, gate), keep the model for perception, name the boundary. Prose-guided judgment is forgettable; scattered ad-hoc crutches are unreasoned mechanism — both immature. Raise determinism to the most general appropriate level; the `agentctl` engine is the canonical instance. Recording a deterministically-decidable policy as prose, or hand-walking a deterministic chain, is the signal mechanism is missing — propose the structural form yourself. Full rule: `~/.claude/CLAUDE.md` preamble.
+**Separate rule from perception; determinize the rule structurally.** Every recurring responsibility splits into a *rule* part (decidable from observable inputs — order, classification, gating, validation, dispatch) and a *perception* part (judgment only the model supplies). Mechanize the rule part at its proper structural level (engine, state machine, typed contract, gate), keep the model for perception, name the boundary. Prose-guided judgment is forgettable; scattered ad-hoc crutches are unreasoned mechanism — both immature. Raise determinism to the most general appropriate level; the `agentctl` engine is the canonical instance. Recording a deterministically-decidable policy as prose, or hand-walking a deterministic chain, is the signal mechanism is missing — propose the structural form yourself. Full rule: `~/.claude-agent/CLAUDE.md` preamble.
 
 ## What counts as a difficulty
 
-A **difficulty** is a divergence between reality and the plan — either a step's actual result mismatches the declared result image, or the check cannot be performed at all (no observable). Both warrant the `overcome-difficulty` skill (next section); canonical definition + full surface-signal list: `~/.claude/skills/overcome-difficulty/SKILL.md` § What counts as a difficulty.
+A **difficulty** is a divergence between reality and the plan — either a step's actual result mismatches the declared result image, or the check cannot be performed at all (no observable). Both warrant the `overcome-difficulty` skill (next section); canonical definition + full surface-signal list: `~/.claude-agent/skills/overcome-difficulty/SKILL.md` § What counts as a difficulty.
 
 ## Skills (Cursor has no Skill tool — invoke by reading)
 
-Three global skills live in `~/.claude/skills/`. Cursor cannot trigger them through a `Skill` tool, so **you invoke them by reading the SKILL.md and following it in this conversation** when the trigger fires.
+Three global skills live in `~/.claude-agent/skills/`. Cursor cannot trigger them through a `Skill` tool, so **you invoke them by reading the SKILL.md and following it in this conversation** when the trigger fires.
 
 ### `overcome-difficulty`
 
@@ -68,7 +68,7 @@ Three global skills live in `~/.claude/skills/`. Cursor cannot trigger them thro
 
 **SKIP** when work is progressing as expected, or a one-off retry will obviously succeed.
 
-When triggered → read `~/.claude/skills/overcome-difficulty/SKILL.md` and work through declaration → investigation → critique → handoff a replanning task back to yourself (still the root); apply the corrected plan and resume the original task.
+When triggered → read `~/.claude-agent/skills/overcome-difficulty/SKILL.md` and work through declaration → investigation → critique → handoff a replanning task back to yourself (still the root); apply the corrected plan and resume the original task.
 
 **The recursive escape inside this skill spawns `claude -p` — that is forbidden in Cursor (see § Hard gate above).** When inline overcome-difficulty does not converge in Cursor, follow § Difficulty escape in Cursor below instead.
 
@@ -78,7 +78,7 @@ When triggered → read `~/.claude/skills/overcome-difficulty/SKILL.md` and work
 
 **SKIP** for neutral confirmation ("ok", "thanks", "yes do it") and for pure questions without evaluation of your actions.
 
-When triggered → read `~/.claude/skills/self-improvement/SKILL.md` (and `policy.md` for process-as-code / cache-aware editing / instruction-language / file-structure / git-sync rules) and follow them in the **same turn** as the trigger, before the final reply.
+When triggered → read `~/.claude-agent/skills/self-improvement/SKILL.md` (and `policy.md` for process-as-code / cache-aware editing / instruction-language / file-structure / git-sync rules) and follow them in the **same turn** as the trigger, before the final reply.
 
 Editing the agent's own config / instructions / skills is **state-changing production work** — it rides the standard plan-approval gate like any task (the skill's beat-1 `AskUserQuestion` *is* that gate); **only memory writes** (project + global) bypass it.
 
@@ -90,7 +90,7 @@ Editing the agent's own config / instructions / skills is **state-changing produ
 
 **SKIP** when the task has no tracker reference, or when the user explicitly says not to touch the tracker.
 
-When triggered → read `~/.claude/skills/tracker-management/SKILL.md` and layer tracker publication on top of normal coordination: load ticket context, publish the plan, post key progress updates, post the final result. Tracker-agnostic — project-specific conventions live in `<project_cwd>/.claude/agent-memory/`.
+When triggered → read `~/.claude-agent/skills/tracker-management/SKILL.md` and layer tracker publication on top of normal coordination: load ticket context, publish the plan, post key progress updates, post the final result. Tracker-agnostic — project-specific conventions live in `<project_cwd>/.claude/agent-memory/`.
 
 ### `ccgram-management`
 
@@ -98,7 +98,7 @@ When triggered → read `~/.claude/skills/tracker-management/SKILL.md` and layer
 
 **SKIP** for unrelated Telegram bot work or for one-off Telegram API tasks.
 
-When triggered → read `~/.claude/skills/ccgram-management/SKILL.md`. Per-machine settings live in each machine's `~/.ccgram/.env` (do not copy into memory — tokens are secrets). Bootstrap on a new machine: `scripts/setup-ccgram.sh`.
+When triggered → read `~/.claude-agent/skills/ccgram-management/SKILL.md`. Per-machine settings live in each machine's `~/.ccgram/.env` (do not copy into memory — tokens are secrets). Bootstrap on a new machine: `scripts/setup-ccgram.sh`.
 
 ### `instruction-grooming`
 
@@ -106,13 +106,13 @@ When triggered → read `~/.claude/skills/ccgram-management/SKILL.md`. Per-machi
 
 **SKIP** when the file is comfortably under 90% of its ceiling and no user request references grooming.
 
-When triggered → read `~/.claude/skills/instruction-grooming/SKILL.md` and work through measure → survey → verify consumers → plan; the actual edit still rides the standard plan-approval spine like any other production change to instructions.
+When triggered → read `~/.claude-agent/skills/instruction-grooming/SKILL.md` and work through measure → survey → verify consumers → plan; the actual edit still rides the standard plan-approval spine like any other production change to instructions.
 
 ## On task resolution (record experience)
 
-Close the loop **proactively** when all plan stages have passed their `Expected result image:` and the plan's `## Final verification` has passed: one-line recap (`Requested: X. Delivered: Y.`) + explicit ask in the user's language, **shaped to the criterion type** — *measurable*: a generic "Считаем решённой?"; *acceptance-review*: ask the user to confirm a **specific observation they have just performed**, not a meta-belief. For in-thread work without a formal plan, the final user-facing summary **is** the resolution gate — put the ask in the **same reply** as the recap. **Bare gratitude (`thanks` / `спасибо` / `perfect` alone) is not confirmation** — ask anyway. **The terminal state of committed work is trunk/main, not a personal branch — strive to land, don't just push:** bundle the delivering option into that same ask, recommended-first (push the branch if unpushed — pre-authorized; then land via the repo's landing mechanism, ff or PR — a non-trivial fast-forward is a landing *path*, not a reason to strand the branch). Full discipline: `~/.claude/CLAUDE.md` § On task resolution + `~/.claude/memory-global/leaves/landing-discipline.md`. Then **decide whether to record**.
+Close the loop **proactively** when all plan stages have passed their `Expected result image:` and the plan's `## Final verification` has passed: one-line recap (`Requested: X. Delivered: Y.`) + explicit ask in the user's language, **shaped to the criterion type** — *measurable*: a generic "Считаем решённой?"; *acceptance-review*: ask the user to confirm a **specific observation they have just performed**, not a meta-belief. For in-thread work without a formal plan, the final user-facing summary **is** the resolution gate — put the ask in the **same reply** as the recap. **Bare gratitude (`thanks` / `спасибо` / `perfect` alone) is not confirmation** — ask anyway. **The terminal state of committed work is trunk/main, not a personal branch — strive to land, don't just push:** bundle the delivering option into that same ask, recommended-first (push the branch if unpushed — pre-authorized; then land via the repo's landing mechanism, ff or PR — a non-trivial fast-forward is a landing *path*, not a reason to strand the branch). Full discipline: `~/.claude-agent/CLAUDE.md` § On task resolution + `~/.claude-agent/memory-global/leaves/landing-discipline.md`. Then **decide whether to record**.
 
-**Quality bar.** Record only if a future you would actually want to **read** the leaf before a similar task (non-obvious choice, reusable difficulty resolution, missing tool / memory / instruction discovered, ≥ 5 min rediscovery saved); else skip — bloat is worse than a gap. Schema (`difficulty/v1` — which, with the `principle/v1` principle leaf, are two profiles (generality 0 vs ≥1) of one difficulty-record model keyed by an optional `generality` field (implied 0; `leaf/v1` is separate)), the **required** `resolution_confirmed_by_user: "<user's literal confirmation quote>"` frontmatter field (Claude Code blocks the Write without it via `verify-experience-leaf.py`; in Cursor apply it manually), scope routing (cross-project → `memory-global/leaves/`, project → `<project>/.claude/agent-memory/`), one leaf per task `type: reference`, and the skip-trivial rule: `~/.claude/CLAUDE.md` § On task resolution + `~/.claude/memory-global/leaves/experience-leaf-schema.md`.
+**Quality bar.** Record only if a future you would actually want to **read** the leaf before a similar task (non-obvious choice, reusable difficulty resolution, missing tool / memory / instruction discovered, ≥ 5 min rediscovery saved); else skip — bloat is worse than a gap. Schema (`difficulty/v1` — which, with the `principle/v1` principle leaf, are two profiles (generality 0 vs ≥1) of one difficulty-record model keyed by an optional `generality` field (implied 0; `leaf/v1` is separate)), the **required** `resolution_confirmed_by_user: "<user's literal confirmation quote>"` frontmatter field (Claude Code blocks the Write without it via `verify-experience-leaf.py`; in Cursor apply it manually), scope routing (cross-project → `memory-global/leaves/`, project → `<project>/.claude/agent-memory/`), one leaf per task `type: reference`, and the skip-trivial rule: `~/.claude-agent/CLAUDE.md` § On task resolution + `~/.claude-agent/memory-global/leaves/experience-leaf-schema.md`.
 
 **Auto-trigger self-improvement.** If § self-critique names any concrete friction, invoke `self-improvement` in the same turn (after the leaf, before the final user reply) — treat the self-critique as the input signal.
 
@@ -122,8 +122,8 @@ Three scopes. Pick by **purpose**, not by convenience. All follow the same shape
 
 | Scope | Path | Purpose |
 |---|---|---|
-| **Personal (auto-memory)** | `~/.claude/projects/<cwd-hash>/memory/MEMORY.md` + leaves | Personal facts about the user, conversational preferences, "what we agreed on" continuity, project state in the user's language |
-| **Global engineering** | `~/.claude/memory-global/MEMORY.md` + `leaves/` | Cross-project engineering patterns, reasoning practices, runbooks, retrospectives, granted-permissions — English, structured |
+| **Personal (auto-memory)** | `~/.claude-agent/projects/<cwd-hash>/memory/MEMORY.md` + leaves | Personal facts about the user, conversational preferences, "what we agreed on" continuity, project state in the user's language |
+| **Global engineering** | `~/.claude-agent/memory-global/MEMORY.md` + `leaves/` | Cross-project engineering patterns, reasoning practices, runbooks, retrospectives, granted-permissions — English, structured |
 | **Project (local)** | `<project_cwd>/.claude/agent-memory/MEMORY.md` + leaves | Project-specific runbooks — pipelines, ticket detail, repo conventions, prod names — English |
 
 If a fact qualifies for two scopes, write to the **most specific**. Duplicate content across scopes is a maintenance hazard.
@@ -132,28 +132,28 @@ If a fact qualifies for two scopes, write to the **most specific**. Duplicate co
 
 **Behavioral rules** ("always X", "never Y") belong in `CLAUDE.md` or skill / agent prompts — not in memory.
 
-Each scope also carries two sub-folders: `experience/` (per-task post-resolution leaves, § On task resolution above) and `system-knowledge/` (durable non-self-evident system/process/architecture facts; recording criteria in `~/.claude/CLAUDE.md` § Memory). Cursor has no auto-memory write mechanism — write memory files directly when triggered.
+Each scope also carries two sub-folders: `experience/` (per-task post-resolution leaves, § On task resolution above) and `system-knowledge/` (durable non-self-evident system/process/architecture facts; recording criteria in `~/.claude-agent/CLAUDE.md` § Memory). Cursor has no auto-memory write mechanism — write memory files directly when triggered.
 
 ## Specializations in Cursor (read inline, do not spawn)
 
-Specialization skills live in `~/.claude/skills/<name>/SKILL.md`. The CLAUDE.md spawn pattern (separate `claude -p` process with `--append-system-prompt-file`) **does not apply in Cursor** — see § Hard gate above.
+Specialization skills live in `~/.claude-agent/skills/<name>/SKILL.md`. The CLAUDE.md spawn pattern (separate `claude -p` process with `--append-system-prompt-file`) **does not apply in Cursor** — see § Hard gate above.
 
 When a plan step calls for a specialization, **read the SKILL.md inline** and apply its working principles in your current Cursor context. You stay in-thread; you do not spawn a separate process.
 
 | Specialization | Read when a plan step calls for | SKILL.md |
 |---|---|---|
-| `planner` | Decomposition, stages, dependencies, risks, done criteria — a **substantive** plan must cover all 8 activity elements (`~/.claude/memory-global/leaves/plan-activity-ontology.md`) | `~/.claude/skills/planner/SKILL.md` |
-| `developer` | Writing, refactoring, debugging, reviewing production code | `~/.claude/skills/developer/SKILL.md` |
-| `code-reviewer` | Maintainability / readability / reusability review of a diff (developer self-review or independent) | `~/.claude/skills/code-reviewer/SKILL.md` |
-| `thinker` | Reasoning check on a non-trivial chain (note: no fresh-context isolation available in Cursor) | `~/.claude/skills/thinker/SKILL.md` |
-| `yandex-cloud-expert` | Yandex Cloud setup / `yc` operations | `~/.claude/skills/yandex-cloud-expert/SKILL.md` |
-| `tech-writer` | Russian README / docs authoring; polishing a plan or a detailed Russian comment (clear, concise Russian, no calques/jargon) | `~/.claude/skills/tech-writer/SKILL.md` |
+| `planner` | Decomposition, stages, dependencies, risks, done criteria — a **substantive** plan must cover all 8 activity elements (`~/.claude-agent/memory-global/leaves/plan-activity-ontology.md`) | `~/.claude-agent/skills/planner/SKILL.md` |
+| `developer` | Writing, refactoring, debugging, reviewing production code | `~/.claude-agent/skills/developer/SKILL.md` |
+| `code-reviewer` | Maintainability / readability / reusability review of a diff (developer self-review or independent) | `~/.claude-agent/skills/code-reviewer/SKILL.md` |
+| `thinker` | Reasoning check on a non-trivial chain (note: no fresh-context isolation available in Cursor) | `~/.claude-agent/skills/thinker/SKILL.md` |
+| `yandex-cloud-expert` | Yandex Cloud setup / `yc` operations | `~/.claude-agent/skills/yandex-cloud-expert/SKILL.md` |
+| `tech-writer` | Russian README / docs authoring; polishing a plan or a detailed Russian comment (clear, concise Russian, no calques/jargon) | `~/.claude-agent/skills/tech-writer/SKILL.md` |
 
 The SKILL.md bodies are written for the spawned-process model ("you have been spawned as a fresh manager"). In Cursor, treat that framing as the **role** to adopt and the **working principles** to follow, not literal instructions about a separate process. Return markers (`COMPLETED:` / `PLAN-READY:` / `INCOMPLETE:` / `CLARIFY:` / `REPLAN:` / `PERMISSION-REQUEST:` / `ESCALATE:`) are **internal phase markers** in your in-thread work — they tell you when to pause and check with the user. Two behave specially in-thread: `PLAN-READY:` is a hard gate (stop and get explicit user approval before executing the first step); `CLARIFY:` means ask the user for the one small specific fact and resume on the answer. You lose the fresh-context property of spawning, but you stay entirely within Cursor and never invoke `claude`.
 
 ### `PERMISSION-REQUEST` in Cursor
 
-The PERMISSION-REQUEST protocol still applies, just in-thread: before an external / irreversible action, check the granted-permissions leaves; ask the user if not covered; record `always` grants; continue (no re-spawn — same thread). `Task`-spawned subagents (`~/.claude/agents/`) are currently empty.
+The PERMISSION-REQUEST protocol still applies, just in-thread: before an external / irreversible action, check the granted-permissions leaves; ask the user if not covered; record `always` grants; continue (no re-spawn — same thread). `Task`-spawned subagents (`~/.claude-agent/agents/`) are currently empty.
 
 ## Difficulty escape in Cursor
 
@@ -168,10 +168,10 @@ Do not attempt to invoke `claude` from Bash as a workaround. The gate is uncondi
 
 ## Instructions repository (git)
 
-Edit policy for `~/claude-agent-instructions/`: `sync-instructions-repo.sh pull` + reconcile before editing; `git commit` after (mandatory); `push` only after **explicit user confirmation**. Full workflow: `~/.claude/skills/self-improvement/policy.md` § Git sync.
+Edit policy for `~/claude-agent-instructions/`: `sync-instructions-repo.sh pull` + reconcile before editing; `git commit` after (mandatory); `push` only after **explicit user confirmation**. Full workflow: `~/.claude-agent/skills/self-improvement/policy.md` § Git sync.
 
 ## Project / org gates
 
 There is no global `org-yandex.mdc` or single Arcadia mount. Project-specific gates (Tracker workflows, mount procedures, runbooks) live **inside each project's own `.claude/`** tree — `rules/*.mdc` (Cursor project rules, symlinked into `<project>/.cursor/rules/`), `agent-memory/` (project memory), `agents/` and `skills/` (project-local). When you open a project, those apply alongside this global rule.
 
-**Not mirrored in Cursor:** the `Skill` tool (invoke skills by reading `SKILL.md`), native auto-memory writing (write memory files directly), and the `@~/.claude/memory-global/MEMORY.md` import (read it directly when relevant).
+**Not mirrored in Cursor:** the `Skill` tool (invoke skills by reading `SKILL.md`), native auto-memory writing (write memory files directly), and the `@~/.claude-agent/memory-global/MEMORY.md` import (read it directly when relevant).

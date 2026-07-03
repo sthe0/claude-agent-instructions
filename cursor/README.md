@@ -5,7 +5,7 @@ Cursor-specific assets are isolated here so they do not leak into Claude Code ru
 ## Layout
 
 - `rules/` — global Cursor rule mirror files.
-- `agents/` — Cursor-only subagents (not linked into `~/.claude/agents`).
+- `agents/` — Cursor-only subagents (not linked into `~/.claude-agent/agents`).
 - `scripts/` — Cursor-only helper scripts.
 
 ## Runtime links

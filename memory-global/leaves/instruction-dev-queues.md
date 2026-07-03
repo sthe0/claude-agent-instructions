@@ -46,7 +46,7 @@ The symmetry: "a separate destination for each flow" is realized as a **separate
 
 ## See also
 
-- `~/.claude/config.md` § `difficulty-channel` — the per-machine channel (`github`/`startrek`) and its OOSEVENREPORT/GitHub-Issues targets.
+- `~/.claude-agent/config.md` § `difficulty-channel` — the per-machine channel (`github`/`startrek`) and its OOSEVENREPORT/GitHub-Issues targets.
 - `~/claude-agent-instructions/docs/adr/0001-consensus-architecture.md` § Difficulty-accumulation — how a flagged report cluster graduates into a backlog item.
 - `~/claude-agent-instructions/skills/self-improvement/` — where a report is filed (non-author machines) and where tier→queue routing is applied.
 - [[handling-escalations]], [[spawning-specialists]] — the coordination surfaces that surface difficulties in the first place.

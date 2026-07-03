@@ -18,7 +18,7 @@ Each `Task` invocation creates a new subagent with a fresh context. To continue 
 - A stopped subagent that receives `SendMessage` **auto-resumes in the background**, no fresh `Task` call required.
 - The agent ID is returned to the parent when `Task` completes. It can also be read from the transcript filename (see § Transcripts) or asked from Claude directly.
 
-**Requires** `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` (experimental "agent teams" feature). Without it, `SendMessage` is not in the parent's tool set and every `Task` is one-shot. Enable in `~/.claude/settings.json` under `env`, or export in the shell before launching Claude Code.
+**Requires** `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` (experimental "agent teams" feature). Without it, `SendMessage` is not in the parent's tool set and every `Task` is one-shot. Enable in `~/.claude-agent/settings.json` under `env`, or export in the shell before launching Claude Code.
 
 ## Transcripts
 
@@ -48,4 +48,4 @@ Practical implication: do not assume "subagent ran out of context" when work jus
 
 ### Cleanup
 
-Transcripts are deleted after `cleanupPeriodDays` (default 30) — override in `~/.claude/settings.json`. After deletion, the agent ID is no longer resolvable; `SendMessage` to it will fail.
+Transcripts are deleted after `cleanupPeriodDays` (default 30) — override in `~/.claude-agent/settings.json`. After deletion, the agent ID is no longer resolvable; `SendMessage` to it will fail.

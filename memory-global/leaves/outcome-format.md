@@ -31,4 +31,4 @@ A report the user (or the next step) can act on without re-asking:
 
 ## See also
 
-- `~/.claude/CLAUDE.md` § On task resolution § Outcome format — the short pointer that loads this leaf.
+- `~/.claude-agent/CLAUDE.md` § On task resolution § Outcome format — the short pointer that loads this leaf.

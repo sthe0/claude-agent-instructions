@@ -29,6 +29,6 @@ Nothing mechanically couples a code change to a test of that change — the disc
 
 ## See also
 
-- `~/.claude/skills/specializations/developer/SKILL.md` § Tests and build (author side)
-- `~/.claude/skills/specializations/code-reviewer/SKILL.md` § What you review (reviewer side)
+- `~/.claude-agent/skills/specializations/developer/SKILL.md` § Tests and build (author side)
+- `~/.claude-agent/skills/specializations/code-reviewer/SKILL.md` § What you review (reviewer side)
 - [[plan-activity-ontology]] — review is the control criterion of a developer-actor stage

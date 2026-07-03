@@ -26,7 +26,7 @@ Use `scripts/spawn-specialist.py` — it handles process concerns (recursion-cap
 
 Cognitive inputs the manager supplies (mechanics are in `--help`):
 
-- `--kind` — specialization name. Resolved from `~/.claude/skills/<kind>/SKILL.md` (global catalog) first, then from the **project-local** `<cwd>/.claude/skills/specializations/<kind>/SKILL.md` (global wins on name collision). Global kinds: `planner` / `developer` / `thinker` / `yandex-cloud-expert` / `tech-writer`; a project ships its own domain experts under its `.claude/skills/specializations/` and they spawn with the same `claude -p` isolation.
+- `--kind` — specialization name. Resolved from `~/.claude-agent/skills/<kind>/SKILL.md` (global catalog) first, then from the **project-local** `<cwd>/.claude/skills/specializations/<kind>/SKILL.md` (global wins on name collision). Global kinds: `planner` / `developer` / `thinker` / `yandex-cloud-expert` / `tech-writer`; a project ships its own domain experts under its `.claude/skills/specializations/` and they spawn with the same `claude -p` isolation.
 - `--plan` — markdown plan with the owned step marked `**<<this step>>**`.
 - `--done-criterion` + `--criterion-type` (`measurable` | `acceptance-review`).
 - `--context-dossier` — 5–10 line digest of conversation context the specialist cannot read on its own (intent nuances, rejected options, in-session decisions, terminology aliases). Omit if nothing's missable.

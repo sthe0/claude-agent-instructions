@@ -23,5 +23,5 @@ Critically evaluate every clarified requirement for adequacy **and** non-contrad
 
 ## See also
 
-- `~/.claude/CLAUDE.md` § Escalation to the user — the short pointer that loads this leaf.
+- `~/.claude-agent/CLAUDE.md` § Escalation to the user — the short pointer that loads this leaf.
 - [[capability-before-offload]] — the acting-side twin: doubt your own claim of *"can't"*, not the user's expectation that you can.

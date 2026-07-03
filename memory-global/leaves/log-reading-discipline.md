@@ -36,4 +36,4 @@ If after three staged passes you still cannot localize the issue, that is a diff
 ## See also
 
 - `<arcadia>/ai/artifacts/skills/gena/gena-investigate/SKILL.md` — upstream rule + a 20-min investigation budget that pairs well with this discipline.
-- `~/.claude/skills/overcome-difficulty/SKILL.md` — when log search isn't converging.
+- `~/.claude-agent/skills/overcome-difficulty/SKILL.md` — when log search isn't converging.
