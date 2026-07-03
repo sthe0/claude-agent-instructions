@@ -57,6 +57,31 @@ def test_submit_plan_emits_publish_plan():
     assert fired[0]["data"]["tracker_key"] == "ABC-1"
 
 
+def test_approve_emits_non_blocking_start_progress():
+    state = _new_state(node=Node.APPROVED.value)
+    plugins.activate(state, "tracker", {"tracker_key": "ABC-7"})
+    d = Directive(True, state.node, "approve")
+    fired = plugins.fire("approve", state, d)
+    assert [f["action"] for f in fired] == ["start_progress"]
+    assert fired[0]["plugin"] == "tracker"
+    # start is hygiene, not load-bearing: it must NOT be a blocking directive
+    assert fired[0].get("blocking") is not True
+    assert fired[0]["data"]["tracker_key"] == "ABC-7"
+
+
+def test_start_progress_never_gates_resolution():
+    # observing approve records nothing on the bag, so the resolution gate is
+    # unaffected: start is never part of the mandatory-missing list.
+    state = _new_state(node=Node.APPROVED.value)
+    plugins.activate(state, "tracker")
+    plugins.fire("approve", state, Directive(True, state.node, "approve"))
+    for phase in ("plan", "result", "status"):
+        state.plugins["tracker"]["published_phases"][phase] = True
+    blockers = plugins.plugin_gate_blockers(state, "resolution")
+    assert blockers == []
+    assert not any("start" in b for b in blockers)
+
+
 def test_passed_stage_emits_publish_progress_but_diagnosing_is_silent():
     state = _new_state(node=Node.VERIFYING.value)
     plugins.activate(state, "tracker")

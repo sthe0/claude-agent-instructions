@@ -1,9 +1,10 @@
 """The tracker-management plugin: the first real consumer of the plugin layer.
 
 The `tracker-management` skill is a deterministic publish-workflow layered on top
-of coordination — it publishes the plan before approval, a progress note at each
-stage boundary, a note when the plan is re-normed, and the final result before the
-task closes. Historically the skill's "Phase hooks" table told the *coordinator*
+of coordination — it publishes the plan before approval, nudges the open->
+in-progress ticket transition once the plan is approved and work begins, posts a
+progress note at each stage boundary, a note when the plan is re-normed, and the
+final result before the task closes. Historically the skill's "Phase hooks" table told the *coordinator*
 to remember each of those moments. That is exactly the cognition the engine can
 own: this plugin OBSERVES the matching core transitions and surfaces a
 `publish_*` PluginDirective at each, and a gate keeps the task from closing until
@@ -50,6 +51,18 @@ def _observe_submit_plan(state, bag) -> list[PluginDirective]:
         "tracker", "publish_plan",
         "post the plan to the ticket BEFORE asking the user for approval",
         blocking=True, data={"tracker_key": _key(bag), "phase": "plan"},
+    )]
+
+
+def _observe_approve(state, bag) -> list[PluginDirective]:
+    # plan just approved (PLAN_READY -> APPROVED): work begins. Nudge the open->
+    # in-progress transition, non-blocking — skip if the ticket is already in progress.
+    return [PluginDirective(
+        "tracker", "start_progress",
+        "the plan is approved and work begins: if the ticket is still open, transition "
+        "it to the in-progress status (e.g. \"В работе\") now; non-blocking — skip if it "
+        "is already in progress",
+        data={"tracker_key": _key(bag)},
     )]
 
 
@@ -126,6 +139,7 @@ register(
         scope="task",
         observers={
             "submit_plan": _observe_submit_plan,
+            "approve": _observe_approve,
             "record_result": _observe_record_result,
             "replan": _observe_replan,
             "resolve": _observe_resolve,
