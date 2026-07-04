@@ -1,10 +1,10 @@
 ---
 name: instruction-dev-queues
-description: "The 3-tier instruction-development tracking model (Core / Org-Yandex / Project): each tier has a proactive internal backlog + a reactive report inbox, with a collapse rule when filers==editors and a stream-separation axis (separate queue vs separate label)."
+description: "The 3-tier instruction-development tracking model (Core / Org-Yandex / Project): each tier has a proactive internal backlog + a reactive report inbox, with a collapse rule when filers==editors and a stream-separation axis (separate queue vs separate label); Core venue is PUBLIC — split mixed items by tier at filing time, pre-publish check via check-org-neutral.py."
 type: reference
 schema: leaf/v1
 created: 2026-06-30
-last_verified: 2026-06-30
+last_verified: 2026-07-04
 ---
 
 # Instruction-development tracking — backlog + report inbox per tier
@@ -45,6 +45,12 @@ How reports stay distinguishable from backlog depends on whether the tier has on
 - **Collapsed** (Project) — one queue, one population; sub-distinguish by label/component within DEEPAGENT only if a project later wants the split.
 
 The symmetry: "a separate destination for each flow" is realized as a **separate queue** where the tier has a tracker per flow, and as a **separate label** where one tracker holds both.
+
+### Split by tier at filing time — the Core venue is PUBLIC
+
+The Core repo `sthe0/claude-agent-instructions` **including its GitHub Issues is public**: filing there is publication to the open internet, and GitHub e-mails the full body to repo watchers at creation time (irrecoverable by any later edit or deletion; a PATCHed issue also keeps its old body publicly visible in edit history — full remediation is delete + recreate).
+
+Therefore an item that spans Core + Org content is **split by tier at filing time**, never filed as one entry: the org-neutral half goes to the Core queue, the org-specific half (internal system codenames, org tool/product names, internal repo layout, queue keys) to the org backlog (OOSEVEN), cross-linked **one-way, internal → public** — the public side carries no queue key and no internal identifier. Mechanical enforcement: run every body destined for a Core issue/PR/commit through `scripts/check-org-neutral.py` **before** posting (exit 1 = org-internal markers found); checking after posting re-creates the exposure the rule exists to prevent. Incident that grounded this: a parked-program backlog entry (2026-07-04) published donor codenames on the public tracker and was remediated by checked replacement + `deleteIssue`.
 
 ## See also
 
