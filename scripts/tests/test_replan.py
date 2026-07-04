@@ -379,3 +379,60 @@ def test_coverage_waiver_does_not_bypass_difficulty_completeness(store, fixtures
     assert d.ok is False
     assert "blockers" in d.data
     assert d.action == "declare"
+
+
+# --- Gap 2: no_change replan refreshes stale materialization on legacy sessions ---
+
+def test_no_change_replan_refreshes_stale_verify_command_and_backfills_snapshot(
+        store, fixtures_dir, tmp_path):
+    """A legacy session (plan_snapshot_path=None) whose plan file's verify_command is
+    edited IN PLACE self-diffs to no_change (old==new==plan_path, for lack of a
+    snapshot to diff against). The no_change branch must still refresh state's
+    verify_command from the file and backfill a snapshot — else record-result keeps
+    running the stale command held in state."""
+    sid = "nc1"
+    plan_path = tmp_path / "plan.toml"
+    plan_path.write_text((fixtures_dir / "plan_two_stage_verifyfix.toml").read_text())
+    _to_executing_stage1(store, sid, str(plan_path))
+
+    # make it a legacy pre-snapshot session
+    state = store.load(sid)
+    state.plan_snapshot_path = None
+    state.plan_snapshot_hash = None
+    store.save(state)
+    old_cmd = state.stage(1).criterion.verify_command
+    assert old_cmd == "python -c 'import mod'"
+
+    # edit verify_command IN PLACE (same path) -> old==new -> no_change
+    edited = plan_path.read_text().replace(old_cmd, "python -c 'import mod; assert True'")
+    assert edited != plan_path.read_text()  # the replacement actually matched
+    plan_path.write_text(edited)
+
+    d = cli.cmd_replan(ns(session=sid, plan=str(plan_path)), store=store)
+    assert d.action == "continue"  # no_change, resumes without re-approval
+    state = store.load(sid)
+    # stale verify_command refreshed from the file
+    assert state.stage(1).criterion.verify_command == "python -c 'import mod; assert True'"
+    # snapshot backfilled so the next replan diffs against real bytes
+    assert state.plan_snapshot_path
+    assert Path(state.plan_snapshot_path).exists()
+
+
+def test_no_change_replan_with_snapshot_is_idempotent(store, fixtures_dir):
+    """Backward-compat: a session WITH a snapshot whose plan is genuinely unchanged
+    stays a true no-op — the refresh copies identical values and the existing
+    snapshot is left intact (not re-backfilled)."""
+    sid = "nc2"
+    plan = str(fixtures_dir / "plan_two_stage_verifyfix.toml")
+    _to_executing_stage1(store, sid, plan)
+    state = store.load(sid)
+    snap_before = state.plan_snapshot_path
+    cmd_before = state.stage(1).criterion.verify_command
+    assert snap_before  # _to_executing_stage1's approve created one
+
+    d = cli.cmd_replan(ns(session=sid, plan=plan), store=store)
+    assert d.action == "continue"
+    state = store.load(sid)
+    assert state.plan_snapshot_path == snap_before  # untouched
+    assert state.stage(1).criterion.verify_command == cmd_before
+    assert state.node == Node.EXECUTING.value

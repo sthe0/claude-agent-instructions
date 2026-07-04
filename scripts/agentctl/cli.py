@@ -102,6 +102,21 @@ def _snapshot_approved_plan(store: StateStore, state: SessionState) -> tuple[str
     return str(snap), digest
 
 
+def _apply_refined_stage_fields(cur, refined) -> None:
+    """Copy the prose+verify definition fields of a freshly-loaded stage onto the
+    matching live stage. Shared by both replan branches that re-materialize from a
+    corrected plan (refinement, and the no_change refresh) so the two never drift.
+    Outcome/status is NOT touched — re-arm logic stays with each caller."""
+    cur.title = refined.title
+    cur.subject.result = refined.subject.result
+    cur.means.means = refined.means.means
+    cur.means.method = refined.means.method
+    cur.subject.invariants = refined.subject.invariants
+    cur.conditions = refined.conditions
+    cur.criterion.verify_command = refined.criterion.verify_command
+    cur.criterion.expected_exit = refined.criterion.expected_exit
+
+
 def _log_gate(state: SessionState, gate: str, blockers: list[str], *, passed: bool) -> None:
     """Append one {ts, session, node, gate, blockers, passed} line to GATE_LOG.
 
@@ -1337,6 +1352,24 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     diagnosing = state.node == Node.DIAGNOSING.value
 
     if kind == "no_change":
+        # A legacy session with no approved-plan snapshot (plan_snapshot_path=None)
+        # diffs plan_path against itself, so an in-place edit self-diffs to no_change
+        # (issue #8, one branch deeper). Re-materialize each live stage's prose+verify
+        # fields from the freshly-loaded plan BEFORE re-arming, or record-result runs
+        # the STALE verify_command still held in state. Idempotent when the plan is
+        # genuinely unchanged (copies identical values).
+        for ns in new.stages:
+            try:
+                cur = state.stage(ns.index)
+            except KeyError:
+                continue
+            _apply_refined_stage_fields(cur, ns)
+        # Backfill a snapshot for a legacy (pre-snapshot) session so the NEXT replan
+        # diffs against real approved bytes instead of self-diffing plan_path.
+        if not (state.plan_snapshot_path and Path(state.plan_snapshot_path).exists()):
+            snap = _snapshot_approved_plan(store, state)
+            if snap:
+                state.plan_snapshot_path, state.plan_snapshot_hash = snap
         if diagnosing:
             for s in state.stages:
                 if s.outcome.status == StageStatus.FAILED.value:
@@ -1349,6 +1382,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
                 return Directive(True, state.node, "next_stage",
                                  "difficulty worked through; plan unchanged — retry the re-armed stage")
             return Directive(True, state.node, "continue", "difficulty worked through; resume execution")
+        store.save(state)
         return Directive(True, state.node, "continue", "replan is a no-op; plan unchanged")
 
     if kind == "refinement":
@@ -1358,16 +1392,10 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
                 cur = state.stage(ns.index)
             except KeyError:
                 continue
-            cur.title = ns.title
-            cur.subject.result = ns.subject.result
-            # carry the corrected means/method/conditions/invariants into state so a
-            # difficulty-driven refinement actually re-selects the means (not just prose).
-            cur.means.means = ns.means.means
-            cur.means.method = ns.means.method
-            cur.subject.invariants = ns.subject.invariants
-            cur.conditions = ns.conditions
-            cur.criterion.verify_command = ns.criterion.verify_command
-            cur.criterion.expected_exit = ns.criterion.expected_exit
+            # carry the corrected prose+means/method/conditions/invariants/verify into
+            # state so a difficulty-driven refinement actually re-selects the means
+            # (not just prose).
+            _apply_refined_stage_fields(cur, ns)
             if cur.outcome.status == StageStatus.FAILED.value:
                 cur.outcome.status = StageStatus.PENDING.value
         state.plan_path = args.plan
