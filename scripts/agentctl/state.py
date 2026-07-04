@@ -19,7 +19,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -253,12 +253,19 @@ class PlanReview:
     exact plan it examined — a review of an earlier plan does not clear the gate for
     a later one. `verdict` is one of pass / revise / override (an override is the
     user's explicit deadlock escape, which requires a non-empty `reviewer` and
-    `note`). `concerns` carries the thinker's blocking points for the audit trail."""
+    `note`). `concerns` carries the thinker's blocking points for the audit trail.
+
+    `plan_sha256` (schema 13, #16) is the sha256 of the reviewed plan file's bytes:
+    plan_path binds the verdict to a NAME, but the coordinator edits plans in place,
+    so a same-path rewrite would inherit a PASS granted to different bytes. The gate
+    recomputes the hash and rejects a content drift. Empty on legacy records (absent
+    key -> default), which degrades the gate to the prior path-only binding."""
     plan_path: str
     verdict: str
     reviewer: str
     concerns: list[str] = field(default_factory=list)
     note: str = ""
+    plan_sha256: str = ""
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "PlanReview | None":
@@ -270,6 +277,7 @@ class PlanReview:
             reviewer=d.get("reviewer", ""),
             concerns=list(d.get("concerns", [])),
             note=d.get("note", ""),
+            plan_sha256=d.get("plan_sha256", ""),
         )
 
 

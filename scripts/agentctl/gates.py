@@ -15,7 +15,9 @@ the guardian before flipping `passed`, so an illegal pass is impossible.
 """
 from __future__ import annotations
 
+import hashlib
 import os
+from pathlib import Path
 
 from .state import Node, SessionState, StageStatus, WeightClass
 from .text_shape import PLACEHOLDER_SET as _PLACEHOLDER_SET
@@ -148,6 +150,20 @@ def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[s
             "thinker review is stale — it examined "
             f"{pr.plan_path!r} but the target plan is {target_plan!r}; re-run plan-review on the current plan"
         ]
+    # #16: the coordinator edits plans in place, so a same-path binding is not a
+    # content binding — recompute the plan's sha256 and reject a drift. Fail-open:
+    # an empty stored hash (legacy record) or an unreadable target degrades to the
+    # path-only binding above, never wedging the gate on a transient read error.
+    if pr.plan_sha256:
+        try:
+            current = hashlib.sha256(Path(target_plan).read_bytes()).hexdigest()
+        except OSError:
+            current = None
+        if current is not None and current != pr.plan_sha256:
+            return [
+                "thinker review is stale — the plan content at "
+                f"{target_plan!r} changed since it was reviewed; re-run plan-review"
+            ]
     if pr.verdict == _PLAN_REVIEW_PASS:
         return []
     if pr.verdict == _PLAN_REVIEW_OVERRIDE:

@@ -75,6 +75,21 @@ def _digest(text: str) -> str:
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:12]
 
 
+def _plan_file_sha256(target: str | None) -> str:
+    """sha256 of a plan file's bytes, or '' when there is no readable file (#16).
+
+    Best-effort by design: an unreadable/absent target yields '' so the plan-review
+    gate degrades to path-only binding rather than wedging on a transient I/O error.
+    cmd_plan_review records this over the reviewed bytes; gates.plan_review_blockers
+    inlines the same sha256-of-bytes recompute (it cannot import cli — circular)."""
+    if not target:
+        return ""
+    try:
+        return hashlib.sha256(Path(target).read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
 def _snapshot_approved_plan(store: StateStore, state: SessionState) -> tuple[str, str] | None:
     """Copy the plan AS APPROVED into the state dir and return (snapshot_path, hash).
 
@@ -548,6 +563,7 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
         reviewer=getattr(args, "reviewer", "") or "",
         concerns=list(getattr(args, "concerns", None) or []),
         note=getattr(args, "note", "") or "",
+        plan_sha256=_plan_file_sha256(target),
     )
     blockers = gates.plan_review_blockers(state, target)
     _log_gate(state, "plan_review", blockers, passed=not blockers)

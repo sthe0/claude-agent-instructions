@@ -190,6 +190,92 @@ def test_legacy_schema11_plan_review_fixture_loads():
     assert s.plan_review.plan_path == raw["plan_review"]["plan_path"]
 
 
+# --- content-hash staleness (issue #16) --------------------------------------
+# Path binding alone lets an in-place rewrite of the same-path plan inherit a PASS
+# granted to different bytes. The review now also records the reviewed plan's
+# sha256; the gate recomputes it and blocks a content drift (fail-open on I/O).
+
+def _sha256_file(p) -> str:
+    import hashlib
+    return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+
+
+def _subst_planned(plan, review) -> SessionState:
+    """A substantive session whose plan_path is a real on-disk file (needed for the
+    content-hash gate, which reads the target's bytes)."""
+    return SessionState(session_id="s", task_id="t", weight_class="SUBSTANTIVE",
+                        plan_path=str(plan), plan_verified=True, plan_review=review)
+
+
+def test_content_hash_mismatch_blocks_as_stale(gate_on, tmp_path):
+    """A passing review bound to a plan file's bytes goes STALE when the SAME path is
+    rewritten in place — path binding alone would keep the stale PASS valid."""
+    plan = tmp_path / "plan.toml"
+    plan.write_text("index = 1\n")
+    s = _subst_planned(plan, PlanReview(str(plan), "pass", "thinker",
+                                        plan_sha256=_sha256_file(plan)))
+    assert gates.plan_review_blockers(s, str(plan)) == []   # unchanged: clears
+    plan.write_text("index = 2\n")                          # in-place rewrite
+    blockers = gates.plan_review_blockers(s, str(plan))
+    assert blockers and "changed since it was reviewed" in blockers[0]
+
+
+def test_content_hash_unreadable_target_fails_open(gate_on, tmp_path):
+    """If the target file cannot be read at gate time, the hash check degrades to the
+    prior path-only binding (a transient read error never wedges the gate)."""
+    missing = tmp_path / "gone.toml"
+    s = _subst_planned(missing, PlanReview(str(missing), "pass", "thinker",
+                                           plan_sha256="deadbeef"))
+    assert gates.plan_review_blockers(s, str(missing)) == []  # unreadable -> path-only
+
+
+def test_content_hash_empty_stored_hash_is_path_only(gate_on, tmp_path):
+    """A PlanReview with an empty plan_sha256 (a legacy record) keeps clearing the
+    gate on path binding alone, even when the file exists and could be hashed."""
+    plan = tmp_path / "plan.toml"
+    plan.write_text("x")
+    s = _subst_planned(plan, PlanReview(str(plan), "pass", "thinker", plan_sha256=""))
+    assert gates.plan_review_blockers(s, str(plan)) == []
+
+
+def test_cmd_plan_review_records_hash_and_inplace_rewrite_blocks_approve(
+        store, fixtures_dir, tmp_path, gate_on):
+    """End-to-end: cmd_plan_review stamps the reviewed plan's sha256; an in-place
+    rewrite of the same-path plan then blocks approve as content-stale."""
+    sid = "hash"
+    plan = tmp_path / "plan.toml"
+    plan.write_text((fixtures_dir / "plan_two_stage.toml").read_text())
+    _to_plan_ready(store, sid, str(plan))
+    cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker",
+                           concerns=None, note="", target=None), store=store)
+    assert store.load(sid).plan_review.plan_sha256 == _sha256_file(plan)
+    # in-place rewrite of the SAME path -> the recorded review is now content-stale
+    plan.write_text(plan.read_text() + "\n# tweak\n")
+    d = cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    assert d.node == Node.PLAN_READY.value  # blocked, not APPROVED
+    assert any("changed since it was reviewed" in b for b in d.data["blockers"])
+
+
+def test_j2_round_trips_plan_review_with_hash():
+    """The new plan_sha256 field survives a to_dict/from_dict round-trip."""
+    s = _subst(plan_review=PlanReview("/plan.toml", "pass", "thinker",
+                                      concerns=["c1"], note="n", plan_sha256="ab12"))
+    assert SessionState.from_dict(json.loads(json.dumps(s.to_dict()))) == s
+
+
+def test_legacy_schema12_plan_review_fixture_loads(gate_on):
+    """A schema-12-tagged state whose plan_review predates plan_sha256 loads under
+    schema-13 code with plan_sha256='' and its gate degrades to path-only binding."""
+    raw = json.loads((FIXTURES / "legacy_schema12_plan_review.json").read_text())
+    assert raw["schema_version"] == 12
+    assert "plan_sha256" not in raw["plan_review"]
+    s = SessionState.from_dict(raw)
+    assert s.plan_review is not None
+    assert s.plan_review.plan_sha256 == ""
+    # empty stored hash -> path-only binding, so a matching target still clears
+    assert gates.plan_review_blockers(s, s.plan_review.plan_path) == []
+
+
 # --- four live spine walks (subprocess, gate ON) -----------------------------
 
 def _run(state_root: Path, *args: str, gate: str = "1"):
