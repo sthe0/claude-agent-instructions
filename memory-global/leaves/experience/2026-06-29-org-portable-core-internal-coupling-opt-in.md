@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "user"
 refs: [2026-06-27-stub-mechanism-not-deployable-until-caller-cli-onboarding.md, 2026-06-26-guard-coupled-doc-relocation.md]
 plan_file: /home/the0/.claude/plans/org-portable-core.toml
 created: 2026-06-29
-last_verified: 2026-06-29
+last_verified: 2026-07-04
 ---
 
 # Make a single-org tool portable by the reachability dividing line: generic default in the shared layer, internal-only as per-machine opt-in
@@ -27,6 +27,16 @@ Inventory couplings -> classify each by external reachability (internal-only vs 
 - Where it arose: claude-agent-instructions Core layer org-portability (CLAUDE.md/config.md prose + configure-identity.sh/hook-long-job-arm.py defaults + setup-org.sh wizard + README/docs)
 - Working plan: /home/the0/.claude/plans/org-portable-core.toml
 - Side-difficulties met here (now extracted, not inlined): [[shared-tree-suite-failure-wrong-ownership-attribution]] (a shared-tree full-suite red attributed to *your* change when the root cause is unrelated parallel-session WIP); [[validator-tightening-newly-enforces-latent-violations]] (the just-fixed shared validator then newly-enforced the WIP author's own latent date-less leaves). The third (commit only your paths via explicit `git add` list when the branch carries another session's WIP) is standard git hygiene — left in prose, same parallel-session context as the first.
+
+
+### 2026-07-04 — public-venue-content-leak
+- Where it arose: Core GitHub Issues backlog (public repo sthe0/claude-agent-instructions): parked-program backlog entry filed as ONE mixed issue (#17) published org-internal donor codenames and infra names to the open internet
+- Working plan: Same dividing line, applied to CONTENT not tooling: what crosses the org boundary must be org-neutral. Remediation order that respects irreversibility: (1) draft org-neutral replacement, (2) run scripts/check-org-neutral.py on the body BEFORE any POST, (3) publish replacement (#18), (4) delete the leak fully — GraphQL deleteIssue, because PATCH keeps old body in public edit history, (5) file the org half separately to the org backlog (OOSEVEN-10), one-way link internal->public, (6) mechanize (marker gate + rule in instruction-dev-queues leaf). Residual honesty: watcher e-mails sent at creation are irrecoverable.
+
+## Common core & variations
+**Common:** One functional ground with the 2026-06-29 context: the Core repo's org boundary. There it was internal-only TOOL couplings; here internal-only CONTENT published to the public venue. Both resolve by classifying against 'reachable/visible from outside the org' and keeping the internal half behind the boundary (opt-in identity file / org backlog queue).
+
+**Variations:** Tooling coupling is reversible (edit the default back); publication is partly IRREVERSIBLE (watcher e-mails, caches) — so the gate must run pre-publish, not post-hoc. Enforcement artifact: scripts/check-org-neutral.py (commit e4cce66) + rule section in [[instruction-dev-queues]].
 
 ## Cost
 Moderate, and concentrated in the diagnosis, not the edits. The change itself is a 6-stage substantive plan — ~527 insertions / 19 deletions across 15 files in two commits (63e5fe3 difficulty-channel auto-detect, 0a0b52d the portability flip) — all small, mechanical prose/default/wizard edits each guarded by a new test. The real overhead came from the three side-difficulties: (1) a contaminated full-suite gate (an UNRELATED parallel-session dirty tree left git conflict markers → collection SyntaxError) cost a wrong-ownership detour before the "is this file in my changeset / was it dirty before I touched it?" check cleared it; (2) the just-fixed leaf validator then newly-enforced the WIP author's own latent date-less leaves, adding an unplanned fix-the-neighbours pass; (3) committing required an explicit `git add <paths>` list to avoid sweeping in the other session's uncommitted WIP. No precise per-task dollar figure is separable — the spawn cost log (`scripts/cost-report.py`) is a 7-day aggregate (~$186 over 79 spawns that week), and `agentctl resolve` never isolated a single-plan rollup for this task; the cost signal here is the ~1 ownership-misattribution detour + 1 neighbour-validator pass, not a billed figure.
