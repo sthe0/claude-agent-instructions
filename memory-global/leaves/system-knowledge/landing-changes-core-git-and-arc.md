@@ -1,10 +1,10 @@
 ---
 name: landing-changes-core-git-and-arc
-description: "Working recipes to land a change to Core git main (from a WIP feature branch, without dragging that WIP or rewriting history) and to Arcadia trunk (arc branch → arc pr create). A missing gh / non-fast-forward / protected trunk is a routing problem, not a permission wall."
+description: "Working recipes to land a change to Core git main (from a WIP feature branch, without dragging that WIP or rewriting history) and to Arcadia trunk (arc branch → arc pr create), plus the arc task-mount teardown that completes a landing: arc unmount --forget (unmount alone keeps store+registry entry). A missing gh / non-fast-forward / protected trunk is a routing problem, not a permission wall."
 type: reference
 schema: leaf/v1
 created: 2026-07-01
-last_verified: 2026-07-01
+last_verified: 2026-07-04
 ---
 
 # Landing a change: Core git `main` and Arcadia `trunk`
@@ -50,7 +50,14 @@ arc checkout trunk                                  # anchor's steady state; the
 
 **Three distinct blocker classes — name which one before saying "can't".** (1) *Tool absent / VCS friction* (missing `gh`, non-ff, protected trunk) — routing problem, find the native path and just do it. (2) *External-service permission* — probe with `git push --dry-run` / `is_author()`; almost always imagined. (3) *Claude Code auto-mode classifier guard* — a **real, harness-level** refusal that is NOT bypassable by the agent and is NOT lack of rights. Verified guards: `arc pr approve` on a self-authored PR → `[Self-Approval]`; `arc pr merge --now --force` → `[Merge Without Review]`; `git reset --hard` on a WIP branch → irreversible-destruction. For class (3), STOP and surface the **precise** remedy to the user (they approve the PR themselves → armed automerge fires; or they add a Bash permission rule to allow the action), never conflate it with "no rights". Diagnose the real gate first: `arc pr status <id> --json` (`merge_allowed`) and `GET /api/v1/review-requests/<id>?fields=checks` — a PR with all CI green and only `arcanum/approved` unsatisfied is one approval away, and for a `junk/<login>/` path Arcadia itself typically permits self-approval (only the Claude classifier stops it).
 
+**Arc task-mount teardown — `arc unmount` alone is a detach, not a cleanup.** `arc unmount <path>` keeps BOTH the store under `~/.arc/stores/` and the registry entry in `~/.arc/mount-points` (by design, for fast remount); the full teardown that ends a task-mount lifecycle after the PR lands is `arc unmount --forget <path>` — the arc analogue of `land-branch.py`'s worktree+branch deletion on the git side. Related facts, all live-verified:
+
+- A `WARN Mount is listed but … .arc/config does not exist` line in `arc mount -l` is a **stale registry entry** (store already gone). Curing it needs `--force` too, because the mountpoint is no longer a repository: `arc unmount --force --forget <path>` (plain `--forget` fails with "Not an arc repository").
+- **Before forgetting a materialized store, check for unpushed local state** — the store, not the working tree, holds local branches. Recipe: remount, `arc branch -v --json` (each local branch's `remote` field names its tracking ref), then per branch `arc log --oneline <remote>..<branch>` — non-empty = unpushed commits (`--not` is NOT supported by arc log); plus `arc status -s` for uncommitted files. Keep-and-report anything dirty.
+- Mechanized as [`junk/the0/agents/common/scripts/arc-mounts-gc.sh`](https://a.yandex-team.ru/review/14261429) (dry-run by default, `--apply` to act, refuses dirty stores, protects the anchor and the root mount): run it periodically or at a resolution gate to sweep all three garbage classes (stale registry entries, unused stores, orphan store dirs).
+
 > verified by: conversation 2026-07-01 — landed a README edit to `origin/main` (`52dca4f..5af1801`, isolated worktree) and to trunk via [PR 14192704](https://a.yandex-team.ru/review/14192704).
+> verified by: conversation 2026-07-04 — swept 11 stale registry entries + 3 unused stores (~10M) with `--force --forget`, kept `arcadia_claude_local` (1 unpushed commit + dirty working copy found by the recipe above), shipped [arc-mounts-gc.sh PR 14261429](https://a.yandex-team.ru/review/14261429).
 
 ## See also
 
