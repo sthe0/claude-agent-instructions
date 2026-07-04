@@ -74,10 +74,10 @@ memory-global/leaves/experience/2026-07-02-dead-spawn-scope-file-blocks-next-wri
 memory-global/leaves/experience/2026-07-02-spawn-sandbox-excludes-declared-stage-material.md:8  # keep:historical-experience — historical quote inside a resolved-task experience leaf
 memory-global/leaves/experience/2026-07-02-spawn-sandbox-excludes-declared-stage-material.md:26  # keep:historical-experience — historical quote inside a resolved-task experience leaf
 memory-global/leaves/experience/MEMORY.md:3  # keep:historical-experience — historical quote inside a resolved-task experience leaf
-memory-global/leaves/experience/MEMORY.md:19  # keep:historical-experience — historical quote inside a resolved-task experience leaf
-memory-global/leaves/experience/MEMORY.md:22  # keep:historical-experience — historical quote inside a resolved-task experience leaf
-memory-global/leaves/experience/MEMORY.md:24  # keep:historical-experience — historical quote inside a resolved-task experience leaf
-memory-global/leaves/experience/MEMORY.md:49  # keep:historical-experience — historical quote inside a resolved-task experience leaf
+memory-global/leaves/experience/MEMORY.md:20  # keep:historical-experience — historical quote inside a resolved-task experience leaf
+memory-global/leaves/experience/MEMORY.md:23  # keep:historical-experience — historical quote inside a resolved-task experience leaf
+memory-global/leaves/experience/MEMORY.md:25  # keep:historical-experience — historical quote inside a resolved-task experience leaf
+memory-global/leaves/experience/MEMORY.md:50  # keep:historical-experience — historical quote inside a resolved-task experience leaf
 memory-global/leaves/spawning-specialists.md:54  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 memory-global/leaves/specialization-skill-usage-tracking.md:34  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 memory-global/leaves/specialization-skill-usage-tracking.md:65  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
