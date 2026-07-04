@@ -46,6 +46,10 @@ def assistant_text(text: str) -> dict:
     return {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}}
 
 
+def assistant_thinking(text: str) -> dict:
+    return {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "thinking", "thinking": text}]}}
+
+
 def write_transcript(path: Path, entries: list[dict]) -> Path:
     path.write_text("\n".join(json.dumps(e) for e in entries), encoding="utf-8")
     return path
@@ -123,16 +127,73 @@ def test_other_attachments_are_not_boundaries(tmp_path):
     assert decision_of(run_hook(payload_for(t))) == "deny"
 
 
-def test_render_checkpoint_excludes_earlier_narration(tmp_path):
-    # Over-fire regression: a big narration block was emitted before an ordinary
-    # tool call (and rendered when the tool ran), then a SHORT text precedes the
-    # ask. Only the short text is at risk -> allow. Before the render-checkpoint
-    # fix the hook summed the big narration and over-fired the deny.
+def test_render_checkpoint_then_short_text_is_still_mid_turn_deny(tmp_path):
+    # SUPERSEDED (2026-07-04): this used to be the over-fire regression guard —
+    # a big narration rendered by an earlier tool call, then a SHORT text (under
+    # threshold) before the ask -> old hook allowed it (text-length rule only).
+    # The topological rule now strictly dominates: ANY completed tool call this
+    # turn (the tool_result checkpoint below) denies the ask regardless of how
+    # little text follows it, because that trailing text rides the ask's own
+    # message and is dropped from the transcript, not merely unrendered — see
+    # hook-ask-text-split.py module docstring. The over-fire scenario the old
+    # test guarded against is subsumed, not reintroduced: mid-turn asks are
+    # denied by design now, not by text miscounting.
     t = write_transcript(tmp_path / "t.jsonl", [
         user_prompt("вопрос"),
         assistant_text("x" * 500),   # rendered when the tool below ran
-        tool_result_entry(),         # render checkpoint
-        assistant_text("y" * 150),   # the at-risk preamble, under threshold
+        tool_result_entry(),         # render checkpoint -> tool call completed this turn
+        assistant_text("y" * 150),   # under threshold, but mid-turn deny fires anyway
+    ])
+    assert decision_of(run_hook(payload_for(t))) == "deny"
+
+
+def test_mid_turn_ask_zero_text_still_denied(tmp_path):
+    # The case the old text-length-only hook missed entirely: a tool call
+    # completes this turn and the assistant writes ZERO text before the ask.
+    # Old hook: turn_text_len == 0 -> allow. New hook: has_tool_result_this_turn
+    # is True regardless of text -> deny, because the ask itself already shares
+    # a risky mid-turn position and any text later added to this same turn
+    # would be unobservably dropped.
+    t = write_transcript(tmp_path / "t.jsonl", [
+        user_prompt("вопрос"),
+        tool_result_entry(),
+    ])
+    proc = run_hook(payload_for(t))
+    assert decision_of(proc) == "deny"
+    assert "tool call" in proc.stdout
+
+
+def test_turn_opening_ask_after_thinking_only_is_allowed(tmp_path):
+    # Turn-opening ask: a real user prompt, then only assistant `thinking`
+    # entries (not rendered `text`, so they don't count as at-risk text and
+    # aren't a tool call) before the ask -> allow.
+    t = write_transcript(tmp_path / "t.jsonl", [
+        user_prompt("вопрос"),
+        assistant_thinking("hmm let me consider"),
+    ])
+    assert decision_of(run_hook(payload_for(t))) == "allow"
+
+
+def test_turn_opened_by_task_notification_then_ask_is_allowed(tmp_path):
+    # The timer-split's second turn: a task-notification user entry is itself a
+    # real-user-prompt-shaped turn boundary, so an ask immediately after it is
+    # turn-opening, not mid-turn -> allow.
+    t = write_transcript(tmp_path / "t.jsonl", [
+        user_prompt("покажи план"),
+        assistant_text("x" * 5000),
+        user_prompt("<task-notification>timer done</task-notification>"),
+    ])
+    assert decision_of(run_hook(payload_for(t))) == "allow"
+
+
+def test_fails_open_on_post_compact_shape_without_boundary(tmp_path):
+    # Post-/compact transcript shape: only summary/attachment-type entries,
+    # no real-user-prompt boundary anywhere -> the observable is unavailable ->
+    # fails open, allow (never wedge the workflow on an ambiguous transcript).
+    t = write_transcript(tmp_path / "t.jsonl", [
+        {"type": "summary", "summary": "earlier conversation, compacted"},
+        {"type": "attachment", "attachment": {"type": "hook_success", "hookName": "SessionStart"}},
+        assistant_text("x" * 5000),
     ])
     assert decision_of(run_hook(payload_for(t))) == "allow"
 
@@ -191,9 +252,16 @@ def test_meta_user_entries_are_not_boundaries(tmp_path):
 
 def test_gate_decision_pure():
     mod = _load_module()
-    assert mod.gate_decision(None) == ("allow", "")
-    assert mod.gate_decision(0)[0] == "allow"
-    assert mod.gate_decision(mod.THRESHOLD_CHARS)[0] == "allow"
-    decision, reason = mod.gate_decision(mod.THRESHOLD_CHARS + 1)
+    assert mod.gate_decision(None, None) == ("allow", "")
+    assert mod.gate_decision(False, 0)[0] == "allow"
+    assert mod.gate_decision(False, mod.THRESHOLD_CHARS)[0] == "allow"
+    decision, reason = mod.gate_decision(False, mod.THRESHOLD_CHARS + 1)
     assert decision == "deny"
     assert "FINAL" in reason
+    # mid-turn rule dominates regardless of at-risk text length
+    decision, reason = mod.gate_decision(True, 0)
+    assert decision == "deny"
+    assert "tool call" in reason
+    decision, reason = mod.gate_decision(True, mod.THRESHOLD_CHARS + 1)
+    assert decision == "deny"
+    assert "tool call" in reason
