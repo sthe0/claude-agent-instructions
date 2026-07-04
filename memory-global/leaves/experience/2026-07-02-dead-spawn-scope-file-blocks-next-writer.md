@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "Fedor (2026-07-02: 'да на все три вопроса')"
 refs: [scripts/hook-scope-conflict.py, docs/operations/cross-session-scope-isolation.md]
 created: 2026-07-02
-last_verified: 2026-07-03
+last_verified: 2026-07-04
 ---
 
 # Ghost scope: a dead spawn session's scope file blocks the next writer for the full heartbeat TTL
@@ -35,6 +35,10 @@ Execute plan agentctl-gate-quality stage-by-stage via dispatched developer spawn
 ### 2026-07-03 — live parent scope blocks its own spawned specialists (lineage blindness)
 - Where it arose: si-mechanize-gates stage 3, session 759b0d4b, 2026-07-03
 - Working plan: Inverse direction of the same registry gap: not a DEAD child's ghost scope, but the LIVE parent's own scope. After the manager merged the stage-2 branch in-thread, hook-scope-track put scripts/install-reminder-hooks.sh into the manager session's touched_paths; every subsequently dispatched developer (fresh session id, no lineage link) was denied Edit on that file by hook-scope-conflict and burned its full $3 budget — twice ($6 total, both died error_max_budget_usd with the work committed but the marker unsent). The registry keys scopes by bare CLAUDE_SESSION_ID with no parent-child lineage, so the coordinator blocks its own specialists on exactly the files the plan tells them to edit. Workaround used: complete the conflicting stage in-thread. Structural fix queued for backlog: spawn-specialist passes parent session id; hook-scope-conflict exempts a writer whose scope chain includes the holder.
+
+### 2026-07-04 — session-limit death mode + forensic recovery of a dead spawn's finished work
+- Where it arose: fix-agentctl-core-defects stages 4-5, session ce4f6071, 2026-07-04
+- Working plan: Two additions confirmed twice this task. (1) Death mode taxonomy: a spawned specialist can die from the SESSION LIMIT (harness kills the process; exit marker absent, transcript ends mid-work) — distinct from budget exhaustion (clean ESCALATE/INCOMPLETE marker). Session-limit death leaves committed work + a live scope claim behind. (2) Forensic recovery beats respawn: before re-spawning, read the dead spawn's transcript tail (~/.claude-agent/ spawn logs / git log in its worktree) — twice the work was actually FINISHED and committed; recovery = verify the commits against the stage's expected result image, release the stale scope claim (agentctl scope release / delete the scope file after backup, e.g. .bak-stage4-release), record-result from the evidence. A respawn would have redone paid-for work and risked conflicting edits.
 ## Common core & variations
 **Common:** Dead-session scope files no longer require manual rm before dispatch: deregistration covers supervised exits, the pid probe covers unsupervised deaths within the same heartbeat window
 

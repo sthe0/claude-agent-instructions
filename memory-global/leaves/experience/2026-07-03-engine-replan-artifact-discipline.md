@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "user (AskUserQuestion at the resolution gate: «Да, решена»)"
 refs: [agentctl/cli.py, 2026-06-25-claude-md-reduction-floor.md]
 created: 2026-07-03
-last_verified: 2026-07-03
+last_verified: 2026-07-04
 ---
 
 # agentctl replan/dispatch artifact discipline: never edit the plan in place, dispatch already spawns
@@ -35,6 +35,10 @@ When correcting a plan under agentctl: author every revision at a NEW version-su
 ### 2026-07-03 — config-root-tails sweep (claude-agent-instructions, session 1c913d96, same day, second independent context)
 - Where it arose: Substantive 5-stage sweep of legacy config-root prose refs (411 occurrences -> 151 converted, 91 allowlisted, standing enumerator in verify-all); agentctl drove the full spine plan->approve->partition->execute->verify-final->resolve
 - Working plan: Independently re-hit all three failure shapes and confirmed the remedies live: (1) post-thinker refinements applied to the plan file IN PLACE were never re-registered - engine ran the frozen pre-refinement verify_command and false-FAILED Stage 3; remedy: copy to a NEW path (v2) with one genuine prose refinement, plan-review --target v2, replan -> kind=refinement copies verify mechanics into state. Wrinkle: the replan coverage gate blocked this no-op re-registration (no means changed) - honest bypass is --coverage-waiver naming the engine snapshot (not the plan artifact) as the divergent thing. (2) Stage 3 count invariant was expressed against the LIVE tree (live grep total == worklist rows) and false-failed at verify-final regression replay after the Stage 4 sweep removed 151 occurrences; remedy: re-anchor to the frozen Stage 3 commit (git grep -onP <pat> 3e48c4f minus generated artifacts == worklist rows) - re-runnable forever; applied as a v3 refinement replan directly from VERIFYING (difficulty commands are rejected at that node). (3) called agentctl dispatch AFTER already spawning via spawn-specialist.py - dispatch is itself a spawner and launched a duplicate developer into the SAME worktree; killed the duplicate process tree within a minute. Rule: dispatch XOR manual spawn, never both.
+
+### 2026-07-04 — legacy pre-snapshot session: no_change replan leaves stale stage materialization
+- Where it arose: fix-agentctl-core-defects stage 6, session ce4f6071, 2026-07-04
+- Working plan: Symptom: after an in-place verify_command refinement, replan said 'plan unchanged — retry the re-armed stage' and the engine then ran the OLD verify_command from state (failing on out-of-scope issue #16) despite the plan file carrying the reviewed new one. Root cause chain: the session was approved BEFORE the #8 snapshot fix shipped, so state.plan_snapshot_path is empty; the documented fallback diffs plan_path against args.plan — the same file — so ANY in-place edit degrades to kind=no_change, and the no_change branch re-arms the FAILED stage WITHOUT refreshing stage definitions from the plan file. Remedy that works: author the correction as a NEW plan file (v8 = reviewed content; restore v7 on disk to its as-approved content as the diff baseline), re-bind the thinker review to v8, replan --plan v8 -> kind=refinement -> stage definitions refresh with PASSED carry. Guard: for any session whose state predates the snapshot mechanism, never correct a plan in place — always a new file.
 ## Common core & variations
 **Common:** engine consumes plan fields literally; a value outside the typed vocabulary must fail loudly at load, not degrade silently at dispatch
 
