@@ -26,6 +26,16 @@ Desired: task-mount teardown leaves no residue. Actual: plain arc unmount kept s
 - Where it arose: Machine with arc task-mount workflow (~/task-mounts anchor model); any session that creates per-task arc mounts or reviews arc mount -l output.
 - Working plan: ~/.claude-agent/plans/arc-mount-store-cleanup-v1.toml (5 stages, all PASSED)
 
+
+### 2026-07-04 — Mechanized the invocation points (same day, follow-up task autonomous-arc-mount-teardown)
+- Where it arose: User pushed twice: 'why no autonomous cleanup proposal' and 'why is edit 2 text, not code' — the SI tie-breaker (existing mechanism > prose) applied; both fixes delivered as code in one Arcadia PR 14261837.
+- Working plan: Plan autonomous-arc-mount-teardown-v1.toml (2 stages: spawn:developer PR, in_thread verification); thinker review r1=revise(6)/r2=pass; developer needed 2 spawns (first INCOMPLETE at 3 USD cap — recurring pattern, continuation via context dossier); PR adds fs-only residue nudge to hook-resolution-land-arc.py + backend_teardown_workspace() with CLAUDE_DRY_RUN + teardown-arc-mount.sh CLI; 34/34 hermetic tests; verification mount itself torn down by the new CLI (dogfood).
+
+## Common core & variations
+**Common:** TODO — shared solution across contexts
+
+**Variations:** New sub-lesson: a tool without an invocation point is not autonomy — mechanize the trigger (gate-time nudge) and the action (lifecycle verb) in the infra layer that owns the resource; arc specifics stay in arc-side hooks (Core stays org-neutral).
+
 ## Cost
 ~2h wall-clock; 2 developer spawns (~$5.85, first hit $3 budget cap and returned INCOMPLETE — continuation via spawn-specialist.py --context-dossier because agentctl dispatch has no continuation channel); thinker plan review x2
 
