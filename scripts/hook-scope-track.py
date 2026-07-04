@@ -160,6 +160,10 @@ def track(payload: dict, now_ts: float) -> None:
         repo_root, vcs = resolve_repo_root_vcs(cwd)
         registry.set_context(session_id, cwd, repo_root, vcs)
 
+    lineage_ids = registry.parse_lineage(os.environ.get("AGENT_LINEAGE_IDS"))
+    if lineage_ids:
+        registry.record_lineage(session_id, lineage_ids)
+
     if tool_name in TRACKED_TOOLS:
         file_path = tool_input.get("file_path") or ""
         if file_path:

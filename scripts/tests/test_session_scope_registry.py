@@ -243,6 +243,69 @@ def test_live_sessions_legacy_no_pid_record_keeps_heartbeat_only_behavior():
     assert [r.session_id for r in live] == ["a"]
 
 
+# ── lineage_ids: schema back-compat, record_lineage, parse/format ──────────
+
+def test_from_dict_defaults_lineage_ids_to_empty_for_legacy_record():
+    rec = ScopeRecord.from_dict({"session_id": "s1", "heartbeat_ts": 1.0})
+    assert rec.lineage_ids == []
+
+
+def test_to_dict_round_trips_lineage_ids():
+    rec = ScopeRecord(session_id="s1", lineage_ids=["p1", "p2"])
+    assert ScopeRecord.from_dict(rec.to_dict()).lineage_ids == ["p1", "p2"]
+
+
+def test_load_legacy_record_without_lineage_ids(tmp_path):
+    path = registry.scope_path(tmp_path, "legacy")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"session_id": "legacy", "heartbeat_ts": 100.0, "touched_paths": ["/repo/a.py"]}),
+        encoding="utf-8",
+    )
+    rec = registry.load(tmp_path, "legacy")
+    assert rec is not None
+    assert rec.lineage_ids == []
+    assert rec.touched_paths == ["/repo/a.py"]
+
+
+def test_record_lineage_creates_and_persists(tmp_path):
+    registry.record_lineage("s1", ["p1", "p2"], scopes_dir=tmp_path)
+    rec = registry.load(tmp_path, "s1")
+    assert rec.lineage_ids == ["p1", "p2"]
+
+
+def test_record_lineage_preserves_other_fields(tmp_path):
+    registry.record_touch("s1", "/repo/a.py", scopes_dir=tmp_path)
+    registry.record_lineage("s1", ["p1"], scopes_dir=tmp_path)
+    rec = registry.load(tmp_path, "s1")
+    assert rec.touched_paths == ["/repo/a.py"]
+    assert rec.lineage_ids == ["p1"]
+
+
+def test_record_lineage_is_idempotent_no_rewrite(tmp_path, monkeypatch):
+    registry.record_lineage("s1", ["p1"], scopes_dir=tmp_path)
+    calls = []
+    real_save = registry.save
+    monkeypatch.setattr(
+        registry, "save", lambda *a, **k: (calls.append(1), real_save(*a, **k))[1]
+    )
+    registry.record_lineage("s1", ["p1"], scopes_dir=tmp_path)  # identical -> no save
+    assert calls == []
+
+
+def test_parse_lineage_dedups_and_orders():
+    assert registry.parse_lineage("a, b ,a,,c") == ["a", "b", "c"]
+
+
+def test_parse_lineage_empty_and_none():
+    assert registry.parse_lineage("") == []
+    assert registry.parse_lineage(None) == []
+
+
+def test_format_lineage_round_trips_with_parse():
+    assert registry.parse_lineage(registry.format_lineage(["a", "b"])) == ["a", "b"]
+
+
 # ── delete ────────────────────────────────────────────────────────────────
 
 def test_delete_removes_existing_file(tmp_path):

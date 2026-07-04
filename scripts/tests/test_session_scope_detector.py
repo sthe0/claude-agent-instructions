@@ -159,6 +159,85 @@ def test_detect_conflicts_extra_live_check_gates_further():
     assert conflicts == []
 
 
+# ── lineage awareness: a parent + its synchronously-spawned descendants are one writer ──
+
+def test_detect_conflicts_writer_lineage_exempts_ancestor_held_path():
+    # 'child' writes a path 'parent' holds; child's writer_lineage names parent,
+    # so the two are one actor and there is no conflict.
+    records = [_rec("parent", 100.0, touched_paths=["/repo/a.py"])]
+    conflicts = detect_conflicts(
+        records, this_session="child", candidate_paths=["/repo/a.py"],
+        now_ts=100.0, ttl_s=30.0, writer_lineage={"parent"},
+    )
+    assert conflicts == []
+
+
+def test_detect_conflicts_record_lineage_exempts_descendant_from_ancestor_writer():
+    # 'parent' writes a path a 'child' record holds; the child's record names
+    # parent in its lineage_ids, so the parent (writer) is exempt from its own
+    # descendant even though the parent's env carries no lineage.
+    child = _rec("child", 100.0, touched_paths=["/repo/a.py"])
+    child.lineage_ids = ["parent"]
+    conflicts = detect_conflicts(
+        [child], this_session="parent", candidate_paths=["/repo/a.py"],
+        now_ts=100.0, ttl_s=30.0,
+    )
+    assert conflicts == []
+
+
+def test_detect_conflicts_siblings_sharing_lineage_are_exempt():
+    # two children of the same parent (documented accepted consequence).
+    c2 = _rec("c2", 100.0, touched_paths=["/repo/a.py"])
+    c2.lineage_ids = ["parent"]
+    conflicts = detect_conflicts(
+        [c2], this_session="c1", candidate_paths=["/repo/a.py"],
+        now_ts=100.0, ttl_s=30.0, writer_lineage={"parent"},
+    )
+    assert conflicts == []
+
+
+def test_detect_conflicts_disjoint_lineage_still_conflicts():
+    foreign = _rec("foreign", 100.0, touched_paths=["/repo/a.py"])
+    foreign.lineage_ids = ["parentB"]
+    conflicts = detect_conflicts(
+        [foreign], this_session="c1", candidate_paths=["/repo/a.py"],
+        now_ts=100.0, ttl_s=30.0, writer_lineage={"parentA"},
+    )
+    assert len(conflicts) == 1
+    assert conflicts[0].other_session == "foreign"
+
+
+def test_detect_conflicts_legacy_record_no_lineage_behaves_as_singleton():
+    # backward-compat: a record with default (empty) lineage_ids still conflicts
+    # with a disjoint-lineage writer exactly as before the lineage change.
+    records = [_rec("other", 100.0, touched_paths=["/repo/a.py"])]  # lineage_ids == []
+    conflicts = detect_conflicts(
+        records, this_session="me", candidate_paths=["/repo/a.py"],
+        now_ts=100.0, ttl_s=30.0, writer_lineage={"someparent"},
+    )
+    assert len(conflicts) == 1
+
+
+def test_detect_conflicts_no_writer_lineage_is_identical_to_pre_change_behavior():
+    # writer_lineage omitted => writer_set is {this_session} => today's behavior.
+    records = [_rec("other", 100.0, touched_paths=["/repo/a.py"])]
+    conflicts = detect_conflicts(
+        records, this_session="me", candidate_paths=["/repo/a.py"],
+        now_ts=100.0, ttl_s=30.0,
+    )
+    assert len(conflicts) == 1
+
+
+def test_detect_conflicts_stale_holder_never_conflicts_regardless_of_lineage():
+    stale = _rec("foreign", 10.0, touched_paths=["/repo/a.py"])  # beyond ttl
+    stale.lineage_ids = ["parentB"]
+    conflicts = detect_conflicts(
+        [stale], this_session="me", candidate_paths=["/repo/a.py"],
+        now_ts=100.0, ttl_s=30.0, writer_lineage={"parentA"},
+    )
+    assert conflicts == []
+
+
 # ── classify_severity: block vs warn ────────────────────────────────────────
 
 def test_classify_severity_blocks_gated_path_held_by_other_live():

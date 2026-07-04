@@ -51,12 +51,17 @@ LIVE_TTL_S = 1800.0
 
 
 def evaluate(
-    payload: dict, now_ts: float, scopes_dir: "str | Path | None" = None
+    payload: dict,
+    now_ts: float,
+    scopes_dir: "str | Path | None" = None,
+    writer_lineage: "set[str] | None" = None,
 ) -> "tuple[str, str]":
     """Pure decision over an already-parsed payload. Returns (decision, message)
     where decision is 'allow' | 'warn' | 'block'. Kept free of stdin/stdout and
     of the wall clock (now_ts injected) so it is unit-testable in-process; main()
-    supplies time.time() and the I/O."""
+    supplies time.time(), the writer's lineage (from env AGENT_LINEAGE_IDS) and
+    the I/O. writer_lineage names the writing session's ancestors so a spawned
+    specialist is not fenced out of the tree its parent already claimed."""
     if payload.get("tool_name") not in ("Edit", "Write"):
         return "allow", ""
 
@@ -71,7 +76,8 @@ def evaluate(
     records = registry.load_all(sd)
     extra_live_check = registry.live_pid_check(records)
     conflicts = detect_conflicts(
-        records, session_id, [candidate], now_ts, LIVE_TTL_S, extra_live_check=extra_live_check
+        records, session_id, [candidate], now_ts, LIVE_TTL_S,
+        extra_live_check=extra_live_check, writer_lineage=writer_lineage,
     )
     if not conflicts:
         return "allow", ""
@@ -120,7 +126,8 @@ def main() -> int:
     except Exception:
         return 0
     try:
-        decision, message = evaluate(payload, time.time())
+        writer_lineage = set(registry.parse_lineage(os.environ.get("AGENT_LINEAGE_IDS")))
+        decision, message = evaluate(payload, time.time(), writer_lineage=writer_lineage)
     except Exception:
         return 0
     if decision == "block":

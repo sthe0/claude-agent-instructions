@@ -57,20 +57,29 @@ def detect_conflicts(
     now_ts: float,
     ttl_s: float,
     extra_live_check: "Callable[[str], bool] | None" = None,
+    writer_lineage: "set[str] | None" = None,
 ) -> "list[Conflict]":
-    """Conflicts between candidate_paths and OTHER live sessions' held paths.
+    """Conflicts between candidate_paths and OTHER-LINEAGE live sessions' held paths.
 
-    A session never conflicts with itself (this_session is excluded before
-    overlap is even checked). Liveness is delegated entirely to
-    registry.live_sessions, so a stale record — or, with extra_live_check
-    (e.g. registry.live_pid_check), one whose backing process is confirmed
-    gone — never produces a conflict. Two sessions rooted in distinct
-    worktrees/mounts naturally hold disjoint paths, so no repo_root/vcs
+    A session never conflicts with its own write-lineage: the writer's lineage
+    set is {this_session} ∪ writer_lineage (the writer's ancestors, supplied by
+    the caller from its env), and a held record is skipped when its own lineage
+    set ({rec.session_id} ∪ rec.lineage_ids) intersects the writer's — i.e. they
+    share an ancestor, or one is an ancestor of the other. With writer_lineage
+    omitted and legacy records (empty lineage_ids), this reduces exactly to the
+    pre-lineage behavior of excluding this_session alone.
+
+    Liveness is delegated entirely to registry.live_sessions, so a stale record —
+    or, with extra_live_check (e.g. registry.live_pid_check), one whose backing
+    process is confirmed gone — never produces a conflict. Two sessions rooted in
+    distinct worktrees/mounts naturally hold disjoint paths, so no repo_root/vcs
     special-casing is needed here for isolate-not-serialize.
     """
+    writer_set = {this_session} | (set(writer_lineage) if writer_lineage else set())
     conflicts: "list[Conflict]" = []
     for rec in live_sessions(records, now_ts, ttl_s, extra_live_check=extra_live_check):
-        if rec.session_id == this_session:
+        holder_set = {rec.session_id} | set(rec.lineage_ids)
+        if holder_set & writer_set:
             continue
         for held in rec.touched_paths:
             for candidate in candidate_paths:

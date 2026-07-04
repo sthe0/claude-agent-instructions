@@ -60,10 +60,12 @@ def _make_arc_stub(bin_dir: Path, root: Path) -> None:
     )
 
 
-def run_hook(payload: dict, home: Path, bin_dir: str) -> subprocess.CompletedProcess:
+def run_hook(payload: dict, home: Path, bin_dir: str, lineage: "str | None" = None) -> subprocess.CompletedProcess:
     # bin_dir first so a stub shadows the real binary; /usr/bin:/bin kept so the
     # stub's own "#!/usr/bin/env bash" shebang can still resolve bash.
     env = {"HOME": str(home), "PATH": f"{bin_dir}:/usr/bin:/bin"}
+    if lineage is not None:
+        env["AGENT_LINEAGE_IDS"] = lineage
     return subprocess.run(
         [sys.executable, str(HOOK)],
         input=json.dumps(payload),
@@ -331,6 +333,48 @@ def test_session_pid_respects_max_depth(monkeypatch):
     )
     assert track_mod.session_pid(max_depth=2) is None
     assert track_mod.session_pid(max_depth=4) == 80
+
+
+def test_edit_persists_lineage_ids_from_env(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _make_git_stub(bin_dir, repo)
+    target = repo / "a.py"
+    target.write_text("x")
+
+    proc = run_hook(
+        edit_payload("child", str(repo), str(target)), home, str(bin_dir),
+        lineage="parent,grandparent",
+    )
+    assert proc.returncode == 0
+
+    rec = _record(home, "child")
+    assert rec is not None
+    assert rec.lineage_ids == ["parent", "grandparent"]
+    assert rec.touched_paths == [str(target.resolve())]
+
+
+def test_no_lineage_env_leaves_lineage_ids_empty(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _make_git_stub(bin_dir, repo)
+    target = repo / "a.py"
+    target.write_text("x")
+
+    proc = run_hook(edit_payload("s1", str(repo), str(target)), home, str(bin_dir))
+    assert proc.returncode == 0
+
+    rec = _record(home, "s1")
+    assert rec is not None
+    assert rec.lineage_ids == []
 
 
 def test_installer_registers_scope_track_for_edit_write_and_bash():

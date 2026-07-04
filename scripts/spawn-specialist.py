@@ -48,13 +48,13 @@ def _spawn_tags() -> dict:
     """Best-effort session/ticket tags for the cost log (enables per-ticket attribution).
 
     ticket: $CLAUDE_TICKET, else a TICKET-123 pattern in cwd (dedicated mounts encode it).
-    session_id: $CLAUDE_SESSION_ID if the harness exposes it, else None.
+    session_id: $CLAUDE_CODE_SESSION_ID if the harness exposes it, else None.
     """
     ticket = os.environ.get("CLAUDE_TICKET")
     if not ticket:
         m = re.search(r"[A-Z][A-Z0-9]+-\d+", os.getcwd())
         ticket = m.group(0) if m else None
-    return {"session_id": os.environ.get("CLAUDE_SESSION_ID"), "ticket": ticket}
+    return {"session_id": os.environ.get("CLAUDE_CODE_SESSION_ID"), "ticket": ticket}
 
 
 RETURN_MARKERS = (
@@ -93,6 +93,17 @@ def recursion_max(constants: dict[str, str]) -> int:
     if key not in constants:
         raise SystemExit(f"error: {key} not defined in config.md")
     return int(constants[key])
+
+
+def build_child_lineage(inherited: "str | None", own_id: "str | None") -> str:
+    """Child's AGENT_LINEAGE_IDS: the inherited lineage (this spawn's own
+    ancestors) plus the spawning session's own id, ordered and deduped, so a
+    parent and its synchronously-spawned descendants form one write-lineage
+    (see session_scope.detector.detect_conflicts)."""
+    ids = registry.parse_lineage(inherited)
+    if own_id and own_id not in ids:
+        ids.append(own_id)
+    return registry.format_lineage(ids)
 
 
 def read_text_or_file(text: str | None, file: Path | None) -> str:
@@ -554,6 +565,10 @@ def main(argv: list[str] | None = None) -> int:
     env = {
         **os.environ,
         "AGENT_RECURSION_DEPTH": str(depth_next),
+        "AGENT_LINEAGE_IDS": build_child_lineage(
+            os.environ.get("AGENT_LINEAGE_IDS", ""),
+            os.environ.get("CLAUDE_CODE_SESSION_ID"),
+        ),
     }
 
     # Snapshot existing transcripts BEFORE spawning so we can identify the

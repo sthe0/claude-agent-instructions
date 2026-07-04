@@ -55,6 +55,11 @@ class ScopeRecord:
     vcs: str = "none"
     touched_paths: "list[str]" = field(default_factory=list)
     pid: "int | None" = None
+    # Ancestor session ids of this session (its spawn lineage), so the online
+    # conflict detector can treat a parent and its synchronously-spawned
+    # descendants as one write-lineage. Empty for a top-level session and for
+    # any legacy record written before lineage tracking existed.
+    lineage_ids: "list[str]" = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -73,11 +78,33 @@ class ScopeRecord:
             vcs=str(d.get("vcs", "none")),
             touched_paths=[str(p) for p in d.get("touched_paths", [])],
             pid=int(pid) if pid is not None else None,
+            lineage_ids=[str(x) for x in d.get("lineage_ids", [])],
         )
 
     @classmethod
     def from_json(cls, text: str) -> "ScopeRecord":
         return cls.from_dict(json.loads(text))
+
+
+def parse_lineage(raw: "str | None") -> "list[str]":
+    """Split a comma-joined lineage-ids string into an ordered, deduped list;
+    empty/whitespace entries are dropped. The inverse of format_lineage. Shared
+    by spawn-specialist (building the child's lineage), hook-scope-track (persisting
+    it) and hook-scope-conflict (reading the writer's lineage), so the env-var wire
+    format has one definition."""
+    seen: set = set()
+    out: "list[str]" = []
+    for part in (raw or "").split(","):
+        part = part.strip()
+        if part and part not in seen:
+            seen.add(part)
+            out.append(part)
+    return out
+
+
+def format_lineage(ids: "list[str]") -> str:
+    """Join lineage ids into the comma-separated env-var form parse_lineage reads."""
+    return ",".join(ids)
 
 
 def scope_path(scopes_dir: "str | Path", session_id: str) -> Path:
@@ -140,6 +167,25 @@ def set_context(
     rec.repo_root = repo_root
     rec.vcs = vcs
     save(scopes_dir, rec)
+    return rec
+
+
+def record_lineage(
+    session_id: str,
+    lineage_ids: "list[str]",
+    scopes_dir: "str | Path" = DEFAULT_SCOPES_DIR,
+) -> ScopeRecord:
+    """Persist the session's ancestor lineage onto its record (create-or-update).
+
+    Idempotent: writes only when the stored lineage actually differs, so the
+    PostToolUse track hook can call it on every fire without churning the file.
+    Loads the existing record first so other fields (touched_paths, heartbeat,
+    pid) are preserved, mirroring set_context/heartbeat's read-modify-write.
+    """
+    rec = load(scopes_dir, session_id) or ScopeRecord(session_id=session_id)
+    if rec.lineage_ids != list(lineage_ids):
+        rec.lineage_ids = list(lineage_ids)
+        save(scopes_dir, rec)
     return rec
 
 

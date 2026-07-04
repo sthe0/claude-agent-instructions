@@ -50,8 +50,10 @@ def _payload(session_id: str, file_path: str, tool: str = "Edit") -> dict:
     }
 
 
-def run_hook(payload: dict, home: Path) -> subprocess.CompletedProcess:
+def run_hook(payload: dict, home: Path, lineage: "str | None" = None) -> subprocess.CompletedProcess:
     env = {"HOME": str(home), "PATH": "/usr/bin:/bin"}
+    if lineage is not None:
+        env["AGENT_LINEAGE_IDS"] = lineage
     return subprocess.run(
         [sys.executable, str(HOOK)],
         input=json.dumps(payload),
@@ -239,6 +241,92 @@ def test_malformed_stdin_allows(tmp_path):
         text=True,
         env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
     )
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == ""
+
+
+def test_lineage_allows_child_writing_parent_held_gated_path(tmp_path):
+    # child's env lineage names the parent that holds the path -> one actor -> allow.
+    home = tmp_path / "home"
+    home.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    shared = repo / "shared.py"
+    shared.write_text("x")
+
+    _seed(home, "parent", [str(shared)], heartbeat_ts=time.time())
+
+    proc = run_hook(_payload("child", str(shared)), home, lineage="parent")
+    assert proc.returncode == 0
+    assert _decision(proc.stdout) is None
+    assert proc.stdout.strip() == ""
+
+
+def test_lineage_allows_parent_writing_child_held_path(tmp_path):
+    # child record carries parent in lineage_ids; parent (no env lineage) writes
+    # the same path -> the parent's own id is in the child's holder-set -> allow.
+    home = tmp_path / "home"
+    home.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    shared = repo / "shared.py"
+    shared.write_text("x")
+
+    rec = registry.ScopeRecord(
+        session_id="child",
+        heartbeat_ts=time.time(),
+        cwd="/somewhere",
+        repo_root="/somewhere",
+        vcs="git",
+        touched_paths=[os.path.realpath(str(shared))],
+        lineage_ids=["parent"],
+    )
+    registry.save(_scopes_dir(home), rec)
+
+    proc = run_hook(_payload("parent", str(shared)), home)
+    assert proc.returncode == 0
+    assert _decision(proc.stdout) is None
+    assert proc.stdout.strip() == ""
+
+
+def test_foreign_lineage_still_blocks_gated_path(tmp_path):
+    # disjoint lineage roots -> a genuinely foreign live session -> still denied.
+    home = tmp_path / "home"
+    home.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    shared = repo / "shared.py"
+    shared.write_text("x")
+
+    rec = registry.ScopeRecord(
+        session_id="foreign",
+        heartbeat_ts=time.time(),
+        cwd="/somewhere",
+        repo_root="/somewhere",
+        vcs="git",
+        touched_paths=[os.path.realpath(str(shared))],
+        lineage_ids=["parentB"],
+    )
+    registry.save(_scopes_dir(home), rec)
+
+    proc = run_hook(_payload("me", str(shared)), home, lineage="parentA")
+    assert proc.returncode == 0
+    out = _decision(proc.stdout)
+    assert out is not None
+    assert out["permissionDecision"] == "deny"
+
+
+def test_stale_holder_ignored_even_with_lineage_env(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    shared = repo / "shared.py"
+    shared.write_text("x")
+
+    _seed(home, "foreign", [str(shared)], heartbeat_ts=0.0)  # long-dead heartbeat
+
+    proc = run_hook(_payload("me", str(shared)), home, lineage="parentA")
     assert proc.returncode == 0
     assert proc.stdout.strip() == ""
 
