@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "user"
 refs: [2026-05-26-agent-system-plan-vs-reality-drift.md, macos-shell-portability-gotchas.md]
 created: 2026-07-01
-last_verified: 2026-07-01
+last_verified: 2026-07-05
 ---
 
 # A watchdog that silently crashes defeats every check — verify the monitor's OWN run, not just its presence
@@ -25,6 +25,16 @@ Read the monitor's own run result BEFORE trusting its silence as 'all clear': sy
 ### 2026-07-01 — initial
 - Where it arose: ccgram watchdog (~/bin/ccgram-watchdog.sh) on klg Work VPS; bash 'set -euo pipefail'; grep zero-match in a pipe. Surfaced while adding a poll-loop-liveness check to the same script.
 - Working plan: Hardened the crashing 'grep|awk' pipelines with '{ grep||true; }'; re-verified shellcheck/bash -n; confirmed the timer service now exits 0. Then added the intended new check on top.
+
+
+### 2026-07-05 — systemd --user job silently aborts because minimal service PATH omits ~/.local/bin (ccgram)
+- Where it arose: ccgram-topic-sweep timer (the0.klg): periodic orphan-topic prune
+- Working plan: ccgram-topic-cleanup: stage1 one-time range sweep, stage2 persistent prune + timer
+
+## Common core & variations
+**Common:** A scheduled job that LOOKS installed (unit enabled, timer active) but whose every run dies before doing anything, visible only in an exit status nothing watches. Here the script's fail-safe guard (empty live-set -> abort, so it can never over-delete) fired on every run because 'ccgram status' produced empty output: systemd --user starts services with a minimal PATH that excludes ~/.local/bin where the uv-installed ccgram binary lives. The guard did its job (no damage), but the auto-clean would have silently never worked.
+
+**Variations:** Detection that saved it: the plan required a MANUAL 'systemctl --user start <svc>' verify step, not just enable+timer — the manual run surfaced ExitStatus=1 + the 'ABORT: empty live set' log line immediately, instead of discovering months later that topics never auto-pruned. Fix: export PATH=HOME/.local/bin:HOME/bin:/usr/bin:/bin at the top of any script a systemd --user unit runs. Reusable rule: never trust enable+timer as proof a --user job works; trigger it once by hand and read its exit status + log. Twin lesson from the same task: Telegram Bot API has no list-forum-topics method, and the VPS egress to api.telegram.org is IPv6-only and flaky (~20% empty responses); a complete deleteForumTopic range sweep therefore needs bounded parallelism + empty-response retry, else ~20% of ids are silently unverified.
 
 ## Cost
 ~$5.76 developer spawn + ~30 min wall-clock incl. this fix (unplanned but blocking).
