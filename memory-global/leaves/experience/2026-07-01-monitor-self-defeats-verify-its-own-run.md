@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "user"
 refs: [2026-05-26-agent-system-plan-vs-reality-drift.md, macos-shell-portability-gotchas.md]
 created: 2026-07-01
-last_verified: 2026-07-05
+last_verified: 2026-07-06
 ---
 
 # A watchdog that silently crashes defeats every check — verify the monitor's OWN run, not just its presence
@@ -30,6 +30,11 @@ Read the monitor's own run result BEFORE trusting its silence as 'all clear': sy
 ### 2026-07-05 — systemd --user job silently aborts because minimal service PATH omits ~/.local/bin (ccgram)
 - Where it arose: ccgram-topic-sweep timer (the0.klg): periodic orphan-topic prune
 - Working plan: ccgram-topic-cleanup: stage1 one-time range sweep, stage2 persistent prune + timer
+
+### 2026-07-06 — "user still sees stale topics" was CLIENT CACHE, not a server miss; and hardening the periodic sweep
+- Where it arose: same ccgram-topic-cleanup task. After Stage 1's exhaustive sweep the user still reported "вижу кучу старых топиков". I re-swept, widened the id ceiling (probe current-max-msg-id via send+delete, covered 2..29048) — server was provably clean (only ever 1 deletable topic; all else TOPIC_ID_INVALID). Root cause: **Telegram caches the forum-topic list on the client**; deleted topics keep showing until a hard refresh. Decisive move was NOT another server sweep but a **user-side tap-test** (tap a ghost topic → it reports "deleted" and vanishes / Clear Cache). Reconciliation rule: when the API says clean but the user sees stale, suspect the **client view**, not the server — get a cheap user observation before more server work. The user confirmed the ghosts cleared on tap.
+- Working plan (Stage 2 replan): hardened the periodic sweep after verification exposed two real defects. (1) It re-probed all ~109 logged ids every 45-min tick over flaky IPv6 → **4m17s runs**; fix = a persisted **DONE set** of confirmed-gone ids (thread ids are never reused, so skip forever) → steady-state **0.68s**, live ids never enter DONE so a later-orphaned window is still caught. (2) A slow run **outlasted the timer period → two concurrent runs** hammering the API and racing the DONE file; fix = non-blocking **flock** (second run logs SKIP, exits 0) + `TimeoutStartSec=1800` backstop. Also removed a **secret leak**: the bot token was interpolated into the curl URL → visible in `ps`/`/proc/<pid>/cmdline`; fix = feed it via `printf ... | curl -K -` (config on stdin; printf is a builtin so no argv either). Verified empirically: live curl argv = `curl -K -`; flock SKIP path exercised; guards intact (skipped_live=6 == live set == tmux windows).
+- Coordination lesson: at `replan` the engine re-armed BOTH a fresh **plan-review** (bound to the new plan hash) and a **critique-coverage** gate (the critique's `invariants_to_preserve` must appear near-verbatim in a stage's invariants). Pitfall hit: I first told the plan-reviewer to check **plan-vs-code match**, but the new script is intentionally **not yet written** (gated behind that very approval) → false "revise" on by-design mismatch. Rule: at replan-time plan-review, judge the **plan design only**; implementation follows approval.
 
 ## Common core & variations
 **Common:** A scheduled job that LOOKS installed (unit enabled, timer active) but whose every run dies before doing anything, visible only in an exit status nothing watches. Here the script's fail-safe guard (empty live-set -> abort, so it can never over-delete) fired on every run because 'ccgram status' produced empty output: systemd --user starts services with a minimal PATH that excludes ~/.local/bin where the uv-installed ccgram binary lives. The guard did its job (no damage), but the auto-clean would have silently never worked.
