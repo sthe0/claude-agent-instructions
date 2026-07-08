@@ -95,3 +95,4 @@ skills/ccgram-management/SKILL.md:17  # keep:harness-owned — harness-owned art
 skills/overcome-difficulty/SKILL.md:51  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 skills/overcome-difficulty/policy.md:57  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 skills/self-improvement/SKILL.md:63  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
+benchmark-profile/REMOVED-VS-RETAINED.md:17  # keep:legacy-fallback — personal ~/.claude/settings.json named as the hook-registration location contrasted against the benchmark profile

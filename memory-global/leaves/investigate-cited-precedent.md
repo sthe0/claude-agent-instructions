@@ -1,10 +1,10 @@
 ---
 name: investigate-cited-precedent
-description: When the user points at a specific prior success/precedent (ticket, run, commit, PR) as evidence, read HOW that precedent actually did it before theorizing from the current code snapshot — the present state may have diverged from the precedent's.
+description: When the user points at a specific prior success/precedent (ticket, run, commit, PR) as evidence, read HOW that precedent actually did it before theorizing from the current code snapshot — the present state may have diverged from the precedent's. This includes the **implicit** precedent — when the current task repeats or extends measurement/analysis work in a ticket that already holds prior runs, read those prior artifacts before reconstructing the method from first principles, even if the user never explicitly pointed at them.
 type: feedback
 schema: leaf/v1
 created: 2026-07-03
-last_verified: 2026-07-03
+last_verified: 2026-07-08
 ---
 
 # Investigate a user-cited precedent before theorizing from the current snapshot
@@ -24,6 +24,12 @@ This is the positive-exemplar twin of [[doubt-own-snapshot]] (there the user ass
 A precedent-type norm ("we did X at param P=v and it worked") often silently depends on an **ambient** parameter or default that was true then and has since drifted. Following the *surface knob* you remember reproduces the visible setting but not the *invariant* the precedent actually relied on. When you invoke a precedent, reconstruct the **invariant** — the relation over all the inputs that had to hold for the good outcome — and check whether it still holds under the **current** defaults, not just whether you set the one knob you recall.
 
 Two traps make this fail. (a) An *ambient default* the precedent silently relied on may have **drifted** since — the invariant held then because a default supplied a factor you never set, and that default is no longer what it was. (b) A same-named parameter may be supplied by a **different code path** than the one you are inspecting: a default you found by grep in one module is not necessarily the default the failing path actually read (different loaders, config layers, or pipelines can each carry their own same-named field). So trace each factor of the invariant from the failing frame back to the real config source it read, and match it against the **observed values** — the error's own numbers — before naming a cause. Reproducing only the surface knob you remember reproduces the setting, not the invariant; and a plausible default on the wrong path is a decoy, not the cause.
+
+### The precedent may be implicit — a repeat/extend task carries its own baseline
+
+The precedent need not be user-cited to be load-bearing. When the current task **repeats or extends** measurement/analysis work (another model, period, basket, cohort) inside a ticket that already holds prior runs, the prior run's artifacts — its output tables, scoring script, result comment — **are** the precedent. Read them *first*, before any first-principles investigation of "how is X measured / where does this number come from / what mechanism produces it here". The last run already answers those in its own output.
+
+Signal you skipped this: you find yourself grepping product code for a billing/metric source, probing ACLs, or theorizing about a mechanism to answer a "how was this measured **here**" question that a prior run in the same ticket already answers. Reading the last run's output collapses the question in one look — field names, the method, and the exact value to reproduce-and-validate against. (Concrete instance: DEEPAGENT-440 cost — the prior `replay100` table + its plan doc show the whole method at a glance: per-cid `total_input_tokens`/`total_output_tokens` persisted by a small runner patch × `/v1/models` price → mean `$1.437 ≈ $1.44` anchor. The patch is *why* the tokens exist; a clean-image rerun silently drops them. First-principles ACL probes and family-contamination theories all melted once the prior table was read.)
 
 ## See also
 
