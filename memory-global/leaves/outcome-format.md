@@ -23,7 +23,7 @@ A report the user (or the next step) can act on without re-asking:
 
 **(2)** what was done, by step + who executed;
 
-**(3)** artifacts — paths, links, commands, with the **clickable URL to the actual run** (never a truncated id fragment) for any external job / PR / CI, in status reports and user-facing comments alike — and present every URL / link as a **markdown link** (descriptive label in `[…]`, the URL in `(…)`) — never bare (a bare URL renders as monospace / non-clickable in some clients) and never wrapped in backticks (inline-code formatting strips the link affordance, so it no longer reads or clicks as a link);
+**(3)** artifacts — paths, links, commands, with the **clickable URL to the actual run/graph itself** (never a truncated id fragment) for any external job / PR / CI, in status reports and user-facing comments alike — **an artifact/output-folder or dataset link does not substitute for the run link**: when a job produces both, give the run/graph URL first and label the folder distinctly (naming an output folder "the graph" is the exact miss this clause removes); and present every URL / link as a **markdown link** (descriptive label in `[…]`, the URL in `(…)`) — never bare (a bare URL renders as monospace / non-clickable in some clients) and never wrapped in backticks (inline-code formatting strips the link affordance, so it no longer reads or clicks as a link);
 
 **(4)** next steps **only if not done** — when done and accepted, **stop** (no teeing up the next roadmap phase, no restating a pointer that already lives in its canonical place);
 
