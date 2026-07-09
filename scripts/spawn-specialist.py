@@ -357,6 +357,45 @@ def log_refused(reason: str, extra: dict) -> None:
     log_cost_entry(entry)
 
 
+def read_ledger_rows(path: Path) -> list[dict]:
+    """Parse this instance's own cost ledger; missing file or a corrupt line
+    (e.g. a half-written row from a killed sibling) yields fewer rows, not a crash."""
+    if not path.exists():
+        return []
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return rows
+
+
+def committed_spawn_usd(rows: list[dict]) -> tuple[int, float]:
+    """(child count, committed USD) already on this instance's ledger.
+
+    Every `spawn_start` row is one child. Its contribution to the sum is the
+    completed `spawn` row's actual `cost_usd` when one has landed, else the
+    start row's own `budget_usd_cap` — an in-flight child can still spend up
+    to what it was granted, so the cap is the correct worst-case estimate
+    until the completion row corrects it.
+    """
+    starts = {r["spawn_id"]: r for r in rows if r.get("event") == "spawn_start" and "spawn_id" in r}
+    completions = {r["spawn_id"]: r for r in rows if r.get("event") == "spawn" and "spawn_id" in r}
+    total = 0.0
+    for spawn_id, start in starts.items():
+        done = completions.get(spawn_id)
+        cost = done.get("cost_usd") if done else None
+        if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+            total += float(cost)
+        else:
+            total += float(start.get("budget_usd_cap") or 0.0)
+    return len(starts), total
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--kind", required=True, help="specialization name (must exist at ~/.claude/skills/<kind>/SKILL.md)")
@@ -604,6 +643,49 @@ def main(argv: list[str] | None = None) -> int:
         args.budget = "medium"
 
     budget = budget_value(args.budget, constants)
+
+    # Fan-out / SUM-bound on this instance's own children, opt-in via two env
+    # vars a benchmark profile can set (see benchmark-profile-spawn/settings.json's
+    # `env` block). No-op when both are unset, so the default profile and every
+    # existing caller are unaffected. Bounds the SUM of committed spend across
+    # ALL children on this ledger, not the per-spawn --max-budget-usd tier cap.
+    max_children_raw = os.environ.get("AGENT_BENCH_MAX_CHILDREN")
+    spawn_budget_raw = os.environ.get("AGENT_BENCH_SPAWN_BUDGET_USD")
+    if max_children_raw is not None or spawn_budget_raw is not None:
+        rows = read_ledger_rows(cost_log_path())
+        child_count, committed_usd = committed_spawn_usd(rows)
+        if max_children_raw is not None and child_count + 1 > int(max_children_raw):
+            print(
+                f"error: spawn would be child #{child_count + 1} on this instance, "
+                f"above AGENT_BENCH_MAX_CHILDREN={max_children_raw}. Refusing.",
+                file=sys.stderr,
+            )
+            log_refused(
+                "fanout-cap",
+                {"kind": args.kind, "children_before": child_count, "cap": int(max_children_raw)},
+            )
+            return 5
+        if spawn_budget_raw is not None:
+            prospective_usd = committed_usd + float(budget)
+            cap_usd = float(spawn_budget_raw)
+            if prospective_usd > cap_usd:
+                print(
+                    f"error: this spawn would bring the instance's committed spend to "
+                    f"${prospective_usd:.2f}, above AGENT_BENCH_SPAWN_BUDGET_USD=${cap_usd:.2f}. "
+                    f"Refusing.",
+                    file=sys.stderr,
+                )
+                log_refused(
+                    "spawn-budget-cap",
+                    {
+                        "kind": args.kind,
+                        "committed_usd_before": committed_usd,
+                        "own_budget_usd": float(budget),
+                        "cap_usd": cap_usd,
+                    },
+                )
+                return 6
+
     perms = permissions_digest(args.project_permissions)
     prompt = assemble_prompt(args, depth_next, perms)
     model = resolve_model(args)
