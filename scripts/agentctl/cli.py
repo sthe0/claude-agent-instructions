@@ -1346,6 +1346,14 @@ def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Di
     )
     state.log("critique")
     store.save(state)
+    # Consult (never fire) the same gate cmd_replan enforces: the record now has all
+    # three sections, but the gate also shape-checks them (>=2 distinct hypotheses,
+    # non-placeholder declaration fields). Announcing "replan unblocked" without
+    # reading the gate drifts the moment either side changes shape.
+    blockers = gates.difficulty_blockers(state)
+    if blockers:
+        action = "investigate" if any("investigation" in b for b in blockers) else "declare"
+        return Directive(False, state.node, action, "; ".join(blockers), data={"blockers": blockers})
     d = Directive(True, state.node, "replan",
                   "difficulty cycle complete; replan is now unblocked")
     inv = state.difficulty.investigation

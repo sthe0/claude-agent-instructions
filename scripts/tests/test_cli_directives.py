@@ -200,6 +200,50 @@ def test_critique_persists_the_structured_split(store, fixtures_dir):
     assert crit.differences_to_remove == ["means: ad-hoc retry"]
 
 
+def _to_diagnosing(store, sid, fixtures_dir):
+    _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
+    cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
+                         m3_severe=False, m4_severe=False), store=store)
+    cli.cmd_next_stage(ns(session=sid), store=store)
+    cli.cmd_record_result(ns(session=sid, status="failed", actual="boom"), store=store)
+    cli.cmd_declare(ns(session=sid, expected="e", actual="a", mismatch="m"), store=store)
+
+
+def test_critique_does_not_announce_replan_while_blocked(store, fixtures_dir):
+    """Regression: cmd_critique used to announce 'replan is now unblocked' as soon
+    as the three difficulty sections existed, without reading the shape checks
+    gates.difficulty_blockers enforces (>=2 distinct hypotheses). A one-hypothesis
+    investigation leaves the gate blocked; the directive must say so, not lie —
+    but the critique itself is still recorded, so a follow-up investigate+critique
+    can proceed without redoing the declaration.
+    """
+    sid = "cblocked"
+    _to_diagnosing(store, sid, fixtures_dir)
+    cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
+                           hypotheses=["h1"]), store=store)
+    d = cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
+                            invariants_to_preserve=[], differences_to_remove=[]), store=store)
+    assert d.ok is False
+    assert d.action != "replan"
+    assert "investigation needs >=2 hypotheses" in d.detail
+    assert store.load(sid).difficulty.critique is not None
+
+
+def test_critique_announces_replan_when_record_is_complete(store, fixtures_dir):
+    """Happy-path text must stay byte-identical: a well-shaped record (>=2 distinct
+    hypotheses, non-placeholder declaration) still gets exactly today's directive."""
+    sid = "ccomplete"
+    _to_diagnosing(store, sid, fixtures_dir)
+    cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
+                           hypotheses=["h1", "h2"]), store=store)
+    d = cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
+                            invariants_to_preserve=[], differences_to_remove=[]), store=store)
+    assert d.ok is True
+    assert d.action == "replan"
+    assert d.detail == "difficulty cycle complete; replan is now unblocked"
+
+
 def test_measurable_record_result_unchanged_without_observation(store, fixtures_dir):
     """Regression: measurable record-result passes without --observation (unchanged behaviour)."""
     sid = "meas-obs"
