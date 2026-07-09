@@ -4,8 +4,9 @@ When a measurable stage carries a `verify_command`, the engine runs it via the
 injected runner and gates on the real exit code:
   - record-result --status passed is OVERRIDDEN to a failure when the command
     contradicts the claim (exit != expected_exit) -> DIAGNOSING;
-  - verify-final re-runs every measurable command as defense in depth and refuses
-    RESOLUTION on any non-match.
+  - verify-final re-runs every measurable command (and every final_check) as
+    defense in depth; any non-match refuses RESOLUTION and routes VERIFYING ->
+    DIAGNOSING, the same difficulty cycle a failed stage's record-result enters.
 The runner is faked so these tests never shell out.
 """
 from argparse import Namespace
@@ -154,8 +155,13 @@ def test_verify_final_blocks_on_failing_command(store):
     d = cli.cmd_verify_final(ns(session="vf1"), store=store, runner=runner_returning(1))
     assert d.ok is False
     assert "failures" in d.data
-    # RESOLUTION refused — stays at VERIFYING rather than trusting the PASSED flag
-    assert store.load("vf1").node == Node.VERIFYING.value
+    # RESOLUTION refused — a failing final-gate command is a difficulty, so the
+    # session enters DIAGNOSING (declare -> investigate -> critique) rather than
+    # trusting the recorded PASSED flag or stranding at VERIFYING with no route
+    # back into the difficulty cycle.
+    assert d.node == Node.DIAGNOSING.value
+    assert d.action == "declare"
+    assert store.load("vf1").node == Node.DIAGNOSING.value
 
 
 def test_verify_final_passes_when_command_matches(store):
@@ -272,7 +278,10 @@ def test_final_check_failure_refuses_resolution(store):
     assert d.ok is False
     assert "failures" in d.data
     assert "suite" in str(d.data["failures"]) or "final_check" in str(d.data["failures"])
-    assert store.load("fc1").node == Node.VERIFYING.value
+    # A failing final_check is a difficulty like a failed stage — enters DIAGNOSING
+    # rather than stranding the session at VERIFYING.
+    assert d.node == Node.DIAGNOSING.value
+    assert store.load("fc1").node == Node.DIAGNOSING.value
 
 
 def test_final_check_pass_allows_resolution(store):

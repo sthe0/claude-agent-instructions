@@ -8,7 +8,7 @@ import pytest
 
 from agentctl import cli
 from agentctl.directive import Directive
-from agentctl.state import Node
+from agentctl.state import Node, StageStatus
 
 
 def ns(**kw):
@@ -579,3 +579,211 @@ def test_record_result_inthread_stage_leaves_cost_none(store, tmp_path):
     assert s.outcome.cost_usd is None
     assert s.outcome.duration_ms is None
     assert s.outcome.spawn_count == 0
+
+
+# --- verify-final failure routes into the difficulty cycle -------------------
+
+def _to_verifying_all_passed_failing_finalcheck(store, sid, tmp_path):
+    """Drive a session to VERIFYING with both stages PASSED but a final_check that
+    always fails — a fresh minimal plan (stages carry no verify_command, mirroring
+    plan_two_stage.toml) so the ONLY failure verify-final can surface is the
+    final_check itself."""
+    plan = tmp_path / "plan_failing_finalcheck.toml"
+    plan.write_text(
+        '[meta]\n'
+        'task_id = "demo-failing-finalcheck"\n'
+        'goal = "Pin verify-final routing a failing final_check into DIAGNOSING"\n'
+        'done_criterion = "both stages PASSED and final_check green"\n'
+        'criterion_type = "measurable"\n'
+        '\n'
+        '[[final_check]]\n'
+        'label = "all green"\n'
+        'command = "false"\n'
+        'expected_exit = 0\n'
+        '\n'
+        '[[stage]]\n'
+        'index = 1\n'
+        'title = "Scaffold module"\n'
+        'executor = "spawn:developer"\n'
+        'expected_result_image = "module file exists"\n'
+        'criterion_type = "measurable"\n'
+        'done_criterion = "mod.py exists"\n'
+        'depends_on = []\n'
+        'output_artifacts = ["mod.py"]\n'
+        '\n'
+        '[[stage]]\n'
+        'index = 2\n'
+        'title = "Add tests"\n'
+        'executor = "spawn:developer"\n'
+        'expected_result_image = "tests exist"\n'
+        'criterion_type = "measurable"\n'
+        'done_criterion = "tests/test_mod.py exists"\n'
+        'depends_on = [1]\n'
+        'output_artifacts = ["tests/test_mod.py"]\n',
+        encoding="utf-8",
+    )
+
+    _to_plan_ready(store, sid, str(plan))
+    cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
+                         m3_severe=False, m4_severe=False), store=store)
+    for _ in range(2):
+        cli.cmd_next_stage(ns(session=sid), store=store)
+        cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
+                               control="reviewed: ok"), store=store)
+
+
+def test_verify_final_failure_routes_to_diagnosing(store, tmp_path):
+    """A failing final_check is a difficulty like a failed stage: verify-final must
+    not strand the session at VERIFYING (from which declare/investigate/critique all
+    refuse) — it enters the DIAGNOSING cycle via the existing `diagnose` transition,
+    exactly as a failed stage's record-result already does."""
+    sid = "vf-diag"
+    _to_verifying_all_passed_failing_finalcheck(store, sid, tmp_path)
+
+    d = cli.cmd_verify_final(ns(session=sid), store=store)
+    assert d.ok is False
+    assert d.node == Node.DIAGNOSING.value
+    assert d.action == "declare"
+    assert d.data["failures"]
+    assert any("final_check" in f for f in d.data["failures"])
+
+    state = store.load(sid)
+    assert state.node == Node.DIAGNOSING.value
+    assert state.difficulty is not None
+
+    # the cycle is now reachable: a follow-up declare is accepted, not refused
+    d2 = cli.cmd_declare(
+        ns(session=sid, expected="final_check passes", actual="final_check failed",
+           mismatch="the 'all green' final_check exited nonzero"),
+        store=store,
+    )
+    assert d2.ok is True
+    assert d2.action == "investigate"
+
+
+def test_verify_final_pending_stage_stays_fix_stages(store, fixtures_dir):
+    """A merely-unfinished (not yet PASSED) stage is NOT a difficulty — the
+    gates.blockers(state, "resolution") early-return must keep returning
+    fix_stages at VERIFYING, untouched by the new failing-final_check routing."""
+    sid = "vf-pending"
+    plan = _to_executing_spawn(store, sid, fixtures_dir)
+    # Only stage 1 is passed; stage 2 remains PENDING.
+    cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
+                           control="reviewed: ok"), store=store)
+
+    d = cli.cmd_verify_final(ns(session=sid), store=store)
+    assert d.ok is False
+    assert d.action == "fix_stages"
+    assert d.node == Node.VERIFYING.value
+    state = store.load(sid)
+    assert state.node == Node.VERIFYING.value
+    assert state.difficulty is None
+
+
+# --- approve/replan refresh caches from the plan file, not the submit-time copy ----
+
+def _two_stage_plan_text(final_check_cmd="true", stage2_verify_cmd="true"):
+    return (
+        '[meta]\n'
+        'task_id = "demo-refresh"\n'
+        'goal = "Pin approve/no_change refreshing final_check/stage caches"\n'
+        'done_criterion = "both stages PASSED and final_check green"\n'
+        'criterion_type = "measurable"\n'
+        '\n'
+        '[[final_check]]\n'
+        'label = "all green"\n'
+        f'command = "{final_check_cmd}"\n'
+        'expected_exit = 0\n'
+        '\n'
+        '[[stage]]\n'
+        'index = 1\n'
+        'title = "Scaffold module"\n'
+        'executor = "spawn:developer"\n'
+        'expected_result_image = "module file exists"\n'
+        'criterion_type = "measurable"\n'
+        'done_criterion = "mod.py exists"\n'
+        'verify_command = "true"\n'
+        'expected_exit = 0\n'
+        'depends_on = []\n'
+        'output_artifacts = ["mod.py"]\n'
+        '\n'
+        '[[stage]]\n'
+        'index = 2\n'
+        'title = "Add tests"\n'
+        'executor = "spawn:developer"\n'
+        'expected_result_image = "tests exist"\n'
+        'criterion_type = "measurable"\n'
+        'done_criterion = "tests/test_mod.py exists"\n'
+        f'verify_command = "{stage2_verify_cmd}"\n'
+        'expected_exit = 0\n'
+        'depends_on = [1]\n'
+        'output_artifacts = ["tests/test_mod.py"]\n'
+    )
+
+
+def test_approve_refreshes_caches_from_edited_plan(store, tmp_path):
+    """approve snapshots+hashes plan_path but must also RELOAD it: a REVISE edit made
+    while PLAN_READY (plan-mutable by design) must not leave state.final_check / a
+    stage's verify_command pinned to the submit-time copy while plan_snapshot_hash
+    attests to the edited bytes. Stage 1 is left untouched (unchanged carry key) and
+    must keep its PASSED outcome; stage 2's verify_command is edited (changed carry
+    key) and its PASSED outcome must be invalidated back to PENDING, since it no
+    longer attests to the stage's current criterion."""
+    sid = "refresh-approve"
+    plan_path = tmp_path / "plan.toml"
+    plan_path.write_text(_two_stage_plan_text())
+    _to_plan_ready(store, sid, str(plan_path))
+
+    # Simulate both stages already PASSED from a prior (pre-review) approve/execute
+    # pass, as if this were a re-approve after a REVISE-driven in-place edit.
+    state = store.load(sid)
+    state.stage(1).outcome.status = StageStatus.PASSED.value
+    state.stage(2).outcome.status = StageStatus.PASSED.value
+    store.save(state)
+
+    # Edit the plan file in place (PLAN_READY is plan-mutable): final_check and
+    # stage 2's verify_command change; stage 1 is left byte-for-byte identical.
+    plan_path.write_text(_two_stage_plan_text(
+        final_check_cmd="false", stage2_verify_cmd="python -c 'import mod'"))
+
+    d = cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    assert d.ok is True
+
+    state = store.load(sid)
+    assert state.final_check[0].command == "false"
+    assert state.stage(2).criterion.verify_command == "python -c 'import mod'"
+    # Unchanged stage 1 carries its PASSED outcome forward.
+    assert state.stage(1).outcome.status == StageStatus.PASSED.value
+    # Changed stage 2's stale PASSED outcome no longer attests to the new
+    # verify_command — it must be invalidated back to PENDING.
+    assert state.stage(2).outcome.status == StageStatus.PENDING.value
+
+
+def test_replan_no_change_refreshes_final_check(store, tmp_path):
+    """A legacy (pre-snapshot) session self-diffs plan_path against itself in
+    cmd_replan, so ANY in-place edit — including a final_check-only edit — lands in
+    the no_change branch. That branch already refreshes per-stage prose/criterion
+    fields via _apply_refined_stage_fields; final_check is meta-level and needs its
+    own refresh next to it, or a stale final_check command silently survives a
+    replan whose plan_snapshot_hash matches the edited file."""
+    sid = "refresh-nochange"
+    plan_path = tmp_path / "plan.toml"
+    plan_path.write_text(_two_stage_plan_text())
+    _to_plan_ready(store, sid, str(plan_path))
+    cli.cmd_approve(ns(session=sid, by="user"), store=store)
+
+    # Force the legacy no-snapshot code path.
+    state = store.load(sid)
+    state.plan_snapshot_path = None
+    state.plan_snapshot_hash = None
+    store.save(state)
+    assert store.load(sid).final_check[0].command == "true"
+
+    plan_path.write_text(_two_stage_plan_text(final_check_cmd="false"))
+
+    d = cli.cmd_replan(ns(session=sid, plan=str(plan_path)), store=store)
+    assert d.ok is True
+
+    state = store.load(sid)
+    assert state.final_check[0].command == "false"

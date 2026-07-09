@@ -132,6 +132,50 @@ def _apply_refined_stage_fields(cur, refined) -> None:
     cur.criterion.expected_exit = refined.criterion.expected_exit
 
 
+def _refresh_caches_from_plan_path(state: SessionState) -> None:
+    """Re-load state.plan_path and refresh state.final_check plus each live
+    stage's prose/criterion fields from those bytes.
+
+    Approve snapshots and hashes plan_path, but the plan-review cycle answers a
+    REVISE verdict by editing plan_path IN PLACE at PLAN_READY (deliberately
+    plan-mutable — see hook-state-gate.py's PLAN_MUTABLE_NODES), so the copy
+    cached at submit-plan can drift from the file approve is about to attest.
+    Without this refresh, plan_snapshot_hash matches the edited bytes while
+    dispatch/verify-final keep running the stale pre-review cache — the gate
+    attests to a plan it never actually executes.
+
+    Mutates each live stage IN PLACE via `_apply_refined_stage_fields`, which
+    never touches `outcome` — an unchanged stage's Outcome therefore survives
+    with no extra logic. A stage whose full definition (`stage_carry_key`)
+    DID change is a different case: its recorded PASSED outcome no longer
+    attests to the stage's current criterion, so it is reset to PENDING for
+    re-verification. The carry-key must be read from `cur` BEFORE
+    `_apply_refined_stage_fields` mutates it — comparing after would compare
+    `cur` against itself post-copy, which always matches and would let a
+    genuinely stale PASSED outcome survive unnoticed.
+
+    Best-effort like `_snapshot_approved_plan`: an absent plan_path or a plan
+    file that fails to load leaves the existing cache untouched rather than
+    raising out of approve."""
+    if not state.plan_path:
+        return
+    from .plan import PlanError, load_plan as _load, stage_carry_key
+    try:
+        refreshed = _load(state.plan_path)
+    except (OSError, PlanError):
+        return
+    for rs in refreshed.stages:
+        try:
+            cur = state.stage(rs.index)
+        except KeyError:
+            continue
+        unchanged = stage_carry_key(cur) == stage_carry_key(rs)
+        _apply_refined_stage_fields(cur, rs)
+        if not unchanged and cur.outcome.status == StageStatus.PASSED.value:
+            cur.outcome.status = StageStatus.PENDING.value
+    state.final_check = refreshed.meta.final_check
+
+
 def _log_gate(state: SessionState, gate: str, blockers: list[str], *, passed: bool) -> None:
     """Append one {ts, session, node, gate, blockers, passed} line to GATE_LOG.
 
@@ -595,6 +639,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     _log_gate(state, "plan_approval", blockers, passed=not blockers)
     if blockers:
         return Directive(False, state.node, "fix_plan", "cannot approve", data={"blockers": blockers})
+    _refresh_caches_from_plan_path(state)
     state.approval = GateRecord("plan_approval", armed=True, passed=True, by=args.by)
     state.node = transition(state.node, "approve")
     snap = _snapshot_approved_plan(store, state)
@@ -1070,9 +1115,21 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
                 f"final_check '{label}': exit {result.returncode} != {fc.expected_exit}"
             )
     if failures:
+        # A failing final_check is a difficulty (actual result diverges from the
+        # plan's declared image) exactly like a failed stage — route into the same
+        # DIAGNOSING cycle (record_result's failed-stage path, above) rather than
+        # stranding the session at VERIFYING with no reachable resolution: from
+        # VERIFYING, declare/investigate/critique all refuse ("difficulty commands
+        # run only in the DIAGNOSING cycle"), and only `reset --force` escaped.
+        state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
+        state.difficulty = Difficulty()
+        store.save(state)
         return Directive(
-            False, state.node, "fix_stages",
-            "final verification command(s) failed", data={"failures": failures},
+            False, state.node, "declare",
+            "final verification command(s) failed; run overcome-difficulty — declare "
+            "the divergence, then investigate, then critique; replan is blocked until "
+            "the cycle is complete",
+            data={"failures": failures},
         )
     # Compute whole-plan cost rollup from already-attributed stage outcomes.
     # No second log read — record-result already stored the costs on each Outcome.
@@ -1380,6 +1437,10 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             except KeyError:
                 continue
             _apply_refined_stage_fields(cur, ns)
+        # final_check is meta-level (not per-stage), so it needs its own refresh
+        # next to the stage loop above — a self-diffed no_change still means the
+        # FILE changed relative to what was cached at submit-plan/last replan.
+        state.final_check = new.meta.final_check
         # Backfill a snapshot for a legacy (pre-snapshot) session so the NEXT replan
         # diffs against real approved bytes instead of self-diffing plan_path.
         if not (state.plan_snapshot_path and Path(state.plan_snapshot_path).exists()):
