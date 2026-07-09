@@ -303,12 +303,37 @@ USAGE_TOKEN_FIELDS = (
 )
 
 
+def _billed_counts(usage: dict) -> dict:
+    """One model's billed token counts, accepting either the camelCase spelling
+    `modelUsage` uses or the snake_case one used elsewhere in the payload."""
+    counts = {}
+    for field in USAGE_TOKEN_FIELDS:
+        head, *rest = field.split("_")
+        camel = head + "".join(part.title() for part in rest)
+        for key in (field, camel):
+            value = usage.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                counts[field] = int(value)
+                break
+    return counts
+
+
 def extract_usage(payload: dict | None) -> dict | None:
-    """Billed token counts from the child's result JSON, or None when absent.
+    """Per-model billed token counts from the child's result JSON, or None.
 
     Only the fields that are actually billed are kept, so a downstream imputed
     list-price computation cannot silently pick up an unpriced counter.
+
+    The basis is `modelUsage`, not `usage`: the two disagree, and only the former
+    is the billed aggregate -- summing `modelUsage[*].costUSD` reproduces
+    `total_cost_usd` exactly, while `usage` reports a narrower slice (measured
+    against a real run, 2026-07-09). Pricing `usage` would understate the child.
     """
+    model_usage = (payload or {}).get("modelUsage")
+    if isinstance(model_usage, dict):
+        per_model = {model: _billed_counts(counts)
+                     for model, counts in model_usage.items() if isinstance(counts, dict)}
+        return {m: c for m, c in per_model.items() if c} or None
     usage = (payload or {}).get("usage")
     if not isinstance(usage, dict):
         return None
