@@ -141,6 +141,8 @@ def collect_spawns(
             ts = parse_ts(e.get("ts"))
             if since is not None and ts is not None and ts < since:
                 continue
+            if e.get("event") == "spawn_start":
+                continue  # paired with the child's completion row; counting both doubles it
             kind = e.get("kind") or "?"
             if e.get("event", "spawn") == "refused":
                 reason = e.get("reason") or "?"

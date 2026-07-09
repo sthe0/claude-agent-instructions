@@ -96,11 +96,19 @@ def filter_by_time(entries: list[dict], since: dt.datetime) -> list[dict]:
 
 
 def split_events(entries: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Return (spawns, refused). Entries with no 'event' field are treated as spawn."""
+    """Return (spawns, refused). Entries with no 'event' field are treated as spawn.
+
+    'spawn_start' rows are dropped: each pairs with the 'spawn' row the same child
+    writes on return, so counting both would double every spawn and average in a
+    costless row.
+    """
     spawns: list[dict] = []
     refused: list[dict] = []
     for e in entries:
-        if e.get("event", "spawn") == "refused":
+        event = e.get("event", "spawn")
+        if event == "spawn_start":
+            continue
+        if event == "refused":
             refused.append(e)
         else:
             spawns.append(e)
