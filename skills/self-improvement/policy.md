@@ -151,6 +151,16 @@ All agent instructions — prompts in `agents/`, skill prompts in `skills/`, `CL
 - **Quoted examples** of what the user might say (`"ok"`, `"do it now"`) — keep quotes literal; surrounding prose stays English.
 - **Proper nouns and API identifiers** (Tracker, Arcadia, `arc`, ticket keys, model names) — not "another language".
 
+### Register in a user-facing reply
+
+*To achieve a reply the user can read without asking what a word means, write the reply IN their language rather than in a transliteration of English.* Twice a transliterated term cost a full turn to explain: «лендить» for *to land* (2026-06-30) and «интейк» for *intake* (2026-07-09).
+
+- An established equivalent exists → use it. Russian: «влить» / «выкатить» / «довести до trunk», never «лендить».
+- The term names one of our own artifacts (`intake`, `partition`, `spine`) → refer to the English identifier as code (`intake.py`), or define it once in the user's language on first use. Never coin a transliteration («интейк», «партишн»).
+- Names stay names: proper nouns, tool names, API identifiers, ticket keys are not vocabulary.
+
+Applies to every user-facing surface — prose, plan narratives, retrospectives, and the question + option-label text of every `AskUserQuestion`.
+
 ### When editing
 
 | Action | Requirement |
