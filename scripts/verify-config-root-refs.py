@@ -47,19 +47,21 @@ Exhaustiveness cross-check (standing, default-on — runs every invocation):
   enumerator's occurrence list without a trace, while still not being
   ``*.py``/``*.sh`` (so the S2 enumerator never looks at it either). That is
   an ungoverned file: invisible to both enumerators at once.
-  ``find_ungoverned`` re-derives the domain independently — walking the
-  whole repo and decoding every file with ``errors="replace"`` instead of
-  strict UTF-8 — so a legacy reference in an undecodable file still surfaces
-  as text. It then asserts every file in that independently-derived domain is
-  covered by doc scope, code scope (``*.py``/``*.sh``, by suffix), or the two
-  named self-reference exclusions above — nothing else. Anything left over
-  is named in the failure output.
+  ``find_ungoverned`` re-derives the domain independently — decoding every
+  file in ``_iter_repo_files`` (the tracked-shape domain, not the working
+  tree) with ``errors="replace"`` instead of strict UTF-8 — so a legacy
+  reference in an undecodable file still surfaces as text. It then asserts
+  every file in that independently-derived domain is covered by doc scope,
+  code scope (``*.py``/``*.sh``, by suffix), or the two named self-reference
+  exclusions above — nothing else. Anything left over is named in the
+  failure output.
 """
 from __future__ import annotations
 
 import argparse
 import fnmatch
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -88,7 +90,36 @@ class AllowlistError(ValueError):
 
 
 def _iter_repo_files(repo_root: Path) -> "list[Path]":
-    """Every tracked-shape file under repo_root, skipping .git/__pycache__."""
+    """Every tracked-shape file under repo_root: the git index, not the
+    working tree, so the verifier's verdict cannot depend on an untracked
+    file that happens to exist on one machine's disk and not another's. Falls
+    back to a full directory walk when repo_root is not inside a git work
+    tree (e.g. a tarball export) or git is unavailable — the only case where
+    the working tree IS the domain.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "-z", "--cached"],
+            cwd=repo_root,
+            capture_output=True,
+            check=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return _iter_repo_files_walk(repo_root)
+    files = []
+    for name in result.stdout.decode("utf-8").split("\0"):
+        if not name:
+            continue
+        rel = Path(name)
+        if ".git" in rel.parts or "__pycache__" in rel.parts:
+            continue
+        files.append(rel)
+    return sorted(files)
+
+
+def _iter_repo_files_walk(repo_root: Path) -> "list[Path]":
+    """Fallback domain for a non-git-work-tree repo_root: every file found by
+    a plain directory walk, skipping .git/__pycache__."""
     files = []
     for p in sorted(repo_root.rglob("*")):
         if not p.is_file():
@@ -207,28 +238,26 @@ def find_ungoverned(repo_root: Path, occurrences=None) -> "list[str]":
     """Repo-relative paths carrying a legacy reference that fall into NEITHER
     doc scope NOR code scope NOR the two self-reference exclusions.
 
-    Independently re-derives the domain (whole-repo walk, ``errors="replace"``
-    decode) rather than reusing ``find_occurrences``'s strict-UTF-8 read, so a
-    file that ``find_occurrences`` silently drops on a decode error still
-    counts here — proving the doc/code split is exhaustive, not just
-    self-consistent with its own blind spot.
+    Independently re-derives the domain (``errors="replace"`` decode of every
+    file in ``_iter_repo_files``) rather than reusing ``find_occurrences``'s
+    strict-UTF-8 read, so a file that ``find_occurrences`` silently drops on a
+    decode error still counts here — proving the doc/code split is
+    exhaustive, not just self-consistent with its own blind spot. The FILE SET
+    is shared with ``_iter_repo_files`` (the git index) so this cross-check
+    cannot report an untracked file as ungoverned; only the decode strategy
+    is independent.
     """
     if occurrences is None:
         occurrences = find_occurrences(repo_root)
     doc_scope_files = {rel for rel, _, _ in occurrences}
 
     all_legacy_files: "set[str]" = set()
-    for p in sorted(repo_root.rglob("*")):
-        if not p.is_file():
-            continue
-        rel = p.relative_to(repo_root)
-        if ".git" in rel.parts or "__pycache__" in rel.parts:
-            continue
+    for rel in _iter_repo_files(repo_root):
         relpath = rel.as_posix()
         if relpath in SELF_REF_EXCLUDED:
             continue
         try:
-            raw = p.read_bytes()
+            raw = (repo_root / rel).read_bytes()
         except OSError:
             continue
         text = raw.decode("utf-8", errors="replace")

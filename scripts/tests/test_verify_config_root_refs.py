@@ -5,6 +5,7 @@ enumerator covered by scripts/tests/test_config_root.py).
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 from pathlib import Path
 
 _SPEC = importlib.util.spec_from_file_location(
@@ -20,6 +21,27 @@ def _write(repo: Path, rel: str, content: str) -> Path:
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content, encoding="utf-8")
     return p
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+
+def _init_git_repo(repo: Path) -> None:
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "Test")
+
+
+def _full_report(repo_root: Path, allowlist_path: Path):
+    """The complete verdict scan() reports on — unallowed, stale, ungoverned —
+    as plain data, so two calls can be compared for exact equality."""
+    entries = vcr.parse_allowlist(allowlist_path)
+    occurrences = vcr.find_occurrences(repo_root)
+    unallowed = vcr.find_unallowed(occurrences, entries)
+    stale = [e["raw"] for e in vcr.find_stale_entries(entries, occurrences)]
+    ungoverned = vcr.find_ungoverned(repo_root, occurrences)
+    return (unallowed, stale, ungoverned)
 
 
 def test_non_allowlisted_ref_fails(tmp_path):
@@ -135,3 +157,43 @@ def test_ungoverned_ignores_self_ref_excluded_paths(tmp_path):
         "path\tline\tcategory\nfoo.md\t3\tkeep:harness-owned ~/.claude.json\n",
     )
     assert vcr.find_ungoverned(tmp_path) == []
+
+
+# ── domain must be the git index, not the working tree (verifier-reproducibility) ──
+
+def test_iter_repo_files_skips_untracked(tmp_path):
+    """A file created on disk but never `git add`ed must be absent from the
+    enumerator's domain — the verdict must not depend on untracked scratch."""
+    _init_git_repo(tmp_path)
+    _write(tmp_path, "README.md", "tracked\n")
+    _git(tmp_path, "add", "README.md")
+    _git(tmp_path, "commit", "-q", "-m", "initial")
+    _write(tmp_path, "scratch.md", "untracked\n")
+
+    files = {p.as_posix() for p in vcr._iter_repo_files(tmp_path)}
+
+    assert "README.md" in files
+    assert "scratch.md" not in files
+
+
+def test_untracked_file_does_not_change_verdict(tmp_path):
+    """Reproduces the eca07be regression: an allowlist entry naming a path
+    that is never committed must report identically (stale, both times)
+    whether or not that path happens to exist untracked on disk — otherwise
+    two checkouts of the same commit disagree."""
+    _init_git_repo(tmp_path)
+    _write(tmp_path, "README.md", "clean\n")
+    allowlist = _write(
+        tmp_path, "allow.txt",
+        "scratch/legacy-note.md:1  # names a path that is never committed\n",
+    )
+    _git(tmp_path, "add", "README.md", "allow.txt")
+    _git(tmp_path, "commit", "-q", "-m", "initial")
+
+    before = _full_report(tmp_path, allowlist)
+    assert before[1] == ["scratch/legacy-note.md:1  # names a path that is never committed"]
+
+    _write(tmp_path, "scratch/legacy-note.md", "See ~/.claude for config.\n")
+    after = _full_report(tmp_path, allowlist)
+
+    assert before == after
