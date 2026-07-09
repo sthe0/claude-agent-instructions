@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "user"
 refs: [2026-06-24-gate-exemption-is-category-error-for-result-images.md, 2026-06-30-mechanize-subdifficulty-extraction-and-audit.md]
 plan_file: /home/the0/.claude-agent/plans/ask-delivery-determinism.toml
 created: 2026-07-04
-last_verified: 2026-07-04
+last_verified: 2026-07-09
 ---
 
 # When the failure-carrying signal is structurally invisible to the gate, gate the topology, not the content
@@ -26,6 +26,16 @@ Reproduce the miss -> inspect WHAT the gate can observe (PreToolUse payload = to
 ### 2026-07-04 — initial
 - Where it arose: claude-agent-instructions: scripts/hook-ask-text-split.py v2 + CLAUDE.md resolution/escalation wording + system-knowledge leaf claude-code-drops-pre-tool-call-text; triggered by a real lost report in session e00ff3b4.
 - Working plan: /home/the0/.claude-agent/plans/ask-delivery-determinism.toml
+
+
+### 2026-07-09 — 2026-07-09 — the symmetric side: promising an ask without arming the timer
+- Where it arose: claude-agent-instructions: scripts/hook-ask-defer-timer.py + scripts/tests/test_ask_defer_timer_hook.py (11 -> 20 cases). Trigger: user, twice in one session — 'you promised buttons again and did not send them'.
+- Working plan: /home/the0/.claude-agent/plans/hook-ask-defer-timer-block.v4.toml
+
+## Common core & variations
+**Common:** Same gate family, same subject (ask delivery determinism), same lesson: a prose rule the model already carries does not hold — CLAUDE.md had the timer-arming rule, added THAT SAME DAY, and the ask was still stranded. Mechanize the decidable part; see [[2026-07-09-gate-must-execute-what-it-attests]] for the sibling defects found in the engine while landing this hook.
+
+**Variations:** Two distinct defects, each alone enough to make the guard a no-op. (1) The promise-verb x ask-noun regexes missed the real phrasings; broadened, with _strip_quoted() removing fenced blocks, inline code spans and blockquote lines so a quoted example is not read as a promise. (2) The Stop hook exited 0 with stdout — which the platform shows only to the HUMAN in transcript mode and NEVER feeds back to the model. Escalated to {"decision":"block","reason":...} on stdout with exit 0 (feeds the model AND blocks turn end), bounded by a one-shot marker file per session_id so a genuinely stuck turn cannot loop. Contrast with hook-ask-text-split.py, which guards the opposite topology (an ask mid-turn); this one guards a promise of a future ask with no timer armed to make that future turn exist.
 
 ## Cost
 Small-to-moderate: one developer spawn ($1.12, 17 tests) + two thinker review rounds (r1 REVISE, r2 PASS-WITH-NOTES) + in-thread doc edits. The design insight (topological over content gate) was the load-bearing part; the code was mechanical.
