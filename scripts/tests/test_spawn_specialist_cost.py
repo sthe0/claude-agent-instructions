@@ -170,6 +170,33 @@ def test_extract_usage_returns_none_when_absent(payload):
     assert MOD.extract_usage(payload) is None
 
 
+def test_extract_usage_prefers_modelusage_per_model():
+    """modelUsage is the billed aggregate (summing its costUSD reproduces
+    total_cost_usd); usage is a narrower slice. Prefer it, converting the
+    camelCase counts to the canonical snake_case billed fields, per model."""
+    payload = {"modelUsage": {"claude-opus-4-8": {
+        "inputTokens": 100, "outputTokens": 20,
+        "cacheCreationInputTokens": 2, "cacheReadInputTokens": 5}}}
+    assert MOD.extract_usage(payload) == {"claude-opus-4-8": {
+        "input_tokens": 100, "output_tokens": 20,
+        "cache_creation_input_tokens": 2, "cache_read_input_tokens": 5}}
+
+
+def test_extract_usage_modelusage_takes_precedence_over_flat_usage():
+    """When both are present the per-model billed aggregate wins — pricing the
+    flat usage block would understate the child (input_tokens 5 vs 100)."""
+    payload = {"usage": {"input_tokens": 5},
+               "modelUsage": {"claude-opus-4-8": {"inputTokens": 100}}}
+    assert MOD.extract_usage(payload) == {"claude-opus-4-8": {"input_tokens": 100}}
+
+
+def test_extract_usage_modelusage_drops_unbilled_counters():
+    """An unpriced per-model counter must not reach the imputed-list-price sum."""
+    payload = {"modelUsage": {"claude-opus-4-8": {
+        "inputTokens": 10, "webSearchRequests": 4, "costUSD": 0.5}}}
+    assert MOD.extract_usage(payload) == {"claude-opus-4-8": {"input_tokens": 10}}
+
+
 # ---------------------------------------------------------------------------
 # skill_path: unflattened <skills>/specializations/<kind>/ layout
 # ---------------------------------------------------------------------------
