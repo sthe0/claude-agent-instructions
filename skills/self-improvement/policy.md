@@ -265,6 +265,8 @@ explicitly reviewed before it lands.
 3. **Push** only after the user explicitly confirms (e.g. «push», «да, пушь», «опубликуй инструкции»). Do **not** run `sync-instructions-repo.sh push` on your own after commit.
 4. If the user declines or defers push — leave the commit local; do not push.
 
+**Author-machine carve-out (skip the PR + the second confirm for low-risk content).** On a machine with direct push rights (`difficulty_channel.authority.is_author()` true), an edit that is (a) already **content-approved** in the dialogue and (b) confined to the **memory-leaf / docs-only** class (`memory-global/leaves/**`, `docs/**`, README prose — content, not a loaded behavioral rule) lands **directly to `main`**: do not open a PR (that path is for machines *without* push rights, or when a review round is deliberately wanted), and **fold the push into the same content-approval** — the single "Apply?" click authorizes landing, so steps 2–3's separate push-confirm does not apply. The **behavioral / executable surface** (`CLAUDE.md`, `skills/`, `agents/`, hooks, settings, scripts) keeps both the default push-path and the separate push-confirm of steps 1–4: those changes are higher-stakes and the deliberate second gate earns its cost. *Difficulty removed: a PR detour plus a second confirm on a cheap, already-approved, author-owned content edit spends the user's attention on ceremony the author's own merge rights make redundant.*
+
 If push is rejected (remote ahead): `pull` → resolve conflicts → ask for confirmation again → `push`.
 
 **No push rights to the canonical repo.** Not every operator of these
