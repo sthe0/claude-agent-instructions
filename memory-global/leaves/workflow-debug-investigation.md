@@ -3,7 +3,7 @@ name: workflow-debug-investigation
 description: Investigation checklist when a long-running orchestrated workflow fails — baseline run, block topology, code delta, then infra logs
 type: reference
 created: 2026-06-03
-last_verified: 2026-06-09
+last_verified: 2026-07-09
 ---
 
 # Workflow debug investigation
@@ -67,6 +67,8 @@ Only after 1–3: YT job stderr, Nirvana block logs, watt/hahn ops, launcher hea
 > verified by: DEEPAGENT-415 workflow_url smoke (2026-06-03) — 15+ `vh3`/`nirvana_api` Python-client calls returned `[]` / non-serializable `Obj` and produced two wrong "infra" conclusions; the raw endpoint returned the full traceback in one `curl`, and the root cause (`YtResolveError`: eval-folder not pre-created) was on stderr line 1.
 
 ## Hypothesis portfolio (required)
+
+**Scope: any failure investigation** — this section is not confined to orchestrated pipelines. It applies equally to local processes, network faults, and client hangs. (The ordered checklist above is pipeline-specific; this rule is not.)
 
 Maintain **at least two** competing hypotheses until one is falsified. For each:
 
