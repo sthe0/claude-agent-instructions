@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Stop hook: warn when a turn defers an AskUserQuestion to "next message" via
-buttons but never arms the background timer that is supposed to open that next
-turn.
+"""Stop hook: block the end of a turn that defers an AskUserQuestion to "next
+message" via buttons but never arms the background timer that is supposed to
+open that next turn.
 
 Difficulty removed: the delivery-split rule (CLAUDE.md § Escalation —
 "Long-artifact exception") requires that a long artifact or a turn that
@@ -28,15 +28,34 @@ boundary predicate). All three must hold to warn:
   3. No `AskUserQuestion` tool_use was already emitted this turn (if the ask
      already fired, nothing was deferred).
 
-Action: WARN only, never deny. Prints a plain message and exits 0 — mirrors
-the existing UserPromptSubmit nudge hooks (hook-self-improvement-reminder.py,
-hook-resolution-reminder.py): a hook crash or an unreadable/absent transcript
-must never wedge the workflow, so any parse failure fails open (silent, exit
-0). Deterministic, offline, no network.
+Action: BLOCK — `{"decision": "block", "reason": ...}` on stdout, exit 0. An
+earlier revision printed a plain warning and exited 0; that was a no-op. For a
+Stop hook, exit-0 stdout is shown only to the human in transcript mode and
+never reaches the model, so the guard could not constrain the actor it exists
+to constrain. A block decision does reach the model and prevents the turn from
+ending, giving it the chance to arm the timer or ask inline.
+
+A blocking Stop hook can wedge a turn: the model may answer the block in prose
+without calling a tool, in which case neither the `timer_armed` nor the
+`ask_already_emitted` veto can ever fire and the block repeats forever. The
+escalation is therefore bounded to ONE block per consecutive Stop streak — a
+marker file under _DEFAULT_STATE_DIR (override with $ASK_DEFER_TIMER_STATE_DIR)
+keyed by session id. The first blocking Stop creates the marker; the next Stop
+for that session consumes it and stays silent, capping the worst case (a false
+positive, or a stubborn model) at one extra turn.
+
+Text that merely quotes or documents the promise phrasings — a code fence, an
+inline code span, a blockquote — is stripped before matching, so working on
+this hook does not trip it.
+
+Any parse or filesystem failure fails open (silent, exit 0, no block): an
+unreadable transcript, malformed stdin, or an unwritable state dir must never
+wedge the workflow. Deterministic, offline, no network.
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -44,20 +63,37 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.transcript_turns import _content_items, _is_real_user_prompt  # noqa: E402
 
-# Deferral-promise phrasings (RU+EN). Kept as a flat list of independent
-# patterns so new phrasings are easy to add/tune without touching the scan
-# logic. Matched case-insensitively against the turn's concatenated assistant
-# text; DOTALL so ".*" spans newlines within one message.
+# Deferral-promise phrasings (RU+EN). Two layers, both kept: the original flat
+# list of whole phrasings, plus a promise-verb x ask-noun construction matched
+# in either order. The construction is what catches the phrasings the flat list
+# missed on 2026-07-09 ("переспрошу кнопками…", "вынесу его тебе кнопками").
+# The verb is mandatory — a bare mention of buttons is not a promise.
+_PROMISE_VERB = (
+    r"(?:переспрошу|спрошу|задам|вынесу|пришлю|отправлю|уточню|приедут|придут|прилетят"
+    r"|(?:i['’]?ll|i will|will)\s+(?:ask|send|surface))"
+)
+_ASK_NOUN = r"(?:кнопк\w*|вопрос\w*|button\w*|question\w*)"
+# Same-line proximity: the two halves of a promise sit in one sentence. A
+# turn-wide ".*" would pair a verb in one paragraph with a noun in another.
+_NEAR = r"[^\n]{0,80}"
+
 _PROMISE_PATTERNS = [
     r"кнопк\w*.*(следующ|next)",
     r"(следующ\w* сообщени\w*|next message).*(ask|вопрос|кнопк\w*|question)",
     r"задам.*(кнопк\w*|вопрос)",
     r"ask\w* .*next (turn|message)",
     r"buttons? next",
+    rf"{_PROMISE_VERB}{_NEAR}{_ASK_NOUN}",
+    rf"{_ASK_NOUN}{_NEAR}{_PROMISE_VERB}",
 ]
 _PROMISE_RE = [
     re.compile(p, re.IGNORECASE | re.UNICODE | re.DOTALL) for p in _PROMISE_PATTERNS
 ]
+
+# Quoted regions: text that discusses the phrasings rather than promising them.
+_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
+_BLOCKQUOTE_RE = re.compile(r"^\s*>.*$", re.MULTILINE)
+_INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
 
 # A backgrounded Bash command that arms the delivery-split timer.
 _SLEEP_RE = re.compile(r"\bsleep\b", re.IGNORECASE)
@@ -70,9 +106,18 @@ _WARNING = (
     "[ask-defer-timer] This turn's text promises to ask via buttons next "
     "message, but no `sleep 2` background timer (or ScheduleWakeup/CronCreate) "
     "was armed this turn — no next turn will fire, so the ask is stranded. Per "
-    "CLAUDE.md, arming the timer and deferring the ask are one atomic act: arm "
-    "the timer now, or ask inline instead of deferring."
+    "CLAUDE.md, arming the timer and deferring the ask are one atomic act. Do "
+    "one of: (a) arm the timer now — a backgrounded `Bash` `sleep 2` — so the "
+    "notification opens a fresh turn carrying the AskUserQuestion; or (b) drop "
+    "the promise and ask nothing. If you were only quoting or discussing this "
+    "phrasing rather than promising it, just end the turn again — this hook "
+    "never blocks twice in a row."
 )
+
+# One-shot bound: marker file per session id. Overridable so tests never touch
+# a real session's state.
+_DEFAULT_STATE_DIR = "/tmp/cc-ask-defer-timer"
+_SUPPRESSED_NOTE = "[ask-defer-timer] block suppressed by one-shot bound\n"
 
 
 def _current_turn_entries(transcript_path: Path) -> list[dict] | None:
@@ -130,8 +175,17 @@ def _turn_assistant_text(entries: list[dict]) -> str:
     return "\n".join(parts)
 
 
+def _strip_quoted(text: str) -> str:
+    """Drop regions that quote rather than assert: fenced code blocks, inline
+    code spans, blockquote lines."""
+    text = _FENCE_RE.sub(" ", text)
+    text = _BLOCKQUOTE_RE.sub(" ", text)
+    return _INLINE_CODE_RE.sub(" ", text)
+
+
 def has_deferral_promise(text: str) -> bool:
-    return any(pattern.search(text) for pattern in _PROMISE_RE)
+    stripped = _strip_quoted(text)
+    return any(pattern.search(stripped) for pattern in _PROMISE_RE)
 
 
 def timer_armed(entries: list[dict]) -> bool:
@@ -167,6 +221,34 @@ def should_warn(entries: list[dict]) -> bool:
     return not timer_armed(entries)
 
 
+def _marker_path(session_id: str) -> Path:
+    state_dir = os.environ.get("ASK_DEFER_TIMER_STATE_DIR") or _DEFAULT_STATE_DIR
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", session_id) or "_unknown"
+    return Path(state_dir) / safe
+
+
+def _consume_marker(marker: Path) -> bool:
+    """True when a marker existed (and is now gone) — i.e. this session already
+    spent its one block. Fails toward True: if we cannot tell, do not block."""
+    try:
+        if not marker.exists():
+            return False
+        marker.unlink(missing_ok=True)
+        return True
+    except OSError:
+        return True
+
+
+def _arm_marker(marker: Path) -> bool:
+    """True when the marker was created and blocking is therefore bounded."""
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+        return True
+    except OSError:
+        return False
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -181,8 +263,24 @@ def main() -> int:
     if entries is None:
         return 0
 
-    if should_warn(entries):
-        print(_WARNING)
+    session_id = payload.get("session_id")
+    marker = _marker_path(session_id if isinstance(session_id, str) else "")
+
+    if not should_warn(entries):
+        _consume_marker(marker)
+        return 0
+
+    if _consume_marker(marker):
+        # Already blocked once for this streak; let the turn end. Stderr is
+        # invisible to the model on a non-blocking Stop — this is for a human
+        # reading a session review, and distinguishes the two silent paths.
+        sys.stderr.write(_SUPPRESSED_NOTE)
+        return 0
+
+    if not _arm_marker(marker):
+        return 0
+
+    print(json.dumps({"decision": "block", "reason": _WARNING}))
     return 0
 
 

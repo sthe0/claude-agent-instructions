@@ -22,14 +22,23 @@ def _load_module():
     return mod
 
 
-def run_hook(payload: dict) -> subprocess.CompletedProcess:
+def run_hook(payload: dict, state_dir: Path | None = None) -> subprocess.CompletedProcess:
+    # The one-shot marker dir is redirected next to the synthetic transcript
+    # (inside tmp_path), so no test ever touches a real session's state and
+    # each test starts with an unspent block.
+    if state_dir is None:
+        state_dir = Path(payload["transcript_path"]).parent / "askdefer-state"
     return subprocess.run(
         [sys.executable, str(HOOK)],
         input=json.dumps(payload),
         capture_output=True,
         text=True,
-        env={"PATH": "/usr/bin:/bin"},
+        env={"PATH": "/usr/bin:/bin", "ASK_DEFER_TIMER_STATE_DIR": str(state_dir)},
     )
+
+
+def block_decision(proc: subprocess.CompletedProcess) -> dict:
+    return json.loads(proc.stdout)
 
 
 def user_prompt(text: str) -> dict:
@@ -52,11 +61,18 @@ def write_transcript(path: Path, entries: list[dict]) -> Path:
     return path
 
 
-def payload_for(transcript: Path) -> dict:
-    return {"session_id": "s1", "transcript_path": str(transcript), "hook_event_name": "Stop"}
+def payload_for(transcript: Path, session_id: str = "s1") -> dict:
+    return {"session_id": session_id, "transcript_path": str(transcript), "hook_event_name": "Stop"}
 
 
 PROMISE_TEXT = "Ладно, задам кнопками следующим сообщением."
+
+# Verbatim from session a2b2e7c7 (2026-07-09) — the two phrasings the original
+# pattern list missed, and the one it caught. Paraphrasing here would rebuild
+# the very blind spot these cases exist to pin.
+MISSED_PROMISE_1 = "Хорошо — переспрошу кнопками вместе с новыми развилками, когда план вернётся."
+MISSED_PROMISE_2 = "План готов, я вынесу его тебе кнопками."
+CAUGHT_PROMISE = "Вопросы никуда не денутся: они приедут кнопками следующим сообщением."
 
 
 def test_warns_on_promise_without_timer_or_ask(tmp_path):
@@ -167,6 +183,109 @@ def test_english_promise_pattern(tmp_path):
     ])
     proc = run_hook(payload_for(t))
     assert "ask-defer-timer" in proc.stdout
+
+
+def test_blocks_on_missed_phrasing_pereproshu(tmp_path):
+    t = write_transcript(tmp_path / "t.jsonl", [
+        user_prompt("а вопросы?"),
+        assistant_text(MISSED_PROMISE_1),
+    ])
+    proc = run_hook(payload_for(t))
+    assert proc.returncode == 0
+    assert block_decision(proc)["decision"] == "block"
+
+
+def test_blocks_on_missed_phrasing_vynesu(tmp_path):
+    t = write_transcript(tmp_path / "t.jsonl", [
+        user_prompt("покажи план"),
+        assistant_text(MISSED_PROMISE_2),
+    ])
+    proc = run_hook(payload_for(t))
+    assert block_decision(proc)["decision"] == "block"
+
+
+def test_silent_on_compliant_turn_with_backgrounded_sleep(tmp_path):
+    # The turn that COMPLIED: promises buttons and arms the timer in the same
+    # turn -> nothing stranded, nothing to block.
+    t = write_transcript(tmp_path / "t.jsonl", [
+        user_prompt("покажи план"),
+        assistant_text(CAUGHT_PROMISE),
+        assistant_tool_use("Bash", {"command": "sleep 2", "run_in_background": True}),
+    ])
+    proc = run_hook(payload_for(t))
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == ""
+
+
+def test_quoted_promise_is_not_a_promise():
+    mod = _load_module()
+    fence = "Example of the phrasing:\n" + "`" * 3 + "\n" + MISSED_PROMISE_2 + "\n" + "`" * 3 + "\n"
+    assert mod.has_deferral_promise(fence) is False
+    quote = "> " + MISSED_PROMISE_2
+    assert mod.has_deferral_promise(quote) is False
+    inline = "The regex must catch `" + MISSED_PROMISE_2 + "` too."
+    assert mod.has_deferral_promise(inline) is False
+
+
+def test_promise_in_earlier_text_block_still_detected(tmp_path):
+    # Pins that the scan covers ALL assistant text of the turn, not just the
+    # last block: narrowing to last_assistant_message would miss this.
+    t = write_transcript(tmp_path / "t.jsonl", [
+        user_prompt("покажи план"),
+        assistant_text(MISSED_PROMISE_2),
+        assistant_text("Готово."),
+    ])
+    proc = run_hook(payload_for(t))
+    assert block_decision(proc)["decision"] == "block"
+
+
+def test_block_payload_is_a_single_json_object(tmp_path):
+    t = write_transcript(tmp_path / "t.jsonl", [
+        user_prompt("покажи план"),
+        assistant_text(PROMISE_TEXT),
+    ])
+    proc = run_hook(payload_for(t))
+    assert proc.returncode == 0
+    decision = block_decision(proc)
+    assert isinstance(decision, dict)
+    assert decision["decision"] == "block"
+    assert "ask-defer-timer" in decision["reason"]
+
+
+def test_one_shot_bound(tmp_path):
+    state = tmp_path / "state"
+    promising = write_transcript(tmp_path / "promise.jsonl", [
+        user_prompt("покажи план"),
+        assistant_text(PROMISE_TEXT),
+    ])
+    quiet = write_transcript(tmp_path / "quiet.jsonl", [
+        user_prompt("покажи план"),
+        assistant_text("Готово."),
+    ])
+
+    first = run_hook(payload_for(promising), state_dir=state)
+    assert block_decision(first)["decision"] == "block"
+
+    # Same session, still promising, no tool called: the bound consumes the
+    # marker and lets the turn end rather than looping.
+    second = run_hook(payload_for(promising), state_dir=state)
+    assert second.returncode == 0
+    assert second.stdout.strip() == ""
+
+    # An intervening non-warning Stop clears the streak; the next promise blocks.
+    assert run_hook(payload_for(quiet), state_dir=state).stdout.strip() == ""
+    third = run_hook(payload_for(promising), state_dir=state)
+    assert block_decision(third)["decision"] == "block"
+
+
+def test_one_shot_marker_is_per_session(tmp_path):
+    state = tmp_path / "state"
+    t = write_transcript(tmp_path / "t.jsonl", [
+        user_prompt("покажи план"),
+        assistant_text(PROMISE_TEXT),
+    ])
+    assert block_decision(run_hook(payload_for(t, "sA"), state_dir=state))["decision"] == "block"
+    assert block_decision(run_hook(payload_for(t, "sB"), state_dir=state))["decision"] == "block"
 
 
 def test_should_warn_pure():
