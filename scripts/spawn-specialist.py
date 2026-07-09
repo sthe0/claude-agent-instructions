@@ -14,8 +14,12 @@ has to provide the cognitive inputs (kind, plan, done criterion, etc.):
   7. Spawn `claude -p --output-format json`.
   8. Forward the specialist's text result to stdout; validate that some line
      carries one of the known return markers (else wrap in MALFORMED:).
-  9. Append a JSONL row to ~/.local/log/claude-spawn-costs.jsonl with the
-     run's kind / budget / depth / cost / duration / marker.
+  9. Append two JSONL rows to the cost ledger (default
+     ~/.local/log/claude-spawn-costs.jsonl, redirected by $CLAUDE_SPAWN_COST_LOG):
+     a `spawn_start` row before launch and a `spawn` row after the child returns,
+     correlated by `spawn_id` and carrying cost / duration / marker / usage tokens.
+     A start row with no matching completion row is a child that died with the
+     wrapper — the signal a cost aggregator needs to know its total is incomplete.
 
 Use --dry-run to print the assembled prompt and command without spawning.
 """
@@ -31,6 +35,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
@@ -41,7 +46,15 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILLS_DIR = skills_dir()
 CONFIG_MD = REPO_ROOT / "config.md"
 PERMISSIONS_CLI = REPO_ROOT / "scripts" / "permissions-cli.py"
-COST_LOG = Path.home() / ".local" / "log" / "claude-spawn-costs.jsonl"
+DEFAULT_COST_LOG = Path.home() / ".local" / "log" / "claude-spawn-costs.jsonl"
+
+
+def cost_log_path() -> Path:
+    """Where the ledger rows go. $CLAUDE_SPAWN_COST_LOG redirects it to a run-local
+    file so a harness that runs the manager inside a container can bill the children
+    that manager spawned; unset, it is the machine-wide log every report tool reads."""
+    override = os.environ.get("CLAUDE_SPAWN_COST_LOG")
+    return Path(override).expanduser() if override else DEFAULT_COST_LOG
 
 
 def _spawn_tags() -> dict:
@@ -113,7 +126,14 @@ def read_text_or_file(text: str | None, file: Path | None) -> str:
 
 
 def permissions_digest(project_file: Path | None) -> str:
-    """Run permissions-cli.py digest for global + optional project file. Empty string if no grants."""
+    """Run permissions-cli.py digest for global + optional project file. Empty string if no grants.
+
+    A trimmed deployment (e.g. the toolchain baked into a benchmark container)
+    ships the spawn wrapper without the permissions store; no grants there means
+    an empty digest, not a spawn failure.
+    """
+    if not PERMISSIONS_CLI.exists():
+        return ""
     chunks: list[str] = []
     cmd = [sys.executable, str(PERMISSIONS_CLI), "digest"]
     out = subprocess.run(cmd, capture_output=True, text=True, check=False)
@@ -171,10 +191,19 @@ def skill_path(kind: str) -> Path:
     project-local (<cwd>/.claude/skills/specializations/<kind>/) is the documented
     fallback (CLAUDE.md dispatch table) so a project ships domain experts spawnable
     with the same claude -p isolation, without polluting the global catalog. Returns
-    the global path when neither exists, so the caller's not-found error names it."""
+    the global path when neither exists, so the caller's not-found error names it.
+
+    Between the two sits the unflattened layout <skills>/specializations/<kind>/:
+    on this machine the global dir reaches those through per-kind symlinks that
+    setup creates, but a config root shipped as a plain directory tree (a profile
+    bind-mounted into a container) carries the source layout and no symlinks.
+    """
     global_path = SKILLS_DIR / kind / "SKILL.md"
     if global_path.exists():
         return global_path
+    unflattened = SKILLS_DIR / "specializations" / kind / "SKILL.md"
+    if unflattened.exists():
+        return unflattened
     project_path = Path.cwd() / ".claude" / "skills" / "specializations" / kind / "SKILL.md"
     if project_path.exists():
         return project_path
@@ -257,9 +286,38 @@ def validate_planner_plan(result_text: str) -> tuple[str, bool]:
 
 
 def log_cost_entry(entry: dict) -> None:
-    COST_LOG.parent.mkdir(parents=True, exist_ok=True)
-    with COST_LOG.open("a", encoding="utf-8") as f:
+    """Append one ledger row. Concurrent spawns share the ledger, so the row is
+    serialized first and written with a single O_APPEND write() — under PIPE_BUF
+    that is atomic, and interleaved half-lines would corrupt another spawn's row."""
+    path = cost_log_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+USAGE_TOKEN_FIELDS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+)
+
+
+def extract_usage(payload: dict | None) -> dict | None:
+    """Billed token counts from the child's result JSON, or None when absent.
+
+    Only the fields that are actually billed are kept, so a downstream imputed
+    list-price computation cannot silently pick up an unpriced counter.
+    """
+    usage = (payload or {}).get("usage")
+    if not isinstance(usage, dict):
+        return None
+    counts = {
+        field: int(usage[field])
+        for field in USAGE_TOKEN_FIELDS
+        if isinstance(usage.get(field), (int, float)) and not isinstance(usage.get(field), bool)
+    }
+    return counts or None
 
 
 def log_refused(reason: str, extra: dict) -> None:
@@ -577,6 +635,27 @@ def main(argv: list[str] | None = None) -> int:
     transcripts_before = _snapshot_transcripts()
     started = time.monotonic()
 
+    # Start row first, so a child that outlives (or kills) this wrapper still leaves
+    # a trace. An aggregator pairs it with the completion row by spawn_id; an
+    # unmatched start row is how it learns its cost total is an undercount.
+    spawn_id = uuid.uuid4().hex
+    ledger_common = {
+        "spawn_id": spawn_id,
+        "kind": args.kind,
+        "budget_tier": args.budget,
+        "budget_usd_cap": budget,
+        "depth": depth_next,
+        "model": model,
+        "stage_index": args.stage_index,
+        "plan_path": str(args.plan),
+        **_spawn_tags(),
+    }
+    log_cost_entry({
+        "ts": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+        "event": "spawn_start",
+        **ledger_common,
+    })
+
     # Use Popen so we can print the child's transcript path to stderr early —
     # the parent (manager) can then tail it for monitoring while we block on
     # the child's final JSON output. launch_supervised makes the child a
@@ -614,6 +693,7 @@ def main(argv: list[str] | None = None) -> int:
     result_text = completed.stdout
     parsed_marker: str | None = None
     payload = _load_json_payload(completed.stdout)
+    usage = extract_usage(payload)
     if payload:
         # Tolerant field lookup — schema may differ across versions.
         result_text = payload.get("result") or payload.get("output") or completed.stdout
@@ -632,18 +712,13 @@ def main(argv: list[str] | None = None) -> int:
     log_cost_entry({
         "ts": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
         "event": "spawn",
-        "kind": args.kind,
-        "budget_tier": args.budget,
-        "budget_usd_cap": budget,
-        "depth": depth_next,
+        **ledger_common,
         "cost_usd": cost_usd,
+        "usage": usage,
         "duration_ms": duration_ms,
         "return_marker": parsed_marker,
         "exit_code": completed.returncode,
         "malformed": not ok,
-        "stage_index": args.stage_index,
-        "plan_path": str(args.plan),
-        **_spawn_tags(),
     })
 
     summary_bits = [

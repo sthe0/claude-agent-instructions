@@ -6,10 +6,13 @@ Tests cover:
 - arg parser accepts --stage-index (present + absent)
 - the log entry dict carries stage_index and plan_path when --stage-index is given
 - omitting --stage-index yields stage_index=None (back-compat)
+- $CLAUDE_SPAWN_COST_LOG redirects the ledger; unset keeps the host default
+- extract_usage() keeps only billed token fields
 """
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -100,3 +103,101 @@ def test_entry_has_both_attribution_keys():
     entry = _build_entry("/tmp/plan.toml", stage_index=5)
     assert "stage_index" in entry
     assert "plan_path" in entry
+
+
+# ---------------------------------------------------------------------------
+# Ledger path: $CLAUDE_SPAWN_COST_LOG override
+# ---------------------------------------------------------------------------
+
+def test_cost_log_path_defaults_to_host_log(monkeypatch):
+    monkeypatch.delenv("CLAUDE_SPAWN_COST_LOG", raising=False)
+    assert MOD.cost_log_path() == MOD.DEFAULT_COST_LOG
+
+
+def test_cost_log_path_honors_override(monkeypatch, tmp_path):
+    target = tmp_path / "run" / "spawn-costs.jsonl"
+    monkeypatch.setenv("CLAUDE_SPAWN_COST_LOG", str(target))
+    assert MOD.cost_log_path() == target
+
+
+def test_log_cost_entry_writes_to_override_creating_parents(monkeypatch, tmp_path):
+    target = tmp_path / "work" / "spawn-costs.jsonl"
+    monkeypatch.setenv("CLAUDE_SPAWN_COST_LOG", str(target))
+
+    MOD.log_cost_entry({"event": "spawn_start", "spawn_id": "abc"})
+    MOD.log_cost_entry({"event": "spawn", "spawn_id": "abc", "cost_usd": 0.25})
+
+    rows = [json.loads(line) for line in target.read_text().splitlines()]
+    assert [r["event"] for r in rows] == ["spawn_start", "spawn"]
+    assert {r["spawn_id"] for r in rows} == {"abc"}
+
+
+def test_log_cost_entry_leaves_host_log_untouched_when_overridden(monkeypatch, tmp_path):
+    """The whole point of the override: a containerized spawn must not append to
+    (nor require) the machine-wide ledger."""
+    monkeypatch.setenv("CLAUDE_SPAWN_COST_LOG", str(tmp_path / "spawn-costs.jsonl"))
+    host_log = tmp_path / "never-written.jsonl"
+    monkeypatch.setattr(MOD, "DEFAULT_COST_LOG", host_log)
+
+    MOD.log_cost_entry({"event": "spawn"})
+
+    assert not host_log.exists()
+
+
+# ---------------------------------------------------------------------------
+# extract_usage: billed token fields only
+# ---------------------------------------------------------------------------
+
+def test_extract_usage_keeps_billed_token_fields():
+    payload = {"usage": {"input_tokens": 10, "output_tokens": 3,
+                         "cache_creation_input_tokens": 1,
+                         "cache_read_input_tokens": 2}}
+    assert MOD.extract_usage(payload) == {
+        "input_tokens": 10, "output_tokens": 3,
+        "cache_creation_input_tokens": 1, "cache_read_input_tokens": 2,
+    }
+
+
+def test_extract_usage_drops_unbilled_counters():
+    """An unpriced counter must not reach the imputed-list-price computation."""
+    payload = {"usage": {"input_tokens": 10, "server_tool_use": {"web_search_requests": 4},
+                         "service_tier": "standard"}}
+    assert MOD.extract_usage(payload) == {"input_tokens": 10}
+
+
+@pytest.mark.parametrize("payload", [None, {}, {"usage": None}, {"usage": "x"}, {"usage": {}}])
+def test_extract_usage_returns_none_when_absent(payload):
+    assert MOD.extract_usage(payload) is None
+
+
+# ---------------------------------------------------------------------------
+# skill_path: unflattened <skills>/specializations/<kind>/ layout
+# ---------------------------------------------------------------------------
+
+def test_skill_path_finds_unflattened_specialization(monkeypatch, tmp_path):
+    """A config root shipped as a plain tree (a profile bind-mounted into a
+    container) has no per-kind symlinks, only the source layout."""
+    skills = tmp_path / "skills"
+    unflattened = skills / "specializations" / "developer" / "SKILL.md"
+    unflattened.parent.mkdir(parents=True)
+    unflattened.write_text("skill")
+    monkeypatch.setattr(MOD, "SKILLS_DIR", skills)
+
+    assert MOD.skill_path("developer") == unflattened
+
+
+def test_skill_path_prefers_flattened_global(monkeypatch, tmp_path):
+    skills = tmp_path / "skills"
+    flat = skills / "developer" / "SKILL.md"
+    flat.parent.mkdir(parents=True)
+    flat.write_text("skill")
+    (skills / "specializations" / "developer").mkdir(parents=True)
+    (skills / "specializations" / "developer" / "SKILL.md").write_text("other")
+    monkeypatch.setattr(MOD, "SKILLS_DIR", skills)
+
+    assert MOD.skill_path("developer") == flat
+
+
+def test_permissions_digest_empty_without_permissions_cli(monkeypatch, tmp_path):
+    monkeypatch.setattr(MOD, "PERMISSIONS_CLI", tmp_path / "absent.py")
+    assert MOD.permissions_digest(None) == ""
