@@ -4,7 +4,7 @@ description: At the resolution gate, committed work must reach its terminal VCS 
 type: feedback
 schema: leaf/v1
 created: 2026-07-02
-last_verified: 2026-07-03
+last_verified: 2026-07-09
 ---
 
 # Landing discipline — push, then land into trunk/main at the resolution gate
@@ -24,6 +24,8 @@ Bundle the delivering step into the resolution `AskUserQuestion` with the delive
 - **(a)** if the branch is unpushed / ahead of upstream, **push** it first — pushing a personal / working branch is pre-authorized (CLAUDE.md § Acting without asking #4), a checkpoint you just do;
 - **(b)** then **land into trunk/main via that repo's landing mechanism** — a git fast-forward (`scripts/land-branch.py`: ref-only `git push <remote> <branch>:<trunk>` ff + full branch cleanup, refusing non-ff; `--remote-only` skips the local `git branch -f` when the local trunk is checked out or pinned under foreign WIP), *or* a PR create→publish→merge for a **review-gated repo** (a GitHub Core PR the owner merges; org-specific PR ship/merge commands live in **project memory**, not Core — org specifics stay out of Core prose);
 - **(c)** **branch deletion — remote, local, and its linked worktree — is PART of landing, not a separate ask** (user directive 2026-07-03: "всегда удаляй ветки после вливания"). `land-branch.py` does it by default (`--keep-branch` is the explicit opt-out); manual landing paths (PR merge, remote-only push) must end with the same deletion. `hook-resolution-reminder.py`'s merged-leftover probe nudges when a merged-but-undeleted branch remains.
+
+**Any task-scoped scratch resource is torn down together with the branch at the gate** — not just its linked worktree. A worktree, a checked-out mount, a scratch container / VM, a temp clone: each was provisioned *for this task*, so each is cleaned up at the resolution gate alongside the branch, and the cleanup is folded into the **same** delivering `AskUserQuestion` option — never left as undisclosed local residue whose existence the user must rediscover. Two constraints ride along: (1) a live process **cannot tear down a resource it is sitting inside** (a mount / container is busy while your cwd is within it — POSIX `EBUSY`), so change out of it first; (2) tear down the resource itself, **never** force-purge its underlying store / volume, which may also hold unrelated state. The concrete teardown command for a non-git resource lives in **project memory**, not Core prose.
 
 **Landing is not contingent on a trivial fast-forward**: if trunk moved or the repo gates on review, that's a landing *path* (rebase / PR), not a licence to leave the branch stranded. Trunk/main-push needs explicit confirmation, so it rides that same click-gate — but the default you present is **landing, recommended**.
 
