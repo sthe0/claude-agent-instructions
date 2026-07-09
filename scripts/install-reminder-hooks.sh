@@ -85,6 +85,9 @@ DESIRED = [
     ("PreToolUse",       "Write", "verify-experience-leaf.py --hook", 5),
     # Reject a Write that would carry a git conflict marker into any file.
     ("PreToolUse",       "Write", "verify-no-conflict-markers.py --hook", 5),
+    # Stop hook: warn when a turn promises to ask via buttons "next message" but
+    # never arms the `sleep 2` background timer that opens that next turn.
+    ("Stop",             None,    "hook-ask-defer-timer.py",        5),
 ]
 
 with open(settings_path, encoding="utf-8") as fh:
