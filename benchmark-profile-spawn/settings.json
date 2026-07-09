@@ -1,0 +1,44 @@
+{
+  "env": {
+    "DISABLE_TELEMETRY": "1",
+    "DISABLE_ERROR_REPORTING": "1",
+    "DISABLE_BUG_COMMAND": "1",
+    "BASH_MAX_OUTPUT_LENGTH": "30000",
+    "AGENT_BENCH_MAX_CHILDREN": "2",
+    "AGENT_BENCH_SPAWN_BUDGET_USD": "6.00"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(ls)",
+      "Bash(ls:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(cat:*)",
+      "Bash(find:*)",
+      "Bash(wc:*)",
+      "Bash(stat:*)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(sed -n:*)",
+      "Bash(git status)",
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git show:*)",
+      "Bash(arc status)",
+      "Bash(arc status:*)",
+      "Bash(arc diff:*)",
+      "Bash(arc log:*)",
+      "Bash(*spawn-specialist*)"
+    ],
+    "deny": [
+      "Bash(claude -p:*)",
+      "Bash(*agentctl*)",
+      "Workflow",
+      "ScheduleWakeup",
+      "CronCreate",
+      "CronCreate:*"
+    ],
+    "defaultMode": "acceptEdits"
+  }
+}
