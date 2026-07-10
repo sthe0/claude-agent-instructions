@@ -240,6 +240,23 @@ def composed_system_prompt_file(skill: Path) -> Path:
     return Path(tmp.name)
 
 
+def prompt_stdin_file(prompt: str) -> Path:
+    """The assembled prompt as a temp file, fed to `claude -p` on stdin rather than argv.
+
+    Linux caps a SINGLE argv element at MAX_ARG_STRLEN (32 pages = 128 KiB), independent of
+    the far larger total-argv budget. assemble_prompt inlines the whole working plan, so any
+    plan past ~128 KiB made execve fail with E2BIG and the spawn never started. A regular
+    file (not a pipe) also keeps this wrapper from blocking on the 64 KiB pipe buffer while
+    it waits in _discover_transcript_path before reaching communicate().
+    """
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".txt", prefix="spawn-prompt-", delete=False, encoding="utf-8"
+    )
+    with tmp:
+        tmp.write(prompt)
+    return Path(tmp.name)
+
+
 def validate_marker(result_text: str) -> tuple[str, bool]:
     """Return (text, ok). A return marker is the label of the message; accept it on
     ANY line (the ^MARKER: anchor keeps prose from matching by accident), not only the
@@ -712,15 +729,12 @@ def main(argv: list[str] | None = None) -> int:
         cmd.extend(["--permission-mode", permission_mode])
     if model is not None:
         cmd.extend(["--model", model])
-    cmd.append(prompt)
 
     if args.dry_run:
         print("=== assembled prompt ===")
         print(prompt)
-        print("\n=== command (not executed) ===")
-        # Print command in a copy-pasteable form, but truncate the prompt arg.
-        printable = cmd[:-1] + [f"<prompt {len(prompt)} chars>"]
-        print(" ".join(repr(c) if " " in c else c for c in printable))
+        print(f"\n=== command (not executed; prompt of {len(prompt)} chars arrives on stdin) ===")
+        print(" ".join(repr(c) if " " in c else c for c in cmd))
         return 0
 
     if shutil.which("claude") is None:
@@ -770,9 +784,12 @@ def main(argv: list[str] | None = None) -> int:
     # if this wrapper is killed (the harness sends SIGTERM ~5s before SIGKILL, and
     # a manual `kill` of the wrapper lands the same SIGTERM), so the claude -p
     # subtree is never orphaned.
-    proc = proc_tree.launch_supervised(
-        cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-    )
+    stdin_path = prompt_stdin_file(prompt)
+    with stdin_path.open("r", encoding="utf-8") as stdin_file:
+        proc = proc_tree.launch_supervised(
+            cmd, env=env, stdin=stdin_file, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+    stdin_path.unlink(missing_ok=True)
     proc_tree.install_teardown(proc)
     transcript_path: Path | None = None
     stdout_str, stderr_str = "", ""
