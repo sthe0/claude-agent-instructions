@@ -78,11 +78,14 @@ DESIRED = [
     ("PostToolUse",      "Bash",  "hook-scope-track.py",             5),
     ("SessionStart",     None,    "hook-policy-scorecard-due.py",    5),
     ("SessionStart",     None,    "hook-sigma-sentinel-due.py",  5),
-    # End-of-turn GATE (not advisory): block a stop when the last user message
-    # carried an agent-behavior-feedback signal but neither self-improvement nor
-    # overcome-difficulty was engaged this turn. Loop-guarded (stop_hook_active +
-    # a durable per-message marker) so the worst case is one extra model turn.
-    ("Stop",             None,    "hook-self-improvement-gate.py",   5),
+    # End-of-turn GATE (not advisory): a loop-safe shell running a registry of
+    # pure turn-boundary guardians. Blocks a stop when any guardian reports an
+    # unmet obligation (today: the last user message carried an agent-behavior-
+    # feedback signal but neither self-improvement nor overcome-difficulty was
+    # engaged this turn). Loop-guarded (stop_hook_active + a durable per-message
+    # marker under state/turn-gate/) and blockers from every guardian aggregate
+    # into one block, so the worst case is exactly one extra model turn.
+    ("Stop",             None,    "hook-turn-end-gate.py",   5),
     # Structure/confirmation gates on memory-leaf Writes. These run on ANY
     # Write (any repo), so they are the only enforcement point for project
     # memory (whose own git pre-commit does not run verify-all).

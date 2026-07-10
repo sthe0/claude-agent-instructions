@@ -78,7 +78,7 @@ When triggered → read `~/.claude-agent/skills/overcome-difficulty/SKILL.md` an
 
 **SKIP** for neutral confirmation ("ok", "thanks", "yes do it") and for pure questions without evaluation of your actions.
 
-When triggered → read `~/.claude-agent/skills/self-improvement/SKILL.md` (and `policy.md` for process-as-code / cache-aware editing / instruction-language / file-structure / git-sync rules) and follow them in the **same turn** as the trigger, before the final reply. Enforced, not advisory: an end-of-turn `Stop` gate (`hook-self-improvement-gate.py`) blocks the turn when a feedback signal is present but neither `self-improvement` nor `overcome-difficulty` ran — engage the skill or state why it does not apply.
+When triggered → read `~/.claude-agent/skills/self-improvement/SKILL.md` (and `policy.md` for process-as-code / cache-aware editing / instruction-language / file-structure / git-sync rules) and follow them in the **same turn** as the trigger, before the final reply. Enforced, not advisory: the generalized end-of-turn `Stop` gate (`hook-turn-end-gate.py`, a loop-safe shell over a registry of pure turn-boundary guardians) blocks the turn when a feedback signal is present but neither `self-improvement` nor `overcome-difficulty` ran — engage the skill or state why it does not apply.
 
 Editing the agent's own config / instructions / skills is **state-changing production work** — it rides the standard plan-approval gate like any task (the skill's beat-1 `AskUserQuestion` *is* that gate); **only memory writes** (project + global) bypass it.
 

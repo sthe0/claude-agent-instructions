@@ -11,7 +11,7 @@ This hook lifts the most common patterns from agent recall to a deterministic
 scan. The skill decision still belongs to the agent — the hook only nudges.
 
 Detection is shared with the end-of-turn `Stop` gate
-(`hook-self-improvement-gate.py`): both import `find_signals` from
+(`hook-turn-end-gate.py`): both import `find_signals` from
 `si_feedback_detect` so the advisory nudge and the gate can never drift apart.
 See that module for the tier design and the precision rationale.
 
