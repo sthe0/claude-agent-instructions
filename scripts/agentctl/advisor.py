@@ -21,6 +21,14 @@ from .dispatch import RunResult
 _ADVISOR_MODEL = "sonnet"
 _ADVISOR_TIMEOUT_S = 20
 
+# The acceptance judge is a SEPARATE, cheaper tier than the warn-only advisor: it
+# gates a real transition (via the pure acceptance-review guardian), so it runs on the
+# cheapest model and is fail-open (a missing verdict blocks at the gate, never passes).
+_JUDGE_MODEL = "haiku"
+JUDGE_REVIEWER = "judge:haiku"
+_JUDGE_PASS = "pass"
+_JUDGE_REVISE = "revise"
+
 _ADVISOR_MODE_SUBSTANTIVE = "substantive"
 _SUBSTANTIVE_WEIGHT_CLASS = "SUBSTANTIVE"
 
@@ -68,6 +76,48 @@ def judge(kind: str, payload: dict, runner, *, enabled: bool | None = None) -> l
         return [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
     except Exception:
         return []
+
+
+def acceptance_judge(observation: str, expected: str, runner, *, enabled: bool) -> tuple[str | None, str]:
+    """Cheap external judge for an acceptance observation, backing the acceptance-review
+    gate. Returns (verdict, reason) where verdict is 'pass' | 'revise' | None.
+
+    Fail-OPEN: a disabled judge, a None runner, a non-zero exit, an unparseable answer,
+    or any exception returns (None, <reason>) — NEVER a false 'pass'. The caller records
+    a StageReview only for a non-None verdict, and the PURE gate fails CLOSED on the
+    resulting absence, so an unavailable judge stalls the pass safely.
+
+    The prompt is lifted from _PROMPTS['acceptance_observation'] (the same criterion the
+    warn-only advisor applies) and wrapped with a strict YES/NO + one-line-reason
+    protocol so the deterministic gate has a machine-decidable verdict rather than a
+    free-text concern list."""
+    if not enabled or runner is None:
+        return None, "judge disabled or no runner (fail-open)"
+    try:
+        criterion = _PROMPTS["acceptance_observation"].format(
+            payload={"expected": expected, "observation": observation}
+        )
+        prompt = (
+            criterion
+            + "\n\nAnswer on the FIRST line with exactly YES (the observation is concrete "
+            "and adequate) or NO (it is vague, generic, or a rephrase of the expected). "
+            "On the SECOND line give a one-line reason."
+        )
+        result = runner(["claude", "-p", "--model", _JUDGE_MODEL, prompt])
+        if result.returncode != 0:
+            return None, "judge exited non-zero (fail-open)"
+        lines = [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
+        if not lines:
+            return None, "judge returned no output (fail-open)"
+        head = lines[0].upper()
+        reason = lines[1] if len(lines) > 1 else lines[0]
+        if head.startswith("YES"):
+            return _JUDGE_PASS, reason
+        if head.startswith("NO"):
+            return _JUDGE_REVISE, reason
+        return None, f"judge answer unparseable: {lines[0]!r} (fail-open)"
+    except Exception:
+        return None, "judge raised (fail-open)"
 
 
 def resolve_enabled(weight_class: str | None, *, thresholds: Thresholds | None = None) -> bool:

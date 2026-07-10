@@ -14,6 +14,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -41,6 +42,7 @@ from .state import (
     Difficulty,
     FinalCheck,
     Investigation,
+    JudgeBypass,
     Partition,
     PartitionUnit,
     PARTITION_UNIT_MODES,
@@ -53,6 +55,7 @@ from .state import (
     Route,
     SessionState,
     Stage,
+    StageReview,
     StageStatus,
     Subject,
     WeightClass,
@@ -88,6 +91,45 @@ def _plan_file_sha256(target: str | None) -> str:
         return hashlib.sha256(Path(target).read_bytes()).hexdigest()
     except OSError:
         return ""
+
+
+def _observation_sha256(observation: str) -> str:
+    """sha256 of an acceptance observation's bytes — the binding key the acceptance
+    gate recomputes over the observation being recorded. Mirrors _plan_file_sha256 but
+    over an in-memory string (the observation is never a file)."""
+    return hashlib.sha256((observation or "").encode("utf-8")).hexdigest()
+
+
+def _record_stage_review(state: SessionState, review: StageReview, *, from_judge: bool) -> None:
+    """Store a StageReview, one per stage_index (last-wins). A judge verdict
+    (from_judge=True) NEVER clobbers a human/manual review already present for the
+    stage (e.g. an override): the automated cognition must not silently overwrite the
+    user's explicit escape. A manual record (from_judge=False, via cmd_stage_review)
+    always replaces."""
+    existing = [r for r in state.stage_reviews if r.stage_index == review.stage_index]
+    if from_judge and existing and any(r.reviewer != advisor.JUDGE_REVIEWER for r in existing):
+        return
+    state.stage_reviews = [r for r in state.stage_reviews if r.stage_index != review.stage_index]
+    state.stage_reviews.append(review)
+
+
+def _judge_bypassed_surface(state: SessionState) -> list[dict]:
+    """The recorded acceptance-judge bypasses as plain dicts, for verify-final and the
+    resolution summary to surface verbatim ([] when none)."""
+    return [
+        {"stage_index": b.stage_index, "kind": b.kind, "reviewer": b.reviewer, "note": b.note}
+        for b in state.judge_bypassed
+    ]
+
+
+def _record_bypass(state: SessionState, bypass: JudgeBypass) -> None:
+    """Append a JudgeBypass (never cleared by a later passing review) so verify-final
+    and the resolution summary can surface every acceptance pass that skipped a genuine
+    judge verdict. Deduplicated on (stage_index, kind) so a re-run of the same passed
+    record does not multiply entries."""
+    if any(b.stage_index == bypass.stage_index and b.kind == bypass.kind for b in state.judge_bypassed):
+        return
+    state.judge_bypassed.append(bypass)
 
 
 def _snapshot_approved_plan(store: StateStore, state: SessionState) -> tuple[str, str] | None:
@@ -627,6 +669,49 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
     )
 
 
+def cmd_stage_review(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Record a manual review of the active acceptance_review stage's observation,
+    backing the acceptance-review gate. Mirrors cmd_plan_review — purely a recorder; the
+    COGNITION (a human judging, or authoring an override) happens outside. The verdict is
+    bound to the observation bytes passed via --observation (defaulting to the stage's
+    current observation), so gates.acceptance_review_blockers can reject a drift. The
+    automated cheap judge writes an equivalent record inline in record-result; this
+    command is the human path (chiefly the override deadlock escape)."""
+    state = _require(store, args.session)
+    stage = state.active_stage()
+    if stage is None:
+        return Directive(False, state.node, "next_stage", "no active stage to review")
+    if stage.criterion.criterion_type != CriterionType.ACCEPTANCE_REVIEW.value:
+        return Directive(
+            False, state.node, "noop",
+            f"stage {stage.index} is not acceptance_review; stage-review applies only to "
+            "acceptance stages",
+        )
+    observation = getattr(args, "observation", None)
+    if observation is None:
+        observation = stage.criterion.observation or ""
+    _record_stage_review(
+        state,
+        StageReview(
+            stage_index=stage.index,
+            verdict=args.verdict,
+            reviewer=getattr(args, "reviewer", "") or "",
+            concerns=list(getattr(args, "concerns", None) or []),
+            note=getattr(args, "note", "") or "",
+            observation_sha256=_observation_sha256(observation),
+        ),
+        from_judge=False,
+    )
+    state.log("stage_review", stage=stage.index, verdict=args.verdict,
+              reviewer=getattr(args, "reviewer", "") or "")
+    store.save(state)
+    return Directive(
+        True, state.node, "continue",
+        f"stage review recorded for stage {stage.index} (verdict={args.verdict}); "
+        "record-result --status passed will re-check the acceptance gate against it",
+    )
+
+
 def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     blockers = (
@@ -1019,6 +1104,53 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
                 "(supply: record-result --observation '<what you observed>')",
             )
 
+        # Cheap-judge COGNITION + PURE gate. When the acceptance-review gate is active
+        # (substantive session / AGENTCTL_STAGE_REVIEW=1), run the fail-open haiku judge
+        # over the observation, record its verdict as a StageReview bound to the
+        # observation bytes, then block the pass on gates.acceptance_review_blockers
+        # (which reads ONLY that record). The judge fails open (no verdict on
+        # timeout/error) and the gate fails closed (no verdict blocks), so an
+        # unavailable judge stalls the pass rather than waving it through.
+        # bind the observation to the stage now so the gate's sha recompute sees it.
+        stage.criterion.observation = observation
+        if gates.stage_review_active(state):
+            judge_runner = runner if runner is not None else advisor.subprocess_runner
+            verdict, reason = advisor.acceptance_judge(
+                observation, stage.subject.result, judge_runner, enabled=True)
+            if verdict is not None:
+                _record_stage_review(
+                    state,
+                    StageReview(
+                        stage_index=stage.index, verdict=verdict,
+                        reviewer=advisor.JUDGE_REVIEWER, note=reason,
+                        observation_sha256=_observation_sha256(observation),
+                    ),
+                    from_judge=True,
+                )
+            ab = gates.acceptance_review_blockers(state, stage)
+            if ab:
+                store.save(state)
+                return Directive(
+                    False, state.node, "attest_observation",
+                    f"stage {stage.index} acceptance pass blocked by the judge gate",
+                    data={"blockers": ab},
+                )
+            # Cleared: if it cleared via an override, that is a bypass of a genuine
+            # passing verdict — record it visibly (never cleared by a later review).
+            rev = gates._stage_review_for(state, stage.index)
+            if rev is not None and rev.verdict == gates._STAGE_REVIEW_OVERRIDE:
+                _record_bypass(state, JudgeBypass(
+                    stage_index=stage.index, kind="override",
+                    reviewer=rev.reviewer, note=rev.note))
+        elif (os.environ.get("AGENTCTL_STAGE_REVIEW") == "0"
+              and state.weight_class == WeightClass.SUBSTANTIVE.value):
+            # The gate WOULD apply to this substantive session but the kill switch
+            # disabled it: the acceptance pass proceeds WITHOUT a judge verdict — record
+            # the bypass so verify-final/resolve surface that this pass was unjudged.
+            _record_bypass(state, JudgeBypass(
+                stage_index=stage.index, kind="killswitch", reviewer="",
+                note="AGENTCTL_STAGE_REVIEW=0"))
+
     # Machine-executed verification: for a measurable stage carrying a verify_command,
     # the engine runs it and OVERRIDES a 'passed' claim the command contradicts. A
     # contradicted pass becomes a real failure (digest + DIAGNOSING), so "report
@@ -1058,7 +1190,12 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
             d = Directive(True, state.node, "verify_final", f"stage {stage.index} passed; all stages passed")
         else:
             d = Directive(True, state.node, "next_stage", f"stage {stage.index} passed; more stages ready")
-        if stage.criterion.criterion_type == CriterionType.ACCEPTANCE_REVIEW.value:
+        # Warn-only advisory: kept ONLY for the non-gated acceptance path. When the
+        # judge gate is active it already paid a cheap judge over this same observation,
+        # so re-running the sonnet advisory here would pay for the judgement twice; the
+        # advisory survives as the fallback cognition when the gate is off (kill switch).
+        if (stage.criterion.criterion_type == CriterionType.ACCEPTANCE_REVIEW.value
+                and not gates.stage_review_active(state)):
             _attach_advisories(d, "acceptance_observation",
                                {"expected": stage.subject.result, "observation": observation},
                                runner, weight_class=state.weight_class)
@@ -1141,19 +1278,25 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     store.save(state)
     kind = "run the measurable check" if state.overall_criterion_type == CriterionType.MEASURABLE.value \
         else "ask the user to accept on review"
-    return Directive(
-        True, state.node, "await_user_confirmation",
-        f"all stages passed; resolution gate armed — {kind}",
-        data={
-            "cost": {
-                "total_cost_usd": rollup.total_cost_usd,
-                "total_duration_ms": rollup.total_duration_ms,
-                "spawn_count": rollup.spawn_count,
-                "attributed_stages": rollup.attributed_stages,
-                "note": rollup.note,
-            }
-        },
-    )
+    data = {
+        "cost": {
+            "total_cost_usd": rollup.total_cost_usd,
+            "total_duration_ms": rollup.total_duration_ms,
+            "spawn_count": rollup.spawn_count,
+            "attributed_stages": rollup.attributed_stages,
+            "note": rollup.note,
+        }
+    }
+    # Bypass visibility: verify-final never returns a clean bill while any acceptance
+    # pass skipped a genuine judge verdict (kill switch / override) — the bypasses are
+    # surfaced verbatim so the resolution decision is made with them in view, never
+    # silently. A later passing review does not clear them.
+    detail = f"all stages passed; resolution gate armed — {kind}"
+    bypasses = _judge_bypassed_surface(state)
+    if bypasses:
+        data["judge_bypassed"] = bypasses
+        detail += f"; WARNING: {len(bypasses)} acceptance judge bypass(es) recorded (see judge_bypassed)"
+    return Directive(True, state.node, "await_user_confirmation", detail, data=data)
 
 
 def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -1213,8 +1356,16 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         "total_cost_usd": cost_surface.get("total_cost_usd"),
     }
     _write_quality_row(quality_row)
-    return Directive(True, state.node, "done", "task resolved", marker="COMPLETED",
-                     data={"cost": cost_surface, "quality": quality_row})
+    detail = "task resolved"
+    data = {"cost": cost_surface, "quality": quality_row}
+    # Bypass visibility: the resolution summary surfaces every acceptance judge bypass
+    # verbatim, so a resolved task's record shows which acceptance passes were unjudged
+    # (kill switch) or overridden — never hidden behind a clean COMPLETED.
+    bypasses = _judge_bypassed_surface(state)
+    if bypasses:
+        data["judge_bypassed"] = bypasses
+        detail += f" (with {len(bypasses)} acceptance judge bypass(es); see judge_bypassed)"
+    return Directive(True, state.node, "done", detail, marker="COMPLETED", data=data)
 
 
 def cmd_reject(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -1908,6 +2059,7 @@ COMMANDS = {
     "plan": cmd_plan,
     "submit-plan": cmd_submit_plan,
     "plan-review": cmd_plan_review,
+    "stage-review": cmd_stage_review,
     "approve": cmd_approve,
     "partition": cmd_partition,
     "partition-units": cmd_partition_units,
@@ -1987,6 +2139,19 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--target", default=None,
                     help="plan file reviewed (defaults to the session's current plan_path; "
                          "pass the NEW plan for a replan-time review)")
+    sp = add("stage-review"); sp.add_argument("--session", required=True)
+    sp.add_argument("--verdict", choices=list(gates.STAGE_REVIEW_VERDICTS), required=True,
+                    help="pass = clears the acceptance gate; revise = blocks; override = "
+                         "user's explicit deadlock escape (requires --reviewer and --note)")
+    sp.add_argument("--reviewer", default="",
+                    help="who performed the review (the user, for an override)")
+    sp.add_argument("--concern", dest="concerns", action="append", default=None,
+                    help="a blocking concern the reviewer raised (repeatable; audit trail)")
+    sp.add_argument("--note", default="",
+                    help="override justification, or a free-text note")
+    sp.add_argument("--observation", default=None,
+                    help="the observation being reviewed (defaults to the stage's current "
+                         "observation); binds the verdict to these exact bytes")
     sp = add("approve"); sp.add_argument("--session", required=True); sp.add_argument("--by", required=True)
     _UNIT_HELP = ("delivery unit as '<mode>|<stages csv>|<title>[|<ref>]' "
                   "(mode: inline|spawn|subtask); repeatable")

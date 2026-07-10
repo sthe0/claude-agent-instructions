@@ -19,7 +19,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -281,6 +281,59 @@ class PlanReview:
         )
 
 
+# The acceptance-review analogue of PlanReview (schema 14): one recorded verdict on
+# an acceptance_review stage's observation, backing the acceptance-review gate
+# (gates.acceptance_review_blockers). Structurally mirrors PlanReview — the COGNITION
+# (the cheap external judge, or a human's override) happens in the cli layer; this
+# only records the verdict, bound to the exact observation bytes it examined.
+# `observation_sha256` is the sha256 of those bytes: the gate recomputes it over the
+# observation being recorded and rejects a drift, so a PASS granted to one observation
+# cannot silently clear a different one.
+@dataclass
+class StageReview:
+    """One judge/human review of an acceptance_review stage's observation.
+
+    `stage_index` binds the verdict to its stage. `verdict` is one of
+    pass / revise / override (an override is the user's explicit deadlock escape,
+    which requires a non-empty `reviewer` and `note`). `observation_sha256` binds the
+    verdict to the exact observation bytes that were judged; empty on a record that
+    declined to bind (degrades the gate to verdict-only, mirroring PlanReview's
+    path-only fallback). `reviewer` is the judge tag ("judge:haiku") for an
+    automated verdict or a human name for a manual/override record."""
+    stage_index: int
+    verdict: str
+    reviewer: str
+    concerns: list[str] = field(default_factory=list)
+    note: str = ""
+    observation_sha256: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict | None) -> "StageReview | None":
+        if not d:
+            return None
+        return cls(
+            stage_index=int(d["stage_index"]),
+            verdict=d["verdict"],
+            reviewer=d.get("reviewer", ""),
+            concerns=list(d.get("concerns", [])),
+            note=d.get("note", ""),
+            observation_sha256=d.get("observation_sha256", ""),
+        )
+
+
+# Bypass-visibility record (schema 14): every time an acceptance_review stage is
+# recorded PASSED WITHOUT a genuine passing judge verdict — because the kill switch
+# disabled the gate, or a human override cleared it — one JudgeBypass is appended and
+# NEVER cleared by a later passing review. verify-final refuses a clean bill while any
+# entry exists unless it prints them; the resolution summary surfaces them verbatim.
+@dataclass
+class JudgeBypass:
+    stage_index: int
+    kind: str  # "killswitch" | "override"
+    reviewer: str = ""
+    note: str = ""
+
+
 # --- the 8 activity elements, grouped by the ontology's clusters -------------
 # Each cluster is a typed sub-structure of Stage; the grouping makes the model
 # self-documenting and splits the immutable DECLARATION (subject/means/actor/
@@ -528,6 +581,14 @@ class SessionState:
     # dataclass default via from_dict), so the gate has no observable and — for a
     # substantive session — blocks approval/replan until a review is recorded.
     plan_review: "PlanReview | None" = None
+    # The acceptance-review judge records backing the acceptance-review gate (schema
+    # 14): one StageReview per acceptance_review stage that has been judged, and one
+    # JudgeBypass per gate bypass (kill switch / override). Both default to [] — legacy
+    # pre-schema-14 states load with empty lists (absent key -> dataclass default via
+    # from_dict), so the gate has no observable and blocks a substantive acceptance
+    # pass until a judge verdict is recorded (fail-closed).
+    stage_reviews: list[StageReview] = field(default_factory=list)
+    judge_bypassed: list[JudgeBypass] = field(default_factory=list)
     approval: GateRecord = field(default_factory=lambda: GateRecord("plan_approval"))
     resolution: GateRecord = field(default_factory=lambda: GateRecord("resolution"))
     stages: list[Stage] = field(default_factory=list)
@@ -660,6 +721,10 @@ class SessionState:
         data["permission_request"] = PermissionRequest(**pr) if pr else None
         data["difficulty"] = Difficulty.from_dict(data.get("difficulty"))
         data["plan_review"] = PlanReview.from_dict(data.get("plan_review"))
+        data["stage_reviews"] = [
+            r for r in (StageReview.from_dict(x) for x in data.get("stage_reviews", [])) if r is not None
+        ]
+        data["judge_bypassed"] = [JudgeBypass(**b) for b in data.get("judge_bypassed", [])]
         cost_raw = data.get("cost")
         data["cost"] = CostRollup(**cost_raw) if cost_raw else None
         data["plan_stack"] = [

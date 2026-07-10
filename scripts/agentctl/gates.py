@@ -12,6 +12,23 @@ prose hard gates:
 
 Guardians return a list of human-readable blockers ([] == may pass). cli.py calls
 the guardian before flipping `passed`, so an illegal pass is impossible.
+
+Purity: everything here is PURE in the sense that matters for a gate — it reads
+recorded state and (for the two content-binding guardians) a plan/observation's own
+bytes via hashlib, but NEVER shells out, opens a socket, or talks to the network. The
+subprocess-shaped cognition (the thinker review, the acceptance judge) lives in the
+impure cli layer; a guardian only reads the RECORD that cognition left behind.
+scripts/tests/ast_purity.py mechanizes this: it admits file I/O but rejects any
+{subprocess, socket, urllib, requests, http} reach, and verify-agentctl asserts it
+over this module.
+
+Fail-open judge, fail-closed gate — the load-bearing asymmetry. The acceptance judge
+(advisor.acceptance_judge) is fail-open: a disabled/errored/timed-out judge returns NO
+verdict rather than a false pass, so it can never HANG or wrongly-block a coordination
+step. Because the judge fails open, the gate must fail CLOSED: acceptance_review_blockers
+treats a missing verdict as a blocker (no StageReview => blocked), so "the judge didn't
+run" degrades to "not yet accepted", never to "accepted by default". The two directions
+compose to: an unavailable judge stalls the pass safely instead of waving it through.
 """
 from __future__ import annotations
 
@@ -20,6 +37,7 @@ import os
 from pathlib import Path
 
 from .state import Node, SessionState, StageStatus, WeightClass
+from .state import Stage as _Stage
 from .text_shape import PLACEHOLDER_SET as _PLACEHOLDER_SET
 from .text_shape import normalize_string as _normalize_string
 
@@ -30,6 +48,14 @@ _PLAN_REVIEW_PASS = "pass"
 _PLAN_REVIEW_REVISE = "revise"
 _PLAN_REVIEW_OVERRIDE = "override"
 PLAN_REVIEW_VERDICTS = (_PLAN_REVIEW_PASS, _PLAN_REVIEW_REVISE, _PLAN_REVIEW_OVERRIDE)
+
+# Verdict vocabulary for the acceptance-review gate — the same shape as plan-review:
+# `pass` clears; `override` clears only as the user's explicit escape (reviewer + note);
+# `revise`/unknown blocks. The cheap judge maps yes->pass, no->revise.
+_STAGE_REVIEW_PASS = "pass"
+_STAGE_REVIEW_REVISE = "revise"
+_STAGE_REVIEW_OVERRIDE = "override"
+STAGE_REVIEW_VERDICTS = (_STAGE_REVIEW_PASS, _STAGE_REVIEW_REVISE, _STAGE_REVIEW_OVERRIDE)
 
 
 def plan_approval_blockers(state: SessionState) -> list[str]:
@@ -176,6 +202,76 @@ def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[s
             return ["thinker review override requires a non-empty " + " and ".join(missing) + " (the user's explicit escape reason)"]
         return []
     return [f"thinker review verdict is {pr.verdict!r} — plan blocked until a passing review (or an explicit override) is recorded"]
+
+
+def stage_review_active(state: SessionState) -> bool:
+    """Whether the acceptance-review judge gate applies to this session.
+
+    Scoped exactly like plan_review_active: chat/small-change sessions never pay the
+    judge cost; SUBSTANTIVE sessions always do. AGENTCTL_STAGE_REVIEW overrides in both
+    directions ("1" forces on, "0" forces off). Deliberately NOT routed through
+    advisor.resolve_enabled — the advisor is an optional cost knob whose kill switch
+    must not silently defeat a mandatory gate; the gate's only off switch is its own
+    env var. Env-only reads, no file/subprocess I/O, so the gate stays pure."""
+    env = os.environ.get("AGENTCTL_STAGE_REVIEW")
+    if env == "1":
+        return True
+    if env == "0":
+        return False
+    return state.weight_class == WeightClass.SUBSTANTIVE.value
+
+
+def _stage_review_for(state: SessionState, stage_index: int):
+    """The most-recently-recorded StageReview for `stage_index`, or None. Last-wins so
+    a manual override recorded after a judge verdict supersedes it."""
+    match = [r for r in state.stage_reviews if r.stage_index == stage_index]
+    return match[-1] if match else None
+
+
+def acceptance_review_blockers(state: SessionState, stage: "_Stage") -> list[str]:
+    """Precondition guardian for `record-result --status passed` on an acceptance_review
+    stage: a recorded StageReview with a passing (or user-overridden) verdict, BOUND to
+    the exact observation bytes being recorded, must exist. An INTERNAL command
+    precondition mirroring plan_review_blockers — deliberately ABSENT from GUARDIANS so
+    verify-agentctl requires no new hook. PURE: reads ONLY the recorded StageReview and
+    hashes the observation's own bytes; never a subprocess/socket/network reach. [] == ok.
+
+    Inactive (chat / small-change / AGENTCTL_STAGE_REVIEW=0) => [] always. Active checks:
+      - a review must exist — else the gate is unmet (fail-CLOSED: a fail-open judge that
+        produced no verdict leaves no review, and that must block, never pass);
+      - it must be bound to the observation being recorded (observation_sha256 == the
+        sha256 of stage.criterion.observation) — a verdict granted to a different
+        observation is stale; empty stored hash degrades to verdict-only (legacy);
+      - the verdict must be `pass`, or `override` with a non-empty reviewer AND note
+        (the explicit user escape); `revise`/unknown blocks."""
+    if not stage_review_active(state):
+        return []
+    review = _stage_review_for(state, stage.index)
+    if review is None:
+        return [
+            "no acceptance judge verdict recorded — the cheap judge produced no verdict "
+            "(disabled/errored/timed out) or none was recorded; an acceptance pass is "
+            "blocked until a passing verdict (or an explicit override) binds to the observation"
+        ]
+    observation = getattr(stage.criterion, "observation", "") or ""
+    expected = hashlib.sha256(observation.encode("utf-8")).hexdigest()
+    if review.observation_sha256 and review.observation_sha256 != expected:
+        return [
+            "acceptance judge verdict is stale — it judged a different observation than the "
+            "one being recorded; re-judge the current observation"
+        ]
+    if review.verdict == _STAGE_REVIEW_PASS:
+        return []
+    if review.verdict == _STAGE_REVIEW_OVERRIDE:
+        missing = []
+        if not (review.reviewer or "").strip():
+            missing.append("reviewer")
+        if not (review.note or "").strip():
+            missing.append("note")
+        if missing:
+            return ["acceptance override requires a non-empty " + " and ".join(missing) + " (the user's explicit escape reason)"]
+        return []
+    return [f"acceptance judge verdict is {review.verdict!r} — pass blocked until a passing verdict (or an explicit override) is recorded"]
 
 
 def replan_coverage_blockers(old_doc, new_doc, critique) -> list[str]:
