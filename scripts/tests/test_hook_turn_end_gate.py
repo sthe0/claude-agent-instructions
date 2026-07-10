@@ -194,6 +194,45 @@ def test_tool_result_user_turn_is_not_the_trigger(tmp_path, isolated_state):
     assert _mod.decide({"transcript_path": str(t), "stop_hook_active": False}) is None
 
 
+# --- spawned-specialist inertness -------------------------------------------
+
+def test_specialist_session_is_inert(tmp_path, isolated_state, monkeypatch):
+    """In a spawned specialist (AGENT_RECURSION_DEPTH>=1) the turn-end gate must
+    not fire: the specialist's contract is to emit its return marker, and a brief
+    that merely mentions "self-improvement" would otherwise hijack it into a block."""
+    monkeypatch.setenv("AGENT_RECURSION_DEPTH", "1")
+    t = _write_transcript(tmp_path, [
+        _user_line(FEEDBACK),
+        _assistant_text_line("COMPLETED: did the thing"),
+    ])
+    assert _mod.decide({"transcript_path": str(t), "stop_hook_active": False}) is None
+    # inert means: nothing fired, so no dedup marker is written either
+    assert not (isolated_state / "state" / "turn-gate").exists()
+
+
+def test_root_session_still_blocks(tmp_path, isolated_state, monkeypatch):
+    """Depth 0 (or unset) is the root coordinator — the gate still enforces."""
+    monkeypatch.setenv("AGENT_RECURSION_DEPTH", "0")
+    t = _write_transcript(tmp_path, [
+        _user_line(FEEDBACK),
+        _assistant_text_line("answer"),
+    ])
+    out = _mod.decide({"transcript_path": str(t), "stop_hook_active": False})
+    assert out is not None and out["decision"] == "block"
+
+
+def test_malformed_depth_falls_back_to_enforcing(tmp_path, isolated_state, monkeypatch):
+    """A non-integer AGENT_RECURSION_DEPTH must not silence the gate (fail-closed
+    on the enforcement side): the ValueError is swallowed and the turn is judged."""
+    monkeypatch.setenv("AGENT_RECURSION_DEPTH", "not-a-number")
+    t = _write_transcript(tmp_path, [
+        _user_line(FEEDBACK),
+        _assistant_text_line("answer"),
+    ])
+    out = _mod.decide({"transcript_path": str(t), "stop_hook_active": False})
+    assert out is not None and out["decision"] == "block"
+
+
 # --- multi-guardian aggregation ---------------------------------------------
 
 def _second_guardian(ctx) -> list[str]:

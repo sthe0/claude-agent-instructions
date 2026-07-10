@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -359,6 +360,17 @@ def decide(payload: dict) -> dict | None:
     """Core decision. Returns a block-directive dict, or None to allow."""
     if payload.get("stop_hook_active"):
         return None
+
+    # Turn-end obligations (self-improvement discipline, resolution-seeking) are
+    # ROOT-coordinator obligations; a spawned specialist's turn-end contract is to
+    # emit its return marker. Inert in a specialist session (spawn-specialist.py
+    # exports AGENT_RECURSION_DEPTH>=1), else a brief that merely mentions
+    # "self-improvement" hijacks the marker into MALFORMED.
+    try:
+        if int(os.environ.get("AGENT_RECURSION_DEPTH", "0") or 0) >= 1:
+            return None
+    except ValueError:
+        pass
 
     ctx = build_context(payload)
     if ctx is None:
