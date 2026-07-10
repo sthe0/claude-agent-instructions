@@ -45,6 +45,15 @@ def boom(argv):
     raise AssertionError(f"runner must not be called (argv={argv})")
 
 
+def judge_yes(argv):
+    # The only runner call an acceptance_review pass makes is the fail-open judge
+    # (`claude -p --model haiku ...`); the verify_command is NEVER machine-run for
+    # an acceptance stage. Asserting that argv shape proves both properties at once,
+    # and the YES verdict clears the judge gate so the pass is admitted.
+    assert argv[:2] == ["claude", "-p"], f"only the judge runs for acceptance (argv={argv})"
+    return RunResult(0, stdout="YES\nconcrete and adequate", stderr="")
+
+
 def _stage(i, *, verify_command=None, expected_exit=0,
            criterion_type="measurable", status=StageStatus.ACTIVE.value):
     return Stage(
@@ -140,7 +149,7 @@ def test_acceptance_review_stage_skips_command(store):
     d = cli.cmd_record_result(
         ns(session="v5", status="passed", actual="ok", control=None,
            observation="I ran the module and it executed without errors"),
-        store=store, runner=boom,  # acceptance-review is not machine-checked
+        store=store, runner=judge_yes,  # only the judge runs; verify_command skipped
     )
     assert d.ok is True
     assert store.load("v5").stage(1).outcome.status == StageStatus.PASSED.value
@@ -228,7 +237,7 @@ def test_acceptance_pass_accepts_distinct_observation(store):
     d = cli.cmd_record_result(
         ns(session="ar4", status="passed", actual="ok", control=None,
            observation=obs),
-        store=store, runner=boom,
+        store=store, runner=judge_yes,
     )
     assert d.ok is True
     after = store.load("ar4")

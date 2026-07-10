@@ -382,3 +382,41 @@ def test_legacy_state_without_tracker_key_field_loads_with_default():
     raw.pop("tracker_key", None)
     loaded = SessionState.from_dict(raw)
     assert loaded.tracker_key is None
+
+
+def test_json_roundtrip_preserves_stage_reviews_and_bypasses():
+    """The schema-14 acceptance-judge fields survive a full to_json/from_json cycle,
+    including the observation_sha256 binding and the never-cleared bypass ledger."""
+    from agentctl.state import JudgeBypass, StageReview
+    s = SessionState(
+        session_id="s", task_id="t",
+        stage_reviews=[
+            StageReview(stage_index=1, verdict="pass", reviewer="judge:haiku",
+                        concerns=["c1"], note="looks concrete", observation_sha256="deadbeef"),
+            StageReview(stage_index=2, verdict="override", reviewer="fedor",
+                        note="deadlock escape", observation_sha256="cafe"),
+        ],
+        judge_bypassed=[
+            JudgeBypass(stage_index=2, kind="override", reviewer="fedor", note="deadlock escape"),
+            JudgeBypass(stage_index=3, kind="killswitch", note="AGENTCTL_STAGE_REVIEW=0"),
+        ],
+    )
+    back = SessionState.from_json(s.to_json())
+    assert back == s
+    assert back.stage_reviews[0].observation_sha256 == "deadbeef"
+    assert back.judge_bypassed[1].kind == "killswitch"
+
+
+def test_legacy_state_without_judge_fields_loads_with_defaults():
+    """A pre-schema-14 state dict (no stage_reviews / judge_bypassed keys) loads with
+    empty lists, so old state.json remains readable."""
+    import json
+    from agentctl.state import StageReview
+    s = SessionState(session_id="s", task_id="t",
+                     stage_reviews=[StageReview(stage_index=1, verdict="pass", reviewer="judge:haiku")])
+    raw = json.loads(s.to_json())
+    raw.pop("stage_reviews", None)
+    raw.pop("judge_bypassed", None)
+    loaded = SessionState.from_dict(raw)
+    assert loaded.stage_reviews == []
+    assert loaded.judge_bypassed == []
