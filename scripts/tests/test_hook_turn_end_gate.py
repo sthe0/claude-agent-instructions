@@ -76,6 +76,18 @@ def _assistant_skill_line(skill: str) -> dict:
     ]}}
 
 
+def _assistant_tool_use_line(name: str, tool_input: dict) -> dict:
+    return {"message": {"role": "assistant", "content": [
+        {"type": "tool_use", "name": name, "input": tool_input},
+    ]}}
+
+
+def _assistant_bash_line(command: str, background: bool) -> dict:
+    return _assistant_tool_use_line(
+        "Bash", {"command": command, "run_in_background": background}
+    )
+
+
 def _write_transcript(tmp_path: Path, lines: list[dict], name="t.jsonl") -> Path:
     p = tmp_path / name
     p.write_text("\n".join(json.dumps(l) for l in lines) + "\n", encoding="utf-8")
@@ -362,3 +374,146 @@ def test_main_empty_stdin_exit_0():
     p = _run(b"")
     assert p.returncode == 0
     assert p.stdout.decode().strip() == ""
+
+
+# --- resolution guardian: unit matrix over a fabricated SessionState ---------
+
+class _FakeGate:
+    def __init__(self, passed: bool):
+        self.passed = passed
+
+
+class _FakeState:
+    """A stand-in for agentctl SessionState exposing only what the resolution
+    guardian reads: weight_class, all_stages_passed(), resolution.passed."""
+
+    def __init__(self, weight_class="SUBSTANTIVE", all_passed=True, resolution_passed=False):
+        self.weight_class = weight_class
+        self._all_passed = all_passed
+        self.resolution = _FakeGate(resolution_passed)
+
+    def all_stages_passed(self) -> bool:
+        return self._all_passed
+
+
+def _res_ctx(state, closure=False, text="add a parser for the config file"):
+    return _mod.TurnContext(
+        last_user_text=text,
+        invocations=frozenset(),
+        transcript_path="/x.jsonl",
+        session_key="s",
+        agentctl_state=state,
+        closure_sought=closure,
+    )
+
+
+def test_resolution_fires_when_all_passed_and_no_closure():
+    out = _mod.resolution_turn_blockers(_res_ctx(_FakeState()))
+    assert len(out) == 1
+    assert "resolution gate" in out[0]
+    assert "verify-final" in out[0]
+
+
+def test_resolution_silent_when_closure_sought():
+    assert _mod.resolution_turn_blockers(_res_ctx(_FakeState(), closure=True)) == []
+
+
+def test_resolution_silent_for_chat_and_small_change():
+    assert _mod.resolution_turn_blockers(_res_ctx(_FakeState(weight_class="CHAT"))) == []
+    assert _mod.resolution_turn_blockers(_res_ctx(_FakeState(weight_class="SMALL_CHANGE"))) == []
+
+
+def test_resolution_silent_with_an_unpassed_stage():
+    assert _mod.resolution_turn_blockers(_res_ctx(_FakeState(all_passed=False))) == []
+
+
+def test_resolution_silent_when_gate_already_passed():
+    assert _mod.resolution_turn_blockers(_res_ctx(_FakeState(resolution_passed=True))) == []
+
+
+def test_resolution_silent_when_no_state():
+    assert _mod.resolution_turn_blockers(_res_ctx(None)) == []
+
+
+# --- resolution guardian: integration through decide() ----------------------
+
+def _patch_state(monkeypatch, state):
+    monkeypatch.setattr(_mod, "_load_agentctl_state", lambda sid: state)
+
+
+def test_resolution_blocks_via_decide(tmp_path, isolated_state, monkeypatch):
+    _patch_state(monkeypatch, _FakeState())
+    t = _write_transcript(tmp_path, [
+        _user_line("add a parser for the config file"),
+        _assistant_text_line("here you go"),
+    ])
+    out = _mod.decide({"transcript_path": str(t), "stop_hook_active": False, "session_id": "s1"})
+    assert out is not None and out["decision"] == "block"
+    assert "resolution gate" in out["reason"]
+    # neutral user text -> the self-improvement obligation is NOT among the blockers
+    assert "self-improvement" not in out["reason"]
+
+
+def test_resolution_silent_when_ask_emitted_this_turn(tmp_path, isolated_state, monkeypatch):
+    _patch_state(monkeypatch, _FakeState())
+    t = _write_transcript(tmp_path, [
+        _user_line("add a parser for the config file"),
+        _assistant_tool_use_line("AskUserQuestion", {"questions": []}),
+    ])
+    assert _mod.decide({"transcript_path": str(t), "stop_hook_active": False, "session_id": "s1"}) is None
+
+
+def test_resolution_silent_when_backgrounded_sleep_armed(tmp_path, isolated_state, monkeypatch):
+    # C2 regression pin: a backgrounded `sleep` is the delivery-split timer, so the
+    # turn IS seeking closure on the next turn — the guardian must stay silent.
+    _patch_state(monkeypatch, _FakeState())
+    t = _write_transcript(tmp_path, [
+        _user_line("add a parser for the config file"),
+        _assistant_bash_line("sleep 2", True),
+    ])
+    assert _mod.decide({"transcript_path": str(t), "stop_hook_active": False, "session_id": "s1"}) is None
+
+
+def test_resolution_silent_when_no_session_state(tmp_path, isolated_state, monkeypatch):
+    # State absent / unparseable -> _load returns None -> fail open (no block).
+    _patch_state(monkeypatch, None)
+    t = _write_transcript(tmp_path, [
+        _user_line("add a parser for the config file"),
+        _assistant_text_line("here you go"),
+    ])
+    assert _mod.decide({"transcript_path": str(t), "stop_hook_active": False, "session_id": "s1"}) is None
+
+
+def test_resolution_and_self_improvement_cofire_one_block(tmp_path, isolated_state, monkeypatch):
+    """Both obligations unmet -> ONE block naming both, resolution named LAST."""
+    _patch_state(monkeypatch, _FakeState())
+    t = _write_transcript(tmp_path, [
+        _user_line(FEEDBACK),
+        _assistant_text_line("answer"),
+    ])
+    out = _mod.decide({"transcript_path": str(t), "stop_hook_active": False, "session_id": "s1"})
+    assert out is not None and out["decision"] == "block"
+    reason = out["reason"]
+    assert "self-improvement" in reason and "resolution gate" in reason
+    assert "1." in reason and "2." in reason
+    # resolution is registered last, so it is numbered after self-improvement
+    assert reason.index("self-improvement") < reason.index("resolution gate")
+
+
+def test_resolution_self_heals_after_a_poller_turn(tmp_path, isolated_state, monkeypatch):
+    """A backgrounded `sleep 60` poller reads as closure (accepted false negative),
+    so the guardian is silent that turn; the FOLLOWING timer-less turn re-evaluates
+    and fires. The miss self-heals rather than persisting."""
+    _patch_state(monkeypatch, _FakeState())
+    t1 = _write_transcript(tmp_path, [
+        _user_line("keep monitoring the job"),
+        _assistant_bash_line("sleep 60", True),
+    ], name="t1.jsonl")
+    assert _mod.decide({"transcript_path": str(t1), "stop_hook_active": False, "session_id": "s1"}) is None
+
+    t2 = _write_transcript(tmp_path, [
+        _user_line("is there anything else"),
+        _assistant_text_line("all done"),
+    ], name="t2.jsonl")
+    out = _mod.decide({"transcript_path": str(t2), "stop_hook_active": False, "session_id": "s1"})
+    assert out is not None and "resolution gate" in out["reason"]

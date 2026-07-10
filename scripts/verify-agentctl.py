@@ -16,7 +16,9 @@ consistent:
      (config-root resolved via scripts/lib/config_root.py, not hardcoded).
   4. Every engine gate has a guardian hook wired in install-reminder-hooks.sh
      DESIRED (plan_approval -> hook-state-gate.py; resolution ->
-     hook-resolution-reminder.py).
+     hook-turn-end-gate.py, the end-of-turn structural gate — the
+     hook-resolution-reminder.py UserPromptSubmit advisory is retained but is no
+     longer the gate's guardian).
   5. The required built-in plugins (dummy, tracker) register at import, extend
      only existing core gates (the scope fence — no new gate), and observe only
      events the engine actually emits.
@@ -56,7 +58,11 @@ COGNITIVE_LEAVES = ["planner", "developer", "overcome-difficulty"]
 # wired in DESIRED.
 GATE_TO_HOOK = {
     "plan_approval": "hook-state-gate.py",
-    "resolution": "hook-resolution-reminder.py",
+    # The resolution gate's structural guardian is the end-of-turn Stop gate, which
+    # can BLOCK a turn that reached all-stages-passed without seeking closure. The
+    # hook-resolution-reminder.py UserPromptSubmit advisory is retained as a
+    # complementary nudge but is no longer the gate guardian.
+    "resolution": "hook-turn-end-gate.py",
 }
 
 # Nodes allowed to have no outgoing table edge.

@@ -70,6 +70,7 @@ from typing import Any, Callable
 # directly (scripts/ on sys.path[0]) or loaded via importlib in tests.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from si_feedback_detect import find_signals  # noqa: E402
+from timer_arm_detect import closure_sought as _closure_sought  # noqa: E402
 
 try:
     from lib import config_root  # noqa: E402
@@ -95,6 +96,10 @@ class TurnContext:
                      present, else the transcript path).
     agentctl_state : the engine's SessionState for this session, or None when no
                      session is readable. Read once, here, by the shell.
+    closure_sought : whether this turn already seeks closure — it emitted an
+                     inline AskUserQuestion OR armed a deferral timer. Computed by
+                     the shell (transcript I/O) via the shared timer_arm_detect
+                     detector, so the resolution guardian stays pure.
     """
 
     last_user_text: str
@@ -102,6 +107,7 @@ class TurnContext:
     transcript_path: str
     session_key: str
     agentctl_state: Any | None
+    closure_sought: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -125,9 +131,55 @@ def self_improvement_blockers(ctx: TurnContext) -> list[str]:
     ]
 
 
-# guardian name -> pure predicate
+def resolution_turn_blockers(ctx: TurnContext) -> list[str]:
+    """A substantive plan whose every stage has PASSED sits at the resolution gate
+    with the gate still open, yet this turn shows no sign closure is being sought
+    (no AskUserQuestion, no armed deferral timer). The engine drives the closing
+    sequence but cannot make the model actually seek confirmation; this turns that
+    advisory into a turn-boundary check.
+
+    Fires ONLY under the full conjunction, all read from the frozen context:
+      - a readable agentctl SessionState exists (absent -> fail open, never fire);
+      - weight_class is SUBSTANTIVE (CHAT / SMALL_CHANGE never resolve this way);
+      - a plan is submitted AND every stage's outcome is PASSED
+        (all_stages_passed(): False for an empty plan or any unpassed stage);
+      - the resolution gate has NOT passed;
+      - the turn is not already seeking closure (ctx.closure_sought).
+
+    Named LAST in TURN_GUARDIANS so, when it co-fires with self_improvement, the
+    aggregated block numbers the resolution obligation last.
+    """
+    state = ctx.agentctl_state
+    if state is None:
+        return []
+    # weight_class is persisted as the plain WeightClass value string.
+    if getattr(state, "weight_class", None) != "SUBSTANTIVE":
+        return []
+    all_passed = getattr(state, "all_stages_passed", None)
+    if not callable(all_passed) or not all_passed():
+        return []
+    resolution = getattr(state, "resolution", None)
+    if resolution is None or getattr(resolution, "passed", False):
+        return []
+    if ctx.closure_sought:
+        return []
+    return [
+        "Every stage of this substantive plan has PASSED and the resolution gate "
+        "is still open, but this turn is not seeking closure. Run "
+        "`agentctl verify-final`, then confirm the task is resolved with the user "
+        "via an AskUserQuestion opened on the NEXT turn through the sleep-2 "
+        "delivery-split — arm a backgrounded `Bash` `sleep 2` this turn so its "
+        "notification opens the turn that carries the ask (a same-turn ask after "
+        "this text would not render). Do not close the task until the user "
+        "confirms; on any verification failure, run overcome-difficulty instead."
+    ]
+
+
+# guardian name -> pure predicate. Order matters: format_reason numbers blockers
+# in iteration order, and the resolution obligation is named LAST.
 TURN_GUARDIANS: dict[str, Callable[[TurnContext], list[str]]] = {
     "self_improvement": self_improvement_blockers,
+    "resolution": resolution_turn_blockers,
 }
 
 
@@ -214,11 +266,13 @@ def _invocations_in(msg: dict) -> set[str]:
     return out
 
 
-def analyze(entries: list[dict]) -> tuple[str, set[str]]:
-    """Return (last_user_text, invocations_after_it) for the current turn.
+def analyze(entries: list[dict]) -> tuple[str, set[str], list[dict]]:
+    """Return (last_user_text, invocations_after_it, turn_entries) for the current
+    turn.
 
     The current turn is delimited by the last user entry that carries human
-    text; assistant messages after it are this turn's response.
+    text; assistant messages after it are this turn's response. `turn_entries` is
+    that response slice, handed to the shared closure detector by the shell.
     """
     last_user_idx = -1
     last_user_text = ""
@@ -232,15 +286,16 @@ def analyze(entries: list[dict]) -> tuple[str, set[str]]:
             last_user_text = text
 
     if last_user_idx < 0:
-        return "", set()
+        return "", set(), []
 
+    turn_entries = entries[last_user_idx + 1:]
     invocations: set[str] = set()
-    for entry in entries[last_user_idx + 1:]:
+    for entry in turn_entries:
         msg = entry.get("message")
         if not isinstance(msg, dict) or msg.get("role") != "assistant":
             continue
         invocations |= _invocations_in(msg)
-    return last_user_text, invocations
+    return last_user_text, invocations, turn_entries
 
 
 def _load_agentctl_state(session_id: str | None):
@@ -276,7 +331,7 @@ def build_context(payload: dict) -> TurnContext | None:
     if not entries:
         return None
 
-    last_user_text, invocations = analyze(entries)
+    last_user_text, invocations, turn_entries = analyze(entries)
     if not last_user_text:
         return None
 
@@ -289,6 +344,7 @@ def build_context(payload: dict) -> TurnContext | None:
         transcript_path=transcript_path,
         session_key=session_id or transcript_path,
         agentctl_state=_load_agentctl_state(session_id),
+        closure_sought=_closure_sought(turn_entries),
     )
 
 

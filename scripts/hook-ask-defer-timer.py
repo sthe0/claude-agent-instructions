@@ -62,6 +62,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.transcript_turns import _content_items, _is_real_user_prompt  # noqa: E402
+# The armed-timer / ask-emitted predicates live in ONE shared module so this warn
+# hook and the resolution guardian in hook-turn-end-gate.py cannot drift apart.
+from timer_arm_detect import ask_emitted as ask_already_emitted  # noqa: E402
+from timer_arm_detect import timer_armed  # noqa: E402
 
 # Deferral-promise phrasings (RU+EN). Two layers, both kept: the original flat
 # list of whole phrasings, plus a promise-verb x ask-noun construction matched
@@ -94,13 +98,6 @@ _PROMISE_RE = [
 _FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 _BLOCKQUOTE_RE = re.compile(r"^\s*>.*$", re.MULTILINE)
 _INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
-
-# A backgrounded Bash command that arms the delivery-split timer.
-_SLEEP_RE = re.compile(r"\bsleep\b", re.IGNORECASE)
-
-# Tool names that also count as "timer armed" (a scheduled wakeup instead of
-# a raw `sleep`).
-_TIMER_TOOL_NAMES = {"ScheduleWakeup", "CronCreate"}
 
 _WARNING = (
     "[ask-defer-timer] This turn's text promises to ask via buttons next "
@@ -149,18 +146,6 @@ def _current_turn_entries(transcript_path: Path) -> list[dict] | None:
     return entries[boundary_idx + 1 :]
 
 
-def _assistant_tool_uses(entries: list[dict]):
-    for entry in entries:
-        if entry.get("type") != "assistant":
-            continue
-        message = entry.get("message")
-        if not isinstance(message, dict):
-            continue
-        for item in _content_items(message):
-            if isinstance(item, dict) and item.get("type") == "tool_use":
-                yield item
-
-
 def _turn_assistant_text(entries: list[dict]) -> str:
     parts = []
     for entry in entries:
@@ -186,30 +171,6 @@ def _strip_quoted(text: str) -> str:
 def has_deferral_promise(text: str) -> bool:
     stripped = _strip_quoted(text)
     return any(pattern.search(stripped) for pattern in _PROMISE_RE)
-
-
-def timer_armed(entries: list[dict]) -> bool:
-    for tool_use in _assistant_tool_uses(entries):
-        name = tool_use.get("name")
-        if name in _TIMER_TOOL_NAMES:
-            return True
-        if name != "Bash":
-            continue
-        tool_input = tool_use.get("input")
-        if not isinstance(tool_input, dict):
-            continue
-        command = tool_input.get("command")
-        if not isinstance(command, str) or not _SLEEP_RE.search(command):
-            continue
-        if tool_input.get("run_in_background") is True:
-            return True
-    return False
-
-
-def ask_already_emitted(entries: list[dict]) -> bool:
-    return any(
-        tool_use.get("name") == "AskUserQuestion" for tool_use in _assistant_tool_uses(entries)
-    )
 
 
 def should_warn(entries: list[dict]) -> bool:
