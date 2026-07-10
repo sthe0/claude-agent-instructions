@@ -48,6 +48,43 @@
 #                                          single class rather than letting it leak
 #                                          through as tracker_read's own status.
 #
+# Optional write verbs (declared only by trackers that support them):
+#   tracker_comment <key> <markdown-path>
+#                                        -> post <markdown-path>'s content as a NEW
+#                                          comment on the task (never edits the
+#                                          description). Exactly ONE degrade class,
+#                                          same shape as tracker_read: exit 0 = posted,
+#                                          ANY nonzero = not posted, reason on stderr.
+#   tracker_publish_plan <key> <toml-path> <markdown-path>
+#                                        -> publish an approved plan snapshot: an
+#                                          implementation-defined durable artifact
+#                                          holding <toml-path> BYTE-IDENTICAL to the
+#                                          input file (never re-serialized), followed
+#                                          by a NEW comment on the task containing
+#                                          <markdown-path>'s content plus a reference
+#                                          to that artifact. Exactly ONE degrade class:
+#                                          exit 0 = fully published, ANY nonzero = not
+#                                          fully published. If the artifact step
+#                                          succeeds but the comment step fails, the
+#                                          artifact's reference (e.g. its URL) MUST
+#                                          still appear in the stderr reason — a
+#                                          half-published state is never left
+#                                          unreported.
+#
+# Both write verbs are probed the same way as tracker_read (`declare -F <verb>`)
+# and follow the same confirmation-gating as tracker_create: CLAUDE_DRY_RUN performs
+# zero external effects, and CLAUDE_LAUNCH_ASSUME_YES=1 is required to proceed
+# without a prompt.
+#
+# THE ORG-NEUTRAL GUARD IS PART OF THE VERB, not of the repo lint: before ANY
+# external call, tracker_comment and tracker_publish_plan MUST run
+# scripts/check-org-neutral.py over every text input they are about to publish
+# (tracker_comment: the markdown; tracker_publish_plan: BOTH the toml and the
+# markdown) and refuse (nonzero, reason on stderr, zero external calls made) on
+# any marker hit. The one escape hatch is CLAUDE_PUBLISH_ALLOW_INTERNAL=1, which
+# only a non-Core plugin publishing to an org-internal venue may set — Core's own
+# github backend never sets it itself, since GitHub Issues is a PUBLIC venue.
+#
 # Every external tool a backend calls MUST go through a *_BIN env seam (GIT_BIN,
 # GH_BIN, …) so the hermetic tests can stub it. Backends must honour CLAUDE_DRY_RUN
 # (exported by the CLI): when set to a non-empty value they perform zero external

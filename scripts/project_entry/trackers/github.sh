@@ -15,6 +15,8 @@
 # backend is only sourced when the caller explicitly asked for a GitHub issue.
 
 GH_BIN="${GH_BIN:-gh}"
+# scripts/project_entry/trackers/github.sh -> up two levels is scripts/.
+_GH_ORGCHECK_PY="${CHECK_ORG_NEUTRAL_PY:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/check-org-neutral.py}"
 
 # kebab: lowercase, non-alnum -> '-', squeeze/trim dashes, truncate ~40 chars.
 # Uses ERE (sed -E, '+'): BSD sed (macOS) does not honor GNU's BRE '\+'.
@@ -104,4 +106,112 @@ print("\n".join(out))
     printf 'github tracker: tracker_read failed for %q (rendering error)\n' "$key" >&2
     return 1
   }
+}
+
+# _gh_orgcheck <file> [<file> ...] -> 0 if every file is clean of org-internal
+# markers (or the override is set), 1 otherwise, with the marker report on
+# stderr. Shared refusal gate for tracker_comment / tracker_publish_plan.
+_gh_orgcheck() {
+  local f report
+  for f in "$@"; do
+    report="$(python3 "$_GH_ORGCHECK_PY" "$f" 2>&1)" && continue
+    if [[ "${CLAUDE_PUBLISH_ALLOW_INTERNAL:-}" == "1" ]]; then
+      continue
+    fi
+    printf 'github tracker: refused to publish %q — org-internal markers found (set CLAUDE_PUBLISH_ALLOW_INTERNAL=1 to override):\n%s\n' \
+      "$f" "$report" >&2
+    return 1
+  done
+  return 0
+}
+
+# tracker_comment <key> <markdown-path> -> posts the file's contents as a NEW
+# issue comment; never edits the description. Optional verb: the caller
+# probes presence with `declare -F tracker_comment`. Guarded by the
+# org-neutral check on <markdown-path>, CLAUDE_DRY_RUN, and the
+# CLAUDE_LAUNCH_ASSUME_YES confirmation gate (outward-facing, irreversible).
+# Single degrade class: exit 0 = posted, ANY nonzero = not posted, reason on
+# stderr.
+tracker_comment() {
+  local key="$1" md_path="$2" rc
+
+  _gh_orgcheck "$md_path" || return 1
+
+  if [[ -n "${CLAUDE_DRY_RUN:-}" ]]; then
+    printf 'github tracker: [dry-run] would comment on %q from %q\n' "$key" "$md_path" >&2
+    return 1
+  fi
+
+  if [[ "${CLAUDE_LAUNCH_ASSUME_YES:-}" != "1" ]]; then
+    printf 'github tracker: post comment on %q from %q? set CLAUDE_LAUNCH_ASSUME_YES=1 to proceed.\n' \
+      "$key" "$md_path" >&2
+    return 1
+  fi
+
+  local -a _gh_args=(issue comment "$key" --body-file "$md_path")
+  [[ -n "${CLAUDE_TRACKER_QUEUE:-}" ]] && _gh_args+=(--repo "$CLAUDE_TRACKER_QUEUE")
+  "$GH_BIN" "${_gh_args[@]}" >/dev/null
+  rc=$?
+  if [[ $rc -ne 0 ]]; then
+    printf 'github tracker: tracker_comment failed for %q (gh issue comment exited %d)\n' "$key" "$rc" >&2
+    return 1
+  fi
+}
+
+# tracker_publish_plan <key> <toml-path> <markdown-path> -> publishes the
+# approved plan snapshot: a SECRET gist (never --public) holding <toml-path>
+# verbatim (passed by path — never re-read/re-serialized, so the published
+# bytes are byte-identical to the input file), then a NEW issue comment
+# containing <markdown-path>'s content plus the gist URL. Optional verb,
+# probed the same way. Guarded by the org-neutral check on BOTH files,
+# CLAUDE_DRY_RUN, and CLAUDE_LAUNCH_ASSUME_YES. Single degrade class: exit 0
+# = gist created AND comment posted, ANY nonzero = not fully published. A
+# comment failure AFTER a successful gist creation still surfaces as one
+# degrade, but the gist URL is reported on stderr rather than left unknown —
+# a half-published state is never left unreported.
+tracker_publish_plan() {
+  local key="$1" toml_path="$2" md_path="$3" out rc gist_url tmp_comment
+
+  _gh_orgcheck "$toml_path" "$md_path" || return 1
+
+  if [[ -n "${CLAUDE_DRY_RUN:-}" ]]; then
+    printf 'github tracker: [dry-run] would publish plan for %q (toml=%q, comment=%q)\n' \
+      "$key" "$toml_path" "$md_path" >&2
+    return 1
+  fi
+
+  if [[ "${CLAUDE_LAUNCH_ASSUME_YES:-}" != "1" ]]; then
+    printf 'github tracker: publish plan for %q (gist + comment)? set CLAUDE_LAUNCH_ASSUME_YES=1 to proceed.\n' \
+      "$key" >&2
+    return 1
+  fi
+
+  out="$("$GH_BIN" gist create "$toml_path" --desc "approved plan: $key" 2>&1)"
+  rc=$?
+  if [[ $rc -ne 0 ]]; then
+    printf 'github tracker: tracker_publish_plan failed creating the gist for %q (gh gist create exited %d): %s\n' \
+      "$key" "$rc" "$out" >&2
+    return 1
+  fi
+  gist_url="$(printf '%s\n' "$out" | grep -oE 'https://gist\.[^[:space:]]+' | tail -1)"
+  [[ -n "$gist_url" ]] || gist_url="$out"
+
+  tmp_comment="$(mktemp)" || {
+    printf 'github tracker: tracker_publish_plan created gist %s for %q but could not stage the comment (mktemp failed) — the gist is not yet linked from the task.\n' \
+      "$gist_url" "$key" >&2
+    return 1
+  }
+  cat "$md_path" >"$tmp_comment"
+  printf '\nApproved plan: %s\n' "$gist_url" >>"$tmp_comment"
+
+  local -a _gh_args=(issue comment "$key" --body-file "$tmp_comment")
+  [[ -n "${CLAUDE_TRACKER_QUEUE:-}" ]] && _gh_args+=(--repo "$CLAUDE_TRACKER_QUEUE")
+  "$GH_BIN" "${_gh_args[@]}" >/dev/null
+  rc=$?
+  rm -f "$tmp_comment"
+  if [[ $rc -ne 0 ]]; then
+    printf 'github tracker: tracker_publish_plan created gist %s for %q but failed to post the comment (gh issue comment exited %d) — the gist is not linked from the task; retry the comment manually with that URL.\n' \
+      "$gist_url" "$key" "$rc" >&2
+    return 1
+  fi
 }
