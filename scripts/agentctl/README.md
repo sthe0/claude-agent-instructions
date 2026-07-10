@@ -160,6 +160,41 @@ A third plugin, **`experience`** ([`plugins_experience.py`](plugins_experience.p
 - [`hook-memory-consistency.py`](../hook-memory-consistency.py) (`PreToolUse` Write/Edit) classifies the target as a memory leaf in any of the **three** scopes (instruction-repo `memory-global/leaves/`, project `.claude/agent-memory/`, personal `~/.claude-agent/projects/*/memory/` — the last is invisible to `verify-leaf-structure.py`) and surfaces missing/malformed frontmatter (`name`/`description`/`type`) plus an index-pointer reminder. It only informs; it never denies.
 - [`hook-experience-record-reminder.py`](../hook-experience-record-reminder.py) (`UserPromptSubmit`) reads the `experience` plugin bag and nudges to record before close — loudest at `node == RESOLUTION` (naming the exact missing phase and the `record-experience.py search …` → `plugin-record` commands), a soft nudge otherwise, silent when the flow is complete or the plugin is inactive. It mirrors `hook-tracker-publish-reminder.py`.
 
+## Loop primitives: the turn-end gate, the acceptance judge, and composition with `/goal`
+
+Three primitives adopted from Claude Code's loop taxonomy, plus one deliberately deferred. The first two are **landed mechanisms**; the third is a recorded non-decision.
+
+### The turn-end Stop gate (the exit gate)
+
+[`hook-turn-end-gate.py`](../hook-turn-end-gate.py) runs on the harness **Stop** event and is the **exit** counterpart to `hook-state-gate.py`'s **entry** gate on production edits. Its architecture mirrors `gates.py` one level up: an impure shell does all I/O and freezes a `TurnContext`; a module-level `TURN_GUARDIANS` registry maps a guardian name to a **pure** `(TurnContext) -> list[str]` function. Two guardians ship — `self_improvement_blockers` (fires on a corrective-feedback turn where neither `self-improvement` nor `overcome-difficulty` was invoked) and `resolution_turn_blockers` (fires only on a SUBSTANTIVE session whose stages are all PASSED, the resolution gate is unpassed, and the ending turn shows no closure being sought — neither an `AskUserQuestion` nor an armed `sleep >= 2` background deferral timer, the latter detected via the shared `timer_arm_detect.py` so the gate and `hook-ask-defer-timer.py` cannot drift).
+
+Three loop-safety properties live **once** in the shell, not per obligation: a `stop_hook_active` short-circuit, a durable per-message marker keyed on `sha256(session + triggering user text)` (so the same message blocks at most once), and fail-open on any malformed/empty/unreadable input. Every fired guardian is **aggregated into ONE block** whose numbered reason names each unmet obligation, so N obligations cost exactly one extra model turn. The trade this buys is stated in the hook: aggregation gives up per-obligation *enforcement* (if the model addresses only obligation 1 of 2, the second stop is allowed) in exchange for turn-boundedness — accepted because a Stop hook that can block a session more than once per message has unbounded blast radius, and because the block text names every obligation. When `self_improvement` and `resolution` co-fire, resolution is named **last** and is enforced only when it is the sole fired guardian; `hook-resolution-reminder.py` stays registered on `UserPromptSubmit` as the complementary advisory for the residual co-firing hole. `verify-agentctl.py`'s gate-to-hook check maps the resolution gate to this hook.
+
+### The acceptance-review judge
+
+For a `criterion_type = acceptance_review` stage, `record-result --status passed` invokes an external cheap judge (a fail-open `claude -p` on the small-fast tier via `advisor.subprocess_runner`) that reads the stage's expected image plus the executor's `--observation` and returns a yes/no verdict. The verdict is recorded on `SessionState` bound to `sha256(observation)` by `cmd_stage_review` (a `StageReview` dataclass), exactly as `plan_review` binds a plan review to the reviewed plan's bytes — defeating "get a pass, then rewrite the observation".
+
+The gate itself is a **pure** function, `gates.acceptance_review_blockers(state, stage)`, that reads only the recorded review — no subprocess, no LLM, no network. It refuses PASSED when the stage is `acceptance_review` and no matching review exists, the `observation_sha256` does not match, or the verdict is `revise`/unknown; a `verdict=override` clears only with a non-empty reviewer **and** note. Like `plan_review_blockers` it is an **internal command precondition and deliberately NOT a member of `gates.GUARDIANS`**, so `verify-agentctl.py`'s check needs no new hook and `gates.py` still imports no subprocess. Scoped to SUBSTANTIVE sessions with its own kill switch `AGENTCTL_STAGE_REVIEW` (not routed through the advisor's cost knob, because a mandatory gate's off switch must not be the advisor's optional one). Because the judge is fail-open (a timeout records no verdict) the **gate is fail-closed** (no verdict blocks) — an infra failure never silently passes a stage; the override escape means it can never wedge the user. That fail-open-judge / fail-closed-gate asymmetry is written into `gates.py`'s module docstring as reasoning, not merely enacted.
+
+Honest limit: unlike Anthropic's `/goal` evaluator (which the *harness* invokes and the agent cannot reach), our judge is **agent-invoked**, so `AGENTCTL_STAGE_REVIEW=0` restores "do not lie to exit" one env var away. We make the bypass impossible to take *silently* rather than impossible to take: every bypass (kill switch or override) is recorded on `SessionState.judge_bypassed`, never cleared by a later passing review, and `verify-final` refuses a clean bill without printing it — so it reaches the user's resolution confirmation instead of dying in a log.
+
+### Composition with `/goal`, and the four places this engine stays stronger
+
+`/goal` and `agentctl` are **orthogonal** and compose. `/goal` is a session-scoped prompt-based Stop hook: a small fast model evaluates a natural-language condition each turn and returns yes/no + a reason. It keeps the *session looping*; `agentctl` decides *what is legal inside that loop*. A `/goal` evaluator naturally sits as a **reader** of our `[[final_check]]` commands — it can only judge what the agent surfaced in the conversation and cannot call tools, whereas the engine **executes** those commands and checks `expected_exit`.
+
+Four properties this system must not regress toward a prompt-based loop:
+
+| Property | agentctl | prompt-based `/goal` loop |
+|---|---|---|
+| Criterion | execution-verified — `verify_command` / `final_check` with `expected_exit` | reads a *report* of a test run it cannot run |
+| Numeric bounds | checked by code (`max-recursion-depth`, `_MAX_PLAN_STACK`, budget tiers) | a turn cap living in the condition *text*, model-judged |
+| Production edits | an **entry** gate (`hook-state-gate.py`) **and** an **exit** gate (the turn-end gate) | none |
+| Divergence | a typed difficulty object (FAILED → DIAGNOSING → declare/investigate/critique → replan with a coverage gate) — the loop *learns* | repeats the same prompt |
+
+### Deferred: the time-axis scheduler primitive
+
+`/loop`'s local interval and `/schedule`'s cloud routine are **explicitly deferred, not built**. Rationale: (1) we already drive long jobs with `ScheduleWakeup` plus detached zero-token pollers per [`memory-global/leaves/long-job-monitoring.md`](../../memory-global/leaves/long-job-monitoring.md); (2) a routine that survives with no open session is a harness capability we do not currently need; (3) a scheduler would duplicate the harness rather than determinize anything of ours. Tracked so it is revisitable rather than forgotten: <!-- DEFERRAL-ISSUE --> _(pending: Core `backlog` issue on `sthe0/claude-agent-instructions`)_. If a concrete recurring need for a session-independent scheduled routine appears (a cadence `ScheduleWakeup` cannot serve), that item is where the evidence should land and reopen the decision.
+
 ## Cost tracking
 
 `record-result` attributes spawn-stage cost from `~/.local/log/claude-spawn-costs.jsonl` (written by `spawn-specialist.py`) and stamps `cost_usd / duration_ms / spawn_count` on each spawn stage's `Outcome`. In-thread and main-session tokens are **not** split per stage — use `scripts/cost-report.py` for the whole-session estimate.
