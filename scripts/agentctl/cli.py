@@ -2273,8 +2273,39 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _inject_default_session(argv: list[str], harness: str | None) -> list[str]:
+    """Return a copy of ``argv`` with ``--session <harness>`` appended when the
+    harness session id is known and the caller passed no --session of its own.
+
+    hook-state-gate.py authorizes production edits by the HARNESS conversation
+    session_id (payload["session_id"] == $CLAUDE_CODE_SESSION_ID). A self-chosen
+    --session silently drives a different engine state file than the gate reads,
+    so an omitted --session must default to the harness id — not stay unset and
+    fail the 30 required=True subcommands. Appending places the flag inside the
+    subparser's argument region (--session is a subcommand option); it is a
+    no-op when --session (either '--session X' or '--session=X') is already
+    present, or when the harness id is empty/None."""
+    if not harness:
+        return list(argv)
+    for tok in argv:
+        if tok == "--session" or tok.startswith("--session="):
+            return list(argv)
+    return list(argv) + ["--session", harness]
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    harness = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    raw = _inject_default_session(
+        list(sys.argv[1:] if argv is None else argv), harness
+    )
+    args = build_parser().parse_args(raw)
+    if harness and getattr(args, "session", None) and args.session != harness:
+        print(
+            f"agentctl: warning: --session {args.session!r} differs from "
+            f"CLAUDE_CODE_SESSION_ID {harness!r}; the production-edit gate "
+            f"authorizes by the harness id, so gated edits may be denied.",
+            file=sys.stderr,
+        )
     store = FileStateStore(Path(args.state_root) if args.state_root else None)
     fn = COMMANDS[args.command]
     try:

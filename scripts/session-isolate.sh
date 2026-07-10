@@ -22,13 +22,13 @@
 #
 # Honors CLAUDE_DRY_RUN: when set, backend_ensure_workspace performs zero
 # mutating git calls (see backends/git.sh) and this script creates nothing on
-# disk. The session's scope re-registration always runs when CLAUDE_SESSION_ID
+# disk. The session's scope re-registration always runs when CLAUDE_CODE_SESSION_ID
 # is set — it is local bookkeeping under ~/.claude/agentctl/scopes (the same
 # family as agentctl's own state store), not a mutation of the task's tree, and
 # recording it is the entire point of the dry-run check: proving the detector
 # would see the isolated root.
 #
-# Reads CLAUDE_SESSION_ID for the session to re-register (same seam
+# Reads CLAUDE_CODE_SESSION_ID for the session to re-register (same seam
 # spawn-specialist.py uses to pass session_id through).
 #
 # Prints the new workspace directory as the FINAL stdout line; progress and the
@@ -97,7 +97,7 @@ fi
 # Always runs (dry-run or not) when a session id is known: it is what makes the
 # isolation immediately visible to the conflict detector, and it never touches
 # the caller's git branch/worktree/index.
-session_id="${CLAUDE_SESSION_ID:-}"
+session_id="${CLAUDE_CODE_SESSION_ID:-}"
 if [[ -n "$session_id" ]]; then
   PYTHONPATH="$_SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" python3 -c '
 import sys
@@ -107,7 +107,7 @@ registry.set_context(session_id, project_dir, project_dir, vcs)
 ' "$session_id" "$project_dir" "$ws_name" \
     || log "session-isolate: warning: could not re-register scope for session $session_id"
 else
-  log "session-isolate: CLAUDE_SESSION_ID not set; skipping scope re-registration" \
+  log "session-isolate: CLAUDE_CODE_SESSION_ID not set; skipping scope re-registration" \
       "(the conflict detector will keep seeing the OLD root until this session's next heartbeat)"
 fi
 

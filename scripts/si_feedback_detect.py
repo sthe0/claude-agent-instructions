@@ -36,6 +36,24 @@ from __future__ import annotations
 
 import re
 
+# Harness-injected context (recalled memory, the skill list, the CLAUDE.md dump)
+# rides inside <system-reminder>...</system-reminder> spans of the same user
+# message the human authored. Those spans mention "self-improvement" many times
+# as background — matching them would fire Tier 1 on injected context, not on
+# user feedback, and falsely block the turn. Excise the spans before detection.
+_SYSTEM_REMINDER_RE = re.compile(
+    r"<system-reminder>.*?</system-reminder>", re.DOTALL | re.IGNORECASE
+)
+
+
+def strip_injected_context(text: str) -> str:
+    """Remove harness-injected ``<system-reminder>`` spans from ``text``.
+
+    Only the human-authored remainder should feed the feedback detector.
+    """
+    return _SYSTEM_REMINDER_RE.sub(" ", text)
+
+
 # Tier 1 — explicit self-improvement mention (any spacing/hyphenation variant)
 _TIER1_RE = re.compile(r"self.?improvement", re.IGNORECASE | re.UNICODE)
 
@@ -89,6 +107,10 @@ def find_signals(prompt: str) -> list[str]:
     """
     if not isinstance(prompt, str) or not prompt:
         return []
+
+    # Strip harness-injected context first — only the human-authored text
+    # should drive feedback detection (see _SYSTEM_REMINDER_RE above).
+    prompt = strip_injected_context(prompt)
 
     # Tier 1 — explicit self-improvement mention
     if _TIER1_RE.search(prompt):

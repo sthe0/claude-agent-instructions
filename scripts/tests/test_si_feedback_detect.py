@@ -72,3 +72,46 @@ def test_tier2b_needs_agent_ref():
 def test_non_string_input_is_safe():
     assert _mod.find_signals(None) == []  # type: ignore[arg-type]
     assert _mod.find_signals(123) == []  # type: ignore[arg-type]
+
+
+def test_system_reminder_span_is_excised():
+    # A single injected span that mentions self-improvement must NOT fire.
+    injected = (
+        "<system-reminder>Remember to run self-improvement when the user "
+        "corrects behavior.</system-reminder> ok thanks"
+    )
+    assert _mod.find_signals(injected) == []
+
+
+def test_multiline_system_reminder_span_is_excised():
+    injected = (
+        "<system-reminder>\nSkill: self-improvement\nUse the self improvement "
+        "skill on feedback.\n</system-reminder>\nlooks good, ship it"
+    )
+    assert _mod.find_signals(injected) == []
+
+
+def test_multiple_reminder_spans_excised_but_human_text_still_scanned():
+    # Two injected spans wrap genuine user feedback — the feedback must survive.
+    text = (
+        "<system-reminder>self-improvement context A</system-reminder>"
+        "did you run self-improvement on this?"
+        "<system-reminder>self-improvement context B</system-reminder>"
+    )
+    assert _mod.find_signals(text) == ["explicit self-improvement mention"]
+
+
+def test_reminder_excision_does_not_suppress_human_tier2():
+    text = (
+        "<system-reminder>self-improvement skill list</system-reminder>"
+        " you shouldn't have pushed"
+    )
+    assert _mod.find_signals(text)
+
+
+def test_strip_injected_context_helper():
+    assert (
+        _mod.strip_injected_context("<system-reminder>x</system-reminder>ab").strip()
+        == "ab"
+    )
+    assert _mod.strip_injected_context("plain text") == "plain text"
