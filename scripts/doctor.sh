@@ -146,6 +146,21 @@ if [[ "$_resolved_tr" != "none" ]]; then
   fi
 fi
 
+# 6c. Soft: `gh` (GitHub CLI) — the transport behind the `github` tracker
+#     backend's tracker_read / tracker_comment / tracker_publish_plan verbs.
+#     Warn-only: a missing or unauthenticated gh degrades those verbs to their
+#     single nonzero class (registry.sh's presence-probe contract) — the
+#     launchers and opening.py run fine without it.
+if command -v gh >/dev/null 2>&1; then
+  if gh auth status >/dev/null 2>&1; then
+    pass "dependency 'gh' found and authenticated ($(command -v gh))"
+  else
+    warn "gh (GitHub CLI) found but not authenticated — run: gh auth login"
+  fi
+else
+  warn "gh (GitHub CLI) not found — install it for tracker_read/tracker_comment/tracker_publish_plan (see docs/operations/setup.md)"
+fi
+
 # 7. Soft: is the isolated system root logged in? Auth is per-config-root and by
 #    policy no credential is copied/symlinked into it, so the root needs its own
 #    one-time login. The CLI records a completed login as an "oauthAccount" block

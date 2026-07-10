@@ -43,6 +43,7 @@ _KNOWN_FIELDS = (
     "workspace_backend",   # optional backend NAME
     "tracker_backend",     # tracker backend NAME
     "tracker_queue",       # queue the tracker creates tasks in
+    "opening_prompt_path", # optional override of opening-prompt.md's location
 )
 
 # Each merged record carries its key under this reserved field.

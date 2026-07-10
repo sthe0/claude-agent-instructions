@@ -14,8 +14,8 @@
 CLAUDE.md:147  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
 README.md:5  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
 README.md:37  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-README.md:67  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-README.md:118  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+README.md:69  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+README.md:122  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
 docs/migrations/2026-05-collapse-manager-memory.md:5  # keep:migration-doc — migration doc — describes the legacy layout by nature
 docs/migrations/2026-05-collapse-manager-memory.md:13  # keep:migration-doc — migration doc — describes the legacy layout by nature
 docs/migrations/2026-05-collapse-manager-memory.md:14  # keep:migration-doc — migration doc — describes the legacy layout by nature
@@ -41,13 +41,13 @@ docs/migrations/README.md:3  # keep:migration-doc — migration doc — describe
 docs/migrations/README.md:5  # keep:migration-doc — migration doc — describes the legacy layout by nature
 docs/operations/git-workflow.md:13  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
 docs/operations/org-portability.md:35  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-docs/operations/org-portability.md:58  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-docs/operations/org-portability.md:62  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-docs/operations/setup.md:31  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-docs/operations/setup.md:33  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-docs/operations/setup.md:36  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-docs/operations/setup.md:41  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-docs/operations/setup.md:51  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+docs/operations/org-portability.md:66  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+docs/operations/org-portability.md:70  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+docs/operations/setup.md:35  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+docs/operations/setup.md:37  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+docs/operations/setup.md:40  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+docs/operations/setup.md:45  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+docs/operations/setup.md:55  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
 memory-global/MEMORY.md:54  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 memory-global/leaves/claude-code-settings-env-precedence.md:35  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 memory-global/leaves/coordinator-pitfalls.md:29  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)

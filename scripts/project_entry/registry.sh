@@ -33,6 +33,21 @@
 #                                          target queue from $CLAUDE_TRACKER_QUEUE (set by
 #                                          enter-task.sh from the resolved project record)
 #
+# Optional read verb (declared only by trackers that support it):
+#   tracker_read <key>                  -> print a flat, backend-agnostic rendering
+#                                          of the task (title / status / author /
+#                                          description / comments) on stdout;
+#                                          read-only, no side effects. The caller
+#                                          probes presence with `declare -F tracker_read`
+#                                          before calling and never invokes it on a
+#                                          backend that omits it. Exactly ONE degrade
+#                                          class: exit 0 = rendered ok, ANY nonzero =
+#                                          unavailable, with the human-readable reason
+#                                          on stderr. An implementation MUST normalize
+#                                          every downstream tool's exit code into that
+#                                          single class rather than letting it leak
+#                                          through as tracker_read's own status.
+#
 # Every external tool a backend calls MUST go through a *_BIN env seam (GIT_BIN,
 # GH_BIN, …) so the hermetic tests can stub it. Backends must honour CLAUDE_DRY_RUN
 # (exported by the CLI): when set to a non-empty value they perform zero external

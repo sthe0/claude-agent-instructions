@@ -4,6 +4,8 @@
 # Stubs:
 #   CLAUDE_AUTH_PROFILE_DIR  -> temp dir with stub eliza/team/personal profiles
 #   ENTER_TASK_BIN           -> stub enter-task.sh (echoes a canned dir)
+#   OPENING_BIN              -> stub opening.py (default: exit 3, suppressed —
+#                               keeps every pre-existing case hermetic)
 #   claude binary            -> stub in $TMP added to PATH front (records env/args)
 #
 # No real enter-task/claude/git is called. Exit 0 on all-pass.
@@ -51,6 +53,17 @@ SCRIPT
 chmod +x "$FAKE_ET"
 export ENTER_TASK_BIN="$FAKE_ET"
 
+# ── Stub opening.py ──────────────────────────────────────────────────────────
+# Default: suppressed (exit 3, no stdout) so pre-existing --key/--new cases —
+# which never anticipated an opening dialogue — stay unaffected.
+FAKE_OPENING="$TMP/fake-opening.sh"
+cat >"$FAKE_OPENING" <<'SCRIPT'
+#!/usr/bin/env bash
+exit 3
+SCRIPT
+chmod +x "$FAKE_OPENING"
+export OPENING_BIN="$FAKE_OPENING"
+
 # ── Stub claude binary ───────────────────────────────────────────────────────
 # command claude bypasses functions, so we provide a real binary at front of PATH.
 export CLAUDE_ENV_RECORDED="$TMP/claude-env.log"
@@ -61,7 +74,14 @@ FAKE_CLAUDE="$TMP/claude"
 cat >"$FAKE_CLAUDE" <<'SCRIPT'
 #!/usr/bin/env bash
 env >> "$CLAUDE_ENV_RECORDED"
-printf '%s\n' "$*" >> "$CLAUDE_ARGS"
+# NUL-delimited: a space-joined "$*" can't distinguish "one arg with a space"
+# from "two args", and breaks entirely on an arg containing a newline (a real
+# opening prompt can be multi-line).
+# printf still runs its format once with an empty conversion when given zero
+# data args, so guard on $# or a zero-arg call phantom-records one empty entry.
+if [ "$#" -gt 0 ]; then
+  printf '%s\0' "$@" >> "$CLAUDE_ARGS"
+fi
 SCRIPT
 chmod +x "$FAKE_CLAUDE"
 # Prepend TMP so command claude finds the stub.
@@ -78,6 +98,15 @@ source "$SCRIPTS_DIR/claude-launchers.sh"
 # ── Helper: reset per-test log files ─────────────────────────────────────────
 reset_logs() {
   : >"$ET_CALLS" >"$CLAUDE_ENV_RECORDED" >"$CLAUDE_ARGS" >"$ONBOARD_LOG"
+}
+
+# ── Helper: read the NUL-delimited CLAUDE_ARGS log into _CLAUDE_ARGV ─────────
+_claude_argv() {
+  _CLAUDE_ARGV=()
+  local _item
+  while IFS= read -r -d '' _item; do
+    _CLAUDE_ARGV+=("$_item")
+  done <"$CLAUDE_ARGS"
 }
 
 # ── Onboard global setup — empty hook dir so existing tests are unaffected ───
@@ -178,7 +207,7 @@ fi
 printf '\n--- dry-run output format ---\n'
 reset_logs
 out="$(CLAUDE_LAUNCH_DRYRUN=1 claude-task DEEPAGENT-1 2>/dev/null)"
-if [[ "$out" == "enter=${ET_DIR} profile=default" ]]; then
+if [[ "$out" == "enter=${ET_DIR} profile=default config=${CLAUDE_AGENT_HOME:-$HOME/.claude-agent}" ]]; then
   ok "claude-task dry-run format correct"
 else
   fail "claude-task dry-run format wrong (got: '$out')"
@@ -186,7 +215,7 @@ fi
 
 reset_logs
 out="$(CLAUDE_LAUNCH_DRYRUN=1 claude-team DEEPAGENT-1 2>/dev/null)"
-if [[ "$out" == "enter=${ET_DIR} profile=team" ]]; then
+if [[ "$out" == "enter=${ET_DIR} profile=team config=${CLAUDE_AGENT_HOME:-$HOME/.claude-agent}" ]]; then
   ok "claude-team dry-run format correct"
 else
   fail "claude-team dry-run format wrong (got: '$out')"
@@ -270,10 +299,11 @@ if [[ -s "$ET_CALLS" ]]; then
 else
   ok "claude-task -c: enter-task not called (flag passthrough)"
 fi
-if grep -qx -- '-c' "$CLAUDE_ARGS"; then
+_claude_argv
+if [[ "${#_CLAUDE_ARGV[@]}" -eq 1 && "${_CLAUDE_ARGV[0]}" == "-c" ]]; then
   ok "claude-task -c: -c forwarded to claude"
 else
-  fail "claude-task -c: -c not forwarded (args: $(cat "$CLAUDE_ARGS"))"
+  fail "claude-task -c: -c not forwarded (args: ${_CLAUDE_ARGV[*]:-<empty>})"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -586,7 +616,7 @@ mkdir -p "$INIT_TMP"
 reset_logs
 _init_out="$(CLAUDE_PROJECT_INIT_BASE="$INIT_TMP" CLAUDE_LAUNCH_DRYRUN=1 \
   CLAUDE_SKIP_ONBOARD=1 claude-task --init demo 2>/dev/null)"
-if [[ "$_init_out" == "enter=${ET_DIR} profile=default" ]]; then
+if [[ "$_init_out" == "enter=${ET_DIR} profile=default config=${CLAUDE_AGENT_HOME:-$HOME/.claude-agent}" ]]; then
   ok "--init dry-run: output is enter=<stub-dir> profile=default"
 else
   fail "--init dry-run: wrong output (got: '$_init_out')"
@@ -617,6 +647,161 @@ if [[ -s "$ET_CALLS" ]]; then
   fail "--init without name: should NOT call enter-task"
 else
   ok "--init without name: enter-task not called"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Test 14 — dry-run argv= diagnostic line lands on stderr, stdout unchanged
+# ═══════════════════════════════════════════════════════════════════════════
+printf '\n--- dry-run argv= diagnostic (stderr only) ---\n'
+FAKE_OPENING_PROMPT="$TMP/fake-opening-prompt.sh"
+cat >"$FAKE_OPENING_PROMPT" <<'SCRIPT'
+#!/usr/bin/env bash
+printf 'ticket:\n  some ticket text\nartifacts: (none)\nmode: opening\n'
+exit 0
+SCRIPT
+chmod +x "$FAKE_OPENING_PROMPT"
+
+reset_logs
+_s4_out="$TMP/stage4-stdout.txt"
+_s4_err="$TMP/stage4-stderr.txt"
+OPENING_BIN="$FAKE_OPENING_PROMPT" CLAUDE_LAUNCH_DRYRUN=1 \
+  claude-task ABC-123 -c >"$_s4_out" 2>"$_s4_err" || true
+_s4_expected_out="enter=${ET_DIR} profile=default config=${CLAUDE_AGENT_HOME:-$HOME/.claude-agent}"
+if [[ "$(cat "$_s4_err")" == "argv=<prompt> -c" && "$(cat "$_s4_out")" == "$_s4_expected_out" ]]; then
+  ok "dryrun:argv-line-on-stderr"
+else
+  fail "dryrun:argv-line-on-stderr (stdout: $(cat "$_s4_out"), stderr: $(cat "$_s4_err"))"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Test 15 — opening prompt: exact argv composition at the real exec point
+# ═══════════════════════════════════════════════════════════════════════════
+printf '\n--- opening prompt: exact argv composition ---\n'
+
+# _make_opening_stub <stub_path> <text_file> <exit_code>
+# Writes an OPENING_BIN replacement that cats <text_file> (verbatim, including
+# any embedded spaces/newlines) to stdout, then exits <exit_code>.
+_make_opening_stub() {
+  local _stub="$1" _textfile="$2" _rc="$3"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'cat %q\n' "$_textfile"
+    printf 'exit %s\n' "$_rc"
+  } >"$_stub"
+  chmod +x "$_stub"
+}
+
+# _assert_claude_argv <label> [expected_arg]...
+# Compares the composed claude argv against the expected list ELEMENT-WISE
+# (never by substring) via the NUL-delimited CLAUDE_ARGS log.
+_assert_claude_argv() {
+  local _label="$1"; shift
+  _claude_argv
+  if [[ "${#_CLAUDE_ARGV[@]}" -eq "$#" ]]; then
+    local _i=0 _mismatch=0 _exp
+    for _exp in "$@"; do
+      [[ "${_CLAUDE_ARGV[_i]}" == "$_exp" ]] || _mismatch=1
+      ((_i++))
+    done
+    if [[ "$_mismatch" -eq 0 ]]; then
+      ok "$_label"
+      return
+    fi
+  fi
+  fail "$_label (got: ${_CLAUDE_ARGV[*]:-<empty>}; want: $*)"
+}
+
+OPEN_TEXT="$TMP/opening-text"
+
+# opening:key-injects — a --key spec composes the prompt as a single argv element
+reset_logs
+printf 'PROMPT-KEY' >"$OPEN_TEXT.key"
+_make_opening_stub "$TMP/opening-key.sh" "$OPEN_TEXT.key" 0
+OPENING_BIN="$TMP/opening-key.sh" claude-task ABC-123 2>/dev/null || true
+_assert_claude_argv "opening:key-injects" "PROMPT-KEY"
+
+# opening:new-injects — a --new spec composes the prompt too
+reset_logs
+printf 'PROMPT-NEW' >"$OPEN_TEXT.new"
+_make_opening_stub "$TMP/opening-new.sh" "$OPEN_TEXT.new" 0
+OPENING_BIN="$TMP/opening-new.sh" CLAUDE_LAUNCH_ASSUME_YES=1 \
+  claude-task --new 'Some Title' </dev/null 2>/dev/null || true
+_assert_claude_argv "opening:new-injects" "PROMPT-NEW"
+
+# opening:name-suppressed — a plain --name spec never invokes OPENING_BIN
+reset_logs
+printf 'SHOULD-NOT-APPEAR' >"$OPEN_TEXT.leak1"
+_make_opening_stub "$TMP/opening-leak1.sh" "$OPEN_TEXT.leak1" 0
+OPENING_BIN="$TMP/opening-leak1.sh" claude-task myfeature 2>/dev/null || true
+_assert_claude_argv "opening:name-suppressed"
+
+# opening:init-suppressed — --init never invokes OPENING_BIN
+reset_logs
+printf 'SHOULD-NOT-APPEAR' >"$OPEN_TEXT.leak2"
+_make_opening_stub "$TMP/opening-leak2.sh" "$OPEN_TEXT.leak2" 0
+OPENING_BIN="$TMP/opening-leak2.sh" CLAUDE_PROJECT_INIT_BASE="$INIT_TMP" \
+  claude-task --init demo 2>/dev/null || true
+_assert_claude_argv "opening:init-suppressed"
+
+# opening:no-flag-suppresses — --no-opening overrides a --key spec's default-on
+reset_logs
+printf 'SHOULD-NOT-APPEAR' >"$OPEN_TEXT.leak3"
+_make_opening_stub "$TMP/opening-leak3.sh" "$OPEN_TEXT.leak3" 0
+OPENING_BIN="$TMP/opening-leak3.sh" claude-task --no-opening ABC-123 2>/dev/null || true
+_assert_claude_argv "opening:no-flag-suppresses"
+
+# opening:env-off-suppresses — CLAUDE_OPENING=off overrides a --key spec's default-on
+reset_logs
+printf 'SHOULD-NOT-APPEAR' >"$OPEN_TEXT.leak4"
+_make_opening_stub "$TMP/opening-leak4.sh" "$OPEN_TEXT.leak4" 0
+CLAUDE_OPENING=off OPENING_BIN="$TMP/opening-leak4.sh" claude-task ABC-123 2>/dev/null || true
+_assert_claude_argv "opening:env-off-suppresses"
+
+# opening:inplace-untouched — the in-place (no-spec) path never reaches opening logic
+reset_logs
+printf 'SHOULD-NOT-APPEAR' >"$OPEN_TEXT.leak5"
+_make_opening_stub "$TMP/opening-leak5.sh" "$OPEN_TEXT.leak5" 0
+OPENING_BIN="$TMP/opening-leak5.sh" claude-task -c 2>/dev/null || true
+_assert_claude_argv "opening:inplace-untouched" "-c"
+
+# opening:user-flags-order-preserved — prompt precedes forwarded flags, in order
+# (this is the mutation-proof case: swapping the exec point's prompt/cargs
+# order must turn this RED).
+reset_logs
+printf 'PROMPT-ORDER' >"$OPEN_TEXT.order"
+_make_opening_stub "$TMP/opening-order.sh" "$OPEN_TEXT.order" 0
+OPENING_BIN="$TMP/opening-order.sh" claude-task ABC-123 --model haiku -c 2>/dev/null || true
+_assert_claude_argv "opening:user-flags-order-preserved" "PROMPT-ORDER" "--model" "haiku" "-c"
+
+# opening:prompt-with-space-and-newline — a multi-line, space-containing prompt
+# still arrives as exactly ONE argv element. This is the recorder-upgrade
+# control: a single-token stub prompt would look identical under the old
+# space-joined "$*" recorder, hiding the exact defect this stage fixes.
+reset_logs
+printf 'hello world\nsecond line has spaces too' >"$OPEN_TEXT.multiline"
+_make_opening_stub "$TMP/opening-multiline.sh" "$OPEN_TEXT.multiline" 0
+OPENING_BIN="$TMP/opening-multiline.sh" claude-task ABC-123 -c 2>/dev/null || true
+_assert_claude_argv "opening:prompt-with-space-and-newline" \
+  "$(printf 'hello world\nsecond line has spaces too')" "-c"
+
+# opening:crash-suppresses-loudly — opening.py's own internal crash (exit 7,
+# neither 0 nor the suppressed-exit 3): prompt suppressed, one stderr warning
+# names the exit code, but the launch still proceeds to claude.
+reset_logs
+FAKE_OPENING_CRASH="$TMP/opening-crash.sh"
+cat >"$FAKE_OPENING_CRASH" <<'SCRIPT'
+#!/usr/bin/env bash
+exit 7
+SCRIPT
+chmod +x "$FAKE_OPENING_CRASH"
+_se_crash="$TMP/stderr-crash.txt"
+OPENING_BIN="$FAKE_OPENING_CRASH" claude-task ABC-123 -c 2>"$_se_crash" || true
+_claude_argv
+if [[ "${#_CLAUDE_ARGV[@]}" -eq 1 && "${_CLAUDE_ARGV[0]}" == "-c" ]] \
+  && grep -q 'opening.py exited 7' "$_se_crash"; then
+  ok "opening:crash-suppresses-loudly"
+else
+  fail "opening:crash-suppresses-loudly (argv: ${_CLAUDE_ARGV[*]:-<empty>}, stderr: $(cat "$_se_crash"))"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════

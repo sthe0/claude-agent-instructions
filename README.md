@@ -38,6 +38,8 @@ The instructions are layered by scope. The **root** (this repo) defines the **un
 
 **Requirements** — `doctor.sh` **fails** (not just warns) if any is missing: **Claude Code ≥ 2.0.20** (the system is skill/plugin/hook-driven; the Skill tool landed in 2.0.20, so that is the floor), plus **git** and **python3** on `PATH` (needed by the launchers, the `agentctl` engine, and the git workflow).
 
+**Optional: `gh` (GitHub CLI)** — the transport behind the `github` tracker backend's `tracker_read` / `tracker_comment` / `tracker_publish_plan` verbs (reading ticket context, posting comments, publishing approved plans). `doctor.sh` **warns**, not fails, when it's missing or unauthenticated — install it, then `gh auth login`. See [docs/operations/setup.md](docs/operations/setup.md).
+
 ### Fastest path — one command
 
 ```bash
@@ -102,6 +104,8 @@ claude-task <name>               # named scratch workspace (no tracker)
 ```
 
 The bare `cd ~/my-project && claude` flow still works — `claude-task` is an optional shortcut. It selects a **workspace** backend (`git` worktree by default; `arc` mount where present) and a **tracker** backend (GitHub Issues by default), auto-detected and overridable; auth variants `claude-<profile>` (e.g. `claude-team`) are the same entry on a machine-local auth profile. Backend/registry detail: [docs/operations/setup.md](docs/operations/setup.md#starting-a-task-with-claude-task) and [docs/operations/org-portability.md](docs/operations/org-portability.md).
+
+`claude-task` / `claude-team` also give the agent the first turn: it reads whatever ticket context and prior plan/branch/comment artifacts already exist and either opens a requirements dialogue or resumes in-flight work without re-asking what's already settled — see [docs/operations/setup.md § The opening dialogue](docs/operations/setup.md#the-opening-dialogue).
 
 ## Pointers
 

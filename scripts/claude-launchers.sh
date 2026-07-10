@@ -22,11 +22,14 @@
 #
 # Env seams for tests:
 #   ENTER_TASK_BIN          override the enter-task.sh path (default: co-located script)
+#   OPENING_BIN             override the opening.py path (default: co-located project_entry/opening.py)
 #   CLAUDE_AUTH_PROFILE_DIR override the profile dir (consumed by auth-profiles.sh)
 #   CLAUDE_LAUNCH_DRYRUN    set to any non-empty value to engage dry-run mode
 #   CLAUDE_ONBOARD_HOOK_DIR override the onboard hook dir (default: ~/.config/claude/onboard.d)
 #   CLAUDE_SKIP_ONBOARD     set to any non-empty value to skip the init probe
 #   CLAUDE_ONBOARD_BIN      override the onboard.sh path (default: co-located onboard.sh)
+#   CLAUDE_OPENING          off|on — force-suppress or force-enable the opening dialogue
+#                           (--no-opening / --opening on the command line take precedence)
 
 # Self-locate: Core scripts/ dir (where enter-task.sh and project_entry/ live).
 _LAUNCHERS_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
@@ -45,6 +48,9 @@ source "$_LAUNCHERS_SCRIPTS_DIR/project_entry/projects.sh"
 
 # enter-task binary; ENTER_TASK_BIN overrides for tests.
 _LAUNCHERS_ENTER_TASK="${ENTER_TASK_BIN:-$_LAUNCHERS_SCRIPTS_DIR/enter-task.sh}"
+
+# opening-dialogue binary; OPENING_BIN overrides for tests.
+OPENING_BIN="${OPENING_BIN:-$_LAUNCHERS_SCRIPTS_DIR/project_entry/opening.py}"
 
 # ── Self-init probe ────────────────────────────────────────────────────────────
 # Probes machine-local onboard.d hooks for --needs-init and runs onboard when
@@ -121,6 +127,7 @@ _dispatch_with_profile() {
   local _tok="${1:-}"
   local _cmd; [[ "$_profile" == "default" ]] && _cmd="claude-task" || _cmd="claude-$_profile"
   local -a _spec _cargs=() _pass=()
+  local _opening_flag=""
 
   _maybe_onboard
 
@@ -140,14 +147,21 @@ _dispatch_with_profile() {
   # --tracker) BEFORE classifying the task token, so e.g.
   # `claude-personal --project robot/deepagent --new "Title"` forwards --project
   # instead of the classifier swallowing it as part of --new's positional args.
-  while [[ "${1:-}" == "--project" || "${1:-}" == "--workspace" || "${1:-}" == "--tracker" ]]; do
-    local _mflag="$1"
-    if [[ -z "${2:-}" ]]; then
-      printf '%s: %s needs a value\n' "$_cmd" "$_mflag" >&2
-      return 1
-    fi
-    _pass+=("$_mflag" "$2")
-    shift 2
+  while [[ "${1:-}" == "--project" || "${1:-}" == "--workspace" || "${1:-}" == "--tracker" || \
+           "${1:-}" == "--no-opening" || "${1:-}" == "--opening" ]]; do
+    case "$1" in
+      --project|--workspace|--tracker)
+        local _mflag="$1"
+        if [[ -z "${2:-}" ]]; then
+          printf '%s: %s needs a value\n' "$_cmd" "$_mflag" >&2
+          return 1
+        fi
+        _pass+=("$_mflag" "$2")
+        shift 2
+        ;;
+      --no-opening) _opening_flag="off"; shift ;;
+      --opening)    _opening_flag="on";  shift ;;
+    esac
   done
   _tok="${1:-}"
 
@@ -196,6 +210,33 @@ _dispatch_with_profile() {
     _spec=(--name "$_tok"); shift; _cargs=("$@")
   fi
 
+  # --no-opening/--opening only make sense BEFORE the task token (the
+  # pre-token loop above); one that lands after it is a user mistake, not a
+  # claude flag to forward — reject with a usage hint instead of silently
+  # passing it through to claude.
+  local _oc
+  for _oc in ${_cargs[@]+"${_cargs[@]}"}; do
+    case "$_oc" in
+      --opening|--no-opening)
+        printf '%s: %s must precede the task (e.g. "%s %s <task>"), not follow it\n' \
+          "$_cmd" "$_oc" "$_cmd" "$_oc" >&2
+        return 1
+        ;;
+    esac
+  done
+
+  # Resolve whether the opening dialogue fires. Default ON for --key/--new,
+  # OFF for --name/--init (a nameless scratch workspace has no task to read).
+  # CLAUDE_OPENING=off, then --no-opening, suppress it; --opening forces it
+  # on, taking final precedence over both.
+  local _opening_on=""
+  case "${_spec[0]:-}" in
+    --key|--new) _opening_on=1 ;;
+  esac
+  [[ "${CLAUDE_OPENING:-}" == "off" ]] && _opening_on=""
+  [[ "$_opening_flag" == "off" ]] && _opening_on=""
+  [[ "$_opening_flag" == "on" ]] && _opening_on=1
+
   # --new is an irreversible tracker write. enter-task guards it behind
   # CLAUDE_LAUNCH_ASSUME_YES=1; confirm interactively (or honor a pre-set gate /
   # non-interactive abort) and forward the gate so the create can proceed.
@@ -243,9 +284,43 @@ _dispatch_with_profile() {
   fi
   rm -f "$_errfile"
 
+  # Compose the opening-dialogue prompt (agent-takes-first-turn). Suppressed
+  # (exit 3) yields no prompt; any OTHER nonzero is an internal opening.py
+  # failure — never conflate the two, and never fail the launch over it.
+  local _prompt=""
+  if [[ -n "$_opening_on" ]]; then
+    local -a _opening_args=()
+    case "${_spec[0]:-}" in
+      --key)                 _opening_args=(--key "${_spec[1]}") ;;
+      --new|--name|--init)   _opening_args=(--title "${_spec[1]}") ;;
+    esac
+    if [[ ${#_opening_args[@]} -gt 0 ]]; then
+      local _opening_rc=0
+      if [[ -n "${CLAUDE_LAUNCH_DRYRUN:-}" ]]; then
+        _prompt="$(CLAUDE_DRY_RUN=1 "$OPENING_BIN" emit --dir "$_dir" "${_opening_args[@]}")"
+      else
+        _prompt="$("$OPENING_BIN" emit --dir "$_dir" "${_opening_args[@]}")"
+      fi
+      _opening_rc=$?
+      case "$_opening_rc" in
+        0) : ;;
+        3) _prompt="" ;;
+        *)
+          _prompt=""
+          printf '%s: opening.py exited %d — opening dialogue disabled for this launch\n' \
+            "$_cmd" "$_opening_rc" >&2
+          ;;
+      esac
+    fi
+  fi
+
   # Dry-run: report the resolved dir and profile, then return without cd or launch.
   if [[ -n "${CLAUDE_LAUNCH_DRYRUN:-}" ]]; then
     printf 'enter=%s profile=%s config=%s\n' "$_dir" "$_profile" "$CLAUDE_AGENT_HOME"
+    # argv= is a diagnostic only, stderr-only, and never the real prompt text
+    # (a literal <prompt> placeholder avoids coupling to the template and a
+    # multi-line prompt shattering this one-line report).
+    printf 'argv=%s%s\n' "${_prompt:+<prompt> }" "${_cargs[@]+${_cargs[*]}}" >&2
     return 0
   fi
 
@@ -255,7 +330,8 @@ _dispatch_with_profile() {
   # why a VAR=val prefix on the _auth_apply function call is not portable).
   _auth_apply "$_profile" -- \
     env CLAUDE_CONFIG_DIR="$CLAUDE_AGENT_HOME" \
-    bash -c 'cd "$1" && shift && command claude "$@"' -- "$_dir" ${_cargs[@]+"${_cargs[@]}"}
+    bash -c 'cd "$1" && shift && command claude "$@"' -- \
+    "$_dir" ${_prompt:+"$_prompt"} ${_cargs[@]+"${_cargs[@]}"}
 }
 
 # ── claude-task (default auth profile) ───────────────────────────────────────

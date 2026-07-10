@@ -9,6 +9,10 @@ Before wiring Core on a new machine, confirm the prerequisites — `doctor.sh` c
 - **Claude Code ≥ 2.0.20** — the system is skill-driven and uses plugins + hooks; per the Claude Code changelog the Skill tool landed in **2.0.20** and the plugin system in 2.0.12, so 2.0.20 is the binding floor. `doctor.sh` parses `claude --version` and reports `[FAIL]` below it; override the floor for tests with the `CLAUDE_MIN_VERSION` env var.
 - **git** and **python3** on `PATH` — the launchers, the `agentctl` engine, and the git workflow all need them.
 
+Optional, warn-only (`doctor.sh` reports `[WARN]`, never `[FAIL]`, when absent):
+
+- **gh (GitHub CLI)**, authenticated (`gh auth login`) — the transport behind the `github` tracker backend's `tracker_read` / `tracker_comment` / `tracker_publish_plan` verbs (reading a ticket's title/status/comments, posting a comment, publishing an approved plan). A missing or unauthenticated `gh` degrades those verbs to their single nonzero class — `opening.py` and the launchers still run; only the ticket-reading and plan-publishing steps are skipped. Install via your platform's package manager (e.g. `brew install gh`, `apt install gh`), then `gh auth login`.
+
 ## Initial setup
 
 ```bash
@@ -109,6 +113,21 @@ The wrapper resolves the issue, creates an isolated working copy (`git worktree`
 - `tracker_backend` — issue source (`github` by default)
 
 Core ships the `git`/`github` defaults and the `default` auth profile; specialized backends install automatically from workspace storage. See [org-portability.md](org-portability.md) for the opt-in surface.
+
+### The opening dialogue
+
+`claude-task` and `claude-team` inject a first-turn prompt before `claude` starts, so the agent — not the user — opens the session. `opening.py` composes the prompt from whatever already exists for the task, and the template (`scripts/project_entry/opening-prompt.md`, overridable per project via the registry field `opening_prompt_path`) branches on a mechanized `mode:` verdict:
+
+- **`mode: opening`** — no prior agent work is found. The agent digests whatever ticket context exists and elicits the missing requirements from the user until the task is formulated and the result image is explicit.
+- **`mode: resume-candidate`** — a plan file, a tracker comment authored by the agent, or a git branch ahead of its merge-base already exists for the task. The agent reconstructs the prior work from those artifacts and continues, without re-asking anything they already settle.
+
+The verdict is mechanized on the negative: with zero matching artifacts it is always `opening`. The model may only *demote* a `resume-candidate` verdict back to `opening` (the artifacts turn out not to be settled work), never promote the reverse. A resume recorded only in a session checkpoint or an experience leaf — no plan file, no tracker comment, no branch — is a known gap: all three probes miss it and the session falls back to `opening`, costing an extra turn but never producing a wrong verdict.
+
+Because the harness denies any `AskUserQuestion` that follows a tool call in the same turn, the opening dialogue always spans two turns: turn 1 delivers the digest as its final text message and arms a background timer; turn 2 (opened by the timer) asks the clarifying questions.
+
+**Suppressing it.** The in-place path (`claude-task -c`, no workspace change) never injects a prompt. Otherwise, precedence is `--no-opening` / `--opening` (command line) over `CLAUDE_OPENING=off` (env) over the per-entry-mode default: **on** for `--key` / `--new` (a real task exists to read), **off** for `--name` / `--init` (a nameless scratch workspace has nothing to read).
+
+**Reading the ticket.** When the resolved tracker backend defines the optional `tracker_read` verb (GitHub Issues does), the brief includes the ticket's title, status, author, description and comments. A backend that omits the verb, or an unreadable ticket, degrades only the `ticket:` line — never the `mode:` verdict. See [org-portability.md § The optional tracker_read verb and resume detection](org-portability.md#the-optional-tracker_read-verb-and-resume-detection) for the verb contract.
 
 ## Troubleshooting a fresh machine
 

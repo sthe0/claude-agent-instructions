@@ -63,3 +63,45 @@ tracker_create() {
   [[ -n "$key" ]] || key="$out"
   printf '%s\t%s\n' "$key" "$slug"
 }
+
+# tracker_read <key> -> flat, backend-agnostic rendering of the issue on stdout
+# (title / status / author / description / comments). Optional verb: the
+# caller probes presence with `declare -F tracker_read`. Single degrade class:
+# any failure (gh absent, auth error, malformed JSON, …) normalizes to exit 1
+# with the reason on stderr — never leaks gh's own exit code or partial stdout.
+tracker_read() {
+  local key="$1" json rc
+
+  if [[ -n "${CLAUDE_DRY_RUN:-}" ]]; then
+    printf 'github tracker: [dry-run] tracker_read skipped for %q\n' "$key" >&2
+    return 1
+  fi
+
+  json="$("$GH_BIN" issue view "$key" --json title,state,author,body,comments 2>/dev/null)"
+  rc=$?
+  if [[ $rc -ne 0 || -z "$json" ]]; then
+    printf 'github tracker: tracker_read failed for %q (gh issue view exited %d)\n' "$key" "$rc" >&2
+    return 1
+  fi
+
+  printf '%s' "$json" | python3 -c '
+import json, sys
+
+d = json.load(sys.stdin)
+out = []
+out.append("title: " + str(d.get("title", "")))
+out.append("status: " + str(d.get("state", "")))
+out.append("author: " + str((d.get("author") or {}).get("login", "")))
+out.append("--- description ---")
+out.append(d.get("body") or "")
+for i, c in enumerate(d.get("comments") or [], start=1):
+    login = (c.get("author") or {}).get("login", "")
+    created = c.get("createdAt", "")
+    out.append("--- comment " + str(i) + " by " + str(login) + " at " + str(created) + " ---")
+    out.append(c.get("body") or "")
+print("\n".join(out))
+' || {
+    printf 'github tracker: tracker_read failed for %q (rendering error)\n' "$key" >&2
+    return 1
+  }
+}
