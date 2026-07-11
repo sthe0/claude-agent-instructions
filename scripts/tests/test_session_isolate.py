@@ -71,9 +71,9 @@ def _run(
     env["GIT_BIN"] = str(_stub_git(tmp_path, fake_toplevel, git_calls, wt_list))
     env["PATH"] = "/usr/bin:/bin"
     if session_id is not None:
-        env["CLAUDE_SESSION_ID"] = session_id
+        env["CLAUDE_CODE_SESSION_ID"] = session_id
     else:
-        env.pop("CLAUDE_SESSION_ID", None)
+        env.pop("CLAUDE_CODE_SESSION_ID", None)
     if dry_run:
         env["CLAUDE_DRY_RUN"] = "1"
     else:

@@ -160,7 +160,7 @@ def test_session_isolate_dispatches_to_arc_plugin_fixture(tmp_path):
     # developer machine's real isolated root.
     env.pop("CLAUDE_CONFIG_DIR", None)
     env.pop("CLAUDE_AGENT_HOME", None)
-    env["CLAUDE_SESSION_ID"] = "s-arc"
+    env["CLAUDE_CODE_SESSION_ID"] = "s-arc"
     env["CLAUDE_DRY_RUN"] = "1"
     env["CLAUDE_BACKEND_DETECTOR"] = str(detector)
     env["CLAUDE_PROJECT_PLUGIN_DIR"] = str(plugin_dir)
@@ -209,7 +209,7 @@ def test_session_isolate_degrades_arc_to_git_when_plugin_absent(tmp_path):
     # developer machine's real isolated root.
     env.pop("CLAUDE_CONFIG_DIR", None)
     env.pop("CLAUDE_AGENT_HOME", None)
-    env["CLAUDE_SESSION_ID"] = "s-degrade"
+    env["CLAUDE_CODE_SESSION_ID"] = "s-degrade"
     env["CLAUDE_DRY_RUN"] = "1"
     env["CLAUDE_BACKEND_DETECTOR"] = str(detector)
     env["CLAUDE_PROJECT_PLUGIN_DIR"] = str(empty_plugins)
