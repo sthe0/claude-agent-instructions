@@ -6,7 +6,7 @@ schema: difficulty/v1
 resolution_confirmed_by_user: "давай закроем задачу"
 refs: [2026-06-24-gate-exemption-is-category-error-for-result-images, 2026-05-26-agent-system-plan-vs-reality-drift]
 created: 2026-06-24
-last_verified: 2026-06-25
+last_verified: 2026-07-11
 ---
 
 # Spawned developer's return marker after a prose preamble false-BLOCKs the engine
@@ -30,6 +30,10 @@ Expected at dispatch: a successful stage returns its marker and the engine recor
 - Where it arose: agentctl stage 2 spawn:developer (budget small) for a 2-line fix + 1 unit test; spawn returned error_max_budget_usd with no marker → MALFORMED
 - Working plan: Same recovery shape, different MALFORMED cause: spawn died on error_max_budget_usd ($1 small budget; cost_usd=1.014 — the developer static prefix alone is ~$1.01 in cache: 2.0M cache_read + 79k cache_create before any work), result also listed a stray Edit permission_denial. The working tree was source of truth: arc status/log/pr showed edits + unit test already committed (3e7e0be0) AND pushed to the ticket branch. So I did NOT re-spawn/retry — read the actual diff, re-ran pytest myself (10 passed) to verify the runtime axis, created the still-missing draft PR (14091442) in-thread (my engine at EXECUTING so the prod-edit gate was open), then record-result passed. Reusable: (1) on ANY MALFORMED/errored developer spawn, treat arc status/log/diff/pr as ground truth and re-verify what landed before assuming failure — partial success is common; finish only residual steps in-thread at the open gate. (2) BUDGET CALIBRATION: --budget small ($1) is insufficient for ANY developer spawn in this project — skill+context static prefix burns ~$1 of cache before the first edit; use --budget medium minimum even for trivial fixes.
 
+
+### 2026-07-11 — cleanup-worktrees-audit stage-1 sweeper spawn
+- Where it arose: agentctl dispatch of a spawn:developer stage building hook-orphan-worktree-sweep.py + its 23 unit tests
+- Working plan: Developer completed BOTH artifacts (315-line sweeper + 176-line test file, all 23 tests green) but emitted no COMPLETED: marker line at all, so spawn-specialist.py validate_marker() wrapped the output MALFORMED:(ok=False) and cli.py parked the stage BLOCKED (spawn_count=0, rc=1) — the exact false-block the wrapper comment at spawn-specialist.py:218 warns about. Recovery: healthcheck (claude -p works) -> read the working tree (both files present, untracked) -> run the stage verify_command (23/23 unit + 7/7 integration green) -> agentctl unblock + record-result --status passed --control <attestation>. No respawn, no lost work.
 ## Common core & variations
 **Common:** Spawn returns a non-marker terminal line (MALFORMED) and agentctl would route to BLOCKED, but the underlying work fully or partially succeeded; manager must independently re-verify the artifact (arc status/log/diff/pr, re-run tests) rather than trust the marker, then finish only the residual steps.
 
