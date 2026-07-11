@@ -43,3 +43,4 @@ Return one of these markers as a line of its own in your final output (first lin
   ```
 
 - `ESCALATE:` — other decision the manager must make (ambiguity in the spec you cannot resolve from context, dependency on another step's output that isn't yet available, a strategic call that affects scope).
+- `REVIEW:` — (thinker) the terminal marker of a plan review: the body is one of `pass` / `revise` / `override`, the same vocabulary `agentctl plan-review --verdict` and `gates.PLAN_REVIEW_VERDICTS` use. The root records the verdict immediately with `agentctl plan-review --verdict <body> --reviewer thinker --target <plan>`, before any further edit to the plan file — the verdict is bound to the plan's sha256 and an edit invalidates the binding.

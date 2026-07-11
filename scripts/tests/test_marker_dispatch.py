@@ -27,6 +27,12 @@ def test_parse_marker_each_known_marker(marker):
     assert body == "some detail here"
 
 
+def test_parse_marker_review():
+    m, body = parse_marker("checked the plan\nREVIEW: revise\n")
+    assert m == "REVIEW"
+    assert body == "revise"
+
+
 def test_parse_marker_malformed():
     m, body = parse_marker("MALFORMED: specialist output did not start with a marker\nrest\n")
     assert m == "MALFORMED"
@@ -173,6 +179,19 @@ def test_escalate_parks_blocked(store, fixtures_dir):
     assert d.marker == "ESCALATE"
     assert d.node == Node.BLOCKED.value
     assert store.load("m6").blocked_from == Node.EXECUTING.value
+
+
+def test_review_marker_parks_blocked(store, fixtures_dir):
+    # REVIEW is a recognised marker with no dedicated route in cmd_dispatch's
+    # if-chain: it must fall through to the same _park_blocked path as an
+    # unrecognised marker, exactly as before REVIEW was added to RETURN_MARKERS.
+    _to_executing(store, "m11", fixtures_dir)
+    d = _dispatch_with(store, "m11", "REVIEW: revise\n")
+    assert d.ok is False
+    assert d.action == "escalate"
+    assert d.marker == "ESCALATE"
+    assert d.node == Node.BLOCKED.value
+    assert store.load("m11").blocked_from == Node.EXECUTING.value
 
 
 def test_malformed_parks_blocked(store, fixtures_dir):
