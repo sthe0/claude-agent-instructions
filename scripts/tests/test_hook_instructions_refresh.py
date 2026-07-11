@@ -6,8 +6,9 @@ test_sync_instructions_repo.py (make_bare_and_clone / advance_main) and the
 subprocess-with-stdin invocation from test_hook_engine_start.py.
 
 Covers: forced-due Core-behind nudge, throttle-window silence, up-to-date
-silence, fetch-failure/non-git fail-open silence, project-layer nudge, and
-stamp-write-gates-next-run.
+silence, fetch-failure/non-git fail-open silence, project-layer nudge,
+stamp-write-gates-next-run, and the deploy-integrity axes (branch mismatch,
+multi-root settings.json, malformed settings.json fail-open).
 """
 from __future__ import annotations
 
@@ -72,13 +73,15 @@ def advance_remote(tmp_path: Path, origin: Path, name: str):
     git("push", "--quiet", "origin", "main", cwd=other)
 
 
-def run_hook(home: Path, core_repo, cwd: Path):
+def run_hook(home: Path, core_repo, cwd: Path, settings_path: Path | None = None):
     env = {
         **os.environ,
         **GIT_ENV,
         "HOME": str(home),
         "CLAUDE_INSTRUCTIONS_REPO": str(core_repo),
     }
+    if settings_path is not None:
+        env["CLAUDE_SETTINGS_PATH"] = str(settings_path)
     payload = json.dumps({"session_id": "s-1", "prompt": "hi", "cwd": str(cwd)})
     return subprocess.run(
         [sys.executable, str(HOOK_SCRIPT)],
@@ -229,3 +232,101 @@ def test_stamp_written_on_fire_gates_second_run(tmp_path):
     second = run_hook(home, core_repo=clone, cwd=clone)
     assert second.returncode == 0
     assert second.stdout.strip() == ""
+
+
+# ---------------------------------------------------------------------------
+# (g) deploy-integrity: Core checkout off the default branch -> deploy warn
+# ---------------------------------------------------------------------------
+
+
+def test_off_main_branch_emits_warn(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    _origin, clone = make_bare_and_clone(tmp_path, "core")
+    git("switch", "--quiet", "-c", "feat/x", cwd=clone)
+
+    proc = run_hook(home, core_repo=clone, cwd=clone)
+
+    assert proc.returncode == 0
+    assert "[instructions-deploy]" in proc.stdout
+    assert "not main" in proc.stdout
+    assert "feat/x" in proc.stdout
+    assert f"git -C {clone} switch main" in proc.stdout
+
+
+# ---------------------------------------------------------------------------
+# (h) deploy-integrity: settings.json hooks span >1 checkout root -> deploy warn
+# ---------------------------------------------------------------------------
+
+
+def test_multi_root_settings_emits_warn(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    _origin, clone = make_bare_and_clone(tmp_path, "core")
+
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({
+        "hooks": {
+            "UserPromptSubmit": [
+                {"hooks": [
+                    {"command": "/root-a/scripts/hook-one.py", "type": "command"},
+                    {"command": "/root-b/scripts/hook-two.py", "type": "command"},
+                ]},
+            ]
+        }
+    }))
+
+    proc = run_hook(home, core_repo=clone, cwd=clone, settings_path=settings)
+
+    assert proc.returncode == 0
+    assert "[instructions-deploy]" in proc.stdout
+    assert "2 distinct checkout roots" in proc.stdout
+    assert "/root-a" in proc.stdout
+    assert "/root-b" in proc.stdout
+
+
+# ---------------------------------------------------------------------------
+# (i) deploy-integrity: on-main + single-root settings.json -> silent
+# ---------------------------------------------------------------------------
+
+
+def test_homogeneous_settings_silent(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    _origin, clone = make_bare_and_clone(tmp_path, "core")
+
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({
+        "hooks": {
+            "UserPromptSubmit": [
+                {"hooks": [
+                    {"command": "/root-a/scripts/hook-one.py", "type": "command"},
+                    {"command": "/root-a/scripts/hook-two.py", "type": "command"},
+                ]},
+            ]
+        }
+    }))
+
+    proc = run_hook(home, core_repo=clone, cwd=clone, settings_path=settings)
+
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == ""
+
+
+# ---------------------------------------------------------------------------
+# (j) deploy-integrity: malformed settings.json -> fail-open silence
+# ---------------------------------------------------------------------------
+
+
+def test_malformed_settings_fails_open(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    _origin, clone = make_bare_and_clone(tmp_path, "core")
+
+    settings = tmp_path / "settings.json"
+    settings.write_text("{not valid json")
+
+    proc = run_hook(home, core_repo=clone, cwd=clone, settings_path=settings)
+
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == ""

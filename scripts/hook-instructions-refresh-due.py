@@ -18,6 +18,16 @@ not trigger a fetch on every later prompt.
 
 Output goes to stdout (UserPromptSubmit convention — becomes turn context,
 mirrors hook-engine-start.py). Exit 0 always.
+
+Also rides this same daily throttle to check the ORTHOGONAL "deployed" axis:
+whether the serving Core checkout (the one settings.json hook commands point
+at) is actually the branch/tree that gets run, not just whether it is behind.
+A merge to origin/main does not "deploy" anything by itself — the checkout on
+disk still runs whatever it has checked out. Two sub-checks, printed on a
+separate "[instructions-deploy]" line so the existing "[instructions-refresh]"
+nudge assertions are unaffected: (1) the Core checkout's HEAD is not on the
+default branch; (2) settings.json hook commands resolve to more than one
+distinct checkout root. Both fail-open like everything else in this hook.
 """
 from __future__ import annotations
 
@@ -27,6 +37,9 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import config_root  # noqa: E402
 
 # Kept well under the hook's own registered timeout (10s in install-reminder-hooks.sh):
 # up to two network fetches (core + project) can run sequentially in the worst case.
@@ -133,6 +146,62 @@ def check_layers(cwd: str) -> list[tuple[str, Path, int, str]]:
     return behind_layers
 
 
+def _settings_path() -> Path:
+    override = os.environ.get("CLAUDE_SETTINGS_PATH")
+    if override:
+        return Path(override).expanduser()
+    return config_root.agent_home() / "settings.json"
+
+
+def check_branch(core_root: Path, default: str = "main") -> str | None:
+    """Warn when the Core checkout's HEAD is not on `default`. Fail-open: None
+    on any git failure (missing repo, detached HEAD, timeout) or when already
+    on `default` — no network involved, a single local `rev-parse`."""
+    proc = _run(["git", "-C", str(core_root), "rev-parse", "--abbrev-ref", "HEAD"], str(core_root), GIT_TIMEOUT_S)
+    if proc is None or proc.returncode != 0:
+        return None
+    branch = proc.stdout.strip()
+    if not branch or branch == default:
+        return None
+    return (
+        f"Core checkout ({core_root}) is on {branch}, not {default} — live hooks run "
+        f"stale code; switch with `git -C {core_root} switch {default}`"
+    )
+
+
+def distinct_roots(settings_path: Path) -> list[str]:
+    """Every distinct checkout root referenced by a settings.json hook command
+    (the substring before '/scripts/'). Fail-open: [] on any error (missing
+    file, bad JSON, unexpected shape)."""
+    try:
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        roots: set[str] = set()
+        for groups in data.get("hooks", {}).values():
+            for group in groups:
+                for entry in group.get("hooks", []):
+                    command = entry.get("command", "")
+                    marker = "/scripts/"
+                    idx = command.find(marker)
+                    if idx == -1:
+                        continue
+                    roots.add(command[:idx].strip("'\""))
+        return sorted(roots)
+    except Exception:
+        return []
+
+
+def check_homogeneity(settings_path: Path) -> str | None:
+    """Warn when settings.json hook commands span more than one checkout root."""
+    roots = distinct_roots(settings_path)
+    if len(roots) > 1:
+        return (
+            f"settings.json hooks span {len(roots)} distinct checkout roots "
+            f"({', '.join(roots)}) — deployed hook behavior is inconsistent; "
+            "point every hook command at one checkout"
+        )
+    return None
+
+
 def build_nudge(layers: list[tuple[str, Path, int, str]]) -> str:
     parts = [
         f"{label} ({root}) is {count} commit(s) behind — pull with `{cmd}`"
@@ -162,10 +231,19 @@ def main() -> int:
     _record(now)
 
     layers = check_layers(cwd)
-    if not layers:
-        return 0
+    if layers:
+        print(build_nudge(layers))
 
-    print(build_nudge(layers))
+    deploy_warnings: list[str] = []
+    branch_warning = check_branch(_core_root())
+    if branch_warning:
+        deploy_warnings.append(branch_warning)
+    homogeneity_warning = check_homogeneity(_settings_path())
+    if homogeneity_warning:
+        deploy_warnings.append(homogeneity_warning)
+    if deploy_warnings:
+        print("[instructions-deploy] " + " ".join(deploy_warnings))
+
     return 0
 
 
