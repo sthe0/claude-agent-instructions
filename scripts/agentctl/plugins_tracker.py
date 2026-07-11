@@ -68,15 +68,40 @@ def _observe_submit_plan(state, bag) -> list[PluginDirective]:
 
 
 def _observe_approve(state, bag) -> list[PluginDirective]:
-    # plan just approved (PLAN_READY -> APPROVED): work begins. Nudge the open->
-    # in-progress transition, non-blocking — skip if the ticket is already in progress.
-    return [PluginDirective(
-        "tracker", "start_progress",
-        "the plan is approved and work begins: if the ticket is still open, transition "
-        "it to the in-progress status (e.g. \"В работе\") now; non-blocking — skip if it "
-        "is already in progress",
-        data={"tracker_key": _key(bag)},
-    )]
+    # plan just approved (PLAN_READY -> APPROVED): work begins. Two nudges fire.
+    # (1) start_progress: the open->in-progress transition, non-blocking — skip if
+    #     the ticket is already in progress.
+    # (2) publish_plan: approve is where the IMMUTABLE approved snapshot exists
+    #     (state.plan_snapshot_path, written by _snapshot_approved_plan at approve),
+    #     so THIS is the transition that carries the plan the ticket must record.
+    #     Publish the snapshot bytes, never the mutable plan file. Non-blocking:
+    #     enforcement lives in _publish_gate + the mandatory `plan` phase, not in a
+    #     blocking approve nudge. If the resolved backend defines no
+    #     tracker_publish_plan, the coordinator discharges the mandatory `plan`
+    #     phase with the skip form rather than wedging resolution — the detail names
+    #     both routes so the degrade is honest, never a silent unrecorded phase.
+    return [
+        PluginDirective(
+            "tracker", "start_progress",
+            "the plan is approved and work begins: if the ticket is still open, transition "
+            "it to the in-progress status (e.g. \"В работе\") now; non-blocking — skip if it "
+            "is already in progress",
+            data={"tracker_key": _key(bag)},
+        ),
+        PluginDirective(
+            "tracker", "publish_plan",
+            "the plan is approved: publish the approved plan SNAPSHOT to the ticket via "
+            "tracker_publish_plan, then `plugin-record --plugin tracker --phase plan`. If "
+            "the backend defines no tracker_publish_plan, record the skip instead: "
+            "`plugin-record --plugin tracker --phase plan --skipped --note \"<why>\"` — "
+            "never leave the mandatory plan phase silently unrecorded",
+            data={
+                "tracker_key": _key(bag),
+                "phase": "plan",
+                "plan_snapshot_path": getattr(state, "plan_snapshot_path", None) or "",
+            },
+        ),
+    ]
 
 
 def _observe_record_result(state, bag) -> list[PluginDirective]:

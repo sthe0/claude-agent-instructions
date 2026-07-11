@@ -124,24 +124,53 @@ def test_submit_plan_emits_publish_plan():
     assert fired[0]["data"]["tracker_key"] == "ABC-1"
 
 
-def test_approve_emits_non_blocking_start_progress():
+def test_approve_emits_start_progress_and_publish_plan_snapshot():
     state = _new_state(node=Node.APPROVED.value)
+    # approve is where the immutable approved snapshot exists; the publish nudge
+    # must carry THAT path, never the mutable plan file.
+    state.plan_path = "/plans/mutable-source.toml"
+    state.plan_snapshot_path = "/state/plan-approved-deadbeef.toml"
     plugins.activate(state, "tracker", {"tracker_key": "ABC-7"})
     d = Directive(True, state.node, "approve")
     fired = plugins.fire("approve", state, d)
-    assert [f["action"] for f in fired] == ["start_progress"]
-    assert fired[0]["plugin"] == "tracker"
+    assert [f["action"] for f in fired] == ["start_progress", "publish_plan"]
+    start, publish = fired
+    assert start["plugin"] == "tracker"
     # start is hygiene, not load-bearing: it must NOT be a blocking directive
-    assert fired[0].get("blocking") is not True
-    assert fired[0]["data"]["tracker_key"] == "ABC-7"
+    assert start.get("blocking") is not True
+    assert start["data"]["tracker_key"] == "ABC-7"
+    # publish_plan is a non-blocking nudge — enforcement is the gate + skip form,
+    # not a blocking approve directive
+    assert publish["plugin"] == "tracker"
+    assert publish.get("blocking") is not True
+    assert publish["data"]["phase"] == "plan"
+    # the IMMUTABLE snapshot, never the mutable plan file
+    assert publish["data"]["plan_snapshot_path"] == "/state/plan-approved-deadbeef.toml"
+    assert publish["data"]["plan_snapshot_path"] != state.plan_path
+    # the nudge names the skip route so a backend without the verb degrades honestly
+    assert "--skipped" in publish["detail"]
 
 
-def test_start_progress_never_gates_resolution():
+def test_approve_publish_plan_snapshot_path_empty_when_unset():
+    # a legacy/best-effort approve with no snapshot recorded must not raise; the
+    # nudge still fires, carrying an empty path the coordinator can act on.
+    state = _new_state(node=Node.APPROVED.value)
+    plugins.activate(state, "tracker", {"tracker_key": "ABC-7"})
+    fired = plugins.fire("approve", state, Directive(True, state.node, "approve"))
+    publish = fired[1]
+    assert publish["action"] == "publish_plan"
+    assert publish["data"]["plan_snapshot_path"] == ""
+
+
+def test_approve_nudges_never_gate_resolution():
     # observing approve records nothing on the bag, so the resolution gate is
-    # unaffected: start is never part of the mandatory-missing list.
+    # unaffected: neither start_progress nor publish_plan is part of the
+    # mandatory-missing list until the coordinator actually records the phase.
     state = _new_state(node=Node.APPROVED.value)
     plugins.activate(state, "tracker")
     plugins.fire("approve", state, Directive(True, state.node, "approve"))
+    # nothing recorded merely by observing: the gate still blocks
+    assert plugins.plugin_gate_blockers(state, "resolution")
     for phase in ("plan", "result", "status"):
         state.plugins["tracker"]["published_phases"][phase] = True
     blockers = plugins.plugin_gate_blockers(state, "resolution")
@@ -281,6 +310,19 @@ def test_publish_gate_blocks_until_mandatory_phases_recorded():
     assert plugins.plugin_gate_blockers(state, "resolution") == []  # all three recorded -> passes
 
 
+def test_publish_gate_discharged_by_skip_marker():
+    # the gate tests membership, not truth: an honest SKIP marker (a dict carrying
+    # the reason) under the mandatory key discharges the gate exactly like a real
+    # post, so a backend with no publish transport never wedges resolution.
+    state = _new_state()
+    plugins.activate(state, "tracker")
+    pub = state.plugins["tracker"]["published_phases"]
+    pub["plan"] = {"skipped": "backend defines no tracker_publish_plan"}
+    pub["result"] = True  # a plain True still discharges its key
+    pub["status"] = {"skipped": "ticket left open pending follow-up PR"}
+    assert plugins.plugin_gate_blockers(state, "resolution") == []
+
+
 def test_publish_gate_blocks_on_missing_status_alone():
     # plan + result recorded, status not yet -> still blocked; status closes it
     state = _new_state()
@@ -356,6 +398,35 @@ def test_e2e_resolve_blocked_until_published_then_passes_and_retires(capsys, tmp
     raw = json.loads((Path(root) / f"{sid}.json").read_text(encoding="utf-8"))
     assert "tracker" not in raw["plugins"]
     assert "tracker" in raw["plugins_archive"]
+
+
+def test_e2e_skip_marker_unblocks_resolution_and_stores_reason(capsys, tmp_path, fixtures_dir):
+    # a backend with no publish transport: the coordinator discharges the
+    # mandatory `plan` phase with the SKIP form. Resolution passes, and the stored
+    # marker keeps the reason for audit (never a silent unrecorded phase).
+    root = str(tmp_path / "state")
+    sid = "tk-skip"
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    _drive_to_resolution(capsys, root, sid, plan, activate_tracker=True)
+
+    # missing a --note is refused: an honest skip must carry a reason
+    rc, d = _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker",
+                 "--phase", "plan", "--skipped")
+    assert rc == 1
+
+    reason = "backend defines no tracker_publish_plan"
+    _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker",
+         "--phase", "plan", "--skipped", "--note", reason)
+    _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker", "--phase", "result")
+    _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker", "--phase", "status")
+
+    rc, d = _run(capsys, root, "resolve", "--session", sid, "--by", "user", "--quality", "4")
+    assert rc == 0
+    assert d["node"] == Node.RESOLVED.value
+
+    raw = json.loads((Path(root) / f"{sid}.json").read_text(encoding="utf-8"))
+    marker = raw["plugins_archive"]["tracker"]["published_phases"]["plan"]
+    assert marker == {"skipped": reason}
 
 
 def test_e2e_non_tracker_session_has_no_tracker_effect(capsys, tmp_path, fixtures_dir):

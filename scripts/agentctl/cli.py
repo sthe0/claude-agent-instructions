@@ -444,6 +444,25 @@ def cmd_plugin_record(args, *, store: StateStore, runner: Runner | None = None) 
         return Directive(False, state.node, "noop", f"plugin {args.plugin!r} is not active")
     phase = args.phase
     note = getattr(args, "note", None)
+    skipped = bool(getattr(args, "skipped", False))
+    if skipped:
+        # An HONEST degrade: the transport for this phase was unavailable (e.g. the
+        # tracker backend defines no tracker_publish_plan). Store a SKIP MARKER under
+        # the phase key — the gate tests MEMBERSHIP, so the marker discharges a
+        # mandatory phase without wedging resolution, while the reason stays visible
+        # in the bag and the returned directive. Never a silent `recorded`.
+        if not (note and note.strip()):
+            return Directive(False, state.node, "noop",
+                             "a skipped publication must carry a reason: pass --note")
+        published = bag.setdefault("published_phases", {})
+        published[phase] = {"skipped": note}
+        state.log("plugin_record", plugin=args.plugin, phase=phase, skipped=True)
+        store.save(state)
+        return Directive(
+            True, state.node, "continue",
+            f"plugin {args.plugin!r}: phase {phase!r} publication skipped: {note}",
+            data={"published_phases": sorted(published)},
+        )
     if phase == "skipped" and not (note and note.strip()):
         return Directive(False, state.node, "noop", "a skip must carry a reason: pass --note")
     published = bag.setdefault("published_phases", {})
@@ -2112,6 +2131,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("plugin-record"); sp.add_argument("--session", required=True)
     sp.add_argument("--plugin", required=True); sp.add_argument("--phase", required=True)
     sp.add_argument("--note", default=None)
+    sp.add_argument("--skipped", action="store_true",
+                    help="record the phase as an honest SKIP (transport unavailable): "
+                         "stores a marker+reason under the phase key so the gate is "
+                         "discharged without a real post. Requires --note.")
 
     sp = add("classify"); sp.add_argument("--session", required=True)
     sp.add_argument("--chat", action="store_true")
