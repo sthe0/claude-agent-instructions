@@ -45,13 +45,46 @@ _SYSTEM_REMINDER_RE = re.compile(
     r"<system-reminder>.*?</system-reminder>", re.DOTALL | re.IGNORECASE
 )
 
+# Beyond <system-reminder>, the harness injects other user-role content that is
+# NOT human-authored and must not drive feedback detection. The Stop gate's
+# analyze() picks the last user entry carrying non-empty text as "the user's
+# message"; on a turn driven by a background event (no fresh human message) that
+# entry can be one of these injected blocks, whose 'self-improvement' mentions
+# then fire Tier 1 falsely (observed 2026-07-11):
+#   - <task-notification>...</task-notification> — background-task completion events.
+#   - The post-compaction continuation summary ("This session is being continued
+#     from a previous conversation ...") — a synthetic recap, not user text.
+#   - The post-compaction skill-context replay ("The following skills were invoked
+#     EARLIER in this session ...") — full SKILL.md bodies shown "for context only",
+#     dense with 'self-improvement'.
+# The last two are always TRAILING injected regions (the harness appends them; no
+# human text follows in the same message), so they are excised from their marker
+# to end-of-text — human feedback authored BEFORE the marker still survives.
+_TASK_NOTIFICATION_RE = re.compile(
+    r"<task-notification>.*?</task-notification>", re.DOTALL | re.IGNORECASE
+)
+_CONTINUATION_SUMMARY_RE = re.compile(
+    r"This session is being continued from a previous conversation.*\Z",
+    re.DOTALL | re.IGNORECASE,
+)
+_SKILL_REPLAY_RE = re.compile(
+    r"The following skills were invoked EARLIER in this session.*\Z",
+    re.DOTALL | re.IGNORECASE,
+)
+
 
 def strip_injected_context(text: str) -> str:
-    """Remove harness-injected ``<system-reminder>`` spans from ``text``.
+    """Remove harness-injected, non-human-authored spans from ``text``.
 
-    Only the human-authored remainder should feed the feedback detector.
+    Excises ``<system-reminder>`` and ``<task-notification>`` spans plus the two
+    trailing post-compaction injections (continuation summary, skill-context
+    replay). Only the human-authored remainder should feed the feedback detector.
     """
-    return _SYSTEM_REMINDER_RE.sub(" ", text)
+    text = _SYSTEM_REMINDER_RE.sub(" ", text)
+    text = _TASK_NOTIFICATION_RE.sub(" ", text)
+    text = _CONTINUATION_SUMMARY_RE.sub(" ", text)
+    text = _SKILL_REPLAY_RE.sub(" ", text)
+    return text
 
 
 # Tier 1 — explicit self-improvement mention (any spacing/hyphenation variant)

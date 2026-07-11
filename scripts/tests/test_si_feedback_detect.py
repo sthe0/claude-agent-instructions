@@ -115,3 +115,46 @@ def test_strip_injected_context_helper():
         == "ab"
     )
     assert _mod.strip_injected_context("plain text") == "plain text"
+
+
+def test_task_notification_span_is_excised():
+    # A background-task completion event is not user feedback.
+    injected = (
+        "<task-notification>\n<task-id>abc</task-id>\nrun the self-improvement "
+        "skill\n</task-notification>"
+    )
+    assert _mod.find_signals(injected) == []
+
+
+def test_continuation_summary_is_excised():
+    # The observed 2026-07-11 false positive: a turn driven by a notification
+    # reaches back to the post-compaction summary, which recaps queued
+    # self-improvement items — that must NOT fire.
+    injected = (
+        "This session is being continued from a previous conversation that ran "
+        "out of context. The summary below covers earlier work.\n\n"
+        "Queued self-improvement items: (a) atomic timer-arming; (b) budget-death "
+        "forensics. Deferred to a post-resolution batch."
+    )
+    assert _mod.find_signals(injected) == []
+
+
+def test_skill_replay_block_is_excised():
+    # The post-compaction "shown for context only" skill dump carries full
+    # SKILL.md bodies dense with 'self-improvement'.
+    injected = (
+        "The following skills were invoked EARLIER in this session, not on the "
+        "current turn.\n\n### Skill: self-improvement\nARGUMENTS: Behavioral "
+        "correction about self-improvement timing."
+    )
+    assert _mod.find_signals(injected) == []
+
+
+def test_trailing_injection_does_not_suppress_prior_human_feedback():
+    # Human feedback authored BEFORE a trailing injected block must still fire.
+    text = (
+        "you shouldn't have pushed without asking\n\n"
+        "The following skills were invoked EARLIER in this session\n"
+        "### Skill: self-improvement\nfull body ..."
+    )
+    assert _mod.find_signals(text)
