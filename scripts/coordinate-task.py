@@ -49,6 +49,10 @@ RETURN_MARKERS = (
     "REPLAN",
     "PERMISSION-REQUEST",
     "ESCALATE",
+    # REVIEW carries no RUN_EXIT_CODE below (no thinker/plan-review path runs
+    # through this CLI) — kept here only so this fourth copy doesn't silently
+    # drift from the other three, which is how the REVIEW gap first appeared.
+    "REVIEW",
 )
 MARKER_RE = re.compile(rf"^({'|'.join(RETURN_MARKERS)}):")
 PLAN_PATH_RE = re.compile(r"^\s*Plan\s*:\s*(.+?)\s*$", re.MULTILINE)

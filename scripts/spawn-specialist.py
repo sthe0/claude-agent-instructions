@@ -65,6 +65,7 @@ RETURN_MARKERS = (
     "REPLAN",
     "PERMISSION-REQUEST",
     "ESCALATE",
+    "REVIEW",
 )
 MARKER_RE = re.compile(rf"^({'|'.join(RETURN_MARKERS)}):")
 

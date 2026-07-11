@@ -22,6 +22,9 @@ SPAWN_CLI = REPO_ROOT / "scripts" / "spawn-specialist.py"
 # Source of truth: spawn-specialist.py RETURN_MARKERS / MARKER_RE. Mirrored here
 # (the engine routes the marker spawn-specialist already parsed onto stdout); a
 # drift-guard test asserts the two tuples stay identical.
+# REVIEW is not in the explicit if-chain below (cmd_dispatch): it is a recognised
+# marker with no dedicated route, so it falls to the same _park_blocked path as
+# an unrecognised marker — that is the intended handling, not a gap.
 RETURN_MARKERS = (
     "COMPLETED",
     "PLAN-READY",
@@ -30,6 +33,7 @@ RETURN_MARKERS = (
     "REPLAN",
     "PERMISSION-REQUEST",
     "ESCALATE",
+    "REVIEW",
 )
 MARKER_RE = re.compile(rf"^({'|'.join(RETURN_MARKERS)}):")
 

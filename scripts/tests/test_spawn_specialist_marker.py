@@ -48,11 +48,26 @@ def test_every_known_marker_detected_after_preamble(marker):
     assert ok is True
 
 
+def test_review_pass_on_last_line_ok():
+    text, ok = MOD.validate_marker("checked the plan against the stages\nREVIEW: pass")
+    assert ok is True
+    assert text == "checked the plan against the stages\nREVIEW: pass"  # unchanged on success
+
+
+def test_review_revise_after_long_preamble_ok():
+    preamble = "\n".join(f"finding {i}: some detail" for i in range(20))
+    body = f"{preamble}\nREVIEW: revise"
+    text, ok = MOD.validate_marker(body)
+    assert ok is True
+    assert text == body
+
+
 def test_no_marker_is_malformed():
     text, ok = MOD.validate_marker("just a summary, no marker at all")
     assert ok is False
     assert text.startswith("MALFORMED:")
     assert "no known return marker" in text
+    assert text.endswith("just a summary, no marker at all")  # original text still forwarded
 
 
 def test_marker_word_mid_sentence_not_matched():
