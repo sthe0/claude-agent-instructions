@@ -4,10 +4,11 @@ command looks like it launches a long-running external job.
 
 Rule (CLAUDE.md § Long-running jobs + memory leaf long-job-monitoring):
 after starting a long external workflow you must drive it to terminal state
-yourself — detached OS poller (zero model tokens) + self-scheduled
-ScheduleWakeup wakeups — never offload the monitoring cadence to the user.
-This hook lifts the "did I remember to arm the watcher?" recall to a
-deterministic launch-pattern scan.
+yourself — detached OS poller (zero model tokens) for durability + a
+harness-tracked `Bash(run_in_background)` waiter for auto-wake (ScheduleWakeup
+works only inside /loop, so it silently no-ops in an ordinary session) —
+never offload the monitoring cadence to the user. This hook lifts the "did I
+remember to arm the watcher?" recall to a deterministic launch-pattern scan.
 
 Detection (any one fires):
   - `nohup ` — a detached background process.
@@ -114,7 +115,10 @@ def main() -> int:
         f"[long-job-arm] This command looks like a long external job launch — {reason}.\n"
         "Per CLAUDE.md § Long-running jobs: drive it to terminal state yourself.\n"
         "  → Arm a detached OS poller (nohup watcher, logs every transition, 0 model tokens)\n"
-        "    + a self-scheduled ScheduleWakeup to report transitions proactively.\n"
+        "    for durability across sessions,\n"
+        "  → AND a harness-tracked Bash(run_in_background:true) waiter that blocks on the job\n"
+        "    and prints a terminal marker — the harness auto-wakes you when it exits.\n"
+        "    (ScheduleWakeup only works inside /loop; outside it, it silently no-ops.)\n"
         "  Do NOT offload the monitoring cadence to the user ('ping me when done')."
     )
     return 0
