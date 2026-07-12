@@ -346,6 +346,100 @@ def test_guardians_are_behaviorally_pure():
     assert len(results["self_improvement"]) == 1
 
 
+# --- long-job auto-wake guardian --------------------------------------------
+
+def test_long_job_blocks_on_detached_launch_without_waiter(tmp_path, isolated_state):
+    t = _write_transcript(tmp_path, [
+        _user_line("kick off the training job"),
+        _assistant_bash_line("nohup ./train.sh > log 2>&1 &", False),
+    ])
+    out = _mod.decide({"transcript_path": str(t), "stop_hook_active": False})
+    assert out is not None and out["decision"] == "block"
+    assert "auto-wake" in out["reason"]
+
+
+def test_long_job_silent_when_background_waiter_armed(tmp_path, isolated_state):
+    # A harness-tracked run_in_background:true waiter that blocks on the job -> the
+    # harness auto-wakes on its exit -> obligation met.
+    t = _write_transcript(tmp_path, [
+        _user_line("kick off the training job"),
+        _assistant_bash_line("nohup ./train.sh &", False),
+        _assistant_bash_line("wait $(cat job.pid); echo JOB_DONE", True),
+    ])
+    assert _mod.decide({"transcript_path": str(t), "stop_hook_active": False}) is None
+
+
+def test_long_job_silent_when_launched_run_in_background(tmp_path, isolated_state):
+    # Orchestrator launch done directly as a harness-tracked background Bash: detect()
+    # fires, but the same tool_use is run_in_background:true -> auto-wake -> silent.
+    t = _write_transcript(tmp_path, [
+        _user_line("start the pipeline"),
+        _assistant_bash_line("nirvana workflow start --id abc", True),
+    ])
+    assert _mod.decide({"transcript_path": str(t), "stop_hook_active": False}) is None
+
+
+def test_long_job_silent_when_cron_armed(tmp_path, isolated_state):
+    t = _write_transcript(tmp_path, [
+        _user_line("start the training job"),
+        _assistant_bash_line("nohup ./train.sh &", False),
+        _assistant_tool_use_line("CronCreate", {"schedule": "*/5 * * * *"}),
+    ])
+    assert _mod.decide({"transcript_path": str(t), "stop_hook_active": False}) is None
+
+
+def test_long_job_still_blocks_when_only_schedulewakeup(tmp_path, isolated_state):
+    # d2 regression guard: ScheduleWakeup no-ops outside /loop, so it does NOT
+    # satisfy the auto-wake obligation — the guardian must STILL fire.
+    t = _write_transcript(tmp_path, [
+        _user_line("start the training job"),
+        _assistant_bash_line("nohup ./train.sh &", False),
+        _assistant_tool_use_line("ScheduleWakeup", {"delay_seconds": 300}),
+    ])
+    out = _mod.decide({"transcript_path": str(t), "stop_hook_active": False})
+    assert out is not None and "auto-wake" in out["reason"]
+
+
+def test_long_job_blocks_on_foreground_poller_only(tmp_path, isolated_state):
+    # A `setsid nohup ... &` poller returns immediately (run_in_background unset), so
+    # it is not a harness-tracked waiter; the guardian still fires.
+    t = _write_transcript(tmp_path, [
+        _user_line("watch the job"),
+        _assistant_bash_line("setsid nohup ./poll.sh &", False),
+    ])
+    out = _mod.decide({"transcript_path": str(t), "stop_hook_active": False})
+    assert out is not None and "auto-wake" in out["reason"]
+
+
+def test_long_job_silent_when_no_launch(tmp_path, isolated_state):
+    t = _write_transcript(tmp_path, [
+        _user_line("run the unit tests"),
+        _assistant_bash_line("python3 -m pytest -q", False),
+    ])
+    assert _mod.decide({"transcript_path": str(t), "stop_hook_active": False}) is None
+
+
+def test_long_job_autowake_registered_before_resolution():
+    keys = list(_mod.TURN_GUARDIANS)
+    assert "long_job_autowake" in keys
+    assert keys.index("long_job_autowake") < keys.index("resolution")
+
+
+def test_long_job_and_self_improvement_cofire_one_block(tmp_path, isolated_state):
+    """A feedback-signal turn that also launched a detached job without a waiter
+    produces ONE block naming BOTH obligations, self-improvement numbered first."""
+    t = _write_transcript(tmp_path, [
+        _user_line(FEEDBACK),
+        _assistant_bash_line("nohup ./train.sh &", False),
+    ])
+    out = _mod.decide({"transcript_path": str(t), "stop_hook_active": False})
+    assert out is not None and out["decision"] == "block"
+    reason = out["reason"]
+    assert "self-improvement" in reason and "auto-wake" in reason
+    assert "1." in reason and "2." in reason
+    assert reason.index("self-improvement") < reason.index("auto-wake")
+
+
 # --- fail-open robustness ---------------------------------------------------
 
 def test_missing_transcript_path(isolated_state):

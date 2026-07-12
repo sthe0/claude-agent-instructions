@@ -3,15 +3,31 @@ otherwise, never blocks, once per session."""
 import importlib.util
 import io
 import json
+import sys
 import uuid
 from pathlib import Path
 
+SCRIPTS_DIR = Path(__file__).resolve().parents[1]
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
 _SPEC = importlib.util.spec_from_file_location(
     "hook_long_job_arm",
-    Path(__file__).resolve().parents[1] / "hook-long-job-arm.py",
+    SCRIPTS_DIR / "hook-long-job-arm.py",
 )
 mod = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(mod)
+
+import long_job_detect  # noqa: E402
+
+
+def test_detect_is_shared_object():
+    """The advisory re-exports the SHARED detect() (identity, not a copy) so it can
+    never drift from the turn-end guardian's launch scan — mirrors the
+    timer_arm_detect.py no-drift `is`-identity pins."""
+    assert mod.detect is long_job_detect.detect
+    assert mod.NOHUP_RE is long_job_detect.NOHUP_RE
+    assert mod.DEFAULT_ORCHESTRATORS is long_job_detect.DEFAULT_ORCHESTRATORS
 
 
 def _run(monkeypatch, capsys, command, session=None, tool="Bash"):

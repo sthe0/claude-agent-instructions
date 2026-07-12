@@ -91,6 +91,45 @@ def test_ask_defer_and_shared_agree():
         assert ask_defer_view is expected, label
 
 
+# --- 3. the auto-wake sibling predicate (waiter_armed) -----------------------
+
+# Each case: (label, entries, expected auto-wake verdict). The auto-wake predicate
+# is BROADER than timer_armed (any backgrounded Bash, not only `sleep`) and
+# NARROWER (ScheduleWakeup is excluded — it no-ops outside /loop).
+WAITER_CASES = [
+    ("run_in_background non-sleep Bash", [_assistant_bash("./train.sh", True)], True),
+    ("foreground non-sleep Bash", [_assistant_bash("./train.sh", False)], False),
+    ("backgrounded sleep still counts", [_assistant_bash("sleep 60", True)], True),
+    ("CronCreate", [_assistant_tool("CronCreate", {"schedule": "* * * * *"})], True),
+    ("ScheduleWakeup alone -> excluded", [_assistant_tool("ScheduleWakeup", {"delay_seconds": 2})], False),
+    ("plain text only", [_assistant_text("nothing armed")], False),
+]
+
+
+def test_waiter_armed_verdicts():
+    for label, entries, expected in WAITER_CASES:
+        assert tad.waiter_armed(entries) is expected, label
+
+
+def test_waiter_and_timer_diverge_on_schedulewakeup():
+    """The two predicates diverge on exactly ScheduleWakeup — the point of keeping
+    waiter_armed a separate sibling. timer_armed still treats it as closure (must
+    not change); waiter_armed rejects it as a real auto-wake (no-ops outside /loop)."""
+    sw = [_assistant_tool("ScheduleWakeup", {"delay_seconds": 2})]
+    assert tad.timer_armed(sw) is True
+    assert tad.waiter_armed(sw) is False
+
+
+def test_iter_bash_commands_returns_bash_command_strings():
+    entries = [
+        _assistant_bash("echo one", False),
+        _assistant_tool("ScheduleWakeup", {"delay_seconds": 2}),
+        _assistant_bash("nohup ./train.sh &", True),
+        _assistant_text("some prose"),
+    ]
+    assert tad.iter_bash_commands(entries) == ["echo one", "nohup ./train.sh &"]
+
+
 def test_turn_gate_shell_freezes_the_same_verdict(tmp_path):
     """build_context (the impure shell) must freeze closure_sought equal to the
     shared detector's verdict over the same turn slice — proving the guardian

@@ -71,7 +71,12 @@ from typing import Any, Callable
 # directly (scripts/ on sys.path[0]) or loaded via importlib in tests.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from si_feedback_detect import find_signals  # noqa: E402
-from timer_arm_detect import closure_sought as _closure_sought  # noqa: E402
+from long_job_detect import detect as _detect_long_job  # noqa: E402
+from timer_arm_detect import (  # noqa: E402
+    closure_sought as _closure_sought,
+    waiter_armed as _waiter_armed,
+    iter_bash_commands as _iter_bash_commands,
+)
 
 try:
     from lib import config_root  # noqa: E402
@@ -101,6 +106,12 @@ class TurnContext:
                      inline AskUserQuestion OR armed a deferral timer. Computed by
                      the shell (transcript I/O) via the shared timer_arm_detect
                      detector, so the resolution guardian stays pure.
+    long_job_launched : whether this turn ran a Bash command that looks like a
+                     detached / orchestrator long-job launch (shared long_job_detect
+                     scan over the turn's Bash commands). Computed by the shell.
+    autowake_armed : whether this turn armed a harness-tracked auto-wake (a
+                     `Bash(run_in_background:true)` waiter or `CronCreate`). Computed
+                     by the shell via the shared waiter_armed predicate.
     """
 
     last_user_text: str
@@ -109,6 +120,8 @@ class TurnContext:
     session_key: str
     agentctl_state: Any | None
     closure_sought: bool = False
+    long_job_launched: bool = False
+    autowake_armed: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -176,10 +189,40 @@ def resolution_turn_blockers(ctx: TurnContext) -> list[str]:
     ]
 
 
+def long_job_autowake_blockers(ctx: TurnContext) -> list[str]:
+    """This turn launched a detached long-running external job but armed no
+    harness-tracked auto-wake, so the main thread would idle silently until the
+    user pings. The PreToolUse advisory `hook-long-job-arm.py` merely nudges at
+    launch time; this turns the deterministically-decidable part — a long-job
+    launch this turn WITHOUT a harness-tracked waiter — into a turn-boundary check.
+
+    Fires only under the conjunction, both read from the frozen context:
+      - a long-job launch was detected in this turn's Bash commands;
+      - no auto-wake was armed this turn (`waiter_armed`: no
+        `Bash(run_in_background:true)`, no `CronCreate`).
+
+    A detached poller alone does NOT satisfy it (it logs transitions but never
+    re-invokes the main thread), and neither does `ScheduleWakeup` (it no-ops
+    outside /loop). Pure: reads only frozen ctx booleans.
+    """
+    if not (ctx.long_job_launched and not ctx.autowake_armed):
+        return []
+    return [
+        "This turn launched a detached long-running external job but armed no "
+        "harness-tracked auto-wake, so the main thread will idle silently until the "
+        "user pings. Arm a harness-tracked `Bash(run_in_background:true)` waiter "
+        "that BLOCKS on the job (waits on its PID / polls to a terminal marker) so "
+        "the harness auto-wakes you when it exits — or a `CronCreate` peek. A "
+        "detached poller alone does NOT auto-wake (it only logs transitions), and "
+        "`ScheduleWakeup` no-ops outside /loop."
+    ]
+
+
 # guardian name -> pure predicate. Order matters: format_reason numbers blockers
 # in iteration order, and the resolution obligation is named LAST.
 TURN_GUARDIANS: dict[str, Callable[[TurnContext], list[str]]] = {
     "self_improvement": self_improvement_blockers,
+    "long_job_autowake": long_job_autowake_blockers,
     "resolution": resolution_turn_blockers,
 }
 
@@ -346,6 +389,10 @@ def build_context(payload: dict) -> TurnContext | None:
         session_key=session_id or transcript_path,
         agentctl_state=_load_agentctl_state(session_id),
         closure_sought=_closure_sought(turn_entries),
+        long_job_launched=any(
+            _detect_long_job(c) for c in _iter_bash_commands(turn_entries)
+        ),
+        autowake_armed=_waiter_armed(turn_entries),
     )
 
 

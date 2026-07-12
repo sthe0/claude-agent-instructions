@@ -99,6 +99,60 @@ def timer_armed(entries: list[dict]) -> bool:
     return False
 
 
+def iter_bash_commands(entries: list[dict]) -> list[str]:
+    """Every assistant `Bash` tool_use command string in these entries, in order.
+
+    Reuses the shared `_assistant_tool_uses` walk so the turn-end guardian can run
+    the long-job launch scan over a turn's Bash commands without re-implementing
+    the transcript walk."""
+    out: list[str] = []
+    for tool_use in _assistant_tool_uses(entries):
+        if tool_use.get("name") != "Bash":
+            continue
+        tool_input = tool_use.get("input")
+        if not isinstance(tool_input, dict):
+            continue
+        command = tool_input.get("command")
+        if isinstance(command, str):
+            out.append(command)
+    return out
+
+
+def waiter_armed(entries: list[dict]) -> bool:
+    """The AUTO-WAKE predicate: did this turn arm a HARNESS-TRACKED waiter that
+    re-invokes the main thread when a long external job ends?
+
+    True when EITHER:
+      - any assistant `Bash` tool_use has `run_in_background` is True — the harness
+        auto-wakes the main thread on ANY backgrounded Bash exit, not only `sleep`;
+      - any tool_use is `CronCreate` — a cron job fires while the REPL is idle
+        regardless of /loop (and `durable` jobs survive session restarts), so it is
+        a genuine self-scheduled auto-wake.
+
+    Deliberately DIFFERENT from `timer_armed` on two axes, so it is a sibling rather
+    than a widening of that predicate:
+      - broader: any backgrounded Bash, not only one whose command contains `sleep`
+        (`timer_armed` carries delivery-split / closure semantics and must NOT
+        change — widening it would make an arbitrary backgrounded job read as
+        "closure sought");
+      - narrower: `ScheduleWakeup` is EXCLUDED. ScheduleWakeup only resumes work in
+        /loop dynamic mode and silently no-ops in an ordinary session, so counting
+        it as an auto-wake would let a coordinator that armed only ScheduleWakeup
+        outside /loop pass while the main thread never wakes — the exact silent-idle
+        failure the auto-wake guardian exists to catch.
+    """
+    for tool_use in _assistant_tool_uses(entries):
+        name = tool_use.get("name")
+        if name == "CronCreate":
+            return True
+        if name != "Bash":
+            continue
+        tool_input = tool_use.get("input")
+        if isinstance(tool_input, dict) and tool_input.get("run_in_background") is True:
+            return True
+    return False
+
+
 def ask_emitted(entries: list[dict]) -> bool:
     """True when an `AskUserQuestion` tool_use was emitted in these entries — the
     inline way a turn signals it is seeking closure rather than deferring it."""
