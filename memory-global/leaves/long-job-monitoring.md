@@ -1,9 +1,9 @@
 ---
 name: long-job-monitoring
-description: Drive a long external job (hours/days) to terminal state and report transitions proactively WITHOUT burning opus on polling and WITHOUT making the user prompt you. Recipe — detached OS poller (zero model tokens) + self-scheduled ScheduleWakeup/CronCreate wakeups + cheap Agent only at the judgment milestone. Anti-pattern: "ping me when it's done".
+description: Drive a long external job (hours/days) to terminal state and report transitions proactively WITHOUT burning opus on polling and WITHOUT making the user prompt you. Recipe — detached OS poller (zero model tokens) + auto-wake (harness-tracked Bash run_in_background waiter in ordinary sessions; ScheduleWakeup/CronCreate only inside /loop) + cheap Agent only at the judgment milestone. Verify the process tree before declaring a job dead (empty buffered log ≠ dead). Anti-pattern: "ping me when it's done".
 type: feedback
 created: 2026-06-22
-last_verified: 2026-06-30
+last_verified: 2026-07-12
 ---
 
 **Difficulty:** a long-running external job (Nirvana meta-graph, CI, training run — hours to days) must reach terminal state **and** have its key transitions reported proactively, while satisfying two constraints that pull against each other: do not burn the expensive opus main thread on waiting, and do not make the user prompt you to keep watching. Under cost pressure the wrong resolution is seductive — "I'll stop polling to save money; ping me when it reaches stage X" — which offloads the monitoring cadence onto the user and violates the coordinator objective (autonomy / drive-to-resolution) and `CLAUDE.md` § Long-running jobs.
@@ -16,12 +16,24 @@ last_verified: 2026-06-30
 **Order & criterion — the autonomous low-cost recipe:**
 
 1. **Detached OS poller = the durable watcher.** Launch a plain `nohup python3 watcher.py > /tmp/.../watch.log 2>&1 &` (or bash) that polls the job's status API every N minutes and **logs every transition**, running until ALL key blocks are terminal. This costs **zero model tokens**, survives across conversation turns and session boundaries, and drives to the end on its own. Design it to LOG transitions (not exit on the first one) so a detached run tracks to terminal; emit a clear `TRIGGER=ALL_TERMINAL` / `TRIGGER=FAILED block=…` marker line.
-2. **Self-scheduled wakeups = the proactive reporter.** Use `ScheduleWakeup` (dynamic /loop pacing) or `CronCreate` to wake yourself, `tail` the poller log, and report key transitions + the DoD milestone to the user — without being asked. Pick cadence from how fast the job's state actually changes and the prompt-cache window (sub-5-min only for fast external state; otherwise 20–30 min idle ticks). The wakeup peek is one cheap main-thread turn, not a held loop.
+2. **Auto-wake = the proactive reporter.** Two mechanisms, and the choice is not free:
+   - **`ScheduleWakeup` / `CronCreate` — only inside `/loop`.** `ScheduleWakeup` is **gated off outside the `/loop` dynamic runtime** (it returns "Wakeup not scheduled. Either the /loop dynamic runtime gate is off or the loop reached its maximum duration."). So in an ordinary session it silently does nothing — do **not** rely on it as the auto-wake path; if you launch a job detached (`setsid nohup`) and lean on ScheduleWakeup outside `/loop`, the main thread **idles until the user pings** (observed 2026-07-12, benchmark grading — a real idle gap the user had to point out with "а что, ты все это время простаивал?").
+   - **Harness-tracked waiter = the auto-wake that works in any session.** Launch a `Bash(run_in_background: true)` waiter that blocks on the job and prints a terminal marker — the harness **re-invokes the main thread automatically when it exits**, no `/loop` needed:
+     ```bash
+     while kill -0 "$PID" 2>/dev/null; do sleep 60; done; echo "=== JOB TERMINAL ==="
+     ```
+     (or block on the status API / `docker wait` / an lock-file). This is the bridge from the zero-token detached poller to proactive reporting. Trade-off: a harness-tracked task dies if the session ends — so for a job that must survive session boundaries, keep the **detached** poller (step 1) as the durable watcher **and** add a harness-tracked waiter for auto-wake within the live session; they are complementary, not either/or.
+
+   Once woken (by either path), `tail` the poller log and report key transitions + the DoD milestone. Pick cadence from how fast the job's state changes and the prompt-cache window (sub-5-min only for fast external state; otherwise 20–30 min idle ticks). The peek is one cheap main-thread turn, not a held loop.
 3. **Cheap `Agent` only at the judgment moment.** When the job reaches the stage that carries the Definition-of-Done (e.g. the val stage proving routing + remarks), spawn a `sonnet`/`haiku` `Agent` to gather the verification evidence and return a compact verdict — see [[delegatable-work-patterns]] Pattern A. Do not do the verbose API probing inline on opus.
 4. **The terminal-WI milestone IS the firing point for description currency.** At that same milestone, before declaring the stage done, run the paired check from [[feedback-vcs-and-review]] (project): reconcile the PR/ticket **description** with the now-true state **and** post the run comment. This binds a repeatedly-missed cognitive step (description left stale until the user pointed it out — DEEPAGENT-414/426/430) to a milestone that now has machinery (the watcher + wakeup), so it stops being a floating step you skip under load.
 
+**Verify a job is dead before declaring it dead.** An **empty log is not evidence of death.** A child that captures its subprocess output (`subprocess.run(..., capture_output=True)`, buffered pipes) writes **nothing** to its own log until it finishes — the log stays empty through a perfectly healthy multi-hour run. Before you conclude a job died and relaunch or probe, check the **process tree and its live artifacts** (`ps -o pid,ppid,cmd -p <pid>`, `pgrep -af <driver>`, `docker ps` for eval containers, growing output files), not the log's emptiness. *Difficulty:* on 2026-07-12 an empty buffered grading log was misread as a dead job; the reflex relaunch (a redundant foreground probe) spawned **duplicate eval containers** competing with the healthy run — thrashing, not recovery. Verify-then-act; a relaunch built on an unconfirmed death hypothesis is a difficulty, not a fix.
+
 **Anti-patterns (forbidden):**
 - "Ping me when it's done" / "tell me when it reaches X" — offloading the monitoring cadence to the user.
+- Relying on `ScheduleWakeup` for auto-wake **outside `/loop`** — it is gated off there and silently no-ops, leaving the main thread idle until the user pings. Use the harness-tracked waiter (step 2) instead.
+- Declaring a job dead from an empty (buffered) log and relaunching — verify the process tree first (see above).
 - Holding an expensive opus inline poll loop running for hours.
 - Declaring the task done / closing the gate before the job is actually terminal (a config edit or a single green block is not the observable — terminal state is).
 
