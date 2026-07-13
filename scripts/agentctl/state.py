@@ -19,7 +19,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -81,6 +81,16 @@ class Confidence(str, Enum):
     HIGH = "high"
     MEDIUM = "medium"
     LOW = "low"
+
+
+class StatementKind(str, Enum):
+    """The category of a refutable principle (element 7). There are exactly two,
+    on one reflexive refutation axis: `сущее` is знание (is / descriptive), refuted
+    by the world; `должное` is норма (ought / prescriptive), shown inadequate when a
+    goal it serves is blocked — reflexively, the discovery that a grounding сущее was
+    false. `принцип` is the most general member of the norm-series, not a third kind."""
+    IS = "сущее"
+    OUGHT = "должное"
 
 
 class InvariantError(Exception):
@@ -384,11 +394,18 @@ class Criterion:
 
 @dataclass
 class Principle:
-    """The refutable principle the stage rests on (confidence is a Confidence value)."""
+    """The refutable principle the stage rests on (confidence is a Confidence value).
+
+    `statement_kind` types the principle by category (a StatementKind value):
+    `сущее` (знание / is — descriptive, refuted when the world contradicts it) or
+    `должное` (норма / ought — prescriptive, shown inadequate when a goal it serves
+    is blocked, which by the reflexive figure is the discovery that a grounding
+    сущее was false). Optional (None) so every pre-typing plan grandfathers in."""
     statement: str
     source: str
     confidence: str
     refutation: str
+    statement_kind: str | None = None
 
 
 @dataclass

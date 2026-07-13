@@ -49,6 +49,13 @@ it uses the sections below instead).
   coordination rule are both possible. Absent = cross-domain / unscoped, retrievable under any
   `--domain` filter (absence is the permissive default, not an error). Consumed by
   `record-experience.py search --domain`.
+- `statement_kind: <сущее | должное>` — **optional**; the category of the principle, mirroring the
+  `StatementKind` enum a plan's element-7 principle carries (see [[plan-activity-ontology]] § Element 7).
+  `сущее` = `знание` (*is* / descriptive, refuted by the world); `должное` = `норма` (*ought* / prescriptive,
+  shown **inadequate** when a goal it serves is blocked). One **reflexive** refutation axis: a `должное`
+  shown inadequate is the discovery that a grounding `сущее` was false, so its `## Refutation` names the
+  goal-blockage and the response is **reflexive reconstruction** of the grounding `знание`. Absent =
+  grandfathered (the field adds no requirement to existing leaves).
 - `created` / `last_verified` (required) — the temporal fields common to every leaf, defined in
   [memory-temporal-frontmatter.md](memory-temporal-frontmatter.md). `last_accessed` is retired.
 
