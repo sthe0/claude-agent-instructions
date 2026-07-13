@@ -21,6 +21,8 @@ When a user's stated requirement appears to contradict what you observe (a comma
 
 Critically evaluate every clarified requirement for adequacy **and** non-contradiction, but resolve a perceived contradiction to root — self-staleness included — before escalating.
 
+The snapshot to refresh is not only your view of the stated order but the functional place behind it — a stale order can be literally accurate yet already fill the wrong position in its organizedness; see [[function-place-difficulty]] for reconstructing the function an order serves before optimizing it at face value.
+
 ### The planning direction: before planning potentially-already-done work, refresh the authoritative source
 
 The same stale-snapshot difficulty has a *planning-side* twin. Before you plan work that another session, machine, or collaborator **could already have produced** — a merge, a hook deploy, a refactor, a migration — refresh the authoritative source (`git fetch origin` + re-read the live state / branch tips / deployed config) **before** committing the plan. Planning against a stale local view silently re-plans already-done work; the wasted effort surfaces only when the plan is executed or, worse, when someone checks the live state you should have checked first.
