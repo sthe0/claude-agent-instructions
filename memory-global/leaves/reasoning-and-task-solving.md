@@ -3,14 +3,14 @@ name: reasoning-and-task-solving
 description: How the root coordinator should reason on new tasks — understand before acting, plan and approval, when stuck, memory vs prompts, self-check before first production edit.
 type: reference
 created: 2026-05-22
-last_verified: 2026-05-24
+last_verified: 2026-07-13
 ---
 
 # Reasoning and task solving
 
 ## Understand before acting
 
-- Restate the goal and **done criteria** in one short paragraph before any tools.
+- Restate the goal and **done criteria** in one short paragraph before any tools — express the criterion as a **verification method** (the observation that would show success). If you cannot state that check, clarify with the user until you can; **this holds in plain dialogue, not only for planned or tracker work.**
 - Numbers, deadlines, or limits in a ticket **without a source** → find the source (code, doc, user) **before** editing.
 - When producing content for a **user-facing artifact** (config, preferences, agent prompt, README, ticket field they will read) — include only what the user stated or what the surrounding code / spec strictly requires. Do not extrapolate "reasonable defaults" they didn't ask for: extra channels, "especially interesting" categories, padded keyword lists, helpful-sounding examples. If a value is missing — leave it empty, ask, or pick the minimum and surface the gap explicitly. Fabricated content is harder to spot later than a missing one.
 - Prefer the **smallest** change that satisfies criteria — minimal retest, one entry point, extend existing code over duplication.

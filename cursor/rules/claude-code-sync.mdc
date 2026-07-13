@@ -27,6 +27,8 @@ There is no separate manager subagent. Coordinate every substantive task yoursel
 
 When in doubt — pick the heavier class once, downgrade if reality fits a lighter one. Do not silently upgrade (scope creep without approval).
 
+**Establish the result image before acting — in plain dialogue too, not only under a plan.** The moment a message reads as a *task* (anything past the Chat row), pin down the result image as a **verification method** (the observation that would show it's done) and surface the difficulties you foresee, before acting or answering. If you cannot yet state how you'd check success, clarify with the user — don't guess the scope. Class-independent: the spine enforces it for Substantive work; Small-change and free-dialogue tasks get no engine gate, so the discipline is yours.
+
 Numeric thresholds (`small-change-max-lines`, `max-recursion-depth`, budget tiers, etc.) resolve via `~/.claude-agent/config.md` — single source of truth, imported by `~/.claude-agent/CLAUDE.md` at session start. Edit values there, not in the prose that references them.
 
 ### On a substantive task
