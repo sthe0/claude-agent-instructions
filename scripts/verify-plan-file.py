@@ -35,6 +35,13 @@ Substantive plans must also carry, at plan level (anywhere in the file):
 Legacy / non-substantive plans (no weight_class marker) are validated only
 against the 4-section baseline, preserving backward compatibility.
 
+Every plan file is additionally bounded to one safe `Write`: a monolithic plan
+above the `plan-file-max-bytes` (config.md) ceiling must be split into an index +
+one file per stage, and any single per-stage file above the ceiling must be
+decomposed further (sub-steps / service sub-plan). This mechanizes
+memory-global/leaves/plan-file-split.md — the planner stalled twice mid-`Write`
+on a ~66-73 KB monolithic DEEPAGENT-448 plan.
+
 A stage MAY optionally carry an executable form of its done criterion via a
 `Verify command:` line (and the TOML keys `verify_command` / `expected_exit`):
 when present on a measurable stage the engine runs it and gates the stage's
@@ -90,6 +97,78 @@ _SOURCE_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Source\**\s*:")
 _CONFIDENCE_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Confidence\**\s*:")
 _REFUTATION_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Refutation\**\s*:")
 
+# --- Plan-file size guard (mechanizes memory-global/leaves/plan-file-split.md) ---
+# The planner stalled twice mid-`Write` authoring a ~66-73 KB monolithic plan
+# ("Response stalled mid-stream"). The failure is a per-`Write` generation-length
+# problem, so the guard bounds each per-file (per-stage) size — NOT the total.
+CONFIG_MD = Path(__file__).resolve().parent.parent / "config.md"
+CONFIG_KEY_RE = re.compile(r"^\|\s*`([a-z0-9-]+)`\s*\|\s*`([^`]+)`\s*\|")
+_PLAN_FILE_MAX_BYTES_KEY = "plan-file-max-bytes"
+_DEFAULT_PLAN_FILE_MAX_BYTES = 18000  # config.md key: plan-file-max-bytes
+# Markdown links to sibling per-stage plan files — the split layout's index rows
+# (`[…](<slug>-stage-<N>-<short>.md)`, per plan-file-split.md § Layout).
+STAGE_FILE_LINK_RE = re.compile(r"\]\(\s*([^)\s]*-stage-[0-9][^)\s]*\.md)\s*\)")
+
+
+def _plan_file_max_bytes() -> int:
+    """Read the `plan-file-max-bytes` ceiling from config.md; fall back to the
+    baked default if the file or key is unreadable (the guard must never wedge
+    on a config hiccup)."""
+    try:
+        for line in CONFIG_MD.read_text(encoding="utf-8").splitlines():
+            m = CONFIG_KEY_RE.match(line)
+            if m and m.group(1) == _PLAN_FILE_MAX_BYTES_KEY:
+                return int(m.group(2))
+    except (OSError, ValueError):
+        pass
+    return _DEFAULT_PLAN_FILE_MAX_BYTES
+
+
+def _referenced_stage_files(path: Path, text: str) -> list[Path]:
+    """Per-stage files linked from an index plan, resolved next to the index."""
+    return [path.parent / m.group(1) for m in STAGE_FILE_LINK_RE.finditer(text)]
+
+
+def _check_plan_size(path: Path, text: str, max_bytes: int) -> list[str]:
+    """Bound each plan file to one safe `Write`. A monolith above the ceiling must
+    be split (index + per-stage files); a split-plan's stage file above the ceiling
+    must be decomposed further (the case a total-size split alone does not solve)."""
+    errors: list[str] = []
+    own_bytes = len(text.encode("utf-8"))
+    stage_files = _referenced_stage_files(path, text)
+    # An index links to per-stage files that actually exist on disk. A dangling
+    # link (placeholder / not-yet-written) keeps the file classified as a monolith
+    # so its own size is still guarded.
+    is_split = any(p.exists() for p in stage_files)
+
+    if is_split:
+        if own_bytes > max_bytes:
+            errors.append(
+                f"split-plan index `{path.name}` is {own_bytes} bytes, above the "
+                f"{max_bytes}-byte per-file ceiling. Keep the index thin — move stage "
+                f"detail into the per-stage files (plan-file-split.md)."
+            )
+        for sp in stage_files:
+            if not sp.exists():
+                continue
+            sb = len(sp.read_bytes())
+            if sb > max_bytes:
+                errors.append(
+                    f"stage file `{sp.name}` is {sb} bytes, above the {max_bytes}-byte "
+                    f"per-stage ceiling. This single stage is too large to author in one "
+                    f"Write; DECOMPOSE it into sub-steps or a service sub-plan (each a "
+                    f"separate bounded Write) rather than emitting one over-ceiling file."
+                )
+    elif own_bytes > max_bytes:
+        errors.append(
+            f"plan `{path.name}` is {own_bytes} bytes, above the {max_bytes}-byte "
+            f"single-Write ceiling, but is a single monolithic file. SPLIT it into an "
+            f"index + one file per stage, each written by a SEPARATE bounded Write "
+            f"(plan-file-split.md). If a single stage alone would still exceed the "
+            f"ceiling, DECOMPOSE that stage into sub-steps or a service sub-plan."
+        )
+    return errors
+
 
 def slice_section(text: str, heading: str) -> str | None:
     """Return the text between `## <heading>` and the next `## ` heading,
@@ -106,12 +185,20 @@ def slice_section(text: str, heading: str) -> str | None:
     return text[start:end]
 
 
-def check(path: Path) -> list[str]:
-    """Return a list of error strings; empty list means OK."""
+def check(path: Path, *, max_bytes: int | None = None) -> list[str]:
+    """Return a list of error strings; empty list means OK.
+
+    `max_bytes` overrides the per-file size ceiling (default: config.md's
+    `plan-file-max-bytes`) — injected small in tests so they need not author
+    real multi-KB plan files."""
     errors: list[str] = []
     if not path.exists():
         return [f"plan file not found: {path}"]
     text = path.read_text(encoding="utf-8")
+    if max_bytes is None:
+        max_bytes = _plan_file_max_bytes()
+
+    errors.extend(_check_plan_size(path, text, max_bytes))
 
     for section in REQUIRED_SECTIONS:
         if not slice_section(text, section):

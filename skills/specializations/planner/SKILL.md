@@ -128,9 +128,16 @@ Optional `##` sections (add when the task warrants them; not enforced by `verify
 
 For each stage that calls for a specialist (developer, thinker, yandex-cloud-expert, …), the manager will spawn that specialization as a separate `claude -p` process — your plan only names which specialization is needed, not how to spawn it.
 
-### Large plans — split into index + per-stage files
+### Large plans — split into index + per-stage files (HARD STEP)
 
-For plans > ~20 KB / ~600 lines or > 3 stages accruing `Actual effort:` updates, split into an index + per-stage files so later Reads pull only the active stage; for ≤ 3 stages or < 10 KB the single-file default stands. Layout and section template: [plan-file-split.md](../../../memory-global/leaves/plan-file-split.md).
+**This is a non-optional step, not advice.** Writing a large plan as one monolithic `Write` stalls mid-stream ("Response stalled mid-stream" → `MALFORMED:`, observed twice on the ~66 KB / 73 KB DEEPAGENT-448 plan). No single plan file may exceed the `plan-file-max-bytes` ceiling (config.md — currently 18 KB); `verify-plan-file.py` FAILS a plan that violates this.
+
+When the plan would exceed the ceiling you **must**:
+
+1. Emit an **index** file (Problem / Stages summary table with per-stage links / Final verification / Risks) **plus one file per stage**, each authored by a **SEPARATE bounded `Write`** — never one big `Write`.
+2. If a **single stage alone** would exceed the ceiling (a total-size split does not solve this), **DECOMPOSE that stage further** — split it into sub-steps or a service sub-plan with a `depends_on` edge — rather than emitting one over-ceiling file.
+
+For a genuinely small plan (≤ 3 stages, comfortably under the ceiling) the single-file default stands. Layout and section template: [plan-file-split.md](../../../memory-global/leaves/plan-file-split.md).
 
 ### Tool guidance
 

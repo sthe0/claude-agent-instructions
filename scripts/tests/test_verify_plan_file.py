@@ -292,3 +292,83 @@ def test_non_substantive_missing_external_research_ok(tmp_path):
     mod = _load()
     plan = _write(tmp_path, _BASELINE_BODY)
     assert not any("External research" in e for e in mod.check(plan))
+
+
+# ---------------------------------------------------------------------------
+# 6. Plan-file size guard (mechanizes plan-file-split.md) — per-file / per-stage
+#    Write-length ceiling, injected small via max_bytes so tests stay fast.
+# ---------------------------------------------------------------------------
+
+_SMALL_CEILING = 400  # bytes — well above _BASELINE_BODY, so only padding trips it
+
+
+def _write_named(tmp_path: Path, name: str, content: str) -> Path:
+    p = tmp_path / name
+    p.write_text(content, encoding="utf-8")
+    return p
+
+
+# An index plan whose ## Stages links out to per-stage files (the split layout).
+def _index_body(stage_links: str) -> str:
+    return (
+        "## Problem and done criteria\nFix the thing.\n\n"
+        "## Stages\n\n"
+        "| # | Name | Stage file |\n|---|---|---|\n"
+        + stage_links
+        + "\nExpected result image: all stages pass\n\n"
+        "## Final verification\nRun pytest.\n\n"
+        "## Risks\nNone.\n"
+    )
+
+
+def test_sub_threshold_monolith_passes(tmp_path):
+    """A monolithic plan under the ceiling passes the size guard (no regression)."""
+    mod = _load()
+    plan = _write(tmp_path, _BASELINE_BODY)
+    assert mod.check(plan, max_bytes=_SMALL_CEILING) == []
+
+
+def test_monolith_over_ceiling_fails(tmp_path):
+    """A monolithic plan above the ceiling FAILS and names the split remedy."""
+    mod = _load()
+    padded = _BASELINE_BODY + "\n" + ("filler line, no stage links here. " * 40)
+    plan = _write(tmp_path, padded)
+    errors = mod.check(plan, max_bytes=_SMALL_CEILING)
+    assert any("monolithic" in e and "SPLIT" in e for e in errors), errors
+
+
+def test_split_index_under_ceiling_passes(tmp_path):
+    """The same content split into a thin index + small per-stage files passes."""
+    mod = _load()
+    _write_named(tmp_path, "plan-stage-1-a.md", "# Stage 1\nsmall body\n")
+    _write_named(tmp_path, "plan-stage-2-b.md", "# Stage 2\nsmall body\n")
+    body = _index_body(
+        "| 1 | A | [stage-1](plan-stage-1-a.md) |\n"
+        "| 2 | B | [stage-2](plan-stage-2-b.md) |\n"
+    )
+    plan = _write(tmp_path, body)
+    assert mod.check(plan, max_bytes=_SMALL_CEILING) == []
+
+
+def test_split_stage_over_ceiling_fails_with_decompose(tmp_path):
+    """A split plan whose one stage file exceeds the ceiling FAILS, naming the
+    decomposition remedy (the case a total-size split alone does not solve)."""
+    mod = _load()
+    _write_named(tmp_path, "plan-stage-1-a.md", "# Stage 1\nsmall body\n")
+    _write_named(tmp_path, "plan-stage-2-b.md", "x" * (_SMALL_CEILING + 50))
+    body = _index_body(
+        "| 1 | A | [stage-1](plan-stage-1-a.md) |\n"
+        "| 2 | B | [stage-2](plan-stage-2-b.md) |\n"
+    )
+    plan = _write(tmp_path, body)
+    errors = mod.check(plan, max_bytes=_SMALL_CEILING)
+    assert any("plan-stage-2-b.md" in e and "DECOMPOSE" in e for e in errors), errors
+
+
+def test_size_ceiling_default_reads_config(tmp_path):
+    """With no max_bytes, the guard reads a positive ceiling from config.md
+    (default wiring), and a tiny plan passes under it."""
+    mod = _load()
+    assert mod._plan_file_max_bytes() > 0
+    plan = _write(tmp_path, _BASELINE_BODY)
+    assert mod.check(plan) == []
