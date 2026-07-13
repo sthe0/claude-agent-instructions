@@ -4,7 +4,7 @@ description: When a user's stated requirement appears to contradict what you obs
 type: feedback
 schema: leaf/v1
 created: 2026-07-02
-last_verified: 2026-07-11
+last_verified: 2026-07-13
 ---
 
 # Before you doubt a requirement, doubt your own snapshot
@@ -27,7 +27,12 @@ The same stale-snapshot difficulty has a *planning-side* twin. Before you plan w
 
 Concrete instance (2026-07-11): a whole plan plus **four** thinker-review rounds were spent against a `main` snapshot **19 commits stale**, on work (a "loops" feature) that had *already been merged and deployed* — discovered only when the user asked "сверься со свежим main". Personal memory was independently wrong too (it claimed the primary checkout sat on a feature branch when it was on `main`). Two separate stale snapshots, one avoidable `fetch` away from being caught at plan time. So: for any task whose result is the kind of thing that gets done once and shared, a fetch-and-re-read is a **plan-time precondition**, not a nicety.
 
+### The outage direction: doubt your own probe before declaring a service down
+
+The same difficulty has an *external-failure* twin. When a service appears to fail, your bare probe is the stale snapshot — a `curl`/one-shot call can fail for a dozen reasons that are not "the service is down" (wrong client, missing ambient context, expired token, a transient, the wrong endpoint). Before you declare it down or escalate the outage to the user, reproduce the failure with the **real client** the working path uses, and actively seek a **counter-example** (open the UI, try a second access path) — a genuine outage survives both, a false premise does not. Never launder the unverified premise into a sub-agent question ("the endpoint is down — how do I get access?"): the sub-agent inherits the premise and **circularly confirms** it. Route it through overcome-difficulty (reproduce → ≥2 hypotheses, each with a cheap falsifier) instead. Enforced pre-emptively by `hook-escalation-diagnosis-gate.py` (denies the un-diagnosed AskUserQuestion) and, as a Stop backstop, by the `escalation_without_diagnosis` turn guardian.
+
 ## See also
 
 - `~/.claude-agent/CLAUDE.md` § Escalation to the user — the short pointer that loads this leaf.
+- [[mirror-working-caller-before-bypass]] — the same "use the real working path, not a bypass" instinct on the ambient-context axis.
 - [[capability-before-offload]] — the acting-side twin: doubt your own claim of *"can't"*, not the user's expectation that you can.

@@ -72,6 +72,7 @@ from typing import Any, Callable
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from si_feedback_detect import find_signals  # noqa: E402
 from long_job_detect import detect as _detect_long_job  # noqa: E402
+from outage_escalation_detect import detect as _detect_outage  # noqa: E402
 from timer_arm_detect import (  # noqa: E402
     closure_sought as _closure_sought,
     waiter_armed as _waiter_armed,
@@ -112,6 +113,13 @@ class TurnContext:
     autowake_armed : whether this turn armed a harness-tracked auto-wake (a
                      `Bash(run_in_background:true)` waiter or `CronCreate`). Computed
                      by the shell via the shared waiter_armed predicate.
+    outage_escalation_sought : whether this turn's assistant text surfaces an
+                     external-service failure to the user without a recorded
+                     diagnosis (shared outage_escalation_detect scan over the
+                     concatenated assistant text). Computed by the shell.
+    difficulty_declared : whether the engine's SessionState carries a declared
+                     difficulty (`state.difficulty.declaration` set). Read once,
+                     here, by the shell from agentctl_state.
     """
 
     last_user_text: str
@@ -122,6 +130,8 @@ class TurnContext:
     closure_sought: bool = False
     long_job_launched: bool = False
     autowake_armed: bool = False
+    outage_escalation_sought: bool = False
+    difficulty_declared: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +152,35 @@ def self_improvement_blockers(ctx: TurnContext) -> list[str]:
         f"overcome-difficulty skill was engaged this turn. Invoke the "
         f"self-improvement skill now, or explicitly state in your reply why it "
         f"does not apply."
+    ]
+
+
+def escalation_without_diagnosis_blockers(ctx: TurnContext) -> list[str]:
+    """This turn surfaced an external-service failure to the user (a present-tense
+    outage cue plus a user-facing escalation frame) without a recorded diagnosis.
+    The PreToolUse hook-escalation-diagnosis-gate.py denies the same shape at
+    AskUserQuestion time; this is the Stop backstop for a TEXT escalation that
+    never went through an ask.
+
+    Fires only under the full conjunction, all read from the frozen context:
+      - outage_escalation_sought (the shell's outage_escalation_detect scan over
+        this turn's assistant text fired);
+      - overcome-difficulty was NOT invoked this turn; AND
+      - no declared difficulty exists (difficulty_declared).
+
+    Pure: reads only frozen ctx booleans / the invocations set.
+    """
+    if not ctx.outage_escalation_sought:
+        return []
+    if "overcome-difficulty" in ctx.invocations:
+        return []
+    if ctx.difficulty_declared:
+        return []
+    return [
+        "This turn surfaced an external-service failure to the user without a "
+        "recorded overcome-difficulty declare. Before ending the turn, reproduce "
+        "it with the real client and run overcome-difficulty (>=2 hypotheses, each "
+        "with a cheap falsifier); do not leave an unverified outage claim standing."
     ]
 
 
@@ -222,6 +261,7 @@ def long_job_autowake_blockers(ctx: TurnContext) -> list[str]:
 # in iteration order, and the resolution obligation is named LAST.
 TURN_GUARDIANS: dict[str, Callable[[TurnContext], list[str]]] = {
     "self_improvement": self_improvement_blockers,
+    "escalation_without_diagnosis": escalation_without_diagnosis_blockers,
     "long_job_autowake": long_job_autowake_blockers,
     "resolution": resolution_turn_blockers,
 }
@@ -342,6 +382,33 @@ def analyze(entries: list[dict]) -> tuple[str, set[str], list[dict]]:
     return last_user_text, invocations, turn_entries
 
 
+def _assistant_text_of(turn_entries: list[dict]) -> str:
+    """Concatenate the human-facing text blocks of this turn's assistant messages
+    (mirrors how analyze() walks turn_entries). Fed to the outage-escalation
+    detector by the shell so the guardian stays pure."""
+    parts: list[str] = []
+    for entry in turn_entries:
+        msg = entry.get("message")
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        text = _user_text(msg)  # same type=="text" extraction works for either role
+        if text:
+            parts.append(text)
+    return "\n".join(parts)
+
+
+def _difficulty_declared(state) -> bool:
+    """True iff the SessionState carries a declared difficulty (a Difficulty whose
+    `.declaration` is set) — mirrors gates.difficulty_blockers' `d = state.difficulty;
+    d.declaration` access. False for None state or an empty/undeclared difficulty."""
+    if state is None:
+        return False
+    difficulty = getattr(state, "difficulty", None)
+    if difficulty is None:
+        return False
+    return getattr(difficulty, "declaration", None) is not None
+
+
 def _load_agentctl_state(session_id: str | None):
     """Best-effort read of the engine's SessionState. None on any failure.
 
@@ -382,17 +449,20 @@ def build_context(payload: dict) -> TurnContext | None:
     session_id = payload.get("session_id")
     if not isinstance(session_id, str) or not session_id:
         session_id = None
+    agentctl_state = _load_agentctl_state(session_id)
     return TurnContext(
         last_user_text=last_user_text,
         invocations=frozenset(invocations),
         transcript_path=transcript_path,
         session_key=session_id or transcript_path,
-        agentctl_state=_load_agentctl_state(session_id),
+        agentctl_state=agentctl_state,
         closure_sought=_closure_sought(turn_entries),
         long_job_launched=any(
             _detect_long_job(c) for c in _iter_bash_commands(turn_entries)
         ),
         autowake_armed=_waiter_armed(turn_entries),
+        outage_escalation_sought=bool(_detect_outage(_assistant_text_of(turn_entries))),
+        difficulty_declared=_difficulty_declared(agentctl_state),
     )
 
 
