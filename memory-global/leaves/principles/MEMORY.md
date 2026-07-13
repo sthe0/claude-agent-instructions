@@ -21,6 +21,7 @@ the two sub-indexes stay physically separate but record two profiles of the same
 
 - [Every result is critiqued against its declared result-image](result-checked-against-its-result-image.md) — the critique primitive (compare expected vs actual, extract the difference) applied to one stage; skipping the check is itself a difficulty. ← `coordinator-pitfalls`, `2026-06-24-gate-exemption-is-category-error-for-result-images`.
 - [A complete option space is generated from the functional ground](option-space-spans-axes-from-functional-ground.md) — span orthogonal axes (passive/active, batch/continuous, precedence/synthesis); generate options from the difficulty's ground, not a mechanism catalogue; ask what invariant subsumes them. ← `coordinator-pitfalls`, `2026-06-26-critique-primitive-unifies-conflict-and-principle`.
+- [The reflexive exit is the base activity figure over a norm](reflexive-exit-is-base-activity-figure.md) — self-improvement / overcome-difficulty / proactive self-diagnosis are one figure with material=the norm (transform=re-norming, control=achievability of the norm's result, result=norm adequate to the order); its search space is the knowledge space = memory. ← `2026-07-14-smd-principle-norm-category-error-and-budget-exhaustion`, `function-place-difficulty`.
 
 ## Level 2 — task-class rules
 

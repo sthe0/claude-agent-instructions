@@ -82,6 +82,11 @@ Two currencies, two enforcement grains:
 
 So documentation currency is the same element-5 discipline as any preserved invariant: the control criterion (element 3) at final verification should treat "the changed object's bound documentation is still consistent" as part of conformance, with the registry making *which* documentation explicit.
 
+### Reflexive use — the same 8 elements over a norm
+
+<!-- Language exception: перенормирование is the settled SMD source-ontology term; preserved verbatim. -->
+When the material is a **norm** (a rule / plan / instruction under revision), these same 8 elements describe every reflexive operation — self-improvement, overcome-difficulty, proactive self-diagnosis — with material=the norm, transformation=re-norming (перенормирование), control=achievability of the norm's result, result=a norm adequate to the order. The reflexive material is sought in **knowledge space (= memory)** rather than an object space. See [[reflexive-exit-is-base-activity-figure]].
+
 ### Recursive sub-ordering — the genesis of composite plans
 
 Element 8 is **not an independent eighth thing**; it is the *consequence* of one rule:
