@@ -4,7 +4,7 @@ description: When a user's stated requirement appears to contradict what you obs
 type: feedback
 schema: leaf/v1
 created: 2026-07-02
-last_verified: 2026-07-11
+last_verified: 2026-07-13
 ---
 
 # Before you doubt a requirement, doubt your own snapshot
@@ -20,6 +20,8 @@ Challenging a **correct** requirement from an out-of-date local view wastes the 
 When a user's stated requirement appears to contradict what you observe (a command / file / flag the user says exists that you don't see), first suspect your OWN source is stale or incomplete — `pull` / `fetch` / re-read the authoritative source (fresh state may live on another branch or machine) **before** doubting the requirement or asking a clarifying question built on a false premise ("X doesn't exist"). A stale local snapshot is not ground truth.
 
 Critically evaluate every clarified requirement for adequacy **and** non-contradiction, but resolve a perceived contradiction to root — self-staleness included — before escalating.
+
+The snapshot to refresh is not only your view of the stated order but the functional place behind it — a stale order can be literally accurate yet already fill the wrong position in its organizedness; see [[function-place-difficulty]] for reconstructing the function an order serves before optimizing it at face value.
 
 ### The planning direction: before planning potentially-already-done work, refresh the authoritative source
 
