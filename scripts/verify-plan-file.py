@@ -89,11 +89,6 @@ _EXTERNAL_RESEARCH_RE = re.compile(r"(?im)^\s*[-*]?\s*\**External research\**\s*
 _SOURCE_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Source\**\s*:")
 _CONFIDENCE_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Confidence\**\s*:")
 _REFUTATION_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Refutation\**\s*:")
-# Element 7's OPTIONAL statement_kind label (знание/сущее | норма/должное). Absent =>
-# grandfathered (older plans predate the field); present => value must be one of the
-# two categories. The capture group grabs the value token for validation.
-_STATEMENT_KIND_RE = re.compile(r"(?im)^\s*[-*]?\s*\**statement_kind\**\s*:\s*`?(\S+?)`?\s*$")
-_STATEMENT_KINDS = ("сущее", "должное")
 
 
 def slice_section(text: str, heading: str) -> str | None:
@@ -191,16 +186,9 @@ def check(path: Path) -> list[str]:
                         f"substantive plan: `Principle:` block inside `## Stages` is missing "
                         f"`{label}:` (element 7 — state the principle's {label.lower()})"
                     )
-            # statement_kind is OPTIONAL (grandfathered when absent), but when present
-            # its value must name one of the two categories — знание or норма.
-            for m in _STATEMENT_KIND_RE.finditer(stages_text):
-                value = m.group(1)
-                if value not in _STATEMENT_KINDS:
-                    errors.append(
-                        f"substantive plan: `Principle:` block has `statement_kind: {value}` "
-                        f"which is not one of {list(_STATEMENT_KINDS)} (element 7 — the "
-                        f"principle is either знание/сущее or норма/должное)"
-                    )
+            # No a-priori знание-vs-норма label is required or validated (ADR-0004 dropped
+            # the principle-typing as a category error — element 7 is always a норма). A
+            # legacy prose plan still carrying such a label is tolerated, never enforced.
 
     return errors
 

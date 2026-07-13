@@ -16,10 +16,10 @@ dataclass — the seam store.py persists.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -443,16 +443,25 @@ class Criterion:
 class Principle:
     """The refutable principle the stage rests on (confidence is a Confidence value).
 
-    `statement_kind` types the principle by category (a StatementKind value):
-    `сущее` (знание / is — descriptive, refuted when the world contradicts it) or
-    `должное` (норма / ought — prescriptive, shown inadequate when a goal it serves
-    is blocked, which by the reflexive figure is the discovery that a grounding
-    сущее was false). Optional (None) so every pre-typing plan grandfathers in."""
+    Element 7 is ALWAYS a норма (должное) — the most general member of the norm-series
+    (цель→план→программа→метод→подход→принцип) — and a norm is never checked for truth.
+    So there is NO a-priori `statement_kind` tag on the principle (ADR-0004 dropped it
+    as a category error): the сущее-vs-должное character of a fault is a POST-HOC product
+    of критика at difficulty closure, living in the two refutation MODES and R2's routing,
+    not on the norm itself."""
     statement: str
     source: str
     confidence: str
     refutation: str
-    statement_kind: str | None = None
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Principle":
+        """Rebuild a Principle from its JSON dict, ignoring unknown keys so a legacy
+        plan/session carrying the retired `statement_kind` field still loads (grandfather
+        — the a-priori principle-typing was dropped in ADR-0004; the key is tolerated and
+        ignored, never re-required). Load-time tolerance IS the migration: no data rewrite."""
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in d.items() if k in known})
 
 
 @dataclass
@@ -577,7 +586,7 @@ class Stage:
                 means=Means(**d["means"]),
                 actor=Actor(**d["actor"]),
                 criterion=Criterion(**d["criterion"]),
-                principle=Principle(**d["principle"]) if d.get("principle") else None,
+                principle=Principle.from_dict(d["principle"]) if d.get("principle") else None,
                 conditions=d.get("conditions"),
                 supplies=[Supply(**s) for s in d.get("supplies", [])],
                 outcome=Outcome(**d["outcome"]) if d.get("outcome") else Outcome(),

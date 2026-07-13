@@ -49,13 +49,6 @@ it uses the sections below instead).
   coordination rule are both possible. Absent = cross-domain / unscoped, retrievable under any
   `--domain` filter (absence is the permissive default, not an error). Consumed by
   `record-experience.py search --domain`.
-- `statement_kind: <сущее | должное>` — **optional**; the category of the principle, mirroring the
-  `StatementKind` enum a plan's element-7 principle carries (see [[plan-activity-ontology]] § Element 7).
-  `сущее` = `знание` (*is* / descriptive, refuted by the world); `должное` = `норма` (*ought* / prescriptive,
-  shown **inadequate** when a goal it serves is blocked). One **reflexive** refutation axis: a `должное`
-  shown inadequate is the discovery that a grounding `сущее` was false, so its `## Refutation` names the
-  goal-blockage and the response is **reflexive reconstruction** of the grounding `знание`. Absent =
-  grandfathered (the field adds no requirement to existing leaves).
 - `created` / `last_verified` (required) — the temporal fields common to every leaf, defined in
   [memory-temporal-frontmatter.md](memory-temporal-frontmatter.md). `last_accessed` is retired.
 
@@ -73,6 +66,15 @@ fully valid — absence means "matches any domain filter". `verify-leaf-structur
   (mirrors the `induced_from` frontmatter so the graph is readable inline).
 - `## Refutation` — the concrete observation that would refute the principle **or** drive it to a
   broader form (refutation ≡ generalization). A principle with no refutation condition is suspect.
+  <!-- Language exception: сущее/должное/знание/норма are the settled SMD source-ontology terms; preserved verbatim for traceability. -->
+  A principle **is always a норма** (`должное`) — the most general member of the norm-series
+  (цель→план→программа→метод→подход→принцип) — and a norm is never checked for truth, so a principle
+  carries **no** a-priori знание-vs-норма tag (ADR-0004 dropped the `statement_kind` field as a category
+  error). On the **one reflexive refutation axis**: a `должное` shown inadequate (a goal it serves is
+  blocked) is the discovery that a grounding `сущее` (a `знание`) was false, so `## Refutation` names the
+  goal-blockage and the response is **reflexive reconstruction** of that grounding `знание`. Whether a
+  *fault* was a content-fault (`сущее`) or a form-fault (`должное`) is decided **post-hoc** at difficulty
+  closure (`критика`), not fixed on the principle in advance.
 - `## See also` — sibling principles, the ADR, related leaves.
 
 **The generality ladder:**

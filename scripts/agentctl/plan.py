@@ -77,7 +77,6 @@ from .state import (
     Principle,
     Stage,
     StageStatus,
-    StatementKind,
     Subject,
     Supply,
 )
@@ -167,15 +166,9 @@ def _validate_substantive_stage(s: dict, index: int) -> None:
             f"stage {index} [stage.principle] confidence {conf!r} is not one of "
             f"{sorted(c.value for c in Confidence)}"
         )
-    # statement_kind types element 7 as знание (сущее) or норма (должное). Optional:
-    # a plan predating the field omits it and grandfathers in; when present it must
-    # name one of the two categories (there is no third — принцип is a norm-series member).
-    kind = principle.get("statement_kind")
-    if kind is not None and kind not in {k.value for k in StatementKind}:
-        raise PlanError(
-            f"stage {index} [stage.principle] statement_kind {kind!r} is not one of "
-            f"{sorted(k.value for k in StatementKind)}"
-        )
+    # Element 7 is ALWAYS a норма (должное); there is no a-priori знание-vs-норма tag to
+    # validate (ADR-0004 dropped it as a category error). A legacy principle block still
+    # carrying the retired key parses unchanged — the extra key is simply not read, not rejected.
     # Anti-template: the cheapest degradation of a required free-text field is
     # boilerplate. Reject placeholder values and reject a principle that merely
     # echoes another field back at itself (refutation == statement, or the
@@ -327,11 +320,6 @@ def parse_plan(data: dict, *, strict_executor: bool = True) -> PlanDoc:
                 source=str(raw_principle["source"]),
                 confidence=str(raw_principle["confidence"]),
                 refutation=str(raw_principle["refutation"]),
-                statement_kind=(
-                    str(raw_principle["statement_kind"])
-                    if raw_principle.get("statement_kind") is not None
-                    else None
-                ),
             )
             if isinstance(raw_principle, dict) and raw_principle
             else None
