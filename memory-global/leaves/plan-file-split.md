@@ -16,11 +16,12 @@ The harness Read dedup ([system-knowledge/harness-read-dedup.md](system-knowledg
 
 Apply the split if **any** of:
 
-- The plan exceeds ~20 KB or ~600 lines.
+- The plan (or any single stage's detail) exceeds the `plan-file-max-bytes` ceiling (config.md — currently 18 KB). **This is now mechanically enforced** — `verify-plan-file.py` FAILS a monolithic plan above the ceiling and FAILS a split-plan whose any stage file exceeds it.
+- The plan exceeds ~600 lines.
 - More than three stages will need `Actual effort:` updates as work progresses.
 - Stages have substantially independent reference-file lists / specialist instructions.
 
-For small plans (single sprint, ≤ 3 stages, < 10 KB): keep the single file. Splitting overhead is not worth it.
+For small plans (single sprint, ≤ 3 stages, comfortably under the ceiling): keep the single file. Splitting overhead is not worth it.
 
 ## Layout
 
@@ -96,10 +97,11 @@ spawn-specialist.py \
 
 ## What the planner skill should do
 
-The planner does **not** auto-split. It writes a single file by default — `verify-plan-file.py` accepts that. If during planning the planner sees the plan growing beyond the trigger thresholds above, it should:
+The split is a **hard, mechanically-enforced step** (planner SKILL.md § Large plans — split into index + per-stage files). A plan above the `plan-file-max-bytes` ceiling MUST be split; `verify-plan-file.py` rejects a monolith over the ceiling with `MALFORMED:`. When the plan grows past the ceiling the planner must:
 
 1. Stop, decide to split.
-2. Write the index + stage files.
-3. Return `PLAN-READY:` pointing at the index path. (The manager reads the index to present to the user; the user approves; later spawns pull individual stage files as needed.)
+2. Write the index **plus one file per stage, each by a SEPARATE bounded `Write`** — never one big `Write` (a monolithic `Write` stalls mid-stream; that is the difficulty this mechanism removes).
+3. If a **single stage alone** would exceed the ceiling, **decompose that stage further** (sub-steps or a service sub-plan) — a total-size split does not fix an oversized single stage.
+4. Return `PLAN-READY:` pointing at the index path. (The manager reads the index to present to the user; the user approves; later spawns pull individual stage files as needed.)
 
-A planner that produces single 30-KB plans is not wrong — but for long-running tickets, the manager re-reading the plan repeatedly costs more than the split would have cost to author.
+Beyond avoiding the stall, the split also cuts cost on long-running tickets: the manager re-reads only the active stage instead of the whole plan.
