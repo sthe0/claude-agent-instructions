@@ -1512,11 +1512,13 @@ def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Di
     # getattr-with-default: in-process Namespace callers (test_replan.py builds one by
     # hand with only the two required fields) must keep working — an absent field is None.
     failure_address = getattr(args, "failure_address", None)
-    # Reject a bogus value here (mirroring cmd_normalize's --level check) so an in-process
-    # caller bypassing the argparse `choices` is caught before the Critique is built; the
-    # gate (failure_address_blockers) is the defense-in-depth backstop at closure. None is
+    # Reject a bogus value HERE (mirroring cmd_normalize's --level check) so an in-process
+    # caller bypassing the argparse `choices` is caught before the Critique is built — this
+    # (with argparse) is the ONLY validation of the value set. The closure gate
+    # (failure_address_blockers) checks only non-None, so a bogus value must never reach a
+    # persisted record; that also grandfathers a legacy OLD-value record on load. None is
     # allowed at critique time — the routing may be recorded now or left for a later replan,
-    # where the closure gate demands it.
+    # where the closure gate demands it be present.
     if failure_address is not None and failure_address not in FAILURE_ADDRESS_VALUES:
         return Directive(False, state.node, "critique",
                          f"--failure-address must be one of {list(FAILURE_ADDRESS_VALUES)} "
@@ -1619,8 +1621,8 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     else:
         _log_gate(state, "normalization_blockers", nblock, passed=True)
 
-    # closure precondition (R2): a goal-failure must be ROUTED — the critique's
-    # failure_address must be a legal value (сущее/должное/not_applicable), never a bare
+    # closure precondition (R2): the fault must be ROUTED — the critique's failure_address
+    # must be recorded (ресурсное/нормативное/not_applicable обеспечение), never a bare
     # omission — before the difficulty may be closed. Mirrors normalization_blockers: an
     # INTERNAL precondition (absent from GUARDIANS), [] outside the DIAGNOSING-closure
     # path, so a non-difficulty replan is unaffected. Unlike the normalization gate there
@@ -1629,8 +1631,8 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     _log_gate(state, "failure_address_blockers", fablock, passed=not fablock)
     if fablock:
         return Directive(False, state.node, "critique",
-                         "replan blocked: the goal-failure must be routed "
-                         "(re-run critique with --failure-address)",
+                         "replan blocked: the fault must be routed to the inadequate "
+                         "обеспечение (re-run critique with --failure-address)",
                          data={"blockers": fablock})
 
     if not state.plan_path:
@@ -2310,9 +2312,10 @@ def build_parser() -> argparse.ArgumentParser:
                          "(repeatable); the engine verifies a means/method changed on replan")
     sp.add_argument("--failure-address", dest="failure_address", default=None,
                     choices=list(FAILURE_ADDRESS_VALUES),
-                    help="route the goal-failure (R2): сущее (content/knowledge-fault) | "
-                         "должное (form/goal-fault) | not_applicable (routing does not "
-                         "apply); the closure gate demands it on a difficulty-closing replan")
+                    help="route the fault to the inadequate обеспечение (R2): ресурсное "
+                         "(ресурсное обеспечение — материал/средство) | нормативное "
+                         "(нормативное обеспечение — норма/способ) | not_applicable (routing "
+                         "does not apply); the closure gate demands it on a difficulty-closing replan")
     sp = add("normalize"); sp.add_argument("--session", required=True)
     sp.add_argument("--factor", required=True,
                     help="the reproducible cause the difficulty exposed, being re-normed "

@@ -50,7 +50,7 @@ def _complete_cycle(store, sid):
     cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
                            hypotheses=["h1", "h2"]), store=store)
     cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
-                        failure_address="должное"), store=store)
+                        failure_address="нормативное"), store=store)
 
 
 # --- guardian unit -----------------------------------------------------------

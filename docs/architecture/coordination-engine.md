@@ -36,7 +36,7 @@ Two gates (marked `■`) are **non-skippable**, enforced by guardian hooks:
 
 State for a session lives at `~/.claude-agent/agentctl/state/<session_id>.json`. The spine is **pluggable** — a skill can attach a per-session sub-state-machine.
 
-Distinct from those two hook-enforced gates, the `DIAGNOSING`-closure path carries a family of **internal `replan` preconditions** — pure guardians deliberately absent from `GUARDIANS` (no hook), each blocking difficulty closure until its artifact is recorded: `difficulty_blockers` (the declare→investigate→critique cycle is complete), `normalization_blockers` (the reproducible factor is re-normed), and `failure_address_blockers` (the goal-failure is routed to a content-fault `сущее`, a form-fault `должное`, or explicit `not_applicable`) — see the engine README.
+Distinct from those two hook-enforced gates, the `DIAGNOSING`-closure path carries a family of **internal `replan` preconditions** — pure guardians deliberately absent from `GUARDIANS` (no hook), each blocking difficulty closure until its artifact is recorded: `difficulty_blockers` (the declare→investigate→critique cycle is complete), `normalization_blockers` (the reproducible factor is re-normed), and `failure_address_blockers` (the fault is routed to the inadequate `обеспечение` — `ресурсное`, `нормативное`, or explicit `not_applicable`) — see the engine README.
 
 ## Where the detail lives
 

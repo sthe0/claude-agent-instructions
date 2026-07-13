@@ -1,20 +1,24 @@
-"""Goal-failure routing at difficulty closure (R2).
+"""Fault-address routing at difficulty closure (R2, reframed v4).
 
-A goal-failure is ambiguous until ROUTED: does it address знание (сущее — the model
-of the material was wrong, form was right) or норма (должное — целеполагание was
-wrong), or does routing explicitly not apply (not_applicable)? The engine types the
-routing as `Critique.failure_address` (reusing StatementKind's values verbatim — no
-second enum — plus the not_applicable sentinel) and enforces it as a `replan`
-precondition at DIAGNOSING closure (gates.failure_address_blockers): once the
-declare->investigate->critique cycle is complete, replan is blocked until the critique
-carries a legal routing value. A bare None (omission) blocks — the routing must be
+A затруднение is overcome by fixing its обеспечение, and a goal-failure is ambiguous
+until ROUTED: was the inadequate обеспечение РЕСУРСНОЕ (материал/средство — 'ресурсное')
+or НОРМАТИВНОЕ (норма/способ — 'нормативное'), or does routing explicitly not apply
+(not_applicable)? These are two special cases of ONE act («норма — тоже ресурс»), both
+reducing reflexively to знание — NOT an is/ought (сущее/должное) tag; that v3 typing was
+rejected (ADR-0004 §R2). The engine types the routing as `Critique.failure_address` and
+enforces it as a `replan` precondition at DIAGNOSING closure (gates.failure_address_blockers):
+once the declare->investigate->critique cycle is complete, replan is blocked until the
+critique carries a routing value. A bare None (omission) blocks — the routing must be
 DECIDED; an EXPLICIT not_applicable is a legal opt-out that clears. This mirrors R3's
-normalization gate over the renorming act; the SMD content (which fault a failure
-addresses) is the coordinator's cognition, the routing's EXISTENCE is the engine's.
+normalization gate over the renorming act; the SMD content (which обеспечение failed) is
+the coordinator's cognition, the routing's EXISTENCE is the engine's.
 
-This covers the deterministic SHELL: the pure guardian, cmd_critique validation, the
-argparse `choices` guard, round-trip persistence, the legacy grandfather migration, and
-the end-to-end block/route path at closure."""
+The closure gate checks ONLY non-None: any recorded value clears, so a legacy record
+carrying an OLD сущее/должное value (the rejected v3 typing) is grandfathered, never
+re-blocked. Bogus values never reach a persisted record — cmd_critique and the argparse
+`choices` reject them at write time. This covers the deterministic SHELL: the pure
+guardian, cmd_critique validation, the argparse `choices` guard, round-trip persistence,
+the legacy grandfather migration, and the end-to-end block/route path at closure."""
 from argparse import Namespace
 
 import pytest
@@ -36,10 +40,11 @@ def ns(**kw):
     return Namespace(**kw)
 
 
-# FAILURE_ADDRESS_VALUES REUSES StatementKind (no second enum) + the not_applicable
-# sentinel — pin the exact set so a future rename of either surface trips here.
-def test_failure_address_values_reuse_statement_kind():
-    assert FAILURE_ADDRESS_VALUES == ("сущее", "должное", "not_applicable")
+# FAILURE_ADDRESS_VALUES routes the fault to the inadequate обеспечение (ресурсное vs
+# нормативное) + the not_applicable sentinel — DECOUPLED from the retired StatementKind
+# enum (ADR-0004 §R2). Pin the exact set so a future rename trips here.
+def test_failure_address_values_are_obespechenie_kinds():
+    assert FAILURE_ADDRESS_VALUES == ("ресурсное", "нормативное", "not_applicable")
 
 
 # --- guardian unit -----------------------------------------------------------
@@ -73,16 +78,16 @@ def test_blockers_empty_while_cycle_incomplete():
 def test_blockers_block_complete_cycle_without_routing():
     s = _diagnosing(_full_difficulty(failure_address=None))
     blockers = gates.failure_address_blockers(s)
-    assert blockers and "routing the goal-failure" in blockers[0]
+    assert blockers and "routing the fault" in blockers[0]
 
 
-def test_blockers_clear_with_content_fault():
-    s = _diagnosing(_full_difficulty(failure_address="сущее"))
+def test_blockers_clear_with_resource_obespechenie():
+    s = _diagnosing(_full_difficulty(failure_address="ресурсное"))
     assert gates.failure_address_blockers(s) == []
 
 
-def test_blockers_clear_with_form_fault():
-    s = _diagnosing(_full_difficulty(failure_address="должное"))
+def test_blockers_clear_with_normative_obespechenie():
+    s = _diagnosing(_full_difficulty(failure_address="нормативное"))
     assert gates.failure_address_blockers(s) == []
 
 
@@ -93,12 +98,13 @@ def test_blockers_clear_with_explicit_not_applicable():
     assert gates.failure_address_blockers(s) == []
 
 
-def test_blockers_block_bogus_value():
-    # defense in depth: an in-process caller that set the Critique directly, bypassing
-    # argparse choices and cmd_critique validation, is still caught at the gate
-    s = _diagnosing(_full_difficulty(failure_address="maybe"))
-    blockers = gates.failure_address_blockers(s)
-    assert blockers and "must be one of" in blockers[0]
+def test_blockers_grandfather_legacy_value_at_closure():
+    # a legacy record carrying an OLD сущее/должное value (the rejected v3 typing) must
+    # still clear — the gate checks ONLY non-None, never membership, so it is never
+    # re-blocked at closure. Bogus rejection lives at write time (cmd_critique/argparse).
+    for legacy in ("сущее", "должное"):
+        s = _diagnosing(_full_difficulty(failure_address=legacy))
+        assert gates.failure_address_blockers(s) == []
 
 
 # --- cmd_critique validation -------------------------------------------------
@@ -129,9 +135,9 @@ def test_cmd_critique_accepts_valid_routing(store, fixtures_dir):
     _to_failed_stage1(store, "cc1", str(fixtures_dir / "plan_two_stage.toml"))
     _declare_investigate(store, "cc1")
     d = cli.cmd_critique(ns(session="cc1", functional_ground="fg", replanning_task="rt",
-                            failure_address="сущее"), store=store)
+                            failure_address="ресурсное"), store=store)
     assert d.ok is True
-    assert store.load("cc1").difficulty.critique.failure_address == "сущее"
+    assert store.load("cc1").difficulty.critique.failure_address == "ресурсное"
 
 
 def test_cmd_critique_rejects_bogus_routing(store, fixtures_dir):
@@ -186,18 +192,30 @@ def test_failure_address_round_trips():
 
 
 def test_legacy_critique_without_failure_address_migrates_to_none():
-    """A persisted state whose critique omits the failure_address key (pre-SCHEMA 17
-    JSON) loads with failure_address defaulting to None."""
+    """A persisted state whose critique omits the failure_address key (pre-R2 JSON) loads
+    with failure_address defaulting to None."""
     s = SessionState(
         session_id="mig", task_id="t", node=Node.DIAGNOSING.value,
-        difficulty=_full_difficulty(failure_address="должное"),
+        difficulty=_full_difficulty(failure_address="нормативное"),
     )
     data = s.to_dict()
     data["difficulty"]["critique"].pop("failure_address")
     restored = SessionState.from_dict(data)
     assert restored.difficulty.critique.failure_address is None
-    # and such a legacy session, at closure, is (correctly) blocked by the new gate
+    # and such a legacy session, at closure, is (correctly) blocked by the gate
     assert gates.failure_address_blockers(restored)
+
+
+def test_legacy_critique_with_old_value_loads_and_is_ungated():
+    """A persisted state whose critique carries an OLD сущее/должное value (the rejected
+    v3 typing) still LOADS unchanged and is NOT re-blocked at closure — grandfather."""
+    s = SessionState(
+        session_id="leg", task_id="t", node=Node.DIAGNOSING.value,
+        difficulty=_full_difficulty(failure_address="сущее"),
+    )
+    restored = SessionState.from_json(s.to_json())
+    assert restored.difficulty.critique.failure_address == "сущее"
+    assert gates.failure_address_blockers(restored) == []
 
 
 # --- end-to-end: block / route at closure ------------------------------------
@@ -230,7 +248,7 @@ def test_routed_critique_unblocks_replan(store, fixtures_dir):
     _to_failed_stage1(store, "e2", plan)
     _declare_investigate(store, "e2")
     cli.cmd_critique(ns(session="e2", functional_ground="fg", replanning_task="rt",
-                        failure_address="должное"), store=store)
+                        failure_address="нормативное"), store=store)
     _renorm(store, "e2")
     d = cli.cmd_replan(ns(session="e2", plan=refined), store=store)
     assert d.ok is True

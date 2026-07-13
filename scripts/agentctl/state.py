@@ -19,7 +19,7 @@ import json
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -83,24 +83,20 @@ class Confidence(str, Enum):
     LOW = "low"
 
 
-class StatementKind(str, Enum):
-    """The category of a refutable principle (element 7). There are exactly two,
-    on one reflexive refutation axis: `сущее` is знание (is / descriptive), refuted
-    by the world; `должное` is норма (ought / prescriptive), shown inadequate when a
-    goal it serves is blocked — reflexively, the discovery that a grounding сущее was
-    false. `принцип` is the most general member of the norm-series, not a third kind."""
-    IS = "сущее"
-    OUGHT = "должное"
-
-
-# The legal values of a Critique.failure_address (R2 — goal-failure routing). This
-# REUSES StatementKind verbatim (no second enum coined) — a goal-failure addresses
-# either знание (сущее: the content, the model of the material, was wrong) or норма
-# (должное: the form, the целеполагание, was wrong) — the SAME должное-rests-on-сущее
-# root R4 draws over the means, now over the goal. `not_applicable` is the one legal
-# sentinel for an EXPLICIT opt-out (the critique states the routing does not apply),
-# kept distinct from a bare None omission so the gate can discriminate the two.
-FAILURE_ADDRESS_VALUES = (StatementKind.IS.value, StatementKind.OUGHT.value, "not_applicable")
+# The legal values of a Critique.failure_address (R2 — the fault-address of преодоление
+# затруднения). A затруднение is overcome by fixing its ОБЕСПЕЧЕНИЕ, and the address is one
+# of two special cases of that ONE act: inadequate РЕСУРСНОЕ обеспечение ('ресурсное' —
+# материал/средство: the model of the material, or the tool, was wrong) or inadequate
+# НОРМАТИВНОЕ обеспечение ('нормативное' — норма/способ: the goal, or the method to reach it,
+# was wrong). These are NOT two ontologies — «норма — тоже ресурс» (нормативное обеспечение
+# ⊂ обеспечение деятельности) — and both reduce reflexively to знание. This is deliberately
+# NOT an is/ought (сущее/должное) tag: the value set is its OWN, decoupled from the retired
+# StatementKind enum a-priori-typing dropped in ADR-0004 (§R2 records the reframe). The
+# сущее/должное character of a fault is a POST-HOC product of критика, not carried here.
+# `not_applicable` is the one legal sentinel for an EXPLICIT opt-out (the critique states the
+# routing does not apply), kept distinct from a bare None omission so the gate can
+# discriminate the two.
+FAILURE_ADDRESS_VALUES = ("ресурсное", "нормативное", "not_applicable")
 
 
 class InvariantError(Exception):
@@ -223,15 +219,19 @@ class Critique:
     so a critique that omits them (and any pre-change persisted state) loads and
     replans exactly as before.
 
-    `failure_address` (schema 17, R2) types the goal-failure ROUTING: a goal-failure
-    addresses either content (сущее — знание-о-материале was wrong, form was right) or
-    form (должное — целеполагание was wrong), or explicitly does not apply
-    (not_applicable). A legal value is one of FAILURE_ADDRESS_VALUES; None is the
-    untouched-legacy default (a critique recorded before schema 17, or one that has not
-    yet routed). gates.failure_address_blockers blocks difficulty closure on a bare None
-    (omission) — an explicit not_applicable is a legal opt-out, not an omission — so the
-    routing is DECIDED, never silently skipped, mirroring normalization_blockers over the
-    reproducible-factor act."""
+    `failure_address` (schema 17, R2; values reframed schema 19 per ADR-0004 §R2) types
+    the fault-address of преодоление затруднения: the затруднение is overcome by fixing its
+    обеспечение, either inadequate РЕСУРСНОЕ обеспечение ('ресурсное' — материал/средство) or
+    inadequate НОРМАТИВНОЕ обеспечение ('нормативное' — норма/способ), or explicitly
+    not_applicable. Two special cases of ONE act («норма — тоже ресурс»), both reducing
+    reflexively to знание — NOT an is/ought tag. A legal value (for a NEW write) is one of
+    FAILURE_ADDRESS_VALUES; None is the untouched-legacy default (a critique recorded before
+    schema 17, or one not yet routed). A legacy record carrying an OLD сущее/должное value
+    (the rejected v3 R2 typing) also loads unchanged — the field stores any string, and the
+    gate checks only non-None, so it is grandfathered, never re-blocked. gates.
+    failure_address_blockers blocks difficulty closure on a bare None (omission) — an explicit
+    not_applicable is a legal opt-out, not an omission — so the routing is DECIDED, never
+    silently skipped, mirroring normalization_blockers over the reproducible-factor act."""
     functional_ground: str
     replanning_task: str
     invariants_to_preserve: list[str] = field(default_factory=list)
