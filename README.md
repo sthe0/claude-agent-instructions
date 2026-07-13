@@ -121,3 +121,7 @@ The bare `cd ~/my-project && claude` flow still works — `claude-task` is an op
 | Extra agents | `~/.claude-agent/agents/` (system root) |
 | Local scripts | `~/.claude/scripts-local/` (personal — machine-local, never in the system root) |
 | Local skills | `~/.claude-agent/skills/` (system root; single-file `skills-local/*.md`, gitignored fallback) |
+
+## License
+
+Licensed under the Apache License, Version 2.0 — see [LICENSE](LICENSE). Copyright 2026 Fedor Solovev. Attribution (the [NOTICE](NOTICE) file) must be preserved in redistributions and derivative works.
