@@ -650,3 +650,113 @@ def test_resolution_self_heals_after_a_poller_turn(tmp_path, isolated_state, mon
     ], name="t2.jsonl")
     out = _mod.decide({"transcript_path": str(t2), "stop_hook_active": False, "session_id": "s1"})
     assert out is not None and "resolution gate" in out["reason"]
+
+
+# --- escalation_without_diagnosis guardian ----------------------------------
+
+# Assistant text that fires outage_escalation_detect (present-tense outage cue +
+# a user-facing escalation frame). NEUTRAL user text is paired with it so the
+# self-improvement guardian never co-fires and assertions stay clean.
+ESCALATION_TEXT = "Сервис недоступен и не отвечает. К кому обратиться за доступом?"
+
+
+class _FakeDifficulty:
+    def __init__(self, declared: bool):
+        self.declaration = object() if declared else None
+
+
+class _StateWithDifficulty:
+    """Minimal SessionState stand-in exposing only `.difficulty` — what the
+    escalation guardian's difficulty_declared computation reads."""
+
+    def __init__(self, declared: bool):
+        self.difficulty = _FakeDifficulty(declared)
+
+
+def _esc_ctx(sought=True, invocations=frozenset(), declared=False):
+    return _mod.TurnContext(
+        last_user_text="add a parser for the config file",
+        invocations=invocations,
+        transcript_path="/x.jsonl",
+        session_key="s",
+        agentctl_state=None,
+        outage_escalation_sought=sought,
+        difficulty_declared=declared,
+    )
+
+
+def test_escalation_guardian_fires_on_undiagnosed_escalation():
+    out = _mod.escalation_without_diagnosis_blockers(_esc_ctx())
+    assert len(out) == 1
+    assert "external-service failure" in out[0]
+    assert "overcome-difficulty" in out[0]
+
+
+def test_escalation_guardian_silent_when_overcome_difficulty_invoked():
+    ctx = _esc_ctx(invocations=frozenset({"overcome-difficulty"}))
+    assert _mod.escalation_without_diagnosis_blockers(ctx) == []
+
+
+def test_escalation_guardian_silent_when_declared():
+    assert _mod.escalation_without_diagnosis_blockers(_esc_ctx(declared=True)) == []
+
+
+def test_escalation_guardian_silent_when_not_sought():
+    assert _mod.escalation_without_diagnosis_blockers(_esc_ctx(sought=False)) == []
+
+
+def test_escalation_registered_after_self_improvement_before_resolution():
+    keys = list(_mod.TURN_GUARDIANS)
+    assert "escalation_without_diagnosis" in keys
+    assert keys.index("self_improvement") < keys.index("escalation_without_diagnosis")
+    assert keys.index("escalation_without_diagnosis") < keys.index("long_job_autowake")
+    assert keys.index("escalation_without_diagnosis") < keys.index("resolution")
+
+
+def test_difficulty_declared_reader():
+    assert _mod._difficulty_declared(None) is False
+    assert _mod._difficulty_declared(_StateWithDifficulty(declared=False)) is False
+    assert _mod._difficulty_declared(_StateWithDifficulty(declared=True)) is True
+
+
+# --- escalation guardian: integration through decide() ----------------------
+
+def test_escalation_blocks_via_decide(tmp_path, isolated_state, monkeypatch):
+    _patch_state(monkeypatch, None)  # no declared difficulty
+    t = _write_transcript(tmp_path, [
+        _user_line("add a parser for the config file"),
+        _assistant_text_line(ESCALATION_TEXT),
+    ])
+    out = _mod.decide({"transcript_path": str(t), "stop_hook_active": False, "session_id": "s1"})
+    assert out is not None and out["decision"] == "block"
+    assert "external-service failure" in out["reason"]
+    # neutral user text -> the self-improvement obligation is not among the blockers
+    assert "agent-behavior-feedback" not in out["reason"]
+
+
+def test_escalation_silent_when_overcome_difficulty_this_turn(tmp_path, isolated_state, monkeypatch):
+    _patch_state(monkeypatch, None)
+    t = _write_transcript(tmp_path, [
+        _user_line("add a parser for the config file"),
+        _assistant_skill_line("overcome-difficulty"),
+        _assistant_text_line(ESCALATION_TEXT),
+    ])
+    assert _mod.decide({"transcript_path": str(t), "stop_hook_active": False, "session_id": "s1"}) is None
+
+
+def test_escalation_silent_when_declare_present(tmp_path, isolated_state, monkeypatch):
+    _patch_state(monkeypatch, _StateWithDifficulty(declared=True))
+    t = _write_transcript(tmp_path, [
+        _user_line("add a parser for the config file"),
+        _assistant_text_line(ESCALATION_TEXT),
+    ])
+    assert _mod.decide({"transcript_path": str(t), "stop_hook_active": False, "session_id": "s1"}) is None
+
+
+def test_escalation_silent_when_no_escalation_text(tmp_path, isolated_state, monkeypatch):
+    _patch_state(monkeypatch, None)
+    t = _write_transcript(tmp_path, [
+        _user_line("add a parser for the config file"),
+        _assistant_text_line("here is the parser, all tests pass"),
+    ])
+    assert _mod.decide({"transcript_path": str(t), "stop_hook_active": False, "session_id": "s1"}) is None
