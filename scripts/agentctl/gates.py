@@ -134,6 +134,32 @@ def difficulty_blockers(state: SessionState) -> list[str]:
     return []
 
 
+def normalization_blockers(state: SessionState) -> list[str]:
+    """Precondition guardian for `replan` at DIAGNOSING closure: a difficulty is a
+    norm-failure, and because activity is constituted by reproduction, closing one
+    REQUIRES re-norming the reproducible factor it exposed (перенормирование). Like
+    difficulty_blockers this is an INTERNAL command precondition — deliberately absent
+    from GUARDIANS so verify-agentctl requires no hook. [] == may close.
+
+    Scoped to the DIAGNOSING-closure path: [] outside DIAGNOSING, and [] while the
+    difficulty cycle is still incomplete (difficulty_blockers owns that case — this
+    gate never double-reports it). Once the cycle is complete, a Normalization record
+    (a non-empty factor) is required; its absence blocks unless cmd_replan's explicit
+    --normalization-waiver escape is taken (a one-off, non-reproducible factor). The
+    LEVEL (note/leaf/principle) is payoff-gated cognition the gate never inspects."""
+    if state.node != Node.DIAGNOSING.value:
+        return []
+    d = state.difficulty
+    if d is None or not d.complete():
+        return []  # difficulty_blockers owns the incomplete-cycle case
+    n = d.normalization
+    if n is None or not (n.factor or "").strip():
+        return ["difficulty closure requires re-norming — run: normalize (record the "
+                "reproducible factor), or replan --normalization-waiver <reason> if the "
+                "factor is genuinely one-off"]
+    return []
+
+
 def plan_review_active(state: SessionState) -> bool:
     """Whether the thinker-review gate applies to this session.
 

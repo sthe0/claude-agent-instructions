@@ -26,6 +26,18 @@ Record only if a future you, opening a similar task, would actually want to **re
 
 If none — do not record. Memory bloat is worse than memory gap. The git log + the code are the default record. Skip the leaf entirely for trivial Q&A turns and one-line tasks; the whole rule applies only to substantive work where you planned, delegated, or hit a difficulty.
 
+### normalize-if-reproducible — the ACT is mandatory, the LEVEL is payoff-gated
+
+The quality bar above governs the recording **LEVEL**, never the *re-norming act itself*. A difficulty is a norm-failure; because an activity is constituted by its reproduction, a **reproducible** factor left un-normed simply re-fails. So at difficulty closure the ACT of **normalizing** that factor (re-norming — updating the governing norm: an instruction, a gate, a habit, or at minimum a deliberate in-head note) is **mandatory whenever the factor is reproducible**, independent of any payoff threshold. The engine enforces the act: `agentctl replan` is blocked at DIAGNOSING closure until `agentctl normalize --factor <reproducible cause>` records it, or `replan --normalization-waiver <reason>` is taken for a genuinely one-off factor (see [[experience-leaf-schema]] and the overcome-difficulty skill).
+
+What `rediscovery-threshold-min` then decides is only the **LEVEL** — where the re-norming lands on the note → leaf → principle ladder (`agentctl normalize --level`):
+
+- **below the bar** → an in-head note / a one-line tweak in place (level omitted or `note`); no experience leaf;
+- **at/above the bar** → a `leaf` (this procedure);
+- **recurring across contexts** (`principle-promotion-threshold`) → a `principle` ([[principle-leaf-schema]]).
+
+So: *reproducible ⇒ always re-norm (the ACT); the quality-bar tests decide only how durably you record it (the LEVEL).* A one-off factor that genuinely will not recur is the sole case that closes with a waiver instead of a record.
+
 ### What to record
 
 The unit of experience is a **recurring difficulty** (a plan-vs-reality divergence — the object `overcome-difficulty` localizes), not a one-off task. One leaf records one difficulty and accumulates every context it arose in, plus the plan that removed it in each.

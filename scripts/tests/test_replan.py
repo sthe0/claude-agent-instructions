@@ -85,6 +85,7 @@ def test_refinement_after_failure_rearms_the_stage(store, fixtures_dir):
     cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
                            hypotheses=["h1", "h2"]), store=store)
     cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt"), store=store)
+    cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
 
     # now a refinement replan must re-arm the failed stage and point back at it
     d = cli.cmd_replan(ns(session=sid, plan=refined), store=store)
@@ -246,6 +247,9 @@ def _to_diagnosing_with_critique(store, sid, plan, *, invariants_to_preserve=Non
     cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
                         invariants_to_preserve=invariants_to_preserve or ["keep idempotency"],
                         differences_to_remove=[]), store=store)
+    # re-norm the difficulty so replan clears the normalization gate and the coverage
+    # gate (checked after it) is what these tests exercise.
+    cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
 
 
 def test_coverage_waiver_bypasses_block_and_is_recorded(store, monkeypatch, tmp_path, fixtures_dir):

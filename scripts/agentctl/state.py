@@ -19,7 +19,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -218,6 +218,27 @@ class Critique:
     differences_to_remove: list[str] = field(default_factory=list)
 
 
+# The levels of the renorming act, ordered by payoff. A reproducible factor MUST be
+# re-normed (the ACT is mandatory); WHICH level — an in-head note, a memory leaf, or a
+# generalized principle — is payoff-gated by rediscovery-threshold-min and stays the
+# coordinator's cognition, so `level` may be None (a note below the leaf threshold).
+NORMALIZATION_LEVELS = ("note", "leaf", "principle")
+
+
+@dataclass
+class Normalization:
+    """Phase 4 (closure): the renorming act (перенормирование). A difficulty is a
+    norm-failure (провал нормы = SIGNAL); because activity is constituted by
+    reproduction, a REPRODUCIBLE factor left un-normed simply re-fails — so closing a
+    difficulty REQUIRES re-norming that factor (the ACT is mandatory-if-reproducible).
+    `factor` names the reproducible cause; `level` (note/leaf/principle) is the payoff-
+    gated recording level and may be None. Recorded by cmd_normalize; gates cmd_replan
+    (see gates.normalization_blockers). A one-off (non-reproducible) factor takes the
+    explicit --normalization-waiver escape instead of a record."""
+    factor: str
+    level: str | None = None
+
+
 @dataclass
 class Difficulty:
     """One active difficulty: a plan-vs-reality divergence being worked through.
@@ -225,6 +246,7 @@ class Difficulty:
     declaration: Declaration | None = None
     investigation: Investigation | None = None
     critique: Critique | None = None
+    normalization: Normalization | None = None
 
     def complete(self) -> bool:
         return (
@@ -240,10 +262,14 @@ class Difficulty:
         decl = d.get("declaration")
         inv = d.get("investigation")
         crit = d.get("critique")
+        # normalization defaults to None so any pre-SCHEMA_VERSION-16 persisted state
+        # (which never carried the key) loads unchanged — the grandfather migration.
+        norm = d.get("normalization")
         return cls(
             declaration=Declaration(**decl) if decl else None,
             investigation=Investigation(**inv) if inv else None,
             critique=Critique(**crit) if crit else None,
+            normalization=Normalization(**norm) if norm else None,
         )
 
 

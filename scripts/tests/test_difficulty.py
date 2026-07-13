@@ -53,6 +53,10 @@ def _critique(store, sid):
                                replanning_task="rt"), store=store)
 
 
+def _normalize(store, sid, *, factor="reproducible cause", level="note"):
+    return cli.cmd_normalize(ns(session=sid, factor=factor, level=level), store=store)
+
+
 # --- entry: FAILED -> DIAGNOSING ---------------------------------------------
 
 def test_failed_stage_enters_diagnosing(store, fixtures_dir):
@@ -85,6 +89,7 @@ def test_replan_allowed_after_full_cycle(store, fixtures_dir):
     _investigate(store, "f3")
     c = _critique(store, "f3")
     assert c.action == "replan"  # cycle complete; replan unblocked
+    _normalize(store, "f3")  # re-norm the reproducible factor before closure
     d = cli.cmd_replan(ns(session="f3", plan=refined), store=store)
     assert d.ok is True
     assert d.action == "next_stage"
@@ -101,6 +106,7 @@ def test_substantive_replan_from_diagnosing_rearms_gate(store, fixtures_dir):
     _declare(store, "f4")
     _investigate(store, "f4")
     _critique(store, "f4")
+    _normalize(store, "f4")  # re-norm the reproducible factor before closure
     d = cli.cmd_replan(ns(session="f4", plan=bigger), store=store)
     assert d.marker == "PLAN-READY"
     state = store.load("f4")

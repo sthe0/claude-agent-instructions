@@ -92,7 +92,19 @@ Then derive a **replanning task** for the root coordinator. The task must name:
 
 End with one explicit sentence: **"Replanning task for the root: …"**.
 
-Record it: `agentctl critique --session <id> --functional-ground … --replanning-task … [--invariant-to-preserve …]… [--difference-to-remove …]…`. This completes the difficulty record and unblocks `replan`.
+Record it: `agentctl critique --session <id> --functional-ground … --replanning-task … [--invariant-to-preserve …]… [--difference-to-remove …]…`. This completes the diagnosis; one closure act remains before `replan`.
+
+## 4. Normalization — re-norming the reproducible factor
+
+A difficulty is a **norm-failure**: a governing norm — an instruction, a gate, a habit, a plan assumption — failed to hold. That failure is a **SIGNAL**, not the fix. Because an activity is constituted by its *reproduction*, a **reproducible** factor left un-normed simply re-fails on the next run. So the closure **ACT** is **re-norming**: update the norm so the same factor cannot recur — tighten an instruction, add/adjust a gate, change a habit, or at minimum record a deliberate note. In SMD/MMK terms, mapped onto the cycle above:
+
+<!-- Language exception: SMD/MMK source terms name the signal→act pair precisely. -->
+- **провал нормы (norm-failure) = SIGNAL** — surfaced by declaration → investigation → critique;
+- **перенормирование (renorming) = ACT** — this phase, which the replanning task then carries into the corrected plan on `replan`.
+
+The **ACT is mandatory whenever the factor is reproducible**; the recording **LEVEL** (in-head note / memory leaf / principle) is payoff-gated by `rediscovery-threshold-min` — that split is the [[recording-experience]] `normalize-if-reproducible` rule. A factor that is genuinely one-off (will not recur) is the only case that skips the record.
+
+Record it: `agentctl normalize --session <id> --factor <the reproducible cause> [--level note|leaf|principle]`. The engine blocks `replan` at DIAGNOSING closure until this exists, **or** you take the explicit one-off escape `agentctl replan … --normalization-waiver <reason>` (`gates.normalization_blockers`). This unblocks `replan`.
 
 ## Handoff back to the root
 

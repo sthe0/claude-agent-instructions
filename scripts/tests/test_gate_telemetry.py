@@ -154,18 +154,21 @@ def test_walkthrough_logs_difficulty_and_replan_coverage_gates(store, monkeypatc
     cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
                            hypotheses=["h1", "h2"]), store=store)
     cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt"), store=store)
+    cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
 
     d = cli.cmd_replan(ns(session=sid, plan=refined), store=store)
     assert d.ok is True
 
     rows = _read_gate_log(log_path)
     gates_fired = [r["gate"] for r in rows]
-    # The completed replan also logs one plan_review evaluation (the thinker-review
-    # gate); here it passes vacuously (gate off by default in the suite), between the
-    # passing difficulty_blockers and the replan_coverage check.
+    # The completed replan logs the normalization gate (closure re-norming) between the
+    # passing difficulty_blockers and the plan_review evaluation (vacuous, gate off by
+    # default in the suite), then the replan_coverage check.
     assert gates_fired == ["plan_approval", "difficulty_blockers",
-                           "difficulty_blockers", "plan_review", "replan_coverage"]
+                           "difficulty_blockers", "normalization_blockers",
+                           "plan_review", "replan_coverage"]
     assert rows[1]["passed"] is False  # premature: record incomplete
     assert rows[2]["passed"] is True   # cycle complete
-    assert rows[3]["passed"] is True   # plan_review evaluated (vacuous, gate off)
-    assert rows[4]["passed"] is True   # coverage satisfied
+    assert rows[3]["passed"] is True   # normalization recorded
+    assert rows[4]["passed"] is True   # plan_review evaluated (vacuous, gate off)
+    assert rows[5]["passed"] is True   # coverage satisfied
