@@ -40,6 +40,7 @@ from .state import (
     CriterionType,
     Declaration,
     Difficulty,
+    FAILURE_ADDRESS_VALUES,
     FinalCheck,
     Investigation,
     JudgeBypass,
@@ -49,6 +50,8 @@ from .state import (
     GateRecord,
     Means,
     Node,
+    Normalization,
+    NORMALIZATION_LEVELS,
     PermissionRequest,
     PlanFrame,
     PlanReview,
@@ -1506,13 +1509,24 @@ def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Di
     if state.difficulty.declaration is None or state.difficulty.investigation is None:
         return Directive(False, state.node, "declare",
                          "critique is out of order: declaration and investigation must come first")
+    # getattr-with-default: in-process Namespace callers (test_replan.py builds one by
+    # hand with only the two required fields) must keep working — an absent field is None.
+    failure_address = getattr(args, "failure_address", None)
+    # Reject a bogus value here (mirroring cmd_normalize's --level check) so an in-process
+    # caller bypassing the argparse `choices` is caught before the Critique is built; the
+    # gate (failure_address_blockers) is the defense-in-depth backstop at closure. None is
+    # allowed at critique time — the routing may be recorded now or left for a later replan,
+    # where the closure gate demands it.
+    if failure_address is not None and failure_address not in FAILURE_ADDRESS_VALUES:
+        return Directive(False, state.node, "critique",
+                         f"--failure-address must be one of {list(FAILURE_ADDRESS_VALUES)} "
+                         f"or omitted, got {failure_address!r}")
     state.difficulty.critique = Critique(
         functional_ground=args.functional_ground,
         replanning_task=args.replanning_task,
-        # getattr-with-default: in-process Namespace callers (test_replan.py builds
-        # one by hand with only the two required fields) must keep working.
         invariants_to_preserve=list(getattr(args, "invariants_to_preserve", None) or []),
         differences_to_remove=list(getattr(args, "differences_to_remove", None) or []),
+        failure_address=failure_address,
     )
     state.log("critique")
     store.save(state)
@@ -1536,6 +1550,38 @@ def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Di
     return d
 
 
+def cmd_normalize(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Phase 4 (closure): record the renorming act. Mandatory at DIAGNOSING closure —
+    a reproducible factor left un-normed re-fails, so replan is blocked (see
+    gates.normalization_blockers) until this records the factor, or the user takes the
+    explicit --normalization-waiver escape for a genuinely one-off factor. The LEVEL
+    (note/leaf/principle) is payoff-gated and may be omitted."""
+    state = _require(store, args.session)
+    bad = _require_diagnosing(state)
+    if bad:
+        return bad
+    d = state.difficulty
+    if d.declaration is None or d.investigation is None or d.critique is None:
+        return Directive(False, state.node, "declare",
+                         "normalize is out of order: declaration, investigation, and "
+                         "critique must come first")
+    factor = (getattr(args, "factor", None) or "").strip()
+    if not factor:
+        return Directive(False, state.node, "normalize",
+                         "normalize requires a non-empty --factor (the reproducible cause "
+                         "being re-normed)")
+    level = getattr(args, "level", None)
+    if level is not None and level not in NORMALIZATION_LEVELS:
+        return Directive(False, state.node, "normalize",
+                         f"normalize --level must be one of {list(NORMALIZATION_LEVELS)} or "
+                         f"omitted (payoff-gated by rediscovery-threshold-min), got {level!r}")
+    d.normalization = Normalization(factor=factor, level=level)
+    state.log("normalize", factor=factor, level=level)
+    store.save(state)
+    return Directive(True, state.node, "replan",
+                     "renorming recorded; replan is now unblocked")
+
+
 def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     from .plan import diff_plans, load_plan as _load, stage_carry_key
@@ -1548,6 +1594,44 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     if dblock:
         return Directive(False, state.node, "declare", "replan blocked by incomplete difficulty record",
                          data={"blockers": dblock})
+
+    # closure precondition: a difficulty exposed a norm-failure; closing it (leaving the
+    # DIAGNOSING cycle) REQUIRES re-norming the reproducible factor. Mandatory-if-
+    # reproducible; the one-off escape is an explicit --normalization-waiver <reason>.
+    # [] outside the DIAGNOSING-closure path, so a non-difficulty replan is unaffected.
+    nblock = gates.normalization_blockers(state)
+    if nblock:
+        waiver = getattr(args, "normalization_waiver", None)
+        if waiver is None:
+            _log_gate(state, "normalization_blockers", nblock, passed=False)
+            return Directive(False, state.node, "normalize",
+                             "replan blocked: difficulty closure requires re-norming",
+                             data={"blockers": nblock})
+        if not waiver.strip():
+            _log_gate(state, "normalization_blockers", nblock, passed=False)
+            return Directive(False, state.node, "normalize",
+                             "normalization waiver reason must not be empty",
+                             data={"blockers": nblock})
+        # a conscious, recorded bypass for a genuinely one-off factor — never a bypass
+        # of the difficulty-record completeness precondition checked above.
+        state.log("normalization_waived", reason=waiver, blockers=list(nblock))
+        _log_gate(state, "normalization_waiver", nblock, passed=True)
+    else:
+        _log_gate(state, "normalization_blockers", nblock, passed=True)
+
+    # closure precondition (R2): a goal-failure must be ROUTED — the critique's
+    # failure_address must be a legal value (сущее/должное/not_applicable), never a bare
+    # omission — before the difficulty may be closed. Mirrors normalization_blockers: an
+    # INTERNAL precondition (absent from GUARDIANS), [] outside the DIAGNOSING-closure
+    # path, so a non-difficulty replan is unaffected. Unlike the normalization gate there
+    # is no waiver — the explicit escape is a legal not_applicable on the critique itself.
+    fablock = gates.failure_address_blockers(state)
+    _log_gate(state, "failure_address_blockers", fablock, passed=not fablock)
+    if fablock:
+        return Directive(False, state.node, "critique",
+                         "replan blocked: the goal-failure must be routed "
+                         "(re-run critique with --failure-address)",
+                         data={"blockers": fablock})
 
     if not state.plan_path:
         return Directive(False, state.node, "submit_plan", "no current plan to replan against")
@@ -2089,6 +2173,7 @@ COMMANDS = {
     "declare": cmd_declare,
     "investigate": cmd_investigate,
     "critique": cmd_critique,
+    "normalize": cmd_normalize,
     "verify-final": cmd_verify_final,
     "resolve": cmd_resolve,
     "reject": cmd_reject,
@@ -2223,6 +2308,18 @@ def build_parser() -> argparse.ArgumentParser:
                     action="append", default=None,
                     help="a difference whose removal requires a CHANGED means/method "
                          "(repeatable); the engine verifies a means/method changed on replan")
+    sp.add_argument("--failure-address", dest="failure_address", default=None,
+                    choices=list(FAILURE_ADDRESS_VALUES),
+                    help="route the goal-failure (R2): сущее (content/knowledge-fault) | "
+                         "должное (form/goal-fault) | not_applicable (routing does not "
+                         "apply); the closure gate demands it on a difficulty-closing replan")
+    sp = add("normalize"); sp.add_argument("--session", required=True)
+    sp.add_argument("--factor", required=True,
+                    help="the reproducible cause the difficulty exposed, being re-normed "
+                         "(the ACT is mandatory at closure)")
+    sp.add_argument("--level", dest="level", default=None, choices=list(NORMALIZATION_LEVELS),
+                    help="recording level (payoff-gated by rediscovery-threshold-min); omit "
+                         "for an in-head note below the leaf threshold")
     sp = add("verify-final"); sp.add_argument("--session", required=True)
     sp = add("resolve"); sp.add_argument("--session", required=True); sp.add_argument("--by", required=True)
     sp.add_argument("--quality", type=int, choices=list(_VALID_QUALITY_RATINGS), default=None,
@@ -2243,6 +2340,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--coverage-waiver", dest="coverage_waiver", default=None,
                     help="bypass a failing coverage gate with a recorded reason (refused if empty); "
                          "never bypasses the difficulty-record completeness precondition")
+    sp.add_argument("--normalization-waiver", dest="normalization_waiver", default=None,
+                    help="close a difficulty WITHOUT a re-norming record when the exposed factor "
+                         "is genuinely one-off; a recorded reason (refused if empty)")
     sp = add("block"); sp.add_argument("--session", required=True); sp.add_argument("--reason", default="")
     sp = add("unblock"); sp.add_argument("--session", required=True)
     sp = add("status"); sp.add_argument("--session", required=False)

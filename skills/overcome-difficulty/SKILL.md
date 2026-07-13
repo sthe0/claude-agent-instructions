@@ -84,6 +84,9 @@ State concretely as `local fact → local expectation → local gap`. The split 
 
 Before concluding a difficulty is intractable or that the only options are costly, restate the **functional ground** (the underlying desired-vs-actual, stripped of any framed mechanism) and enumerate the **simplest primitive** that removes it — especially one already demonstrated in code/artifacts you've read. Mechanism-fixation (solving "can API X pin the path?" instead of "how do I get real data to a controlled path?") is a common way investigation declares a false dead-end.
 
+<!-- Language exception: сущее/должное/знание-о-материале/целеполагание are the settled SMD source-ontology terms named here; preserved verbatim for traceability. -->
+**Route the goal-failure — `--failure-address` (form/content).** A goal-failure addresses one of two faults, and the critique must decide which: a **content**-fault (`сущее`) — the знание-о-материале, your model of what you were transforming, was wrong while the goal-setting was right; or a **form**-fault (`должное`) — the целеполагание itself was wrong (the goal, or the norm you set to reach it, was inadequate). This is the same `сущее`/`должное` root the typed principle draws over the means, now read over the goal at closure — reusing the `StatementKind` values, not a new vocabulary. Where routing genuinely does not apply, say so explicitly with `not_applicable`; do not leave it unset, as the closure gate (`gates.failure_address_blockers`) blocks `replan` on a bare omission so the routing is DECIDED rather than silently skipped.
+
 Then derive a **replanning task** for the root coordinator. The task must name:
 
 - Which stages of the current plan are affected (refine / rebuild / drop / merge / insert).
@@ -92,7 +95,19 @@ Then derive a **replanning task** for the root coordinator. The task must name:
 
 End with one explicit sentence: **"Replanning task for the root: …"**.
 
-Record it: `agentctl critique --session <id> --functional-ground … --replanning-task … [--invariant-to-preserve …]… [--difference-to-remove …]…`. This completes the difficulty record and unblocks `replan`.
+Record it: `agentctl critique --session <id> --functional-ground … --replanning-task … [--invariant-to-preserve …]… [--difference-to-remove …]… [--failure-address сущее|должное|not_applicable]`. This completes the diagnosis; one closure act remains before `replan`.
+
+## 4. Normalization — re-norming the reproducible factor
+
+A difficulty is a **norm-failure**: a governing norm — an instruction, a gate, a habit, a plan assumption — failed to hold. That failure is a **SIGNAL**, not the fix. Because an activity is constituted by its *reproduction*, a **reproducible** factor left un-normed simply re-fails on the next run. So the closure **ACT** is **re-norming**: update the norm so the same factor cannot recur — tighten an instruction, add/adjust a gate, change a habit, or at minimum record a deliberate note. In SMD/MMK terms, mapped onto the cycle above:
+
+<!-- Language exception: SMD/MMK source terms name the signal→act pair precisely. -->
+- **провал нормы (norm-failure) = SIGNAL** — surfaced by declaration → investigation → critique;
+- **перенормирование (renorming) = ACT** — this phase, which the replanning task then carries into the corrected plan on `replan`.
+
+The **ACT is mandatory whenever the factor is reproducible**; the recording **LEVEL** (in-head note / memory leaf / principle) is payoff-gated by `rediscovery-threshold-min` — that split is the [[recording-experience]] `normalize-if-reproducible` rule. A factor that is genuinely one-off (will not recur) is the only case that skips the record.
+
+Record it: `agentctl normalize --session <id> --factor <the reproducible cause> [--level note|leaf|principle]`. The engine blocks `replan` at DIAGNOSING closure until this exists, **or** you take the explicit one-off escape `agentctl replan … --normalization-waiver <reason>` (`gates.normalization_blockers`). This unblocks `replan`.
 
 ## Handoff back to the root
 

@@ -19,7 +19,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 17
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -81,6 +81,26 @@ class Confidence(str, Enum):
     HIGH = "high"
     MEDIUM = "medium"
     LOW = "low"
+
+
+class StatementKind(str, Enum):
+    """The category of a refutable principle (element 7). There are exactly two,
+    on one reflexive refutation axis: `сущее` is знание (is / descriptive), refuted
+    by the world; `должное` is норма (ought / prescriptive), shown inadequate when a
+    goal it serves is blocked — reflexively, the discovery that a grounding сущее was
+    false. `принцип` is the most general member of the norm-series, not a third kind."""
+    IS = "сущее"
+    OUGHT = "должное"
+
+
+# The legal values of a Critique.failure_address (R2 — goal-failure routing). This
+# REUSES StatementKind verbatim (no second enum coined) — a goal-failure addresses
+# either знание (сущее: the content, the model of the material, was wrong) or норма
+# (должное: the form, the целеполагание, was wrong) — the SAME должное-rests-on-сущее
+# root R4 draws over the means, now over the goal. `not_applicable` is the one legal
+# sentinel for an EXPLICIT opt-out (the critique states the routing does not apply),
+# kept distinct from a bare None omission so the gate can discriminate the two.
+FAILURE_ADDRESS_VALUES = (StatementKind.IS.value, StatementKind.OUGHT.value, "not_applicable")
 
 
 class InvariantError(Exception):
@@ -201,11 +221,43 @@ class Critique:
     replan_coverage_blockers): similarities -> conditions/invariants that must be
     PRESERVED, differences -> means/method that must CHANGE. Both default to []
     so a critique that omits them (and any pre-change persisted state) loads and
-    replans exactly as before."""
+    replans exactly as before.
+
+    `failure_address` (schema 17, R2) types the goal-failure ROUTING: a goal-failure
+    addresses either content (сущее — знание-о-материале was wrong, form was right) or
+    form (должное — целеполагание was wrong), or explicitly does not apply
+    (not_applicable). A legal value is one of FAILURE_ADDRESS_VALUES; None is the
+    untouched-legacy default (a critique recorded before schema 17, or one that has not
+    yet routed). gates.failure_address_blockers blocks difficulty closure on a bare None
+    (omission) — an explicit not_applicable is a legal opt-out, not an omission — so the
+    routing is DECIDED, never silently skipped, mirroring normalization_blockers over the
+    reproducible-factor act."""
     functional_ground: str
     replanning_task: str
     invariants_to_preserve: list[str] = field(default_factory=list)
     differences_to_remove: list[str] = field(default_factory=list)
+    failure_address: str | None = None
+
+
+# The levels of the renorming act, ordered by payoff. A reproducible factor MUST be
+# re-normed (the ACT is mandatory); WHICH level — an in-head note, a memory leaf, or a
+# generalized principle — is payoff-gated by rediscovery-threshold-min and stays the
+# coordinator's cognition, so `level` may be None (a note below the leaf threshold).
+NORMALIZATION_LEVELS = ("note", "leaf", "principle")
+
+
+@dataclass
+class Normalization:
+    """Phase 4 (closure): the renorming act (перенормирование). A difficulty is a
+    norm-failure (провал нормы = SIGNAL); because activity is constituted by
+    reproduction, a REPRODUCIBLE factor left un-normed simply re-fails — so closing a
+    difficulty REQUIRES re-norming that factor (the ACT is mandatory-if-reproducible).
+    `factor` names the reproducible cause; `level` (note/leaf/principle) is the payoff-
+    gated recording level and may be None. Recorded by cmd_normalize; gates cmd_replan
+    (see gates.normalization_blockers). A one-off (non-reproducible) factor takes the
+    explicit --normalization-waiver escape instead of a record."""
+    factor: str
+    level: str | None = None
 
 
 @dataclass
@@ -215,6 +267,7 @@ class Difficulty:
     declaration: Declaration | None = None
     investigation: Investigation | None = None
     critique: Critique | None = None
+    normalization: Normalization | None = None
 
     def complete(self) -> bool:
         return (
@@ -230,10 +283,14 @@ class Difficulty:
         decl = d.get("declaration")
         inv = d.get("investigation")
         crit = d.get("critique")
+        # normalization defaults to None so any pre-SCHEMA_VERSION-16 persisted state
+        # (which never carried the key) loads unchanged — the grandfather migration.
+        norm = d.get("normalization")
         return cls(
             declaration=Declaration(**decl) if decl else None,
             investigation=Investigation(**inv) if inv else None,
             critique=Critique(**crit) if crit else None,
+            normalization=Normalization(**norm) if norm else None,
         )
 
 
@@ -384,11 +441,18 @@ class Criterion:
 
 @dataclass
 class Principle:
-    """The refutable principle the stage rests on (confidence is a Confidence value)."""
+    """The refutable principle the stage rests on (confidence is a Confidence value).
+
+    `statement_kind` types the principle by category (a StatementKind value):
+    `сущее` (знание / is — descriptive, refuted when the world contradicts it) or
+    `должное` (норма / ought — prescriptive, shown inadequate when a goal it serves
+    is blocked, which by the reflexive figure is the discovery that a grounding
+    сущее was false). Optional (None) so every pre-typing plan grandfathers in."""
     statement: str
     source: str
     confidence: str
     refutation: str
+    statement_kind: str | None = None
 
 
 @dataclass
