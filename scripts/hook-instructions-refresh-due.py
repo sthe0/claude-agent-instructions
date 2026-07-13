@@ -1,25 +1,28 @@
 #!/usr/bin/env python3
-"""UserPromptSubmit hook: once-daily proactive OFFER to refresh instructions.
+"""UserPromptSubmit hook: per-session proactive OFFER to refresh instructions.
 
 Replaces the silent 10-min background auto-pull (install-sync-cron.sh /
 install-sync-systemd-timer.sh) with an explicit, opt-in nudge: once per
-calendar day, on the day's first prompt, check whether the Core instruction
+session, on the session's first prompt, check whether the Core instruction
 repo and/or the current project's own git-tracked .claude/ layer are behind
 their upstream, and if so print a line instructing the agent to OFFER a pull
-via AskUserQuestion — never pull automatically.
+via AskUserQuestion — never pull automatically. So every new session starts
+on fresh instructions, not only the day's first session.
 
-Throttled via a stamp file (mirrors hook-policy-scorecard-due.py's throttle
-skeleton) and fail-open throughout: any git failure (offline, timeout,
-non-git cwd, no upstream configured) is treated as "not behind" and stays
-silent, so a flaky network can never wedge or spam a prompt. The stamp is
-written once the day's due-check fires (before the fetch), so the check runs
-at most once per calendar day regardless of outcome — an offline morning does
-not trigger a fetch on every later prompt.
+Throttled via a stamp file keyed on the session_id (mirrors
+hook-policy-scorecard-due.py's throttle skeleton), falling back to the
+calendar-day key when the payload carries no session_id. Fail-open
+throughout: any git failure (offline, timeout, non-git cwd, no upstream
+configured) is treated as "not behind" and stays silent, so a flaky network
+can never wedge or spam a prompt. The stamp is written once the session's
+due-check fires (before the fetch), so the check runs at most once per
+session regardless of outcome — an offline first prompt does not trigger a
+fetch on every later prompt in that session.
 
 Output goes to stdout (UserPromptSubmit convention — becomes turn context,
 mirrors hook-engine-start.py). Exit 0 always.
 
-Also rides this same daily throttle to check the ORTHOGONAL "deployed" axis:
+Also rides this same per-session throttle to check the ORTHOGONAL "deployed" axis:
 whether the serving Core checkout (the one settings.json hook commands point
 at) is actually the branch/tree that gets run, not just whether it is behind.
 A merge to origin/main does not "deploy" anything by itself — the checkout on
@@ -51,20 +54,22 @@ def _stamp_path() -> Path:
     return Path.home() / ".local" / "state" / "claude-instructions-refresh.stamp"
 
 
-def _due(now: dt.datetime) -> bool:
+def _due(session_key: str) -> bool:
+    """Fire once per session_key. A stamp holding any other key — a prior
+    session, a stale calendar-day key, or a legacy ISO datetime from before
+    the per-session rekey — reads as due (fail-open)."""
     try:
         raw = _stamp_path().read_text(encoding="utf-8").strip()
-        prev = dt.datetime.fromisoformat(raw)
-    except (OSError, ValueError):
+    except OSError:
         return True
-    return prev.date() != now.date()
+    return raw != session_key
 
 
-def _record(now: dt.datetime) -> None:
+def _record(session_key: str) -> None:
     try:
         stamp = _stamp_path()
         stamp.parent.mkdir(parents=True, exist_ok=True)
-        stamp.write_text(now.isoformat(), encoding="utf-8")
+        stamp.write_text(session_key, encoding="utf-8")
     except OSError:
         pass
 
@@ -225,10 +230,12 @@ def main() -> int:
         cwd = os.getcwd()
 
     now = dt.datetime.now()
-    if not _due(now):
+    session_id = payload.get("session_id") if isinstance(payload, dict) else None
+    session_key = session_id if isinstance(session_id, str) and session_id else now.date().isoformat()
+    if not _due(session_key):
         return 0
 
-    _record(now)
+    _record(session_key)
 
     layers = check_layers(cwd)
     if layers:

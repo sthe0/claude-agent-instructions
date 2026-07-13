@@ -119,7 +119,7 @@ def test_core_behind_emits_nudge(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# (b) within throttle window (stamp = today) -> silent
+# (b) within throttle window (stamp = current session key) -> silent
 # ---------------------------------------------------------------------------
 
 
@@ -131,13 +131,77 @@ def test_within_throttle_window_silent(tmp_path):
 
     stamp = stamp_path(home)
     stamp.parent.mkdir(parents=True, exist_ok=True)
-    import datetime as dt
-    stamp.write_text(dt.datetime.now().isoformat(), encoding="utf-8")
+    # run_hook posts session_id="s-1"; a stamp holding that key gates the run.
+    stamp.write_text("s-1", encoding="utf-8")
 
     proc = run_hook(home, core_repo=clone, cwd=clone)
 
     assert proc.returncode == 0
     assert proc.stdout.strip() == ""
+
+
+# ---------------------------------------------------------------------------
+# (b2) stamp from a DIFFERENT session -> a new session re-fires the offer
+# ---------------------------------------------------------------------------
+
+
+def test_new_session_id_refires(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    origin, clone = make_bare_and_clone(tmp_path, "core")
+    advance_remote(tmp_path, origin, "core")
+
+    stamp = stamp_path(home)
+    stamp.parent.mkdir(parents=True, exist_ok=True)
+    # A prior session's key; run_hook posts session_id="s-1" (a new session).
+    stamp.write_text("s-old", encoding="utf-8")
+
+    proc = run_hook(home, core_repo=clone, cwd=clone)
+
+    assert proc.returncode == 0
+    assert "[instructions-refresh]" in proc.stdout
+    assert "Core" in proc.stdout
+    # the new session's key is now recorded, gating its own later prompts
+    assert stamp.read_text(encoding="utf-8").strip() == "s-1"
+
+
+# ---------------------------------------------------------------------------
+# (b3) no session_id in payload -> falls back to the per-calendar-day key
+# ---------------------------------------------------------------------------
+
+
+def test_missing_session_id_falls_back_to_daily_key(tmp_path):
+    import datetime as dt
+
+    home = tmp_path / "home"
+    home.mkdir()
+    origin, clone = make_bare_and_clone(tmp_path, "core")
+    advance_remote(tmp_path, origin, "core")
+
+    env = {
+        **os.environ,
+        **GIT_ENV,
+        "HOME": str(home),
+        "CLAUDE_INSTRUCTIONS_REPO": str(clone),
+    }
+    payload = json.dumps({"prompt": "hi", "cwd": str(clone)})  # no session_id
+
+    def run_no_sid():
+        return subprocess.run(
+            [sys.executable, str(HOOK_SCRIPT)],
+            input=payload, env=env, cwd=str(clone),
+            capture_output=True, text=True,
+        )
+
+    first = run_no_sid()
+    assert first.returncode == 0
+    assert "[instructions-refresh]" in first.stdout
+    # fallback key is today's date; recorded so a same-day rerun stays silent
+    assert stamp_path(home).read_text(encoding="utf-8").strip() == dt.date.today().isoformat()
+
+    second = run_no_sid()
+    assert second.returncode == 0
+    assert second.stdout.strip() == ""
 
 
 # ---------------------------------------------------------------------------
