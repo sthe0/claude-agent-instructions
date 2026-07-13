@@ -36,7 +36,7 @@ import hashlib
 import os
 from pathlib import Path
 
-from .state import Node, SessionState, StageStatus, WeightClass
+from .state import FAILURE_ADDRESS_VALUES, Node, SessionState, StageStatus, WeightClass
 from .state import Stage as _Stage
 from .text_shape import PLACEHOLDER_SET as _PLACEHOLDER_SET
 from .text_shape import normalize_string as _normalize_string
@@ -157,6 +157,38 @@ def normalization_blockers(state: SessionState) -> list[str]:
         return ["difficulty closure requires re-norming — run: normalize (record the "
                 "reproducible factor), or replan --normalization-waiver <reason> if the "
                 "factor is genuinely one-off"]
+    return []
+
+
+def failure_address_blockers(state: SessionState) -> list[str]:
+    """Precondition guardian for `replan` at DIAGNOSING closure: a goal-failure is
+    ambiguous until ROUTED — content-fault (сущее: знание-о-материале was wrong) or
+    form-fault (должное: целеполагание was wrong), or explicitly not_applicable. This is
+    R2's mechanization of the SAME должное-rests-on-сущее root R4 draws over the means,
+    now over the goal. Like difficulty_blockers/normalization_blockers it is an INTERNAL
+    command precondition — deliberately absent from GUARDIANS so verify-agentctl requires
+    no hook. PURE: reads only the recorded Critique; no subprocess/socket/network. [] == ok.
+
+    Scoped to the DIAGNOSING-closure path: [] outside DIAGNOSING, and [] while the
+    difficulty cycle is still incomplete (difficulty_blockers owns that case). Once the
+    cycle is complete, the critique's failure_address must be a legal routing value — a
+    bare None (omission) blocks (the routing must be DECIDED), while an EXPLICIT
+    not_applicable is a legal opt-out that clears. A non-legal value blocks too (defense
+    in depth for an in-process caller that set the Critique directly, bypassing the
+    argparse `choices` and cmd_critique's own validation)."""
+    if state.node != Node.DIAGNOSING.value:
+        return []
+    d = state.difficulty
+    if d is None or not d.complete():
+        return []  # difficulty_blockers owns the incomplete-cycle case
+    fa = d.critique.failure_address
+    if fa is None:
+        return ["difficulty closure requires routing the goal-failure — record the "
+                "critique with --failure-address (сущее: content/knowledge-fault | "
+                "должное: form/goal-fault | not_applicable: routing does not apply)"]
+    if fa not in FAILURE_ADDRESS_VALUES:
+        return [f"failure_address must be one of {list(FAILURE_ADDRESS_VALUES)} "
+                f"(or omitted before closure), got {fa!r}"]
     return []
 
 

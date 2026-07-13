@@ -84,6 +84,9 @@ State concretely as `local fact → local expectation → local gap`. The split 
 
 Before concluding a difficulty is intractable or that the only options are costly, restate the **functional ground** (the underlying desired-vs-actual, stripped of any framed mechanism) and enumerate the **simplest primitive** that removes it — especially one already demonstrated in code/artifacts you've read. Mechanism-fixation (solving "can API X pin the path?" instead of "how do I get real data to a controlled path?") is a common way investigation declares a false dead-end.
 
+<!-- Language exception: сущее/должное/знание-о-материале/целеполагание are the settled SMD source-ontology terms named here; preserved verbatim for traceability. -->
+**Route the goal-failure — `--failure-address` (form/content).** A goal-failure addresses one of two faults, and the critique must decide which: a **content**-fault (`сущее`) — the знание-о-материале, your model of what you were transforming, was wrong while the goal-setting was right; or a **form**-fault (`должное`) — the целеполагание itself was wrong (the goal, or the norm you set to reach it, was inadequate). This is the same `сущее`/`должное` root the typed principle draws over the means, now read over the goal at closure — reusing the `StatementKind` values, not a new vocabulary. Where routing genuinely does not apply, say so explicitly with `not_applicable`; do not leave it unset, as the closure gate (`gates.failure_address_blockers`) blocks `replan` on a bare omission so the routing is DECIDED rather than silently skipped.
+
 Then derive a **replanning task** for the root coordinator. The task must name:
 
 - Which stages of the current plan are affected (refine / rebuild / drop / merge / insert).
@@ -92,7 +95,7 @@ Then derive a **replanning task** for the root coordinator. The task must name:
 
 End with one explicit sentence: **"Replanning task for the root: …"**.
 
-Record it: `agentctl critique --session <id> --functional-ground … --replanning-task … [--invariant-to-preserve …]… [--difference-to-remove …]…`. This completes the diagnosis; one closure act remains before `replan`.
+Record it: `agentctl critique --session <id> --functional-ground … --replanning-task … [--invariant-to-preserve …]… [--difference-to-remove …]… [--failure-address сущее|должное|not_applicable]`. This completes the diagnosis; one closure act remains before `replan`.
 
 ## 4. Normalization — re-norming the reproducible factor
 

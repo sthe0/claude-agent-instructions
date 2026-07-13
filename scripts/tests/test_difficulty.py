@@ -50,7 +50,8 @@ def _investigate(store, sid, hypotheses=("h1", "h2")):
 
 def _critique(store, sid):
     return cli.cmd_critique(ns(session=sid, functional_ground="fg",
-                               replanning_task="rt"), store=store)
+                               replanning_task="rt",
+                               failure_address="должное"), store=store)
 
 
 def _normalize(store, sid, *, factor="reproducible cause", level="note"):

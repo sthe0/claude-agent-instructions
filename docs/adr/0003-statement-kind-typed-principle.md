@@ -39,10 +39,20 @@ The four required subfields keep their shape and required-ness; the anti-templat
 
 `plan-activity-ontology.md` § Element 7 and `principle-leaf-schema.md` describe: `сущее` is refuted by the world; `должное` is shown inadequate when a goal it serves is blocked, and by the reflexive figure that inadequacy is the discovery that a grounding `сущее` was false — the response being **reflexive reconstruction** (repair the grounding `знание`, then renorm the `норма`). `принцип` is named as the most general norm-series member, not a third kind.
 
+### 4. `failure_address` — the goal application of the same root (R2)
+
+<!-- Language exception: сущее/должное/знание/норма and related terms are the settled SMD source-ontology this ADR records; preserved verbatim for traceability. -->
+The shared root is *`должное` (`норма`) rests on `сущее` (`знание`)*. Section 1 applies it over the **means/principle** (element 7). R2 applies it over the **goal**: when a goal-failure closes a difficulty, the critique must ROUTE the failure to the fault it addresses — a content-fault (`сущее`: the знание-о-материале, the model of the material, was wrong) or a form-fault (`должное`: the целеполагание, the goal-setting, was wrong), or explicitly `not_applicable`. Routing is ambiguous until DECIDED, so the engine types it and demands it at closure.
+
+- **Reuse, not a second enum.** `Critique.failure_address: str | None` (`state.py`, `SCHEMA_VERSION` 16→17) draws its legal values from `FAILURE_ADDRESS_VALUES = (StatementKind.IS.value, StatementKind.OUGHT.value, "not_applicable")` — the two `StatementKind` values **verbatim** plus one sentinel. No parallel enum is coined; the `сущее`/`должное` distinction is the SAME one section 1 types over the means, now over the goal (satisfying D2). `not_applicable` is the one legal sentinel for an EXPLICIT opt-out, kept distinct from a bare `None` omission so the gate can discriminate the two.
+- **Grandfathered exactly as `normalization`/`statement_kind` were.** `failure_address` is an optional field defaulting to `None`; `Critique(**crit)` reconstructs a pre-schema-17 critique unchanged (D3). A legacy record loads with `failure_address=None` and is (correctly) blocked only when it reaches closure.
+- **A third internal-precondition gate.** `gates.failure_address_blockers` mirrors `normalization_blockers`: PURE (reads only the recorded `Critique`; gates.py purity preserved), scoped to the DIAGNOSING-closure path, and **deliberately absent from `GUARDIANS`** (an internal `replan` precondition, not a hook-checked chokepoint). A bare `None` at closure blocks (the routing must be decided); an explicit `not_applicable` clears; a non-legal value blocks too (defense in depth). Validated at three layers: the argparse `choices` guard, `cmd_critique`'s own check, and the gate. One call site atop `cmd_replan`, after the normalization gate.
+
 ## Consequences
 
 - Element 7 principles can now be typed; the engine rejects a bogus `statement_kind` value while grandfathering every artifact that omits it.
-- This is the **means/principle** application of the shared root *`должное` (`норма`) rests on `сущее` (`знание`)*. The **goal** application of the same root (R2 — `failure_address` routing a goal-failure to a content-fault (`сущее`) or form-fault (`должное`)) reuses this same `StatementKind` enum rather than coining a second one; that mechanization is recorded in a later section / stage of this work.
+- R2's `failure_address` types goal-failure routing over the same `должное`-rests-on-`сущее` root, reusing `StatementKind` rather than coining a second enum; goal-failures can no longer close silently un-routed.
+- This is the **means/principle** application of the shared root *`должное` (`норма`) rests on `сущее` (`знание`)*. The **goal** application of the same root (R2 — `failure_address` routing a goal-failure to a content-fault (`сущее`) or form-fault (`должное`)) reuses this same `StatementKind` enum rather than coining a second one; that mechanization is recorded in § 4 below.
 - Cost paid: one optional field, one enum, three-surface validation, and documentation. No data-migration script; no existing artifact rewritten.
 
 ## Refutation of this decision

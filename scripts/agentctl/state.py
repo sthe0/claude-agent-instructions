@@ -19,7 +19,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -91,6 +91,16 @@ class StatementKind(str, Enum):
     false. `принцип` is the most general member of the norm-series, not a third kind."""
     IS = "сущее"
     OUGHT = "должное"
+
+
+# The legal values of a Critique.failure_address (R2 — goal-failure routing). This
+# REUSES StatementKind verbatim (no second enum coined) — a goal-failure addresses
+# either знание (сущее: the content, the model of the material, was wrong) or норма
+# (должное: the form, the целеполагание, was wrong) — the SAME должное-rests-on-сущее
+# root R4 draws over the means, now over the goal. `not_applicable` is the one legal
+# sentinel for an EXPLICIT opt-out (the critique states the routing does not apply),
+# kept distinct from a bare None omission so the gate can discriminate the two.
+FAILURE_ADDRESS_VALUES = (StatementKind.IS.value, StatementKind.OUGHT.value, "not_applicable")
 
 
 class InvariantError(Exception):
@@ -211,11 +221,22 @@ class Critique:
     replan_coverage_blockers): similarities -> conditions/invariants that must be
     PRESERVED, differences -> means/method that must CHANGE. Both default to []
     so a critique that omits them (and any pre-change persisted state) loads and
-    replans exactly as before."""
+    replans exactly as before.
+
+    `failure_address` (schema 17, R2) types the goal-failure ROUTING: a goal-failure
+    addresses either content (сущее — знание-о-материале was wrong, form was right) or
+    form (должное — целеполагание was wrong), or explicitly does not apply
+    (not_applicable). A legal value is one of FAILURE_ADDRESS_VALUES; None is the
+    untouched-legacy default (a critique recorded before schema 17, or one that has not
+    yet routed). gates.failure_address_blockers blocks difficulty closure on a bare None
+    (omission) — an explicit not_applicable is a legal opt-out, not an omission — so the
+    routing is DECIDED, never silently skipped, mirroring normalization_blockers over the
+    reproducible-factor act."""
     functional_ground: str
     replanning_task: str
     invariants_to_preserve: list[str] = field(default_factory=list)
     differences_to_remove: list[str] = field(default_factory=list)
+    failure_address: str | None = None
 
 
 # The levels of the renorming act, ordered by payoff. A reproducible factor MUST be

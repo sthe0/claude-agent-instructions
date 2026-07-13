@@ -40,6 +40,7 @@ from .state import (
     CriterionType,
     Declaration,
     Difficulty,
+    FAILURE_ADDRESS_VALUES,
     FinalCheck,
     Investigation,
     JudgeBypass,
@@ -1508,13 +1509,24 @@ def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Di
     if state.difficulty.declaration is None or state.difficulty.investigation is None:
         return Directive(False, state.node, "declare",
                          "critique is out of order: declaration and investigation must come first")
+    # getattr-with-default: in-process Namespace callers (test_replan.py builds one by
+    # hand with only the two required fields) must keep working — an absent field is None.
+    failure_address = getattr(args, "failure_address", None)
+    # Reject a bogus value here (mirroring cmd_normalize's --level check) so an in-process
+    # caller bypassing the argparse `choices` is caught before the Critique is built; the
+    # gate (failure_address_blockers) is the defense-in-depth backstop at closure. None is
+    # allowed at critique time — the routing may be recorded now or left for a later replan,
+    # where the closure gate demands it.
+    if failure_address is not None and failure_address not in FAILURE_ADDRESS_VALUES:
+        return Directive(False, state.node, "critique",
+                         f"--failure-address must be one of {list(FAILURE_ADDRESS_VALUES)} "
+                         f"or omitted, got {failure_address!r}")
     state.difficulty.critique = Critique(
         functional_ground=args.functional_ground,
         replanning_task=args.replanning_task,
-        # getattr-with-default: in-process Namespace callers (test_replan.py builds
-        # one by hand with only the two required fields) must keep working.
         invariants_to_preserve=list(getattr(args, "invariants_to_preserve", None) or []),
         differences_to_remove=list(getattr(args, "differences_to_remove", None) or []),
+        failure_address=failure_address,
     )
     state.log("critique")
     store.save(state)
@@ -1606,6 +1618,20 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         _log_gate(state, "normalization_waiver", nblock, passed=True)
     else:
         _log_gate(state, "normalization_blockers", nblock, passed=True)
+
+    # closure precondition (R2): a goal-failure must be ROUTED — the critique's
+    # failure_address must be a legal value (сущее/должное/not_applicable), never a bare
+    # omission — before the difficulty may be closed. Mirrors normalization_blockers: an
+    # INTERNAL precondition (absent from GUARDIANS), [] outside the DIAGNOSING-closure
+    # path, so a non-difficulty replan is unaffected. Unlike the normalization gate there
+    # is no waiver — the explicit escape is a legal not_applicable on the critique itself.
+    fablock = gates.failure_address_blockers(state)
+    _log_gate(state, "failure_address_blockers", fablock, passed=not fablock)
+    if fablock:
+        return Directive(False, state.node, "critique",
+                         "replan blocked: the goal-failure must be routed "
+                         "(re-run critique with --failure-address)",
+                         data={"blockers": fablock})
 
     if not state.plan_path:
         return Directive(False, state.node, "submit_plan", "no current plan to replan against")
@@ -2282,6 +2308,11 @@ def build_parser() -> argparse.ArgumentParser:
                     action="append", default=None,
                     help="a difference whose removal requires a CHANGED means/method "
                          "(repeatable); the engine verifies a means/method changed on replan")
+    sp.add_argument("--failure-address", dest="failure_address", default=None,
+                    choices=list(FAILURE_ADDRESS_VALUES),
+                    help="route the goal-failure (R2): сущее (content/knowledge-fault) | "
+                         "должное (form/goal-fault) | not_applicable (routing does not "
+                         "apply); the closure gate demands it on a difficulty-closing replan")
     sp = add("normalize"); sp.add_argument("--session", required=True)
     sp.add_argument("--factor", required=True,
                     help="the reproducible cause the difficulty exposed, being re-normed "
