@@ -53,6 +53,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib import config_root  # noqa: E402
 
+try:
+    from difficulty_channel import authority  # noqa: E402
+except Exception:
+    authority = None  # degrade silently — the direct-push-no-PR hint just won't fire
+
 LAND_BRANCH_SCRIPT = Path(__file__).resolve().parent / "land-branch.py"
 LAND_BRANCH_TIMEOUT_SEC = 5
 GIT_TIMEOUT_SEC = 5
@@ -80,6 +85,18 @@ MERGED_LEFTOVER_HINT = (
     "them via `python3 scripts/land-branch.py` (which deletes by default) or "
     "raw git (`git branch -D <br>` + `git push origin --delete <br>`). Full "
     "landing discipline: memory-global/leaves/landing-discipline.md."
+)
+
+DIRECT_PUSH_NO_PR_HINT = (
+    "Also — this is the Core instructions repo and you hold direct push "
+    "rights to it with no distinct human reviewer gating merge. Per "
+    "memory-global/leaves/landing-discipline.md (\"review-gated is defined "
+    "by a distinct human reviewer, not surface type\"), land by DIRECT push "
+    "/ fast-forward (`python3 scripts/land-branch.py`) — do NOT propose or "
+    "open a PR here. A PR in this repo is the "
+    "[[capability-before-offload]] anti-pattern: an extra merge click "
+    "offloaded onto the user when you already hold the rights and no one "
+    "else must review."
 )
 
 UNPUSHED_BRANCH_HINT = (
@@ -212,6 +229,49 @@ def unpushed_branch_hint(repo_dir: str) -> str | None:
     return None
 
 
+def _push_probe_runner(cmd: list[str]) -> int:
+    """Timeout-bounded runner for the `git push --dry-run` capability probe.
+    authority.probe_push_capability's default runner has NO timeout, and this
+    hint fires on every open-resolution-gate prompt — a network stall on the
+    probe must not hang the user's turn (a hang is not an exception, so the
+    outer try/except cannot catch it). Any timeout/failure returns non-zero,
+    which is_author reads as 'no direct push rights' — the safe default (don't
+    tell the user to push directly when we could not quickly confirm rights)."""
+    try:
+        return subprocess.run(
+            cmd, cwd=authority.REPO_ROOT, capture_output=True, timeout=GIT_TIMEOUT_SEC
+        ).returncode
+    except Exception:
+        return 1
+
+
+def direct_push_no_pr_hint(repo_dir: str) -> str | None:
+    """Best-effort DIRECT_PUSH_NO_PR_HINT when repo_dir is at or under the Core
+    instructions repo root AND the current machine holds direct push rights to
+    it (authority.is_author(), a git push --dry-run capability probe). Matches
+    on "at or under" rather than exact equality since a session's cwd is often
+    a subdirectory (e.g. scripts/) — same semantics as the `git -C repo_dir`
+    calls in the sibling hint functions above, which resolve correctly from
+    any subdirectory of the repo. The probe is timeout-bounded via
+    _push_probe_runner so a network stall cannot hang the turn. Any failure
+    (authority unimportable, repo_dir not resolvable, probe exception/timeout)
+    degrades silently to None so the hook never breaks a resolution turn."""
+    if authority is None:
+        return None
+    try:
+        resolved = Path(repo_dir).resolve()
+        root = authority.REPO_ROOT.resolve()
+        if resolved != root and not resolved.is_relative_to(root):
+            return None
+        if not authority.is_author(
+            probe=lambda: authority.probe_push_capability(runner=_push_probe_runner)
+        ):
+            return None
+    except Exception:
+        return None
+    return DIRECT_PUSH_NO_PR_HINT
+
+
 def merged_leftover_hint(repo_dir: str, trunk: str = "main", remote: str = "origin") -> str | None:
     """Best-effort MERGED_LEFTOVER_HINT naming local branches whose tips are
     already reachable from <remote>/<trunk> (i.e. merged/landed) but not yet
@@ -283,6 +343,15 @@ def main() -> int:
             leftover_hint = None
         if leftover_hint:
             print(leftover_hint)
+        # Independent of the above: when this machine holds direct push
+        # rights to this exact (Core) repo, name the anti-PR default so a
+        # review-gated-repo assumption doesn't leak in from context.
+        try:
+            no_pr_hint = direct_push_no_pr_hint(repo_dir)
+        except Exception:
+            no_pr_hint = None
+        if no_pr_hint:
+            print(no_pr_hint)
         return 0
 
     prompt = payload.get("prompt") or ""

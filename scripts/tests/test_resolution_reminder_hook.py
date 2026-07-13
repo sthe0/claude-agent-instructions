@@ -249,7 +249,7 @@ def test_hints_cite_landing_discipline_leaf():
     load the full rule at the gate (CLAUDE.md keeps only the short pointer)."""
     mod = _load_module()
     for hint in (mod.BRANCH_HYGIENE_HINT, mod.UNPUSHED_BRANCH_HINT,
-                 mod.MERGED_LEFTOVER_HINT):
+                 mod.MERGED_LEFTOVER_HINT, mod.DIRECT_PUSH_NO_PR_HINT):
         assert "memory-global/leaves/landing-discipline.md" in hint
 
 
@@ -337,3 +337,93 @@ def test_main_emits_merged_leftover_hint_at_open_gate(tmp_path, monkeypatch, cap
 
     assert rc == 0
     assert "landed-feature" in out
+
+
+# --- direct_push_no_pr_hint(): direct-push-rights -> no-PR nudge -------------
+
+def _suppress_other_hints(mod, monkeypatch) -> None:
+    monkeypatch.setattr(mod, "landable_branch_hint", lambda repo_dir: None)
+    monkeypatch.setattr(mod, "unpushed_branch_hint", lambda repo_dir: None)
+    monkeypatch.setattr(mod, "merged_leftover_hint", lambda repo_dir: None)
+
+
+def test_direct_push_no_pr_hint_fires_for_core_repo_author(monkeypatch, capsys, tmp_path):
+    """repo_dir is the Core instructions repo AND is_author() is true -> the
+    anti-PR line is in stdout at the open resolution gate."""
+    mod = _load_module()
+    session_id = _arm_gate(mod, monkeypatch, tmp_path)
+    _suppress_other_hints(mod, monkeypatch)
+    monkeypatch.setattr(mod.authority, "is_author", lambda *a, **k: True)
+    core_repo = str(mod.authority.REPO_ROOT)
+
+    rc, out = _run(monkeypatch, capsys, mod, {"session_id": session_id, "cwd": core_repo})
+
+    assert rc == 0
+    assert mod.DIRECT_PUSH_NO_PR_HINT in out
+
+
+def test_direct_push_no_pr_hint_absent_when_not_author(monkeypatch, capsys, tmp_path):
+    """Core repo but is_author() is false (no direct push rights) -> no hint."""
+    mod = _load_module()
+    session_id = _arm_gate(mod, monkeypatch, tmp_path)
+    _suppress_other_hints(mod, monkeypatch)
+    monkeypatch.setattr(mod.authority, "is_author", lambda *a, **k: False)
+    core_repo = str(mod.authority.REPO_ROOT)
+
+    rc, out = _run(monkeypatch, capsys, mod, {"session_id": session_id, "cwd": core_repo})
+
+    assert rc == 0
+    assert mod.DIRECT_PUSH_NO_PR_HINT not in out
+
+
+def test_direct_push_no_pr_hint_fires_from_core_repo_subdirectory(monkeypatch, capsys, tmp_path):
+    """cwd is a subdirectory of the Core repo (e.g. scripts/, the common case
+    for a session opened there) rather than the exact repo root -> the hint
+    still fires, matching how `git -C repo_dir` resolves from any subdir."""
+    mod = _load_module()
+    session_id = _arm_gate(mod, monkeypatch, tmp_path)
+    _suppress_other_hints(mod, monkeypatch)
+    monkeypatch.setattr(mod.authority, "is_author", lambda *a, **k: True)
+    subdir = str(mod.authority.REPO_ROOT / "scripts")
+
+    rc, out = _run(monkeypatch, capsys, mod, {"session_id": session_id, "cwd": subdir})
+
+    assert rc == 0
+    assert mod.DIRECT_PUSH_NO_PR_HINT in out
+
+
+def test_direct_push_no_pr_hint_absent_for_non_core_repo(monkeypatch, capsys, tmp_path):
+    """is_author() true but repo_dir is some other path (not the Core repo)
+    -> no hint, even though push rights would otherwise qualify."""
+    mod = _load_module()
+    session_id = _arm_gate(mod, monkeypatch, tmp_path)
+    _suppress_other_hints(mod, monkeypatch)
+    monkeypatch.setattr(mod.authority, "is_author", lambda *a, **k: True)
+    other_repo = tmp_path / "elsewhere"
+    other_repo.mkdir()
+
+    rc, out = _run(monkeypatch, capsys, mod, {"session_id": session_id, "cwd": str(other_repo)})
+
+    assert rc == 0
+    assert mod.DIRECT_PUSH_NO_PR_HINT not in out
+
+
+def test_direct_push_no_pr_hint_absent_when_probe_times_out(monkeypatch, capsys, tmp_path):
+    """Real is_author path (not stubbed): the git push --dry-run probe stalls
+    and its subprocess raises TimeoutExpired. _push_probe_runner must catch it
+    and return non-zero (no direct-push rights) so the helper degrades to no
+    hint and the turn is not hung — exit 0, line absent."""
+    mod = _load_module()
+    session_id = _arm_gate(mod, monkeypatch, tmp_path)
+    _suppress_other_hints(mod, monkeypatch)
+
+    def _stall(*a, **k):
+        raise subprocess.TimeoutExpired(cmd=["git", "push", "--dry-run"], timeout=mod.GIT_TIMEOUT_SEC)
+
+    monkeypatch.setattr(mod.subprocess, "run", _stall)
+    core_repo = str(mod.authority.REPO_ROOT)
+
+    rc, out = _run(monkeypatch, capsys, mod, {"session_id": session_id, "cwd": core_repo})
+
+    assert rc == 0
+    assert mod.DIRECT_PUSH_NO_PR_HINT not in out
