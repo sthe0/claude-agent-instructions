@@ -301,6 +301,36 @@ def test_reachable_via_subindex_not_flagged(tmp_path):
     assert sd.scan_orphans(tmp_path) == []
 
 
+def test_wikilink_reachable_leaf_not_flagged(tmp_path):
+    (tmp_path / "MEMORY.md").write_text("- [[topic-slug]]\n", encoding="utf-8")
+    (tmp_path / "leaves").mkdir()
+    (tmp_path / "leaves" / "topic.md").write_text(
+        "---\nname: topic-slug\ndescription: d\n---\nbody\n", encoding="utf-8"
+    )
+    assert sd.scan_orphans(tmp_path) == []
+
+
+def test_wikilink_alias_and_anchor_resolve(tmp_path):
+    (tmp_path / "MEMORY.md").write_text("- [[topic-slug|подпись]]\n", encoding="utf-8")
+    (tmp_path / "leaves").mkdir()
+    (tmp_path / "leaves" / "topic.md").write_text(
+        "---\nname: topic-slug\ndescription: d\n---\nbody\n", encoding="utf-8"
+    )
+    assert sd.scan_orphans(tmp_path) == []
+
+
+def test_wikilink_unknown_slug_ignored_real_orphan_still_flagged(tmp_path):
+    (tmp_path / "MEMORY.md").write_text("- [[nope]]\n", encoding="utf-8")
+    (tmp_path / "leaves").mkdir()
+    (tmp_path / "leaves" / "orphan.md").write_text(
+        "---\nname: real-orphan\ndescription: d\n---\nbody\n", encoding="utf-8"
+    )
+    findings = sd.scan_orphans(tmp_path)
+    assert len(findings) == 1
+    assert findings[0].kind == "orphan-leaf"
+    assert findings[0].path == "leaves/orphan.md"
+
+
 def test_orphan_index_kind_for_unlinked_memory_md(tmp_path):
     (tmp_path / "MEMORY.md").write_text("no links here\n", encoding="utf-8")
     (tmp_path / "island").mkdir()

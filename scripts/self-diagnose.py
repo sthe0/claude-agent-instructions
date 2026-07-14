@@ -33,7 +33,9 @@ Read-only, mechanical scans over the agent's OWN functional elements:
                         "generalize and group" norm, mechanized as a flag (never
                         an auto-merge: the merge decision stays the model's).
   orphan-leaf/-index    a .md under a memory root that no MEMORY.md index links
-                        to — the reachability half of the same norm.
+                        to — the reachability half of the same norm. Reachability
+                        follows both markdown [](path) links and [[slug]]
+                        wikilinks (resolved via a frontmatter name: index).
 
 The DECIDABLE rule is mechanized here; the PERCEPTION (is a flagged candidate
 worth re-norming, and how) stays the model's — this scanner only detects and
@@ -67,6 +69,7 @@ MEMORY_INDEX_LINE_THRESHOLD = 200
 NEAR_DUPLICATE_JACCARD_THRESHOLD = 0.6
 
 _LINK_RE = re.compile(r"\]\(([^)]+)\)")
+_WIKILINK_RE = re.compile(r"\[\[([^\[\]]+?)\]\]")
 _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 _EXTERNAL_PREFIXES = ("http://", "https://", "mailto:")
 _FM_NAME_RE = re.compile(r"^name:\s*(.+?)\s*$", re.MULTILINE)
@@ -263,12 +266,37 @@ def _link_target_path(source: Path, target: str) -> "Path | None":
     return base.resolve()
 
 
+def _build_name_index(memory_root: Path) -> "dict[str, Path]":
+    """Map frontmatter name: slug -> resolved .md path, for [[wikilink]]
+    resolution. First occurrence of a slug wins; files with no frontmatter
+    (MEMORY.md indexes typically have none) are skipped naturally."""
+    index: "dict[str, Path]" = {}
+    for md in sorted(memory_root.rglob("*.md")):
+        try:
+            text = md.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if not text.startswith("---"):
+            continue
+        end = text.find("\n---", 3)
+        if end == -1:
+            continue
+        name_m = _FM_NAME_RE.search(text[3:end])
+        if not name_m:
+            continue
+        slug = name_m.group(1).strip()
+        if slug:
+            index.setdefault(slug, md.resolve())
+    return index
+
+
 def scan_orphans(memory_root: Path) -> "list[Difficulty]":
     """Flag any .md under memory_root that no MEMORY.md index reaches.
 
-    BFS from the root MEMORY.md over local .md links, recursing only into
-    linked MEMORY.md index files (leaves are terminal). Reachability is the
-    other half of the "generalize and group" norm: a leaf nobody indexes is
+    BFS from the root MEMORY.md over local .md links AND [[slug]] wikilinks
+    (resolved via a frontmatter name: index), recursing only into linked
+    MEMORY.md index files (leaves are terminal). Reachability is the other
+    half of the "generalize and group" norm: a leaf nobody indexes is
     invisible to the model at recall time."""
     out: "list[Difficulty]" = []
     if not memory_root.is_dir():
@@ -283,6 +311,7 @@ def scan_orphans(memory_root: Path) -> "list[Difficulty]":
             )
         return out
 
+    name_index = _build_name_index(memory_root)
     visited: "set[Path]" = set()
     queued: "set[Path]" = {root_index.resolve()}
     stack: "list[Path]" = [root_index.resolve()]
@@ -302,6 +331,14 @@ def scan_orphans(memory_root: Path) -> "list[Difficulty]":
             resolved = _link_target_path(current, target)
             if resolved is None or not resolved.exists():
                 continue  # dangling targets are scan_dangling_pointers' job
+            if resolved not in queued:
+                queued.add(resolved)
+                stack.append(resolved)
+        for m in _WIKILINK_RE.finditer(text):
+            slug = m.group(1).split("|", 1)[0].split("#", 1)[0].strip()
+            resolved = name_index.get(slug)
+            if resolved is None or not resolved.exists():
+                continue  # unknown slug: a genuine orphan is still caught below
             if resolved not in queued:
                 queued.add(resolved)
                 stack.append(resolved)
