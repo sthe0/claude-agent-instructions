@@ -42,6 +42,8 @@ Before decomposing anything, state explicitly for yourself and in the plan:
 
 Concrete numbers / deadlines / TTLs / limits **without** an explicit source link: **do not guess** by proximity — find the source (domain docs, wiki, project memory, MCP, semantic search, source-artifact comments), else return `ESCALATE:`; never commit a numeric value without basis, and record what each key number means + which layer it affects. Detail: see [policy.md](policy.md) § Numbers and deadlines without a source.
 
+This generalizes past numbers: for a reasoning/research deliverable, every load-bearing **decision or judgment** needs the same source/confidence/refutation grounding (plan-activity-ontology element 7), recorded as a claim in the provenance ledger (`--deliverable-kind reasoning|mixed` at classify arms the resolution gate). Your own enumeration is primary; the ledger's independent `ledger-enumerate` cross-check only widens recall (< 100%), never substitutes for it. Detail: see [policy.md](policy.md) § Numbers and deadlines without a source.
+
 ### Gathering context
 
 Read the user's request and all linked source artifacts (tickets, RFCs, parent tasks), their comments, and the wiki/docs they link; for a familiar domain read the relevant project memory leaves only. Detail: see [policy.md](policy.md) § Gathering context.

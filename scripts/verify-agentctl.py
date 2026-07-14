@@ -215,7 +215,10 @@ def check_gate_guardians(gate_to_hook: dict, desired_hooks: set[str]) -> list[st
 # every built-in consumer into REGISTRY). Each entry: (name, gate-it-must-extend).
 # None == the plugin contributes no gate. A new built-in plugin without an entry
 # here is fine; this only pins the ones the engine documents.
-REQUIRED_PLUGINS = {"dummy": "resolution", "tracker": "resolution", "experience": "resolution"}
+REQUIRED_PLUGINS = {
+    "dummy": "resolution", "tracker": "resolution", "experience": "resolution",
+    "ledger": "resolution",
+}
 # Plugin observer events must be a subset of the events the engine can emit, or a
 # plugin would silently never fire. The event vocabulary is EVENT_FOR_COMMAND.
 def check_plugins() -> list[str]:

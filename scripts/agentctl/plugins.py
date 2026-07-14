@@ -254,3 +254,4 @@ register(
 # already defined when its `from .plugins import ...` runs.
 from . import plugins_tracker as _plugins_tracker  # noqa: E402,F401
 from . import plugins_experience as _plugins_experience  # noqa: E402,F401
+from . import plugins_ledger as _plugins_ledger  # noqa: E402,F401

@@ -10,6 +10,7 @@ If the task has concrete numbers, deadlines, TTLs, or limits **without** an expl
 2. **Find the source** — domain docs, wiki, project memory leaf, MCP query, semantic search, comments on the source artifact.
 3. If no source — return `ESCALATE:` with the specific question; do not commit a numeric value in the plan without basis.
 4. In "Problem and done criteria" record: **what each key number means** and **which system layer** it affects.
+5. **Generalizes to every load-bearing decision/judgment**, not numbers only, for a reasoning/research deliverable (`--deliverable-kind reasoning` or `mixed` at classify). Record each as a claim in the provenance ledger: `agentctl ledger-add --status axiom|derivation|assumption ...` — axiom needs `--source`, derivation needs `--premise` ids to established claims, assumption needs `--basis`. The resolution gate blocks until the ledger is closed. Your own enumeration is primary; `agentctl ledger-enumerate` runs an independent second reading that only *raises* candidates it finds (recall < 100%, not a substitute) — each raised candidate must be recorded (`ledger-dispose --as recorded --claim <id>`) or dismissed with a reason (`--as dismissed --reason ...`) before resolution. Detail: [formalization-ladder-l1-l3.md](../../../memory-global/leaves/formalization-ladder-l1-l3.md).
 
 ## Gathering context
 

@@ -54,6 +54,40 @@ _PROMPTS: dict[str, str] = {
     ),
 }
 
+_ENUMERATE_PROMPT = (
+    "You are given a reasoning/research deliverable. List every LOAD-BEARING "
+    "decision, judgment, or claim a reader would take as established fact — a "
+    "choice made, a recommendation proposed, a causal or quantitative claim. "
+    "One item per line, no numbering, no bullets, no prose, no preamble. Return "
+    "nothing if the text makes no load-bearing claims.\n\n{payload}"
+)
+
+
+def enumerate_claims(artifact_text: str, runner) -> list[str]:
+    """Independent semantic re-reading of an outgoing deliverable that RAISES the
+    load-bearing decisions/judgments/claims it detects, one statement per line.
+
+    This is a recall-widener for the coordinator's OWN enumeration, never
+    authoritative and never complete — model perception with recall < 100%. The
+    deterministic disposition gate (ledger.validate_candidates) is what turns each
+    raised item into a blocker; this call only supplies the candidates.
+
+    Cost-bounded exactly like the warn-only advisor: `claude -p --model sonnet`
+    with the timeout carried by the runner (advisor.subprocess_runner). Fail-open:
+    a None runner, a non-zero exit, or any exception returns [] — an empty
+    enumeration is a valid (if unhelpful) result; the mandatory-cross-check blocker
+    is discharged by the `enumerated` flag the caller sets, not by the count."""
+    if runner is None:
+        return []
+    try:
+        prompt = _ENUMERATE_PROMPT.format(payload=artifact_text)
+        result = runner(["claude", "-p", "--model", _ADVISOR_MODEL, prompt])
+        if result.returncode != 0:
+            return []
+        return [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
+    except Exception:
+        return []
+
 
 def judge(kind: str, payload: dict, runner, *, enabled: bool | None = None) -> list[str]:
     """Return advisory strings for the given cognition point, or [] if disabled/failed.

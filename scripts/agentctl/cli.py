@@ -23,7 +23,7 @@ from pathlib import Path
 
 from lib import config_root
 
-from . import advisor, continuations, cost, gates, permissions, plugins
+from . import advisor, continuations, cost, gates, ledger, permissions, plugins, plugins_ledger
 from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
 from .partition import render_section, render_units, verdict
@@ -489,6 +489,174 @@ def cmd_plugin_record(args, *, store: StateStore, runner: Runner | None = None) 
     )
 
 
+def cmd_ledger_add(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Declare (or re-declare) one claim in the active ledger bag. Permissive by
+    design — an ungrounded axiom/derivation/assumption is stored as-is; only the
+    resolution gate (ledger.validate_ledger, via plugins_ledger._ledger_gate)
+    rejects it. Grounding a claim is re-adding the same --id with --source/
+    --premise/--basis filled in: UPSERT, last write wins. Fires no plugin event —
+    recording a claim must not re-trigger the resolve nudge."""
+    state = _require(store, args.session)
+    bag = state.plugins.get("ledger")
+    if bag is None:
+        return Directive(False, state.node, "noop", "plugin 'ledger' is not active")
+    claims = bag.setdefault("claims", [])
+    entry = {
+        "id": args.id,
+        "status": args.status,
+        "statement": getattr(args, "statement", "") or "",
+        "source": getattr(args, "source", "") or "",
+        "premises": list(getattr(args, "premises", None) or []),
+        "basis": getattr(args, "basis", "") or "",
+        "load_bearing": bool(getattr(args, "load_bearing", True)),
+    }
+    for i, c in enumerate(claims):
+        if c.get("id") == entry["id"]:
+            claims[i] = entry
+            break
+    else:
+        claims.append(entry)
+    state.log("ledger_add", claim=entry["id"], status=entry["status"])
+    store.save(state)
+    return Directive(
+        True, state.node, "continue",
+        f"claim {entry['id']!r} recorded as {entry['status']!r}",
+        data={"claims": [c["id"] for c in claims]},
+    )
+
+
+def cmd_ledger_check(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Read-only: report the active ledger's blockers via the SAME
+    plugins_ledger.ledger_blockers the resolution gate uses, so check and gate never
+    diverge — claim closure (validate_ledger) AND candidate disposition-completeness
+    (validate_candidates) AND the enumeration cross-check having RUN (bag
+    ['enumerated']). Green (ok=True, no blockers) iff every load-bearing claim is
+    grounded/derived/marked, every candidate is recorded/dismissed, and
+    ledger-enumerate has run. Does not mutate state."""
+    state = _require(store, args.session)
+    bag = state.plugins.get("ledger")
+    if bag is None:
+        return Directive(False, state.node, "noop", "plugin 'ledger' is not active")
+    blockers = plugins_ledger.ledger_blockers(bag)
+    detail = "ledger closed" if not blockers else f"ledger not closed: {'; '.join(blockers)}"
+    return Directive(not blockers, state.node, "inspect", detail, data={"blockers": blockers})
+
+
+def cmd_ledger_candidate(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Declare (or re-declare) one enumeration candidate — a load-bearing
+    decision/judgment the coordinator (or ledger-enumerate's independent advisor
+    pass, stage 5) has surfaced. Permissive by design, mirroring ledger-add:
+    stored as 'raised' (undispositioned); only the resolution gate (ledger.
+    validate_candidates) rejects a candidate left raised. UPSERT, last write
+    wins — re-raising the same --id resets any prior disposition, so grounding a
+    candidate is done via ledger-dispose, not by re-raising it. Fires no plugin
+    event."""
+    state = _require(store, args.session)
+    bag = state.plugins.get("ledger")
+    if bag is None:
+        return Directive(False, state.node, "noop", "plugin 'ledger' is not active")
+    candidates = bag.setdefault("candidates", [])
+    entry = {
+        "id": args.id,
+        "statement": getattr(args, "statement", "") or "",
+        "disposition": "raised",
+        "reason": "",
+        "claim": "",
+    }
+    for i, c in enumerate(candidates):
+        if c.get("id") == entry["id"]:
+            candidates[i] = entry
+            break
+    else:
+        candidates.append(entry)
+    state.log("ledger_candidate", candidate=entry["id"])
+    store.save(state)
+    return Directive(
+        True, state.node, "continue",
+        f"candidate {entry['id']!r} raised",
+        data={"candidates": [c["id"] for c in candidates]},
+    )
+
+
+def cmd_ledger_dispose(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Disposition one enumeration candidate: 'recorded' (linked to an existing
+    load-bearing claim via --claim) or 'dismissed' (with --reason). Refuses early
+    when the flag its own --as needs is missing, rather than landing a
+    disposition the resolution gate (ledger.validate_candidates) would reject
+    anyway — the gate still owns whether the --claim id is real/load-bearing,
+    this command only owns whether the required flag was passed at all."""
+    state = _require(store, args.session)
+    bag = state.plugins.get("ledger")
+    if bag is None:
+        return Directive(False, state.node, "noop", "plugin 'ledger' is not active")
+    candidates = bag.setdefault("candidates", [])
+    match = next((c for c in candidates if c.get("id") == args.id), None)
+    if match is None:
+        return Directive(False, state.node, "noop", f"no such candidate {args.id!r}")
+    if args.as_ == "recorded" and not args.claim:
+        return Directive(False, state.node, "noop", "--claim is required for --as recorded")
+    if args.as_ == "dismissed" and not args.reason:
+        return Directive(False, state.node, "noop", "--reason is required for --as dismissed")
+    match["disposition"] = args.as_
+    match["reason"] = args.reason or ""
+    match["claim"] = args.claim or ""
+    state.log("ledger_dispose", candidate=args.id, disposition=args.as_)
+    store.save(state)
+    return Directive(
+        True, state.node, "continue",
+        f"candidate {args.id!r} dispositioned as {args.as_!r}",
+        data={"candidate": args.id, "disposition": args.as_},
+    )
+
+
+def cmd_ledger_enumerate(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Run the independent semantic enumeration cross-check over an outgoing
+    deliverable: read --artifact, ask an independent advisor pass (advisor.
+    enumerate_claims, `claude -p --model sonnet`, cost-bounded) to RAISE the
+    load-bearing decisions/judgments/claims it detects, UPSERT each as a 'raised'
+    candidate (last-wins by a deterministic `enum-N` id), then flip bag
+    ['enumerated']=True so the mandatory-cross-check blocker is discharged.
+
+    It only RAISES — disposition stays the coordinator's act (ledger-dispose), so
+    it is the disposition + enumerated blockers, not this call, that make the
+    cross-check advisory-BLOCKING. A recall-widener, never authoritative: an empty
+    enumeration still flips the flag (the pass RAN), and the residual missed claim
+    is Layer B discipline's to catch. Fires no plugin event."""
+    state = _require(store, args.session)
+    bag = state.plugins.get("ledger")
+    if bag is None:
+        return Directive(False, state.node, "noop", "plugin 'ledger' is not active")
+    try:
+        text = Path(args.artifact).read_text(encoding="utf-8")
+    except OSError as exc:
+        return Directive(False, state.node, "noop",
+                         f"cannot read artifact {args.artifact!r}: {exc}")
+    run = runner if runner is not None else advisor.subprocess_runner
+    statements = advisor.enumerate_claims(text, run)
+    candidates = bag.setdefault("candidates", [])
+    raised: list[str] = []
+    for i, statement in enumerate(statements):
+        cid = f"enum-{i + 1}"
+        entry = {"id": cid, "statement": statement, "disposition": "raised",
+                 "reason": "", "claim": ""}
+        for j, c in enumerate(candidates):
+            if c.get("id") == cid:
+                candidates[j] = entry
+                break
+        else:
+            candidates.append(entry)
+        raised.append(cid)
+    bag["enumerated"] = True
+    state.log("ledger_enumerate", raised=len(raised))
+    store.save(state)
+    return Directive(
+        True, state.node, "continue",
+        f"enumeration cross-check ran; raised {len(raised)} candidate(s) — "
+        "disposition each with `agentctl ledger-dispose`",
+        data={"raised": raised, "enumerated": True},
+    )
+
+
 def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     thr = Thresholds()
@@ -508,6 +676,7 @@ def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Di
     state.route = result.route
     if sig.tracker_key and TRACKER_KEY_RE.match(sig.tracker_key):
         state.tracker_key = sig.tracker_key
+    state.deliverable_kind = getattr(args, "deliverable_kind", "") or ""
     state.node = transition(state.node, "classify")
     state.log("classify", weight_class=result.weight_class, route=result.route, reasons=result.reasons)
 
@@ -2160,6 +2329,11 @@ COMMANDS = {
     "plugin-activate": cmd_plugin_activate,
     "plugin-deactivate": cmd_plugin_deactivate,
     "plugin-record": cmd_plugin_record,
+    "ledger-add": cmd_ledger_add,
+    "ledger-check": cmd_ledger_check,
+    "ledger-candidate": cmd_ledger_candidate,
+    "ledger-dispose": cmd_ledger_dispose,
+    "ledger-enumerate": cmd_ledger_enumerate,
     "classify": cmd_classify,
     "plan": cmd_plan,
     "submit-plan": cmd_submit_plan,
@@ -2223,6 +2397,33 @@ def build_parser() -> argparse.ArgumentParser:
                          "stores a marker+reason under the phase key so the gate is "
                          "discharged without a real post. Requires --note.")
 
+    sp = add("ledger-add"); sp.add_argument("--session", required=True)
+    sp.add_argument("--id", required=True, help="claim id; re-adding an existing id upserts it")
+    sp.add_argument("--status", required=True, choices=sorted(ledger.VALID_STATUSES))
+    sp.add_argument("--statement", default="", help="the claim text")
+    sp.add_argument("--source", default="", help="axiom provenance (sensor+window / ticket / file:line)")
+    sp.add_argument("--premise", dest="premises", action="append", default=None,
+                    help="a premise claim id this derivation rests on (repeatable)")
+    sp.add_argument("--basis", default="", help="assumption ground")
+    sp.add_argument("--load-bearing", dest="load_bearing", action="store_true", default=True)
+    sp.add_argument("--not-load-bearing", dest="load_bearing", action="store_false")
+    sp = add("ledger-check"); sp.add_argument("--session", required=True)
+
+    sp = add("ledger-candidate"); sp.add_argument("--session", required=True)
+    sp.add_argument("--id", required=True, help="candidate id; re-adding an existing id re-raises it")
+    sp.add_argument("--statement", default="", help="the decision/judgment statement")
+
+    sp = add("ledger-dispose"); sp.add_argument("--session", required=True)
+    sp.add_argument("--id", required=True, help="candidate id to disposition")
+    sp.add_argument("--as", dest="as_", required=True, choices=["recorded", "dismissed"])
+    sp.add_argument("--reason", default="", help="required when --as dismissed")
+    sp.add_argument("--claim", default="", help="grounding claim id, required when --as recorded")
+
+    sp = add("ledger-enumerate"); sp.add_argument("--session", required=True)
+    sp.add_argument("--artifact", required=True,
+                    help="path to the outgoing deliverable to cross-check for load-bearing "
+                         "decisions/judgments/claims (raised as candidates)")
+
     sp = add("classify"); sp.add_argument("--session", required=True)
     sp.add_argument("--chat", action="store_true")
     sp.add_argument("--changed-lines", dest="changed_lines", type=int, default=0)
@@ -2233,6 +2434,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--external-effect", dest="external_effect", action="store_true")
     sp.add_argument("--new-dependency", dest="new_dependency", action="store_true")
     sp.add_argument("--public-api-change", dest="public_api_change", action="store_true")
+    sp.add_argument("--deliverable-kind", dest="deliverable_kind", default="",
+                    choices=["", "reasoning", "code", "ops", "mixed"],
+                    help="what kind of artifact this task produces; 'reasoning'/'mixed' "
+                         "arms the claim-provenance ledger plugin on a SUBSTANTIVE session")
 
     sp = add("plan"); sp.add_argument("--session", required=True)
     sp = add("submit-plan"); sp.add_argument("--session", required=True); sp.add_argument("--plan", required=True)
@@ -2362,6 +2567,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--external-effect", dest="external_effect", action="store_true")
     sp.add_argument("--new-dependency", dest="new_dependency", action="store_true")
     sp.add_argument("--public-api-change", dest="public_api_change", action="store_true")
+    sp.add_argument("--deliverable-kind", dest="deliverable_kind", default="",
+                    choices=["", "reasoning", "code", "ops", "mixed"],
+                    help="what kind of artifact this task produces; 'reasoning'/'mixed' "
+                         "arms the claim-provenance ledger plugin on a SUBSTANTIVE session")
     sp.add_argument("--plan", default=None)
     sp.add_argument("--approved-by", dest="approved_by", default=None,
                     help="human token authorizing the wrapper to cross the plan-approval "

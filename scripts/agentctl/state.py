@@ -708,6 +708,11 @@ class SessionState:
     # None on legacy states and on sessions with no tracker-key-shaped task id
     # (absent key -> dataclass default via from_dict's cls(**data)).
     tracker_key: str | None = None
+    # The deliverable kind classify was told (claim-provenance ledger): persisted so
+    # the ledger plugin's auto_activate predicate can read it without re-deriving it.
+    # '' on legacy states and on sessions where the coordinator did not pass
+    # --deliverable-kind (absent key -> dataclass default via from_dict's cls(**data)).
+    deliverable_kind: str = ""
     schema_version: int = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
