@@ -26,6 +26,16 @@ reject the under-delivering stage (honest: stage 3 under-delivered on req h) →
 - Where it arose: claude-agent-instructions Core, worktree /home/the0/cai-wt-memreorg branch memory-norms; scanner scripts/self-diagnose.py 229→485 lines.
 - Working plan: self-diagnose-org-invariants: single spawn:developer stage — near-duplicate (Jaccard>=0.6 flag-only) + orphan (BFS reachability) + broken-hook-registration scans + dangling-pointer HTML-comment/placeholder fix + CLI wiring + fixture tests; rule detects/flags, model decides whether to merge/re-norm (NEVER auto-edit memory).
 
+
+### 2026-07-14 — second instance: reachability blind to the wikilink edge type
+- Where it arose: claude-agent-instructions Core, worktree /tmp/wt-self-diagnose-wikilink branch self-diagnose-wikilink-reachability; scan_orphans BFS in scripts/self-diagnose.py
+- Working plan: scan_orphans's mechanized reachability modeled only markdown path-link edges — blind to `[[wikilink]]` edges, the OTHER link type the memory actually uses (a leaf referenced from an index by frontmatter name: slug). Result: a wikilink-only-reachable leaf (smd-task-worktree-checkpoint.md) was FALSELY flagged orphan-leaf, forcing manual 'do not delete' triage and risking deletion of live-referenced content. Same trap #1 as the initial context (mechanize only the OBVIOUS subset of a decidable rule) recurring on the SAME scanner one week later. Fix (spawn:developer, flag-only preserved): _WIKILINK_RE + _build_name_index (frontmatter name:->path, first-wins) + follow [[slug]]/[[slug|alias]] from index files only; unknown slug ignored so real orphans still caught. Verified: pytest 1847 passed (1844+3); false orphan gone. Side-lesson: a dispatched developer reported 15 unrelated hook_turn_end_gate failures as 'pre-existing'; root independently re-ran and found them NOT reproducible (transient) — verify a spawned specialist's 'pre-existing failure' claim against a clean tree before folding it into the done-criterion narrative.
+
+## Common core & variations
+**Common:** mechanizing a decidable rule must enumerate the FULL domain of the rule (here: EVERY edge type a reachability check can traverse), not the first/obvious subset — the mechanical-enumeration discipline applied to one's own determinization
+
+**Variations:** initial: near-duplicate/orphan/broken-hook still prose after stage-3 shipped 3-of-N detection classes. this instance: orphan reachability shipped 1-of-2 edge types (markdown, not wikilink).
+
 ## Cost
 1 planner + 1 thinker plan-review + 1 spawn:developer (dispatch timed out 9m20s exit143 -> marker-drop -> verified worktree directly + committed) ; ~4 engine difficulty-cycle transitions.
 
