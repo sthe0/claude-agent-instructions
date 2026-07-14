@@ -66,9 +66,11 @@ Three global skills live in `~/.claude-agent/skills/`. Cursor cannot trigger the
 
 ### `overcome-difficulty`
 
-**TRIGGER:** any difficulty per the definition above. Surface signals: verification failed, blocker, repeated error, surprising output, plan mismatch, two or more process corrections in a row, long shell loops without progress, missing observable to verify a step.
+**TRIGGER:** any difficulty per the definition above. Surface signals: verification failed, blocker, repeated error, surprising output, plan mismatch, two or more process corrections in a row, long shell loops without progress, missing observable to verify a step, or a non-empty `self-diagnose.py` worklist (proactive — own memory/instructions as the plan, not gated on user report).
 
 **SKIP** when work is progressing as expected, or a one-off retry will obviously succeed.
+
+**Proactive, not only reactive.** `~/.claude-agent/scripts/self-diagnose.py` mechanically scans the agent's own memory/instructions for self-friction (oversized index, dangling pointer, file near its ceiling); Cursor has no SessionStart hook to auto-run it, so periodically run it yourself and work any non-empty worklist through this same cycle.
 
 When triggered → read `~/.claude-agent/skills/overcome-difficulty/SKILL.md` and work through declaration → investigation → critique → handoff a replanning task back to yourself (still the root); apply the corrected plan and resume the original task.
 
@@ -79,6 +81,8 @@ When triggered → read `~/.claude-agent/skills/overcome-difficulty/SKILL.md` an
 **TRIGGER:** the user gives substantive correction or feedback about agent behavior — corrects/rejects/clarifies your action, states a principle ("don't do that", "prefer X", "always Z"), evaluates agent quality, proposes changes to instructions/agents/skills/memory/workflow, or reminds you that this skill should have run (the reminder itself is feedback — run in the current turn).
 
 **SKIP** for neutral confirmation ("ok", "thanks", "yes do it") and for pure questions without evaluation of your actions.
+
+**Also self-initiated:** a non-empty `self-diagnose.py` worklist worked to a re-norming task by `overcome-difficulty` is authored here, through the normal gate below — not only user feedback.
 
 When triggered → read `~/.claude-agent/skills/self-improvement/SKILL.md` (and `policy.md` for process-as-code / cache-aware editing / instruction-language / file-structure / git-sync rules) and follow them in the **same turn** as the trigger, before the final reply. Enforced, not advisory: the generalized end-of-turn `Stop` gate (`hook-turn-end-gate.py`, a loop-safe shell over a registry of pure turn-boundary guardians) blocks the turn when a feedback signal is present but neither `self-improvement` nor `overcome-difficulty` ran — engage the skill or state why it does not apply.
 

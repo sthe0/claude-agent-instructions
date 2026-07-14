@@ -13,6 +13,8 @@ You run as a skill in the main thread, so you have full conversation context —
 
 A user reminder ("did you run self-improvement?", "yes, run it") IS feedback. Invoke in the **same turn** as the trigger, before the final reply. Do not reply with apology only.
 
+**Also self-initiated, not only user-triggered.** `scripts/self-diagnose.py` (run at session start by `hook-self-diagnose-due.py`, throttled + fail-open) mechanically surfaces self-friction in the agent's own memory/instructions — an oversized index, a dangling pointer, a file near its ceiling — proactively, before any user complains. When `overcome-difficulty` (see its § Proactive self-diagnosis) has worked such an item to a re-norming task, author the edit here, through the normal Beat 1/Beat 2 gate below.
+
 ## Workflow — on the standard plan-approval spine
 
 Self-improvement edits the agent's own instructions / config — itself a **state-changing task**, gated by the agentctl spine like any other (config and instructions are production; the dedicated `si-propose`/`si-apply` two-beat gate was retired and **only memory writes are gate-exempt**). Run it as a **two-beat** task so one response never overloads diagnosis + authoring + editing + committing. The cognition below (re-read, classify, author edits, the `AskUserQuestion`) is yours; the engine holds the standard plan-approval gate around the edit.

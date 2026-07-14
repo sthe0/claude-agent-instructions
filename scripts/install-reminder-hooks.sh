@@ -88,6 +88,11 @@ DESIRED = [
     ("PostToolUse",      "Bash",  "hook-scope-track.py",             5),
     ("SessionStart",     None,    "hook-policy-scorecard-due.py",    5),
     ("SessionStart",     None,    "hook-sigma-sentinel-due.py",  5),
+    # Standing proactive self-diagnosis: run self-diagnose.py's read-only scan
+    # for self-friction (oversized memory index, dangling pointer, instruction
+    # file near its ceiling) and surface any worklist to stderr. Self-throttled,
+    # fail-open — never blocks or slows session start.
+    ("SessionStart",     None,    "hook-self-diagnose-due.py",   5),
     # End-of-turn GATE (not advisory): a loop-safe shell running a registry of
     # pure turn-boundary guardians. Blocks a stop when any guardian reports an
     # unmet obligation (today: the last user message carried an agent-behavior-
