@@ -77,7 +77,7 @@ Carve-outs that minimize per-action confirmation:
 
 **Substantive plan changes still require approval.** Refinement (tightening Expected-image, missed read step, reorder without dep change, typo, post-hoc `Actual effort:`) — apply in-thread. Substantive (scope expansion/contraction, new resource, new specialist, changed done criterion, new external action) — `AskUserQuestion` with diff vs prior plan. Full policy + anti-patterns: `~/.claude-agent/memory-global/leaves/acting-without-asking.md`.
 
-**Parallel sessions share one working tree** — the `session_scope` registry + conflict detector deny/warn (via `hook-scope-conflict.py`) when two *live* sessions overlap the same tree; **isolate, not serialize** (own worktree/mount, integrate at land). Mechanism: `docs/operations/cross-session-scope-isolation.md`.
+**Parallel sessions share one working tree** — `session_scope` + `hook-scope-conflict.py` deny/warn when two *live* sessions overlap the same tree; **isolate, not serialize** (own worktree/mount). **Core feature work goes in a linked worktree; the serving checkout stays on `main` — gate `hook-guard-serving-checkout-offmain.py`.** Mechanism: `docs/operations/cross-session-scope-isolation.md`.
 
 ### When the work is stuck
 

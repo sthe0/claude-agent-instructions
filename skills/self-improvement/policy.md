@@ -296,6 +296,21 @@ supported mode, not an error:
    PR — or hand the commit/patch to someone who can push. Tell the user this is
    the path instead of reporting the push as failed.
 
+### Where to author Core edits — the serving checkout stays on `main`
+
+*Difficulty removed: `~/claude-agent-instructions` is the **serving/primary** checkout — the tree `settings.json` hook commands point at — so its checked-out branch **is** the live hook code every session on the machine runs. Doing feature work there on a non-`main` branch makes live hooks execute stale/experimental code for **all** sessions and contaminates the shared working tree for parallel sessions.*
+
+**Core feature work goes in a linked worktree; the serving/primary checkout `~/claude-agent-instructions` stays on the default branch.**
+
+```bash
+git -C ~/claude-agent-instructions worktree add -b <branch> <path> origin/main
+cd <path>   # author, test, and commit here
+```
+
+- **Direct edits on the serving checkout are allowed only on `main`** (the author fast-path: a one-line memory/docs tweak on `main` needs no worktree).
+- Enforced by `scripts/hook-guard-serving-checkout-offmain.py` (PreToolUse): it **denies** an `Edit`/`Write` (or a `git commit`) targeting the serving/primary checkout while its `HEAD` is off `main`, and redirects to `git worktree add`. Fail-open on every other case — a **linked** worktree (off-main edits there are the whole point), on-`main`, detached `HEAD`, paths outside the Core repo, and writes under `memory-global/` (memory recording is never gated).
+- Land by fast-forwarding the worktree branch onto `origin/main` (per § After editing), then remove the worktree and delete the branch.
+
 ### Background pull (opt-in, every 10 minutes)
 
 Background auto-pull is **not installed by default**; `setup-symlinks.sh` does not enable it. Install manually only if you want it:

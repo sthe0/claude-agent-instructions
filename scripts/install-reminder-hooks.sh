@@ -69,6 +69,11 @@ DESIRED = [
     # Hard gate: deny a recursive rm that (worst-case, with any empty $VAR) targets
     # /, $HOME, ~/.claude, or the instruction repo — the agent's own memory/config.
     ("PreToolUse",       "Bash",  "hook-guard-destructive-rm.py",    5),
+    # Hard gate: deny an Edit/Write or `git commit` in the serving/PRIMARY Core
+    # checkout while it is off the default branch (feature work must go in a
+    # linked worktree, so live hooks stay deterministic). Fail-open otherwise.
+    ("PreToolUse",       "Edit|Write", "hook-guard-serving-checkout-offmain.py", 5),
+    ("PreToolUse",       "Bash",  "hook-guard-serving-checkout-offmain.py", 5),
     ("PostToolUse",      "Write", "hook-self-critique-reminder.py",  5),
     # Nudge when AskUserQuestion times out: any answer written mid-turn must be
     # restated in the turn's FINAL message or it never reaches the user.
