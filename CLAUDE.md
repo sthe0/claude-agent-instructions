@@ -83,7 +83,7 @@ Carve-outs that minimize per-action confirmation:
 
 A **difficulty** (intro: a desired-vs-actual divergence) takes two operational forms here: an actual step result doesn't match the result image the plan declared, or you cannot perform that check at all — no observable, no way to compare actual against expected. Both warrant the same response.
 
-Use the **overcome-difficulty** skill (see `~/.claude-agent/skills/overcome-difficulty/`). Surface signals: verification failed, blocker, repeated error, plan mismatch, two or more process corrections in a row, **same root-cause narrative repeated without new evidence**, before retrying an external workflow / VCS / mount / CLI after failure, session review, missing observable to verify a step, **or a non-empty `self-diagnose.py` worklist** (proactive — § Proactive self-diagnosis).
+Use the **overcome-difficulty** skill (see `~/.claude-agent/skills/overcome-difficulty/`). Surface signals: verification failed, blocker, repeated error, plan mismatch, two or more process corrections in a row, **same root-cause narrative repeated without new evidence**, before retrying an external workflow / VCS / mount / CLI after failure, session review, missing observable to verify a step.
 
 The engine drives the *shell*: a FAILED stage routes to `DIAGNOSING`, where it enforces `declare → investigate → critique` and **blocks `replan` until the difficulty record is complete** (`gates.difficulty_blockers`). The skill supplies each phase's *cognition* and the **replanning task** you (still as root) apply to fix the plan and resume the original user task on the new plan.
 
