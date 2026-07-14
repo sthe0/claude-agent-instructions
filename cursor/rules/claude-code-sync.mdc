@@ -78,6 +78,8 @@ When triggered → read `~/.claude-agent/skills/overcome-difficulty/SKILL.md` an
 
 ### `self-improvement`
 
+**Self-improvement is `overcome-difficulty` specialized to a _normative_ agent-system difficulty** (material = the norm-set; closing ACT = a re-norming edit); the beats map onto declaration → investigation → critique → normalization.
+
 **TRIGGER:** the user gives substantive correction or feedback about agent behavior — corrects/rejects/clarifies your action, states a principle ("don't do that", "prefer X", "always Z"), evaluates agent quality, proposes changes to instructions/agents/skills/memory/workflow, or reminds you that this skill should have run (the reminder itself is feedback — run in the current turn).
 
 **SKIP** for neutral confirmation ("ok", "thanks", "yes do it") and for pure questions without evaluation of your actions.

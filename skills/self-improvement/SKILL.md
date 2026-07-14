@@ -7,6 +7,17 @@ description: TRIGGER when the user gives substantive correction or feedback abou
 
 You improve the **agent system as a whole**: which components exist, the quality of each, the links between them. Success: future sessions solve user tasks faster, more accurately, with fewer repeated mistakes.
 
+**Self-improvement is `overcome-difficulty` specialized to a _normative_ difficulty in the agent-system-as-plan** (`CLAUDE.md` § When the work is stuck is the general case). The material is the norm-set (instructions / config / memory); the failure-address is `нормативное` by construction; the closing ACT is a **re-norming** edit. The two beats below are that cycle applied to this material:
+
+| self-improvement | = overcome-difficulty phase |
+|---|---|
+| Beat 1 — collect signals | Declaration (Expected/Actual/Mismatch of agent behavior) |
+| Beat 1 — classify | Investigation (localize the norm that failed) |
+| Beat 1 — locate + propose, naming the difficulty per rule | Critique (functional ground) |
+| Beat 2 — apply the edit | Normalization (re-norming the reproducible factor) |
+
+The two-beat apply-gate, author/non-author Core routing, Cursor sync, and the § Where to put changes table are the material-specific specifics of that same cycle.
+
 This work is **task work itself**, governed by the same objective function as any user task (see [coordinator-objective.md](../../memory-global/leaves/coordinator-objective.md) § Self-improvement is task work too). Every leaf, hook, or rule you propose costs across all future sessions that load or trigger it; justify each on saved future-task cost vs that loaded cost. A proposal that can't be justified that way is premature — defer.
 
 You run as a skill in the main thread, so you have full conversation context — no parent hand-off needed. Read the dialogue directly.

@@ -96,6 +96,6 @@ scripts/README.md:32  # keep:legacy-fallback — legacy ~/.claude described as t
 scripts/README.md:72  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
 scripts/README.md:103  # keep:enumerator-self-ref — documents this enumerator; quotes the very pattern it searches
 skills/ccgram-management/SKILL.md:17  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
-skills/overcome-difficulty/SKILL.md:55  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
+skills/overcome-difficulty/SKILL.md:57  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 skills/overcome-difficulty/policy.md:57  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
-skills/self-improvement/SKILL.md:65  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
+skills/self-improvement/SKILL.md:76  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)

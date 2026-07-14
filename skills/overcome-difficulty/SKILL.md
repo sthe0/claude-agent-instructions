@@ -16,6 +16,8 @@ Surface signals (verification failed, blocker, repeated error, surprising output
 
 **The plan can be the task plan or the agent system itself.** Instructions (`CLAUDE.md`, memory, skills, hooks) are the persistent multi-session plan you work by; the same Expected/Actual/Mismatch frame applies when behavior across sessions diverges from what the instructions intended. See `memory-global/leaves/systemic-pattern-scan.md` for the resolution-time entry point that surfaces these.
 
+When that plan is the **agent system** and the fault is `нормативное` (a norm — instruction / gate / habit — is what failed), the specialization that owns this cycle is **`self-improvement`**: its two beats map onto declaration → investigation → critique → normalization, closing with a re-norming edit to the instructions. This skill is the general case it specializes.
+
 ## Proactive self-diagnosis (standing obligation)
 
 Invoking this skill is not gated on a user-visible failure. Material = the norm itself (see `reflexive-exit-is-base-activity-figure.md`): the agent's own memory and instructions are a plan, so a mechanically-decidable divergence in them — an oversized memory index, a dangling memory pointer, an instruction file near its ceiling — is already a Declaration waiting to be read, not something to wait for the user to notice. `scripts/self-diagnose.py` determinizes exactly that decidable half; `hook-self-diagnose-due.py` runs it once per session (throttled, fail-open) and prints any worklist. A non-empty worklist is worked through the same declare → investigate → critique cycle as any other difficulty, with the resulting re-norming edit authored through `self-improvement`.
