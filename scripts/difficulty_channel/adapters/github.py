@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import urllib.request
 from pathlib import Path
@@ -75,6 +76,101 @@ def _read_token() -> str:
     raise RuntimeError(
         f"no GitHub write token (set GITHUB_TOKEN, create {TOKEN_PATH}, or run `gh auth login`)"
     )
+
+
+# Fully-qualified issue refs only: owner/repo#N, owner/repo/issues/N, or a full URL.
+# A bare N/#N carries no repo and must never be defaulted to REPO — reject it instead.
+_ISSUE_REF_RE = re.compile(
+    r"^(?:https?://github\.com/)?(?P<repo>[\w.-]+/[\w.-]+)(?:#|/issues/)(?P<number>\d+)/?$"
+)
+
+
+def _parse_issue_ref(issue_ref: str) -> tuple[str, int]:
+    """Parse a fully-qualified GitHub issue ref into (repo, number). Raises ValueError on a
+    bare number/`#N` (no repo) rather than silently defaulting to REPO."""
+    match = _ISSUE_REF_RE.match(issue_ref.strip())
+    if not match:
+        raise ValueError(
+            f"issue ref must be a fully-qualified 'owner/repo#N', 'owner/repo/issues/N', "
+            f"or a github.com URL — got {issue_ref!r}"
+        )
+    return match.group("repo"), int(match.group("number"))
+
+
+def _gh_headers(token: str) -> dict:
+    return {
+        "Authorization": f"token {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+
+def add_label(
+    issue_ref: str,
+    label: str,
+    *,
+    repo: str | None = None,
+    http: Callable[[str, str, dict, bytes | None], object] | None = None,
+    token: str | None = None,
+) -> None:
+    """Add ``label`` to an existing issue (additive, idempotent — does not create the label;
+    a missing label 422s, which callers treat as a fail-open skip)."""
+    parsed_repo, number = _parse_issue_ref(issue_ref)
+    target_repo = repo or parsed_repo
+    tok = token or _read_token()
+    body = json.dumps([label]).encode("utf-8")
+    url = f"{API_BASE}/repos/{target_repo}/issues/{number}/labels"
+    (http or _default_http)("POST", url, _gh_headers(tok), body)
+
+
+def add_comment(
+    issue_ref: str,
+    body: str,
+    *,
+    repo: str | None = None,
+    http: Callable[[str, str, dict, bytes | None], object] | None = None,
+    token: str | None = None,
+) -> None:
+    """Post a comment to an existing issue (the usage-telemetry sink append path). Same
+    fully-qualified-ref rule as add_label — a bare number/`#N` raises ValueError."""
+    parsed_repo, number = _parse_issue_ref(issue_ref)
+    target_repo = repo or parsed_repo
+    tok = token or _read_token()
+    payload = json.dumps({"body": body}).encode("utf-8")
+    url = f"{API_BASE}/repos/{target_repo}/issues/{number}/comments"
+    (http or _default_http)("POST", url, _gh_headers(tok), payload)
+
+
+def list_comments(
+    issue_ref: str,
+    *,
+    repo: str | None = None,
+    http: Callable[[str, str, dict, bytes | None], object] | None = None,
+    token: str | None = None,
+) -> list[dict]:
+    """Fetch every comment on an existing issue (paginated, read-only). Same
+    fully-qualified-ref rule as add_label."""
+    parsed_repo, number = _parse_issue_ref(issue_ref)
+    target_repo = repo or parsed_repo
+    tok = token or _read_token()
+    client = http or _default_http
+    headers = _gh_headers(tok)
+    out: list[dict] = []
+    page = 1
+    while True:
+        url = (
+            f"{API_BASE}/repos/{target_repo}/issues/{number}/comments"
+            f"?per_page=100&page={page}"
+        )
+        batch = client("GET", url, headers, None)
+        if not isinstance(batch, list) or not batch:
+            break
+        out.extend(batch)
+        if len(batch) < 100:
+            break
+        page += 1
+    return out
 
 
 class GitHubChannel(DifficultyChannel):

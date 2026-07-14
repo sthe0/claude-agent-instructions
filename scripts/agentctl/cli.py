@@ -23,7 +23,7 @@ from pathlib import Path
 
 from lib import config_root
 
-from . import advisor, continuations, cost, gates, ledger, permissions, plugins, plugins_ledger
+from . import advisor, continuations, cost, gates, ledger, permissions, plugins, plugins_ledger, solved_marker
 from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
 from .partition import render_section, render_units, verdict
@@ -675,6 +675,10 @@ def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Di
     state.weight_class = result.weight_class
     state.route = result.route
     if sig.tracker_key and TRACKER_KEY_RE.match(sig.tracker_key):
+        state.tracker_key = sig.tracker_key
+    elif sig.tracker_key and solved_marker.looks_like_key(sig.tracker_key) == "github":
+        # a fully-qualified github ref (owner/repo#N) is not TRACKER_KEY_RE-shaped and so
+        # does not force SUBSTANTIVE, but it must still reach cmd_resolve's marker stamp.
         state.tracker_key = sig.tracker_key
     state.deliverable_kind = getattr(args, "deliverable_kind", "") or ""
     state.node = transition(state.node, "classify")
@@ -1527,9 +1531,13 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     quality_note = getattr(args, "quality_note", None)
     state.log("resolve", by=args.by, quality=quality, quality_by=quality_by)
     store.save(state)
+    tracker_key = getattr(state, "tracker_key", None)
+    if not tracker_key and solved_marker.looks_like_key(state.task_id):
+        tracker_key = state.task_id
     quality_row = {
         "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
         "task_id": state.task_id,
+        "tracker_key": tracker_key,
         "session": state.session_id,
         "quality": quality,
         "quality_by": quality_by,
@@ -1547,8 +1555,18 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         "total_cost_usd": cost_surface.get("total_cost_usd"),
     }
     _write_quality_row(quality_row)
+    # Whether to stamp is fully decidable from observed state (resolved + a known
+    # tracker key) — a rule, not a judgement — so it runs unconditionally here rather
+    # than being left for the coordinator to remember. Belt-and-suspenders around
+    # solved_marker.stamp's own fail-open contract: resolution has already happened
+    # and must never be undone by a marker failure.
+    try:
+        marker_status = solved_marker.stamp(tracker_key)
+    except Exception as exc:  # noqa: BLE001 - fail-open by design
+        marker_status = {"channel": None, "key": tracker_key, "stamped": False,
+                          "skipped_reason": str(exc)}
     detail = "task resolved"
-    data = {"cost": cost_surface, "quality": quality_row}
+    data = {"cost": cost_surface, "quality": quality_row, "solved_marker": marker_status}
     # Bypass visibility: the resolution summary surfaces every acceptance judge bypass
     # verbatim, so a resolved task's record shows which acceptance passes were unjudged
     # (kill switch) or overridden — never hidden behind a clean COMPLETED.

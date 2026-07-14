@@ -1,0 +1,187 @@
+"""usage-digest.py `pull`: cross-installation aggregator over per-channel sink comments.
+
+NO live network: sink comment lists are injected as fixtures. The load-bearing invariants
+under test are: sum across disjoint (installation, period) rows with no double-count, dedup
+of re-emitted periods, skipping human chatter / malformed comments, a rated-row-WEIGHTED mean
+quality (NOT invocation-weighted), channel segmentation (non-Yandex excludes Yandex), and
+fail-soft on an unreachable sink. Each has a mutation twin that turns RED if the guard is dropped.
+"""
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent
+SCRIPT = SCRIPTS_DIR / "usage-digest.py"
+_spec = importlib.util.spec_from_file_location("usage_digest", SCRIPT)
+usage_digest = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(usage_digest)
+
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+def _agg(installation, period, channel, *, inv=0, resolved=0, precedents=0,
+         spawns=0, cost=0.0, n_rated=0, mean_q=None):
+    return {
+        "schema": "usage/v1",
+        "period": period,
+        "installation_id": installation,
+        "channel": channel,
+        "n_invocations": inv,
+        "n_resolved": resolved,
+        "n_quality_rated": n_rated,
+        "n_marked_precedents": precedents,
+        "mean_quality": mean_q,
+        "total_cost_usd": cost,
+        "n_spawns": spawns,
+    }
+
+
+def _comment(payload) -> str:
+    """A github/startrek-agnostic comment text carrying a fenced-JSON aggregate."""
+    return usage_digest.format_comment(payload)
+
+
+def _gh_lister(bodies):
+    return lambda sink, http=None: [{"body": b} for b in bodies]
+
+
+def _st_lister(texts):
+    return lambda key, http=None: [{"text": t} for t in texts]
+
+
+# ── extract_aggregate: chatter is skipped, well-formed blocks parse ───────────
+
+def test_extract_aggregate_parses_well_formed_block():
+    payload = _agg("inst-a", "2026-W01", "github", inv=5)
+    got = usage_digest.extract_aggregate(_comment(payload))
+    assert got is not None and got["installation_id"] == "inst-a" and got["n_invocations"] == 5
+
+
+def test_extract_aggregate_skips_human_chatter():
+    assert usage_digest.extract_aggregate("just a human note, no aggregate here") is None
+
+
+def test_extract_aggregate_skips_marker_without_valid_json():
+    text = f"{usage_digest.AGGREGATE_MARKER}\n```json\n{{not valid json,,,}}\n```"
+    assert usage_digest.extract_aggregate(text) is None
+
+
+def test_extract_aggregate_rejects_wrong_schema():
+    payload = _agg("inst-a", "2026-W01", "github")
+    payload["schema"] = "something-else"
+    assert usage_digest.extract_aggregate(_comment(payload)) is None
+
+
+# ── rollup: sum across disjoint (installation, period) rows, no double-count ───
+
+def test_rollup_sums_three_installations_over_two_disjoint_weeks():
+    aggs = [
+        _agg("inst-a", "2026-W01", "github", inv=10, resolved=2, spawns=1, cost=1.0),
+        _agg("inst-a", "2026-W02", "github", inv=20, resolved=3, spawns=2, cost=2.0),
+        _agg("inst-b", "2026-W01", "github", inv=5, resolved=1, spawns=0, cost=0.5),
+    ]
+    result = usage_digest.rollup(aggs)
+    total = result["total"]
+    # Disjoint periods -> a plain sum is correct (no overlapping-window double-count).
+    assert total["n_invocations"] == 35
+    assert total["n_resolved"] == 6
+    assert total["n_spawns"] == 3
+    assert total["total_cost_usd"] == 3.5
+    assert total["n_installations"] == 2  # inst-a and inst-b
+    assert result["n_aggregates"] == 3
+
+
+def test_rollup_dedups_a_reemitted_period_keeping_the_latest():
+    # inst-a re-emits 2026-W01 (a corrected count). Latest (list-order) must win, not sum.
+    aggs = [
+        _agg("inst-a", "2026-W01", "github", inv=10),
+        _agg("inst-a", "2026-W01", "github", inv=17),  # re-emit, supersedes
+    ]
+    result = usage_digest.rollup(aggs)
+    # MUTATION: dropping the (installation, period) dedup would count 10+17=27 here.
+    assert result["total"]["n_invocations"] == 17
+    assert result["n_aggregates"] == 1
+
+
+def test_rollup_mean_quality_is_rated_row_weighted_not_invocation_weighted():
+    # inst-a: huge traffic, few rated rows, low quality. inst-b: little traffic, many rated, high.
+    aggs = [
+        _agg("inst-a", "2026-W01", "github", inv=1000, n_rated=2, mean_q=1.0),
+        _agg("inst-b", "2026-W01", "github", inv=10, n_rated=8, mean_q=5.0),
+    ]
+    result = usage_digest.rollup(aggs)
+    # Rated-row weighted: (1.0*2 + 5.0*8) / (2+8) = 42/10 = 4.2.
+    # MUTATION: weighting by n_invocations would give ~1.04, dominated by inst-a. This asserts 4.2.
+    assert result["total"]["mean_quality"] == 4.2
+    assert result["total"]["n_quality_rated"] == 10
+
+
+def test_rollup_mean_quality_none_when_no_rated_rows():
+    result = usage_digest.rollup([_agg("inst-a", "2026-W01", "github", inv=5)])
+    assert result["total"]["mean_quality"] is None
+
+
+# ── channel segmentation: non-Yandex excludes Yandex ──────────────────────────
+
+def test_rollup_segments_by_channel_non_yandex_excludes_yandex():
+    aggs = [
+        _agg("inst-gh", "2026-W01", "github", inv=10),
+        _agg("inst-st", "2026-W01", "startrek", inv=7),
+    ]
+    result = usage_digest.rollup(aggs)
+    seg = result["by_segment"]
+    # MUTATION: collapsing all rows into one segment would put 17 in each. Segments must be disjoint.
+    assert seg["non-yandex"]["n_invocations"] == 10
+    assert seg["yandex"]["n_invocations"] == 7
+    assert seg["non-yandex"]["n_installations"] == 1
+    assert result["total"]["n_invocations"] == 17
+
+
+# ── pull: end-to-end over injected sink listers, both channels ────────────────
+
+def test_pull_reads_both_channels_and_sums():
+    gh_bodies = [
+        "human chatter — ignore me",
+        _comment(_agg("inst-gh", "2026-W01", "github", inv=10, resolved=2)),
+    ]
+    st_texts = [
+        _comment(_agg("inst-st", "2026-W01", "startrek", inv=7, resolved=1)),
+    ]
+    result = usage_digest.pull(
+        sinks={"github": "org/repo#1", "startrek": "USAGE-1"},
+        github_list_comments=_gh_lister(gh_bodies),
+        startrek_list_comments=_st_lister(st_texts),
+    )
+    # Chatter skipped; both real aggregates summed.
+    assert result["n_aggregates"] == 2
+    assert result["total"]["n_invocations"] == 17
+    assert result["by_segment"]["non-yandex"]["n_invocations"] == 10
+    assert result["by_segment"]["yandex"]["n_invocations"] == 7
+
+
+def test_pull_skips_unconfigured_sink():
+    result = usage_digest.pull(
+        sinks={"github": "org/repo#1", "startrek": ""},  # startrek unconfigured
+        github_list_comments=_gh_lister([_comment(_agg("inst-gh", "2026-W01", "github", inv=4))]),
+        startrek_list_comments=_st_lister(["should never be read"]),
+    )
+    assert result["total"]["n_invocations"] == 4
+    assert "yandex" not in result["by_segment"]
+
+
+def test_pull_fail_soft_on_unreachable_sink():
+    def boom(sink, http=None):
+        raise RuntimeError("network down")
+
+    logs = []
+    result = usage_digest.pull(
+        sinks={"github": "org/repo#1", "startrek": "USAGE-1"},
+        github_list_comments=boom,  # github down
+        startrek_list_comments=_st_lister([_comment(_agg("inst-st", "2026-W01", "startrek", inv=9))]),
+        log=logs.append,
+    )
+    # A down channel degrades to the other channel's rollup, never a crash.
+    assert result["total"]["n_invocations"] == 9
+    assert "non-yandex" not in result["by_segment"]
+    assert any("failed" in m for m in logs)

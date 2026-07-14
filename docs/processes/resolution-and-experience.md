@@ -13,6 +13,17 @@ The engine holds the task behind a non-skippable **resolution gate**. Two things
 
 The gate mechanism is part of [the coordination engine and its state machine](../architecture/coordination-engine.md).
 
+## Resolution stamps the ticket and the usage ledger
+
+`resolve` carries two more side effects, both fail-open (a failure here never blocks or undoes a resolution that already happened):
+
+- It stamps a `solved_by_007` marker on the task's tracker ticket — a Startrek tag or a GitHub label, chosen by the ticket's channel — so resolved tasks accumulate into a searchable precedent corpus. This runs in the engine itself, not a plugin: whether to stamp is fully decidable from observed state (resolved + a known tracker key), so it is a rule, not a judgement call a plugin nudge could defer to the coordinator.
+- It adds the resolved task's tracker/issue key to the per-task quality-ledger row, so `scripts/agent-stats.py` can report resolved tasks, cost, and "marked precedents" in one place, sliced by project or across all projects on the machine.
+
+Full mechanism, the GitHub production preconditions, and why this stamp is engine-executed while the ticket's status transition stays skill-executed: [the solved-by marker and usage stats leaf](../../memory-global/leaves/solved-by-007-marker-and-usage-stats.md).
+
+Beyond this machine, an **opt-in** (default OFF) periodic step (`scripts/usage-digest.py emit`) posts an anonymized counts-only aggregate to a per-channel tracking sink, and `usage-digest.py pull` (alias `agent-stats.py --cross-machine`) sums the fleet into one rollup. It never runs on the `resolve` hot path and never emits task ids / keys / paths. Consent contract, emitted schema, the two sink ids, and the private-sink reachability constraint: [the agent-usage-telemetry leaf](../../memory-global/leaves/agent-usage-telemetry.md).
+
 ## Criterion type shapes the question
 
 How the task is confirmed depends on how its done criterion is verified:
@@ -30,4 +41,5 @@ Once the task is confirmed resolved, the system decides whether to record it. Th
 
 - [The task lifecycle](task-lifecycle.md) — where resolution sits in the end-to-end flow.
 - [The recording-experience leaf](../../memory-global/leaves/recording-experience.md) — the quality bar and search-before-record discipline.
+- [The solved-by marker and usage stats leaf](../../memory-global/leaves/solved-by-007-marker-and-usage-stats.md) — the resolution-gate ticket stamp and the local usage report it feeds.
 - [Self-improvement](self-improvement.md) — the sibling process for behavioural corrections.

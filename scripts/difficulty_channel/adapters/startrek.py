@@ -123,6 +123,53 @@ class StartrekChannel(DifficultyChannel):
         return [_issue_to_record(i) for i in issues]
 
 
+def _st_headers(token: str) -> dict:
+    return {
+        "Authorization": f"OAuth {token}",
+        "Content-Type": "application/json",
+    }
+
+
+def add_tag(
+    issue_key: str,
+    tag: str,
+    *,
+    http: Callable[[str, str, dict, bytes | None], dict] | None = None,
+    token: str | None = None,
+) -> None:
+    """Add ``tag`` to an existing issue via the add operator (never a full-array replace),
+    so tags already on the issue survive."""
+    sanitized = _sanitize_tag(tag)
+    tok = token or _read_token()
+    body = json.dumps({"tags": {"add": [sanitized]}}).encode("utf-8")
+    (http or _default_http)("PATCH", f"{API_BASE}/issues/{issue_key}", _st_headers(tok), body)
+
+
+def add_comment(
+    issue_key: str,
+    body: str,
+    *,
+    http: Callable[[str, str, dict, bytes | None], dict] | None = None,
+    token: str | None = None,
+) -> None:
+    """Post a comment to an existing issue (the usage-telemetry sink append path)."""
+    tok = token or _read_token()
+    payload = json.dumps({"text": body}).encode("utf-8")
+    (http or _default_http)("POST", f"{API_BASE}/issues/{issue_key}/comments", _st_headers(tok), payload)
+
+
+def list_comments(
+    issue_key: str,
+    *,
+    http: Callable[[str, str, dict, bytes | None], dict] | None = None,
+    token: str | None = None,
+) -> list[dict]:
+    """Fetch every comment on an existing issue (read-only)."""
+    tok = token or _read_token()
+    result = (http or _default_http)("GET", f"{API_BASE}/issues/{issue_key}/comments", _st_headers(tok), None)
+    return result if isinstance(result, list) else []
+
+
 def _issue_to_record(issue: dict) -> DifficultyRecord:
     tags = issue.get("tags") or [""]
     return DifficultyRecord(
