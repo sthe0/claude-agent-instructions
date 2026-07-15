@@ -21,13 +21,17 @@ def _load_module():
     return mod
 
 
-def run_hook(payload: dict) -> subprocess.CompletedProcess:
+def run_hook(payload: dict, denial_log: str = "/dev/null") -> subprocess.CompletedProcess:
+    # The hook runs as a subprocess with a scrubbed env, so it cannot see a
+    # CLAUDE_ASK_GATE_DENIAL_LOG set on the pytest parent — point its denial
+    # sink here explicitly. Default /dev/null keeps every test off the real
+    # ~/.local/log denial log; a test that verifies logging passes a tmp path.
     return subprocess.run(
         [sys.executable, str(HOOK)],
         input=json.dumps(payload),
         capture_output=True,
         text=True,
-        env={"PATH": "/usr/bin:/bin"},
+        env={"PATH": "/usr/bin:/bin", "CLAUDE_ASK_GATE_DENIAL_LOG": denial_log},
     )
 
 
@@ -77,6 +81,20 @@ def test_denies_over_threshold(tmp_path):
     assert proc.returncode == 0
     assert decision_of(proc) == "deny"
     assert "timer" in proc.stdout or "FINAL" in proc.stdout
+
+
+def test_denial_is_logged(tmp_path):
+    # Every DENY appends one fail-open entry-shape record to the denial sink, so a
+    # suspected false positive can be diagnosed after the fact.
+    log = tmp_path / "denials.jsonl"
+    t = write_transcript(tmp_path / "t.jsonl", [user_prompt("go"), tool_result_entry()])
+    proc = run_hook(payload_for(t), denial_log=str(log))
+    assert decision_of(proc) == "deny"
+    lines = log.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    rec = json.loads(lines[0])
+    assert rec["reason_head"] and isinstance(rec["tail"], list) and rec["tail"]
+    assert rec["tail"][-1]["has_tool_result"] is True
 
 
 def test_allows_short_status_line(tmp_path):

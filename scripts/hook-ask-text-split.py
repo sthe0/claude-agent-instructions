@@ -32,11 +32,23 @@ Fails open (allow) on any missing observable: no transcript_path, unreadable
 file, no turn boundary found. Always exits 0 — a hook crash must never wedge the
 workflow. DENY uses the same PreToolUse permissionDecision JSON contract as
 hook-plan-delivery-gate.py.
+
+Caveat (measured 2026-07-15): a Stop-hook block does NOT open a fresh turn — it
+CONTINUES the current one, so tool calls made *before* the block are legitimately
+"this turn" and a subsequent ask is denied correctly (not a false positive). The
+sleep-2 remedy above is also version-sensitive: the background command's own
+completion can land a tool_result between the turn boundary and the ask, tripping
+decision step (1). To confirm the true entry shape behind a suspected false
+positive — the live root-session transcript is otherwise unreachable from a
+sub-agent — every DENY is appended, fail-open, to
+`~/.local/log/claude-ask-gate-denials.jsonl` as a compact entry-shape tail.
 """
 from __future__ import annotations
 
 import json
+import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -142,6 +154,51 @@ def gate_decision(has_tool_result_this_turn: bool | None, at_risk_text_len: int 
     return "allow", ""
 
 
+# Fail-open observability sink: the compact entry-shape tail behind every DENY,
+# so a suspected false-positive denial can be diagnosed after the fact (the live
+# root-session transcript is otherwise unreachable from a sub-agent).
+_DENIAL_LOG = Path(
+    os.environ.get("CLAUDE_ASK_GATE_DENIAL_LOG")
+    or Path.home() / ".local" / "log" / "claude-ask-gate-denials.jsonl"
+)
+
+
+def _log_denial(transcript_path: Path, reason: str) -> None:
+    """Append one fail-open record of the transcript tail that produced this
+    denial (entry types / attachment types / tool_result & text presence — no
+    text bodies). Never raises: observability must not wedge the gate."""
+    try:
+        lines = transcript_path.read_text(encoding="utf-8", errors="replace").splitlines()[-8:]
+        tail = []
+        for line in lines:
+            try:
+                entry = json.loads(line)
+            except Exception:
+                continue
+            if not isinstance(entry, dict):
+                continue
+            att = entry.get("attachment")
+            origin = entry.get("origin")
+            items = _content_items(entry["message"]) if isinstance(entry.get("message"), dict) else []
+            tail.append({
+                "type": entry.get("type"),
+                "att_type": att.get("type") if isinstance(att, dict) else None,
+                "isMeta": bool(entry.get("isMeta")),
+                "origin_kind": origin.get("kind") if isinstance(origin, dict) else None,
+                "has_tool_result": any(isinstance(i, dict) and i.get("type") == "tool_result" for i in items),
+                "has_text": any(isinstance(i, dict) and i.get("type") == "text" and i.get("text") for i in items),
+            })
+        _DENIAL_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with _DENIAL_LOG.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "reason_head": reason[:60],
+                "tail": tail,
+            }) + "\n")
+    except Exception:
+        pass
+
+
 def deny_with(reason: str) -> None:
     print(json.dumps({
         "hookSpecificOutput": {
@@ -168,6 +225,7 @@ def main() -> int:
     has_tool_result, at_risk_len = scan_transcript(Path(transcript_path))
     decision, reason = gate_decision(has_tool_result, at_risk_len)
     if decision == "deny":
+        _log_denial(Path(transcript_path), reason)
         deny_with(reason)
     return 0
 
