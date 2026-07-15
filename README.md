@@ -82,10 +82,10 @@ Git itself needs no special setup — Claude uses `git`/`gh` natively. Org-speci
 
 ## Getting started — your first task
 
-Once `doctor.sh` shows all `[ OK ]`, start a task the same way every time: open `claude` in the directory you want to work in and describe what you need in plain language (English or Russian — the agent replies in the language you write). You do **not** invoke the engine, pick a skill, or write a plan by hand — a hook arms the coordination engine on your first message and the agent routes the work itself.
+Once `doctor.sh` shows all `[ OK ]`, start a task the same way every time: open `claude-agent` in the directory you want to work in and describe what you need in plain language (English or Russian — the agent replies in the language you write). You do **not** invoke the engine, pick a skill, or write a plan by hand — a hook arms the coordination engine on your first message and the agent routes the work itself.
 
 ```
-cd ~/my-project && claude
+cd ~/my-project && claude-agent
 > Add retry-with-backoff to the HTTP client and cover it with a test.
 ```
 
@@ -103,7 +103,7 @@ claude-task --new "title"        # create an issue, then enter
 claude-task <name>               # named scratch workspace (no tracker)
 ```
 
-The bare `cd ~/my-project && claude` flow still works — `claude-task` is an optional shortcut. It selects a **workspace** backend (`git` worktree by default; `arc` mount where present) and a **tracker** backend (GitHub Issues by default), auto-detected and overridable; auth variants `claude-<profile>` (e.g. `claude-team`) are the same entry on a machine-local auth profile. Backend/registry detail: [docs/operations/setup.md](docs/operations/setup.md#starting-a-task-with-claude-task) and [docs/operations/org-portability.md](docs/operations/org-portability.md).
+The manual `cd ~/my-project && claude-agent` flow still works — `claude-task` is an optional shortcut. (Bare `claude` is your untouched personal install, **not** the system.) It selects a **workspace** backend (`git` worktree by default; `arc` mount where present) and a **tracker** backend (GitHub Issues by default), auto-detected and overridable; auth variants `claude-<profile>` (e.g. `claude-team`) are the same entry on a machine-local auth profile. Backend/registry detail: [docs/operations/setup.md](docs/operations/setup.md#starting-a-task-with-claude-task) and [docs/operations/org-portability.md](docs/operations/org-portability.md).
 
 `claude-task` / `claude-team` also give the agent the first turn: it reads whatever ticket context and prior plan/branch/comment artifacts already exist and either opens a requirements dialogue or resumes in-flight work without re-asking what's already settled — see [docs/operations/setup.md § The opening dialogue](docs/operations/setup.md#the-opening-dialogue).
 
