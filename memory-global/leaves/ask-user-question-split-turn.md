@@ -4,7 +4,7 @@ description: The universal turn-split rule for AskUserQuestion — deliver any p
 schema: leaf/v1
 type: feedback
 created: 2026-07-14
-last_verified: 2026-07-14
+last_verified: 2026-07-15
 ---
 
 ## Difficulty
@@ -22,6 +22,10 @@ The universal turn-split:
 3. Open the **next** turn (the timer's completion notification) directly with the `AskUserQuestion` — **zero preceding text**; put any one-line digest inside the question text itself.
 
 This split is **universal**, not only for long artifacts — same-message pre-ask text is dropped from render and transcript regardless of length. The exception shifts *when* the click happens; it never downgrades a defined-set choice to a free-text question.
+
+**Two version-sensitivity caveats (measured 2026-07-15), so a denial here is not mistaken for a hook bug:**
+- A **Stop-hook block does not open a fresh turn** — it *continues* the current one. So a tool call made before the block is legitimately "this turn", and a subsequent ask is denied **correctly**, not as a false positive. To open a real boundary, the `sleep 2` timer route above is still required.
+- The sleep-2 remedy is itself version-sensitive: the background command's own completion can land a `tool_result` between the turn boundary and the ask, re-tripping the mid-turn rule. When a denial is suspected of being a false positive, the entry-shape tail behind it is appended to `~/.local/log/claude-ask-gate-denials.jsonl` (`hook-ask-text-split.py`; path overridable via `CLAUDE_ASK_GATE_DENIAL_LOG`) — read the tail to confirm the true transcript shape rather than assuming the gate misfired.
 
 **Machine enforcement:**
 - `hook-ask-text-split.py` denies **every mid-turn ask** — any ask in a turn that already completed a tool call — and any turn-opening ask whose substantive same-turn text exceeds the threshold.
