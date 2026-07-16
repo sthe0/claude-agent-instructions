@@ -29,6 +29,7 @@ CHECKS: list[str] = [
     "verify-memory-index",
     "lint-hooks-executable",
     "verify-doc-concepts",
+    "verify-onboarding-entrypoint",
     "verify-no-conflict-markers",
     "verify-config-root-refs",
 ]
