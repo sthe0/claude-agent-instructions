@@ -249,6 +249,74 @@ def _validate_graph(stages: list[Stage], *, is_substantive: bool) -> None:
             visit(i, [i])
 
 
+# --- verify_command scope lint (advisory, never blocking) -------------------
+# Difficulty removed: a stage's verify_command running a whole aggregate suite
+# (verify-all.py, a bare pytest invocation) without scoping to the paths the
+# stage actually touches lets pre-existing, unrelated reds elsewhere in the
+# repo false-fail the stage — a recurring authoring miss (experience leaf
+# 2026-06-29, ~20 accumulated contexts). This is the DECIDABLE rule part
+# (does the command look like an unscoped aggregate run); whether a
+# whole-suite run is actually justified for a given stage is perception left
+# to the plan author — hence advisory, never a block.
+_VERIFY_ALL_MARKER = "verify-all"
+_PYTEST_TOKENS = ("pytest", "py.test")
+
+
+def _pytest_invocation_tail(tokens: list[str]) -> list[str] | None:
+    """None if `tokens` isn't a pytest invocation; otherwise the tokens after the
+    invocation itself (so the `-m` in `python -m pytest` is never mistaken for a
+    `-m` marker-selection flag scoping the run)."""
+    if tokens and tokens[0] in _PYTEST_TOKENS:
+        return tokens[1:]
+    for i in range(len(tokens) - 2):
+        if tokens[i] in ("python", "python3") and tokens[i + 1] == "-m" and tokens[i + 2] == "pytest":
+            return tokens[i + 3:]
+    return None
+
+
+def _pytest_is_scoped(tail: list[str]) -> bool:
+    return any(
+        t in ("-k", "-m") or "::" in t or t.endswith(".py") or ("/" in t and not t.startswith("-"))
+        for t in tail
+    )
+
+
+def _subcommand_is_aggregate_unscoped(sub: str) -> bool:
+    tokens = sub.split()
+    if not tokens:
+        return False
+    if _VERIFY_ALL_MARKER in sub:
+        return "--staged" not in tokens
+    tail = _pytest_invocation_tail(tokens)
+    if tail is not None:
+        return not _pytest_is_scoped(tail)
+    return False
+
+
+def verify_command_scope_warnings(stages) -> list[str]:
+    """Warn (never block) when a stage's verify_command runs an aggregate test
+    suite (verify-all.py, a bare pytest invocation) without narrowing it to the
+    gate that enforces the stage — the miss recorded in experience leaf
+    2026-06-29 (~20 accumulated contexts). One warning per offending stage."""
+    warnings: list[str] = []
+    for s in stages:
+        cmd = s.criterion.verify_command
+        if not cmd:
+            continue
+        for sub in re.split(r"&&|;|\|", cmd):
+            sub = sub.strip()
+            if sub and _subcommand_is_aggregate_unscoped(sub):
+                warnings.append(
+                    f"stage {s.index} ({s.title!r}): verify_command runs an aggregate "
+                    f"suite without a scope flag ({sub!r}); scope it to the gate that "
+                    f"enforces it (--staged, or an explicit test path) so pre-existing "
+                    f"unrelated reds cannot false-fail the stage "
+                    f"(see experience leaf 2026-06-29)."
+                )
+                break
+    return warnings
+
+
 def parse_plan(data: dict, *, strict_executor: bool = True) -> PlanDoc:
     """Pure: a parsed-TOML dict -> PlanDoc. No filesystem.
 

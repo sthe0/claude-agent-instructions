@@ -30,7 +30,7 @@ from .partition import render_section, render_units, verdict
 from .directive import Directive
 from .dispatch import Runner, dispatch_stage, parse_marker, subprocess_runner
 from .machine import transition
-from .plan import load_plan
+from .plan import load_plan, verify_command_scope_warnings
 from .state import (
     _EXECUTION_NODES,
     _MAX_PLAN_STACK,
@@ -800,6 +800,10 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
                        {"plan": plan_path, "stage_count": len(state.stages),
                         "titles": [s.title for s in state.stages]},
                        runner, weight_class=state.weight_class)
+    if plan_path.endswith(".toml"):
+        # Deterministic scope lint (experience leaf 2026-06-29) — always runs,
+        # independent of the optional LLM advisor above; warn-only, never blocks.
+        d.data.setdefault("advisories", []).extend(verify_command_scope_warnings(doc.stages))
     return d
 
 
