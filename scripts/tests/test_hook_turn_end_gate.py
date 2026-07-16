@@ -760,3 +760,91 @@ def test_escalation_silent_when_no_escalation_text(tmp_path, isolated_state, mon
         _assistant_text_line("here is the parser, all tests pass"),
     ])
     assert _mod.decide({"transcript_path": str(t), "stop_hook_active": False, "session_id": "s1"}) is None
+
+
+# --- prose_binary_ask guardian ----------------------------------------------
+
+# Assistant text that fires binary_ask_detect (a trailing confirm question posed
+# in prose). NEUTRAL user text is paired with it so the self-improvement guardian
+# never co-fires and assertions stay clean.
+PROSE_ASK_TEXT = "Готов черновик v11. Публикуем v11?"
+
+
+def _pba_ctx(prose=True, invocations=frozenset(), closure=False):
+    return _mod.TurnContext(
+        last_user_text="add a parser for the config file",
+        invocations=invocations,
+        transcript_path="/x.jsonl",
+        session_key="s",
+        agentctl_state=None,
+        closure_sought=closure,
+        prose_binary_ask=prose,
+    )
+
+
+def test_prose_binary_ask_fires_on_trailing_confirm_question():
+    out = _mod.prose_binary_ask_blockers(_pba_ctx())
+    assert len(out) == 1
+    assert "AskUserQuestion" in out[0]
+
+
+def test_prose_binary_ask_silent_when_ask_invoked():
+    ctx = _pba_ctx(invocations=frozenset({"AskUserQuestion"}))
+    assert _mod.prose_binary_ask_blockers(ctx) == []
+
+
+def test_prose_binary_ask_silent_when_closure_sought():
+    assert _mod.prose_binary_ask_blockers(_pba_ctx(closure=True)) == []
+
+
+def test_prose_binary_ask_silent_when_not_detected():
+    assert _mod.prose_binary_ask_blockers(_pba_ctx(prose=False)) == []
+
+
+def test_prose_binary_ask_registered_before_resolution():
+    keys = list(_mod.TURN_GUARDIANS)
+    assert "prose_binary_ask" in keys
+    assert keys.index("prose_binary_ask") < keys.index("resolution")
+
+
+def test_prose_binary_ask_blocks_via_decide(tmp_path, isolated_state):
+    # Neutral user text + assistant text ending in a prose confirm -> only the
+    # prose_binary_ask guardian fires (no state, no feedback, no outage).
+    t = _write_transcript(tmp_path, [
+        _user_line("add a parser for the config file"),
+        _assistant_text_line(PROSE_ASK_TEXT),
+    ])
+    out = _mod.decide({"transcript_path": str(t), "stop_hook_active": False})
+    assert out is not None and out["decision"] == "block"
+    assert "AskUserQuestion" in out["reason"]
+    assert "self-improvement" not in out["reason"]
+
+
+def test_prose_binary_ask_silent_when_ask_emitted_this_turn(tmp_path, isolated_state):
+    # The turn DID pose the decision through the click-gate -> obligation met.
+    t = _write_transcript(tmp_path, [
+        _user_line("add a parser for the config file"),
+        _assistant_text_line(PROSE_ASK_TEXT),
+        _assistant_tool_use_line("AskUserQuestion", {"questions": []}),
+    ])
+    assert _mod.decide({"transcript_path": str(t), "stop_hook_active": False}) is None
+
+
+def test_prose_binary_ask_silent_when_sleep_timer_armed(tmp_path, isolated_state):
+    # The legitimate delivery-split: artifact + confirm question this turn, sleep-2
+    # armed so the ask opens next turn -> closure_sought -> guardian stays silent.
+    t = _write_transcript(tmp_path, [
+        _user_line("add a parser for the config file"),
+        _assistant_text_line(PROSE_ASK_TEXT),
+        _assistant_bash_line("sleep 2", True),
+    ])
+    assert _mod.decide({"transcript_path": str(t), "stop_hook_active": False}) is None
+
+
+def test_prose_binary_ask_silent_on_open_wh_question(tmp_path, isolated_state):
+    # An open-ended (free-text) question is out of the detector's scope.
+    t = _write_transcript(tmp_path, [
+        _user_line("add a parser for the config file"),
+        _assistant_text_line("Куда записать вывод?"),
+    ])
+    assert _mod.decide({"transcript_path": str(t), "stop_hook_active": False}) is None

@@ -73,6 +73,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from si_feedback_detect import find_signals  # noqa: E402
 from long_job_detect import detect as _detect_long_job  # noqa: E402
 from outage_escalation_detect import detect as _detect_outage  # noqa: E402
+from binary_ask_detect import detect as _detect_binary_ask  # noqa: E402
 from timer_arm_detect import (  # noqa: E402
     closure_sought as _closure_sought,
     waiter_armed as _waiter_armed,
@@ -120,6 +121,10 @@ class TurnContext:
     difficulty_declared : whether the engine's SessionState carries a declared
                      difficulty (`state.difficulty.declaration` set). Read once,
                      here, by the shell from agentctl_state.
+    prose_binary_ask : whether this turn's assistant text ENDS with a binary /
+                     confirm question posed in prose instead of via an
+                     AskUserQuestion click-gate (shared binary_ask_detect scan
+                     over the concatenated assistant text). Computed by the shell.
     """
 
     last_user_text: str
@@ -132,6 +137,7 @@ class TurnContext:
     autowake_armed: bool = False
     outage_escalation_sought: bool = False
     difficulty_declared: bool = False
+    prose_binary_ask: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +187,45 @@ def escalation_without_diagnosis_blockers(ctx: TurnContext) -> list[str]:
         "recorded overcome-difficulty declare. Before ending the turn, reproduce "
         "it with the real client and run overcome-difficulty (>=2 hypotheses, each "
         "with a cheap falsifier); do not leave an unverified outage claim standing."
+    ]
+
+
+def prose_binary_ask_blockers(ctx: TurnContext) -> list[str]:
+    """This turn ends with a binary / confirm decision posed to the user in PROSE
+    (a trailing "записать?", "публикуем v11?", "should I push?", "считаем
+    решённой?") instead of through an AskUserQuestion click-gate. CLAUDE.md
+    § Escalation mandates AskUserQuestion for every confirmation / defined-set
+    choice so the user clicks instead of typing; the recurring lapse is to type
+    the confirm as prose. hook-ask-text-split.py gates a mis-positioned ask CALL;
+    here no ask tool is called at all, so only this Stop text-scan can catch it.
+
+    Fires ONLY under the full conjunction, all read from the frozen context:
+      - prose_binary_ask (the shell's binary_ask_detect scan over this turn's
+        assistant text fired: the final utterance is a confirm question, not
+        open-ended);
+      - no AskUserQuestion was invoked this turn (the click-gate the norm wants);
+      - the turn is not already seeking closure (ctx.closure_sought) — the
+        legitimate "arm sleep-2 → ask next turn" split must not be nagged.
+
+    Pure: reads only frozen ctx booleans / the invocations set.
+    """
+    if not ctx.prose_binary_ask:
+        return []
+    if "AskUserQuestion" in ctx.invocations:
+        return []
+    if ctx.closure_sought:
+        return []
+    return [
+        "This turn ends with a binary / confirm decision posed to the user in "
+        "prose instead of via AskUserQuestion. CLAUDE.md § Escalation mandates "
+        "AskUserQuestion for every confirmation / defined-set choice (apply/skip, "
+        "push, scope, resolution) so the user clicks instead of typing. Re-pose "
+        "the decision as an AskUserQuestion with the recommended option first — "
+        "if a preceding artifact must render first, deliver it as this turn's "
+        "final message and arm a backgrounded `Bash` `sleep 2` so the ask opens "
+        "the NEXT turn (a same-turn ask after this text would not render). If the "
+        "question is genuinely open-ended (a free-text name/path/sentence), state "
+        "in your reply why AskUserQuestion does not apply."
     ]
 
 
@@ -263,6 +308,7 @@ TURN_GUARDIANS: dict[str, Callable[[TurnContext], list[str]]] = {
     "self_improvement": self_improvement_blockers,
     "escalation_without_diagnosis": escalation_without_diagnosis_blockers,
     "long_job_autowake": long_job_autowake_blockers,
+    "prose_binary_ask": prose_binary_ask_blockers,
     "resolution": resolution_turn_blockers,
 }
 
@@ -463,6 +509,7 @@ def build_context(payload: dict) -> TurnContext | None:
         autowake_armed=_waiter_armed(turn_entries),
         outage_escalation_sought=bool(_detect_outage(_assistant_text_of(turn_entries))),
         difficulty_declared=_difficulty_declared(agentctl_state),
+        prose_binary_ask=bool(_detect_binary_ask(_assistant_text_of(turn_entries))),
     )
 
 
