@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "user"
 refs: [memory-global/leaves/experience/2026-07-02-dead-spawn-scope-file-blocks-next-writer.md, memory-global/leaves/experience/2026-06-24-developer-marker-not-on-line-1-false-block.md]
 plan_file: /home/the0/.claude-agent/plans/fix-scope-hook-lineage-and-replan-gaps-v1.toml
 created: 2026-07-04
-last_verified: 2026-07-05
+last_verified: 2026-07-16
 ---
 
 # Spawn budget death: forensics on artifacts before any respawn; finish via continuation brief
@@ -30,6 +30,16 @@ Desired: a budget-dead spawn's completed/partial work is recognized and reused. 
 ### 2026-07-05 — capture-absorb-program-durably (2 more occurrences, incl. a review-verdict variant)
 - Where it arose: capture-absorb-program-durably task (agentctl-driven). (a) The **planner** for the capture plan died at the $3 medium cap (MALFORMED) but had written the COMPLETE 5-stage TOML to disk — used the artifact directly (only fix: two single-`"`→`"""` multiline-string typos), zero respawn. (b) The **thinker plan-review** died at the $1 small cap (MALFORMED) but had already emitted `PLAN-REVIEW: REVISE` + two well-formed blocking findings as the last text blocks in its transcript — extracted the verdict from `~/.claude-agent/projects/<hash>/<sid>.jsonl` (assistant text blocks) and recorded it, no respawn.
 - New generalization: the pattern isn't limited to file-producing spawns. A **review/analysis** spawn's deliverable is its transcript text; budget-death truncates the *return-marker step*, not the reasoning already written. Parse the transcript's assistant text blocks before concluding "no verdict". The subsequent (cheaper, sonnet) re-review of the revised plan finished cleanly under budget — the continuation-on-cheaper-model half of the pattern held for a review too.
+
+
+### 2026-07-16 — transport-layer disconnect (API 'Connection closed mid-response')
+- Where it arose: agentctl dispatch of a stage-2 developer; the spawn made all edits then the streaming API connection dropped before the marker line → MALFORMED → BLOCKED
+- Working plan: onboarding-entrypoint-guard stage 2
+
+## Common core & variations
+**Common:** A marker-less spawn return (MALFORMED→BLOCKED) does NOT mean the work failed; the deliverable is often complete on disk. Forensically verify (git status/diff + the stage verify_command) BEFORE re-spawning.
+
+**Variations:** New sub-cause: not budget-death and not marker-not-on-line-1, but a genuine mid-response API transport disconnect AFTER all edits flushed. Same recovery: verified the 3 edits on disk + regression proof, unblocked, recorded passed WITHOUT re-dispatch (a re-spawn would redo correct edits and risk divergence).
 
 ## Cost
 3 spawns attributed ~$7.9 total; forensics avoided ~2 full respawns (~$6 saved); continuation developer (sonnet/medium) finished stage 1 well under budget. 2026-07-05: planner ($3) + thinker-review ($1) both budget-dead — forensics reused both (plan TOML from disk; REVISE verdict from transcript), avoiding ~$4 of respawns; the 5 capture-stage developers then ran $0.60–$1.95 each (all under budget).
