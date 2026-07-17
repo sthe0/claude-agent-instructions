@@ -30,6 +30,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -548,15 +549,19 @@ def main(argv: list[str] | None = None) -> int:
         cmd.extend(["--permission-mode", permission_mode])
     if model is not None:
         cmd.extend(["--model", model])
-    cmd.append(prompt)
+    # The prompt is NOT appended to argv: with the plan inlined it exceeds Linux
+    # MAX_ARG_STRLEN (32 pages = 131072 bytes for a single argv string), which execve
+    # rejects with E2BIG before the child starts. It travels via stdin instead (see
+    # the launch below); `claude -p` reads its prompt from stdin.
 
     if args.dry_run:
-        print("=== assembled prompt ===")
+        print("=== assembled prompt (delivered via stdin) ===")
         print(prompt)
         print("\n=== command (not executed) ===")
-        # Print command in a copy-pasteable form, but truncate the prompt arg.
-        printable = cmd[:-1] + [f"<prompt {len(prompt)} chars>"]
-        print(" ".join(repr(c) if " " in c else c for c in printable))
+        # The prompt is piped via stdin, so it is not a member of cmd; print cmd
+        # verbatim and note the stdin payload size separately.
+        print(" ".join(repr(c) if " " in c else c for c in cmd))
+        print(f"# stdin: <prompt {len(prompt)} chars>")
         return 0
 
     if shutil.which("claude") is None:
@@ -586,19 +591,33 @@ def main(argv: list[str] | None = None) -> int:
     # a manual `kill` of the wrapper lands the same SIGTERM), so the claude -p
     # subtree is never orphaned.
     proc = proc_tree.launch_supervised(
-        cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        cmd, env=env, stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
     proc_tree.install_teardown(proc)
     transcript_path: Path | None = None
     stdout_str, stderr_str = "", ""
-    try:
+
+    # Transcript discovery must run OFF the main thread: the child does not create
+    # its transcript until it has read the prompt, and the prompt is only written
+    # when communicate() runs below — so a discover-then-communicate ordering (the
+    # old argv path could afford, because the prompt was already on the command
+    # line) would always miss. The daemon thread polls for the transcript while
+    # communicate() feeds stdin and drains stdout/stderr concurrently; communicate
+    # is what avoids the pipe-buffer deadlock a manual write()+read() would risk.
+    def _announce_transcript() -> None:
+        nonlocal transcript_path
         transcript_path = _discover_transcript_path(transcripts_before, timeout=10.0)
         if transcript_path is not None:
             print(f"spawn-specialist: transcript={transcript_path}", file=sys.stderr, flush=True)
         else:
             print("spawn-specialist: transcript=<not-found-within-10s>", file=sys.stderr, flush=True)
 
-        stdout_str, stderr_str = proc.communicate()
+    announcer = threading.Thread(target=_announce_transcript, daemon=True)
+    try:
+        announcer.start()
+        stdout_str, stderr_str = proc.communicate(input=prompt)
+        announcer.join(timeout=11.0)
     finally:
         # Normal completion already reaped the child (no-op here); any abnormal
         # exit (exception, KeyboardInterrupt, timeout) still tears down the whole
