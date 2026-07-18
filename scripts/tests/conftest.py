@@ -41,6 +41,19 @@ def _plan_review_gate_off_by_default(monkeypatch):
     monkeypatch.setenv("AGENTCTL_PLAN_REVIEW", "0")
 
 
+@pytest.fixture(autouse=True)
+def _plan_presentation_gate_off_by_default(monkeypatch):
+    """Default the presentation/delivery gate OFF for the suite at large, for the
+    same reason as `_plan_review_gate_off_by_default` above: the overwhelming
+    majority of substantive-flow tests are not about presentation/delivery, and
+    coupling them all to it would make this gate's change cascade failures across
+    unrelated modules. AGENTCTL_PLAN_PRESENTATION=0 is the documented force-off
+    knob (gates.plan_presentation_active) — byte-identical to the gate being
+    absent. Its real block/pass/stale/override/fail-closed behaviour is proven
+    end-to-end by test_plan_presentation.py, which explicitly re-enables it."""
+    monkeypatch.setenv("AGENTCTL_PLAN_PRESENTATION", "0")
+
+
 @pytest.fixture
 def store(tmp_path):
     return FileStateStore(tmp_path / "state")

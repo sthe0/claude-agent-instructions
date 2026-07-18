@@ -3,7 +3,7 @@ name: acting-without-asking
 description: Carve-outs that let the agent act without a per-action confirmation — side-effect-free classes, plan-scope-declared changes, and the budget for estimating an unknown tool's side-effect class. Substantive plan changes still require approval.
 type: reference
 created: 2026-05-26
-last_verified: 2026-06-24
+last_verified: 2026-07-18
 ---
 
 # Acting without asking
@@ -99,10 +99,14 @@ When the plan is at `PLAN_READY` and the user replies with an instruction to *ch
 
 The carve-out phrase "after the plan is approved" (see § In-context carve-out below and CLAUDE.md § Classify task weight) means one of:
 
-- **(a)** a `~/.claude-agent/plans/<slug>.md` file written and shown to the user — *shown* = a faithful human-readable rendering of every stage (ideas, method, checks, risks) delivered in a message the user actually receives, i.e. the turn's **final** message (text emitted before a tool call may never render — see the `claude-code-drops-pre-tool-call-text` leaf and its text-then-buttons timer split for still gating via `AskUserQuestion`); neither a terse digest nor a raw plan-file dump counts as "shown" — or
+- **(a)** a `~/.claude-agent/plans/<slug>.toml` file whose **essence was presented** and the user then **explicitly approved** — TWO SEPARATE ACTS:
+  1. **Presentation.** The user acts on a **human-readable rendering in the language of the dialogue**, never the raw TOML (the TOML file stays English and is **not** run through tech-writer; tech-writer authors the renderings). Two renderings exist — an **essence** (self-contained, «замкнутым образом, без ссылок на полный план») and a **full** rendering (translates *every* stage); the first line of either is the **absolute path to the TOML plan**. The essence is registered with `agentctl present-plan --kind essence` and delivered as the turn's **final** message (text emitted before a tool call may never render — see the `claude-code-drops-pre-tool-call-text` leaf and the `sleep 2` timer split in [[ask-user-question-split-turn]]); neither a terse digest nor a raw plan-file dump counts. `cmd_approve` is engine-blocked until the delivery hook stamps a receipt bound to the current `plan_sha256` (`plan_presentation_blockers`); an ALLOW is not a stamp. If the gate cannot verify delivery, the only exit is the explicit, per-plan-version, audit-logged `agentctl confirm-delivery --session <id> --by <who> --note <why>` — never widen the gate.
+  2. **Approval.** The user then explicitly approves via an `AskUserQuestion` that carries a distinct **"show the full plan"** option; choosing it re-presents via `agentctl present-plan --kind full` (re-running present→timer→final-message→ask) and **never** re-submits for approval.
 - **(b)** an in-conversation plan text the user has explicitly confirmed ("ok, proceed", "looks good", etc.).
 
 Deciding what to do in your own head is **not** an approved plan. If you are about to Edit a production file and neither (a) nor (b) exists, you are outside the carve-out — stop, invoke `planner`, present the plan, wait for approval.
+
+**What is machine-guaranteed vs perception (do not overstate):** the gate proves an act of presentation occurred and those exact bytes landed as a final message bound to this plan version — **not** that the essence is adequate or that the user read it. Essence adequacy is perception (tech-writer authors, thinker plan-review checks). See [[ask-user-question-split-turn]] § Machine enforcement for the two residuals.
 
 ## In-context carve-out — manager implements substantive work in-thread
 

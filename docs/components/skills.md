@@ -35,7 +35,7 @@ Canonical path in repo: `skills/specializations/<name>/SKILL.md`. Symlinked flat
 | `code-reviewer` | Maintainability / readability / reusability review of a diff (self-review or independent) | [skills/specializations/code-reviewer/SKILL.md](../../skills/specializations/code-reviewer/SKILL.md) |
 | `developer` | Writing, refactoring, debugging, reviewing production code | [skills/specializations/developer/SKILL.md](../../skills/specializations/developer/SKILL.md) |
 | `planner` | Decomposition, stages, dependencies, risks, done criteria | [skills/specializations/planner/SKILL.md](../../skills/specializations/planner/SKILL.md) |
-| `tech-writer` | Russian README / documentation authoring; polishing plans & long comments | [skills/specializations/tech-writer/SKILL.md](../../skills/specializations/tech-writer/SKILL.md) |
+| `tech-writer` | README / documentation authoring and polishing plans & long comments, in the language of the dialogue | [skills/specializations/tech-writer/SKILL.md](../../skills/specializations/tech-writer/SKILL.md) |
 | `thinker` | Independent reasoning check on a non-trivial chain | [skills/specializations/thinker/SKILL.md](../../skills/specializations/thinker/SKILL.md) |
 | `yandex-cloud-expert` | Yandex Cloud / `yc` operations | [skills/specializations/yandex-cloud-expert/SKILL.md](../../skills/specializations/yandex-cloud-expert/SKILL.md) |
 <!-- inventory:specializations:end -->

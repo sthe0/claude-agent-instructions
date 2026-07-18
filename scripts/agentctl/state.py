@@ -19,7 +19,7 @@ import json
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -378,6 +378,58 @@ class StageReview:
         )
 
 
+# The plan-presentation receipt (schema 20): proof that a specific plan version's
+# rendering was (attempted to be) shown to the user. Structurally the third
+# instance of the PlanReview/StageReview charter — an artifact-EXISTENCE +
+# binding check, never a judgement of whether the rendering was faithful (that
+# perception stays with the coordinator/tech-writer, never the engine). Recorded
+# by cmd_present_plan; gates cmd_approve via gates.plan_presentation_blockers.
+# Bound three ways, one per field beyond plan_path/kind:
+#   - plan_sha256      : WHICH PLAN VERSION was presented — recomputed at gate
+#                         time so a later edit doesn't inherit an earlier receipt
+#                         (mirrors PlanReview.plan_sha256, #16).
+#   - rendering_sha256  : the EXACT presented bytes — the delivery hook verifies
+#                         the turn's actual transcript output hashes to this
+#                         before stamping delivery (agentctl/delivery.py), so
+#                         this receipt is proof of INTENT and the delivery stamp
+#                         is proof of DELIVERY; the two are deliberately
+#                         separate records with separate storage (see
+#                         delivery.py's module docstring for why).
+#   - presented_ts      : WHEN the receipt was stamped, same epoch-float
+#                         convention as plan_submitted_ts.
+# New at schema 20 — no earlier session ever recorded one — so presented_ts (and
+# every other field) carries NO default: a legacy dict can never satisfy
+# from_dict. Grandfathering therefore happens at the LIST level only
+# (SessionState.plan_presentations: absent key -> empty list via from_dict's
+# data.get(..., [])), never at the individual-record level.
+PLAN_PRESENTATION_RENDERING_CAP_BYTES = 64 * 1024
+
+PLAN_PRESENTATION_KIND_ESSENCE = "essence"
+PLAN_PRESENTATION_KIND_FULL = "full"
+PLAN_PRESENTATION_KINDS = (PLAN_PRESENTATION_KIND_ESSENCE, PLAN_PRESENTATION_KIND_FULL)
+
+
+@dataclass
+class PlanPresentation:
+    plan_path: str
+    kind: str  # PLAN_PRESENTATION_KIND_ESSENCE | PLAN_PRESENTATION_KIND_FULL
+    plan_sha256: str
+    rendering_sha256: str
+    rendering_text: str
+    presented_ts: float
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "PlanPresentation":
+        return cls(
+            plan_path=d["plan_path"],
+            kind=d["kind"],
+            plan_sha256=d["plan_sha256"],
+            rendering_sha256=d["rendering_sha256"],
+            rendering_text=d["rendering_text"],
+            presented_ts=d["presented_ts"],
+        )
+
+
 # Bypass-visibility record (schema 14): every time an acceptance_review stage is
 # recorded PASSED WITHOUT a genuine passing judge verdict — because the kill switch
 # disabled the gate, or a human override cleared it — one JudgeBypass is appended and
@@ -662,6 +714,15 @@ class SessionState:
     # pass until a judge verdict is recorded (fail-closed).
     stage_reviews: list[StageReview] = field(default_factory=list)
     judge_bypassed: list[JudgeBypass] = field(default_factory=list)
+    # Plan-presentation receipts backing the plan-presentation gate (schema 20):
+    # one PlanPresentation per (plan_path, kind) currently in force — a fresh
+    # cmd_present_plan call SUPERSEDES (never appends) the prior receipt for the
+    # same key, so this list holds at most one "essence" and one "full" entry at
+    # a time; the audit trail of every presentation lives in state.log's history
+    # instead. Empty on legacy pre-schema-20 states (absent key -> dataclass
+    # default via from_dict's cls(**data)), so the gate has no observable and —
+    # for a substantive session — blocks approval until a receipt is recorded.
+    plan_presentations: list[PlanPresentation] = field(default_factory=list)
     approval: GateRecord = field(default_factory=lambda: GateRecord("plan_approval"))
     resolution: GateRecord = field(default_factory=lambda: GateRecord("resolution"))
     stages: list[Stage] = field(default_factory=list)
@@ -803,6 +864,9 @@ class SessionState:
             r for r in (StageReview.from_dict(x) for x in data.get("stage_reviews", [])) if r is not None
         ]
         data["judge_bypassed"] = [JudgeBypass(**b) for b in data.get("judge_bypassed", [])]
+        data["plan_presentations"] = [
+            PlanPresentation.from_dict(x) for x in data.get("plan_presentations", [])
+        ]
         cost_raw = data.get("cost")
         data["cost"] = CostRollup(**cost_raw) if cost_raw else None
         data["plan_stack"] = [

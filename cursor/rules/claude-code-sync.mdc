@@ -155,7 +155,7 @@ When a plan step calls for a specialization, **read the SKILL.md inline** and ap
 | `code-reviewer` | Maintainability / readability / reusability review of a diff (developer self-review or independent) | `~/.claude-agent/skills/code-reviewer/SKILL.md` |
 | `thinker` | Reasoning check on a non-trivial chain (note: no fresh-context isolation available in Cursor) | `~/.claude-agent/skills/thinker/SKILL.md` |
 | `yandex-cloud-expert` | Yandex Cloud setup / `yc` operations | `~/.claude-agent/skills/yandex-cloud-expert/SKILL.md` |
-| `tech-writer` | Russian README / docs authoring; polishing a plan or a detailed Russian comment (clear, concise Russian, no calques/jargon) | `~/.claude-agent/skills/tech-writer/SKILL.md` |
+| `tech-writer` | README / docs authoring and polishing a plan rendering or a detailed comment, in the language of the dialogue (clear, concise prose, no calques/jargon) | `~/.claude-agent/skills/tech-writer/SKILL.md` |
 
 The SKILL.md bodies are written for the spawned-process model ("you have been spawned as a fresh manager"). In Cursor, treat that framing as the **role** to adopt and the **working principles** to follow, not literal instructions about a separate process. Return markers (`COMPLETED:` / `PLAN-READY:` / `INCOMPLETE:` / `CLARIFY:` / `REPLAN:` / `PERMISSION-REQUEST:` / `ESCALATE:`) are **internal phase markers** in your in-thread work — they tell you when to pause and check with the user. Two behave specially in-thread: `PLAN-READY:` is a hard gate (stop and get explicit user approval before executing the first step); `CLARIFY:` means ask the user for the one small specific fact and resume on the answer. You lose the fresh-context property of spawning, but you stay entirely within Cursor and never invoke `claude`.
 

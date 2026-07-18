@@ -15,6 +15,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -23,7 +24,7 @@ from pathlib import Path
 
 from lib import config_root
 
-from . import advisor, continuations, cost, gates, ledger, permissions, plugins, plugins_ledger, solved_marker
+from . import advisor, continuations, cost, delivery, gates, ledger, permissions, plugins, plugins_ledger, solved_marker
 from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
 from .partition import render_section, render_units, verdict
@@ -53,7 +54,12 @@ from .state import (
     Normalization,
     NORMALIZATION_LEVELS,
     PermissionRequest,
+    PLAN_PRESENTATION_KIND_ESSENCE,
+    PLAN_PRESENTATION_KIND_FULL,
+    PLAN_PRESENTATION_KINDS,
+    PLAN_PRESENTATION_RENDERING_CAP_BYTES,
     PlanFrame,
+    PlanPresentation,
     PlanReview,
     Route,
     SessionState,
@@ -389,6 +395,14 @@ def cmd_reset(args, *, store: StateStore, runner: Runner | None = None) -> Direc
     )
     new.log("reset", task=new.task_id, prior_task=(prior.task_id if prior else None))
     store.save(new)
+    # Hygiene, not a security boundary (delivery.delete_stamp's own docstring):
+    # a stale stamp cannot silently clear a later task's gate since the gate
+    # binds on plan_sha256/rendering_sha256 and a reset task starts with no
+    # plan, but leaving the sidecar around would confuse status/debugging
+    # output with a stamp for a task that no longer exists.
+    state_file = config_root.resolve_agentctl_state_file(args.session)
+    if state_file is not None:
+        delivery.delete_stamp(state_file)
     return Directive(
         True, new.node, "classify", "session re-armed for new task; run classify",
     )
@@ -804,7 +818,214 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
         # Deterministic scope lint (experience leaf 2026-06-29) — always runs,
         # independent of the optional LLM advisor above; warn-only, never blocks.
         d.data.setdefault("advisories", []).extend(verify_command_scope_warnings(doc.stages))
+    if gates.plan_presentation_active(state):
+        # A NUDGE, not the enforcement — the hash-bound gate in gates.
+        # plan_presentation_blockers (checked at `approve`) is what actually
+        # makes presentation non-skippable. d.ok/d.node/marker stay untouched
+        # so a coordinator/test relying on the PLAN-READY contract sees no
+        # change; this only adds an advisory string a well-behaved caller reads.
+        d.data.setdefault("advisories", []).append(
+            "run `present-plan --kind essence` (and `--kind full` if the plan "
+            "needs stage-by-stage detail) before requesting approval — "
+            "`approve` will refuse without a bound presentation + delivery proof"
+        )
     return d
+
+
+def _record_plan_presentation(state: SessionState, presentation: PlanPresentation) -> None:
+    """Store a PlanPresentation, one per (plan_path, kind) — SUPERSEDE, not
+    append. Mirrors _record_stage_review's replace-then-append idiom: a later
+    presentation of the same plan/kind fully replaces the prior receipt, so
+    gates._plan_presentation_for's last-wins scan never has to choose between
+    a stale and a fresh receipt for the same (plan_path, kind)."""
+    state.plan_presentations = [
+        p for p in state.plan_presentations
+        if not (p.plan_path == presentation.plan_path and p.kind == presentation.kind)
+    ]
+    state.plan_presentations.append(presentation)
+
+
+_PLAN_PRESENTATION_STAGE_ANCHOR_RE = re.compile(r"^\[stage (\d+)\]", re.MULTILINE)
+
+
+def _plan_presentation_skeleton(stages: list[Stage]) -> str:
+    """Deterministic `full`-rendering skeleton: one `[stage N] <title>` anchor
+    line per stage, in plan order. present-plan's completeness check parses
+    these same anchors back out of a submitted `full` rendering — the
+    coordinator fills in the body under each anchor but must not drop or
+    renumber one, or the completeness check rejects the rendering."""
+    lines = [f"[stage {s.index}] {s.title}" for s in stages]
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
+def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Stamp a PlanPresentation receipt: proof the coordinator rendered the plan
+    for the user, bound to the exact plan version (plan_sha256) and the exact
+    rendered bytes (rendering_sha256). Records the ARTIFACT and its bindings
+    only — never a judgement of whether the rendering is a FAITHFUL or GOOD
+    summary of the plan (that remains perception, same charter as PlanReview/
+    StageReview). Orthogonal to the node graph: never calls transition() and
+    never changes state.node — a plan may be presented at any point after it
+    exists, independent of where the state machine currently sits.
+
+    `--emit-skeleton` stamps nothing; it only hands back the anchor scaffold a
+    `full` rendering must preserve, so the coordinator does not have to
+    hand-enumerate stages itself.
+    """
+    state = _require(store, args.session)
+    if not state.plan_path:
+        return Directive(False, state.node, "noop", "no plan to present: submit a plan first")
+
+    if getattr(args, "emit_skeleton", False):
+        try:
+            doc = load_plan(state.plan_path)
+        except Exception as exc:
+            return Directive(False, state.node, "noop", f"cannot load plan: {exc}")
+        skeleton = _plan_presentation_skeleton(doc.stages)
+        return Directive(
+            True, state.node, "continue",
+            "skeleton emitted; fill in each [stage N] section, then present-plan "
+            "--kind full --rendering-file <path> with the completed rendering",
+            data={"skeleton": skeleton, "stage_count": len(doc.stages)},
+        )
+
+    kind = args.kind
+    if kind not in PLAN_PRESENTATION_KINDS:
+        return Directive(
+            False, state.node, "noop",
+            f"unknown presentation kind {kind!r}; expected one of {PLAN_PRESENTATION_KINDS}",
+        )
+    rendering_file = getattr(args, "rendering_file", None)
+    if not rendering_file:
+        return Directive(False, state.node, "noop", "--rendering-file is required")
+    try:
+        raw = Path(rendering_file).read_bytes()
+    except OSError as exc:
+        return Directive(False, state.node, "noop", f"cannot read rendering file: {exc}")
+    if len(raw) > PLAN_PRESENTATION_RENDERING_CAP_BYTES:
+        return Directive(
+            False, state.node, "noop",
+            f"rendering is {len(raw)} bytes, over the "
+            f"{PLAN_PRESENTATION_RENDERING_CAP_BYTES}-byte cap — trim it, never "
+            "truncate silently; the recorded receipt must match what the user saw",
+        )
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return Directive(False, state.node, "noop", "rendering file must be UTF-8 text")
+
+    if kind == PLAN_PRESENTATION_KIND_FULL:
+        # Completeness is MECHANIZABLE (every stage anchor present) — enforce it.
+        # Whether the prose under each anchor is a faithful summary is
+        # perception, not checked here; `essence` has no analogous check at all
+        # (free-form by design — a stage-enumerated essence would just be `full`).
+        try:
+            doc = load_plan(state.plan_path)
+        except Exception as exc:
+            return Directive(False, state.node, "noop", f"cannot load plan: {exc}")
+        expected = {s.index for s in doc.stages}
+        found = {int(m) for m in _PLAN_PRESENTATION_STAGE_ANCHOR_RE.findall(text)}
+        missing = sorted(expected - found)
+        extra = sorted(found - expected)
+        if missing or extra:
+            problems = []
+            if missing:
+                problems.append(f"missing stage anchors: {missing}")
+            if extra:
+                problems.append(f"unknown stage anchors: {extra}")
+            return Directive(
+                False, state.node, "noop",
+                "full rendering is incomplete; stamping nothing — " + "; ".join(problems),
+                data={"missing": missing, "extra": extra},
+            )
+
+    presentation = PlanPresentation(
+        plan_path=state.plan_path,
+        kind=kind,
+        plan_sha256=_plan_file_sha256(state.plan_path),
+        rendering_sha256=hashlib.sha256(raw).hexdigest(),
+        rendering_text=text,
+        presented_ts=time.time(),
+    )
+    _record_plan_presentation(state, presentation)
+    state.log("present_plan", plan=state.plan_path, kind=kind,
+              rendering_sha256=presentation.rendering_sha256)
+    store.save(state)
+    return Directive(
+        True, state.node, "continue",
+        f"presentation receipt recorded (kind={kind}); emit this exact rendering "
+        "as the turn's FINAL text message so the delivery hook can verify it "
+        "actually reached the user",
+        data={"rendering_sha256": presentation.rendering_sha256, "plan_sha256": presentation.plan_sha256},
+    )
+
+
+def cmd_confirm_delivery(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """The HUMAN escape from the delivery-stamp half of the plan-presentation
+    gate — used when the delivery hook is disabled, uninstalled, or otherwise
+    cannot fire (see gates.plan_presentation_blockers's fail-CLOSED
+    justification: without a reachable escape, a dead hook would brick every
+    substantive session at PLAN_READY forever — the bypass-trainer shape a
+    fail-closed gate must never produce).
+
+    NOT a security boundary: anyone who can run this can already run
+    `approve --by <name>` directly, exactly as with plan-review overrides — it
+    exists for AUDIT-TRAIL hygiene (a named actor and a stated reason for the
+    manual override), never to gate WHO may approve. cmd_present_plan and the
+    delivery hook must never call this themselves; it is reachable only as a
+    human-initiated command, enforced by rejecting `--by hook` outright.
+    """
+    state = _require(store, args.session)
+    receipt = gates._plan_presentation_for(state, PLAN_PRESENTATION_KIND_ESSENCE)
+    if receipt is None:
+        return Directive(
+            False, state.node, "noop",
+            "no essence presentation receipt exists yet — run present-plan "
+            "--kind essence before confirm-delivery has anything to bind to",
+        )
+    by = (getattr(args, "by", "") or "").strip()
+    note = (getattr(args, "note", "") or "").strip()
+    missing = []
+    if not by:
+        missing.append("--by")
+    if not note:
+        missing.append("--note")
+    if missing:
+        return Directive(
+            False, state.node, "noop",
+            f"confirm-delivery requires {' and '.join(missing)} (a named actor "
+            "and a stated reason for the manual override)",
+        )
+    if by.lower() == delivery.SOURCE_HOOK:
+        return Directive(
+            False, state.node, "noop",
+            "--by hook is reserved for the automated delivery hook; a human "
+            "override must name an actual person",
+        )
+    state_file = config_root.resolve_agentctl_state_file(state.session_id)
+    if state_file is None:
+        return Directive(
+            False, state.node, "noop",
+            "cannot resolve this session's state file — nowhere to write the "
+            "delivery stamp sidecar",
+        )
+    stamp = delivery.DeliveryStamp(
+        plan_path=receipt.plan_path,
+        plan_sha256=receipt.plan_sha256,
+        rendering_sha256=receipt.rendering_sha256,
+        verified_ts=time.time(),
+        source=delivery.SOURCE_OVERRIDE,
+        by=by,
+        note=note,
+    )
+    delivery.write_stamp(state_file, stamp)
+    state.log("confirm_delivery", by=by, note=note)
+    store.save(state)
+    return Directive(
+        True, state.node, "continue",
+        f"delivery override recorded by {by!r}; the plan-presentation gate is "
+        "now satisfied for this receipt",
+    )
 
 
 def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -912,11 +1133,18 @@ def cmd_stage_review(args, *, store: StateStore, runner: Runner | None = None) -
 
 
 def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    # plan_presentation_blockers is fail-open on the RECEIPT side (mirrors
+    # plan_review_blockers) but fail-CLOSED on the DELIVERY side: approval — the
+    # irreversible act — cannot be recorded without proof the plan actually
+    # reached the user, even if no live-turn ask ever fired. Admissible only
+    # because confirm-delivery is a reachable, audit-logged escape (gates.py's
+    # plan_presentation_blockers docstring has the full justification).
     state = _require(store, args.session)
     blockers = (
         gates.blockers(state, "plan_approval")
         + plugins.plugin_gate_blockers(state, "plan_approval")
         + gates.plan_review_blockers(state, state.plan_path)
+        + gates.plan_presentation_blockers(state, state.plan_path)
     )
     if not args.by or not args.by.strip():
         blockers = blockers + ["empty approver: --by must name who approved"]
@@ -2359,6 +2587,8 @@ COMMANDS = {
     "classify": cmd_classify,
     "plan": cmd_plan,
     "submit-plan": cmd_submit_plan,
+    "present-plan": cmd_present_plan,
+    "confirm-delivery": cmd_confirm_delivery,
     "plan-review": cmd_plan_review,
     "stage-review": cmd_stage_review,
     "approve": cmd_approve,
@@ -2463,6 +2693,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = add("plan"); sp.add_argument("--session", required=True)
     sp = add("submit-plan"); sp.add_argument("--session", required=True); sp.add_argument("--plan", required=True)
+    sp = add("present-plan"); sp.add_argument("--session", required=True)
+    sp.add_argument("--kind", choices=list(PLAN_PRESENTATION_KINDS), default=PLAN_PRESENTATION_KIND_ESSENCE,
+                    help="essence = free-form summary, no completeness check; "
+                         "full = every [stage N] anchor required, stage-enumerated")
+    sp.add_argument("--rendering-file", dest="rendering_file", default=None,
+                    help="file containing the exact bytes shown to the user")
+    sp.add_argument("--emit-skeleton", dest="emit_skeleton", action="store_true",
+                    help="print the [stage N] anchor scaffold for a `full` rendering; "
+                         "stamps nothing")
+    sp = add("confirm-delivery"); sp.add_argument("--session", required=True)
+    sp.add_argument("--by", required=True,
+                    help="the human who confirms delivery (must not be 'hook')")
+    sp.add_argument("--note", required=True,
+                    help="why the automated delivery hook could not verify this itself")
     sp = add("plan-review"); sp.add_argument("--session", required=True)
     sp.add_argument("--verdict", choices=list(gates.PLAN_REVIEW_VERDICTS), required=True,
                     help="pass = clears the gate; revise = blocks; override = user's "

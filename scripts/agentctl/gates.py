@@ -36,7 +36,11 @@ import hashlib
 import os
 from pathlib import Path
 
+from lib import config_root
+
+from . import delivery
 from .state import Node, SessionState, StageStatus, WeightClass
+from .state import PLAN_PRESENTATION_KIND_ESSENCE as _PLAN_PRESENTATION_KIND_ESSENCE
 from .state import Stage as _Stage
 from .text_shape import PLACEHOLDER_SET as _PLACEHOLDER_SET
 from .text_shape import normalize_string as _normalize_string
@@ -260,6 +264,131 @@ def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[s
             return ["thinker review override requires a non-empty " + " and ".join(missing) + " (the user's explicit escape reason)"]
         return []
     return [f"thinker review verdict is {pr.verdict!r} — plan blocked until a passing review (or an explicit override) is recorded"]
+
+
+def plan_presentation_active(state: SessionState) -> bool:
+    """Whether the plan-presentation gate applies to this session.
+
+    Scoped exactly like plan_review_active: SUBSTANTIVE sessions always pay it;
+    chat/small-change never do. AGENTCTL_PLAN_PRESENTATION overrides in both
+    directions ("1" forces on, "0" forces off). Deliberately NOT routed through
+    advisor.resolve_enabled — see plan_review_active's docstring for why a
+    mandatory gate must not share an optional cost knob's kill switch. Env-only
+    reads, no file/subprocess I/O, so this predicate itself stays pure (the
+    guardian it gates is not fully pure — see plan_presentation_blockers)."""
+    env = os.environ.get("AGENTCTL_PLAN_PRESENTATION")
+    if env == "1":
+        return True
+    if env == "0":
+        return False
+    return state.weight_class == WeightClass.SUBSTANTIVE.value
+
+
+def _plan_presentation_for(state: SessionState, kind: str):
+    """The most-recently-recorded PlanPresentation for `kind`, or None.
+    cmd_present_plan supersedes rather than appends, so in practice at most one
+    match exists per kind; last-wins mirrors _stage_review_for regardless."""
+    match = [p for p in state.plan_presentations if p.kind == kind]
+    return match[-1] if match else None
+
+
+def plan_presentation_blockers(state: SessionState, target_plan: str | None) -> list[str]:
+    """Precondition guardian for `approve`: the plan must have been PRESENTED to
+    the user (a receipt exists, bound to the exact plan version) AND that
+    presentation must be PROVEN DELIVERED (a delivery stamp exists, bound to the
+    exact receipt). This is an INTERNAL command precondition mirroring
+    plan_review_blockers/acceptance_review_blockers — the third instance of that
+    charter — deliberately absent from GUARDIANS (its (state, target_plan)
+    signature does not fit the one-argument `guardian(state)` GUARDIANS
+    dispatches), so verify-agentctl's guardian-hook-coverage rule does not apply
+    to it. [] == may pass.
+
+    Not fully pure like the rest of this module: the DELIVERY half reads the
+    session's own delivery-stamp sidecar via delivery.read_stamp (file I/O
+    only — no subprocess/socket/network, so ast_purity's admitted-reach set
+    still holds).
+
+    Inactive (chat / small-change / AGENTCTL_PLAN_PRESENTATION=0) => [] always.
+    RECEIPT-side checks fail OPEN on missing observables, mirroring
+    plan_review_blockers:
+      - no essence-kind receipt at all -> blocker naming `present-plan --kind
+        essence` (a `full` receipt never substitutes — an essence rendering is
+        always required; `full` is the additional, stage-enumerated form for
+        stages that need it, not a replacement);
+      - receipt.plan_path != target_plan -> stale (wrong plan version);
+      - receipt.plan_sha256 != current sha256 of target_plan -> stale content;
+        fail-open on OSError / empty stored hash (mirrors plan_review_blockers's
+        `if pr.plan_sha256:` legacy-degradation guard).
+
+    DELIVERY fails CLOSED — the one deliberate departure from the surrounding
+    fail-open discipline, matching the module docstring's "fail-open judge,
+    fail-closed gate" asymmetry: absence of proof that a POSITIVE EVENT
+    (delivery) occurred is not the same kind of ambiguity as a missing-but-
+    possibly-true fact (a transient read error on an existing review), so it
+    degrades to "not yet delivered", never "delivered by default". Admissible
+    ONLY because cmd_confirm_delivery is a reachable, audit-logged, per-plan-
+    version escape (see its own docstring) — without that escape a disabled/
+    uninstalled delivery hook would brick every substantive session at
+    PLAN_READY forever, the exact bypass-trainer shape the fail-closed design
+    must avoid. A missing, stale, superseded, or UNREADABLE stamp all block
+    identically (delivery.read_stamp already collapses every unreadable/corrupt
+    case to None) — this gate never distinguishes "corrupt sidecar" from
+    "never verified", because both mean the same thing here: no usable proof."""
+    if not plan_presentation_active(state):
+        return []
+    receipt = _plan_presentation_for(state, _PLAN_PRESENTATION_KIND_ESSENCE)
+    if receipt is None:
+        return [
+            "no plan presentation recorded — run: present-plan --kind essence "
+            "(the plan must be shown to the user before it can be approved)"
+        ]
+    if not target_plan or receipt.plan_path != target_plan:
+        return [
+            "plan presentation is stale — it presented "
+            f"{receipt.plan_path!r} but the target plan is {target_plan!r}; "
+            "re-run present-plan on the current plan"
+        ]
+    if receipt.plan_sha256:
+        try:
+            current = hashlib.sha256(Path(target_plan).read_bytes()).hexdigest()
+        except OSError:
+            current = None
+        if current is not None and current != receipt.plan_sha256:
+            return [
+                "plan presentation is stale — the plan content at "
+                f"{target_plan!r} changed since it was presented; re-run present-plan"
+            ]
+
+    state_file = config_root.resolve_agentctl_state_file(state.session_id)
+    stamp = delivery.read_stamp(state_file) if state_file is not None else None
+    if stamp is None:
+        return [
+            "no delivery proof recorded — the plan was presented but nothing "
+            "confirms it reached the user; either let the delivery hook verify "
+            "the turn's transcript, or run confirm-delivery --by <you> "
+            "--note <reason> as the escape"
+        ]
+    if stamp.plan_sha256 != receipt.plan_sha256 or stamp.rendering_sha256 != receipt.rendering_sha256:
+        return [
+            "delivery proof is stale — it verified a different plan/rendering "
+            "than the current presentation receipt; re-present and re-verify "
+            "(or confirm-delivery --by <you> --note <reason>)"
+        ]
+    if stamp.source == delivery.SOURCE_HOOK:
+        return []
+    if stamp.source == delivery.SOURCE_OVERRIDE:
+        missing = []
+        if not (stamp.by or "").strip():
+            missing.append("by")
+        if not (stamp.note or "").strip():
+            missing.append("note")
+        if missing:
+            return [
+                "delivery override requires a non-empty " + " and ".join(missing) +
+                " (the user's explicit escape reason) — re-run confirm-delivery"
+            ]
+        return []
+    return [f"delivery stamp source is {stamp.source!r} — expected 'hook' or 'override'"]
 
 
 def stage_review_active(state: SessionState) -> bool:
