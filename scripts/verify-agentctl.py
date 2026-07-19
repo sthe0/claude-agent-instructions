@@ -217,7 +217,7 @@ def check_gate_guardians(gate_to_hook: dict, desired_hooks: set[str]) -> list[st
 # here is fine; this only pins the ones the engine documents.
 REQUIRED_PLUGINS = {
     "dummy": "resolution", "tracker": "resolution", "experience": "resolution",
-    "ledger": "resolution",
+    "ledger": "resolution", "premise": "plan_approval",
 }
 # Plugin observer events must be a subset of the events the engine can emit, or a
 # plugin would silently never fire. The event vocabulary is EVENT_FOR_COMMAND.

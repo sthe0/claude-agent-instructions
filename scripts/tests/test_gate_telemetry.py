@@ -165,10 +165,14 @@ def test_walkthrough_logs_difficulty_and_replan_coverage_gates(store, monkeypatc
     # The completed replan logs the closure gates in order — normalization_blockers
     # (re-norming) then failure_address_blockers (goal-failure routing) — between the
     # passing difficulty_blockers and the plan_review evaluation (vacuous, gate off by
-    # default in the suite), then the replan_coverage check.
+    # default in the suite), then the plan_approval PLUGIN gate (stage 3: cmd_replan
+    # now composes plugins.plugin_gate_blockers(state, "plan_approval") just as
+    # cmd_approve does — vacuous here, premise force-off in the suite), then the
+    # replan_coverage check.
     assert gates_fired == ["plan_approval", "difficulty_blockers",
                            "difficulty_blockers", "normalization_blockers",
-                           "failure_address_blockers", "plan_review", "replan_coverage"]
+                           "failure_address_blockers", "plan_review",
+                           "plan_approval_plugin", "replan_coverage"]
     assert rows[1]["passed"] is False  # premature: record incomplete
     assert rows[2]["passed"] is True   # cycle complete
     assert rows[3]["passed"] is True   # normalization recorded

@@ -6,7 +6,8 @@ from argparse import Namespace
 
 import pytest
 
-from agentctl import cli
+from agentctl import cli, plan, plugins
+from agentctl import plugins_premise as pp
 from agentctl.directive import Directive
 from agentctl.state import Node, StageStatus
 
@@ -831,3 +832,132 @@ def test_replan_no_change_refreshes_final_check(store, tmp_path):
 
     state = store.load(sid)
     assert state.final_check[0].command == "false"
+
+
+# --- cmd_replan composes the plan_approval plugin gate (stage 3) -----------------
+
+def _approved_two_stage(store, sid, plan_path):
+    """Drive a session to a post-approve state against `plan_path`. AGENTCTL_PREMISE
+    is force-off in the suite (conftest), so premise never auto-activates and approve
+    stays clean — each test below then arms premise MANUALLY on the live session, so
+    the plan_approval plugin gate fires independently of the auto-activation knob."""
+    _to_plan_ready(store, sid, str(plan_path))
+    cli.cmd_approve(ns(session=sid, by="user"), store=store)
+
+
+def test_replan_composes_plan_approval_plugin_gate(store, tmp_path):
+    """cmd_replan must refuse a replan whose plan carries an undispositioned question,
+    by the SAME plugins.plugin_gate_blockers(state, "plan_approval") composition
+    cmd_approve uses. Without it a refinement/no_change replan rotates the plan bytes
+    back to VERIFYING while the plugin gate never re-fires (the 2026-07-09
+    attest-vs-execute hole). MUTATION ANCHOR: reverting the one-line composition flips
+    the `blocked.ok is False` assertion — the replan would return ok=True."""
+    sid = "replan-premise-gate"
+    plan_path = tmp_path / "plan.toml"
+    plan_path.write_text(_two_stage_plan_text())
+    _approved_two_stage(store, sid, plan_path)
+
+    # Arm premise on the live session with a clean enumeration (matching the current
+    # plan content) and ONE open question — isolating the open-question blocker from
+    # the enumeration-staleness one.
+    state = store.load(sid)
+    plugins.activate(state, "premise")
+    bag = state.plugins["premise"]
+    bag["enumerated"] = True
+    bag["enumerated_at"] = pp._plan_content_digest(plan.load_plan(str(plan_path)))
+    bag["questions"] = [
+        {"id": "q1", "target": "plan.goal", "question": "is the goal reachable?"},
+    ]
+    store.save(state)
+
+    # A replan against the same approved plan is REFUSED: the open question is
+    # undispositioned and the composed plugin gate catches it.
+    blocked = cli.cmd_replan(ns(session=sid, plan=str(plan_path)), store=store)
+    assert blocked.ok is False
+    assert any("[premise]" in b and "open" in b for b in blocked.data["blockers"])
+
+    # Disposing the question (assumed, with its required fields) clears the gate; the
+    # same replan then proceeds.
+    state = store.load(sid)
+    state.plugins["premise"]["questions"] = [
+        {"id": "q1", "target": "plan.goal", "question": "is the goal reachable?",
+         "disposition": "assumed", "own_research": "read the tracker thread",
+         "basis": "confirmed reachable by the reporter", "risk": "reporter may be wrong"},
+    ]
+    store.save(state)
+    ok = cli.cmd_replan(ns(session=sid, plan=str(plan_path)), store=store)
+    assert ok.ok is True
+
+
+def test_replan_is_noop_without_active_plugin(store, tmp_path, monkeypatch):
+    """A session with NO plugin extending plan_approval sees byte-identical replan
+    behaviour: plugins.plugin_gate_blockers returns [] so the composition adds
+    nothing. The gate is still EVALUATED (one telemetry row) and passes with an empty
+    blocker set — the byte-identical no-op path the composition promises."""
+    log_path = tmp_path / "gate-log.jsonl"
+    monkeypatch.setattr(cli, "GATE_LOG", log_path)
+    sid = "replan-no-plugin"
+    plan_path = tmp_path / "plan.toml"
+    plan_path.write_text(_two_stage_plan_text())
+    _approved_two_stage(store, sid, plan_path)
+
+    state = store.load(sid)
+    assert "premise" not in state.plugins  # nothing extends plan_approval
+
+    d = cli.cmd_replan(ns(session=sid, plan=str(plan_path)), store=store)
+    assert d.ok is True
+
+    rows = [_json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+    plugin_rows = [r for r in rows if r["gate"] == "plan_approval_plugin"]
+    assert len(plugin_rows) == 1
+    assert plugin_rows[0]["passed"] is True
+    assert plugin_rows[0]["blockers"] == []
+
+
+def test_refinement_replan_rebinds_only_changed_stage_questions(store, tmp_path):
+    """F6 pricing: a refinement replan that rewrites ONE stage must demand a rebind
+    only for questions bound to THAT stage — a question bound to an untouched stage
+    stays disposed. This is what keeps the composition from becoming a bypass trainer:
+    it re-blocks a disposed question exactly when its bound stage's bytes changed,
+    never indiscriminately."""
+    sid = "replan-rebind-scope"
+    old_path = tmp_path / "plan.toml"
+    old_path.write_text(_two_stage_plan_text(stage2_verify_cmd="true"))
+    _approved_two_stage(store, sid, old_path)
+
+    # Stamp each stage's ORIGINAL question key so a disposed question binds to it.
+    old_doc = plan.load_plan(str(old_path))
+    key_by_index = {s.index: plan.stage_question_key(s) for s in old_doc.stages}
+
+    def _assumed(qid, stage_index):
+        return {
+            "id": qid, "target": f"stage:{stage_index}.means",
+            "question": f"is stage {stage_index}'s means sound?",
+            "disposition": "assumed", "own_research": "read the surrounding code",
+            "basis": "matches the existing working caller", "risk": "the caller may change",
+            "disposed_at_key": key_by_index[stage_index],
+        }
+
+    # The refinement rewrites ONLY stage 2 (verify_command true -> false), so only
+    # stage 2's stage_question_key moves; stage 1 stays byte-identical.
+    new_path = tmp_path / "plan_refined.toml"
+    new_path.write_text(_two_stage_plan_text(stage2_verify_cmd="false"))
+
+    state = store.load(sid)
+    plugins.activate(state, "premise")
+    bag = state.plugins["premise"]
+    bag["enumerated"] = True
+    # enumeration re-run against the NEW content, so the ONLY live blocker is the
+    # stale per-stage binding — not enumeration staleness.
+    bag["enumerated_at"] = pp._plan_content_digest(plan.load_plan(str(new_path)))
+    bag["questions"] = [_assumed("q1", 1), _assumed("q2", 2)]
+    store.save(state)
+
+    d = cli.cmd_replan(ns(session=sid, plan=str(new_path)), store=store)
+    assert d.ok is False
+    blockers = d.data["blockers"]
+    rebind = [b for b in blockers if "changed since this question was disposed" in b]
+    assert len(rebind) == 1
+    assert "stage 2" in rebind[0]
+    # stage 1's question — bound to the untouched stage — is NOT re-blocked.
+    assert not any("stage 1" in b for b in blockers)

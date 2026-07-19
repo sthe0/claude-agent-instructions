@@ -32,6 +32,15 @@ from pathlib import Path
 
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
 from lib.config_root import skills_dir  # config-root resolver (isolated system root)
+from lib.planner_plan_check import (  # single shared home for return-marker + plan checks
+    MARKER_RE,
+    PLAN_PATH_RE,
+    RETURN_MARKERS,
+    check_planner_return,
+    extract_marker,
+    validate_marker,
+    validate_planner_plan,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILLS_DIR = skills_dir()
@@ -41,20 +50,7 @@ PERMISSIONS_CLI = REPO_ROOT / "scripts" / "permissions-cli.py"
 DEFAULT_API_KEY_FILE = Path.home() / ".cursor_api_key"
 COST_LOG = Path.home() / ".local" / "log" / "cursor-spawn-costs.jsonl"
 
-RETURN_MARKERS = (
-    "COMPLETED",
-    "PLAN-READY",
-    "INCOMPLETE",
-    "CLARIFY",
-    "REPLAN",
-    "PERMISSION-REQUEST",
-    "ESCALATE",
-    "REVIEW",
-)
-MARKER_RE = re.compile(rf"^({'|'.join(RETURN_MARKERS)}):")
-
 CONFIG_KEY_RE = re.compile(r"^\|\s*`([a-z0-9-]+)`\s*\|\s*`([^`]+)`\s*\|")
-PLAN_PATH_RE = re.compile(r"^\s*Plan\s*:\s*(.+?)\s*$", re.MULTILINE)
 
 BUDGET_TIMEOUT_SEC = {"small": 300, "medium": 600, "large": 900}
 
@@ -167,50 +163,6 @@ def assemble_prompt(
         "If you hit a small specific question whose answer is needed to continue, return CLARIFY: (see § Return markers).",
     ]
     return "\n".join(sections)
-
-
-def validate_marker(result_text: str) -> tuple[str, bool]:
-    """Return (text, ok). If marker is missing, prepend MALFORMED: and ok=False."""
-    for line in result_text.splitlines():
-        if line.strip():
-            if MARKER_RE.match(line.strip()):
-                return result_text, True
-            break
-    return (
-        "MALFORMED: specialist output did not start with a known marker.\n\n" + result_text,
-        False,
-    )
-
-
-def validate_planner_plan(result_text: str) -> tuple[str, bool]:
-    """For planner PLAN-READY: outputs, extract the `Plan: <path>` line and
-    run verify-plan-file.py against it. Return (forwarded_text, ok)."""
-    m = PLAN_PATH_RE.search(result_text)
-    if not m:
-        return (
-            "MALFORMED: planner PLAN-READY: output is missing a "
-            "`Plan: <absolute-path>` line. The plan must be written to a file "
-            "(convention: ~/.claude/plans/<slug>.md) and the path declared "
-            "on its own line right after PLAN-READY:.\n\n" + result_text,
-            False,
-        )
-    plan_path = m.group(1).strip().strip("`'\"")
-    verifier = Path(__file__).resolve().parent / "verify-plan-file.py"
-    if not verifier.exists():
-        return result_text, True
-    proc = subprocess.run(
-        [sys.executable, str(verifier), plan_path],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if proc.returncode == 0:
-        return result_text, True
-    return (
-        f"MALFORMED: planner PLAN-READY: declared plan at `{plan_path}` "
-        f"but verify-plan-file.py rejected it:\n{proc.stderr}\n\n" + result_text,
-        False,
-    )
 
 
 def log_cost_entry(entry: dict) -> None:
@@ -450,13 +402,7 @@ def main(argv: list[str] | None = None) -> int:
     if not result_text.strip() and completed.stderr.strip():
         result_text = completed.stderr
 
-    forwarded, ok = validate_marker(result_text)
-    parsed_marker: str | None = None
-    if ok:
-        first = forwarded.splitlines()[0].strip()
-        parsed_marker = first.split(":", 1)[0]
-        if args.kind == "planner" and parsed_marker == "PLAN-READY":
-            forwarded, ok = validate_planner_plan(forwarded)
+    forwarded, ok, parsed_marker = check_planner_return(result_text, args.kind)
 
     sys.stdout.write(forwarded)
     if not forwarded.endswith("\n"):

@@ -65,8 +65,14 @@ def save_state(path: Path, state: dict) -> None:
 
 
 def plan_files_exist() -> bool:
+    # A plan may be a TOML (the planner's deliverable the engine tracks) or a
+    # markdown file (the non-substantive prose form). Detect either — globbing
+    # only *.md silently missed every substantive session's TOML plan.
     dirs = {PLAN_DIR, LEGACY_PLAN_DIR}
-    return any(d.exists() and any(d.glob("*.md")) for d in dirs)
+    return any(
+        d.exists() and (any(d.glob("*.toml")) or any(d.glob("*.md")))
+        for d in dirs
+    )
 
 
 def main() -> int:
@@ -135,8 +141,9 @@ def main() -> int:
         "an approved plan is required BEFORE editing — per CLAUDE.md § Carve-out.\n"
         "  Check: ls ~/.claude/plans/\n"
         "  If no plan exists: stop editing, invoke `planner`, get user approval, then continue.\n"
-        "  'Approved plan' = a ~/.claude/plans/<slug>.md shown to the user, OR an in-conversation\n"
-        "  plan the user explicitly confirmed. Deciding what to do in your head is NOT a plan."
+        "  'Approved plan' = a ~/.claude/plans/<slug>.toml (the planner's deliverable the engine\n"
+        "  tracks) shown to the user, OR an in-conversation plan the user explicitly confirmed.\n"
+        "  Deciding what to do in your head is NOT a plan."
     )
     return 0
 

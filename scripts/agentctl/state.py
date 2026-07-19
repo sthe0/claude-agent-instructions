@@ -503,8 +503,16 @@ class Principle:
     not on the norm itself."""
     statement: str
     source: str
-    confidence: str
-    refutation: str
+    # `derivation` sits adjacent to `source` because the pair is one checkable unit:
+    # source answers "does the cited ground exist", derivation answers "does the claim
+    # actually follow from it" — the second half of a twice-checkable premise. The field
+    # defaults to "" only to satisfy dataclass ordering (a defaulted field may not precede
+    # a non-defaulted one, so confidence/refutation default too); real requiredness for a
+    # substantive stage is enforced dict-level in plan._validate_substantive_stage, so the
+    # default never weakens that gate.
+    derivation: str = ""
+    confidence: str = ""
+    refutation: str = ""
 
     @classmethod
     def from_dict(cls, d: dict) -> "Principle":
@@ -593,6 +601,9 @@ class Stage:
     principle: Principle | None = None
     conditions: str | None = None
     supplies: list[Supply] = field(default_factory=list)
+    # Paths this stage produces (green-reachability targets for verify-command lint).
+    # Optional and tolerant: a plan omitting it loads unchanged.
+    output_artifacts: list[str] = field(default_factory=list)
     outcome: Outcome = field(default_factory=Outcome)
     # General control-criterion attestation (element #3 of the plan activity ontology).
     # Optional on any stage; required non-empty for spawn:developer when recording passed,
@@ -641,6 +652,7 @@ class Stage:
                 principle=Principle.from_dict(d["principle"]) if d.get("principle") else None,
                 conditions=d.get("conditions"),
                 supplies=[Supply(**s) for s in d.get("supplies", [])],
+                output_artifacts=list(d.get("output_artifacts", [])),
                 outcome=Outcome(**d["outcome"]) if d.get("outcome") else Outcome(),
                 control=d.get("control"),
             )
@@ -668,6 +680,7 @@ class Stage:
             principle=None,  # flat states predate the principle element
             conditions=d.get("conditions"),
             supplies=[Supply(on=int(x)) for x in d.get("depends_on", [])],
+            output_artifacts=list(d.get("output_artifacts", [])),
             outcome=Outcome(
                 status=d.get("status", StageStatus.PENDING.value),
                 actual=d.get("actual"),

@@ -24,14 +24,20 @@ from pathlib import Path
 
 from lib import config_root
 
-from . import advisor, continuations, cost, delivery, gates, ledger, permissions, plugins, plugins_ledger, solved_marker
+from . import advisor, continuations, cost, delivery, gates, ledger, permissions, plugins, plugins_ledger, plugins_premise, premise, solved_marker
 from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
 from .partition import render_section, render_units, verdict
 from .directive import Directive
 from .dispatch import Runner, dispatch_stage, parse_marker, subprocess_runner
 from .machine import transition
-from .plan import load_plan, verify_command_scope_warnings
+from .plan import (
+    load_plan,
+    stage_question_key,
+    verify_command_reachability_blockers,
+    verify_command_scope_warnings,
+)
+from .render import cmd_plan_render
 from .state import (
     _EXECUTION_NODES,
     _MAX_PLAN_STACK,
@@ -671,6 +677,306 @@ def cmd_ledger_enumerate(args, *, store: StateStore, runner: Runner | None = Non
     )
 
 
+def _question_bag(store: StateStore, session_id: str):
+    """(state, bag) for the active premise bag, or (state, None) when the plugin is
+    not armed — the caller returns the not-active Directive, mirroring the ledger
+    verbs' `if bag is None` guard."""
+    state = _require(store, session_id)
+    return state, state.plugins.get("premise")
+
+
+def _bound_stage_key(state, question: "premise.Question") -> str:
+    """The current stage_question_key of the stage a Question is bound to — the
+    value dispose/rebind stamp into `disposed_at_key`. Returns "" for
+    plan.goal / plan.done_criterion targets (no per-goal key repeats under a stage
+    index), for an unparseable target, and when no plan has been submitted yet
+    (`state.plan_path` empty) — exactly the cases premise.validate_questions
+    exempts from the key-mismatch check. Reads only; the WRITE lives in the two
+    disposing verbs so the package-wide single-writer scan stays exact."""
+    parsed = premise.parse_target(question.target)
+    if parsed is None:
+        return ""
+    kind, stage_index, _element = parsed
+    if kind != "stage":
+        return ""
+    plan_path = getattr(state, "plan_path", None)
+    if not plan_path:
+        return ""
+    doc = load_plan(plan_path)
+    keys = {s.index: stage_question_key(s) for s in doc.stages}
+    return keys.get(stage_index, "")
+
+
+def cmd_question_raise(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Record (or re-declare) one OPEN question arising during plan construction.
+    Permissive exactly like ledger-add: a malformed target is stored as-is and the
+    GATE (premise.validate_questions) reports it, so the moment-of-arising record is
+    never lost to an argparse rejection. UPSERT by --id, last write wins — re-raising
+    resets the entry to open. state.log stamps the act; that timestamp IS the
+    moment-of-arising record and is why questions live in state, not the plan file."""
+    state, bag = _question_bag(store, args.session)
+    if bag is None:
+        return Directive(False, state.node, "noop", "plugin 'premise' is not active")
+    questions = premise.questions_from_dicts(bag.get("questions", []))
+    questions = [q for q in questions if q.id != args.id]
+    questions.append(premise.Question(id=args.id, target=args.target, question=args.question or ""))
+    bag["questions"] = premise.questions_to_dicts(questions)
+    state.log("question_raise", question=args.id, target=args.target)
+    store.save(state)
+    return Directive(
+        True, state.node, "continue",
+        f"question {args.id!r} raised (open) against {args.target!r}",
+        data={"questions": [q.id for q in questions]},
+    )
+
+
+def cmd_question_research(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Record the own-research attempt for a question — a SEPARATE act from
+    disposing, because 'research precedes escalation' is only evidenced by two
+    independently-logged acts. Sets own_research; does not disposition. Writes no
+    disposed_at_key (only dispose/rebind may)."""
+    state, bag = _question_bag(store, args.session)
+    if bag is None:
+        return Directive(False, state.node, "noop", "plugin 'premise' is not active")
+    questions = premise.questions_from_dicts(bag.get("questions", []))
+    match = next((q for q in questions if q.id == args.id), None)
+    if match is None:
+        return Directive(False, state.node, "noop", f"no such question {args.id!r}")
+    match.own_research = args.attempted
+    bag["questions"] = premise.questions_to_dicts(questions)
+    state.log("question_research", question=args.id)
+    store.save(state)
+    return Directive(
+        True, state.node, "continue",
+        f"own research recorded for question {args.id!r}",
+        data={"question": args.id},
+    )
+
+
+def cmd_question_dispose(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Disposition a question: researched | escalated | assumed. Stamps
+    `disposed_at_key` from the BOUND STAGE's current stage_question_key ("" for
+    plan.goal / plan.done_criterion targets and when no plan exists yet) — PER
+    ENTRY, at disposition time, on THIS entry only. There is NO bag-level
+    plan_sha256 to restamp; v1's laundering defect was exactly such a shared field,
+    so one add carried a whole stale bag onto a new plan version. A per-entry stamp
+    written only here (and in cmd_question_rebind) has no such path by construction.
+
+    DEVIATES from the permissive-add idiom for ONE case: refuses `--to escalated`
+    with empty own_research, naming `question-research` as the route out. This is a
+    UX fast-fail, NOT the authority — the authority is premise.validate_questions
+    rule 5 at the plan_approval gate (both exist on purpose; the CLI refusal is a
+    courtesy, the gate refusal is the control). Other required fields per
+    disposition stay permissive here and are enforced only at the gate."""
+    state, bag = _question_bag(store, args.session)
+    if bag is None:
+        return Directive(False, state.node, "noop", "plugin 'premise' is not active")
+    questions = premise.questions_from_dicts(bag.get("questions", []))
+    match = next((q for q in questions if q.id == args.id), None)
+    if match is None:
+        return Directive(False, state.node, "noop", f"no such question {args.id!r}")
+    if args.to == "escalated" and not match.own_research:
+        return Directive(
+            False, state.node, "noop",
+            "refusing --to escalated: own research must precede escalation to the "
+            "user — record it with `agentctl question-research --id "
+            f"{args.id} --attempted ...` first",
+        )
+    match.disposition = args.to
+    if args.answer:
+        match.answer = args.answer
+    if args.source:
+        match.source = args.source
+    if args.derivation:
+        match.derivation = args.derivation
+    if args.basis:
+        match.basis = args.basis
+    if args.risk:
+        match.risk = args.risk
+    match.disposed_at_key = _bound_stage_key(state, match)
+    bag["questions"] = premise.questions_to_dicts(questions)
+    state.log("question_dispose", question=args.id, disposition=args.to)
+    store.save(state)
+    return Directive(
+        True, state.node, "continue",
+        f"question {args.id!r} dispositioned as {args.to!r}",
+        data={"question": args.id, "disposition": args.to,
+              "disposed_at_key": match.disposed_at_key},
+    )
+
+
+def cmd_question_rebind(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Re-stamp a disposed question's `disposed_at_key` to its bound stage's CURRENT
+    key, after the coordinator has RE-READ the question against the changed stage
+    (--confirm-still-valid carries that reason). This is the reachable route out of
+    blocker 12 (bound-stage-definition-changed); without it a refusal with no
+    resolution path trains a bypass. Requires a non-empty reason (argparse-enforced).
+    The second — and only other — writer of disposed_at_key."""
+    state, bag = _question_bag(store, args.session)
+    if bag is None:
+        return Directive(False, state.node, "noop", "plugin 'premise' is not active")
+    questions = premise.questions_from_dicts(bag.get("questions", []))
+    match = next((q for q in questions if q.id == args.id), None)
+    if match is None:
+        return Directive(False, state.node, "noop", f"no such question {args.id!r}")
+    match.disposed_at_key = _bound_stage_key(state, match)
+    bag["questions"] = premise.questions_to_dicts(questions)
+    state.log("question_rebind", question=args.id, reason=args.confirm_still_valid)
+    store.save(state)
+    return Directive(
+        True, state.node, "continue",
+        f"question {args.id!r} rebound to its stage's current key",
+        data={"question": args.id, "disposed_at_key": match.disposed_at_key},
+    )
+
+
+def cmd_question_retire(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Retire a question whose target stage no longer exists — the route out of the
+    dangling-edge blocker (rule 2). Sets disposition='retired' + reason; writes NO
+    disposed_at_key (retired is not key-bound — it has walked away from the target)."""
+    state, bag = _question_bag(store, args.session)
+    if bag is None:
+        return Directive(False, state.node, "noop", "plugin 'premise' is not active")
+    questions = premise.questions_from_dicts(bag.get("questions", []))
+    match = next((q for q in questions if q.id == args.id), None)
+    if match is None:
+        return Directive(False, state.node, "noop", f"no such question {args.id!r}")
+    match.disposition = "retired"
+    match.reason = args.reason
+    bag["questions"] = premise.questions_to_dicts(questions)
+    state.log("question_retire", question=args.id)
+    store.save(state)
+    return Directive(
+        True, state.node, "continue",
+        f"question {args.id!r} retired",
+        data={"question": args.id},
+    )
+
+
+def cmd_question_list(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Read-only render of the question bag. `--format md` is the THINKER'S read
+    surface (state is canonical and so invisible to a reviewer who reads only the
+    plan): a markdown table of target | question | disposition | own_research |
+    source | derivation. A PROJECTION, exactly like the plan-render — never a second
+    source of truth. Does not mutate state."""
+    state, bag = _question_bag(store, args.session)
+    if bag is None:
+        return Directive(False, state.node, "noop", "plugin 'premise' is not active")
+    questions = premise.questions_from_dicts(bag.get("questions", []))
+    if getattr(args, "format", None) == "md":
+        rows = [
+            "| target | question | disposition | own_research | source | derivation |",
+            "|---|---|---|---|---|---|",
+        ]
+        for q in questions:
+            rows.append(
+                f"| {q.target} | {q.question} | {q.disposition} | "
+                f"{q.own_research} | {q.source} | {q.derivation} |"
+            )
+        detail = "\n".join(rows)
+    else:
+        detail = "; ".join(f"{q.id}={q.disposition}" for q in questions) or "no questions"
+    return Directive(
+        True, state.node, "inspect", detail,
+        data={"questions": premise.questions_to_dicts(questions)},
+    )
+
+
+def cmd_question_check(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Read-only: report the active premise bag's blockers via the SAME
+    plugins_premise.premise_blockers the plan_approval gate uses, so check and gate
+    never diverge (the ledger-check precedent). Green (ok=True) iff every raised
+    question is closed, every enumeration candidate dispositioned, and the
+    enumeration cross-check has run against the current plan. Does not mutate."""
+    state, bag = _question_bag(store, args.session)
+    if bag is None:
+        return Directive(False, state.node, "noop", "plugin 'premise' is not active")
+    blockers = plugins_premise.premise_blockers(state, bag)
+    detail = "questions closed" if not blockers else f"questions not closed: {'; '.join(blockers)}"
+    return Directive(not blockers, state.node, "inspect", detail, data={"blockers": blockers})
+
+
+def cmd_question_enumerate(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Run the independent question-enumeration cross-check over the WHOLE plan: ONE
+    bounded advisor pass (advisor.enumerate_questions_health, `claude -p --model sonnet`,
+    cost-bounded) re-reads goal + done_criterion + the full plan text and RAISES the
+    questions the plan's construction should have provoked but left implicit, each UPSERT
+    as a 'raised' QuestionCandidate (last-wins by a deterministic `qenum-N` id), then
+    flips bag['enumerated']=True and stamps bag['enumerated_at'] with the CURRENT plan
+    content digest so a later content change re-blocks approve (the staleness check).
+
+    ONE call over the whole plan, not one per element: the questions worth raising are
+    overwhelmingly cross-element, and per-element fan-out would multiply cost by the
+    element count for no recall gain (argued in enumerate_questions_health).
+
+    Fail-open, and the flag is flipped REGARDLESS of the pair count — never gated on a
+    non-empty result. A count-gate is the tempting inversion and it is WRONG: it would
+    let a single 20 s advisor timeout (or a genuinely question-free plan) leave
+    `enumerated` False forever, wedging approve with no route out. So the mandatory
+    cross-check is discharged by the pass HAVING RUN, and the silent-discharge cost that
+    buys is paid back NON-BLOCKINGLY: when the pass produced nothing (zero candidates) or
+    the runner did not report healthy, a non-blocking advisory (F3b) tells the
+    coordinator to do the second reading by hand. The advisory never sets ok=False and
+    never adds a blocker — approve stays passable on infra failure. Fires no plugin
+    event; records runner health (enumerated_runner_ok) and the pair count
+    (enumerated_count) for observability."""
+    state, bag = _question_bag(store, args.session)
+    if bag is None:
+        return Directive(False, state.node, "noop", "plugin 'premise' is not active")
+    plan_path = getattr(state, "plan_path", None)
+    if not plan_path:
+        return Directive(False, state.node, "noop",
+                         "no plan submitted yet — run submit-plan before question-enumerate")
+    doc = load_plan(plan_path)
+    try:
+        plan_text = Path(plan_path).read_text(encoding="utf-8")
+    except OSError as exc:
+        return Directive(False, state.node, "noop",
+                         f"cannot read plan {plan_path!r}: {exc}")
+
+    run = runner if runner is not None else advisor.subprocess_runner
+    runner_ok, pairs = advisor.enumerate_questions_health(
+        doc.meta.goal, doc.meta.done_criterion, plan_text, run)
+
+    candidates = bag.setdefault("candidates", [])
+    raised: list[str] = []
+    for i, (target, question) in enumerate(pairs):
+        cid = f"qenum-{i + 1}"
+        entry = {"id": cid, "statement": f"[{target}] {question}", "disposition": "raised",
+                 "reason": "", "question": ""}
+        for j, c in enumerate(candidates):
+            if c.get("id") == cid:
+                candidates[j] = entry
+                break
+        else:
+            candidates.append(entry)
+        raised.append(cid)
+
+    bag["enumerated"] = True
+    bag["enumerated_at"] = plugins_premise._plan_content_digest(doc)
+    bag["enumerated_runner_ok"] = runner_ok
+    bag["enumerated_count"] = len(pairs)
+    state.log("question_enumerate", raised=len(raised), runner_ok=runner_ok)
+    store.save(state)
+
+    d = Directive(
+        True, state.node, "continue",
+        f"question enumeration cross-check ran; raised {len(raised)} candidate(s) — "
+        "disposition each with `agentctl question-dispose --id <qenum-N> --to "
+        "researched|escalated|assumed`",
+        data={"raised": raised, "enumerated": True, "runner_ok": runner_ok},
+    )
+    if not pairs or runner_ok is not True:
+        why = ("the advisor runner was unavailable or failed"
+               if runner_ok is not True else "the pass raised no questions")
+        d.data.setdefault("advisories", []).append(
+            f"question enumeration discharged the mandatory cross-check on the flag alone "
+            f"({why}) — the enumeration added no candidates, so re-read goal + "
+            "done_criterion + every stage by hand for smuggled premises before approving"
+        )
+    return d
+
+
 def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     thr = Thresholds()
@@ -778,6 +1084,18 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
             state.overall_done_criterion = doc.meta.done_criterion
         state.plan_verified = True
         problems: list[str] = []
+        if state.weight_class == WeightClass.SUBSTANTIVE.value:
+            # Two-directional control: the scope lint (advisory, below) keeps a
+            # control from being false-RED; this BLOCKS a control that can never
+            # go honestly GREEN because it names a path no stage produces and
+            # that does not exist. No legitimate instance -> a blocker, not a warn.
+            problems.extend(
+                verify_command_reachability_blockers(
+                    doc.stages, doc.meta.final_check, doc.meta.repo_root
+                )
+            )
+            if problems:
+                state.plan_verified = False
     else:
         # markdown fallback: reuse verify-plan-file.py for structure-only check
         problems = _verify_markdown_plan(plan_path)
@@ -2069,6 +2387,28 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
                          "replan blocked: the corrected plan needs a thinker review "
                          "(run: plan-review --target " + args.plan + ")",
                          data={"blockers": prblock})
+
+    # plan_approval PLUGIN gate: mirror cmd_approve's plugins.plugin_gate_blockers
+    # composition so a refinement/no_change replan cannot rotate the plan bytes back
+    # to VERIFYING while a premise-plugin blocker (undispositioned question, stale
+    # per-stage rebind) goes unchecked — the 2026-07-09 attest-vs-execute hole.
+    # Evaluate against the PROPOSED plan (args.plan): premise_blockers reads
+    # state.plan_path, so swap it for the call and restore in finally. [] when no
+    # plugin extends plan_approval, so the row still logs (passed, empty) and the
+    # replan is byte-identical to before.
+    _saved_plan_path = state.plan_path
+    try:
+        state.plan_path = args.plan
+        pblock = plugins.plugin_gate_blockers(state, "plan_approval")
+    finally:
+        state.plan_path = _saved_plan_path
+    _log_gate(state, "plan_approval_plugin", pblock, passed=not pblock)
+    if pblock:
+        return Directive(False, state.node, "close_questions",
+                         "replan blocked: the corrected plan carries unresolved "
+                         "plan_approval premises (dispose open questions / rebind "
+                         "stale per-stage bindings against the new plan)",
+                         data={"blockers": pblock})
     # #8: diff against the plan AS APPROVED (the immutable snapshot), not plan_path —
     # which the coordinator may have edited in place. Absent a snapshot (legacy
     # session, or an approve that predates the field) fall back to plan_path.
@@ -2584,8 +2924,17 @@ COMMANDS = {
     "ledger-candidate": cmd_ledger_candidate,
     "ledger-dispose": cmd_ledger_dispose,
     "ledger-enumerate": cmd_ledger_enumerate,
+    "question-raise": cmd_question_raise,
+    "question-research": cmd_question_research,
+    "question-dispose": cmd_question_dispose,
+    "question-rebind": cmd_question_rebind,
+    "question-retire": cmd_question_retire,
+    "question-list": cmd_question_list,
+    "question-check": cmd_question_check,
+    "question-enumerate": cmd_question_enumerate,
     "classify": cmd_classify,
     "plan": cmd_plan,
+    "plan-render": cmd_plan_render,
     "submit-plan": cmd_submit_plan,
     "present-plan": cmd_present_plan,
     "confirm-delivery": cmd_confirm_delivery,
@@ -2676,6 +3025,41 @@ def build_parser() -> argparse.ArgumentParser:
                     help="path to the outgoing deliverable to cross-check for load-bearing "
                          "decisions/judgments/claims (raised as candidates)")
 
+    sp = add("question-raise"); sp.add_argument("--session", required=True)
+    sp.add_argument("--id", required=True, help="question id; re-raising an existing id resets it to open")
+    sp.add_argument("--target", required=True,
+                    help="the plan element the question arose against: plan.goal, "
+                         "plan.done_criterion, or stage:<n>.<element>")
+    sp.add_argument("--question", default="", help="the question text")
+
+    sp = add("question-research"); sp.add_argument("--session", required=True)
+    sp.add_argument("--id", required=True, help="question id to attach the research attempt to")
+    sp.add_argument("--attempted", required=True, help="the own-research attempt (must precede escalation)")
+
+    sp = add("question-dispose"); sp.add_argument("--session", required=True)
+    sp.add_argument("--id", required=True, help="question id to disposition")
+    sp.add_argument("--to", dest="to", required=True, choices=["researched", "escalated", "assumed"])
+    sp.add_argument("--answer", default="", help="the resolved answer (researched/escalated)")
+    sp.add_argument("--source", default="", help="provenance of the answer (researched)")
+    sp.add_argument("--derivation", default="", help="how the answer follows from the source (researched)")
+    sp.add_argument("--basis", default="", help="the ground the assumption rests on (assumed)")
+    sp.add_argument("--risk", default="", help="what breaks if the assumption is wrong (assumed)")
+
+    sp = add("question-rebind"); sp.add_argument("--session", required=True)
+    sp.add_argument("--id", required=True, help="disposed question id to re-stamp against its stage's current key")
+    sp.add_argument("--confirm-still-valid", dest="confirm_still_valid", required=True,
+                    help="why the disposition still holds against the changed stage (non-empty)")
+
+    sp = add("question-retire"); sp.add_argument("--session", required=True)
+    sp.add_argument("--id", required=True, help="question id whose target stage no longer exists")
+    sp.add_argument("--reason", required=True, help="why the question is retired")
+
+    sp = add("question-list"); sp.add_argument("--session", required=True)
+    sp.add_argument("--format", dest="format", default="", choices=["", "md"],
+                    help="md renders the thinker's markdown table; default is a compact one-liner")
+
+    sp = add("question-check"); sp.add_argument("--session", required=True)
+    sp = add("question-enumerate"); sp.add_argument("--session", required=True)
     sp = add("classify"); sp.add_argument("--session", required=True)
     sp.add_argument("--chat", action="store_true")
     sp.add_argument("--changed-lines", dest="changed_lines", type=int, default=0)
@@ -2692,6 +3076,13 @@ def build_parser() -> argparse.ArgumentParser:
                          "arms the claim-provenance ledger plugin on a SUBSTANTIVE session")
 
     sp = add("plan"); sp.add_argument("--session", required=True)
+    sp = add("plan-render"); sp.add_argument("--plan", required=True,
+        help="TOML plan to render to a markdown prose view on demand (a projection, "
+             "never written to disk — the TOML is the single source of truth)")
+    # Accept (and ignore) --session so the harness-session auto-injection
+    # (_inject_default_session) is a no-op here: rendering is a pure, session-free
+    # read of the plan file, unlike every other verb which drives session state.
+    sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
     sp = add("submit-plan"); sp.add_argument("--session", required=True); sp.add_argument("--plan", required=True)
     sp = add("present-plan"); sp.add_argument("--session", required=True)
     sp.add_argument("--kind", choices=list(PLAN_PRESENTATION_KINDS), default=PLAN_PRESENTATION_KIND_ESSENCE,

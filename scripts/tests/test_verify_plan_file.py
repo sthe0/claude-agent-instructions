@@ -35,6 +35,7 @@ _ACTIVITY_LABELS = (
     "Conditions & invariants: no other files changed\n"
     "Principle: use narrowest-scope tool\n"
     "Source: developer SKILL.md\n"
+    "Derivation: that SKILL prescribes the narrowest tool for the edit, so Edit follows for a field addition\n"
     "Confidence: high\n"
     "Refutation: if a full rewrite is needed, Write is required instead\n"
 )
@@ -195,6 +196,18 @@ def test_substantive_missing_source(tmp_path):
     plan = _write(tmp_path, content)
     errors = mod.check(plan)
     assert any("Source" in e for e in errors), errors
+
+
+def test_substantive_prose_plan_requires_derivation_line(tmp_path):
+    mod = _load()
+    labels = _ACTIVITY_LABELS.replace(
+        "Derivation: that SKILL prescribes the narrowest tool for the edit, so Edit follows for a field addition\n",
+        "",
+    )
+    content = "weight_class: substantive\n\n" + _make_body(stage_extra=labels)
+    plan = _write(tmp_path, content)
+    errors = mod.check(plan)
+    assert any("Derivation" in e for e in errors), errors
 
 
 def test_substantive_missing_confidence(tmp_path):

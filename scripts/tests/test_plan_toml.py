@@ -163,6 +163,7 @@ def _full_substantive_stage(index=1):
         "principle": {
             "statement": "additive-optional keeps backward compat",
             "source": "leaf-schema.md precedent",
+            "derivation": "that precedent added an optional field and no loader broke, so the same shape applies here",
             "confidence": "high",
             "refutation": "refuted if existing fixture breaks",
         },
@@ -206,6 +207,45 @@ def test_substantive_missing_principle_subfield_raises():
     del stage["principle"]["source"]
     with pytest.raises(PlanError, match="source"):
         parse_plan({"meta": _substantive_meta(), "stage": [stage]})
+
+
+def test_substantive_stage_requires_principle_derivation():
+    stage = _full_substantive_stage()
+    del stage["principle"]["derivation"]
+    with pytest.raises(PlanError, match="derivation"):
+        parse_plan({"meta": _substantive_meta(), "stage": [stage]})
+
+
+def test_principle_derivation_may_not_echo_source():
+    stage = _full_substantive_stage()
+    stage["principle"]["derivation"] = stage["principle"]["source"]
+    with pytest.raises(PlanError, match="derivation must differ from source"):
+        parse_plan({"meta": _substantive_meta(), "stage": [stage]})
+
+
+def test_principle_derivation_may_not_echo_statement():
+    stage = _full_substantive_stage()
+    stage["principle"]["derivation"] = stage["principle"]["statement"]
+    with pytest.raises(PlanError, match="derivation must differ from statement"):
+        parse_plan({"meta": _substantive_meta(), "stage": [stage]})
+
+
+def test_principle_derivation_rejects_placeholder():
+    stage = _full_substantive_stage()
+    stage["principle"]["derivation"] = "TODO"
+    with pytest.raises(PlanError, match="derivation"):
+        parse_plan({"meta": _substantive_meta(), "stage": [stage]})
+
+
+def test_nonsubstantive_plan_loads_without_derivation():
+    """A non-substantive plan whose principle omits derivation still parses (grandfather)."""
+    stage = _minimal_stage()
+    stage["principle"] = {
+        "statement": "s", "source": "src", "confidence": "high", "refutation": "r",
+    }
+    doc = parse_plan({"meta": {"task_id": "t"}, "stage": [stage]})
+    assert doc.stages[0].principle is not None
+    assert doc.stages[0].principle.derivation == ""
 
 
 def test_substantive_missing_capability_required_raises():

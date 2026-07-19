@@ -17,3 +17,17 @@ def normalize_string(s: str) -> str:
 PLACEHOLDER_SET = frozenset({
     "todo", "tbd", "n/a", "na", "...", "expected", "actual", "mismatch", "-"
 })
+
+# The activity-ontology elements a stage may supply to a dependent stage (plan.py)
+# or a raised question may target (premise.py). Lives here rather than in plan.py
+# so premise.py can reuse the vocabulary without importing plan's TOML parsing /
+# state machinery — the same reason PLACEHOLDER_SET lives here instead of gates.py.
+ELEMENT_NAMES = frozenset(
+    {
+        "material", "result", "invariants",   # subject cluster
+        "means", "method",                    # means cluster
+        "executor", "capability",             # actor cluster
+        "criterion", "done_criterion",        # criterion cluster
+        "principle", "conditions",
+    }
+)

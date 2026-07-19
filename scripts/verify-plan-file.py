@@ -23,7 +23,10 @@ For **substantive** plans — those containing a line that matches
   - `Material:` (element 2 — what is transformed, initial state)
   - `Means & method:` *or* both `Means:` and `Method:` (elements 4/4')
   - `Conditions & invariants:` *or* both `Conditions:` and `Invariants:` (element 5)
-  - `Principle:` containing `Source:`, `Confidence:`, and `Refutation:` (element 7)
+  - `Principle:` containing `Source:`, `Derivation:`, `Confidence:`, and
+    `Refutation:` (element 7). `Derivation:` states how the claim follows from the
+    source, so the premise is checkable twice: does the source exist, and does the
+    claim actually follow from it.
 
 Substantive plans must also carry, at plan level (anywhere in the file):
   - `External research:` — the planner's recorded decision on whether
@@ -87,6 +90,7 @@ _PRINCIPLE_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Principle\**\s*:")
 # Plan-level (not per-stage) external-research decision, required for substantive plans.
 _EXTERNAL_RESEARCH_RE = re.compile(r"(?im)^\s*[-*]?\s*\**External research\**\s*:")
 _SOURCE_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Source\**\s*:")
+_DERIVATION_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Derivation\**\s*:")
 _CONFIDENCE_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Confidence\**\s*:")
 _REFUTATION_RE = re.compile(r"(?im)^\s*[-*]?\s*\**Refutation\**\s*:")
 
@@ -178,6 +182,7 @@ def check(path: Path) -> list[str]:
         else:
             for label, label_re in [
                 ("Source", _SOURCE_RE),
+                ("Derivation", _DERIVATION_RE),
                 ("Confidence", _CONFIDENCE_RE),
                 ("Refutation", _REFUTATION_RE),
             ]:
@@ -210,7 +215,7 @@ def main(argv: list[str] | None = None) -> int:
             "image lines), Final verification, and Risks sections.\n"
             "Substantive plans (weight_class: substantive) additionally require\n"
             "Capability (or Actor), Material, Means & method, Conditions & invariants,\n"
-            "and Principle (with Source, Confidence, Refutation) inside ## Stages,\n"
+            "and Principle (with Source, Derivation, Confidence, Refutation) inside ## Stages,\n"
             "plus a plan-level External research: line.",
             file=sys.stderr,
         )

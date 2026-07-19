@@ -27,7 +27,12 @@ TOML shape (minimal):
     verify_command = "python3 -m agentctl status"  # optional; executable form of done_criterion
     expected_exit = 0                     # optional (default 0); engine gates passed on this exit
     depends_on = []                       # optional
-    output_artifacts = ["scripts/agentctl/"]  # optional
+    output_artifacts = ["scripts/agentctl/"]  # optional; paths this stage produces.
+                                              # Parsed onto Stage.output_artifacts and
+                                              # consulted by the verify-command
+                                              # reachability lint: a verify_command path
+                                              # that neither exists yet nor is declared
+                                              # here by some stage is unreachable-green.
 
 For substantive plans (meta.weight_class = "substantive") the [meta] table must
 also carry a plan-level external-research decision:
@@ -51,6 +56,9 @@ and every stage must also carry the 8-element activity-structure fields:
     [stage.principle]
     statement = "..."
     source = "..."
+    derivation = "..."                   # how the claim follows from the source
+                                         # (checkable second half of provenance;
+                                         # must differ from statement and source)
     confidence = "high"                  # high | medium | low
     refutation = "..."
 
@@ -61,7 +69,9 @@ gate; wording-only edits (titles, expected-result prose) are refinements.
 """
 from __future__ import annotations
 
+import hashlib
 import re
+import shlex
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -80,6 +90,7 @@ from .state import (
     Subject,
     Supply,
 )
+from .text_shape import ELEMENT_NAMES as _ELEMENT_NAMES
 from .text_shape import PLACEHOLDER_SET as _PLACEHOLDER_SET
 from .text_shape import normalize_string as _normalize_string
 
@@ -122,19 +133,7 @@ _EXECUTOR_RE = re.compile(r"^(in_thread|spawn:[a-z][a-z0-9_-]*)$")
 
 # Extra stage fields required for substantive plans (8-element activity structure).
 _SUBSTANTIVE_STAGE_FIELDS = ("material", "means", "method", "conditions", "invariants", "capability_required")
-_PRINCIPLE_SUBFIELDS = ("statement", "source", "confidence", "refutation")
-
-# The activity-ontology elements a stage may supply to a dependent stage. A
-# substantive stage's Supply.element must name one of these (or be absent).
-_ELEMENT_NAMES = frozenset(
-    {
-        "material", "result", "invariants",   # subject cluster
-        "means", "method",                    # means cluster
-        "executor", "capability",             # actor cluster
-        "criterion", "done_criterion",        # criterion cluster
-        "principle", "conditions",
-    }
-)
+_PRINCIPLE_SUBFIELDS = ("statement", "source", "derivation", "confidence", "refutation")
 
 
 def _validate_substantive_stage(s: dict, index: int) -> None:
@@ -185,6 +184,22 @@ def _validate_substantive_stage(s: dict, index: int) -> None:
         raise PlanError(
             f"stage {index} [stage.principle] refutation must differ from statement "
             f"(a refutation identical to the claim it refutes proves nothing)"
+        )
+    # Derivation is the second checkable half of provenance: source says the ground
+    # exists, derivation says the claim follows from it. A derivation that just echoes
+    # the statement (or the source) asserts the inference instead of showing it, so it
+    # is no more checkable than a bare citation — reject both collapses.
+    norm_derivation = _normalize_string(str(principle.get("derivation", "")))
+    norm_source = _normalize_string(str(principle.get("source", "")))
+    if norm_derivation and norm_derivation == norm_statement:
+        raise PlanError(
+            f"stage {index} [stage.principle] derivation must differ from statement "
+            f"(a derivation that restates the claim shows no inference from the source)"
+        )
+    if norm_derivation and norm_derivation == norm_source:
+        raise PlanError(
+            f"stage {index} [stage.principle] derivation must differ from source "
+            f"(a derivation that restates the source shows no inference to the claim)"
         )
     norm_method = _normalize_string(str(s.get("method", "")))
     if norm_statement and norm_statement == norm_method:
@@ -317,6 +332,130 @@ def verify_command_scope_warnings(stages) -> list[str]:
     return warnings
 
 
+# --- verify_command green-reachability lint (BLOCKING for substantive) -------
+# Difficulty removed: the scope lint above stops a control from being false-RED;
+# it says nothing about the other direction. A verify_command / final_check can
+# name a path that no stage ever produces and that does not yet exist — the
+# control can then never go GREEN honestly, so "green" would only ever mean the
+# author never ran it. This is the second half of two-directional control: a
+# control is trusted only when it goes RED on mutation AND its GREEN direction is
+# reachable. Unlike scope (perception: is a whole-suite run justified here?),
+# green-reachability has no legitimate instance — a control that cannot pass is a
+# broken control, full stop — so this is DECIDABLE with no author discretion and
+# is therefore a BLOCKER, not an advisory.
+#
+# A "path" is green-reachable iff it already exists under repo_root OR some
+# stage declares it (a prefix of it) in output_artifacts (the machine-readable
+# answer to "which stage produces this path").
+#
+# Deliberately NARROW to keep the false-positive population empty-in-practice:
+#   * Only RELATIVE, literal, path-shaped tokens are considered. Absolute paths
+#     (/dev/null, /tmp/scratch written at runtime) are OUT OF SCOPE — a runtime
+#     temp file is exactly the false positive this narrowing avoids.
+#   * Globs ("*?["), shell variables ("$..."), URLs ("://"), option values
+#     ("k=v") and the program string after `-c` / module after `-m` are dropped:
+#     none is a literal filesystem path.
+# Residual false-positive population (documented, not eliminated): a relative
+# path a stage's command *creates then reads within the same command* (so it is
+# neither pre-existing nor a declared cross-stage artifact). Declare such a path
+# in that stage's output_artifacts to silence the lint.
+#
+# LIMITS, stated so the green light is not over-read:
+#   * Reachability is NOT validity: a reachable path proves the command *can*
+#     run green, never that green *means the stage is done* — that is the
+#     author's done_criterion, which this lint does not judge.
+#   * Path-reachability is NOT green-reachability in full: a command can still
+#     fail green for reasons no static path check can see (a missing binary, a
+#     network dep, a wrong exit code). This closes the one decidable, recurring
+#     sub-case — a path nothing produces — not the general halting question.
+_PATH_EXTS = (".py", ".toml", ".json", ".md", ".txt", ".sh", ".cfg",
+              ".ini", ".yaml", ".yml", ".csv", ".sql")
+
+
+def _reachability_path_tokens(cmd: str) -> list[str]:
+    """The relative, literal, path-shaped tokens of a shell command — the tokens
+    whose green-reachability is decidable. shlex parses the WHOLE command in one
+    pass so a quoted `python3 -c "..."` body — which itself contains `;` `|` `<`
+    `>` between Python statements — collapses into ONE token that the `-c` drop
+    then discards, instead of being shattered on shell metacharacters that also
+    occur inside it. Shell operators (`&&`, `|`, `2>&1`, `>`) survive as tokens but
+    are not path-shaped, so they fall out. Tolerant: unbalanced quotes fall back to
+    a plain split rather than raising."""
+    try:
+        toks = shlex.split(cmd)
+    except ValueError:
+        toks = cmd.split()
+    tokens: list[str] = []
+    skip_next = False
+    for t in toks:
+        if skip_next:
+            skip_next = False
+            continue
+        if t in ("-c", "-m"):  # program string / module name follows, not a path
+            skip_next = True
+            continue
+        if t.startswith("-"):
+            continue
+        if any(ch.isspace() for ch in t):
+            continue  # a real path token has no whitespace or newline
+        head = t.split("::", 1)[0]  # drop a pytest node-id suffix
+        if not head or head.startswith("/"):
+            continue  # empty or absolute -> out of scope
+        if any(ch in head for ch in "*?[$=") or "://" in head:
+            continue  # glob / variable / option-value / URL -> not a literal path
+        if "/" in head or head.endswith(_PATH_EXTS):
+            tokens.append(head)
+    return tokens
+
+
+def _path_is_reachable(token: str, declared: list[str], repo_root: str | None) -> bool:
+    base = Path(repo_root) if repo_root else Path(".")
+    if (base / token).exists():
+        return True
+    tnorm = token.rstrip("/")
+    for decl in declared:
+        dnorm = decl.rstrip("/")
+        if tnorm == dnorm or tnorm.startswith(dnorm + "/") or dnorm.startswith(tnorm + "/"):
+            return True
+    return False
+
+
+def verify_command_reachability_blockers(stages, final_check, repo_root) -> list[str]:
+    """BLOCK a substantive plan whose verify_command / final_check names a bare
+    literal relative path that is neither present under repo_root nor declared as
+    some stage's output_artifacts — a control that can never go green honestly.
+    One blocker per offending (surface, path). See the module comment above for
+    the false-positive narrowing and the two named limits."""
+    declared: list[str] = []
+    for s in stages:
+        declared.extend(getattr(s, "output_artifacts", []) or [])
+    blockers: list[str] = []
+
+    def _check(cmd: str | None, where: str) -> None:
+        if not cmd:
+            return
+        seen: set[str] = set()
+        for tok in _reachability_path_tokens(cmd):
+            if tok in seen:
+                continue
+            seen.add(tok)
+            if not _path_is_reachable(tok, declared, repo_root):
+                blockers.append(
+                    f"{where}: path {tok!r} is not green-reachable — it does not exist "
+                    f"under repo_root and no stage declares it in output_artifacts, so "
+                    f"this control can never pass honestly. Route out (pick one): create "
+                    f"the file before this control runs, OR declare {tok!r} in the "
+                    f"output_artifacts of the stage that produces it."
+                )
+
+    for s in stages:
+        _check(s.criterion.verify_command, f"stage {s.index} ({s.title!r}) verify_command")
+    for fi, fc in enumerate(final_check or [], 1):
+        label = fc.label or fc.command
+        _check(fc.command, f"final_check {fi} ({label!r})")
+    return blockers
+
+
 def parse_plan(data: dict, *, strict_executor: bool = True) -> PlanDoc:
     """Pure: a parsed-TOML dict -> PlanDoc. No filesystem.
 
@@ -386,6 +525,7 @@ def parse_plan(data: dict, *, strict_executor: bool = True) -> PlanDoc:
             Principle(
                 statement=str(raw_principle["statement"]),
                 source=str(raw_principle["source"]),
+                derivation=str(raw_principle.get("derivation", "")),
                 confidence=str(raw_principle["confidence"]),
                 refutation=str(raw_principle["refutation"]),
             )
@@ -422,6 +562,7 @@ def parse_plan(data: dict, *, strict_executor: bool = True) -> PlanDoc:
                 principle=principle,
                 conditions=str(s["conditions"]) if s.get("conditions") else None,
                 supplies=_build_supplies(s, index),
+                output_artifacts=[str(p) for p in s.get("output_artifacts", [])],
                 outcome=Outcome(status=StageStatus.PENDING.value),
             )
         )
@@ -487,6 +628,59 @@ def stage_carry_key(stage) -> tuple:
         stage.means.method,
         stage.conditions,
     )
+
+
+def stage_question_key(stage) -> str:
+    """Stable digest of a stage's FULL definition, used by premise.py to decide
+    whether a disposed Question bound to `stage:<n>.<element>` still targets the
+    same bytes it was answered against.
+
+    A THIRD member of the key family beside `_structural_signature` (drives
+    replan refinement-vs-substantive classification) and `stage_carry_key` (drives
+    PASSED carry-forward): it answers a THIRD question — 'did the bytes this
+    question was answered against change?' — distinct from either of the other
+    two, so per the convention `stage_carry_key`'s own docstring states (the keys
+    "answer different questions and must evolve independently"), it is a new
+    function rather than an extension of `stage_carry_key`.
+
+    Unlike `stage_carry_key`, this covers every field a Question.target can
+    legally name (text_shape.ELEMENT_NAMES: material, result, invariants, means,
+    method, executor, capability, criterion, done_criterion, principle,
+    conditions) — including `principle` and `supplies`, which `stage_carry_key`
+    omits because carry-forward never needed them. A question targeting
+    `stage:<n>.principle` must be invalidated when that principle is rewritten;
+    `stage_carry_key` would not notice, so it cannot be reused for this purpose.
+
+    Returns a stable sha256 hex digest, not a tuple: the value is persisted in
+    Question.disposed_at_key and compared across processes, so it must survive a
+    JSON round-trip byte-for-byte (a tuple would not, once JSON turns it into a
+    list)."""
+    principle = stage.principle
+    principle_tuple = (
+        (principle.statement, principle.source, principle.derivation,
+         principle.confidence, principle.refutation)
+        if principle is not None else None
+    )
+    supplies_tuple = tuple((s.on, s.element, s.artifact) for s in stage.supplies)
+    payload = repr((
+        stage.actor.executor,
+        stage.actor.capability_required,
+        tuple(sorted(stage.depends_on)),
+        stage.criterion.done_criterion,
+        stage.criterion.criterion_type,
+        stage.criterion.verify_command,
+        stage.criterion.expected_exit,
+        stage.title,
+        stage.subject.material,
+        stage.subject.result,
+        stage.subject.invariants,
+        stage.means.means,
+        stage.means.method,
+        stage.conditions,
+        principle_tuple,
+        supplies_tuple,
+    ))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def diff_plans(old: PlanDoc, new: PlanDoc) -> str:

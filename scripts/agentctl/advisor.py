@@ -89,6 +89,84 @@ def enumerate_claims(artifact_text: str, runner) -> list[str]:
         return []
 
 
+_ENUMERATE_QUESTIONS_PROMPT = (
+    "You are given a plan's goal, done-criterion, and full stage text. Independently "
+    "re-read it and list the QUESTIONS the plan's construction SHOULD have raised but "
+    "may have left implicit — an unstated assumption, an ambiguous term, a choice made "
+    "without justification, a premise smuggled in as fact. Do NOT answer them; only "
+    "raise them.\n\n"
+    "Emit one question per line as `<target>\\t<question>` (a literal TAB between the "
+    "two). `<target>` names the plan element the question is raised against and MUST be "
+    "one of:\n"
+    "  plan.goal\n"
+    "  plan.done_criterion\n"
+    "  stage:<n>.<element>   where <n> is a stage index and <element> is one of: "
+    "material, result, invariants, means, method, executor, capability, criterion, "
+    "done_criterion, principle, conditions\n"
+    "No numbering, no bullets, no prose, no preamble. Return nothing if the plan raises "
+    "no implicit questions.\n\n{payload}"
+)
+
+
+def enumerate_questions_health(
+    goal: str, done_criterion: str, plan_text: str, runner
+) -> tuple[bool | None, list[tuple[str, str]]]:
+    """Independent re-reading of a WHOLE plan that RAISES the questions its
+    construction should have provoked, as (target, question) pairs, together with a
+    runner-health flag.
+
+    ONE bounded `claude -p --model sonnet` call over the goal + done-criterion + full
+    plan text — deliberately whole-plan, not one call per element: the questions worth
+    raising are overwhelmingly cross-element (a stage's method contradicting the goal, a
+    done-criterion an invariant can't hold) and per-element calls would both miss those
+    and multiply the cost/latency by the element count for no recall gain.
+
+    Fail-open, exactly like enumerate_claims. The returned flag reports whether the
+    runner produced a usable answer, so the caller can record runner health and attach a
+    non-blocking advisory when the pass was vacuous — WITHOUT ever re-gating on it:
+
+      * runner is None        -> (None, [])   advisor absent (disabled/stubbed)
+      * non-zero exit          -> (False, [])  runner reachable but failed
+      * exception              -> (False, [])  timeout/crash swallowed
+      * success (0 exit)       -> (True, pairs) pairs may still be empty
+
+    The mandatory cross-check blocker is discharged by the `enumerated` flag the caller
+    sets REGARDLESS of the pair count — never by the count itself. Gating discharge on a
+    non-empty result would let a single 20 s timeout (or a genuinely question-free plan)
+    wedge approve permanently with no route out; fail-open buys that liveness, and the
+    silent-discharge cost it incurs is paid back non-blockingly by the caller's advisory,
+    not by making approve un-passable on infra failure."""
+    if runner is None:
+        return None, []
+    try:
+        payload = f"GOAL:\n{goal}\n\nDONE CRITERION:\n{done_criterion}\n\nPLAN:\n{plan_text}"
+        prompt = _ENUMERATE_QUESTIONS_PROMPT.format(payload=payload)
+        result = runner(["claude", "-p", "--model", _ADVISOR_MODEL, prompt])
+        if result.returncode != 0:
+            return False, []
+        pairs: list[tuple[str, str]] = []
+        for ln in (result.stdout or "").splitlines():
+            if not ln.strip():
+                continue
+            target, sep, question = ln.partition("\t")
+            target, question = target.strip(), question.strip()
+            if not sep or not target or not question:
+                continue
+            pairs.append((target, question))
+        return True, pairs
+    except Exception:
+        return False, []
+
+
+def enumerate_questions(
+    goal: str, done_criterion: str, plan_text: str, runner
+) -> list[tuple[str, str]]:
+    """Thin wrapper over enumerate_questions_health returning only the (target,
+    question) pairs — the recall-widener surface, symmetric with enumerate_claims. A
+    caller that also needs to record runner health calls the _health variant directly."""
+    return enumerate_questions_health(goal, done_criterion, plan_text, runner)[1]
+
+
 def judge(kind: str, payload: dict, runner, *, enabled: bool | None = None) -> list[str]:
     """Return advisory strings for the given cognition point, or [] if disabled/failed.
 

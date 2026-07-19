@@ -54,6 +54,27 @@ def _plan_presentation_gate_off_by_default(monkeypatch):
     monkeypatch.setenv("AGENTCTL_PLAN_PRESENTATION", "0")
 
 
+@pytest.fixture(autouse=True)
+def _premise_gate_off_by_default(monkeypatch):
+    """Default the premise (question-provenance) plan_approval gate OFF for the
+    suite at large — the same accommodation as `_plan_review_gate_off_by_default`
+    above, for the same reason.
+
+    `plugins_premise` auto-activates for EVERY SUBSTANTIVE session (weight_class
+    alone) and fail-closes `approve` until every raised question is disposed AND the
+    enumeration cross-check has run. The CLI verbs that discharge it land in a later
+    stage, so with the gate live every substantive-cycle e2e test (walkthrough,
+    tracker, ledger, resolve-marker, partition, …) would wedge at approve on
+    machinery it does not exercise. We set the documented force-off knob
+    (AGENTCTL_PREMISE=0) by default — byte-identical to the plugin never
+    auto-activating — exactly as the fixture above neutralizes the review gate.
+
+    The plugin's real arming / gate / stale-enumeration behaviour is proven by
+    test_plugins_premise.py, which deletes the knob so the plain weight_class
+    predicate runs."""
+    monkeypatch.setenv("AGENTCTL_PREMISE", "0")
+
+
 @pytest.fixture
 def store(tmp_path):
     return FileStateStore(tmp_path / "state")

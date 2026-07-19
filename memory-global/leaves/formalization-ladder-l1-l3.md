@@ -37,3 +37,4 @@ Name these as the enumeration-honesty blind spot that the coordinator's own disc
 - `skills/specializations/planner/SKILL.md` § Numbers and deadlines without a source — the numeric special case (L2) this ladder generalizes to every load-bearing decision/judgment; and its `policy.md` detail.
 - [plan-activity-ontology.md](plan-activity-ontology.md) — element 7 (refutable principle: source / confidence / refutation), the per-claim grounding shape the ledger records.
 - `CLAUDE.md` § Verify the right axis — arms the reasoning-deliverable provenance gate at `classify --deliverable-kind reasoning`; `scripts/agentctl/README.md` § ledger — the L1 closure mechanism.
+- [[question-provenance-gate]] — the plan-approval-axis twin of this resolution-axis ledger: the `premise` plugin applies the same rule/perception split (recorded questions dispositioned = form; which questions exist = perception) at plan_approval, and inherits this leaf's RECALL<100% residual verbatim.

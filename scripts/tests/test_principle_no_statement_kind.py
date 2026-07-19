@@ -48,6 +48,7 @@ def _stage(**overrides) -> dict:
         "principle": {
             "statement": "a norm is never checked for truth",
             "source": "SMD norm-series",
+            "derivation": "the norm-series ranks принцип as its most general norm, so it inherits the never-checked-for-truth property of norms",
             "confidence": "high",
             "refutation": "shown inadequate when a goal it serves is blocked",
         },
@@ -72,9 +73,9 @@ def test_schema_version_monotonic():
 
 
 def test_principle_has_no_statement_kind_field():
-    """The dataclass exposes exactly the four norm subfields — no statement_kind."""
+    """The dataclass exposes exactly the norm subfields — no statement_kind."""
     names = {f.name for f in dataclasses.fields(Principle)}
-    assert names == {"statement", "source", "confidence", "refutation"}
+    assert names == {"statement", "source", "derivation", "confidence", "refutation"}
     assert "statement_kind" not in names
 
 
@@ -158,6 +159,7 @@ _ACTIVITY_LABELS = (
     "Conditions & invariants: no other files changed\n"
     "Principle: a norm is never checked for truth\n"
     "Source: SMD norm-series\n"
+    "Derivation: принцип is the norm-series' most general norm, so it inherits norms' never-checked property\n"
     "Confidence: high\n"
     "Refutation: shown inadequate when a goal it serves is blocked\n"
 )

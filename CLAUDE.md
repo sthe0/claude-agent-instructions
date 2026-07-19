@@ -56,7 +56,7 @@ The substantive-task spine (classify → route → plan-approval gate → dispat
 
 ### Escalation to the user
 
-Ask when: several equivalent strategies and the choice affects timeline or risk; no access to a resource and no workaround; the done criterion is undefined. Batch 3–4 questions, not one at a time.
+Ask when: several equivalent strategies and the choice affects timeline or risk; no access to a resource and no workaround; the done criterion is undefined. Batch 3–4 questions, not one at a time. On a substantive plan, record each such question in the engine's `premise` gate (`agentctl question-raise/-dispose`) so no un-dispositioned premise survives `approve`: [question-provenance-gate.md](memory-global/leaves/question-provenance-gate.md).
 
 **Before you doubt a requirement, doubt your own snapshot.** When a stated requirement contradicts what you observe, first suspect your OWN source is stale — `pull` / `fetch` / re-read the authoritative source **before** questioning the requirement on a false premise ("X doesn't exist"); resolve a perceived contradiction to root — self-staleness included — before escalating. *Difficulty:* challenging a **correct** requirement from an out-of-date local view wastes the user's attention. Full rule: [doubt-own-snapshot.md](memory-global/leaves/doubt-own-snapshot.md).
 
