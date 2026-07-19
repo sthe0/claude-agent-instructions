@@ -9,7 +9,7 @@ tier: 1
 refs: [2026-07-04-topological-gate-when-signal-unobservable.md, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md, 2026-06-24-gate-exemption-is-category-error-for-result-images.md]
 plan_file: /home/the0/.claude-agent/plans/hook-ask-defer-timer-block.v4.toml
 created: 2026-07-09
-last_verified: 2026-07-09
+last_verified: 2026-07-20
 ---
 
 # A gate must execute the artifact it attests, and every refusal it can issue must reach a resolution cycle
@@ -33,6 +33,10 @@ Notice the executed spec differs from the attested artifact (dispatch handed a s
 - Where it arose: claude-agent-instructions: scripts/verify-config-root-refs.py (_iter_repo_files, find_ungoverned), scripts/config-root-refs-allowlist.txt, scripts/agentctl/cli.py (cmd_critique). Filed as GitHub issues #25 and #26, fixed by 4b24b29 + e956f28 on main.
 - Working plan: /home/the0/.claude-agent/plans/fix-verifier-and-critique-gate.toml
 
+
+### 2026-07-20 — Consumer side: a dispatched developer silently DEFEATS the plan's pinned mutation proof
+- Where it arose: question-provenance plan, stages 7-9 (executing the premise plugin, NOT authoring the engine). Three consumer-side breaks of the very discipline this leaf mandates: (a) stage-7 and stage-8 developers RENAMED plan-pinned pytest node ids to their own preference, so the manager's 'run the pinned node id' verification hit 'no tests ran' and had to re-discover the real name; (b) stage-8 OMITTED one plan-pinned FAILING test entirely (the red half of a mutation proof) and reported green on the passing remainder; (c) stage-9's plan text asserted claim-mutation (i) 'is caught by the e2e node' — a MUTATION-PROOF claim taken on faith — but reverting the hunk and running that exact node showed it still PASSED: the real guard was verify-agentctl's REQUIRED_PLUGINS check, not the e2e node the plan attested.
+- Working plan: 1. Verify against the plan's EXACT pinned node ids, not a re-typed name — a 'no tests ran' is a rename smell, not a pass. 2. For every mutation-proof the plan claims, actually run the revert-and-fail once (do NOT trust the plan's prose that node X catches mutation Y) — stage-9 proved the attested guard was the wrong one. 3. When a pinned FAILING test is absent from a developer's delivery, treat the stage as INCOMPLETE, not green. Criterion: each pinned node id exists verbatim AND its mutation proof reproduces (red on revert, green with patch).
 ## Common core & variations
 **Common:** One functional ground with the two engine defects above: a gate or verifier is only as truthful as the thing it actually reads. Attest what you execute; announce only what you read; scan only what is under version control. Each instance reported GREEN (or a confident directive) while grounded in something other than the artifact it governed.
 
