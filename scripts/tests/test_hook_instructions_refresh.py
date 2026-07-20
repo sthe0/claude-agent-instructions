@@ -7,8 +7,11 @@ subprocess-with-stdin invocation from test_hook_engine_start.py.
 
 Covers: forced-due Core-behind nudge, throttle-window silence, up-to-date
 silence, fetch-failure/non-git fail-open silence, project-layer nudge,
-stamp-write-gates-next-run, and the deploy-integrity axes (branch mismatch,
-multi-root settings.json, malformed settings.json fail-open).
+stamp-write-gates-next-run, the deploy-integrity axes (branch mismatch,
+multi-root settings.json, malformed settings.json fail-open), the D3
+worktree-fresh rebase OFFER for a behind linked worktree (fetch-before-count),
+and the D2/R4 relocate OFFER for the primary Core checkout / a registered
+canon-roots entry.
 """
 from __future__ import annotations
 
@@ -213,8 +216,14 @@ def test_up_to_date_silent(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
     _origin, clone = make_bare_and_clone(tmp_path, "core")
+    # A session cwd distinct from the Core repo itself — otherwise cwd would
+    # BE the primary Core checkout and the D2/R4 relocate OFFER (a separate,
+    # orthogonal axis — see test_primary_core_checkout_emits_relocate_offer)
+    # would also fire, which is not what this test is checking.
+    session_cwd = tmp_path / "session-cwd"
+    session_cwd.mkdir()
 
-    proc = run_hook(home, core_repo=clone, cwd=clone)
+    proc = run_hook(home, core_repo=clone, cwd=session_cwd)
 
     assert proc.returncode == 0
     assert proc.stdout.strip() == ""
@@ -358,6 +367,8 @@ def test_homogeneous_settings_silent(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
     _origin, clone = make_bare_and_clone(tmp_path, "core")
+    session_cwd = tmp_path / "session-cwd"  # kept distinct from the Core repo — see test_up_to_date_silent
+    session_cwd.mkdir()
 
     settings = tmp_path / "settings.json"
     settings.write_text(json.dumps({
@@ -371,7 +382,7 @@ def test_homogeneous_settings_silent(tmp_path):
         }
     }))
 
-    proc = run_hook(home, core_repo=clone, cwd=clone, settings_path=settings)
+    proc = run_hook(home, core_repo=clone, cwd=session_cwd, settings_path=settings)
 
     assert proc.returncode == 0
     assert proc.stdout.strip() == ""
@@ -386,11 +397,160 @@ def test_malformed_settings_fails_open(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
     _origin, clone = make_bare_and_clone(tmp_path, "core")
+    session_cwd = tmp_path / "session-cwd"  # kept distinct from the Core repo — see test_up_to_date_silent
+    session_cwd.mkdir()
 
     settings = tmp_path / "settings.json"
     settings.write_text("{not valid json")
 
-    proc = run_hook(home, core_repo=clone, cwd=clone, settings_path=settings)
+    proc = run_hook(home, core_repo=clone, cwd=session_cwd, settings_path=settings)
 
     assert proc.returncode == 0
     assert proc.stdout.strip() == ""
+
+
+# ---------------------------------------------------------------------------
+# (k) worktree-fresh (D3): a linked worktree behind origin/main -> rebase
+#     OFFER, with the behind-count read only AFTER a fetch
+# ---------------------------------------------------------------------------
+
+
+def test_linked_worktree_behind_emits_rebase_offer(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    origin, clone = make_bare_and_clone(tmp_path, "wt")
+    worktree = tmp_path / "wt-linked"
+    git("worktree", "add", "--quiet", "-b", "wt-branch", str(worktree), "main", cwd=clone)
+    # Advances origin/main AFTER the worktree's own local ref for origin/main was
+    # last updated — so the OFFER only appears if check_worktree_fresh fetches
+    # before counting; a stale-ref count would read 0-behind forever.
+    advance_remote(tmp_path, origin, "wt")
+
+    missing_core = tmp_path / "does-not-exist"
+    proc = run_hook(home, core_repo=missing_core, cwd=worktree)
+
+    assert proc.returncode == 0
+    assert "[worktree-fresh]" in proc.stdout
+    assert str(worktree) in proc.stdout
+    assert "1 commit(s) behind" in proc.stdout
+    assert f"git -C {worktree} rebase origin/main" in proc.stdout
+
+
+def test_linked_worktree_up_to_date_silent(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    _origin, clone = make_bare_and_clone(tmp_path, "wt")
+    worktree = tmp_path / "wt-linked"
+    git("worktree", "add", "--quiet", "-b", "wt-branch", str(worktree), "main", cwd=clone)
+
+    missing_core = tmp_path / "does-not-exist"
+    proc = run_hook(home, core_repo=missing_core, cwd=worktree)
+
+    assert proc.returncode == 0
+    assert "[worktree-fresh]" not in proc.stdout
+
+
+def test_primary_checkout_no_worktree_fresh_offer(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    origin, clone = make_bare_and_clone(tmp_path, "wt")
+    advance_remote(tmp_path, origin, "wt")
+
+    # The primary (non-linked) checkout of a behind repo — out of scope for
+    # worktree-fresh (that's check_layers'/build_nudge's "Core"/"Project" job).
+    proc = run_hook(home, core_repo=clone, cwd=clone)
+
+    assert proc.returncode == 0
+    assert "[worktree-fresh]" not in proc.stdout
+
+
+# ---------------------------------------------------------------------------
+# (l) relocate (D2/R4): primary Core checkout or a registered canon-roots
+#     entry -> relocation OFFER; a linked worktree or an unregistered sibling
+#     path stays silent
+# ---------------------------------------------------------------------------
+
+
+def test_primary_core_checkout_emits_relocate_offer(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    _origin, clone = make_bare_and_clone(tmp_path, "core")
+
+    proc = run_hook(home, core_repo=clone, cwd=clone)
+
+    assert proc.returncode == 0
+    assert "[relocate]" in proc.stdout
+    assert "session-isolate.sh" in proc.stdout
+
+
+def test_linked_worktree_of_core_no_relocate_offer(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    _origin, clone = make_bare_and_clone(tmp_path, "core")
+    worktree = tmp_path / "core-linked"
+    git("worktree", "add", "--quiet", "-b", "wt-branch", str(worktree), "main", cwd=clone)
+
+    proc = run_hook(home, core_repo=clone, cwd=worktree)
+
+    assert proc.returncode == 0
+    assert "[relocate]" not in proc.stdout
+
+
+def test_canon_roots_entry_emits_relocate_offer(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    missing_core = tmp_path / "does-not-exist"
+
+    anchor = tmp_path / "org-mirror"
+    inside = anchor / "sub" / "dir"
+    inside.mkdir(parents=True)
+    roots_file = tmp_path / "canon-roots.local"
+    roots_file.write_text(f"{anchor}\n")
+
+    env = {
+        **os.environ,
+        **GIT_ENV,
+        "HOME": str(home),
+        "CLAUDE_INSTRUCTIONS_REPO": str(missing_core),
+        "CLAUDE_CANON_ROOTS_FILE": str(roots_file),
+    }
+    payload = json.dumps({"session_id": "s-1", "prompt": "hi", "cwd": str(inside)})
+    proc = subprocess.run(
+        [sys.executable, str(HOOK_SCRIPT)],
+        input=payload, env=env, cwd=str(inside),
+        capture_output=True, text=True,
+    )
+
+    assert proc.returncode == 0
+    assert "[relocate]" in proc.stdout
+    assert "session-isolate.sh" in proc.stdout
+
+
+def test_sibling_of_canon_root_no_relocate_offer(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    missing_core = tmp_path / "does-not-exist"
+
+    anchor = tmp_path / "org-mirror"
+    anchor.mkdir()
+    sibling = tmp_path / "org-mirror-sibling"  # shares a string prefix, not a path-part prefix
+    sibling.mkdir()
+    roots_file = tmp_path / "canon-roots.local"
+    roots_file.write_text(f"{anchor}\n")
+
+    env = {
+        **os.environ,
+        **GIT_ENV,
+        "HOME": str(home),
+        "CLAUDE_INSTRUCTIONS_REPO": str(missing_core),
+        "CLAUDE_CANON_ROOTS_FILE": str(roots_file),
+    }
+    payload = json.dumps({"session_id": "s-1", "prompt": "hi", "cwd": str(sibling)})
+    proc = subprocess.run(
+        [sys.executable, str(HOOK_SCRIPT)],
+        input=payload, env=env, cwd=str(sibling),
+        capture_output=True, text=True,
+    )
+
+    assert proc.returncode == 0
+    assert "[relocate]" not in proc.stdout

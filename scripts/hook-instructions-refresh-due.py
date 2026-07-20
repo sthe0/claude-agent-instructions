@@ -31,6 +31,25 @@ separate "[instructions-deploy]" line so the existing "[instructions-refresh]"
 nudge assertions are unaffected: (1) the Core checkout's HEAD is not on the
 default branch; (2) settings.json hook commands resolve to more than one
 distinct checkout root. Both fail-open like everything else in this hook.
+
+Two more nudges ride the same throttle, companions to hook-guard-canon-
+readonly.py's hard PreToolUse deny (never auto, only OFFERs — mirrors this
+file's existing pull-nudge philosophy):
+
+- "[worktree-fresh]": when cwd is a LINKED git worktree, OFFER a rebase onto
+  origin/main if it is behind (D3). The behind-count is read only AFTER a
+  fresh `git fetch origin main`, never against a possibly-stale local ref —
+  otherwise the count can sit at a stale 0 and the OFFER silently never
+  fires. Silent for the primary checkout (out of scope here — see check_branch
+  above) and for an up-to-date worktree.
+- "[relocate]": when cwd is itself inside a canon (the primary Core checkout
+  on any branch, or a path under a registered scripts/lib/config_root.
+  canon_roots_file() entry), OFFER relocation via `scripts/session-isolate.sh`
+  so a running session picks this up on its very next move (D2/R4), not only
+  when hook-guard-canon-readonly.py blocks an actual edit. The canon-detection
+  helpers below are deliberately duplicated from hook-guard-canon-readonly.py
+  rather than imported — each hook stays a standalone script so a bug in one
+  can never wedge the other.
 """
 from __future__ import annotations
 
@@ -207,6 +226,102 @@ def check_homogeneity(settings_path: Path) -> str | None:
     return None
 
 
+def _git_info(cwd: str):
+    """(toplevel, git_dir_abs, git_common_dir_abs, branch) for `cwd`, or None on
+    any failure. Duplicated from hook-guard-canon-readonly.py's _git_info (not
+    imported — see module docstring) rather than shared, so a bug in one hook
+    can never wedge the other."""
+    proc = _run(
+        ["git", "-C", cwd, "rev-parse",
+         "--show-toplevel", "--git-dir", "--git-common-dir", "--abbrev-ref", "HEAD"],
+        cwd, GIT_TIMEOUT_S,
+    )
+    if proc is None or proc.returncode != 0:
+        return None
+    lines = proc.stdout.splitlines()
+    if len(lines) < 4:
+        return None
+    toplevel, git_dir, git_common_dir, branch = lines[0], lines[1], lines[2], lines[3]
+    git_dir_abs = os.path.realpath(os.path.join(cwd, git_dir))
+    git_common_abs = os.path.realpath(os.path.join(cwd, git_common_dir))
+    return os.path.realpath(toplevel), git_dir_abs, git_common_abs, branch
+
+
+def check_worktree_fresh(cwd: str) -> str | None:
+    """D3: OFFER a rebase onto origin/main when cwd is a LINKED git worktree
+    that is behind. Fetches origin/main first and only THEN counts commits —
+    counting against a stale local ref could read 0-behind forever and the
+    OFFER would never fire. Fail-open: None for a non-git cwd, the PRIMARY
+    checkout (git_dir == git_common_dir; out of scope here), any git failure,
+    or an up-to-date worktree."""
+    info = _git_info(cwd)
+    if info is None:
+        return None
+    toplevel, git_dir_abs, git_common_abs, _branch = info
+    if git_dir_abs == git_common_abs:
+        return None  # primary checkout, not a linked worktree
+
+    fetch = _run(["git", "-C", toplevel, "fetch", "origin", "main", "-q"], toplevel, FETCH_TIMEOUT_S)
+    if fetch is None or fetch.returncode != 0:
+        return None
+    behind = _count_commits(Path(toplevel), "HEAD..origin/main")
+    if not behind:
+        return None
+    return (
+        f"[worktree-fresh] this linked worktree ({toplevel}) is {behind} commit(s) behind "
+        f"origin/main — OFFER the user a rebase via AskUserQuestion: "
+        f"`git -C {toplevel} rebase origin/main` (never automatic)."
+    )
+
+
+def _read_canon_roots() -> list[str]:
+    """Non-empty, non-comment lines of the canon-roots file, or [] on any error
+    — fail-open. Duplicated from hook-guard-canon-readonly.py (see module
+    docstring)."""
+    try:
+        path = config_root.canon_roots_file()
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return []
+    return [ln.strip() for ln in lines if ln.strip() and not ln.strip().startswith("#")]
+
+
+def _under_canon_root(target: str) -> bool:
+    """True iff realpath(target) is, or is a descendant of, the realpath of any
+    registered canon-roots entry."""
+    target_real = os.path.realpath(target)
+    for root in _read_canon_roots():
+        try:
+            root_real = os.path.realpath(root)
+        except Exception:
+            continue
+        if target_real == root_real or target_real.startswith(root_real + os.sep):
+            return True
+    return False
+
+
+def check_in_canon(cwd: str) -> str | None:
+    """D2/R4: OFFER relocation when cwd is itself inside a canon — the PRIMARY
+    Core checkout (any branch) or a path under a registered canon-roots entry
+    — so a running session picks this up on its very next move, not only when
+    hook-guard-canon-readonly.py blocks an actual edit. Fail-open: None on any
+    git failure, a linked worktree, a second mount, or a plain non-canon dir."""
+    in_primary = False
+    info = _git_info(cwd)
+    if info is not None:
+        toplevel, git_dir_abs, git_common_abs, _branch = info
+        if toplevel == os.path.realpath(str(_core_root())) and git_dir_abs == git_common_abs:
+            in_primary = True
+
+    if not in_primary and not _under_canon_root(cwd):
+        return None
+    return (
+        f"[relocate] {cwd} is inside a canon (read-only from a live session) — do feature "
+        f"work in an isolated copy instead: `scripts/session-isolate.sh <task-name>` (a linked "
+        f"git worktree, or a second mount for other VCS backends)."
+    )
+
+
 def build_nudge(layers: list[tuple[str, Path, int, str]]) -> str:
     parts = [
         f"{label} ({root}) is {count} commit(s) behind — pull with `{cmd}`"
@@ -250,6 +365,14 @@ def main() -> int:
         deploy_warnings.append(homogeneity_warning)
     if deploy_warnings:
         print("[instructions-deploy] " + " ".join(deploy_warnings))
+
+    worktree_offer = check_worktree_fresh(cwd)
+    if worktree_offer:
+        print(worktree_offer)
+
+    relocate_offer = check_in_canon(cwd)
+    if relocate_offer:
+        print(relocate_offer)
 
     return 0
 
