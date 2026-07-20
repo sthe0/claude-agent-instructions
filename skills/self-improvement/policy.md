@@ -32,9 +32,11 @@ to it.
 
 ### What NOT to encode as code
 
-Two carve-outs from the "process belongs in a script" instinct. Both
-reject *speculative* machinery — code that exists in service of an
-imagined future failure rather than an observed one.
+Three carve-outs from the "process belongs in a script" instinct. The
+first two reject *speculative* machinery — code that exists in service
+of an imagined future failure rather than an observed one; the third
+rejects a *hollow* check — decidable machinery that does not carry the
+semantic property it purports to enforce.
 
 - **No hard line ceilings on memory files.** `MEMORY.md` indices and
   leaves accumulate across sessions; capping them via
@@ -58,6 +60,26 @@ imagined future failure rather than an observed one.
   justified up front only when (a) a single failure is unrecoverable,
   (b) the failure mode has already been observed, or (c) the mechanism
   is a thin wrapper around something already needed.
+
+- **No brittle proxy of a semantic property.** Before mechanizing a rule
+  as a check, confirm the decidable quantity it computes actually
+  *carries* the property you care about, not merely correlates with it.
+  A verbatim/structural test (substring match, token-presence,
+  name-equality) is a **proxy**; when the load-bearing property is
+  semantic — does this test actually *catch* the mutation? does this
+  claim actually *hold*? — the proxy passes inputs that violate it and
+  fails inputs that honour it. If the decidable part does not carry the
+  property, keep it as **perception** (the model's judgement); do not
+  ship a check that attests what it never verified. *Example:* asserting
+  a plan's pinned pytest node-ids appear verbatim in the developer's
+  tests is decidable but hollow — a renamed-but-equivalent test fails it,
+  a same-named but gutted test passes it; the load-bearing form is the
+  **mutation proof** (revert the fix → the pinned test must fail,
+  [2026-07-09-gate-must-execute-what-it-attests.md](../../memory-global/leaves/experience/2026-07-09-gate-must-execute-what-it-attests.md)).
+  This is the negative of SKILL.md § Structural form before prose:
+  reaching for a mechanizable-but-hollow proxy because it is decidable
+  inverts the rule/perception split (`CLAUDE.md` head, *"Separate rule
+  from perception"*), mechanizing the part the model should judge.
 
 ---
 
