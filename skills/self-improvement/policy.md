@@ -333,40 +333,6 @@ cd <path>   # author, test, and commit here
 - Enforced by `scripts/hook-guard-serving-checkout-offmain.py` (PreToolUse): it **denies** an `Edit`/`Write` (or a `git commit`) targeting the serving/primary checkout while its `HEAD` is off `main`, and redirects to `git worktree add`. Fail-open on every other case — a **linked** worktree (off-main edits there are the whole point), on-`main`, detached `HEAD`, paths outside the Core repo, and writes under `memory-global/` (memory recording is never gated).
 - Land by fast-forwarding the worktree branch onto `origin/main` (per § After editing), then remove the worktree and delete the branch.
 
-### Background pull (opt-in, every 10 minutes)
+### Install & scripts reference
 
-Background auto-pull is **not installed by default**; `setup-symlinks.sh` does not enable it. Install manually only if you want it:
-
-```bash
-~/claude-agent-instructions/scripts/install-sync-cron.sh
-```
-
-Cron line (repo path substituted on install): `*/10 * * * * …/sync-instructions-repo.sh pull`.
-Log: `~/.local/log/claude-agent-instructions-sync.log`.
-
-If `crontab` is forbidden (corp VM): `scripts/install-sync-systemd-timer.sh`.
-
-To disable later: `crontab -l | grep -v claude-agent-instructions | crontab -`.
-
-### Git hooks
-
-```bash
-~/claude-agent-instructions/scripts/install-git-hooks.sh
-```
-
-`post-commit` only reminds that push needs user confirmation — it does **not** auto-push (see § After editing).
-
-### Scripts
-
-| Script | Purpose |
-|---|---|
-| `sync-instructions-repo.sh pull` | fetch + rebase / ff-only |
-| `sync-instructions-repo.sh push` | push if local commits exist |
-| `sync-instructions-repo.sh sync` | pull, then push |
-| `install-sync-cron.sh` | cron line (pull every 10 min) — opt-in, run manually if desired |
-| `install-sync-systemd-timer.sh` | user systemd timer (if cron unavailable) — opt-in |
-| `install-git-hooks.sh` | post-commit → reminder (no auto-push) |
-| `setup-symlinks.sh` | apply the runtime symlinks |
-| `setup-project-memory.sh` | per-project: symlink shared agent memory into the project tree |
-| `verify-instructions-sync.sh` | check symlinks and drift |
-| `verify-layout-contract.sh` | tree vs the layout in this document |
+Background-pull install (cron every 10 min, or the systemd-timer fallback), the git-hooks installer (`post-commit` reminder, **no** auto-push), and the `sync-instructions-repo.sh` script table are operational reference — moved to [instructions-repo-git-sync.md](../../memory-global/leaves/system-knowledge/instructions-repo-git-sync.md).
