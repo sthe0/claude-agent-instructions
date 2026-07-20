@@ -197,3 +197,80 @@ def test_untracked_file_does_not_change_verdict(tmp_path):
     after = _full_report(tmp_path, allowlist)
 
     assert before == after
+
+
+# ── --staged: only NEWLY-INTRODUCED violations block (Stage 4, lib.baseline_diff) ──
+
+def test_staged_tolerates_pre_existing_red(tmp_path):
+    """The motivating case: a pre-existing legacy reference at HEAD, in a file
+    an unrelated staged change never touches, must not block --staged."""
+    _init_git_repo(tmp_path)
+    _write(tmp_path, "legacy.md", "See ~/.claude for config.\n")
+    _write(tmp_path, "clean.md", "nothing here\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "seed with pre-existing red")
+
+    _write(tmp_path, "clean.md", "nothing here, now changed\n")
+
+    assert vcr.scan_staged(tmp_path) == 0
+
+
+def test_staged_reports_new_unallowed_reference(tmp_path):
+    _init_git_repo(tmp_path)
+    _write(tmp_path, "clean.md", "nothing here\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "seed clean")
+
+    _write(tmp_path, "clean.md", "nothing here\nSee ~/.claude now.\n")
+
+    assert vcr.scan_staged(tmp_path) == 1
+
+
+def test_staged_reports_new_stale_allowlist_entry(tmp_path):
+    """An allowlist entry that matched at HEAD but is orphaned by a staged fix
+    becomes stale — that is a NEW stale entry, not a pre-existing one."""
+    _init_git_repo(tmp_path)
+    _write(tmp_path, "doc.md", "See ~/.claude for x.\n")
+    _write(
+        tmp_path, "scripts/config-root-refs-allowlist.txt",
+        "doc.md:1  # legacy note\n",
+    )
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "seed with a matching allowlist entry")
+
+    _write(tmp_path, "doc.md", "See ~/.claude-agent for x.\n")  # fixed, orphaning the entry
+
+    assert vcr.scan_staged(tmp_path) == 1
+
+
+def test_staged_reports_new_ungoverned_file(tmp_path):
+    _init_git_repo(tmp_path)
+    _write(tmp_path, "clean.md", "nothing here\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "seed clean")
+
+    (tmp_path / "notes.dat").write_bytes(b"See ~/.claude for config.\n\xff\xfe garbage\n")
+    _git(tmp_path, "add", "-A")
+
+    assert vcr.scan_staged(tmp_path) == 1
+
+
+def test_whole_repo_mode_unchanged_still_reports_pre_existing_red(tmp_path):
+    """Whole-repo (no --staged) is byte-for-byte preserved: it still reports
+    a red that --staged now tolerates."""
+    _init_git_repo(tmp_path)
+    _write(tmp_path, "legacy.md", "See ~/.claude for config.\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "seed with pre-existing red")
+
+    allowlist = tmp_path / "scripts" / "config-root-refs-allowlist.txt"
+    assert vcr.scan(tmp_path, allowlist) == 1
+    assert vcr.scan_staged(tmp_path) == 0
+
+
+def test_staged_degrades_to_whole_repo_when_baseline_unavailable(tmp_path):
+    """Not a git work tree at all -> BaselineUnavailable -> --staged degrades
+    to reporting everything, same as whole-repo scan()."""
+    _write(tmp_path, "legacy.md", "See ~/.claude for config.\n")
+
+    assert vcr.scan_staged(tmp_path) == 1
