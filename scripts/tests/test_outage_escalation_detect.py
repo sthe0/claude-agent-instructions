@@ -1,10 +1,14 @@
-"""Tests for outage_escalation_detect.detect — the precision-first perception half
-of the escalation-without-diagnosis gate.
+"""Tests for outage_escalation_detect.protocol_prefilter — the language-agnostic
+PROTOCOL-TOKEN pre-filter of the escalation-without-diagnosis gate.
 
-The fires / doesn't-fire rows are precision TARGETS, not guarantees: this is a
-heuristic backstop and paraphrase misses are documented, not bugs. What the tests
-PIN is the conjunction discipline (both a present-tense failure cue AND a
-user-facing escalation frame must co-occur) and the named precision targets.
+The per-language "this reads like an un-diagnosed outage escalation" cue
+conjunction was retired and moved to semantic_judge.py ('outage_escalation' kind).
+What remains here — and what these tests PIN — is only the deterministic
+precondition: does the text carry an external-service-failure protocol token (an
+HTTP 4xx/5xx status run, or a fixed English outage token)? A pure natural-language
+outage escalation with NO protocol token no longer fires this pre-filter (the
+recall narrowing documented in the module); the semantic judge is the meaning-level
+backstop on the Stop path.
 """
 from __future__ import annotations
 
@@ -23,66 +27,56 @@ def _load():
 
 
 _mod = _load()
-detect = _mod.detect
+protocol_prefilter = _mod.protocol_prefilter
 
 
-# --- fires: present-tense outage + user-facing ask --------------------------
+# --- fires: a protocol token is present -------------------------------------
 
-def test_fires_ru_present_outage_with_ask():
-    out = detect("Сервис не отвечает, endpoint недоступен — что делать?")
-    assert len(out) == 1
-
-
-def test_fires_first_person_inability_with_ask():
-    out = detect("Не могу получить доступ к базе. Подскажи, к кому обратиться?")
-    assert len(out) == 1
+def test_fires_on_5xx_status():
+    assert protocol_prefilter("The upstream returned 504 no upstreams.") is True
 
 
-def test_fires_en_present_outage_with_ask():
-    out = detect("The upstream is down — 504 no upstreams. What should I do?")
-    assert len(out) == 1
+def test_fires_on_4xx_status():
+    assert protocol_prefilter("Got a 403 from the API.") is True
 
 
-def test_fires_ask_user_question_body_shape():
-    # The A2 gate concatenates question + option texts; a typical outage ask body.
-    body = "Сервис лежит и недоступен. К какому сервису запросить доступ?"
-    assert len(detect(body)) == 1
+def test_fires_on_timeout():
+    assert protocol_prefilter("The request timed out.") is True
+    assert protocol_prefilter("connection timeout") is True
 
 
-# --- precision targets: SHOULD NOT fire -------------------------------------
-
-def test_past_downtime_narrative_is_a_target_not_fire():
-    # Documented precision target: narrative PAST downtime with a resolution.
-    # `лежал` is past tense -> the present-tense `\bлежит\b` cue does not match.
-    assert detect("Сервис лежал вчера час, но его уже починили.") == []
+def test_fires_on_unreachable():
+    assert protocol_prefilter("host unreachable") is True
 
 
-def test_plain_task_spec_with_down_in_another_sense():
-    assert detect("Scroll down to the config section and add a parser.") == []
+def test_fires_on_no_upstreams():
+    assert protocol_prefilter("502 Bad Gateway: no upstreams") is True
 
 
-def test_outage_report_without_ask_does_not_fire():
-    # A bare report with no escalation frame -> conjunction not met.
-    assert detect("Сервис не отвечает на запросы.") == []
+def test_fires_language_agnostic_when_token_present():
+    # A Russian body still fires when it carries a bare protocol token.
+    assert protocol_prefilter("Сервис вернул 504 no upstreams — что делать?") is True
 
 
-def test_ask_without_failure_cue_does_not_fire():
-    # A user-facing question with no failure cue -> conjunction not met.
-    assert detect("Что делать дальше по этой задаче?") == []
+# --- does NOT fire: no protocol token (now the judge's domain) --------------
+
+def test_pure_nl_outage_without_token_is_silent():
+    # The recall narrowing: a natural-language escalation with no protocol token no
+    # longer fires the pre-filter — the semantic judge is the Stop-path backstop.
+    assert protocol_prefilter("Сервис не отвечает, endpoint недоступен — что делать?") is False
+
+
+def test_plain_prose_is_silent():
+    assert protocol_prefilter("Scroll down to the config section and add a parser.") is False
+
+
+def test_bare_number_not_in_4xx_5xx_range_is_silent():
+    # The status regex is [45]\d\d: a 2xx/3xx code or an unrelated number is silent.
+    assert protocol_prefilter("HTTP 302 redirect handled.") is False
+    assert protocol_prefilter("We processed 128 items.") is False
+    assert protocol_prefilter("200 OK, all good.") is False
 
 
 def test_empty_and_non_string():
-    assert detect("") == []
-    assert detect(None) == []  # type: ignore[arg-type]
-
-
-# --- shape ------------------------------------------------------------------
-
-def test_returns_at_most_one_signal():
-    # Multiple cues present -> still exactly one aggregated signal string.
-    out = detect(
-        "Endpoint недоступен, сервис не отвечает, 504 no upstreams. "
-        "Что делать и к кому эскалировать?"
-    )
-    assert len(out) == 1
-    assert isinstance(out[0], str)
+    assert protocol_prefilter("") is False
+    assert protocol_prefilter(None) is False  # type: ignore[arg-type]

@@ -1,36 +1,32 @@
 #!/usr/bin/env python3
-"""Shared feedback-signal detector for the self-improvement discipline.
+"""Shared DETERMINISTIC feedback-signal detector for the self-improvement discipline.
 
 Difficulty removed: the same "is this an agent-behavior-feedback turn?" decision
 is needed in two places — the advisory `UserPromptSubmit` reminder
 (`hook-self-improvement-reminder.py`) and the end-of-turn `Stop` gate
-(`hook-self-improvement-gate.py`). Keeping the regexes in one importable module
-means the reminder and the gate can never drift apart.
+(`hook-turn-end-gate.py`). Keeping the shared deterministic match in one importable
+module means the instant nudge and the gate can never drift apart on it.
 
-Detection design (precision-first; two tiers):
+Split of labor (rule vs perception): only Tier 1 — the explicit 'self-improvement'
+proper-name mention — is a language-agnostic DETERMINISTIC rule and stays here. The
+former Tier-2 natural-language corrective cues (imperatives, agent-directed
+'you shouldn't' / RU 'почему ты', …) were per-language regexes that were RETIRED
+and moved to the model-backed semantic_judge.py ('si_feedback' kind), which
+classifies MEANING in any language. The Stop shell consults that judge behind a
+precondition gate (skill not already invoked, short human text, not a bare
+affirmation); the instant reminder deliberately does NOT (it must stay latency-free
+on the prompt path).
 
-  Tier 1 — explicit self-improvement reference (near-certain):
-    'self-improvement' / 'selfimprovement' / 'self improvement' as a substring.
-    Covers "did you run self-improvement?", "запусти self-improvement", etc.
+Detection design:
 
-  Tier 2 — agent-directed correction.  Two sub-tiers:
-    (a) Strong imperative patterns — self-sufficient, fire on their own:
-        "don't do that", "stop doing", "перестань", "не делай так",
-        "я же просил", "я же говорил".
-        (Imperative forms and "I-already-told-you" phrases inherently
-        address the agent; no separate pronoun check needed.)
-    (b) Context-dependent patterns — fire only with an explicit agent-reference
-        (you|your|ты|тебя|тебе|тобой) co-occurring in the prompt:
-        EN: "you shouldn't", "you should have", "you didn't", "why did you",
-            "next time", "you always", "you keep", "that's wrong", "instead of".
-        RU: "не так", "неправильно", "не надо было", "не нужно было", "зачем ты",
-            "почему ты", "опять ты", "так нельзя", "в следующий раз",
-            "следовало", "должен был".
+  Tier 1 — explicit self-improvement reference (near-certain, deterministic):
+    'self-improvement' / 'selfimprovement' / 'self improvement' as a substring,
+    after excising harness-injected context. Covers "did you run self-improvement?",
+    "запусти self-improvement", etc.
 
-V1 exclusions (documented precision choice):
-  Bare 'always'/'never'/'prefer'/'всегда'/'никогда' without an agent-reference
-  cue are excluded — they appear constantly in normal task specs ("always
-  validate input") and would dominate false positives.
+This module also exports `is_neutral_affirmation` — a small closed multilingual set
+of bare affirmations / gratitude ("ok", "спасибо", …) that are never feedback — so
+the Stop shell can skip a judge call on them (a pure affirmation is not a correction).
 """
 from __future__ import annotations
 
@@ -90,53 +86,41 @@ def strip_injected_context(text: str) -> str:
 # Tier 1 — explicit self-improvement mention (any spacing/hyphenation variant)
 _TIER1_RE = re.compile(r"self.?improvement", re.IGNORECASE | re.UNICODE)
 
-# Tier 2(a) — strong imperative / "I-already-told-you" patterns (self-sufficient)
-_STRONG_CORRECTIVE_RE = re.compile(
-    r"\bdon'?t do that\b"
-    r"|\bstop doing\b"
-    r"|\bперестань\b"
-    r"|\bне делай так\b"
-    r"|\bя же просил\b"
-    r"|\bя же говорил\b",
-    re.IGNORECASE | re.UNICODE,
-)
+# Bare neutral affirmations / gratitude — a small closed multilingual set. A whole
+# message that is one of these is never agent-behavior feedback, so the Stop shell
+# skips the si_feedback judge on it (case- and trailing-punctuation-insensitive).
+_NEUTRAL_AFFIRMATIONS = frozenset({
+    "ok", "okay", "k", "kk", "yes", "yep", "yeah", "yup", "sure", "fine",
+    "thanks", "thank you", "thx", "ty", "great", "perfect", "nice", "cool",
+    "done", "good", "got it", "ok thanks", "ok thx", "sounds good", "lgtm",
+    "да", "ага", "угу", "ок", "окей", "спасибо", "спс", "хорошо", "ладно",
+    "отлично", "супер", "класс", "понял", "поняла", "принято", "ясно", "верно",
+})
 
-# Tier 2(b) — context-dependent corrective patterns (need agent-ref co-occurrence)
-_WEAK_CORRECTIVE_RE = re.compile(
-    r"\byou shouldn'?t\b"
-    r"|\byou should have\b"
-    r"|\byou didn'?t\b"
-    r"|\bwhy did you\b"
-    r"|\bnext time\b"
-    r"|\byou always\b"
-    r"|\byou keep\b"
-    r"|\bthat'?s wrong\b"
-    r"|\binstead of\b"
-    r"|\bне так\b"
-    r"|\bнеправильно\b"
-    r"|\bне надо было\b"
-    r"|\bне нужно было\b"
-    r"|\bзачем ты\b"
-    r"|\bпочему ты\b"
-    r"|\bопять ты\b"
-    r"|\bтак нельзя\b"
-    r"|\bв следующий раз\b"
-    r"|\bследовало\b"
-    r"|\bдолжен был\b",
-    re.IGNORECASE | re.UNICODE,
-)
 
-# Explicit 2nd-person agent-reference (required by Tier 2(b))
-_AGENT_REF_RE = re.compile(
-    r"\b(?:you|your|ты|тебя|тебе|тобой)\b",
-    re.IGNORECASE | re.UNICODE,
-)
+def is_neutral_affirmation(text: str) -> bool:
+    """True iff the whole message is a bare neutral affirmation / gratitude (a small
+    closed multilingual set) — never agent-behavior feedback. Case and trailing
+    punctuation are ignored. An empty message is treated as neutral (nothing to
+    judge)."""
+    if not isinstance(text, str):
+        return False
+    norm = text.strip().lower().strip(".!…,:;) ")
+    if not norm:
+        return True
+    return norm in _NEUTRAL_AFFIRMATIONS
 
 
 def find_signals(prompt: str) -> list[str]:
-    """Return a list of feedback-signal descriptions for ``prompt`` (empty if none).
+    """Return the DETERMINISTIC Tier-1 feedback signal for ``prompt`` (empty if none).
 
-    Precision-first: at most one signal is returned, naming the tier that fired.
+    Tier 1 only: the explicit 'self-improvement' proper-name mention (any
+    spacing/hyphen variant), after excising harness-injected context. The former
+    Tier-2 natural-language corrective cues were retired from regex matching and
+    moved to the semantic judge (semantic_judge.py, 'si_feedback'); the Stop shell
+    consults that judge behind a precondition gate. Keeping this match deterministic
+    is what lets the instant UserPromptSubmit reminder stay latency-free and
+    judge-free.
     """
     if not isinstance(prompt, str) or not prompt:
         return []
@@ -148,16 +132,5 @@ def find_signals(prompt: str) -> list[str]:
     # Tier 1 — explicit self-improvement mention
     if _TIER1_RE.search(prompt):
         return ["explicit self-improvement mention"]
-
-    # Tier 2(a) — strong imperative (self-sufficient, no agent-ref check)
-    m = _STRONG_CORRECTIVE_RE.search(prompt)
-    if m:
-        return [f"agent-directed correction: '{m.group(0)}'"]
-
-    # Tier 2(b) — context-dependent (agent-ref required)
-    if _AGENT_REF_RE.search(prompt):
-        m = _WEAK_CORRECTIVE_RE.search(prompt)
-        if m:
-            return [f"agent-directed correction: '{m.group(0)}'"]
 
     return []

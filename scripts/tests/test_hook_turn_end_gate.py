@@ -18,6 +18,16 @@ Plus the two properties the generalization introduces:
     and must still return its blocker list. A guardian that delegates its I/O one
     call deep passes a source-substring search but fails this test.
 
+The perception SOURCES that build_context calls (binary_ask / si_feedback /
+outage_escalation) delegate to the model-backed semantic_judge via a live
+`claude -p` subprocess. An autouse fixture (`judge_stub`) replaces
+semantic_judge.judge with a deterministic in-memory stub so NO test ever launches
+a real `claude -p`: its default verdict is None (fail-open, do-not-fire), and a
+test opts a guardian into firing with `judge_stub.set(kind, True)`. The same
+fixture clears any ambient AGENT_RECURSION_DEPTH so the suite behaves as a root
+session wherever it is run (a spawned specialist exports depth>=1, which would
+otherwise make decide() short-circuit); the three depth-specific tests re-set it.
+
 Transcript fixtures are small JSONL files built in tmp_path.
 """
 from __future__ import annotations
@@ -103,9 +113,44 @@ def isolated_state(tmp_path, monkeypatch):
     return home
 
 
+# --- semantic-judge stub seam + ambient-depth hermeticity -------------------
+
+class _JudgeStub:
+    """Deterministic stand-in for semantic_judge.judge. Records every call and
+    returns the per-kind verdict a test installed (default None == fail-open
+    do-not-fire), NEVER launching a subprocess."""
+
+    def __init__(self):
+        self.verdicts: dict[str, object] = {}
+        self.calls: list[tuple[str, str]] = []
+
+    def __call__(self, kind, text, *, runner=None, thresholds=None, enabled=None):
+        self.calls.append((kind, text))
+        return self.verdicts.get(kind)
+
+    def set(self, kind: str, verdict) -> None:
+        self.verdicts[kind] = verdict
+
+    def calls_for(self, kind: str) -> list[tuple[str, str]]:
+        return [c for c in self.calls if c[0] == kind]
+
+
+@pytest.fixture(autouse=True)
+def judge_stub(monkeypatch):
+    """Patch the judge the hook module resolved (`_mod.semantic_judge.judge`, imported
+    at hook-turn-end-gate.py:73) to a deterministic stub, and clear any ambient
+    AGENT_RECURSION_DEPTH so decide() judges the turn as a root session. Autouse, so
+    no test can reach the live `claude -p` runner even without requesting it."""
+    monkeypatch.delenv("AGENT_RECURSION_DEPTH", raising=False)
+    stub = _JudgeStub()
+    monkeypatch.setattr(_mod.semantic_judge, "judge", stub)
+    return stub
+
+
 # --- decide() matrix --------------------------------------------------------
 
-def test_blocks_on_feedback_without_skill(tmp_path, isolated_state):
+def test_blocks_on_feedback_without_skill(tmp_path, isolated_state, judge_stub):
+    judge_stub.set("si_feedback", True)
     t = _write_transcript(tmp_path, [
         _user_line(FEEDBACK),
         _assistant_text_line("Sorry, here is the answer."),
@@ -149,7 +194,8 @@ def test_stop_hook_active_never_blocks(tmp_path, isolated_state):
     assert _mod.decide({"transcript_path": str(t), "stop_hook_active": True}) is None
 
 
-def test_dedup_blocks_at_most_once(tmp_path, isolated_state):
+def test_dedup_blocks_at_most_once(tmp_path, isolated_state, judge_stub):
+    judge_stub.set("si_feedback", True)
     t = _write_transcript(tmp_path, [
         _user_line(FEEDBACK),
         _assistant_text_line("answer"),
@@ -161,7 +207,8 @@ def test_dedup_blocks_at_most_once(tmp_path, isolated_state):
     assert second is None  # marker suppresses the repeat
 
 
-def test_marker_lands_under_turn_gate(tmp_path, isolated_state):
+def test_marker_lands_under_turn_gate(tmp_path, isolated_state, judge_stub):
+    judge_stub.set("si_feedback", True)
     t = _write_transcript(tmp_path, [
         _user_line(FEEDBACK),
         _assistant_text_line("answer"),
@@ -210,9 +257,10 @@ def test_specialist_session_is_inert(tmp_path, isolated_state, monkeypatch):
     assert not (isolated_state / "state" / "turn-gate").exists()
 
 
-def test_root_session_still_blocks(tmp_path, isolated_state, monkeypatch):
+def test_root_session_still_blocks(tmp_path, isolated_state, monkeypatch, judge_stub):
     """Depth 0 (or unset) is the root coordinator — the gate still enforces."""
     monkeypatch.setenv("AGENT_RECURSION_DEPTH", "0")
+    judge_stub.set("si_feedback", True)
     t = _write_transcript(tmp_path, [
         _user_line(FEEDBACK),
         _assistant_text_line("answer"),
@@ -221,10 +269,11 @@ def test_root_session_still_blocks(tmp_path, isolated_state, monkeypatch):
     assert out is not None and out["decision"] == "block"
 
 
-def test_malformed_depth_falls_back_to_enforcing(tmp_path, isolated_state, monkeypatch):
+def test_malformed_depth_falls_back_to_enforcing(tmp_path, isolated_state, monkeypatch, judge_stub):
     """A non-integer AGENT_RECURSION_DEPTH must not silence the gate (fail-closed
     on the enforcement side): the ValueError is swallowed and the turn is judged."""
     monkeypatch.setenv("AGENT_RECURSION_DEPTH", "not-a-number")
+    judge_stub.set("si_feedback", True)
     t = _write_transcript(tmp_path, [
         _user_line(FEEDBACK),
         _assistant_text_line("answer"),
@@ -239,8 +288,9 @@ def _second_guardian(ctx) -> list[str]:
     return ["The resolution gate was not closed: confirm with the user."]
 
 
-def test_two_guardians_produce_exactly_one_block(tmp_path, isolated_state, monkeypatch):
+def test_two_guardians_produce_exactly_one_block(tmp_path, isolated_state, monkeypatch, judge_stub):
     monkeypatch.setitem(_mod.TURN_GUARDIANS, "resolution", _second_guardian)
+    judge_stub.set("si_feedback", True)
     t = _write_transcript(tmp_path, [
         _user_line(FEEDBACK),
         _assistant_text_line("answer"),
@@ -256,13 +306,14 @@ def test_two_guardians_produce_exactly_one_block(tmp_path, isolated_state, monke
 
 
 def test_same_message_never_blocks_twice_with_one_obligation_addressed(
-    tmp_path, isolated_state, monkeypatch
+    tmp_path, isolated_state, monkeypatch, judge_stub
 ):
     """The trade aggregation buys: the marker keys on the message alone, so once
     the message has blocked, a stop that addressed only ONE of the two named
     obligations is allowed through. Turn-boundedness over per-obligation
     enforcement — stated, not hidden."""
     monkeypatch.setitem(_mod.TURN_GUARDIANS, "resolution", _second_guardian)
+    judge_stub.set("si_feedback", True)
     payload = {"stop_hook_active": False, "session_id": "sess-1"}
 
     first = _mod.decide({**payload, "transcript_path": str(_write_transcript(tmp_path, [
@@ -280,11 +331,12 @@ def test_same_message_never_blocks_twice_with_one_obligation_addressed(
     assert second is None
 
 
-def test_raising_guardian_contributes_no_blocker(tmp_path, isolated_state, monkeypatch):
+def test_raising_guardian_contributes_no_blocker(tmp_path, isolated_state, monkeypatch, judge_stub):
     def _boom(ctx):
         raise RuntimeError("guardian bug")
 
     monkeypatch.setitem(_mod.TURN_GUARDIANS, "boom", _boom)
+    judge_stub.set("si_feedback", True)
     t = _write_transcript(tmp_path, [
         _user_line(FEEDBACK),
         _assistant_text_line("answer"),
@@ -321,6 +373,10 @@ def test_guardians_are_behaviorally_pure():
         transcript_path="/nonexistent/t.jsonl",
         session_key="sess-pure",
         agentctl_state=None,
+        # Perception is frozen by the shell; the guardian reads this field, so set it
+        # to a live feedback signal here rather than expecting the (pure) guardian to
+        # compute it.
+        si_feedback_signals=("agent-behavior feedback (semantic judge)",),
     )
 
     def _forbidden(*args, **kwargs):
@@ -425,9 +481,10 @@ def test_long_job_autowake_registered_before_resolution():
     assert keys.index("long_job_autowake") < keys.index("resolution")
 
 
-def test_long_job_and_self_improvement_cofire_one_block(tmp_path, isolated_state):
+def test_long_job_and_self_improvement_cofire_one_block(tmp_path, isolated_state, judge_stub):
     """A feedback-signal turn that also launched a detached job without a waiter
     produces ONE block naming BOTH obligations, self-improvement numbered first."""
+    judge_stub.set("si_feedback", True)
     t = _write_transcript(tmp_path, [
         _user_line(FEEDBACK),
         _assistant_bash_line("nohup ./train.sh &", False),
@@ -484,17 +541,25 @@ def _run(stdin_bytes: bytes, env=None):
 
 def test_main_emits_block_json(tmp_path, monkeypatch):
     import os
+    # A real subprocess: the in-process judge stub cannot reach the child, so this
+    # drives a DETERMINISTIC blocker — a Tier-1 'self-improvement' mention fires the
+    # self-improvement guardian with no judge — and forces SEMANTIC_JUDGE=0 so the
+    # child never spawns `claude -p` for any kind. AGENT_RECURSION_DEPTH is cleared so
+    # the child's decide() does not short-circuit as a specialist session.
     t = _write_transcript(tmp_path, [
-        _user_line(FEEDBACK),
+        _user_line("did you run self-improvement?"),
         _assistant_text_line("answer"),
     ])
     env = dict(os.environ)
     env["CLAUDE_AGENT_HOME"] = str(tmp_path / "home")
     env.pop("CLAUDE_CONFIG_DIR", None)
+    env.pop("AGENT_RECURSION_DEPTH", None)
+    env["SEMANTIC_JUDGE"] = "0"
     p = _run(json.dumps({"transcript_path": str(t), "stop_hook_active": False}).encode(), env=env)
     assert p.returncode == 0
     directive = json.loads(p.stdout.decode())
     assert directive["decision"] == "block"
+    assert "self-improvement" in directive["reason"]
 
 
 def test_main_malformed_stdin_exit_0():
@@ -617,9 +682,10 @@ def test_resolution_silent_when_no_session_state(tmp_path, isolated_state, monke
     assert _mod.decide({"transcript_path": str(t), "stop_hook_active": False, "session_id": "s1"}) is None
 
 
-def test_resolution_and_self_improvement_cofire_one_block(tmp_path, isolated_state, monkeypatch):
+def test_resolution_and_self_improvement_cofire_one_block(tmp_path, isolated_state, monkeypatch, judge_stub):
     """Both obligations unmet -> ONE block naming both, resolution named LAST."""
     _patch_state(monkeypatch, _FakeState())
+    judge_stub.set("si_feedback", True)
     t = _write_transcript(tmp_path, [
         _user_line(FEEDBACK),
         _assistant_text_line("answer"),
@@ -654,10 +720,11 @@ def test_resolution_self_heals_after_a_poller_turn(tmp_path, isolated_state, mon
 
 # --- escalation_without_diagnosis guardian ----------------------------------
 
-# Assistant text that fires outage_escalation_detect (present-tense outage cue +
-# a user-facing escalation frame). NEUTRAL user text is paired with it so the
+# Assistant text that trips the outage protocol pre-filter (an HTTP 5xx token) so
+# the shell consults the outage_escalation judge; the meaning-level verdict is then
+# supplied by the judge stub. NEUTRAL user text is paired with it so the
 # self-improvement guardian never co-fires and assertions stay clean.
-ESCALATION_TEXT = "Сервис недоступен и не отвечает. К кому обратиться за доступом?"
+ESCALATION_TEXT = "Сервис вернул 504 и не отвечает. К кому обратиться за доступом?"
 
 
 class _FakeDifficulty:
@@ -721,8 +788,9 @@ def test_difficulty_declared_reader():
 
 # --- escalation guardian: integration through decide() ----------------------
 
-def test_escalation_blocks_via_decide(tmp_path, isolated_state, monkeypatch):
+def test_escalation_blocks_via_decide(tmp_path, isolated_state, monkeypatch, judge_stub):
     _patch_state(monkeypatch, None)  # no declared difficulty
+    judge_stub.set("outage_escalation", True)
     t = _write_transcript(tmp_path, [
         _user_line("add a parser for the config file"),
         _assistant_text_line(ESCALATION_TEXT),
@@ -807,9 +875,10 @@ def test_prose_binary_ask_registered_before_resolution():
     assert keys.index("prose_binary_ask") < keys.index("resolution")
 
 
-def test_prose_binary_ask_blocks_via_decide(tmp_path, isolated_state):
+def test_prose_binary_ask_blocks_via_decide(tmp_path, isolated_state, judge_stub):
     # Neutral user text + assistant text ending in a prose confirm -> only the
     # prose_binary_ask guardian fires (no state, no feedback, no outage).
+    judge_stub.set("binary_ask", True)
     t = _write_transcript(tmp_path, [
         _user_line("add a parser for the config file"),
         _assistant_text_line(PROSE_ASK_TEXT),
@@ -848,3 +917,40 @@ def test_prose_binary_ask_silent_on_open_wh_question(tmp_path, isolated_state):
         _assistant_text_line("Куда записать вывод?"),
     ])
     assert _mod.decide({"transcript_path": str(t), "stop_hook_active": False}) is None
+
+
+# --- language-agnostic judge seam: end-to-end through the hook ---------------
+
+def test_russian_prose_binary_ask_fires_via_judge(tmp_path, isolated_state, judge_stub):
+    """A RUSSIAN prose binary-confirm question fires the prose_binary_ask guardian
+    THROUGH the judge — the structural precondition (trailing question) trips, so the
+    shell consults the judge, whose True verdict makes the guardian fire. Proves the
+    perception is language-agnostic end to end (no per-language regex involved)."""
+    judge_stub.set("binary_ask", True)
+    t = _write_transcript(tmp_path, [
+        _user_line("add a parser for the config file"),
+        _assistant_text_line("Готов отчёт по задаче. Публиковать сейчас?"),
+    ])
+    out = _mod.decide({"transcript_path": str(t), "stop_hook_active": False})
+    assert out is not None and out["decision"] == "block"
+    assert "AskUserQuestion" in out["reason"]
+    # The verdict came THROUGH the judge: the binary_ask precondition tripped, so the
+    # shell consulted it with the Russian assistant text.
+    assert judge_stub.calls_for("binary_ask"), "the binary_ask judge was not consulted"
+    # neutral user text -> the self-improvement obligation is not among the blockers
+    assert "self-improvement" not in out["reason"]
+
+
+def test_judge_not_called_when_preconditions_unmet(tmp_path, isolated_state, judge_stub):
+    """The judge is PRECONDITION-GATED, not run every turn. Here no cheap precondition
+    trips — the assistant text has no trailing question (binary_ask gate fails) and
+    overcome-difficulty was invoked (the si_feedback and outage_escalation sources
+    short-circuit before the judge) — so the judge stub is consulted ZERO times."""
+    t = _write_transcript(tmp_path, [
+        _user_line("add a parser for the config file"),
+        _assistant_skill_line("overcome-difficulty"),
+        _assistant_text_line("Готово, все тесты проходят."),
+    ])
+    out = _mod.decide({"transcript_path": str(t), "stop_hook_active": False})
+    assert out is None
+    assert judge_stub.calls == [], f"judge consulted despite unmet preconditions: {judge_stub.calls}"

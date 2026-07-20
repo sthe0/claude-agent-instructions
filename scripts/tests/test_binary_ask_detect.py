@@ -1,13 +1,13 @@
-"""Tests for binary_ask_detect.detect — the precision-first perception half of the
-prose_binary_ask turn guardian (does this turn END with a binary / confirm question
-posed in prose instead of via an AskUserQuestion click-gate?).
+"""Tests for binary_ask_detect.final_question_segment — the language-agnostic
+STRUCTURAL gate of the prose_binary_ask turn guardian (does this turn's assistant
+text END with a question?).
 
-The fires / doesn't-fire rows are precision TARGETS, not guarantees: this is a
-heuristic backstop and paraphrase misses are documented, not bugs. What the tests
-PIN is the conjunction discipline (final utterance is a question AND carries a
-confirm/action cue AND does not open with a wh-word) and the named precision
-targets from the thinker plan-review (substring guards, wh-suppression, the
-готов/счита FP-shape regression pins).
+The per-language "is that trailing question a BINARY/CONFIRM ask?" cue matching was
+retired and moved to semantic_judge.py ('binary_ask' kind). What remains here — and
+what these tests PIN — is only the structural precondition: the text (stripped)
+ends with a question mark (ASCII '?' or full-width '？'), and the returned segment
+is its final sentence (a confirm buried mid-turn, with substantive text after it,
+yields None so the shell never spends a judge call on it).
 """
 from __future__ import annotations
 
@@ -26,98 +26,68 @@ def _load():
 
 
 _mod = _load()
-detect = _mod.detect
+final_question_segment = _mod.final_question_segment
 
 
-# --- fires: trailing binary / confirm question ------------------------------
+# --- returns the final segment: text ends with a question -------------------
 
-def test_fires_ru_zapisat():
-    assert len(detect("Записать?")) == 1
-
-
-def test_fires_ru_publish():
-    assert len(detect("Готов черновик v11. Публикуем v11?")) == 1
+def test_ru_single_question():
+    assert final_question_segment("Записать?") == "Записать"
 
 
-def test_fires_ru_resolution_ask():
-    # The headline resolution ask this mechanism most exists to catch.
-    assert len(detect("Requested: X. Delivered: X. Считаем решённой?")) == 1
+def test_en_single_question():
+    assert final_question_segment("should I push?") == "should I push"
 
 
-def test_fires_ru_landing_ask():
-    assert len(detect("Коммит готов. Вливаем в транк?")) == 1
+def test_full_width_question_mark():
+    # The full-width '？' counts as a question terminator (CJK input).
+    assert final_question_segment("公開しますか？") == "公開しますか"
 
 
-def test_fires_en_should_i_push():
-    assert len(detect("Tests are green. should I push?")) == 1
-
-
-def test_fires_en_land_it():
-    assert len(detect("The branch is ready. Land it?")) == 1
-
-
-def test_fires_after_leading_prose_paragraph():
+def test_returns_last_sentence_after_leading_prose():
     text = (
-        "Я доисследовал провенанс judge_score_gt по коду: это ручная YAML-разметка.\n"
-        "Записать вывод в system-knowledge лист?"
+        "Я доисследовал провенанс по коду: это ручная YAML-разметка.\n"
+        "Записать вывод в лист?"
     )
-    assert len(detect(text)) == 1
+    assert final_question_segment(text) == "Записать вывод в лист"
 
 
-# --- precision targets: SHOULD NOT fire -------------------------------------
-
-def test_open_wh_ru_chto_zapisat_does_not_fire():
-    # Confirm verb present ("записать") but opens with the open wh-word "что" ->
-    # genuinely open, free-text answer -> out of scope (rule 3).
-    assert detect("Что записать в лист?") == []
+def test_trailing_whitespace_tolerated():
+    assert final_question_segment("Публикуем v11?  \n") == "Публикуем v11"
 
 
-def test_open_wh_en_how_should_i_proceed_does_not_fire():
-    assert detect("how should I proceed?") == []
+def test_segment_bounded_by_previous_terminator():
+    # Only the final sentence is returned, not the whole multi-sentence body.
+    assert final_question_segment("Готов черновик. Публикуем?") == "Публикуем"
 
 
-def test_substring_guard_udalos_does_not_fire():
-    # "удалось" must NOT match the delete cue (narrowed to удали|удаля).
-    assert detect("Это удалось?") == []
+# --- returns None: text does not end with a question ------------------------
+
+def test_statement_is_none():
+    assert final_question_segment("Всё готово, опубликовал v11.") is None
 
 
-def test_non_question_does_not_fire():
-    assert detect("Всё готово, опубликовал v11.") == []
+def test_question_then_prose_is_none():
+    # A confirm followed by more prose does NOT end with '?': structurally not a
+    # trailing ask, so the shell must not spend a judge call.
+    assert final_question_segment("Записать? Ниже детали правок и следующий шаг.") is None
 
 
-def test_confirm_then_prose_not_ending_in_question_does_not_fire():
-    # Rule 1: the text must END with '?'. A confirm followed by more prose misses
-    # (deliberate under-fire).
-    assert detect("Записать? Ниже детали правок и следующий шаг.") == []
+def test_empty_is_none():
+    assert final_question_segment("") is None
 
 
-def test_empty_and_non_string():
-    assert detect("") == []
-    assert detect(None) == []  # type: ignore[arg-type]
+def test_non_string_is_none():
+    assert final_question_segment(None) is None  # type: ignore[arg-type]
+    assert final_question_segment(123) is None  # type: ignore[arg-type]
 
 
-# --- thinker NIT regression pins: готов / счита FP shapes --------------------
-# These open with "Есть"/"Ты" (not wh-words) and carry the loosest cues
-# (готов\\w* / счита\\w*). They are the shapes most likely to false-positive; pin
-# them so a future lexicon change that would fire on them is caught in CI. Current
-# behaviour: they DO fire (documented loosest-cue cost) — the pin asserts the
-# CURRENT verdict so any change is deliberate, and the surrounding conjunction
-# (final-segment-only, ends-'?', not-wh) is what bounds the blast radius.
+# --- structural, not semantic: open-ended questions still pass the gate -----
+# The gate is deliberately meaning-agnostic — an open wh-question ends with '?'
+# too, and passes; distinguishing binary-confirm from open-ended is the judge's
+# job, not this helper's. Pin that so a future change that re-adds NL suppression
+# here (against the split-of-labor) is caught.
 
-def test_pin_est_li_gotovoe_reshenie():
-    # "Есть ли готовое решение?" — informational, but "готов" is a cue. Pinned as
-    # a KNOWN loose-cue fire so a lexicon tweak that changes it is intentional.
-    assert len(detect("Есть ли готовое решение?")) == 1
-
-
-def test_pin_ty_tak_schitaesh():
-    # "Ты так считаешь?" — same loose-cue shape via "счита".
-    assert len(detect("Ты так считаешь?")) == 1
-
-
-# --- shape ------------------------------------------------------------------
-
-def test_returns_at_most_one_signal():
-    out = detect("Публикуем и вливаем в транк?")
-    assert len(out) == 1
-    assert isinstance(out[0], str)
+def test_open_wh_question_still_returns_segment():
+    assert final_question_segment("Что записать в лист?") == "Что записать в лист"
+    assert final_question_segment("how should I proceed?") == "how should I proceed"

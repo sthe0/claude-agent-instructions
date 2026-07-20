@@ -70,10 +70,15 @@ from typing import Any, Callable
 # Make the sibling shared detector and lib/ importable whether this hook is run
 # directly (scripts/ on sys.path[0]) or loaded via importlib in tests.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from si_feedback_detect import find_signals  # noqa: E402
+import semantic_judge  # noqa: E402
+from si_feedback_detect import (  # noqa: E402
+    find_signals,
+    strip_injected_context,
+    is_neutral_affirmation,
+)
 from long_job_detect import detect as _detect_long_job  # noqa: E402
-from outage_escalation_detect import detect as _detect_outage  # noqa: E402
-from binary_ask_detect import detect as _detect_binary_ask  # noqa: E402
+from outage_escalation_detect import protocol_prefilter as _outage_prefilter  # noqa: E402
+from binary_ask_detect import final_question_segment as _final_question_segment  # noqa: E402
 from timer_arm_detect import (  # noqa: E402
     closure_sought as _closure_sought,
     waiter_armed as _waiter_armed,
@@ -116,15 +121,27 @@ class TurnContext:
                      by the shell via the shared waiter_armed predicate.
     outage_escalation_sought : whether this turn's assistant text surfaces an
                      external-service failure to the user without a recorded
-                     diagnosis (shared outage_escalation_detect scan over the
-                     concatenated assistant text). Computed by the shell.
+                     diagnosis. Computed by the shell as a PRECONDITION-GATED
+                     semantic-judge call: the protocol-token pre-filter and the
+                     cheap preconditions (overcome-difficulty not invoked, no
+                     declared difficulty) must hold before the judge is consulted;
+                     None/False verdict -> False (fail-open).
     difficulty_declared : whether the engine's SessionState carries a declared
                      difficulty (`state.difficulty.declaration` set). Read once,
                      here, by the shell from agentctl_state.
     prose_binary_ask : whether this turn's assistant text ENDS with a binary /
                      confirm question posed in prose instead of via an
-                     AskUserQuestion click-gate (shared binary_ask_detect scan
-                     over the concatenated assistant text). Computed by the shell.
+                     AskUserQuestion click-gate. Computed by the shell as a
+                     PRECONDITION-GATED semantic-judge call: the structural
+                     final-question gate and the cheap preconditions (no
+                     AskUserQuestion this turn, not already seeking closure) must
+                     hold before the judge is consulted; None/False -> False.
+    si_feedback_signals : the agent-behavior-feedback signal(s) carried by the
+                     user's message, computed by the shell — the deterministic
+                     Tier-1 'self-improvement' mention, else a precondition-gated
+                     si_feedback judge verdict. Empty tuple == no feedback. The
+                     (pure) self_improvement guardian reads this frozen field so it
+                     never performs perception itself.
     """
 
     last_user_text: str
@@ -138,6 +155,7 @@ class TurnContext:
     outage_escalation_sought: bool = False
     difficulty_declared: bool = False
     prose_binary_ask: bool = False
+    si_feedback_signals: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -145,8 +163,12 @@ class TurnContext:
 # ---------------------------------------------------------------------------
 def self_improvement_blockers(ctx: TurnContext) -> list[str]:
     """The user's message carried agent-behavior feedback, but neither the
-    self-improvement nor the overcome-difficulty skill was engaged this turn."""
-    signals = find_signals(ctx.last_user_text)
+    self-improvement nor the overcome-difficulty skill was engaged this turn.
+
+    Pure: reads the frozen `si_feedback_signals` (the shell computed it — Tier-1
+    deterministic match or precondition-gated judge verdict) and the invocations
+    set; performs no perception itself."""
+    signals = ctx.si_feedback_signals
     if not signals:
         return []
     if ctx.invocations & _SATISFYING_SKILLS:
@@ -162,15 +184,15 @@ def self_improvement_blockers(ctx: TurnContext) -> list[str]:
 
 
 def escalation_without_diagnosis_blockers(ctx: TurnContext) -> list[str]:
-    """This turn surfaced an external-service failure to the user (a present-tense
-    outage cue plus a user-facing escalation frame) without a recorded diagnosis.
-    The PreToolUse hook-escalation-diagnosis-gate.py denies the same shape at
-    AskUserQuestion time; this is the Stop backstop for a TEXT escalation that
-    never went through an ask.
+    """This turn surfaced an external-service failure to the user (a meaning-level
+    un-diagnosed outage escalation) without a recorded diagnosis. The PreToolUse
+    hook-escalation-diagnosis-gate.py denies the same shape at AskUserQuestion time;
+    this is the Stop backstop for a TEXT escalation that never went through an ask.
 
     Fires only under the full conjunction, all read from the frozen context:
-      - outage_escalation_sought (the shell's outage_escalation_detect scan over
-        this turn's assistant text fired);
+      - outage_escalation_sought (the shell's precondition-gated semantic judge —
+        protocol-token pre-filter then the 'outage_escalation' judge — fired on
+        this turn's assistant text);
       - overcome-difficulty was NOT invoked this turn; AND
       - no declared difficulty exists (difficulty_declared).
 
@@ -200,9 +222,10 @@ def prose_binary_ask_blockers(ctx: TurnContext) -> list[str]:
     here no ask tool is called at all, so only this Stop text-scan can catch it.
 
     Fires ONLY under the full conjunction, all read from the frozen context:
-      - prose_binary_ask (the shell's binary_ask_detect scan over this turn's
-        assistant text fired: the final utterance is a confirm question, not
-        open-ended);
+      - prose_binary_ask (the shell's precondition-gated semantic judge — the
+        final_question_segment structural gate then the 'binary_ask' judge — fired
+        on this turn's assistant text: the final utterance is a confirm question,
+        not open-ended);
       - no AskUserQuestion was invoked this turn (the click-gate the norm wants);
       - the turn is not already seeking closure (ctx.closure_sought) — the
         legitimate "arm sleep-2 → ask next turn" split must not be nagged.
@@ -472,6 +495,70 @@ def _load_agentctl_state(session_id: str | None):
         return None
 
 
+# --- perception SOURCES: precondition-gated semantic-judge calls (shell only) ---
+# These run in the impure shell (I/O is allowed here), never in a pure guardian.
+# Each checks a cheap LANGUAGE-AGNOSTIC structural pre-filter and the guardian's own
+# cheap preconditions FIRST, and consults the model-backed judge ONLY when all hold —
+# so a no-signal turn spawns ZERO `claude -p` subprocesses. Every path fails open: a
+# None/error verdict yields the do-not-fire default, byte-identical to judge-absent.
+def _judge_binary_ask(
+    assistant_text: str, invocations: frozenset[str], closure_sought: bool
+) -> bool:
+    """prose_binary_ask source. Structural gate (the assistant text ends with a
+    question) + cheap preconditions (no AskUserQuestion this turn, not already
+    seeking closure), THEN the judge — a True verdict means that trailing question
+    is a binary/confirm ask."""
+    if _final_question_segment(assistant_text) is None:
+        return False
+    if "AskUserQuestion" in invocations or closure_sought:
+        return False
+    return semantic_judge.judge(
+        "binary_ask", assistant_text, runner=semantic_judge.subprocess_runner
+    ) is True
+
+
+def _judge_outage(
+    assistant_text: str, invocations: frozenset[str], difficulty_declared: bool
+) -> bool:
+    """outage_escalation_sought source. Protocol-token pre-filter + cheap
+    preconditions (overcome-difficulty not invoked, no declared difficulty), THEN
+    the judge — a True verdict means an un-diagnosed external-service escalation."""
+    if not _outage_prefilter(assistant_text):
+        return False
+    if "overcome-difficulty" in invocations or difficulty_declared:
+        return False
+    return semantic_judge.judge(
+        "outage_escalation", assistant_text, runner=semantic_judge.subprocess_runner
+    ) is True
+
+
+def _si_feedback_signals(
+    user_text: str, invocations: frozenset[str]
+) -> tuple[str, ...]:
+    """self_improvement source. Tier-1 (the deterministic 'self-improvement'
+    proper-name mention) fires with NO judge. Otherwise the judge is consulted ONLY
+    when the satisfying skill was not already invoked (else the guardian suppresses
+    the signal anyway — a cost gate), the stripped human text is non-empty and within
+    the si-maxlen budget, and it is not a bare neutral affirmation; a True verdict is
+    a feedback signal. Returns the tuple the (pure) guardian reads from frozen ctx."""
+    tier1 = find_signals(user_text)
+    if tier1:
+        return tuple(tier1)
+    if invocations & _SATISFYING_SKILLS:
+        return ()
+    stripped = strip_injected_context(user_text).strip()
+    if not stripped or len(stripped) > semantic_judge.si_maxlen():
+        return ()
+    if is_neutral_affirmation(stripped):
+        return ()
+    verdict = semantic_judge.judge(
+        "si_feedback", stripped, runner=semantic_judge.subprocess_runner
+    )
+    if verdict is True:
+        return ("agent-behavior feedback (semantic judge)",)
+    return ()
+
+
 def build_context(payload: dict) -> TurnContext | None:
     """Freeze this turn's facts, or None when the turn cannot be read (fail-open)."""
     transcript_path = payload.get("transcript_path")
@@ -496,20 +583,25 @@ def build_context(payload: dict) -> TurnContext | None:
     if not isinstance(session_id, str) or not session_id:
         session_id = None
     agentctl_state = _load_agentctl_state(session_id)
+    inv = frozenset(invocations)
+    assistant_text = _assistant_text_of(turn_entries)
+    closure = _closure_sought(turn_entries)
+    difficulty_declared = _difficulty_declared(agentctl_state)
     return TurnContext(
         last_user_text=last_user_text,
-        invocations=frozenset(invocations),
+        invocations=inv,
         transcript_path=transcript_path,
         session_key=session_id or transcript_path,
         agentctl_state=agentctl_state,
-        closure_sought=_closure_sought(turn_entries),
+        closure_sought=closure,
         long_job_launched=any(
             _detect_long_job(c) for c in _iter_bash_commands(turn_entries)
         ),
         autowake_armed=_waiter_armed(turn_entries),
-        outage_escalation_sought=bool(_detect_outage(_assistant_text_of(turn_entries))),
-        difficulty_declared=_difficulty_declared(agentctl_state),
-        prose_binary_ask=bool(_detect_binary_ask(_assistant_text_of(turn_entries))),
+        outage_escalation_sought=_judge_outage(assistant_text, inv, difficulty_declared),
+        difficulty_declared=difficulty_declared,
+        prose_binary_ask=_judge_binary_ask(assistant_text, inv, closure),
+        si_feedback_signals=_si_feedback_signals(last_user_text, inv),
     )
 
 

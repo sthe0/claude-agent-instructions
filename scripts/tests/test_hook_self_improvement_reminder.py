@@ -1,10 +1,14 @@
 """Tests for hook-self-improvement-reminder.py — feedback-trigger detector.
 
+The reminder is deterministic Tier-1 ONLY: it shares find_signals with the Stop
+gate but never consults the semantic judge (UserPromptSubmit is latency-critical).
+So former Tier-2 NL corrections stay silent here — the Stop gate's judge is where
+they are classified.
+
 Covers:
 - Tier 1: explicit self-improvement mention fires (spacing/hyphen variants, RU+EN).
-- Tier 2(a): strong imperatives fire on their own (no agent-ref needed).
-- Tier 2(b): context-dependent corrections fire only with an agent-ref cue.
-- Negatives: neutral task prompts stay silent, incl. bare always/never/всегда.
+- former Tier-2 NL corrections are now silent (moved to the semantic judge).
+- Negatives: neutral task prompts stay silent.
 - main(): emits exactly one reminder line on a signal; nothing otherwise.
 - Robustness: malformed / empty stdin -> exit 0, no output.
 """
@@ -43,22 +47,25 @@ _mod = _load_module()
         "запусти self-improvement по этому",
         "the self improvement skill should have run",
         "selfimprovement was skipped",
-        "don't do that again",
-        "stop doing the extra commits",
-        "перестань так делать",
-        "не делай так больше",
-        "я же просил не коммитить",
-        "я же говорил про язык",
-        "you shouldn't have pushed",
-        "why did you skip the tests",
-        "next time ask me first, you keep forgetting",
-        "ты сделал не так",
-        "почему ты не спросил",
-        "в следующий раз ты должен спросить",
     ],
 )
 def test_positive_signals_fire(prompt):
     assert _mod.find_signals(prompt), f"expected a signal for: {prompt!r}"
+
+
+# former Tier-2 NL corrections now stay silent here (semantic judge's domain)
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "don't do that again",
+        "перестань так делать",
+        "you shouldn't have pushed",
+        "why did you skip the tests",
+        "почему ты не спросил",
+    ],
+)
+def test_former_tier2_now_silent(prompt):
+    assert _mod.find_signals(prompt) == [], f"unexpected signal for: {prompt!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -79,13 +86,6 @@ def test_positive_signals_fire(prompt):
 )
 def test_negative_prompts_silent(prompt):
     assert _mod.find_signals(prompt) == [], f"unexpected signal for: {prompt!r}"
-
-
-def test_tier2b_needs_agent_ref():
-    # 'instead of' is a Tier 2(b) pattern: silent without an agent-ref cue,
-    # fires once one co-occurs.
-    assert _mod.find_signals("use a map instead of a loop") == []
-    assert _mod.find_signals("you used a loop instead of a map")
 
 
 # ---------------------------------------------------------------------------

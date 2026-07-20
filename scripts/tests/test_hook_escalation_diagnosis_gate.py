@@ -31,8 +31,11 @@ def _load():
 
 _mod = _load()
 
-# A body that fires outage_escalation_detect (present-tense failure + ask frame).
-ESC_BODY = "Сервис недоступен, не отвечает. К кому обратиться за доступом?"
+# A body that fires the deterministic protocol prefilter (an HTTP 5xx status run +
+# an English outage token) inside an otherwise-Russian escalation ask. The gate is
+# prefilter-only by design (no judge on the ask path), so detection requires a
+# language-agnostic protocol token, NOT a natural-language cue.
+ESC_BODY = "Сервис вернул HTTP 503, unreachable. К кому обратиться за доступом?"
 
 
 def _ask_payload(question: str, options=None, **extra) -> dict:
@@ -84,12 +87,13 @@ def test_non_escalation_ask_allows(monkeypatch, capsys):
 
 
 def test_option_text_drives_detection(monkeypatch, capsys):
-    # The failure cue may live in an OPTION description, not the question stem.
+    # The protocol token may live in an OPTION description, not the question stem;
+    # the prefilter scans question + every option label/description.
     monkeypatch.setattr(_mod, "_overcome_difficulty_invoked", lambda p: False)
     monkeypatch.setattr(_mod, "_difficulty_declared", lambda s: False)
     payload = _ask_payload(
         "Что делать?",
-        options=[{"label": "Retry", "description": "Сервис недоступен и не отвечает"}],
+        options=[{"label": "Retry", "description": "Сервис вернул HTTP 503, unreachable"}],
     )
     assert _run_main(payload, monkeypatch, capsys) == "deny"
 
