@@ -66,3 +66,25 @@ class Thresholds:
     def advisor_mode(self) -> str:
         """'off' or 'substantive' — gates advisor.resolve_enabled's config layer."""
         return self._str("advisor-mode")
+
+    @property
+    def semantic_judge_mode(self) -> str:
+        """'on' or 'off' — global kill-switch for semantic_judge.resolve_enabled."""
+        return self._str("semantic-judge-mode")
+
+    @property
+    def semantic_judge_kinds(self) -> str:
+        """Comma-list of enabled judge kinds — the per-kind kill-switch."""
+        return self._str("semantic-judge-kinds")
+
+    @property
+    def semantic_judge_model(self) -> str:
+        return self._str("semantic-judge-model")
+
+    @property
+    def semantic_judge_timeout_s(self) -> int:
+        return self._int("semantic-judge-timeout-s")
+
+    @property
+    def semantic_judge_si_maxlen(self) -> int:
+        return self._int("semantic-judge-si-maxlen")

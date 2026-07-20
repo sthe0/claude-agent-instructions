@@ -14,12 +14,22 @@ guardian escalation_without_diagnosis is the backstop for TEXT escalations that
 never reach an AskUserQuestion.
 
 DENY when ALL hold:
-  1. outage_escalation_detect.detect(question + every option label/description)
-     fires (present-tense external-failure cue AND user-facing escalation frame);
+  1. outage_escalation_detect.protocol_prefilter(question + every option
+     label/description) fires (an HTTP 4xx/5xx status run or a fixed English outage
+     token — 'timeout' / 'timed out' / 'unreachable' / 'no upstreams');
   2. the overcome-difficulty skill was NOT invoked anywhere in this session's
      transcript; AND
   3. no active agentctl `declare` record exists for the session (a declared
      difficulty whose `.declaration` is set).
+
+This gate deliberately uses ONLY the deterministic protocol-token pre-filter and
+does NOT consult the model-backed semantic judge: it runs on the AskUserQuestion
+tool-call path, where a per-ask `claude -p` call would add seconds of latency to
+every ask and risk hook->claude->hook recursion. The cost is a recall narrowing —
+a pure-NL escalation carrying no protocol token ("сервис лежит, к кому за
+доступом?") is no longer pre-empted at ask time; the Stop-hook guardian's
+precondition-gated judge (escalation_without_diagnosis) is the backstop for that
+text form. Precision-first, as this gate always was.
 
 Precision-first: a false DENY is more disruptive than a false Stop-nudge, so the
 conjunction is strict and every observable failure FAILS OPEN (allow) — a missing
@@ -36,7 +46,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from outage_escalation_detect import detect as _detect_outage  # noqa: E402
+from outage_escalation_detect import protocol_prefilter as _outage_prefilter  # noqa: E402
 
 _DENY_REASON = (
     "You are escalating an external-service failure to the user without a recorded "
@@ -172,7 +182,7 @@ def main() -> int:
 
     try:
         tool_input = payload.get("tool_input") or {}
-        fires = bool(_detect_outage(_ask_text(tool_input)))
+        fires = _outage_prefilter(_ask_text(tool_input))
         if not fires:
             return 0  # cheap common path: nothing to gate
         transcript_path = payload.get("transcript_path")

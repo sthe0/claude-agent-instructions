@@ -15,6 +15,15 @@ Detection is shared with the end-of-turn `Stop` gate
 `si_feedback_detect` so the advisory nudge and the gate can never drift apart.
 See that module for the tier design and the precision rationale.
 
+Asymmetry with the Stop gate (deliberate): this reminder shares ONLY the
+deterministic half — the Tier-1 'self-improvement' proper-name mention that
+`find_signals` returns. It does NOT consult the model-backed semantic judge that
+the Stop gate additionally uses for the natural-language feedback that carries no
+Tier-1 literal. This hook runs on UserPromptSubmit, the latency-critical prompt
+path: a per-prompt `claude -p` judge call would add seconds to every user turn and
+risk hook->claude->hook recursion. The Stop gate, running once at turn end, can
+afford the judge behind its precondition gate; the instant nudge stays judge-free.
+
 Stateless: no per-session suppression. Same simplicity as hook-tracker-reminder.py.
 Revisit only if false-positive noise is observed.
 

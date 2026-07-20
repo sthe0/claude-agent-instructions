@@ -1,100 +1,55 @@
 #!/usr/bin/env python3
-"""Heuristic detector: is this text an external-service-failure ESCALATION that
-has NOT been through a diagnosis?
+"""Structural pre-filter: does this text carry an external-service-failure
+PROTOCOL TOKEN (an HTTP 4xx/5xx status run or a fixed English outage token)?
 
 Difficulty removed: the coordinator, hitting an apparent external-service outage
 (a probe returns 504 / "unreachable"), sometimes surfaces the failure straight to
 the user ("сервис лежит — что делать?") — or launders the unverified premise into
 a sub-agent question — WITHOUT first reproducing it with the real client and
 enumerating hypotheses. A bare probe is not a diagnosis; the premise is often
-false (stale snapshot, wrong client, transient). This detector is the shared
-PERCEPTION half of the gate: it decides "this reads like an un-diagnosed outage
-escalation", so the deterministic hooks (hook-escalation-diagnosis-gate.py,
-the escalation_without_diagnosis turn guardian) can act on it.
+false (stale snapshot, wrong client, transient).
 
-This is a heuristic backstop, not a determinization: paraphrases it cannot match
-are expected misses, and it deliberately errs toward UNDER-firing (see below).
+Split of labor (rule vs perception): the per-language natural-language cue
+conjunction that used to decide "this reads like an un-diagnosed outage
+escalation" (a present-tense failure cue AND a user-facing escalation frame) has
+been RETIRED and moved to the model-backed semantic_judge.py ('outage_escalation'
+kind), which classifies MEANING in any language. This module keeps ONLY the
+language-agnostic protocol-token PRE-FILTER.
 
-Design (precision-first; mirrors si_feedback_detect.py):
-
-  Fires ONLY when BOTH co-occur in the text:
-    1. a PRESENT-TENSE / first-person-inability external-failure cue
-       ("не могу получить доступ", "сервис не отвечает", "endpoint недоступен",
-        "504 no upstreams", "X лежит" / "is down" / "unreachable"); AND
-    2. a user-facing ESCALATION FRAME — a question / permission-request about how
-       to proceed ("что делать", "к какому … доступ", "подскажи",
-        "нужно ли эскалировать", "what should I do", "who do I ask", …).
-
-  Returns AT MOST ONE signal string naming what matched (empty list == no fire).
-
-Precision choices (documented misses, not bugs):
-  - Narrative PAST downtime ("X лежал вчера, но починили") is a precision target
-    the matcher will sometimes MISS — present-tense cues use `\\bлежит\\b` /
-    `\\bis down\\b`, so the past form `лежал` simply does not match; no brittle
-    negative-lookahead is added that would risk the present-tense true positives.
-    Prefer under-fire over a fragile matcher.
-  - "down" in a non-outage sense ("scroll down", "the down arrow") does not match
-    the specific `\\bis down\\b` / `\\bлежит\\b` phrases.
-  - A plain outage REPORT with no ask ("сервис не отвечает") does not fire — the
-    escalation frame is required by conjunction.
+Two consumers, one pre-filter:
+  - hook-turn-end-gate.py (Stop shell): uses `protocol_prefilter` as the cheap
+    precondition, then consults the semantic judge on the assistant text.
+  - hook-escalation-diagnosis-gate.py (PreToolUse on AskUserQuestion): uses
+    `protocol_prefilter` as its INSTANT deterministic gate. It deliberately does
+    NOT call the judge — a per-AskUserQuestion `claude -p` call would add latency
+    to every ask and risk hook->claude->hook recursion. The cost is a recall
+    narrowing (precision-first, as this detector always was): a pure-NL escalation
+    with NO protocol token ("сервис лежит, к кому за доступом?") is no longer
+    pre-empted at ask time; the Stop guardian's judge is the backstop for the text
+    form of that escalation.
 """
 from __future__ import annotations
 
 import re
 
-# Present-tense / first-person-inability external-failure cues. Deliberately
-# specific phrases: the conjunction with an escalation frame (below) supplies the
-# precision, but each cue is still kept narrow enough not to match everyday prose.
-_FAILURE_RE = re.compile(
-    r"не могу (?:получить )?доступ"     # first-person inability (RU)
-    r"|не отвеча\w*"                    # "не отвечает" / "не отвечают"
-    r"|недоступ\w*"                     # недоступен / недоступна / недоступно
-    r"|не работа\w*"                    # "не работает" (present)
-    r"|\bлежит\b"                       # "X лежит" (present; PAST "лежал" won't match)
-    r"|\bis down\b"
-    r"|\bis unreachable\b"
+# External-service-failure protocol tokens: an HTTP 4xx/5xx status run, or a fixed
+# English outage token. Language-agnostic (a bare status code / gateway phrase),
+# so no per-language cue list — the meaning-level judgment is the semantic judge's.
+_PROTOCOL_RE = re.compile(
+    r"\b[45]\d\d\b"          # HTTP 4xx / 5xx status code
+    r"|\btimed? out\b"       # "timeout" is caught by the alt below; "timed out" here
+    r"|\btimeout\b"
     r"|\bunreachable\b"
-    r"|\bnot responding\b"
-    r"|\btimed? out\b"
-    r"|no upstreams"
-    r"|\b50[0234]\b",                   # 500/502/503/504 gateway errors
-    re.IGNORECASE | re.UNICODE,
-)
-
-# User-facing escalation frame: a question / permission-request to the user about
-# how to proceed. Explicit phrases only — bare "?" is intentionally excluded
-# (too broad), keeping the matcher precision-first.
-_ESCALATION_RE = re.compile(
-    r"что (?:мне |нам )?делать"
-    r"|как (?:мне |нам )?быть"
-    r"|подскаж\w*"
-    r"|эскалир\w*"                      # "нужно ли эскалировать", "эскалация"
-    r"|к ком[уy]\b"                     # "к кому обратиться / за доступом"
-    r"|к как(?:ому|ой)\b"              # "к какому сервису … доступ"
-    r"|what should i do"
-    r"|what do i do"
-    r"|how (?:do|should|can) i"
-    r"|who (?:do|should|can) i"
-    r"|should i escalate"
-    r"|need(?:s)? escalat\w*",
-    re.IGNORECASE | re.UNICODE,
+    r"|no upstreams",
+    re.IGNORECASE,
 )
 
 
-def detect(text: str) -> list[str]:
-    """Return a one-element signal list when ``text`` reads like an un-diagnosed
-    external-service-failure escalation, else []. Precision-first: fires only on
-    the conjunction of a present-tense failure cue and a user-facing escalation
-    frame."""
+def protocol_prefilter(text: str) -> bool:
+    """True iff ``text`` contains an external-service-failure protocol token (an
+    HTTP 4xx/5xx run or one of 'timeout' / 'timed out' / 'unreachable' /
+    'no upstreams'). The cheap language-agnostic precondition gate; the meaning-level
+    "is this an un-diagnosed escalation" judgment belongs to the semantic judge."""
     if not isinstance(text, str) or not text:
-        return []
-    fmatch = _FAILURE_RE.search(text)
-    if not fmatch:
-        return []
-    ematch = _ESCALATION_RE.search(text)
-    if not ematch:
-        return []
-    return [
-        f"external-service-failure escalation without diagnosis "
-        f"(failure cue: {fmatch.group(0)!r}; escalation frame: {ematch.group(0)!r})"
-    ]
+        return False
+    return _PROTOCOL_RE.search(text) is not None
