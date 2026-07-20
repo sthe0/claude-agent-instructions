@@ -411,6 +411,71 @@ def test_non_substantive_placeholder_principle_field_ok():
     assert doc.stages[0].principle.statement == "TBD"
 
 
+# --- lenient (strict=False) OLD-side snapshot load: bypasses schema tightened
+# after a plan was approved, while the strict/default path keeps rejecting it ---
+
+def test_lenient_snapshot_missing_derivation_parses_and_diffs():
+    """A substantive snapshot frozen before [stage.principle].derivation became
+    required must still load — and stay diffable — via strict=False."""
+    stage = _full_substantive_stage()
+    del stage["principle"]["derivation"]
+    data = {"meta": _substantive_meta(), "stage": [stage]}
+
+    doc = parse_plan(data, strict=False)
+    assert doc.stages[0].principle.derivation == ""
+    assert doc.stages[0].principle.statement == stage["principle"]["statement"]
+
+    new_doc = parse_plan({"meta": _substantive_meta(), "stage": [_full_substantive_stage()]})
+    assert diff_plans(doc, new_doc) in {"no_change", "refinement", "substantive"}
+
+
+def test_lenient_snapshot_strict_still_rejects_missing_derivation():
+    """The strict/default path (cmd_submit_plan, the NEW side of cmd_replan) must
+    still raise on the exact input the lenient path above accepts."""
+    stage = _full_substantive_stage()
+    del stage["principle"]["derivation"]
+    data = {"meta": _substantive_meta(), "stage": [stage]}
+
+    with pytest.raises(PlanError, match="derivation"):
+        parse_plan(data)
+
+
+def test_lenient_snapshot_missing_external_research_parses():
+    """A second substantive-only gate (the plan-level external_research meta
+    requirement, distinct from the per-stage principle check above) is also
+    bypassed on the lenient path — proving the relaxation covers the whole
+    submission-grade validation, not just one subfield."""
+    meta = _substantive_meta()
+    del meta["external_research"]
+    data = {"meta": meta, "stage": [_full_substantive_stage()]}
+
+    doc = parse_plan(data, strict=False)
+    assert doc.meta.external_research is None
+
+    new_doc = parse_plan({"meta": _substantive_meta(), "stage": [_full_substantive_stage()]})
+    assert diff_plans(doc, new_doc) in {"no_change", "refinement", "substantive"}
+
+
+def test_lenient_snapshot_strict_still_rejects_missing_external_research():
+    meta = _substantive_meta()
+    del meta["external_research"]
+    data = {"meta": meta, "stage": [_full_substantive_stage()]}
+
+    with pytest.raises(PlanError, match="external_research"):
+        parse_plan(data)
+
+
+def test_lenient_snapshot_strict_executor_alias_still_works():
+    """strict_executor is a retained back-compat alias for strict — the sole
+    caller (cli.py's cmd_replan OLD-side load) predates the rename."""
+    stage = _full_substantive_stage()
+    del stage["principle"]["derivation"]
+    data = {"meta": _substantive_meta(), "stage": [stage]}
+
+    doc = parse_plan(data, strict_executor=False)
+    assert doc.stages[0].principle.derivation == ""
+
+
 def test_supplies_derive_depends_on():
     """Explicit supplies feed the derived depends_on projection."""
     data = {
