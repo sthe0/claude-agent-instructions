@@ -75,6 +75,18 @@ def agentctl_gate_log() -> Path:
     return agentctl_dir() / "gate-log.jsonl"
 
 
+def canon_roots_file() -> Path:
+    """Machine-local list of extra canon-read-only path roots, one per line
+    (``<root>/canon-roots.local`` — see hook-guard-canon-readonly.py). Org-
+    neutral by construction: Core code only ever sees an opaque path list, never
+    an org-specific token. Honors an ``$CLAUDE_CANON_ROOTS_FILE`` override,
+    mirroring ``agentctl_edit_log()``'s ``$AGENTCTL_EDIT_LEDGER`` pattern."""
+    override = os.environ.get("CLAUDE_CANON_ROOTS_FILE")
+    if override:
+        return Path(override).expanduser()
+    return agent_home() / "canon-roots.local"
+
+
 def agentctl_scopes_dir() -> Path:
     """Session-scope registry directory (``<root>/agentctl/scopes`` — see
     session_scope/registry.py)."""
