@@ -244,6 +244,20 @@ _BINARY_ASK_QUESTION_MARKS = frozenset({
     "⁇",   # double question mark "⁇"
 })
 
+# Trailing "decoration" a confirm question is commonly wrapped in: markdown
+# emphasis (**bold?**, _em?_, `code?`, ~strike?~), closing brackets/quotes
+# ("...ok?)", '...land it?"'), and whitespace. Stripped as a suffix RUN before the
+# last-char question-mark prefilter so a bolded/parenthesised ask like
+# "**...сделать?**" or "...ok?)" is still recognised — otherwise its literal last
+# char is '*' / ')' , the judge is never called, and the prose_binary_ask Stop-gate
+# never fires (the concrete miss that motivated this: a turn ending "...потом?**").
+# Deliberately disjoint from _BINARY_ASK_QUESTION_MARKS and contains no letters/
+# digits, so rstrip() can only consume a trailing punctuation/whitespace run and can
+# never chew into real word content or expose a '?' from mid-message. Whitespace is
+# listed explicitly because str.rstrip(chars) does NOT also strip whitespace once a
+# chars argument is given.
+_BINARY_ASK_TRAILING_DECORATION = "*_`~)]}>\"'»”’ \t\r\n"
+
 # Interactive end-of-turn call: bounded well under _ADVISOR_TIMEOUT_S=20 so a
 # fail-open timeout tail stays short on an ordinary turn.
 _BINARY_ASK_TIMEOUT_S = 8
@@ -276,8 +290,10 @@ def judge_binary_ask(
     'Починить заодно?' both missed it) with a model judgment, per CLAUDE.md's
     "separate rule from perception" principle: perception (is this a confirm
     question?) goes to the model; the deterministic part is a language-independent
-    punctuation prefilter (the message must actually END in a question mark from
-    _BINARY_ASK_QUESTION_MARKS) that keeps the model off every non-question turn.
+    punctuation prefilter (the message must END in a question mark from
+    _BINARY_ASK_QUESTION_MARKS once a trailing run of formatting decoration --
+    markdown emphasis, closing brackets/quotes, whitespace: _BINARY_ASK_TRAILING_
+    DECORATION -- is stripped) that keeps the model off every non-question turn.
 
     Fail-open, mirroring judge()/acceptance_judge(): disabled, no runner, a
     non-zero exit, an empty/unparseable answer, or any exception all return False
@@ -285,7 +301,7 @@ def judge_binary_ask(
     a fabricated True) is the safe failure direction."""
     if not enabled or not isinstance(final_text, str) or not final_text:
         return False
-    stripped = final_text.rstrip()
+    stripped = final_text.rstrip(_BINARY_ASK_TRAILING_DECORATION)
     if not stripped or stripped[-1] not in _BINARY_ASK_QUESTION_MARKS:
         return False
     if runner is None:

@@ -444,3 +444,21 @@ class TestJudgeBinaryAsk:
 
     def test_no_runner(self):
         assert advisor.judge_binary_ask("Apply this change?", None) is False
+
+    def test_bold_wrapped_question_reaches_runner(self):
+        # The concrete miss: a confirm question wrapped in markdown bold ends in
+        # '**', not '?'. The trailing-decoration rstrip must expose the '?' so the
+        # judge is actually consulted (and here returns YES -> True).
+        assert advisor.judge_binary_ask("**Применить правку?**", _fake_runner("YES")) is True
+
+    def test_paren_close_after_question_reaches_runner(self):
+        assert advisor.judge_binary_ask("Применить правку?)", _fake_runner("YES")) is True
+
+    def test_quote_close_after_question_reaches_runner(self):
+        assert advisor.judge_binary_ask('Land it?"', _fake_runner("YES")) is True
+
+    def test_decoration_then_non_question_skips_runner(self):
+        # A bolded NON-question must still skip the runner: stripping the trailing
+        # '**' exposes '.', not a question mark, so the raising runner is never
+        # called (no over-strip into word content, no false positive).
+        assert advisor.judge_binary_ask("**Готово.**", _raising_runner) is False
