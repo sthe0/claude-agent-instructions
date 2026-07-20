@@ -456,16 +456,31 @@ def verify_command_reachability_blockers(stages, final_check, repo_root) -> list
     return blockers
 
 
-def parse_plan(data: dict, *, strict_executor: bool = True) -> PlanDoc:
+def parse_plan(
+    data: dict, *, strict: bool = True, strict_executor: bool | None = None
+) -> PlanDoc:
     """Pure: a parsed-TOML dict -> PlanDoc. No filesystem.
 
-    strict_executor=True (default) rejects any stage executor outside the
-    {in_thread, spawn:<kind>} vocabulary — the path every newly authored or
-    resubmitted plan goes through (cmd_submit_plan, the new side of cmd_replan).
-    strict_executor=False tolerates legacy free-text executors when loading a
-    plan purely for read-only comparison (cmd_replan's OLD/approved-snapshot
-    side) — plans approved before this vocabulary existed must stay diffable
-    without retroactively bricking their session's replan flow."""
+    strict=True (default) is the full submission-grade validation every newly
+    authored or resubmitted plan goes through (cmd_submit_plan, the NEW side of
+    cmd_replan): the executor vocabulary check, the substantive `external_research`
+    meta requirement, and the per-stage substantive activity/principle checks.
+
+    strict=False loads a plan purely as a read-only comparison baseline
+    (cmd_replan's OLD/approved-snapshot side). It keeps the BASIC structural
+    parse — [meta].task_id, at least one [[stage]], the per-stage
+    title/executor/expected_result_image/done_criterion, unique indices, and
+    _validate_graph — but skips every submission-grade check above, so a snapshot
+    frozen before a newer trunk tightened the schema (e.g. before
+    [stage.principle].derivation became required) stays diffable without
+    retroactively bricking its own session's replan flow. On this path every
+    principle subfield is read via .get() so a genuinely old snapshot missing a
+    subfield parses to a partial Principle instead of raising KeyError.
+
+    strict_executor is a retained back-compat alias for strict (the flag once
+    only gated the executor vocabulary check); when given it overrides strict."""
+    if strict_executor is not None:
+        strict = strict_executor
     if "meta" not in data:
         raise PlanError("plan missing [meta] table")
     m = data["meta"]
@@ -500,7 +515,7 @@ def parse_plan(data: dict, *, strict_executor: bool = True) -> PlanDoc:
 
     is_substantive = meta.weight_class is not None and meta.weight_class.lower() == "substantive"
 
-    if is_substantive and not meta.external_research:
+    if strict and is_substantive and not meta.external_research:
         raise PlanError(
             "[meta] missing 'external_research' (required for substantive plans): "
             "record whether internet/intranet research for information or ideas would "
@@ -513,25 +528,37 @@ def parse_plan(data: dict, *, strict_executor: bool = True) -> PlanDoc:
         for required in ("title", "executor", "expected_result_image", "done_criterion"):
             if not s.get(required):
                 raise PlanError(f"stage {index} missing {required!r}")
-        if strict_executor and not _EXECUTOR_RE.match(str(s["executor"])):
+        if strict and not _EXECUTOR_RE.match(str(s["executor"])):
             raise PlanError(
                 f"stage {index} executor {s['executor']!r} is outside the vocabulary "
                 "(expected 'in_thread' or 'spawn:<kind>')"
             )
-        if is_substantive:
+        if strict and is_substantive:
             _validate_substantive_stage(s, index)
         raw_principle = s.get("principle")
-        principle = (
-            Principle(
-                statement=str(raw_principle["statement"]),
-                source=str(raw_principle["source"]),
-                derivation=str(raw_principle.get("derivation", "")),
-                confidence=str(raw_principle["confidence"]),
-                refutation=str(raw_principle["refutation"]),
-            )
-            if isinstance(raw_principle, dict) and raw_principle
-            else None
-        )
+        principle = None
+        if isinstance(raw_principle, dict) and raw_principle:
+            if strict:
+                # Submission grade: _validate_substantive_stage already guaranteed
+                # the required subfields, so a missing one here is a genuine bug —
+                # keep direct indexing so it fails loudly rather than silently.
+                principle = Principle(
+                    statement=str(raw_principle["statement"]),
+                    source=str(raw_principle["source"]),
+                    derivation=str(raw_principle.get("derivation", "")),
+                    confidence=str(raw_principle["confidence"]),
+                    refutation=str(raw_principle["refutation"]),
+                )
+            else:
+                # Read-only baseline: a snapshot frozen before a subfield became
+                # required must parse to a partial Principle, not raise KeyError.
+                principle = Principle(
+                    statement=str(raw_principle.get("statement", "")),
+                    source=str(raw_principle.get("source", "")),
+                    derivation=str(raw_principle.get("derivation", "")),
+                    confidence=str(raw_principle.get("confidence", "")),
+                    refutation=str(raw_principle.get("refutation", "")),
+                )
         stages.append(
             Stage(
                 index=index,
@@ -574,13 +601,15 @@ def parse_plan(data: dict, *, strict_executor: bool = True) -> PlanDoc:
     return PlanDoc(meta=meta, stages=stages)
 
 
-def load_plan(path: str | Path, *, strict_executor: bool = True) -> PlanDoc:
+def load_plan(
+    path: str | Path, *, strict: bool = True, strict_executor: bool | None = None
+) -> PlanDoc:
     p = Path(path)
     if not p.exists():
         raise PlanError(f"plan file not found: {p}")
     with p.open("rb") as fh:
         data = tomllib.load(fh)
-    return parse_plan(data, strict_executor=strict_executor)
+    return parse_plan(data, strict=strict, strict_executor=strict_executor)
 
 
 def _structural_signature(doc: PlanDoc) -> dict:
