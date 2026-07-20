@@ -1213,6 +1213,19 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
             False, state.node, "noop",
             f"unknown presentation kind {kind!r}; expected one of {PLAN_PRESENTATION_KINDS}",
         )
+    if kind == PLAN_PRESENTATION_KIND_ESSENCE:
+        # essence is the receipt an approval ask is assembled from — gate it on
+        # the same plan_review_blockers precondition as approve/replan, so a
+        # thinker review must exist BEFORE that receipt can be stamped, not only
+        # before the terminal approve. `full` is the detailed on-request view,
+        # not the approval trigger, so it stays ungated.
+        prblock = gates.plan_review_blockers(state, state.plan_path)
+        _log_gate(state, "plan_review", prblock, passed=not prblock)
+        if prblock:
+            return Directive(
+                False, state.node, "noop", "cannot present essence",
+                data={"blockers": prblock},
+            )
     rendering_file = getattr(args, "rendering_file", None)
     if not rendering_file:
         return Directive(False, state.node, "noop", "--rendering-file is required")

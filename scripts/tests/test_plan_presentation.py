@@ -217,6 +217,68 @@ def test_essence_and_full_presentations_leave_two_receipts(store, fixtures_dir, 
     assert sorted(p.kind for p in store.load(sid).plan_presentations) == ["essence", "full"]
 
 
+# --- cmd_present_plan essence gated on plan_review_blockers -------------------
+
+@pytest.fixture
+def review_gate_on(monkeypatch):
+    monkeypatch.setenv("AGENTCTL_PLAN_REVIEW", "1")
+
+
+def test_present_plan_essence_refused_without_review_nothing_stamped(
+    store, fixtures_dir, tmp_path, gate_on, review_gate_on
+):
+    sid = "prg1"
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    _to_plan_ready(store, sid, plan)
+    rendering = _write_rendering(tmp_path, "Summary of the plan.")
+
+    d = cli.cmd_present_plan(
+        ns(session=sid, kind="essence", rendering_file=rendering, emit_skeleton=False),
+        store=store,
+    )
+    assert d.ok is False
+    assert d.data["blockers"] == gates.plan_review_blockers(store.load(sid), plan)
+    assert store.load(sid).plan_presentations == []
+
+
+def test_present_plan_essence_allowed_after_passing_review(
+    store, fixtures_dir, tmp_path, gate_on, review_gate_on
+):
+    sid = "prg2"
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    _to_plan_ready(store, sid, plan)
+    cli.cmd_plan_review(
+        ns(session=sid, verdict="pass", reviewer="thinker", concerns=None, note="", target=None),
+        store=store,
+    )
+    rendering = _write_rendering(tmp_path, "Summary of the plan.")
+
+    d = cli.cmd_present_plan(
+        ns(session=sid, kind="essence", rendering_file=rendering, emit_skeleton=False),
+        store=store,
+    )
+    assert d.ok is True
+    assert [p.kind for p in store.load(sid).plan_presentations] == ["essence"]
+
+
+def test_present_plan_full_not_gated_by_plan_review(
+    store, fixtures_dir, tmp_path, gate_on, review_gate_on
+):
+    sid = "prg3"
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    _to_plan_ready(store, sid, plan)
+    rendering = _write_rendering(
+        tmp_path, "[stage 1] Scaffold module\nbody1\n[stage 2] Add tests\nbody2\n"
+    )
+
+    d = cli.cmd_present_plan(
+        ns(session=sid, kind="full", rendering_file=rendering, emit_skeleton=False),
+        store=store,
+    )
+    assert d.ok is True
+    assert [p.kind for p in store.load(sid).plan_presentations] == ["full"]
+
+
 def test_present_plan_over_cap_rejected_not_truncated(store, fixtures_dir, tmp_path, gate_on):
     sid = "cap1"
     plan = str(fixtures_dir / "plan_two_stage.toml")
