@@ -55,6 +55,16 @@ Exhaustiveness cross-check (standing, default-on — runs every invocation):
   code scope (``*.py``/``*.sh``, by suffix), or the two named self-reference
   exclusions above — nothing else. Anything left over is named in the
   failure output.
+
+``--staged`` mode:
+  Whole-repo mode (the default) fails on every violation, including one
+  already true at HEAD — so an unrelated commit is blocked by a pre-existing
+  red. ``--staged`` reports only what the staged change ITSELF introduces:
+  each of the three violation categories (unallowed / stale / ungoverned) is
+  diffed against a clean HEAD baseline via ``lib.baseline_diff``, at content
+  granularity (not line position), so a pre-existing violation, one in a
+  file this change never touches, or one whose line merely shifted, is
+  tolerated. See ``scan_staged`` for the mechanism and its degrade path.
 """
 from __future__ import annotations
 
@@ -65,8 +75,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import baseline_diff  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ALLOWLIST_PATH = REPO_ROOT / "scripts" / "config-root-refs-allowlist.txt"
+ALLOWLIST_RELPATH = "scripts/config-root-refs-allowlist.txt"
 
 # Code-scope suffixes governed by the sibling S2 enumerator
 # (scripts/tests/test_config_root.py::_root_offenders). Doc scope is the
@@ -316,12 +330,103 @@ def scan(repo_root: Path = REPO_ROOT, allowlist_path: Path = ALLOWLIST_PATH) -> 
     return 0
 
 
+def _new_unallowed(repo_root: Path, *, on_degraded=None) -> "list[tuple[str, int, str]]":
+    def finder(root: Path):
+        occurrences = find_occurrences(root)
+        entries = parse_allowlist(root / ALLOWLIST_RELPATH)
+        return find_unallowed(occurrences, entries)
+
+    return baseline_diff.new_violations(
+        finder, repo_root,
+        key=lambda item: (item[0], item[2].strip()),
+        on_degraded=on_degraded,
+    )
+
+
+def _new_stale_entries(repo_root: Path, *, on_degraded=None) -> "list[dict]":
+    def finder(root: Path):
+        occurrences = find_occurrences(root)
+        entries = parse_allowlist(root / ALLOWLIST_RELPATH)
+        return find_stale_entries(entries, occurrences)
+
+    return baseline_diff.new_violations(
+        finder, repo_root,
+        key=lambda entry: entry["raw"].strip(),
+        on_degraded=on_degraded,
+    )
+
+
+def _new_ungoverned(repo_root: Path, *, on_degraded=None) -> "list[str]":
+    return baseline_diff.new_violations(
+        find_ungoverned, repo_root,
+        key=lambda rel: (rel,),
+        on_degraded=on_degraded,
+    )
+
+
+def scan_staged(repo_root: Path = REPO_ROOT) -> int:
+    """``--staged`` mode: fail only on violations the staged change INTRODUCES.
+
+    Diffs each of the three violation categories against a clean HEAD
+    baseline via ``lib.baseline_diff`` — a pre-existing violation (already
+    true at HEAD) or one living in a file this change never touches is
+    tolerated, so an unrelated commit is never blocked by a red this change
+    did not create. The allowlist for the baseline run is resolved from the
+    BASELINE root (never the module-level ``ALLOWLIST_PATH``, which is
+    pinned to this serving checkout), so the diff compares like against
+    like. A baseline that cannot be constructed (unborn HEAD, not a git work
+    tree) degrades to whole-repo reporting rather than silently passing a
+    real new violation.
+    """
+    degraded_notes: "list[str]" = []
+    try:
+        new_unallowed = _new_unallowed(repo_root, on_degraded=degraded_notes.append)
+        new_stale = _new_stale_entries(repo_root, on_degraded=degraded_notes.append)
+        new_ungoverned = _new_ungoverned(repo_root, on_degraded=degraded_notes.append)
+    except AllowlistError as exc:
+        print(f"verify-config-root-refs: FAIL {exc}")
+        return 1
+
+    if new_unallowed:
+        print(f"verify-config-root-refs: {len(new_unallowed)} newly-introduced non-allowlisted legacy reference(s):")
+        for rel, lineno, line in new_unallowed:
+            print(f"  {rel}:{lineno}: {line.strip()}")
+    if new_stale:
+        print(f"verify-config-root-refs: {len(new_stale)} newly-introduced stale allowlist entrie(s):")
+        for e in new_stale:
+            print(f"  {ALLOWLIST_RELPATH}:{e['lineno']}: {e['raw'].strip()}")
+    if new_ungoverned:
+        print(f"verify-config-root-refs: {len(new_ungoverned)} newly-introduced ungoverned file(s):")
+        for rel in new_ungoverned:
+            print(f"  {rel}")
+
+    for note in degraded_notes:
+        print(f"verify-config-root-refs: NOTE (--staged): {note}")
+
+    if new_unallowed or new_stale or new_ungoverned:
+        print(
+            "\nConvert each newly-introduced reference to the root-generic form "
+            "($CLAUDE_CONFIG_DIR / 'the config root'), or add a path:line "
+            "allowlist entry with a reason. Run without --staged for the full "
+            "whole-repo picture (including any pre-existing red)."
+        )
+        return 1
+
+    print("verify-config-root-refs: OK (--staged) — no newly-introduced legacy reference(s)")
+    return 0
+
+
 def main(argv: "list[str] | None" = None) -> int:
     parser = argparse.ArgumentParser(
         description="Fail on legacy ~/.claude / $HOME/.claude references outside the allowlist (doc scope)."
     )
-    parser.add_argument("--staged", action="store_true", help="accepted; ignored (whole-repo check)")
-    parser.parse_args(argv)
+    parser.add_argument(
+        "--staged", action="store_true",
+        help="report only violations introduced since HEAD (vs whole-repo)",
+    )
+    args = parser.parse_args(argv)
+    if args.staged:
+        return scan_staged()
     return scan()
 
 
