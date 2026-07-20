@@ -53,6 +53,8 @@ What this skill is **not**:
 
 Adapt the detail to the project's conventions. If project memory specifies a comment format, follow it. Otherwise: terse, factual, linkable. Plan posts include the markdown plan (or a link to a plan file) and flag stages needing approval. Progress posts are one line plus an artifact link. Final-result posts list all artifacts.
 
+For any comment longer than a few lines — a report, a methodology or result summary — also apply the **exposition order and term-density** rules in [tech-writer](../specializations/tech-writer/SKILL.md) § What to say, and in what order: the **base difficulty/task first**, general before particular, one honest thesis in the lead, thresholds and per-item detail under a fold. A correct-but-dense comment the reader cannot parse is a failed post, not a thorough one (DEEPAGENT-445: a full, accurate report rejected as unreadable "нейрослоп").
+
 ### Experience record lives in the ticket
 
 For ticket-driven work the **ticket is the single source of truth for the resolved difficulty** — do not duplicate it into a full experience leaf. At resolution, post the structured record (Difficulty / Order & criterion / Context / Working plan) as the final comment, then write only a **thin pointer leaf** (`ticket:` frontmatter + a one-line reusable hook). `scripts/record-experience.py ticket …` does both: it writes the thin leaf and prints the comment body to post here. Schema: [experience-leaf-schema.md](../../memory-global/leaves/experience-leaf-schema.md). This keeps the ticket and memory from diverging on later edits and saves context that would go to re-typing the plan.

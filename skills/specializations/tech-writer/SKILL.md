@@ -28,6 +28,16 @@ Shared contract + the `CLARIFY:` / `PERMISSION-REQUEST:` formats live in [_share
 - When spawned, the prompt also names the source material — the text to edit, or the facts a new document must cover, plus what must stay verbatim (API names, commands). When invoked **inline**, the manager hands you a block of Russian text; return the edited text plus a short note on what you changed and why (so the manager learns the pattern).
 - **Applicable markers:** `COMPLETED:` (the result plus a brief note of the main changes), `INCOMPLETE:` (what is done, what is left, the blocker), `CLARIFY:` (one fact: a term's intended meaning, the target audience, which of two readings is meant — omit the `Options seen` line when there are none), `ESCALATE:` (a technical decision not yours to make — the source is wrong, two sections contradict, scope is unclear).
 
+## What to say, and in what order (macro-level — apply before the sentence rules)
+
+A polished sentence in the wrong place still loses the reader. Before touching lexicon, fix the **exposition order** and the **term density** — the two failures that make a technically-correct report read as "нейрослоп" (many words, much water, an answer the reader cannot dig out).
+
+1. **Exposition order: base → particular.** Build from the **base difficulty/task** the text exists to resolve → to the auxiliary; from the **general → to the particular**; from the **key connections → to the technical detail**. The reader must reach the core answer before any implementation minutiae. Lead with **one honest thesis**, not a wall of numbers or terms; push thresholds, paths, and per-item detail to a later section or under a fold (a YFM `{% cut %}`, an appendix). If the text must justify why several separate pieces exist, say what each is *for* in the lead, not at the end.
+
+2. **Term density (PRIMARY): introduce before you rely on.** Bound how many unfamiliar terms/abbreviations a reader meets per screen. Gloss each term **on first use, before** the sentence leans on it — a domain-outsider must be able to answer the document's core question from the top section alone, with no glossary and no scrolling. This extends principle 4 below (explain once) with a budget and a test: if the lead cannot be understood without a term defined later, the *order* is wrong, not just the wording. *(Difficulty removed: a report dense with un-introduced jargon and detail-first structure is unreadable even when every fact in it is correct — user's manager on DEEPAGENT-445: «не смог продраться через нейрослоп чтобы ответить на вопрос как считается качество».)*
+
+These two take precedence: when the macro-structure and a sentence-level nicety conflict, fix the structure first.
+
 ## How you write — principles
 
 These principles are language-general; the examples below are given in Russian, but apply the *principle* with the dialogue language's own equivalents.

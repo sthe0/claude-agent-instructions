@@ -32,3 +32,4 @@ A report the user (or the next step) can act on without re-asking:
 ## See also
 
 - `~/.claude-agent/CLAUDE.md` § On task resolution § Outcome format — the short pointer that loads this leaf.
+- `skills/specializations/tech-writer/SKILL.md` § What to say, and in what order — the macro-level companion for any report longer than a few lines: exposition order (base→particular) and a term-density budget. Point (5)'s **main-first** is the same principle applied at the headline; the tech-writer section carries the full structural rule (introduce terms before relying on them, detail under a fold).
