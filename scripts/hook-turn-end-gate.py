@@ -73,17 +73,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from si_feedback_detect import find_signals  # noqa: E402
 from long_job_detect import detect as _detect_long_job  # noqa: E402
 from outage_escalation_detect import detect as _detect_outage  # noqa: E402
-from binary_ask_detect import detect as _detect_binary_ask  # noqa: E402
 from timer_arm_detect import (  # noqa: E402
     closure_sought as _closure_sought,
     waiter_armed as _waiter_armed,
     iter_bash_commands as _iter_bash_commands,
 )
+from agentctl import advisor  # noqa: E402
+from agentctl.advisor import judge_binary_ask  # noqa: E402
 
 try:
     from lib import config_root  # noqa: E402
 except Exception:  # pragma: no cover - fail-open if the resolver is unavailable
     config_root = None
+
+# Kill-switch for the semantic prose_binary_ask judge: set to "0" to force the
+# guardian off without a code change. Direction is safe-by-default: an unset or
+# unrecognised value leaves the detector ENABLED, so a forgotten wire never
+# silently disables the obligation.
+_BINARY_ASK_KILLSWITCH_ENV = "CLAUDE_BINARY_ASK_SEMANTIC"
 
 # Skills whose invocation this turn satisfies the self-improvement discipline.
 _SATISFYING_SKILLS = frozenset({"self-improvement", "overcome-difficulty"})
@@ -123,8 +130,10 @@ class TurnContext:
                      here, by the shell from agentctl_state.
     prose_binary_ask : whether this turn's assistant text ENDS with a binary /
                      confirm question posed in prose instead of via an
-                     AskUserQuestion click-gate (shared binary_ask_detect scan
-                     over the concatenated assistant text). Computed by the shell.
+                     AskUserQuestion click-gate (language-independent punctuation
+                     prefilter + agentctl.advisor.judge_binary_ask semantic model
+                     verdict over the concatenated assistant text). Computed by
+                     the shell.
     """
 
     last_user_text: str
@@ -200,9 +209,9 @@ def prose_binary_ask_blockers(ctx: TurnContext) -> list[str]:
     here no ask tool is called at all, so only this Stop text-scan can catch it.
 
     Fires ONLY under the full conjunction, all read from the frozen context:
-      - prose_binary_ask (the shell's binary_ask_detect scan over this turn's
-        assistant text fired: the final utterance is a confirm question, not
-        open-ended);
+      - prose_binary_ask (the shell's judge_binary_ask semantic scan over this
+        turn's assistant text fired: the final utterance is a confirm question,
+        not open-ended or rhetorical);
       - no AskUserQuestion was invoked this turn (the click-gate the norm wants);
       - the turn is not already seeking closure (ctx.closure_sought) — the
         legitimate "arm sleep-2 → ask next turn" split must not be nagged.
@@ -472,8 +481,13 @@ def _load_agentctl_state(session_id: str | None):
         return None
 
 
-def build_context(payload: dict) -> TurnContext | None:
-    """Freeze this turn's facts, or None when the turn cannot be read (fail-open)."""
+def build_context(payload: dict, *, runner: Callable | None = None) -> TurnContext | None:
+    """Freeze this turn's facts, or None when the turn cannot be read (fail-open).
+
+    ``runner`` is injected straight into judge_binary_ask (None -> that judge
+    fails open to False, exactly like advisor absent). The real invocation point
+    (main()) passes advisor.subprocess_runner; tests inject a fake runner or omit
+    it entirely to keep the suite free of live model calls."""
     transcript_path = payload.get("transcript_path")
     if not isinstance(transcript_path, str) or not transcript_path:
         return None
@@ -509,7 +523,11 @@ def build_context(payload: dict) -> TurnContext | None:
         autowake_armed=_waiter_armed(turn_entries),
         outage_escalation_sought=bool(_detect_outage(_assistant_text_of(turn_entries))),
         difficulty_declared=_difficulty_declared(agentctl_state),
-        prose_binary_ask=bool(_detect_binary_ask(_assistant_text_of(turn_entries))),
+        prose_binary_ask=judge_binary_ask(
+            _assistant_text_of(turn_entries),
+            runner,
+            enabled=os.environ.get(_BINARY_ASK_KILLSWITCH_ENV) != "0",
+        ),
     )
 
 
@@ -520,8 +538,11 @@ def _marker_path(session_key: str, user_text: str) -> Path:
     return _state_dir() / digest
 
 
-def decide(payload: dict) -> dict | None:
-    """Core decision. Returns a block-directive dict, or None to allow."""
+def decide(payload: dict, *, runner: Callable | None = None) -> dict | None:
+    """Core decision. Returns a block-directive dict, or None to allow.
+
+    ``runner`` is threaded straight through to build_context() for the semantic
+    prose_binary_ask judge; see build_context's docstring."""
     if payload.get("stop_hook_active"):
         return None
 
@@ -536,7 +557,7 @@ def decide(payload: dict) -> dict | None:
     except ValueError:
         pass
 
-    ctx = build_context(payload)
+    ctx = build_context(payload, runner=runner)
     if ctx is None:
         return None
 
@@ -571,7 +592,7 @@ def main() -> int:
     if not isinstance(payload, dict):
         return 0
     try:
-        directive = decide(payload)
+        directive = decide(payload, runner=advisor.subprocess_runner)
     except Exception:
         return 0  # fail-open — a hook must never wedge the session
     if directive is not None:

@@ -232,6 +232,77 @@ def acceptance_judge(observation: str, expected: str, runner, *, enabled: bool) 
         return None, "judge raised (fail-open)"
 
 
+# Language-independent question-mark set for the pre-model prefilter: the ASCII
+# '?' plus the fullwidth CJK, Arabic, Greek, and double question marks. Deliberately
+# NOT ASCII-only endswith('?') — that would silently miss every CJK/Arabic/Greek
+# question, defeating the point of a language-independent detector.
+_BINARY_ASK_QUESTION_MARKS = frozenset({
+    "?",        # U+003F ASCII question mark
+    "？",   # fullwidth CJK question mark "？"
+    "؟",   # Arabic question mark "؟"
+    ";",   # Greek question mark (looks like ';')
+    "⁇",   # double question mark "⁇"
+})
+
+# Interactive end-of-turn call: bounded well under _ADVISOR_TIMEOUT_S=20 so a
+# fail-open timeout tail stays short on an ordinary turn.
+_BINARY_ASK_TIMEOUT_S = 8
+
+_BINARY_ASK_PROMPT = (
+    "You are given the FINAL message of an AI assistant's turn, written in any "
+    "language. Decide whether the message ends with a BINARY or ONE-OF-N CONFIRM "
+    "question -- one whose right answer instrument is a button/click (apply, push, "
+    "land, save, choose option A/B/C, confirm a resolution) -- as opposed to a "
+    "question that expects a free-text answer or is merely rhetorical.\n\n"
+    "Answer YES only for decisional / action / resolution / scope confirm "
+    "questions, for example (any language): \"Apply this change?\", \"Запустить "
+    "бенчмарк?\", \"Push to main or open a PR?\", \"Считаем задачу решённой?\", "
+    "\"Land it?\", \"Оставляем как есть или откатываем?\".\n\n"
+    "Answer NO for: rhetorical or comprehension checks (\"Понятно?\", \"Makes "
+    "sense?\", \"ok?\", \"ясно?\", \"Yeah?\"), open-ended / wh-questions, purely "
+    "informational questions, or when the message poses no question at all.\n\n"
+    "Answer on the FIRST line with exactly YES or NO, nothing else.\n\n"
+    "MESSAGE:\n{text}"
+)
+
+
+def judge_binary_ask(
+    final_text: str, runner, *, enabled: bool = True, timeout: int = _BINARY_ASK_TIMEOUT_S
+) -> bool:
+    """Language-independent semantic judge: does ``final_text`` end with a binary /
+    confirm question that should have gone through an AskUserQuestion click-gate?
+
+    Replaces a regex confirm-verb lexicon (leaky in every language -- 'Fix it?',
+    'Починить заодно?' both missed it) with a model judgment, per CLAUDE.md's
+    "separate rule from perception" principle: perception (is this a confirm
+    question?) goes to the model; the deterministic part is a language-independent
+    punctuation prefilter (the message must actually END in a question mark from
+    _BINARY_ASK_QUESTION_MARKS) that keeps the model off every non-question turn.
+
+    Fail-open, mirroring judge()/acceptance_judge(): disabled, no runner, a
+    non-zero exit, an empty/unparseable answer, or any exception all return False
+    -- the guardian this feeds is a Stop-gate BLOCKER, so a confident False (never
+    a fabricated True) is the safe failure direction."""
+    if not enabled or not isinstance(final_text, str) or not final_text:
+        return False
+    stripped = final_text.rstrip()
+    if not stripped or stripped[-1] not in _BINARY_ASK_QUESTION_MARKS:
+        return False
+    if runner is None:
+        return False
+    try:
+        prompt = _BINARY_ASK_PROMPT.format(text=final_text)
+        result = runner(["claude", "-p", "--model", _JUDGE_MODEL, prompt], timeout=timeout)
+        if result.returncode != 0:
+            return False
+        lines = [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
+        if not lines:
+            return False
+        return lines[0].upper().startswith("YES")
+    except Exception:
+        return False
+
+
 def resolve_enabled(weight_class: str | None, *, thresholds: Thresholds | None = None) -> bool:
     """Resolve whether the advisor should run for this call.
 

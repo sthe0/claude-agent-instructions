@@ -29,12 +29,12 @@ from agentctl.state import (
 
 
 def _fake_runner(text, code=0):
-    def runner(argv):
+    def runner(argv, **kwargs):
         return RunResult(code, stdout=text, stderr="")
     return runner
 
 
-def _raising_runner(argv):
+def _raising_runner(argv, **kwargs):
     raise RuntimeError("unexpected runner call")
 
 
@@ -421,3 +421,26 @@ class TestRecordResultAcceptanceWiring:
         )
         assert d.ok is True
         assert "advisories" not in d.data
+
+
+class TestJudgeBinaryAsk:
+    def test_yes(self):
+        assert advisor.judge_binary_ask("Apply this change?", _fake_runner("YES")) is True
+
+    def test_no(self):
+        assert advisor.judge_binary_ask("Apply this change?", _fake_runner("NO")) is False
+
+    def test_raising_runner_fails_open(self):
+        assert advisor.judge_binary_ask("Apply this change?", _raising_runner) is False
+
+    def test_no_question_mark_skips_runner(self):
+        assert advisor.judge_binary_ask("Applied the change.", _raising_runner) is False
+
+    def test_fullwidth_question_mark(self):
+        assert advisor.judge_binary_ask("提交做吗？", _fake_runner("YES")) is True
+
+    def test_disabled(self):
+        assert advisor.judge_binary_ask("Apply this change?", _fake_runner("YES"), enabled=False) is False
+
+    def test_no_runner(self):
+        assert advisor.judge_binary_ask("Apply this change?", None) is False

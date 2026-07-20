@@ -32,8 +32,17 @@ from pathlib import Path
 
 import pytest
 
+from agentctl.dispatch import RunResult
+
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 HOOK_SCRIPT = SCRIPTS_DIR / "hook-turn-end-gate.py"
+
+
+def _fake_runner(text, code=0):
+    """Inject a canned judge_binary_ask verdict -- never a live model call."""
+    def runner(argv, **kwargs):
+        return RunResult(code, stdout=text, stderr="")
+    return runner
 
 
 def _load_module():
@@ -764,7 +773,7 @@ def test_escalation_silent_when_no_escalation_text(tmp_path, isolated_state, mon
 
 # --- prose_binary_ask guardian ----------------------------------------------
 
-# Assistant text that fires binary_ask_detect (a trailing confirm question posed
+# Assistant text that fires judge_binary_ask (a trailing confirm question posed
 # in prose). NEUTRAL user text is paired with it so the self-improvement guardian
 # never co-fires and assertions stay clean.
 PROSE_ASK_TEXT = "Готов черновик v11. Публикуем v11?"
@@ -808,16 +817,70 @@ def test_prose_binary_ask_registered_before_resolution():
 
 
 def test_prose_binary_ask_blocks_via_decide(tmp_path, isolated_state):
-    # Neutral user text + assistant text ending in a prose confirm -> only the
-    # prose_binary_ask guardian fires (no state, no feedback, no outage).
+    # Neutral user text + assistant text ending in a prose confirm, semantic
+    # judge says YES -> only the prose_binary_ask guardian fires (no state, no
+    # feedback, no outage).
     t = _write_transcript(tmp_path, [
         _user_line("add a parser for the config file"),
         _assistant_text_line(PROSE_ASK_TEXT),
     ])
-    out = _mod.decide({"transcript_path": str(t), "stop_hook_active": False})
+    out = _mod.decide(
+        {"transcript_path": str(t), "stop_hook_active": False},
+        runner=_fake_runner("YES"),
+    )
     assert out is not None and out["decision"] == "block"
     assert "AskUserQuestion" in out["reason"]
     assert "self-improvement" not in out["reason"]
+
+
+def test_prose_binary_ask_silent_when_judge_says_no(tmp_path, isolated_state):
+    # Same prose confirm text, but the semantic judge says NO -> no block.
+    t = _write_transcript(tmp_path, [
+        _user_line("add a parser for the config file"),
+        _assistant_text_line(PROSE_ASK_TEXT),
+    ])
+    out = _mod.decide(
+        {"transcript_path": str(t), "stop_hook_active": False},
+        runner=_fake_runner("NO"),
+    )
+    assert out is None
+
+
+def test_prose_binary_ask_blocks_on_russian_decisional_question(tmp_path, isolated_state):
+    # The empirical miss that motivated this task: a confirm-verb lexicon
+    # missed "Починить заодно?" in every language it was tried in. The semantic
+    # judge, given YES, must fire; given NO, must stay silent.
+    t = _write_transcript(tmp_path, [
+        _user_line("add a parser for the config file"),
+        _assistant_text_line("Починить заодно?"),
+    ])
+    blocked = _mod.decide(
+        {"transcript_path": str(t), "stop_hook_active": False},
+        runner=_fake_runner("YES"),
+    )
+    assert blocked is not None and blocked["decision"] == "block"
+
+    allowed = _mod.decide(
+        {"transcript_path": str(t), "stop_hook_active": False},
+        runner=_fake_runner("NO"),
+    )
+    assert allowed is None
+
+
+def test_prose_binary_ask_silent_on_rhetorical_comprehension_check(tmp_path, isolated_state):
+    # Negative pin against over-fire (block-2 review): a rhetorical
+    # comprehension check must not block even if a runner were somehow to
+    # answer YES -- the judge is prompted to say NO here, and this test locks
+    # that expectation down.
+    t = _write_transcript(tmp_path, [
+        _user_line("add a parser for the config file"),
+        _assistant_text_line("Понятно?"),
+    ])
+    out = _mod.decide(
+        {"transcript_path": str(t), "stop_hook_active": False},
+        runner=_fake_runner("NO"),
+    )
+    assert out is None
 
 
 def test_prose_binary_ask_silent_when_ask_emitted_this_turn(tmp_path, isolated_state):
