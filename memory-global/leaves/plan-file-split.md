@@ -3,10 +3,21 @@ name: plan-file-split
 description: For substantive multi-stage plans that grow above ~20 KB, split the single plan markdown into an index file (`<slug>.md`) plus per-stage files (`<slug>-stage-<N>.md`). The index carries the structural sections (Problem, Stages-overview pointers, Final verification, Risks); each stage file carries that stage's Output / Expected result image / Actual effort. This lets later Read calls pull only the active stage instead of re-loading the entire plan.
 type: reference
 created: 2026-05-27
-last_verified: 2026-05-27
+last_verified: 2026-07-18
 ---
 
 # Plan-file split
+
+> **Legacy (`.md`-era) + one corrected hazard — read this first.** This leaf predates the
+> `agentctl` engine, which now writes a **single TOML** plan (`~/.claude-agent/plans/<slug>.toml`)
+> and tracks stages itself; the per-stage-`.md` split below is a token-economy technique for the
+> old markdown plans, not a requirement. **Its functional ground is token economy — never
+> dispatchability.** The old § "How this interacts with `spawn-specialist.py`" advised
+> *concatenating* files into one `--plan` argument; that path reproduced the E2BIG dispatch failure
+> (Linux `MAX_ARG_STRLEN` = 131072 B per argv string), because `agentctl dispatch` inlines the whole
+> plan into the spawn prompt. Since commit `5d96cd6` `spawn-specialist.py` delivers that prompt via
+> **stdin**, so a plan of any size dispatches cleanly — splitting is **no longer needed to make a
+> large plan dispatchable**, only to save re-read tokens. See the corrected § below.
 
 The planner skill (`skills/specializations/planner/SKILL.md`) writes plans to `~/.claude-agent/plans/<slug>.md`. For a typical 4–6-stage plan this is fine. For larger plans, observed cost in the 2026-05-27 deepagent sessions reached **25 KB per plan file, re-read 3–10 times** as the work moved through stages. See [token-economy-plan.md](token-economy-plan.md) item 6.
 
@@ -82,17 +93,18 @@ No frontmatter required — these are plan working files, not memory leaves.
 
 ## How this interacts with `spawn-specialist.py`
 
-When spawning a specialist for stage N, pass the index plus only that stage's file:
+**TOML-engine reality (current).** You do not spawn specialists by hand for a plan the engine drives —
+`agentctl dispatch` reads `meta` + the active stage from the single `.toml`, inlines the plan into the
+spawn prompt, and pipes the whole prompt to `spawn-specialist.py` via **stdin** (commit `5d96cd6`).
+Prompt size is therefore bounded only by memory, not by `MAX_ARG_STRLEN` — the 172 KB
+question-provenance plan dispatches cleanly. **Do not** concatenate plan files into one `--plan`
+argument or otherwise push a large payload onto argv: that path raises `OSError: [Errno 7] Argument
+list too long` before the child starts. This is the corrected form of the old advice, which suggested
+exactly that concatenation and predated the stdin channel.
 
-```bash
-spawn-specialist.py \
-  --kind developer \
-  --plan ~/.claude-agent/plans/<slug>.md \
-  --plan ~/.claude-agent/plans/<slug>-stage-<N>-<short>.md \
-  ...
-```
-
-(Tool currently accepts a single `--plan` arg — if you need both, concatenate them into a scratch file and pass that. Repeating-flag support can be added later if this pattern becomes common; see [token-economy-plan.md](token-economy-plan.md) item 6 follow-up.)
+**Legacy `.md` split (only if you still hand-split a markdown plan).** Pass the index and just the
+active stage file — but merge them into the prompt *content* (or let the caller assemble one prompt),
+never as two argv strings, and never via a concatenated-into-argv scratch file.
 
 ## What the planner skill should do
 

@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "fedor.solovyev@gmail.com"
 refs: [/home/the0/agent-bench/report/report-opus-n120.md, /home/the0/agent-bench/report/grade_all.py]
 created: 2026-07-16
-last_verified: 2026-07-16
+last_verified: 2026-07-20
 ---
 
 # Environment/resource artifacts silently contaminate a benchmark measurement
@@ -31,3 +31,5 @@ Generation was flat/subscription mode (real money ≈ $0; imputed list-price ≈
 
 ## Self-critique of the agent system
 The disk-full corruption was only caught because the grade contradicted a known baseline; without that reference point the fabricated ~20% pass@3 would have been published. A pre-flight/post-grade gate must exist so detection does not depend on happening to have a baseline to contradict — this is the mechanization candidate routed to self-improvement.
+
+**Update 2026-07-20 — MECHANIZATION LANDED** (task `agent-bench-grade-integrity-gates`, agent-bench commit `9de0969`): both gates now live in `report/grade_all.py` — `check_disk_headroom()` (pre-flight, `DEFAULT_MIN_FREE_GB=50` floor on docker's storage fs, local-harness path only, skipped under sb-cli/`--smoke`) and `assert_group_trustworthy()` (post-grade, refuses a group whose `error_instances > max(2, ceil(0.02*submitted))`, escape `--allow-degraded`, keyed on `error_instances` only — the disk-full undercount signal — and no-op when `submitted` is falsy). 13 mutation-proving tests. So disk-full grading corruption now fails LOUD at start or at record-time instead of silently publishing a fabricated headline; detection no longer depends on a lucky baseline to contradict.

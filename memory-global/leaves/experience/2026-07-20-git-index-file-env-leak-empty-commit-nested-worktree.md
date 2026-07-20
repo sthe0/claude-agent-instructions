@@ -27,7 +27,7 @@ Add a _clean_git_env() context manager that pops the leaking git location/index 
 - Working plan: baseline-diff-git-index-leak-fix.toml: (1) _clean_git_env scrub + GIT_INDEX_FILE-leak regression test; (2) land Partition A (#38) and Partition B (#39, incl. the fix) as two disjoint-file PRs off origin/main, each committing through the real pre-commit gate without --no-verify.
 
 ## Cost
-TODO — fill from the figure surfaced by `agentctl resolve` (see also scripts/cost-report.py)
+In-thread (no spawns) except one general-purpose plan-review agent (~2×77k subagent tokens). Under a flat-Max subscription this is list-price telemetry, not real spend. The real cost was wall-clock: the leak masqueraded as a plan-verification pass because the original `final_check` ran the verifier standalone (no `GIT_INDEX_FILE`), so it surfaced only at the real hook-driven commit and forced a full overcome-difficulty cycle at landing. Quality self-rated 3/5 (user-confirmed) — clean fix, long process tail.
 
 ## Self-critique of the agent system
 The original plan's final_check ran verify-all --staged DIRECTLY, which cannot reproduce the leak (no GIT_INDEX_FILE) — the verification axis was wrong: 'run the check' != 'commit through the check'. A hook-reachable git library must be verified by an actual hook-driven commit.
