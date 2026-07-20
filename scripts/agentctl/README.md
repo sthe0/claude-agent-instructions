@@ -222,6 +222,10 @@ Four properties this system must not regress toward a prompt-based loop:
 
 Session state is JSON at `~/.claude-agent/agentctl/state/<session_id>.json` (the durable machine-written record, kept separate from the human/LLM-authored TOML plan).
 
+Alongside it sits a second, append-only store: `~/.claude-agent/agentctl/edit-log.jsonl` (`config_root.agentctl_edit_log()`), written by `edit_ledger.py` at the same hook chokepoint that tracks every Edit/Write. Unlike the session-state file, which holds one current snapshot per session, the edit-ledger accumulates one row per edit, forever. Each row carries **two ids**: `session_id` (the agent that made the edit, possibly a subagent) and `env_session_id` (the root session's `CLAUDE_CODE_SESSION_ID`) — so a later query can join a commit back to every subagent edit made under its root session. Query it with `../edit-ledger.py`; see [`../README.md`](../README.md#change-attribution) for the full convention.
+
+The `Agent-Session`/`Agent-Task` commit trailer that ties a commit to a session is built by `../agent_commit_trailer.py`, called from both the git `commit-msg` hook and arc's `arc-land-pr.sh` so the two VCS contexts stamp byte-identical trailers. Arc has no `commit-msg` hook to test against a live landing, so trailer-injection coverage for arc is verified by the injection *intent* that `arc-land-pr.sh --dry-run` prints (a Core-side test) rather than by an actual arc landing.
+
 ## Keeping this doc current
 
 This README is a **registered concept doc** in [`../doc-bindings.json`](../doc-bindings.json) (concept `coordination-state-machine`): changing engine code under `scripts/agentctl/` should review this file in the same change. [`verify-doc-concepts.py`](../verify-doc-concepts.py) asserts the `## State machine` heading exists and the `Node` anchor still resolves; the commit-time reminder names this doc when engine code changes without it.

@@ -41,6 +41,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from agentctl import edit_ledger  # noqa: E402
 from agentctl.exempt_paths import is_engine_exempt  # noqa: E402
 from session_scope import registry  # noqa: E402
 
@@ -170,6 +171,22 @@ def track(payload: dict, now_ts: float) -> None:
             abspath = os.path.realpath(file_path)
             if not is_engine_exempt(abspath):
                 registry.record_touch(session_id, abspath)
+                # env_session_id is the ROOT session's CLAUDE_CODE_SESSION_ID,
+                # which for a subagent edit differs from the hook-stdin
+                # session_id above — the commit trailer (agent_commit_trailer.py)
+                # keys on the env var, so both ids are recorded to bridge the
+                # two (see edit_ledger.py's module docstring).
+                try:
+                    edit_ledger.append(
+                        session_id,
+                        os.environ.get("CLAUDE_CODE_SESSION_ID") or "",
+                        abspath,
+                        tool_name,
+                        cwd,
+                        now_ts,
+                    )
+                except Exception:
+                    pass
 
     # Resolve the session pid once (first fire) and reuse it thereafter — it
     # never changes for the life of the session, and re-walking ancestry via

@@ -10,6 +10,7 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 | [lint-cursor-mirror.py](../cursor/scripts/lint-cursor-mirror.py) | Detect structural drift between `skills/` and the cursor mirror (flat-skill parity, specialization parity, trigger markers) |
 | [migrate-cursor-namespace.sh](../cursor/scripts/migrate-cursor-namespace.sh) | Migrate global + all `~/arcadia*/robot/deepagent` mounts (`--all-deepagent-mounts`) |
 | [agent-stats.py](agent-stats.py) | One local usage report over the existing ledgers (invocations, resolved tasks, `solved_by_007` precedents, mean quality, cost, spawns); `--project` / `--global` slices, markdown or `--json`; `--cross-machine` delegates to `usage-digest.py pull` |
+| [agent_commit_trailer.py](agent_commit_trailer.py) | Build the `Agent-Session`/`Agent-Task` commit trailer lines for the current session (reads agentctl state); called by `githooks/commit-msg` and by `arc-land-pr.sh` so the trailer is byte-identical across git and arc |
 | [apply-mcp-local.sh](apply-mcp-local.sh) | Merge `mcp-local/*.json` into `$CLAUDE_AGENT_HOME/settings.local.json` under `mcpServers` (idempotent) |
 | [apply-settings.sh](apply-settings.sh) | Merge the versioned policy base (`settings/base.json`) into machine-local `$CLAUDE_AGENT_HOME/settings.json` (additive, idempotent) |
 | [check-org-neutral.py](check-org-neutral.py) | Pre-publish gate: exit 1 if text destined for a PUBLIC venue (Core repo issues/PRs/commits) contains org-internal markers; run BEFORE posting, never after (watcher e-mails are irrecoverable) |
@@ -20,6 +21,7 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 | [core-difficulty-digest.py](core-difficulty-digest.py) | Pull difficulty records from every configured channel, cluster by functional ground (reusing `record-experience.py` search), compute mass = Σseverity, and flag clusters ≥ `core-difficulty-mass-threshold` or any critical (ADR-0001 difficulty-accumulation); flags only — never edits Core |
 | [cost-report.py](cost-report.py) | Aggregate `~/.local/log/claude-spawn-costs.jsonl` (totals, by kind/tier/day, depth/marker distributions, refused events) |
 | [doctor.sh](doctor.sh) | Readiness preflight ("am I ready to start?") for a new user: checks `claude` CLI on PATH, `$CLAUDE_AGENT_HOME/CLAUDE.md` symlink into the repo, engine hooks (state-gate + engine-start) wired in settings.json, `agentctl` importable, git hooks installed; read-only, exits non-zero on any hard failure |
+| [edit-ledger.py](edit-ledger.py) | Query CLI over the durable edit-ledger: `by-session <id>` / `by-file <path>`, `--json` for raw records; read-only |
 | [enter-task.sh](enter-task.sh) | Org-neutral entry point for starting work on a task: resolves workspace (git worktree default) and optional tracker backend, derives task name + branch, wires `.claude`; prints the project cwd as final stdout; machine-local backends attach as plugins |
 | [file-difficulty.py](file-difficulty.py) | Submit a Core difficulty record to the configured channel (Startrek or GitHub Issues); non-author machines use this instead of editing Core directly (ADR-0001 non-author path) |
 | [hook-answer-delivery-reminder.py](hook-answer-delivery-reminder.py) | PostToolUse AskUserQuestion: on the harness timeout marker, nudge that the turn's final message must restate any mid-turn answer content and the open question (CLAUDE.md § Escalation — an unanswered user question survives the turn); non-blocking |
@@ -118,3 +120,26 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 | [verify-self-improvement-edit.py](verify-self-improvement-edit.py) | `commit-msg` gate: require `[self-improvement-reviewed]` in commits that touch `skills/self-improvement/` |
 | [verify-tests-accompany-code.py](verify-tests-accompany-code.py) | `commit-msg` advisory (warn-only, never blocks): nudge when staged non-test `scripts/**.py` carries no test delta; `[skip-test-guard: <reason>]` trailer suppresses it |
 <!-- inventory:scripts:end -->
+
+## Change attribution
+
+Answering "which agent session made which change" doesn't require reading a transcript. Two pieces work together: a durable edit-ledger that records every Edit/Write, and a commit trailer that stamps the session onto the commit it produced.
+
+**The edit-ledger.** Every Edit/Write hook call appends one JSON line to `agentctl/edit_ledger.py`'s ledger, at the same `hook-scope-track.py` chokepoint that already observes every tool call. The ledger lives at `config_root.agentctl_edit_log()` (`~/.claude-agent/agentctl/edit-log.jsonl` by default, overridable via `$AGENTCTL_EDIT_LEDGER`) and is append-only and fail-open: a write failure never blocks the edit that triggered it.
+
+Query it with `edit-ledger.py`, which never writes:
+
+```
+scripts/edit-ledger.py by-session <session_id>
+scripts/edit-ledger.py by-file <path>
+```
+
+Each row carries **two session ids**, not one: `session_id` is the agent that actually made the edit (which may be a subagent), and `env_session_id` is the root session's `CLAUDE_CODE_SESSION_ID` — the id a commit trailer keys on. `by-session` matches a row when *either* id equals the query, so looking up a commit's `Agent-Session` value also surfaces every subagent edit made under that root session, not just edits made by the root session directly.
+
+**The commit trailer.** `agent_commit_trailer.py` builds up to two trailer lines — `Agent-Session: <session_id>` and `Agent-Task: <tracker_key-or-task_id>` — from the current session's `CLAUDE_CODE_SESSION_ID` and its agentctl state file. Both the git `commit-msg` hook and arc's `arc-land-pr.sh` call this same helper, so the trailer format is byte-identical across Core git commits and both arc contexts. A human commit (no agent session, or no matching state file) gets no trailer at all — only agent-authored commits are stamped.
+
+Two things to know before trusting `Agent-Task`:
+- It's best-effort, not authoritative: it reflects whatever task the agentctl state file held *at commit time*, so a session that got re-purposed for a different task without a fresh `classify` can carry a stale value.
+- It's deliberately restricted to `tracker_key`/`task_id` and never derived from the free-text `goal` — `goal` can carry private or internal detail, and this trailer lands in the public Core repo (and, via `arc-land-pr.sh`, in arc history too).
+
+And some commit paths are known to carry no trailer at all: `git commit --no-verify` (skips the hook entirely), a squash or rebase-merge that rewrites the commit message afterward, a non-agent shell that happens to have a leaked `CLAUDE_CODE_SESSION_ID` in its environment, and an ad-hoc `arc commit -m` run outside `arc-land-pr.sh`.

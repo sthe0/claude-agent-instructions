@@ -81,6 +81,14 @@ def agentctl_scopes_dir() -> Path:
     return agentctl_dir() / "scopes"
 
 
+def agentctl_edit_log() -> Path:
+    """Durable session->edit ledger (``<root>/agentctl/edit-log.jsonl`` — see
+    agentctl/edit_ledger.py). Honors an ``$AGENTCTL_EDIT_LEDGER`` override at
+    the call site (edit_ledger.py), mirroring agentctl_gate_log()'s role for
+    gate-log.jsonl."""
+    return agentctl_dir() / "edit-log.jsonl"
+
+
 def plans_dir() -> Path:
     """Coordination plan artifacts directory (``<root>/plans``)."""
     return agent_home() / "plans"

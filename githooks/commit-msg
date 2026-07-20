@@ -1,10 +1,22 @@
 #!/usr/bin/env bash
 # commit-msg hooks. Order: advisory nudges first (never block), then the
+# Agent-Session/Agent-Task trailer injection (never blocks), then the
 # blocking self-improvement-edit gate (exec, terminates the hook).
 set -e
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 # Advisory (warn-only, exit 0): staged code without an accompanying test.
 # See scripts/verify-tests-accompany-code.py + leaf tests-accompany-code.md.
 python3 "$REPO_ROOT/scripts/verify-tests-accompany-code.py" "$1" || true
+# Agent-Session/Agent-Task trailer: empty output for a human commit (no
+# CLAUDE_CODE_SESSION_ID / no agentctl state). --if-exists doNothing makes
+# this idempotent across amend/rebase re-runs. See scripts/agent_commit_trailer.py.
+TRAILERS="$(python3 "$REPO_ROOT/scripts/agent_commit_trailer.py" 2>/dev/null || true)"
+if [ -n "$TRAILERS" ]; then
+  while IFS= read -r trailer_line; do
+    if [ -n "$trailer_line" ]; then
+      git interpret-trailers --in-place --if-exists doNothing --trailer "$trailer_line" "$1" || true
+    fi
+  done <<< "$TRAILERS"
+fi
 # Blocking gate: self-improvement skill edits. See verify-self-improvement-edit.py.
 exec python3 "$REPO_ROOT/scripts/verify-self-improvement-edit.py" "$1"
