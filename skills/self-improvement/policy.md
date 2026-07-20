@@ -30,6 +30,17 @@ Do not write the same procedure twice — once as "you must …" in prose and
 once as `verify-X.py`. Code is the single source of truth; prose points
 to it.
 
+The mirror is debt in both directions — but a fail-open mechanism does not
+make prose a mirror. Before adding a rule, and when grooming an existing
+one, check whether a mechanism already *guarantees* it; if so the prose is
+redundant — drop it, keeping only the perception/why/pointer the
+mechanism's own error text cannot give. But a mechanism *guarantees* only
+when it is hard (deny/block) AND fail-closed, or the rule is independently
+carried on a designated fallback surface. Prose behind a fail-open hook is
+not a mirror — it is that hook's documented degraded-mode fallback
+(`hook-state-gate.py`: the prose-fallback nudge still applies); pruning it
+deletes the only carrier on a hook-less or engine-down install.
+
 ### What NOT to encode as code
 
 Three carve-outs from the "process belongs in a script" instinct. The
@@ -318,19 +329,20 @@ supported mode, not an error:
    PR — or hand the commit/patch to someone who can push. Tell the user this is
    the path instead of reporting the push as failed.
 
-### Where to author Core edits — the serving checkout stays on `main`
+### Where to author Core edits — canonical checkouts are read-only
 
-*Difficulty removed: `~/claude-agent-instructions` is the **serving/primary** checkout — the tree `settings.json` hook commands point at — so its checked-out branch **is** the live hook code every session on the machine runs. Doing feature work there on a non-`main` branch makes live hooks execute stale/experimental code for **all** sessions and contaminates the shared working tree for parallel sessions.*
+*Difficulty removed: `~/claude-agent-instructions` is the **serving/primary** checkout — the tree `settings.json` hook commands point at — so its checked-out branch **is** the live hook code every session on the machine runs. Editing it directly, on any branch, makes live hooks execute code that hasn't landed yet and contaminates the shared working tree for parallel sessions. The same holds for the arc anchor mount (`~/task-mounts/main`).*
 
-**Core feature work goes in a linked worktree; the serving/primary checkout `~/claude-agent-instructions` stays on the default branch.**
+**Both canonical checkouts — the Core repo and the arc anchor mount — are read-only to session edits, mutated only by `pull`.** ALL edits, including writes under `memory-global/` and project `agent-memory/`, go through a separate worktree (Core) or second mount (arc), then land back:
 
 ```bash
 git -C ~/claude-agent-instructions worktree add -b <branch> <path> origin/main
 cd <path>   # author, test, and commit here
 ```
 
-- **Direct edits on the serving checkout are allowed only on `main`** (the author fast-path: a one-line memory/docs tweak on `main` needs no worktree).
-- Enforced by `scripts/hook-guard-serving-checkout-offmain.py` (PreToolUse): it **denies** an `Edit`/`Write` (or a `git commit`) targeting the serving/primary checkout while its `HEAD` is off `main`, and redirects to `git worktree add`. Fail-open on every other case — a **linked** worktree (off-main edits there are the whole point), on-`main`, detached `HEAD`, paths outside the Core repo, and writes under `memory-global/` (memory recording is never gated).
+- Enforced by `scripts/hook-guard-canon-readonly.py` (PreToolUse, renamed from `hook-guard-serving-checkout-offmain.py`): it **denies** an `Edit`/`Write` (or a `git commit`) whose target lands in a canonical checkout **on any branch** — no on-`main` carve-out, no `memory-global/` exemption. It fails open only for a **linked** worktree, a second arc mount, personal auto-memory under `~/.claude-agent`, and `/tmp`. Canon detection is org-neutral: a machine-local list (`~/.claude-agent/canon-roots.local`, via `config_root.canon_roots_file()`) names the canonical roots, so the public Core repo carries zero arc specifics — arc canon is opt-in per install.
+- **Operational consequence:** recording an experience / self-improvement leaf into `memory-global/` now requires a worktree — the primary Core checkout denies the write — then land.
+- The guard's deny message points at `session-isolate.sh` to relocate a session whose cwd sits inside a canon.
 - Land by fast-forwarding the worktree branch onto `origin/main` (per § After editing), then remove the worktree and delete the branch.
 
 ### Install & scripts reference

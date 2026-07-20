@@ -174,6 +174,43 @@ moved) — it never touches the *caller's* branch, worktree, or index, so this
 step is itself safe to run from inside the isolated workspace `session-isolate`
 created.
 
+## The canon-read-only guard
+
+A generalization of the earlier serving-checkout-off-main guard. Both
+canonical checkouts on a machine — the Core repo's primary/serving checkout
+(`~/claude-agent-instructions`) and, where installed, the arc anchor mount
+(`~/task-mounts/main`) — are read-only to a session's own edits. They are
+mutated **only** by `pull`; all code/memory edits flow through a separate
+linked worktree (Core) or second arc mount, then land back.
+
+`scripts/hook-guard-canon-readonly.py` (PreToolUse, renamed from
+`hook-guard-serving-checkout-offmain.py`) enforces this. Its predicate: the
+target of an `Edit`/`Write`/`git commit` resolves (realpath-normalized) under
+a canonical root **on any branch** — there is no on-`main` carve-out and no
+`memory-global/` exemption (both existed on the old serving-checkout guard
+and are dropped here, decision D1). Canon roots are read from a
+machine-local list, `~/.claude-agent/canon-roots.local` (via
+`config_root.canon_roots_file()`), so the Core repo stays org-neutral — arc
+canon is opt-in per install, not hardcoded. The guard still fails open for a
+linked worktree, a second arc mount, personal auto-memory under
+`~/.claude-agent`, `/tmp`, and `git pull` itself; its deny message points at
+`session-isolate.sh` to relocate.
+
+**Operational consequence:** recording an experience or self-improvement leaf
+into `memory-global/` now requires a worktree — the primary Core checkout
+denies that write same as any other — then land, per § Landing back above.
+
+Two once-per-session nudges layer on top (offers, never automatic):
+
+- **D3 — worktree-rebase-onto-canon offer.** When a linked worktree is behind
+  the canonical root, the session is offered a rebase onto canon. The check
+  fetches first, then counts commits behind, so the offer reflects the true
+  remote state rather than a stale local view.
+- **D2/R4 — in-canon relocation offer.** When a session's cwd resolves inside
+  a canonical root, it is offered relocation via `session-isolate.sh` (the
+  same router § Remediating a conflict — isolate uses) rather than left to
+  hit the guard's deny on its first edit.
+
 ## See also
 
 - Memory leaf: `memory-global/leaves/system-knowledge/cross-session-scope-isolation.md`

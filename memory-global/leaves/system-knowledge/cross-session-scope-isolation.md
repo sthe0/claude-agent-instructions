@@ -27,6 +27,8 @@ The conflict hook's three outcomes: **block** (deny) only for a gated path alrea
 
 Delivery is partitioned: **PR1** = registry (A) + detector (B) + both hooks + docs (the first independently-shippable slice — detection); **PR2** = the git isolation router (C). The arc backend is **not** a Core deliverable — it ships as a machine-local plugin in the Yandex storage tree, not in this repo.
 
+**The canon-read-only guard** (generalizes the old serving-checkout-off-main guard) is a separate component layered on the same isolation model: `hook-guard-canon-readonly.py` (renamed from `hook-guard-serving-checkout-offmain.py`) DENIES an `Edit`/`Write`/`git commit` whose realpath-normalized target lands under a canonical root — the Core repo's primary checkout, or (where installed) the arc anchor mount — **on any branch**, dropping the old guard's on-`main` carve-out and `memory-global/` exemption (decision D1). Canon roots are named by a machine-local list, `~/.claude-agent/canon-roots.local` (`config_root.canon_roots_file()`), so arc canon is opt-in per install and the public Core repo stays org-neutral. It still fails open for a linked worktree, a second arc mount, personal auto-memory under `~/.claude-agent`, `/tmp`, and `git pull`. **Consequence:** recording an experience/self-improvement leaf into `memory-global/` now requires a worktree — the primary checkout denies the write — then land. Two once-per-session offers (never automatic) ride alongside: **D3** — rebase a behind-canon worktree onto canon (fetch-before-count, so the offer reflects the true remote state); **D2/R4** — relocate a session whose cwd is inside a canon, via `session-isolate.sh`.
+
 ## See also
 
 - Ops doc: `docs/operations/cross-session-scope-isolation.md`
