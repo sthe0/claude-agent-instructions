@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "user"
 refs: [2026-06-24-gate-exemption-is-category-error-for-result-images.md, 2026-06-30-mechanize-subdifficulty-extraction-and-audit.md]
 plan_file: /home/the0/.claude-agent/plans/ask-delivery-determinism.toml
 created: 2026-07-04
-last_verified: 2026-07-09
+last_verified: 2026-07-20
 ---
 
 # When the failure-carrying signal is structurally invisible to the gate, gate the topology, not the content
@@ -31,6 +31,13 @@ Reproduce the miss -> inspect WHAT the gate can observe (PreToolUse payload = to
 ### 2026-07-09 — 2026-07-09 — the symmetric side: promising an ask without arming the timer
 - Where it arose: claude-agent-instructions: scripts/hook-ask-defer-timer.py + scripts/tests/test_ask_defer_timer_hook.py (11 -> 20 cases). Trigger: user, twice in one session — 'you promised buttons again and did not send them'.
 - Working plan: /home/the0/.claude-agent/plans/hook-ask-defer-timer-block.v4.toml
+
+### 2026-07-20 — the prefilter blind to trailing markdown decoration let a binary ask slip the Stop-gate
+- Where it arose: claude-agent-instructions: scripts/agentctl/advisor.py `judge_binary_ask` prefilter + scripts/tests/test_advisor.py. Trigger: user, twice in one session — 'again you did not use AskUserQuestion' — I ended turns with a prose binary offer in the message tail instead of an AskUserQuestion.
+- Difficulty: the Stop-gate's semantic binary-ask judge (`prose_binary_ask_blockers`, hook-turn-end-gate.py) never fired because its cheap deterministic **prefilter** gated the expensive judge on `final_text.rstrip()` ending in a question mark — but the actual stranded turn ended `…or later?**` (question wrapped in markdown bold). Default `rstrip()` strips only whitespace, so the last char was `*`, not `?`; the prefilter returned early, the judge never ran, and the fail-open gate let the turn end with an un-clicked binary question. The prose norm (CLAUDE.md § Escalation, "AskUserQuestion for every binary decision") was already carried and still missed — the model reliably clicks on *conscious* gates (push/resolution) but drops incidental tail-offers, exactly the case the gate exists to catch.
+- Diagnosis correction (doubt-own-snapshot): my Beat-1 first blamed "the judge is coupled to advisor-mode/weight-class". Reading the code disproved it — `hook-turn-end-gate.py:595` calls `decide(payload, runner=advisor.subprocess_runner)` **unconditionally**; the only real hole was the prefilter's decoration-blindness. Dropped the false hole from scope before proposing.
+- Fix: strip a trailing-**decoration** charset (`_BINARY_ASK_TRAILING_DECORATION` = markdown emphasis `*_\`~` + closing brackets/quotes `)]}>"'»""'` + whitespace) before the question-mark test: `final_text.rstrip(_BINARY_ASK_TRAILING_DECORATION)`. Charset is disjoint from the question marks and contains no letters/digits, so a decorated question reaches the judge while a decorated **statement** (`**Done.**`) still short-circuits. Whitespace is listed explicitly because `str.rstrip(chars)` disables the default whitespace strip. 4 tests added (bold/paren/quote-wrapped question → reaches runner; decorated non-question → skips). Same lesson as this leaf's core: a deterministic **prefilter** guarding a semantic judge must tolerate the surface decoration the model actually emits, or the judge never runs and the gate silently fails open — the prefilter's own blind spot is the un-observable that lets the failure through.
+- 1-stage substantive plan (in_thread, measurable); verify = pytest advisor+turn-end suites (113 passed) + verify-agentctl 16/16. Commit 9e0ec68 (child of eb3d5ca), `[self-improvement-reviewed]`.
 
 ## Common core & variations
 **Common:** Same gate family, same subject (ask delivery determinism), same lesson: a prose rule the model already carries does not hold — CLAUDE.md had the timer-arming rule, added THAT SAME DAY, and the ask was still stranded. Mechanize the decidable part; see [[2026-07-09-gate-must-execute-what-it-attests]] for the sibling defects found in the engine while landing this hook.
