@@ -2414,10 +2414,12 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # session, or an approve that predates the field) fall back to plan_path.
     snap = state.plan_snapshot_path
     old_path = snap if (snap and Path(snap).exists()) else state.plan_path
-    # OLD side is a read-only comparison baseline: plans approved before the
-    # executor vocabulary existed (#7) may carry free-text executors and must
-    # stay diffable — only the NEW side (and submit-plan) is strict.
-    old = _load(old_path, strict_executor=False)
+    # OLD side is a read-only comparison baseline: a snapshot frozen before a
+    # newer trunk tightened the schema (free-text executors #7, or a later-required
+    # substantive field like [stage.principle].derivation) must stay diffable — the
+    # lenient load keeps the structural parse but skips every submission-grade
+    # check. Only the NEW side (and submit-plan) is strict.
+    old = _load(old_path, strict=False)
     new = _load(args.plan)
 
     # coverage gate: inside the difficulty flow, the corrected plan must CARRY the
