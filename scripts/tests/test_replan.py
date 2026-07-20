@@ -329,6 +329,53 @@ def test_replan_uses_snapshot_when_plan_path_edited_in_place(store, fixtures_dir
     assert [s.index for s in state.stages] == [1, 2, 3]
 
 
+def test_replan_lenient_snapshot_missing_derivation_does_not_brick_replan(store, fixtures_dir, tmp_path):
+    """Regression: a substantive snapshot frozen before [stage.principle].derivation
+    became a required subfield must not permanently block replan. Approval-time
+    validation is strict today and cannot itself produce such a file, so the stale
+    snapshot is written directly (simulating one frozen by an older trunk) and set
+    as the session's approved-plan snapshot before replanning against a normal new
+    plan — cmd_replan must complete the diff instead of raising."""
+    sid = "snapLenient"
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    _to_executing_stage1(store, sid, plan)
+
+    stale_snapshot = tmp_path / "stale_snapshot.toml"
+    stale_snapshot.write_text("""
+[meta]
+task_id = "old-task"
+weight_class = "substantive"
+external_research = "checked wiki; none applies"
+
+[[stage]]
+index = 1
+title = "Old stage"
+executor = "spawn:developer"
+expected_result_image = "old result"
+done_criterion = "old check passes"
+material = "existing code"
+means = "Edit tool"
+method = "old method"
+conditions = "EXECUTING node"
+invariants = "legacy plans unchanged"
+capability_required = "Python"
+verify_command = "pytest -q"
+
+[stage.principle]
+statement = "old statement"
+source = "old source"
+confidence = "high"
+refutation = "old refutation"
+""")
+    state = store.load(sid)
+    state.plan_snapshot_path = str(stale_snapshot)
+    store.save(state)
+
+    new_plan = str(fixtures_dir / "plan_two_stage_substantive.toml")
+    d = cli.cmd_replan(ns(session=sid, plan=new_plan), store=store)
+    assert d.marker == "PLAN-READY"
+
+
 # --- #12: PASSED carry-forward across a substantive replan -----------------
 
 def test_substantive_replan_carries_forward_passed_unchanged_stage(store, fixtures_dir):
