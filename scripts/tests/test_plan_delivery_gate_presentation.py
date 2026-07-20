@@ -149,6 +149,39 @@ def test_never_emitted_denies(tmp_path):
     assert _stamp(tmp_path, "s2") is None
 
 
+def test_delivered_with_whitespace_newline_case_drift_allows_and_stamps(tmp_path):
+    # Same content as RENDERING but reformatted: extra blank line, trailing
+    # whitespace, upper-cased -- incidental drift the byte-exact check used to
+    # reject with _NOT_DELIVERED_REASON. Must now allow via the normalized tier.
+    drifted = "## STAGE 1\n\n...full   plan essence...  \n"
+    write_full_state(tmp_path, "s19", plan_presentations=[make_receipt(RENDERING, presented_ts=100.0)])
+    t = write_transcript(tmp_path / "t.jsonl", [
+        user_prompt_entry(90.0),
+        text_only_entry(105.0, drifted),
+        user_prompt_entry(110.0),
+    ])
+    proc = run_hook(ask_payload("s19", t), tmp_path)
+    assert not _is_deny(proc)
+    stamp = _stamp(tmp_path, "s19")
+    assert stamp is not None
+    assert stamp.source == delivery_mod.SOURCE_HOOK
+
+
+def test_delivered_missing_content_still_denies(tmp_path):
+    # Delivered text omits a whole line of the essence -- normalization
+    # collapses whitespace/case, it must NOT mask a genuinely dropped line.
+    truncated = "## Stage 1\n"  # missing "...full plan essence..."
+    write_full_state(tmp_path, "s20", plan_presentations=[make_receipt(RENDERING, presented_ts=100.0)])
+    t = write_transcript(tmp_path / "t.jsonl", [
+        user_prompt_entry(90.0),
+        text_only_entry(105.0, truncated),
+        user_prompt_entry(110.0),
+    ])
+    proc = run_hook(ask_payload("s20", t), tmp_path)
+    assert _is_deny(proc)
+    assert _stamp(tmp_path, "s20") is None
+
+
 def test_no_receipt_denies(tmp_path):
     write_full_state(tmp_path, "s3", plan_presentations=[])
     t = write_transcript(tmp_path / "t.jsonl", [user_prompt_entry(90.0), text_only_entry(105.0, RENDERING), user_prompt_entry(110.0)])

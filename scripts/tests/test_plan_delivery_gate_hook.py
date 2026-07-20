@@ -16,6 +16,9 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from agentctl.state import PlanPresentation  # noqa: E402
+
 HOOK = Path(__file__).resolve().parent.parent / "hook-plan-delivery-gate.py"
 
 
@@ -258,6 +261,30 @@ def test_gate_decision_pure_function():
     assert mod.gate_decision("PLAN_READY", 105.0, 100.0, turn_start_ts=100.0)[0] == "deny"
     assert mod.gate_decision("PLAN_READY", 100.0, 105.0, turn_start_ts=None)[0] == "allow"
     assert mod.gate_decision("PLAN_READY", 105.0, 100.0, turn_start_ts=None)[0] == "deny"
+
+
+def test_gate_decision_normalized_match_ts_none_degrades_to_allow():
+    # Same content, reformatted (drifted whitespace/case) so only the tier-2
+    # normalized comparison matches; the landing timestamp is unparsable
+    # (ts=None) -- must degrade to allow+verified, same as the byte-exact
+    # ts=None case, not fall through to _NOT_DELIVERED_REASON.
+    mod = _load_module()
+    receipt = PlanPresentation(
+        plan_path="/plan.toml", kind="essence", plan_sha256="a" * 64,
+        rendering_sha256="b" * 64, rendering_text="## Stage 1\n...full plan essence...",
+        presented_ts=100.0,
+    )
+    drifted = "##   STAGE 1\n...FULL plan   essence...\n"
+    decision, reason, delivery_verified = mod.gate_decision(
+        "PLAN_READY", 100.0, 90.0, turn_start_ts=110.0,
+        presentation_active=True,
+        receipt=receipt,
+        receipt_stale_reason=None,
+        delivered_texts=[(drifted, None)],
+        has_show_full_plan_option=True,
+    )
+    assert decision == "allow"
+    assert delivery_verified is True
 
 
 def test_load_gate_fields_missing_node_returns_none(tmp_path):

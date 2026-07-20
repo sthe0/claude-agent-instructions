@@ -32,6 +32,15 @@ and the finding that motivated this extension):
    substitute for a fresh delivery — see _receipt_stale_reason and the
    post-dating loop in gate_decision).
 
+NORMALIZED MATCH: the delivered-text comparison in the loop below is a
+two-tier check — exact substring first, then (only if that fails) a
+normalized substring via text_shape.normalize_string (casefold + collapse
+whitespace), so incidental newline/whitespace/casefold drift between the
+registered essence and the delivered turn text no longer trips
+_NOT_DELIVERED_REASON. Genuinely missing CONTENT (a dropped word/line) still
+fails both tiers and still denies — normalization tolerates reformatting,
+not omission.
+
 PERMISSION IS NOT PROOF. The hook ALLOWS on every genuinely missing
 observable (no live session, unreadable state, wrong node, absent/unparsable
 transcript, inactive session, the AGENTCTL_PLAN_PRESENTATION=0 kill switch) —
@@ -221,7 +230,8 @@ def gate_decision(
     """Pure decision. Returns ("allow"|"deny", reason, delivery_verified).
 
     ALLOW != VERIFIED: delivery_verified is True ONLY when this call actually
-    observed the rendering land (byte-present in a delivered_final_texts entry
+    observed the rendering land (present — exact, or normalized for
+    whitespace/newline/casefold drift — in a delivered_final_texts entry
     that either post-dates the receipt's presented_ts, or — degraded — has an
     unparsable landing timestamp; see the loop below). It is False on every
     other path: every fail-open allow (wrong node, no plan yet, presentation
@@ -266,13 +276,22 @@ def gate_decision(
     verified = False
     degraded_match = False
     for text, ts in delivered_texts:
-        if receipt.rendering_text not in text:
+        matched = receipt.rendering_text in text
+        if not matched:
+            # Tier 2: incidental whitespace/newline/casefold drift between the
+            # registered essence and the delivered turn text must not trigger
+            # _NOT_DELIVERED_REASON — normalize_string only collapses
+            # whitespace and casefolds, so genuinely missing CONTENT (a
+            # dropped word/line) still fails this tier too.
+            matched = _gates._normalize_string(receipt.rendering_text) in _gates._normalize_string(text)
+        if not matched:
             continue
         if ts is None:
             # The delivery landed but its own timestamp couldn't be parsed —
             # a missing observable on the DELIVERY side only (presented_ts
             # itself is a required PlanPresentation field and can never be
-            # missing). Degrade to the plain byte check rather than wedging.
+            # missing). Degrade to the match tier already established above
+            # rather than wedging.
             degraded_match = True
             continue
         if ts > receipt.presented_ts:
