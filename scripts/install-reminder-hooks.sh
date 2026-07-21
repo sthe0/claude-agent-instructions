@@ -88,6 +88,10 @@ DESIRED = [
     ("PostToolUse",      "Edit|Write", "hook-scope-track.py",        5),
     ("PostToolUse",      "Bash",  "hook-scope-track.py",             5),
     ("SessionStart",     None,    "hook-policy-scorecard-due.py",    5),
+    # Throttled nudge (once/7d): runs budget-calibration.py --check and speaks only
+    # when a spawn budget tier looks miscalibrated against realized spend, routing
+    # to self-improvement to adjust the config.md tier values. Fail-open, never blocks.
+    ("SessionStart",     None,    "hook-budget-calibration-due.py",  10),
     ("SessionStart",     None,    "hook-sigma-sentinel-due.py",  5),
     # Standing proactive self-diagnosis: run self-diagnose.py's read-only scan
     # for self-friction (oversized memory index, dangling pointer, instruction
