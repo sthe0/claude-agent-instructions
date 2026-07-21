@@ -1,9 +1,10 @@
-"""The review-dispatch plugin (thinker/plan_review slot only — the code-review
-slot lands in a later stage). Proves:
+"""The review-dispatch plugin — both slots (thinker/plan_review, code-reviewer/
+code_review). Proves:
 
-  1. registration: `review_dispatch` is in the REGISTRY, observes `submit_plan`
-     ONLY (deliberately NOT `replan` — see the module docstring), and
-     contributes no gate — enforcement stays in gates.plan_review_blockers.
+  1. registration: `review_dispatch` is in the REGISTRY, observes
+     `submit_plan` AND `dispatch` ONLY (deliberately NOT `replan` — see the
+     module docstring), and contributes no gate — enforcement stays in
+     gates.plan_review_blockers / gates.code_review_blockers.
   2. `_auto_activate` arms for SUBSTANTIVE alone (both env-override directions).
   3. the real `submit_plan` event (fired through cli.main()'s central
      `_fire_plugins` wiring, driven by the actual `cmd_submit_plan` command)
@@ -13,6 +14,13 @@ slot lands in a later stage). Proves:
      review exists" is proven by firing the event directly (see the module
      docstring on why a second submit-plan call can't demonstrate this: it
      unconditionally clears the review itself).
+  4. the `dispatch` event (fired directly against an in-memory state, mirroring
+     the "silent once bound" thinker test) appends a blocking directive naming
+     the code-reviewer spawn whenever gates.code_review_blockers is non-empty
+     for the active needs_control() stage, and stays silent once a bound
+     passing review exists, the active stage is not a developer stage, or the
+     session is non-substantive / the knob is off. The submit_plan/thinker
+     behaviour from (3) is unchanged by this addition.
 """
 from __future__ import annotations
 
@@ -24,19 +32,56 @@ import pytest
 from agentctl import cli, plugins
 from agentctl import plugins_review_dispatch as prd
 from agentctl.directive import Directive
-from agentctl.state import Node, SessionState, WeightClass
+from agentctl.state import (
+    Actor,
+    CodeReview,
+    Criterion,
+    GateRecord,
+    Means,
+    Node,
+    Outcome,
+    SessionState,
+    Stage,
+    StageStatus,
+    Subject,
+    WeightClass,
+)
 from agentctl.store import FileStateStore
 
 
 @pytest.fixture(autouse=True)
 def _review_dispatch_armed(monkeypatch):
-    """Override conftest's suite-wide AGENTCTL_PLAN_REVIEW=0 force-off: this
-    module is the one place that exercises the real plan-review arming
-    predicate the plugin rides on, so it deletes both knobs and lets the plain
-    weight_class logic decide. A module-local autouse fixture runs after the
-    conftest one, so this delenv wins for every test here."""
+    """Override conftest's suite-wide AGENTCTL_PLAN_REVIEW=0 / AGENTCTL_CODE_REVIEW=0
+    force-offs: this module is the one place that exercises the real plan-review AND
+    code-review arming predicates the plugin's two observers ride on, so it deletes
+    all three knobs and lets the plain weight_class logic decide. A module-local
+    autouse fixture runs after the conftest ones, so this delenv wins for every test
+    here."""
     monkeypatch.delenv("AGENTCTL_PLAN_REVIEW", raising=False)
+    monkeypatch.delenv("AGENTCTL_CODE_REVIEW", raising=False)
     monkeypatch.delenv("AGENTCTL_REVIEW_DISPATCH", raising=False)
+
+
+def _dev_stage(index=1):
+    return Stage(
+        index=index, title="s1",
+        subject=Subject(material="m", result="the expected image"),
+        means=Means(means="Edit", method="implement"),
+        actor=Actor(executor="spawn:developer"),
+        criterion=Criterion(criterion_type="measurable", done_criterion="c"),
+        outcome=Outcome(status=StageStatus.ACTIVE.value),
+    )
+
+
+def _non_dev_stage(index=1):
+    return Stage(
+        index=index, title="s1",
+        subject=Subject(material="m", result="img"),
+        means=Means(means="Read", method="plan"),
+        actor=Actor(executor="spawn:thinker"),
+        criterion=Criterion(criterion_type="measurable", done_criterion="c"),
+        outcome=Outcome(status=StageStatus.ACTIVE.value),
+    )
 
 
 def _new_state(sid="s", **kw):
@@ -45,9 +90,9 @@ def _new_state(sid="s", **kw):
 
 # --- registration --------------------------------------------------------
 
-def test_registered_observes_submit_plan_only_no_gate():
+def test_registered_observes_submit_plan_and_dispatch_only_no_gate():
     p = plugins.REGISTRY["review_dispatch"]
-    assert set(p.observers) == {"submit_plan"}
+    assert set(p.observers) == {"submit_plan", "dispatch"}
     assert "replan" not in p.observers
     assert p.gates == {}
 
@@ -154,3 +199,74 @@ def test_submit_plan_silent_when_knob_off(capsys, tmp_path, fixtures_dir, monkey
     assert rc == 0
     pds = d["data"].get("plugin_directives", [])
     assert not any(p["plugin"] == "review_dispatch" for p in pds)
+
+
+# --- dispatch -> code-reviewer slot ---------------------------------------
+
+def _dispatch_state(stage, *, weight=WeightClass.SUBSTANTIVE.value, reviews=()):
+    state = SessionState(
+        session_id="rd-dispatch", task_id="t", node=Node.EXECUTING.value,
+        weight_class=weight, stages=[stage], current_stage=stage.index,
+        code_reviews=list(reviews),
+        approval=GateRecord("plan_approval", armed=True, passed=True, by="user"),
+    )
+    plugins.activate(state, "review_dispatch")
+    return state
+
+
+def _fire_dispatch(state):
+    directive = Directive(True, state.node, "noop")
+    return plugins.fire("dispatch", state, directive)
+
+
+def test_dispatch_fires_blocking_code_review_directive():
+    state = _dispatch_state(_dev_stage())
+    fired = _fire_dispatch(state)
+    matches = [p for p in fired if p["plugin"] == "review_dispatch"
+               and p["action"] == "spawn_code_review"]
+    assert len(matches) == 1
+    m = matches[0]
+    assert m["blocking"] is True
+    assert m["data"]["specialist"] == "code-reviewer"
+    assert m["data"]["slot"] == "code_review"
+    assert m["data"]["stage"] == 1
+
+
+def test_dispatch_silent_once_bound_passing_review_exists():
+    state = _dispatch_state(
+        _dev_stage(), reviews=[CodeReview(stage_index=1, verdict="pass", reviewer="code-reviewer")]
+    )
+    fired = _fire_dispatch(state)
+    assert not any(p["plugin"] == "review_dispatch" for p in fired)
+
+
+def test_dispatch_silent_for_non_developer_active_stage():
+    state = _dispatch_state(_non_dev_stage())
+    fired = _fire_dispatch(state)
+    assert not any(p["plugin"] == "review_dispatch" for p in fired)
+
+
+def test_dispatch_silent_for_small_change_session():
+    state = _dispatch_state(_dev_stage(), weight=WeightClass.SMALL_CHANGE.value)
+    fired = _fire_dispatch(state)
+    assert not any(p["plugin"] == "review_dispatch" for p in fired)
+
+
+def test_dispatch_silent_when_knob_off(monkeypatch):
+    monkeypatch.setenv("AGENTCTL_CODE_REVIEW", "0")
+    state = _dispatch_state(_dev_stage())
+    fired = _fire_dispatch(state)
+    assert not any(p["plugin"] == "review_dispatch" for p in fired)
+
+
+def test_submit_plan_thinker_directive_unaffected_by_dispatch_addition():
+    """Regression: the dispatch observer added in this stage must not change
+    the submit_plan/thinker directive's shape or trigger condition."""
+    state = _dispatch_state(_dev_stage())
+    state.plan_path = "/tmp/some-plan.toml"
+    directive = Directive(True, state.node, "noop")
+    fired = plugins.fire("submit_plan", state, directive)
+    matches = [p for p in fired if p["plugin"] == "review_dispatch"
+               and p["action"] == "spawn_thinker_review"]
+    assert len(matches) == 1
+    assert matches[0]["data"]["specialist"] == "thinker"
