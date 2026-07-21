@@ -1,6 +1,7 @@
 import pytest
 
-from agentctl.plan import PlanError, diff_plans, load_plan, parse_plan
+from agentctl.plan import PlanError, diff_plans, final_check_venue_warnings, load_plan, parse_plan
+from agentctl.state import FinalCheck
 
 
 def test_load_two_stage_plan(fixtures_dir):
@@ -134,6 +135,75 @@ def test_repo_root_absent_defaults_none():
         }],
     }
     assert parse_plan(data).meta.repo_root is None
+
+
+# --- optional plan-level delivery_worktree + final_check venue lint (#45) ---
+
+def test_delivery_worktree_parsed():
+    data = {
+        "meta": {"task_id": "t", "delivery_worktree": "/abs/worktree"},
+        "stage": [{
+            "index": 1, "title": "x", "executor": "in_thread",
+            "expected_result_image": "i", "done_criterion": "c",
+        }],
+    }
+    assert parse_plan(data).meta.delivery_worktree == "/abs/worktree"
+
+
+def test_delivery_worktree_absent_defaults_none():
+    """A plan without delivery_worktree parses with None — byte-identical to legacy plans."""
+    data = {
+        "meta": {"task_id": "t"},
+        "stage": [{
+            "index": 1, "title": "x", "executor": "in_thread",
+            "expected_result_image": "i", "done_criterion": "c",
+        }],
+    }
+    assert parse_plan(data).meta.delivery_worktree is None
+
+
+def test_final_check_venue_warns_on_repo_root_cd(tmp_path):
+    repo_root = tmp_path / "repo"
+    worktree = tmp_path / "worktree"
+    fc = FinalCheck(command=f"cd {repo_root} && pytest -q", expected_exit=0, label="all tests")
+    warnings = final_check_venue_warnings([fc], str(repo_root), str(worktree))
+    assert len(warnings) == 1
+    assert "repo_root" in warnings[0]
+    assert str(worktree) in warnings[0]
+
+
+def test_final_check_venue_silent_when_cd_targets_worktree(tmp_path):
+    repo_root = tmp_path / "repo"
+    worktree = tmp_path / "worktree"
+    fc = FinalCheck(command=f"cd {worktree} && pytest -q", expected_exit=0, label="all tests")
+    assert final_check_venue_warnings([fc], str(repo_root), str(worktree)) == []
+
+
+def test_final_check_venue_silent_when_delivery_worktree_unset(tmp_path):
+    repo_root = tmp_path / "repo"
+    fc = FinalCheck(command=f"cd {repo_root} && pytest -q", expected_exit=0, label="all tests")
+    assert final_check_venue_warnings([fc], str(repo_root), None) == []
+
+
+def test_final_check_venue_lint_never_blocks_plan_parsing():
+    """The venue lint is advisory-only, computed by a separate non-raising
+    function — parse_plan itself never rejects a venue mismatch (the CLI layer
+    calls final_check_venue_warnings onto the advisories channel, not problems)."""
+    data = {
+        "meta": {
+            "task_id": "t",
+            "repo_root": "/abs/repo",
+            "delivery_worktree": "/abs/worktree",
+        },
+        "stage": [{
+            "index": 1, "title": "x", "executor": "in_thread",
+            "expected_result_image": "i", "done_criterion": "c",
+        }],
+        "final_check": [{"command": "cd /abs/repo && pytest -q", "expected_exit": 0}],
+    }
+    doc = parse_plan(data)
+    assert doc.meta.delivery_worktree == "/abs/worktree"
+    assert len(final_check_venue_warnings(doc.meta.final_check, doc.meta.repo_root, doc.meta.delivery_worktree)) == 1
 
 
 # --- 8-element activity-structure (weight_class = "substantive") ---

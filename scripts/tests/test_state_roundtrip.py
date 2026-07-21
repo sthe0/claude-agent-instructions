@@ -200,6 +200,29 @@ def test_legacy_state_without_final_check_loads_with_default():
     assert loaded.final_check == []
 
 
+def test_json_roundtrip_preserves_delivery_worktree():
+    """delivery_worktree round-trips through to_json / from_json (#45)."""
+    s = SessionState(
+        session_id="sess", task_id="task",
+        weight_class=WeightClass.SUBSTANTIVE.value, route=Route.SPAWN.value,
+        delivery_worktree="/abs/worktree",
+    )
+    back = SessionState.from_json(s.to_json())
+    assert back == s
+    assert back.delivery_worktree == "/abs/worktree"
+
+
+def test_legacy_state_without_delivery_worktree_loads_with_default():
+    """A state dict without 'delivery_worktree' (pre-field states) loads with
+    None — byte-identical to pre-field behaviour."""
+    import json
+    s = SessionState(session_id="s", task_id="t")
+    raw = json.loads(s.to_json())
+    del raw["delivery_worktree"]  # simulate a pre-field state
+    loaded = SessionState.from_dict(raw)
+    assert loaded.delivery_worktree is None
+
+
 def test_ready_stages_respects_dependencies():
     s = SessionState(session_id="s", task_id="t")
     s.stages = [
@@ -307,6 +330,7 @@ def test_plan_stack_frame_preserves_partition_units():
         weight_class=WeightClass.SUBSTANTIVE.value,
         route=Route.SPAWN.value,
         repo_root=None,
+        delivery_worktree=None,
         final_check=[],
         partition=Partition(
             m1=True, verdict="recommended",

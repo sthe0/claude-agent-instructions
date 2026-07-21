@@ -32,6 +32,7 @@ from .directive import Directive
 from .dispatch import Runner, dispatch_stage, parse_marker, subprocess_runner
 from .machine import transition
 from .plan import (
+    final_check_venue_warnings,
     load_plan,
     stage_question_key,
     verify_command_reachability_blockers,
@@ -1078,6 +1079,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
         doc = load_plan(plan_path)
         state.stages = doc.stages
         state.repo_root = doc.meta.repo_root
+        state.delivery_worktree = doc.meta.delivery_worktree
         state.final_check = doc.meta.final_check
         if not state.goal:
             state.goal = doc.meta.goal
@@ -1137,6 +1139,12 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
         # Deterministic scope lint (experience leaf 2026-06-29) — always runs,
         # independent of the optional LLM advisor above; warn-only, never blocks.
         d.data.setdefault("advisories", []).extend(verify_command_scope_warnings(doc.stages))
+        # Deterministic worktree-venue lint (#45) — same warn-only channel; fires
+        # only when [meta] delivery_worktree names a pre-landing venue distinct
+        # from repo_root.
+        d.data.setdefault("advisories", []).extend(
+            final_check_venue_warnings(doc.meta.final_check, doc.meta.repo_root, doc.meta.delivery_worktree)
+        )
     if gates.plan_presentation_active(state):
         # A NUDGE, not the enforcement — the hash-bound gate in gates.
         # plan_presentation_blockers (checked at `approve`) is what actually
@@ -2654,6 +2662,7 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
         weight_class=state.weight_class,
         route=state.route,
         repo_root=state.repo_root,
+        delivery_worktree=state.delivery_worktree,
         final_check=list(state.final_check),
         partition=state.partition,
         approval=state.approval,
@@ -2674,6 +2683,7 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
     state.weight_class = None
     state.route = None
     state.repo_root = None
+    state.delivery_worktree = None
     state.final_check = []
     state.partition = None
     state.approval = GateRecord("plan_approval")
@@ -2717,6 +2727,7 @@ def cmd_pop_subplan(args, *, store: StateStore, runner: Runner | None = None) ->
     state.weight_class = frame.weight_class
     state.route = frame.route
     state.repo_root = frame.repo_root
+    state.delivery_worktree = frame.delivery_worktree
     state.final_check = frame.final_check
     state.partition = frame.partition
     state.approval = frame.approval

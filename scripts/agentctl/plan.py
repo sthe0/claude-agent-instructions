@@ -110,6 +110,12 @@ class PlanMeta:
     # invoker's cwd — byte-identical to pre-repo_root behaviour. Set it so a plan's
     # repo-relative verify paths resolve no matter where the engine is driven from.
     repo_root: str | None = None
+    # The linked worktree a worktree-delivered change is authored in, when it
+    # differs from repo_root (a Core/IaC change lands via PR; the canonical
+    # checkout at repo_root stays frozen on main until landing). None (default) =
+    # no worktree-venue signal, byte-identical to pre-field behaviour. Backs the
+    # final_check_venue_warnings lint below.
+    delivery_worktree: str | None = None
     # Optional typed end-to-end checks run by verify-final after per-stage re-runs.
     # Absent => [] (back-compat). Parsed from top-level [[final_check]] tables.
     final_check: list[FinalCheck] = field(default_factory=list)
@@ -456,6 +462,59 @@ def verify_command_reachability_blockers(stages, final_check, repo_root) -> list
     return blockers
 
 
+# --- final_check worktree-venue lint (advisory, never blocking) -------------
+# Difficulty removed: a worktree-delivered change (Core edits land via PR; the
+# canonical checkout stays frozen on main until landing) is ABSENT from
+# repo_root pre-landing, so a final_check whose `cd` targets repo_root observes
+# the wrong tree — a genuinely-green delivery false-fails (experience leaves
+# 2026-06-24-agentctl-verify-venue-worktree-needs-substantive-replan,
+# 2026-07-20-agentctl-premise-gate-blocks-venue-refinement-replan). This is
+# perception, not a decidable defect — a repo_root-anchored final_check is the
+# CORRECT post-landing confirmation, so the lint only warns (never blocks) and
+# only fires when [meta] delivery_worktree names the pre-landing venue.
+def final_check_venue_warnings(
+    final_check, repo_root: str | None, delivery_worktree: str | None
+) -> list[str]:
+    """Warn (never block) when a final_check `cd`s into the canonical repo_root
+    while [meta] delivery_worktree is set — pre-landing that observes the wrong
+    tree; the repo_root run is the post-landing confirmation instead. Silent
+    when delivery_worktree is unset (no signal) or repo_root is unset (nothing
+    to compare against)."""
+    if not delivery_worktree or not repo_root:
+        return []
+    repo_root_p = Path(repo_root).resolve()
+    worktree_p = Path(delivery_worktree).resolve()
+    warnings: list[str] = []
+    for fi, fc in enumerate(final_check or [], 1):
+        for sub in re.split(r"&&|;|\|", fc.command):
+            sub = sub.strip()
+            if not sub:
+                continue
+            try:
+                toks = shlex.split(sub)
+            except ValueError:
+                continue
+            if len(toks) < 2 or toks[0] != "cd":
+                continue
+            target = Path(toks[1])
+            if not target.is_absolute():
+                target = repo_root_p / target
+            target = target.resolve()
+            under_repo_root = target == repo_root_p or repo_root_p in target.parents
+            under_worktree = target == worktree_p or worktree_p in target.parents
+            if under_repo_root and not under_worktree:
+                label = fc.label or fc.command
+                warnings.append(
+                    f"final_check {fi} ({label!r}) cd's into the canonical repo_root "
+                    f"but [meta] delivery_worktree is set; pre-landing this observes "
+                    f"the wrong tree — cd into {delivery_worktree} so the check runs "
+                    f"where the un-landed change lives (the repo_root run is the "
+                    f"post-landing confirmation)."
+                )
+                break
+    return warnings
+
+
 def parse_plan(
     data: dict, *, strict: bool = True, strict_executor: bool | None = None
 ) -> PlanDoc:
@@ -506,6 +565,7 @@ def parse_plan(
         weight_class=str(raw_weight) if raw_weight is not None else None,
         external_research=str(m["external_research"]) if m.get("external_research") else None,
         repo_root=str(m["repo_root"]) if m.get("repo_root") else None,
+        delivery_worktree=str(m["delivery_worktree"]) if m.get("delivery_worktree") else None,
         final_check=final_checks,
     )
 

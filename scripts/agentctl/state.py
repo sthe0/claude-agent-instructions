@@ -567,6 +567,7 @@ class PlanFrame:
     weight_class: str | None
     route: str | None
     repo_root: str | None
+    delivery_worktree: str | None
     final_check: list[FinalCheck]
     partition: "Partition | None"
     approval: GateRecord
@@ -709,6 +710,11 @@ class SessionState:
     # repo_root). None inherits the invoker's cwd — byte-identical to the pre-field
     # behaviour, so live states predating the field load unchanged.
     repo_root: str | None = None
+    # The linked worktree a worktree-delivered change is authored in (from plan
+    # [meta].delivery_worktree). None (default) = no worktree-venue signal,
+    # byte-identical to pre-field behaviour; live states predating the field load
+    # unchanged. Backs plan.final_check_venue_warnings.
+    delivery_worktree: str | None = None
     # Typed end-to-end checks run at verify-final after per-stage re-runs.
     # Absent in legacy states (schema_version <= 7): from_dict defaults to [].
     final_check: list[FinalCheck] = field(default_factory=list)
@@ -900,6 +906,7 @@ class SessionState:
                 weight_class=f.get("weight_class"),
                 route=f.get("route"),
                 repo_root=f.get("repo_root"),
+                delivery_worktree=f.get("delivery_worktree"),
                 final_check=[FinalCheck(**fc) for fc in f.get("final_check", [])],
                 partition=Partition.from_dict(f["partition"]) if f.get("partition") else None,
                 approval=GateRecord(**f["approval"]),

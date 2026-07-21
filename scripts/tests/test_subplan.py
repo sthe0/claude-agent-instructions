@@ -64,6 +64,7 @@ def _executing_state(store, sid, n_stages=2, current=1):
         approval=GateRecord("plan_approval", armed=True, passed=True, by="tester"),
         partition=Partition(verdict="single"),
         repo_root="/tmp/repo",
+        delivery_worktree="/tmp/repo/.wt",
         final_check=[FinalCheck(command="echo ok", expected_exit=0, label="smoke")],
         stages=[_stage(i) for i in range(1, n_stages + 1)],
         current_stage=current,
@@ -119,6 +120,7 @@ def test_push_subplan_transitions_to_classified(store):
     assert state.weight_class is None
     assert state.route is None
     assert state.partition is None
+    assert state.delivery_worktree is None  # reset on push, like repo_root
 
 
 def test_push_preserves_parent_in_frame(store):
@@ -136,6 +138,7 @@ def test_push_preserves_parent_in_frame(store):
     assert frame.weight_class == WeightClass.SUBSTANTIVE.value
     assert frame.route == Route.SPAWN.value
     assert frame.repo_root == "/tmp/repo"
+    assert frame.delivery_worktree == "/tmp/repo/.wt"
     assert len(frame.final_check) == 1
     assert frame.final_check[0].command == "echo ok"
     assert frame.partition is not None
@@ -170,6 +173,7 @@ def test_pop_subplan_restores_parent(store):
     assert state.weight_class == WeightClass.SUBSTANTIVE.value
     assert state.route == Route.SPAWN.value
     assert state.repo_root == "/tmp/repo"
+    assert state.delivery_worktree == "/tmp/repo/.wt"
     assert len(state.final_check) == 1
     assert state.final_check[0].command == "echo ok"
     assert state.partition is not None
@@ -219,6 +223,7 @@ def _make_frame(i):
         weight_class=WeightClass.SUBSTANTIVE.value,
         route=Route.SPAWN.value,
         repo_root=None,
+        delivery_worktree=None,
         final_check=[],
         partition=Partition(verdict="single"),
         approval=GateRecord("plan_approval", armed=True, passed=True),
