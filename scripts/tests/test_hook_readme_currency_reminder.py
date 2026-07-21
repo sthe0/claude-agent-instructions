@@ -291,3 +291,79 @@ def test_main_malformed_registry_no_crash_exit_zero(monkeypatch, capsys, tmp_pat
     monkeypatch.setattr("sys.stdin", io.StringIO(_payload("git commit -m 'x'")))
     rc = mod.main()
     assert rc == 0
+
+
+# ---------------------------------------------------------------------------
+# Integration: main() routes the changeset cwd through git_cwd.effective_git_cwd
+# so a cross-repo commit (the standard `cd <worktree> && git/arc commit` landing
+# pattern) computes the changeset against the tree the command actually targets,
+# not the ambient session cwd. Blind-spot fix — see scripts/lib/git_cwd.py.
+# ---------------------------------------------------------------------------
+
+
+def _capture_changeset_cwd(monkeypatch, mod):
+    """Record the cwd _git_changeset receives and short-circuit main(): the stub
+    MUST return None (dict.update does; dict.setdefault would return the truthy
+    string and make main() unpack a path → ValueError). _arc_changeset is stubbed
+    to None so the `_git_changeset(...) or _arc_changeset(...)` fallback stays
+    None and the hook takes its no-changeset branch after the capture."""
+    seen = {}
+    monkeypatch.setattr(mod, "_git_changeset", lambda cwd, sweep: seen.update(cwd=cwd))
+    monkeypatch.setattr(mod, "_arc_changeset", lambda cwd: None)
+    return seen
+
+
+def test_main_effective_cwd_cd_redirect(monkeypatch):
+    """`cd <worktree> && git commit` — the leading-cd redirect makes the changeset
+    compute against the worktree the commit targets, not the session cwd."""
+    mod = _load_module()
+    seen = _capture_changeset_cwd(monkeypatch, mod)
+    monkeypatch.setattr(
+        "sys.stdin",
+        io.StringIO(_payload("cd /repo/b && git commit -m x", cwd="/repo/a")),
+    )
+    assert mod.main() == 0
+    assert seen["cwd"] == "/repo/b"
+
+
+def test_main_effective_cwd_cd_redirect_arc(monkeypatch):
+    """The leading-cd branch is command-agnostic, so it also fixes `arc commit`
+    (COMMIT_RE fires on `arc commit` too)."""
+    mod = _load_module()
+    seen = _capture_changeset_cwd(monkeypatch, mod)
+    monkeypatch.setattr(
+        "sys.stdin",
+        io.StringIO(_payload("cd /repo/b && arc commit -m x", cwd="/repo/a")),
+    )
+    assert mod.main() == 0
+    assert seen["cwd"] == "/repo/b"
+
+
+def test_main_effective_cwd_falls_back_without_redirect(monkeypatch):
+    """No redirect → the changeset keys off the payload cwd exactly as before the
+    fix (strictly non-regressing for same-tree commits)."""
+    mod = _load_module()
+    seen = _capture_changeset_cwd(monkeypatch, mod)
+    monkeypatch.setattr(
+        "sys.stdin",
+        io.StringIO(_payload("git commit -m x", cwd="/repo/a")),
+    )
+    assert mod.main() == 0
+    assert seen["cwd"] == "/repo/a"
+
+
+def test_main_dash_c_form_does_not_trigger_hook(monkeypatch):
+    """Boundary: `git -C <dir> commit` is NOT contiguous `git commit`, so this
+    hook's COMMIT_RE never fires on it and main() returns 0 without computing a
+    changeset. The `git -C` branch of effective_git_cwd is therefore exercised
+    only at the lib level (test_git_cwd.test_dash_c_absolute), where the canon
+    hook's tokenized _is_git_commit does reach it. Documents why the -C form is
+    absent from this hook's cross-repo cases."""
+    mod = _load_module()
+    seen = _capture_changeset_cwd(monkeypatch, mod)
+    monkeypatch.setattr(
+        "sys.stdin",
+        io.StringIO(_payload("git -C /repo/b commit -m x", cwd="/repo/a")),
+    )
+    assert mod.main() == 0
+    assert seen == {}  # _git_changeset never called — hook did not fire

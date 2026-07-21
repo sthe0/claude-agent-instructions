@@ -28,6 +28,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import git_cwd  # noqa: E402
+
 COMMIT_RE = re.compile(r"\b(?:git|arc)\s+commit(?=\s|$)")
 # `git commit -a` / `-am` / `--all` also sweep in tracked-but-unstaged edits.
 GIT_ALL_RE = re.compile(r"\bcommit\b.*?(?:\s--all\b|\s-[a-z]*a[a-z]*\b)")
@@ -193,7 +196,7 @@ def main() -> int:
     if not isinstance(command, str) or not COMMIT_RE.search(command):
         return 0
 
-    cwd = payload.get("cwd") or os.getcwd()
+    cwd = git_cwd.effective_git_cwd(command, payload.get("cwd") or os.getcwd())
     sweep_all = bool(GIT_ALL_RE.search(command))
 
     cs = _git_changeset(cwd, sweep_all) or _arc_changeset(cwd)
