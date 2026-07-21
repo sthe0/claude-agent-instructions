@@ -49,7 +49,7 @@ docs/operations/setup.md:40  # keep:legacy-fallback — legacy ~/.claude describ
 docs/operations/setup.md:45  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
 docs/operations/setup.md:55  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
 benchmark-profile/REMOVED-VS-RETAINED.md:17  # keep:harness-owned — describes the personal ~/.claude/settings.json where the hook family is registered
-memory-global/MEMORY.md:61  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
+memory-global/MEMORY.md:62  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 memory-global/leaves/claude-code-settings-env-precedence.md:35  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 memory-global/leaves/coordinator-pitfalls.md:29  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 memory-global/leaves/experience/2026-05-24-silent-architectural-decision-config-as-file.md:23  # keep:historical-experience — historical quote inside a resolved-task experience leaf
@@ -94,8 +94,8 @@ memory-global/leaves/system-knowledge/instructions-repo-layout.md:109  # keep:le
 memory-global/leaves/token-economy-plan.md:30  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 memory-global/leaves/token-economy-plan.md:66  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 scripts/README.md:38  # keep:protected-path — hook-guard-destructive-rm.py row lists ~/.claude among the protected paths it guards
-scripts/README.md:78  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-scripts/README.md:109  # keep:enumerator-self-ref — documents this enumerator; quotes the very pattern it searches
+scripts/README.md:79  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+scripts/README.md:110  # keep:enumerator-self-ref — documents this enumerator; quotes the very pattern it searches
 skills/ccgram-management/SKILL.md:17  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 skills/overcome-difficulty/SKILL.md:57  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 skills/overcome-difficulty/policy.md:57  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)

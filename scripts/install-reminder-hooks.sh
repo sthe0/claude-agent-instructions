@@ -29,6 +29,7 @@ DESIRED = [
     ("UserPromptSubmit", None,    "hook-self-improvement-reminder.py", 5),
     ("UserPromptSubmit", None,    "hook-tracker-reminder.py",        5),
     ("UserPromptSubmit", None,    "hook-tracker-publish-reminder.py", 5),
+    ("UserPromptSubmit", None,    "hook-ticket-plan-sync.py",        5),
     ("UserPromptSubmit", None,    "hook-experience-record-reminder.py", 5),
     ("PreToolUse",       "Bash",  "hook-push-confirmation-reminder.py", 5),
     ("PreToolUse",       "Bash",  "hook-readme-currency-reminder.py", 5),
