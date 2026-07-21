@@ -230,6 +230,36 @@ def cmd_file(path_str: str) -> int:
     return 0
 
 
+def cmd_root(root_str: str) -> int:
+    """Check every in-scope *.md leaf under DIR.
+
+    Used for the project-memory layout (`.claude/agent-memory/`), which
+    `is_leaf` already recognizes (line-79 path check). Reuses the same scope
+    and grandfather rules as cmd_file/_scan: non-opted-in files return None
+    from check_content and pass.
+    """
+    root = Path(root_str)
+    if not root.is_dir():
+        print(f"verify-leaf-structure: FAIL {root}: not a directory", file=sys.stderr)
+        return 1
+    paths = sorted(str(p) for p in root.rglob("*.md") if is_leaf(str(p)))
+    if not paths:
+        print(f"verify-leaf-structure: OK — no leaf files in scope under {root}")
+        return 0
+    failed: list[str] = []
+    for path in paths:
+        err = check_content(Path(path).read_text(encoding="utf-8"), path)
+        if err:
+            print(f"verify-leaf-structure: FAIL {path}: {err}")
+            failed.append(path)
+        else:
+            print(f"verify-leaf-structure: OK {path}")
+    if failed:
+        print(f"\n{len(failed)} leaf/leaves failed the structure check under {root}.")
+        return 1
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     group = parser.add_mutually_exclusive_group()
@@ -237,11 +267,16 @@ def main(argv: list[str] | None = None) -> int:
                        help="check files staged for commit")
     group.add_argument("--hook", action="store_true",
                        help="PreToolUse hook mode: JSON tool input on stdin")
+    group.add_argument("--root", metavar="DIR",
+                       help="check every *.md leaf under DIR "
+                            "(project agent-memory layout)")
     parser.add_argument("path", nargs="?", help="check one file (ad-hoc CLI)")
     args = parser.parse_args(argv)
 
     if args.hook:
         return cmd_hook()
+    if args.root:
+        return cmd_root(args.root)
     if args.path:
         return cmd_file(args.path)
     mode = "staged" if args.staged else "all"

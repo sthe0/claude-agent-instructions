@@ -65,7 +65,15 @@ PATTERN_CHARS = set("*?<>[]{}")
 
 # Files / directories that may legitimately reference paths that no longer
 # exist (migration / changelog docs describe past state).
-SKIP_PATH_PREFIXES = ("docs/migrations/",)
+#
+# benchmark-profile*/ are byte-exact frozen snapshots pinned by MANIFEST.sha256;
+# their intra-tree links point outside the partial snapshot and editing any file
+# to "fix" a ref would break the hash manifest, so they are out of cross-ref scope.
+SKIP_PATH_PREFIXES = (
+    "docs/migrations/",
+    "benchmark-profile/",
+    "benchmark-profile-spawn/",
+)
 
 
 def blank_out_code_fences(text: str) -> str:

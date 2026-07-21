@@ -27,6 +27,11 @@ die() {
   exit 1
 }
 
+# Directory the caller invoked us from, captured BEFORE the `cd "$REPO"` below so
+# the post-pull integrity gate can locate a project's .claude/agent-memory to
+# verify (a detached/cron run whose cwd holds no project simply finds nothing).
+INVOCATION_DIR="$(pwd -P)"
+
 cd "$REPO" || die "repo not found: $REPO"
 
 if [[ -z "$BRANCH" ]]; then
@@ -112,6 +117,66 @@ maybe_migrate_isolated() {
   fi
 }
 
+# After a pull that APPLIED commits, verify instruction integrity in BOTH layers
+# so a freshly-pulled inconsistency surfaces immediately instead of at the next
+# random failure. Determinizes the norm "run integrity checks when instructions
+# are updated" structurally, at the pull event, rather than as a prose rule the
+# model may forget.
+#
+# Fail-open by construction: every check is guarded and the caller invokes this as
+# `run_integrity_checks || true`, so a failing check emits a loud WARN (detail to
+# stderr, summary via log) but NEVER aborts the already-applied pull. The verify
+# entrypoints are env seams (CLAUDE_VERIFY_ALL_BIN / CLAUDE_VERIFY_LEAF_BIN),
+# mirroring the migrate/setup seams above, so tests can stub them.
+run_integrity_checks() {
+  local verify_all="${CLAUDE_VERIFY_ALL_BIN:-$REPO/scripts/verify-all.py}"
+  local verify_leaf="${CLAUDE_VERIFY_LEAF_BIN:-$REPO/scripts/verify-leaf-structure.py}"
+
+  # Global layer: the instructions repo's own verify-all suite.
+  if [[ -f "$verify_all" ]]; then
+    local out rc=0
+    out="$(cd "$REPO" && python3 "$verify_all" 2>&1)" || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+      printf '%s\n' "$out" >&2
+      log "pull: WARN global integrity check (verify-all.py) reported problems — fail-open, pull NOT aborted; review the output above"
+    else
+      log "pull: integrity OK (global verify-all.py)"
+    fi
+  fi
+
+  # Project layer: if the pull was invoked from within a project tree carrying
+  # .claude/agent-memory/MEMORY.md, verify that project's leaves with the
+  # layout-aware --root checker. Walk UP from the invocation dir so a subdirectory
+  # invocation still finds the project root; SKIP when the discovered agent-memory
+  # resolves under $REPO itself (the instructions repo is covered by the global
+  # check above, never re-checked as a "project").
+  if [[ -f "$verify_leaf" ]]; then
+    local dir repo_real
+    dir="${INVOCATION_DIR:-$(pwd -P)}"
+    repo_real="$(cd "$REPO" && pwd -P)"
+    while [[ -n "$dir" && "$dir" != "/" ]]; do
+      if [[ -f "$dir/.claude/agent-memory/MEMORY.md" ]]; then
+        local mem="$dir/.claude/agent-memory"
+        case "$mem/" in
+          "$repo_real"/*) : ;;  # under the instructions repo — global check covers it
+          *)
+            local pout prc=0
+            pout="$(cd "$REPO" && python3 "$verify_leaf" --root "$mem" 2>&1)" || prc=$?
+            if [[ "$prc" -ne 0 ]]; then
+              printf '%s\n' "$pout" >&2
+              log "pull: WARN project integrity check (verify-leaf-structure --root $mem) reported problems — fail-open, pull NOT aborted"
+            else
+              log "pull: integrity OK (project $mem)"
+            fi
+            ;;
+        esac
+        break
+      fi
+      dir="$(dirname "$dir")"
+    done
+  fi
+}
+
 cmd_pull() {
   log "pull start ($REPO)"
 
@@ -160,6 +225,11 @@ cmd_pull() {
   if [[ "$did_stash" == true ]]; then
     pop_stash_if_any || return 1
   fi
+
+  # Integrity gate runs ONLY here — on the reconcile path where commits were
+  # actually applied. The behind==0 and fetch-not-found early returns above skip
+  # it, keeping up-to-date auto-pulls cheap. Fail-open: never aborts the pull.
+  run_integrity_checks || true
 
   log "pull: done"
 }

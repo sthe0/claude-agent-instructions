@@ -218,3 +218,59 @@ class TestHookMode:
     def test_hook_bad_json_returns_0(self, monkeypatch):
         monkeypatch.setattr("sys.stdin", StringIO("not json"))
         assert main(["--hook"]) == 0
+
+
+# ---------------------------------------------------------------------------
+# --root batch mode (project agent-memory layout)
+# ---------------------------------------------------------------------------
+
+class TestRootMode:
+    def _mem(self, tmp_path: Path) -> Path:
+        # is_leaf requires "agent-memory" (or "leaves") in the path parts.
+        d = tmp_path / "agent-memory"
+        d.mkdir()
+        return d
+
+    def test_valid_and_grandfathered_pass(self, tmp_path):
+        mem = self._mem(tmp_path)
+        (mem / "good.md").write_text(
+            _v1_leaf(["Difficulty", "Guidance", "See also"]), encoding="utf-8")
+        (mem / "grandfathered.md").write_text(
+            "---\nname: x\ndescription: bare fact\ntype: reference\n---\n\n# T\n\nbody\n",
+            encoding="utf-8")
+        assert main(["--root", str(mem)]) == 0
+
+    def test_opted_in_violation_fails(self, tmp_path):
+        mem = self._mem(tmp_path)
+        (mem / "bad.md").write_text(
+            _v1_leaf(["Guidance", "See also"]), encoding="utf-8")  # missing Difficulty
+        assert main(["--root", str(mem)]) == 1
+
+    def test_memory_md_and_experience_ignored(self, tmp_path):
+        mem = self._mem(tmp_path)
+        # A bad opted-in leaf placed in MEMORY.md and under experience/ must NOT
+        # fail the scan — both are out of scope per is_leaf.
+        (mem / "MEMORY.md").write_text(_v1_leaf(["Guidance"]), encoding="utf-8")
+        exp = mem / "experience"
+        exp.mkdir()
+        (exp / "task.md").write_text(_v1_leaf(["Guidance"]), encoding="utf-8")
+        assert main(["--root", str(mem)]) == 0
+
+    def test_empty_root_ok(self, tmp_path):
+        mem = self._mem(tmp_path)
+        assert main(["--root", str(mem)]) == 0
+
+    def test_missing_root_fails(self, tmp_path):
+        assert main(["--root", str(tmp_path / "nope")]) == 1
+
+    def test_root_recurses_subdirs(self, tmp_path):
+        mem = self._mem(tmp_path)
+        sub = mem / "system-knowledge"
+        sub.mkdir()
+        # A grandfathered SK leaf missing a difficulty-lead must be caught even
+        # nested under the root.
+        (sub / "foo.md").write_text(
+            "---\nname: x\ndescription: 'Some plain fact about a system'\ntype: reference\n---\n\n"
+            "# Title\n\n## Section\n\ncontent\ncontent\ncontent\ncontent\ncontent\ncontent\ncontent\ncontent\n",
+            encoding="utf-8")
+        assert main(["--root", str(mem)]) == 1
