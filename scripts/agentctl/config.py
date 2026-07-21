@@ -60,7 +60,19 @@ class Thresholds:
         return self._int("loop-sensitivity-depth")
 
     def budget_usd(self, tier: str) -> str:
+        """Expected-size telemetry LABEL for a tier — NOT the applied kill-cap.
+        The cap passed to `claude -p --max-budget-usd` is runaway_ceiling_usd()."""
         return self._str(f"budget-{tier}-usd")
+
+    def runaway_ceiling_usd(self) -> str:
+        """The single global runaway backstop actually passed as --max-budget-usd
+        to every spawn (spawn-runaway-ceiling-usd). Fail-safe to the large tier if
+        the key is absent, mirroring spawn-specialist.runaway_ceiling — never
+        unbounded."""
+        key = "spawn-runaway-ceiling-usd"
+        if key in self._c:
+            return self._c[key]
+        return self.budget_usd("large")
 
     @property
     def advisor_mode(self) -> str:

@@ -87,6 +87,24 @@ def budget_value(tier: str, constants: dict[str, str]) -> str:
     return constants[key]
 
 
+# Multiple of a spawn's tier LABEL above which realized cost triggers one stderr
+# soft-warn line (no kill, no non-zero exit) — a cheap calibration signal.
+SOFT_WARN_MULT = 2.0
+
+
+def runaway_ceiling(constants: dict[str, str]) -> str:
+    """The single global runaway backstop passed as --max-budget-usd to every
+    spawn (spawn-runaway-ceiling-usd in config.md). Under flat billing the
+    per-tier budget-*-usd values are expected-size LABELS, not kill-caps; the
+    kill is this one high ceiling. Fail-safe: if the key is absent, fall back to
+    the large tier so a partial rollout can never remove the backstop entirely
+    (never unbounded)."""
+    key = "spawn-runaway-ceiling-usd"
+    if key in constants:
+        return constants[key]
+    return budget_value("large", constants)
+
+
 def recursion_max(constants: dict[str, str]) -> int:
     key = "max-recursion-depth"
     if key not in constants:
@@ -496,7 +514,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         args.budget = "medium"
 
-    budget = budget_value(args.budget, constants)
+    # The tier value is now a telemetry LABEL (recorded on the spawn-costs row,
+    # used for the soft-warn), NOT the applied kill-cap. The cap passed to
+    # `claude -p --max-budget-usd` is the single global runaway ceiling, so the
+    # kill fires only on a true runaway, not on legitimate large work.
+    tier_label_usd = budget_value(args.budget, constants)
+    cap = runaway_ceiling(constants)
     perms = permissions_digest(args.project_permissions)
     prompt = assemble_prompt(args, depth_next, perms)
     model = resolve_model(args)
@@ -507,7 +530,7 @@ def main(argv: list[str] | None = None) -> int:
         "--append-system-prompt-file",
         str(composed_system_prompt_file(skill)),
         "--max-budget-usd",
-        budget,
+        cap,
         "--output-format",
         "json",
         # Pass the per-model autocompact threshold via --settings (highest in the
@@ -622,7 +645,7 @@ def main(argv: list[str] | None = None) -> int:
         "event": "spawn",
         "kind": args.kind,
         "budget_tier": args.budget,
-        "budget_usd_cap": budget,
+        "budget_usd_cap": cap,
         "depth": depth_next,
         "cost_usd": cost_usd,
         "duration_ms": duration_ms,
@@ -633,6 +656,23 @@ def main(argv: list[str] | None = None) -> int:
         "plan_path": str(args.plan),
         **_spawn_tags(),
     })
+
+    # Soft-warn (no kill, no exit-code change): realized cost exceeding a
+    # multiple of the tier LABEL is a cheap calibration signal that the tier's
+    # expected size is set too low for this kind of work. It never truncates the
+    # spawn — the only kill is the runaway ceiling applied above.
+    if cost_usd is not None:
+        try:
+            label_usd = float(tier_label_usd)
+        except ValueError:
+            label_usd = 0.0
+        if label_usd > 0 and cost_usd > SOFT_WARN_MULT * label_usd:
+            print(
+                f"spawn-specialist: soft-warn: realized cost_usd={cost_usd} exceeds "
+                f"{SOFT_WARN_MULT}x the '{args.budget}' tier label ({tier_label_usd}); "
+                f"tier expected-size may be under-set (not a kill — cap is the runaway ceiling {cap}).",
+                file=sys.stderr,
+            )
 
     summary_bits = [
         f"spawn-specialist: kind={args.kind}",
