@@ -168,6 +168,77 @@ def test_linked_worktree_edit_allows(tmp_path):
     assert _allowed(proc), proc.stdout
 
 
+def test_bash_git_commit_cd_redirect_into_worktree_allows(tmp_path):
+    """cwd-reset case: the harness reports payload cwd = primary core, but the
+    command itself `cd`s into a linked worktree before committing — the commit's
+    real target is the worktree, which must be ALLOWED."""
+    core = make_core(tmp_path)
+    wt = tmp_path / "wt"
+    git("worktree", "add", "-b", "wt-branch", str(wt), "main", cwd=core)
+    proc = run_hook(core, {
+        "tool_name": "Bash",
+        "tool_input": {"command": f"cd {wt} && git commit -m 'wip'"},
+        "cwd": str(core),
+    })
+    assert _allowed(proc), proc.stdout
+
+
+def test_bash_git_commit_dash_c_into_worktree_allows(tmp_path):
+    """Same cwd-reset case via `git -C <worktree> commit` instead of a leading cd."""
+    core = make_core(tmp_path)
+    wt = tmp_path / "wt"
+    git("worktree", "add", "-b", "wt-branch", str(wt), "main", cwd=core)
+    proc = run_hook(core, {
+        "tool_name": "Bash",
+        "tool_input": {"command": f"git -C {wt} commit -m 'wip'"},
+        "cwd": str(core),
+    })
+    assert _allowed(proc), proc.stdout
+
+
+def test_bash_bare_git_commit_no_redirect_still_denies(tmp_path):
+    """No redirect at all — payload cwd = primary core is the real target, so the
+    deny must survive the new redirect-resolution logic unchanged."""
+    core = make_core(tmp_path)
+    proc = run_hook(core, {
+        "tool_name": "Bash",
+        "tool_input": {"command": "git commit -m 'wip'"},
+        "cwd": str(core),
+    })
+    assert _denied(proc), proc.stdout
+
+
+def test_bash_non_commit_git_command_with_cd_redirect_allows(tmp_path):
+    """A cd-redirected non-commit git command was already allowed (not a `git
+    commit`) and must stay allowed after the redirect-resolution change."""
+    core = make_core(tmp_path)
+    wt = tmp_path / "wt"
+    git("worktree", "add", "-b", "wt-branch", str(wt), "main", cwd=core)
+    proc = run_hook(core, {
+        "tool_name": "Bash",
+        "tool_input": {"command": f"cd {wt} && git status"},
+        "cwd": str(core),
+    })
+    assert _allowed(proc), proc.stdout
+
+
+def test_bash_unrelated_dash_c_before_bare_commit_still_denies(tmp_path):
+    """A `-C <dir>` earlier in the chain that belongs to a DIFFERENT git
+    invocation must not be misattributed to the later, unredirected `git
+    commit` — that commit still targets payload cwd (primary core) and must
+    still be denied."""
+    core = make_core(tmp_path)
+    other = tmp_path / "other"
+    other.mkdir()
+    git("init", "--quiet", "-b", "main", ".", cwd=other)
+    proc = run_hook(core, {
+        "tool_name": "Bash",
+        "tool_input": {"command": f"git -C {other} status && git commit -m 'wip'"},
+        "cwd": str(core),
+    })
+    assert _denied(proc), proc.stdout
+
+
 def test_file_outside_core_repo_allows(tmp_path):
     core = make_core(tmp_path)
     other = tmp_path / "other"

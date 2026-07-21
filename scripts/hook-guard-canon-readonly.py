@@ -148,6 +148,32 @@ def _is_git_commit(command: str) -> bool:
     return False
 
 
+def _effective_git_cwd(command: str, payload_cwd: str) -> str:
+    """The directory a `git commit` in `command` actually targets: the redirect
+    the command itself selects (`git -C <dir> commit` or a leading `cd <dir> &&`
+    / `cd <dir> ;`), or `payload_cwd` unchanged when the command has no such
+    redirect. Best-effort: any parse doubt (or the harness's tracked shell cwd
+    getting reset out from under a `cd`/`-C` the command actually issues) falls
+    back to `payload_cwd`, never to a MORE permissive guess."""
+    try:
+        tokens = shlex.split(command)
+    except Exception:
+        return payload_cwd
+
+    def _resolve(candidate: str) -> str:
+        if not os.path.isabs(candidate):
+            candidate = os.path.join(payload_cwd, candidate)
+        return candidate
+
+    for i in range(len(tokens) - 3):
+        if (os.path.basename(tokens[i]) == "git" and tokens[i + 1] == "-C"
+                and tokens[i + 3] == "commit"):
+            return _resolve(tokens[i + 2])
+    if len(tokens) >= 2 and tokens[0] == "cd":
+        return _resolve(tokens[1])
+    return payload_cwd
+
+
 def _deny_msg(target: str) -> str:
     return (
         f"Refusing to modify canon ({target}) directly from a live agent session. Canon "
@@ -169,7 +195,8 @@ def decide(payload: dict) -> str | None:
         command = (tool_input.get("command") or "").strip()
         if not command or not _is_git_commit(command):
             return None
-        cwd = payload.get("cwd") or os.getcwd()
+        payload_cwd = payload.get("cwd") or os.getcwd()
+        cwd = _effective_git_cwd(command, payload_cwd)
         target_dir = _nearest_existing_dir(cwd)
         if target_dir is None:
             return None
