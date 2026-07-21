@@ -39,12 +39,24 @@ def _load_module():
     return mod
 
 
-def _write_state(state_dir: Path, session_id: str, node: str, resolution_passed: bool) -> None:
+def _write_state(
+    state_dir: Path,
+    session_id: str,
+    node: str,
+    resolution_passed: bool,
+    *,
+    delivery_worktree: str | None = None,
+    repo_root: str | None = None,
+) -> None:
     state_dir.mkdir(parents=True, exist_ok=True)
     data = {
         "node": node,
         "resolution": {"passed": resolution_passed},
     }
+    if delivery_worktree is not None:
+        data["delivery_worktree"] = delivery_worktree
+    if repo_root is not None:
+        data["repo_root"] = repo_root
     (state_dir / f"{session_id}.json").write_text(json.dumps(data), encoding="utf-8")
 
 
@@ -251,6 +263,94 @@ def test_hints_cite_landing_discipline_leaf():
     for hint in (mod.BRANCH_HYGIENE_HINT, mod.UNPUSHED_BRANCH_HINT,
                  mod.MERGED_LEFTOVER_HINT, mod.DIRECT_PUSH_NO_PR_HINT):
         assert "memory-global/leaves/landing-discipline.md" in hint
+
+
+# --- _delivery_repo_dir(): landing-probes key off the session's declared -----
+# --- delivery tree (delivery_worktree, else repo_root), not the ambient cwd --
+
+def _capture_probe_repo_dir(mod, monkeypatch, capsys, session_id, cwd):
+    """Run the resolution-gate branch of main() and return the repo_dir the
+    landing-probes were handed — captured by monkeypatching landable_branch_hint
+    (which, like the other three probes, receives repo_dir). This is what proves
+    what the probes key off, independent of any probe's own logic."""
+    seen = {}
+    monkeypatch.setattr(
+        mod, "landable_branch_hint",
+        lambda repo_dir: seen.setdefault("d", repo_dir) or None,
+    )
+    _run(monkeypatch, capsys, mod, {"session_id": session_id, "cwd": cwd})
+    return seen.get("d")
+
+
+def test_probes_key_off_declared_delivery_worktree_not_cwd(monkeypatch, capsys, tmp_path):
+    """A session that declares delivery_worktree makes the probes key off THAT
+    tree, not the (different) session cwd — the cross-repo fix."""
+    mod = _load_module()
+    state_dir = _point_roots_at(monkeypatch, tmp_path)
+    delivery = tmp_path / "delivery"
+    delivery.mkdir()
+    other_cwd = tmp_path / "elsewhere"
+    other_cwd.mkdir()
+    _write_state(state_dir, "sess-dw", "RESOLUTION", resolution_passed=False,
+                 delivery_worktree=str(delivery))
+
+    assert _capture_probe_repo_dir(mod, monkeypatch, capsys, "sess-dw", str(other_cwd)) == str(delivery)
+
+
+def test_probes_fall_back_to_cwd_when_no_declared_tree(monkeypatch, capsys, tmp_path):
+    """No declared delivery tree (the common same-repo case) -> probes key off
+    the session cwd, byte-identical to the pre-fix behavior."""
+    mod = _load_module()
+    state_dir = _point_roots_at(monkeypatch, tmp_path)
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    _write_state(state_dir, "sess-none", "RESOLUTION", resolution_passed=False)
+
+    assert _capture_probe_repo_dir(mod, monkeypatch, capsys, "sess-none", str(cwd)) == str(cwd)
+
+
+def test_probes_fall_back_to_cwd_when_declared_path_missing(monkeypatch, capsys, tmp_path):
+    """A declared delivery tree that does not exist on disk is ignored -> cwd."""
+    mod = _load_module()
+    state_dir = _point_roots_at(monkeypatch, tmp_path)
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    _write_state(state_dir, "sess-gone", "RESOLUTION", resolution_passed=False,
+                 delivery_worktree=str(tmp_path / "does-not-exist"))
+
+    assert _capture_probe_repo_dir(mod, monkeypatch, capsys, "sess-gone", str(cwd)) == str(cwd)
+
+
+def test_delivery_worktree_preferred_over_repo_root_when_both_set(monkeypatch, capsys, tmp_path):
+    """Both fields set and both existing -> delivery_worktree wins (the branch
+    physically lives in the worktree). Covers the plan's refutation criterion."""
+    mod = _load_module()
+    state_dir = _point_roots_at(monkeypatch, tmp_path)
+    delivery = tmp_path / "delivery"
+    delivery.mkdir()
+    root = tmp_path / "root_repo"
+    root.mkdir()
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    _write_state(state_dir, "sess-both", "RESOLUTION", resolution_passed=False,
+                 delivery_worktree=str(delivery), repo_root=str(root))
+
+    assert _capture_probe_repo_dir(mod, monkeypatch, capsys, "sess-both", str(cwd)) == str(delivery)
+
+
+def test_repo_root_used_when_only_repo_root_set(monkeypatch, capsys, tmp_path):
+    """Only repo_root declared (no delivery_worktree) and it exists -> repo_root
+    is the probe target (the repo_root fallback branch)."""
+    mod = _load_module()
+    state_dir = _point_roots_at(monkeypatch, tmp_path)
+    root = tmp_path / "root_repo"
+    root.mkdir()
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    _write_state(state_dir, "sess-root", "RESOLUTION", resolution_passed=False,
+                 repo_root=str(root))
+
+    assert _capture_probe_repo_dir(mod, monkeypatch, capsys, "sess-root", str(cwd)) == str(root)
 
 
 # --- merged_leftover_hint(): merged-but-undeleted local branches ------------

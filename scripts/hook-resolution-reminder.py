@@ -168,6 +168,32 @@ def resolution_gate_open(session_id: str) -> bool:
     return not bool(resolution.get("passed"))
 
 
+def _delivery_repo_dir(session_id: str, cwd: str) -> str:
+    """The repo the resolution landing-probes should key off. When the active
+    agentctl session declares a delivery tree (its plan's [meta] delivery_worktree,
+    else repo_root — where the work actually lands), probe THAT tree, not the
+    session cwd, so Core delivery coordinated from an unrelated project session
+    still gets the correct land-vs-PR nudge. Falls back to cwd when there is no
+    session state, no declared tree, or the declared path is gone. Reads the same
+    state file as resolution_gate_open; the whole body is guarded so a non-dict
+    JSON body or a non-str field value degrades to cwd rather than raising — the
+    hook must never crash a resolution turn."""
+    if not session_id:
+        return cwd
+    try:
+        path = config_root.resolve_agentctl_state_file(session_id)
+        if path is None:
+            return cwd
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for key in ("delivery_worktree", "repo_root"):
+            val = data.get(key)
+            if val and Path(val).is_dir():
+                return val
+    except Exception:
+        return cwd
+    return cwd
+
+
 def landable_branch_hint(repo_dir: str) -> str | None:
     """Best-effort: BRANCH_HYGIENE_HINT if `land-branch.py --check` reports
     LANDABLE in repo_dir, else None. Any failure (missing script, timeout,
@@ -318,7 +344,10 @@ def main() -> int:
             "explicitly via AskUserQuestion, then run `agentctl resolve "
             "--by <user>` only after an unambiguous confirmation."
         )
-        repo_dir = payload.get("cwd") or str(Path(__file__).resolve().parent)
+        repo_dir = _delivery_repo_dir(
+            payload.get("session_id") or "",
+            payload.get("cwd") or str(Path(__file__).resolve().parent),
+        )
         try:
             hint = landable_branch_hint(repo_dir)
         except Exception:
