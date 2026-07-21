@@ -19,7 +19,7 @@ import json
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -375,6 +375,46 @@ class StageReview:
             concerns=list(d.get("concerns", [])),
             note=d.get("note", ""),
             observation_sha256=d.get("observation_sha256", ""),
+        )
+
+
+# The code-review analogue of StageReview (schema 21): one recorded verdict on a
+# spawn:developer stage's produced code, backing the code-review gate
+# (gates.code_review_blockers). Structurally the same charter — the COGNITION (the
+# code-reviewer specialization, or a human's override) happens outside this module;
+# this only records the verdict. Unlike StageReview, the reviewed-code digest is
+# CALLER-SUPPLIED at record time (a `--code-ref` value derived from a git revision
+# or diff), never recomputed here — gates.py stays pure (no subprocess/git reach).
+@dataclass
+class CodeReview:
+    """One code-reviewer/human review of a spawn:developer stage's diff.
+
+    `stage_index` binds the verdict to its stage. `verdict` is one of
+    pass / revise / override (an override is the user's explicit deadlock escape,
+    which requires a non-empty `reviewer` and `note`). `code_sha256` binds the
+    verdict to the exact reviewed-code digest the caller supplied when recording
+    it; empty on a record that declined to bind (degrades the gate to
+    verdict-only, mirroring StageReview's observation-only fallback). `reviewer`
+    is the reviewer tag ("code-reviewer") for an automated verdict or a human
+    name for a manual/override record."""
+    stage_index: int
+    verdict: str
+    reviewer: str
+    concerns: list[str] = field(default_factory=list)
+    note: str = ""
+    code_sha256: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict | None) -> "CodeReview | None":
+        if not d:
+            return None
+        return cls(
+            stage_index=int(d["stage_index"]),
+            verdict=d["verdict"],
+            reviewer=d.get("reviewer", ""),
+            concerns=list(d.get("concerns", [])),
+            note=d.get("note", ""),
+            code_sha256=d.get("code_sha256", ""),
         )
 
 
@@ -740,6 +780,13 @@ class SessionState:
     # pass until a judge verdict is recorded (fail-closed).
     stage_reviews: list[StageReview] = field(default_factory=list)
     judge_bypassed: list[JudgeBypass] = field(default_factory=list)
+    # Code-reviewer records backing the code-review gate (schema 21): one
+    # CodeReview per spawn:developer stage that has been reviewed. Empty on
+    # legacy pre-schema-21 states (absent key -> dataclass default via
+    # from_dict), so the gate has no observable and blocks a substantive
+    # spawn:developer stage's PASSED record until a review is recorded
+    # (fail-closed).
+    code_reviews: list[CodeReview] = field(default_factory=list)
     # Plan-presentation receipts backing the plan-presentation gate (schema 20):
     # one PlanPresentation per (plan_path, kind) currently in force — a fresh
     # cmd_present_plan call SUPERSEDES (never appends) the prior receipt for the
@@ -890,6 +937,9 @@ class SessionState:
             r for r in (StageReview.from_dict(x) for x in data.get("stage_reviews", [])) if r is not None
         ]
         data["judge_bypassed"] = [JudgeBypass(**b) for b in data.get("judge_bypassed", [])]
+        data["code_reviews"] = [
+            r for r in (CodeReview.from_dict(x) for x in data.get("code_reviews", [])) if r is not None
+        ]
         data["plan_presentations"] = [
             PlanPresentation.from_dict(x) for x in data.get("plan_presentations", [])
         ]

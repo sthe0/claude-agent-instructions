@@ -61,6 +61,14 @@ _STAGE_REVIEW_REVISE = "revise"
 _STAGE_REVIEW_OVERRIDE = "override"
 STAGE_REVIEW_VERDICTS = (_STAGE_REVIEW_PASS, _STAGE_REVIEW_REVISE, _STAGE_REVIEW_OVERRIDE)
 
+# Verdict vocabulary for the code-review gate — the same shape as acceptance-review:
+# `pass` clears; `override` clears only as the user's explicit escape (reviewer + note);
+# `revise`/unknown blocks.
+_CODE_REVIEW_PASS = "pass"
+_CODE_REVIEW_REVISE = "revise"
+_CODE_REVIEW_OVERRIDE = "override"
+CODE_REVIEW_VERDICTS = (_CODE_REVIEW_PASS, _CODE_REVIEW_REVISE, _CODE_REVIEW_OVERRIDE)
+
 
 def plan_approval_blockers(state: SessionState) -> list[str]:
     out: list[str] = []
@@ -459,6 +467,80 @@ def acceptance_review_blockers(state: SessionState, stage: "_Stage") -> list[str
             return ["acceptance override requires a non-empty " + " and ".join(missing) + " (the user's explicit escape reason)"]
         return []
     return [f"acceptance judge verdict is {review.verdict!r} — pass blocked until a passing verdict (or an explicit override) is recorded"]
+
+
+def code_review_active(state: SessionState) -> bool:
+    """Whether the code-reviewer gate applies to this session.
+
+    Scoped exactly like stage_review_active: chat/small-change sessions never pay the
+    reviewer cost; SUBSTANTIVE sessions always do. AGENTCTL_CODE_REVIEW overrides in both
+    directions ("1" forces on, "0" forces off). Deliberately NOT routed through
+    advisor.resolve_enabled — the advisor is an optional cost knob whose kill switch
+    must not silently defeat a mandatory gate; the gate's only off switch is its own
+    env var. Env-only reads, no file/subprocess I/O, so the gate stays pure."""
+    env = os.environ.get("AGENTCTL_CODE_REVIEW")
+    if env == "1":
+        return True
+    if env == "0":
+        return False
+    return state.weight_class == WeightClass.SUBSTANTIVE.value
+
+
+def _code_review_for(state: SessionState, stage_index: int):
+    """The most-recently-recorded CodeReview for `stage_index`, or None. Last-wins so
+    a manual override recorded after a code-reviewer verdict supersedes it."""
+    match = [r for r in state.code_reviews if r.stage_index == stage_index]
+    return match[-1] if match else None
+
+
+def code_review_blockers(
+    state: SessionState, stage: "_Stage", expected_code_sha256: str | None = None
+) -> list[str]:
+    """Precondition guardian for `record-result --status passed` on a needs_control()
+    (spawn:developer) stage: a recorded CodeReview with a passing (or user-overridden)
+    verdict must exist. An INTERNAL command precondition mirroring
+    acceptance_review_blockers — deliberately ABSENT from GUARDIANS so verify-agentctl
+    requires no new hook. PURE: reads only the recorded CodeReview and compares two
+    caller-supplied digests; never a subprocess/socket/network reach — gates.py cannot
+    recompute a git sha itself. [] == ok.
+
+    Inactive (chat / small-change / AGENTCTL_CODE_REVIEW=0) => [] always. Active checks:
+      - a review must exist — else the gate is unmet (fail-CLOSED, mirroring
+        acceptance_review_blockers: no CodeReview => blocked, never a default pass);
+      - if BOTH the recorded review.code_sha256 and the caller-supplied
+        `expected_code_sha256` (the record-result --code-ref value, when the cli layer
+        passes one through) are non-empty and they differ, the verdict is stale — it
+        reviewed a different code revision than the one now being recorded; either side
+        empty degrades to verdict-only (legacy / unbound review);
+      - the verdict must be `pass`, or `override` with a non-empty reviewer AND note
+        (the explicit user escape); `revise`/unknown blocks."""
+    if not code_review_active(state):
+        return []
+    review = _code_review_for(state, stage.index)
+    if review is None:
+        return [
+            "no code-reviewer verdict recorded — spawn the `code-reviewer` specialization "
+            "to review this stage's diff, then record with `agentctl code-review`; a "
+            "spawn:developer stage cannot be recorded passed until a passing verdict "
+            "(or an explicit override) exists"
+        ]
+    if review.code_sha256 and expected_code_sha256 and review.code_sha256 != expected_code_sha256:
+        return [
+            "code-reviewer verdict is stale — it reviewed a different code revision than "
+            "the one being recorded; re-run code-review on the current diff"
+        ]
+    if review.verdict == _CODE_REVIEW_PASS:
+        return []
+    if review.verdict == _CODE_REVIEW_OVERRIDE:
+        missing = []
+        if not (review.reviewer or "").strip():
+            missing.append("reviewer")
+        if not (review.note or "").strip():
+            missing.append("note")
+        if missing:
+            return ["code-review override requires a non-empty " + " and ".join(missing) + " (the user's explicit escape reason)"]
+        return []
+    return [f"code-reviewer verdict is {review.verdict!r} — pass blocked until a passing verdict (or an explicit override) is recorded"]
 
 
 def replan_coverage_blockers(old_doc, new_doc, critique) -> list[str]:
