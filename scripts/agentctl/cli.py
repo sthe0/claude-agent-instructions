@@ -2156,6 +2156,19 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     tracker_key = getattr(state, "tracker_key", None)
     if not tracker_key and solved_marker.looks_like_key(state.task_id):
         tracker_key = state.task_id
+    # Realized budget-tier labels for this task, for budget-calibration.py to group
+    # spend by (kind x tier) and by task-type against. Joined by plan_path — the
+    # same key attribute_stage already uses — rather than session_id, whose
+    # semantics (the SPAWNING session's CLAUDE_CODE_SESSION_ID) are not guaranteed
+    # to equal state.session_id. [] when no spawn ever ran (in-thread task) or
+    # plan_path is unset; a spawn row with a missing/null tier is skipped.
+    _cost_log = getattr(args, "cost_log", None)
+    _cost_log_path = Path(_cost_log) if _cost_log else cost.COST_LOG
+    _cost_rows = cost.read_rows(_cost_log_path)
+    budget_tiers = sorted({
+        r["budget_tier"] for r in _cost_rows
+        if r.get("plan_path") == state.plan_path and r.get("budget_tier")
+    })
     quality_row = {
         "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
         "task_id": state.task_id,
@@ -2175,6 +2188,10 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         "n_difficulty_records": sum(1 for h in state.history if h.get("event") == "declare"),
         "spawn_count": cost_surface.get("spawn_count", 0),
         "total_cost_usd": cost_surface.get("total_cost_usd"),
+        "weight_class": state.weight_class,
+        "deliverable_kind": state.deliverable_kind or None,
+        "route": state.route,
+        "budget_tiers": budget_tiers,
     }
     _write_quality_row(quality_row)
     # Whether to stamp is fully decidable from observed state (resolved + a known
@@ -3271,6 +3288,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="'user-confirmed' (default), 'user-adjusted', or 'user-other' "
                          "(free-text answer)")
     sp.add_argument("--quality-note", dest="quality_note", default=None)
+    sp.add_argument("--cost-log", dest="cost_log", default=None,
+                    help="override cost log path for tests (defaults to cost.COST_LOG); "
+                         "read to derive the realized budget_tiers for the quality row")
     sp = add("reject"); sp.add_argument("--session", required=True)
     sp.add_argument("--reason", required=True,
                     help="the intent mismatch the user named when rejecting the delivery "
