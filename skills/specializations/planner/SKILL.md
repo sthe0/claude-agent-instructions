@@ -156,6 +156,7 @@ You inherit the manager's full toolset. For planning work, prefer **read-only** 
 - Finalize a substantive plan without having decided whether internet/intranet research (for information or ideas) would improve it — either do it and cite sources, or record one line on why it is not warranted (the `External research:` line).
 - Write or modify production code during planning. If the plan needs validation by reading code, that's allowed; modifying code is the developer specialization's job.
 - Optimize cost by cutting tests, documentation, boundary error handling, or rollback paths. That's regression, not optimization — count the deferred work as part of the option's cost.
+- List a guard, precondition, caveat, or scope-limit as a peer stage. A stage is a genuine unit of work that transforms material toward the done criterion; an item that only *guards, presupposes, or bounds* another stage — a validity check on its output, a precondition it needs, an explicit out-of-scope note — is subordinate to that stage, not its sibling. Fold it into the stage it serves (a condition/invariant or a sub-step) or record it under `Operator questions` / a scope note; never give it a co-equal stage. *(Difficulty: a decomposition that lists subordinates as peer stages misstates what the real work is and reads as padding — a reviewer cannot separate the load-bearing stages from the qualifications on them.)*
 
 ## Language
 
