@@ -1,5 +1,5 @@
 """Cluster B — dispatch semantics (#7 executor vocabulary, #10 pure dry-run,
-#13 explicit spawn wording).
+#13 explicit spawn wording, #43 dependent-stage worktree continuity).
 
 #7:  parse_plan rejects executors outside {in_thread, spawn:<kind>} at submission
      (a typo silently defaulting to in-thread degraded whole plans); the OLD /
@@ -9,19 +9,34 @@
      marker routing.
 #13: cmd_next_stage's dispatch directive says the spawn happens via `agentctl
      dispatch` itself (synchronous, blocking) — never manually.
+#43: a stage that depends on a prior SPAWN stage gets --continue-worktree threaded
+     through build_argv/cmd_dispatch, naming the prior stage's shared worktree so
+     the next developer builds on it instead of forking fresh off origin/main; an
+     independent stage (or one with no spawn dependency) never receives the flag.
 """
 from argparse import Namespace
 
 import pytest
 
 from agentctl import cli
-from agentctl.dispatch import RunResult
+from agentctl.dispatch import RunResult, build_argv
 from agentctl.plan import PlanError, load_plan, parse_plan
-from agentctl.state import Node, StageStatus
+from agentctl.state import Actor, Criterion, Means, Node, Stage, StageStatus, Subject
 
 
 def ns(**kw):
     return Namespace(**kw)
+
+
+def _make_spawn_stage(index: int = 1) -> Stage:
+    return Stage(
+        index=index,
+        title="test stage",
+        subject=Subject(material="m", result="r"),
+        means=Means(means="Edit", method="apply"),
+        actor=Actor(executor="spawn:developer"),
+        criterion=Criterion(criterion_type="measurable", done_criterion="tests green"),
+    )
 
 
 def _stage_dict(executor: str) -> dict:
@@ -215,3 +230,77 @@ def test_next_stage_in_thread_detail_unchanged(store, tmp_path):
     d = cli.cmd_next_stage(ns(session=sid), store=store)
     assert d.action == "execute_in_thread"
     assert "spawn" not in d.detail.lower()
+
+
+# --- #43: dependent-stage worktree continuity -----------------------------------
+
+def test_build_argv_threads_continue_worktree_when_given():
+    stage = _make_spawn_stage(index=2)
+    argv = build_argv(stage, "/tmp/plan.toml", continue_worktree="/repo/.claude/worktrees/t")
+    assert "--continue-worktree" in argv
+    idx = argv.index("--continue-worktree")
+    assert argv[idx + 1] == "/repo/.claude/worktrees/t"
+
+
+def test_build_argv_omits_continue_worktree_when_unset():
+    stage = _make_spawn_stage(index=2)
+    argv_default = build_argv(stage, "/tmp/plan.toml")
+    argv_explicit_none = build_argv(stage, "/tmp/plan.toml", continue_worktree=None)
+    assert "--continue-worktree" not in argv_default
+    assert argv_default == argv_explicit_none  # byte-identical to pre-flag behaviour
+
+
+def test_cmd_dispatch_continues_worktree_for_dependent_spawn_stage(store, fixtures_dir):
+    """Stage 2 of plan_two_stage.toml depends_on [1] and both stages are
+    spawn:developer — cmd_dispatch must thread --continue-worktree for stage 2
+    (naming the shared delivery worktree) but never for independent stage 1."""
+    sid = "cont1"
+    _to_executing(store, sid, fixtures_dir)  # stage 1 now ACTIVE
+    state = store.load(sid)
+    state.delivery_worktree = "/repo/.claude/worktrees/demo-two-stage"
+    store.save(state)
+
+    seen_argv = []
+
+    def runner(argv):
+        seen_argv.append(argv)
+        return RunResult(0, stdout="COMPLETED: done\n")
+
+    cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium",
+                        dry_run=False), store=store, runner=runner)
+    assert "--continue-worktree" not in seen_argv[0]  # stage 1 has no dependency
+
+    cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
+                            control="reviewed: ok"), store=store)
+    cli.cmd_next_stage(ns(session=sid), store=store)  # activates stage 2
+
+    cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium",
+                        dry_run=False), store=store, runner=runner)
+    argv2 = seen_argv[1]
+    assert "--continue-worktree" in argv2
+    idx = argv2.index("--continue-worktree")
+    assert argv2[idx + 1] == "/repo/.claude/worktrees/demo-two-stage"
+
+
+def test_cmd_dispatch_omits_continue_worktree_without_delivery_worktree_or_repo_root(store, fixtures_dir):
+    """Even a dependent spawn stage gets no continuation when the session carries
+    neither delivery_worktree nor repo_root (nothing to anchor a default path to)."""
+    sid = "cont2"
+    _to_executing(store, sid, fixtures_dir)
+    assert store.load(sid).delivery_worktree is None
+    assert store.load(sid).repo_root is None
+
+    seen_argv = []
+
+    def runner(argv):
+        seen_argv.append(argv)
+        return RunResult(0, stdout="COMPLETED: done\n")
+
+    cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium",
+                        dry_run=False), store=store, runner=runner)
+    cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
+                            control="reviewed: ok"), store=store)
+    cli.cmd_next_stage(ns(session=sid), store=store)
+    cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium",
+                        dry_run=False), store=store, runner=runner)
+    assert "--continue-worktree" not in seen_argv[1]

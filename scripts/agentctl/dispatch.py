@@ -83,6 +83,7 @@ def build_argv(
     budget: str = "medium",
     complexity: str = "medium",
     dry_run: bool = False,
+    continue_worktree: str | None = None,
 ) -> list[str]:
     kind = stage.spawn_kind()
     if not kind:
@@ -104,6 +105,8 @@ def build_argv(
         complexity,
     ]
     argv.extend(["--stage-index", str(stage.index)])
+    if continue_worktree:
+        argv.extend(["--continue-worktree", continue_worktree])
     if dry_run:
         argv.append("--dry-run")
     return argv
@@ -117,7 +120,11 @@ def dispatch_stage(
     budget: str = "medium",
     complexity: str = "medium",
     dry_run: bool = False,
+    continue_worktree: str | None = None,
 ) -> RunResult:
-    argv = build_argv(stage, plan_path, budget=budget, complexity=complexity, dry_run=dry_run)
+    argv = build_argv(
+        stage, plan_path, budget=budget, complexity=complexity, dry_run=dry_run,
+        continue_worktree=continue_worktree,
+    )
     run = runner or subprocess_runner
     return run(argv)

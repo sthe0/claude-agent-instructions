@@ -1713,6 +1713,27 @@ def cmd_next_stage(args, *, store: StateStore, runner: Runner | None = None) -> 
     )
 
 
+def _continuation_worktree(state: SessionState, stage: Stage) -> str | None:
+    """The shared worktree/branch a DEPENDENT spawn stage should continue, or
+    None for an independent stage (empty depends_on) or one whose dependencies
+    are all in-thread. A prior SPAWN stage's committed-but-un-landed work lives
+    in a branch dispatch never told the next developer about — this names it.
+
+    Prefers the plan's declared [meta] delivery_worktree (state.delivery_worktree);
+    falls back to the task_id-scoped default only when repo_root is known (a
+    relative worktree path with no anchor would be meaningless)."""
+    if not any(
+        d in {s.index for s in state.stages if s.is_spawn()}
+        for d in stage.depends_on
+    ):
+        return None
+    if state.delivery_worktree:
+        return state.delivery_worktree
+    if state.repo_root:
+        return f"{state.repo_root}/.claude/worktrees/{state.task_id}"
+    return None
+
+
 def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
                  perm_checker=None) -> Directive:
     state = _require(store, args.session)
@@ -1727,6 +1748,7 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
         runner=runner,
         budget=getattr(args, "budget", "medium"),
         complexity=getattr(args, "complexity", "medium"),
+        continue_worktree=_continuation_worktree(state, stage),
         dry_run=dry_run,
     )
     if dry_run:

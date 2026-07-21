@@ -135,7 +135,21 @@ def assemble_prompt(args: argparse.Namespace, depth: int, permissions: str) -> s
     constraints = read_text_or_file(args.constraints, None)
     dossier = read_text_or_file(None, args.context_dossier) if args.context_dossier else ""
 
-    sections = [f"AGENT_RECURSION_DEPTH={depth}", "", "## Working plan", "", plan, ""]
+    sections = [f"AGENT_RECURSION_DEPTH={depth}", ""]
+    continue_worktree = getattr(args, "continue_worktree", None)
+    if continue_worktree:
+        sections += [
+            "## Continue the prior stage — do NOT fork fresh",
+            "",
+            f"This stage depends on a prior stage whose committed-but-un-landed work "
+            f"lives in the linked worktree `{continue_worktree}` (build on its branch). "
+            f"`cd` into that worktree and continue on its branch, creating the worktree "
+            f"only if it is absent — never `git worktree add` a fresh branch off "
+            f"origin/main for this stage, or you will fork away from and lose the prior "
+            f"stage's work.",
+            "",
+        ]
+    sections += ["## Working plan", "", plan, ""]
     sections += [
         "## Done criterion for this step",
         "",
@@ -268,6 +282,14 @@ def build_parser() -> argparse.ArgumentParser:
         "and the per-kind default. Prefer --complexity unless you need an exact model.",
     )
     p.add_argument("--stage-index", type=int, default=None, help="index of the plan stage this spawn serves (optional; enables per-stage cost attribution)")
+    p.add_argument(
+        "--continue-worktree",
+        default=None,
+        help="path of a prior dependent stage's linked worktree/branch to continue "
+        "(threaded by `agentctl dispatch` for a stage that depends on a prior spawn "
+        "stage); when set, the assembled prompt instructs the specialist to build on "
+        "that worktree/branch instead of forking fresh",
+    )
     p.add_argument("--dry-run", action="store_true", help="print the prompt and the command that would run, then exit")
     return p
 
