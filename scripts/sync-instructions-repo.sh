@@ -177,6 +177,27 @@ run_integrity_checks() {
   fi
 }
 
+# After a pull that APPLIED commits, re-run the reminder-hook installer so hooks
+# ADDED to the repo after this machine was onboarded (e.g. hook-guard-canon-
+# readonly.py) actually reach live settings.json — the installer otherwise runs
+# only on the one-time legacy migration path, leaving post-onboarding hooks dead.
+# Idempotent (installs each hook once), fail-open by construction: the caller
+# invokes this as `rewire_reminder_hooks || true`, so a failure emits a loud WARN
+# but NEVER aborts the already-applied pull. Env-seamed (CLAUDE_INSTALL_HOOKS_BIN)
+# so tests can stub the installer, mirroring run_integrity_checks's seams.
+rewire_reminder_hooks() {
+  local installer="${CLAUDE_INSTALL_HOOKS_BIN:-$REPO/scripts/install-reminder-hooks.sh}"
+  [[ -f "$installer" ]] || return 0
+  local out rc=0
+  out="$(CLAUDE_INSTRUCTIONS_REPO="$REPO" bash "$installer" 2>&1)" || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    printf '%s\n' "$out" >&2
+    log "pull: WARN reminder-hook rewire (install-reminder-hooks.sh) failed — fail-open, pull NOT aborted; wire hooks manually with: $installer"
+  else
+    log "pull: reminder hooks rewired (install-reminder-hooks.sh)"
+  fi
+}
+
 cmd_pull() {
   log "pull start ($REPO)"
 
@@ -230,6 +251,7 @@ cmd_pull() {
   # actually applied. The behind==0 and fetch-not-found early returns above skip
   # it, keeping up-to-date auto-pulls cheap. Fail-open: never aborts the pull.
   run_integrity_checks || true
+  rewire_reminder_hooks || true
 
   log "pull: done"
 }

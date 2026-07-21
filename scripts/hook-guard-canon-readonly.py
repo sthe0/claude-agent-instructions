@@ -148,6 +148,184 @@ def _is_git_commit(command: str) -> bool:
     return False
 
 
+# --- best-effort in-place Bash-write detection (extends the git-commit deny) ---
+#
+# The Bash branch of this guard used to deny ONLY a literal `git commit` in canon,
+# so every other in-place write verb (`sed -i`, `>>`, `tee`, `cp`/`mv`, `patch`,
+# `git apply`) slipped past it — a hole under the "canon is read-only" promise.
+# The helpers below close the DETECTABLE write verbs, fail-open (any parse doubt
+# ALLOWS), and allow the identical verbs targeting a worktree / second mount.
+#
+# NAMED RESIDUAL (not closable by any PreToolUse hook, do not claim otherwise):
+# an interpreter one-liner that opens a path for writing internally
+# (`python3 -c "open(p,'w')"`, `perl -e '...'`, an `eval`'d string, any program
+# that writes a file with no shell-visible write verb) and a redirection glued to
+# a preceding word (`foo>bar`, `2>bar`) carry no token this hook can key on. The
+# durable guarantee for those is the tool-level Edit/Write deny plus keeping
+# feature work out of the canon checkout entirely.
+
+_BASH_SEPS = {";", "&&", "||", "|", "|&", "&"}
+
+
+def _split_segments(tokens: list[str]):
+    """Yield the pipeline/list segments of a tokenized command, split on the
+    shell separators `; && || | |& &`. Best-effort: a separator glued inside a
+    single shlex token (`a;b`) is left intact — an accepted residual."""
+    seg: list[str] = []
+    for tok in tokens:
+        if tok in _BASH_SEPS:
+            if seg:
+                yield seg
+            seg = []
+        else:
+            seg.append(tok)
+    if seg:
+        yield seg
+
+
+def _canon_target(candidate: str, eff_cwd: str) -> str | None:
+    """Realpath of `candidate` (resolved rel to `eff_cwd`) iff it lands in canon,
+    else None. A not-yet-existing write target resolves through its nearest
+    existing parent so a redirect creating a new file in canon is still caught."""
+    if not candidate:
+        return None
+    path = candidate if os.path.isabs(candidate) else os.path.join(eff_cwd, candidate)
+    parent = _nearest_existing_dir(path)
+    if parent is None:
+        return None
+    if _is_in_canon(parent, path):
+        return os.path.realpath(path)
+    return None
+
+
+def _canon_cwd(eff_cwd: str) -> str | None:
+    """Realpath of `eff_cwd` iff the cwd itself is canon — for cwd-relative
+    writers (`patch`, `git apply`) whose write target is derived from the diff,
+    not a shell-visible positional, so the cwd is the only decidable signal."""
+    parent = _nearest_existing_dir(eff_cwd)
+    if parent is None:
+        return None
+    if _is_in_canon(parent, eff_cwd):
+        return os.path.realpath(eff_cwd)
+    return None
+
+
+def _operands_until_redirect(rest: list[str]) -> list[str]:
+    """Tokens of a segment (after the command word) up to the first redirection
+    operator — `<`/`>` starts an I/O target, not a positional of the verb."""
+    out: list[str] = []
+    for tok in rest:
+        if tok and tok[0] in "<>":
+            break
+        out.append(tok)
+    return out
+
+
+def _sed_in_place(rest: list[str]) -> bool:
+    """True iff any token is a sed in-place flag: `-i`, `-i.bak`, `--in-place`,
+    `--in-place=.bak`, or a clustered short flag containing `i` (`-ni`)."""
+    for tok in rest:
+        if tok == "--in-place" or tok.startswith("--in-place="):
+            return True
+        if tok.startswith("-") and not tok.startswith("--") and "i" in tok[1:]:
+            return True
+    return False
+
+
+def _cp_mv_dest(rest: list[str]) -> str | None:
+    """The write destination of a `cp`/`mv`: the `-t DIR` / `--target-directory`
+    value if present, else the last positional. Returning only the destination
+    keeps copying OUT of canon (canon source, outside dest) allowed."""
+    positionals: list[str] = []
+    take_next = False
+    dest_opt: str | None = None
+    for tok in rest:
+        if take_next:
+            dest_opt = tok
+            take_next = False
+        elif tok in ("-t", "--target-directory"):
+            take_next = True
+        elif tok.startswith("--target-directory="):
+            dest_opt = tok.split("=", 1)[1]
+        elif tok.startswith("-"):
+            continue
+        else:
+            positionals.append(tok)
+    if dest_opt is not None:
+        return dest_opt
+    return positionals[-1] if positionals else None
+
+
+def _segment_write_target(seg: list[str], eff_cwd: str) -> str | None:
+    """The canon path a single command segment would write in place, or None.
+    Covers output redirection, `sed -i`, `tee`, `cp`/`mv` dest, `patch`, and
+    `git apply`; every path is resolved rel to `eff_cwd`."""
+    if not seg:
+        return None
+
+    # (a) output redirection anywhere in the segment: `> f`, `>> f`, glued `>f`/`>>f`.
+    for i, tok in enumerate(seg):
+        redirect_tgt: str | None = None
+        if tok in (">", ">>"):
+            redirect_tgt = seg[i + 1] if i + 1 < len(seg) else None
+        elif tok.startswith(">") and tok.strip(">"):
+            redirect_tgt = tok.lstrip(">")
+        if redirect_tgt:
+            hit = _canon_target(redirect_tgt, eff_cwd)
+            if hit:
+                return hit
+
+    # (b) verb-based writers.
+    verb = os.path.basename(seg[0]) if seg[0] else ""
+    rest = _operands_until_redirect(seg[1:])
+
+    if verb == "patch":
+        return _canon_cwd(eff_cwd)
+    if verb == "git" and "apply" in rest:
+        return _canon_cwd(eff_cwd)
+    if verb == "sed" and _sed_in_place(rest):
+        for tok in rest:
+            if tok.startswith("-"):
+                continue
+            hit = _canon_target(tok, eff_cwd)
+            if hit:
+                return hit
+        return None
+    if verb == "tee":
+        for tok in rest:
+            if tok.startswith("-"):
+                continue
+            hit = _canon_target(tok, eff_cwd)
+            if hit:
+                return hit
+        return None
+    if verb in ("cp", "mv"):
+        dest = _cp_mv_dest(rest)
+        if dest:
+            return _canon_target(dest, eff_cwd)
+        return None
+    return None
+
+
+def _canon_bash_write(command: str, payload_cwd: str) -> str | None:
+    """Best-effort: the canon path a non-`git commit` Bash command writes in
+    place, or None. Fail-open on any parse error (allow), reusing the leading-`cd`
+    resolution so `cd <wt> && sed -i ... f` keys off the worktree, not the
+    session cwd."""
+    try:
+        tokens = shlex.split(command)
+    except Exception:
+        return None
+    if not tokens:
+        return None
+    eff_cwd = git_cwd.effective_git_cwd(command, payload_cwd)
+    for seg in _split_segments(tokens):
+        hit = _segment_write_target(seg, eff_cwd)
+        if hit:
+            return hit
+    return None
+
+
 def _deny_msg(target: str) -> str:
     return (
         f"Refusing to modify canon ({target}) directly from a live agent session. Canon "
@@ -167,15 +345,21 @@ def decide(payload: dict) -> str | None:
 
     if tool_name == "Bash":
         command = (tool_input.get("command") or "").strip()
-        if not command or not _is_git_commit(command):
+        if not command:
             return None
         payload_cwd = payload.get("cwd") or os.getcwd()
-        cwd = git_cwd.effective_git_cwd(command, payload_cwd)
-        target_dir = _nearest_existing_dir(cwd)
-        if target_dir is None:
+        if _is_git_commit(command):
+            cwd = git_cwd.effective_git_cwd(command, payload_cwd)
+            target_dir = _nearest_existing_dir(cwd)
+            if target_dir is None:
+                return None
+            if _is_primary_core(target_dir):
+                return _deny_msg(os.path.realpath(str(_core_root())))
             return None
-        if _is_primary_core(target_dir):
-            return _deny_msg(os.path.realpath(str(_core_root())))
+        # Non-commit Bash: best-effort deny of an in-place write into canon.
+        hit = _canon_bash_write(command, payload_cwd)
+        if hit:
+            return _deny_msg(hit)
         return None
 
     file_path = tool_input.get("file_path")

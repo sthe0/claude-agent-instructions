@@ -99,6 +99,11 @@ DESIRED = [
     # file near its ceiling) and surface any worklist to stderr. Self-throttled,
     # fail-open — never blocks or slows session start.
     ("SessionStart",     None,    "hook-self-diagnose-due.py",   5),
+    # Fail-loud detector: the canon read-only guard is present in the repo but
+    # NOT wired into BOTH live PreToolUse chains (Edit|Write + Bash), or is wired
+    # to a missing script path — i.e. canon may silently be writable. Non-blocking,
+    # fail-open; names the install-reminder-hooks.sh remediation.
+    ("SessionStart",     None,    "hook-canon-guard-wired-check.py", 5),
     # End-of-turn GATE (not advisory): a loop-safe shell running a registry of
     # pure turn-boundary guardians. Blocks a stop when any guardian reports an
     # unmet obligation (today: the last user message carried an agent-behavior-
