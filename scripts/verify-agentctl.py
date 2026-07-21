@@ -218,7 +218,7 @@ def check_gate_guardians(gate_to_hook: dict, desired_hooks: set[str]) -> list[st
 # here is fine; this only pins the ones the engine documents.
 REQUIRED_PLUGINS = {
     "dummy": "resolution", "tracker": "resolution", "experience": "resolution",
-    "ledger": "resolution", "premise": "plan_approval",
+    "ledger": "resolution", "premise": "plan_approval", "review_dispatch": None,
 }
 # Plugin observer events must be a subset of the events the engine can emit, or a
 # plugin would silently never fire. The event vocabulary is EVENT_FOR_COMMAND.
@@ -371,6 +371,242 @@ def check_control_precondition() -> list[str]:
     return problems
 
 
+def check_review_dispatch() -> list[str]:
+    """Verify the review_dispatch plugin's two proactive triggers on live state.
+
+    Slot 1 (plan_review -> thinker): firing `submit_plan` on a SUBSTANTIVE session
+    at PLAN_READY with an unbound plan review must append exactly one blocking
+    directive naming the thinker spawn; once a bound passing PlanReview is
+    recorded, the same fire is silent.
+
+    Slot 2 (code_review -> code-reviewer): firing `dispatch` on a SUBSTANTIVE
+    session whose active stage is a needs_control() (spawn:developer) stage with
+    no bound CodeReview must append exactly one blocking directive naming the
+    code-reviewer spawn; once a bound passing CodeReview is recorded, the same
+    fire is silent.
+
+    Both fired directly via plugins.fire against an in-memory state, mirroring
+    check_control_precondition's style — the real cli.main() -> _fire_plugins
+    wiring for the submit_plan/thinker path is exercised end-to-end by
+    scripts/tests/test_plugins_review_dispatch.py.
+    """
+    from agentctl import plugins
+    from agentctl.directive import Directive
+    from agentctl.state import (
+        Actor, CodeReview, Criterion, GateRecord, Means, Node, Outcome,
+        Partition, PlanReview, SessionState, Stage, StageStatus, Subject,
+    )
+
+    problems: list[str] = []
+    prior_pr = os.environ.get("AGENTCTL_PLAN_REVIEW")
+    prior_cr = os.environ.get("AGENTCTL_CODE_REVIEW")
+    prior_rd = os.environ.get("AGENTCTL_REVIEW_DISPATCH")
+    os.environ.pop("AGENTCTL_PLAN_REVIEW", None)
+    os.environ.pop("AGENTCTL_CODE_REVIEW", None)
+    os.environ.pop("AGENTCTL_REVIEW_DISPATCH", None)
+    try:
+        plugin = plugins.REGISTRY.get("review_dispatch")
+        if plugin is None:
+            problems.append("review_dispatch plugin not registered at import (REGISTRY)")
+            return problems
+        if set(plugin.observers) != {"submit_plan", "dispatch"}:
+            problems.append(
+                f"review_dispatch observers should be {{'submit_plan', 'dispatch'}}, "
+                f"got {set(plugin.observers)}"
+            )
+        if "replan" in plugin.observers:
+            problems.append(
+                "review_dispatch must not observe 'replan' (staleness risk — "
+                "cmd_replan does not save on a rejected replan)"
+            )
+        if plugin.gates:
+            problems.append(f"review_dispatch must contribute no gate, got {plugin.gates}")
+
+        # --- slot 1: plan_review -> thinker, at PLAN_READY / submit_plan ---
+        plan_state = SessionState(
+            session_id="rvd-plan", task_id="rvd-task", node=Node.PLAN_READY.value,
+            weight_class="SUBSTANTIVE", plan_path="/tmp/verify-agentctl-review-dispatch-plan.toml",
+        )
+        plugins.activate(plan_state, "review_dispatch")
+        fired = plugins.fire("submit_plan", plan_state, Directive(True, plan_state.node, "noop"))
+        matches = [f for f in fired if f["plugin"] == "review_dispatch" and f["action"] == "spawn_thinker_review"]
+        if len(matches) != 1:
+            problems.append(
+                f"submit_plan on an unreviewed SUBSTANTIVE plan should fire exactly one "
+                f"thinker directive, got {len(matches)}"
+            )
+        elif matches[0]["data"].get("specialist") != "thinker":
+            problems.append(f"thinker directive names the wrong specialist: {matches[0]['data']}")
+
+        plan_state.plan_review = PlanReview(plan_path=plan_state.plan_path, verdict="pass", reviewer="thinker")
+        fired_again = plugins.fire("submit_plan", plan_state, Directive(True, plan_state.node, "noop"))
+        if any(f["plugin"] == "review_dispatch" for f in fired_again):
+            problems.append("submit_plan directive still fires after a bound passing PlanReview is recorded")
+
+        # --- slot 2: code_review -> code-reviewer, at dispatch ---
+        dev_stage = Stage(
+            index=1, title="dev stage",
+            subject=Subject(material="m", result="img"),
+            means=Means(means="Edit", method="do"),
+            actor=Actor(executor="spawn:developer"),
+            criterion=Criterion(criterion_type="measurable", done_criterion="dc"),
+            outcome=Outcome(status=StageStatus.ACTIVE.value),
+        )
+        dispatch_state = SessionState(
+            session_id="rvd-dispatch", task_id="rvd-task", node=Node.EXECUTING.value,
+            weight_class="SUBSTANTIVE",
+            approval=GateRecord("plan_approval", armed=True, passed=True, by="user"),
+            partition=Partition(verdict="not-recommended"),
+            stages=[dev_stage], current_stage=1,
+        )
+        plugins.activate(dispatch_state, "review_dispatch")
+        fired3 = plugins.fire("dispatch", dispatch_state, Directive(True, dispatch_state.node, "noop"))
+        matches3 = [f for f in fired3 if f["plugin"] == "review_dispatch" and f["action"] == "spawn_code_review"]
+        if len(matches3) != 1:
+            problems.append(
+                f"dispatch on a needs_control() stage with no CodeReview should fire exactly "
+                f"one code-reviewer directive, got {len(matches3)}"
+            )
+        elif matches3[0]["data"].get("specialist") != "code-reviewer":
+            problems.append(f"code-review directive names the wrong specialist: {matches3[0]['data']}")
+
+        dispatch_state.code_reviews.append(CodeReview(stage_index=1, verdict="pass", reviewer="code-reviewer"))
+        fired4 = plugins.fire("dispatch", dispatch_state, Directive(True, dispatch_state.node, "noop"))
+        if any(f["plugin"] == "review_dispatch" for f in fired4):
+            problems.append("dispatch directive still fires after a bound passing CodeReview is recorded")
+    finally:
+        for key, prior in (
+            ("AGENTCTL_PLAN_REVIEW", prior_pr),
+            ("AGENTCTL_CODE_REVIEW", prior_cr),
+            ("AGENTCTL_REVIEW_DISPATCH", prior_rd),
+        ):
+            if prior is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = prior
+    return problems
+
+
+def check_code_review_precondition() -> list[str]:
+    """Verify the record-result code-review gate for spawn:developer stages.
+
+    A SUBSTANTIVE spawn:developer stage that already clears the free-text
+    needs_control() floor (check_control_precondition's axis) must still refuse
+    record-result --status passed until a bound passing (or user-overridden)
+    CodeReview has been recorded; recording one then allows the pass. A
+    non-substantive session and the AGENTCTL_CODE_REVIEW=0 knob keep only the
+    free-text floor — byte-identical to the gate being absent.
+    """
+    from argparse import Namespace
+    from agentctl import cli
+    from agentctl.state import (
+        Actor, CodeReview, Criterion, GateRecord, Means, Node, Outcome,
+        Partition, SessionState, Stage, StageStatus, Subject,
+    )
+
+    problems: list[str] = []
+    prior_code_review_env = os.environ.get("AGENTCTL_CODE_REVIEW")
+    os.environ.pop("AGENTCTL_CODE_REVIEW", None)
+
+    def _dev_stage(index=1) -> Stage:
+        return Stage(
+            index=index, title="dev stage",
+            subject=Subject(material="m", result="img"),
+            means=Means(means="Edit", method="do"),
+            actor=Actor(executor="spawn:developer"),
+            criterion=Criterion(criterion_type="measurable", done_criterion="dc"),
+            outcome=Outcome(status=StageStatus.ACTIVE.value),
+        )
+
+    def _executing_state(stage: Stage, weight="SUBSTANTIVE") -> SessionState:
+        return SessionState(
+            session_id="cr-check", task_id="cr-task",
+            node=Node.EXECUTING.value,
+            weight_class=weight,
+            route="SPAWN" if weight == "SUBSTANTIVE" else None,
+            approval=GateRecord("plan_approval", armed=True, passed=True, by="user"),
+            partition=Partition(verdict="not-recommended"),
+            stages=[stage],
+            current_stage=stage.index,
+        )
+
+    class _Mem:
+        def __init__(self, s): self.s = s
+        def load(self, _): return self.s
+        def save(self, s): self.s = s
+
+    try:
+        # 1. SUBSTANTIVE spawn:developer + --control + passed + no CodeReview -> REFUSED
+        store = _Mem(_executing_state(_dev_stage()))
+        d = cli.cmd_record_result(
+            Namespace(session="cr-check", status="passed", actual="done",
+                      control="reviewed: self-review ok", code_ref=None),
+            store=store,
+        )
+        if d.ok:
+            problems.append(
+                "record-result --status passed on a SUBSTANTIVE spawn:developer stage with "
+                "--control but no recorded CodeReview was not refused (expected ok=False)"
+            )
+        if "code-review" not in d.detail:
+            problems.append(
+                f"code-review refusal directive does not name 'code-review' in its detail: {d.detail!r}"
+            )
+
+        # 2. bound passing CodeReview -> ALLOWED (transitions to VERIFYING)
+        state2 = _executing_state(_dev_stage())
+        state2.code_reviews.append(CodeReview(stage_index=1, verdict="pass", reviewer="code-reviewer"))
+        store2 = _Mem(state2)
+        d2 = cli.cmd_record_result(
+            Namespace(session="cr-check", status="passed", actual="done",
+                      control="reviewed: self-review ok", code_ref=None),
+            store=store2,
+        )
+        if not d2.ok:
+            problems.append(
+                f"record-result --status passed with a bound passing CodeReview was refused "
+                f"unexpectedly: {d2.detail}"
+            )
+        if d2.ok and store2.s.node != Node.VERIFYING.value:
+            problems.append(
+                f"after a bound passing CodeReview, node should be VERIFYING, got {store2.s.node}"
+            )
+
+        # 3. non-substantive session -> ALLOWED with only --control (byte-identical floor)
+        store3 = _Mem(_executing_state(_dev_stage(), weight="SMALL_CHANGE"))
+        d3 = cli.cmd_record_result(
+            Namespace(session="cr-check", status="passed", actual="done",
+                      control="reviewed: self-review ok", code_ref=None),
+            store=store3,
+        )
+        if not d3.ok:
+            problems.append(
+                f"record-result --status passed on a non-substantive spawn:developer stage "
+                f"with --control but no CodeReview was refused unexpectedly (the code-review "
+                f"gate must be SUBSTANTIVE-only): {d3.detail}"
+            )
+
+        # 4. AGENTCTL_CODE_REVIEW=0 knob -> ALLOWED with only --control
+        os.environ["AGENTCTL_CODE_REVIEW"] = "0"
+        store4 = _Mem(_executing_state(_dev_stage()))
+        d4 = cli.cmd_record_result(
+            Namespace(session="cr-check", status="passed", actual="done",
+                      control="reviewed: self-review ok", code_ref=None),
+            store=store4,
+        )
+        if not d4.ok:
+            problems.append(
+                f"record-result --status passed with the AGENTCTL_CODE_REVIEW=0 knob was "
+                f"refused unexpectedly (the knob must force the gate off): {d4.detail}"
+            )
+    finally:
+        if prior_code_review_env is None:
+            os.environ.pop("AGENTCTL_CODE_REVIEW", None)
+        else:
+            os.environ["AGENTCTL_CODE_REVIEW"] = prior_code_review_env
+    return problems
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--staged", action="store_true", help="ignored; accepted for verify-all uniformity")
@@ -401,6 +637,8 @@ def main(argv: list[str] | None = None) -> int:
 
     problems += check_plugins()
     problems += check_control_precondition()
+    problems += check_review_dispatch()
+    problems += check_code_review_precondition()
 
     if problems:
         print("verify-agentctl: FAIL")
