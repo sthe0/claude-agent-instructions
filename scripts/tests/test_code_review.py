@@ -16,14 +16,18 @@ no new hook. PURE: never a subprocess/socket/network reach."""
 from __future__ import annotations
 
 import json
+from argparse import Namespace
 
-from agentctl import gates
+from agentctl import cli, gates
 from agentctl.state import (
     Actor,
     CodeReview,
     Criterion,
+    GateRecord,
     Means,
+    Node,
     Outcome,
+    Partition,
     SCHEMA_VERSION,
     SessionState,
     Stage,
@@ -52,6 +56,157 @@ def _subst(stage, *, reviews=(), weight="SUBSTANTIVE"):
 def _review(verdict, reviewer="code-reviewer", note="", code_sha256=""):
     return CodeReview(stage_index=1, verdict=verdict, reviewer=reviewer, note=note,
                        code_sha256=code_sha256)
+
+
+# --- cli / record-result: the CodeReview recorder + the gate fold-in ---------
+
+class _Mem:
+    def __init__(self, state):
+        self.s = state
+
+    def load(self, _):
+        return self.s
+
+    def save(self, s):
+        self.s = s
+
+
+def _executing_state(*stages, weight="SUBSTANTIVE"):
+    return SessionState(
+        session_id="cr", task_id="cr-task",
+        node=Node.EXECUTING.value,
+        weight_class=weight,
+        route="SPAWN" if weight == "SUBSTANTIVE" else "INLINE",
+        approval=GateRecord("plan_approval", armed=True, passed=True, by="user"),
+        partition=Partition(verdict="not-recommended"),
+        stages=list(stages),
+        current_stage=stages[0].index,
+    )
+
+
+def _store(*stages, weight="SUBSTANTIVE"):
+    return _Mem(_executing_state(*stages, weight=weight))
+
+
+def _code_review(store, verdict, reviewer="code-reviewer", note="", concerns=None, code_ref=None):
+    return cli.cmd_code_review(
+        Namespace(session="cr", verdict=verdict, reviewer=reviewer, note=note,
+                   concerns=concerns, code_ref=code_ref),
+        store=store,
+    )
+
+
+def _rr(store, status, actual="done", control=None, code_ref=None):
+    return cli.cmd_record_result(
+        Namespace(session="cr", status=status, actual=actual, control=control,
+                   observation="", code_ref=code_ref),
+        store=store,
+    )
+
+
+def test_cli_code_review_recorder_writes_bound_review():
+    store = _store(_dev_stage())
+    d = _code_review(store, "pass", code_ref="rev1")
+    assert d.ok is True
+    reviews = store.s.code_reviews
+    assert len(reviews) == 1
+    assert reviews[0].verdict == "pass"
+    assert reviews[0].stage_index == 1
+    assert reviews[0].code_sha256  # bound from --code-ref, non-empty
+
+
+def test_cli_code_review_recorder_rejects_non_developer_stage():
+    non_dev = Stage(
+        index=1, title="s1",
+        subject=Subject(material="m", result="img"),
+        means=Means(means="Read", method="plan"),
+        actor=Actor(executor="spawn:planner"),
+        criterion=Criterion(criterion_type="measurable", done_criterion="c"),
+        outcome=Outcome(status=StageStatus.ACTIVE.value),
+    )
+    store = _store(non_dev)
+    d = _code_review(store, "pass")
+    assert d.ok is False
+    assert d.action == "noop"
+    assert store.s.code_reviews == []
+
+
+def test_record_result_substantive_developer_with_control_but_no_code_review_is_blocked(monkeypatch):
+    monkeypatch.delenv("AGENTCTL_CODE_REVIEW", raising=False)
+    store = _store(_dev_stage())
+    d = _rr(store, "passed", control="reviewed: self-review complete")
+    assert d.ok is False
+    assert d.action == "spawn_code_review"
+    assert store.s.node == Node.EXECUTING.value  # blocked pass never advances the node
+
+
+def test_record_result_passes_after_a_passing_code_review_is_recorded(monkeypatch):
+    monkeypatch.delenv("AGENTCTL_CODE_REVIEW", raising=False)
+    store = _store(_dev_stage())
+    _code_review(store, "pass")
+    d = _rr(store, "passed", control="reviewed: self-review complete")
+    assert d.ok is True
+    assert store.s.node == Node.VERIFYING.value
+
+
+def test_record_result_re_recording_after_pass_still_passes(monkeypatch):
+    monkeypatch.delenv("AGENTCTL_CODE_REVIEW", raising=False)
+    store = _store(_dev_stage())
+    _code_review(store, "revise", note="needs work")
+    blocked = _rr(store, "passed", control="reviewed")
+    assert blocked.ok is False
+    _code_review(store, "pass")
+    d = _rr(store, "passed", control="reviewed")
+    assert d.ok is True
+
+
+def test_record_result_non_substantive_developer_passes_with_only_control(monkeypatch):
+    monkeypatch.delenv("AGENTCTL_CODE_REVIEW", raising=False)
+    store = _store(_dev_stage(), weight="SMALL_CHANGE")
+    d = _rr(store, "passed", control="reviewed: self-review complete")
+    assert d.ok is True
+    assert store.s.node == Node.VERIFYING.value
+    assert store.s.code_reviews == []  # gate never consulted -> byte-identical path
+
+
+def test_record_result_kill_switch_off_passes_with_only_control(monkeypatch):
+    monkeypatch.setenv("AGENTCTL_CODE_REVIEW", "0")
+    store = _store(_dev_stage())
+    d = _rr(store, "passed", control="reviewed: self-review complete")
+    assert d.ok is True
+    assert store.s.node == Node.VERIFYING.value
+
+
+def test_record_result_non_developer_stage_unaffected_by_code_review_gate():
+    non_dev = Stage(
+        index=1, title="s1",
+        subject=Subject(material="m", result="img"),
+        means=Means(means="Read", method="plan"),
+        actor=Actor(executor="in_thread"),
+        criterion=Criterion(criterion_type="measurable", done_criterion="c"),
+        outcome=Outcome(status=StageStatus.ACTIVE.value),
+    )
+    store = _store(non_dev)
+    d = _rr(store, "passed", control=None)
+    assert d.ok is True
+    assert store.s.node == Node.VERIFYING.value
+
+
+def test_record_result_stale_code_ref_blocks_even_with_prior_pass(monkeypatch):
+    monkeypatch.delenv("AGENTCTL_CODE_REVIEW", raising=False)
+    store = _store(_dev_stage())
+    _code_review(store, "pass", code_ref="rev1")
+    d = _rr(store, "passed", control="reviewed", code_ref="rev2")
+    assert d.ok is False
+    assert d.action == "spawn_code_review"
+
+
+def test_cli_code_review_registered_in_parser():
+    p = cli.build_parser()
+    args = p.parse_args(["code-review", "--session", "s", "--verdict", "pass"])
+    assert args.verdict == "pass"
+    assert args.reviewer == ""
+    assert args.code_ref is None
 
 
 # --- state: CodeReview + SessionState.code_reviews --------------------------

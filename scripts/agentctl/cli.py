@@ -43,6 +43,7 @@ from .state import (
     _EXECUTION_NODES,
     _MAX_PLAN_STACK,
     Actor,
+    CodeReview,
     Critique,
     Criterion,
     CriterionType,
@@ -128,6 +129,16 @@ def _record_stage_review(state: SessionState, review: StageReview, *, from_judge
         return
     state.stage_reviews = [r for r in state.stage_reviews if r.stage_index != review.stage_index]
     state.stage_reviews.append(review)
+
+
+def _record_code_review(state: SessionState, review: CodeReview) -> None:
+    """Store a CodeReview, one per stage_index (last-wins). Unlike
+    _record_stage_review there is no automated judge path to protect a human
+    override from — every code-review record is code-reviewer/human-authored via
+    cmd_code_review, so a later record for the same stage always replaces the
+    prior one."""
+    state.code_reviews = [r for r in state.code_reviews if r.stage_index != review.stage_index]
+    state.code_reviews.append(review)
 
 
 def _judge_bypassed_surface(state: SessionState) -> list[dict]:
@@ -1500,6 +1511,48 @@ def cmd_stage_review(args, *, store: StateStore, runner: Runner | None = None) -
     )
 
 
+def cmd_code_review(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Record a code-reviewer/human review of the active spawn:developer stage's
+    produced code, backing the code-review gate. Mirrors cmd_stage_review — purely a
+    recorder; the COGNITION (the code-reviewer specialization judging the diff, or a
+    human authoring an override) happens outside. There is no automated judge for
+    code review (unlike the acceptance path's fail-open cheap judge) — this command
+    is the only path that ever writes a CodeReview. The verdict is bound to a
+    caller-supplied --code-ref (hashed via _digest, never recomputed from git — gates.py
+    stays pure), so gates.code_review_blockers can reject a drift when record-result
+    later supplies a different --code-ref."""
+    state = _require(store, args.session)
+    stage = state.active_stage()
+    if stage is None:
+        return Directive(False, state.node, "next_stage", "no active stage to review")
+    if not stage.needs_control():
+        return Directive(
+            False, state.node, "noop",
+            f"stage {stage.index} is not a spawn:developer stage; code-review applies "
+            "only to developer-produced code",
+        )
+    code_ref = getattr(args, "code_ref", None) or None
+    _record_code_review(
+        state,
+        CodeReview(
+            stage_index=stage.index,
+            verdict=args.verdict,
+            reviewer=getattr(args, "reviewer", "") or "",
+            concerns=list(getattr(args, "concerns", None) or []),
+            note=getattr(args, "note", "") or "",
+            code_sha256=_digest(code_ref) if code_ref else "",
+        ),
+    )
+    state.log("code_review", stage=stage.index, verdict=args.verdict,
+              reviewer=getattr(args, "reviewer", "") or "")
+    store.save(state)
+    return Directive(
+        True, state.node, "continue",
+        f"code review recorded for stage {stage.index} (verdict={args.verdict}); "
+        "record-result --status passed will re-check the code-review gate against it",
+    )
+
+
 def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     # plan_presentation_blockers is fail-open on the RECEIPT side (mirrors
     # plan_review_blockers) but fail-CLOSED on the DELIVERY side: approval — the
@@ -1897,6 +1950,32 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
             "developer-produced result is review — supply it via: "
             "record-result --control '<how the code was reviewed>'",
         )
+
+    # Code-review gate: recording a PASSED spawn:developer stage additionally requires
+    # a bound passing (or user-overridden) CodeReview when the gate is active
+    # (substantive session / AGENTCTL_CODE_REVIEW=1) — the SUBSTANTIVE-only structured
+    # upgrade layered after the free-text control floor above (Op-Q5: the two stay
+    # independent, so a knob-off/non-substantive stage's behaviour is unaffected).
+    # Unlike the acceptance path there is no automated judge here — the verdict is
+    # always code-reviewer/human-authored via `agentctl code-review`; this fold-in only
+    # checks the pure gates.code_review_blockers, which reads solely the recorded
+    # CodeReview. Placed BEFORE verify_command execution + the node transition so a
+    # blocked pass never advances past EXECUTING.
+    code_ref = getattr(args, "code_ref", None) or None
+    if passed and stage.needs_control() and gates.code_review_active(state):
+        crb = gates.code_review_blockers(
+            state, stage, expected_code_sha256=_digest(code_ref) if code_ref else None,
+        )
+        if crb:
+            store.save(state)
+            return Directive(
+                False, state.node, "spawn_code_review",
+                f"stage {stage.index} spawn:developer pass blocked by the code-review gate — "
+                "spawn the `code-reviewer` specialization to review this stage's diff, then "
+                "record with `agentctl code-review --session <sid> --verdict pass|revise|override "
+                "--reviewer code-reviewer [--code-ref <rev>]`, then re-run record-result",
+                data={"blockers": crb},
+            )
 
     # Acceptance-review observation gate: recording a PASSED acceptance stage requires
     # a non-empty observation that differs (normalized) from the expected image.
@@ -3034,6 +3113,7 @@ COMMANDS = {
     "confirm-delivery": cmd_confirm_delivery,
     "plan-review": cmd_plan_review,
     "stage-review": cmd_stage_review,
+    "code-review": cmd_code_review,
     "approve": cmd_approve,
     "partition": cmd_partition,
     "partition-units": cmd_partition_units,
@@ -3218,6 +3298,19 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--observation", default=None,
                     help="the observation being reviewed (defaults to the stage's current "
                          "observation); binds the verdict to these exact bytes")
+    sp = add("code-review"); sp.add_argument("--session", required=True)
+    sp.add_argument("--verdict", choices=list(gates.CODE_REVIEW_VERDICTS), required=True,
+                    help="pass = clears the code-review gate; revise = blocks; override = "
+                         "user's explicit deadlock escape (requires --reviewer and --note)")
+    sp.add_argument("--reviewer", default="",
+                    help="who performed the review (code-reviewer, or the user for an override)")
+    sp.add_argument("--concern", dest="concerns", action="append", default=None,
+                    help="a blocking concern the reviewer raised (repeatable; audit trail)")
+    sp.add_argument("--note", default="",
+                    help="override justification, or a free-text note")
+    sp.add_argument("--code-ref", dest="code_ref", default=None,
+                    help="the reviewed-code revision/digest the reviewer names; binds the "
+                         "verdict so a later record-result with a different --code-ref is stale")
     sp = add("approve"); sp.add_argument("--session", required=True); sp.add_argument("--by", required=True)
     _UNIT_HELP = ("delivery unit as '<mode>|<stages csv>|<title>[|<ref>]' "
                   "(mode: inline|spawn|subtask); repeatable")
@@ -3245,6 +3338,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--observation", default="",
                     help="for acceptance_review stages: what you actually observed "
                          "(required when recording passed; must differ from the expected image)")
+    sp.add_argument("--code-ref", dest="code_ref", default=None,
+                    help="for spawn:developer stages: the reviewed-code revision/digest, to "
+                         "cross-check against the bound CodeReview's --code-ref (drift -> stale)")
     sp.add_argument("--cost-log", dest="cost_log", default=None,
                     help="override cost log path for tests (defaults to cost.COST_LOG)")
     sp = add("declare"); sp.add_argument("--session", required=True)

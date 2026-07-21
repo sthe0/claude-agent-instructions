@@ -33,6 +33,7 @@ any problem.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
@@ -255,6 +256,10 @@ def check_control_precondition() -> list[str]:
     non-empty --control attestation has been supplied. Non-developer stages and
     failed records are always allowed through. No new command must exist for this
     feature — the precondition rides the general record-result command.
+
+    Scoped to this one precondition: the orthogonal code-review gate (also keyed
+    on spawn:developer + SUBSTANTIVE) is force-disabled for the duration, the same
+    accommodation scripts/tests/conftest.py makes for the pytest suite at large.
     """
     from argparse import Namespace
     from agentctl import cli
@@ -264,6 +269,8 @@ def check_control_precondition() -> list[str]:
     )
 
     problems: list[str] = []
+    prior_code_review_env = os.environ.get("AGENTCTL_CODE_REVIEW")
+    os.environ["AGENTCTL_CODE_REVIEW"] = "0"
 
     def _dev_stage(index=1, executor="spawn:developer") -> Stage:
         return Stage(
@@ -357,6 +364,10 @@ def check_control_precondition() -> list[str]:
             f"not a new verb): {found}"
         )
 
+    if prior_code_review_env is None:
+        os.environ.pop("AGENTCTL_CODE_REVIEW", None)
+    else:
+        os.environ["AGENTCTL_CODE_REVIEW"] = prior_code_review_env
     return problems
 
 

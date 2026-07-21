@@ -75,6 +75,21 @@ def _premise_gate_off_by_default(monkeypatch):
     monkeypatch.setenv("AGENTCTL_PREMISE", "0")
 
 
+@pytest.fixture(autouse=True)
+def _code_review_gate_off_by_default(monkeypatch):
+    """Default the code-review gate OFF for the suite at large, the same
+    accommodation as `_plan_review_gate_off_by_default` above and for the same
+    reason: `gates.code_review_blockers` fold-in blocks `record-result --status
+    passed` on every SUBSTANTIVE spawn:developer stage until a bound passing
+    CodeReview is recorded, but the overwhelming majority of substantive-flow
+    tests (cost, dispatch, ledger, tracker, resolve-marker, drive-close, …) drive
+    such a stage to PASSED to exercise unrelated machinery. AGENTCTL_CODE_REVIEW=0
+    is the documented force-off knob (gates.code_review_active) — byte-identical
+    to the gate being absent. Its real block/pass/stale/override behaviour is
+    proven end-to-end by test_code_review.py, which explicitly re-enables it."""
+    monkeypatch.setenv("AGENTCTL_CODE_REVIEW", "0")
+
+
 @pytest.fixture
 def store(tmp_path):
     return FileStateStore(tmp_path / "state")
