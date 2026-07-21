@@ -6,6 +6,7 @@ ask-less-bypass residual this stage exists to remove."""
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 from argparse import Namespace
 from pathlib import Path
@@ -19,8 +20,21 @@ from agentctl.state import (
     PLAN_PRESENTATION_RENDERING_CAP_BYTES,
     PlanPresentation,
     SessionState,
+    SHOW_FULL_PLAN_MARKER,
 )
 from agentctl.store import FileStateStore
+
+_DELIVERY_GATE_HOOK = Path(__file__).resolve().parent.parent / "hook-plan-delivery-gate.py"
+
+
+def _load_delivery_gate_hook():
+    """Load the hyphenated hook module by path — same recipe as
+    test_plan_delivery_gate_hook.py's _load_module, reused rather than
+    re-implemented."""
+    spec = importlib.util.spec_from_file_location("hook_plan_delivery_gate", _DELIVERY_GATE_HOOK)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def ns(**kw) -> Namespace:
@@ -120,6 +134,78 @@ def test_present_plan_essence_stamps_receipt(store, fixtures_dir, tmp_path, gate
     assert p.plan_sha256 == _sha256_file(plan)
     assert p.rendering_sha256 == _sha256_file(rendering)
     assert p.presented_ts > 0
+
+    # The essence directive must hand the coordinator the full choreography —
+    # the marker literal and the three ordered steps — at the one point it is
+    # guaranteed to read it, rather than leaving that to forgettable prose.
+    assert SHOW_FULL_PLAN_MARKER in d.detail
+    assert "sleep 2" in d.detail
+    assert "FINAL text" in d.detail
+    assert "next turn" in d.detail
+    assert d.data["show_full_plan_marker"] == SHOW_FULL_PLAN_MARKER
+    assert isinstance(d.data["next_steps"], list) and len(d.data["next_steps"]) == 3
+
+
+def test_present_plan_full_directive_detail_unchanged(store, fixtures_dir, tmp_path, gate_on):
+    """Regression guard: only the essence branch gained the choreography —
+    the full-kind directive's detail text is byte-identical to before."""
+    sid = "pp1f"
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    _to_plan_ready(store, sid, plan)
+    rendering = _write_rendering(
+        tmp_path, "[stage 1] Scaffold module\nbody1\n[stage 2] Add tests\nbody2\n"
+    )
+
+    d = cli.cmd_present_plan(
+        ns(session=sid, kind="full", rendering_file=rendering, emit_skeleton=False),
+        store=store,
+    )
+    assert d.ok is True
+    assert d.detail == (
+        "presentation receipt recorded (kind=full); emit this exact rendering "
+        "as the turn's FINAL text message so the delivery hook can verify it "
+        "actually reached the user"
+    )
+    assert set(d.data.keys()) == {"rendering_sha256", "plan_sha256"}
+
+
+def test_emitted_essence_marker_satisfies_hook(store, fixtures_dir, tmp_path, gate_on):
+    """Cross-component regression test for the exact fixable problem: the
+    marker the ENGINE EMITS, dropped into an ask option, must actually clear
+    the hook's own marker check — and an ask with no marker at all must still
+    be denied with _NO_MARKER_REASON."""
+    sid = "pp1x"
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    _to_plan_ready(store, sid, plan)
+    rendering = _write_rendering(tmp_path, "Summary of the plan.")
+
+    d = cli.cmd_present_plan(
+        ns(session=sid, kind="essence", rendering_file=rendering, emit_skeleton=False),
+        store=store,
+    )
+    assert d.ok is True
+    marker = d.data["show_full_plan_marker"]
+
+    hook = _load_delivery_gate_hook()
+    tool_input_with_marker = {
+        "questions": [{"options": [{"label": f"show the full plan {marker}"}]}]
+    }
+    assert hook._has_show_full_plan_option(tool_input_with_marker) is True
+
+    decision, reason, _delivery_verified = hook.gate_decision(
+        "PLAN_READY", 100.0, 90.0, turn_start_ts=110.0,
+        presentation_active=True,
+        receipt=PlanPresentation(
+            plan_path=plan, kind="essence", plan_sha256="a" * 64,
+            rendering_sha256="b" * 64, rendering_text="Summary of the plan.",
+            presented_ts=100.0,
+        ),
+        receipt_stale_reason=None,
+        delivered_texts=[("Summary of the plan.", 105.0)],
+        has_show_full_plan_option=False,
+    )
+    assert decision == "deny"
+    assert reason == hook._NO_MARKER_REASON
 
 
 def test_present_plan_full_missing_stage_anchor_rejected_nothing_stamped(

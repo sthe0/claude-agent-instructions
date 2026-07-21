@@ -98,6 +98,7 @@ from agentctl import gates as _gates  # noqa: E402
 from agentctl.state import PLAN_PRESENTATION_KIND_ESSENCE as _KIND_ESSENCE  # noqa: E402
 from agentctl.state import PlanPresentation as _PlanPresentation  # noqa: E402
 from agentctl.state import SessionState as _SessionState  # noqa: E402
+from agentctl.state import SHOW_FULL_PLAN_MARKER  # noqa: E402
 from lib import config_root  # noqa: E402
 from lib.transcript_turns import delivered_final_texts, latest_turn_start  # noqa: E402
 
@@ -106,14 +107,14 @@ resolve_state_path = config_root.resolve_agentctl_state_file
 # The only node this gate concerns itself with: the plan-approval hard gate.
 GATED_NODE = "PLAN_READY"
 
-# Language-independent ASCII marker the coordinator embeds in a "show the full
-# plan" option's label (or description). Stage 4/5 renderings are dialogue-
-# language prose, so a natural-language keyword match ("покажи план" / "show
-# the plan") would break the moment the dialogue is not the language it was
-# written against. An ASCII bracketed literal is stable across every dialogue
-# language and trivially greppable in coordinator prompts/skills; the
-# surrounding option label/description text is free-form.
-SHOW_FULL_PLAN_MARKER = "[show-full-plan]"
+# SHOW_FULL_PLAN_MARKER is defined in agentctl.state (imported above) — the
+# coordinator embeds it in a "show the full plan" option's label (or
+# description). Stage 4/5 renderings are dialogue-language prose, so a
+# natural-language keyword match ("покажи план" / "show the plan") would break
+# the moment the dialogue is not the language it was written against. An ASCII
+# bracketed literal is stable across every dialogue language and trivially
+# greppable in coordinator prompts/skills; the surrounding option
+# label/description text is free-form.
 
 _SAME_TURN_REASON = (
     "the plan was submitted this same turn — it cannot have rendered to the "

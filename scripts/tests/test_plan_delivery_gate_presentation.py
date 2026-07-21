@@ -21,9 +21,9 @@ from pathlib import Path
 
 from agentctl import delivery as delivery_mod
 from agentctl.state import GateRecord, PlanPresentation, SessionState
+from agentctl.state import SHOW_FULL_PLAN_MARKER as MARKER
 
 HOOK = Path(__file__).resolve().parent.parent / "hook-plan-delivery-gate.py"
-MARKER = "[show-full-plan]"
 
 
 def iso(epoch: float) -> str:

@@ -408,6 +408,13 @@ PLAN_PRESENTATION_KIND_ESSENCE = "essence"
 PLAN_PRESENTATION_KIND_FULL = "full"
 PLAN_PRESENTATION_KINDS = (PLAN_PRESENTATION_KIND_ESSENCE, PLAN_PRESENTATION_KIND_FULL)
 
+# Language-independent ASCII marker a plan-approval AskUserQuestion option must
+# embed (label or description) to show the full plan. Checked by
+# hook-plan-delivery-gate.py's _has_show_full_plan_option, emitted by
+# cli.cmd_present_plan's essence Directive — single-sourced here so the two can
+# never drift apart.
+SHOW_FULL_PLAN_MARKER = "[show-full-plan]"
+
 
 @dataclass
 class PlanPresentation:

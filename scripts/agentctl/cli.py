@@ -69,6 +69,7 @@ from .state import (
     PlanReview,
     Route,
     SessionState,
+    SHOW_FULL_PLAN_MARKER,
     Stage,
     StageReview,
     StageStatus,
@@ -1282,6 +1283,34 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
     state.log("present_plan", plan=state.plan_path, kind=kind,
               rendering_sha256=presentation.rendering_sha256)
     store.save(state)
+
+    if kind == PLAN_PRESENTATION_KIND_ESSENCE:
+        # essence is the only kind that feeds an approval ask (full is
+        # on-request detail, skeleton stamps nothing), so it alone gets the
+        # full arm-timer/final-text/ask-next-turn choreography — spelled out
+        # here, at the point the coordinator is guaranteed to read it, rather
+        # than left to forgettable prose in a memory leaf it may never have
+        # loaded (ask-user-question-split-turn.md).
+        next_steps = [
+            "arm a `sleep 2` background timer now (atomic with deferring the ask)",
+            "emit THIS exact rendering as the turn's FINAL text message — zero "
+            "tool calls after it",
+            "next turn, open directly with the approval AskUserQuestion (zero "
+            "preceding text) carrying an option whose label or description "
+            f"embeds the literal marker {SHOW_FULL_PLAN_MARKER!r}",
+        ]
+        detail = (
+            "presentation receipt recorded (kind=essence). Next: "
+            + " Then, ".join(f"({i}) {step}" for i, step in enumerate(next_steps, 1))
+        )
+        data = {
+            "rendering_sha256": presentation.rendering_sha256,
+            "plan_sha256": presentation.plan_sha256,
+            "show_full_plan_marker": SHOW_FULL_PLAN_MARKER,
+            "next_steps": next_steps,
+        }
+        return Directive(True, state.node, "continue", detail, data=data)
+
     return Directive(
         True, state.node, "continue",
         f"presentation receipt recorded (kind={kind}); emit this exact rendering "
