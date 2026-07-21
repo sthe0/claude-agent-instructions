@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "user"
 refs: [memory-global/leaves/experience/2026-07-02-dead-spawn-scope-file-blocks-next-writer.md, memory-global/leaves/experience/2026-06-24-developer-marker-not-on-line-1-false-block.md]
 plan_file: /home/the0/.claude-agent/plans/fix-scope-hook-lineage-and-replan-gaps-v1.toml
 created: 2026-07-04
-last_verified: 2026-07-20
+last_verified: 2026-07-21
 ---
 
 # Spawn budget death: forensics on artifacts before any respawn; finish via continuation brief
@@ -40,6 +40,10 @@ Desired: a budget-dead spawn's completed/partial work is recognized and reused. 
 ### 2026-07-20 — QPROV stage-9 e2e: an oversized ~8-subtask stage exhausts even budget-large ($8)
 - Where it arose: question-provenance plan, stage 9 (end-to-end wiring of the premise plugin). The dispatched developer died on error_max_budget_usd at the $8 large tier — not a small/medium cap but the largest — because the stage bundled ~8 sub-tasks (cli wiring + plugin registration + verify-agentctl REQUIRED_PLUGINS + two render paths + hook + three test files). git status/diff showed the on-disk work near-complete: code written, most tests green, only a 2-line residual and a 6-call render-mutation sweep left, plus the report marker never emitted.
 - Working plan: 1. On BLOCKED-after-budget-death, inspect BEFORE respawn (git status/diff on the stage's declared files + the spawn transcript jsonl) — same forensic reflex as the 5 prior occurrences. 2. Confirm the deliverable is near-complete on disk. 3. Finish the 2-line residual and the 6-mutation sweep in-thread (manager), zero respawn — a full $8 budget saved. 4. Re-verify independently (pytest green) and record-result --status passed. Criterion: stage e2e tests green + verify-agentctl lists the plugin.
+
+### 2026-07-21 — Core backlog 43/44/45 — three dispatch developers all died at the commit step (budget + live #44 hook denial, compounded)
+- Where it arose: agentctl-driven Core task implement-backlog-43-44-45; three spawn:developer stages, one shared worktree, delivered as one PR
+- Working plan: Verify each dead spawn's work independently (git status/diff in worktree + run the stage's contract tests) BEFORE any respawn; complete any gap myself; commit in the worktree; agentctl unblock --session <id>; record-result --status passed. Applied 3x, zero respawn.
 ## Common core & variations
 **Common:** A marker-less spawn return (MALFORMED→BLOCKED) does NOT mean the work failed; the deliverable is often complete on disk. Forensically verify (git status/diff + the stage verify_command) BEFORE re-spawning.
 
