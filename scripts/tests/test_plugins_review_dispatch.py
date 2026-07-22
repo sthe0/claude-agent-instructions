@@ -31,7 +31,7 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cli, plugins
+from agentctl import cli, gates, plugins
 from agentctl import plugins_review_dispatch as prd
 from agentctl.directive import Directive
 from agentctl.state import (
@@ -276,3 +276,21 @@ def test_submit_plan_thinker_directive_unaffected_by_dispatch_addition():
                and p["action"] == "spawn_thinker_review"]
     assert len(matches) == 1
     assert matches[0]["data"]["specialist"] == "thinker"
+
+
+def test_submit_plan_silent_when_node_not_plan_ready():
+    """Node-guard: the submit_plan observer must fire ONLY at PLAN_READY. A
+    submit_plan event reaching the observer while the session sits at any other
+    node (here PLANNING) — even with a plan-review genuinely owed — must produce
+    NO directive. Without the `node != PLAN_READY` guard the observer would emit
+    a spawn_thinker_review directive off-node; this test is the one that fails if
+    that guard line is deleted (mutation check)."""
+    state = _dispatch_state(_dev_stage())
+    state.node = Node.PLANNING.value
+    state.plan_path = "/tmp/some-plan.toml"
+    # Sanity: a review IS owed here, so only the node-guard suppresses the
+    # directive — not an empty blocker set.
+    assert gates.plan_review_blockers(state, state.plan_path)
+    directive = Directive(True, state.node, "noop")
+    fired = plugins.fire("submit_plan", state, directive)
+    assert not any(p["plugin"] == "review_dispatch" for p in fired)
