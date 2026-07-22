@@ -470,6 +470,111 @@ def test_no_change_replan_refreshes_stale_verify_command_and_backfills_snapshot(
     assert Path(state.plan_snapshot_path).exists()
 
 
+# --- #17: PARTITIONED -> VERIFYING when a replan carries every PASSED stage forward ---
+
+def _to_partitioned(store, sid, plan):
+    """Drive a session to PARTITIONED WITHOUT calling next-stage, so the caller
+    controls exactly which stage(s) are ready."""
+    cli.cmd_start(ns(session=sid, task="demo-two-stage", goal="", done_criterion="",
+                     criterion_type="measurable", recursion_depth=0), store=store)
+    cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
+                        wall_clock_min=60, tracker_key=None, architectural=True,
+                        external_effect=False, new_dependency=False,
+                        public_api_change=False), store=store)
+    cli.cmd_plan(ns(session=sid), store=store)
+    cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
+    cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
+                         m3_severe=False, m4_severe=False), store=store)
+
+
+def test_donecriterion_only_change_is_substantive_but_preserves_stage_carry_keys(fixtures_dir):
+    """Sanity check for the regression fixture: a [meta] done_criterion-only edit
+    must classify as substantive (meta.done_criterion is in _structural_signature)
+    while every stage's carry key (which excludes meta fields) stays identical."""
+    from agentctl.plan import stage_carry_key
+
+    base = load_plan(str(fixtures_dir / "plan_two_stage.toml"))
+    changed = load_plan(str(fixtures_dir / "plan_two_stage_donecriterion_changed.toml"))
+    assert diff_plans(base, changed) == "substantive"
+    assert [stage_carry_key(s) for s in base.stages] == [stage_carry_key(s) for s in changed.stages]
+
+
+def test_next_stage_finalizes_partitioned_when_replan_preserved_all_passed(store, fixtures_dir):
+    """The exact deadlock scenario: both stages PASSED, a substantive replan (meta
+    done_criterion only) carries both PASSED outcomes forward, re-approval lands
+    back at PARTITIONED with no ready stage -- next-stage must advance straight to
+    VERIFYING and verify-final must reach RESOLUTION, with zero manual state edits
+    beyond the legitimate cmd_record_result PASSED calls."""
+    sid = "fin1"
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    changed = str(fixtures_dir / "plan_two_stage_donecriterion_changed.toml")
+    _to_executing_stage1(store, sid, plan)
+
+    d = cli.cmd_record_result(ns(session=sid, status="passed", actual="mod scaffolded",
+                               control="reviewed: ok"), store=store)
+    assert d.action == "next_stage"
+    d = cli.cmd_next_stage(ns(session=sid), store=store)
+    assert d.node == Node.EXECUTING.value
+    d = cli.cmd_record_result(ns(session=sid, status="passed", actual="tests added",
+                               control="reviewed: ok"), store=store)
+    assert d.action == "verify_final"
+    state = store.load(sid)
+    assert state.node == Node.VERIFYING.value
+    assert state.all_stages_passed()
+
+    # substantive replan (meta done_criterion only) -- re-arms the approval gate but
+    # carries both PASSED outcomes forward (stage_carry_key unchanged for each stage)
+    d = cli.cmd_replan(ns(session=sid, plan=changed), store=store)
+    assert d.marker == "PLAN-READY"
+    state = store.load(sid)
+    assert state.node == Node.PLAN_READY.value
+    assert not state.approval.passed
+    assert state.stage(1).outcome.status == StageStatus.PASSED.value
+    assert state.stage(2).outcome.status == StageStatus.PASSED.value
+
+    d = cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    assert d.node == Node.APPROVED.value
+
+    d = cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
+                             m3_severe=False, m4_severe=False), store=store)
+    assert d.node == Node.PARTITIONED.value
+    state = store.load(sid)
+    assert state.ready_stages() == []  # both PASSED, nothing left to start
+
+    # the fix: next-stage must not dead-end here -- it advances straight to
+    # VERIFYING via the guarded finalize_partitioned edge
+    d = cli.cmd_next_stage(ns(session=sid), store=store)
+    assert d.ok is True
+    assert d.node == Node.VERIFYING.value
+    assert d.action == "verify_final"
+    assert store.load(sid).node == Node.VERIFYING.value
+
+    d = cli.cmd_verify_final(ns(session=sid), store=store)
+    assert d.node == Node.RESOLUTION.value
+    assert store.load(sid).node == Node.RESOLUTION.value
+
+
+def test_next_stage_does_not_finalize_when_a_stage_is_not_ready_and_not_passed(store, fixtures_dir):
+    """The negative guard: a non-ready, non-PASSED stage at PARTITIONED must still
+    refuse -- never silently finalize just because ready_stages() is empty."""
+    sid = "fin2"
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    _to_partitioned(store, sid, plan)
+
+    state = store.load(sid)
+    # simulate stage 1 having failed (not PASSED); stage 2 depends on stage 1, so
+    # neither stage is ready -- but the session has NOT reached all-PASSED.
+    state.stage(1).outcome.status = StageStatus.FAILED.value
+    store.save(state)
+    assert store.load(sid).ready_stages() == []
+    assert not store.load(sid).all_stages_passed()
+
+    d = cli.cmd_next_stage(ns(session=sid), store=store)
+    assert d.ok is False
+    assert store.load(sid).node == Node.PARTITIONED.value  # unchanged
+
+
 def test_no_change_replan_with_snapshot_is_idempotent(store, fixtures_dir):
     """Backward-compat: a session WITH a snapshot whose plan is genuinely unchanged
     stays a true no-op — the refresh copies identical values and the existing

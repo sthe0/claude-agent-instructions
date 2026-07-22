@@ -30,6 +30,13 @@ start → CLASSIFIED → ROUTED → PLANNING → PLAN_READY ──■APPROVAL GA
                                                             ──■RESOLUTION GATE■──→ RESOLVED
 ```
 
+`PARTITIONED` also has a guarded direct edge straight to `VERIFYING` (event
+`finalize_partitioned`, fired by `next-stage`): when a substantive replan
+carried every stage's PASSED outcome forward (a control-criterion-only change
+left every stage's carry-key unchanged), there is no ready stage left to
+execute, so the engine advances straight to final verification instead of
+dead-ending.
+
 The two gates (`■`) are **non-skippable**:
 
 - **Approval gate** — [`hook-state-gate.py`](../hook-state-gate.py) hard-denies production Edit/Write until the engine reaches an execution node. "Production" includes the agent's own config/instructions; only memory and `/tmp/` scratch are unconditionally exempt.
@@ -48,7 +55,7 @@ Each node is a phase in the task lifecycle (`Node` in `state.py`). The *route* p
 | `PLANNING` | Authoring the plan (stages, each with its result image + done criterion). |
 | `PLAN_READY` | Plan authored; **held at the approval gate** until the user approves. |
 | `APPROVED` | Plan-approval gate passed. |
-| `PARTITIONED` | M1–M4 **delivery-partition** verdict recorded — into how many independently-shippable units (PRs/tickets) the approved plan is cut. |
+| `PARTITIONED` | M1–M4 **delivery-partition** verdict recorded — into how many independently-shippable units (PRs/tickets) the approved plan is cut. Normally exits via `execute_approved` once a stage is ready; if a substantive replan already carried every stage's PASSED outcome forward and none is ready, `next-stage` instead fires the guarded `finalize_partitioned` edge straight to `VERIFYING` (see State machine above). |
 | `EXECUTING` | Running the active stage — in-thread or via a dispatched specialist. |
 | `VERIFYING` | A stage result was recorded; checking it, then choosing next stage vs final. |
 | `RESOLUTION` | All stages PASSED; **held at the resolution gate** awaiting user confirmation. Exits via `resolve` (confirmed) or `reject` (user rejects the delivery, re-opening the difficulty cycle at `DIAGNOSING` — see `reject` below). |
@@ -80,7 +87,7 @@ start → classify → plan → submit-plan → approve → partition → next-s
 | `approve` | Pass the plan-approval gate (also gated by `plan_review_blockers`, see `plan-review` — already surfaced proactively by `review_dispatch` at `submit-plan`); `--by` names the approver (`PLAN_READY → APPROVED`). Also snapshots the plan **as approved** (content-hash-named file under the state dir, recorded as `plan_snapshot_path`/`plan_snapshot_hash`) — the immutable baseline `replan` diffs against, so an in-place edit of `plan_path` can never masquerade as "no change". |
 | `partition` | Record the M1–M4 **delivery-partition** assessment — into how many independently-shippable, separately-reviewable units (PRs/tickets) the approved plan is cut. Delivery segmentation, **not** the planner's step-level decomposition (`APPROVED → PARTITIONED`). Optionally materializes the split as **units** via repeatable `--unit '<mode>\|<stages csv>\|<title>[\|<ref>]'` — each unit groups approved-plan stage indices (pairwise disjoint) under an org-neutral execution mode `inline` / `spawn` / `subtask`; see `memory-global/leaves/partition-markers.md` § Materialization. |
 | `partition-units` | Record (or replace) the per-unit delivery routing **after** the verdict is surfaced — the user's structure decision arrives once they have seen the M1–M4 verdict. Same `--unit` syntax as `partition`; allowed only at `PARTITIONED` or `EXECUTING`; replaces the whole units list, leaves verdict + node untouched. Re-recording at `EXECUTING` does not re-validate against already-PASSED stages (documented limitation). |
-| `next-stage` | Select the next ready stage and enter execution (`→ EXECUTING`). |
+| `next-stage` | Select the next ready stage and enter execution (`→ EXECUTING`). At `PARTITIONED` with no ready stage: if every stage is already PASSED (a substantive replan carried them forward), fires the guarded `finalize_partitioned` edge to `VERIFYING` instead of refusing; a genuine non-ready, non-PASSED stage still returns a non-ok directive. |
 | `dispatch` | At `EXECUTING`, route the active stage to its actor (`in_thread` / `spawn:<specialization>`) and return the cognitive leaf + return-marker handling; no node change. For a spawn stage this command **is** the spawn — it runs `spawn-specialist.py` itself, synchronously (blocking until the specialist returns); do **not** spawn manually with `spawn-specialist.py` or `claude -p` first. `--dry-run` is a pure preview: echoes the spawn command with no event log, no state save, no marker routing. On a `needs_control()` (`spawn:developer`) stage, this is also the event `review_dispatch` (§ Plugins) observes to proactively name the required code-reviewer spawn, ahead of `record-result`'s reactive refusal. |
 | `record-result` | Record a stage's actual result + status, plus an optional general `--control` attestation (how element #3, the control criterion, was met) and an optional `--code-ref` (for `spawn:developer` stages, cross-checked against the bound code review — see *Code-review gate* below). PASSED → `VERIFYING`; FAILED → `DIAGNOSING` (enter the overcome-difficulty sub-spine). A `spawn:developer` stage is **refused** PASSED without a non-empty `--control` — see *Control attestation* below; on a SUBSTANTIVE session it is also refused without a bound passing `CodeReview` — see *Code-review gate* below, already surfaced proactively by `review_dispatch` at `dispatch`. |
 | `code-review` | Record a `code-reviewer`/human review of the active `spawn:developer` stage's produced code (`--verdict pass\|revise\|override --reviewer <name> [--concern …] [--note …] [--code-ref <rev>]`). Backs the **code-review gate** — see *Code-review gate* below. No node change. `review_dispatch` (§ Plugins) is the proactive trigger naming this spawn at `dispatch`. |

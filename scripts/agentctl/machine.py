@@ -16,6 +16,11 @@ The graph (happy path + carve-outs):
   PLAN_READY --approve--> APPROVED      (plan-approval gate passes)
   APPROVED --partition--> PARTITIONED    (M1–M4 assessment recorded)
   PARTITIONED --execute--> EXECUTING     (spawn path passes through partition)
+  PARTITIONED --finalize--> VERIFYING    (no ready stage AND every stage already
+                                          PASSED — a substantive replan whose stage
+                                          carry-keys were unchanged carried every
+                                          PASSED outcome forward; nothing left to
+                                          execute, so go straight to final verification)
   EXECUTING --verify--> VERIFYING       (a stage result recorded)
   VERIFYING --next_stage--> EXECUTING   (more ready stages remain)
   VERIFYING --final--> RESOLUTION       (all stages PASSED)
@@ -46,6 +51,13 @@ TRANSITIONS: dict[str, tuple[str, str]] = {
     "approve": (Node.PLAN_READY.value, Node.APPROVED.value),
     "partition": (Node.APPROVED.value, Node.PARTITIONED.value),
     "execute_approved": (Node.PARTITIONED.value, Node.EXECUTING.value),
+    # #17: PARTITIONED had no forward edge when a substantive replan carried every
+    # stage's PASSED outcome forward (control-criterion-only change; carry-keys
+    # unchanged) — the session landed with no ready stage and no way to reach final
+    # verification short of a manual state.json hand-patch. Guarded fire site is
+    # cmd_next_stage (cli.py): only when ready_stages() is empty AND every stage is
+    # already PASSED.
+    "finalize_partitioned": (Node.PARTITIONED.value, Node.VERIFYING.value),
     "execute_small": (Node.ROUTED.value, Node.EXECUTING.value),
     "verify": (Node.EXECUTING.value, Node.VERIFYING.value),
     "next_stage": (Node.VERIFYING.value, Node.EXECUTING.value),

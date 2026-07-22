@@ -34,6 +34,19 @@ def test_partitioned_is_reachable_and_not_dead_end():
     out_edges = [ev for ev, (frm, to) in TRANSITIONS.items() if frm == Node.PARTITIONED.value]
     assert in_edges == ["partition"]
     assert "execute_approved" in out_edges
+    assert "finalize_partitioned" in out_edges
+
+
+def test_finalize_partitioned_edge_goes_to_verifying():
+    assert transition(Node.PARTITIONED.value, "finalize_partitioned") == Node.VERIFYING.value
+
+
+def test_finalize_partitioned_illegal_outside_partitioned():
+    for node in (Node.CLASSIFIED, Node.ROUTED, Node.PLANNING, Node.PLAN_READY,
+                 Node.APPROVED, Node.EXECUTING, Node.VERIFYING, Node.RESOLUTION,
+                 Node.RESOLVED, Node.DIAGNOSING, Node.BLOCKED):
+        with pytest.raises(TransitionError):
+            transition(node.value, "finalize_partitioned")
 
 
 def test_wrong_source_node_raises():

@@ -1781,6 +1781,23 @@ def cmd_next_stage(args, *, store: StateStore, runner: Runner | None = None) -> 
     state = _require(store, args.session)
     ready = state.ready_stages()
     if not ready:
+        # #17: a substantive replan whose stage carry-keys were unchanged (e.g. a
+        # control-criterion-only change) carries every PASSED outcome forward, so a
+        # re-approval lands the session at PARTITIONED with no PENDING stage left to
+        # start — the intended next step (final verification) had no edge from here.
+        # Fire it only under the exact guard that makes VERIFYING the faithful node
+        # (every stage already PASSED); a genuine dependency problem (a non-ready,
+        # non-PASSED stage) must NOT be silently finalized, so it keeps the prior
+        # non-ok directive below.
+        if state.node == Node.PARTITIONED.value and state.all_stages_passed():
+            state.node = transition(state.node, "finalize_partitioned")
+            state.log("finalize_partitioned")
+            store.save(state)
+            return Directive(
+                True, state.node, "verify_final",
+                "all stages already passed (a replan preserved them); advanced to "
+                "final verification — run verify-final",
+            )
         return Directive(False, state.node, "verify_final", "no ready stages; run verify-final if all passed")
     stage = ready[0]
     # pick the entry edge into EXECUTING from the current node
