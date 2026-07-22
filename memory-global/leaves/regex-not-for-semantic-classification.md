@@ -49,7 +49,7 @@ Enumerated every hard-enforcement site in the 35-hook suite (`grep` for the thre
 
 `closure_sought` (gates `prose_binary_ask_blockers` and `resolution_turn_blockers`) reads `timer_arm_detect.ask_emitted`/`timer_armed` — tool-invocation shape (was `AskUserQuestion` called, is a backgrounded `sleep` armed), not NL meaning — STRUCTURAL.
 
-**Result: the semantic-hard-block set is exactly three guardian sites, all sharing two detector modules (`si_feedback_detect`, `outage_escalation_detect`) across three consumers (one PreToolUse gate, two Stop guardians).** Two of the three were unguarded regex-only decisions before this task and are now prefilter-AND-judge; the third (`prose_binary_ask`) was already prefilter-AND-judge before this task began and needed no change. No further semantic hard-block was found in the suite — no additional fix or follow-up is named.
+**Result: the semantic-hard-block set is exactly four sites, and every one is prefilter-AND-fail-open-judge — no unguarded regex-only semantic decision remains.** Three of the four share two detector modules (`si_feedback_detect`, `outage_escalation_detect`) across three consumers (one PreToolUse gate — `hook-escalation-diagnosis-gate.py`; two Stop guardians — `self_improvement_blockers`, `escalation_without_diagnosis_blockers`); all three were unguarded regex-only decisions before this task and were fixed here. The fourth (`prose_binary_ask`) is a distinct semantic site backed by `judge_binary_ask` behind a punctuation prefilter — already prefilter-AND-judge before this task began, unchanged, and the pre-existing exemplar the other three now mirror. No further semantic hard-block was found in the suite — no additional fix or follow-up is named.
 
 ## See also
 
