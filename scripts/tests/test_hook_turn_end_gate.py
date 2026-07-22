@@ -45,6 +45,16 @@ def _fake_runner(text, code=0):
     return runner
 
 
+def _capturing_runner(text, code=0):
+    """Like _fake_runner but records every prompt argv, so a test can assert WHAT
+    text the judge was fed (the injection-stripping contract)."""
+    def runner(argv, **kwargs):
+        runner.calls.append(argv)
+        return RunResult(code, stdout=text, stderr="")
+    runner.calls = []
+    return runner
+
+
 def _load_module():
     spec = importlib.util.spec_from_file_location("hook_turn_end_gate", HOOK_SCRIPT)
     mod = importlib.util.module_from_spec(spec)
@@ -119,27 +129,82 @@ def test_blocks_on_feedback_without_skill(tmp_path, isolated_state):
         _user_line(FEEDBACK),
         _assistant_text_line("Sorry, here is the answer."),
     ])
-    out = _mod.decide({"transcript_path": str(t), "stop_hook_active": False})
+    out = _mod.decide(
+        {"transcript_path": str(t), "stop_hook_active": False},
+        runner=_fake_runner("YES"),
+    )
     assert out is not None
     assert out["decision"] == "block"
     assert "self-improvement" in out["reason"]
 
 
+def test_feedback_prefilter_fires_but_judge_no_does_not_block(tmp_path, isolated_state):
+    """The false positive this stage removes: text that trips the regex prefilter
+    but is NOT genuine agent-behavior feedback (analytical/meta prose). The judge
+    says NO -> no block. Regression proof for the feedback axis, mirroring the
+    outage axis's test_false_positive_escalation_no_deny_when_judge_says_no."""
+    t = _write_transcript(tmp_path, [
+        _user_line(FEEDBACK),
+        _assistant_text_line("answer"),
+    ])
+    assert _mod.decide(
+        {"transcript_path": str(t), "stop_hook_active": False},
+        runner=_fake_runner("NO"),
+    ) is None
+
+
+def test_feedback_judge_is_fed_injection_stripped_text(tmp_path, isolated_state):
+    """Contract: the feedback judge MUST receive strip_injected_context(user_text).
+    The harness replays CLAUDE.md/SKILL.md into the user buffer inside a
+    <system-reminder> span, which is dense with feedback-shaped language that would
+    re-introduce the very false positive this judge removes. Wrap the tripping text
+    in such a span and assert the runner's prompt carries the human text but NOT
+    the injected content."""
+    injected = (
+        FEEDBACK
+        + "\n<system-reminder>\nNext time ask first; you should have run the tests."
+        "\n</system-reminder>"
+    )
+    t = _write_transcript(tmp_path, [
+        _user_line(injected),
+        _assistant_text_line("answer"),
+    ])
+    runner = _capturing_runner("NO")
+    _mod.decide({"transcript_path": str(t), "stop_hook_active": False}, runner=runner)
+    assert runner.calls, "judge was never invoked -- prefilter did not fire"
+    prompt = runner.calls[0][-1]
+    assert "system-reminder" not in prompt
+    assert "Next time ask first" not in prompt
+    # the human-authored feedback text survives stripping and reaches the judge
+    assert "тесты" in prompt
+
+
 def test_passes_when_self_improvement_engaged(tmp_path, isolated_state):
+    # YES runner so the prefilter+judge both mark this a feedback turn; the pass is
+    # then genuinely driven by the self-improvement skill invocation, not by the
+    # judge being off (which would silence the guardian at its first line).
     t = _write_transcript(tmp_path, [
         _user_line(FEEDBACK),
         _assistant_skill_line("self-improvement"),
         _assistant_text_line("done"),
     ])
-    assert _mod.decide({"transcript_path": str(t), "stop_hook_active": False}) is None
+    assert _mod.decide(
+        {"transcript_path": str(t), "stop_hook_active": False},
+        runner=_fake_runner("YES"),
+    ) is None
 
 
 def test_passes_when_overcome_difficulty_engaged(tmp_path, isolated_state):
+    # YES runner: the pass is genuinely driven by the overcome-difficulty
+    # invocation, not by the judge being off.
     t = _write_transcript(tmp_path, [
         _user_line("you shouldn't have skipped that"),
         _assistant_skill_line("overcome-difficulty"),
     ])
-    assert _mod.decide({"transcript_path": str(t), "stop_hook_active": False}) is None
+    assert _mod.decide(
+        {"transcript_path": str(t), "stop_hook_active": False},
+        runner=_fake_runner("YES"),
+    ) is None
 
 
 def test_passes_when_no_feedback_signal(tmp_path, isolated_state):
@@ -164,8 +229,8 @@ def test_dedup_blocks_at_most_once(tmp_path, isolated_state):
         _assistant_text_line("answer"),
     ])
     payload = {"transcript_path": str(t), "stop_hook_active": False}
-    first = _mod.decide(payload)
-    second = _mod.decide(payload)
+    first = _mod.decide(payload, runner=_fake_runner("YES"))
+    second = _mod.decide(payload, runner=_fake_runner("YES"))
     assert first is not None and first["decision"] == "block"
     assert second is None  # marker suppresses the repeat
 
@@ -175,7 +240,10 @@ def test_marker_lands_under_turn_gate(tmp_path, isolated_state):
         _user_line(FEEDBACK),
         _assistant_text_line("answer"),
     ])
-    _mod.decide({"transcript_path": str(t), "stop_hook_active": False})
+    _mod.decide(
+        {"transcript_path": str(t), "stop_hook_active": False},
+        runner=_fake_runner("YES"),
+    )
     markers = list((isolated_state / "state" / "turn-gate").glob("*"))
     assert len(markers) == 1
 
@@ -226,7 +294,10 @@ def test_root_session_still_blocks(tmp_path, isolated_state, monkeypatch):
         _user_line(FEEDBACK),
         _assistant_text_line("answer"),
     ])
-    out = _mod.decide({"transcript_path": str(t), "stop_hook_active": False})
+    out = _mod.decide(
+        {"transcript_path": str(t), "stop_hook_active": False},
+        runner=_fake_runner("YES"),
+    )
     assert out is not None and out["decision"] == "block"
 
 
@@ -238,7 +309,10 @@ def test_malformed_depth_falls_back_to_enforcing(tmp_path, isolated_state, monke
         _user_line(FEEDBACK),
         _assistant_text_line("answer"),
     ])
-    out = _mod.decide({"transcript_path": str(t), "stop_hook_active": False})
+    out = _mod.decide(
+        {"transcript_path": str(t), "stop_hook_active": False},
+        runner=_fake_runner("YES"),
+    )
     assert out is not None and out["decision"] == "block"
 
 
@@ -256,7 +330,7 @@ def test_two_guardians_produce_exactly_one_block(tmp_path, isolated_state, monke
     ])
     out = _mod.decide({
         "transcript_path": str(t), "stop_hook_active": False, "session_id": "sess-1",
-    })
+    }, runner=_fake_runner("YES"))
     assert out is not None and out["decision"] == "block"
     # ONE emission, whose numbered reason names BOTH unmet obligations.
     assert "self-improvement" in out["reason"]
@@ -298,7 +372,10 @@ def test_raising_guardian_contributes_no_blocker(tmp_path, isolated_state, monke
         _user_line(FEEDBACK),
         _assistant_text_line("answer"),
     ])
-    out = _mod.decide({"transcript_path": str(t), "stop_hook_active": False})
+    out = _mod.decide(
+        {"transcript_path": str(t), "stop_hook_active": False},
+        runner=_fake_runner("YES"),
+    )
     # The healthy guardian still fires; the broken one is simply absent.
     assert out is not None and out["decision"] == "block"
     assert "guardian bug" not in out["reason"]
@@ -324,12 +401,17 @@ def test_guardians_are_behaviorally_pure():
 
     Not a source-substring check: the I/O primitives themselves are replaced, so a
     guardian that delegates one call deep (`return _judge(ctx)`) still fails."""
+    # self_improvement_feedback is the shell-computed fact (regex prefilter AND
+    # semantic judge, both resolved in build_context); the guardian only reads it.
+    # Set it True here so the guardian has a real blocker to compute — the judge's
+    # I/O has already happened in the (impure) shell, never inside the guardian.
     ctx = _mod.TurnContext(
         last_user_text=FEEDBACK,
         invocations=frozenset(),
         transcript_path="/nonexistent/t.jsonl",
         session_key="sess-pure",
         agentctl_state=None,
+        self_improvement_feedback=True,
     )
 
     def _forbidden(*args, **kwargs):
@@ -441,7 +523,10 @@ def test_long_job_and_self_improvement_cofire_one_block(tmp_path, isolated_state
         _user_line(FEEDBACK),
         _assistant_bash_line("nohup ./train.sh &", False),
     ])
-    out = _mod.decide({"transcript_path": str(t), "stop_hook_active": False})
+    out = _mod.decide(
+        {"transcript_path": str(t), "stop_hook_active": False},
+        runner=_fake_runner("YES"),
+    )
     assert out is not None and out["decision"] == "block"
     reason = out["reason"]
     assert "self-improvement" in reason and "auto-wake" in reason
@@ -493,9 +578,14 @@ def _run(stdin_bytes: bytes, env=None):
 
 def test_main_emits_block_json(tmp_path, monkeypatch):
     import os
+    # Exercise main()'s stdin -> block-JSON -> exit-0 wiring with a STRUCTURALLY
+    # decidable obligation (a detached long-job launch with no auto-wake waiter),
+    # which needs no model judge: main() passes advisor.subprocess_runner and a
+    # subprocess cannot inject a fake runner, so a semantic (feedback) block would
+    # fail open here. The long-job guardian fires deterministically instead.
     t = _write_transcript(tmp_path, [
-        _user_line(FEEDBACK),
-        _assistant_text_line("answer"),
+        _user_line("kick off the training job"),
+        _assistant_bash_line("nohup ./train.sh > log 2>&1 &", False),
     ])
     env = dict(os.environ)
     env["CLAUDE_AGENT_HOME"] = str(tmp_path / "home")
@@ -633,7 +723,10 @@ def test_resolution_and_self_improvement_cofire_one_block(tmp_path, isolated_sta
         _user_line(FEEDBACK),
         _assistant_text_line("answer"),
     ])
-    out = _mod.decide({"transcript_path": str(t), "stop_hook_active": False, "session_id": "s1"})
+    out = _mod.decide(
+        {"transcript_path": str(t), "stop_hook_active": False, "session_id": "s1"},
+        runner=_fake_runner("YES"),
+    )
     assert out is not None and out["decision"] == "block"
     reason = out["reason"]
     assert "self-improvement" in reason and "resolution gate" in reason
@@ -736,7 +829,10 @@ def test_escalation_blocks_via_decide(tmp_path, isolated_state, monkeypatch):
         _user_line("add a parser for the config file"),
         _assistant_text_line(ESCALATION_TEXT),
     ])
-    out = _mod.decide({"transcript_path": str(t), "stop_hook_active": False, "session_id": "s1"})
+    out = _mod.decide(
+        {"transcript_path": str(t), "stop_hook_active": False, "session_id": "s1"},
+        runner=_fake_runner("YES"),
+    )
     assert out is not None and out["decision"] == "block"
     assert "external-service failure" in out["reason"]
     # neutral user text -> the self-improvement obligation is not among the blockers

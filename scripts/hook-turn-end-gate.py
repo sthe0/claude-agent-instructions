@@ -70,7 +70,7 @@ from typing import Any, Callable
 # Make the sibling shared detector and lib/ importable whether this hook is run
 # directly (scripts/ on sys.path[0]) or loaded via importlib in tests.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from si_feedback_detect import find_signals  # noqa: E402
+from si_feedback_detect import find_signals, strip_injected_context  # noqa: E402
 from long_job_detect import detect as _detect_long_job  # noqa: E402
 from outage_escalation_detect import detect as _detect_outage  # noqa: E402
 from timer_arm_detect import (  # noqa: E402
@@ -86,11 +86,13 @@ try:
 except Exception:  # pragma: no cover - fail-open if the resolver is unavailable
     config_root = None
 
-# Kill-switch for the semantic prose_binary_ask judge: set to "0" to force the
-# guardian off without a code change. Direction is safe-by-default: an unset or
+# Kill-switches for the semantic judges: set to "0" to force a given judge off
+# without a code change. Direction is safe-by-default: an unset or
 # unrecognised value leaves the detector ENABLED, so a forgotten wire never
 # silently disables the obligation.
 _BINARY_ASK_KILLSWITCH_ENV = "CLAUDE_BINARY_ASK_SEMANTIC"
+_SI_FEEDBACK_KILLSWITCH_ENV = "CLAUDE_SI_FEEDBACK_SEMANTIC"
+_OUTAGE_ESCALATION_KILLSWITCH_ENV = "CLAUDE_OUTAGE_ESCALATION_SEMANTIC"
 
 # Skills whose invocation this turn satisfies the self-improvement discipline.
 _SATISFYING_SKILLS = frozenset({"self-improvement", "overcome-difficulty"})
@@ -123,11 +125,18 @@ class TurnContext:
                      by the shell via the shared waiter_armed predicate.
     outage_escalation_sought : whether this turn's assistant text surfaces an
                      external-service failure to the user without a recorded
-                     diagnosis (shared outage_escalation_detect scan over the
-                     concatenated assistant text). Computed by the shell.
+                     diagnosis (shared outage_escalation_detect prefilter over
+                     the concatenated assistant text AND
+                     agentctl.advisor.judge_outage_escalation semantic model
+                     verdict). Computed by the shell.
     difficulty_declared : whether the engine's SessionState carries a declared
                      difficulty (`state.difficulty.declaration` set). Read once,
                      here, by the shell from agentctl_state.
+    self_improvement_feedback : whether the user's message carried genuine
+                     agent-behavior feedback (shared si_feedback_detect.find_signals
+                     prefilter over the injection-stripped user text AND
+                     agentctl.advisor.judge_feedback_signal semantic model
+                     verdict). Computed by the shell.
     prose_binary_ask : whether this turn's assistant text ENDS with a binary /
                      confirm question posed in prose instead of via an
                      AskUserQuestion click-gate (language-independent punctuation
@@ -146,6 +155,7 @@ class TurnContext:
     autowake_armed: bool = False
     outage_escalation_sought: bool = False
     difficulty_declared: bool = False
+    self_improvement_feedback: bool = False
     prose_binary_ask: bool = False
 
 
@@ -153,20 +163,19 @@ class TurnContext:
 # Guardians — PURE: (TurnContext) -> list[str]. No subprocess, network, file I/O.
 # ---------------------------------------------------------------------------
 def self_improvement_blockers(ctx: TurnContext) -> list[str]:
-    """The user's message carried agent-behavior feedback, but neither the
-    self-improvement nor the overcome-difficulty skill was engaged this turn."""
-    signals = find_signals(ctx.last_user_text)
-    if not signals:
+    """The user's message carried agent-behavior feedback (regex prefilter AND
+    semantic model judge, both resolved by the shell into self_improvement_feedback),
+    but neither the self-improvement nor the overcome-difficulty skill was engaged
+    this turn. Pure: reads only the frozen ctx booleans / the invocations set."""
+    if not ctx.self_improvement_feedback:
         return []
     if ctx.invocations & _SATISFYING_SKILLS:
         return []
-    signal = "; ".join(signals)
     return [
-        f"The user's message carried an agent-behavior-feedback signal "
-        f"({signal}), but neither the self-improvement nor the "
-        f"overcome-difficulty skill was engaged this turn. Invoke the "
-        f"self-improvement skill now, or explicitly state in your reply why it "
-        f"does not apply."
+        "The user's message carried an agent-behavior-feedback signal, but "
+        "neither the self-improvement nor the overcome-difficulty skill was "
+        "engaged this turn. Invoke the self-improvement skill now, or "
+        "explicitly state in your reply why it does not apply."
     ]
 
 
@@ -480,10 +489,10 @@ def _load_agentctl_state(session_id: str | None):
 def build_context(payload: dict, *, runner: Callable | None = None) -> TurnContext | None:
     """Freeze this turn's facts, or None when the turn cannot be read (fail-open).
 
-    ``runner`` is injected straight into judge_binary_ask (None -> that judge
-    fails open to False, exactly like advisor absent). The real invocation point
-    (main()) passes advisor.subprocess_runner; tests inject a fake runner or omit
-    it entirely to keep the suite free of live model calls."""
+    ``runner`` is injected straight into the agentctl.advisor judges (None ->
+    each judge fails open to False, exactly like advisor absent). The real
+    invocation point (main()) passes advisor.subprocess_runner; tests inject a
+    fake runner or omit it entirely to keep the suite free of live model calls."""
     transcript_path = payload.get("transcript_path")
     if not isinstance(transcript_path, str) or not transcript_path:
         return None
@@ -506,6 +515,7 @@ def build_context(payload: dict, *, runner: Callable | None = None) -> TurnConte
     if not isinstance(session_id, str) or not session_id:
         session_id = None
     agentctl_state = _load_agentctl_state(session_id)
+    assistant_text = _assistant_text_of(turn_entries)
     return TurnContext(
         last_user_text=last_user_text,
         invocations=frozenset(invocations),
@@ -517,10 +527,25 @@ def build_context(payload: dict, *, runner: Callable | None = None) -> TurnConte
             _detect_long_job(c) for c in _iter_bash_commands(turn_entries)
         ),
         autowake_armed=_waiter_armed(turn_entries),
-        outage_escalation_sought=bool(_detect_outage(_assistant_text_of(turn_entries))),
+        outage_escalation_sought=(
+            bool(_detect_outage(assistant_text))
+            and advisor.judge_outage_escalation(
+                assistant_text,
+                runner,
+                enabled=os.environ.get(_OUTAGE_ESCALATION_KILLSWITCH_ENV) != "0",
+            )
+        ),
         difficulty_declared=_difficulty_declared(agentctl_state),
+        self_improvement_feedback=(
+            bool(find_signals(last_user_text))
+            and advisor.judge_feedback_signal(
+                strip_injected_context(last_user_text),
+                runner,
+                enabled=os.environ.get(_SI_FEEDBACK_KILLSWITCH_ENV) != "0",
+            )
+        ),
         prose_binary_ask=judge_binary_ask(
-            _assistant_text_of(turn_entries),
+            assistant_text,
             runner,
             enabled=os.environ.get(_BINARY_ASK_KILLSWITCH_ENV) != "0",
         ),

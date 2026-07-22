@@ -15,7 +15,10 @@ never reach an AskUserQuestion.
 
 DENY when ALL hold:
   1. outage_escalation_detect.detect(question + every option label/description)
-     fires (present-tense external-failure cue AND user-facing escalation frame);
+     fires (present-tense external-failure cue AND user-facing escalation frame)
+     — a high-recall PREFILTER — AND agentctl.advisor.judge_outage_escalation
+     (a fail-open semantic model judge) confirms it is a genuine escalation, not
+     a paraphrase/meta-mention that merely trips the regex;
   2. the overcome-difficulty skill was NOT invoked anywhere in this session's
      transcript; AND
   3. no active agentctl `declare` record exists for the session (a declared
@@ -23,8 +26,8 @@ DENY when ALL hold:
 
 Precision-first: a false DENY is more disruptive than a false Stop-nudge, so the
 conjunction is strict and every observable failure FAILS OPEN (allow) — a missing
-transcript, unreadable state, or any unexpected error never wedges the ask.
-Always exits 0.
+transcript, unreadable state, a disabled/errored judge, or any unexpected error
+never wedges the ask. Always exits 0.
 
 DENY uses the same PreToolUse permissionDecision JSON contract as
 hook-plan-delivery-gate.py.
@@ -32,11 +35,20 @@ hook-plan-delivery-gate.py.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
+from typing import Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from outage_escalation_detect import detect as _detect_outage  # noqa: E402
+from agentctl import advisor  # noqa: E402
+
+# Kill-switch for the semantic outage-escalation judge: set to "0" to force it
+# off without a code change. Safe-by-default: unset/unrecognised leaves the
+# judge ENABLED. Shared name with hook-turn-end-gate.py's Stop-hook backstop —
+# both gate the same underlying escalation-without-diagnosis obligation.
+_OUTAGE_ESCALATION_KILLSWITCH_ENV = "CLAUDE_OUTAGE_ESCALATION_SEMANTIC"
 
 _DENY_REASON = (
     "You are escalating an external-service failure to the user without a recorded "
@@ -160,6 +172,37 @@ def deny_with(reason: str) -> None:
     }))
 
 
+def decide(payload: dict, *, runner: Callable | None = None) -> str | None:
+    """Core decision. Returns the deny reason string, or None to allow.
+
+    ``runner`` is injected straight into agentctl.advisor.judge_outage_escalation
+    (None -> that judge fails open to False, never denies) — the same contract
+    build_context follows in hook-turn-end-gate.py. The prefilter
+    (outage_escalation_detect.detect) runs first and short-circuits to None
+    (allow) without ever invoking the judge when it doesn't fire."""
+    if payload.get("tool_name") != "AskUserQuestion":
+        return None
+    tool_input = payload.get("tool_input") or {}
+    text = _ask_text(tool_input)
+    if not _detect_outage(text):
+        return None  # cheap common path: nothing to gate
+    fires = advisor.judge_outage_escalation(
+        text,
+        runner,
+        enabled=os.environ.get(_OUTAGE_ESCALATION_KILLSWITCH_ENV) != "0",
+    )
+    if not fires:
+        return None
+    transcript_path = payload.get("transcript_path")
+    session_id = payload.get("session_id") or ""
+    decision, reason = gate_decision(
+        fires,
+        _overcome_difficulty_invoked(transcript_path),
+        _difficulty_declared(session_id),
+    )
+    return reason if decision == "deny" else None
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -167,25 +210,13 @@ def main() -> int:
         return 0
     if not isinstance(payload, dict):
         return 0
-    if payload.get("tool_name") != "AskUserQuestion":
-        return 0
 
     try:
-        tool_input = payload.get("tool_input") or {}
-        fires = bool(_detect_outage(_ask_text(tool_input)))
-        if not fires:
-            return 0  # cheap common path: nothing to gate
-        transcript_path = payload.get("transcript_path")
-        session_id = payload.get("session_id") or ""
-        decision, reason = gate_decision(
-            fires,
-            _overcome_difficulty_invoked(transcript_path),
-            _difficulty_declared(session_id),
-        )
-        if decision == "deny":
-            deny_with(reason)
+        reason = decide(payload, runner=advisor.subprocess_runner)
     except Exception:
         return 0  # fail-open — a hook must never wedge the ask
+    if reason is not None:
+        deny_with(reason)
     return 0
 
 
