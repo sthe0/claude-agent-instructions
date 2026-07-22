@@ -4,7 +4,7 @@ description: CLAUDE_AFK_TIMEOUT_MS (set to 2e9 in settings/base.json to disable 
 type: reference
 schema: leaf/v1
 created: 2026-07-02
-last_verified: 2026-07-02
+last_verified: 2026-07-21
 ---
 
 # CLAUDE_AFK_TIMEOUT_MS is an unverified (possibly dead) config env var
@@ -14,7 +14,7 @@ last_verified: 2026-07-02
 Desired: every env var pinned in `settings/base.json` has a known, verified effect. Actual: `CLAUDE_AFK_TIMEOUT_MS` (set to `2000000000` — see the `env` block, intent per commit `cbe290f` "disable AskUserQuestion AFK auto-resolve timeout") cannot be confirmed to do anything. When AskUserQuestion goes unanswered the harness auto-proceeds after ~60s ("No response after 60s — the user may be away from keyboard…"); the var is meant to lengthen/disable that window, but nothing verifies it works.
 
 Two facts establish the risk:
-- **No consumer in the repo.** `CLAUDE_AFK_TIMEOUT_MS` appears ONLY in `settings/base.json`. No script/hook reads it (`hook-answer-delivery-reminder.py` merely *detects* the harness's "No response after" marker; it does not produce or control the timeout). So the var only matters if the Claude Code harness itself honors it.
+- **No consumer in the repo.** `CLAUDE_AFK_TIMEOUT_MS` appears ONLY in `settings/base.json` — and since 2026-07-21 there is NO repo consumer at all: the answer-delivery-reminder hook that formerly *detected* the harness's "No response after" marker was retired with the AskUserQuestion turn-split machinery (see [[claude-code-drops-pre-tool-call-text]]). So the var only ever mattered, and still only matters, if the Claude Code harness itself honors it.
 - **No documentation anywhere.** Not in the official docs map, `settings.md` (which lists ~25+ other env vars incl. `BASH_DEFAULT_TIMEOUT_MS`), `hooks.md`, the `anthropics/claude-code` `CHANGELOG.md` (4679 lines, zero "afk" matches), or web/GitHub search for the literal string. The closest feature request, [issue #30740](https://github.com/anthropics/claude-code/issues/30740) ("configurable AskUserQuestion timeout"), was closed **not planned** — suggesting no such knob shipped.
 
 So its purpose is asserted only by the repo's own commit message + the variable name, not by an independent source. It may be (a) real-but-undocumented/internal, (b) an experimental-build artifact, or (c) a no-op. The 60s auto-proceed itself is a Claude Code **harness** behavior, not ccgram (ccgram's autoclose only closes Telegram topics, `AUTOCLOSE_DEAD/DONE_MINUTES` 10/30 min — a different mechanism).
