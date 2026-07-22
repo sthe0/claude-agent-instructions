@@ -4,10 +4,16 @@ detect_channel() is a pure function — every host-access operation is injected 
 four probe parameters so tests run offline with no real host inspection.
 
 Precedence (first match wins):
-  1. STRONG internal signal (corp hostname, arcadia toolchain, skotty, /etc/yandex) -> startrek
-  2. Any GitHub credential (token file, GITHUB_TOKEN env, gh CLI)                  -> github
-  3. Weak internal signal only (tracker-token file) with no GitHub cred             -> startrek
-  4. Default                                                                         -> github
+  1. STRONG internal signal (corp hostname, arcadia toolchain, /etc/yandex) -> startrek
+  2. skotty backed by a writable tracker credential (~/.tracker-token)      -> startrek
+  3. Any GitHub credential (token file, GITHUB_TOKEN env, gh CLI)           -> github
+  4. Weak internal signal only (tracker-token file) with no GitHub cred     -> startrek
+  5. Default                                                                 -> github
+
+skotty (a corp certificate CLI) is installed on plenty of personal machines and, on
+its own, implies neither corp ownership nor a writable Startrek credential — so it
+never forces startrek by itself; it only reinforces a choice already backed by a
+genuine corp marker or a writable ~/.tracker-token.
 
 Warnings are emitted when the chosen channel lacks its write credential, or when the
 machine has no recognizable credentials at all.
@@ -41,16 +47,19 @@ def detect_channel(
 
     fqdn = hostname()
 
-    # --- Strong internal signals ---
+    # --- Strong internal signals (unambiguous corp-ownership markers) ---
     strong_internal: list[str] = []
     if fqdn.endswith(".yandex.net") or fqdn.endswith(".yandex-team.ru"):
         strong_internal.append("corp-hostname")
     if has_command("ya") and has_command("arc"):
         strong_internal.append("arcadia-toolchain")
-    if path_exists("~/.skotty") or has_command("skotty"):
-        strong_internal.append("skotty")
     if path_exists("/etc/yandex"):
         strong_internal.append("etc-yandex")
+
+    # --- skotty: internal signal, but not authoritative on its own ---
+    has_skotty = path_exists("~/.skotty") or has_command("skotty")
+    if has_skotty:
+        evidence.append("skotty")
 
     # --- GitHub credentials ---
     github_creds: list[str] = []
@@ -67,8 +76,9 @@ def detect_channel(
         weak_internal.append("tracker-token")
 
     # --- Apply precedence ---
-    if strong_internal:
+    if strong_internal or (has_skotty and weak_internal):
         evidence.extend(strong_internal)
+        evidence.extend(weak_internal)
         channel = "startrek"
         if not weak_internal:
             warnings.append("startrek chosen but ~/.tracker-token not found; writes may fail")

@@ -122,6 +122,26 @@ def main(argv: list[str] | None = None, _ts: str | None = None) -> int:
         submit_kwargs: dict = {"queue": resolved_queue}
         routing_lines = [f"queue: {resolved_queue}"]
     elif channel_name in ("github", "external"):
+        if args.queue:
+            project_q = None
+        else:
+            project_q = resolve_project_queue(Path(args.target).resolve())
+        # Subject-awareness guard (mirrors the startrek branch's project_q resolution):
+        # project queues are Startrek-only and the github Core repo is public, so a
+        # project-scoped difficulty has no honest destination on this channel — refuse
+        # rather than silently dumping it into the public Core repo. Fires on --dry-run
+        # too (the preview must show the refusal, not fake a routing). --queue is the
+        # explicit override that lifts the refusal (subject already user-decided).
+        if project_q is not None:
+            print(
+                "error: this is a project-scoped difficulty (target resolves to project "
+                f"queue {project_q}) and the {channel_name} channel cannot deliver it to a "
+                "project queue; file it against the project's own tracker, or if it is "
+                "genuinely a Core difficulty, target a Core file (or pass --queue to file "
+                "it explicitly)",
+                file=sys.stderr,
+            )
+            return 2
         resolved_label = _GH_BACKLOG_LABEL if args.stream == "backlog" else _GH_DIFFICULTY_LABEL
         submit_kwargs = {"stream": args.stream}
         routing_lines = [f"label: {resolved_label}"]

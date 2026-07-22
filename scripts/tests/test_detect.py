@@ -91,7 +91,20 @@ def test_etc_yandex_is_strong_signal():
     assert "etc-yandex" in result.evidence
 
 
-def test_skotty_command_is_strong_signal():
+def test_skotty_alone_without_tracker_token_gives_github():
+    """skotty is an internal signal, but a corp CLI merely being on PATH does not
+    imply a writable Startrek credential or corp ownership — it must not force an
+    unwritable startrek channel on its own."""
+    result = _make(commands={"skotty"})
+    assert result.channel == "github"
+    assert "skotty" in result.evidence
+
+
+def test_skotty_with_tracker_token_gives_startrek():
+    """skotty backed by a writable ~/.tracker-token still routes to startrek — but
+    this is a weak assertion: tracker-token alone already yields startrek, so this
+    only proves skotty is not a blocker, not that skotty is load-bearing."""
     result = _make(commands={"skotty"}, paths={"~/.tracker-token"})
     assert result.channel == "startrek"
     assert "skotty" in result.evidence
+    assert "tracker-token" in result.evidence

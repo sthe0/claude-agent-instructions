@@ -277,3 +277,62 @@ def test_dry_run_explicit_queue_overrides_project_field(tmp_path, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "queue: MYQUEUE" in out
+
+
+# ── github/external channel is subject-aware (project-scoped target refused) ─
+
+def test_github_core_target_routes_unchanged(tmp_path, capsys):
+    # Hermetic Core-subject target: tmp_path has no up-tree agent-project.json,
+    # so this must route to the Core repo exactly as before this change.
+    target_file = tmp_path / "CLAUDE.md"
+    target_file.write_text("# test", encoding="utf-8")
+    rc = _run("--target", str(target_file), "--ground", "x",
+              "--channel", "github", "--dry-run")
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "label: difficulty" in out
+
+
+def test_github_project_target_refuses_submit(tmp_path, capsys):
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "agent-project.json").write_text(
+        json.dumps({"instruction_queue": "DEEPAGENT"}), encoding="utf-8"
+    )
+    target_file = tmp_path / "CLAUDE.md"
+    target_file.write_text("# test", encoding="utf-8")
+    rc = _run("--target", str(target_file), "--ground", "x", "--channel", "github")
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "project" in err
+    assert "DEEPAGENT" in err
+    assert "--layer" not in err
+
+
+def test_github_project_target_refuses_dry_run(tmp_path, capsys):
+    # The refusal must fire on --dry-run too — no fake routing preview.
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "agent-project.json").write_text(
+        json.dumps({"instruction_queue": "DEEPAGENT"}), encoding="utf-8"
+    )
+    target_file = tmp_path / "CLAUDE.md"
+    target_file.write_text("# test", encoding="utf-8")
+    rc = _run("--target", str(target_file), "--ground", "x",
+              "--channel", "github", "--dry-run")
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "project" in err
+    assert "DEEPAGENT" in err
+
+
+def test_github_project_target_queue_override_bypasses_refusal(tmp_path, capsys):
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "agent-project.json").write_text(
+        json.dumps({"instruction_queue": "DEEPAGENT"}), encoding="utf-8"
+    )
+    target_file = tmp_path / "CLAUDE.md"
+    target_file.write_text("# test", encoding="utf-8")
+    rc = _run("--target", str(target_file), "--ground", "x", "--channel", "github",
+              "--queue", "SOMEQUEUE", "--dry-run")
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "label: difficulty" in out
