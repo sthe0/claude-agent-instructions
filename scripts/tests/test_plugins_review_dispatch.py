@@ -264,8 +264,11 @@ def test_dispatch_silent_when_knob_off(monkeypatch):
 
 def test_submit_plan_thinker_directive_unaffected_by_dispatch_addition():
     """Regression: the dispatch observer added in this stage must not change
-    the submit_plan/thinker directive's shape or trigger condition."""
+    the submit_plan/thinker directive's shape or trigger condition. Fired at
+    PLAN_READY — the node the submit_plan observer is guarded to — not the
+    EXECUTING node _dispatch_state builds for the dispatch-slot tests."""
     state = _dispatch_state(_dev_stage())
+    state.node = Node.PLAN_READY.value
     state.plan_path = "/tmp/some-plan.toml"
     directive = Directive(True, state.node, "noop")
     fired = plugins.fire("submit_plan", state, directive)

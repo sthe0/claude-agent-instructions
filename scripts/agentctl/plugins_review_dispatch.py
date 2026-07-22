@@ -60,7 +60,7 @@ import os
 
 from . import gates
 from .plugins import Plugin, PluginDirective, register
-from .state import WeightClass
+from .state import Node, WeightClass
 
 _SLOT_SPECIALIST = {
     "plan_review": "thinker",
@@ -82,10 +82,13 @@ def _auto_activate(state) -> bool:
 
 
 def _obs_submit_plan(state, bag) -> list[PluginDirective]:
-    """Fires on the event that mints the plan-review obligation (PLAN_READY).
-    Reuses gates.plan_review_blockers verbatim — never re-derives the
-    precondition — so the trigger and the gate can never disagree about
-    whether a review is still owed."""
+    """Fires ONLY on the event that mints the plan-review obligation —
+    node-guarded to PLAN_READY, the node `cmd_submit_plan` lands on. Reuses
+    gates.plan_review_blockers verbatim — never re-derives the precondition —
+    so the trigger and the gate can never disagree about whether a review is
+    still owed."""
+    if getattr(state, "node", None) != Node.PLAN_READY.value:
+        return []
     target_plan = getattr(state, "plan_path", None)
     blockers = gates.plan_review_blockers(state, target_plan)
     if not blockers:
