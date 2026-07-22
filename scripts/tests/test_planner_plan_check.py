@@ -95,7 +95,7 @@ def test_md_plan_rejected_as_malformed(tmp_path):
     text, ok = MOD.validate_planner_plan(f"PLAN-READY: ready\nPlan: {md}")
     assert ok is False
     assert "not a .toml" in text
-    assert "verify-plan-file.py" in text  # points at the markdown checker
+    assert "TOML-only" in text  # states the plans-are-TOML-only convention
     assert str(config_root.plans_dir()) in text
 
 

@@ -81,7 +81,6 @@ from .state import (
 from .store import FileStateStore, StateStore
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-VERIFY_PLAN_CLI = REPO_ROOT / "scripts" / "verify-plan-file.py"
 GATE_LOG = config_root.agentctl_gate_log()
 # Per-task quality ledger (quality-regression-tracking): one row per resolved
 # task, stamped with the instructions-repo HEAD so a quality drop can be
@@ -1105,15 +1104,6 @@ def cmd_plan(args, *, store: StateStore, runner: Runner | None = None) -> Direct
     return Directive(True, state.node, "await_plan", "planner working; submit-plan when ready")
 
 
-def _verify_markdown_plan(path: str) -> list[str]:
-    proc = subprocess.run(
-        ["python3", str(VERIFY_PLAN_CLI), path], capture_output=True, text=True
-    )
-    if proc.returncode == 0:
-        return []
-    return [ln for ln in (proc.stdout + proc.stderr).splitlines() if ln.strip()]
-
-
 def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     plan_path = args.plan
@@ -1122,42 +1112,37 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     # submit-plan without a reset --force. Distinguished by the source node; drives
     # the `revise_plan` edge (PLAN_READY -> PLAN_READY) instead of `submit_plan`.
     resubmitting = state.node == Node.PLAN_READY.value
-    if state.weight_class == WeightClass.SUBSTANTIVE.value and not plan_path.endswith(".toml"):
+    if not plan_path.endswith(".toml"):
         state.log("submit_plan", plan=plan_path, verified=False)
         store.save(state)
         return Directive(
             False, state.node, "fix_plan",
-            "substantive plan must be TOML (markdown is the prose mirror only and cannot track typed stages)",
-            data={"problems": ["substantive plan must be a .toml file; rewrite as TOML with typed stages"]},
+            "plans are TOML-only — rewrite as TOML with typed stages",
+            data={"problems": ["plans are TOML-only; rewrite as TOML with typed stages"]},
         )
-    if plan_path.endswith(".toml"):
-        doc = load_plan(plan_path)
-        state.stages = doc.stages
-        state.repo_root = doc.meta.repo_root
-        state.delivery_worktree = doc.meta.delivery_worktree
-        state.final_check = doc.meta.final_check
-        if not state.goal:
-            state.goal = doc.meta.goal
-        if not state.overall_done_criterion:
-            state.overall_done_criterion = doc.meta.done_criterion
-        state.plan_verified = True
-        problems: list[str] = []
-        if state.weight_class == WeightClass.SUBSTANTIVE.value:
-            # Two-directional control: the scope lint (advisory, below) keeps a
-            # control from being false-RED; this BLOCKS a control that can never
-            # go honestly GREEN because it names a path no stage produces and
-            # that does not exist. No legitimate instance -> a blocker, not a warn.
-            problems.extend(
-                verify_command_reachability_blockers(
-                    doc.stages, doc.meta.final_check, doc.meta.repo_root
-                )
+    doc = load_plan(plan_path)
+    state.stages = doc.stages
+    state.repo_root = doc.meta.repo_root
+    state.delivery_worktree = doc.meta.delivery_worktree
+    state.final_check = doc.meta.final_check
+    if not state.goal:
+        state.goal = doc.meta.goal
+    if not state.overall_done_criterion:
+        state.overall_done_criterion = doc.meta.done_criterion
+    state.plan_verified = True
+    problems: list[str] = []
+    if state.weight_class == WeightClass.SUBSTANTIVE.value:
+        # Two-directional control: the scope lint (advisory, below) keeps a
+        # control from being false-RED; this BLOCKS a control that can never
+        # go honestly GREEN because it names a path no stage produces and
+        # that does not exist. No legitimate instance -> a blocker, not a warn.
+        problems.extend(
+            verify_command_reachability_blockers(
+                doc.stages, doc.meta.final_check, doc.meta.repo_root
             )
-            if problems:
-                state.plan_verified = False
-    else:
-        # markdown fallback: reuse verify-plan-file.py for structure-only check
-        problems = _verify_markdown_plan(plan_path)
-        state.plan_verified = not problems
+        )
+        if problems:
+            state.plan_verified = False
 
     state.plan_path = plan_path
 
@@ -1190,16 +1175,15 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
                        {"plan": plan_path, "stage_count": len(state.stages),
                         "titles": [s.title for s in state.stages]},
                        runner, weight_class=state.weight_class)
-    if plan_path.endswith(".toml"):
-        # Deterministic scope lint (experience leaf 2026-06-29) — always runs,
-        # independent of the optional LLM advisor above; warn-only, never blocks.
-        d.data.setdefault("advisories", []).extend(verify_command_scope_warnings(doc.stages))
-        # Deterministic worktree-venue lint (#45) — same warn-only channel; fires
-        # only when [meta] delivery_worktree names a pre-landing venue distinct
-        # from repo_root.
-        d.data.setdefault("advisories", []).extend(
-            final_check_venue_warnings(doc.meta.final_check, doc.meta.repo_root, doc.meta.delivery_worktree)
-        )
+    # Deterministic scope lint (experience leaf 2026-06-29) — always runs,
+    # independent of the optional LLM advisor above; warn-only, never blocks.
+    d.data.setdefault("advisories", []).extend(verify_command_scope_warnings(doc.stages))
+    # Deterministic worktree-venue lint (#45) — same warn-only channel; fires
+    # only when [meta] delivery_worktree names a pre-landing venue distinct
+    # from repo_root.
+    d.data.setdefault("advisories", []).extend(
+        final_check_venue_warnings(doc.meta.final_check, doc.meta.repo_root, doc.meta.delivery_worktree)
+    )
     if gates.plan_presentation_active(state):
         # A NUDGE, not the enforcement — the hash-bound gate in gates.
         # plan_presentation_blockers (checked at `approve`) is what actually

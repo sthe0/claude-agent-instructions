@@ -14,9 +14,8 @@ plan check cannot be bypassed.
 The planner's deliverable is the TOML plan the engine tracks. ``validate_planner_plan``
 loads the declared plan through ``agentctl.plan.load_plan`` — the same validator
 ``cmd_submit_plan`` trusts — and requires a ``.toml`` path with
-``weight_class = "substantive"``. There is NO markdown branch: a substantive plan the
-engine tracks is TOML; markdown is only the non-substantive prose mirror checked by
-verify-plan-file.py. Engine-import failure fails CLOSED — the plan check must never be
+``weight_class = "substantive"``. Plans are TOML-only; there is no markdown plan class.
+Engine-import failure fails CLOSED — the plan check must never be
 silently skipped because an import broke.
 """
 from __future__ import annotations
@@ -91,8 +90,7 @@ def validate_planner_plan(result_text: str) -> tuple[str, bool]:
         return (
             f"MALFORMED: planner PLAN-READY: declared plan at `{plan_path}` is not a "
             ".toml file. The planner's deliverable is the TOML plan the engine tracks "
-            f"(the real plans directory is `{plans_hint}`); markdown is only the "
-            "non-substantive prose mirror checked by verify-plan-file.py.\n\n" + result_text,
+            f"(the real plans directory is `{plans_hint}`); plans are TOML-only.\n\n" + result_text,
             False,
         )
 

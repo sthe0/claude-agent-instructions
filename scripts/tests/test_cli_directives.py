@@ -125,6 +125,28 @@ def test_substantive_markdown_plan_refused(store, tmp_path):
     assert state.node == Node.PLANNING.value   # NOT stranded at PLAN_READY
 
 
+def test_small_change_markdown_plan_refused(store, tmp_path):
+    """The TOML-only guard is a single all-weights check, not a substantive-only
+    one: a SMALL_CHANGE session submitting a .md plan is refused with the same
+    'plans are TOML-only' contract, not routed through the retired markdown
+    validator (which only ever existed for the non-substantive case)."""
+    sid = "small-md"
+    _start(store, sid)
+    cli.cmd_classify(ns(session=sid, chat=False, changed_lines=5, files=1,
+                        wall_clock_min=5, tracker_key=None, architectural=False,
+                        external_effect=False, new_dependency=False,
+                        public_api_change=False), store=store)
+    assert store.load(sid).weight_class == "SMALL_CHANGE"
+
+    md_plan = tmp_path / "plan.md"
+    md_plan.write_text("# a small-change plan\n", encoding="utf-8")
+    d = cli.cmd_submit_plan(ns(session=sid, plan=str(md_plan)), store=store)
+
+    assert d.ok is False
+    assert d.action == "fix_plan"
+    assert "toml" in d.detail.lower()
+
+
 def test_substantive_toml_plan_still_accepted(store, fixtures_dir):
     """A substantive session with a .toml plan still advances to PLAN_READY (regression guard)."""
     d = _to_plan_ready(store, "subst-toml", str(fixtures_dir / "plan_two_stage.toml"))
