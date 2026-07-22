@@ -439,8 +439,16 @@ def check_review_dispatch() -> list[str]:
         elif matches[0]["data"].get("specialist") != "thinker":
             problems.append(f"thinker directive names the wrong specialist: {matches[0]['data']}")
 
-        plan_state.plan_review = PlanReview(plan_path=plan_state.plan_path, verdict="pass", reviewer="thinker")
+        # A pass binds only when reviewer-attested (non-empty plan_sha256 matching the
+        # live bytes), so write the fixture plan and attest its real digest.
+        import hashlib
+        Path(plan_state.plan_path).write_text("index = 1\n")
+        plan_state.plan_review = PlanReview(
+            plan_path=plan_state.plan_path, verdict="pass", reviewer="thinker",
+            plan_sha256=hashlib.sha256(Path(plan_state.plan_path).read_bytes()).hexdigest(),
+        )
         fired_again = plugins.fire("submit_plan", plan_state, Directive(True, plan_state.node, "noop"))
+        Path(plan_state.plan_path).unlink(missing_ok=True)
         if any(f["plugin"] == "review_dispatch" for f in fired_again):
             problems.append("submit_plan directive still fires after a bound passing PlanReview is recorded")
 
@@ -678,8 +686,16 @@ def check_obligations() -> list[str]:
         elif not any("spawn_thinker_review" in b for b in obligation_blockers):
             problems.append(f"obligations blocker does not name spawn_thinker_review: {obligation_blockers}")
 
-        state.plan_review = PlanReview(plan_path=state.plan_path, verdict="pass", reviewer="thinker")
+        # A pass discharges only when reviewer-attested: write the fixture plan and
+        # attest its real digest (a digest-less pass leaves the obligation open).
+        import hashlib
+        Path(state.plan_path).write_text("index = 1\n")
+        state.plan_review = PlanReview(
+            plan_path=state.plan_path, verdict="pass", reviewer="thinker",
+            plan_sha256=hashlib.sha256(Path(state.plan_path).read_bytes()).hexdigest(),
+        )
         cleared = plugins.plugin_gate_blockers(state, "resolution")
+        Path(state.plan_path).unlink(missing_ok=True)
         if any(b.startswith("[obligations]") for b in cleared):
             problems.append(f"obligations blocker did not clear after a bound passing PlanReview: {cleared}")
 

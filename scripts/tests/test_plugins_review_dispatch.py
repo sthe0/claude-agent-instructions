@@ -24,8 +24,10 @@ code_review). Proves:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from argparse import Namespace
+from pathlib import Path
 
 import pytest
 
@@ -165,8 +167,9 @@ def test_submit_plan_silent_once_bound_passing_review_exists(capsys, tmp_path, f
     sid = "rd2"
     plan = str(fixtures_dir / "plan_two_stage.toml")
     _drive_to_plan_ready(capsys, root, sid, plan)
+    digest = hashlib.sha256(Path(plan).read_bytes()).hexdigest()
     rc, d = _run(capsys, root, "plan-review", "--session", sid, "--verdict", "pass",
-                 "--reviewer", "thinker")
+                 "--reviewer", "thinker", "--plan-digest", digest)
     assert rc == 0
 
     store = FileStateStore(root)

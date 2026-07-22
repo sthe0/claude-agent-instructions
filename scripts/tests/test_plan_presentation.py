@@ -334,7 +334,8 @@ def test_present_plan_essence_allowed_after_passing_review(
     plan = str(fixtures_dir / "plan_two_stage.toml")
     _to_plan_ready(store, sid, plan)
     cli.cmd_plan_review(
-        ns(session=sid, verdict="pass", reviewer="thinker", concerns=None, note="", target=None),
+        ns(session=sid, verdict="pass", reviewer="thinker", concerns=None, note="",
+           target=None, plan_digest=_sha256_file(plan)),
         store=store,
     )
     rendering = _write_rendering(tmp_path, "Summary of the plan.")
@@ -632,7 +633,8 @@ def test_approve_blocked_without_essence_presentation(home_store, fixtures_dir, 
     plan = str(fixtures_dir / "plan_two_stage.toml")
     _to_plan_ready(home_store, sid, plan)
     cli.cmd_plan_review(
-        ns(session=sid, verdict="pass", reviewer="thinker", concerns=None, note="", target=None),
+        ns(session=sid, verdict="pass", reviewer="thinker", concerns=None, note="",
+           target=None, plan_digest=_sha256_file(plan)),
         store=home_store,
     )
     d = cli.cmd_approve(ns(session=sid, by="user"), store=home_store)
@@ -648,7 +650,8 @@ def test_approve_proceeds_with_receipt_and_matching_delivery_stamp(
     plan = str(fixtures_dir / "plan_two_stage.toml")
     _to_plan_ready(home_store, sid, plan)
     cli.cmd_plan_review(
-        ns(session=sid, verdict="pass", reviewer="thinker", concerns=None, note="", target=None),
+        ns(session=sid, verdict="pass", reviewer="thinker", concerns=None, note="",
+           target=None, plan_digest=_sha256_file(plan)),
         store=home_store,
     )
     rendering = _write_rendering(tmp_path, "essence text")
@@ -675,7 +678,8 @@ def test_essence_receipt_without_delivery_stamp_still_blocks_approve(
     plan = str(fixtures_dir / "plan_two_stage.toml")
     _to_plan_ready(home_store, sid, plan)
     cli.cmd_plan_review(
-        ns(session=sid, verdict="pass", reviewer="thinker", concerns=None, note="", target=None),
+        ns(session=sid, verdict="pass", reviewer="thinker", concerns=None, note="",
+           target=None, plan_digest=_sha256_file(plan)),
         store=home_store,
     )
     rendering = _write_rendering(tmp_path, "essence text")

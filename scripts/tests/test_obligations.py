@@ -188,16 +188,22 @@ def test_guardian_empty_ledger_no_blockers():
     assert ob._resolution_guardian(state, bag) == []
 
 
-def test_guardian_blocks_open_plan_review_until_passing_review_bound():
-    state = _active_state(plan_path="/tmp/plan.toml")
+def test_guardian_blocks_open_plan_review_until_passing_review_bound(tmp_path):
+    import hashlib
+    plan = tmp_path / "plan.toml"
+    plan.write_text("index = 1\n")
+    state = _active_state(plan_path=str(plan))
     ob.mint(state, [_thinker_pd()])
     bag = state.plugins["obligations"]
     blockers = ob._resolution_guardian(state, bag)
     assert len(blockers) == 1
     assert "spawn_thinker_review" in blockers[0]
 
+    # A pass discharges only when reviewer-attested (non-empty plan_sha256 matching
+    # the live bytes); a digest-less pass would leave the obligation open.
     state.plan_review = PlanReview(
-        plan_path="/tmp/plan.toml", verdict="pass", reviewer="thinker",
+        plan_path=str(plan), verdict="pass", reviewer="thinker",
+        plan_sha256=hashlib.sha256(plan.read_bytes()).hexdigest(),
     )
     assert ob._resolution_guardian(state, bag) == []
 

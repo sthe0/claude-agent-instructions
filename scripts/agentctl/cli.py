@@ -1443,7 +1443,11 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
     to the session's current plan_path — pass the NEW plan for a replan-time review).
     Purely a recorder, mirroring declare/investigate/critique: gates.
     plan_review_blockers enforces bind/verdict at approve/replan, so an incomplete
-    override recorded here simply fails to clear the gate rather than erroring."""
+    override recorded here simply fails to clear the gate rather than erroring.
+
+    The reviewer must pass --plan-digest <hex> (the sha256 of its OWN read of the
+    plan); it is cross-checked against the live bytes and stored as the attested
+    plan_sha256. A passing verdict does NOT bind without a matching attestation."""
     state = _require(store, args.session)
     target = getattr(args, "target", None) or state.plan_path
     if not target:
@@ -1470,13 +1474,31 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
                 "reviewer whose 'revise' verdict it would override (the user is the "
                 "expected override author)",
             )
+    # --plan-digest is the sha256 the REVIEWER computed from its OWN read of the
+    # target plan file. Cross-check it against the engine's live digest and REFUSE
+    # to record on mismatch (a reviewer that read a different/stale file must not
+    # bind a pass). The matching digest becomes PlanReview.plan_sha256 — the field
+    # is now REVIEWER-attested, NOT engine-auto-computed. CONTRACT INVERSION: an
+    # ABSENT --plan-digest yields plan_sha256="" (unattested); the pass path of
+    # gates.plan_review_blockers then BLOCKS on the empty hash (see the inversion
+    # note there), so a reviewer that could not read the plan cannot bind a pass.
+    attested = (getattr(args, "plan_digest", None) or "").strip().lower()
+    if attested:
+        live = _plan_file_sha256(target)
+        if live and attested != live:
+            return Directive(
+                False, state.node, "noop",
+                f"--plan-digest {attested!r} does not match the live plan bytes "
+                f"({live!r}) at {target!r}: the reviewer read a different or stale "
+                "plan; re-read the current plan and re-run plan-review",
+            )
     state.plan_review = PlanReview(
         plan_path=target,
         verdict=args.verdict,
         reviewer=getattr(args, "reviewer", "") or "",
         concerns=list(getattr(args, "concerns", None) or []),
         note=getattr(args, "note", "") or "",
-        plan_sha256=_plan_file_sha256(target),
+        plan_sha256=attested,
     )
     blockers = gates.plan_review_blockers(state, target)
     _log_gate(state, "plan_review", blockers, passed=not blockers)
@@ -3321,6 +3343,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--target", default=None,
                     help="plan file reviewed (defaults to the session's current plan_path; "
                          "pass the NEW plan for a replan-time review)")
+    sp.add_argument("--plan-digest", dest="plan_digest", default=None,
+                    help="sha256 the REVIEWER computed from its OWN read of the target "
+                         "plan; cross-checked against the live bytes and stored as the "
+                         "attested plan_sha256. A passing verdict does NOT bind without "
+                         "it — a reviewer that could not read the plan cannot attest.")
     sp = add("stage-review"); sp.add_argument("--session", required=True)
     sp.add_argument("--verdict", choices=list(gates.STAGE_REVIEW_VERDICTS), required=True,
                     help="pass = clears the acceptance gate; revise = blocks; override = "

@@ -49,8 +49,18 @@ def test_a_missing_review_blocks(gate_on):
 
 
 def test_b_bound_pass_clears(gate_on):
-    s = _subst(plan_review=PlanReview("/plan.toml", "pass", "thinker"))
+    # A pass binds only with a non-empty reviewer-attested plan_sha256; the /plan.toml
+    # path is unreadable so the drift check fails open and the non-empty hash clears.
+    s = _subst(plan_review=PlanReview("/plan.toml", "pass", "thinker", plan_sha256="ab12"))
     assert gates.plan_review_blockers(s, "/plan.toml") == []
+
+
+def test_b2_pass_without_attestation_blocks(gate_on):
+    """CONTRACT INVERSION: an empty plan_sha256 on the pass path is unattested and
+    blocks — a reviewer that supplied no --plan-digest cannot bind a passing verdict."""
+    s = _subst(plan_review=PlanReview("/plan.toml", "pass", "thinker"))
+    blockers = gates.plan_review_blockers(s, "/plan.toml")
+    assert blockers and "not attested" in blockers[0]
 
 
 def test_c_stale_review_blocks(gate_on):
@@ -127,7 +137,8 @@ def test_approve_blocked_then_passes_after_review(store, fixtures_dir, gate_on):
     d = cli.cmd_approve(ns(session=sid, by="user"), store=store)
     assert d.node == Node.PLAN_READY.value  # blocked
     cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker",
-                           concerns=None, note="", target=None), store=store)
+                           concerns=None, note="", target=None,
+                           plan_digest=_sha256_file(plan)), store=store)
     d = cli.cmd_approve(ns(session=sid, by="user"), store=store)
     assert d.node == Node.APPROVED.value
 
@@ -229,13 +240,16 @@ def test_content_hash_unreadable_target_fails_open(gate_on, tmp_path):
     assert gates.plan_review_blockers(s, str(missing)) == []  # unreadable -> path-only
 
 
-def test_content_hash_empty_stored_hash_is_path_only(gate_on, tmp_path):
-    """A PlanReview with an empty plan_sha256 (a legacy record) keeps clearing the
-    gate on path binding alone, even when the file exists and could be hashed."""
+def test_content_hash_empty_stored_hash_pass_blocks(gate_on, tmp_path):
+    """CONTRACT INVERSION: an empty plan_sha256 on the PASS path is UNATTESTED and now
+    BLOCKS on an active gate — even when the file exists and could be hashed — because
+    the reviewer supplied no --plan-digest proving it read the plan. (Previously this
+    degraded to path-only binding and cleared.)"""
     plan = tmp_path / "plan.toml"
     plan.write_text("x")
     s = _subst_planned(plan, PlanReview(str(plan), "pass", "thinker", plan_sha256=""))
-    assert gates.plan_review_blockers(s, str(plan)) == []
+    blockers = gates.plan_review_blockers(s, str(plan))
+    assert blockers and "not attested" in blockers[0]
 
 
 def test_cmd_plan_review_records_hash_and_inplace_rewrite_blocks_approve(
@@ -247,7 +261,8 @@ def test_cmd_plan_review_records_hash_and_inplace_rewrite_blocks_approve(
     plan.write_text((fixtures_dir / "plan_two_stage.toml").read_text())
     _to_plan_ready(store, sid, str(plan))
     cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker",
-                           concerns=None, note="", target=None), store=store)
+                           concerns=None, note="", target=None,
+                           plan_digest=_sha256_file(plan)), store=store)
     assert store.load(sid).plan_review.plan_sha256 == _sha256_file(plan)
     # in-place rewrite of the SAME path -> the recorded review is now content-stale
     plan.write_text(plan.read_text() + "\n# tweak\n")
@@ -265,15 +280,85 @@ def test_j2_round_trips_plan_review_with_hash():
 
 def test_legacy_schema12_plan_review_fixture_loads(gate_on):
     """A schema-12-tagged state whose plan_review predates plan_sha256 loads under
-    schema-13 code with plan_sha256='' and its gate degrades to path-only binding."""
+    the current code with plan_sha256=''. CONTRACT INVERSION: that empty hash is now
+    unattested, so a legacy pass no longer clears the gate — it BLOCKS until re-reviewed
+    with a --plan-digest."""
     raw = json.loads((FIXTURES / "legacy_schema12_plan_review.json").read_text())
     assert raw["schema_version"] == 12
     assert "plan_sha256" not in raw["plan_review"]
     s = SessionState.from_dict(raw)
     assert s.plan_review is not None
     assert s.plan_review.plan_sha256 == ""
-    # empty stored hash -> path-only binding, so a matching target still clears
-    assert gates.plan_review_blockers(s, s.plan_review.plan_path) == []
+    # empty stored hash on the pass path -> unattested -> blocks (was: cleared)
+    blockers = gates.plan_review_blockers(s, s.plan_review.plan_path)
+    assert blockers and "not attested" in blockers[0]
+
+
+# --- reviewer-attested --plan-digest (stage 5) -------------------------------
+# The pass verdict binds only on a reviewer-attested digest matching the live bytes,
+# so a reviewer that could not read the plan cannot record a binding pass.
+
+def test_plan_digest_matching_records_and_binds(store, fixtures_dir, tmp_path, gate_on):
+    """(a) A matching --plan-digest is stored as the attested plan_sha256 and clears
+    the gate — approve reaches APPROVED."""
+    sid = "pdmatch"
+    plan = tmp_path / "plan.toml"
+    plan.write_text((fixtures_dir / "plan_two_stage.toml").read_text())
+    _to_plan_ready(store, sid, str(plan))
+    d = cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker",
+                               concerns=None, note="", target=None,
+                               plan_digest=_sha256_file(plan)), store=store)
+    assert d.ok is True
+    assert store.load(sid).plan_review.plan_sha256 == _sha256_file(plan)
+    d = cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    assert d.node == Node.APPROVED.value
+
+
+def test_plan_digest_mismatch_refuses_and_records_nothing(store, fixtures_dir, tmp_path, gate_on):
+    """(b) A mismatched --plan-digest exits non-zero and writes NO review — the
+    reviewer read a different/stale plan, so nothing is bound."""
+    sid = "pdmiss"
+    plan = tmp_path / "plan.toml"
+    plan.write_text((fixtures_dir / "plan_two_stage.toml").read_text())
+    _to_plan_ready(store, sid, str(plan))
+    assert store.load(sid).plan_review is None
+    d = cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker",
+                               concerns=None, note="", target=None,
+                               plan_digest="deadbeef"), store=store)
+    assert d.ok is False and "does not match" in d.detail
+    assert store.load(sid).plan_review is None  # nothing recorded
+
+
+def test_plan_digest_absent_pass_does_not_bind(store, fixtures_dir, tmp_path, gate_on):
+    """(c) No --plan-digest on an ACTIVE session records an unattested pass that does
+    NOT bind — the sibling-session 'reviewer could not read the plan' failure mode."""
+    sid = "pdabsent"
+    plan = tmp_path / "plan.toml"
+    plan.write_text((fixtures_dir / "plan_two_stage.toml").read_text())
+    _to_plan_ready(store, sid, str(plan))
+    cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker",
+                           concerns=None, note="", target=None,
+                           plan_digest=None), store=store)
+    s = store.load(sid)
+    assert s.plan_review.plan_sha256 == ""
+    blockers = gates.plan_review_blockers(s, s.plan_path)
+    assert blockers and "not attested" in blockers[0]
+    d = cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    assert d.node == Node.PLAN_READY.value  # blocked, not APPROVED
+
+
+def test_override_binds_without_digest(store, fixtures_dir, tmp_path, gate_on):
+    """(d) An override (the deadlock escape) still binds with no --plan-digest — the
+    attestation requirement lives only in the pass branch."""
+    sid = "pdoverride"
+    plan = tmp_path / "plan.toml"
+    plan.write_text((fixtures_dir / "plan_two_stage.toml").read_text())
+    _to_plan_ready(store, sid, str(plan))
+    cli.cmd_plan_review(ns(session=sid, verdict="override", reviewer="fedor",
+                           concerns=None, note="user escape", target=None,
+                           plan_digest=None), store=store)
+    d = cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    assert d.node == Node.APPROVED.value
 
 
 # --- four live spine walks (subprocess, gate ON) -----------------------------
@@ -305,7 +390,8 @@ def test_spine_walk_construction_deny_then_pass(tmp_path):
     _classify_plan_submit(root, "c1", plan)
     denied = _run(root, "approve", "--session", "c1", "--by", "user")
     assert '"ok": false' in denied.stdout and "plan-review" in denied.stdout.lower()
-    _run(root, "plan-review", "--session", "c1", "--verdict", "pass", "--reviewer", "thinker")
+    _run(root, "plan-review", "--session", "c1", "--verdict", "pass", "--reviewer",
+         "thinker", "--plan-digest", _sha256_file(plan))
     ok = _run(root, "approve", "--session", "c1", "--by", "user")
     assert '"APPROVED"' in ok.stdout
 
@@ -315,7 +401,8 @@ def test_spine_walk_replan_deny_then_pass(tmp_path):
     plan = str(FIXTURES / "plan_two_stage.toml")
     refined = str(FIXTURES / "plan_two_stage_refined.toml")
     _classify_plan_submit(root, "r1", plan)
-    _run(root, "plan-review", "--session", "r1", "--verdict", "pass", "--reviewer", "thinker")
+    _run(root, "plan-review", "--session", "r1", "--verdict", "pass", "--reviewer",
+         "thinker", "--plan-digest", _sha256_file(plan))
     _run(root, "approve", "--session", "r1", "--by", "user")
     _run(root, "partition", "--session", "r1")
     _run(root, "next-stage", "--session", "r1")
@@ -329,7 +416,8 @@ def test_spine_walk_replan_deny_then_pass(tmp_path):
     denied = _run(root, "replan", "--session", "r1", "--plan", refined)
     assert '"ok": false' in denied.stdout and "plan-review" in denied.stdout.lower()
     _run(root, "plan-review", "--session", "r1", "--verdict", "pass",
-         "--reviewer", "thinker", "--target", refined)
+         "--reviewer", "thinker", "--target", refined,
+         "--plan-digest", _sha256_file(refined))
     ok = _run(root, "replan", "--session", "r1", "--plan", refined)
     assert '"ok": true' in ok.stdout
 

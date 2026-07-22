@@ -97,9 +97,11 @@ def _obs_submit_plan(state, bag) -> list[PluginDirective]:
         detail=(
             f"spawn the `{specialist}` specialization to review the plan; feed it "
             f"`agentctl plan-render --plan {target_plan}` and `agentctl question-list "
-            f"--session {state.session_id} --format md`; then record with `agentctl "
+            f"--session {state.session_id} --format md`; the reviewer must compute the "
+            f"sha256 of {target_plan} from its OWN read and record with `agentctl "
             f"plan-review --session {state.session_id} --verdict pass|revise|override "
-            f"--reviewer {specialist}`"
+            f"--reviewer {specialist} --plan-digest <sha256-hex>` (a pass does NOT bind "
+            f"without a matching --plan-digest)"
         ),
         blocking=True,
         data={"slot": "plan_review", "specialist": specialist, "blockers": blockers},

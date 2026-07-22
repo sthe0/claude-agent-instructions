@@ -234,8 +234,11 @@ def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[s
       - a review must exist (state.plan_review) — else the gate is unmet;
       - it must be bound to `target_plan` (pr.plan_path == target_plan) — a review
         of an earlier plan version is stale and does not clear a later one;
-      - the verdict must be `pass`, or `override` with a non-empty reviewer AND note
-        (the explicit user deadlock escape); `revise`/unknown blocks."""
+      - the verdict must be `pass` WITH a non-empty reviewer-attested plan_sha256
+        (from --plan-digest) matching the live bytes, or `override` with a non-empty
+        reviewer AND note (the explicit user deadlock escape); `revise`/unknown blocks.
+        A `pass` whose plan_sha256 is EMPTY (no attestation) blocks — a reviewer that
+        could not read the plan cannot bind it."""
     if not plan_review_active(state):
         return []
     pr = state.plan_review
@@ -248,8 +251,10 @@ def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[s
         ]
     # #16: the coordinator edits plans in place, so a same-path binding is not a
     # content binding — recompute the plan's sha256 and reject a drift. Fail-open:
-    # an empty stored hash (legacy record) or an unreadable target degrades to the
-    # path-only binding above, never wedging the gate on a transient read error.
+    # an unreadable target degrades to the path-only binding above, never wedging
+    # the gate on a transient read error. (An EMPTY stored hash used to degrade to
+    # path-only too; on the PASS path below that is now REVERSED — see the pass
+    # branch's attestation requirement.)
     if pr.plan_sha256:
         try:
             current = hashlib.sha256(Path(target_plan).read_bytes()).hexdigest()
@@ -261,6 +266,20 @@ def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[s
                 f"{target_plan!r} changed since it was reviewed; re-run plan-review"
             ]
     if pr.verdict == _PLAN_REVIEW_PASS:
+        # CONTRACT INVERSION (reviewer-attested binding): plan_sha256 is now the
+        # digest the REVIEWER attested via --plan-digest, not an engine auto-
+        # compute. An EMPTY hash on the pass path means the reviewer supplied no
+        # proof it read the plan — so a sibling-session reviewer that could not
+        # read the plan cannot bind a pass; block and let the difficulty surface.
+        # (A non-empty hash was already checked against the live bytes above, and
+        # fails OPEN on a transient OSError.) The override branch below is NOT
+        # reached by this — the deadlock escape stays attestation-free.
+        if not pr.plan_sha256:
+            return [
+                "thinker review is not attested — the reviewer supplied no "
+                "plan-digest proving it read the plan; re-run plan-review with "
+                "--plan-digest"
+            ]
         return []
     if pr.verdict == _PLAN_REVIEW_OVERRIDE:
         missing = []
