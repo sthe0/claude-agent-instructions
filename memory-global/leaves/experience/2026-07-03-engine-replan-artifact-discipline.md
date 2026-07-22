@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "user (AskUserQuestion at the resolution gate: «Да, решена»)"
 refs: [agentctl/cli.py, 2026-06-25-claude-md-reduction-floor.md]
 created: 2026-07-03
-last_verified: 2026-07-04
+last_verified: 2026-07-22
 ---
 
 # agentctl replan/dispatch artifact discipline: never edit the plan in place, dispatch already spawns
@@ -39,10 +39,15 @@ When correcting a plan under agentctl: author every revision at a NEW version-su
 ### 2026-07-04 — legacy pre-snapshot session: no_change replan leaves stale stage materialization
 - Where it arose: fix-agentctl-core-defects stage 6, session ce4f6071, 2026-07-04
 - Working plan: Symptom: after an in-place verify_command refinement, replan said 'plan unchanged — retry the re-armed stage' and the engine then ran the OLD verify_command from state (failing on out-of-scope issue #16) despite the plan file carrying the reviewed new one. Root cause chain: the session was approved BEFORE the #8 snapshot fix shipped, so state.plan_snapshot_path is empty; the documented fallback diffs plan_path against args.plan — the same file — so ANY in-place edit degrades to kind=no_change, and the no_change branch re-arms the FAILED stage WITHOUT refreshing stage definitions from the plan file. Remedy that works: author the correction as a NEW plan file (v8 = reviewed content; restore v7 on disk to its as-approved content as the diff baseline), re-bind the thinker review to v8, replan --plan v8 -> kind=refinement -> stage definitions refresh with PASSED carry. Guard: for any session whose state predates the snapshot mechanism, never correct a plan in place — always a new file.
-## Common core & variations
-**Common:** engine consumes plan fields literally; a value outside the typed vocabulary must fail loudly at load, not degrade silently at dispatch
+### 2026-07-22 — a cosmetic edit inside a classifier-watched structural field flips a typo-refinement into a destructive substantive replan
+- Where it arose: behavioral-conformance-control task, session f8a7f77a, agentctl current at origin/main ~19c3fe1; the failing stage's verify_command named a non-existent test module (`test_cli.py`), a genuine typo-only fix
+- Working plan: The fix was a single `replace_all` of the wrong module name across the plan TOML. `replace_all` touched 6 sites — one of which was an ILLUSTRATIVE "Green:" example string sitting INSIDE the structural field `meta.done_criterion`. The engine classifies refinement-vs-substantive by BYTE-diff of structural fields, so a purely cosmetic change to a classifier-watched field re-classified the replan as **substantive**, re-armed the PLAN_READY hard gate, and reset already-PASSED stages 4–5 to PENDING — even though intent/scope/means were unchanged. Recovery cost a full re-approval cycle (present-plan essence → user re-approval) plus re-recording the two lost stages (their code was committed and green, so re-record, not re-do). Rule: when fixing a plan file, scope the edit to the field that actually needs it — NEVER let a `replace_all` or cosmetic touch land inside a classifier-watched structural field (`meta.*`, executor, done_criterion, means), or accept that the engine will destroy PASSED state and force re-approval. A substantive replan is a destructive operation on delivered work; treat any structural-field byte-change as substantive-by-construction. Same family as the initial context's "substantive replan resets PASSED stages" — this vector is the ACCIDENTAL trigger of that reset via an unscoped string edit.
+- Secondary (landing tail, same session): after both delivery branches were reviewed PASS at their pre-rebase HEAD, rebasing onto a concurrently-advancing origin/main was byte-clean but broke `verify-config-root-refs` — a LINE-pinned allowlist entry (the harness-ref pin at MEMORY.md line 64) drifted to line 65 because this branch's own new MEMORY.md pointer stacked on top of a parallel session's MEMORY.md addition. A clean rebase is not a green rebase: re-run the FULL `verify-all` (not just the targeted suites) after every rebase onto a moved trunk, and expect line-pinned governance to drift under concurrent same-file edits. Land with `land-branch.py --remote-only` when a parallel session has local trunk checked out, so you never disturb its working tree.
 
-**Variations:** prior contexts: replan self-diff / stage reset / double-spawn; this one: executor vocabulary fallthrough
+## Common core & variations
+**Common:** engine consumes plan fields literally; a value outside the typed vocabulary must fail loudly at load, not degrade silently at dispatch — and a byte-change to any classifier-watched structural field is substantive-by-construction, so an unscoped edit there silently destroys PASSED state
+
+**Variations:** prior contexts: replan self-diff / stage reset / double-spawn; executor vocabulary fallthrough; this one: an unscoped `replace_all` touching an illustrative string inside `meta.done_criterion` accidentally triggers the destructive substantive reset, plus a post-rebase line-pin verify drift on the landing tail
 
 ## Cost
 Wall-clock ~1.5h across the recovery; $4.5 attributed to stage 5 dispatch spawn + ~$1.9 wasted on the duplicate manual spawn; 2 extra difficulty cycles
