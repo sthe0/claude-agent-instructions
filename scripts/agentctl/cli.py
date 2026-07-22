@@ -909,6 +909,50 @@ def cmd_question_check(args, *, store: StateStore, runner: Runner | None = None)
     return Directive(not blockers, state.node, "inspect", detail, data={"blockers": blockers})
 
 
+def cmd_question_candidate_dispose(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Disposition one question-enumeration candidate (bag['candidates'], written
+    by question-enumerate): 'recorded' (linked to an existing Question via
+    --question) or 'dismissed' (with --reason). Mirrors cmd_ledger_dispose's
+    shape but operates on the premise bag's OWN candidate store, never
+    bag['questions'] — the two stores have different entry shapes and
+    disposition referents (a QuestionCandidate points at a Question id, not a
+    ledger claim), so this is a dedicated verb rather than an overload of
+    question-dispose. Refuses early when --question for --as recorded is
+    missing or does not resolve to an existing bag['questions'] entry —
+    premise.validate_question_candidates enforces the same resolvability at the
+    plan_approval gate; this command owns the CLI-level fast-fail."""
+    state, bag = _question_bag(store, args.session)
+    if bag is None:
+        return Directive(False, state.node, "noop", "plugin 'premise' is not active")
+    candidates = premise.question_candidates_from_dicts(bag.get("candidates", []))
+    match = next((c for c in candidates if c.id == args.id), None)
+    if match is None:
+        return Directive(False, state.node, "noop", f"no such candidate {args.id!r}")
+    if args.as_ == "recorded":
+        if not args.question:
+            return Directive(False, state.node, "noop", "--question is required for --as recorded")
+        questions = premise.questions_from_dicts(bag.get("questions", []))
+        if not any(q.id == args.question for q in questions):
+            return Directive(
+                False, state.node, "noop",
+                f"--question {args.question!r} does not resolve to an existing "
+                "question (dangling edge)",
+            )
+    if args.as_ == "dismissed" and not args.reason:
+        return Directive(False, state.node, "noop", "--reason is required for --as dismissed")
+    match.disposition = args.as_
+    match.reason = args.reason or ""
+    match.question = args.question or ""
+    bag["candidates"] = premise.question_candidates_to_dicts(candidates)
+    state.log("question_candidate_dispose", candidate=args.id, disposition=args.as_)
+    store.save(state)
+    return Directive(
+        True, state.node, "continue",
+        f"candidate {args.id!r} dispositioned as {args.as_!r}",
+        data={"candidate": args.id, "disposition": args.as_},
+    )
+
+
 def cmd_question_enumerate(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Run the independent question-enumeration cross-check over the WHOLE plan: ONE
     bounded advisor pass (advisor.enumerate_questions_health, `claude -p --model sonnet`,
@@ -975,8 +1019,8 @@ def cmd_question_enumerate(args, *, store: StateStore, runner: Runner | None = N
     d = Directive(
         True, state.node, "continue",
         f"question enumeration cross-check ran; raised {len(raised)} candidate(s) — "
-        "disposition each with `agentctl question-dispose --id <qenum-N> --to "
-        "researched|escalated|assumed`",
+        "disposition each with `agentctl question-candidate-dispose --id <qenum-N> "
+        "--as recorded --question <qid> | --as dismissed --reason <text>`",
         data={"raised": raised, "enumerated": True, "runner_ok": runner_ok},
     )
     if not pairs or runner_ok is not True:
@@ -3105,6 +3149,7 @@ COMMANDS = {
     "question-list": cmd_question_list,
     "question-check": cmd_question_check,
     "question-enumerate": cmd_question_enumerate,
+    "question-candidate-dispose": cmd_question_candidate_dispose,
     "classify": cmd_classify,
     "plan": cmd_plan,
     "plan-render": cmd_plan_render,
@@ -3234,6 +3279,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = add("question-check"); sp.add_argument("--session", required=True)
     sp = add("question-enumerate"); sp.add_argument("--session", required=True)
+
+    sp = add("question-candidate-dispose"); sp.add_argument("--session", required=True)
+    sp.add_argument("--id", required=True, help="candidate id (qenum-N) to disposition")
+    sp.add_argument("--as", dest="as_", required=True, choices=["recorded", "dismissed"])
+    sp.add_argument("--reason", default="", help="required when --as dismissed")
+    sp.add_argument("--question", default="",
+                    help="question id this candidate resolves to, required when --as recorded")
     sp = add("classify"); sp.add_argument("--session", required=True)
     sp.add_argument("--chat", action="store_true")
     sp.add_argument("--changed-lines", dest="changed_lines", type=int, default=0)
