@@ -191,6 +191,13 @@ def fire(event: str, state, directive) -> list[dict]:
             if bag is not None:
                 state.plugins_archive[plugin.name] = bag
 
+    # local import: plugins_obligations imports Plugin/PluginDirective/register
+    # from this module at its own top level, so importing it here (rather than
+    # at module scope, before those names exist) avoids a circular-import order
+    # dependency. mint() itself no-ops when the plugin is inactive.
+    from . import plugins_obligations as _obl
+    _obl.mint(state, fired)
+
     if fired:
         prior = directive.data.get("plugin_directives", [])
         directive.data["plugin_directives"] = prior + fired
@@ -257,3 +264,4 @@ from . import plugins_experience as _plugins_experience  # noqa: E402,F401
 from . import plugins_ledger as _plugins_ledger  # noqa: E402,F401
 from . import plugins_premise as _plugins_premise  # noqa: E402,F401
 from . import plugins_review_dispatch as _plugins_review_dispatch  # noqa: E402,F401
+from . import plugins_obligations as _plugins_obligations  # noqa: E402,F401
