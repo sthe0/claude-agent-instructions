@@ -1177,7 +1177,9 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
                        runner, weight_class=state.weight_class)
     # Deterministic scope lint (experience leaf 2026-06-29) — always runs,
     # independent of the optional LLM advisor above; warn-only, never blocks.
-    d.data.setdefault("advisories", []).extend(verify_command_scope_warnings(doc.stages))
+    d.data.setdefault("advisories", []).extend(
+        verify_command_scope_warnings(doc.stages, doc.meta.final_check)
+    )
     # Deterministic worktree-venue lint (#45) — same warn-only channel; fires
     # only when [meta] delivery_worktree names a pre-landing venue distinct
     # from repo_root.

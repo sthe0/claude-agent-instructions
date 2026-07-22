@@ -31,6 +31,18 @@ def _warnings_for(verify_command, title="s"):
     return verify_command_scope_warnings(doc.stages)
 
 
+def _final_check_warnings_for(command, label=None):
+    fc = {"command": command}
+    if label is not None:
+        fc["label"] = label
+    doc = parse_plan({
+        "meta": {"task_id": "t"},
+        "stage": [_stage("pytest scripts/tests/test_x.py")],
+        "final_check": [fc],
+    })
+    return verify_command_scope_warnings(doc.stages, doc.meta.final_check)
+
+
 def test_bare_pytest_module_invocation_warns():
     assert len(_warnings_for("python -m pytest")) == 1
 
@@ -80,6 +92,34 @@ def test_warning_names_stage_index_and_title():
     assert "Run everything" in warnings[0]
 
 
+def test_aggregate_unscoped_final_check_warns():
+    warnings = _final_check_warnings_for("python -m pytest")
+    assert len(warnings) == 1
+    assert "final_check 1" in warnings[0]
+
+
+def test_scoped_final_check_is_silent():
+    assert _final_check_warnings_for("pytest scripts/tests/test_x.py") == []
+    assert _final_check_warnings_for("scripts/verify-all.py --staged") == []
+
+
+def test_final_check_label_in_warning():
+    labeled = _final_check_warnings_for("python -m pytest", label="E2E gate")
+    assert len(labeled) == 1
+    assert "E2E gate" in labeled[0]
+
+    unlabeled = _final_check_warnings_for("python -m pytest", label="")
+    assert len(unlabeled) == 1
+    assert "python -m pytest" in unlabeled[0]
+
+
+def test_default_none_final_check_back_compat():
+    """verify_command_scope_warnings(stages) with no second arg must still work
+    (every pre-existing caller) — final_check defaults to None, not required."""
+    doc = parse_plan({"meta": {"task_id": "t"}, "stage": [_stage("python -m pytest")]})
+    assert len(verify_command_scope_warnings(doc.stages)) == 1
+
+
 def test_submit_plan_attaches_scope_advisory_without_blocking(tmp_path):
     """Integration: an aggregate-unscoped verify_command in a submitted TOML plan
     surfaces the scope warning in the submit-plan Directive's advisories while
@@ -122,3 +162,52 @@ verify_command = "python -m pytest"
     assert d.marker == "PLAN-READY"
     advisories = d.data.get("advisories", [])
     assert any("aggregate" in a and "stage 1" in a for a in advisories)
+
+
+def test_submit_plan_attaches_final_check_scope_advisory_without_blocking(tmp_path):
+    """Integration: an aggregate-unscoped [[final_check]] in a submitted TOML
+    plan surfaces a 'final_check' scope warning in the submit-plan Directive's
+    advisories while ok/node/marker stay exactly the PLAN-READY hard-gate
+    shape — the same contract as the stage-scoped advisory above, extended to
+    final_check."""
+    store = FileStateStore(tmp_path / "state")
+    sid = "scope-lint-final-check"
+    cli.cmd_start(ns(session=sid, task="demo", goal="g", done_criterion="dc",
+                      criterion_type="measurable", recursion_depth=0), store=store)
+    cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
+                         wall_clock_min=60, tracker_key=None, architectural=True,
+                         external_effect=False, new_dependency=False,
+                         public_api_change=False), store=store)
+    cli.cmd_plan(ns(session=sid), store=store)
+
+    plan = tmp_path / "plan.toml"
+    plan.write_text(
+        """
+[meta]
+task_id = "demo"
+goal = "g"
+done_criterion = "dc"
+criterion_type = "measurable"
+
+[[stage]]
+index = 1
+title = "Run scoped tests"
+executor = "in_thread"
+expected_result_image = "i"
+criterion_type = "measurable"
+done_criterion = "d"
+verify_command = "pytest -k foo"
+
+[[final_check]]
+command = "python -m pytest"
+""",
+        encoding="utf-8",
+    )
+    d = cli.cmd_submit_plan(ns(session=sid, plan=str(plan)), store=store)
+
+    assert d.ok is True
+    from agentctl.state import Node
+    assert d.node == Node.PLAN_READY.value
+    assert d.marker == "PLAN-READY"
+    advisories = d.data.get("advisories", [])
+    assert any("aggregate" in a and "final_check 1" in a for a in advisories)

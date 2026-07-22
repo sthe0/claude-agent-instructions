@@ -268,14 +268,15 @@ def _validate_graph(stages: list[Stage], *, is_substantive: bool) -> None:
 
 
 # --- verify_command scope lint (advisory, never blocking) -------------------
-# Difficulty removed: a stage's verify_command running a whole aggregate suite
-# (verify-all.py, a bare pytest invocation) without scoping to the paths the
-# stage actually touches lets pre-existing, unrelated reds elsewhere in the
-# repo false-fail the stage — a recurring authoring miss (experience leaf
-# 2026-06-29, ~20 accumulated contexts). This is the DECIDABLE rule part
-# (does the command look like an unscoped aggregate run); whether a
-# whole-suite run is actually justified for a given stage is perception left
-# to the plan author — hence advisory, never a block.
+# Difficulty removed: a stage's verify_command, or the plan's final_check,
+# running a whole aggregate suite (verify-all.py, a bare pytest invocation)
+# without scoping to the paths actually touched lets pre-existing, unrelated
+# reds elsewhere in the repo false-fail the stage/resolution — a recurring
+# authoring miss (experience leaf 2026-06-29, ~20 accumulated contexts,
+# several of them final_check whole-suite hostages). This is the DECIDABLE
+# rule part (does the command look like an unscoped aggregate run); whether a
+# whole-suite run is actually justified is perception left to the plan author
+# — hence advisory, never a block.
 _VERIFY_ALL_MARKER = "verify-all"
 _PYTEST_TOKENS = ("pytest", "py.test")
 
@@ -311,27 +312,50 @@ def _subcommand_is_aggregate_unscoped(sub: str) -> bool:
     return False
 
 
-def verify_command_scope_warnings(stages) -> list[str]:
-    """Warn (never block) when a stage's verify_command runs an aggregate test
-    suite (verify-all.py, a bare pytest invocation) without narrowing it to the
-    gate that enforces the stage — the miss recorded in experience leaf
-    2026-06-29 (~20 accumulated contexts). One warning per offending stage."""
+def _first_unscoped_subcommand(cmd: str) -> str | None:
+    """The first aggregate-unscoped subcommand in `cmd` (split on shell
+    separators), or None if every subcommand is scoped or non-aggregate."""
+    for sub in re.split(r"&&|;|\|", cmd):
+        sub = sub.strip()
+        if sub and _subcommand_is_aggregate_unscoped(sub):
+            return sub
+    return None
+
+
+def verify_command_scope_warnings(stages, final_check=None) -> list[str]:
+    """Warn (never block) when a stage's verify_command, or a plan's
+    final_check, runs an aggregate test suite (verify-all.py, a bare pytest
+    invocation) without narrowing it to the gate that enforces it — the miss
+    recorded in experience leaf 2026-06-29 (~20 accumulated contexts, several
+    of them final_check whole-suite hostages). One warning per offending
+    stage or final_check entry."""
     warnings: list[str] = []
     for s in stages:
         cmd = s.criterion.verify_command
         if not cmd:
             continue
-        for sub in re.split(r"&&|;|\|", cmd):
-            sub = sub.strip()
-            if sub and _subcommand_is_aggregate_unscoped(sub):
-                warnings.append(
-                    f"stage {s.index} ({s.title!r}): verify_command runs an aggregate "
-                    f"suite without a scope flag ({sub!r}); scope it to the gate that "
-                    f"enforces it (--staged, or an explicit test path) so pre-existing "
-                    f"unrelated reds cannot false-fail the stage "
-                    f"(see experience leaf 2026-06-29)."
-                )
-                break
+        sub = _first_unscoped_subcommand(cmd)
+        if sub:
+            warnings.append(
+                f"stage {s.index} ({s.title!r}): verify_command runs an aggregate "
+                f"suite without a scope flag ({sub!r}); scope it to the gate that "
+                f"enforces it (--staged, or an explicit test path) so pre-existing "
+                f"unrelated reds cannot false-fail the stage "
+                f"(see experience leaf 2026-06-29)."
+            )
+    for fi, fc in enumerate(final_check or [], 1):
+        if not fc.command:
+            continue
+        sub = _first_unscoped_subcommand(fc.command)
+        if sub:
+            label = fc.label or fc.command
+            warnings.append(
+                f"final_check {fi} ({label!r}): verify command runs an "
+                f"aggregate suite without a scope flag ({sub!r}); scope it to "
+                f"the change's own tests (an explicit path, -k/-m, or --staged) "
+                f"so pre-existing unrelated reds cannot false-fail resolution "
+                f"(see experience leaf 2026-06-29, instances 17/18/19)."
+            )
     return warnings
 
 
