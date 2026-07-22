@@ -462,3 +462,87 @@ class TestJudgeBinaryAsk:
         # '**' exposes '.', not a question mark, so the raising runner is never
         # called (no over-strip into word content, no false positive).
         assert advisor.judge_binary_ask("**Готово.**", _raising_runner) is False
+
+
+class TestJudgeFeedbackSignal:
+    def test_yes(self):
+        assert advisor.judge_feedback_signal("you shouldn't have done that", _fake_runner("YES")) is True
+
+    def test_no(self):
+        assert advisor.judge_feedback_signal("please add a test for this", _fake_runner("NO")) is False
+
+    def test_disabled(self):
+        assert advisor.judge_feedback_signal("ты не так сделал", _fake_runner("YES"), enabled=False) is False
+
+    def test_no_runner(self):
+        assert advisor.judge_feedback_signal("ты не так сделал", None) is False
+
+    def test_empty_text_skips_runner(self):
+        assert advisor.judge_feedback_signal("", _raising_runner) is False
+
+    def test_non_string_text_skips_runner(self):
+        assert advisor.judge_feedback_signal(None, _raising_runner) is False
+
+    def test_non_zero_exit_fails_open(self):
+        assert advisor.judge_feedback_signal("ты не так сделал", _fake_runner("YES", code=1)) is False
+
+    def test_empty_stdout_fails_open(self):
+        assert advisor.judge_feedback_signal("ты не так сделал", _fake_runner("   \n  ")) is False
+
+    def test_unparseable_answer_fails_open(self):
+        assert advisor.judge_feedback_signal("ты не так сделал", _fake_runner("maybe")) is False
+
+    def test_raising_runner_fails_open(self):
+        assert advisor.judge_feedback_signal("ты не так сделал", _raising_runner) is False
+
+    def test_argv_carries_judge_model(self):
+        seen = {}
+
+        def recording_runner(argv, **kwargs):
+            seen["argv"] = argv
+            return RunResult(0, stdout="NO", stderr="")
+
+        advisor.judge_feedback_signal("some text", recording_runner)
+        assert seen["argv"][:4] == ["claude", "-p", "--model", "haiku"]
+
+
+class TestJudgeOutageEscalation:
+    def test_yes(self):
+        assert advisor.judge_outage_escalation("The deploy is failing, how should I proceed?", _fake_runner("YES")) is True
+
+    def test_no(self):
+        assert advisor.judge_outage_escalation("This hook detects outage escalations via regex.", _fake_runner("NO")) is False
+
+    def test_disabled(self):
+        assert advisor.judge_outage_escalation("the service is down, what now?", _fake_runner("YES"), enabled=False) is False
+
+    def test_no_runner(self):
+        assert advisor.judge_outage_escalation("the service is down, what now?", None) is False
+
+    def test_empty_text_skips_runner(self):
+        assert advisor.judge_outage_escalation("", _raising_runner) is False
+
+    def test_non_string_text_skips_runner(self):
+        assert advisor.judge_outage_escalation(None, _raising_runner) is False
+
+    def test_non_zero_exit_fails_open(self):
+        assert advisor.judge_outage_escalation("the service is down, what now?", _fake_runner("YES", code=1)) is False
+
+    def test_empty_stdout_fails_open(self):
+        assert advisor.judge_outage_escalation("the service is down, what now?", _fake_runner("  \n  ")) is False
+
+    def test_unparseable_answer_fails_open(self):
+        assert advisor.judge_outage_escalation("the service is down, what now?", _fake_runner("unclear")) is False
+
+    def test_raising_runner_fails_open(self):
+        assert advisor.judge_outage_escalation("the service is down, what now?", _raising_runner) is False
+
+    def test_argv_carries_judge_model(self):
+        seen = {}
+
+        def recording_runner(argv, **kwargs):
+            seen["argv"] = argv
+            return RunResult(0, stdout="NO", stderr="")
+
+        advisor.judge_outage_escalation("some text", recording_runner)
+        assert seen["argv"][:4] == ["claude", "-p", "--model", "haiku"]

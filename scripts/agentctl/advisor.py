@@ -319,6 +319,117 @@ def judge_binary_ask(
         return False
 
 
+_FEEDBACK_JUDGE_PROMPT = (
+    "You are given a user's message to an AI coding assistant, written in any "
+    "language. Decide whether this message carries AGENT-BEHAVIOR FEEDBACK -- a "
+    "correction of what the assistant did, a stated principle or preference about "
+    "how the assistant should work, or a \"you should have / next time do X\" "
+    "evaluation of the assistant's own conduct.\n\n"
+    "Answer YES only when the message evaluates or directs the ASSISTANT'S "
+    "behavior, for example (any language): \"you shouldn't have done that\", "
+    "\"next time ask first\", \"don't use regexes for this\", \"ты не так сделал\".\n\n"
+    "Answer NO for: a neutral task instruction, an analytical or meta discussion "
+    "that merely mentions corrective-sounding words without evaluating the "
+    "assistant (e.g. a description of how a hook works, or a review of someone "
+    "else's text), or a plain question.\n\n"
+    "Answer on the FIRST line with exactly YES or NO, nothing else.\n\n"
+    "MESSAGE:\n{text}"
+)
+
+_OUTAGE_ESCALATION_JUDGE_PROMPT = (
+    "You are given the final message of an AI assistant's turn, written in any "
+    "language. Decide whether this message ESCALATES a live, un-diagnosed "
+    "external-service failure to the user -- surfacing an outage and asking how "
+    "to proceed -- as opposed to text that merely discusses failure handling.\n\n"
+    "Answer YES only when the message reports a CURRENT failure the assistant has "
+    "not yet diagnosed and is asking the user how to proceed.\n\n"
+    "Answer NO for: a meta-description of how failure handling or an escalation "
+    "gate works, a past or already-resolved incident, ordinary prose that "
+    "mentions error codes or failures without escalating one, or a message that "
+    "reports a diagnosed failure with a proposed fix.\n\n"
+    "Answer on the FIRST line with exactly YES or NO, nothing else.\n\n"
+    "MESSAGE:\n{text}"
+)
+
+
+def judge_feedback_signal(
+    user_text: str, runner, *, enabled: bool = True, timeout: int = _BINARY_ASK_TIMEOUT_S
+) -> bool:
+    """Semantic judge behind the self-improvement regex prefilter: does
+    ``user_text`` carry genuine agent-behavior feedback (a correction, a stated
+    principle, a "should have" evaluation), as opposed to a neutral instruction or
+    analytical/meta text that merely mentions corrective-sounding words?
+
+    Caller contract: ``user_text`` MUST already be injection-stripped (the same
+    text si_feedback_detect.strip_injected_context() produces and the regex
+    prefilter matched on) -- never the raw harness-injected buffer, which is
+    dense with feedback-shaped language from replayed CLAUDE.md/SKILL.md content
+    and would reintroduce the false-positive class this judge exists to remove.
+
+    This function is a PURE model call with no inline prefilter: unlike
+    judge_binary_ask's self-contained punctuation check, the regex prefilter here
+    (si_feedback_detect.find_signals) lives outside the agentctl package, and
+    advisor.py imports only within .config/.dispatch -- the caller runs the
+    prefilter and calls this judge only when it fires.
+
+    Fail-open, mirroring judge_binary_ask: disabled, no text, no runner, a
+    non-zero exit, an empty/unparseable answer, or any exception all return
+    False -- the guardian this feeds is a Stop-gate BLOCKER, so a confident False
+    (never a fabricated True) is the safe failure direction."""
+    if not enabled or not isinstance(user_text, str) or not user_text:
+        return False
+    if runner is None:
+        return False
+    try:
+        prompt = _FEEDBACK_JUDGE_PROMPT.format(text=user_text)
+        result = runner(["claude", "-p", "--model", _JUDGE_MODEL, prompt], timeout=timeout)
+        if result.returncode != 0:
+            return False
+        lines = [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
+        if not lines:
+            return False
+        return lines[0].upper().startswith("YES")
+    except Exception:
+        return False
+
+
+def judge_outage_escalation(
+    assistant_text: str, runner, *, enabled: bool = True, timeout: int = _BINARY_ASK_TIMEOUT_S
+) -> bool:
+    """Semantic judge behind the outage-escalation regex prefilter: does
+    ``assistant_text`` escalate a live, un-diagnosed external-service failure to
+    the user, as opposed to a meta-description of failure handling, a resolved
+    incident, or prose that merely mentions error codes?
+
+    This function is a PURE model call with no inline prefilter -- the caller
+    (outage_escalation_detect.detect) runs the regex prefilter outside the
+    agentctl package and calls this judge only when it fires; advisor.py imports
+    only within .config/.dispatch, so it cannot import the scripts/-root
+    detector to prefilter internally the way judge_binary_ask does with its
+    self-contained punctuation check.
+
+    Fail-open, mirroring judge_binary_ask: disabled, no text, no runner, a
+    non-zero exit, an empty/unparseable answer, or any exception all return
+    False -- both hard-block consumers of this judge (the Stop guardian and the
+    PreToolUse gate) treat False as "do not block", so a confident False is the
+    safe failure direction."""
+    if not enabled or not isinstance(assistant_text, str) or not assistant_text:
+        return False
+    if runner is None:
+        return False
+    try:
+        prompt = _OUTAGE_ESCALATION_JUDGE_PROMPT.format(text=assistant_text)
+        result = runner(["claude", "-p", "--model", _JUDGE_MODEL, prompt], timeout=timeout)
+        if result.returncode != 0:
+            return False
+        lines = [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
+        if not lines:
+            return False
+        return lines[0].upper().startswith("YES")
+    except Exception:
+        return False
+
+
 def resolve_enabled(weight_class: str | None, *, thresholds: Thresholds | None = None) -> bool:
     """Resolve whether the advisor should run for this call.
 
