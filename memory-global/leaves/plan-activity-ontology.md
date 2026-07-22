@@ -1,23 +1,23 @@
 ---
 name: plan-activity-ontology
-description: The 8-element activity-structure ontology a plan must cover, mapped to concrete agentctl/plan.py + verify-plan-file.py fields; substantive-only requirement; recursive sub-ordering as the genesis of composite (multi-stage) plans.
+description: The 8-element activity-structure ontology a plan must cover, mapped to concrete agentctl/plan.py fields; substantive-only requirement; recursive sub-ordering as the genesis of composite (multi-stage) plans.
 type: reference
 schema: leaf/v1
 created: 2026-06-25
-last_verified: 2026-06-25
+last_verified: 2026-07-22
 ---
 
 # Plan activity ontology (the 8 elements a plan must cover)
 
 ## Difficulty
 
-A plan stated as a free list of steps silently omits the constituents that decide whether the activity can actually be *performed* and *verified*: what is transformed and into what; by which immutable means and method; under which conditions and which properties must stay unchanged; by which actor holding which capability; and on the strength of which refutable principle the transformation was chosen. The two enforcement surfaces — the machine TOML (`agentctl/plan.py`) and the prose verifier (`verify-plan-file.py`) — historically named only a subset and drifted apart, so an author could satisfy the *shape* while leaving the activity under-specified. Functional ground: **a plan is the image of removing a difficulty; an incomplete image is unrealizable or unverifiable.** This leaf fixes the complete element set and where each element lives in the schema, so neither surface can quietly drop one.
+A plan stated as a free list of steps silently omits the constituents that decide whether the activity can actually be *performed* and *verified*: what is transformed and into what; by which immutable means and method; under which conditions and which properties must stay unchanged; by which actor holding which capability; and on the strength of which refutable principle the transformation was chosen. The machine TOML validator (`agentctl/plan.py`) and this prose leaf — a now-retired standalone markdown-plan validator once existed alongside them — historically named only a subset and drifted apart, so an author could satisfy the *shape* while leaving the activity under-specified. Functional ground: **a plan is the image of removing a difficulty; an incomplete image is unrealizable or unverifiable.** This leaf fixes the complete element set and where each element lives in the schema, so neither surface can quietly drop one.
 
 ## Guidance
 
 ### Source of truth: the typed code model, not this prose
 
-The **canonical** definition and enforcer of plan structure is the typed model in **`scripts/agentctl/state.py` + `scripts/agentctl/plan.py`**: the grouped dataclasses (`Subject`, `Means`, `Actor`, `Criterion`, `Principle`, `Supply`, `Outcome`) and the algorithms over them — substantive-field validation, the `Confidence` enum check, and `_validate_graph` (dangling `Supply.on`, unknown substantive `Supply.element`, acyclicity). This leaf and `verify-plan-file.py` are a **secondary human-readable mirror** that must track the code; on any divergence, **the code wins**. The author-written TOML stays in a flat per-stage schema (top-level `executor` / `done_criterion` / `criterion_type` / `depends_on`); `parse_plan` maps those flat keys onto the grouped objects, so the grouping is a property of the in-memory model, not of the file syntax.
+The **canonical** definition and enforcer of plan structure is the typed model in **`scripts/agentctl/state.py` + `scripts/agentctl/plan.py`**: the grouped dataclasses (`Subject`, `Means`, `Actor`, `Criterion`, `Principle`, `Supply`, `Outcome`) and the algorithms over them — substantive-field validation, the `Confidence` enum check, and `_validate_graph` (dangling `Supply.on`, unknown substantive `Supply.element`, acyclicity). This leaf is a **secondary human-readable mirror** that must track the code; on any divergence, **the code wins**. The author-written TOML stays in a flat per-stage schema (top-level `executor` / `done_criterion` / `criterion_type` / `depends_on`); `parse_plan` maps those flat keys onto the grouped objects, so the grouping is a property of the in-memory model, not of the file syntax.
 
 ### The 8 elements → grouped typed fields
 
@@ -105,11 +105,11 @@ When planning: if any element of a stage is not already a given, do **not** hand
 
 The actor must have the **whole** plan before it, to be guided by it — not only its own stage. This is why a spawned specialist receives the working plan with its step marked, not just an isolated task.
 
-### What the two surfaces enforce (one canonical, one mirror)
+### What the canonical surface enforces
 
-- **`agentctl/plan.py` + `state.py`** (machine, **canonical**): `parse_plan` builds the grouped typed objects from the flat TOML keys and enforces, *in code*, for a substantive plan — every stage carries `subject`(material/result), `means`(means/method), `conditions`, `subject.invariants`, and a `Principle`(statement/source/confidence/refutation); the `confidence` is a valid `Confidence` enum value; and `_validate_graph` holds (no dangling `Supply.on`, no unknown substantive `Supply.element`, no cycle). For non-substantive / weight-absent plans these stay optional. Unknown keys are ignored.
+- **`agentctl/plan.py` + `state.py`** (machine, **canonical**, the sole live enforcement surface — plans are TOML-only): `parse_plan` builds the grouped typed objects from the flat TOML keys and enforces, *in code*, for a substantive plan — every stage carries `subject`(material/result), `means`(means/method), `conditions`, `subject.invariants`, and a `Principle`(statement/source/confidence/refutation); the `confidence` is a valid `Confidence` enum value; and `_validate_graph` holds (no dangling `Supply.on`, no unknown substantive `Supply.element`, no cycle). For non-substantive / weight-absent plans these stay optional. Unknown keys are ignored.
   - **Principle (element 7) anti-template** is also mechanically enforced for substantive plans: `_validate_substantive_stage` rejects placeholder subfield values (`todo`/`tbd`/`n/a`/…), a principle whose `refutation` echoes its `statement`, and a `statement` that echoes the stage's `method` (all after normalization) — so a Principle can't be satisfied by restating the stage. The shared normalization/placeholder-set logic lives in `agentctl/text_shape.py`, reused from `gates.py`'s difficulty-record anti-template.
-- **`verify-plan-file.py`** (prose, **mirror**): a substantive prose plan must additionally carry per-stage subsections **Material**, **Means & method**, **Conditions & invariants**, **Principle** (with Source, Confidence, Refutation), on top of the existing Problem-and-done-criteria / Stages / Final verification / Risks. This surface is a human-readable reflection of the code contract — it must track `plan.py`/`state.py`, which win on any divergence.
+- A rendered prose view of a substantive TOML plan — carrying the same per-stage **Material**, **Means & method**, **Conditions & invariants**, **Principle** (with Source, Confidence, Refutation) subsections — is available on demand via `agentctl plan-render`; it is a projection of the code contract, not a second independent validator.
 
 ## See also
 

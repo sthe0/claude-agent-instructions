@@ -3,7 +3,7 @@ name: plan-file-split
 description: For substantive multi-stage plans that grow above ~20 KB, split the single plan markdown into an index file (`<slug>.md`) plus per-stage files (`<slug>-stage-<N>.md`). The index carries the structural sections (Problem, Stages-overview pointers, Final verification, Risks); each stage file carries that stage's Output / Expected result image / Actual effort. This lets later Read calls pull only the active stage instead of re-loading the entire plan.
 type: reference
 created: 2026-05-27
-last_verified: 2026-07-18
+last_verified: 2026-07-22
 ---
 
 # Plan-file split
@@ -45,7 +45,7 @@ For small plans (single sprint, ≤ 3 stages, < 10 KB): keep the single file. Sp
 
 ### Index file (`<slug>.md`)
 
-Must still satisfy `verify-plan-file.py` — it checks for the required `##` headings. Keep all four:
+Must still satisfy the legacy markdown-plan validator (retired along with the markdown plan class — see the note at top) — it checked for the required `##` headings. Keep all four:
 
 1. **Problem.** One paragraph.
 2. **Stages.** A summary table with one row per stage:
@@ -57,7 +57,7 @@ Must still satisfy `verify-plan-file.py` — it checks for the required `##` hea
    | 2 | … | … | … | [stage-2-….md](<slug>-stage-2-….md) |
    ```
 
-   At least one `Expected result image:` line must appear in this section — put it in the table or just below as a global summary, so `verify-plan-file.py` passes. The detailed `Expected result image:` per stage lives in the stage file.
+   At least one `Expected result image:` line must appear in this section — put it in the table or just below as a global summary. The detailed `Expected result image:` per stage lives in the stage file.
 3. **Final verification.** One paragraph or pointer to `<slug>-final-verification.md`.
 4. **Risks.** One paragraph.
 
@@ -108,7 +108,7 @@ never as two argv strings, and never via a concatenated-into-argv scratch file.
 
 ## What the planner skill should do
 
-The planner does **not** auto-split. It writes a single file by default — `verify-plan-file.py` accepts that. If during planning the planner sees the plan growing beyond the trigger thresholds above, it should:
+The planner does **not** auto-split. It writes a single file by default. If during planning the planner sees the plan growing beyond the trigger thresholds above, it should:
 
 1. Stop, decide to split.
 2. Write the index + stage files.

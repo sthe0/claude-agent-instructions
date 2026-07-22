@@ -144,7 +144,7 @@ Two modules carry the load-bearing invariants:
 
 ## The plan model
 
-Plan structure is defined **primarily by typed code**, not prose. `plan.py`'s `parse_plan` builds grouped dataclasses (`Subject`, `Means`, `Actor`, `Criterion`, `Principle`, `Supply`, `Outcome`) from the flat author TOML and validates the 8-element activity ontology for substantive plans. The canonical description of the 8 elements and where each lives in the schema is [`memory-global/leaves/plan-activity-ontology.md`](../../memory-global/leaves/plan-activity-ontology.md); [`verify-plan-file.py`](../verify-plan-file.py) is a prose mirror. On any divergence, the code wins.
+Plan structure is defined **primarily by typed code**, not prose. `plan.py`'s `parse_plan` builds grouped dataclasses (`Subject`, `Means`, `Actor`, `Criterion`, `Principle`, `Supply`, `Outcome`) from the flat author TOML and validates the 8-element activity ontology for substantive plans. The canonical description of the 8 elements and where each lives in the schema is [`memory-global/leaves/plan-activity-ontology.md`](../../memory-global/leaves/plan-activity-ontology.md); plans are TOML-only, and a rendered prose view is available on demand via `agentctl plan-render`. On any divergence between prose and code, the code wins.
 
 **Substantive plans must be TOML.** `submit-plan` refuses a substantive plan whose path does not end in `.toml` — markdown may mirror a plan as prose but cannot carry typed stages the engine tracks. Every substantive stage must also declare `capability_required` (Actor-cluster: the skill or knowledge the executor needs); `parse_plan` raises `PlanError` on any missing field.
 

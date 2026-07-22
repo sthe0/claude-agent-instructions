@@ -31,7 +31,7 @@ Spawn cheap `Explore`/`general-purpose` agents (never inline on opus — see `de
 
 A move without checking who reads the exact text breaks silently. Before extracting or centralizing a block:
 
-- `grep` for any script that anchors on that text: `verify-*` guards (`verify-cross-refs.py`, `verify-doc-concepts.py`, `lint-cursor-mirror.py`), `spawn-specialist.py`'s prompt-composition logic, `verify-plan-file.py`.
+- `grep` for any script that anchors on that text: `verify-*` guards (`verify-cross-refs.py`, `verify-doc-concepts.py`, `lint-cursor-mirror.py`), `spawn-specialist.py`'s prompt-composition logic.
 - If a guard pins the moved content (line count, a specific phrase, a required cross-reference), update the guard **in the same commit** as the move — a move and its guard drift apart otherwise (experience: `2026-06-26-guard-coupled-doc-relocation`).
 - If a spawn template composes the file as a system prompt (e.g. specialization `SKILL.md`s appended at `claude -p` spawn time), confirm the spawned process still receives the full moved text — either inline it at compose time or leave a real markdown link a human/agent can follow; a dangling relative link a spawned process can't resolve is silent information loss (experience: `2026-06-24-prose-to-code-migration-consumer-and-superset`).
 

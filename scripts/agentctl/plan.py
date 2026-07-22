@@ -40,9 +40,7 @@ also carry a plan-level external-research decision:
     external_research = "checked internal wiki + WebSearch; no prior art applies"
                                          # required for substantive; what
                                          # internet/intranet research found, or
-                                         # why it is not warranted. Mirrors the
-                                         # markdown `External research:` line
-                                         # checked by verify-plan-file.py.
+                                         # why it is not warranted.
 
 and every stage must also carry the 8-element activity-structure fields:
 
@@ -103,8 +101,7 @@ class PlanMeta:
     criterion_type: str = CriterionType.MEASURABLE.value
     weight_class: str | None = None
     # Plan-level external-research decision (planner SKILL.md § Research). Required
-    # non-empty for substantive plans; None for legacy/non-substantive. Mirrors the
-    # markdown `External research:` line checked by verify-plan-file.py.
+    # non-empty for substantive plans; None for legacy/non-substantive.
     external_research: str | None = None
     # Directory each stage's verify_command runs in. None (default) inherits the
     # invoker's cwd — byte-identical to pre-repo_root behaviour. Set it so a plan's
