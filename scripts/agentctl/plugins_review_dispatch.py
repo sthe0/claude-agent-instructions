@@ -41,9 +41,14 @@ staleness risk, not remove one.
 `dispatch`, by contrast, IS a safe observer target: `cmd_dispatch` saves state
 before returning on every non-preview path (COMPLETED / CLARIFY / recursion
 refusal / any marker), so `_fire_plugins`' reload always reflects the
-just-dispatched active stage — no staleness risk, unlike `replan`. A dry-run
-preview never reaches `_fire_plugins` at all (cmd_dispatch returns early), so
-the observer only ever sees a real dispatch's reloaded state.
+just-dispatched active stage — no staleness risk, unlike `replan`. `main` runs
+`_fire_plugins` after EVERY command, a `dispatch --dry-run` preview included
+(cmd_dispatch returns early WITHOUT a fresh save, so the observer reloads the
+last-saved state); when a preview follows a `next-stage` that activated a
+needs_control() stage, the code-review nudge therefore surfaces alongside the
+preview. That is advisory only — a dry-run performs no spawn and the label
+never blocks the preview action — so it is a harmless hint, not a staleness
+bug like a `replan` observer would be.
 
 No `gates` entry: enforcement stays entirely in `gates.plan_review_blockers`
 (wired into `approve`/`replan`) and `gates.code_review_blockers` (wired into
