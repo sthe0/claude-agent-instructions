@@ -49,7 +49,7 @@ docs/operations/setup.md:40  # keep:legacy-fallback — legacy ~/.claude describ
 docs/operations/setup.md:45  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
 docs/operations/setup.md:55  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
 benchmark-profile/REMOVED-VS-RETAINED.md:17  # keep:harness-owned — describes the personal ~/.claude/settings.json where the hook family is registered
-memory-global/MEMORY.md:64  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
+memory-global/MEMORY.md:65  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 memory-global/leaves/claude-code-settings-env-precedence.md:35  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 memory-global/leaves/coordinator-pitfalls.md:29  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 memory-global/leaves/experience/2026-05-24-silent-architectural-decision-config-as-file.md:23  # keep:historical-experience — historical quote inside a resolved-task experience leaf
