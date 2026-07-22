@@ -30,7 +30,26 @@ Not all regex use in a hard-enforcement gate is the anti-pattern. The boundary:
 
 ### Structural-vs-semantic audit of the hook suite
 
-**PENDING — filled in by the audit stage of the task that produced this leaf.** The full enumeration of every detector-driven hard-enforcement site in the hook suite is classified against the boundary above, confirming whether the semantic-hard-block set is exactly the two sites fixed alongside this leaf (the self-improvement feedback signal and the outage-escalation signal, both re-wired to a prefilter-AND-judge pair mirroring `judge_binary_ask`) — or naming any further semantic hard-block found, with its file and either its fix or the reason it was deferred.
+Enumerated every hard-enforcement site in the 35-hook suite (`grep` for the three enforcement contracts: PreToolUse `"permissionDecision": "deny"`, a Stop `"decision": "block"`, and `sys.exit(2)`/exit-code-2 — the last found nowhere in the suite). Eight files carry a hard-enforcement path; `hook-turn-end-gate.py` alone aggregates five independent guardians. Each is classified below.
+
+| Site | Reads | Class | Disposition |
+|---|---|---|---|
+| `hook-guard-destructive-rm.py` (deny) | shell command shape: `rm -rf` + interpolated-`$VAR` worst-case path expansion | STRUCTURAL | legitimate, unchanged |
+| `hook-guard-canon-readonly.py` (deny) | git state + a machine-local canon-path list, realpath-compared | STRUCTURAL | legitimate, unchanged |
+| `hook-arc-mount-search-guard.py` (deny) | `/proc/self/mounts` shape + recursive-search tool/command names (`find`/`rg`/`fd`/`grep -r`) | STRUCTURAL | legitimate, unchanged |
+| `hook-state-gate.py` (deny) | the `agentctl` engine node/state machine | STRUCTURAL | legitimate, unchanged |
+| `hook-scope-conflict.py` (deny + Stop block) | the cross-session `session_scope` registry (live path-overlap check) | STRUCTURAL | legitimate, unchanged |
+| `hook-plan-delivery-gate.py` (deny) | verbatim / normalized substring presence of the registered plan essence in delivered transcript text (exact bytes, not meaning) | STRUCTURAL | legitimate, unchanged — a byte/shape presence check, not a meaning classification |
+| `hook-escalation-diagnosis-gate.py` (deny) | `outage_escalation_detect` regex prefilter over free NL text | **SEMANTIC** | **FIXED this task** — prefilter-AND-`judge_outage_escalation` |
+| `hook-turn-end-gate.py` → `self_improvement_blockers` (Stop block) | `si_feedback_detect.find_signals` regex prefilter over free NL text | **SEMANTIC** | **FIXED this task** — prefilter-AND-`judge_feedback_signal` |
+| `hook-turn-end-gate.py` → `escalation_without_diagnosis_blockers` (Stop block) | `outage_escalation_detect` regex prefilter over free NL text (Stop-hook backstop for the PreToolUse gate above) | **SEMANTIC** | **FIXED this task** — same judge-backed `ctx.outage_escalation_sought` as the PreToolUse gate |
+| `hook-turn-end-gate.py` → `prose_binary_ask_blockers` (Stop block) | a punctuation prefilter + `agentctl.advisor.judge_binary_ask` over free NL text | SEMANTIC | **already correctly judge-backed** — this is the pre-existing exemplar the other two fixes mirror, not a new fix |
+| `hook-turn-end-gate.py` → `resolution_turn_blockers` (Stop block) | the `agentctl` `SessionState` (weight class, stage outcomes, resolution-gate flag) | STRUCTURAL | legitimate, unchanged |
+| `hook-turn-end-gate.py` → `long_job_autowake_blockers` (Stop block) | `long_job_detect` (Bash command-pattern shape) + `timer_arm_detect.waiter_armed` (tool-invocation shape: `run_in_background`/`CronCreate`) | STRUCTURAL | legitimate, unchanged |
+
+`closure_sought` (gates `prose_binary_ask_blockers` and `resolution_turn_blockers`) reads `timer_arm_detect.ask_emitted`/`timer_armed` — tool-invocation shape (was `AskUserQuestion` called, is a backgrounded `sleep` armed), not NL meaning — STRUCTURAL.
+
+**Result: the semantic-hard-block set is exactly three guardian sites, all sharing two detector modules (`si_feedback_detect`, `outage_escalation_detect`) across three consumers (one PreToolUse gate, two Stop guardians).** Two of the three were unguarded regex-only decisions before this task and are now prefilter-AND-judge; the third (`prose_binary_ask`) was already prefilter-AND-judge before this task began and needed no change. No further semantic hard-block was found in the suite — no additional fix or follow-up is named.
 
 ## See also
 
