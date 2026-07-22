@@ -27,7 +27,7 @@ transcript, unreadable state, or any unexpected error never wedges the ask.
 Always exits 0.
 
 DENY uses the same PreToolUse permissionDecision JSON contract as
-hook-ask-text-split.py / hook-plan-delivery-gate.py.
+hook-plan-delivery-gate.py.
 """
 from __future__ import annotations
 

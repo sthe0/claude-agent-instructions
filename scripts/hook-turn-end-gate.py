@@ -205,16 +205,16 @@ def prose_binary_ask_blockers(ctx: TurnContext) -> list[str]:
     решённой?") instead of through an AskUserQuestion click-gate. CLAUDE.md
     § Escalation mandates AskUserQuestion for every confirmation / defined-set
     choice so the user clicks instead of typing; the recurring lapse is to type
-    the confirm as prose. hook-ask-text-split.py gates a mis-positioned ask CALL;
-    here no ask tool is called at all, so only this Stop text-scan can catch it.
+    the confirm as prose. No ask tool is called at all here, so only this Stop
+    text-scan can catch it.
 
     Fires ONLY under the full conjunction, all read from the frozen context:
       - prose_binary_ask (the shell's judge_binary_ask semantic scan over this
         turn's assistant text fired: the final utterance is a confirm question,
         not open-ended or rhetorical);
       - no AskUserQuestion was invoked this turn (the click-gate the norm wants);
-      - the turn is not already seeking closure (ctx.closure_sought) — the
-        legitimate "arm sleep-2 → ask next turn" split must not be nagged.
+      - the turn is not already seeking closure (ctx.closure_sought) — a turn
+        that already posed the ask inline must not be nagged.
 
     Pure: reads only frozen ctx booleans / the invocations set.
     """
@@ -230,9 +230,7 @@ def prose_binary_ask_blockers(ctx: TurnContext) -> list[str]:
         "AskUserQuestion for every confirmation / defined-set choice (apply/skip, "
         "push, scope, resolution) so the user clicks instead of typing. Re-pose "
         "the decision as an AskUserQuestion with the recommended option first — "
-        "if a preceding artifact must render first, deliver it as this turn's "
-        "final message and arm a backgrounded `Bash` `sleep 2` so the ask opens "
-        "the NEXT turn (a same-turn ask after this text would not render). If the "
+        "it may share this turn with any preceding text and tool calls. If the "
         "question is genuinely open-ended (a free-text name/path/sentence), state "
         "in your reply why AskUserQuestion does not apply."
     ]
@@ -274,11 +272,9 @@ def resolution_turn_blockers(ctx: TurnContext) -> list[str]:
         "Every stage of this substantive plan has PASSED and the resolution gate "
         "is still open, but this turn is not seeking closure. Run "
         "`agentctl verify-final`, then confirm the task is resolved with the user "
-        "via an AskUserQuestion opened on the NEXT turn through the sleep-2 "
-        "delivery-split — arm a backgrounded `Bash` `sleep 2` this turn so its "
-        "notification opens the turn that carries the ask (a same-turn ask after "
-        "this text would not render). Do not close the task until the user "
-        "confirms; on any verification failure, run overcome-difficulty instead."
+        "via an AskUserQuestion — it may share this turn with the recap text. Do "
+        "not close the task until the user confirms; on any verification failure, "
+        "run overcome-difficulty instead."
     ]
 
 

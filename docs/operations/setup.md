@@ -123,7 +123,7 @@ Core ships the `git`/`github` defaults and the `default` auth profile; specializ
 
 The verdict is mechanized on the negative: with zero matching artifacts it is always `opening`. The model may only *demote* a `resume-candidate` verdict back to `opening` (the artifacts turn out not to be settled work), never promote the reverse. A resume recorded only in a session checkpoint or an experience leaf — no plan file, no tracker comment, no branch — is a known gap: all three probes miss it and the session falls back to `opening`, costing an extra turn but never producing a wrong verdict.
 
-Because the harness denies any `AskUserQuestion` that follows a tool call in the same turn, the opening dialogue always spans two turns: turn 1 delivers the digest as its final text message and arms a background timer; turn 2 (opened by the timer) asks the clarifying questions.
+The agent delivers the digest and asks the clarifying questions in the same opening turn — an `AskUserQuestion` may share its turn with the preceding digest text and any tool calls.
 
 **Suppressing it.** The in-place path (`claude-task -c`, no workspace change) never injects a prompt. Otherwise, precedence is `--no-opening` / `--opening` (command line) over `CLAUDE_OPENING=off` (env) over the per-entry-mode default: **on** for `--key` / `--new` (a real task exists to read), **off** for `--name` / `--init` (a nameless scratch workspace has nothing to read).
 

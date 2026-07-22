@@ -1,14 +1,13 @@
 """Agreement tests for the shared timer_arm_detect detector.
 
-The whole point of extracting timer_arm_detect.py is that the ask-defer warn hook
-(hook-ask-defer-timer.py) and the resolution guardian's shell (hook-turn-end-
-gate.py) can never drift apart on "did this turn seek closure?". These tests pin
-that:
+The whole point of extracting timer_arm_detect.py is that the resolution
+guardian's shell (hook-turn-end-gate.py) never reimplements "did this turn seek
+closure?" locally. These tests pin that:
 
-  1. Both consumers reference the SAME function objects (import, not reimplement).
-  2. On a table of fabricated transcripts spanning both entry shapes, the ask-
-     defer view and the turn-end-gate's frozen `closure_sought` agree with the
-     shared detector's verdict — divergence is what the test forbids.
+  1. The consumer references the SAME function objects (import, not reimplement).
+  2. On a table of fabricated transcripts spanning both entry shapes, the
+     turn-end-gate's frozen `closure_sought` agrees with the shared detector's
+     verdict — divergence is what the test forbids.
 """
 from __future__ import annotations
 
@@ -31,16 +30,10 @@ def _load(name: str, filename: str):
 
 
 tad = _load("timer_arm_detect", "timer_arm_detect.py")
-defer_mod = _load("hook_ask_defer_timer", "hook-ask-defer-timer.py")
 turn_mod = _load("hook_turn_end_gate", "hook-turn-end-gate.py")
 
 
-# --- 1. both consumers reference the shared definitions ----------------------
-
-def test_ask_defer_imports_shared_predicates():
-    assert defer_mod.timer_armed is tad.timer_armed
-    assert defer_mod.ask_already_emitted is tad.ask_emitted
-
+# --- 1. the consumer references the shared definitions ------------------------
 
 def test_turn_gate_imports_shared_closure():
     assert turn_mod._closure_sought is tad.closure_sought
@@ -83,12 +76,6 @@ CASES = [
 def test_shared_detector_verdicts():
     for label, entries, expected in CASES:
         assert tad.closure_sought(entries) is expected, label
-
-
-def test_ask_defer_and_shared_agree():
-    for label, entries, expected in CASES:
-        ask_defer_view = defer_mod.timer_armed(entries) or defer_mod.ask_already_emitted(entries)
-        assert ask_defer_view is expected, label
 
 
 # --- 3. the auto-wake sibling predicate (waiter_armed) -----------------------

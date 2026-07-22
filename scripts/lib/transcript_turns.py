@@ -1,13 +1,12 @@
 """Shared turn-boundary primitive for hooks that read the session transcript.
 
-Difficulty removed: two hooks (hook-ask-text-split.py, hook-plan-delivery-
-gate.py) both need "when did the current turn start?" — the transcript is the
-only observable that captures a turn opened by a background task-notification
-(a `queued_command` attachment entry), which may not fire UserPromptSubmit —
-harness/version-dependent (observed firing live 2026-07-03 on this machine;
-the stale-timestamp premise held elsewhere) — so engine-side state timestamps
-cannot be relied on to advance for it. This module is the single structural
-home for that predicate instead of duplicating it per hook.
+Difficulty removed: hook-plan-delivery-gate.py needs "when did the current
+turn start?" — the transcript is the only observable that captures a turn
+opened by a background task-notification (a `queued_command` attachment
+entry), which may not fire UserPromptSubmit — harness/version-dependent
+(observed firing live 2026-07-03 on this machine; the stale-timestamp premise
+held elsewhere) — so engine-side state timestamps cannot be relied on to
+advance for it. This module is the single structural home for that predicate.
 """
 from __future__ import annotations
 

@@ -1,21 +1,19 @@
 #!/usr/bin/env python3
 """Shared "is this turn seeking closure?" detector.
 
-Difficulty removed: two consumers need the SAME predicate over one turn's
-transcript slice and must never drift apart —
+Difficulty removed: the `hook-turn-end-gate.py` (Stop) guardians need a stable
+predicate over one turn's transcript slice —
 
-  - the advisory `hook-ask-defer-timer.py` (Stop) warns when a turn PROMISES to
-    ask via buttons next message but never armed the `sleep 2` background timer
-    that would open that next turn;
-  - the resolution guardian in `hook-turn-end-gate.py` (Stop) must NOT fire when
-    the turn is already seeking closure — i.e. it emitted an `AskUserQuestion`
-    inline OR armed a deferral timer to carry the ask on the next turn.
+  - the resolution guardian must NOT fire when the turn is already seeking
+    closure — i.e. it emitted an `AskUserQuestion` inline OR armed a deferral
+    timer;
+  - the `long_job_autowake` guardian reads `waiter_armed` to tell whether a
+    detached long job armed a harness-tracked auto-wake.
 
-If each reimplemented the armed-timer predicate, one could treat a turn as
-"timer armed / closure sought" while the other treated it as stranded. Keeping
-the predicate in ONE importable module (mirroring si_feedback_detect.py) makes
-that divergence impossible; scripts/tests/test_timer_arm_detect.py pins that both
-consumers agree on the same fabricated transcripts.
+Keeping the armed-timer predicate in ONE importable module (mirroring
+si_feedback_detect.py) keeps every guardian on the same definition of "timer
+armed"; scripts/tests/test_timer_arm_detect.py pins that behavior on fabricated
+transcripts.
 
 A timer is "armed" this turn when the assistant emitted EITHER:
   - a `ScheduleWakeup` / `CronCreate` tool_use, OR
@@ -26,8 +24,7 @@ The predicate deliberately matches ANY backgrounded `sleep`, not only `sleep 2`:
 a monitoring poller (`sleep 60`) reads as "timer armed" too. That is an accepted
 FALSE NEGATIVE for the resolution guardian (a poller is not really seeking
 closure) — one that self-heals, because the FOLLOWING turn without a timer is
-re-evaluated and fires. Widening the match would instead risk FALSE POSITIVES on
-the ask-defer warn path, which is the more costly error there.
+re-evaluated and fires.
 
 Both predicates are pure over a list of transcript entries (one turn's slice) and
 tolerate BOTH entry shapes seen in the wild: a top-level `type == "assistant"`
@@ -37,7 +34,7 @@ from __future__ import annotations
 
 import re
 
-# A backgrounded Bash command that arms a delivery-split / monitoring timer.
+# A backgrounded Bash command that arms a deferral / monitoring timer.
 _SLEEP_RE = re.compile(r"\bsleep\b", re.IGNORECASE)
 
 # Tool names that count as "timer armed" on their own (a scheduled wakeup

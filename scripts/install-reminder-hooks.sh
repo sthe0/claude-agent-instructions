@@ -40,10 +40,6 @@ DESIRED = [
     # plan was submitted — pre-tool-call text may never render, so the click-
     # question would arrive with nothing behind it ("Я не вижу плана").
     ("PreToolUse",       "AskUserQuestion", "hook-plan-delivery-gate.py", 5),
-    # General text-then-buttons gate: deny ANY AskUserQuestion preceded by
-    # substantive same-turn assistant text (>200 chars) — that text may never
-    # render; deliver it as the turn's final message and ask next turn.
-    ("PreToolUse",       "AskUserQuestion", "hook-ask-text-split.py", 5),
     # Pre-emptive primary gate: deny an AskUserQuestion that escalates an external-
     # service failure to the user WITHOUT a recorded diagnosis (present-tense outage
     # cue + user-facing ask, and neither overcome-difficulty invoked nor a declared
@@ -77,9 +73,6 @@ DESIRED = [
     ("PreToolUse",       "Edit|Write", "hook-guard-canon-readonly.py", 5),
     ("PreToolUse",       "Bash",  "hook-guard-canon-readonly.py", 5),
     ("PostToolUse",      "Write", "hook-self-critique-reminder.py",  5),
-    # Nudge when AskUserQuestion times out: any answer written mid-turn must be
-    # restated in the turn's FINAL message or it never reaches the user.
-    ("PostToolUse",      "AskUserQuestion", "hook-answer-delivery-reminder.py", 5),
     # Nudge when an AskUserQuestion answer is free text rather than an offered
     # option label: a correction delivered this way bypasses the
     # UserPromptSubmit self-improvement reminder, which only sees prompts.
@@ -119,9 +112,6 @@ DESIRED = [
     ("PreToolUse",       "Write", "verify-experience-leaf.py --hook", 5),
     # Reject a Write that would carry a git conflict marker into any file.
     ("PreToolUse",       "Write", "verify-no-conflict-markers.py --hook", 5),
-    # Stop hook: warn when a turn promises to ask via buttons "next message" but
-    # never arms the `sleep 2` background timer that opens that next turn.
-    ("Stop",             None,    "hook-ask-defer-timer.py",        5),
 ]
 
 with open(settings_path, encoding="utf-8") as fh:
