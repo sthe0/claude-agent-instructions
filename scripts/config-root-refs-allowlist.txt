@@ -63,7 +63,9 @@ memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-
 memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md:54  # keep:historical-experience — historical quote inside a resolved-task experience leaf
 memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md:61  # keep:historical-experience — historical quote inside a resolved-task experience leaf
 memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md:95  # keep:historical-experience — historical quote inside a resolved-task experience leaf
-memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md:122  # keep:historical-experience — historical quote inside a resolved-task experience leaf
+memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md:3  # keep:historical-experience — instance-17 lesson IS the ~/.claude vs ~/.claude-agent settings-file distinction
+memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md:121  # keep:historical-experience — instance-17 context block: the settings-file venue lesson
+memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md:128  # keep:historical-experience — historical quote inside a resolved-task experience leaf
 memory-global/leaves/experience/2026-06-29-resume-paused-task-isolated-worktree-pinned-sha.md:27  # keep:historical-experience — historical quote inside a resolved-task experience leaf
 memory-global/leaves/experience/2026-06-29-resume-paused-task-isolated-worktree-pinned-sha.md:34  # keep:historical-experience — historical quote inside a resolved-task experience leaf
 memory-global/leaves/experience/2026-06-30-mechanize-subdifficulty-extraction-and-audit.md:33  # keep:historical-experience — historical quote inside a resolved-task experience leaf
