@@ -219,6 +219,7 @@ def check_gate_guardians(gate_to_hook: dict, desired_hooks: set[str]) -> list[st
 REQUIRED_PLUGINS = {
     "dummy": "resolution", "tracker": "resolution", "experience": "resolution",
     "ledger": "resolution", "premise": "plan_approval", "review_dispatch": None,
+    "obligations": "resolution",
 }
 # Plugin observer events must be a subset of the events the engine can emit, or a
 # plugin would silently never fire. The event vocabulary is EVENT_FOR_COMMAND.
@@ -607,6 +608,102 @@ def check_code_review_precondition() -> list[str]:
     return problems
 
 
+def check_obligations() -> list[str]:
+    """Verify the conformance-obligations ledger's block-then-clear behavior on
+    the LIVE path (plugins.fire's generic mint() delegate -> plugin_gate_blockers'
+    resolution fold), not just a direct call into the pure guardian, plus the
+    STATIC force-registration pin.
+
+    Live path: activate `review_dispatch` + `obligations` on a SUBSTANTIVE
+    session at PLAN_READY with an unbound plan review, fire `submit_plan` (the
+    real event review_dispatch observes) so its blocking `spawn_thinker_review`
+    directive is emitted and mint() records it into the obligations ledger;
+    `plugin_gate_blockers(state, 'resolution')` must then carry an
+    `[obligations]`-prefixed blocker naming the obligation. Binding a passing
+    PlanReview must clear it — the guardian re-checks discharge against LIVE
+    state, so no re-fire is needed for the blocker to disappear.
+
+    Static pin: `_DISCHARGE` is the single source of truth for "what is a
+    conformance obligation" (mint records ONLY blocking directives whose action
+    is a `_DISCHARGE` key — see plugins_obligations.py's module docstring for why
+    a universal mint would deadlock resolution). This assertion is the
+    force-registration safety promised in its place: a future blocking
+    conformance directive that wants tracking must add a `_DISCHARGE` entry AND
+    consciously update this pinned set, failing the build until it does, rather
+    than a runtime fail-closed that could deadlock resolution the way a
+    universal mint would.
+    """
+    from agentctl import plugins
+    from agentctl import plugins_obligations as obligations
+    from agentctl.directive import Directive
+    from agentctl.state import Node, PlanReview, SessionState
+
+    problems: list[str] = []
+    prior_pr = os.environ.get("AGENTCTL_PLAN_REVIEW")
+    prior_rd = os.environ.get("AGENTCTL_REVIEW_DISPATCH")
+    prior_ob = os.environ.get("AGENTCTL_OBLIGATIONS")
+    os.environ.pop("AGENTCTL_PLAN_REVIEW", None)
+    os.environ.pop("AGENTCTL_REVIEW_DISPATCH", None)
+    os.environ.pop("AGENTCTL_OBLIGATIONS", None)
+    try:
+        plugin = plugins.REGISTRY.get("obligations")
+        if plugin is None:
+            problems.append("obligations plugin not registered at import (REGISTRY)")
+            return problems
+        if set(plugin.gates) != {"resolution"}:
+            problems.append(
+                f"obligations must contribute exactly the resolution gate, got {set(plugin.gates)}"
+            )
+        if plugin.observers:
+            problems.append(
+                f"obligations must contribute no observers (mint rides fire()'s generic "
+                f"post-observe delegate, not an observer of its own), got {plugin.observers}"
+            )
+
+        state = SessionState(
+            session_id="obl-check", task_id="obl-task", node=Node.PLAN_READY.value,
+            weight_class="SUBSTANTIVE", plan_path="/tmp/verify-agentctl-obligations-plan.toml",
+        )
+        plugins.activate(state, "review_dispatch")
+        plugins.activate(state, "obligations")
+        plugins.fire("submit_plan", state, Directive(True, state.node, "noop"))
+
+        blockers = plugins.plugin_gate_blockers(state, "resolution")
+        obligation_blockers = [b for b in blockers if b.startswith("[obligations]")]
+        if not obligation_blockers:
+            problems.append(
+                "mint via plugins.fire('submit_plan', ...) did not populate an "
+                "[obligations]-sourced resolution-gate blocker for an open, unreviewed plan review"
+            )
+        elif not any("spawn_thinker_review" in b for b in obligation_blockers):
+            problems.append(f"obligations blocker does not name spawn_thinker_review: {obligation_blockers}")
+
+        state.plan_review = PlanReview(plan_path=state.plan_path, verdict="pass", reviewer="thinker")
+        cleared = plugins.plugin_gate_blockers(state, "resolution")
+        if any(b.startswith("[obligations]") for b in cleared):
+            problems.append(f"obligations blocker did not clear after a bound passing PlanReview: {cleared}")
+
+        expected_discharge_actions = {"spawn_thinker_review", "spawn_code_review"}
+        if set(obligations._DISCHARGE) != expected_discharge_actions:
+            problems.append(
+                f"obligations._DISCHARGE registry drifted from the pinned set "
+                f"{expected_discharge_actions!r}, got {set(obligations._DISCHARGE)!r} — a "
+                f"new/removed conformance-obligation action must be a conscious update to "
+                f"this pin, not silent drift"
+            )
+    finally:
+        for key, prior in (
+            ("AGENTCTL_PLAN_REVIEW", prior_pr),
+            ("AGENTCTL_REVIEW_DISPATCH", prior_rd),
+            ("AGENTCTL_OBLIGATIONS", prior_ob),
+        ):
+            if prior is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = prior
+    return problems
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--staged", action="store_true", help="ignored; accepted for verify-all uniformity")
@@ -639,6 +736,7 @@ def main(argv: list[str] | None = None) -> int:
     problems += check_control_precondition()
     problems += check_review_dispatch()
     problems += check_code_review_precondition()
+    problems += check_obligations()
 
     if problems:
         print("verify-agentctl: FAIL")
