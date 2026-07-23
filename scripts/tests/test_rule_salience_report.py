@@ -6,6 +6,7 @@ UNINSTRUMENTED state distinction (never collapsed), and determinism of the
 ranked report over a fixed fixture transcript."""
 from __future__ import annotations
 
+import datetime as dt
 import importlib.util
 import json
 import sys
@@ -32,6 +33,10 @@ rsr = _load_module()
 # Fixture builders
 # ---------------------------------------------------------------------------
 
+# Sub A deliberately holds TWO rule units under ONE heading: the heading's own
+# prose and a sibling bold-lead. That is the case a heading-granular gate cannot
+# see - deleting either entry leaves the heading itself still registered by the
+# other. Sub B keeps the solo-heading case for contrast.
 CLAUDE_MD_TEXT = """# Title
 
 ## Section One
@@ -39,6 +44,8 @@ CLAUDE_MD_TEXT = """# Title
 ### Sub A
 
 Rule A body with a **bold phrase** inside it, plain text after.
+
+**Rule A-two lead.** A second rule unit sharing Sub A with the first.
 
 ### Sub B
 
@@ -66,6 +73,15 @@ def base_rules():
             "delivery_kind": "bracket_tag",
             "delivery_marker": "[my-tag]",
         },
+        {
+            "id": "rule-a-two",
+            "tier": 0,
+            "locator_heading": "### Sub A",
+            "locator_phrase": "A second rule unit sharing Sub A",
+            "kernel_reason": "NOT-NOTICING",
+            "delivery_kind": "",
+            "delivery_marker": "",
+        },
     ]
 
 
@@ -73,10 +89,23 @@ def write_transcript(path: Path, lines: list[dict]) -> None:
     path.write_text("\n".join(json.dumps(line) for line in lines) + "\n")
 
 
-def transcript_line(ts: str, text: str) -> dict:
+def transcript_line(ts: str, text: str, role: str = "user") -> dict:
+    """A text-part transcript line. Defaults to the user turn, where
+    hook-injected bracket tags actually land; pass role="assistant" for the
+    agent merely talking about a marker."""
     return {
         "timestamp": ts,
-        "message": {"role": "assistant", "content": [{"type": "text", "text": text}]},
+        "message": {"role": role, "content": [{"type": "text", "text": text}]},
+    }
+
+
+def tool_use_line(ts: str, command: str) -> dict:
+    return {
+        "timestamp": ts,
+        "message": {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "input": {"command": command}}],
+        },
     }
 
 
@@ -95,6 +124,54 @@ def test_check_registry_fails_when_entry_deleted():
     rules = [r for r in base_rules() if r["id"] != "rule-b"]
     errors = rsr.check_registry(rules, CLAUDE_MD_TEXT)
     assert any("### Sub B" in e for e in errors)
+
+
+def test_check_registry_fails_when_sibling_entry_deleted_under_shared_heading():
+    """The case a heading-granular gate cannot see: `### Sub A` owns TWO rule
+    units, so deleting rule-a-two leaves its heading still registered by rule-a
+    while the bold-lead span it described stands unregistered in CLAUDE.md.
+    Most registry entries share a heading with a sibling, so this - not the
+    solo-heading case above - is the deletion the gate must actually catch."""
+    rules = [r for r in base_rules() if r["id"] != "rule-a-two"]
+    assert any(r["locator_heading"] == "### Sub A" for r in rules), (
+        "precondition: the heading itself must remain registered, so only "
+        "rule-unit granularity can detect the deletion"
+    )
+    errors = rsr.check_registry(rules, CLAUDE_MD_TEXT)
+    assert any("Rule A-two lead" in e for e in errors), errors
+
+
+def test_check_registry_fails_when_heading_prose_entry_deleted_under_shared_heading():
+    """The mirror deletion under the same shared heading: dropping rule-a
+    leaves `### Sub A`'s own prose unregistered even though rule-a-two keeps
+    the heading in the registry."""
+    rules = [r for r in base_rules() if r["id"] != "rule-a"]
+    errors = rsr.check_registry(rules, CLAUDE_MD_TEXT)
+    assert any("Rule A body" in e for e in errors), errors
+
+
+def test_check_registry_fails_when_bold_lead_rule_inserted():
+    """Insertion side: a new bold-lead rule unit added to CLAUDE.md with no
+    registry entry must go red."""
+    claude_md = CLAUDE_MD_TEXT.replace(
+        "### Sub B",
+        "**Freshly inserted rule.** Body of a rule nobody registered.\n\n### Sub B",
+    )
+    errors = rsr.check_registry(base_rules(), claude_md)
+    assert any("Freshly inserted rule" in e for e in errors), errors
+
+
+def test_check_registry_fails_when_imperative_bullet_rule_inserted():
+    claude_md = CLAUDE_MD_TEXT + "\n- An unregistered imperative bullet rule.\n"
+    errors = rsr.check_registry(base_rules(), claude_md)
+    assert any("unregistered imperative bullet" in e for e in errors), errors
+
+
+def test_check_registry_exempts_pure_container_headings():
+    """`# Title` and `## Section One` carry no prose of their own; they must not
+    be demanded to have entries."""
+    errors = rsr.check_registry(base_rules(), CLAUDE_MD_TEXT)
+    assert errors == []
 
 
 def test_check_registry_fails_when_locator_phrase_edited_to_absent_text():
@@ -323,6 +400,156 @@ def test_report_is_deterministic(fixture_transcript):
         rows = rsr.build_report_rows(rules, sessions_scanned, firing_counts, sessions_with_firing)
         results.append(rsr.render_report(rows, sessions_scanned, denom_source="test"))
     assert results[0] == results[1] == results[2]
+
+
+# ---------------------------------------------------------------------------
+# Window denominator — a transcript counts only on a PARSED in-window timestamp
+# ---------------------------------------------------------------------------
+
+def _cutoff(days_ago: int):
+    return dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days_ago)
+
+
+def test_unparseable_timestamp_does_not_put_session_in_window(tmp_path):
+    """The denominator bug: a line whose timestamp is missing or unparseable is
+    not evidence of recency. Such lines are ubiquitous in real transcripts, so
+    treating them as in-window pairs a window-filtered numerator with an
+    unfiltered denominator and deflates every rule's measured salience."""
+    jsonl = tmp_path / "session.jsonl"
+    write_transcript(
+        jsonl,
+        [
+            transcript_line("2020-01-01T00:00:00Z", "ancient [my-tag] firing"),
+            {"message": {"role": "user", "content": "no timestamp field at all"}},
+            {"timestamp": "not-a-timestamp", "message": {"role": "user", "content": "junk ts"}},
+        ],
+    )
+    sessions_scanned, firing_counts, _ = rsr.scan_transcripts(
+        base_rules(), cutoff=_cutoff(30), transcripts=[jsonl]
+    )
+    assert sessions_scanned == 0
+    assert firing_counts.get("[my-tag]", 0) == 0
+
+
+def test_in_window_timestamp_counts_session(tmp_path):
+    jsonl = tmp_path / "session.jsonl"
+    write_transcript(
+        jsonl,
+        [
+            transcript_line("2020-01-01T00:00:00Z", "ancient [my-tag] firing"),
+            transcript_line(_cutoff(1).isoformat(), "recent [my-tag] firing"),
+        ],
+    )
+    sessions_scanned, firing_counts, _ = rsr.scan_transcripts(
+        base_rules(), cutoff=_cutoff(30), transcripts=[jsonl]
+    )
+    assert sessions_scanned == 1
+    # the pre-cutoff line's firing is excluded from the numerator too
+    assert firing_counts["[my-tag]"] == 1
+
+
+def test_wholly_untimestamped_transcript_falls_back_to_mtime(tmp_path):
+    """A transcript with no parseable timestamp anywhere is dated by file mtime
+    rather than silently dropped or silently admitted."""
+    jsonl = tmp_path / "session.jsonl"
+    write_transcript(jsonl, [{"message": {"role": "user", "content": "[my-tag] fired"}}])
+
+    fresh, counts = rsr.scan_session_for_markers(
+        jsonl, rsr.marker_origin_map(base_rules()), cutoff=_cutoff(1)
+    )
+    assert fresh is True
+    assert counts["[my-tag]"] == 1
+
+    stale, counts = rsr.scan_session_for_markers(
+        jsonl, rsr.marker_origin_map(base_rules()), cutoff=_cutoff(-1)  # cutoff in the future
+    )
+    assert stale is False
+    assert counts == {}
+
+
+def test_ledger_rows_without_parsed_timestamp_are_out_of_window(tmp_path):
+    ledger = tmp_path / "ledger.jsonl"
+    write_transcript(
+        ledger,
+        [
+            {"session_id": "s-old", "ts": "2020-01-01T00:00:00+00:00"},
+            {"session_id": "s-untimed"},
+            {"session_id": "s-recent", "ts": _cutoff(1).isoformat()},
+        ],
+    )
+    assert rsr.count_ledger_sessions(ledger, cutoff=_cutoff(30)) == 1
+    assert len(rsr.load_ledger_rows(ledger, cutoff=_cutoff(30))) == 1
+    assert rsr.count_ledger_sessions(ledger, cutoff=None) == 3
+
+
+# ---------------------------------------------------------------------------
+# Marker origin restriction — discussing a rule is not firing it
+# ---------------------------------------------------------------------------
+
+def test_assistant_prose_mentioning_a_bracket_tag_is_not_a_firing(tmp_path):
+    """Every marker in the registry also appears verbatim in CLAUDE.md, plan
+    files and reviews. Counting assistant prose would score a session that only
+    DISCUSSED a rule as having fired it - false OBSERVED, the dangerous
+    direction, since it is what justifies demotion."""
+    jsonl = tmp_path / "session.jsonl"
+    write_transcript(
+        jsonl,
+        [transcript_line("2026-06-01T00:00:00Z", "the [my-tag] hook should fire here", role="assistant")],
+    )
+    sessions_scanned, firing_counts, _ = rsr.scan_transcripts(
+        base_rules(), cutoff=None, transcripts=[jsonl]
+    )
+    assert sessions_scanned == 1
+    assert firing_counts.get("[my-tag]", 0) == 0
+
+
+def test_agentctl_construct_counts_only_in_tool_use_input(tmp_path):
+    rules = [dict(base_rules()[1], id="rule-c", delivery_kind="agentctl_construct",
+                  delivery_marker="agentctl approve")]
+    jsonl = tmp_path / "session.jsonl"
+    write_transcript(
+        jsonl,
+        [
+            transcript_line("2026-06-01T00:00:00Z", "I will run agentctl approve next", role="assistant"),
+            transcript_line("2026-06-01T00:01:00Z", "please run agentctl approve", role="user"),
+            tool_use_line("2026-06-01T00:02:00Z", "python3 -m agentctl approve --by user"),
+        ],
+    )
+    _, firing_counts, _ = rsr.scan_transcripts(rules, cutoff=None, transcripts=[jsonl])
+    assert firing_counts["agentctl approve"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Shared delivery markers are not independent evidence
+# ---------------------------------------------------------------------------
+
+def test_shared_delivery_marker_is_flagged(fixture_transcript):
+    """Two entries whose only firing signal is the same marker cannot be
+    distinguished by it; the render must say so rather than present two
+    identical counts as two independent observations."""
+    rules = base_rules() + [dict(base_rules()[1], id="rule-b-twin")]
+    sessions_scanned, firing_counts, sessions_with_firing = rsr.scan_transcripts(
+        rules, cutoff=None, transcripts=[fixture_transcript]
+    )
+    rows = rsr.build_report_rows(rules, sessions_scanned, firing_counts, sessions_with_firing)
+    by_id = {r["id"]: r for r in rows}
+    assert by_id["rule-b"]["shared_marker_with"] == ["rule-b-twin"]
+    assert by_id["rule-b-twin"]["shared_marker_with"] == ["rule-b"]
+    assert by_id["rule-a"]["shared_marker_with"] == []
+    rendered = rsr.render_report(rows, sessions_scanned, denom_source="test")
+    assert "NOT independent evidence" in rendered
+
+
+def test_report_names_uninstrumented_share(fixture_transcript):
+    """Phase 3 must not have to discover the instrumentation gap by itself."""
+    rules = base_rules()
+    sessions_scanned, firing_counts, sessions_with_firing = rsr.scan_transcripts(
+        rules, cutoff=None, transcripts=[fixture_transcript]
+    )
+    rows = rsr.build_report_rows(rules, sessions_scanned, firing_counts, sessions_with_firing)
+    rendered = rsr.render_report(rows, sessions_scanned, denom_source="test")
+    assert "UNINSTRUMENTED** - they carry no positive-firing signal" in rendered
+    assert "never gates" in rendered
 
 
 def test_missing_ledger_degrades_gracefully(tmp_path):

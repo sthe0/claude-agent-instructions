@@ -6,8 +6,13 @@ Stage 4 of instruction-surface-governance. Two modes:
 
   --check-registry   Two-directional drift gate against scripts/rule-registry.toml
                       and CLAUDE.md (no ledger reads). Exit 1 on any drift.
-                        Direction A: every rule unit in CLAUDE.md has a registry
-                        entry (best-effort heading-coverage check).
+                        Direction A: every RULE UNIT mechanically enumerated from
+                        CLAUDE.md contains the locator_phrase of some registry
+                        entry. Units are enumerated at the same granularity the
+                        registry itself uses (see `enumerate_rule_units`), so
+                        deleting one entry of several sharing a heading turns the
+                        gate red, and inserting a new bold-lead rule or imperative
+                        bullet with no entry turns it red too.
                         Direction B: every registry entry's locator_heading and
                         locator_phrase are still verbatim-findable in CLAUDE.md.
 
@@ -38,6 +43,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -132,39 +138,148 @@ def direction_b_drift(rules: list[dict], claude_md: str) -> list[str]:
     return errors
 
 
-def _is_pure_container(lines: list[str], heading_idx: int) -> bool:
-    """A heading is a pure container - exempt from needing its own registry
-    entry - when every line between it and the next heading (any level) is
-    blank. Such a heading only frames its subsections; the rule units live in
-    those subsections' own entries."""
-    for line in lines[heading_idx + 1 :]:
-        stripped = line.strip()
-        if not stripped:
+_BULLET_RE = re.compile(r"^(?:[-*+]\s|\d+\.\s)")
+
+
+def _is_structural(stripped: str) -> bool:
+    """Markdown scaffolding that can never carry a rule of its own."""
+    if not stripped:
+        return True
+    if stripped.startswith("---") and set(stripped) == {"-"}:
+        return True
+    if stripped.startswith("@"):  # @import lines
+        return True
+    if stripped.startswith("<!--") or stripped.endswith("-->"):
+        return True
+    return False
+
+
+def _blocks(lines: list[str]) -> list[tuple[int, list[str]]]:
+    """Blank-line-separated blocks as (0-based start line index, lines)."""
+    out: list[tuple[int, list[str]]] = []
+    buf: list[str] = []
+    start = 0
+    for i, line in enumerate(lines):
+        if line.strip():
+            if not buf:
+                start = i
+            buf.append(line)
+        elif buf:
+            out.append((start, buf))
+            buf = []
+    if buf:
+        out.append((start, buf))
+    return out
+
+
+def enumerate_rule_units(claude_md: str) -> list[dict]:
+    """Mechanically enumerate CLAUDE.md's rule units at registry granularity.
+
+    Three unit kinds, matching the registry's documented enumeration:
+
+      heading    a `#`..`####` heading, extended with the plain prose blocks
+                 that follow it before the next unit starts. A heading whose
+                 extent holds no prose of its own (it only frames subsections,
+                 bold leads or bullets) is a *pure container* and is exempt.
+      bold-lead  a paragraph block whose first content line starts with `**`.
+                 Checked against its OWN block text only - so deleting one of
+                 several bold-lead entries sharing a heading is detectable.
+      bullet     a top-level `- ` / `N. ` item (continuation lines included),
+                 also checked against its own text only.
+
+    Returns dicts: {kind, heading, line (1-based), text, has_prose}. A unit with
+    has_prose False holds only scaffolding (`---`, `@import`, HTML comments) and
+    is exempt from needing an entry.
+    """
+    lines = claude_md.splitlines()
+    units: list[dict] = []
+    heading = ""
+    current_heading_unit: dict | None = None
+
+    for start, block in _blocks(lines):
+        offset = next(
+            (i for i, ln in enumerate(block) if not _is_structural(ln.strip())), len(block)
+        )
+        first = block[offset].strip() if offset < len(block) else ""
+
+        if first and any(first.startswith(p) for p in HEADING_PREFIXES):
+            heading = first
+            current_heading_unit = {
+                "kind": "heading",
+                "heading": heading,
+                "line": start + offset + 1,
+                "text": "",
+            }
+            units.append(current_heading_unit)
+            # a heading block may carry trailing prose lines with no blank line
+            rest = "\n".join(block[offset + 1 :])
+            current_heading_unit["text"] += rest
             continue
-        if any(stripped.startswith(p) for p in HEADING_PREFIXES):
-            return True
-        return False
-    return True
+
+        if first.startswith("**"):
+            units.append({
+                "kind": "bold-lead",
+                "heading": heading,
+                "line": start + offset + 1,
+                "text": "\n".join(block),
+            })
+            continue
+
+        if _BULLET_RE.match(first):
+            item: list[str] | None = None
+            item_start = start
+            for j, ln in enumerate(block):
+                stripped = ln.strip()
+                if _BULLET_RE.match(ln):  # top-level item; indented lines continue it
+                    if item:
+                        units.append({
+                            "kind": "bullet", "heading": heading,
+                            "line": item_start + 1, "text": "\n".join(item),
+                        })
+                    item, item_start = [ln], start + j
+                elif item is not None:
+                    item.append(ln)
+                elif stripped:
+                    item, item_start = [ln], start + j
+            if item:
+                units.append({
+                    "kind": "bullet", "heading": heading,
+                    "line": item_start + 1, "text": "\n".join(item),
+                })
+            continue
+
+        # plain prose / table block: belongs to the enclosing heading unit
+        if current_heading_unit is not None:
+            current_heading_unit["text"] += "\n" + "\n".join(block)
+
+    for u in units:
+        u["has_prose"] = any(
+            not _is_structural(ln.strip()) for ln in u["text"].splitlines()
+        )
+    return units
 
 
 def direction_a_drift(rules: list[dict], claude_md: str) -> list[str]:
-    """Every heading in CLAUDE.md that owns rule-bearing body text must be
-    referenced by at least one registry entry; a heading with body text and
-    zero registry entries is unregistered content. A pure-container heading
-    (only framing subsections, no body text of its own) is exempt. Best-effort:
-    only checks headings, since sub-heading rule units (bold leads, bullets)
-    aren't independently locatable from the markdown structure alone."""
+    """Every rule unit enumerated from CLAUDE.md must contain the
+    locator_phrase of at least one registry entry.
+
+    Rule-unit - not heading - granularity is what makes the gate bite in both
+    directions: deleting an entry whose bold-lead or bullet still stands in
+    CLAUDE.md leaves that unit uncovered (red), and inserting a new rule unit
+    with no entry leaves it uncovered too (red). Pure-container headings, which
+    carry no prose of their own, stay exempt."""
     errors = []
-    registered_headings = {r.get("locator_heading") for r in rules}
-    lines = claude_md.splitlines()
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if not any(stripped.startswith(p) for p in HEADING_PREFIXES):
+    phrases = [p for p in (r.get("locator_phrase") or "" for r in rules) if p]
+    for unit in enumerate_rule_units(claude_md):
+        if not unit["has_prose"]:
+            continue  # pure container / structural-only
+        if any(p in unit["text"] for p in phrases):
             continue
-        if _is_pure_container(lines, i):
-            continue
-        if stripped not in registered_headings:
-            errors.append(f"unregistered heading: {stripped!r}")
+        excerpt = " ".join(unit["text"].split())[:70]
+        errors.append(
+            f"unregistered rule unit ({unit['kind']}, CLAUDE.md:{unit['line']}, "
+            f"under {unit['heading'] or '<top>'!r}): {excerpt!r}"
+        )
     return errors
 
 
@@ -202,48 +317,95 @@ def iter_messages(jsonl: Path):
         return
 
 
-def _message_texts(m: dict):
-    """Yield every searchable text blob in one transcript line: plain-string
-    content, text parts, and tool_use inputs (as JSON so Bash command strings
-    are included)."""
+ORIGIN_ASSISTANT_TEXT = "assistant_text"
+ORIGIN_OTHER_TEXT = "other_text"
+ORIGIN_TOOL_USE_INPUT = "tool_use_input"
+ORIGIN_TOOL_RESULT = "tool_result"
+
+# Which text origins may count as a firing, per delivery_kind. A marker seen
+# only in assistant prose is the agent *discussing* the rule (every marker in
+# this registry also appears verbatim in CLAUDE.md, plan files and reviews) -
+# never evidence that the delivery mechanism fired. False-OBSERVED is the
+# dangerous direction, so each kind is restricted to the origin its mechanism
+# actually writes to.
+MARKER_ORIGINS_BY_KIND: dict[str, frozenset[str]] = {
+    # hook-injected text arrives in the user turn / as hook output, not in
+    # assistant prose
+    "bracket_tag": frozenset({ORIGIN_OTHER_TEXT, ORIGIN_TOOL_RESULT}),
+    # an agentctl subcommand is observable as a literal substring of the Bash
+    # tool_use input that ran it
+    "agentctl_construct": frozenset({ORIGIN_TOOL_USE_INPUT}),
+}
+
+
+def _message_text_parts(m: dict):
+    """Yield (origin, text) for every searchable blob in one transcript line.
+
+    The origin tag is what lets a marker match be attributed to a mechanism
+    rather than to the agent talking about the mechanism."""
     msg = m.get("message", {}) if isinstance(m.get("message"), dict) else {}
+    role = msg.get("role") or m.get("type") or ""
+    text_origin = ORIGIN_ASSISTANT_TEXT if role == "assistant" else ORIGIN_OTHER_TEXT
     content = msg.get("content") if isinstance(msg, dict) else None
     if isinstance(content, str):
-        yield content
+        yield text_origin, content
     elif isinstance(content, list):
         for part in content:
             if not isinstance(part, dict):
                 continue
             if part.get("type") == "text":
-                yield part.get("text", "")
+                yield text_origin, part.get("text", "")
             elif part.get("type") == "tool_use":
-                yield json.dumps(part.get("input") or {})
+                yield ORIGIN_TOOL_USE_INPUT, json.dumps(part.get("input") or {})
             elif part.get("type") == "tool_result":
                 pc = part.get("content")
                 if isinstance(pc, str):
-                    yield pc
+                    yield ORIGIN_TOOL_RESULT, pc
                 elif isinstance(pc, list):
                     for sub in pc:
                         if isinstance(sub, dict) and sub.get("type") == "text":
-                            yield sub.get("text", "")
+                            yield ORIGIN_TOOL_RESULT, sub.get("text", "")
 
 
-def scan_session_for_markers(jsonl: Path, markers: set[str], cutoff: dt.datetime | None):
-    """Return (in_window: bool, counts: dict[marker, int]) for one transcript."""
+def _mtime_in_window(path: Path, cutoff: dt.datetime) -> bool:
+    try:
+        mtime = dt.datetime.fromtimestamp(path.stat().st_mtime, dt.timezone.utc)
+    except OSError:
+        return False
+    return mtime >= cutoff
+
+
+def scan_session_for_markers(
+    jsonl: Path, marker_origins: dict[str, frozenset[str]], cutoff: dt.datetime | None
+):
+    """Return (in_window: bool, counts: dict[marker, int]) for one transcript.
+
+    A transcript counts toward the denominator only when it has a *successfully
+    parsed* timestamp inside the window - a missing or unparseable timestamp is
+    not evidence of recency. Transcripts with no parseable timestamp at all fall
+    back to file mtime. Otherwise a filtered numerator would be divided by an
+    effectively unfiltered denominator, systematically deflating salience."""
     counts: dict[str, int] = defaultdict(int)
-    in_window = False
+    saw_parsed_ts = False
+    in_window = cutoff is None
     for m in iter_messages(jsonl):
         ts = parse_ts(m.get("timestamp") or "")
-        if ts and cutoff and ts < cutoff:
-            continue
-        in_window = True
-        for text in _message_texts(m):
+        if ts:
+            saw_parsed_ts = True
+            if cutoff and ts < cutoff:
+                continue
+            in_window = True
+        for origin, text in _message_text_parts(m):
             if not text:
                 continue
-            for marker in markers:
-                if marker in text:
+            for marker, origins in marker_origins.items():
+                if origin in origins and marker in text:
                     counts[marker] += text.count(marker)
-    return in_window, counts
+    if cutoff is not None and not saw_parsed_ts:
+        in_window = _mtime_in_window(jsonl, cutoff)
+    if not in_window:
+        return False, {}
+    return True, counts
 
 
 def find_transcripts() -> list[Path]:
@@ -252,14 +414,22 @@ def find_transcripts() -> list[Path]:
     return sorted(PROJECTS_ROOT.glob("*/*.jsonl"))
 
 
+def marker_origin_map(rules: list[dict]) -> dict[str, frozenset[str]]:
+    """marker -> the union of origins that may evidence it firing."""
+    out: dict[str, frozenset[str]] = {}
+    for r in rules:
+        marker = r.get("delivery_marker")
+        origins = MARKER_ORIGINS_BY_KIND.get(r.get("delivery_kind") or "")
+        if not marker or not origins:
+            continue
+        out[marker] = out.get(marker, frozenset()) | origins
+    return out
+
+
 def scan_transcripts(rules: list[dict], cutoff: dt.datetime | None, transcripts: list[Path] | None = None):
     """Return (sessions_scanned, firing_counts, sessions_with_firing) across
     all searchable markers in the registry."""
-    markers = {
-        r["delivery_marker"]
-        for r in rules
-        if r.get("delivery_kind") in ("bracket_tag", "agentctl_construct") and r.get("delivery_marker")
-    }
+    marker_origins = marker_origin_map(rules)
     if transcripts is None:
         transcripts = find_transcripts()
 
@@ -268,7 +438,7 @@ def scan_transcripts(rules: list[dict], cutoff: dt.datetime | None, transcripts:
     sessions_with_firing: dict[str, int] = defaultdict(int)
 
     for jsonl in transcripts:
-        in_window, counts = scan_session_for_markers(jsonl, markers, cutoff)
+        in_window, counts = scan_session_for_markers(jsonl, marker_origins, cutoff)
         if not in_window:
             continue
         sessions_scanned += 1
@@ -286,13 +456,15 @@ def scan_transcripts(rules: list[dict], cutoff: dt.datetime | None, transcripts:
 
 def count_ledger_sessions(path: Path, cutoff: dt.datetime | None) -> int | None:
     """Distinct session_id/session count in a JSONL ledger within the window.
-    Returns None if the ledger file is absent (graceful degradation)."""
+    A row needs a successfully parsed in-window `ts` to count - an unparseable
+    or missing one is not evidence of recency. Returns None if the ledger file
+    is absent (graceful degradation)."""
     if not path.exists():
         return None
     seen: set[str] = set()
     for m in iter_messages(path):
         ts = parse_ts(m.get("ts") or "")
-        if ts and cutoff and ts < cutoff:
+        if cutoff and (ts is None or ts < cutoff):
             continue
         sid = m.get("session_id") or m.get("session") or m.get("task_id")
         if sid:
@@ -301,14 +473,14 @@ def count_ledger_sessions(path: Path, cutoff: dt.datetime | None) -> int | None:
 
 
 def load_ledger_rows(path: Path, cutoff: dt.datetime | None) -> list[dict] | None:
-    """All rows of a JSONL ledger within the window, or None if the ledger file
-    is absent (graceful degradation)."""
+    """All rows of a JSONL ledger with a successfully parsed in-window `ts`, or
+    None if the ledger file is absent (graceful degradation)."""
     if not path.exists():
         return None
     rows = []
     for m in iter_messages(path):
         ts = parse_ts(m.get("ts") or "")
-        if ts and cutoff and ts < cutoff:
+        if cutoff and (ts is None or ts < cutoff):
             continue
         rows.append(m)
     return rows
@@ -423,6 +595,11 @@ def build_report_rows(
     sessions_with_firing: dict[str, int],
     trigger_ledger_rows: list[dict] | None = None,
 ) -> list[dict]:
+    marker_owners: dict[str, list[str]] = defaultdict(list)
+    for r in rules:
+        if r.get("delivery_marker"):
+            marker_owners[r["delivery_marker"]].append(r["id"])
+
     rows = []
     for r in rules:
         marker = r.get("delivery_marker", "")
@@ -446,6 +623,7 @@ def build_report_rows(
                 "sessions_scanned": sessions_scanned,
                 "state": state,
                 "reason": reason,
+                "shared_marker_with": [o for o in marker_owners.get(marker, []) if o != r["id"]],
             }
         )
     rows.sort(key=lambda row: (row["state"] != "OBSERVED", -row["firing_count"], row["id"]))
@@ -459,8 +637,17 @@ def render_report(rows: list[dict], sessions_scanned: int, denom_source: str) ->
     lines.append("|---|---:|---|---:|---|---|")
     for row in rows:
         ratio = f"{row['sessions_with_firing']}/{row['sessions_scanned']}"
+        reason = row["reason"]
+        shared = row.get("shared_marker_with") or []
+        if shared:
+            note = (
+                f"shares delivery_marker `{row['delivery_marker']}` with "
+                + ", ".join(f"`{o}`" for o in shared)
+                + " - its firings are NOT independent evidence for this entry"
+            )
+            reason = f"{reason}; {note}" if reason else note
         lines.append(
-            f"| `{row['id']}` | {row['tier']} | {row['state']} | {row['firing_count']} | {ratio} | {row['reason']} |"
+            f"| `{row['id']}` | {row['tier']} | {row['state']} | {row['firing_count']} | {ratio} | {reason} |"
         )
     counts = defaultdict(int)
     for row in rows:
@@ -470,6 +657,36 @@ def render_report(rows: list[dict], sessions_scanned: int, denom_source: str) ->
         "Summary: "
         + ", ".join(f"{state}={n}" for state, n in sorted(counts.items()))
         + f" (total {len(rows)})"
+    )
+    uninstrumented = counts.get("UNINSTRUMENTED", 0)
+    lines.append("")
+    lines.append("Reading these numbers:")
+    lines.append(
+        f"- **{uninstrumented}/{len(rows)} entries are UNINSTRUMENTED** - they carry no "
+        "positive-firing signal at all, so their rows say nothing about salience "
+        "either way. Only the OBSERVED / NEVER-OBSERVED / TRIGGER-ABSENT rows carry "
+        "evidence; a demotion decision resting on an UNINSTRUMENTED row is resting on "
+        "no measurement."
+    )
+    lines.append(
+        "- Firing detection is substring matching over session transcripts, restricted "
+        "per delivery_kind to the text origin the mechanism actually writes to "
+        "(bracket_tag: non-assistant text and tool_result; agentctl_construct: tool_use "
+        "inputs). Assistant prose is excluded because every marker here also appears "
+        "verbatim in CLAUDE.md, plan files and reviews - discussing a rule would "
+        "otherwise score as firing it. Residual bias remains in BOTH directions: a "
+        "tool_use input that merely greps CLAUDE.md still matches (over-count), and a "
+        "mechanism whose output never reaches the transcript is invisible (under-count)."
+    )
+    lines.append(
+        "- `structured_hook` is a reserved delivery_kind: PreToolUse allow/deny hooks "
+        "emit no positive firing signal, so entries using it are UNINSTRUMENTED by "
+        "construction. No registry entry currently uses it; the branch exists so such "
+        "an entry cannot be silently misread as NEVER-OBSERVED."
+    )
+    lines.append(
+        "- This report never gates. It exits 0 on every path, including missing "
+        "ledgers and missing transcripts; only `--check-registry` can fail."
     )
     return "\n".join(lines) + "\n"
 

@@ -32,7 +32,15 @@ CHECKS: list[str] = [
     "verify-onboarding-entrypoint",
     "verify-no-conflict-markers",
     "verify-config-root-refs",
+    "rule-salience-report",
 ]
+
+# Checks whose main() takes its own flags instead of the shared --staged.
+# rule-salience-report's default mode prints a report and never gates; only
+# --check-registry runs the drift gate, so the aggregator must pass it.
+CHECK_ARGS: dict[str, list[str]] = {
+    "rule-salience-report": ["--check-registry"],
+}
 
 
 def load_check(name: str, scripts_dir: Path):
@@ -64,7 +72,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"verify-all: skip {name} (missing)")
             continue
         print(f"=== {name} ===")
-        rc = mod.main(sub_argv)
+        rc = mod.main(CHECK_ARGS.get(name, sub_argv))
         if rc != 0:
             failed.append(name)
         print()
