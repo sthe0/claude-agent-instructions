@@ -200,19 +200,30 @@ def scan_dynamic_injection(max_sessions: int = 20) -> dict[str, int] | None:
     }
 
 
+def surface_breakdown() -> tuple[list[tuple[str, int]], int]:
+    """((label, chars) rows, summed total) for the always-loaded surface.
+
+    The single source of the surface number: `cmd_surface_report` renders what
+    this returns, and out-of-tree consumers (rule-salience-report.py's Phase-3
+    pressure arm) read it instead of re-deriving or scraping stdout. Dynamic
+    hook-injection volume is deliberately not part of it — it is never summed
+    into the static total."""
+    rows: list[tuple[str, int]] = []
+    for label, path in _surface_files():
+        n = len(path.read_text(encoding="utf-8")) if path.is_file() else 0
+        rows.append((label, n))
+
+    skill_total, skill_count = _skill_description_total()
+    rows.append((f"skill descriptions ({skill_count} skills)", skill_total))
+
+    return rows, sum(n for _, n in rows)
+
+
 def cmd_surface_report(constants: dict[str, str], include_dynamic: bool) -> int:
     """Report-only: the aggregate always-loaded surface plus its breakdown.
     Never fails — the aggregate is disclosed, not enforced (see
     always-loaded-surface-advisory-chars in config.md)."""
-    breakdown: list[tuple[str, int]] = []
-    for label, path in _surface_files():
-        n = len(path.read_text(encoding="utf-8")) if path.is_file() else 0
-        breakdown.append((label, n))
-
-    skill_total, skill_count = _skill_description_total()
-    breakdown.append((f"skill descriptions ({skill_count} skills)", skill_total))
-
-    total = sum(n for _, n in breakdown)
+    breakdown, total = surface_breakdown()
 
     print("lint-prose-length: always-loaded-surface-report")
     for label, n in breakdown:

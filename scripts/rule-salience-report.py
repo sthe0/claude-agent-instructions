@@ -2,7 +2,7 @@
 """Rule-salience report: does each always-loaded CLAUDE.md rule's delivery
 mechanism ever actually fire?
 
-Stage 4 of instruction-surface-governance. Two modes:
+Stage 4 of instruction-surface-governance. Three modes:
 
   --check-registry   Two-directional drift gate against scripts/rule-registry.toml
                       and CLAUDE.md (no ledger reads). Exit 1 on any drift.
@@ -25,6 +25,13 @@ Stage 4 of instruction-surface-governance. Two modes:
                         which is the prose->pointer collapse a future kernel-shrink
                         actually risks. Trust Direction B per-entry; treat
                         Direction A as a coarser insertion/bookkeeping net.
+
+  --check-due        Phase-3 readiness verdict: is compressing proven-deliverable
+                      kernel prose both warranted (the always-loaded surface
+                      overshoots its advisory budget) and safe (enough data, and
+                      enough OBSERVED tier>=1 prose to cover the overshoot)? See
+                      `phase3_readiness` for the three arms. Reports only - it
+                      exits 0 on every path, DUE included.
 
   (default)           Ranked report: one row per registry entry, with an
                       observed-firing count/ratio when the entry's delivery
@@ -52,6 +59,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import importlib.util
 import json
 import re
 import sys
@@ -710,12 +718,321 @@ def render_report(rows: list[dict], sessions_scanned: int, denom_source: str) ->
 
 
 # ---------------------------------------------------------------------------
+# Phase-3 readiness — is compressing proven-deliverable kernel prose due yet?
+# ---------------------------------------------------------------------------
+
+BASELINE_STAMP_PATH = Path.home() / ".local" / "state" / "claude-phase3-baseline.stamp"
+
+# What a compressed rule still costs. Collapsing a rule's prose to a pointer
+# does not free its gross length - a line stays behind. Measured over the 9
+# CLAUDE.md bold-lead rules that already carry a leaf link, rendering each as
+# `**<bold lead>** [leaf](path).` gives 65..191 chars, mean 114, median 105.
+# 120 rounds the mean up so the deduction is never optimistic: the reclaimable
+# arm under-counts (the sentinel fires late) rather than over-counts (a false
+# DUE that would authorize compression on air).
+POINTER_ALLOWANCE_CHARS = 120
+
+# Largest-first attribution rows the verdict prints. The verdict is read from a
+# hook injection, where an unbounded list would cost more surface than the
+# compression it proposes; 10 matches the repo's digest-first log-reading cap.
+MAX_DETAIL_ROWS = 10
+
+
+def read_baseline_age_days(
+    path: Path = BASELINE_STAMP_PATH, now: dt.datetime | None = None
+) -> float | None:
+    """Days since the sentinel's baseline stamp, or None when it is absent or
+    unparseable - which the predicate reads as "the observation window has not
+    started", never as "old enough". The stamp is written by the hook; this
+    module stays write-free (see the module docstring's contract)."""
+    try:
+        raw = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    ts = parse_ts(raw)
+    if ts is None:
+        return None
+    if ts.tzinfo is None:
+        # A stamp written without an offset would otherwise raise on the
+        # subtraction below, and this check must never raise.
+        ts = ts.replace(tzinfo=dt.timezone.utc)
+    now = now or dt.datetime.now(dt.timezone.utc)
+    return max(0.0, (now - ts).total_seconds() / 86400.0)
+
+
+def reclaimable_chars(
+    registry_rows: list[dict], units: list[dict], state_by_id: dict[str, str]
+) -> tuple[int, list[dict]]:
+    """(chars, detail) that compressing PROVEN-deliverable prose would free.
+
+    A CLAUDE.md rule unit contributes only when it is covered by at least one
+    registry entry and EVERY covering entry is tier>=1 AND OBSERVED. The three
+    other firing states are excluded on purpose and are not interchangeable:
+    NEVER-OBSERVED means the mechanism was watched and never fired - a RISK
+    signal, the opposite of a licence to delete the prose that is doing the
+    work; TRIGGER-ABSENT and UNINSTRUMENTED are absence of measurement. Reading
+    any of them as a compress signal is the 2026-07-03 regression this whole
+    programme exists to prevent.
+
+    Coverage uses the same locator_phrase containment as `direction_a_drift`,
+    so a unit the drift gate calls covered is the unit counted here. Each unit
+    is counted ONCE no matter how many entries cover it - charging a multi-entry
+    bold-lead block once per entry would inflate the arm into a false DUE."""
+    total = 0
+    detail: list[dict] = []
+    for unit in units:
+        if not unit["has_prose"]:
+            continue
+        covering = [
+            r for r in registry_rows
+            if (r.get("locator_phrase") or "") and r["locator_phrase"] in unit["text"]
+        ]
+        if not covering:
+            continue
+        if not all(
+            (r.get("tier") or 0) >= 1 and state_by_id.get(r["id"]) == "OBSERVED"
+            for r in covering
+        ):
+            continue
+        gain = max(0, len(unit["text"]) - POINTER_ALLOWANCE_CHARS)
+        total += gain
+        detail.append({
+            "kind": unit["kind"],
+            "heading": unit["heading"],
+            "line": unit["line"],
+            "chars": gain,
+            "entries": [r["id"] for r in covering],
+        })
+    return total, detail
+
+
+def phase3_readiness(
+    surface_chars: int,
+    surface_budget: int,
+    reclaimable: int,
+    sessions_scanned: int,
+    sessions_floor: int,
+    baseline_age_days: float | None,
+    window_days: float,
+) -> tuple[bool, str, dict]:
+    """(due, reason, metrics) - the whole Phase-3 predicate, and pure.
+
+    Numbers in, verdict out: no clock, no config read, no filesystem. That is
+    what lets both branches be proven on synthetic data, including a surface
+    grown past the budget, without editing a constant or a 39k-char file.
+
+    Three arms, evaluated in a fixed order, first failure returned as the
+    reason:
+
+      pressure         the aggregate always-loaded surface exceeds its advisory
+                       budget. No overshoot, nothing to buy - compression is a
+                       cost with no benefit.
+      data-sufficiency enough sessions scanned AND enough elapsed days since
+                       the baseline stamp. Guards the reclaimable arm from
+                       resting on a thin sample: OBSERVED after two sessions is
+                       coincidence, not evidence.
+      reclaimable      proven-deliverable prose covers the overshoot. Firing
+                       last, so a DUE verdict always names a concrete surplus.
+    """
+    overshoot = surface_chars - surface_budget
+    metrics = {
+        "surface_chars": surface_chars,
+        "surface_budget": surface_budget,
+        "overshoot": overshoot,
+        "reclaimable": reclaimable,
+        "sessions_scanned": sessions_scanned,
+        "sessions_floor": sessions_floor,
+        "baseline_age_days": baseline_age_days,
+        "window_days": window_days,
+    }
+
+    if overshoot <= 0:
+        return False, (
+            f"pressure: surface {surface_chars} chars is within the "
+            f"{surface_budget}-char advisory budget (overshoot {overshoot})"
+        ), metrics
+
+    if baseline_age_days is None:
+        return False, (
+            "data-sufficiency: no baseline stamp yet, so the observation window "
+            "has not started"
+        ), metrics
+    if sessions_scanned < sessions_floor:
+        return False, (
+            f"data-sufficiency: {sessions_scanned} session(s) scanned is below the "
+            f"{sessions_floor}-session floor"
+        ), metrics
+    if baseline_age_days < window_days:
+        return False, (
+            f"data-sufficiency: baseline is {baseline_age_days:.1f} day(s) old, "
+            f"below the {window_days}-day window"
+        ), metrics
+
+    if reclaimable < overshoot:
+        return False, (
+            f"reclaimable: {reclaimable} char(s) of OBSERVED tier>=1 prose is below "
+            f"the {overshoot}-char overshoot"
+        ), metrics
+
+    return True, (
+        f"surface exceeds its budget by {overshoot} chars and {reclaimable} char(s) "
+        f"of OBSERVED tier>=1 prose can be compressed to cover it"
+    ), metrics
+
+
+def _load_lint_prose_length():
+    """The surface number's single source, loaded by path (the script's name is
+    hyphenated, so it is not importable). None when it cannot be loaded - the
+    caller reports the missing input instead of guessing a surface size."""
+    path = REPO_ROOT / "scripts" / "lint-prose-length.py"
+    spec = importlib.util.spec_from_file_location("lint_prose_length", path)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception:  # noqa: BLE001 - see below
+        # Deliberately broad: an unmeasurable surface must degrade to a NOT-DUE
+        # verdict naming the missing input, never to a traceback. This check is
+        # called from a hook, and a sentinel that can crash a session is a
+        # sentinel someone disables.
+        return None
+    return module
+
+
+def _int_or_none(raw) -> int | None:
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def scan_firing(
+    rules: list[dict], cutoff: dt.datetime | None, transcripts: list[Path]
+) -> tuple[int, list[dict]]:
+    """(sessions_scanned, report rows) - shared by the ranked report and the
+    readiness check so a DUE verdict can never rest on firing states that
+    disagree with the report a reader would run to audit it."""
+    if not transcripts:
+        return 0, build_report_rows(rules, 0, {}, {})
+    sessions_scanned, firing_counts, sessions_with_firing = scan_transcripts(rules, cutoff, transcripts)
+    trigger_ledger_rows = load_ledger_rows(POLICY_LEDGER_PATH, cutoff)
+    rows = build_report_rows(
+        rules, sessions_scanned, firing_counts, sessions_with_firing, trigger_ledger_rows
+    )
+    return sessions_scanned, rows
+
+
+def collect_due_inputs(rules: list[dict], claude_md: str, days: int) -> dict:
+    """Assemble the predicate's numeric inputs from the existing plumbing.
+
+    Read-only, and an input that cannot be measured comes back None rather than
+    raising, so the CLI can name the missing one. Kept separate from both the
+    predicate (which must stay pure) and the rendering, so the DUE branch of the
+    CLI is testable by substituting this one function."""
+    constants: dict[str, str] = {}
+    surface_chars = None
+    lint = _load_lint_prose_length()
+    if lint is not None:
+        try:
+            constants = lint.parse_config_md()
+            _, surface_chars = lint.surface_breakdown()
+        except Exception:  # noqa: BLE001 - fail open, see _load_lint_prose_length
+            constants, surface_chars = {}, None
+
+    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
+    sessions_scanned, rows = scan_firing(rules, cutoff, find_transcripts())
+    reclaimable, detail = reclaimable_chars(
+        rules, enumerate_rule_units(claude_md), {r["id"]: r["state"] for r in rows}
+    )
+
+    return {
+        "surface_chars": surface_chars,
+        "surface_budget": _int_or_none(constants.get("always-loaded-surface-advisory-chars")),
+        "reclaimable": reclaimable,
+        "detail": detail,
+        "sessions_scanned": sessions_scanned,
+        "sessions_floor": _int_or_none(constants.get("phase3-due-sessions-floor")),
+        "baseline_age_days": read_baseline_age_days(),
+        "window_days": _int_or_none(constants.get("phase3-due-data-window-days")),
+    }
+
+
+def render_due_verdict(due: bool, reason: str, metrics: dict, detail: list[dict]) -> str:
+    age = metrics["baseline_age_days"]
+    age_text = "n/a (no stamp)" if age is None else f"{age:.1f}"
+    lines = [
+        f"phase3-readiness: {'DUE' if due else 'NOT-DUE'} - {reason}",
+        f"  pressure:         surface {metrics['surface_chars']} / budget "
+        f"{metrics['surface_budget']} chars (overshoot {metrics['overshoot']})",
+        f"  data-sufficiency: {metrics['sessions_scanned']} session(s) / floor "
+        f"{metrics['sessions_floor']}; baseline age {age_text} / window "
+        f"{metrics['window_days']} day(s)",
+        f"  reclaimable:      {metrics['reclaimable']} char(s) across {len(detail)} "
+        "OBSERVED tier>=1 unit(s)",
+    ]
+    ranked = sorted(detail, key=lambda d: -d["chars"])
+    for d in ranked[:MAX_DETAIL_ROWS]:
+        lines.append(
+            f"    - {d['chars']:>6} chars  {d['kind']} at CLAUDE.md:{d['line']} "
+            f"({', '.join(d['entries'])})"
+        )
+    if len(ranked) > MAX_DETAIL_ROWS:
+        lines.append(
+            f"    - ... and {len(ranked) - MAX_DETAIL_ROWS} smaller unit(s), not "
+            "listed; their chars are included in the total above"
+        )
+    lines.append(
+        "  Only the OBSERVED state feeds the reclaimable arm. NEVER-OBSERVED is a "
+        "RISK signal about the mechanism, never a licence to compress the prose."
+    )
+    lines.append(
+        "  This check reports and never gates: it exits 0 on every path, DUE included."
+    )
+    return "\n".join(lines)
+
+
+def cmd_check_due(rules: list[dict], claude_md: str, days: int) -> int:
+    """Report the Phase-3 readiness verdict. Returns 0 on EVERY path, DUE
+    included - a sentinel that can fail a build is a sentinel someone disables
+    the first time it fires."""
+    inputs = collect_due_inputs(rules, claude_md, days)
+    missing = [
+        name for name in ("surface_chars", "surface_budget", "sessions_floor", "window_days")
+        if inputs.get(name) is None
+    ]
+    if missing:
+        print(
+            "phase3-readiness: NOT-DUE - inputs unavailable: " + ", ".join(missing)
+            + " (nothing to compare; the check reports and never gates)"
+        )
+        return 0
+
+    due, reason, metrics = phase3_readiness(
+        surface_chars=inputs["surface_chars"],
+        surface_budget=inputs["surface_budget"],
+        reclaimable=inputs["reclaimable"],
+        sessions_scanned=inputs["sessions_scanned"],
+        sessions_floor=inputs["sessions_floor"],
+        baseline_age_days=inputs["baseline_age_days"],
+        window_days=inputs["window_days"],
+    )
+    print(render_due_verdict(due, reason, metrics, inputs.get("detail") or []))
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--check-registry", action="store_true", help="Run the two-directional drift gate and exit")
+    ap.add_argument(
+        "--check-due",
+        action="store_true",
+        help="Report the Phase-3 readiness verdict and exit (never gates; always exits 0)",
+    )
     ap.add_argument("--days", type=int, default=90, help="Scan window size in days (default 90)")
     ap.add_argument("--registry", default=str(REGISTRY_PATH), help="Path to rule-registry.toml")
     ap.add_argument("--claude-md", default=str(CLAUDE_MD_PATH), help="Path to CLAUDE.md")
@@ -736,15 +1053,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"OK: {len(rules)} registry entries, no drift against {claude_md_path}")
         return 0
 
+    if args.check_due:
+        return cmd_check_due(rules, claude_md, args.days)
+
     cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=args.days)
     transcripts = find_transcripts()
     if not transcripts:
         print("No session transcripts found; report is empty (no --check-registry errors implied).")
-        rows = build_report_rows(rules, 0, {}, {})
+        _, rows = scan_firing(rules, cutoff, transcripts)
         print(render_report(rows, 0, denom_source="no transcripts available"))
         return 0
 
-    sessions_scanned, firing_counts, sessions_with_firing = scan_transcripts(rules, cutoff, transcripts)
+    sessions_scanned, rows = scan_firing(rules, cutoff, transcripts)
 
     denom_source = "transcript scan"
     policy_sessions = count_ledger_sessions(POLICY_LEDGER_PATH, cutoff)
@@ -757,8 +1077,6 @@ def main(argv: list[str] | None = None) -> int:
         else:
             denom_source = "transcript scan only (both supplementary ledgers absent)"
 
-    trigger_ledger_rows = load_ledger_rows(POLICY_LEDGER_PATH, cutoff)
-    rows = build_report_rows(rules, sessions_scanned, firing_counts, sessions_with_firing, trigger_ledger_rows)
     print(render_report(rows, sessions_scanned, denom_source))
     return 0
 
