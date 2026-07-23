@@ -109,6 +109,45 @@ print("\n".join(out))
   }
 }
 
+# tracker_plan_marker <key> -> concatenated posted comment bodies on <key>,
+# newline-joined, no header decoration, in CHRONOLOGICAL (creation) order,
+# oldest first — see registry.sh's provider-contract doc block for why this
+# ordering is a load-bearing precondition, not an incidental detail. This
+# verb performs NO marker-parsing itself; it only hands raw text to
+# verify-ticket-plan-sync.py's --comment-file - mode, which owns the
+# last-marker-wins extraction. Optional verb, probed the same way as
+# tracker_read. Single degrade class: exit 0 = rendered ok, INCLUDING zero
+# comments (empty stdout is success — the absence is reported by
+# verify-ticket-plan-sync.py's own NO-PLAN status, not by this verb), ANY
+# nonzero = unavailable, reason on stderr.
+tracker_plan_marker() {
+  local key="$1" json rc
+
+  if [[ -n "${CLAUDE_DRY_RUN:-}" ]]; then
+    printf 'github tracker: [dry-run] tracker_plan_marker skipped for %q\n' "$key" >&2
+    return 1
+  fi
+
+  json="$("$GH_BIN" issue view "$key" --json comments 2>/dev/null)"
+  rc=$?
+  if [[ $rc -ne 0 || -z "$json" ]]; then
+    printf 'github tracker: tracker_plan_marker failed for %q (gh issue view exited %d)\n' "$key" "$rc" >&2
+    return 1
+  fi
+
+  printf '%s' "$json" | python3 -c '
+import json, sys
+
+d = json.load(sys.stdin)
+bodies = [c.get("body") or "" for c in d.get("comments") or []]
+if bodies:
+    print("\n".join(bodies))
+' || {
+    printf 'github tracker: tracker_plan_marker failed for %q (rendering error)\n' "$key" >&2
+    return 1
+  }
+}
+
 # _gh_orgcheck <file> [<file> ...] -> 0 if every file is clean of org-internal
 # markers (or the override is set), 1 otherwise, with the marker report on
 # stderr. Shared refusal gate for tracker_comment / tracker_publish_plan.

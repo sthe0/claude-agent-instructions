@@ -47,6 +47,38 @@
 #                                          every downstream tool's exit code into that
 #                                          single class rather than letting it leak
 #                                          through as tracker_read's own status.
+#   tracker_plan_marker <key>           -> print every posted comment's body
+#                                          on <key>, in CHRONOLOGICAL
+#                                          (creation) order, oldest first —
+#                                          LOAD-BEARING: verify-ticket-plan-
+#                                          sync.py's extract_marker() picks
+#                                          the LAST marker match in the
+#                                          concatenated text as authoritative,
+#                                          so a backend implementing this verb
+#                                          MUST preserve that order (matching
+#                                          `gh issue view --json comments`'s
+#                                          own default) — a backend that
+#                                          reorders or reverses comments
+#                                          before printing them would
+#                                          silently make a stale marker win
+#                                          over the current one. Newline-
+#                                          joined, no header decoration;
+#                                          performs NO marker-parsing itself
+#                                          — that stays exclusively in
+#                                          verify-ticket-plan-sync.py. Exactly
+#                                          ONE degrade class, same shape as
+#                                          tracker_read: exit 0 = rendered ok
+#                                          INCLUDING zero comments (empty
+#                                          stdout is success, not failure —
+#                                          the absence is reported by
+#                                          verify-ticket-plan-sync.py's own
+#                                          NO-PLAN status instead), ANY
+#                                          nonzero = unavailable, reason on
+#                                          stderr. Intended consumer:
+#                                          `<backend-call> tracker_plan_marker
+#                                          <key> | python3
+#                                          verify-ticket-plan-sync.py --plan
+#                                          <toml> --comment-file -`.
 #
 # Optional write verbs (declared only by trackers that support them):
 #   tracker_comment <key> <markdown-path>
