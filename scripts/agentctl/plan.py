@@ -76,6 +76,7 @@ from pathlib import Path
 
 from .state import (
     Actor,
+    CheckVenue,
     Confidence,
     Criterion,
     CriterionType,
@@ -126,6 +127,23 @@ class PlanDoc:
 
 class PlanError(Exception):
     """The TOML plan is missing required structure."""
+
+
+_CHECK_VENUE_VALUES = {v.value for v in CheckVenue}
+
+
+def _parse_check_venue(raw: object, context: str) -> str:
+    """Validate a stage's `verify_venue` or a final_check's `venue` against the
+    CheckVenue vocabulary, defaulting to "delivery" when absent so an
+    un-annotated check keeps observing the same tree dispatch wrote to."""
+    if raw is None:
+        return CheckVenue.DELIVERY.value
+    value = str(raw)
+    if value not in _CHECK_VENUE_VALUES:
+        raise PlanError(
+            f"{context} venue {value!r} is not one of {sorted(_CHECK_VENUE_VALUES)}"
+        )
+    return value
 
 
 # The only two executor shapes the engine dispatches: in-thread, or a named spawn
@@ -576,7 +594,10 @@ def parse_plan(
         xc = fc.get("expected_exit", 0)
         if not isinstance(xc, int):
             raise PlanError(f"final_check {fi} expected_exit must be an int")
-        final_checks.append(FinalCheck(command=cmd, expected_exit=xc, label=str(fc.get("label", ""))))
+        venue = _parse_check_venue(fc.get("venue"), f"final_check {fi}")
+        final_checks.append(
+            FinalCheck(command=cmd, expected_exit=xc, label=str(fc.get("label", "")), venue=venue)
+        )
 
     meta = PlanMeta(
         task_id=str(m["task_id"]),
@@ -666,6 +687,7 @@ def parse_plan(
                         str(s["verify_command"]) if s.get("verify_command") else None
                     ),
                     expected_exit=int(s.get("expected_exit", 0)),
+                    verify_venue=_parse_check_venue(s.get("verify_venue"), f"stage {index}"),
                 ),
                 principle=principle,
                 conditions=str(s["conditions"]) if s.get("conditions") else None,

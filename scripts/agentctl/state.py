@@ -19,7 +19,7 @@ import json
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -68,6 +68,16 @@ class Route(str, Enum):
 class CriterionType(str, Enum):
     MEASURABLE = "measurable"
     ACCEPTANCE_REVIEW = "acceptance_review"
+
+
+# The declared check venue for a stage's verify_command or a [[final_check]]
+# (schema 22). "repo_root" always means the canonical checkout; "delivery"
+# (the default) means the plan's delivery venue — SessionState.resolve_check_venue
+# is the one place that resolves either value to a concrete cwd, shared by
+# cmd_dispatch and all three verify sites so they observe the same tree.
+class CheckVenue(str, Enum):
+    DELIVERY = "delivery"
+    REPO_ROOT = "repo_root"
 
 
 class StageStatus(str, Enum):
@@ -536,6 +546,11 @@ class Criterion:
     verify_command: str | None = None
     expected_exit: int = 0
     observation: str = ""
+    # The declared check venue (CheckVenue value, schema 22): which tree
+    # verify_command runs in, resolved via SessionState.resolve_check_venue.
+    # Defaults to "delivery" so an un-annotated stage keeps observing the
+    # same tree dispatch wrote to (the venue-symmetry fix), not repo_root.
+    verify_venue: str = "delivery"
 
 
 @dataclass
@@ -585,11 +600,15 @@ class Supply:
 class FinalCheck:
     """A typed end-to-end check the engine runs at verify-final.
 
-    Runs via `bash -c` in repo_root (if set). `label` is a human-readable name
-    for failure messages; when empty the command string is used instead."""
+    Runs via `bash -c` in the venue named by `venue` (a CheckVenue value,
+    resolved via SessionState.resolve_check_venue), default "delivery".
+    `label` is a human-readable name for failure messages; when empty the
+    command string is used instead."""
     command: str
     expected_exit: int = 0
     label: str = ""
+    # schema 22 — see Criterion.verify_venue for the shared default rationale.
+    venue: str = "delivery"
 
 
 @dataclass
@@ -880,6 +899,24 @@ class SessionState:
             raise InvariantError(
                 f"plan_stack depth {len(self.plan_stack)} exceeds _MAX_PLAN_STACK={_MAX_PLAN_STACK}"
             )
+
+    # --- check venue --------------------------------------------------------
+    def resolve_check_venue(self, venue: str) -> str | None:
+        """Resolve a declared CheckVenue value to a concrete cwd — the ONE
+        resolver cmd_dispatch and all three verify sites (cmd_record_result,
+        cmd_verify_final's per-stage re-run, cmd_verify_final's final_check
+        loop) call, so they observe the same tree instead of dispatch writing
+        to delivery_worktree while verification silently checks repo_root
+        (the venue-asymmetry defect this method removes).
+
+        "repo_root" always resolves to the canonical checkout. Anything else
+        (including the "delivery" default) resolves to the plan's delivery
+        venue: delivery_worktree when declared, else repo_root. With
+        delivery_worktree unset this is byte-identical to repo_root for every
+        plan that never declared one (152/171 existing plans as of schema 22)."""
+        if venue == CheckVenue.REPO_ROOT.value:
+            return self.repo_root
+        return self.delivery_worktree or self.repo_root
 
     # --- stage helpers ----------------------------------------------------
     def stage(self, index: int) -> Stage:

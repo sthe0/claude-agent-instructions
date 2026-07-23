@@ -43,6 +43,7 @@ from .state import (
     _EXECUTION_NODES,
     _MAX_PLAN_STACK,
     Actor,
+    CheckVenue,
     CodeReview,
     Critique,
     Criterion,
@@ -332,6 +333,28 @@ def _verify_command_result(stage, runner: Runner | None, cwd: str | None = None)
     if not crit.verify_command or crit.criterion_type != CriterionType.MEASURABLE.value:
         return True, None
     return _run_check(crit.verify_command, crit.expected_exit, runner, cwd)
+
+
+def _resolve_or_refuse(state: SessionState, venue: str) -> tuple[str | None, str | None]:
+    """Resolve a declared CheckVenue via state.resolve_check_venue; return
+    (cwd, refusal). refusal is None when the venue is usable — unset (cwd is
+    None, the pre-venue behaviour), no delivery_worktree ever declared (the
+    resolved cwd is plain repo_root, exactly as pre-fix — a missing repo_root
+    surfaces as a shell `cd` failure -> check FAILED, unchanged), or an
+    existing directory. Once a delivery_worktree IS declared, a resolved venue
+    that does not exist on disk (e.g. a worktree never created, or cleaned up
+    after the session that made it ended) cannot be run: the engine has no way
+    to know whether the check would have passed there, so this is a REFUSAL
+    distinct from a check failure — the caller must surface it without
+    recording a stage FAILED or entering DIAGNOSING."""
+    cwd = state.resolve_check_venue(venue)
+    if not cwd or state.delivery_worktree is None or Path(cwd).is_dir():
+        return cwd, None
+    return cwd, (
+        f"check venue {cwd!r} does not exist (declared by [meta] delivery_worktree "
+        f"or repo_root); create the venue, or set venue = \"repo_root\" if a "
+        f"delivery venue is no longer needed"
+    )
 
 
 def _is_recursion_refusal(result) -> bool:
@@ -1874,8 +1897,10 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
         dry_run=dry_run,
         # A hard-sandboxed spawned child can only write the tree it is
         # launched in, so pin its cwd to the plan's delivery venue rather
-        # than relying on the dispatching process's ambient cwd.
-        cwd=state.delivery_worktree or state.repo_root,
+        # than relying on the dispatching process's ambient cwd. Always
+        # "delivery" — dispatch has no verify_venue/venue of its own to read,
+        # and delivery is where a spawned developer must write.
+        cwd=state.resolve_check_venue(CheckVenue.DELIVERY.value),
     )
     if dry_run:
         # #10: a dry-run is a pure preview — no event log, no state save, no
@@ -2125,7 +2150,17 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
     # contradicted pass becomes a real failure (digest + DIAGNOSING), so "report
     # honestly" is an invariant for the measurable subset, not a discipline.
     if passed:
-        ok, result = _verify_command_result(stage, runner, cwd=state.repo_root)
+        crit = stage.criterion
+        cwd = None
+        if crit.verify_command and crit.criterion_type == CriterionType.MEASURABLE.value:
+            cwd, refusal = _resolve_or_refuse(state, crit.verify_venue)
+            if refusal:
+                store.save(state)
+                return Directive(
+                    False, state.node, "fix_venue",
+                    f"stage {stage.index} verify_command refused: {refusal}",
+                )
+        ok, result = _verify_command_result(stage, runner, cwd=cwd)
         if not ok:
             passed = False
             note = (
@@ -2207,14 +2242,29 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     # non-match refuses RESOLUTION rather than trusting the recorded PASSED flags.
     failures: list[str] = []
     for stage in state.stages:
-        ok, result = _verify_command_result(stage, runner, cwd=state.repo_root)
+        crit = stage.criterion
+        cwd = None
+        if crit.verify_command and crit.criterion_type == CriterionType.MEASURABLE.value:
+            cwd, refusal = _resolve_or_refuse(state, crit.verify_venue)
+            if refusal:
+                return Directive(
+                    False, state.node, "fix_venue",
+                    f"stage {stage.index} verify_command refused: {refusal}",
+                )
+        ok, result = _verify_command_result(stage, runner, cwd=cwd)
         if not ok:
             failures.append(
                 f"stage {stage.index}: exit {result.returncode} != "
                 f"{stage.criterion.expected_exit} ({stage.criterion.verify_command})"
             )
     for fc in state.final_check:
-        ok, result = _run_check(fc.command, fc.expected_exit, runner, cwd=state.repo_root)
+        cwd, refusal = _resolve_or_refuse(state, fc.venue)
+        if refusal:
+            return Directive(
+                False, state.node, "fix_venue",
+                f"final_check '{fc.label or fc.command}' refused: {refusal}",
+            )
+        ok, result = _run_check(fc.command, fc.expected_exit, runner, cwd=cwd)
         if not ok:
             label = fc.label or fc.command
             failures.append(
