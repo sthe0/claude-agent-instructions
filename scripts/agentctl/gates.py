@@ -562,6 +562,44 @@ def code_review_blockers(
     return [f"code-reviewer verdict is {review.verdict!r} — pass blocked until a passing verdict (or an explicit override) is recorded"]
 
 
+def _operative_surface(doc) -> tuple:
+    """The plan's operative surface: what the engine executes or dispatches on,
+    as opposed to its prose (title/goal/done_criterion/expected_result_image/
+    material/conditions/invariants/principle) — the latter is deliberately
+    excluded so no amount of narrative rewriting can satisfy the CHANGE half
+    below. Per stage: means, method, verify_command, expected_exit, the
+    declared check venue and the executor. Plan level: repo_root,
+    delivery_worktree and every final_check's (command, expected_exit, venue).
+    Every string component passes through `_normalize_string` so a whitespace-
+    or-case-only rephrasing does not register as a change; expected_exit stays
+    a literal int comparison."""
+    stage_surface = sorted(
+        (
+            _normalize_string(s.means.means),
+            _normalize_string(s.means.method),
+            _normalize_string(s.criterion.verify_command or ""),
+            s.criterion.expected_exit,
+            _normalize_string(s.criterion.verify_venue),
+            _normalize_string(s.actor.executor),
+        )
+        for s in doc.stages
+    )
+    final_check_surface = sorted(
+        (
+            _normalize_string(fc.command),
+            fc.expected_exit,
+            _normalize_string(fc.venue),
+        )
+        for fc in doc.meta.final_check
+    )
+    meta_surface = (
+        _normalize_string(doc.meta.repo_root or ""),
+        _normalize_string(doc.meta.delivery_worktree or ""),
+        final_check_surface,
+    )
+    return (stage_surface, meta_surface)
+
+
 def replan_coverage_blockers(old_doc, new_doc, critique) -> list[str]:
     """Verify the critique's similarities/differences split is COVERED by the
     corrected plan — the dataflow, NOT the cognitive item->field mapping (that
@@ -571,9 +609,14 @@ def replan_coverage_blockers(old_doc, new_doc, critique) -> list[str]:
         appear as a substring of the new plan's conditions + invariants text;
         missing => a blocker naming the item.
       - CHANGE: if any difference is declared (critique.differences_to_remove is
-        non-empty), the multiset of (means, method) across the new stages must
-        differ from the old plan's — proof some means/method was re-selected to
-        remove the difference; unchanged => one blocker.
+        non-empty), the plan's operative surface (`_operative_surface`: per-stage
+        means/method/verify_command/expected_exit/verify_venue/executor, plus
+        [meta] repo_root/delivery_worktree/final_check) must differ from the old
+        plan's — proof something the engine executes or dispatches on was
+        re-selected to remove the difference; unchanged => one blocker. A means/
+        method-only diff is one member of that surface, not the whole of it: a
+        correction that instead lives entirely in verify_command, a final_check,
+        or [meta] also satisfies this half.
 
     Declared-item-scoped: empty lists pass vacuously, so a critique that records no
     split (or, via the cmd_replan guard, a replan with no difficulty present)
@@ -601,12 +644,13 @@ def replan_coverage_blockers(old_doc, new_doc, critique) -> list[str]:
             )
     diffs = [d for d in critique.differences_to_remove if (d or "").strip()]
     if diffs:
-        old_mm = sorted((s.means.means, s.means.method) for s in old_doc.stages)
-        new_mm = sorted((s.means.means, s.means.method) for s in new_doc.stages)
-        if old_mm == new_mm:
+        if _operative_surface(old_doc) == _operative_surface(new_doc):
             out.append(
-                "differences_to_remove is non-empty but no stage means/method changed "
-                "— a difference cannot be removed without re-selecting a means/method"
+                "differences_to_remove is non-empty but the plan's operative surface "
+                "(means/method, verify_command/expected_exit/verify_venue, executor, "
+                "final_check, [meta] repo_root/delivery_worktree) did not change — a "
+                "difference cannot be removed without changing what the engine "
+                "executes or dispatches on"
             )
     return out
 
