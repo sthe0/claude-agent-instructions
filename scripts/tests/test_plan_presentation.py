@@ -94,7 +94,7 @@ def test_state_round_trip_plan_presentation():
         rendering_sha256="b" * 64, rendering_text="hello", presented_ts=123.0,
     )
     s = SessionState(session_id="s", task_id="t", plan_presentations=[pp])
-    assert s.schema_version == 21
+    assert s.schema_version == 22
     round_tripped = SessionState.from_dict(json.loads(json.dumps(s.to_dict())))
     assert round_tripped == s
 
