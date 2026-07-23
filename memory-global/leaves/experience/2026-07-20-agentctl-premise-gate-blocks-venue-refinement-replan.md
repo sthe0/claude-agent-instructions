@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "user (Fedor Solovyev)"
 refs: [2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan, 2026-07-09-gate-must-execute-what-it-attests, 2026-07-03-engine-replan-artifact-discipline]
 created: 2026-07-20
-last_verified: 2026-07-22
+last_verified: 2026-07-23
 ---
 
 # Premise gate blocks a verify_command-venue refinement replan — nudge plan_path + re-enumerate
@@ -37,6 +37,16 @@ Passable recipe: (1) nudge the gate-exempt state.plan_path to the corrected plan
 - Where it arose: dedicated SUBSTANTIVE fix task off origin/main in isolated worktree /Users/the0/cai-wt-qcd (branch `agentctl-question-candidate-dispose`), discharging the follow-up owed above.
 - What landed (commit `e987fe3`): `cmd_question_candidate_dispose` in `scripts/agentctl/cli.py` mirroring `cmd_ledger_dispose` but over `state.plugins["premise"]["candidates"]` (recorded ⇒ resolvable `--question` referent; dismissed ⇒ `--reason`; unknown id ⇒ "no such candidate"); subparser + COMMANDS entry; corrected `cmd_question_enumerate` advice string; 8-test file `scripts/tests/test_agentctl_question_candidate_dispose.py` (both success paths, all error paths, and a `premise_blockers` gate-unblock). verify-all 16/16, full pytest 2396 passed / 3 skipped.
 - **Meta (spine mechanics learned, worth reusing):** (a) `spawn-specialist.py` doesn't set child cwd — a spawned `developer` inherits the parent's cwd and its filesystem sandbox anchors on that cwd's git root, so **dispatch must be run from the worktree scripts dir** for the child to reach the worktree; (b) spawned children (even under bypassPermissions) **cannot execute `python`** but can read/write files and run git/ls — so the root (which holds execution rights in the worktree) runs the verification itself; (c) `python3 -m agentctl` only imports when cwd=`scripts/` (package lives at `scripts/agentctl/`) — a verify_command that cd's to repo_root false-fails the `-m agentctl` clause while pytest (conftest-injected sys.path) passes; wrap the `-m` clause in `(cd scripts && …)`. This third point recurred as the DIAGNOSING→replan on this very task — the same verify-venue family as [[2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan]].
+
+
+### 2026-07-23 — canon-writer-ledger-attribution (control-scoping refinement; clean CLI path)
+- Where it arose: Core self-improvement task: stamp direct-IO canon writers into the attribution ledger. Stage-4 landing FAILED its final_check axis (c) test -z "$(git status --porcelain)" in the SHARED canonical checkout /home/the0/claude-agent-instructions — false-RED on 2 foreign untracked experience leaves owned by a concurrent session (verify-ownership forbids touching them). A ff-merge cannot create untracked files, so the fix was a REFINEMENT replan scoping the canonical axis to -uno (tracked-only); worktree axis (d) stays strict (task owns the worktree).
+- Working plan: canon-writer-ledger-attribution v-uno (both stage-4 verify_command and meta.final_check 2 canonical axis -> git status --porcelain -uno; worktree axis strict)
+
+## Common core & variations
+**Common:** Same recipe as the 2026-07-20 head context: a refinement replan that touches a stage verify_command re-stales BOTH the premise digest (re-run question-enumerate) AND the plan-review (fresh thinker review bound to the NEW sha256). replan_coverage then requires every critique.invariants_to_preserve item to substring-land (casefold+collapsed-ws) in a stage conditions/invariants field. After replan: next-stage -> EXECUTING -> record-result, engine re-runs the -uno check itself (exit 0).
+
+**Variations:** Two nuances this occurrence adds. (1) COVERAGE gate has a SECOND clause: when critique.differences_to_remove is non-empty, replan_coverage_blockers ALSO requires the (means,method) multiset across stages to DIFFER from the approved snapshot — folding invariants into the invariants field is not enough; I added a 'verification-means refinement' sentence to stage-4 method naming the -uno re-selection. Recipe step (3) should read: fold preserved invariants into conditions/invariants AND record the changed means in a stage means/method. (2) The mandatory plan-review SPAWN could not Read the plan at ~/.claude-agent/plans/<slug>.toml (PERMISSION-REQUEST) because spawn-specialist.py anchors the child sandbox on the LAUNCH cwd; remedy used = launch spawn-specialist.py from a PARENT cwd (/home/the0) that contains BOTH ~/.claude-agent/plans/ AND the repo — a simpler alternative to the venue leaf's --add-dir ~/.claude-agent/plans fix, no code change. (3) No state.json surgery needed — enumerate raised 0 candidates, the whole cycle went through the normal CLI verbs, confirming the e987fe3 fix + the clean-refinement path. Delivered: 6 direct-IO canon writers now stamp via edit_ledger.stamp; landed 127a26c to origin/main.
 
 ## Cost
 Modest — most effort in diagnosing the premise digest binding across plugins_premise.py + cli.py cmd_replan + gates.py replan_coverage_blockers.
