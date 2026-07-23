@@ -41,7 +41,7 @@ docs/migrations/README.md:3  # keep:migration-doc — migration doc — describe
 docs/migrations/README.md:5  # keep:migration-doc — migration doc — describes the legacy layout by nature
 docs/operations/git-workflow.md:13  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
 docs/operations/org-portability.md:35  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-docs/operations/org-portability.md:66  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+docs/operations/org-portability.md:74  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
 docs/operations/org-portability.md:70  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
 docs/operations/setup.md:35  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
 docs/operations/setup.md:37  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location

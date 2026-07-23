@@ -11,7 +11,7 @@ Before wiring Core on a new machine, confirm the prerequisites — `doctor.sh` c
 
 Optional, warn-only (`doctor.sh` reports `[WARN]`, never `[FAIL]`, when absent):
 
-- **gh (GitHub CLI)**, authenticated (`gh auth login`) — the transport behind the `github` tracker backend's `tracker_read` / `tracker_comment` / `tracker_publish_plan` verbs (reading a ticket's title/status/comments, posting a comment, publishing an approved plan). A missing or unauthenticated `gh` degrades those verbs to their single nonzero class — `opening.py` and the launchers still run; only the ticket-reading and plan-publishing steps are skipped. Install via your platform's package manager (e.g. `brew install gh`, `apt install gh`), then `gh auth login`.
+- **gh (GitHub CLI)**, authenticated (`gh auth login`) — the transport behind the `github` tracker backend's `tracker_read` / `tracker_comment` / `tracker_publish_plan` / `tracker_plan_marker` verbs (reading a ticket's title/status/comments, posting a comment, publishing an approved plan, fetching posted comments back for plan-sync comparison). A missing or unauthenticated `gh` degrades those verbs to their single nonzero class — `opening.py` and the launchers still run; only the ticket-reading and plan-publishing steps are skipped. Install via your platform's package manager (e.g. `brew install gh`, `apt install gh`), then `gh auth login`.
 
 ## Initial setup
 

@@ -38,7 +38,7 @@ The instructions are layered by scope. The **root** (this repo) defines the **un
 
 **Requirements** — `doctor.sh` **fails** (not just warns) if any is missing: **Claude Code ≥ 2.0.20** (the system is skill/plugin/hook-driven; the Skill tool landed in 2.0.20, so that is the floor), plus **git** and **python3** on `PATH` (needed by the launchers, the `agentctl` engine, and the git workflow).
 
-**Optional: `gh` (GitHub CLI)** — the transport behind the `github` tracker backend's `tracker_read` / `tracker_comment` / `tracker_publish_plan` verbs (reading ticket context, posting comments, publishing approved plans). `doctor.sh` **warns**, not fails, when it's missing or unauthenticated — install it, then `gh auth login`. See [docs/operations/setup.md](docs/operations/setup.md).
+**Optional: `gh` (GitHub CLI)** — the transport behind the `github` tracker backend's `tracker_read` / `tracker_comment` / `tracker_publish_plan` / `tracker_plan_marker` verbs (reading ticket context, posting comments, publishing approved plans, fetching posted comments back for plan-sync comparison). `doctor.sh` **warns**, not fails, when it's missing or unauthenticated — install it, then `gh auth login`. See [docs/operations/setup.md](docs/operations/setup.md).
 
 ### Fastest path — one command
 
