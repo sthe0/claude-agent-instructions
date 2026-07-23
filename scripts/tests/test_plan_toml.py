@@ -1,6 +1,6 @@
 import pytest
 
-from agentctl.plan import PlanError, diff_plans, final_check_venue_warnings, load_plan, parse_plan
+from agentctl.plan import PlanError, check_venue_warnings, diff_plans, load_plan, parse_plan
 from agentctl.state import FinalCheck
 
 
@@ -166,7 +166,7 @@ def test_final_check_venue_warns_on_repo_root_cd(tmp_path):
     repo_root = tmp_path / "repo"
     worktree = tmp_path / "worktree"
     fc = FinalCheck(command=f"cd {repo_root} && pytest -q", expected_exit=0, label="all tests")
-    warnings = final_check_venue_warnings([fc], str(repo_root), str(worktree))
+    warnings = check_venue_warnings([], [fc], str(repo_root), str(worktree))
     assert len(warnings) == 1
     assert "repo_root" in warnings[0]
     assert str(worktree) in warnings[0]
@@ -176,19 +176,19 @@ def test_final_check_venue_silent_when_cd_targets_worktree(tmp_path):
     repo_root = tmp_path / "repo"
     worktree = tmp_path / "worktree"
     fc = FinalCheck(command=f"cd {worktree} && pytest -q", expected_exit=0, label="all tests")
-    assert final_check_venue_warnings([fc], str(repo_root), str(worktree)) == []
+    assert check_venue_warnings([], [fc], str(repo_root), str(worktree)) == []
 
 
 def test_final_check_venue_silent_when_delivery_worktree_unset(tmp_path):
     repo_root = tmp_path / "repo"
     fc = FinalCheck(command=f"cd {repo_root} && pytest -q", expected_exit=0, label="all tests")
-    assert final_check_venue_warnings([fc], str(repo_root), None) == []
+    assert check_venue_warnings([], [fc], str(repo_root), None) == []
 
 
 def test_final_check_venue_lint_never_blocks_plan_parsing():
     """The venue lint is advisory-only, computed by a separate non-raising
     function — parse_plan itself never rejects a venue mismatch (the CLI layer
-    calls final_check_venue_warnings onto the advisories channel, not problems)."""
+    calls check_venue_warnings onto the advisories channel, not problems)."""
     data = {
         "meta": {
             "task_id": "t",
@@ -203,7 +203,7 @@ def test_final_check_venue_lint_never_blocks_plan_parsing():
     }
     doc = parse_plan(data)
     assert doc.meta.delivery_worktree == "/abs/worktree"
-    assert len(final_check_venue_warnings(doc.meta.final_check, doc.meta.repo_root, doc.meta.delivery_worktree)) == 1
+    assert len(check_venue_warnings(doc.stages, doc.meta.final_check, doc.meta.repo_root, doc.meta.delivery_worktree)) == 1
 
 
 # --- 8-element activity-structure (weight_class = "substantive") ---

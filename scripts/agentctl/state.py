@@ -772,7 +772,7 @@ class SessionState:
     # The linked worktree a worktree-delivered change is authored in (from plan
     # [meta].delivery_worktree). None (default) = no worktree-venue signal,
     # byte-identical to pre-field behaviour; live states predating the field load
-    # unchanged. Backs plan.final_check_venue_warnings.
+    # unchanged. Backs plan.check_venue_warnings.
     delivery_worktree: str | None = None
     # Typed end-to-end checks run at verify-final after per-stage re-runs.
     # Absent in legacy states (schema_version <= 7): from_dict defaults to [].

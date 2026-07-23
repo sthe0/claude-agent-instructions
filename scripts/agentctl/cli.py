@@ -32,7 +32,7 @@ from .directive import Directive
 from .dispatch import Runner, dispatch_stage, parse_marker, subprocess_runner
 from .machine import transition
 from .plan import (
-    final_check_venue_warnings,
+    check_venue_warnings,
     load_plan,
     stage_question_key,
     verify_command_reachability_blockers,
@@ -1203,11 +1203,11 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     d.data.setdefault("advisories", []).extend(
         verify_command_scope_warnings(doc.stages, doc.meta.final_check)
     )
-    # Deterministic worktree-venue lint (#45) — same warn-only channel; fires
-    # only when [meta] delivery_worktree names a pre-landing venue distinct
-    # from repo_root.
+    # Deterministic check-venue lint (#45) — same warn-only channel; fires
+    # only when [meta] delivery_worktree names a venue distinct from repo_root,
+    # and only when a check's `cd` target contradicts its own declared venue.
     d.data.setdefault("advisories", []).extend(
-        final_check_venue_warnings(doc.meta.final_check, doc.meta.repo_root, doc.meta.delivery_worktree)
+        check_venue_warnings(doc.stages, doc.meta.final_check, doc.meta.repo_root, doc.meta.delivery_worktree)
     )
     if gates.plan_presentation_active(state):
         # A NUDGE, not the enforcement — the hash-bound gate in gates.

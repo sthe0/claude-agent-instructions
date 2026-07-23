@@ -112,7 +112,7 @@ class PlanMeta:
     # differs from repo_root (a Core/IaC change lands via PR; the canonical
     # checkout at repo_root stays frozen on main until landing). None (default) =
     # no worktree-venue signal, byte-identical to pre-field behaviour. Backs the
-    # final_check_venue_warnings lint below.
+    # check_venue_warnings lint below.
     delivery_worktree: str | None = None
     # Optional typed end-to-end checks run by verify-final after per-stage re-runs.
     # Absent => [] (back-compat). Parsed from top-level [[final_check]] tables.
@@ -501,31 +501,38 @@ def verify_command_reachability_blockers(stages, final_check, repo_root) -> list
     return blockers
 
 
-# --- final_check worktree-venue lint (advisory, never blocking) -------------
-# Difficulty removed: a worktree-delivered change (Core edits land via PR; the
-# canonical checkout stays frozen on main until landing) is ABSENT from
-# repo_root pre-landing, so a final_check whose `cd` targets repo_root observes
-# the wrong tree — a genuinely-green delivery false-fails (experience leaves
-# 2026-06-24-agentctl-verify-venue-worktree-needs-substantive-replan,
-# 2026-07-20-agentctl-premise-gate-blocks-venue-refinement-replan). This is
-# perception, not a decidable defect — a repo_root-anchored final_check is the
-# CORRECT post-landing confirmation, so the lint only warns (never blocks) and
-# only fires when [meta] delivery_worktree names the pre-landing venue.
-def final_check_venue_warnings(
-    final_check, repo_root: str | None, delivery_worktree: str | None
+# --- check-venue lint (advisory, never blocking) -----------------------------
+# Difficulty removed: schema 22 made the check venue a DECLARED field
+# (Criterion.verify_venue / FinalCheck.venue, resolved by
+# SessionState.resolve_check_venue) shared by dispatch and every verify site.
+# Once the venue is decidable from that field, a lint that still GUESSES the
+# intended venue from a `cd` target is a second, weaker copy of the same rule —
+# its disagreements with the field are unresolvable. This lint is therefore
+# rebased on CONTRADICTION: it warns only when a check's first `cd` target
+# disagrees with the venue it itself declares (default "delivery"), and stays
+# silent when a check declares venue = "repo_root" and cd's to canon — that is
+# now a deliberate, reviewable declaration, not a suspected mistake. Perception
+# (inferring a `cd` target from free-text command bodies) stays a lint; the
+# rule (which venue is intended) lives in the field. Still advisory-only:
+# fires only when [meta] delivery_worktree names a venue distinct from repo_root.
+def check_venue_warnings(
+    stages, final_check, repo_root: str | None, delivery_worktree: str | None
 ) -> list[str]:
-    """Warn (never block) when a final_check `cd`s into the canonical repo_root
-    while [meta] delivery_worktree is set — pre-landing that observes the wrong
-    tree; the repo_root run is the post-landing confirmation instead. Silent
-    when delivery_worktree is unset (no signal) or repo_root is unset (nothing
-    to compare against)."""
+    """Warn (never block) when a stage verify_command or a final_check `cd`s
+    into a tree that CONTRADICTS its own declared venue: a "delivery"-venue
+    check cd-ing into the canonical repo_root, or a "repo_root"-venue check
+    cd-ing into the delivery worktree. Silent when the declared venue and the
+    `cd` target agree (including a "repo_root"-venue check cd-ing to canon —
+    the intentional post-landing confirmation), or when delivery_worktree is
+    unset (no second venue exists to contradict) or repo_root is unset
+    (nothing to resolve relative `cd` targets against)."""
     if not delivery_worktree or not repo_root:
         return []
     repo_root_p = Path(repo_root).resolve()
     worktree_p = Path(delivery_worktree).resolve()
-    warnings: list[str] = []
-    for fi, fc in enumerate(final_check or [], 1):
-        for sub in re.split(r"&&|;|\|", fc.command):
+
+    def _first_cd_target(command: str) -> Path | None:
+        for sub in re.split(r"&&|;|\|", command):
             sub = sub.strip()
             if not sub:
                 continue
@@ -538,19 +545,45 @@ def final_check_venue_warnings(
             target = Path(toks[1])
             if not target.is_absolute():
                 target = repo_root_p / target
-            target = target.resolve()
-            under_repo_root = target == repo_root_p or repo_root_p in target.parents
-            under_worktree = target == worktree_p or worktree_p in target.parents
-            if under_repo_root and not under_worktree:
-                label = fc.label or fc.command
+            return target.resolve()
+        return None
+
+    warnings: list[str] = []
+
+    def _warn_if_contradicts_venue(command: str, venue: str, where: str) -> None:
+        target = _first_cd_target(command)
+        if target is None:
+            return
+        under_repo_root = target == repo_root_p or repo_root_p in target.parents
+        under_worktree = target == worktree_p or worktree_p in target.parents
+        if venue == CheckVenue.REPO_ROOT.value:
+            if under_worktree and not under_repo_root:
                 warnings.append(
-                    f"final_check {fi} ({label!r}) cd's into the canonical repo_root "
-                    f"but [meta] delivery_worktree is set; pre-landing this observes "
-                    f"the wrong tree — cd into {delivery_worktree} so the check runs "
-                    f"where the un-landed change lives (the repo_root run is the "
-                    f"post-landing confirmation)."
+                    f"{where} declares venue = \"repo_root\" but cd's into the "
+                    f"delivery worktree {delivery_worktree}; cd into {repo_root} "
+                    f"to match its declared venue, or drop the venue override if "
+                    f"the worktree is the intended target."
                 )
-                break
+        else:
+            if under_repo_root and not under_worktree:
+                warnings.append(
+                    f"{where} cd's into the canonical repo_root but its declared "
+                    f"venue is \"delivery\"; cd into {delivery_worktree} so the "
+                    f"check runs where the un-landed change lives, or declare "
+                    f"venue = \"repo_root\" if this check is the intentional "
+                    f"post-landing confirmation."
+                )
+
+    for s in stages or []:
+        if s.criterion.verify_command:
+            _warn_if_contradicts_venue(
+                s.criterion.verify_command,
+                s.criterion.verify_venue,
+                f"stage {s.index} ({s.title!r}) verify_command",
+            )
+    for fi, fc in enumerate(final_check or [], 1):
+        label = fc.label or fc.command
+        _warn_if_contradicts_venue(fc.command, fc.venue, f"final_check {fi} ({label!r})")
     return warnings
 
 
