@@ -35,6 +35,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from agentctl import edit_ledger
 from lib.config_root import agent_home
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -183,6 +184,7 @@ def main(argv: list[str] | None = None) -> int:
         changed.append(f"{path}  (created={created}, last_verified={last_verified})")
         if args.apply:
             path.write_text(new_text, encoding="utf-8")
+            edit_ledger.stamp(str(path), "stamp-memory-dates")
 
     verb = "stamped" if args.apply else "would stamp"
     print(f"stamp-memory-dates [{args.scope}]: {len(leaves)} leaf/leaves scanned, "

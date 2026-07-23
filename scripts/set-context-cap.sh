@@ -46,16 +46,23 @@ BASE="$REPO/settings/base.json"
 source "$REPO/scripts/lib/config-root.sh"
 command -v python3 >/dev/null || { echo "set-context-cap: python3 required" >&2; exit 1; }
 
+# Ledger-stamp resolution: THIS script's own location, not the canonical $REPO
+# above (which may point at a different checkout) — so a worktree copy stamps
+# via its own edit_ledger, provable pre-landing.
+STAMP_REPO="$(cd "$(dirname "$0")/.." && pwd)"
+
 [[ $# -ge 1 ]] || { echo "usage: set-context-cap.sh <window-tokens> [--dry-run]" >&2; exit 2; }
 WINDOW="$1"; shift
 DRY=""
 [[ "${1:-}" == "--dry-run" ]] && DRY="1"
 
-BASE="$BASE" DRY="$DRY" python3 - "$WINDOW" <<'PY'
+BASE="$BASE" DRY="$DRY" STAMP_SCRIPTS_DIR="$STAMP_REPO/scripts" python3 - "$WINDOW" <<'PY'
 import json, os, sys
 
 base = os.environ["BASE"]
 dry = bool(os.environ.get("DRY"))
+sys.path.insert(0, os.environ["STAMP_SCRIPTS_DIR"])
+from agentctl import edit_ledger
 try:
     window = int(sys.argv[1])
 except ValueError:
@@ -101,6 +108,7 @@ if dry:
 with open(base, "w", encoding="utf-8") as fh:
     json.dump(data, fh, indent=2, ensure_ascii=False)
     fh.write("\n")
+edit_ledger.stamp(base, "script:set-context-cap")
 print(f"wrote {base}")
 PY
 
@@ -121,6 +129,7 @@ if [[ -z "$DRY" ]]; then
           | .env |= del(.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, .CLAUDE_CODE_DISABLE_1M_CONTEXT)
         else . end
     ' "$TARGET" > "$tmp" && jq empty "$tmp" && mv "$tmp" "$TARGET"
+    python3 "$STAMP_REPO/scripts/edit-ledger.py" stamp --file "$TARGET" --tool "script:set-context-cap" >/dev/null 2>&1 || true
   fi
   echo "set-context-cap: applied (base + live). RESTART Claude Code, then verify via /context (env is read at session start)."
 fi

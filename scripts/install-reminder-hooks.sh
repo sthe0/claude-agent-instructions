@@ -13,13 +13,20 @@ source "$REPO/scripts/lib/config-root.sh"
 SETTINGS="$CLAUDE_AGENT_HOME/settings.json"
 command -v python3 >/dev/null || { echo "install-reminder-hooks: python3 required" >&2; exit 1; }
 
+# Ledger-stamp resolution: THIS script's own location, not the canonical $REPO
+# above (which may point at a different checkout) — so a worktree copy stamps
+# via its own edit_ledger, provable pre-landing.
+STAMP_REPO="$(cd "$(dirname "$0")/.." && pwd)"
+
 [[ -f "$SETTINGS" ]] || echo '{}' > "$SETTINGS"
 
-SCRIPTS_DIR="$REPO/scripts" python3 - "$SETTINGS" <<'PY'
+SCRIPTS_DIR="$REPO/scripts" STAMP_SCRIPTS_DIR="$STAMP_REPO/scripts" python3 - "$SETTINGS" <<'PY'
 import json, os, shutil, sys
 
 settings_path = sys.argv[1]
 scripts = os.environ["SCRIPTS_DIR"]
+sys.path.insert(0, os.environ["STAMP_SCRIPTS_DIR"])
+from agentctl import edit_ledger
 
 # (event, matcher-or-None, script-basename [+ optional args], timeout)
 DESIRED = [
@@ -154,6 +161,7 @@ if changed:
     with open(settings_path, "w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=2, ensure_ascii=False)
         fh.write("\n")
+    edit_ledger.stamp(settings_path, "script:install-reminder-hooks")
     print("install-reminder-hooks: wired " + str(len(changed)) + " hook(s):")
     for c in changed:
         print("  + " + c)

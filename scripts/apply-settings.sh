@@ -53,4 +53,5 @@ printf '%s\n' "$merged" > "$tmp"
 jq empty "$tmp"  # validate before swapping in
 cp "$TARGET" "$TARGET.bak"
 mv "$tmp" "$TARGET"
+python3 "$REPO/scripts/edit-ledger.py" stamp --file "$TARGET" --tool "script:apply-settings" >/dev/null 2>&1 || true
 echo "apply-settings: merged $BASE -> $TARGET (backup: $TARGET.bak)"

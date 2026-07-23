@@ -125,13 +125,16 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 
 Answering "which agent session made which change" doesn't require reading a transcript. Two pieces work together: a durable edit-ledger that records every Edit/Write, and a commit trailer that stamps the session onto the commit it produced.
 
-**The edit-ledger.** Every Edit/Write hook call appends one JSON line to `agentctl/edit_ledger.py`'s ledger, at the same `hook-scope-track.py` chokepoint that already observes every tool call. The ledger lives at `config_root.agentctl_edit_log()` (`~/.claude-agent/agentctl/edit-log.jsonl` by default, overridable via `$AGENTCTL_EDIT_LEDGER`) and is append-only and fail-open: a write failure never blocks the edit that triggered it.
+**The edit-ledger.** The ledger (`agentctl/edit_ledger.py`) has **two feeders**. The primary one is the `hook-scope-track.py` PostToolUse chokepoint: every Edit/Write tool call appends one JSON line, at the same point that already observes every tool call. The second covers writers that reach canon files by direct filesystem IO and so never pass through the Edit/Write hook — `record-experience.py`, `stamp-memory-dates.py`, and the four setup shell scripts (`apply-settings.sh`, `install-reminder-hooks.sh`, `set-context-cap.sh`, `setup-project-memory.sh`); each calls `edit_ledger.stamp(file, tool)` itself so its write is attributed too. Both feeders drop **scratch paths** (`/tmp`, `$TMPDIR`, `tempfile.gettempdir()`, or `$AGENTCTL_SCRATCH_ROOTS` when set) through `exempt_paths.is_ledger_noise`, so the ledger records only durable edits. It lives at `config_root.agentctl_edit_log()` (`~/.claude-agent/agentctl/edit-log.jsonl` by default, overridable via `$AGENTCTL_EDIT_LEDGER`) and is append-only and fail-open: a write failure never blocks the edit that triggered it.
 
-Query it with `edit-ledger.py`, which never writes:
+Each row names its feeder in the `tool` field: `Edit`/`Write` for the hook, or a descriptive marker for a direct-IO writer (`record-experience:new`, `stamp-memory-dates`, `script:apply-settings`, …), so a query can tell which writer produced a row.
+
+The `edit-ledger.py` CLI has both a read side and a write side:
 
 ```
-scripts/edit-ledger.py by-session <session_id>
-scripts/edit-ledger.py by-file <path>
+scripts/edit-ledger.py by-session <session_id>   # read
+scripts/edit-ledger.py by-file <path>            # read
+scripts/edit-ledger.py stamp <file> <tool>       # write — used by the shell writers above
 ```
 
 Each row carries **two session ids**, not one: `session_id` is the agent that actually made the edit (which may be a subagent), and `env_session_id` is the root session's `CLAUDE_CODE_SESSION_ID` — the id a commit trailer keys on. `by-session` matches a row when *either* id equals the query, so looking up a commit's `Agent-Session` value also surfaces every subagent edit made under that root session, not just edits made by the root session directly.

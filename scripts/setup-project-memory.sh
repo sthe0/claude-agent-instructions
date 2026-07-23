@@ -106,6 +106,7 @@ Loaded into every Claude Code session in this project via the native auto-memory
 
 <!-- Add one-line pointers to leaf files in this directory as memories accumulate. -->
 EOF
+      python3 "$SCRIPT_DIR/edit-ledger.py" stamp --file "$AGENT_MEMORY/MEMORY.md" --tool "script:setup-project-memory" >/dev/null 2>&1 || true
     fi
     if [[ -L "$TARGET" ]]; then
       rm "$TARGET"

@@ -33,6 +33,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from agentctl import edit_ledger  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = REPO_ROOT / "config.md"
 H2 = re.compile(r"^##\s", re.MULTILINE)
@@ -188,35 +191,35 @@ def ticket_comment(a) -> str:
 # sub-index maintenance
 # --------------------------------------------------------------------------
 def update_subindex(exp_dir: Path, date: str, title: str, filename: str,
-                    description: str) -> None:
+                    description: str, session: str | None = None) -> None:
     idx = exp_dir / "MEMORY.md"
     pointer = f"- [{date} — {title}]({filename}) — {description}\n"
     month = date[:7]
     if not idx.exists():
-        idx.write_text(
+        text = (
             "# Experience\n\nDifficulty-centric experience leaves "
             "(see ../experience-leaf-schema.md). Most recent first.\n\n"
-            f"## {month}\n\n{pointer}",
-            encoding="utf-8",
+            f"## {month}\n\n{pointer}"
         )
-        return
-    text = idx.read_text(encoding="utf-8")
-    mhdr = re.search(rf"^##\s+{re.escape(month)}\s*$", text, re.MULTILINE)
-    if mhdr:
-        nl = text.find("\n", mhdr.end())
-        insert_at = nl + 1
-        # skip a single blank line after the header for neatness
-        if text[insert_at:insert_at + 1] == "\n":
-            insert_at += 1
-        text = text[:insert_at] + pointer + text[insert_at:]
     else:
-        first_month = re.search(r"^##\s+\d{4}-\d{2}\s*$", text, re.MULTILINE)
-        block = f"## {month}\n\n{pointer}\n"
-        if first_month:
-            text = text[:first_month.start()] + block + text[first_month.start():]
+        text = idx.read_text(encoding="utf-8")
+        mhdr = re.search(rf"^##\s+{re.escape(month)}\s*$", text, re.MULTILINE)
+        if mhdr:
+            nl = text.find("\n", mhdr.end())
+            insert_at = nl + 1
+            # skip a single blank line after the header for neatness
+            if text[insert_at:insert_at + 1] == "\n":
+                insert_at += 1
+            text = text[:insert_at] + pointer + text[insert_at:]
         else:
-            text = text.rstrip() + "\n\n" + block
+            first_month = re.search(r"^##\s+\d{4}-\d{2}\s*$", text, re.MULTILINE)
+            block = f"## {month}\n\n{pointer}\n"
+            if first_month:
+                text = text[:first_month.start()] + block + text[first_month.start():]
+            else:
+                text = text.rstrip() + "\n\n" + block
     idx.write_text(text, encoding="utf-8")
+    edit_ledger.stamp(str(idx), "record-experience:subindex", session=session)
 
 
 # --------------------------------------------------------------------------
@@ -445,7 +448,9 @@ def cmd_new(a) -> int:
             f"or pass `--justify-new \"<reason>\"` for a genuinely distinct difficulty."
         )
     path.write_text(standalone_body(a), encoding="utf-8")
-    update_subindex(exp_dir, a.date, a.title, filename, a.description)
+    edit_ledger.stamp(str(path), "record-experience:new", session=getattr(a, "session", None))
+    update_subindex(exp_dir, a.date, a.title, filename, a.description,
+                    session=getattr(a, "session", None))
     print(f"wrote {path}\nupdated {exp_dir / 'MEMORY.md'}")
     return 0
 
@@ -478,6 +483,7 @@ def cmd_extend(a) -> int:
             text = set_fm_field(text, "created", a.date)
         text = set_fm_field(text, "last_verified", a.date)
     path.write_text(text, encoding="utf-8")
+    edit_ledger.stamp(str(path), "record-experience:extend", session=getattr(a, "session", None))
     print(f"extended {path} (now {n_ctx} context(s))")
     if n_ctx >= 2 and (not a.common or not a.variations):
         print("→ fill `## Common core & variations` to distill the general solution")
@@ -493,6 +499,8 @@ def cmd_set_last_verified(a) -> int:
         sys.exit(f"leaf has no YAML frontmatter block: {path}")
     new_text = set_fm_field(text, "last_verified", a.date)
     path.write_text(new_text, encoding="utf-8")
+    edit_ledger.stamp(str(path), "record-experience:set-last-verified",
+                      session=getattr(a, "session", None))
     print(f"set last_verified: {a.date} on {path}")
     return 0
 
@@ -505,7 +513,9 @@ def cmd_ticket(a) -> int:
     if path.exists():
         sys.exit(f"refusing to overwrite existing leaf: {path}")
     path.write_text(ticket_leaf_body(a), encoding="utf-8")
-    update_subindex(exp_dir, a.date, a.title, filename, a.description)
+    edit_ledger.stamp(str(path), "record-experience:ticket", session=getattr(a, "session", None))
+    update_subindex(exp_dir, a.date, a.title, filename, a.description,
+                    session=getattr(a, "session", None))
     print(f"wrote thin leaf {path}\nupdated {exp_dir / 'MEMORY.md'}", file=sys.stderr)
     print("\n===== post this on the ticket =====", file=sys.stderr)
     print("NOTE: headers below are English (the LEAF stays English per repo policy).",
@@ -567,6 +577,8 @@ def build_parser() -> argparse.ArgumentParser:
             "--tier", type=int, choices=[0, 1], default=None,
             help="difficulty tier: 0 state-level (default/omitted), 1 principle-level (sigma fuel)",
         )
+        sp.add_argument("--session", default=None,
+                        help="ledger session_id for the edit-ledger stamp of this write")
 
     n = sub.add_parser("new")
     add_scope(n)
@@ -589,12 +601,16 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--plan", required=True)
     e.add_argument("--common")
     e.add_argument("--variations")
+    e.add_argument("--session", default=None,
+                   help="ledger session_id for the edit-ledger stamp of this write")
     e.set_defaults(func=cmd_extend)
 
     slv = sub.add_parser("set-last-verified",
                          help="bump last_verified on an existing leaf (re-confirmation)")
     slv.add_argument("--leaf", required=True)
     slv.add_argument("--date", default=today())
+    slv.add_argument("--session", default=None,
+                     help="ledger session_id for the edit-ledger stamp of this write")
     slv.set_defaults(func=cmd_set_last_verified)
 
     t = sub.add_parser("ticket")
