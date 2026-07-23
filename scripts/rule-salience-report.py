@@ -7,14 +7,24 @@ Stage 4 of instruction-surface-governance. Two modes:
   --check-registry   Two-directional drift gate against scripts/rule-registry.toml
                       and CLAUDE.md (no ledger reads). Exit 1 on any drift.
                         Direction A: every RULE UNIT mechanically enumerated from
-                        CLAUDE.md contains the locator_phrase of some registry
-                        entry. Units are enumerated at the same granularity the
-                        registry itself uses (see `enumerate_rule_units`), so
-                        deleting one entry of several sharing a heading turns the
-                        gate red, and inserting a new bold-lead rule or imperative
-                        bullet with no entry turns it red too.
-                        Direction B: every registry entry's locator_heading and
-                        locator_phrase are still verbatim-findable in CLAUDE.md.
+                        CLAUDE.md (see `enumerate_rule_units`: heading / bold-lead /
+                        top-level bullet) contains the locator_phrase of some
+                        registry entry. This catches most sibling-deletion and
+                        rule-insertion drift, but is NOT exhaustive per-entry:
+                        measured on the current registry, 23/67 single-entry
+                        deletions stay green, concentrated in 9 units covered by
+                        more than one entry; inserting a plain continuation
+                        paragraph under an already-covered heading, or a bullet
+                        nested inside a bold-lead block with no blank line before
+                        it (that bullet is swallowed into the bold-lead unit, so
+                        e.g. CLAUDE.md's "Cognition the engine does NOT replace"
+                        block is one unit covering four entries), also stays green.
+                        Direction B is the exact per-entry control: it goes red
+                        whenever any registry entry's locator_heading or
+                        locator_phrase stops being verbatim-findable in CLAUDE.md,
+                        which is the prose->pointer collapse a future kernel-shrink
+                        actually risks. Trust Direction B per-entry; treat
+                        Direction A as a coarser insertion/bookkeeping net.
 
   (default)           Ranked report: one row per registry entry, with an
                       observed-firing count/ratio when the entry's delivery
@@ -217,6 +227,12 @@ def enumerate_rule_units(claude_md: str) -> list[dict]:
             continue
 
         if first.startswith("**"):
+            # A bold-lead unit is the whole paragraph block. A bullet nested
+            # directly under the bold lead with no blank line before it stays
+            # inside this block and is NOT enumerated as its own unit (so a
+            # bold-lead block can cover several registry entries at once — see
+            # the module docstring's Direction-A limits). Direction B remains the
+            # exact per-entry control for those entries.
             units.append({
                 "kind": "bold-lead",
                 "heading": heading,
@@ -512,12 +528,14 @@ def eval_trigger_proxy(rows: list[dict] | None, field: str, op: str, value) -> b
     Returns False - the ledger was available and every row was checked, and
                      none satisfied the predicate: positive evidence the
                      trigger did NOT occur.
-    Returns None  - no proxy is wired up for this rule, or the ledger is
-                     absent: we have no independent evidence either way
-                     (graceful degradation to the unrefined NEVER-OBSERVED
-                     default).
+    Returns None  - no proxy is wired up for this rule, the ledger is absent,
+                     or it yielded zero rows in the window: we have no
+                     independent evidence either way (graceful degradation to
+                     the unrefined NEVER-OBSERVED default). An empty-but-present
+                     row list is NOT treated as "trigger did not occur" — zero
+                     data must never render as positive TRIGGER-ABSENT evidence.
     """
-    if not field or rows is None:
+    if not field or not rows:
         return None
     check = _OPS.get(op)
     if check is None:

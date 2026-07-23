@@ -310,6 +310,9 @@ def test_eval_trigger_proxy_true_false_none():
     assert rsr.eval_trigger_proxy([{"attention": {"corrections": 0}}], "attention.corrections", ">", 0) is False
     assert rsr.eval_trigger_proxy(None, "attention.corrections", ">", 0) is None
     assert rsr.eval_trigger_proxy(rows, "", "", None) is None
+    # An empty-but-present row list is zero data, NOT positive "trigger did not
+    # occur" evidence — must be None (UNINSTRUMENTED), never False (TRIGGER-ABSENT).
+    assert rsr.eval_trigger_proxy([], "attention.corrections", ">", 0) is None
 
 
 # ---------------------------------------------------------------------------
