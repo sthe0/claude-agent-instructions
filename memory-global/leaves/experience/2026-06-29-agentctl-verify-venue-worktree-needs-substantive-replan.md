@@ -6,7 +6,7 @@ schema: difficulty/v1
 generality: 0
 resolution_confirmed_by_user: "fedor (AskUserQuestion: 'Да — решено')"
 created: 2026-06-29
-last_verified: 2026-07-22
+last_verified: 2026-07-23
 instance_count: 19
 ---
 
@@ -144,6 +144,10 @@ Make the engine verify in the venue that holds the commits. Either (a) keep repo
 - **TRIGGER to promote from backlog → task.** Revisit if the suite/final_check-hostage class accrues another instance *after* this advisory extension lands (i.e. the authoring nudge proves insufficient on its own).
 - **REUSE pointer.** the `baseline_diff.py` helper on branch `si/baseline-diff-granularity` (its path there is scripts/lib/baseline_diff.py — not yet merged into this tree) already computes merge-base test-delta at line granularity — the differential-verify engine option should build on it, not re-derive the merge-base diff.
 
+
+### 2026-07-23 — FALSE-GREEN venue: a canon-pinned check naming a PRE-EXISTING file passes over the pre-change baseline
+- Where it arose: github-tracker-plan-sync-gap (Core instructions repo, session 9976df6a), 2026-07-23 — landed 950537d
+- Working plan: /home/the0/.claude-agent/plans/github-tracker-plan-sync-gap-v3.toml
 ## Common core & variations
 **Common:** Same root as all seven prior contexts: the engine runs a literal check (per-stage `verify_command` at record-result, or every `[[final_check]]` at verify-final) so an over-broad / wrong-scope / wrong-venue / wrong-interface check false-FAILS a genuinely-green stage or refuses resolution. The durable discipline is unchanged and now eight-times-confirmed: author each check against the ACTUAL observable+scope+venue+interface, scoped to the stage's OWN deliverable, and run it by hand once before trusting it. **Instance 8 adds the venue-LIFETIME rule:** the engine's verify cwd is `state.repo_root`, and verify-final re-runs EVERY stage's `verify_command` — so if a stage DELETES its own working venue (a worktree/mount it removes as its final act), that venue must appear in NEITHER `[meta] repo_root` NOR any surviving stage's `verify_command`. Pin `repo_root` to a checkout that OUTLIVES all stages (the stable main checkout) and verify the LANDED artifact (origin/main), never the ephemeral venue — `cli.py`'s `cd <repo_root> && <cmd>` short-circuits to a false FAILED the moment that cwd is gone (cli.py:75-76). The two engine-correction remedies generalise across BOTH executed fields: (b) hand-patch `state.json` (`stages[k].criterion.verify_command` OR `final_check[k].command`) is cheap+non-destructive and always available; (a) force-substantive resets PASSED stages and should be the last resort. **As of `origin/main` `4761b49` (2026-06-30) the refinement-reload engine fix now covers BOTH stage `verify_command` AND plan-level `final_check`** — a correctness-only edit to either is a cheap refinement that preserves PASSED stages; remedies (a)/(b) are fallbacks, no longer the only path for final_check (instance 6 closed) — re-validated end-to-end in instance 7 (a single refinement replan carried BOTH the narrowed verify_command AND a re-pointed final_check into live state with no stage reset, no re-approval). Scope an absence/purity check to the stage's changed files (the task delta), **and a measurable stage's test gate to the stage's OWN subsystem tests, never the whole-repo suite** (or pre-existing unrelated reds false-fail it — whole-suite green is a separate concern, fixed by repairing the unrelated reds, not by widening the gate); prepend an explicit `cd <venue>` whenever the check touches a repo other than [meta] repo_root.
 
