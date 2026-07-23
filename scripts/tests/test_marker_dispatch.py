@@ -98,6 +98,26 @@ def test_return_markers_mirror_spawn_specialist():
     assert dispatch.RETURN_MARKERS == mod.RETURN_MARKERS
 
 
+def test_dispatch_binds_the_shared_strip_helper():
+    # The vocabulary is mirrored but the emphasis RULE is shared: dispatch must bind
+    # the SAME strip_marker_emphasis object as the wrapper site, so a strip applied to
+    # one and not the other cannot silently pass this guard.
+    from lib import planner_plan_check
+    assert dispatch.strip_marker_emphasis is planner_plan_check.strip_marker_emphasis
+
+
+@pytest.mark.parametrize("marker", list(dispatch.RETURN_MARKERS))
+def test_both_sites_accept_a_bolded_marker(marker):
+    # Behaviour-pinning drift guard: a bolded marker must parse identically at the
+    # wrapper site (lib.extract_marker) and the engine-routing site (dispatch.parse_marker)
+    # for EVERY shared marker — so a strip present at one site but absent at the other
+    # fails here instead of passing a tuple-only comparison.
+    from lib.planner_plan_check import extract_marker
+    wrapped = f"**{marker}:** detail"
+    assert extract_marker(wrapped) == marker
+    assert parse_marker(wrapped) == (marker, "detail")
+
+
 # --- cmd_dispatch routing ---------------------------------------------------
 
 def _to_executing(store, sid, fixtures_dir):

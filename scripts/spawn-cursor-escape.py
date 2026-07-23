@@ -30,6 +30,7 @@ import time
 from pathlib import Path
 
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
+from lib.planner_plan_check import strip_marker_emphasis  # shared emphasis-tolerance
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_MD = REPO_ROOT / "config.md"
@@ -113,10 +114,17 @@ def assemble_prompt(
 
 
 def validate_marker(result_text: str) -> tuple[str, bool]:
-    """Return (text, ok). If marker is missing, prepend MALFORMED: and ok=False."""
+    """Return (text, ok). If marker is missing, prepend MALFORMED: and ok=False.
+
+    Only the first non-blank line carries the escape marker (distinct from the
+    any-line spawn-marker contract); a leading markdown-emphasis run is stripped
+    first so ``**RESOLVED:**`` is accepted like the bare form. The distinct escape
+    vocabulary (RESOLVED/INVESTIGATION/LOOP_DETECTED) and this first-line algorithm
+    are unchanged — only the low-level emphasis helper is shared."""
     for line in result_text.splitlines():
         if line.strip():
-            if MARKER_RE.match(line.strip()):
+            stripped, _ = strip_marker_emphasis(line.strip())
+            if MARKER_RE.match(stripped):
                 return result_text, True
             break
     return (

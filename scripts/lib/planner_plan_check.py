@@ -33,16 +33,50 @@ RETURN_MARKERS = (
     "REVIEW",
 )
 MARKER_RE = re.compile(rf"^({'|'.join(RETURN_MARKERS)}):")
-PLAN_PATH_RE = re.compile(r"^\s*Plan\s*:\s*(.+?)\s*$", re.MULTILINE)
+# The `Plan:` label tolerates the same emphasis run as the marker line: a specialist
+# that bolds its PLAN-READY: marker bolds its `**Plan:**` label too, and a marker-only
+# fix would leave the planner path false-BLOCKed. Two emphasis runs are absorbed — the
+# leading one (`**Plan`) and the label's closing one right after the colon (`Plan:** `),
+# so `**Plan:** **/x.toml**` captures `/x.toml` after the path cleanup below strips the
+# path's own wrap. Kept as a widened regex rather than a per-line scan so the module
+# keeps its single MULTILINE search over the whole output.
+PLAN_PATH_RE = re.compile(r"^\s*[*_`]*\s*Plan\s*:\s*[*_`]*\s*(.+?)\s*$", re.MULTILINE)
+
+_EMPHASIS_CHARS = "*_`"
+
+
+def strip_marker_emphasis(line: str) -> tuple[str, bool]:
+    """Drop a leading run of markdown emphasis / code-span characters (``*``, ``_``,
+    `` ` ``) so a correctly-named return marker wrapped in emphasis — ``**COMPLETED:**``,
+    `` `COMPLETED:` ``, ``__COMPLETED:__`` — is matched exactly like the bare form.
+
+    Difficulty removed: a specialist whose work SUCCEEDED but who rendered its marker as
+    markdown was rejected as MALFORMED on formatting alone, parking the stage and forcing
+    a manual recovery. The ``^MARKER:`` anchor still applies — only after this leading run
+    is removed — so a marker word mid-prose (``*note* ESCALATE: x`` -> ``note* ESCALATE:
+    x``) still does not match. Returns ``(stripped_line, was_wrapped)``; ``was_wrapped`` is
+    True iff a leading emphasis run was removed."""
+    stripped = line.lstrip(_EMPHASIS_CHARS)
+    return stripped, stripped != line
+
+
+def trim_wrapped_marker_body(body: str) -> str:
+    """Trim a trailing emphasis / code-span run from a marker BODY whose marker line was
+    wrapped, so ``**COMPLETED:** done`` yields ``done`` rather than ``** done``. Gate the
+    call on ``was_wrapped``: an UNWRAPPED body is left byte-identical, so a marker whose
+    body legitimately ends in ``*``/``_`` is untouched on the path that works today."""
+    return body.strip().strip(_EMPHASIS_CHARS).strip()
 
 
 def extract_marker(result_text: str) -> str | None:
     """The label of the specialist's message: the marker word on the FIRST line that
     carries a known ``^MARKER:`` — matching ``validate_marker``'s any-line contract, so a
     specialist writing a summary before the marker is read correctly (both for plan
-    dispatch and for telemetry). ``None`` if no line carries a known marker."""
+    dispatch and for telemetry). A leading markdown-emphasis run is stripped first so a
+    wrapped marker reads like a bare one. ``None`` if no line carries a known marker."""
     for line in result_text.splitlines():
-        m = MARKER_RE.match(line.strip())
+        stripped, _ = strip_marker_emphasis(line.strip())
+        m = MARKER_RE.match(stripped)
         if m:
             return m.group(1)
     return None
@@ -84,7 +118,7 @@ def validate_planner_plan(result_text: str) -> tuple[str, bool]:
             "its own line right after PLAN-READY:.\n\n" + result_text,
             False,
         )
-    plan_path = m.group(1).strip().strip("`'\"")
+    plan_path = m.group(1).strip().strip("`'\"*_").strip()
 
     if not plan_path.endswith(".toml"):
         return (

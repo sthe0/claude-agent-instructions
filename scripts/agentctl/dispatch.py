@@ -14,14 +14,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from lib.planner_plan_check import strip_marker_emphasis, trim_wrapped_marker_body
+
 from .state import CriterionType, Stage
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SPAWN_CLI = REPO_ROOT / "scripts" / "spawn-specialist.py"
 
-# Source of truth: spawn-specialist.py RETURN_MARKERS / MARKER_RE. Mirrored here
-# (the engine routes the marker spawn-specialist already parsed onto stdout); a
-# drift-guard test asserts the two tuples stay identical.
+# Source of truth: spawn-specialist.py RETURN_MARKERS / MARKER_RE. The VOCABULARY is
+# mirrored here (the engine routes the marker spawn-specialist already parsed onto
+# stdout); a drift-guard test asserts the two tuples stay identical. The emphasis RULE
+# is NOT mirrored — it is shared: strip_marker_emphasis is imported from
+# lib.planner_plan_check, the same object both spawn wrappers bind, so a bolded marker
+# parses identically at the wrapper site and here.
 # REVIEW is not in the explicit if-chain below (cmd_dispatch): it is a recognised
 # marker with no dedicated route, so it falls to the same _park_blocked path as
 # an unrecognised marker — that is the intended handling, not a gap.
@@ -40,16 +45,23 @@ MARKER_RE = re.compile(rf"^({'|'.join(RETURN_MARKERS)}):")
 
 def parse_marker(stdout: str) -> tuple[str | None, str]:
     """Scan a spawn's stdout for the first recognised return marker, tolerating a
-    preamble (e.g. a summary the specialist printed before the marker line).
-    Return the marker and the body after its colon. A `MALFORMED:` wrapper line
+    preamble (e.g. a summary the specialist printed before the marker line) and a
+    marker wrapped in markdown emphasis (``**COMPLETED:** done``). Return the marker
+    and the body after its colon; when the marker line was wrapped the trailing
+    emphasis run is trimmed off the body too, so ``**COMPLETED:** done`` yields
+    ``done`` not ``** done`` (the body feeds CLARIFY/REPLAN/INCOMPLETE routing). An
+    UNWRAPPED marker's body is byte-identical to before. A `MALFORMED:` wrapper line
     maps to marker "MALFORMED"; if no line carries a marker, map to (None, "")."""
     for line in (stdout or "").splitlines():
         line = line.strip()
         if not line:
             continue
-        m = MARKER_RE.match(line)
+        stripped, was_wrapped = strip_marker_emphasis(line)
+        m = MARKER_RE.match(stripped)
         if m:
-            return m.group(1), line[m.end():].strip()
+            body = stripped[m.end():]
+            body = trim_wrapped_marker_body(body) if was_wrapped else body.strip()
+            return m.group(1), body
         if line.startswith("MALFORMED:"):
             return "MALFORMED", line[len("MALFORMED:"):].strip()
     return None, ""
