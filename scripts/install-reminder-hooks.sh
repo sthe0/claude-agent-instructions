@@ -104,6 +104,12 @@ DESIRED = [
     # to a missing script path — i.e. canon may silently be writable. Non-blocking,
     # fail-open; names the install-reminder-hooks.sh remediation.
     ("SessionStart",     None,    "hook-canon-guard-wired-check.py", 5),
+    # Phase-3 forcing trigger: throttled (7d), speaks only when
+    # rule-salience-report.py's phase3_readiness predicate says the deferred
+    # instruction-surface compression phase is DUE (pressure + data-sufficiency
+    # + reclaimable all satisfied). Establishes its own write-once baseline
+    # stamp; never reimplements the predicate. Fail-open, never blocks.
+    ("SessionStart",     None,    "hook-phase3-due.py",  10),
     # End-of-turn GATE (not advisory): a loop-safe shell running a registry of
     # pure turn-boundary guardians. Blocks a stop when any guardian reports an
     # unmet obligation (today: the last user message carried an agent-behavior-
