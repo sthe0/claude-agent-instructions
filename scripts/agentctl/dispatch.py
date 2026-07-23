@@ -65,8 +65,8 @@ class RunResult:
     stderr: str = ""
 
 
-def subprocess_runner(argv: list[str]) -> RunResult:
-    proc = subprocess.run(argv, capture_output=True, text=True)
+def subprocess_runner(argv: list[str], cwd: str | None = None) -> RunResult:
+    proc = subprocess.run(argv, capture_output=True, text=True, cwd=cwd)
     return RunResult(proc.returncode, proc.stdout, proc.stderr)
 
 
@@ -121,10 +121,17 @@ def dispatch_stage(
     complexity: str = "medium",
     dry_run: bool = False,
     continue_worktree: str | None = None,
+    cwd: str | None = None,
 ) -> RunResult:
     argv = build_argv(
         stage, plan_path, budget=budget, complexity=complexity, dry_run=dry_run,
         continue_worktree=continue_worktree,
     )
     run = runner or subprocess_runner
+    # cwd is only threaded to the runner when set, so every pre-existing
+    # single-arg fake runner (and the None -> inherit-cwd default) stays
+    # byte-identical; a session carrying delivery_worktree/repo_root is the
+    # sole case that now requires the runner to accept a `cwd` kwarg.
+    if cwd is not None:
+        return run(argv, cwd=cwd)
     return run(argv)

@@ -342,7 +342,9 @@ def main() -> int:
             "regardless of its wording. Give a one-line recap "
             "(`Requested: X. Delivered: Y.`) and ask the user to confirm "
             "explicitly via AskUserQuestion, then run `agentctl resolve "
-            "--by <user>` only after an unambiguous confirmation."
+            "--by <user>` only after an unambiguous confirmation. Include the "
+            "agent-proposed 1-5 quality rating as the first resolution option "
+            "(see leaves/quality-regression-investigation.md)."
         )
         repo_dir = _delivery_repo_dir(
             payload.get("session_id") or "",

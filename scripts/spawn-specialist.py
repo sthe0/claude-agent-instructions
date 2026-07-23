@@ -190,6 +190,17 @@ def assemble_prompt(args: argparse.Namespace, depth: int, permissions: str) -> s
             permissions,
             "",
         ]
+    if getattr(args, "kind", None) == "developer":
+        sections += [
+            "## Verification command hygiene",
+            "",
+            "Run verification commands (tests, linters) as a single BARE command — "
+            "no `&&`, `;`, or pipes (classified as multiple operations), no `$VAR` "
+            "shell expansion (classified as simple_expansion), and no `python3 -c` "
+            "(requires approval). Reference paths as absolute arguments inside your "
+            "working directory rather than `cd`-ing first.",
+            "",
+        ]
     sections += [
         "If your work needs an action not covered, return PERMISSION-REQUEST: with the request.",
         "If you hit a small specific question whose answer is needed to continue, return CLARIFY: (see § Return markers).",
@@ -369,6 +380,23 @@ def autocompact_pct_for_model(model: str | None) -> str:
     return str(max(1, min(95, pct)))
 
 
+# Code-executing permission scoped to developer spawns only, injected into the
+# child's --settings payload rather than settings/base.json (which is merged
+# fleet-wide on `git pull` without a prompt and must stay read-only-only per
+# lint-settings-base.py). See memory-global leaf settings-permission-tiers.md.
+DEVELOPER_SETTINGS_ALLOW = ["Bash(python3 -m pytest:*)"]
+
+
+def build_child_settings(kind: str, model: str | None) -> dict:
+    """Child `--settings` payload: the per-model autocompact override for every
+    kind, plus a developer-scoped exec allow (pytest) so a spawned developer can
+    run the suite without an approval prompt."""
+    settings: dict = {"env": {"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": autocompact_pct_for_model(model)}}
+    if kind == "developer":
+        settings["permissions"] = {"allow": list(DEVELOPER_SETTINGS_ALLOW)}
+    return settings
+
+
 def _snapshot_transcripts() -> set[Path]:
     """Set of `<system-root>/projects/**/*.jsonl` that exist right now (isolated or legacy)."""
     from lib.config_root import agent_home as _agent_home
@@ -539,7 +567,7 @@ def main(argv: list[str] | None = None) -> int:
         # work: settings.json env is applied after process start and wins (see
         # memory-global leaf claude-code-settings-env-precedence.md).
         "--settings",
-        json.dumps({"env": {"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": autocompact_pct_for_model(model)}}),
+        json.dumps(build_child_settings(args.kind, model)),
     ]
     permission_mode = resolve_permission_mode(args)
     if permission_mode is not None:

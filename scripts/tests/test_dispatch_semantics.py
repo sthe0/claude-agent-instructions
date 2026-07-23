@@ -262,7 +262,7 @@ def test_cmd_dispatch_continues_worktree_for_dependent_spawn_stage(store, fixtur
 
     seen_argv = []
 
-    def runner(argv):
+    def runner(argv, cwd=None):
         seen_argv.append(argv)
         return RunResult(0, stdout="COMPLETED: done\n")
 

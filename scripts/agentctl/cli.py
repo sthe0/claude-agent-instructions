@@ -1872,6 +1872,10 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
         complexity=getattr(args, "complexity", "medium"),
         continue_worktree=_continuation_worktree(state, stage),
         dry_run=dry_run,
+        # A hard-sandboxed spawned child can only write the tree it is
+        # launched in, so pin its cwd to the plan's delivery venue rather
+        # than relying on the dispatching process's ambient cwd.
+        cwd=state.delivery_worktree or state.repo_root,
     )
     if dry_run:
         # #10: a dry-run is a pure preview — no event log, no state save, no
