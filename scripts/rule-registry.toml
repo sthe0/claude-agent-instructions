@@ -1,0 +1,811 @@
+## Registry of always-loaded rule units enumerated from CLAUDE.md.
+##
+## Stage 4 of instruction-surface-governance. Each [[rule]] is one mechanically
+## enumerated unit at the granularity of: every `### `/`#### ` heading, every
+## `**Bolded lead.**`-style rule paragraph, and every top-level numbered/bulleted
+## imperative — per the stage's method step 1. Pure section-container `## `
+## headings are NOT rule units by themselves (they group; the units inside them
+## are), except where a `## ` section has no `### ` children, in which case the
+## section-level paragraphs are the unit (Long-running jobs, Memory intro,
+## Cost discipline, Instruction language, Instructions repository).
+##
+## Field contract, checked by rule-salience-report.py --check-registry:
+##   id               stable kebab-case identity, independent of section location.
+##   tier             0-4, per the Tier 0-4 model (meta.goal of the governing plan).
+##   locator_heading  the exact heading LINE (with `#`/`##`/`###`/`####` prefix) the
+##                    rule currently lives under. Must be verbatim-findable as a
+##                    whole line in CLAUDE.md.
+##   locator_phrase   a short, verbatim, markup-boundary-safe substring of the rule's
+##                    own text. Must be verbatim-findable anywhere in CLAUDE.md
+##                    (direction B of the drift gate). Chosen to sit entirely inside
+##                    or entirely outside a `**bold**` span so it survives as a raw
+##                    substring of the markdown source, not just the rendered text.
+##   kernel_reason    REQUIRED, non-empty, for every tier == 0 entry; must be exactly
+##                    "FRAME" or "NOT-NOTICING" (the two kernel-membership criteria).
+##                    Empty for tier >= 1. An entry that can name neither is a
+##                    demotion candidate for Phase 3, not a registry error.
+##   delivery_kind    for tier >= 1 only. One of:
+##                      "bracket_tag"        - a hook prefixes injected text with
+##                                              literal `[tag]`; delivery_marker is
+##                                              that bracketed tag.
+##                      "agentctl_construct" - an agentctl subcommand/gate whose
+##                                              invocation is observable as a literal
+##                                              substring in a Bash tool_use input;
+##                                              delivery_marker is that substring.
+##                      "structured_hook"    - a PreToolUse hook that returns a
+##                                              structured allow/deny JSON decision
+##                                              with no narrative bracket tag. No
+##                                              positive (ALLOW-path) firing signal
+##                                              is currently logged anywhere on this
+##                                              machine - see delivery_note. Always
+##                                              reported UNINSTRUMENTED.
+##                      "harness"            - enforced by the harness runtime itself
+##                                              (context window, output caps), not by
+##                                              a hook or agentctl. No session-level
+##                                              marker exists. Always reported
+##                                              UNINSTRUMENTED.
+##   delivery_marker  literal search string for "bracket_tag"/"agentctl_construct";
+##                    empty for "structured_hook"/"harness".
+##   delivery_note    free-text detail: which hook/gate/subcommand, and any caveat
+##                    about a secondary, unobservable backing mechanism.
+##
+## Enumerated from the CLAUDE.md text at commit e7006be (stage 3 HEAD), 217 lines.
+
+[meta]
+schema = "rule-registry/v1"
+source_file = "CLAUDE.md"
+tier_model = "0=always-loaded kernel, 1=engine gates/hooks, 2=JIT-injected prose, 3=skills, 4=memory leaves"
+kernel_criteria = ["FRAME", "NOT-NOTICING"]
+enumeration_granularity = "### /#### headings; **bolded-lead** rule paragraphs; top-level imperative bullets/numbered items; section-level paragraphs for ## sections with no ### children"
+
+# ---------------------------------------------------------------------------
+# Preamble (before "## Coordination")
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id = "coordinator-role-and-optimization-objective"
+tier = 0
+locator_heading = "# Global agent instructions"
+locator_phrase = "Optimize for: minimize cost"
+kernel_reason = "FRAME"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "difficulty-functional-place-ontology"
+tier = 0
+locator_heading = "# Global agent instructions"
+locator_phrase = "Everything here rests on one object"
+kernel_reason = "FRAME"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "separate-rule-from-perception"
+tier = 0
+locator_heading = "# Global agent instructions"
+locator_phrase = "Separate rule from perception; determinize the rule at its proper structural level"
+kernel_reason = "FRAME"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "org-specific-procedures-not-in-file"
+tier = 0
+locator_heading = "# Global agent instructions"
+locator_phrase = "Org-specific procedures (Yandex/Arcadia/Tracker/Nirvana/arc) live in project memory"
+kernel_reason = "FRAME"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+# ---------------------------------------------------------------------------
+# ## Coordination — you are the manager (intro paragraph)
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id = "no-separate-manager-root-is-entry-point"
+tier = 0
+locator_heading = "## Coordination — you are the manager"
+locator_phrase = "There is no separate manager subagent"
+kernel_reason = "FRAME"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+# ---------------------------------------------------------------------------
+# ### Classify task weight first
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id = "classify-task-weight-first"
+tier = 0
+locator_heading = "### Classify task weight first"
+locator_phrase = "Three weight classes with concrete thresholds"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "establish-result-image-before-acting"
+tier = 0
+locator_heading = "### Classify task weight first"
+locator_phrase = "Establish the result image before acting"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "external-effect-makes-task-substantive"
+tier = 0
+locator_heading = "### Classify task weight first"
+locator_phrase = "An external/irreversible effect makes a task"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "carve-out-in-context-substantive-plans"
+tier = 0
+locator_heading = "### Classify task weight first"
+locator_phrase = "Carve-out for in-context substantive plans"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "approved-plan-defined"
+tier = 1
+locator_heading = "### Classify task weight first"
+locator_phrase = "\"Approved plan\" defined"
+kernel_reason = ""
+delivery_kind = "agentctl_construct"
+delivery_marker = "agentctl approve"
+delivery_note = "Enforced primarily by hook-plan-delivery-gate.py, a structured-decision PreToolUse hook (no bracket tag, no positive-firing log - see structured_hook entries). 'agentctl approve' is the observable CLI-invocation proxy for the second half of the two-act approval."
+
+[[rule]]
+id = "tracker-tasks-substantive-by-definition"
+tier = 0
+locator_heading = "### Classify task weight first"
+locator_phrase = "Tracker tasks are substantive by definition"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "delivery-partition-separate-axis"
+tier = 1
+locator_heading = "### Classify task weight first"
+locator_phrase = "Delivery partition is a separate axis"
+kernel_reason = ""
+delivery_kind = "agentctl_construct"
+delivery_marker = "agentctl partition"
+delivery_note = "agentctl partition computes the M1-M4 verdict, machine-enforced pre-EXECUTING."
+
+# ---------------------------------------------------------------------------
+# ### Coordination spine — driven by `agentctl`
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id = "coordination-spine-agentctl"
+tier = 1
+locator_heading = "### Coordination spine — driven by `agentctl`"
+locator_phrase = "each command returns a Directive"
+kernel_reason = ""
+delivery_kind = "agentctl_construct"
+delivery_marker = "-m agentctl"
+delivery_note = "Generic proxy: any agentctl subcommand invocation via 'python3 -m agentctl <cmd>' in a Bash tool_use."
+
+[[rule]]
+id = "fallback-engine-unavailable"
+tier = 0
+locator_heading = "### Coordination spine — driven by `agentctl`"
+locator_phrase = "hand-walk the same steps, same order"
+kernel_reason = "FRAME"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "plan-review-gate"
+tier = 1
+locator_heading = "### Coordination spine — driven by `agentctl`"
+locator_phrase = "Plan-review gate"
+kernel_reason = ""
+delivery_kind = "agentctl_construct"
+delivery_marker = "agentctl plan-review"
+delivery_note = "gates.plan_review_blockers, machine-blocked precondition on submit_plan/replan."
+
+[[rule]]
+id = "cognition-engine-does-not-replace"
+tier = 0
+locator_heading = "### Coordination spine — driven by `agentctl`"
+locator_phrase = "Cognition the engine does NOT replace"
+kernel_reason = "FRAME"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "criterion-type-measurable-vs-acceptance"
+tier = 0
+locator_heading = "### Coordination spine — driven by `agentctl`"
+locator_phrase = "user accepts on review when no objective check exists"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "verify-right-axis-report-honestly"
+tier = 0
+locator_heading = "### Coordination spine — driven by `agentctl`"
+locator_phrase = "Verify the right axis, report honestly"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "mini-od-first-external-job-failure"
+tier = 0
+locator_heading = "### Coordination spine — driven by `agentctl`"
+locator_phrase = "Mini-OD on first external-job failure"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+# ---------------------------------------------------------------------------
+# ### Escalation to the user
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id = "escalation-ask-when-criteria"
+tier = 0
+locator_heading = "### Escalation to the user"
+locator_phrase = "Ask when: several equivalent strategies"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "question-provenance-gate-recording"
+tier = 1
+locator_heading = "### Escalation to the user"
+locator_phrase = "record each such question in the engine's `premise` gate"
+kernel_reason = ""
+delivery_kind = "agentctl_construct"
+delivery_marker = "agentctl question-raise"
+delivery_note = "gates.premise; no un-dispositioned premise survives approve."
+
+[[rule]]
+id = "doubt-own-snapshot-before-escalating"
+tier = 0
+locator_heading = "### Escalation to the user"
+locator_phrase = "Before you doubt a requirement, doubt your own snapshot"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "ask-user-question-mandatory-for-choices"
+tier = 0
+locator_heading = "### Escalation to the user"
+locator_phrase = "Use `AskUserQuestion` for every confirmation"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "unanswered-question-survives-turn"
+tier = 0
+locator_heading = "### Escalation to the user"
+locator_phrase = "An unanswered user question survives the turn"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+# ---------------------------------------------------------------------------
+# ### Acting without asking
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id = "acting-without-asking-intro"
+tier = 0
+locator_heading = "### Acting without asking"
+locator_phrase = "Carve-outs that minimize per-action confirmation"
+kernel_reason = "FRAME"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "side-effect-free-actions-preauthorized"
+tier = 1
+locator_heading = "### Acting without asking"
+locator_phrase = "Side-effect-free actions pre-authorized"
+kernel_reason = ""
+delivery_kind = "harness"
+delivery_marker = ""
+delivery_note = "settings/base.json classify_action verb taxonomy, merged per machine by setup-symlinks.sh - a harness allowlist, not a hook or agentctl construct; no session-level firing marker."
+
+[[rule]]
+id = "plan-scope-declared-actions-preauthorized"
+tier = 0
+locator_heading = "### Acting without asking"
+locator_phrase = "Plan-scope-declared actions pre-authorized after plan approval"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "unknown-tool-lookup-budget"
+tier = 0
+locator_heading = "### Acting without asking"
+locator_phrase = "Unknown tool side-effect class"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "pushing-commits-personal-branch-preauthorized"
+tier = 0
+locator_heading = "### Acting without asking"
+locator_phrase = "Pushing commits to a personal ticket / working branch"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "dont-offload-action-you-can-perform"
+tier = 0
+locator_heading = "### Acting without asking"
+locator_phrase = "Don't offload to the user an action you can perform yourself"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "substantive-plan-changes-require-approval"
+tier = 0
+locator_heading = "### Acting without asking"
+locator_phrase = "Substantive plan changes still require approval"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "parallel-sessions-share-working-tree"
+tier = 1
+locator_heading = "### Acting without asking"
+locator_phrase = "Parallel sessions share one working tree"
+kernel_reason = ""
+delivery_kind = "bracket_tag"
+delivery_marker = "[scope-conflict]"
+delivery_note = "hook-scope-conflict.py is the observable (bracket-tag) half. The second half of this rule (canon read-only, hook-guard-canon-readonly.py) is a structured-decision hook with no positive-firing log - treat as an unobservable caveat on this entry, not a separate NEVER-OBSERVED claim."
+
+# ---------------------------------------------------------------------------
+# ### When the work is stuck
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id = "difficulty-two-operational-forms"
+tier = 0
+locator_heading = "### When the work is stuck"
+locator_phrase = "takes two operational forms here"
+kernel_reason = "FRAME"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "use-overcome-difficulty-skill-triggers"
+tier = 0
+locator_heading = "### When the work is stuck"
+locator_phrase = "Surface signals: verification failed, blocker, repeated error"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "engine-drives-diagnosing-shell"
+tier = 1
+locator_heading = "### When the work is stuck"
+locator_phrase = "blocks `replan` until the difficulty record is complete"
+kernel_reason = ""
+delivery_kind = "agentctl_construct"
+delivery_marker = "agentctl replan"
+delivery_note = "gates.difficulty_blockers on the DIAGNOSING state. Marker observes replan attempts, an imperfect proxy for 'the gate held' (does not itself distinguish a blocked attempt from a successful one - see report caveats)."
+
+# ---------------------------------------------------------------------------
+# ### When the user corrects agent behavior
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id = "use-self-improvement-skill-triggers"
+tier = 0
+locator_heading = "### When the user corrects agent behavior"
+locator_phrase = "Triggers: user corrects/rejects/clarifies"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "run-self-improvement-same-turn"
+tier = 1
+locator_heading = "### When the user corrects agent behavior"
+locator_phrase = "nudges likely feedback turns"
+kernel_reason = ""
+delivery_kind = "bracket_tag"
+delivery_marker = "[self-improvement-reminder]"
+delivery_note = "hook-self-improvement-reminder.py UserPromptSubmit nudge."
+trigger_proxy_field = "attention.corrections"
+trigger_proxy_op = ">"
+trigger_proxy_value = 0
+
+[[rule]]
+id = "in-task-corrections-are-triggers"
+tier = 0
+locator_heading = "### When the user corrects agent behavior"
+locator_phrase = "In-task corrections are themselves triggers"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "retrospect-full-scope-not-just-session"
+tier = 0
+locator_heading = "### When the user corrects agent behavior"
+locator_phrase = "cover the full scope the user named"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "not-mandatory-neutral-confirmation"
+tier = 0
+locator_heading = "### When the user corrects agent behavior"
+locator_phrase = "Not mandatory only for neutral confirmation"
+kernel_reason = "FRAME"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+# ---------------------------------------------------------------------------
+# ### Delegating to specialists & skills
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id = "specialist-vs-skill-inline-vs-spawn"
+tier = 0
+locator_heading = "### Delegating to specialists & skills"
+locator_phrase = "is a specialization skill run"
+kernel_reason = "FRAME"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "specialist-dispatch-table"
+tier = 0
+locator_heading = "### Delegating to specialists & skills"
+locator_phrase = "Decomposition, stages, deps, risks, done criteria"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = "Two rows of this table (thinker @ plan-review, code-reviewer @ spawn:developer) are partly mechanized by the review_dispatch plugin; the table as a whole remains a prose lookup applied by the model."
+
+[[rule]]
+id = "name-delegation-need-if-unstated"
+tier = 0
+locator_heading = "### Delegating to specialists & skills"
+locator_phrase = "If the need exists but isn't stated, name it"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "invariants-plan-ready-hard-gate"
+tier = 1
+locator_heading = "### Delegating to specialists & skills"
+locator_phrase = "`PLAN-READY:` is a hard gate"
+kernel_reason = ""
+delivery_kind = "agentctl_construct"
+delivery_marker = "PLAN_READY"
+delivery_note = "Engine holds at the PLAN_READY state until explicit approval."
+
+[[rule]]
+id = "skill-first-over-direct-cli"
+tier = 0
+locator_heading = "### Delegating to specialists & skills"
+locator_phrase = "Skill-first over direct CLI"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+# ---------------------------------------------------------------------------
+# ### On task resolution (record experience)
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id = "resolved-only-on-explicit-confirmation"
+tier = 1
+locator_heading = "### On task resolution (record experience)"
+locator_phrase = "only when the user explicitly confirms it"
+kernel_reason = ""
+delivery_kind = "bracket_tag"
+delivery_marker = "[resolution-reminder]"
+delivery_note = "hook-resolution-reminder.py is the observable (bracket-tag) half. hook-turn-end-gate.py (the 'resolution' guardian) is a structured-decision Stop hook with no positive-firing log; agentctl verify-final/resolve are CLI constructs observable via a 'agentctl resolve' search but not separately instrumented here to avoid double-counting against entry land-into-trunk-proactively."
+trigger_proxy_field = "effectiveness.resolution_confirmed"
+trigger_proxy_op = ">"
+trigger_proxy_value = 0
+
+[[rule]]
+id = "gate-not-passed-no-close"
+tier = 0
+locator_heading = "### On task resolution (record experience)"
+locator_phrase = "Gate not passed ⇒ no close"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "recap-then-ask-shaped-to-criterion-type"
+tier = 0
+locator_heading = "### On task resolution (record experience)"
+locator_phrase = "Recap one line"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "bare-gratitude-not-confirmation"
+tier = 0
+locator_heading = "### On task resolution (record experience)"
+locator_phrase = "Bare gratitude is not confirmation"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "land-into-trunk-proactively"
+tier = 1
+locator_heading = "### On task resolution (record experience)"
+locator_phrase = "Push, then land into trunk/main"
+kernel_reason = ""
+delivery_kind = "bracket_tag"
+delivery_marker = "[resolution-reminder]"
+delivery_note = "Same hook-resolution-reminder.py injection as resolved-only-on-explicit-confirmation; this entry is the landing-discipline aspect of that one nudge."
+
+# ---------------------------------------------------------------------------
+# #### Outcome format
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id = "outcome-format-five-points"
+tier = 0
+locator_heading = "#### Outcome format"
+locator_phrase = "A report the user (or the next step) can act on without re-asking"
+kernel_reason = "FRAME"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+# ---------------------------------------------------------------------------
+# #### Recording the experience
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id = "renorm-then-decide-record-level"
+tier = 1
+locator_heading = "#### Recording the experience"
+locator_phrase = "re-norm, then decide the record LEVEL"
+kernel_reason = ""
+delivery_kind = "agentctl_construct"
+delivery_marker = "agentctl normalize"
+delivery_note = "Mandatory ACT engine-gated by agentctl normalize, or --normalization-waiver for a genuine one-off."
+
+[[rule]]
+id = "record-per-recording-experience-schema"
+tier = 0
+locator_heading = "#### Recording the experience"
+locator_phrase = "search before recording"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+# ---------------------------------------------------------------------------
+# ### Limits
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id = "limits-substantive-code-spawn-developer"
+tier = 0
+locator_heading = "### Limits"
+locator_phrase = "production code → spawn `developer`, never write it yourself"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "limits-no-domain-runbooks-no-instruction-changes"
+tier = 0
+locator_heading = "### Limits"
+locator_phrase = "domain runbooks (pipeline stages, relaunches, prod names)"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "limits-destructive-commands-guard-variables"
+tier = 0
+locator_heading = "### Limits"
+locator_phrase = "Destructive commands built from variables"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = "A hook-guard-destructive-rm.py PreToolUse gate covers a protected-path denylist subset (structured_hook, unobservable), but CLAUDE.md is explicit that 'the discipline is yours' for the general case - kept tier 0."
+
+# ---------------------------------------------------------------------------
+# ## Coordination constants (no ### children)
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id = "coordination-constants-edit-in-config-not-here"
+tier = 0
+locator_heading = "## Coordination constants"
+locator_phrase = "Edit values **there**, not here"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+# ---------------------------------------------------------------------------
+# ## Long-running jobs (no ### children)
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id = "long-running-jobs-drive-to-terminal-state"
+tier = 0
+locator_heading = "## Long-running jobs"
+locator_phrase = "drive it to terminal state"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+# ---------------------------------------------------------------------------
+# ## Memory (intro + ### children)
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id = "memory-three-scopes-pick-by-purpose"
+tier = 0
+locator_heading = "## Memory"
+locator_phrase = "You have three memory scopes"
+kernel_reason = "FRAME"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "memory-scope-most-specific-wins"
+tier = 0
+locator_heading = "## Memory"
+locator_phrase = "If a fact qualifies for two scopes, write it to the"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "when-to-use-memory"
+tier = 0
+locator_heading = "### When to use memory"
+locator_phrase = "before assuming repo/infra conventions"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "system-knowledge-leaves-criteria"
+tier = 0
+locator_heading = "### `system-knowledge/` leaves"
+locator_phrase = "not reachable in 1–2 search hops, not already documented"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+# ---------------------------------------------------------------------------
+# ## Cost discipline (no ### children)
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id = "keep-main-thread-lean-delegate"
+tier = 0
+locator_heading = "## Cost discipline"
+locator_phrase = "Keep the main thread lean"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "one-task-one-session-clear-between-tasks"
+tier = 0
+locator_heading = "## Cost discipline"
+locator_phrase = "One task ≈ one session"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "harness-enforces-token-limits-use-usage"
+tier = 1
+locator_heading = "## Cost discipline"
+locator_phrase = "Harness enforces the rest"
+kernel_reason = ""
+delivery_kind = "harness"
+delivery_marker = ""
+delivery_note = "Model context window, CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, BASH_MAX_OUTPUT_LENGTH - harness runtime enforcement, not a hook or agentctl construct. /usage is a manual slash command with no reliable transcript trace."
+
+# ---------------------------------------------------------------------------
+# ## Instruction language (no ### children)
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id = "instruction-language-match-user-language"
+tier = 0
+locator_heading = "## Instruction language"
+locator_phrase = "match the language the user writes in"
+kernel_reason = "FRAME"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+# ---------------------------------------------------------------------------
+# ## Instructions repository (git) (no ### children)
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id = "instructions-repo-edit-policy"
+tier = 0
+locator_heading = "## Instructions repository (git)"
+locator_phrase = "Edit policy for `~/claude-agent-instructions/`: `sync-instructions-repo.sh pull` + reconcile before editing"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
