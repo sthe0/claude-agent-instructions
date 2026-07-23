@@ -2,7 +2,7 @@
 
 Index of memories applicable across all projects on this machine. Entries are pointer lines to leaf files in `leaves/`.
 
-Loaded into every session via `@~/.claude-agent/memory-global/MEMORY.md` import in `CLAUDE.md`. Keep this index under ~200 lines — anything past the first 200 lines is truncated by the harness.
+Loaded into every session via `@~/.claude-agent/memory-global/MEMORY.md` import in `CLAUDE.md`. Keep this index under ~200 lines — anything past the first 200 lines is truncated by the harness. CONFIRMED (unlike the CLAUDE.md char-ceiling claim, which is cosmetic — see `claude-md-max-chars` in config.md): the installed client bundle enforces a real 200-line / 25 000-byte cap on this file (function `Yqr(e)`, constants `Doe=200`/`rxe=25000`) on the AutoMem context-assembly path. Verified 2026-07-23 by reading the bundle and by a sentinel probe (a marker at line 150 was returned verbatim; a marker at line 240 was absent).
 
 ## How to use
 

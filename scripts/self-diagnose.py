@@ -17,7 +17,9 @@ Read-only, mechanical scans over the agent's OWN functional elements:
                         MEMORY_INDEX_LINE_THRESHOLD, matching the harness
                         auto-load truncation memory-global/MEMORY.md already
                         documents: "anything past the first 200 lines is
-                        truncated").
+                        truncated" — CONFIRMED real, not cosmetic; verified
+                        2026-07-23 against the installed client bundle, see
+                        memory-global/MEMORY.md line 5).
   dangling-pointer      a markdown link in a MEMORY.md whose local .md target
                         does not exist on disk.
   ceiling-proximity      a governed instructions file (CLAUDE.md, README,
@@ -60,7 +62,8 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 
-# Mirrors memory-global/MEMORY.md's own "keep this index under ~200 lines" note.
+# Mirrors memory-global/MEMORY.md's own "keep this index under ~200 lines" note
+# (CONFIRMED real cap, verified 2026-07-23 — see that file's line 5).
 MEMORY_INDEX_LINE_THRESHOLD = 200
 
 # Heuristic default: two leaves whose frontmatter name+description token sets

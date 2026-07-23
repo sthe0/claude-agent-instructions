@@ -53,6 +53,8 @@ semantic property it purports to enforce.
   leaves accumulate across sessions; capping them via
   `lint-prose-length.py` (or any analogue) forces pruning that deletes
   useful pointers. The truncation cliff at ~200 lines for `MEMORY.md`
+  (CONFIRMED real, not cosmetic — verified 2026-07-23 against the
+  installed client bundle; see `memory-global/MEMORY.md` line 5)
   is a *signal* for the agent to curate, not a gate for a linter.
   Distinguish **instruction surfaces** (`CLAUDE.md`, cursor mirror,
   `SKILL.md`, `policy.md` — loaded into every session prompt → hard

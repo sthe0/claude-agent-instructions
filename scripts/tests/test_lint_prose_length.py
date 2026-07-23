@@ -30,6 +30,8 @@ _CONFIG_TEMPLATE = """\
 | `cursor-mirror-max-lines` | `50` | . |
 | `skill-md-max-lines` | `50` | . |
 | `policy-md-max-lines` | `50` | . |
+| `skill-description-max-chars` | `850` | . |
+| `always-loaded-surface-advisory-chars` | `100000` | . |
 """
 
 
@@ -40,6 +42,15 @@ def _make_repo(tmp: Path, claude_lines: int, claude_line_width: int = 5) -> None
     (tmp / "README.md").write_text("readme\n", encoding="utf-8")
     (tmp / "cursor" / "rules").mkdir(parents=True)
     (tmp / "cursor" / "rules" / "claude-code-sync.mdc").write_text("m\n", encoding="utf-8")
+
+
+def _write_skill(tmp: Path, name: str, description: str) -> None:
+    skill_dir = tmp / "skills" / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: {description}\n---\nbody\n",
+        encoding="utf-8",
+    )
 
 
 def _run(tmp: Path, capsys):
@@ -97,3 +108,59 @@ def test_fail_above_ceiling_still_fatal(tmp_path, capsys):
     assert rc == 1
     assert "FAIL" in out
     assert "CLAUDE.md: 101 lines, limit 100" in out
+
+
+def test_skill_description_over_cap_fails(tmp_path, capsys):
+    _make_repo(tmp_path, claude_lines=50)
+    _write_skill(tmp_path, "toolong", "x" * 900)
+    rc, out = _run(tmp_path, capsys)
+    assert rc == 1
+    assert "FAIL" in out
+    assert "skills/toolong/SKILL.md: 900 chars description, limit 850" in out
+
+
+def test_skill_description_under_cap_passes(tmp_path, capsys):
+    _make_repo(tmp_path, claude_lines=50)
+    _write_skill(tmp_path, "fine", "x" * 800)
+    rc, out = _run(tmp_path, capsys)
+    assert rc == 0
+
+
+def test_surface_report_consistency(tmp_path, capsys):
+    _make_repo(tmp_path, claude_lines=50)
+    (tmp_path / "memory-global").mkdir()
+    (tmp_path / "memory-global" / "MEMORY.md").write_text("m" * 40 + "\n", encoding="utf-8")
+    _write_skill(tmp_path, "a", "d" * 100)
+    _write_skill(tmp_path, "b", "e" * 200)
+
+    mod = _load_mod()
+    mod.REPO_ROOT = tmp_path
+    mod.CONFIG_MD = tmp_path / "config.md"
+    rc = mod.main(["--surface-report"])
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "DYNAMIC" not in out
+
+    lines = [l.strip() for l in out.splitlines() if l.strip().endswith("chars")]
+    breakdown_total = sum(int(l.rsplit(" ", 2)[-2]) for l in lines if "TOTAL" not in l)
+    total_line = next(l for l in lines if l.startswith("TOTAL"))
+    reported_total = int(total_line.rsplit(" ", 2)[-2])
+    assert reported_total == breakdown_total
+
+
+def test_surface_report_no_transcript_io_without_include_dynamic(tmp_path, capsys):
+    _make_repo(tmp_path, claude_lines=50)
+
+    mod = _load_mod()
+    mod.REPO_ROOT = tmp_path
+    mod.CONFIG_MD = tmp_path / "config.md"
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("scan_dynamic_injection must not run without --include-dynamic")
+
+    mod.scan_dynamic_injection = _boom
+    rc = mod.main(["--surface-report"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "DYNAMIC" not in out
