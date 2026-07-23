@@ -17,6 +17,7 @@
 GH_BIN="${GH_BIN:-gh}"
 # scripts/project_entry/trackers/github.sh -> up two levels is scripts/.
 _GH_ORGCHECK_PY="${CHECK_ORG_NEUTRAL_PY:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/check-org-neutral.py}"
+_VERIFY_PLAN_SYNC_PY="${VERIFY_PLAN_SYNC_PY:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/verify-ticket-plan-sync.py}"
 
 # kebab: lowercase, non-alnum -> '-', squeeze/trim dashes, truncate ~40 chars.
 # Uses ERE (sed -E, '+'): BSD sed (macOS) does not honor GNU's BRE '\+'.
@@ -162,15 +163,19 @@ tracker_comment() {
 # approved plan snapshot: a SECRET gist (never --public) holding <toml-path>
 # verbatim (passed by path — never re-read/re-serialized, so the published
 # bytes are byte-identical to the input file), then a NEW issue comment
-# containing <markdown-path>'s content plus the gist URL. Optional verb,
-# probed the same way. Guarded by the org-neutral check on BOTH files,
-# CLAUDE_DRY_RUN, and CLAUDE_LAUNCH_ASSUME_YES. Single degrade class: exit 0
-# = gist created AND comment posted, ANY nonzero = not fully published. A
-# comment failure AFTER a successful gist creation still surfaces as one
-# degrade, but the gist URL is reported on stderr rather than left unknown —
-# a half-published state is never left unreported.
+# containing <markdown-path>'s content plus the gist URL and an
+# agent-plan-sync marker (see verify-ticket-plan-sync.py) so a later session
+# can detect drift between this comment and the current TOML. Optional
+# verb, probed the same way. Guarded by the org-neutral check on BOTH
+# files, CLAUDE_DRY_RUN, and CLAUDE_LAUNCH_ASSUME_YES. Single degrade
+# class: exit 0 = gist created AND comment posted, ANY nonzero = not fully
+# published — including a marker-computation failure, which is a
+# precondition of publishing at all and never leaves a half-published
+# state. A comment failure AFTER a successful gist creation still surfaces
+# as one degrade, but the gist URL is reported on stderr rather than left
+# unknown — a half-published state is never left unreported.
 tracker_publish_plan() {
-  local key="$1" toml_path="$2" md_path="$3" out rc gist_url tmp_comment
+  local key="$1" toml_path="$2" md_path="$3" out rc gist_url tmp_comment marker_line
 
   _gh_orgcheck "$toml_path" "$md_path" || return 1
 
@@ -185,6 +190,12 @@ tracker_publish_plan() {
       "$key" >&2
     return 1
   fi
+
+  marker_line="$(python3 "$_VERIFY_PLAN_SYNC_PY" --emit-marker --plan "$toml_path")" || {
+    printf 'github tracker: tracker_publish_plan failed to compute the plan-sync marker for %q — refusing to publish.\n' \
+      "$toml_path" >&2
+    return 1
+  }
 
   out="$("$GH_BIN" gist create "$toml_path" --desc "approved plan: $key" 2>&1)"
   rc=$?
@@ -203,6 +214,7 @@ tracker_publish_plan() {
   }
   cat "$md_path" >"$tmp_comment"
   printf '\nApproved plan: %s\n' "$gist_url" >>"$tmp_comment"
+  printf '\n%s\n' "$marker_line" >>"$tmp_comment"
 
   local -a _gh_args=(issue comment "$key" --body-file "$tmp_comment")
   [[ -n "${CLAUDE_TRACKER_QUEUE:-}" ]] && _gh_args+=(--repo "$CLAUDE_TRACKER_QUEUE")

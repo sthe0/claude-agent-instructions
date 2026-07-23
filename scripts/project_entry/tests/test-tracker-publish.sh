@@ -14,6 +14,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPTS_DIR="$(cd "$HERE/../.." && pwd)"
 GITHUB_SH="$SCRIPTS_DIR/project_entry/trackers/github.sh"
+VERIFY_SYNC_PY="$SCRIPTS_DIR/verify-ticket-plan-sync.py"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -206,6 +207,52 @@ check "stub backend omitting tracker_comment: declare -F reports absent" '[[ $rc
 bash -c "source '$FAKE_TR'; declare -F tracker_publish_plan >/dev/null"
 rc=$?
 check "stub backend omitting tracker_publish_plan: declare -F reports absent" '[[ $rc -ne 0 ]]'
+
+# --- case 10: publish attaches a valid agent-plan-sync marker to the
+#              comment — round-tripped through the comparator, OK ---------
+MARKER_FIXTURE_TOML="$TMP/plan-marker-fixture.toml"
+cat >"$MARKER_FIXTURE_TOML" <<'EOF'
+[[stage]]
+index = 1
+title = "marker fixture stage"
+EOF
+
+STUB_LOG="$TMP/log-10"; : >"$STUB_LOG"
+STUB_GIST_COPY="$TMP/gist-copy-10"
+STUB_COMMENT_COPY="$TMP/comment-copy-10"
+STUB_FAIL=""
+export STUB_LOG STUB_GIST_COPY STUB_COMMENT_COPY STUB_FAIL
+export STUB_GIST_URL="https://gist.github.com/testuser/deadbeefdeadbeef"
+
+out="$(tracker_publish_plan "$KEY" "$MARKER_FIXTURE_TOML" "$CLEAN_MD" 2>"$TMP/stderr-10.log")"; rc=$?
+verify_out="$(python3 "$VERIFY_SYNC_PY" --plan "$MARKER_FIXTURE_TOML" --comment-file "$STUB_COMMENT_COPY" 2>&1)"; verify_rc=$?
+check "publish marker: publish succeeded"              '[[ $rc -eq 0 ]]'
+check "publish marker: comment carries a marker line"  'grep -q "agent-plan-sync: plan_sha256=" "$STUB_COMMENT_COPY"'
+check "publish marker: comparator reports OK"          '[[ $verify_rc -eq 0 ]] && printf "%s" "$verify_out" | grep -q "OK"'
+
+# --- case 11: mutating the TOML after publish makes the previously
+#              captured marker DRIFT (marker is byte-bound to content,
+#              not just the path) -----------------------------------------
+printf '\n# mutated after publish\n' >>"$MARKER_FIXTURE_TOML"
+verify_out_drift="$(python3 "$VERIFY_SYNC_PY" --plan "$MARKER_FIXTURE_TOML" --comment-file "$STUB_COMMENT_COPY" 2>&1)"; verify_drift_rc=$?
+check "publish marker: mutated plan reports DRIFT via the stale marker" \
+  '[[ $verify_drift_rc -eq 1 ]] && printf "%s" "$verify_out_drift" | grep -q "DRIFT"'
+
+# --- case 12: marker-computation failure is a hard precondition of
+#              publishing — no gh calls happen at all, single degrade
+#              class, reason on stderr ------------------------------------
+STUB_LOG="$TMP/log-12"; : >"$STUB_LOG"
+STUB_GIST_COPY="$TMP/gist-copy-12"
+STUB_COMMENT_COPY="$TMP/comment-copy-12"
+_SAVED_VERIFY_PLAN_SYNC_PY="$_VERIFY_PLAN_SYNC_PY"
+_VERIFY_PLAN_SYNC_PY="$TMP/does-not-exist.py"
+out="$(tracker_publish_plan "$KEY" "$CLEAN_TOML" "$CLEAN_MD" 2>"$TMP/stderr-12.log")"; rc=$?
+_VERIFY_PLAN_SYNC_PY="$_SAVED_VERIFY_PLAN_SYNC_PY"
+check "publish marker-failure: exit nonzero"     '[[ $rc -ne 0 ]]'
+check "publish marker-failure: zero gh calls"    '[[ ! -s "$STUB_LOG" ]]'
+check "publish marker-failure: stderr reason"    '[[ -s "$TMP/stderr-12.log" ]]'
+
+unset STUB_LOG STUB_GIST_COPY STUB_COMMENT_COPY STUB_FAIL STUB_GIST_URL
 
 printf 'tracker-publish tests: %d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]
