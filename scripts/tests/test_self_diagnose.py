@@ -86,7 +86,7 @@ def test_ceiling_proximity_flags_claude_md_and_governed_file(tmp_path, monkeypat
     (tmp_path / "README.md").write_text("\n".join(["l"] * 5), encoding="utf-8")
     _stub_lint_prose_length(
         monkeypatch,
-        config={"claude-md-max-bytes": "100", "readme-max-lines": "5"},
+        config={"claude-md-max-chars": "100", "readme-max-lines": "5"},
         governed=[("README.md", "readme-max-lines")],
     )
     findings = sd.scan_ceiling_proximity(tmp_path)
@@ -101,7 +101,7 @@ def test_ceiling_proximity_clean_when_well_under_limits(tmp_path, monkeypatch):
     (tmp_path / "README.md").write_text("l\n", encoding="utf-8")
     _stub_lint_prose_length(
         monkeypatch,
-        config={"claude-md-max-bytes": "10000", "readme-max-lines": "140"},
+        config={"claude-md-max-chars": "10000", "readme-max-lines": "140"},
         governed=[("README.md", "readme-max-lines")],
     )
     assert sd.scan_ceiling_proximity(tmp_path) == []

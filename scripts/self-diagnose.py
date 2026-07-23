@@ -404,19 +404,19 @@ def scan_ceiling_proximity(repo_root: Path) -> "list[Difficulty]":
     except OSError:
         return out
 
-    byte_limit_raw = constants.get("claude-md-max-bytes")
+    char_limit_raw = constants.get("claude-md-max-chars")
     claude_md = repo_root / "CLAUDE.md"
-    if byte_limit_raw is not None and claude_md.is_file():
+    if char_limit_raw is not None and claude_md.is_file():
         try:
-            byte_limit = int(byte_limit_raw)
-            nbytes = len(claude_md.read_text(encoding="utf-8").encode("utf-8"))
+            char_limit = int(char_limit_raw)
+            nchars = len(claude_md.read_text(encoding="utf-8"))
         except (ValueError, OSError):
-            byte_limit = nbytes = None
-        if byte_limit is not None:
-            level = mod.check_level(nbytes, byte_limit)
+            char_limit = nchars = None
+        if char_limit is not None:
+            level = mod.check_level(nchars, char_limit)
             if level in ("warn", "fail"):
                 out.append(
-                    Difficulty("ceiling-proximity", "CLAUDE.md", f"{nbytes}B {level} of {byte_limit}B (claude-md-max-bytes)")
+                    Difficulty("ceiling-proximity", "CLAUDE.md", f"{nchars} chars {level} of {char_limit} chars (claude-md-max-chars)")
                 )
 
     for glob_pat, key in mod.GOVERNED:

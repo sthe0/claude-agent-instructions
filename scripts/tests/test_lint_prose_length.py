@@ -25,7 +25,7 @@ _CONFIG_TEMPLATE = """\
 | Key | Value | Meaning |
 |---|---|---|
 | `claude-md-max-lines` | `100` | . |
-| `claude-md-max-bytes` | `1000` | . |
+| `claude-md-max-chars` | `1000` | . |
 | `readme-max-lines` | `50` | . |
 | `cursor-mirror-max-lines` | `50` | . |
 | `skill-md-max-lines` | `50` | . |
@@ -51,7 +51,7 @@ def _run(tmp: Path, capsys):
 
 
 def test_clean_tree_no_warn(tmp_path, capsys):
-    _make_repo(tmp_path, claude_lines=50)  # 50% of lines, 300/1000 bytes
+    _make_repo(tmp_path, claude_lines=50)  # 50% of lines, 300/1000 chars
     rc, out = _run(tmp_path, capsys)
     assert rc == 0
     assert "WARN" not in out
@@ -66,12 +66,29 @@ def test_warn_at_90_percent_exits_zero(tmp_path, capsys):
     assert "OK" in out
 
 
-def test_byte_warn_at_90_percent(tmp_path, capsys):
-    # 50 lines x 18 chars + newline = 950 bytes -> 95% of the 1000-byte ceiling.
+def test_char_warn_at_90_percent(tmp_path, capsys):
+    # 50 lines x 18 chars + newline = 950 chars -> 95% of the 1000-char ceiling.
     _make_repo(tmp_path, claude_lines=50, claude_line_width=18)
     rc, out = _run(tmp_path, capsys)
     assert rc == 0
-    assert "WARN — CLAUDE.md: 950 bytes, 95% of limit 1000" in out
+    assert "WARN — CLAUDE.md: 950 chars, 95% of limit 1000" in out
+
+
+def test_char_unit_not_byte_unit_cyrillic(tmp_path, capsys):
+    # 950 Cyrillic chars = 951 chars total (95% of the 1000-char ceiling,
+    # WARN) but 1901 UTF-8 bytes -- over the 1000-byte ceiling the OLD
+    # byte-based model would have FAILED on. Proves the linter measures
+    # chars, not bytes.
+    (tmp_path / "config.md").write_text(_CONFIG_TEMPLATE, encoding="utf-8")
+    body = "б" * 950 + "\n"
+    (tmp_path / "CLAUDE.md").write_text(body, encoding="utf-8")
+    (tmp_path / "README.md").write_text("readme\n", encoding="utf-8")
+    (tmp_path / "cursor" / "rules").mkdir(parents=True)
+    (tmp_path / "cursor" / "rules" / "claude-code-sync.mdc").write_text("m\n", encoding="utf-8")
+    assert len(body.encode("utf-8")) > 1000  # sanity: would FAIL as bytes
+    rc, out = _run(tmp_path, capsys)
+    assert rc == 0
+    assert "WARN — CLAUDE.md: 951 chars, 95% of limit 1000" in out
 
 
 def test_fail_above_ceiling_still_fatal(tmp_path, capsys):

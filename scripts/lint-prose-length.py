@@ -11,7 +11,7 @@ file with a one-line pointer.
 
 Governed files (per `config.md` keys):
 
-  CLAUDE.md                              claude-md-max-lines, claude-md-max-bytes
+  CLAUDE.md                              claude-md-max-lines, claude-md-max-chars
   README.md                              readme-max-lines
   cursor/rules/claude-code-sync.mdc      cursor-mirror-max-lines
   skills/*/SKILL.md                      skill-md-max-lines
@@ -19,9 +19,14 @@ Governed files (per `config.md` keys):
   skills/*/policy.md                     policy-md-max-lines
   skills/specializations/*/policy.md     policy-md-max-lines
 
-CLAUDE.md also has a UTF-8 byte ceiling (`claude-md-max-bytes`): the harness
-silently truncates CLAUDE.md past ~40 000 bytes, losing tail rules, and the
-line-count guard does not catch byte growth.
+CLAUDE.md also has a char ceiling (`claude-md-max-chars`), measured in UTF-16
+code units — the unit the harness's own `content.length` check uses, not
+UTF-8 bytes. Crossing it produces a display-only `/doctor` warning, not
+truncation (verified against the installed client bundle and an over-limit
+sentinel test; see the `claude-md-max-chars` row in config.md). The
+line-count guard does not catch char growth (a few long lines can cross the
+char budget while staying well under the line limit), so it is checked
+explicitly.
 
 At or above WARN_FRACTION of any ceiling a non-fatal WARN line is printed
 (exit code unchanged): a limit that only signals at 100% is discovered as a
@@ -87,33 +92,33 @@ def main(argv: list[str] | None = None) -> int:
     warnings: list[str] = []
     scanned = 0
 
-    # Byte-size ceiling for CLAUDE.md. The harness silently truncates CLAUDE.md
-    # past ~40 000 bytes, dropping tail rules; the line-count guard below does
-    # not catch byte growth (a few long lines can blow the byte budget while
-    # staying well under the line limit), so check bytes explicitly.
-    byte_key = "claude-md-max-bytes"
-    raw_bytes = constants.get(byte_key)
-    if raw_bytes is None:
-        failures.append(f"config.md missing key: {byte_key}")
+    # Char-size ceiling for CLAUDE.md, measured in UTF-16 code units — the unit
+    # the harness's own content.length check uses. The line-count guard above
+    # does not catch char growth (a few long lines can cross the char budget
+    # while staying well under the line limit), so check chars explicitly.
+    char_key = "claude-md-max-chars"
+    raw_chars = constants.get(char_key)
+    if raw_chars is None:
+        failures.append(f"config.md missing key: {char_key}")
     else:
         try:
-            byte_limit = int(raw_bytes)
+            char_limit = int(raw_chars)
         except ValueError:
-            failures.append(f"config.md key {byte_key} is not an integer: {raw_bytes!r}")
+            failures.append(f"config.md key {char_key} is not an integer: {raw_chars!r}")
         else:
             claude_md = REPO_ROOT / "CLAUDE.md"
             if claude_md.is_file():
                 scanned += 1
-                nbytes = len(claude_md.read_text(encoding="utf-8").encode("utf-8"))
-                level = check_level(nbytes, byte_limit)
+                nchars = len(claude_md.read_text(encoding="utf-8"))
+                level = check_level(nchars, char_limit)
                 if level == "fail":
                     failures.append(
-                        f"CLAUDE.md: {nbytes} bytes, limit {byte_limit} ({byte_key})"
+                        f"CLAUDE.md: {nchars} chars, limit {char_limit} ({char_key})"
                     )
                 elif level == "warn":
                     warnings.append(
-                        f"CLAUDE.md: {nbytes} bytes, {nbytes * 100 // byte_limit}% "
-                        f"of limit {byte_limit} ({byte_key})"
+                        f"CLAUDE.md: {nchars} chars, {nchars * 100 // char_limit}% "
+                        f"of limit {char_limit} ({char_key})"
                     )
 
     for glob_pat, key in GOVERNED:

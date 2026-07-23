@@ -28,7 +28,7 @@ _CONFIG_TEMPLATE = """\
 | Key | Value | Meaning |
 |---|---|---|
 | `claude-md-max-lines` | `100` | . |
-| `claude-md-max-bytes` | `1000` | . |
+| `claude-md-max-chars` | `1000` | . |
 | `readme-max-lines` | `50` | . |
 | `cursor-mirror-max-lines` | `50` | . |
 | `skill-md-max-lines` | `50` | . |
@@ -160,7 +160,7 @@ def test_only_newly_due_file_named(tmp_path):
     recent = dt.datetime.now()
     stamp.write_text(json.dumps({"README.md": recent.isoformat()}), encoding="utf-8")
 
-    # CLAUDE.md now also crosses WARN — 92% of its 1000-byte ceiling.
+    # CLAUDE.md now also crosses WARN — 92% of its 1000-char ceiling.
     (repo / "CLAUDE.md").write_text("x" * 920, encoding="utf-8")
 
     proc = run_hook(home, repo)

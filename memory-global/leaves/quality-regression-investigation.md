@@ -98,7 +98,7 @@ instruction-commit range between the two windows and a hint to run the helper.
    (move the rule up, bold the trigger, add it to an existing table row) at zero
    net line cost.
 3. **Re-add prose within ceilings** — last resort: re-add the removed text, staying
-   under `claude-md-max-lines` / `claude-md-max-bytes`; if the ceiling blocks,
+   under `claude-md-max-lines` / `claude-md-max-chars`; if the ceiling blocks,
    extract something less load-bearing to a leaf first.
 
 Never clear the flag by deleting the check or widening the threshold without a

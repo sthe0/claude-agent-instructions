@@ -29,7 +29,7 @@ Suggested flow once the scorecard flag fires:
   2. Read the ranked commits top-down as ordered hypotheses.
   3. Fix per the ladder: mechanize the rule > restore lost salience without
      growing CLAUDE.md/config.md > only then re-add prose, within the
-     claude-md-max-lines / claude-md-max-bytes ceilings.
+     claude-md-max-lines / claude-md-max-chars ceilings.
   4. Runbook: memory-global/leaves/quality-regression-investigation.md
 """
 from __future__ import annotations
