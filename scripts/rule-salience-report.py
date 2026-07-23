@@ -83,6 +83,14 @@ QUALITY_LEDGER_PATH = Path.home() / ".local" / "log" / "claude-task-quality.json
 
 VALID_KERNEL_REASONS = {"FRAME", "NOT-NOTICING"}
 VALID_DELIVERY_KINDS = {"bracket_tag", "agentctl_construct", "structured_hook", "harness"}
+# Kinds whose delivery mechanism itself leaves a transcript marker (a bracket
+# tag, an agentctl subcommand). The remainder of VALID_DELIVERY_KINDS -
+# structured_hook and harness - can never carry one: a structured_hook is a
+# PreToolUse allow/deny decision with no positive-firing log, and a harness
+# enforcement (settings allowlist, context-window limit) is enforced outside
+# any transcript the agent writes. Derived, not listed a second time, so the
+# two sets cannot drift apart as VALID_DELIVERY_KINDS grows.
+MARKER_BEARING_KINDS = {"bracket_tag", "agentctl_construct"}
 HEADING_PREFIXES = ("#### ", "### ", "## ", "# ")
 
 
@@ -131,8 +139,17 @@ def registry_schema_errors(rules: list[dict]) -> list[str]:
                 errors.append(
                     f"{where}: tier {tier} requires delivery_kind in {sorted(VALID_DELIVERY_KINDS)}, got {delivery_kind!r}"
                 )
-            if delivery_kind in ("bracket_tag", "agentctl_construct") and not r.get("delivery_marker"):
+            if delivery_kind in MARKER_BEARING_KINDS and not r.get("delivery_marker"):
                 errors.append(f"{where}: delivery_kind={delivery_kind!r} requires a non-empty delivery_marker")
+            if (
+                delivery_kind in VALID_DELIVERY_KINDS
+                and delivery_kind not in MARKER_BEARING_KINDS
+                and not r.get("uninstrumented_reason")
+            ):
+                errors.append(
+                    f"{where}: delivery_kind={delivery_kind!r} leaves no transcript marker - "
+                    f"add a delivery_marker, or state uninstrumented_reason"
+                )
 
         if not r.get("locator_heading"):
             errors.append(f"{where}: missing locator_heading")

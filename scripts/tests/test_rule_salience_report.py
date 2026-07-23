@@ -197,6 +197,68 @@ def test_check_registry_flags_schema_violations():
     assert any("kernel_reason" in e for e in errors)
 
 
+# ---------------------------------------------------------------------------
+# Tier>=1 observability growth guard: a marker-free delivery_kind (harness,
+# structured_hook) must declare uninstrumented_reason, or the entry becomes
+# silently unobservable with no reviewable trace of why.
+# ---------------------------------------------------------------------------
+
+def _marker_free_tier1_entry(**overrides):
+    entry = {
+        "id": "rule-marker-free",
+        "tier": 1,
+        "locator_heading": "### Sub B",
+        "locator_phrase": "Rule B body text",
+        "kernel_reason": "",
+        "delivery_kind": "harness",
+        "delivery_marker": "",
+    }
+    entry.update(overrides)
+    return entry
+
+
+def test_check_registry_fails_when_marker_free_tier1_entry_lacks_uninstrumented_reason():
+    rules = base_rules() + [_marker_free_tier1_entry()]
+    errors = rsr.check_registry(rules, CLAUDE_MD_TEXT)
+    matches = [e for e in errors if "rule-marker-free" in e]
+    assert len(matches) == 1, errors
+    assert "uninstrumented_reason" in matches[0]
+
+
+def test_check_registry_passes_when_marker_free_tier1_entry_states_uninstrumented_reason():
+    rules = base_rules() + [
+        _marker_free_tier1_entry(uninstrumented_reason="Harness allowlist enforcement, no transcript event.")
+    ]
+    errors = rsr.check_registry(rules, CLAUDE_MD_TEXT)
+    assert not any("rule-marker-free" in e for e in errors), errors
+
+
+def test_check_registry_structured_hook_tier1_entry_also_requires_uninstrumented_reason():
+    """structured_hook is the second marker-free kind (a PreToolUse allow/deny
+    decision with no positive-firing log) - it must not slip through the gate
+    the harness case above closes."""
+    rules = base_rules() + [_marker_free_tier1_entry(delivery_kind="structured_hook")]
+    errors = rsr.check_registry(rules, CLAUDE_MD_TEXT)
+    assert any("rule-marker-free" in e and "uninstrumented_reason" in e for e in errors), errors
+
+
+def test_check_registry_marker_bearing_tier1_entry_unaffected_by_uninstrumented_reason_gate():
+    """rule-b (bracket_tag with a real delivery_marker) must not be dragged
+    into the marker-free requirement."""
+    errors = rsr.check_registry(base_rules(), CLAUDE_MD_TEXT)
+    assert not any("rule-b" in e for e in errors), errors
+
+
+def test_check_registry_tier0_entries_never_require_uninstrumented_reason():
+    """Tier-0 kernel entries are UNINSTRUMENTED by construction (kernel_reason
+    covers them) and must never be dragged into the tier>=1 observability
+    requirement, regardless of delivery_kind."""
+    rules = base_rules()
+    assert rules[0]["tier"] == 0
+    errors = rsr.check_registry(rules, CLAUDE_MD_TEXT)
+    assert not any("uninstrumented_reason" in e for e in errors), errors
+
+
 def test_check_registry_cli_exit_codes(tmp_path):
     good_registry = tmp_path / "good.toml"
     _write_toml(good_registry, base_rules())
