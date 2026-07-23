@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Query CLI over the durable edit-ledger (agentctl/edit_ledger.py).
+"""Query + stamp CLI over the durable edit-ledger (agentctl/edit_ledger.py).
 
 Answers the two forensic questions the ledger exists to make cheap:
 "what did session X edit" (``by-session``) and "who edited file Y"
-(``by-file``) — without reading a transcript. Read-only: this CLI never
-writes to the ledger.
+(``by-file``) — without reading a transcript. It also exposes a ``stamp``
+subcommand: the shell entry point to ``edit_ledger.stamp()``, the same
+primitive a Python direct-IO canon writer imports directly — so a shell
+writer (apply-settings.sh, install-reminder-hooks.sh, ...) can record its own
+attribution with one line, with no second implementation to keep in sync.
 
 Each ledger row carries two session ids (see edit_ledger.py's module
 docstring): ``session_id`` (the hook-stdin id of the agent that actually made
@@ -63,7 +66,23 @@ def main(argv: "list[str] | None" = None) -> int:
     p_file = sub.add_parser("by-file", help="all records touching a file (matched by realpath)")
     p_file.add_argument("path")
 
+    p_stamp = sub.add_parser("stamp", help="append one attribution row for a direct-IO canon write (shell entry point to edit_ledger.stamp())")
+    p_stamp.add_argument("--file", required=True, help="path of the file that was written")
+    p_stamp.add_argument("--tool", required=True, help="synthetic writer marker, e.g. 'script:apply-settings'")
+    p_stamp.add_argument("--session", default=None, help="explicit session id, overriding $CLAUDE_CODE_SESSION_ID for session_id")
+
     args = p.parse_args(argv)
+
+    if args.command == "stamp":
+        # Always returns 0: a shell writer's own canon write must never be
+        # failed by its attribution call (stamp() is itself fail-open, but the
+        # CLI wraps it again so even an argparse-adjacent surprise can't
+        # propagate a nonzero exit into a caller's `|| true`-free path).
+        try:
+            edit_ledger.stamp(args.file, args.tool, session=args.session, path=_ledger_path(args.ledger))
+        except Exception:
+            pass
+        return 0
 
     records = sorted(edit_ledger.read_records(_ledger_path(args.ledger)), key=lambda r: r.get("ts", 0))
 

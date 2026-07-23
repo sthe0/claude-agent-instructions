@@ -109,6 +109,11 @@ def test_live_hook_then_cli_end_to_end(tmp_path):
         "AGENTCTL_EDIT_LEDGER": str(ledger_path),
         "CLAUDE_CODE_SESSION_ID": "FINALCHECK-root",
         "HOME": str(tmp_path / "home"),
+        # Pin scratch to a root this test does not use, so `target` below is
+        # non-scratch by construction — must be in the subprocess env dict,
+        # not a monkeypatch, since the hook runs as a real subprocess (a
+        # control must not depend on the machine's ambient $TMPDIR).
+        "AGENTCTL_SCRATCH_ROOTS": str(tmp_path / "scratchroot"),
     }
     (tmp_path / "home").mkdir(exist_ok=True)
 

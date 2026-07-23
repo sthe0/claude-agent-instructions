@@ -14,6 +14,13 @@ Memory and scratch paths (agentctl.exempt_paths.is_engine_exempt: /tmp/, /memory
 /memory-global/, /agent-memory/) are never recorded as touched scope — those
 writes are gate-exempt and carry no contention risk.
 
+The durable edit ledger (agentctl.edit_ledger) uses a DIFFERENT, narrower filter
+(agentctl.exempt_paths.is_ledger_noise: ephemeral OS-temp scratch only) — an
+observability decision, not a gating one, so it must not borrow the gate's
+exempt set. Memory writes ARE ledgered: memory is exactly the file class the
+durable attribution ledger most needs to record, even though it is rightly
+gate-exempt.
+
 It also resolves and records the durable session process's pid (once per
 session, cached thereafter — see session_pid()) so hook-scope-conflict.py's
 live_pid_check can tell a genuinely dead session from a merely TTL-fresh one.
@@ -42,7 +49,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agentctl import edit_ledger  # noqa: E402
-from agentctl.exempt_paths import is_engine_exempt  # noqa: E402
+from agentctl.exempt_paths import is_engine_exempt, is_ledger_noise  # noqa: E402
 from session_scope import registry  # noqa: E402
 
 TRACKED_TOOLS = ("Edit", "Write")
@@ -171,12 +178,23 @@ def track(payload: dict, now_ts: float) -> None:
             abspath = os.path.realpath(file_path)
             if not is_engine_exempt(abspath):
                 registry.record_touch(session_id, abspath)
-                # env_session_id is the ROOT session's CLAUDE_CODE_SESSION_ID,
-                # which for a subagent edit differs from the hook-stdin
-                # session_id above — the commit trailer (agent_commit_trailer.py)
-                # keys on the env var, so both ids are recorded to bridge the
-                # two (see edit_ledger.py's module docstring).
-                try:
+            # The ledger's filter is deliberately separate from the gate's: it
+            # is an observability decision (is this write worth recording?),
+            # not a gating one, so it must not be nested inside the
+            # is_engine_exempt branch above — that would silently blind the
+            # ledger to the memory tree, which is exactly what it exists to
+            # attribute. is_ledger_noise() also does realpath + env work
+            # (unlike the old pure-substring test), so its evaluation sits
+            # inside the same try/except as the append: a raise from either
+            # must be swallowed exactly alike, and neither may skip the
+            # heartbeat below.
+            try:
+                if not is_ledger_noise(abspath):
+                    # env_session_id is the ROOT session's CLAUDE_CODE_SESSION_ID,
+                    # which for a subagent edit differs from the hook-stdin
+                    # session_id above — the commit trailer (agent_commit_trailer.py)
+                    # keys on the env var, so both ids are recorded to bridge the
+                    # two (see edit_ledger.py's module docstring).
                     edit_ledger.append(
                         session_id,
                         os.environ.get("CLAUDE_CODE_SESSION_ID") or "",
@@ -185,8 +203,8 @@ def track(payload: dict, now_ts: float) -> None:
                         cwd,
                         now_ts,
                     )
-                except Exception:
-                    pass
+            except Exception:
+                pass
 
     # Resolve the session pid once (first fire) and reuse it thereafter — it
     # never changes for the life of the session, and re-walking ancestry via

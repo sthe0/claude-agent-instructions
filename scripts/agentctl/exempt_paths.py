@@ -29,7 +29,9 @@ three are listed explicitly:
 """
 from __future__ import annotations
 
+import os
 import re
+import tempfile
 
 # Edits to files matching this pattern are *candidates* for the gate; anything
 # else (prose .txt, images, data) is never gated. ``.md`` / ``.mdc`` are included
@@ -83,3 +85,67 @@ def is_gated_path(path: str) -> bool:
     """True if an edit to this path is governed by the engine gate: a production
     file that is not on the exempt list."""
     return is_production_file(path) and not is_engine_exempt(path)
+
+
+# Override for scratch_roots(): os.pathsep-separated, REPLACES the defaults when
+# set and non-empty. Mirrors edit_ledger.py's $AGENTCTL_EDIT_LEDGER override idiom
+# so both in-process and subprocess controls can state which roots count.
+SCRATCH_ROOTS_ENV = "AGENTCTL_SCRATCH_ROOTS"
+
+
+def scratch_roots() -> "tuple[str, ...]":
+    """Resolve, at call time, the set of roots that count as ephemeral OS-temp
+    scratch for is_ledger_noise(). Never cached at import: an env change inside a
+    test or a subprocess must be honoured on the next call.
+
+    Default roots: "/tmp" (unconditional — scratch by convention even when
+    $TMPDIR points elsewhere), $TMPDIR if set, and tempfile.gettempdir(). Each
+    root is kept in both its normpath and realpath form (on a machine where
+    $TMPDIR is itself a symlink target, e.g. /var/tmp -> /place/vartmp, a caller
+    may hand either form), empty entries dropped, order-stable dedupe.
+    """
+    override = os.environ.get(SCRATCH_ROOTS_ENV)
+    if override:
+        candidates = [c for c in override.split(os.pathsep) if c]
+    else:
+        candidates = ["/tmp"]
+        tmpdir = os.environ.get("TMPDIR")
+        if tmpdir:
+            candidates.append(tmpdir)
+        candidates.append(tempfile.gettempdir())
+
+    roots: "list[str]" = []
+    seen = set()
+    for c in candidates:
+        for form in (os.path.normpath(c), os.path.realpath(c)):
+            if form and form not in seen:
+                seen.add(form)
+                roots.append(form)
+    return tuple(roots)
+
+
+def is_ledger_noise(path: str) -> bool:
+    """True if `path` is not worth recording in the durable edit ledger: ONLY
+    ephemeral OS-temp scratch (root containment over scratch_roots()), never a
+    substring test. This answers a different question from is_engine_exempt:
+    that predicate decides what the engine GATE permits (memory is exempt from
+    the gate by design); this one decides what the durable attribution LEDGER
+    observes. Memory is exactly the file class the ledger most needs to
+    attribute, so it is NOT ledger noise even though it is gate-exempt — the two
+    predicates must stay independent, or the ledger silently inherits the gate's
+    permission answer for a question the gate was never asked.
+
+    The session scratchpad (a per-session working area that is not an OS-temp
+    path and is not gate-exempt either) is deliberately NOT scratch here and
+    stays ledgered.
+
+    Path containment, not substring matching, mirrors
+    hook-orphan-worktree-sweep.py's is_temp_root(): "<root>-evil/x.py" must not
+    match root "<root>", and a path need not literally contain a trailing slash
+    to be recognized as being at a root.
+    """
+    p = os.path.realpath(os.path.normpath(path or ""))
+    for root in scratch_roots():
+        if p == root or p.startswith(root + os.sep):
+            return True
+    return False

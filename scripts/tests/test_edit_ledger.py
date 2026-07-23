@@ -98,6 +98,10 @@ def test_track_ledgers_both_session_ids_when_they_diverge(tmp_path, monkeypatch)
     ledger_path = tmp_path / "edit-log.jsonl"
     monkeypatch.setenv("AGENTCTL_EDIT_LEDGER", str(ledger_path))
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "root-session")
+    # Pin scratch to a root this test does not use, so the asserted-positive
+    # path below is non-scratch by construction rather than by the machine's
+    # ambient $TMPDIR (a control must not depend on the machine's temp root).
+    monkeypatch.setenv("AGENTCTL_SCRATCH_ROOTS", str(tmp_path / "scratchroot"))
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -129,6 +133,11 @@ def test_track_does_not_ledger_exempt_paths(tmp_path, monkeypatch):
     scratch = tmp_path / "tmp" / "scratch.py"
     scratch.parent.mkdir(parents=True)
     scratch.write_text("x", encoding="utf-8")
+    # Pin scratch to the exact directory this test means, so the
+    # asserted-negative path is scratch BY THE ROOT NAMED HERE rather than by
+    # whatever the machine's $TMPDIR happens to be (a control must not depend
+    # on the machine's temp root).
+    monkeypatch.setenv("AGENTCTL_SCRATCH_ROOTS", str(scratch.parent))
 
     track_mod.track(_payload("s1", str(tmp_path), str(scratch)), time.time())
 
