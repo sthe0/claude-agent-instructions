@@ -15,16 +15,19 @@
 # the overlay); this script covers resolution — the link actually leads to a skill.
 #
 # How to run it:  bash scripts/verify-extracted-skills-resolve.sh
+# It also runs as part of scripts/verify-instructions-sync.sh, next to the layout
+# contract, so the installer path covers it too.
 #
-# Input: <agent-home>/extracted-skills.local — one skill name per line, '#' starts
-# a comment. The manifest holds the NAMES because they are machine-local data; this
-# repo is public and carries none of them. No manifest is a valid state: the script
-# reports zero extracted skills and exits 0.
+# Input: the extracted-skills manifest — format and location in
+# lib/extracted-skills.sh. No manifest is a valid state: the script reports zero
+# extracted skills and exits 0.
 set -euo pipefail
 
 SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/config-root.sh
 source "$SCRIPTS_DIR/lib/config-root.sh"  # exports CLAUDE_AGENT_HOME
+# shellcheck source=scripts/lib/extracted-skills.sh
+source "$SCRIPTS_DIR/lib/extracted-skills.sh"
 
 MANIFEST="$CLAUDE_AGENT_HOME/extracted-skills.local"
 
@@ -36,10 +39,7 @@ fi
 FAIL=0
 COUNT=0
 
-while IFS= read -r line || [[ -n "$line" ]]; do
-  name="${line%%#*}"
-  name="$(echo "$name" | tr -d '[:space:]')"
-  [[ -z "$name" ]] && continue
+while IFS= read -r name; do
   COUNT=$((COUNT + 1))
   skill="$CLAUDE_AGENT_HOME/skills/$name/SKILL.md"
   if [[ -f "$skill" ]]; then
@@ -48,7 +48,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     echo "FAIL: extracted skill '$name' does not resolve at $skill — run scripts/setup-symlinks.sh"
     FAIL=1
   fi
-done < "$MANIFEST"
+done < <(extracted_skill_names "$MANIFEST")
 
 if [[ "$FAIL" -ne 0 ]]; then
   echo "Extracted-skill resolution failed. Manifest: $MANIFEST"
