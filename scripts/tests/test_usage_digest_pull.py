@@ -3,8 +3,13 @@
 NO live network: sink comment lists are injected as fixtures. The load-bearing invariants
 under test are: sum across disjoint (installation, period) rows with no double-count, dedup
 of re-emitted periods, skipping human chatter / malformed comments, a rated-row-WEIGHTED mean
-quality (NOT invocation-weighted), channel segmentation (non-Yandex excludes Yandex), and
-fail-soft on an unreachable sink. Each has a mutation twin that turns RED if the guard is dropped.
+quality (NOT invocation-weighted), channel segmentation (the public segment excludes an org
+segment), and fail-soft on an unreachable sink. Each has a mutation twin that turns RED if the
+guard is dropped.
+
+Channel names other than the `github` built-in are synthetic here: an org channel's adapter
+lives in the machine-local plugin dir (ADR-0001 B1), so pull's non-builtin branch is exercised
+through the injected ``plugin_list_comments`` seam and these assertions hold on any machine.
 """
 from __future__ import annotations
 
@@ -38,7 +43,7 @@ def _agg(installation, period, channel, *, inv=0, resolved=0, precedents=0,
 
 
 def _comment(payload) -> str:
-    """A github/startrek-agnostic comment text carrying a fenced-JSON aggregate."""
+    """A tracker-agnostic comment text carrying a fenced-JSON aggregate."""
     return usage_digest.format_comment(payload)
 
 
@@ -46,7 +51,8 @@ def _gh_lister(bodies):
     return lambda sink, http=None: [{"body": b} for b in bodies]
 
 
-def _st_lister(texts):
+def _plugin_lister(texts):
+    """A plugin adapter whose comments carry `text`, not github's `body`."""
     return lambda key, http=None: [{"text": t} for t in texts]
 
 
@@ -122,19 +128,19 @@ def test_rollup_mean_quality_none_when_no_rated_rows():
     assert result["total"]["mean_quality"] is None
 
 
-# ── channel segmentation: non-Yandex excludes Yandex ──────────────────────────
+# ── channel segmentation: the public segment excludes an org segment ──────────
 
-def test_rollup_segments_by_channel_non_yandex_excludes_yandex():
+def test_rollup_segments_by_channel_public_excludes_an_org_channel():
     aggs = [
         _agg("inst-gh", "2026-W01", "github", inv=10),
-        _agg("inst-st", "2026-W01", "startrek", inv=7),
+        _agg("inst-org", "2026-W01", "orgchan", inv=7),
     ]
     result = usage_digest.rollup(aggs)
     seg = result["by_segment"]
     # MUTATION: collapsing all rows into one segment would put 17 in each. Segments must be disjoint.
-    assert seg["non-yandex"]["n_invocations"] == 10
-    assert seg["yandex"]["n_invocations"] == 7
-    assert seg["non-yandex"]["n_installations"] == 1
+    assert seg[usage_digest.PUBLIC_SEGMENT]["n_invocations"] == 10
+    assert seg["orgchan"]["n_invocations"] == 7
+    assert seg[usage_digest.PUBLIC_SEGMENT]["n_installations"] == 1
     assert result["total"]["n_invocations"] == 17
 
 
@@ -145,29 +151,29 @@ def test_pull_reads_both_channels_and_sums():
         "human chatter — ignore me",
         _comment(_agg("inst-gh", "2026-W01", "github", inv=10, resolved=2)),
     ]
-    st_texts = [
-        _comment(_agg("inst-st", "2026-W01", "startrek", inv=7, resolved=1)),
+    org_texts = [
+        _comment(_agg("inst-org", "2026-W01", "orgchan", inv=7, resolved=1)),
     ]
     result = usage_digest.pull(
-        sinks={"github": "org/repo#1", "startrek": "USAGE-1"},
+        sinks={"github": "org/repo#1", "orgchan": "USAGE-1"},
         github_list_comments=_gh_lister(gh_bodies),
-        startrek_list_comments=_st_lister(st_texts),
+        plugin_list_comments=_plugin_lister(org_texts),
     )
     # Chatter skipped; both real aggregates summed.
     assert result["n_aggregates"] == 2
     assert result["total"]["n_invocations"] == 17
-    assert result["by_segment"]["non-yandex"]["n_invocations"] == 10
-    assert result["by_segment"]["yandex"]["n_invocations"] == 7
+    assert result["by_segment"][usage_digest.PUBLIC_SEGMENT]["n_invocations"] == 10
+    assert result["by_segment"]["orgchan"]["n_invocations"] == 7
 
 
 def test_pull_skips_unconfigured_sink():
     result = usage_digest.pull(
-        sinks={"github": "org/repo#1", "startrek": ""},  # startrek unconfigured
+        sinks={"github": "org/repo#1", "orgchan": ""},  # orgchan unconfigured
         github_list_comments=_gh_lister([_comment(_agg("inst-gh", "2026-W01", "github", inv=4))]),
-        startrek_list_comments=_st_lister(["should never be read"]),
+        plugin_list_comments=_plugin_lister(["should never be read"]),
     )
     assert result["total"]["n_invocations"] == 4
-    assert "yandex" not in result["by_segment"]
+    assert "orgchan" not in result["by_segment"]
 
 
 def test_pull_fail_soft_on_unreachable_sink():
@@ -176,12 +182,14 @@ def test_pull_fail_soft_on_unreachable_sink():
 
     logs = []
     result = usage_digest.pull(
-        sinks={"github": "org/repo#1", "startrek": "USAGE-1"},
+        sinks={"github": "org/repo#1", "orgchan": "USAGE-1"},
         github_list_comments=boom,  # github down
-        startrek_list_comments=_st_lister([_comment(_agg("inst-st", "2026-W01", "startrek", inv=9))]),
+        plugin_list_comments=_plugin_lister(
+            [_comment(_agg("inst-org", "2026-W01", "orgchan", inv=9))]
+        ),
         log=logs.append,
     )
     # A down channel degrades to the other channel's rollup, never a crash.
     assert result["total"]["n_invocations"] == 9
-    assert "non-yandex" not in result["by_segment"]
+    assert usage_digest.PUBLIC_SEGMENT not in result["by_segment"]
     assert any("failed" in m for m in logs)

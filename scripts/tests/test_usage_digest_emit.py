@@ -4,11 +4,11 @@ NO live network: the adapter verbs and emit() are exercised through injected fak
 load-bearing invariants under test are the opt-in default OFF, the counts-only + anonymized
 envelope, the disjoint ISO-week period, and fail-open.
 
-The startrek adapter's own add_comment/list_comments behavior is no longer tested here — it
-moved out of Core to the machine-local plugin dir (ADR-0001 B1) and is no longer statically
-importable. ``emit()``'s startrek dispatch is still covered below via an injected
-``startrek_add_comment`` (the same test seam ``emit()`` exposes for exactly this reason),
-never the real plugin loader.
+A plugin channel's own add_comment/list_comments behavior is not tested here — an org adapter
+lives in the machine-local plugin dir (ADR-0001 B1) and is not statically importable.
+``emit()``'s plugin dispatch is covered below via an injected ``plugin_add_comment`` (the same
+test seam ``emit()`` exposes for exactly this reason), never the real plugin loader, so these
+assertions hold on any machine.
 """
 from __future__ import annotations
 
@@ -90,7 +90,7 @@ def test_installation_id_is_anonymized_no_raw_hostname():
 
 def _rows():
     task_rows = [
-        {"ts": "2026-07-06T00:00:00", "session": "s1", "quality": 4, "tracker_key": "DEEPAGENT-1"},
+        {"ts": "2026-07-06T00:00:00", "session": "s1", "quality": 4, "tracker_key": "PROJ-1"},
         {"ts": "2026-07-07T00:00:00", "session": "s2", "quality": 2, "tracker_key": None},
     ]
     policy_rows = [{"ts": "2026-07-06T00:00:00", "project": "p"}]
@@ -117,7 +117,7 @@ def test_build_payload_is_counts_only_with_quality_weight():
 def test_assert_counts_only_rejects_a_task_id_field():
     with pytest.raises(ValueError):
         usage_digest.assert_counts_only(
-            {"schema": "usage/v1", "period": "2026-W28", "task_id": "DEEPAGENT-1"}
+            {"schema": "usage/v1", "period": "2026-W28", "task_id": "PROJ-1"}
         )
 
 
@@ -153,7 +153,7 @@ def test_emit_optin_on_posts_one_counts_only_anonymized_comment():
         identity={"usage_telemetry": "on"},
         channel="github", period="2026-W28", installation_id="deadbeefcafe0000",
         task_rows=task_rows, policy_rows=policy_rows, spawn_rows=spawn_rows,
-        sink_github="org/repo#1", github_add_comment=fake, log=lambda m: None,
+        sink="org/repo#1", github_add_comment=fake, log=lambda m: None,
     )
     assert result["emitted"] is True
     assert len(calls) == 1
@@ -171,19 +171,66 @@ def test_emit_optin_on_posts_one_counts_only_anonymized_comment():
     assert socket.gethostname() not in body
 
 
-def test_emit_routes_startrek_to_startrek_adapter():
+def test_emit_routes_a_non_builtin_channel_to_the_plugin_adapter():
     task_rows, policy_rows, spawn_rows = _rows()
-    st_calls, st_fake = _capture_add_comment()
+    pl_calls, pl_fake = _capture_add_comment()
     gh_calls, gh_fake = _capture_add_comment()
     usage_digest.emit(
         identity={"usage_telemetry": "on"},
-        channel="startrek", period="2026-W28", installation_id="abc",
+        channel="orgchan", period="2026-W28", installation_id="abc",
         task_rows=task_rows, policy_rows=policy_rows, spawn_rows=spawn_rows,
-        sink_startrek="QUEUE-9", startrek_add_comment=st_fake, github_add_comment=gh_fake,
+        sink="QUEUE-9", plugin_add_comment=pl_fake, github_add_comment=gh_fake,
         log=lambda m: None,
     )
-    assert len(st_calls) == 1 and st_calls[0][0] == "QUEUE-9"
+    assert len(pl_calls) == 1 and pl_calls[0][0] == "QUEUE-9"
     assert gh_calls == []
+
+
+# ── sink resolution: override > machine identity > built-in default ───────────
+
+def test_resolve_sink_prefers_an_explicit_override():
+    identity = {"usage_sink_orgchan": "QUEUE-9"}
+    assert usage_digest.resolve_sink("orgchan", identity, "OTHER-1") == "OTHER-1"
+
+
+def test_resolve_sink_reads_the_machine_identity_key():
+    identity = {"usage_sink_orgchan": "QUEUE-9"}
+    assert usage_digest.resolve_sink("orgchan", identity) == "QUEUE-9"
+
+
+def test_resolve_sink_of_the_builtin_channel_is_unprovisioned_by_default():
+    """Core ships NO sink ref at all — not even for github. A non-empty in-code default
+    would post an installation's telemetry to a repo nobody on that machine chose."""
+    assert usage_digest.USAGE_SINK_GITHUB == ""
+    assert usage_digest.resolve_sink("github", {}) == ""
+
+
+def test_resolve_sink_of_an_unconfigured_channel_is_empty():
+    """Core ships no org sink: a channel nobody configured resolves to '' (a skip), never
+    to some other channel's ticket."""
+    assert usage_digest.resolve_sink("orgchan", {}) == ""
+
+
+def test_emit_resolves_the_sink_from_the_machine_identity():
+    task_rows, policy_rows, spawn_rows = _rows()
+    pl_calls, pl_fake = _capture_add_comment()
+    result = usage_digest.emit(
+        identity={"usage_telemetry": "on", "usage_sink_orgchan": "QUEUE-9"},
+        channel="orgchan", period="2026-W28", installation_id="abc",
+        task_rows=task_rows, policy_rows=policy_rows, spawn_rows=spawn_rows,
+        plugin_add_comment=pl_fake, log=lambda m: None,
+    )
+    assert result["emitted"] is True
+    assert result["sink"] == "QUEUE-9"
+    assert [c[0] for c in pl_calls] == ["QUEUE-9"]
+
+
+# ── rollup segmentation: public built-in vs. per-org segments ─────────────────
+
+def test_channel_segment_keeps_public_and_org_installations_apart():
+    assert usage_digest.channel_segment("github") == usage_digest.PUBLIC_SEGMENT
+    assert usage_digest.channel_segment("orgchan") == "orgchan"
+    assert usage_digest.channel_segment(None) == "unknown"
 
 
 # ── emit: fail-open ───────────────────────────────────────────────────────────
@@ -198,42 +245,25 @@ def test_emit_failopen_on_raising_adapter():
         identity={"usage_telemetry": "on"},
         channel="github", period="2026-W28", installation_id="abc",
         task_rows=task_rows, policy_rows=policy_rows, spawn_rows=spawn_rows,
-        sink_github="org/repo#1", github_add_comment=raising, log=lambda m: None,
+        sink="org/repo#1", github_add_comment=raising, log=lambda m: None,
     )
     assert result["emitted"] is False
     assert result["reason"].startswith("error:")
 
 
-def test_emit_startrek_no_sink_configured_skips(monkeypatch):
-    # Neutralize the module default (OOSEVEN-16) so this exercises the truly-unconfigured path.
-    monkeypatch.setattr(usage_digest, "USAGE_SINK_STARTREK", "")
+def test_emit_with_no_sink_configured_skips():
+    """An identity with no `usage_sink_<channel>` key and no override: nothing is posted."""
     task_rows, policy_rows, spawn_rows = _rows()
-    st_calls, st_fake = _capture_add_comment()
+    pl_calls, pl_fake = _capture_add_comment()
     result = usage_digest.emit(
         identity={"usage_telemetry": "on"},
-        channel="startrek", period="2026-W28", installation_id="abc",
+        channel="orgchan", period="2026-W28", installation_id="abc",
         task_rows=task_rows, policy_rows=policy_rows, spawn_rows=spawn_rows,
-        sink_startrek="", startrek_add_comment=st_fake, log=lambda m: None,
+        plugin_add_comment=pl_fake, log=lambda m: None,
     )
     assert result["emitted"] is False
     assert result["reason"] == "no-sink"
-    assert st_calls == []
-
-
-def test_emit_startrek_falls_back_to_provisioned_default_sink():
-    # No sink override and no identity key -> the wired module default (OOSEVEN-16) is used.
-    assert usage_digest.USAGE_SINK_STARTREK == "OOSEVEN-16"
-    task_rows, policy_rows, spawn_rows = _rows()
-    st_calls, st_fake = _capture_add_comment()
-    result = usage_digest.emit(
-        identity={"usage_telemetry": "on"},
-        channel="startrek", period="2026-W28", installation_id="abc",
-        task_rows=task_rows, policy_rows=policy_rows, spawn_rows=spawn_rows,
-        startrek_add_comment=st_fake, log=lambda m: None,
-    )
-    assert result["emitted"] is True
-    assert result["sink"] == "OOSEVEN-16"
-    assert [c[0] for c in st_calls] == ["OOSEVEN-16"]
+    assert pl_calls == []
 
 
 # ── CLI: opt-in OFF exits 0 and posts nothing (offline) ───────────────────────
