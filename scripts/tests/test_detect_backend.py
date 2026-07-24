@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from project_entry.detect_backend import detect_backends
+from project_entry.detect_backend import detect_backends, load_detect_hook
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 ENTER_TASK = SCRIPTS / "enter-task.sh"
@@ -21,7 +21,7 @@ PROJECTS_PY = SCRIPTS / "project_entry" / "projects.py"
 
 # ── Pure-function tests ────────────────────────────────────────────────────
 
-def _det(commands=(), paths=(), env=None):
+def _det(commands=(), paths=(), env=None, hook=None):
     cmds = set(commands)
     ps = set(paths)
     ev = env or {}
@@ -29,32 +29,22 @@ def _det(commands=(), paths=(), env=None):
         has_command=lambda cmd: cmd in cmds,
         path_exists=lambda p: p in ps,
         getenv=lambda k: ev.get(k),
+        hook=hook,
     )
-
-
-def test_ya_and_arc_gives_arc_startrek():
-    assert _det(commands=["ya", "arc"]) == ("arc", "startrek")
-
-
-def test_arc_without_ya_gives_git_none():
-    assert _det(commands=["arc"]) == ("git", "none")
-
-
-def test_ya_without_arc_gives_git_none():
-    assert _det(commands=["ya"]) == ("git", "none")
 
 
 def test_gh_only_gives_git_github():
     assert _det(commands=["gh"]) == ("git", "github")
 
 
-def test_ya_arc_and_gh_arc_wins():
-    """Internal toolchain wins over GitHub CLI when both are present."""
-    assert _det(commands=["ya", "arc", "gh"]) == ("arc", "startrek")
-
-
 def test_no_signals_gives_git_none():
     assert _det() == ("git", "none")
+
+
+def test_no_toolchain_is_org_neutral():
+    """Core has no rule keyed on an org toolchain: with no hook installed, no command
+    on PATH other than `gh` can move the pair off the neutral default."""
+    assert _det(commands=["orgtool", "orgvcs"]) == ("git", "none")
 
 
 def test_path_and_env_probes_accepted_for_signature_parity():
@@ -63,6 +53,62 @@ def test_path_and_env_probes_accepted_for_signature_parity():
         "git",
         "github",
     )
+
+
+# ── Hook seam ─────────────────────────────────────────────────────────────
+
+def test_hook_decision_wins_over_neutral_rules():
+    """A hook that decides overrides `gh` — the org's own precedence is the hook's
+    business, not Core's."""
+    assert _det(commands=["gh"], hook=lambda **kw: ("orgws", "orgtr")) == ("orgws", "orgtr")
+
+
+def test_hook_returning_none_defers_to_neutral_rules():
+    assert _det(commands=["gh"], hook=lambda **kw: None) == ("git", "github")
+    assert _det(hook=lambda **kw: None) == ("git", "none")
+
+
+def test_hook_receives_all_three_probes_by_keyword():
+    seen = {}
+
+    def hook(**kwargs):
+        seen.update(kwargs)
+        return None
+
+    _det(commands=["gh"], hook=hook)
+    assert set(seen) == {"has_command", "path_exists", "getenv"}
+    assert seen["has_command"]("gh") is True
+
+
+def test_plugin_absent_yields_no_hook_and_the_default_pair(tmp_path, monkeypatch):
+    """The REAL default path, with no stub anywhere: an empty plugin dir installs no
+    hook, and detection then resolves git/none without raising."""
+    monkeypatch.setenv("CLAUDE_PROJECT_PLUGIN_DIR", str(tmp_path / "empty-plugins"))
+    hook = load_detect_hook()
+    assert hook is None
+    assert _det(hook=hook) == ("git", "none")
+
+
+def test_plugin_dir_without_detect_hook_is_not_an_error(tmp_path, monkeypatch):
+    """A machine that installs backends but no detect hook must still detect cleanly."""
+    (tmp_path / "backends").mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_PROJECT_PLUGIN_DIR", str(tmp_path))
+    assert load_detect_hook() is None
+
+
+def test_plugin_detect_hook_is_loaded_and_used(tmp_path, monkeypatch):
+    (tmp_path / "detect.py").write_text(
+        "def detect(has_command, path_exists, getenv):\n"
+        "    if has_command('orgvcs'):\n"
+        "        return ('orgws', 'orgtr')\n"
+        "    return None\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CLAUDE_PROJECT_PLUGIN_DIR", str(tmp_path))
+    hook = load_detect_hook()
+    assert hook is not None
+    assert _det(commands=["orgvcs"], hook=hook) == ("orgws", "orgtr")
+    assert _det(commands=["gh"], hook=hook) == ("git", "github")
 
 
 # ── Subprocess helpers ────────────────────────────────────────────────────
