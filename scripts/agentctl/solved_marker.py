@@ -10,15 +10,20 @@ coordinator to remember.
 This module is pure dispatch: it reuses the difficulty_channel adapters'
 auth/HTTP (`add_tag` / `add_label`) rather than re-implementing a client, and it
 never raises — any failure (no key, no token, HTTP error, unclassifiable key,
-a bare github number) resolves to a `stamped: False` status dict so a marker
-failure never blocks resolution.
+a bare github number, a missing adapter plugin) resolves to a `stamped: False`
+status dict so a marker failure never blocks resolution.
+
+The startrek channel is not a Core built-in (ADR-0001 B1): its ``add_tag`` is
+resolved lazily via ``load_adapter`` only when a startrek-shaped key is actually
+being stamped, so this module never requires the plugin to be installed just to
+import cleanly on a machine that doesn't use that channel.
 """
 from __future__ import annotations
 
 import re
 from typing import Callable
 
-from difficulty_channel.adapters import github, startrek
+from difficulty_channel.adapters import github, load_adapter
 
 SOLVED_MARKER = "solved_by_007"
 
@@ -46,14 +51,17 @@ def stamp(
     tracker_key: str | None,
     *,
     repo: str | None = None,
-    startrek_add: Callable[..., None] = startrek.add_tag,
+    startrek_add: Callable[..., None] | None = None,
     github_add: Callable[..., None] = github.add_label,
 ) -> dict:
     """Stamp SOLVED_MARKER on the ticket/issue identified by `tracker_key`.
 
     Returns a status dict {channel, key, stamped, skipped_reason?} and never raises —
     every failure mode (no key, no token, HTTP error, unclassifiable key, a bare
-    github number) is caught and reported as a skip.
+    github number, a missing startrek plugin on this machine) is caught and reported
+    as a skip. ``startrek_add`` defaults to None and is resolved via ``load_adapter``
+    only when a startrek-shaped key is actually being stamped (test seam: pass an
+    explicit callable to skip the plugin loader entirely).
     """
     channel = looks_like_key(tracker_key)
     if channel is None:
@@ -61,7 +69,8 @@ def stamp(
                  "skipped_reason": "no key or unclassifiable key"}
     try:
         if channel == "startrek":
-            startrek_add(tracker_key, SOLVED_MARKER)
+            add = startrek_add or load_adapter("startrek").add_tag
+            add(tracker_key, SOLVED_MARKER)
         else:
             github_add(tracker_key, SOLVED_MARKER, repo=repo)
         return {"channel": channel, "key": tracker_key, "stamped": True}

@@ -2,7 +2,7 @@
 
 Walks up the filesystem from a starting path to find the nearest
 ``.claude/agent-project.json`` with a non-empty ``instruction_queue`` field.
-Used by ``file-difficulty.py`` to resolve the Startrek queue for project-local work.
+Used by ``file-difficulty.py`` to resolve the tracker queue for project-local work.
 """
 from __future__ import annotations
 

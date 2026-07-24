@@ -3,11 +3,18 @@
 The port is transport-agnostic: these tests exercise the in-memory NullChannel double only,
 never external I/O. They pin the record schema (the single join contract), the severity enum,
 the submit/pull(since) round-trip, and config-routed registry resolution.
+
+Also covers the machine-local adapter-plugin seam (``difficulty_channel.adapters.load_adapter``,
+B1): a non-built-in channel name resolves from a plugin dir (synthetic adapter, not a real
+tracker — no network), an unknown name fails with a clear error rather than crashing, and a
+built-in name never touches the plugin dir at all, so a machine with none configured still
+resolves.
 """
 # scripts/ is on sys.path via conftest.py, so the package imports normally.
 import pytest
 
 import difficulty_channel as dc
+from difficulty_channel import adapters
 
 
 def _rec(ts="2026-06-26T00:00:00", ground="gate denies a legit write", sev=dc.Severity.HIGH):
@@ -74,3 +81,57 @@ def test_registry_resolves_name_to_channel():
 def test_register_custom_channel():
     dc.register_channel("null2", dc.NullChannel)
     assert isinstance(dc.get_channel("null2"), dc.NullChannel)
+
+
+# ── Adapter plugin seam (B1) ──────────────────────────────────────────────────
+
+_SYNTHETIC_ADAPTER_SRC = '''
+from difficulty_channel.port import DifficultyChannel, register_channel
+
+
+class AcmeCorpChannel(DifficultyChannel):
+    """Synthetic test-only adapter — proves the plugin-present resolution path, nothing more."""
+
+    def __init__(self, **kwargs):
+        self._store = []
+
+    def submit(self, record):
+        self._store.append(record)
+        return "acmecorp-1"
+
+    def pull(self, since=None):
+        return list(self._store)
+
+
+register_channel("acmecorp", AcmeCorpChannel)
+'''
+
+
+def test_load_adapter_plugin_present_resolves_synthetic_channel(monkeypatch, tmp_path):
+    plugin_dir = tmp_path / "difficulty-channel-plugins"
+    (plugin_dir / "adapters").mkdir(parents=True)
+    (plugin_dir / "adapters" / "acmecorp.py").write_text(_SYNTHETIC_ADAPTER_SRC, encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_DIFFICULTY_PLUGIN_DIR", str(plugin_dir))
+
+    adapters.load_adapter("acmecorp")
+
+    ch = dc.get_channel("acmecorp")
+    assert ch.__class__.__name__ == "AcmeCorpChannel"
+    assert ch.submit(_rec()) == "acmecorp-1"
+
+
+def test_load_adapter_plugin_absent_raises_clear_error(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_DIFFICULTY_PLUGIN_DIR", str(tmp_path))  # no adapters/ subdir at all
+
+    with pytest.raises(FileNotFoundError, match="no-such-adapter"):
+        adapters.load_adapter("no-such-adapter")
+
+
+def test_load_adapter_builtin_noop_with_no_plugin_dir_configured(monkeypatch, tmp_path):
+    """The real DEFAULT path: nothing configured, no plugin dir on this machine at all."""
+    monkeypatch.delenv("CLAUDE_DIFFICULTY_PLUGIN_DIR", raising=False)
+    monkeypatch.setenv("CLAUDE_AGENT_HOME", str(tmp_path))  # exists, but has no plugins subdir
+
+    adapters.load_adapter("github")  # must not raise, must never look at the plugin dir
+
+    assert isinstance(dc.get_channel("github"), adapters.GitHubChannel)

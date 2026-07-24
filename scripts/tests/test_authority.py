@@ -60,9 +60,9 @@ def test_channel_from_local_identity_file(tmp_path):
     assert authority.read_configured_channel(path=identity) == "github"
 
 
-def test_channel_defaults_to_startrek_when_file_absent(tmp_path):
+def test_channel_defaults_to_github_when_file_absent(tmp_path):
     missing = tmp_path / "no-such-file.local"
-    assert authority.read_configured_channel(path=missing) == "startrek"
+    assert authority.read_configured_channel(path=missing) == "github"
 
 
 def test_local_identity_ignores_comments(tmp_path):

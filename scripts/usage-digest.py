@@ -52,7 +52,7 @@ _as_spec.loader.exec_module(agent_stats)
 parse_ts = agent_stats.cost_report.parse_ts
 
 from difficulty_channel import detect  # noqa: E402
-from difficulty_channel.adapters import github, startrek  # noqa: E402
+from difficulty_channel.adapters import github, load_adapter  # noqa: E402
 from lib.config_root import identity_file  # noqa: E402
 
 # Per-channel tracking sinks. A fork/operator overrides them via the agent-identity.local
@@ -254,7 +254,7 @@ def emit(
             if not sink:
                 log("usage-digest: no startrek sink configured; skipped")
                 return {"emitted": False, "reason": "no-sink"}
-            (startrek_add_comment or startrek.add_comment)(sink, body, http=http)
+            (startrek_add_comment or load_adapter("startrek").add_comment)(sink, body, http=http)
         else:
             log(f"usage-digest: unknown channel {channel!r}; skipped")
             return {"emitted": False, "reason": "unknown-channel"}
@@ -407,7 +407,7 @@ def _sink_comment_texts(channel, sink, *, github_list_comments, startrek_list_co
             comments = (github_list_comments or github.list_comments)(sink, http=http)
             return [c.get("body", "") for c in comments]
         if channel == "startrek":
-            comments = (startrek_list_comments or startrek.list_comments)(sink, http=http)
+            comments = (startrek_list_comments or load_adapter("startrek").list_comments)(sink, http=http)
             return [c.get("text", "") for c in comments]
     except Exception as exc:  # noqa: BLE001 - read-only, fail-soft on an unreachable sink
         log(f"usage-digest: pull from {channel} sink failed ({exc}); skipped")
