@@ -21,6 +21,15 @@ ok() {
   echo "OK: $*"
 }
 
+# Print the OK line only if the preceding guarded block did not add a new
+# failure — otherwise a block that both fails a check and unconditionally
+# prints "OK: ..." right after is a lie about the very thing it just checked.
+ok_unless_failed() {
+  local before="$1"; shift
+  [[ "$FAIL" -eq "$before" ]] && ok "$*"
+  return 0
+}
+
 require_dir() {
   [[ -d "$1" ]] || fail "missing directory $1"
 }
@@ -61,11 +70,12 @@ require_file "$REPO/skills/tracker-management/SKILL.md"
 # that the overlay copy is actually linked into the skill catalog.
 EXTRACTED_MANIFEST="$CLAUDE_AGENT_HOME/extracted-skills.local"
 if [[ -f "$EXTRACTED_MANIFEST" ]]; then
+  before_fail="$FAIL"
   while IFS= read -r skill_name; do
     require_absent "$REPO/skills/$skill_name"
     require_file "$CLAUDE_AGENT_HOME/skills-local/$skill_name/SKILL.md"
   done < <(extracted_skill_names "$EXTRACTED_MANIFEST")
-  ok "extracted skills absent from the repo, present in the overlay"
+  ok_unless_failed "$before_fail" "extracted skills absent from the repo, present in the overlay"
 fi
 
 require_dir "$REPO/skills/specializations"
@@ -166,18 +176,22 @@ require_file "$REPO/mcp-local/README.md"
 require_absent "$REPO/cursor-rules/claude-code-sync.mdc"
 require_absent "$REPO/scripts/lint-cursor-mirror.py"
 
+before_fail="$FAIL"
 for forbidden in sync-junk-agents-arc.sh junk-agents-arc-commit.sh setup-the0-agents-mount.sh install-junk-agents-sync-cron.sh; do
   require_absent "$REPO/scripts/$forbidden"
 done
-ok "no local arc scripts in global scripts/"
+ok_unless_failed "$before_fail" "no local arc scripts in global scripts/"
 
 echo "=== Hook registration (bidirectional) ==="
 # Every scripts/hook-*.py must be registered in BOTH this contract's require_file
 # lines AND the canonical scripts/README.md inventory (the top-level README.md is a
 # thin pointer to it, so the inventory — not the overview — is where hooks live). A
 # one-directional allowlist makes newly-added hooks invisible (observed 2026-06-11:
-# two hooks shipped unregistered); this turns a forgotten registration into a hard
-# pre-commit failure.
+# two hooks shipped unregistered). This contract is NOT wired into
+# githooks/pre-commit (verify-all.py --staged runs only the Python modules in its
+# CHECKS list) — a forgotten registration fails only when this script is run
+# explicitly, e.g. via verify-instructions-sync.sh or by hand.
+before_fail="$FAIL"
 for hookpath in "$REPO"/scripts/hook-*.py; do
   [[ -e "$hookpath" ]] || continue
   base="$(basename "$hookpath")"
@@ -186,7 +200,7 @@ for hookpath in "$REPO"/scripts/hook-*.py; do
   grep -qF "$base" "$REPO/scripts/README.md" \
     || fail "hook $base not documented in scripts/README.md inventory"
 done
-ok "all scripts/hook-*.py registered in contract + scripts/README.md"
+ok_unless_failed "$before_fail" "all scripts/hook-*.py registered in contract + scripts/README.md"
 
 echo "=== Runtime symlinks ==="
 # System root (isolated: ~/.claude-agent, or legacy non-isolated: ~/.claude)
