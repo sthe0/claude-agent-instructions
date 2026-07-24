@@ -20,7 +20,7 @@ sys.modules["consensus_synthesizer"] = syn
 _SPEC.loader.exec_module(syn)
 
 
-def _rec(ground, sev=dc.Severity.MEDIUM, reporter="startrek", target="CLAUDE.md"):
+def _rec(ground, sev=dc.Severity.MEDIUM, reporter="reporter-a", target="CLAUDE.md"):
     return dc.DifficultyRecord(
         ts="2026-06-26T00:00:00", layer="core", target=target,
         functional_ground=ground, severity=sev, reporter=reporter, evidence="e",
@@ -35,10 +35,10 @@ def test_normalize_rejects_non_records():
 
 
 def test_cluster_reuses_digest_stage9():
-    recs = [_rec("same ground here", reporter="startrek"),
+    recs = [_rec("same ground here", reporter="reporter-a"),
             _rec("same ground here", reporter="external")]
     clusters = syn.cluster_records(recs)
-    assert len(clusters) == 1 and clusters[0].reporters == {"startrek", "external"}
+    assert len(clusters) == 1 and clusters[0].reporters == {"reporter-a", "external"}
 
 
 def test_detect_conflict_on_a_vs_not_a():
@@ -70,7 +70,7 @@ def test_dry_run_leaves_core_byte_unchanged():
     core_files = [REPO_ROOT / "CLAUDE.md", REPO_ROOT / "config.md",
                   REPO_ROOT / "skills" / "self-improvement" / "SKILL.md"]
     before = {f: _hash(f) for f in core_files if f.exists()}
-    recs = [_rec("gate too coarse", dc.Severity.HIGH, "startrek"),
+    recs = [_rec("gate too coarse", dc.Severity.HIGH, "reporter-a"),
             _rec("gate too coarse", dc.Severity.HIGH, "external")]
     result = syn.run_synthesis(recs, threshold=4)
     assert result.core_written is False
@@ -81,7 +81,7 @@ def test_dry_run_leaves_core_byte_unchanged():
 
 
 def test_promote_is_handoff_not_write():
-    recs = [_rec("some ground", dc.Severity.CRITICAL, "startrek")]
+    recs = [_rec("some ground", dc.Severity.CRITICAL, "reporter-a")]
     [prop] = syn.run_synthesis(recs, threshold=1000).menu  # critical flags it
     route = syn.promote_to_layer(prop)
     assert route["action"] == "handoff"

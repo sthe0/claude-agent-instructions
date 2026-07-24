@@ -3,8 +3,8 @@
 #
 # Difficulty removed: a developer in a different org should not have to learn the
 # agent-identity / difficulty-channel internals to get started. This wizard wraps
-# configure-identity.sh (which auto-detects the right channel — `github` for any
-# machine without internal Yandex signals) and prints what is left to do.
+# configure-identity.sh (which auto-detects the right channel — `github` unless a
+# machine-local plugin detect hook says otherwise) and prints what is left to do.
 #
 # Usage:
 #   setup-org.sh [--non-interactive]
@@ -62,8 +62,8 @@ cat <<EOF
   [opt ] per-project memory          (scripts/setup-project-memory.sh inside a repo)
 
 Notes:
-  * Internal-Yandex facilities (Arcadia arc, Startrek) are opt-in, not assumed.
-  * Public services stay available: yandex-cloud-expert works (yandex.cloud is public).
+  * Org-specific channels and backends are opt-in: install their adapters in the
+    machine-local plugin dirs (docs/operations/org-portability.md). Core assumes none.
   * Org-specific runbooks live in <project>/.claude/, never in this Core repo.
   * Long-job orchestrators are configurable: set long_job_orchestrators=... in
     ${IDENTITY_FILE} for your org's job runners.

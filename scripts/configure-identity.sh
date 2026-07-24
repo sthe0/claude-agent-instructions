@@ -45,8 +45,10 @@ cat > "$IDENTITY_FILE" <<EOF
 ${_detect_header}
 #
 # difficulty_channel — where non-author machines submit Core difficulties:
-#   startrek  →  Yandex Tracker queue OOSEVENREPORT  (internal Yandex devs; requires ~/.tracker-token)
-#   github    →  GitHub Issues sthe0/claude-agent-instructions  (external; requires GITHUB_TOKEN or gh auth)
+#   github    →  GitHub Issues sthe0/claude-agent-instructions  (the built-in default;
+#                requires GITHUB_TOKEN or gh auth)
+#   <other>   →  an org channel whose adapter you installed in the machine-local plugin dir
+#                (see docs/operations/org-portability.md)
 #
 # Authority (author vs. non-author) is NOT stored here — it is determined
 # automatically via \`git push --dry-run\` capability on the instructions repo.
@@ -56,12 +58,12 @@ ${_detect_header}
 difficulty_channel=${_channel}
 #
 # project_backend — workspace backend for task entry (enter-task.sh):
-#   git  → git worktree (org-neutral default)
-#   arc  → Arcadia arc mount (internal Yandex; requires arc + ya on PATH)
+#   git      → git worktree (the built-in default)
+#   <other>  → a backend from the machine-local project-entry plugin dir
 # tracker_backend — tracker backend for task entry:
 #   none     → no tracker integration
 #   github   → GitHub Issues (requires gh CLI + auth)
-#   startrek → Yandex Tracker (internal Yandex; requires ~/.tracker-token)
+#   <other>  → a backend from the machine-local project-entry plugin dir
 #
 # To override, change the lines below and save.
 project_backend=${_det_ws}

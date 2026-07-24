@@ -16,7 +16,7 @@ The local usage report (`agent-stats.py`, see [[solved-by-007-marker-and-usage-s
 **The two commands** (`scripts/usage-digest.py`, mirroring the channel-pull shape of `core-difficulty-digest.py`):
 
 - `emit` — computes a compact aggregate over this machine's last **complete ISO week** and, **only when opt-in is ON**, posts it as one fenced-JSON comment on this machine's channel sink. Reuses `agent-stats.aggregate` for the counts and the `difficulty_channel` adapters' `add_comment` for the append.
-- `pull` (alias `agent-stats.py --cross-machine`) — read-only; lists every configured sink's comments, extracts the well-formed aggregates (ignoring human chatter), dedups re-emitted periods per `(installation_id, period)`, and sums the disjoint ISO-week rows into one rollup, segmented `non-yandex` (GitHub) vs `yandex` (Startrek).
+- `pull` (alias `agent-stats.py --cross-machine`) — read-only; lists every configured sink's comments, extracts the well-formed aggregates (ignoring human chatter), dedups re-emitted periods per `(installation_id, period)`, and sums the disjoint ISO-week rows into one rollup, segmented by channel — the built-in `github` rows fold into the `public` segment, every other channel keeps its own segment.
 
 **Opt-in — default OFF.** A machine emits nothing unless `usage_telemetry=on` is set in `agent-identity.local` (the machine-local, never-git-tracked identity file). With the key absent or ≠ `on`, `emit` prints `opt-in OFF; nothing emitted` and posts zero bytes. This is load-bearing, not cosmetic: the rollup ships *other* installations' data, so consent defaults to off (standard distributed-telemetry data-minimization). Turn it on per machine by adding that one line.
 
@@ -40,12 +40,10 @@ The local usage report (`agent-stats.py`, see [[solved-by-007-marker-and-usage-s
 
 **What a machine NEVER emits:** task ids, tracker keys, ticket/issue references, filesystem paths, prompts, ticket bodies, commit messages — any of them present in the payload makes `assert_counts_only` raise before the post. Only counts + the anonymized id leave a machine.
 
-**The two sinks** (a dedicated tracking issue/ticket per channel; each emit is one append-only comment, so cross-machine emits never race on a shared blob and history is preserved):
+**The sink is per channel** (a dedicated tracking issue/ticket for each; each emit is one append-only comment, so cross-machine emits never race on a shared blob and history is preserved). `resolve_sink(channel, identity, override=None)` resolves it in that order: an explicit `--sink` override, then the machine-local `agent-identity.local` key `usage_sink_<channel>=<ref>`, then the in-code default. **Core ships no org sink** — `USAGE_SINK_GITHUB` is the only in-code constant and it is deliberately empty; every other channel's sink is machine-local data. An unresolved sink fail-open-skips (`reason: "no-sink"`); it never falls back to another channel's ticket.
 
-- `USAGE_SINK_GITHUB` — a tracking issue in a **PRIVATE** GitHub repo (honoring the "closed" requirement), for the non-Yandex channel. **Default empty (unprovisioned):** the maintainer's fine-grained PAT cannot create a repo (`403 Resource not accessible by personal access token`), so the private repo + issue is created **manually** when a non-Yandex installation first opts into telemetry (default OFF — nothing emits there until then), then wired via `usage_sink_github`. An empty sink fail-open-skips.
-- `USAGE_SINK_STARTREK` — a tracking ticket in Startrek, for the Yandex channel. **Provisioned:** `OOSEVEN-16` (do-not-close aggregate ticket), wired as the in-code default.
-
-A fork/operator overrides both without editing code via `agent-identity.local` keys `usage_sink_github=owner/repo#N` and `usage_sink_startrek=QUEUE-N`; the in-code constants are only defaults.
+- **github** — a tracking issue in a **PRIVATE** GitHub repo (honoring the "closed" requirement). **Unprovisioned:** the maintainer's fine-grained PAT cannot create a repo (`403 Resource not accessible by personal access token`), so the private repo + issue is created **manually** when an installation first opts into telemetry (default OFF — nothing emits there until then), then wired via `usage_sink_github=owner/repo#N`.
+- **any other channel** — a ticket in whatever tracker that channel's machine-local adapter posts to, wired via `usage_sink_<channel>=QUEUE-N`. `emit` dispatches through the adapter's `add_comment`, so Core needs no knowledge of the tracker.
 
 **Cadence.** Run `emit` once per closed ISO week (a cron / scheduled step, never on the `resolve` hot path — emit is a separate opt-in periodic action). Re-emitting the same week is safe: `pull` keeps the latest comment per `(installation_id, period)`.
 

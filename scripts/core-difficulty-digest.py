@@ -25,6 +25,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from difficulty_channel import DifficultyRecord, Severity, get_channel, is_registered  # noqa: E402
+from difficulty_channel import authority  # noqa: E402
 from difficulty_channel.adapters import load_adapter  # noqa: E402  (also registers the built-ins)
 
 REPO_ROOT = SCRIPTS_DIR.parent
@@ -92,6 +93,17 @@ def read_mass_threshold(config_path: Path = CONFIG_PATH, override: int | None = 
     return DEFAULT_MASS_THRESHOLD
 
 
+def default_channels(configured: str | None = None) -> list[str]:
+    """Channels to pull when none are named: the public built-in plus whatever channel this
+    machine is configured for. Core names no org channel — an org's queue-routed channel
+    reaches the digest only because that machine configured it."""
+    names = ["github"]
+    configured = configured if configured is not None else authority.read_configured_channel()
+    if configured and configured not in names:
+        names.append(configured)
+    return names
+
+
 def pull_all(channel_names: list[str], since: str | None = None) -> list[DifficultyRecord]:
     """Pull from every named channel. A channel this machine cannot resolve is skipped, not
     fatal: the digest still reports what the remaining channels returned."""
@@ -138,11 +150,12 @@ def _format(flagged: list[Cluster]) -> str:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--channel", action="append", default=[], dest="channels",
-                   help="channel name to pull (repeatable); default: all but the null double")
+                   help="channel name to pull (repeatable); "
+                        "default: the built-in public channel plus this machine's configured one")
     p.add_argument("--since", default=None)
     p.add_argument("--threshold", type=int, default=None, help="override mass threshold")
     a = p.parse_args(argv)
-    channels = a.channels or ["startrek", "github"]  # both implemented channels by default
+    channels = a.channels or default_channels()
     threshold = read_mass_threshold(override=a.threshold)
     records = pull_all(channels, since=a.since)
     print(_format(digest(records, threshold)))

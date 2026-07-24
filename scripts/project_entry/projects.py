@@ -138,7 +138,7 @@ def _is_path_suffix(pwd: str, cand: str) -> bool:
 
 
 # A backend qualifier is a leading lowercase token followed by a colon, e.g.
-# 'arc:'. The remainder must be non-empty. Directory-path keys ('robot/deepagent')
+# 'git:'. The remainder must be non-empty. Directory-path keys ('team/proj')
 # never match — their first colon, if any, follows a slash.
 _BACKEND_QUALIFIER_RE = re.compile(r"^[a-z][a-z0-9]*:.+")
 
@@ -147,9 +147,9 @@ def split_backend_qualifier(selector: str) -> "tuple[str | None, str]":
     """Split an optional 'backend:' qualifier off the front of a selector.
 
     Reserves a leading ``^[a-z][a-z0-9]*:`` prefix on selector strings to pin a
-    project's installation, e.g. ``arc:robot/deepagent`` -> ``("arc", "robot/deepagent")``.
+    project's installation, e.g. ``git:team/proj`` -> ``("git", "team/proj")``.
     A selector without that shape (including directory-path keys like
-    ``robot/deepagent``, whose first colon — if any — follows a slash) returns
+    ``team/proj``, whose first colon — if any — follows a slash) returns
     ``(None, selector)`` unchanged, so the qualifier is purely opt-in.
     """
     if _BACKEND_QUALIFIER_RE.match(selector):
@@ -165,7 +165,7 @@ def resolve(
 ) -> "dict | None":
     """Resolve a single record.
 
-    With a selector: an optional 'backend:' qualifier (e.g. 'arc:robot/deepagent')
+    With a selector: an optional 'backend:' qualifier (e.g. 'git:team/proj')
     pins the installation — match key/workspace_path filtered by workspace_backend.
     Without a qualifier: match the selector against the record key first, then
     workspace_path. Without a selector: pick the record whose workspace_subpath or
