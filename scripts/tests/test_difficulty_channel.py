@@ -130,6 +130,7 @@ def test_load_adapter_plugin_absent_raises_clear_error(monkeypatch, tmp_path):
 def test_load_adapter_builtin_noop_with_no_plugin_dir_configured(monkeypatch, tmp_path):
     """The real DEFAULT path: nothing configured, no plugin dir on this machine at all."""
     monkeypatch.delenv("CLAUDE_DIFFICULTY_PLUGIN_DIR", raising=False)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)  # agent_home() consults it first
     monkeypatch.setenv("CLAUDE_AGENT_HOME", str(tmp_path))  # exists, but has no plugins subdir
 
     adapters.load_adapter("github")  # must not raise, must never look at the plugin dir

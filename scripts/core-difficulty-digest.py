@@ -24,8 +24,8 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from difficulty_channel import DifficultyRecord, Severity, get_channel  # noqa: E402
-import difficulty_channel.adapters  # noqa: E402,F401  (registers startrek/external)
+from difficulty_channel import DifficultyRecord, Severity, get_channel, is_registered  # noqa: E402
+from difficulty_channel.adapters import load_adapter  # noqa: E402  (also registers the built-ins)
 
 REPO_ROOT = SCRIPTS_DIR.parent
 CONFIG_PATH = REPO_ROOT / "config.md"
@@ -93,10 +93,20 @@ def read_mass_threshold(config_path: Path = CONFIG_PATH, override: int | None = 
 
 
 def pull_all(channel_names: list[str], since: str | None = None) -> list[DifficultyRecord]:
+    """Pull from every named channel. A channel this machine cannot resolve is skipped, not
+    fatal: the digest still reports what the remaining channels returned."""
     records: list[DifficultyRecord] = []
     for name in channel_names:
         try:
-            records.extend(get_channel(name).pull(since=since))
+            if not is_registered(name):
+                load_adapter(name)
+            channel = get_channel(name)
+        except (FileNotFoundError, KeyError) as exc:
+            print(f"core-difficulty-digest: channel {name!r} unavailable on this machine "
+                  f"({exc}) — skipped", file=sys.stderr)
+            continue
+        try:
+            records.extend(channel.pull(since=since))
         except NotImplementedError:
             # a stub adapter (e.g. external) is configured but not yet pullable — skip it
             print(f"core-difficulty-digest: channel {name!r} is a stub (skipped)", file=sys.stderr)
