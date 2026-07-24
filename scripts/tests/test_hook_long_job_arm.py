@@ -48,15 +48,15 @@ def test_detect_orchestrator_launch(monkeypatch):
     """Orchestrator-name matching is entirely configuration-driven (Core ships no
     built-in names) — isolate the regex so this test doesn't depend on the real
     machine's agent-identity.local."""
-    monkeypatch.setattr(long_job_detect, "TOOL_RE", long_job_detect._build_tool_re(("nirvana", "yt")))
-    assert mod.detect("nirvana workflow start --id abc")
-    assert mod.detect("yt start-op map --src //tmp/a")
+    monkeypatch.setattr(long_job_detect, "TOOL_RE", long_job_detect._build_tool_re(("airflow", "dagster")))
+    assert mod.detect("airflow workflow start --id abc")
+    assert mod.detect("dagster start-op map --src //tmp/a")
 
 
 def test_detect_silent_on_plain_command():
     assert mod.detect("git status") is None
     assert mod.detect("python3 -m pytest -q") is None
-    assert mod.detect("cat nirvana_notes.md") is None  # tool word, no launch verb
+    assert mod.detect("cat airflow_notes.md") is None  # tool word, no launch verb
 
 
 # --- configurable orchestrator list ------------------------------------------
@@ -68,11 +68,11 @@ def test_default_orchestrator_list_unconfigured(tmp_path):
     idf.write_text("difficulty_channel=github\n")
     assert mod._orchestrator_names(idf) == mod.DEFAULT_ORCHESTRATORS == ()
     tool_re = mod._build_tool_re(mod._orchestrator_names(idf))
-    assert tool_re.search("nirvana workflow start --id abc") is None
+    assert tool_re.search("airflow workflow start --id abc") is None
 
 
 def test_operator_override_replaces_list(tmp_path):
-    """An operator-supplied list matches its own names, not the Yandex defaults."""
+    """An operator-supplied list matches its own names, not any name outside it."""
     idf = tmp_path / "agent-identity.local"
     idf.write_text("long_job_orchestrators=airflow, dagster prefect\n")
     names = mod._orchestrator_names(idf)
@@ -80,7 +80,7 @@ def test_operator_override_replaces_list(tmp_path):
     tool_re = mod._build_tool_re(names)
     assert tool_re.search("airflow dags trigger my_dag")
     assert tool_re.search("dagster job launch")
-    assert tool_re.search("nirvana workflow start") is None  # Yandex name no longer matched
+    assert tool_re.search("luigi workflow start") is None  # outside the configured list
 
 
 def test_missing_identity_file_falls_back(tmp_path):
