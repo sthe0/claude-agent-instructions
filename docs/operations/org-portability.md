@@ -79,7 +79,7 @@ Because every Core setup script and launcher already honors `CLAUDE_AGENT_HOME`,
 ## What stays Yandex-flavored (and why it's harmless)
 
 - **`yandex-cloud-expert`** — kept on purpose; `yandex.cloud` is a public service.
-- **`hook-arc-mount-search-guard.py`** — guards recursive search across `arc` FUSE mounts. With no arc mounts present it is simply inert.
+- **`hook-multi-mount-search-guard.py`** — guards recursive search across `arc` FUSE mounts (its own filename is VCS-neutral; the `arc`-specific mount detection inside it is unchanged, since `arc` is a deeply functional VCS command elsewhere in this repo). With no arc mounts present it is simply inert.
 - **Memory leaves referencing Arcanum / Startrek / Nirvana** under `memory-global/leaves/system-knowledge/` — read-only reference facts an external user never touches; they do not change behavior. Genuinely project-scoped runbooks belong in `<project>/.claude/agent-memory/`.
 
 ## See also

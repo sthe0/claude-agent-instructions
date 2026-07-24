@@ -145,7 +145,7 @@ _dispatch_with_profile() {
 
   # Extract a leading run of enter-task modifier flags (--project/--workspace/
   # --tracker) BEFORE classifying the task token, so e.g.
-  # `claude-personal --project robot/deepagent --new "Title"` forwards --project
+  # `claude-personal --project myorg/myproject --new "Title"` forwards --project
   # instead of the classifier swallowing it as part of --new's positional args.
   while [[ "${1:-}" == "--project" || "${1:-}" == "--workspace" || "${1:-}" == "--tracker" || \
            "${1:-}" == "--no-opening" || "${1:-}" == "--opening" ]]; do
@@ -193,7 +193,7 @@ _dispatch_with_profile() {
 
   # Classify the first token into an enter-task spec flag (workspace entry).
   if [[ "$_tok" =~ ^[A-Z][A-Z0-9]+-[0-9]+$ ]]; then
-    # Tracker key (e.g. DEEPAGENT-7)
+    # Tracker key (e.g. PROJ-7)
     _spec=(--key "$_tok"); shift; _cargs=("$@")
   elif [[ "$_tok" == "--new" ]]; then
     local _title="${2:-}"

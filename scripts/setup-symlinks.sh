@@ -3,7 +3,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
 # Single source of truth for the agent config root (default: ~/.claude-agent).
-# Override with CLAUDE_AGENT_HOME=/path for tests or the Yandex overlay.
+# Override with CLAUDE_AGENT_HOME=/path for tests or an org-specific overlay.
 source "$REPO/scripts/lib/config-root.sh"
 
 mkdir -p "$CLAUDE_AGENT_HOME" "$HOME/.cursor"
@@ -74,8 +74,6 @@ link "$REPO/CLAUDE.md" "$CLAUDE_AGENT_HOME/CLAUDE.md"
 link "$REPO/config.md" "$CLAUDE_AGENT_HOME/config.md"
 link "$REPO/memory-global" "$CLAUDE_AGENT_HOME/memory-global"
 
-# Do not install org-yandex globally — it lives in robot/deepagent/.claude/rules/
-rm -f "$HOME/.cursor/rules/org-yandex.mdc"
 rm -rf "$CLAUDE_AGENT_HOME/scripts-local" 2>/dev/null || true
 
 # Agents: global only in $CLAUDE_AGENT_HOME/agents/
@@ -102,19 +100,13 @@ fi
 mkdir -p "$CLAUDE_AGENT_HOME/skills"
 prune_dangling "$CLAUDE_AGENT_HOME/skills"
 
-# Remove legacy home symlinks to Arcadia artifacts or the0-agents
+# Prune stray non-symlink entries under skills/ (this dir should hold only the
+# managed symlinks installed above).
 for entry in "$CLAUDE_AGENT_HOME/skills/"*; do
   [[ -e "$entry" ]] || continue
   base="$(basename "$entry")"
   [[ "$base" == "overcome-difficulty" || "$base" == "self-improvement" || "$base" == "README.md" ]] && continue
-  if [[ -L "$entry" ]]; then
-    target="$(readlink "$entry")"
-    if [[ "$target" == *"/ai/artifacts/skills"* ]] || [[ "$target" == *"arcadia_the0-agents"* ]]; then
-      rm -f "$entry"
-    fi
-  elif [[ -d "$entry" ]]; then
-    rm -rf "$entry"
-  fi
+  [[ -d "$entry" && ! -L "$entry" ]] && rm -rf "$entry"
 done
 
 if [[ -d "$REPO/skills" ]]; then
@@ -140,15 +132,6 @@ fi
 
 link_local_skills "$REPO/skills-local"
 link_local_skills "$CLAUDE_AGENT_HOME/skills-local"
-
-# Drop legacy per-agent symlinks to the0-agents / logos / deepagent project agents
-for entry in "$CLAUDE_AGENT_HOME/agents/"*.md; do
-  [[ -L "$entry" ]] || continue
-  target="$(readlink "$entry")"
-  if [[ "$target" == *"arcadia_the0-agents"* ]] || [[ "$target" == *"/logos/"* ]] || [[ "$target" == *"/robot/deepagent/.claude/agents"* ]]; then
-    rm -f "$entry"
-  fi
-done
 
 chmod +x "$REPO/scripts/verify-instructions-sync.sh" "$REPO/scripts/verify-layout-contract.sh" "$REPO/scripts/verify-extracted-skills-resolve.sh" "$REPO/scripts/setup-project-memory.sh" "$REPO/scripts/apply-settings.sh" "$REPO/cursor/scripts/install-cursor-links.sh" "$REPO/cursor/scripts/link-project-cursor-agents.sh" "$REPO/cursor/scripts/migrate-cursor-namespace.sh" "$REPO/scripts/migrate-to-isolated.sh"
 
@@ -176,8 +159,7 @@ CLAUDE_SETTINGS="$CLAUDE_AGENT_HOME/settings.json" "$REPO/scripts/apply-settings
 "$REPO/scripts/verify-instructions-sync.sh" || true
 
 echo "Global symlinks ok. Per-project setup (run from each repo root):"
-echo "  robot/deepagent  →  .claude/scripts/setup-local.sh"
-echo "  logos            →  .claude/scripts/setup-local.sh"
+echo "  <project>  →  .claude/scripts/setup-local.sh"
 ls -la "$CLAUDE_AGENT_HOME/memory-global" "$CLAUDE_AGENT_HOME/skills" "$CLAUDE_AGENT_HOME/agents" 2>/dev/null || true
 
 # ── One-time login hint (auth is per-config-root) ─────────────────────────────

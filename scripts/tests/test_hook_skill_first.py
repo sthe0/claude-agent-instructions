@@ -40,6 +40,23 @@ def test_detect_tracker_rest():
     assert "tracker" in names
 
 
+def test_tracker_generic_shape_needs_no_configured_host():
+    """The built-in pattern is host-agnostic: a REST issue-API shape matches
+    without any operator-supplied host in agent-identity.local."""
+    generic_re = mod._build_tracker_re(extra_hosts=())
+    assert generic_re.search("curl -X GET https://tracker.example.com/rest/api/2/issue/ABC-1")
+    assert generic_re.search("curl -X GET https://any-host.example/v2/issues/ABC-1")
+    assert generic_re.search("curl -X GET https://plain-host.example/widgets") is None
+
+
+def test_tracker_extra_hosts_are_operator_configurable():
+    """A machine-local host fragment (agent-identity.local's
+    skill_first_tracker_hosts=) extends detection beyond the generic shape."""
+    custom_re = mod._build_tracker_re(extra_hosts=("issues.internal-example.org",))
+    assert custom_re.search("curl -X GET https://issues.internal-example.org/get/1")
+    assert mod._tracker_hosts(Path("/nonexistent/agent-identity.local")) == ()
+
+
 def test_silent_on_plain_shell():
     assert mod.detect("git status") == []
     assert mod.detect("python3 build.py") == []

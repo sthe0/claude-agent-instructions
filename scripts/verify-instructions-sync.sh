@@ -84,7 +84,7 @@ if [[ -d "$REPO/skills/specializations" ]]; then
 fi
 
 # Stale agents that should no longer exist
-for stale in manager.md memory.md self-improvement.md yandex-developer.md; do
+for stale in manager.md memory.md self-improvement.md; do
   if [[ -L "$CLAUDE_AGENT_HOME/agents/$stale" || -f "$CLAUDE_AGENT_HOME/agents/$stale" ]]; then
     echo "FAIL: stale agent symlink $stale"
     FAIL=1

@@ -1,4 +1,4 @@
-"""Tests for hook-arc-mount-search-guard.py: deny recursive searches spanning ≥2 arc FUSE mounts."""
+"""Tests for hook-multi-mount-search-guard.py: deny recursive searches spanning ≥2 arc FUSE mounts."""
 from __future__ import annotations
 
 import importlib.util
@@ -9,9 +9,9 @@ from pathlib import Path
 
 import pytest
 
-HOOK = Path(__file__).resolve().parent.parent / "hook-arc-mount-search-guard.py"
+HOOK = Path(__file__).resolve().parent.parent / "hook-multi-mount-search-guard.py"
 
-spec = importlib.util.spec_from_file_location("hook_arc_mount_search_guard", str(HOOK))
+spec = importlib.util.spec_from_file_location("hook_multi_mount_search_guard", str(HOOK))
 _mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(_mod)
 decide = _mod.decide
@@ -22,9 +22,9 @@ sysfs /sys sysfs rw 0 0
 proc /proc proc rw 0 0
 arc /home/the0/arcadia fuse.arc rw 0 0
 arc /home/the0/arcadia_claude_local fuse.arc rw 0 0
-arc /home/the0/arcadia_DEEPAGENT-100 fuse.arc rw 0 0
-arc /home/the0/arcadia_DEEPAGENT-200 fuse.arc rw 0 0
-arc /home/the0/arcadia_DEEPAGENT-300 fuse.arc rw 0 0
+arc /home/the0/arcadia_PROJ-100 fuse.arc rw 0 0
+arc /home/the0/arcadia_PROJ-200 fuse.arc rw 0 0
+arc /home/the0/arcadia_PROJ-300 fuse.arc rw 0 0
 """
 
 MOUNTS_5 = arc_mounts_from_text(_PROC_TEXT)

@@ -48,7 +48,7 @@ mkdir -p "$AGENT_MEMORY" "$AGENT_MEMORY/experience" "$AGENT_MEMORY/system-knowle
 # Claude Code per-cwd hash: every non-alphanumeric char in the absolute cwd → "-"
 # (the harness sanitizes "/" AND "_" — and any other non-alnum — to "-"). The
 # leading "/" already produces the leading "-", so no extra prefix.
-# /home/x → -home-x ; /home/arcadia_X → -home-arcadia-X  (underscore → dash too).
+# /home/x → -home-x ; /home/my_repo → -home-my-repo  (underscore → dash too).
 HASH="$(printf '%s' "$PROJECT_CWD" | sed 's/[^A-Za-z0-9]/-/g')"
 PROJECTS_DIR="$CLAUDE_AGENT_HOME/projects/$HASH"
 mkdir -p "$PROJECTS_DIR"
