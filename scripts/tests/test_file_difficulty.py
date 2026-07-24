@@ -57,6 +57,14 @@ def org_channel(monkeypatch, tmp_path_factory):
     return ORG_CHANNEL
 
 
+@pytest.fixture
+def no_plugin_dir(monkeypatch, tmp_path):
+    """An in-process registered channel is a non-built-in name, so main() still probes the
+    plugin dir before falling back to the registry. Point that probe at an empty tmp dir:
+    without this the tests read whatever plugins this machine happens to have installed."""
+    monkeypatch.setenv("CLAUDE_DIFFICULTY_PLUGIN_DIR", str(tmp_path / "no-plugins"))
+
+
 def _run(*args, **kw):
     """Run main() with FIXED_TS so timestamps are deterministic in output assertions."""
     return main(list(args), _ts=FIXED_TS, **kw)
@@ -110,7 +118,7 @@ def test_dry_run_omits_evidence_field_when_empty(capsys):
 
 # ── submit via null channel ───────────────────────────────────────────────────
 
-def test_submit_via_null_channel_returns_handle(monkeypatch, capsys):
+def test_submit_via_null_channel_returns_handle(no_plugin_dir, monkeypatch, capsys):
     monkeypatch.setattr(_mod.authority, "is_author", lambda: False)
     dc.register_channel("null-test", dc.NullChannel)
     rc = _run("--target", "CLAUDE.md", "--ground", "gate wording ambiguous",
@@ -120,7 +128,7 @@ def test_submit_via_null_channel_returns_handle(monkeypatch, capsys):
     assert "mem-" in capsys.readouterr().out
 
 
-def test_submit_via_null_channel_record_survives_round_trip(monkeypatch):
+def test_submit_via_null_channel_record_survives_round_trip(no_plugin_dir, monkeypatch):
     monkeypatch.setattr(_mod.authority, "is_author", lambda: False)
     ch = dc.NullChannel()
     dc.register_channel("null-rt", lambda: ch)
@@ -228,14 +236,6 @@ def test_dry_run_project_target_resolves_queue(org_channel, tmp_path, capsys):
 
 
 # ── authority gate (author machine refuses the non-author route) ────────────
-
-@pytest.fixture
-def no_plugin_dir(monkeypatch, tmp_path):
-    """An in-process registered channel is a non-built-in name, so main() still probes the
-    plugin dir before falling back to the registry. Point that probe at an empty tmp dir:
-    without this the tests read whatever plugins this machine happens to have installed."""
-    monkeypatch.setenv("CLAUDE_DIFFICULTY_PLUGIN_DIR", str(tmp_path / "no-plugins"))
-
 
 def test_author_machine_refuses_without_force_report(no_plugin_dir, monkeypatch, capsys):
     monkeypatch.setattr(_mod.authority, "is_author", lambda: True)
