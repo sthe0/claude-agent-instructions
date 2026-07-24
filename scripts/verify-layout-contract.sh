@@ -14,7 +14,7 @@ FAIL=0
 
 fail() {
   echo "FAIL: $*"
-  FAIL=1
+  FAIL=$((FAIL + 1))
 }
 
 ok() {

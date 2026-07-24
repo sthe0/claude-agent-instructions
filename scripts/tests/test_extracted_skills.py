@@ -130,6 +130,33 @@ def test_contract_rejects_extracted_skill_still_in_repo(tmp_path):
     assert "OK: extracted skills absent from the repo, present in the overlay" not in result.stdout
 
 
+def test_ok_unless_failed_hides_nothing_when_an_earlier_block_also_failed():
+    """The bug this pins: FAIL used to be a sticky boolean, so `ok_unless_failed`
+    compared "did anything fail before this block?" instead of "did this block
+    fail?" — once anything earlier in the run failed, every later guarded block
+    printed its OK line regardless of its own outcome. Drive the real fail()/
+    ok()/ok_unless_failed() functions in isolation (same technique as
+    test_setup_symlinks_links_the_agent_home_overlay) with two failures: one
+    before the guarded block, one inside it."""
+    source = CONTRACT.read_text(encoding="utf-8")
+    functions = (
+        _extract_bash_function(source, "fail")
+        + _extract_bash_function(source, "ok")
+        + _extract_bash_function(source, "ok_unless_failed")
+    )
+    script = (
+        "FAIL=0\n"
+        f"{functions}"
+        'fail "unrelated earlier failure"\n'
+        'before_fail="$FAIL"\n'
+        'fail "this block failed too"\n'
+        'ok_unless_failed "$before_fail" "this block secretly passed"\n'
+    )
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    assert result.stdout.count("FAIL: ") == 2, result.stdout
+    assert "OK: this block secretly passed" not in result.stdout
+
+
 def test_contract_rejects_extracted_skill_missing_from_overlay(tmp_path):
     agent_home = _agent_home(tmp_path)
     _manifest(agent_home, "bridge-management\n")  # no overlay copy created
