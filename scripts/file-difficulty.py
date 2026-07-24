@@ -24,7 +24,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 import difficulty_channel as dc  # noqa: E402
 import difficulty_channel.adapters  # noqa: E402,F401
 from difficulty_channel import authority  # noqa: E402
-from difficulty_channel.adapters.startrek import QUEUE as _ST_QUEUE, BACKLOG_QUEUE as _ST_BACKLOG_QUEUE  # noqa: E402
+from difficulty_channel.adapters import load_adapter  # noqa: E402
 from difficulty_channel.adapters.github import DIFFICULTY_LABEL as _GH_DIFFICULTY_LABEL, BACKLOG_LABEL as _GH_BACKLOG_LABEL  # noqa: E402
 from difficulty_channel.project_queue import resolve_project_queue  # noqa: E402
 
@@ -99,12 +99,19 @@ def main(argv: list[str] | None = None, _ts: str | None = None) -> int:
 
     # Resolve effective routing destination before submit or print.
     if channel_name == "startrek":
+        try:
+            _startrek = load_adapter("startrek")
+        except FileNotFoundError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
         if args.queue:
             resolved_queue = args.queue
             project_q = None
         else:
             project_q = resolve_project_queue(Path(args.target).resolve())
-            resolved_queue = project_q or (_ST_BACKLOG_QUEUE if args.stream == "backlog" else _ST_QUEUE)
+            resolved_queue = project_q or (
+                _startrek.BACKLOG_QUEUE if args.stream == "backlog" else _startrek.QUEUE
+            )
         # Fix-first guard (policy.md § Author machine: fix-first, backlog-second):
         # a core-tier filing (no explicit --queue, no project-queue resolution)
         # headed for the org-wide startrek queues from a machine that can edit

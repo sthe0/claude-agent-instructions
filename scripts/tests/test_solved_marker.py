@@ -2,6 +2,11 @@
 
 NO live network: every case exercises an injected fake HTTP client (adapters) or an
 injected fake add-verb (dispatcher).
+
+The startrek adapter's own add_tag behavior is no longer tested here — it moved out of
+Core to the machine-local plugin dir (ADR-0001 B1) and is no longer statically importable.
+``stamp()``'s startrek dispatch is still covered below via an injected ``startrek_add`` (the
+same test seam ``stamp()`` exposes for exactly this reason), never the real plugin loader.
 """
 # scripts/ is on sys.path via conftest.py, so both packages import normally.
 import json
@@ -9,37 +14,7 @@ import json
 import pytest
 
 from agentctl import solved_marker
-from difficulty_channel.adapters import github, startrek
-
-
-# ── Startrek add_tag ──────────────────────────────────────────────────────────
-
-def test_startrek_add_tag_emits_patch_with_add_operator_body():
-    calls = []
-
-    def fake_http(method, url, headers, body):
-        calls.append((method, url, headers, body))
-        return {}
-
-    startrek.add_tag("DEEPAGENT-445", "solved_by_007", http=fake_http, token="t")
-    assert len(calls) == 1
-    method, url, headers, body = calls[0]
-    assert method == "PATCH"
-    assert url == f"{startrek.API_BASE}/issues/DEEPAGENT-445"
-    assert headers["Authorization"] == "OAuth t"
-    payload = json.loads(body)
-    assert payload == {"tags": {"add": ["solved_by_007"]}}
-
-
-def test_startrek_add_tag_sanitizes_tag_unchanged_for_snake_case():
-    calls = []
-
-    def fake_http(method, url, headers, body):
-        calls.append(json.loads(body))
-        return {}
-
-    startrek.add_tag("Q-1", "solved_by_007", http=fake_http, token="t")
-    assert calls[0]["tags"]["add"] == ["solved_by_007"]
+from difficulty_channel.adapters import github
 
 
 # ── GitHub add_label ──────────────────────────────────────────────────────────

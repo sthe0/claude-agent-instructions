@@ -3,6 +3,12 @@
 NO live network: the adapter verbs and emit() are exercised through injected fakes. The
 load-bearing invariants under test are the opt-in default OFF, the counts-only + anonymized
 envelope, the disjoint ISO-week period, and fail-open.
+
+The startrek adapter's own add_comment/list_comments behavior is no longer tested here — it
+moved out of Core to the machine-local plugin dir (ADR-0001 B1) and is no longer statically
+importable. ``emit()``'s startrek dispatch is still covered below via an injected
+``startrek_add_comment`` (the same test seam ``emit()`` exposes for exactly this reason),
+never the real plugin loader.
 """
 from __future__ import annotations
 
@@ -18,7 +24,7 @@ _spec = importlib.util.spec_from_file_location("usage_digest", SCRIPT)
 usage_digest = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(usage_digest)
 
-from difficulty_channel.adapters import github, startrek  # noqa: E402
+from difficulty_channel.adapters import github  # noqa: E402
 
 
 # ── adapter verbs: add_comment / list_comments (github) ───────────────────────
@@ -56,37 +62,6 @@ def test_github_list_comments_gets_issues_comments_path():
     method, url = calls[0]
     assert method == "GET"
     assert "/repos/org/repo/issues/7/comments" in url
-
-
-# ── adapter verbs: add_comment / list_comments (startrek) ─────────────────────
-
-def test_startrek_add_comment_posts_to_issues_comments_path():
-    calls = []
-
-    def fake_http(method, url, headers, body):
-        calls.append((method, url, headers, body))
-        return {}
-
-    startrek.add_comment("QUEUE-42", "hello", http=fake_http, token="t")
-    assert len(calls) == 1
-    method, url, headers, body = calls[0]
-    assert method == "POST"
-    assert url == "https://st-api.yandex-team.ru/v2/issues/QUEUE-42/comments"
-    assert headers["Authorization"].startswith("OAuth ")
-    assert json.loads(body) == {"text": "hello"}
-
-
-def test_startrek_list_comments_gets_issues_comments_path():
-    calls = []
-
-    def fake_http(method, url, headers, body):
-        calls.append((method, url))
-        return [{"text": "a"}]
-
-    out = startrek.list_comments("QUEUE-42", http=fake_http, token="t")
-    assert out == [{"text": "a"}]
-    assert calls[0][0] == "GET"
-    assert "/issues/QUEUE-42/comments" in calls[0][1]
 
 
 # ── ISO-week disjoint buckets + anonymization ─────────────────────────────────

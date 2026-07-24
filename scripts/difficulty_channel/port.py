@@ -97,6 +97,11 @@ def register_channel(name: str, factory: Callable[[], DifficultyChannel]) -> Non
     _REGISTRY[name] = factory
 
 
+def is_registered(name: str) -> bool:
+    """Whether ``name`` already has a factory in the registry (built-in, plugin, or test double)."""
+    return name in _REGISTRY
+
+
 def get_channel(name: str, **kwargs) -> DifficultyChannel:
     if name not in _REGISTRY:
         known = ", ".join(sorted(_REGISTRY)) or "(none registered)"

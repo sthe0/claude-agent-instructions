@@ -1,8 +1,11 @@
-"""Startrek + GitHub difficulty-channel adapters (ADR-0001 S3 stage 8).
+"""GitHub difficulty-channel adapter (ADR-0001 S3 stage 8).
 
-NO live network: the Startrek adapter's pure record->fields mapping is asserted directly, and
-its submit()/pull() are exercised through an injected fake HTTP client. Likewise for the
-GitHub adapter.
+NO live network: the GitHub adapter's pure record->fields mapping is asserted directly, and its
+submit()/pull() are exercised through an injected fake HTTP client.
+
+The org-specific adapter (formerly ``startrek``) is no longer resident in Core — it attaches
+through the machine-local plugin seam instead (see ``test_difficulty_channel.py``'s
+plugin-loading tests: plugin-present / plugin-absent / no-plugin-dir default).
 """
 # scripts/ is on sys.path via conftest.py, so the package imports normally.
 import json
@@ -10,7 +13,7 @@ import json
 import pytest
 
 import difficulty_channel as dc
-from difficulty_channel.adapters import external, github, startrek
+from difficulty_channel.adapters import external, github
 
 
 def _rec():
@@ -23,74 +26,6 @@ def _rec():
         reporter="agent",
         evidence="session quote",
     )
-
-
-# ── Startrek adapter ──────────────────────────────────────────────────────────
-
-def test_startrek_pure_mapping_targets_oosevenreport():
-    fields = startrek.record_to_fields(_rec())
-    assert fields["queue"] == "OOSEVENREPORT"
-    assert fields["priority"] == {"key": "critical"}  # HIGH -> critical (queue accepts only the standard five)
-    assert "gate denies a legitimate memory write" in fields["tags"]
-    assert "gate denies a legitimate memory write" in fields["summary"]
-    assert "CLAUDE.md" in fields["description"]
-
-
-def test_startrek_tag_is_sanitized_to_a_tracker_legal_value():
-    # Tracker 422s on a tag with a comma/tab/newline or >480 UTF-8 bytes; a real
-    # functional ground has commas, so the tag must be a sanitized projection.
-    rec = dc.DifficultyRecord(
-        ts="2026-06-26T00:00:00",
-        layer="core",
-        target="scripts/agentctl/plan.py",
-        functional_ground="a, b\tc\nd, " + "x" * 600,
-        severity=dc.Severity.MEDIUM,
-        reporter="agent",
-        evidence="e",
-    )
-    tag = startrek.record_to_fields(rec)["tags"][0]
-    assert "," not in tag and "\t" not in tag and "\n" not in tag and "\r" not in tag
-    assert tag  # non-empty for a non-empty ground
-    assert len(tag.encode("utf-8")) <= 480
-    assert tag.startswith("a b c d")  # forbidden chars collapsed to single spaces
-
-
-def test_startrek_submit_uses_injected_http_no_network():
-    calls = []
-
-    def fake_http(method, url, headers, body):
-        calls.append((method, url, headers, body))
-        assert "Authorization" in headers and headers["Authorization"].startswith("OAuth ")
-        return {"key": "OOSEVENREPORT-42"}
-
-    ch = startrek.StartrekChannel(http=fake_http, token="fake-token")
-    key = ch.submit(_rec())
-    assert key == "OOSEVENREPORT-42"
-    assert len(calls) == 1
-    method, url, _, _ = calls[0]
-    assert method == "POST" and url.endswith("/issues")
-
-
-def test_startrek_pull_round_trips_through_fake_http():
-    def fake_http(method, url, headers, body):
-        return [{
-            "createdAt": "2026-06-26T00:00:00",
-            "summary": "[core] some ground",
-            "tags": ["some ground"],
-            "priority": {"key": "blocker"},
-            "createdBy": {"id": "user1"},
-            "description": "evidence body",
-        }]
-
-    ch = startrek.StartrekChannel(http=fake_http, token="t")
-    recs = ch.pull(since="2026-06-01T00:00:00")
-    assert len(recs) == 1
-    assert recs[0].functional_ground == "some ground"
-    assert recs[0].severity is dc.Severity.CRITICAL
-
-
-def test_startrek_registered_in_port_registry():
-    assert isinstance(dc.get_channel("startrek"), startrek.StartrekChannel)
 
 
 # ── GitHub adapter ────────────────────────────────────────────────────────────
@@ -194,46 +129,6 @@ def test_external_is_back_compat_alias_for_github():
     """'external' channel key still resolves; ExternalChannel is GitHubChannel."""
     assert isinstance(dc.get_channel("external"), github.GitHubChannel)
     assert external.ExternalChannel is github.GitHubChannel
-
-
-# ── Startrek queue parameterization ──────────────────────────────────────────
-
-def test_startrek_record_to_fields_accepts_queue_override():
-    fields = startrek.record_to_fields(_rec(), queue="OOSEVEN")
-    assert fields["queue"] == "OOSEVEN"
-
-
-def test_startrek_record_to_fields_default_queue_unchanged():
-    fields = startrek.record_to_fields(_rec())
-    assert fields["queue"] == "OOSEVENREPORT"
-
-
-def test_startrek_channel_queue_param_used_in_submit():
-    calls = []
-
-    def fake_http(method, url, headers, body):
-        calls.append(json.loads(body))
-        return {"key": "OOSEVEN-1"}
-
-    ch = startrek.StartrekChannel(http=fake_http, token="t", queue="OOSEVEN")
-    ch.submit(_rec())
-    assert calls[0]["queue"] == "OOSEVEN"
-
-
-def test_startrek_channel_queue_param_used_in_pull():
-    queries = []
-
-    def fake_http(method, url, headers, body):
-        queries.append(json.loads(body)["query"])
-        return []
-
-    ch = startrek.StartrekChannel(http=fake_http, token="t", queue="OOSEVEN")
-    ch.pull()
-    assert queries[0].startswith("Queue: OOSEVEN")
-
-
-def test_startrek_backlog_queue_constant():
-    assert startrek.BACKLOG_QUEUE == "OOSEVEN"
 
 
 # ── GitHub backlog stream ─────────────────────────────────────────────────────

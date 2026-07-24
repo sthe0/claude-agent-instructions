@@ -9,8 +9,10 @@ as a per-machine discriminator.
 Channel selection: the machine's preferred channel is read from the system config root's
 ``agent-identity.local`` (resolved via ``scripts/lib/config_root.py`` — ``~/.claude-agent`` when
 isolated, ``~/.claude`` on a legacy machine); (``difficulty_channel=<name>``); the default is
-``startrek`` (internal Yandex Tracker queue
-OOSEVENREPORT). External contributors set ``difficulty_channel=github``.
+``github`` (the public built-in). A machine that needs an org-specific channel installs that
+channel's adapter as a plugin (``adapters.load_adapter`` — see
+``scripts/difficulty_channel/adapters/__init__.py``) and sets ``difficulty_channel=<name>`` to
+that plugin's name; resolution below loads the plugin before looking it up in the registry.
 
 Both the push probe and the HTTP clients are injectable so tests run offline with no real push.
 """
@@ -21,15 +23,16 @@ import sys
 from pathlib import Path
 from typing import Callable
 
-from .port import DifficultyRecord, get_channel
-from . import adapters as _adapters  # noqa: F401  — registers startrek/github/external in the registry
+from .port import DifficultyRecord, get_channel, is_registered
+from . import adapters as _adapters  # noqa: F401  — registers the built-in adapters (github, external)
+from .adapters import load_adapter
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # scripts/ for lib.config_root
 from lib.config_root import identity_file  # noqa: E402
 
 LOCAL_IDENTITY_PATH = identity_file()
-DEFAULT_CHANNEL = "startrek"
+DEFAULT_CHANNEL = "github"
 
 
 def probe_push_capability(
@@ -82,12 +85,20 @@ def read_local_identity(path: Path = LOCAL_IDENTITY_PATH) -> dict[str, str]:
 
 
 def read_configured_channel(path: Path = LOCAL_IDENTITY_PATH) -> str:
-    """Return the machine's preferred channel from agent-identity.local; default: startrek."""
+    """Return the machine's preferred channel from agent-identity.local; default: github."""
     return read_local_identity(path).get("difficulty_channel", DEFAULT_CHANNEL)
 
 
 def file_core_difficulty(record: DifficultyRecord, channel: str | None = None, **kwargs) -> str:
     """Non-author path: submit the difficulty to a channel the machine already has write to.
-    Returns the channel-native handle (ST key or GitHub issue URL). NEVER edits Core."""
+    Returns the channel-native handle (tracker key or GitHub issue URL). NEVER edits Core.
+
+    ``load_adapter`` is a no-op for a built-in channel and loads+registers a machine-local
+    plugin adapter for any other configured name, so a non-built-in channel still resolves.
+    Skipped entirely when ``ch`` is already registered (a built-in, an already-loaded plugin,
+    or a channel a test registered directly) — it is not a plugin file on disk.
+    """
     ch = channel if channel is not None else read_configured_channel()
+    if not is_registered(ch):
+        load_adapter(ch)
     return get_channel(ch, **kwargs).submit(record)
