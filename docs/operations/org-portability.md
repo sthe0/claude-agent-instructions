@@ -95,12 +95,16 @@ following up for you, and `verify-instructions-sync.sh` no longer flags them:
 - `verify-instructions-sync.sh`'s stale-agent check no longer names one formerly-stale
   agent filename, so a leftover symlink for it will not surface as a FAIL.
 
-Run `git show c3bdbc8^:scripts/setup-symlinks.sh` and
-`git show c3bdbc8^:scripts/verify-instructions-sync.sh` to see the exact removed
-patterns (file paths and symlink-target substrings) and check your machine against
-them by hand; remove anything that matches. This is a one-time migration step, not an
-ongoing requirement — a machine set up after this commit never creates these
-artifacts in the first place.
+Run `git show c3bdbc8 -- scripts/setup-symlinks.sh scripts/verify-instructions-sync.sh`
+to read the removals as a diff — the deleted lines carry the exact file paths and
+symlink-target substrings to look for. Check your machine against them by hand and
+remove anything that matches. This is a one-time migration step, not an ongoing
+requirement — a machine set up after this commit never creates these artifacts in the
+first place.
+
+The SHA is stable: this branch lands by fast-forward, so `c3bdbc8` keeps its identity
+on `main`. If a future rebase ever invalidates it, search the log for the commit
+subject `strip remaining org-internal DATA from Core scripts` instead.
 
 ## What stays Yandex-flavored (and why it's harmless)
 

@@ -19,8 +19,8 @@
 # HARD FLOOR: a compaction leaves ~90-97k tokens behind (structural: static prefix
 # ~60k = system prompt + tools + MCP + memory + skills, plus summary ~14-20k + first
 # reads; verified across 5 sessions 2026-06-17). A trigger at/below it re-fires every
-# turn -> thrash (memory-global/leaves/autocompact-threshold-policy.md § Failure modes
-# — "Thrash" case; the harness even warns "a file/tool output is likely too
+# turn -> thrash (memory-global/leaves/autocompact-threshold-policy.md, the "Thrash"
+# bullet; the harness even warns "a file/tool output is likely too
 # large" — large retained tool outputs inflate the floor; see large-tool-output-
 # discipline). We require trigger >= 100k floor + 50k margin = 150k, which (at
 # FRACTION=0.2) means a minimum window of ~210k. For a tighter ACTIVE session use
