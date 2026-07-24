@@ -14,7 +14,7 @@ Detection (any one fires):
   - `nohup ` — a detached background process.
   - an orchestrator launch verb: a name from the orchestrator list paired with
     (start|launch|submit|create|run|exec|operation) in either order, e.g.
-    `nirvana ... start`, `yt start-op`, `sandbox create`.
+    `airflow ... start`, `dagster start-op`, `prefect create`.
 
 The orchestrator name list is operator-configurable so this works in any org:
 set `long_job_orchestrators=name1,name2` (comma/space-separated) in the system
