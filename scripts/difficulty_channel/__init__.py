@@ -16,6 +16,7 @@ from .port import (
     NullChannel,
     Severity,
     get_channel,
+    is_registered,
     register_channel,
 )
 
@@ -25,5 +26,6 @@ __all__ = [
     "NullChannel",
     "Severity",
     "get_channel",
+    "is_registered",
     "register_channel",
 ]
