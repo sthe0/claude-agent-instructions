@@ -216,13 +216,17 @@ def test_setup_symlinks_links_the_agent_home_overlay(tmp_path):
 
 def test_setup_symlinks_extraction_touches_only_claude_agent_home():
     """The containment argument above holds only as long as link()/
-    link_local_skills() stay free of $HOME, $REPO, chmod, and git references —
+    link_local_skills() stay free of $HOME, $REPO, chmod, git and rm references —
     pin that so a future edit to either function that reaches outside
     $CLAUDE_AGENT_HOME fails this test instead of silently widening what the
-    extraction-based test above can touch."""
+    extraction-based test above can touch. Matched by regex, not substring: the
+    literal forms ${HOME} and ~/ both name the real home while containing no
+    "$HOME", and the sibling test would then execute them for real."""
     source = SETUP_SYMLINKS.read_text(encoding="utf-8")
     functions = _extract_bash_function(source, "link") + _extract_bash_function(source, "link_local_skills")
-    assert "$HOME" not in functions
-    assert "$REPO" not in functions
+    assert not re.search(r"(?<!CLAUDE_AGENT_)\$\{?HOME\b", functions)
+    assert not re.search(r"(?<![\w/])~/", functions)
+    assert not re.search(r"\$\{?REPO\b", functions)
     assert "chmod" not in functions
     assert "git " not in functions
+    assert "rm " not in functions
