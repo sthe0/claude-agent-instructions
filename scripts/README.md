@@ -109,10 +109,10 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 | [verify-cross-refs.py](verify-cross-refs.py) | Catch broken intra-repo Markdown links and inline-code path references |
 | [verify-doc-concepts.py](verify-doc-concepts.py) | Verify foundational-concept doc-bindings: each registered concept's doc section heading exists and its code anchors are importable |
 | [verify-experience-leaf.py](verify-experience-leaf.py) | Verify experience-leaf schema (`difficulty/v1`, required `resolution_confirmed_by_user` frontmatter) |
+| [verify-extracted-skills-resolve.sh](verify-extracted-skills-resolve.sh) | Check that every skill extracted to the machine-local overlay still resolves in the skill catalog; runs inside `verify-instructions-sync.sh` |
 | [verify-instructions-sync.sh](verify-instructions-sync.sh) | Check global symlinks and drift |
 | [verify-language.py](verify-language.py) | Enforce English-by-default policy with adjacent-exception rule |
 | [verify-layout-contract.sh](verify-layout-contract.sh) | Compare tree to the layout in `skills/self-improvement/policy.md` |
-| [verify-extracted-skills-resolve.sh](verify-extracted-skills-resolve.sh) | Check that every skill extracted to the machine-local overlay still resolves in the catalog |
 | [verify-leaf-structure.py](verify-leaf-structure.py) | Verify non-experience leaves: `schema:leaf/v1` enforces 3 sections; grandfathered SK leaves get the difficulty-lead baseline |
 | [verify-memory-index.py](verify-memory-index.py) | Verify every memory-global leaf is referenced from an index and carries a valid top-level `type:` frontmatter key |
 | [verify-no-conflict-markers.py](verify-no-conflict-markers.py) | Reject committed git merge-conflict markers (`<<<<<<<` / `=======` / `>>>>>>>` / `\|\|\|\|\|\|\|`) in tracked text files; `--staged` / `--hook` modes |

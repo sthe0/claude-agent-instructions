@@ -8,6 +8,8 @@ SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${CLAUDE_INSTRUCTIONS_REPO:-$(cd "$SCRIPTS_DIR/.." && pwd)}"
 # shellcheck source=scripts/lib/config-root.sh
 source "$SCRIPTS_DIR/lib/config-root.sh"  # exports CLAUDE_AGENT_HOME (system root — isolated or legacy)
+# shellcheck source=scripts/lib/extracted-skills.sh
+source "$SCRIPTS_DIR/lib/extracted-skills.sh"
 FAIL=0
 
 fail() {
@@ -53,20 +55,16 @@ require_file "$REPO/skills/self-improvement/SKILL.md"
 require_file "$REPO/skills/self-improvement/policy.md"
 require_file "$REPO/skills/tracker-management/SKILL.md"
 
-# Skills extracted out of this repo into the machine-local overlay. Their NAMES are
-# machine-local data — this repo is public, so the manifest holds them and this
-# contract holds none. Two-directional per extracted skill: gone from the repo AND
-# present in the overlay. scripts/verify-extracted-skills-resolve.sh then checks
+# Skills extracted out of this repo into the machine-local overlay (manifest format:
+# lib/extracted-skills.sh). Two-directional per extracted skill: gone from the repo
+# AND present in the overlay. scripts/verify-extracted-skills-resolve.sh then checks
 # that the overlay copy is actually linked into the skill catalog.
 EXTRACTED_MANIFEST="$CLAUDE_AGENT_HOME/extracted-skills.local"
 if [[ -f "$EXTRACTED_MANIFEST" ]]; then
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    skill_name="${line%%#*}"
-    skill_name="$(echo "$skill_name" | tr -d '[:space:]')"
-    [[ -z "$skill_name" ]] && continue
+  while IFS= read -r skill_name; do
     require_absent "$REPO/skills/$skill_name"
     require_file "$CLAUDE_AGENT_HOME/skills-local/$skill_name/SKILL.md"
-  done < "$EXTRACTED_MANIFEST"
+  done < <(extracted_skill_names "$EXTRACTED_MANIFEST")
   ok "extracted skills absent from the repo, present in the overlay"
 fi
 
