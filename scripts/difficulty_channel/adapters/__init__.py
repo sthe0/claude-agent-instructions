@@ -12,38 +12,29 @@ this seam without ever living in the public repo.
 """
 from __future__ import annotations
 
-import hashlib
-import importlib.util
-import os
 import sys
 from pathlib import Path
 
 from .github import GitHubChannel
 from .external import ExternalChannel  # back-compat alias for GitHubChannel
 
+_SCRIPTS_DIR = str(Path(__file__).resolve().parents[2])
+if _SCRIPTS_DIR not in sys.path:  # scripts/ for lib.plugin_dir
+    sys.path.insert(0, _SCRIPTS_DIR)
+from lib.plugin_dir import load_plugin_module, resolve_plugin_dir  # noqa: E402
+
 __all__ = ["GitHubChannel", "ExternalChannel", "load_adapter"]
 
 BUILTIN_NAMES = {"github", "external"}
 
+PLUGIN_DIR_ENV = "CLAUDE_DIFFICULTY_PLUGIN_DIR"
+PLUGIN_DIR_NAME = "difficulty-channel-plugins"
+_PLUGIN_NAMESPACE = "difficulty_channel._plugin_adapters"
+
 
 def _plugin_dir() -> Path:
     """Machine-local adapter-plugin root (read-time resolution; overridable for tests)."""
-    override = os.environ.get("CLAUDE_DIFFICULTY_PLUGIN_DIR")
-    if override:
-        return Path(override).expanduser()
-    scripts_dir = str(Path(__file__).resolve().parents[2])  # scripts/ for lib.config_root
-    if scripts_dir not in sys.path:
-        sys.path.insert(0, scripts_dir)
-    from lib.config_root import agent_home  # noqa: E402
-
-    return agent_home() / "difficulty-channel-plugins"
-
-
-def _module_name(plugin_dir: Path, name: str) -> str:
-    # The plugin dir is part of the module identity: keyed on ``name`` alone, a later call with a
-    # different CLAUDE_DIFFICULTY_PLUGIN_DIR would silently reuse the first dir's module.
-    tag = hashlib.sha1(str(plugin_dir).encode("utf-8")).hexdigest()[:8]
-    return f"difficulty_channel._plugin_adapters.{tag}.{name}"
+    return resolve_plugin_dir(PLUGIN_DIR_ENV, PLUGIN_DIR_NAME)
 
 
 def load_adapter(name: str):
@@ -71,17 +62,12 @@ def load_adapter(name: str):
     if name in BUILTIN_NAMES:
         return None
     plugin_dir = _plugin_dir()
-    module_name = _module_name(plugin_dir, name)
-    if module_name in sys.modules:
-        return sys.modules[module_name]
-    plugin_file = plugin_dir / "adapters" / f"{name}.py"
-    if not plugin_file.is_file():
+    relpath = f"adapters/{name}.py"
+    module = load_plugin_module(plugin_dir, relpath, _PLUGIN_NAMESPACE)
+    if module is None:
         raise FileNotFoundError(
-            f"difficulty_channel: no adapter plugin named {name!r} (looked in {plugin_file}; "
+            f"difficulty_channel: no adapter plugin named {name!r} "
+            f"(looked in {plugin_dir / relpath}; "
             f"built-in names need no plugin: {', '.join(sorted(BUILTIN_NAMES))})"
         )
-    spec = importlib.util.spec_from_file_location(module_name, plugin_file)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
     return module
