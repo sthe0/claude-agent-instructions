@@ -19,8 +19,9 @@ Detection (any one fires):
 The orchestrator name list is operator-configurable so this works in any org:
 set `long_job_orchestrators=name1,name2` (comma/space-separated) in the system
 config root's `agent-identity.local` (resolved via scripts/lib/config_root.py:
-`~/.claude-agent` when isolated). When the key is absent the built-in default
-(Yandex orchestrators) is used, so an unconfigured machine behaves unchanged.
+`~/.claude-agent` when isolated). Core ships no built-in names — with the key
+absent, an unconfigured machine arms on no orchestrator launches until the
+operator configures its own list.
 
 Advisory only: prints to stdout (model context), exit 0 always, never blocks.
 Fires once per session (state file) so a launch loop doesn't flood context.

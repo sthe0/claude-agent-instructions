@@ -29,7 +29,7 @@ Each mount is a network-backed virtual FS where `stat`/`readdir` over the full t
 
 **Rule:** scope every recursive search to the specific repository or subdirectory you need — e.g. `~/claude-agent-instructions/` or a single project dir — never the home root. This is especially easy to violate when the session cwd is itself under an arc mount (e.g. `/home/the0/arcadia_claude_local/robot/deepagent`) and you need files that live elsewhere under `~`: pin the absolute repo path, don't let the search default to `~`/cwd-parent.
 
-A machine-local guard enforces this: `scripts/hook-arc-mount-search-guard.py` (PreToolUse `Bash|Grep|Glob`) reads the live mount table and **denies** a recursive search whose resolved root spans ≥2 `fuse.arc` mounts, with a message to re-scope.
+A machine-local guard enforces this: `scripts/hook-multi-mount-search-guard.py` (PreToolUse `Bash|Grep|Glob`) reads the live mount table and **denies** a recursive search whose resolved root spans ≥2 `fuse.arc` mounts, with a message to re-scope.
 
 > verified by: `mount | grep fuse.arc` on 2026-06-23 (5 mounts under /home/the0); the guard hook lives in the instructions repo.
 

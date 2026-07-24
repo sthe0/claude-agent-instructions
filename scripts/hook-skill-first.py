@@ -11,6 +11,12 @@ signatures in the raw command.
 
 Each matched class fires once per session (state file) so a repeated operation
 does not flood context. Advisory only: stdout, exit 0, never blocks.
+
+The tracker class detects a host-agnostic REST-API shape (a `tracker.` subdomain,
+a `/v2/issues` or `/rest/api/<n>/issue` path) plus any operator-supplied host/path
+fragments from `skill_first_tracker_hosts=` (comma/space-separated) in the system
+config root's `agent-identity.local` — so a specific tracker's exact hostname is
+opt-in configuration, not a Core default.
 """
 from __future__ import annotations
 
@@ -18,6 +24,32 @@ import json
 import re
 import sys
 from pathlib import Path
+
+
+def _tracker_hosts(identity_path=None) -> tuple[str, ...]:
+    """Resolve extra tracker-API host/path fragments from `skill_first_tracker_hosts=`
+    in the resolved agent-identity.local. Fail-open: any error yields no extra
+    fragments (a hook must never crash the Bash call it advises on)."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from difficulty_channel.authority import read_local_identity, LOCAL_IDENTITY_PATH
+
+        raw = read_local_identity(identity_path or LOCAL_IDENTITY_PATH).get(
+            "skill_first_tracker_hosts", ""
+        )
+        return tuple(n for n in re.split(r"[,\s]+", raw.strip()) if n)
+    except Exception:
+        return ()
+
+
+def _build_tracker_re(extra_hosts=None) -> "re.Pattern[str]":
+    """Compile the tracker-API detection pattern: a host-agnostic REST-shape
+    fragment plus any operator-supplied host/path fragments."""
+    fragments = [r"tracker\.[\w.-]+", r"/v2/issues", r"/rest/api/\d+/issue"]
+    resolved = extra_hosts if extra_hosts is not None else _tracker_hosts()
+    fragments.extend(re.escape(h) for h in resolved)
+    return re.compile(r"curl\b[^\n]*\b(" + "|".join(fragments) + r")\b", re.IGNORECASE)
+
 
 # operation-class -> (compiled signature, suggested skill family). High
 # precision: each pattern targets a write/domain op a skill clearly covers.
@@ -28,9 +60,7 @@ CLASSES: list[tuple[str, re.Pattern, str]] = [
      "ya-vault"),
     ("codesearch", re.compile(r"\barc\s+grep\b"),
      "codesearch / ast-index"),
-    ("tracker", re.compile(
-        r"curl\b[^\n]*\b(st-api\.yandex|startrek|tracker\.yandex|/v2/issues)\b",
-        re.IGNORECASE),
+    ("tracker", _build_tracker_re(),
      "tracker / tracker-management / startrek-client"),
     ("ci", re.compile(r"\bya\s+(make\s+-A|test)\b|\bsandbox\b.*\b(create|run)\b",
                       re.IGNORECASE),

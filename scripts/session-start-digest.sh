@@ -4,7 +4,7 @@
 # log, project agent-memory listing, in-progress markers — into one compact
 # digest. Replaces the 4–5 separate `pwd` / `arc info` / `arc status` /
 # `arc log` / `ls .claude/agent-memory/` calls observed at the start of
-# deepagent sessions.
+# typical sessions.
 #
 # Output is one screen of text (≤ ~80 lines). Each section is delimited by a
 # `--- <name> ---` line; missing sections (no arc, no agent memory) are
