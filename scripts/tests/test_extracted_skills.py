@@ -19,6 +19,7 @@ REPO = SCRIPTS.parent
 RESOLVE = SCRIPTS / "verify-extracted-skills-resolve.sh"
 CONTRACT = SCRIPTS / "verify-layout-contract.sh"
 SETUP_SYMLINKS = SCRIPTS / "setup-symlinks.sh"
+SYNC = SCRIPTS / "verify-instructions-sync.sh"
 
 
 def _env(agent_home: Path, home: "Path | None" = None) -> "dict[str, str]":
@@ -124,6 +125,22 @@ def test_contract_rejects_extracted_skill_missing_from_overlay(tmp_path):
     result = _run(CONTRACT, agent_home)
     assert result.returncode == 1
     assert f"missing file {agent_home}/skills-local/bridge-management/SKILL.md" in result.stdout
+
+
+# ── verify-instructions-sync.sh: the control is actually run ─────────────────
+
+def test_sync_verifier_runs_the_resolve_check(tmp_path):
+    """A control nothing invokes decays unnoticed, so the resolve check rides along
+    with the layout contract in the machine-state verifier. Only reachability is
+    asserted — the verifier's other checks fail against a non-canonical checkout."""
+    env = _env(_agent_home(tmp_path))
+    env["CLAUDE_INSTRUCTIONS_REPO"] = str(REPO)
+    result = subprocess.run(
+        ["bash", str(SYNC)], env=env, capture_output=True, text=True,
+    )
+
+    assert "=== Extracted skills ===" in result.stdout
+    assert "nothing to resolve" in result.stdout
 
 
 # ── setup-symlinks.sh: the overlay reaches the catalog ───────────────────────

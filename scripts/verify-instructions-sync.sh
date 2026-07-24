@@ -32,6 +32,14 @@ if [[ -x "$REPO/scripts/verify-layout-contract.sh" ]]; then
   "$REPO/scripts/verify-layout-contract.sh" || FAIL=1
 fi
 
+# The contract's sibling: it asserts extracted skills are in the overlay, this one
+# asserts the overlay copy actually resolves in the catalog. Nothing inside the repo
+# can see that link, so an unrun check here means a silently uninvocable skill.
+if [[ -x "$REPO/scripts/verify-extracted-skills-resolve.sh" ]]; then
+  echo "=== Extracted skills ==="
+  "$REPO/scripts/verify-extracted-skills-resolve.sh" || FAIL=1
+fi
+
 echo "=== Global symlinks ==="
 check_link "$CLAUDE_AGENT_HOME/CLAUDE.md" "$REPO/CLAUDE.md"
 check_link "$HOME/.cursor/rules/claude-code-sync.mdc" "$REPO/cursor/rules/claude-code-sync.mdc"
