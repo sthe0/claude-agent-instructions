@@ -225,7 +225,7 @@ def test_absolute_interpreter_with_module_not_flagged(tmp_path):
     interp = tmp_path / "python"
     interp.write_text("", encoding="utf-8")
     settings = tmp_path / "settings.json"
-    _write_settings(settings, [f"{interp} -m ccgram.main hook"])
+    _write_settings(settings, [f"{interp} -m somepkg.main hook"])
     assert sd.scan_broken_hooks([settings]) == []
 
 

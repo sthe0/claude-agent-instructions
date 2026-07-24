@@ -1,11 +1,6 @@
-"""Isolated-root coverage for the two installers not covered elsewhere in this
-audit: setup-ccgram.sh's Claude Code detection, and project_entry/registry.sh's
-machine-local plugin directory (used by session-isolate.sh's backend lookup).
-
-setup-ccgram.sh performs real installs (uv, ccgram, tmux, launchd/systemd) when
-run, so its hook-install detection branch is covered structurally rather than
-by subprocess execution — the same style test_config_root.py already uses for
-setup-symlinks.sh / doctor.sh / etc.
+"""Isolated-root coverage for project_entry/registry.sh's machine-local plugin
+directory (used by session-isolate.sh's backend lookup) — the one installer path
+not covered by test_config_root.py.
 
 registry.sh only defines shell functions at source time (no top-level side
 effects beyond computing _REGISTRY_DIR), so its plugin-dir resolver is covered
@@ -18,23 +13,7 @@ import subprocess
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[1]
-SETUP_CCGRAM = SCRIPTS / "setup-ccgram.sh"
 REGISTRY = SCRIPTS / "project_entry" / "registry.sh"
-
-
-# ── setup-ccgram.sh: structural check on the hook-install detection line ──────
-
-def test_ccgram_detection_checks_isolated_root():
-    text = SETUP_CCGRAM.read_text()
-    assert 'CLAUDE_AGENT_HOME/settings.json' in text, (
-        "setup-ccgram.sh's Claude Code detection must check "
-        "$CLAUDE_AGENT_HOME/settings.json, not only the legacy $HOME/.claude path"
-    )
-
-
-def test_ccgram_sources_config_root_resolver():
-    text = SETUP_CCGRAM.read_text()
-    assert "lib/config-root.sh" in text
 
 
 # ── registry.sh: _plugin_dir resolution order ──────────────────────────────

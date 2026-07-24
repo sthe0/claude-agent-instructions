@@ -2,8 +2,10 @@
 # Verify on-disk layout matches skills/self-improvement/policy.md § File structure.
 set -euo pipefail
 
-REPO="${CLAUDE_INSTRUCTIONS_REPO:-$HOME/claude-agent-instructions}"
 SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Default to the checkout this script ships in, so a worktree's contract verifies
+# that worktree rather than whichever checkout $HOME happens to hold.
+REPO="${CLAUDE_INSTRUCTIONS_REPO:-$(cd "$SCRIPTS_DIR/.." && pwd)}"
 # shellcheck source=scripts/lib/config-root.sh
 source "$SCRIPTS_DIR/lib/config-root.sh"  # exports CLAUDE_AGENT_HOME (system root — isolated or legacy)
 FAIL=0
@@ -50,8 +52,23 @@ require_file "$REPO/skills/overcome-difficulty/SKILL.md"
 require_file "$REPO/skills/self-improvement/SKILL.md"
 require_file "$REPO/skills/self-improvement/policy.md"
 require_file "$REPO/skills/tracker-management/SKILL.md"
-require_file "$REPO/skills/ccgram-management/SKILL.md"
-require_file "$REPO/scripts/setup-ccgram.sh"
+
+# Skills extracted out of this repo into the machine-local overlay. Their NAMES are
+# machine-local data — this repo is public, so the manifest holds them and this
+# contract holds none. Two-directional per extracted skill: gone from the repo AND
+# present in the overlay. scripts/verify-extracted-skills-resolve.sh then checks
+# that the overlay copy is actually linked into the skill catalog.
+EXTRACTED_MANIFEST="$CLAUDE_AGENT_HOME/extracted-skills.local"
+if [[ -f "$EXTRACTED_MANIFEST" ]]; then
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    skill_name="${line%%#*}"
+    skill_name="$(echo "$skill_name" | tr -d '[:space:]')"
+    [[ -z "$skill_name" ]] && continue
+    require_absent "$REPO/skills/$skill_name"
+    require_file "$CLAUDE_AGENT_HOME/skills-local/$skill_name/SKILL.md"
+  done < "$EXTRACTED_MANIFEST"
+  ok "extracted skills absent from the repo, present in the overlay"
+fi
 
 require_dir "$REPO/skills/specializations"
 require_file "$REPO/skills/specializations/planner/SKILL.md"
@@ -102,13 +119,17 @@ require_file "$REPO/scripts/hook-sigma-sentinel-due.py"
 require_file "$REPO/scripts/hook-skill-first.py"
 require_file "$REPO/scripts/hook-state-gate.py"
 require_file "$REPO/scripts/hook-tracker-publish-reminder.py"
+require_file "$REPO/scripts/hook-budget-calibration-due.py"
+require_file "$REPO/scripts/hook-canon-guard-wired-check.py"
 require_file "$REPO/scripts/hook-escalation-diagnosis-gate.py"
 require_file "$REPO/scripts/hook-guard-canon-readonly.py"
 require_file "$REPO/scripts/hook-instruction-grooming-due.py"
 require_file "$REPO/scripts/hook-orphan-worktree-sweep.py"
+require_file "$REPO/scripts/hook-phase3-due.py"
 require_file "$REPO/scripts/hook-plan-delivery-gate.py"
 require_file "$REPO/scripts/hook-self-diagnose-due.py"
 require_file "$REPO/scripts/hook-si-freetext-answer.py"
+require_file "$REPO/scripts/hook-ticket-plan-sync.py"
 require_file "$REPO/scripts/hook-turn-end-gate.py"
 require_file "$REPO/scripts/install-reminder-hooks.sh"
 require_file "$REPO/scripts/set-context-cap.sh"
@@ -134,6 +155,7 @@ require_dir "$REPO/scripts"
 require_file "$REPO/scripts/setup-symlinks.sh"
 require_file "$REPO/scripts/setup-project-memory.sh"
 require_file "$REPO/scripts/verify-layout-contract.sh"
+require_file "$REPO/scripts/verify-extracted-skills-resolve.sh"
 require_file "$REPO/scripts/sync-instructions-repo.sh"
 require_file "$REPO/scripts/apply-mcp-local.sh"
 require_file "$REPO/scripts/verify-all.py"

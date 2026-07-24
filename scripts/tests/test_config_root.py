@@ -194,7 +194,6 @@ _PY_ROOT_TARGET_RE = re.compile(
 # Repo-relative paths whose legacy-root references are intentional.
 _LEGACY_REF_ALLOWLIST = {
     "scripts/session-start-digest.sh":       "read-time legacy auto-memory mirror fallback",
-    "scripts/setup-ccgram.sh":               "Claude Code presence probe checks both roots",
     "scripts/setup-project-memory.sh":       "legacy auto-memory dir is its migration source",
     "scripts/project_entry/projects.sh":     "legacy projects.d read fallback",
     "scripts/project_entry/projects.py":     "legacy projects.d read fallback (python side)",
