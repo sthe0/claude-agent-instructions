@@ -53,10 +53,14 @@ def test_detect_orchestrator_launch(monkeypatch):
     assert mod.detect("dagster start-op map --src //tmp/a")
 
 
-def test_detect_silent_on_plain_command():
+def test_detect_silent_on_plain_command(monkeypatch):
     assert mod.detect("git status") is None
     assert mod.detect("python3 -m pytest -q") is None
-    assert mod.detect("cat airflow_notes.md") is None  # tool word, no launch verb
+    # Pin TOOL_RE (as test_detect_orchestrator_launch does) so this assertion
+    # actually exercises the tool-word-without-launch-verb branch instead of
+    # passing vacuously against the unconfigured machine's never-matching regex.
+    monkeypatch.setattr(long_job_detect, "TOOL_RE", long_job_detect._build_tool_re(("airflow", "dagster")))
+    assert mod.detect("cat airflow.md") is None  # tool word, no launch verb
 
 
 # --- configurable orchestrator list ------------------------------------------

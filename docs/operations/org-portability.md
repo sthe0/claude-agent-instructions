@@ -30,6 +30,7 @@ Everything org-specific is steered by per-machine keys in the system root's `age
 |---|---|---|---|
 | `difficulty_channel` | `github` | an org channel | Where non-author machines file Core difficulties. **Auto-detected** by `scripts/difficulty_channel/detect.py`, which consults the machine-local plugin's optional `detect.py` hook first and falls back to `github`. Core ships no org probes — *which* host signals identify an org is data that lives in the overlay hook. Override by editing the line. |
 | `long_job_orchestrators` | built-in Yandex list | — | Comma/space-separated orchestrator names the `hook-long-job-arm.py` advisory hook watches for. Unset → the built-in default (Nirvana, Sandbox, Reactor, vh3, hitman, yt), so an unconfigured machine is unchanged. Set e.g. `airflow,dagster` for your org's job runners. |
+| `skill_first_tracker_hosts` | unset (generic shape only) | an org tracker host | Comma/space-separated host/path fragments the `hook-skill-first.py` skill-first advisory adds to its host-agnostic tracker-API detection (`tracker.` subdomain, `/v2/issues`, `/rest/api/<n>/issue`). Unset → only the generic shape is detected. Set e.g. `mytracker.example.com` for your org's exact tracker hostname. |
 | `project_backend` | `git` | an org backend | Workspace backend the task-entry subsystem uses to make an isolated working copy: `git` worktree (the only backend Core ships) or a plugin backend. **Auto-detected** by `scripts/project_entry/detect_backend.py`, which consults the plugin's `detect.py` hook first and otherwise yields `git`. Override per machine. |
 | `tracker_backend` | `github` / `none` | an org backend | Tracker backend that resolves an issue key → slug: GitHub Issues (when `gh` is present), `none` (name pass-through), or a plugin backend. Auto-detected alongside `project_backend`. |
 | `projects_dir` | unset (machine-local root only) | shared records root | Optional **shared** root of the named project registry (see below). A team distributes portable project records here; `claude-task --register` always writes absolute checkout paths to the machine-local `<config root>/projects.d` (`~/.claude-agent/projects.d` on a migrated machine; legacy `~/.claude/projects.d` still read as fallback) regardless. On a `ya`+`arc` machine `setup-local.sh` sets this to the workspace-storage `projects/` dir automatically. |
@@ -75,6 +76,31 @@ source "$CORE/scripts/lib/config-root.sh"     # exports CLAUDE_AGENT_HOME
 ```
 
 Because every Core setup script and launcher already honors `CLAUDE_AGENT_HOME`, an overlay that reuses it **inherits isolation with zero divergence**: bare `claude` stays personal, `claude-task` / `claude-agent` run Core ⊕ overlay on `~/.claude-agent`, and a single `CLAUDE_AGENT_HOME=/some/root` override relocates both in lockstep. An overlay that hardcodes a root instead re-introduces the clobber it was built to avoid and breaks the one-switch model — so reusing Core's resolver is the contract, not an optimization.
+
+## Migrating a machine set up before the stage-5 self-heal removal
+
+Commit `c3bdbc8` deleted three self-heal blocks from `setup-symlinks.sh` and one
+stale-agent entry from `verify-instructions-sync.sh`, on the argument that all four
+are no-ops on a live machine. That argument was verified on **one** machine only. If
+your machine was set up before this commit, `setup-symlinks.sh` no longer cleans the
+following up for you, and `verify-instructions-sync.sh` no longer flags them:
+
+- An unconditional removal of one legacy per-org Cursor rules file is gone.
+- The removal of a `$CLAUDE_AGENT_HOME/skills/` symlink whose *target still resolves*
+  and points at a legacy external location is gone. The remaining `prune_dangling`
+  pass only removes symlinks whose target no longer exists, so a still-resolving
+  legacy symlink is now covered by **neither** prune.
+- The removal of a legacy per-agent `$CLAUDE_AGENT_HOME/agents/*.md` symlink pointing
+  outside this repo is gone.
+- `verify-instructions-sync.sh`'s stale-agent check no longer names one formerly-stale
+  agent filename, so a leftover symlink for it will not surface as a FAIL.
+
+Run `git show c3bdbc8^:scripts/setup-symlinks.sh` and
+`git show c3bdbc8^:scripts/verify-instructions-sync.sh` to see the exact removed
+patterns (file paths and symlink-target substrings) and check your machine against
+them by hand; remove anything that matches. This is a one-time migration step, not an
+ongoing requirement — a machine set up after this commit never creates these
+artifacts in the first place.
 
 ## What stays Yandex-flavored (and why it's harmless)
 
