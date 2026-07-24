@@ -15,7 +15,7 @@ agent — the hook only nudges.
 It also performs a mount-hygiene check: when a ticket key is present and
 the session sits in a *different* task-mount than the ticket's own, it
 emits a second `[mount-check]` reminder. Rationale (root cause): cwd is
-fixed at session/topic creation (ccgram topic -> session_id -> cwd, or
+fixed at session/topic creation (a chat-bridge topic -> session_id -> cwd, or
 `claude-task <TICKET>`); nothing re-evaluates it when a ticket key later
 appears mid-conversation, so a session can keep operating on a ticket
 from the wrong mount (observed: a `main`-mount session continuing

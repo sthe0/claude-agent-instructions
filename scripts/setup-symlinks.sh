@@ -32,6 +32,29 @@ link_skill_dir() {
   link "$dir_path" "$CLAUDE_AGENT_HOME/skills/$base"
 }
 
+# Skills that live outside the repo: the repo-local skills-local/ (untracked, kept
+# for back-compat) and the machine-local overlay under $CLAUDE_AGENT_HOME. The
+# overlay is where skills extracted from Core live, so a machine keeps them
+# invocable without the public repo carrying them.
+link_local_skills() {
+  local dir="$1"
+  [[ -d "$dir" ]] || return 0
+  local entry base
+  for entry in "$dir"/*; do
+    [[ -e "$entry" ]] || continue
+    base="$(basename "$entry")"
+    [[ "$base" == "README.md" ]] && continue
+    if [[ -f "$entry" && "$entry" == *.md ]]; then
+      # Single-file skill — link the .md directly.
+      link "$entry" "$CLAUDE_AGENT_HOME/skills/$base"
+    elif [[ -d "$entry" && -f "$entry/SKILL.md" ]]; then
+      # Multi-file skill — link the whole directory (mirrors how skills/ are linked).
+      link "$entry" "$CLAUDE_AGENT_HOME/skills/$base"
+    fi
+  done
+  return 0
+}
+
 prune_dangling() {
   local dir="$1"
   local logfile="$HOME/.local/log/setup-symlinks-prune.log"
@@ -115,20 +138,8 @@ if [[ -d "$REPO/skills/specializations" ]]; then
   done
 fi
 
-if [[ -d "$REPO/skills-local" ]]; then
-  for entry in "$REPO/skills-local/"*; do
-    [[ -e "$entry" ]] || continue
-    base="$(basename "$entry")"
-    [[ "$base" == "README.md" ]] && continue
-    if [[ -f "$entry" && "$entry" == *.md ]]; then
-      # Single-file skill — link the .md directly.
-      link "$entry" "$CLAUDE_AGENT_HOME/skills/$base"
-    elif [[ -d "$entry" && -f "$entry/SKILL.md" ]]; then
-      # Multi-file skill — link the whole directory (mirrors how skills/ are linked).
-      link "$entry" "$CLAUDE_AGENT_HOME/skills/$base"
-    fi
-  done
-fi
+link_local_skills "$REPO/skills-local"
+link_local_skills "$CLAUDE_AGENT_HOME/skills-local"
 
 # Drop legacy per-agent symlinks to the0-agents / logos / deepagent project agents
 for entry in "$CLAUDE_AGENT_HOME/agents/"*.md; do
