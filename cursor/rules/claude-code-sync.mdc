@@ -100,14 +100,6 @@ Editing the agent's own config / instructions / skills is **state-changing produ
 
 When triggered → read `~/.claude-agent/skills/tracker-management/SKILL.md` and layer tracker publication on top of normal coordination: load ticket context, publish the plan, post key progress updates, post the final result. Tracker-agnostic — project-specific conventions live in `<project_cwd>/.claude/agent-memory/`.
 
-### `ccgram-management`
-
-**TRIGGER:** the user mentions ccgram, the Telegram bridge for Claude Code, the Claude–Mac / Claude–Personal VPS / Claude–Work VPS groups, asks to restart / check / reinstall the bridge, debug a missing topic, or set up the bridge on a new machine.
-
-**SKIP** for unrelated Telegram bot work or for one-off Telegram API tasks.
-
-When triggered → read `~/.claude-agent/skills/ccgram-management/SKILL.md`. Per-machine settings live in each machine's `~/.ccgram/.env` (do not copy into memory — tokens are secrets). Bootstrap on a new machine: `scripts/setup-ccgram.sh`.
-
 ### `instruction-grooming`
 
 **TRIGGER:** an instruction file crosses `lint-prose-length.py`'s 90% WARN threshold (`CLAUDE.md`, `README.md`, the cursor mirror, any `SKILL.md`/`policy.md`) — flagged directly by the linter or via the `hook-instruction-grooming-due.py` OFFER — or the user asks to slim / groom / consolidate / deduplicate a bloated instruction file.

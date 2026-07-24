@@ -89,7 +89,6 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 | [session-isolate.sh](session-isolate.sh) | Component C remediation for a cross-session filesystem-scope conflict: routes a contended task into its own workspace by reusing `project_entry`'s `backend_ensure_workspace` (git worktree via built-in `backends/git.sh`, or a machine-local plugin backend such as arc registered at `${CLAUDE_PROJECT_PLUGIN_DIR:-…}/backends/arc.sh` — resolved by name, backend-blind), then re-registers the session's scope at the new root; honors `CLAUDE_DRY_RUN` (zero mutation) |
 | [session-start-digest.sh](session-start-digest.sh) | SessionStart bootstrap: cwd, VCS branch / status / log, project-memory listing, in-progress markers in one digest |
 | [set-context-cap.sh](set-context-cap.sh) | Set an arbitrary context-size cap (auto-compaction trigger) in tokens — computes `CLAUDE_CODE_DISABLE_1M_CONTEXT` + `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` into `base.json`; max ~830k (83% clamp) |
-| [setup-ccgram.sh](setup-ccgram.sh) | Bootstrap CCGram (Telegram bridge) on a machine; idempotent, does not touch secrets |
 | [setup-org.sh](setup-org.sh) | One-command org-portable onboarding wizard: wraps `configure-identity.sh` (channel auto-detect → per-machine identity) and prints an onboarding checklist; idempotent, no network |
 | [setup-project-memory.sh](setup-project-memory.sh) | Per-project: symlink shared agent memory into the project tree |
 | [setup-symlinks.sh](setup-symlinks.sh) | Apply runtime symlinks for agents, skills, memory-global |
@@ -113,6 +112,7 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 | [verify-instructions-sync.sh](verify-instructions-sync.sh) | Check global symlinks and drift |
 | [verify-language.py](verify-language.py) | Enforce English-by-default policy with adjacent-exception rule |
 | [verify-layout-contract.sh](verify-layout-contract.sh) | Compare tree to the layout in `skills/self-improvement/policy.md` |
+| [verify-extracted-skills-resolve.sh](verify-extracted-skills-resolve.sh) | Check that every skill extracted to the machine-local overlay still resolves in the catalog |
 | [verify-leaf-structure.py](verify-leaf-structure.py) | Verify non-experience leaves: `schema:leaf/v1` enforces 3 sections; grandfathered SK leaves get the difficulty-lead baseline |
 | [verify-memory-index.py](verify-memory-index.py) | Verify every memory-global leaf is referenced from an index and carries a valid top-level `type:` frontmatter key |
 | [verify-no-conflict-markers.py](verify-no-conflict-markers.py) | Reject committed git merge-conflict markers (`<<<<<<<` / `=======` / `>>>>>>>` / `\|\|\|\|\|\|\|`) in tracked text files; `--staged` / `--hook` modes |

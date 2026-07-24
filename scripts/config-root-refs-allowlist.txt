@@ -90,8 +90,7 @@ memory-global/leaves/token-economy-plan.md:30  # keep:harness-owned — harness-
 memory-global/leaves/token-economy-plan.md:66  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 scripts/README.md:35  # keep:protected-path — hook-guard-destructive-rm.py row lists ~/.claude among the protected paths it guards
 scripts/README.md:77  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-scripts/README.md:109  # keep:enumerator-self-ref — documents this enumerator; quotes the very pattern it searches
-skills/ccgram-management/SKILL.md:17  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
+scripts/README.md:108  # keep:enumerator-self-ref — documents this enumerator; quotes the very pattern it searches
 skills/overcome-difficulty/SKILL.md:57  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 skills/overcome-difficulty/policy.md:57  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 skills/self-improvement/SKILL.md:76  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
