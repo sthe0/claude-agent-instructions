@@ -1,11 +1,12 @@
 """setup-org.sh — one-command org-portable onboarding wizard.
 
 Machine-independent contract test: the wizard creates the per-machine identity
-file (with whatever channel detect.py resolves on this host), is idempotent, and
-prints the onboarding checklist. The `github`-with-no-plugin-hook branch of channel
-detection is proven separately by the difficulty_channel.detect unit tests, since
-detect.py inspects the real machine (not $HOME) and would yield this machine's
-configured channel regardless of the temp HOME used here.
+file, is idempotent, and prints the onboarding checklist. `_run` below points the
+detect plugin dir at the temp HOME, so no machine-local detect hook can fire and
+the neutral rules decide — which makes `difficulty_channel=github` deterministic on
+any host, and the headline org-neutrality invariant worth asserting here rather
+than describing. The hook branch itself is covered by the difficulty_channel.detect
+unit tests, which inject a synthetic hook.
 """
 import os
 import subprocess
@@ -17,9 +18,11 @@ SCRIPT = Path(__file__).resolve().parents[1] / "setup-org.sh"
 def _run(home, *args):
     env = dict(os.environ)
     env["HOME"] = str(home)
-    # Hermetic: let config-root.sh resolve the default $HOME/.claude-agent,
-    # not an inherited override from the runner's own agent session.
-    for var in ("CLAUDE_AGENT_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_AGENT_IDENTITY"):
+    # Hermetic: let config-root.sh resolve the default $HOME/.claude-agent, and let both
+    # plugin dirs resolve under it too, so neither an inherited override from the runner's
+    # own agent session nor a real machine-local hook reaches this run.
+    for var in ("CLAUDE_AGENT_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_AGENT_IDENTITY",
+                "CLAUDE_DIFFICULTY_PLUGIN_DIR", "CLAUDE_PROJECT_PLUGIN_DIR"):
         env.pop(var, None)
     return subprocess.run(
         ["bash", str(SCRIPT), *args],
@@ -34,7 +37,8 @@ def test_creates_identity_and_prints_checklist(tmp_path):
     assert r.returncode == 0, r.stderr
     idf = tmp_path / ".claude-agent" / "agent-identity.local"
     assert idf.exists()
-    assert "difficulty_channel=" in idf.read_text()
+    # With no hook reachable, the neutral rules decide — Core's only channel is the public one.
+    assert "difficulty_channel=github" in idf.read_text()
     assert "Onboarding checklist" in r.stdout
 
 

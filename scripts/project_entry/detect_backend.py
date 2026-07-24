@@ -26,8 +26,8 @@ through registry.sh, i.e. the same plugin dir must also carry its backend/tracke
 The hook module must use ABSOLUTE imports (see ``lib.plugin_dir.load_plugin_module``).
 
 ``detect_backends`` never loads the hook itself — that would make it impure. Impure
-callers resolve it once via ``load_detect_hook()`` and pass it in; ``__main__`` below is
-the reference wiring.
+callers resolve it once via ``load_detect_hook()`` and pass it in; ``detect_this_machine()``
+below is the reference wiring.
 """
 from __future__ import annotations
 
@@ -86,11 +86,16 @@ def _real_path_exists(p: str) -> bool:
     return os.path.exists(os.path.expanduser(p))
 
 
-if __name__ == "__main__":
-    ws, tr = detect_backends(
+def detect_this_machine() -> "tuple[str, str]":
+    """Reference wiring: the real probes plus this machine's detect hook."""
+    return detect_backends(
         has_command=lambda cmd: shutil.which(cmd) is not None,
         path_exists=_real_path_exists,
         getenv=os.environ.get,
         hook=load_detect_hook(),
     )
+
+
+if __name__ == "__main__":
+    ws, tr = detect_this_machine()
     print(f"{ws} {tr}")

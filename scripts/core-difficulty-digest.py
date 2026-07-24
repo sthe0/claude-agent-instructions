@@ -96,7 +96,11 @@ def read_mass_threshold(config_path: Path = CONFIG_PATH, override: int | None = 
 def default_channels(configured: str | None = None) -> list[str]:
     """Channels to pull when none are named: the public built-in plus whatever channel this
     machine is configured for. Core names no org channel — an org's queue-routed channel
-    reaches the digest only because that machine configured it."""
+    reaches the digest only because that machine configured it.
+
+    `configured` distinguishes two states a caller may need: None means "read this machine",
+    while "" means "an unconfigured machine" and adds nothing to the built-in.
+    """
     names = ["github"]
     configured = configured if configured is not None else authority.read_configured_channel()
     if configured and configured not in names:

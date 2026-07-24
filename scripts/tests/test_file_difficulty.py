@@ -229,7 +229,15 @@ def test_dry_run_project_target_resolves_queue(org_channel, tmp_path, capsys):
 
 # ── authority gate (author machine refuses the non-author route) ────────────
 
-def test_author_machine_refuses_without_force_report(monkeypatch, capsys):
+@pytest.fixture
+def no_plugin_dir(monkeypatch, tmp_path):
+    """An in-process registered channel is a non-built-in name, so main() still probes the
+    plugin dir before falling back to the registry. Point that probe at an empty tmp dir:
+    without this the tests read whatever plugins this machine happens to have installed."""
+    monkeypatch.setenv("CLAUDE_DIFFICULTY_PLUGIN_DIR", str(tmp_path / "no-plugins"))
+
+
+def test_author_machine_refuses_without_force_report(no_plugin_dir, monkeypatch, capsys):
     monkeypatch.setattr(_mod.authority, "is_author", lambda: True)
     dc.register_channel("null-authority-1", dc.NullChannel)
     rc = _run("--target", "CLAUDE.md", "--ground", "x", "--channel", "null-authority-1")
@@ -237,7 +245,7 @@ def test_author_machine_refuses_without_force_report(monkeypatch, capsys):
     assert "force-report" in capsys.readouterr().err
 
 
-def test_author_machine_force_report_proceeds(monkeypatch, capsys):
+def test_author_machine_force_report_proceeds(no_plugin_dir, monkeypatch, capsys):
     monkeypatch.setattr(_mod.authority, "is_author", lambda: True)
     ch = dc.NullChannel()
     dc.register_channel("null-authority-2", lambda: ch)
@@ -247,7 +255,7 @@ def test_author_machine_force_report_proceeds(monkeypatch, capsys):
     assert len(ch.pull()) == 1
 
 
-def test_non_author_machine_proceeds_without_force_report(monkeypatch, capsys):
+def test_non_author_machine_proceeds_without_force_report(no_plugin_dir, monkeypatch, capsys):
     monkeypatch.setattr(_mod.authority, "is_author", lambda: False)
     ch = dc.NullChannel()
     dc.register_channel("null-authority-3", lambda: ch)

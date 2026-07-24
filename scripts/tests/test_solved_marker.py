@@ -147,6 +147,22 @@ def test_stamp_issue_key_on_a_builtin_channel_is_a_fail_open_skip(configured_cha
     assert "issue keys" in result["skipped_reason"]
 
 
+def test_stamp_issue_key_with_no_plugin_installed_is_a_fail_open_skip(
+    configured_channel, monkeypatch, tmp_path
+):
+    """The other fail-open path `stamp` names: a configured NON-built-in channel whose adapter
+    plugin is not installed here. `load_adapter` raises FileNotFoundError, which must surface as
+    a skip reason — a raise would propagate into an already-completed resolution."""
+    configured_channel("orgchan")
+    monkeypatch.setenv("CLAUDE_DIFFICULTY_PLUGIN_DIR", str(tmp_path / "no-plugins"))
+    result = solved_marker.stamp(
+        "PROJ-1", github_add=lambda *a, **kw: pytest.fail("must not call github_add")
+    )
+    assert result["stamped"] is False
+    assert result["channel"] == "orgchan"
+    assert "orgchan" in result["skipped_reason"]
+
+
 def test_stamp_none_key_is_a_fail_open_skip():
     result = solved_marker.stamp(None)
     assert result["stamped"] is False

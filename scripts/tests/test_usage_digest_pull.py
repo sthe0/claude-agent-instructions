@@ -16,11 +16,15 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 SCRIPT = SCRIPTS_DIR / "usage-digest.py"
 _spec = importlib.util.spec_from_file_location("usage_digest", SCRIPT)
 usage_digest = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(usage_digest)
+
+from difficulty_channel.adapters import BUILTIN_NAMES  # noqa: E402
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -174,6 +178,26 @@ def test_pull_skips_unconfigured_sink():
     )
     assert result["total"]["n_invocations"] == 4
     assert "orgchan" not in result["by_segment"]
+
+
+@pytest.mark.parametrize("channel", sorted(BUILTIN_NAMES))
+def test_pull_reads_every_builtin_sink_through_the_builtin_lister(channel):
+    """Sink listing dispatches on BUILTIN_NAMES membership, not one built-in's literal name:
+    routing a built-in to the plugin loader yields None, whose AttributeError the fail-soft
+    handler swallows into an empty (silently wrong) rollup."""
+    def must_not_be_called(sink, http=None):
+        raise AssertionError("a built-in channel must not take the plugin path")
+
+    result = usage_digest.pull(
+        sinks={channel: "org/repo#1"},
+        github_list_comments=_gh_lister(
+            [_comment(_agg("inst-gh", "2026-W01", channel, inv=6))]
+        ),
+        plugin_list_comments=must_not_be_called,
+        log=lambda m: None,
+    )
+    assert result["total"]["n_invocations"] == 6
+    assert result["by_segment"][usage_digest.PUBLIC_SEGMENT]["n_invocations"] == 6
 
 
 def test_pull_fail_soft_on_unreachable_sink():

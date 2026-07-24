@@ -24,7 +24,7 @@ _spec = importlib.util.spec_from_file_location("usage_digest", SCRIPT)
 usage_digest = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(usage_digest)
 
-from difficulty_channel.adapters import github  # noqa: E402
+from difficulty_channel.adapters import BUILTIN_NAMES, github  # noqa: E402
 
 
 # ── adapter verbs: add_comment / list_comments (github) ───────────────────────
@@ -225,7 +225,43 @@ def test_emit_resolves_the_sink_from_the_machine_identity():
     assert [c[0] for c in pl_calls] == ["QUEUE-9"]
 
 
-# ── rollup segmentation: public built-in vs. per-org segments ─────────────────
+# ── the seam is BUILTIN_NAMES membership, never one built-in's literal name ───
+#
+# Comparing against "github" alone drops the other built-in into the plugin branch, where
+# load_adapter() returns None for a built-in and every resulting AttributeError is swallowed
+# by the fail-open handlers — a silent wrong-path, not a visible failure. Each test below
+# turns RED if its site is mutated back to a literal comparison.
+
+@pytest.mark.parametrize("channel", sorted(BUILTIN_NAMES))
+def test_resolve_sink_of_every_builtin_falls_back_to_the_builtin_default(channel, monkeypatch):
+    monkeypatch.setattr(usage_digest, "USAGE_SINK_GITHUB", "org/repo#1")
+    assert usage_digest.resolve_sink(channel, {}) == "org/repo#1"
+    # built-ins only: an unconfigured org channel still resolves to a skip
+    assert usage_digest.resolve_sink("orgchan", {}) == ""
+
+
+@pytest.mark.parametrize("channel", sorted(BUILTIN_NAMES))
+def test_emit_routes_every_builtin_channel_to_the_builtin_adapter(channel):
+    task_rows, policy_rows, spawn_rows = _rows()
+    gh_calls, gh_fake = _capture_add_comment()
+    result = usage_digest.emit(
+        identity={"usage_telemetry": "on"},
+        channel=channel, period="2026-W28", installation_id="abc",
+        task_rows=task_rows, policy_rows=policy_rows, spawn_rows=spawn_rows,
+        sink="org/repo#1", github_add_comment=gh_fake,
+        plugin_add_comment=lambda *a, **kw: pytest.fail("must not take the plugin path"),
+        log=lambda m: None,
+    )
+    assert result["emitted"] is True
+    assert [c[0] for c in gh_calls] == ["org/repo#1"]
+
+
+# ── rollup segmentation: public built-ins vs. per-org segments ────────────────
+
+@pytest.mark.parametrize("channel", sorted(BUILTIN_NAMES))
+def test_channel_segment_folds_every_builtin_into_the_public_segment(channel):
+    assert usage_digest.channel_segment(channel) == usage_digest.PUBLIC_SEGMENT
+
 
 def test_channel_segment_keeps_public_and_org_installations_apart():
     assert usage_digest.channel_segment("github") == usage_digest.PUBLIC_SEGMENT

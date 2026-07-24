@@ -57,7 +57,9 @@ def load_adapter(name: str):
     * expose whatever module-level surface its consumers reach for beyond the port. The in-tree
       consumers use ``QUEUE`` and ``BACKLOG_QUEUE`` (stream identifiers), ``add_tag(key, tag)``,
       ``add_comment(key, body, http=None)`` and ``list_comments(key, http=None)``; omitting one
-      breaks only the consumer that calls it.
+      breaks only the consumer that calls it. ``list_comments`` returns a list of dicts carrying
+      each comment's text under ``body`` (usage-digest also tolerates the ``text`` spelling some
+      trackers use natively, but ``body`` is the contract).
     """
     if name in BUILTIN_NAMES:
         return None
