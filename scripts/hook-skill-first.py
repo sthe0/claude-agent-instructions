@@ -61,7 +61,7 @@ CLASSES: list[tuple[str, re.Pattern, str]] = [
     ("codesearch", re.compile(r"\barc\s+grep\b"),
      "codesearch / ast-index"),
     ("tracker", _build_tracker_re(),
-     "tracker / tracker-management / startrek-client"),
+     "tracker / tracker-management / tracker-client"),
     ("ci", re.compile(r"\bya\s+(make\s+-A|test)\b|\bsandbox\b.*\b(create|run)\b",
                       re.IGNORECASE),
      "ci / sandbox / sandbox-client"),

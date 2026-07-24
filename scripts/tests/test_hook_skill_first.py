@@ -36,7 +36,7 @@ def test_detect_vault_and_grep():
 
 def test_detect_tracker_rest():
     names = [n for n, _ in mod.detect(
-        "curl -X PATCH https://st-api.yandex-team.ru/v2/issues/ABC-1")]
+        "curl -X PATCH https://tracker.example.com/v2/issues/ABC-1")]
     assert "tracker" in names
 
 
