@@ -11,6 +11,7 @@ Three pieces are under test:
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -22,19 +23,28 @@ SETUP_SYMLINKS = SCRIPTS / "setup-symlinks.sh"
 SYNC = SCRIPTS / "verify-instructions-sync.sh"
 
 
-def _env(agent_home: Path, home: "Path | None" = None) -> "dict[str, str]":
+def _env(agent_home: Path) -> "dict[str, str]":
     env = dict(os.environ)
     env["CLAUDE_AGENT_HOME"] = str(agent_home)
-    if home is not None:
-        env["HOME"] = str(home)
     return env
 
 
-def _run(script: Path, agent_home: Path, **kw) -> subprocess.CompletedProcess:
+def _run(script: Path, agent_home: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["bash", str(script)], env=_env(agent_home, **kw),
+        ["bash", str(script)], env=_env(agent_home),
         capture_output=True, text=True,
     )
+
+
+def _extract_bash_function(source: str, name: str) -> str:
+    """Pull one top-level `name() { ... }` definition verbatim out of a shell
+    script, so a test can exercise the real function body without running the
+    rest of the script around it."""
+    match = re.search(
+        rf"^{re.escape(name)}\(\) \{{\n.*?^\}}\n", source, re.MULTILINE | re.DOTALL,
+    )
+    assert match, f"function {name}() not found"
+    return match.group(0)
 
 
 def _agent_home(tmp_path: Path) -> Path:
@@ -116,6 +126,8 @@ def test_contract_rejects_extracted_skill_still_in_repo(tmp_path):
     result = _run(CONTRACT, agent_home)
     assert result.returncode == 1
     assert f"must not exist: {REPO}/skills/tracker-management" in result.stdout
+    # Output honesty: a block that failed must not also claim to have passed.
+    assert "OK: extracted skills absent from the repo, present in the overlay" not in result.stdout
 
 
 def test_contract_rejects_extracted_skill_missing_from_overlay(tmp_path):
@@ -146,17 +158,44 @@ def test_sync_verifier_runs_the_resolve_check(tmp_path):
 # ── setup-symlinks.sh: the overlay reaches the catalog ───────────────────────
 
 def test_setup_symlinks_links_the_agent_home_overlay(tmp_path):
-    """Exit status is deliberately not asserted: under a faked HOME the installer
-    aborts in a later step (install-reminder-hooks.sh resolves this repo through
-    $HOME). That abort happens well after the skill linking, and containing the
-    installer to the sandbox is worth more here than a clean exit code."""
-    home = tmp_path / "home"
-    agent_home = home / ".claude-agent"
-    (agent_home / "skills-local" / "bridge-management").mkdir(parents=True)
+    """Running the whole installer end to end is not hermetic: setup-symlinks.sh
+    self-locates $REPO from $0, so it chains into sub-installers (install-git-hooks.sh
+    runs `git config core.hooksPath` in $REPO, install-reminder-hooks.sh hardcodes
+    $HOME/claude-agent-instructions, several scripts chmod real repo files) that
+    reach outside the sandbox this test controls. The behaviour under test —
+    the overlay reaching the skill catalog — lives entirely in link()/
+    link_local_skills(); pull those two functions verbatim out of the real
+    installer and run only them, so nothing else in the installer is reachable
+    regardless of how its later steps change."""
+    agent_home = _agent_home(tmp_path)
+    (agent_home / "skills-local" / "bridge-management").mkdir()
     (agent_home / "skills-local" / "bridge-management" / "SKILL.md").write_text("x", encoding="utf-8")
 
-    _run(SETUP_SYMLINKS, agent_home, home=home)
+    source = SETUP_SYMLINKS.read_text(encoding="utf-8")
+    functions = _extract_bash_function(source, "link") + _extract_bash_function(source, "link_local_skills")
+    script = (
+        "set -euo pipefail\n"
+        f'CLAUDE_AGENT_HOME="{agent_home}"\n'
+        f"{functions}"
+        f'link_local_skills "{agent_home}/skills-local"\n'
+    )
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
 
     linked = agent_home / "skills" / "bridge-management"
     assert linked.is_symlink()
     assert linked.resolve() == (agent_home / "skills-local" / "bridge-management").resolve()
+
+
+def test_setup_symlinks_extraction_touches_only_claude_agent_home():
+    """The containment argument above holds only as long as link()/
+    link_local_skills() stay free of $HOME, $REPO, chmod, and git references —
+    pin that so a future edit to either function that reaches outside
+    $CLAUDE_AGENT_HOME fails this test instead of silently widening what the
+    extraction-based test above can touch."""
+    source = SETUP_SYMLINKS.read_text(encoding="utf-8")
+    functions = _extract_bash_function(source, "link") + _extract_bash_function(source, "link_local_skills")
+    assert "$HOME" not in functions
+    assert "$REPO" not in functions
+    assert "chmod" not in functions
+    assert "git " not in functions
