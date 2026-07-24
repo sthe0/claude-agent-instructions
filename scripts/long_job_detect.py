@@ -15,8 +15,9 @@ so the shared logic lives here and the hook re-exports it.
 
 The orchestrator name list is operator-configurable so this works in any org:
 set `long_job_orchestrators=name1,name2` (comma/space-separated) in the system
-config root's `agent-identity.local`. When the key is absent the built-in default
-(Yandex orchestrators) is used, so an unconfigured machine behaves unchanged.
+config root's `agent-identity.local`. Core ships no built-in names — with the
+key absent, an unconfigured machine detects only `nohup` and arms on no
+orchestrator launches until the operator configures its own list.
 """
 from __future__ import annotations
 
@@ -26,9 +27,9 @@ from pathlib import Path
 
 NOHUP_RE = re.compile(r"\bnohup\b")
 
-# Built-in default orchestrator names (Yandex). An unconfigured machine uses these,
-# so behaviour is byte-identical to before the list became configurable.
-DEFAULT_ORCHESTRATORS = ("nirvana", "sandbox", "reactor", "vh3", "hitman", "yt")
+# Core carries no org-specific orchestrator names; the list is entirely
+# operator-supplied via agent-identity.local's `long_job_orchestrators=` key.
+DEFAULT_ORCHESTRATORS: tuple[str, ...] = ()
 
 
 def _orchestrator_names(identity_path=None) -> tuple[str, ...]:
@@ -50,8 +51,13 @@ def _orchestrator_names(identity_path=None) -> tuple[str, ...]:
 
 
 def _build_tool_re(names=None) -> "re.Pattern[str]":
-    """Compile the orchestrator-name alternation from the resolved (or given) list."""
-    alts = "|".join(re.escape(n) for n in (names or _orchestrator_names()))
+    """Compile the orchestrator-name alternation from the resolved (or given) list.
+    An empty list (no names configured anywhere) compiles to a pattern that never
+    matches — an empty alternation would otherwise match at every word boundary."""
+    resolved = names if names is not None else _orchestrator_names()
+    if not resolved:
+        return re.compile(r"(?!)")
+    alts = "|".join(re.escape(n) for n in resolved)
     return re.compile(rf"\b({alts})\b", re.IGNORECASE)
 
 

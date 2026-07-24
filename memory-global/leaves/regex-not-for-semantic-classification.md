@@ -36,7 +36,7 @@ Enumerated every hard-enforcement site in the 35-hook suite (`grep` for the thre
 |---|---|---|---|
 | `hook-guard-destructive-rm.py` (deny) | shell command shape: `rm -rf` + interpolated-`$VAR` worst-case path expansion | STRUCTURAL | legitimate, unchanged |
 | `hook-guard-canon-readonly.py` (deny) | git state + a machine-local canon-path list, realpath-compared | STRUCTURAL | legitimate, unchanged |
-| `hook-arc-mount-search-guard.py` (deny) | `/proc/self/mounts` shape + recursive-search tool/command names (`find`/`rg`/`fd`/`grep -r`) | STRUCTURAL | legitimate, unchanged |
+| `hook-multi-mount-search-guard.py` (deny) | `/proc/self/mounts` shape + recursive-search tool/command names (`find`/`rg`/`fd`/`grep -r`) | STRUCTURAL | legitimate, unchanged |
 | `hook-state-gate.py` (deny) | the `agentctl` engine node/state machine | STRUCTURAL | legitimate, unchanged |
 | `hook-scope-conflict.py` (deny + Stop block) | the cross-session `session_scope` registry (live path-overlap check) | STRUCTURAL | legitimate, unchanged |
 | `hook-plan-delivery-gate.py` (deny) | verbatim / normalized substring presence of the registered plan essence in delivered transcript text (exact bytes, not meaning) | STRUCTURAL | legitimate, unchanged — a byte/shape presence check, not a meaning classification |

@@ -44,7 +44,11 @@ def test_detect_nohup():
     assert mod.detect("nohup python3 watch.py &")
 
 
-def test_detect_orchestrator_launch():
+def test_detect_orchestrator_launch(monkeypatch):
+    """Orchestrator-name matching is entirely configuration-driven (Core ships no
+    built-in names) — isolate the regex so this test doesn't depend on the real
+    machine's agent-identity.local."""
+    monkeypatch.setattr(long_job_detect, "TOOL_RE", long_job_detect._build_tool_re(("nirvana", "yt")))
     assert mod.detect("nirvana workflow start --id abc")
     assert mod.detect("yt start-op map --src //tmp/a")
 
@@ -58,12 +62,13 @@ def test_detect_silent_on_plain_command():
 # --- configurable orchestrator list ------------------------------------------
 
 def test_default_orchestrator_list_unconfigured(tmp_path):
-    """No long_job_orchestrators= key -> built-in Yandex default, behaviour unchanged."""
+    """No long_job_orchestrators= key -> Core ships no built-in names: the
+    resolved list is empty and its regex matches no orchestrator launch."""
     idf = tmp_path / "agent-identity.local"
     idf.write_text("difficulty_channel=github\n")
-    assert mod._orchestrator_names(idf) == mod.DEFAULT_ORCHESTRATORS
-    # the default-built regex still matches a Yandex orchestrator launch
-    assert mod.detect("nirvana workflow start --id abc")
+    assert mod._orchestrator_names(idf) == mod.DEFAULT_ORCHESTRATORS == ()
+    tool_re = mod._build_tool_re(mod._orchestrator_names(idf))
+    assert tool_re.search("nirvana workflow start --id abc") is None
 
 
 def test_operator_override_replaces_list(tmp_path):
