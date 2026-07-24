@@ -67,5 +67,7 @@ Notes:
   * Org-specific runbooks live in <project>/.claude/, never in this Core repo.
   * Long-job orchestrators are configurable: set long_job_orchestrators=... in
     ${IDENTITY_FILE} for your org's job runners.
+  * The skill-first tracker advisory is configurable: set skill_first_tracker_hosts=...
+    in ${IDENTITY_FILE} for your org's tracker host/path fragments.
 ---------------------------------------------------------------------
 EOF
