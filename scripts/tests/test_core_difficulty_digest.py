@@ -29,12 +29,12 @@ def _rec(ground, sev, reporter, ts="2026-06-26T00:00:00", target="CLAUDE.md"):
 
 def test_same_ground_two_channels_one_cluster():
     recs = [
-        _rec("gate denies a legitimate memory write", dc.Severity.MEDIUM, "startrek"),
+        _rec("gate denies a legitimate memory write", dc.Severity.MEDIUM, "reporter-a"),
         _rec("gate denies a legitimate memory write", dc.Severity.MEDIUM, "external"),
     ]
     clusters = digest_mod.cluster_records(recs)
     assert len(clusters) == 1
-    assert clusters[0].reporters == {"startrek", "external"}
+    assert clusters[0].reporters == {"reporter-a", "external"}
 
 
 def test_mass_sums_severity_weights():
@@ -96,8 +96,21 @@ def test_pull_all_via_in_memory_double():
     assert len(recs) == 1 and recs[0].functional_ground == "seeded ground"
 
 
-def test_default_channels_include_startrek_and_github(monkeypatch):
-    """When no --channel args are given, both startrek and github are attempted."""
+def test_default_channels_are_the_builtin_plus_this_machines_configured_one():
+    """Core names no org channel: the default list is the public built-in, extended with
+    whatever channel THIS machine configured."""
+    assert digest_mod.default_channels(configured="orgchan") == ["github", "orgchan"]
+
+
+def test_default_channels_do_not_duplicate_a_builtin_configured_channel():
+    assert digest_mod.default_channels(configured="github") == ["github"]
+
+
+def test_default_channels_of_an_unconfigured_machine_are_the_builtin_alone():
+    assert digest_mod.default_channels(configured="") == ["github"]
+
+
+def test_main_with_no_channel_args_attempts_the_default_channels(monkeypatch):
     attempted = []
 
     def fake_pull_all(channel_names, since=None):
@@ -105,9 +118,9 @@ def test_default_channels_include_startrek_and_github(monkeypatch):
         return []
 
     monkeypatch.setattr(digest_mod, "pull_all", fake_pull_all)
+    monkeypatch.setattr(digest_mod.authority, "read_configured_channel", lambda: "orgchan")
     digest_mod.main([])
-    assert "startrek" in attempted
-    assert "github" in attempted
+    assert attempted == ["github", "orgchan"]
 
 
 # ── Non-built-in channels resolve through the plugin seam (B1) ────────────────

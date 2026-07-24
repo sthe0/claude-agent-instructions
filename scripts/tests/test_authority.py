@@ -80,14 +80,14 @@ def test_local_identity_ignores_comments(tmp_path):
 def test_file_core_difficulty_uses_configured_channel(tmp_path):
     """file_core_difficulty() reads the machine-local channel when none is passed explicitly."""
     identity = tmp_path / "agent-identity.local"
-    identity.write_text("difficulty_channel=startrek\n", encoding="utf-8")
+    identity.write_text("difficulty_channel=orgchan\n", encoding="utf-8")
 
     ch = dc.NullChannel()
-    dc.register_channel("startrek-identity-test", lambda: ch)
+    dc.register_channel("orgchan-identity-test", lambda: ch)
 
     # Patch the configured channel to return our test channel name.
     original = authority.read_configured_channel
-    authority.read_configured_channel = lambda path=None: "startrek-identity-test"
+    authority.read_configured_channel = lambda path=None: "orgchan-identity-test"
     try:
         authority.file_core_difficulty(_rec("identity channel test"))
     finally:

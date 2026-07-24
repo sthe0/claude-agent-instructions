@@ -324,7 +324,7 @@ def budget_report(tr: dict, spawn_cost: float, spawn_note: str) -> str:
     L.append(f"  A. Spawns (claude -p)            {fmt_usd(spawn_cost):>10}   measured    {spawn_note}")
     L.append(f"  B. Interactive main session      {fmt_usd(tr['interactive_usd']):>10}   estimated   token x price, {tr['n_files']} transcript(s)")
     L.append(f"  C. Subagent (Agent tool)                 $?   partial     not isolated from main transcript")
-    L.append(f"  D. External compute (Nirvana/Sandbox)    $?   n/a         robot compute, not captured")
+    L.append(f"  D. External compute (job orchestrators)  $?   n/a         robot compute, not captured")
     L.append(f"  -> budget ~ {fmt_usd(low)} (measured) ... {fmt_usd(high)} (spawns + interactive est.); +C/+D unmeasured on top")
     L.append("")
     L.append("=== Token usage (interactive, by model) ===")

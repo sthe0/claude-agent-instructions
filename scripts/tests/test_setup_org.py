@@ -2,10 +2,10 @@
 
 Machine-independent contract test: the wizard creates the per-machine identity
 file (with whatever channel detect.py resolves on this host), is idempotent, and
-prints the onboarding checklist. The `github`-under-no-signals branch of channel
+prints the onboarding checklist. The `github`-with-no-plugin-hook branch of channel
 detection is proven separately by the difficulty_channel.detect unit tests, since
-detect.py inspects the real machine (not $HOME) and would yield `startrek` on a
-Yandex host regardless of the temp HOME used here.
+detect.py inspects the real machine (not $HOME) and would yield this machine's
+configured channel regardless of the temp HOME used here.
 """
 import os
 import subprocess

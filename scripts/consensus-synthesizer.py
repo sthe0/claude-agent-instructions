@@ -151,7 +151,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--channel", action="append", default=[], dest="channels")
     p.add_argument("--threshold", type=int, default=None)
     a = p.parse_args(argv)
-    channels = a.channels or ["startrek"]  # implemented channels only; stubs added explicitly
+    channels = a.channels or _digest.default_channels()
     threshold = read_mass_threshold(override=a.threshold)
     records = _digest.pull_all(channels)
     result = run_synthesis(records, threshold)

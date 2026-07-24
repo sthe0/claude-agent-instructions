@@ -134,34 +134,34 @@ for _fn in claude-task claude-eliza claude-team claude-personal onboard; do
 done
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Test 2 — arg classification: DEEPAGENT-7 -> --key
+# Test 2 — arg classification: PROJ-7 -> --key
 # ═══════════════════════════════════════════════════════════════════════════
 printf '\n--- arg classification ---\n'
 reset_logs
-out="$(CLAUDE_LAUNCH_DRYRUN=1 claude-team DEEPAGENT-7 2>/dev/null)"
-if grep -qF -- '--key DEEPAGENT-7' "$ET_CALLS"; then
-  ok "DEEPAGENT-7 classified as --key"
+out="$(CLAUDE_LAUNCH_DRYRUN=1 claude-team PROJ-7 2>/dev/null)"
+if grep -qF -- '--key PROJ-7' "$ET_CALLS"; then
+  ok "PROJ-7 classified as --key"
 else
-  fail "DEEPAGENT-7 not classified as --key (et-calls: $(cat "$ET_CALLS"))"
+  fail "PROJ-7 not classified as --key (et-calls: $(cat "$ET_CALLS"))"
 fi
 if printf '%s\n' "$out" | grep -q 'profile=team'; then
-  ok "DEEPAGENT-7 dry-run: profile=team"
+  ok "PROJ-7 dry-run: profile=team"
 else
-  fail "DEEPAGENT-7 dry-run: missing profile=team (got: $out)"
+  fail "PROJ-7 dry-run: missing profile=team (got: $out)"
 fi
 
-# Test 2b — DEEPAGENT-1 specifically (the done-criterion example)
+# Test 2b — PROJ-1 specifically (the done-criterion example)
 reset_logs
-out="$(CLAUDE_LAUNCH_DRYRUN=1 claude-team DEEPAGENT-1 2>/dev/null)"
+out="$(CLAUDE_LAUNCH_DRYRUN=1 claude-team PROJ-1 2>/dev/null)"
 if printf '%s\n' "$out" | grep -qF "enter=${ET_DIR}"; then
-  ok "DEEPAGENT-1 dry-run: enter=<stub-dir>"
+  ok "PROJ-1 dry-run: enter=<stub-dir>"
 else
-  fail "DEEPAGENT-1 dry-run: missing enter= (got: $out)"
+  fail "PROJ-1 dry-run: missing enter= (got: $out)"
 fi
 if printf '%s\n' "$out" | grep -q 'profile=team'; then
-  ok "DEEPAGENT-1 dry-run: profile=team"
+  ok "PROJ-1 dry-run: profile=team"
 else
-  fail "DEEPAGENT-1 dry-run: missing profile=team (got: $out)"
+  fail "PROJ-1 dry-run: missing profile=team (got: $out)"
 fi
 
 # Test 2c — --new classification
@@ -206,7 +206,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 printf '\n--- dry-run output format ---\n'
 reset_logs
-out="$(CLAUDE_LAUNCH_DRYRUN=1 claude-task DEEPAGENT-1 2>/dev/null)"
+out="$(CLAUDE_LAUNCH_DRYRUN=1 claude-task PROJ-1 2>/dev/null)"
 if [[ "$out" == "enter=${ET_DIR} profile=default config=${CLAUDE_AGENT_HOME:-$HOME/.claude-agent}" ]]; then
   ok "claude-task dry-run format correct"
 else
@@ -214,7 +214,7 @@ else
 fi
 
 reset_logs
-out="$(CLAUDE_LAUNCH_DRYRUN=1 claude-team DEEPAGENT-1 2>/dev/null)"
+out="$(CLAUDE_LAUNCH_DRYRUN=1 claude-team PROJ-1 2>/dev/null)"
 if [[ "$out" == "enter=${ET_DIR} profile=team config=${CLAUDE_AGENT_HOME:-$HOME/.claude-agent}" ]]; then
   ok "claude-team dry-run format correct"
 else
@@ -226,7 +226,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 printf '\n--- non-dry profile env application ---\n'
 reset_logs
-claude-team DEEPAGENT-1 2>/dev/null || true
+claude-team PROJ-1 2>/dev/null || true
 if grep -q 'TEST_TEAM_VAR=ya-pool-active' "$CLAUDE_ENV_RECORDED"; then
   ok "non-dry claude-team: team.sh env (TEST_TEAM_VAR) visible to claude"
 else
@@ -235,7 +235,7 @@ fi
 
 # Confirm default profile does NOT leak team vars
 reset_logs
-claude-task DEEPAGENT-1 2>/dev/null || true
+claude-task PROJ-1 2>/dev/null || true
 if grep -q 'TEST_TEAM_VAR' "$CLAUDE_ENV_RECORDED"; then
   fail "default profile should not expose TEST_TEAM_VAR"
 else
@@ -313,7 +313,7 @@ printf '\n--- onboard probe ---\n'
 
 # Case (a): empty hook dir -> onboard NOT called
 reset_logs
-CLAUDE_LAUNCH_DRYRUN=1 claude-task DEEPAGENT-1 >/dev/null 2>/dev/null || true
+CLAUDE_LAUNCH_DRYRUN=1 claude-task PROJ-1 >/dev/null 2>/dev/null || true
 if [[ -s "$ONBOARD_LOG" ]]; then
   fail "empty hook dir: onboard should NOT be called (log: $(cat "$ONBOARD_LOG"))"
 else
@@ -350,7 +350,7 @@ _saved_et="$_LAUNCHERS_ENTER_TASK"
 _LAUNCHERS_ENTER_TASK="$FAKE_ET_B"
 CLAUDE_ONBOARD_HOOK_DIR="$HOOK_DIR_B" CLAUDE_ONBOARD_BIN="$FAKE_ONBOARD_B" \
   CLAUDE_LAUNCH_DRYRUN=1 \
-  claude-task DEEPAGENT-1 >/dev/null 2>"$_stderr_b" || true
+  claude-task PROJ-1 >/dev/null 2>"$_stderr_b" || true
 _LAUNCHERS_ENTER_TASK="$_saved_et"
 if grep -q 'environment not initialized' "$_stderr_b"; then
   ok "needs-init=0: banner printed"
@@ -379,7 +379,7 @@ if [[ "${1:-}" == "--needs-init" ]]; then exit 1; fi
 HSCRIPT
 chmod +x "$HOOK_DIR_C/10-already.sh"
 CLAUDE_ONBOARD_HOOK_DIR="$HOOK_DIR_C" CLAUDE_LAUNCH_DRYRUN=1 \
-  claude-task DEEPAGENT-1 >/dev/null 2>/dev/null || true
+  claude-task PROJ-1 >/dev/null 2>/dev/null || true
 if [[ -s "$ONBOARD_LOG" ]]; then
   fail "needs-init=1: onboard should NOT be called (log: $(cat "$ONBOARD_LOG"))"
 else
@@ -395,7 +395,7 @@ if [[ "${1:-}" == "--needs-init" ]]; then exit 0; fi
 HSCRIPT
 chmod +x "$HOOK_DIR_D/10-init.sh"
 CLAUDE_ONBOARD_HOOK_DIR="$HOOK_DIR_D" CLAUDE_SKIP_ONBOARD=1 CLAUDE_LAUNCH_DRYRUN=1 \
-  claude-task DEEPAGENT-1 >/dev/null 2>/dev/null || true
+  claude-task PROJ-1 >/dev/null 2>/dev/null || true
 if [[ -s "$ONBOARD_LOG" ]]; then
   fail "CLAUDE_SKIP_ONBOARD: onboard should NOT be called (log: $(cat "$ONBOARD_LOG"))"
 else
@@ -577,8 +577,8 @@ printf '\n--- --project modifier-flag forwarding ---\n'
 # Case (c): --project is forwarded to enter-task alongside --new.
 reset_logs
 CLAUDE_LAUNCH_DRYRUN=1 CLAUDE_LAUNCH_ASSUME_YES=1 \
-  claude-task --project robot/deepagent --new 'T' </dev/null >/dev/null 2>/dev/null || true
-if grep -qF -- '--project robot/deepagent' "$ET_CALLS"; then
+  claude-task --project team/proj --new 'T' </dev/null >/dev/null 2>/dev/null || true
+if grep -qF -- '--project team/proj' "$ET_CALLS"; then
   ok "12c: --project forwarded to enter-task"
 else
   fail "12c: --project not forwarded (et-calls: $(cat "$ET_CALLS"))"
@@ -591,13 +591,13 @@ fi
 
 # Case (d): --project is forwarded to enter-task alongside a tracker key.
 reset_logs
-CLAUDE_LAUNCH_DRYRUN=1 claude-task --project robot/deepagent DEEPAGENT-7 >/dev/null 2>/dev/null || true
-if grep -qF -- '--project robot/deepagent' "$ET_CALLS"; then
+CLAUDE_LAUNCH_DRYRUN=1 claude-task --project team/proj PROJ-7 >/dev/null 2>/dev/null || true
+if grep -qF -- '--project team/proj' "$ET_CALLS"; then
   ok "12d: --project forwarded alongside a ticket key"
 else
   fail "12d: --project not forwarded (et-calls: $(cat "$ET_CALLS"))"
 fi
-if grep -qF -- '--key DEEPAGENT-7' "$ET_CALLS"; then
+if grep -qF -- '--key PROJ-7' "$ET_CALLS"; then
   ok "12d: ticket key still classified as --key"
 else
   fail "12d: ticket key not forwarded as --key (et-calls: $(cat "$ET_CALLS"))"
