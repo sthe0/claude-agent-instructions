@@ -449,9 +449,9 @@ def pull(
 
 
 def _resolve_sinks(args, identity: dict) -> dict:
-    """channel -> sink id for every channel this machine knows a sink for: the github
-    built-in, every `usage_sink_<channel>` identity key, then `--sink <channel>=<ref>`."""
-    sinks = {"github": USAGE_SINK_GITHUB}
+    """channel -> sink id for every channel this machine knows a sink for: the built-ins'
+    shared default, every `usage_sink_<channel>` identity key, then `--sink <channel>=<ref>`."""
+    sinks = {name: USAGE_SINK_GITHUB for name in BUILTIN_NAMES}
     for key, value in identity.items():
         if key.startswith(SINK_IDENTITY_PREFIX) and value:
             sinks[key[len(SINK_IDENTITY_PREFIX):]] = value
@@ -485,13 +485,16 @@ def format_rollup_markdown(result: dict) -> str:
 
 def cmd_pull(args) -> int:
     """Read-only cross-installation rollup. Always returns 0 (fail-soft)."""
-    identity_path = args.identity or identity_file()
-    identity = read_identity(identity_path)
-    result = pull(sinks=_resolve_sinks(args, identity))
-    if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
-    else:
-        print(format_rollup_markdown(result))
+    try:
+        identity_path = args.identity or identity_file()
+        identity = read_identity(identity_path)
+        result = pull(sinks=_resolve_sinks(args, identity))
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(format_rollup_markdown(result))
+    except Exception as exc:  # noqa: BLE001 - fail-soft at the CLI boundary, as cmd_emit is
+        print(f"usage-digest: pull skipped ({exc})")
     return 0
 
 

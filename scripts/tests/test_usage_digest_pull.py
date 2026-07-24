@@ -200,6 +200,16 @@ def test_pull_reads_every_builtin_sink_through_the_builtin_lister(channel):
     assert result["by_segment"][usage_digest.PUBLIC_SEGMENT]["n_invocations"] == 6
 
 
+@pytest.mark.parametrize("channel", sorted(BUILTIN_NAMES))
+def test_resolve_sinks_seeds_every_builtin_not_one_literal_name(channel, monkeypatch):
+    """Sink seeding dispatches on BUILTIN_NAMES, not one built-in's literal name: seeding
+    only `github` leaves the other built-in absent from the sink map, so a `pull` silently
+    never reads it. MUTATION: reverting to `{"github": USAGE_SINK_GITHUB}` turns this RED."""
+    monkeypatch.setattr(usage_digest, "USAGE_SINK_GITHUB", "org/repo#1")
+    args = usage_digest.build_arg_parser().parse_args(["pull"])
+    assert usage_digest._resolve_sinks(args, {})[channel] == "org/repo#1"
+
+
 def test_pull_fail_soft_on_unreachable_sink():
     def boom(sink, http=None):
         raise RuntimeError("network down")
@@ -217,3 +227,23 @@ def test_pull_fail_soft_on_unreachable_sink():
     assert result["total"]["n_invocations"] == 9
     assert usage_digest.PUBLIC_SEGMENT not in result["by_segment"]
     assert any("failed" in m for m in logs)
+
+
+# ── CLI: `pull` keeps its "always returns 0" promise ──────────────────────────
+
+@pytest.mark.parametrize("kind", ["non-utf8", "directory"])
+def test_cli_pull_exits_zero_on_an_unreadable_identity(kind, tmp_path, capsys):
+    """cmd_pull's docstring promises a fail-soft exit 0. An identity path that cannot be
+    decoded — undecodable bytes, or a directory (which `exists()` accepts) — must degrade
+    to a message, not a traceback. MUTATION: dropping cmd_pull's try/except raises
+    UnicodeDecodeError / IsADirectoryError here and the exit code becomes 1.
+    Offline: the read fails before any sink is contacted."""
+    if kind == "non-utf8":
+        identity = tmp_path / "agent-identity.local"
+        identity.write_bytes(b"difficulty_channel=\xff\xfe\n")
+    else:
+        identity = tmp_path / "identity-as-a-directory"
+        identity.mkdir()
+    rc = usage_digest.main(["pull", "--identity", str(identity)])
+    assert rc == 0
+    assert "pull skipped" in capsys.readouterr().out
