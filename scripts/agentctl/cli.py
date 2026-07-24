@@ -1075,7 +1075,7 @@ def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Di
     state.route = result.route
     if sig.tracker_key and TRACKER_KEY_RE.match(sig.tracker_key):
         state.tracker_key = sig.tracker_key
-    elif sig.tracker_key and solved_marker.looks_like_key(sig.tracker_key) == "github":
+    elif sig.tracker_key and solved_marker.key_shape(sig.tracker_key) == "github":
         # a fully-qualified github ref (owner/repo#N) is not TRACKER_KEY_RE-shaped and so
         # does not force SUBSTANTIVE, but it must still reach cmd_resolve's marker stamp.
         state.tracker_key = sig.tracker_key
@@ -2356,7 +2356,7 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     state.log("resolve", by=args.by, quality=quality, quality_by=quality_by)
     store.save(state)
     tracker_key = getattr(state, "tracker_key", None)
-    if not tracker_key and solved_marker.looks_like_key(state.task_id):
+    if not tracker_key and solved_marker.key_shape(state.task_id):
         tracker_key = state.task_id
     # Realized budget-tier labels for this task, for budget-calibration.py to group
     # spend by (kind x tier) and by task-type against. Joined by plan_path — the

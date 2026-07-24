@@ -3,10 +3,11 @@
 NO live network: every case exercises an injected fake HTTP client (adapters) or an
 injected fake add-verb (dispatcher).
 
-The startrek adapter's own add_tag behavior is no longer tested here — it moved out of
-Core to the machine-local plugin dir (ADR-0001 B1) and is no longer statically importable.
-``stamp()``'s startrek dispatch is still covered below via an injected ``startrek_add`` (the
-same test seam ``stamp()`` exposes for exactly this reason), never the real plugin loader.
+A plugin channel's own add_tag behavior is not tested here — an org adapter lives in the
+machine-local plugin dir (ADR-0001 B1) and is not statically importable. ``stamp()``'s
+issue-key dispatch is covered below via an injected ``plugin_add`` (the same test seam
+``stamp()`` exposes for exactly this reason), never the real plugin loader; the configured
+channel is likewise stubbed, so these assertions hold on any machine.
 """
 # scripts/ is on sys.path via conftest.py, so both packages import normally.
 import json
@@ -84,45 +85,66 @@ def test_github_add_label_bare_number_raises_no_default_repo_post(bad_ref):
     assert calls == []  # never posts to a default/Core repo
 
 
-# ── looks_like_key classifier ─────────────────────────────────────────────────
+# ── key_shape classifier ──────────────────────────────────────────────────────
 
-def test_looks_like_key_classifies_startrek_key():
-    assert solved_marker.looks_like_key("DEEPAGENT-445") == "startrek"
+def test_key_shape_classifies_a_tracker_issue_key():
+    assert solved_marker.key_shape("PROJ-445") == "issue-key"
 
 
-def test_looks_like_key_classifies_qualified_github_ref():
-    assert solved_marker.looks_like_key("org/repo#7") == "github"
-    assert solved_marker.looks_like_key("org/repo/issues/7") == "github"
-    assert solved_marker.looks_like_key("https://github.com/org/repo/issues/7") == "github"
+def test_key_shape_classifies_qualified_github_ref():
+    assert solved_marker.key_shape("org/repo#7") == "github"
+    assert solved_marker.key_shape("org/repo/issues/7") == "github"
+    assert solved_marker.key_shape("https://github.com/org/repo/issues/7") == "github"
 
 
 @pytest.mark.parametrize("bad_ref", ["7", "#7", None, ""])
-def test_looks_like_key_bare_number_or_none_is_unclassifiable(bad_ref):
-    assert solved_marker.looks_like_key(bad_ref) is None
+def test_key_shape_bare_number_or_none_is_unclassifiable(bad_ref):
+    assert solved_marker.key_shape(bad_ref) is None
 
 
 # ── stamp() dispatcher ────────────────────────────────────────────────────────
 
-def test_stamp_routes_startrek_key_to_startrek_add():
+@pytest.fixture
+def configured_channel(monkeypatch):
+    """Pin the configured channel so dispatch assertions hold on any machine."""
+    def _set(name: str) -> None:
+        monkeypatch.setattr(solved_marker, "read_configured_channel", lambda: name)
+    return _set
+
+
+def test_stamp_routes_issue_key_to_the_configured_channel(configured_channel):
+    configured_channel("orgchan")
     calls = []
     result = solved_marker.stamp(
-        "DEEPAGENT-445",
-        startrek_add=lambda key, tag, **kw: calls.append(("startrek", key, tag)),
+        "PROJ-445",
+        plugin_add=lambda key, tag, **kw: calls.append((key, tag)),
         github_add=lambda *a, **kw: pytest.fail("must not call github_add"),
     )
-    assert calls == [("startrek", "DEEPAGENT-445", solved_marker.SOLVED_MARKER)]
-    assert result == {"channel": "startrek", "key": "DEEPAGENT-445", "stamped": True}
+    assert calls == [("PROJ-445", solved_marker.SOLVED_MARKER)]
+    assert result == {"channel": "orgchan", "key": "PROJ-445", "stamped": True}
 
 
 def test_stamp_routes_github_ref_to_github_add():
     calls = []
     result = solved_marker.stamp(
         "org/repo#7",
-        startrek_add=lambda *a, **kw: pytest.fail("must not call startrek_add"),
+        plugin_add=lambda *a, **kw: pytest.fail("must not call plugin_add"),
         github_add=lambda ref, tag, **kw: calls.append((ref, tag, kw.get("repo"))),
     )
     assert calls == [("org/repo#7", solved_marker.SOLVED_MARKER, None)]
     assert result == {"channel": "github", "key": "org/repo#7", "stamped": True}
+
+
+def test_stamp_issue_key_on_a_builtin_channel_is_a_fail_open_skip(configured_channel):
+    """A machine with no plugin channel cannot stamp a bare PROJ-1: github labels need
+    a fully-qualified ref. Reported as a skip, never raised, and never mis-sent to github."""
+    configured_channel("github")
+    result = solved_marker.stamp(
+        "PROJ-1", github_add=lambda *a, **kw: pytest.fail("must not call github_add")
+    )
+    assert result["stamped"] is False
+    assert result["channel"] == "github"
+    assert "issue keys" in result["skipped_reason"]
 
 
 def test_stamp_none_key_is_a_fail_open_skip():
@@ -137,13 +159,15 @@ def test_stamp_bare_github_number_is_a_fail_open_skip_not_raise():
     assert result["channel"] is None
 
 
-def test_stamp_swallows_read_token_runtime_error():
-    def raising_startrek_add(key, tag, **kw):
+def test_stamp_swallows_read_token_runtime_error(configured_channel):
+    configured_channel("orgchan")
+
+    def raising_plugin_add(key, tag, **kw):
         raise RuntimeError("no tracker write token")
 
-    result = solved_marker.stamp("DEEPAGENT-1", startrek_add=raising_startrek_add)
+    result = solved_marker.stamp("PROJ-1", plugin_add=raising_plugin_add)
     assert result == {
-        "channel": "startrek", "key": "DEEPAGENT-1", "stamped": False,
+        "channel": "orgchan", "key": "PROJ-1", "stamped": False,
         "skipped_reason": "no tracker write token",
     }
 

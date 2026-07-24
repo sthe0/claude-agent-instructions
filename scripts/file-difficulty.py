@@ -24,7 +24,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 import difficulty_channel as dc  # noqa: E402
 import difficulty_channel.adapters  # noqa: E402,F401
 from difficulty_channel import authority  # noqa: E402
-from difficulty_channel.adapters import load_adapter  # noqa: E402
+from difficulty_channel.adapters import BUILTIN_NAMES, load_adapter  # noqa: E402
 from difficulty_channel.adapters.github import DIFFICULTY_LABEL as _GH_DIFFICULTY_LABEL, BACKLOG_LABEL as _GH_BACKLOG_LABEL  # noqa: E402
 from difficulty_channel.project_queue import resolve_project_queue  # noqa: E402
 
@@ -79,7 +79,7 @@ def main(argv: list[str] | None = None, _ts: str | None = None) -> int:
     p.add_argument("--channel", default=None,
                    help="channel override; default: from agent-identity.local")
     p.add_argument("--queue", default=None,
-                   help="explicit startrek queue override (e.g. DEEPAGENT)")
+                   help="explicit queue override for a queue-routed channel (e.g. PROJ)")
     p.add_argument("--stream", default="report", choices=["report", "backlog"],
                    help="flow selector: report (default) or backlog")
     p.add_argument("--dry-run", action="store_true",
@@ -97,48 +97,20 @@ def main(argv: list[str] | None = None, _ts: str | None = None) -> int:
 
     channel_name = args.channel or authority.read_configured_channel()
 
-    # Resolve effective routing destination before submit or print.
-    if channel_name == "startrek":
-        try:
-            _startrek = load_adapter("startrek")
-        except FileNotFoundError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 1
-        if args.queue:
-            resolved_queue = args.queue
-            project_q = None
-        else:
-            project_q = resolve_project_queue(Path(args.target).resolve())
-            resolved_queue = project_q or (
-                _startrek.BACKLOG_QUEUE if args.stream == "backlog" else _startrek.QUEUE
-            )
-        # Fix-first guard (policy.md § Author machine: fix-first, backlog-second):
-        # a core-tier filing (no explicit --queue, no project-queue resolution)
-        # headed for the org-wide startrek queues from a machine that can edit
-        # Core directly is a deferral-by-default — refuse with the hint. Fires on
-        # --dry-run too (the preview must show the refusal, not fake a routing).
-        if (args.layer == "core" and project_q is None and not args.queue
-                and not args.force_report and authority.is_author()):
-            print(
-                "error: author machine: propose the fix directly (fix-first); "
-                "backlog -> --channel github --stream backlog "
-                "(or name a queue explicitly with --queue)",
-                file=sys.stderr,
-            )
-            return 2
-        submit_kwargs: dict = {"queue": resolved_queue}
-        routing_lines = [f"queue: {resolved_queue}"]
-    elif channel_name in ("github", "external"):
+    # Resolve effective routing destination before submit or print. The built-in channels
+    # route by label on one public repo; every other channel is a machine-local plugin
+    # adapter (ADR-0001 B1) that routes by queue and names its own queues.
+    if channel_name in BUILTIN_NAMES:
         if args.queue:
             project_q = None
         else:
             project_q = resolve_project_queue(Path(args.target).resolve())
-        # Subject-awareness guard (mirrors the startrek branch's project_q resolution):
-        # project queues are Startrek-only and the github Core repo is public, so a
-        # project-scoped difficulty has no honest destination on this channel — refuse
-        # rather than silently dumping it into the public Core repo. Fires on --dry-run
-        # too (the preview must show the refusal, not fake a routing). --queue is the
-        # explicit override that lifts the refusal (subject already user-decided).
+        # Subject-awareness guard (mirrors the queue branch's project_q resolution):
+        # project queues exist only on a queue-routed channel and the built-in Core repo
+        # is public, so a project-scoped difficulty has no honest destination here —
+        # refuse rather than silently dumping it into the public Core repo. Fires on
+        # --dry-run too (the preview must show the refusal, not fake a routing). --queue
+        # is the explicit override that lifts the refusal (subject already user-decided).
         if project_q is not None:
             print(
                 "error: this is a project-scoped difficulty (target resolves to project "
@@ -150,11 +122,46 @@ def main(argv: list[str] | None = None, _ts: str | None = None) -> int:
             )
             return 2
         resolved_label = _GH_BACKLOG_LABEL if args.stream == "backlog" else _GH_DIFFICULTY_LABEL
-        submit_kwargs = {"stream": args.stream}
+        submit_kwargs: dict = {"stream": args.stream}
         routing_lines = [f"label: {resolved_label}"]
     else:
-        submit_kwargs = {}
-        routing_lines = []
+        try:
+            adapter = load_adapter(channel_name)
+        except FileNotFoundError as exc:
+            if not dc.is_registered(channel_name):
+                print(f"error: {exc}", file=sys.stderr)
+                return 1
+            # A channel registered in-process (a test double, an embedded channel) has no
+            # plugin file and names no queues: submit with no routing hints.
+            adapter = None
+        if adapter is None:
+            submit_kwargs = {}
+            routing_lines = []
+        else:
+            if args.queue:
+                resolved_queue = args.queue
+                project_q = None
+            else:
+                project_q = resolve_project_queue(Path(args.target).resolve())
+                resolved_queue = project_q or (
+                    adapter.BACKLOG_QUEUE if args.stream == "backlog" else adapter.QUEUE
+                )
+            # Fix-first guard (policy.md § Author machine: fix-first, backlog-second):
+            # a core-tier filing (no explicit --queue, no project-queue resolution)
+            # headed for the channel's org-wide queues from a machine that can edit
+            # Core directly is a deferral-by-default — refuse with the hint. Fires on
+            # --dry-run too (the preview must show the refusal, not fake a routing).
+            if (args.layer == "core" and project_q is None and not args.queue
+                    and not args.force_report and authority.is_author()):
+                print(
+                    "error: author machine: propose the fix directly (fix-first); "
+                    "backlog -> --channel github --stream backlog "
+                    "(or name a queue explicitly with --queue)",
+                    file=sys.stderr,
+                )
+                return 2
+            submit_kwargs = {"queue": resolved_queue}
+            routing_lines = [f"queue: {resolved_queue}"]
 
     if args.dry_run:
         _print_record(record)

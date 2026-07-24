@@ -2,7 +2,7 @@
 field on the quality ledger row.
 
 Covers: classify storing a fully-qualified github ref into state.tracker_key
-(the Startrek-shaped-key branch is already covered by test_tracker_plugin.py);
+(the issue-key-shaped branch is already covered by test_tracker_plugin.py);
 resolve threading that key into both the quality row and solved_marker.stamp,
 fail-open when stamp raises, and the no-key case stamping nothing.
 """
@@ -80,21 +80,21 @@ def test_classify_ignores_bare_number(store):
 
 # --- resolve: tracker_key threads into the quality row + the stamp ------------
 
-def test_resolve_with_startrek_key_writes_row_and_invokes_stamp(store, monkeypatch, fixtures_dir, tmp_path):
+def test_resolve_with_an_issue_key_writes_row_and_invokes_stamp(store, monkeypatch, fixtures_dir, tmp_path):
     calls = []
     monkeypatch.setattr(solved_marker, "stamp", lambda key, **kw: calls.append(key) or
-                         {"channel": "startrek", "key": key, "stamped": True})
+                         {"channel": "orgchan", "key": key, "stamped": True})
     plan = str(fixtures_dir / "plan_two_stage.toml")
 
-    d = _drive_to_resolved(store, "res-startrek", plan, tracker_key="DEEPAGENT-1")
+    d = _drive_to_resolved(store, "res-issue-key", plan, tracker_key="PROJ-1")
 
     assert d.ok is True
     assert d.marker == "COMPLETED"
-    assert calls == ["DEEPAGENT-1"]
+    assert calls == ["PROJ-1"]
     assert d.data["solved_marker"]["stamped"] is True
-    assert d.data["quality"]["tracker_key"] == "DEEPAGENT-1"
+    assert d.data["quality"]["tracker_key"] == "PROJ-1"
     rows = _read_quality_rows(cli.TASK_QUALITY_LOG)
-    assert rows[-1]["tracker_key"] == "DEEPAGENT-1"
+    assert rows[-1]["tracker_key"] == "PROJ-1"
 
 
 def test_resolve_with_github_ref_invokes_stamp_with_that_ref(store, monkeypatch, fixtures_dir):
@@ -117,14 +117,14 @@ def test_resolve_stamp_raising_still_completes_and_still_wrote_row(store, monkey
     monkeypatch.setattr(solved_marker, "stamp", _raise)
     plan = str(fixtures_dir / "plan_two_stage.toml")
 
-    d = _drive_to_resolved(store, "res-raise", plan, tracker_key="DEEPAGENT-2")
+    d = _drive_to_resolved(store, "res-raise", plan, tracker_key="PROJ-2")
 
     assert d.ok is True
     assert d.node == Node.RESOLVED.value
     assert d.marker == "COMPLETED"
     assert d.data["solved_marker"]["stamped"] is False
     rows = _read_quality_rows(cli.TASK_QUALITY_LOG)
-    assert rows[-1]["tracker_key"] == "DEEPAGENT-2"
+    assert rows[-1]["tracker_key"] == "PROJ-2"
     assert rows[-1]["quality"] == 5
 
 

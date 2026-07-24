@@ -4,7 +4,8 @@
 Mirrors the channel model of core-difficulty-digest.py: each opted-in
 installation computes a COMPACT anonymized aggregate over its own local ledgers
 and posts it as one comment on a single per-channel tracking sink (a private
-GitHub issue / a Startrek ticket). A separate aggregator (`pull`, stage 7)
+GitHub issue, or whatever ticket the channel's adapter names). A separate
+aggregator (`pull`, stage 7)
 reads those comments from every channel and sums them into one rollup.
 
 Design invariants (load-bearing, tested):
@@ -55,15 +56,15 @@ from difficulty_channel import detect  # noqa: E402
 from difficulty_channel.adapters import github, load_adapter  # noqa: E402
 from lib.config_root import identity_file  # noqa: E402
 
-# Per-channel tracking sinks. A fork/operator overrides them via the agent-identity.local
-# keys `usage_sink_github` / `usage_sink_startrek`. The GitHub sink MUST be a PRIVATE repo
-# issue to honor the "closed" requirement; an empty default fail-open-skips until configured.
-# The Startrek sink is provisioned (OOSEVEN-16, do-not-close aggregate ticket). The GitHub
-# sink is left empty by default: the account's fine-grained PAT cannot create a repo, so the
-# private repo is provisioned manually when a non-Yandex installation opts into telemetry
-# (default OFF), then wired via `usage_sink_github` — nothing emits there until then.
+# Per-channel tracking sinks. Every channel resolves its sink from the agent-identity.local
+# key `usage_sink_<channel>`, so an org channel wires its own sink on the machine that uses it
+# and Core carries no sink identifier of anyone's. The github sink MUST be a PRIVATE repo issue
+# to honor the "closed" requirement; the built-in default below is empty because the account's
+# fine-grained PAT cannot create a repo — the private repo is provisioned manually when an
+# installation opts into telemetry (default OFF), then wired via `usage_sink_github`. An
+# unconfigured sink fail-open-skips: nothing emits there until then.
 USAGE_SINK_GITHUB = ""
-USAGE_SINK_STARTREK = "OOSEVEN-16"
+SINK_IDENTITY_PREFIX = "usage_sink_"
 
 # The ONLY fields allowed to leave the machine — counts + an anonymized id. The guard below
 # refuses to post a payload carrying anything else (a task id / key / path would be a leak).
@@ -214,6 +215,13 @@ def format_comment(payload: dict) -> str:
 
 # --- emit ---------------------------------------------------------------------
 
+def resolve_sink(channel: str, identity: dict, override: str | None = None) -> str:
+    """This machine's tracking sink for `channel`: explicit override, else the identity key
+    `usage_sink_<channel>`, else the built-in default (github only; empty = unconfigured)."""
+    default = USAGE_SINK_GITHUB if channel == "github" else ""
+    return override or identity.get(f"{SINK_IDENTITY_PREFIX}{channel}") or default
+
+
 def emit(
     *,
     identity: dict,
@@ -223,10 +231,9 @@ def emit(
     task_rows: list[dict],
     policy_rows: list[dict],
     spawn_rows: list[dict],
-    sink_github: str | None = None,
-    sink_startrek: str | None = None,
+    sink: str | None = None,
     github_add_comment=None,
-    startrek_add_comment=None,
+    plugin_add_comment=None,
     http=None,
     log=None,
 ) -> dict:
@@ -243,21 +250,16 @@ def emit(
         )
         assert_counts_only(payload)
         body = format_comment(payload)
+        sink = resolve_sink(channel, identity, sink)
+        if not sink:
+            log(f"usage-digest: no {channel} sink configured; skipped")
+            return {"emitted": False, "reason": "no-sink"}
         if channel == "github":
-            sink = sink_github or identity.get("usage_sink_github") or USAGE_SINK_GITHUB
-            if not sink:
-                log("usage-digest: no github sink configured; skipped")
-                return {"emitted": False, "reason": "no-sink"}
             (github_add_comment or github.add_comment)(sink, body, http=http)
-        elif channel == "startrek":
-            sink = sink_startrek or identity.get("usage_sink_startrek") or USAGE_SINK_STARTREK
-            if not sink:
-                log("usage-digest: no startrek sink configured; skipped")
-                return {"emitted": False, "reason": "no-sink"}
-            (startrek_add_comment or load_adapter("startrek").add_comment)(sink, body, http=http)
         else:
-            log(f"usage-digest: unknown channel {channel!r}; skipped")
-            return {"emitted": False, "reason": "unknown-channel"}
+            # Any other channel is a machine-local plugin adapter (ADR-0001 B1); an
+            # unresolvable name raises and is caught below as a fail-open skip.
+            (plugin_add_comment or load_adapter(channel).add_comment)(sink, body, http=http)
     except Exception as exc:  # noqa: BLE001 - fail-open by design; telemetry never blocks
         log(f"usage-digest: emit failed ({exc}); skipped")
         return {"emitted": False, "reason": f"error:{exc}"}
@@ -266,14 +268,7 @@ def emit(
 
 
 def _detect_channel() -> str:
-    import shutil
-    import os
-    return detect.detect_channel(
-        hostname=socket.getfqdn,
-        has_command=lambda cmd: shutil.which(cmd) is not None,
-        path_exists=detect._real_path_exists,
-        getenv=os.environ.get,
-    ).channel
+    return detect.detect_this_machine().channel
 
 
 def cmd_emit(args) -> int:
@@ -306,8 +301,14 @@ def cmd_emit(args) -> int:
 # (ignoring human chatter), dedup re-emitted periods, and sum the DISJOINT
 # (installation, period) rows into one per-channel rollup. Writes nothing.
 
-# Channel -> human-readable segment. github is the non-Yandex sink, startrek the Yandex one.
-CHANNEL_SEGMENT = {"github": "non-yandex", "startrek": "yandex"}
+# Channel -> fleet segment. The public built-in is one segment; every org channel segments
+# under its own name, so a rollup separates public from org installations without Core
+# knowing any org's name.
+PUBLIC_SEGMENT = "public"
+
+
+def channel_segment(channel: str | None) -> str:
+    return PUBLIC_SEGMENT if channel == "github" else (channel or "unknown")
 
 
 def extract_aggregate(comment_text: str) -> dict | None:
@@ -388,7 +389,7 @@ def rollup(aggregates: list[dict]) -> dict:
     by_segment: dict[str, dict] = {}
     total = _empty_segment()
     for agg in rows:
-        segment = CHANNEL_SEGMENT.get(agg.get("channel"), agg.get("channel") or "unknown")
+        segment = channel_segment(agg.get("channel"))
         _accumulate(by_segment.setdefault(segment, _empty_segment()), agg)
         _accumulate(total, agg)
 
@@ -399,16 +400,18 @@ def rollup(aggregates: list[dict]) -> dict:
     }
 
 
-def _sink_comment_texts(channel, sink, *, github_list_comments, startrek_list_comments, http, log):
+def _sink_comment_texts(channel, sink, *, github_list_comments, plugin_list_comments, http, log):
     """List one sink's comments and return their text bodies; fail-soft to [] on an
-    unreachable sink (a down channel degrades to the other channel's rollup, never a crash)."""
+    unreachable sink (a down channel degrades to the other channels' rollup, never a crash).
+
+    Trackers disagree on the comment-text field name, so both spellings are accepted rather
+    than Core knowing each adapter's shape."""
     try:
         if channel == "github":
             comments = (github_list_comments or github.list_comments)(sink, http=http)
-            return [c.get("body", "") for c in comments]
-        if channel == "startrek":
-            comments = (startrek_list_comments or load_adapter("startrek").list_comments)(sink, http=http)
-            return [c.get("text", "") for c in comments]
+        else:
+            comments = (plugin_list_comments or load_adapter(channel).list_comments)(sink, http=http)
+        return [c.get("body") or c.get("text") or "" for c in comments]
     except Exception as exc:  # noqa: BLE001 - read-only, fail-soft on an unreachable sink
         log(f"usage-digest: pull from {channel} sink failed ({exc}); skipped")
     return []
@@ -418,7 +421,7 @@ def pull(
     *,
     sinks: dict,
     github_list_comments=None,
-    startrek_list_comments=None,
+    plugin_list_comments=None,
     http=None,
     log=None,
 ) -> dict:
@@ -432,7 +435,7 @@ def pull(
         for text in _sink_comment_texts(
             channel, sink,
             github_list_comments=github_list_comments,
-            startrek_list_comments=startrek_list_comments,
+            plugin_list_comments=plugin_list_comments,
             http=http, log=log,
         ):
             agg = extract_aggregate(text)
@@ -444,10 +447,17 @@ def pull(
 
 
 def _resolve_sinks(args, identity: dict) -> dict:
-    return {
-        "github": getattr(args, "sink_github", None) or identity.get("usage_sink_github") or USAGE_SINK_GITHUB,
-        "startrek": getattr(args, "sink_startrek", None) or identity.get("usage_sink_startrek") or USAGE_SINK_STARTREK,
-    }
+    """channel -> sink id for every channel this machine knows a sink for: the github
+    built-in, every `usage_sink_<channel>` identity key, then `--sink <channel>=<ref>`."""
+    sinks = {"github": USAGE_SINK_GITHUB}
+    for key, value in identity.items():
+        if key.startswith(SINK_IDENTITY_PREFIX) and value:
+            sinks[key[len(SINK_IDENTITY_PREFIX):]] = value
+    for spec in getattr(args, "sink", None) or []:
+        channel, _, ref = spec.partition("=")
+        if channel.strip():
+            sinks[channel.strip()] = ref.strip()
+    return sinks
 
 
 def format_rollup_markdown(result: dict) -> str:
@@ -495,8 +505,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     e.add_argument("--spawn-log", type=Path, default=agent_stats.SPAWN_COST_LOG)
     pl = sub.add_parser("pull", help="read every channel sink and print the summed cross-installation rollup")
     pl.add_argument("--identity", type=Path, default=None, help="agent-identity.local path override")
-    pl.add_argument("--sink-github", default=None, help="override the github tracking-sink issue ref")
-    pl.add_argument("--sink-startrek", default=None, help="override the startrek tracking-sink issue key")
+    pl.add_argument("--sink", action="append", default=None, metavar="CHANNEL=REF",
+                    help="override one channel's tracking sink (repeatable)")
     pl.add_argument("--json", action="store_true", help="emit a JSON dict instead of markdown")
     return p
 
