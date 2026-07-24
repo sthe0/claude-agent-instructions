@@ -39,10 +39,31 @@ MARKER_RE = re.compile(rf"^({'|'.join(RETURN_MARKERS)}):")
 
 
 def parse_marker(stdout: str) -> tuple[str | None, str]:
-    """Scan a spawn's stdout for the first recognised return marker, tolerating a
-    preamble (e.g. a summary the specialist printed before the marker line).
-    Return the marker and the body after its colon. A `MALFORMED:` wrapper line
-    maps to marker "MALFORMED"; if no line carries a marker, map to (None, "")."""
+    """Read a spawn's stdout for its return marker.
+
+    ONE ordered scan of the non-blank lines: the first line carrying either a
+    known ``^MARKER:`` or a ``MALFORMED:`` prefix wins, and both tests share the
+    single loop body so the winner is the first in DOCUMENT order. Keeping them
+    in one pass is load-bearing — two sequential passes (all lines for a marker,
+    then all lines for MALFORMED) would let a stray ``COMPLETED:`` line inside a
+    MALFORMED envelope's preserved original out-rank the envelope itself, a
+    fail-open mis-route.
+
+    ``lib.planner_plan_check.check_planner_return`` — which ``spawn-specialist.py``
+    already ran on this text before it reached our stdout — canonicalises a
+    passing result onto its FIRST non-blank line (``lib.planner_plan_check.canonicalize``)
+    whenever the second-pass extractor ran; that pass alone can recover a marker
+    under markdown emphasis, e.g. ``**COMPLETED:**``, that this regex would miss.
+    So for canonical input the ordered scan returns the canonical marker on its
+    first iteration, with no special first-line branch needed, and the same scan
+    still tolerates a preamble in legacy / kill-switch output.
+
+    Return the marker and the body after its colon. The canonical marker line is
+    BARE, so that body is ``""`` for every canonicalised marker — the digest
+    lives on its own ``Digest:`` line, deliberately off the line this parse
+    feeds to ``cmd_dispatch``'s deterministic consumers (the permission gate
+    among them). A ``MALFORMED:`` line maps to marker "MALFORMED"; if no line
+    carries a marker, map to (None, "")."""
     for line in (stdout or "").splitlines():
         line = line.strip()
         if not line:

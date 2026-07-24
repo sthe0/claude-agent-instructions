@@ -18,7 +18,9 @@ You execute the step. You do **not** unilaterally spawn other specialists — on
 
 ## Return markers
 
-Return one of these markers as a line of its own in your final output (first line is best; a short summary before it is tolerated). Each SKILL.md names which subset applies to that role and gives the role-specific meaning; the generic meaning and the two structured formats are here.
+End your output with the marker that names your outcome, written however reads naturally. A dedicated extraction pass identifies which marker labels your message, so markdown emphasis (`**COMPLETED:**`), a code span, and a summary before the marker are all fine — formatting does not change a marker's identity. Each SKILL.md names which subset applies to that role and gives the role-specific meaning; the generic meaning and the two structured formats are here.
+
+Two things do still matter. Do not present a marker you do not mean — the pass reads your message's declared disposition, and a marker written casually is read as your real verdict. And if you discuss markers in prose (weighing whether to `REPLAN:`, quoting this contract), make the marker you actually return unambiguous — a message that signals two markers with no clear terminal one is treated as markerless.
 
 - `COMPLETED:` — the step is done; include a summary, artifact paths (PR link, branch, files changed, test output), and any local plan revisions you applied.
 - `PLAN-READY:` — (planner) the plan is ready and the manager **must** obtain explicit user approval before spawning the next specialist. The planner's SKILL.md carries the enforced `Plan:` / `Summary:` format.

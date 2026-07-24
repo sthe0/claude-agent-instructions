@@ -35,6 +35,7 @@ import time
 from pathlib import Path
 
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
+from lib import marker_extract  # unconditional second-pass marker extraction (model is the primary classifier)
 from lib.config_root import skills_dir  # config-root resolver (isolated system root)
 from lib.planner_plan_check import (  # single shared home for return-marker + plan checks
     MARKER_RE,
@@ -503,6 +504,14 @@ def resolve_permission_mode(args: argparse.Namespace) -> str | None:
     return None
 
 
+def _build_extraction(result_text: str, kind: str) -> "marker_extract.Extraction | None":
+    """The call site's guard, factored out so a test can drive it directly
+    without invoking main()'s subprocess plumbing. The shared implementation
+    (``marker_extract.build_extraction``) runs the pass unconditionally
+    whenever it can, not only after the legacy any-line regex scan failed."""
+    return marker_extract.build_extraction(result_text, kind=kind)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
@@ -663,7 +672,10 @@ def main(argv: list[str] | None = None) -> int:
         result_text = payload.get("result") or payload.get("output") or completed.stdout
         cost_usd = payload.get("cost_usd") or payload.get("total_cost_usd")
 
-    forwarded, ok, parsed_marker = check_planner_return(result_text, args.kind)
+    extraction = _build_extraction(result_text, args.kind)
+    forwarded, ok, parsed_marker = check_planner_return(
+        result_text, args.kind, extraction=extraction
+    )
     sys.stdout.write(forwarded)
     if not forwarded.endswith("\n"):
         sys.stdout.write("\n")
@@ -682,6 +694,10 @@ def main(argv: list[str] | None = None) -> int:
         "malformed": not ok,
         "stage_index": args.stage_index,
         "plan_path": str(args.plan),
+        "extractor_invoked": extraction is not None,
+        "extractor_model": marker_extract.model() if extraction is not None else None,
+        "extractor_degraded": extraction.degraded if extraction is not None else None,
+        "extraction_reason": extraction.reason if extraction is not None else None,
         **_spawn_tags(),
     })
 

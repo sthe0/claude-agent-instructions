@@ -30,6 +30,7 @@ import time
 from pathlib import Path
 
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
+from lib import marker_extract  # unconditional second-pass marker extraction (model is the primary classifier)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_MD = REPO_ROOT / "config.md"
@@ -208,6 +209,17 @@ def build_agent_cmd(
     return cmd
 
 
+def _build_extraction(result_text: str) -> "marker_extract.Extraction | None":
+    """The call site's guard, factored out so a test can drive it directly
+    without invoking main()'s subprocess plumbing. The shared implementation
+    (``marker_extract.build_extraction``) runs the pass unconditionally
+    whenever it can, not only after the legacy first-non-blank-line scan
+    (``validate_marker``) failed. Passes this wrapper's own local
+    ``RETURN_MARKERS`` vocabulary rather than going through
+    ``lib.planner_plan_check.check_planner_return``."""
+    return marker_extract.build_extraction(result_text, allowed=RETURN_MARKERS)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
@@ -313,7 +325,26 @@ def main(argv: list[str] | None = None) -> int:
     if not result_text.strip() and completed.stderr.strip():
         result_text = completed.stderr
 
-    forwarded, ok = validate_marker(result_text)
+    extraction = _build_extraction(result_text)
+
+    if extraction is not None and not extraction.degraded:
+        from lib.planner_plan_check import canonicalize  # local import: keep this file's own footprint minimal
+
+        if extraction.marker is not None:
+            forwarded = canonicalize(extraction.marker, extraction.digest, None, result_text)
+            ok = True
+        else:
+            forwarded = (
+                "MALFORMED: escape output did not carry a known marker "
+                f"({', '.join(RETURN_MARKERS)}) per second-pass extraction: "
+                f"{extraction.reason or 'no marker found'}. Set "
+                "AGENTCTL_MARKER_EXTRACTOR=0 to fall back to the legacy "
+                f"line-start marker scan.\n\n{result_text}"
+            )
+            ok = False
+    else:
+        forwarded, ok = validate_marker(result_text)
+
     parsed_marker: str | None = None
     if ok:
         first = forwarded.splitlines()[0].strip()
@@ -334,6 +365,10 @@ def main(argv: list[str] | None = None) -> int:
         "return_marker": parsed_marker,
         "exit_code": completed.returncode,
         "malformed": not ok,
+        "extractor_invoked": extraction is not None,
+        "extractor_model": marker_extract.model() if extraction is not None else None,
+        "extractor_degraded": extraction.degraded if extraction is not None else None,
+        "extraction_reason": extraction.reason if extraction is not None else None,
     })
 
     summary_bits = [

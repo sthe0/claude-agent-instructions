@@ -31,6 +31,7 @@ import time
 from pathlib import Path
 
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
+from lib import marker_extract  # unconditional second-pass marker extraction (model is the primary classifier)
 from lib.config_root import skills_dir  # config-root resolver (isolated system root)
 from lib.planner_plan_check import (  # single shared home for return-marker + plan checks
     MARKER_RE,
@@ -284,6 +285,14 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _build_extraction(result_text: str, kind: str) -> "marker_extract.Extraction | None":
+    """The call site's guard, factored out so a test can drive it directly
+    without invoking main()'s subprocess plumbing. The shared implementation
+    (``marker_extract.build_extraction``) runs the pass unconditionally
+    whenever it can, not only after the legacy any-line regex scan failed."""
+    return marker_extract.build_extraction(result_text, kind=kind)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
@@ -402,7 +411,10 @@ def main(argv: list[str] | None = None) -> int:
     if not result_text.strip() and completed.stderr.strip():
         result_text = completed.stderr
 
-    forwarded, ok, parsed_marker = check_planner_return(result_text, args.kind)
+    extraction = _build_extraction(result_text, args.kind)
+    forwarded, ok, parsed_marker = check_planner_return(
+        result_text, args.kind, extraction=extraction
+    )
 
     sys.stdout.write(forwarded)
     if not forwarded.endswith("\n"):
@@ -421,6 +433,10 @@ def main(argv: list[str] | None = None) -> int:
         "return_marker": parsed_marker,
         "exit_code": completed.returncode,
         "malformed": not ok,
+        "extractor_invoked": extraction is not None,
+        "extractor_model": marker_extract.model() if extraction is not None else None,
+        "extractor_degraded": extraction.degraded if extraction is not None else None,
+        "extraction_reason": extraction.reason if extraction is not None else None,
     })
 
     summary_bits = [
