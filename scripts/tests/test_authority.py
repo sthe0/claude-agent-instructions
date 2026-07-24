@@ -65,6 +65,22 @@ def test_channel_defaults_to_github_when_file_absent(tmp_path):
     assert authority.read_configured_channel(path=missing) == "github"
 
 
+def test_channel_defaults_to_github_when_identity_path_is_a_directory(tmp_path):
+    """Channel resolution is fail-open for every caller (solved_marker.stamp reads it outside
+    its own try), so an unreadable identity path must degrade to the default, not raise."""
+    as_dir = tmp_path / "agent-identity.local"
+    as_dir.mkdir()
+    assert authority.read_configured_channel(path=as_dir) == "github"
+
+
+def test_channel_defaults_to_github_when_identity_file_is_not_utf8(tmp_path):
+    """The other way a read fails: bytes that are not UTF-8 raise UnicodeDecodeError, which is
+    not an OSError — so the fail-open catch must name it too."""
+    corrupt = tmp_path / "agent-identity.local"
+    corrupt.write_bytes(b"difficulty_channel=\xff\xfe\n")
+    assert authority.read_configured_channel(path=corrupt) == "github"
+
+
 def test_local_identity_ignores_comments(tmp_path):
     identity = tmp_path / "agent-identity.local"
     identity.write_text(

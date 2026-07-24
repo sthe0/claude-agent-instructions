@@ -79,7 +79,10 @@ def read_local_identity(path: Path = LOCAL_IDENTITY_PATH) -> dict[str, str]:
             if "=" in line:
                 k, _, v = line.partition("=")
                 result[k.strip()] = v.strip()
-    except FileNotFoundError:
+    # Any unreadable identity file — absent, a directory, no permission, not UTF-8 — means
+    # "unconfigured": callers treat channel resolution as fail-open (solved_marker.stamp reads
+    # it outside its own try), so a read error must not become a raise.
+    except (OSError, UnicodeDecodeError):
         pass
     return result
 

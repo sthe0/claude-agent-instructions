@@ -53,12 +53,13 @@ _as_spec.loader.exec_module(agent_stats)
 parse_ts = agent_stats.cost_report.parse_ts
 
 from difficulty_channel import detect  # noqa: E402
-from difficulty_channel.adapters import github, load_adapter  # noqa: E402
+from difficulty_channel.adapters import BUILTIN_NAMES, github, load_adapter  # noqa: E402
 from lib.config_root import identity_file  # noqa: E402
 
 # Per-channel tracking sinks. Every channel resolves its sink from the agent-identity.local
 # key `usage_sink_<channel>`, so an org channel wires its own sink on the machine that uses it
-# and Core carries no sink identifier of anyone's. The github sink MUST be a PRIVATE repo issue
+# and Core carries no sink identifier of anyone's. The built-in channels all speak the same
+# public GitHub surface, so they share this one default. That sink MUST be a PRIVATE repo issue
 # to honor the "closed" requirement; the built-in default below is empty because the account's
 # fine-grained PAT cannot create a repo — the private repo is provisioned manually when an
 # installation opts into telemetry (default OFF), then wired via `usage_sink_github`. An
@@ -217,8 +218,8 @@ def format_comment(payload: dict) -> str:
 
 def resolve_sink(channel: str, identity: dict, override: str | None = None) -> str:
     """This machine's tracking sink for `channel`: explicit override, else the identity key
-    `usage_sink_<channel>`, else the built-in default (github only; empty = unconfigured)."""
-    default = USAGE_SINK_GITHUB if channel == "github" else ""
+    `usage_sink_<channel>`, else the built-in default (built-ins only; empty = unconfigured)."""
+    default = USAGE_SINK_GITHUB if channel in BUILTIN_NAMES else ""
     return override or identity.get(f"{SINK_IDENTITY_PREFIX}{channel}") or default
 
 
@@ -254,10 +255,10 @@ def emit(
         if not sink:
             log(f"usage-digest: no {channel} sink configured; skipped")
             return {"emitted": False, "reason": "no-sink"}
-        if channel == "github":
+        if channel in BUILTIN_NAMES:
             (github_add_comment or github.add_comment)(sink, body, http=http)
         else:
-            # Any other channel is a machine-local plugin adapter (ADR-0001 B1); an
+            # Any non-built-in channel is a machine-local plugin adapter (ADR-0001 B1); an
             # unresolvable name raises and is caught below as a fail-open skip.
             (plugin_add_comment or load_adapter(channel).add_comment)(sink, body, http=http)
     except Exception as exc:  # noqa: BLE001 - fail-open by design; telemetry never blocks
@@ -301,14 +302,14 @@ def cmd_emit(args) -> int:
 # (ignoring human chatter), dedup re-emitted periods, and sum the DISJOINT
 # (installation, period) rows into one per-channel rollup. Writes nothing.
 
-# Channel -> fleet segment. The public built-in is one segment; every org channel segments
-# under its own name, so a rollup separates public from org installations without Core
+# Channel -> fleet segment. The built-ins all fold into one public segment; every org channel
+# segments under its own name, so a rollup separates public from org installations without Core
 # knowing any org's name.
 PUBLIC_SEGMENT = "public"
 
 
 def channel_segment(channel: str | None) -> str:
-    return PUBLIC_SEGMENT if channel == "github" else (channel or "unknown")
+    return PUBLIC_SEGMENT if channel in BUILTIN_NAMES else (channel or "unknown")
 
 
 def extract_aggregate(comment_text: str) -> dict | None:
@@ -404,10 +405,11 @@ def _sink_comment_texts(channel, sink, *, github_list_comments, plugin_list_comm
     """List one sink's comments and return their text bodies; fail-soft to [] on an
     unreachable sink (a down channel degrades to the other channels' rollup, never a crash).
 
-    Trackers disagree on the comment-text field name, so both spellings are accepted rather
-    than Core knowing each adapter's shape."""
+    `body` is the adapter contract's comment-text key (see `load_adapter`'s contract block);
+    `text` is accepted as a tolerance because that is the native spelling on some trackers and
+    an adapter that passes its rows through untranslated would otherwise read as all-chatter."""
     try:
-        if channel == "github":
+        if channel in BUILTIN_NAMES:
             comments = (github_list_comments or github.list_comments)(sink, http=http)
         else:
             comments = (plugin_list_comments or load_adapter(channel).list_comments)(sink, http=http)
