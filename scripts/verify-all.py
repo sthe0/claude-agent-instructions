@@ -33,6 +33,7 @@ CHECKS: list[str] = [
     "verify-no-conflict-markers",
     "verify-config-root-refs",
     "rule-salience-report",
+    "verify-terms",
 ]
 
 # Checks whose main() takes its own flags instead of the shared --staged.

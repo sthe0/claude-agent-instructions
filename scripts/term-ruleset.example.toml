@@ -1,0 +1,51 @@
+# Example term ruleset for the C1 org-neutrality mechanism (scripts/lib/term_ruleset.py).
+#
+# Core ships ZERO real org-internal terms — this file is documentation only,
+# using synthetic names throughout, and is never discovered at runtime (it
+# does not live in a Personal/Team term-rulesets/ directory).
+#
+# To use: copy this file (or start fresh) into one of the discovery
+# locations, with real org-internal terms:
+#   - $CLAUDE_TERM_RULESET_DIR/<any-name>.toml   (explicit override; replaces
+#     discovery entirely — see the module docstring for why)
+#   - <agent-home>/term-rulesets/<any-name>.toml  (Personal)
+#   - <project>/.claude/term-rulesets/<any-name>.toml  (Team/project)
+#
+# A ruleset file must NEVER be tracked inside the repo it guards — loading it
+# from there is refused (self-publication refusal); keep it in a
+# machine-local directory outside any tree scanned by verify-terms.py.
+
+[[deny]]
+# A synthetic internal codename. `\b` guards avoid false-positiving inside
+# unrelated words (e.g. this would NOT match "general").
+pattern = '\bzorblex\b'
+label = "internal-codename"
+note = "internal project codename — never publish"
+
+[[deny]]
+pattern = 'acme-internal-tracker'
+label = "internal-tool"
+note = "internal ticket-tracker hostname fragment"
+
+[[exempt]]
+# "zorblex-public" is a real, publicly-reachable product name that happens
+# to contain the denied word as a substring — safe to publish. The
+# exemption is occurrence-level: it suppresses only a "zorblex" hit whose
+# span is contained in a "zorblex-public" match, not every "zorblex" in the
+# file.
+pattern = 'zorblex-public'
+reason = "publicly-reachable product name; safe to reference in docs"
+
+[[exempt]]
+# Path-scoped: this internal-tool reference is allowed only inside the
+# fixtures directory (a documented example of the denied term, not a leak).
+pattern = 'acme-internal-tracker'
+path = "docs/examples/**"
+reason = "documented example of the denied term itself, not a real leak"
+
+[[grandfather]]
+# Temporary: a known-not-yet-fixed area. Must carry an owner/plan, and this
+# table is expected to shrink to zero over time — verify-terms.py
+# --assert-grandfather-empty proves it has.
+path = "legacy/**"
+reason = "TODO(owner): migrate off the internal tracker name by next quarter"

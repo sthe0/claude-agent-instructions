@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # commit-msg hooks. Order: advisory nudges first (never block), then the
 # Agent-Session/Agent-Task trailer injection (never blocks), then the
-# blocking self-improvement-edit gate (exec, terminates the hook).
+# blocking term-neutrality gate, then the blocking self-improvement-edit
+# gate (exec, terminates the hook).
 set -e
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 # Advisory (warn-only, exit 0): staged code without an accompanying test.
@@ -17,6 +18,18 @@ if [ -n "$TRAILERS" ]; then
       git interpret-trailers --in-place --if-exists doNothing --trailer "$trailer_line" "$1" || true
     fi
   done <<< "$TRAILERS"
+fi
+# Blocking gate: no org-internal term in the commit message itself (C1
+# mechanism — a bad commit message can't be fixed post-landing without a
+# forbidden history rewrite, so this is hard-blocking, unlike the advisory
+# pre-write hook). Silent no-op on a machine with zero rulesets installed.
+# See scripts/check-org-neutral.py + scripts/lib/term_ruleset.py.
+if ! python3 "$REPO_ROOT/scripts/check-org-neutral.py" "$1"; then
+  echo "commit-msg: org-internal term(s) found in the commit message (see" \
+       "above) - rewrite the message WITHOUT quoting the removed term" \
+       "verbatim. Do not bypass with --no-verify; if truly unavoidable," \
+       "record why in the commit body and surface it to the coordinator." >&2
+  exit 1
 fi
 # Blocking gate: self-improvement skill edits. See verify-self-improvement-edit.py.
 exec python3 "$REPO_ROOT/scripts/verify-self-improvement-edit.py" "$1"

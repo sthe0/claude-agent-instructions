@@ -9,46 +9,57 @@ Run every issue/PR/commit body through this check BEFORE posting - checking
 the live artifact after publication re-creates the exposure (watcher e-mails
 are sent at creation time and are irrecoverable).
 
+Core carries no denylist of its own — the actual org-internal terms come
+from a machine-local term ruleset (see ``lib/term_ruleset.py``). With no
+ruleset discovered (a foreign clone with none installed), every input is
+reported clean; this deliberately fails open on missing config while still
+failing closed on any real hit.
+
 Usage:
     check-org-neutral.py <file>     # or '-' for stdin
 Exit 0 = clean; exit 1 = markers found (printed one per line).
 """
-import re
+from __future__ import annotations
+
 import sys
+from pathlib import Path
 
-# Case-insensitive; \b guards where a bare substring would false-positive
-# (e.g. 'gena' inside 'general'). Extend when a new leak class is found.
-MARKERS = [
-    r"\bgena\b",
-    r"\bt-run\b",
-    r"theya",
-    r"auto-solve",
-    r"ccgram",
-    r"telegram",
-    r"startrek",
-    r"yandex",
-    r"junk/the0",
-    r"ooseven",
-    r"arcadia",
-    r"arcanum",
-    r"\bnirvana\b",
-    r"deepagent",
-]
+SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from lib import config_root  # noqa: E402
+from lib import term_ruleset as tr  # noqa: E402
+
+REPO_ROOT = SCRIPTS_DIR.parent
 
 
-def main() -> int:
-    if len(sys.argv) != 2:
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if len(argv) != 1:
         print(__doc__, file=sys.stderr)
         return 2
-    text = sys.stdin.read() if sys.argv[1] == "-" else open(sys.argv[1], encoding="utf-8").read()
-    hits = []
-    for pattern in MARKERS:
-        for m in re.finditer(pattern, text, re.IGNORECASE):
-            line_no = text.count("\n", 0, m.start()) + 1
-            hits.append(f"{pattern}: line {line_no}: ...{text[max(0, m.start() - 30):m.end() + 30]!r}...")
+    text = sys.stdin.read() if argv[0] == "-" else open(argv[0], encoding="utf-8").read()
+
+    try:
+        rulesets = tr.discover_rulesets(
+            agent_home=config_root.agent_home(),
+            project_dir=REPO_ROOT,
+            guarded_repo_root=REPO_ROOT,
+        )
+    except tr.RulesetError as exc:
+        print(f"error loading term ruleset: {exc}", file=sys.stderr)
+        return 2
+
+    if not rulesets:
+        print("clean: no term ruleset installed (0 rulesets discovered)")
+        return 0
+
+    hits = tr.scan(text, rulesets)
     if hits:
         print("ORG-INTERNAL MARKERS FOUND (do not publish):")
-        print("\n".join(hits))
+        for h in hits:
+            print(f"  {h.format()}")
         return 1
     print("clean: no org-internal markers")
     return 0

@@ -106,6 +106,34 @@ The SHA is stable: this branch lands by fast-forward, so `c3bdbc8` keeps its ide
 on `main`. If a future rebase ever invalidates it, search the log for the commit
 subject `strip remaining org-internal DATA from Core scripts` instead.
 
+## Term neutrality: the C1 ruleset mechanism
+
+Core ships a generic, org-agnostic **term-lint** mechanism (`scripts/lib/term_ruleset.py`) that carries **zero org names** — it is a matcher, not a denylist. The denylist itself is data an org supplies locally; Core never bundles one.
+
+**Discovery** (`discover_rulesets`), in order:
+
+1. `$CLAUDE_TERM_RULESET_DIR` — if set, REPLACES the discovery set entirely (does not union with the two directories below; used by tests and single-shot overrides).
+2. Personal dir: `<agent-home>/term-rulesets/` (e.g. `~/.claude-agent/term-rulesets/`).
+3. Team/project dir: `<project>/.claude/term-rulesets/`.
+
+Every `*.toml` file found across the active location(s) is loaded and unioned. A ruleset file tracked *inside* the tree it guards is refused at load time (self-publication refusal, checked via `git ls-files`) — a public repo cannot ship the very denylist that would leak the terms it's trying to hide. See [scripts/term-ruleset.example.toml](../../scripts/term-ruleset.example.toml) for the schema (`[[deny]]`, `[[exempt]]`, `[[grandfather]]` tables) and inline comments explaining each.
+
+- `deny` patterns match content **and** path; hits UNION across all discovered rulesets.
+- `exempt` entries suppress a specific occurrence (span-contained), scoped to the ruleset that declares it.
+- `grandfather` entries suppress every hit (content and path) for a matching path prefix — a baseline for pre-existing occurrences an org isn't ready to fix yet.
+
+**Zero rulesets installed → reported no-op, never a silent pass.** Every gate below prints an explicit line saying no ruleset was found, rather than passing quietly — a machine with no ruleset installed is indistinguishable from "clean" only by reading that line.
+
+**Three gate points**, by reversibility:
+
+| Gate | Script | Strength | Why |
+|---|---|---|---|
+| Pre-write | `scripts/hook-term-neutrality.py` (PreToolUse Edit/Write) | Advisory — never blocks | A mid-edit draft is cheap to fix; blocking here would deny a tool call over a false positive. |
+| Commit message | `githooks/commit-msg` | Hard-blocking | A bad commit message can't be fixed post-landing without a forbidden history rewrite. |
+| Difficulty-record body | `scripts/file-difficulty.py` | Hard-blocking | The record is about to leave this machine for a PUBLIC channel (the report stream). |
+
+`scripts/verify-terms.py` is the whole-tree check (content + path, over `git ls-files`), registered in `verify-all.py`; `--expect-rulesets N` asserts the discovered ruleset count, which is how Core proves its own tree carries zero rulesets.
+
 ## What stays Yandex-flavored (and why it's harmless)
 
 - **`yandex-cloud-expert`** — kept on purpose; `yandex.cloud` is a public service.
