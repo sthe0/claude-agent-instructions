@@ -1,7 +1,7 @@
 """session_scope — reusable session -> filesystem-scope registry.
 
-Difficulty removed: parallel Claude Code sessions share one working tree / arc
-mount with no way to see what another live session is touching, so collisions
+Difficulty removed: parallel Claude Code sessions share one working tree or
+VCS mount with no way to see what another live session is touching, so collisions
 are caught only after the fact (git status forensics, stash surgery). This
 package gives any session a place to record its active scope (cwd, repo root,
 VCS kind, touched paths) so a later online conflict detector (a separate

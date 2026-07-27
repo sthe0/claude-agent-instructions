@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""PreToolUse hook: deny recursive filesystem searches that span ≥2 arc FUSE mounts.
+"""PreToolUse hook: deny recursive filesystem searches that span ≥2 FUSE mounts.
 
-The user's home directory has multiple fuse.arc mountpoints (network-backed arc vfs).
-A recursive search rooted at /home/the0, ~, $HOME, or any ancestor of those mounts
-fans out across all of them and is pathologically slow / hammers the network mount.
+Some machines carry several network-backed FUSE mountpoints under the user's home
+directory (a VCS virtual filesystem, a remote share). A recursive search rooted at
+the home directory, ~, $HOME, or any ancestor of those mounts fans out across all of
+them and is pathologically slow / hammers the network mount. The rule keys off the
+`fuse.*` fstype alone, so it is VCS- and vendor-neutral: any FUSE mount counts.
 This hook intercepts Bash (find/grep -r/rg/fd/ls -R), Grep, and Glob tool calls,
 detects multi-mount fan-out, and DENY-signals any call that would cross ≥2 mounts.
 
@@ -26,7 +28,7 @@ _RECURSIVE_ALWAYS = frozenset(["find", "rg", "fd"])
 _GREP_VARIANTS = frozenset(["grep", "egrep", "fgrep", "zgrep"])
 
 
-def arc_mounts_from_text(text: str) -> list[str]:
+def fuse_mounts_from_text(text: str) -> list[str]:
     mounts = []
     for line in text.splitlines():
         parts = line.split()
@@ -40,12 +42,12 @@ def arc_mounts_from_text(text: str) -> list[str]:
     return mounts
 
 
-def arc_mounts(proc_path: str = "/proc/self/mounts") -> list[str]:
+def fuse_mounts(proc_path: str = "/proc/self/mounts") -> list[str]:
     if not os.path.exists(proc_path):
-        return []  # no /proc (e.g. macOS) -> no arc mounts to guard
+        return []  # no /proc (e.g. macOS) -> no FUSE mounts to guard
     try:
         with open(proc_path, encoding="utf-8", errors="replace") as fh:
-            return arc_mounts_from_text(fh.read())
+            return fuse_mounts_from_text(fh.read())
     except Exception:
         return []
 
@@ -63,10 +65,10 @@ def spans(root: str, mounts: list[str]) -> int:
 
 def _deny_msg(root: str, n: int) -> str:
     return (
-        f"This search is rooted at {root!r}, which spans {n} arc FUSE mounts under /home "
-        f"(network-backed arc vfs — recursive traversal is pathologically slow and hammers "
+        f"This search is rooted at {root!r}, which spans {n} FUSE mounts under /home "
+        f"(network-backed filesystems — recursive traversal is pathologically slow and hammers "
         f"the mount). Re-scope the search root to the specific repository or directory you "
-        f"need (e.g. a path inside one project), not /home/the0 / ~ / $HOME."
+        f"need (e.g. a path inside one project), not the home directory / ~ / $HOME."
     )
 
 
@@ -158,7 +160,7 @@ def main() -> int:
     tool_input = payload.get("tool_input") or {}
     cwd = payload.get("cwd") or os.getcwd()
 
-    reason = decide(tool_name, tool_input, cwd, arc_mounts())
+    reason = decide(tool_name, tool_input, cwd, fuse_mounts())
     if reason:
         print(json.dumps({
             "hookSpecificOutput": {

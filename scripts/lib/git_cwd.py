@@ -1,4 +1,4 @@
-"""Resolve the working directory a `git`/`arc commit` command actually targets.
+"""Resolve the working directory a VCS commit command actually targets.
 
 Difficulty removed: a hook that keys an enforcement/nudge decision off the
 ambient session cwd misfires when the triggering command embeds its own

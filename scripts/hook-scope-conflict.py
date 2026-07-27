@@ -92,7 +92,7 @@ def evaluate(
             "shared tree would clobber that session's uncommitted work. Isolate "
             "this task into its own worktree/mount instead of serializing on the "
             "shared tree: run `scripts/session-isolate.sh <task-name>` (git "
-            "worktree / arc mount), then retry. See "
+            "worktree, or the workspace backend this machine registers), then retry. See "
             "docs/operations/cross-session-scope-isolation.md."
         )
         return "block", reason
@@ -104,7 +104,7 @@ def evaluate(
         "uncommitted work.\n"
         "Per CLAUDE.md § isolate-not-serialize: isolate this task into its own "
         "worktree/mount\n"
-        "  → scripts/session-isolate.sh <task-name>   (git worktree / arc mount)\n"
+        "  → scripts/session-isolate.sh <task-name>   (git worktree, or this machine's backend)\n"
         "then continue. See docs/operations/cross-session-scope-isolation.md."
     )
     return "warn", advisory

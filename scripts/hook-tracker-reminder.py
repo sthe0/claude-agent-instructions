@@ -19,7 +19,7 @@ fixed at session/topic creation (a chat-bridge topic -> session_id -> cwd, or
 `claude-task <TICKET>`); nothing re-evaluates it when a ticket key later
 appears mid-conversation, so a session can keep operating on a ticket
 from the wrong mount (observed: a `main`-mount session continuing
-DEEPAGENT-440 instead of its dedicated mount). The rule part (does cwd's
+PROJ-440 instead of its dedicated mount). The rule part (does cwd's
 mount match the ticket, and does a dedicated mount exist?) is
 deterministically decidable -> mechanized here; the perception part
 (should I actually relocate, given the remaining work?) stays with the
@@ -34,7 +34,7 @@ Scope:
   - When a ticket key is found, compares `cwd` against the task-mount
     root (`CLAUDE_TASK_MOUNT_ROOT`, else `~/task-mounts` if it exists,
     else the check is a complete no-op — keeping Core org-neutral, since
-    the mount layout is a Yandex/arc convention).
+    the task-mount layout is an org convention, not a Core default).
   - Emits a stdout line on match — UserPromptSubmit stdout is appended
     to the model's system context for the upcoming turn.
   - Exit 0 always.
