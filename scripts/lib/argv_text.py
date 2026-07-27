@@ -60,6 +60,26 @@ MAX_ARG_STRLEN = 131072
 _REF_SNIPPET_CHARS = 200
 
 
+def classify_arg_text(value: str) -> tuple[str, str]:
+    """Classify one non-``None`` argv value into the convention's three branches.
+
+    The single discrimination rule ``read_arg_text`` and a FORWARD-side
+    normalizer (an argv value this process hands on to a child rather than
+    reading itself) both apply, so the two can never drift into recognising
+    ``@``/``@@`` differently.
+
+      ``"escaped"`` -> payload is the DE-ESCAPED literal (``"@@x"`` -> ``"@x"``)
+      ``"ref"``     -> payload is the reference's bare path, unresolved
+                       (``"@path"`` -> ``"path"``)
+      ``"inline"``  -> payload is `value` itself, untouched
+    """
+    if value.startswith("@@"):
+        return "escaped", value[1:]
+    if value.startswith("@"):
+        return "ref", value[1:]
+    return "inline", value
+
+
 def read_arg_text(value: str | None) -> str | None:
     """Resolve one argv value per the `@<path>` convention documented above.
 
@@ -68,11 +88,10 @@ def read_arg_text(value: str | None) -> str | None:
     """
     if value is None:
         return None
-    if value.startswith("@@"):
-        return value[1:]
-    if value.startswith("@"):
-        return _read_ref(value[1:])
-    return value
+    kind, payload = classify_arg_text(value)
+    if kind == "ref":
+        return _read_ref(payload)
+    return payload
 
 
 def read_arg_text_list(values: list[str] | None) -> list[str] | None:
