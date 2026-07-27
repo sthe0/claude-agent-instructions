@@ -18,12 +18,12 @@ The messaging-bridge watchdog had been exiting 1 on every 10-min systemd tick (f
 ## Order & criterion
 Read the monitor's own run result BEFORE trusting its silence as 'all clear': systemctl --user show <svc> -p ExecMainStatus -p Result (or the timer's last-run status). Only then does absence-of-alert mean healthy. Shell fix for the class: guard every zero-match-legal grep in a pipe as '{ grep -E ... || true; } | ...' so a healthy zero-match doesn't kill the pipeline under pipefail.
 
-**Acceptance check:** systemctl --user show msg-bridge-watchdog.service -p ExecMainStatus -p Result => Result=success ExecMainStatus=0 (was exit-code 1); bash -n + shellcheck clean; a healthy (zero-match) log no longer aborts the run.
+**Acceptance check:** systemctl --user show <svc> -p ExecMainStatus -p Result => Result=success ExecMainStatus=0 (was exit-code 1); bash -n + shellcheck clean; a healthy (zero-match) log no longer aborts the run.
 
 ## Contexts
 
 ### 2026-07-01 — initial
-- Where it arose: the messaging-bridge watchdog (~/bin/msg-bridge-watchdog.sh) on klg Work VPS; bash 'set -euo pipefail'; grep zero-match in a pipe. Surfaced while adding a poll-loop-liveness check to the same script.
+- Where it arose: the messaging-bridge watchdog script on the work VPS; bash 'set -euo pipefail'; grep zero-match in a pipe. Surfaced while adding a poll-loop-liveness check to the same script.
 - Working plan: Hardened the crashing 'grep|awk' pipelines with '{ grep||true; }'; re-verified shellcheck/bash -n; confirmed the timer service now exits 0. Then added the intended new check on top.
 
 
@@ -37,7 +37,7 @@ Read the monitor's own run result BEFORE trusting its silence as 'all clear': sy
 - Coordination lesson: at `replan` the engine re-armed BOTH a fresh **plan-review** (bound to the new plan hash) and a **critique-coverage** gate (the critique's `invariants_to_preserve` must appear near-verbatim in a stage's invariants). Pitfall hit: I first told the plan-reviewer to check **plan-vs-code match**, but the new script is intentionally **not yet written** (gated behind that very approval) → false "revise" on by-design mismatch. Rule: at replan-time plan-review, judge the **plan design only**; implementation follows approval.
 
 ## Common core & variations
-**Common:** A scheduled job that LOOKS installed (unit enabled, timer active) but whose every run dies before doing anything, visible only in an exit status nothing watches. Here the script's fail-safe guard (empty live-set -> abort, so it can never over-delete) fired on every run because 'msg-bridge status' produced empty output: systemd --user starts services with a minimal PATH that excludes ~/.local/bin where the uv-installed messaging-bridge binary lives. The guard did its job (no damage), but the auto-clean would have silently never worked.
+**Common:** A scheduled job that LOOKS installed (unit enabled, timer active) but whose every run dies before doing anything, visible only in an exit status nothing watches. Here the script's fail-safe guard (empty live-set -> abort, so it can never over-delete) fired on every run because the bridge CLI's status output was empty: systemd --user starts services with a minimal PATH that excludes ~/.local/bin where the uv-installed messaging-bridge binary lives. The guard did its job (no damage), but the auto-clean would have silently never worked.
 
 **Variations:** Detection that saved it: the plan required a MANUAL 'systemctl --user start <svc>' verify step, not just enable+timer — the manual run surfaced ExitStatus=1 + the 'ABORT: empty live set' log line immediately, instead of discovering months later that topics never auto-pruned. Fix: export PATH=HOME/.local/bin:HOME/bin:/usr/bin:/bin at the top of any script a systemd --user unit runs. Reusable rule: never trust enable+timer as proof a --user job works; trigger it once by hand and read its exit status + log. Twin lesson from the same task: Telegram Bot API has no list-forum-topics method, and the VPS egress to api.telegram.org is IPv6-only and flaky (~20% empty responses); a complete deleteForumTopic range sweep therefore needs bounded parallelism + empty-response retry, else ~20% of ids are silently unverified.
 
