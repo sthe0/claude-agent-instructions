@@ -1,6 +1,6 @@
 ---
 name: overcome-difficulty
-description: TRIGGER when the actual result of the plan or one of its stages diverges from the expected result — verification failed, blocker, repeated error, surprising output, plan mismatch, two or more process corrections in a row, long shell loops without progress, same root-cause narrative repeated without new evidence, or the first failure in an external orchestrated job (Nirvana WI, CI launch, Reactor) before chaotic retries. Work through declaration → investigation → critique to localize the moment of divergence and derive a concrete replanning task that the root coordinator then applies to fix the plan. SKIP when work is progressing as expected, or a one-off retry will obviously succeed without further analysis.
+description: TRIGGER when the actual result of the plan or one of its stages diverges from the expected result — verification failed, blocker, repeated error, surprising output, plan mismatch, two or more process corrections in a row, long shell loops without progress, same root-cause narrative repeated without new evidence, or the first failure in an external orchestrated job (an orchestrator work item, a CI launch, a scheduler run) before chaotic retries. Work through declaration → investigation → critique to localize the moment of divergence and derive a concrete replanning task that the root coordinator then applies to fix the plan. SKIP when work is progressing as expected, or a one-off retry will obviously succeed without further analysis.
 ---
 
 # Overcome difficulty
@@ -52,12 +52,12 @@ Compare in order:
 | **Means** | Which agents / skills / commands / MCP were used versus what the plan named? Did any substitution coincide with the divergence? |
 | **Results** | Stage outputs vs expected artifacts. Which intermediate output was the first one to fail expectation? |
 | **Reference baseline** | Is there a known-good run (same workflow / flow, comparable params)? At **block order**, what differs from the failing run? (See `memory-global/leaves/workflow-debug-investigation.md` § Reference baseline.) |
-| **Topology / causality** | Parent/child WI, block completion order, Stop/Start/shared instance ids — is the reported failure block the **root** cause or downstream of orchestration? |
-| **Code delta** | For ticket-scoped work — `arc diff` or PR diff on code paths for failing block names **before** deep infra logs. |
+| **Topology / causality** | Parent/child work item, block completion order, Stop/Start/shared instance ids — is the reported failure block the **root** cause or downstream of orchestration? |
+| **Code delta** | For ticket-scoped work — the branch diff or PR diff on code paths for failing block names **before** deep infra logs. |
 | **Prior sessions** | What was already attempted on the same task — read the relevant session transcript (`~/.claude/projects/<cwd-hash>/<uuid>.jsonl` or Cursor `agent-transcripts/`) for launch parameters, working commands, branches already rejected. Avoid blind repeats. |
 
 
-For orchestrated pipelines (Nirvana, Arcadia CI, Reactor, multi-stage Sandbox), follow the ordered checklist in **`memory-global/leaves/workflow-debug-investigation.md`** — baseline → topology → code delta → infra logs last. Project-specific pipeline signals may live in `<project_cwd>/.claude/agent-memory/leaves/overcome-difficulty-signals-pipelines.md`.
+For orchestrated pipelines (a workflow orchestrator, monorepo CI, a scheduler, a multi-stage build graph), follow the ordered checklist in **`memory-global/leaves/workflow-debug-investigation.md`** — baseline → topology → code delta → infra logs last. Project-specific pipeline signals may live in `<project_cwd>/.claude/agent-memory/leaves/overcome-difficulty-signals-pipelines.md`.
 
 ### Hypothesis portfolio
 
