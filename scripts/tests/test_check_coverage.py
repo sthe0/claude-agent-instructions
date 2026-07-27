@@ -93,10 +93,10 @@ def test_zero_exit_with_plain_message_when_no_critique(store, fixtures_dir):
     assert not d.data
 
 
-def test_check_coverage_mutates_no_session_state(store, fixtures_dir):
-    """The core read-only contract: bytes and mtime of the session's state file
-    must be byte-for-byte identical before and after the call, whether or not
-    the check finds blockers."""
+def test_check_coverage_mutates_no_session_state_blockers_branch(store, fixtures_dir):
+    """State-invariance on the blockers return path: bytes and mtime of the
+    session's state file must be byte-for-byte identical before and after,
+    when coverage blockers are found."""
     sid = "cc4"
     plan = str(fixtures_dir / "plan_two_stage.toml")
     refined = str(fixtures_dir / "plan_two_stage_refined.toml")
@@ -107,9 +107,54 @@ def test_check_coverage_mutates_no_session_state(store, fixtures_dir):
     before_mtime = state_path.stat().st_mtime_ns
 
     d = cli.cmd_check_coverage(ns(session=sid, new=refined), store=store)
-    assert d.ok is False  # exercising the blockers branch, the more code-heavy path
+    assert d.ok is False  # blockers found
 
     after_bytes = state_path.read_bytes()
     after_mtime = state_path.stat().st_mtime_ns
-    assert after_bytes == before_bytes
-    assert after_mtime == before_mtime
+    assert after_bytes == before_bytes, "state file was mutated on blockers branch"
+    assert after_mtime == before_mtime, "state file mtime changed on blockers branch"
+
+
+def test_check_coverage_mutates_no_session_state_coverage_clear_branch(store, fixtures_dir, tmp_path):
+    """State-invariance on the coverage-clear return path: bytes and mtime of the
+    session's state file must be byte-for-byte identical before and after,
+    when a corrected plan clears all coverage blockers."""
+    sid = "cc5"
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    _to_diagnosing_with_critique(store, sid, plan)
+    carried = _fixture_with_invariant(fixtures_dir, tmp_path, invariant_text="keep idempotency")
+
+    state_path = store.path(sid)
+    before_bytes = state_path.read_bytes()
+    before_mtime = state_path.stat().st_mtime_ns
+
+    d = cli.cmd_check_coverage(ns(session=sid, new=carried), store=store)
+    assert d.ok is True  # coverage clear
+
+    after_bytes = state_path.read_bytes()
+    after_mtime = state_path.stat().st_mtime_ns
+    assert after_bytes == before_bytes, "state file was mutated on coverage-clear branch"
+    assert after_mtime == before_mtime, "state file mtime changed on coverage-clear branch"
+
+
+def test_check_coverage_mutates_no_session_state_no_critique_branch(store, fixtures_dir):
+    """State-invariance on the no-critique early-return path: bytes and mtime of the
+    session's state file must be byte-for-byte identical before and after,
+    when there is no active difficulty (nothing to cover)."""
+    sid = "cc6"
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    _to_executing_stage1(store, sid, plan)  # no difficulty, no critique
+
+    state_path = store.path(sid)
+    before_bytes = state_path.read_bytes()
+    before_mtime = state_path.stat().st_mtime_ns
+
+    d = cli.cmd_check_coverage(ns(session=sid, new=refined), store=store)
+    assert d.ok is True  # no critique to check
+    assert "nothing to cover" in d.detail
+
+    after_bytes = state_path.read_bytes()
+    after_mtime = state_path.stat().st_mtime_ns
+    assert after_bytes == before_bytes, "state file was mutated on no-critique branch"
+    assert after_mtime == before_mtime, "state file mtime changed on no-critique branch"
