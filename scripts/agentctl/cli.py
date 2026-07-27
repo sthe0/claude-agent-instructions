@@ -1894,6 +1894,7 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
         budget=getattr(args, "budget", "medium"),
         complexity=getattr(args, "complexity", "medium"),
         continue_worktree=_continuation_worktree(state, stage),
+        constraints=getattr(args, "constraints", "") or "",
         dry_run=dry_run,
         # A hard-sandboxed spawned child can only write the tree it is
         # launched in, so pin its cwd to the plan's delivery venue rather
@@ -3373,9 +3374,13 @@ _ARG_RESOLVE: frozenset[tuple[str, str]] = frozenset(
     (command, dest) for dest, commands in _RESOLVE_ROWS for command in commands
 )
 
-# Empty by construction, and declared anyway: a forwarding argument gets a
-# MEMBER here, not a new mechanism.
-_ARG_FORWARD: frozenset[tuple[str, str]] = frozenset()
+_ARG_FORWARD: frozenset[tuple[str, str]] = frozenset({
+    # dispatch's own process never reads this narrative text — it only hands it
+    # on to the spawned specialist's argv, which resolves it via the same
+    # lib.argv_text convention on its own side (see spawn-specialist.py /
+    # spawn-cursor-specialist.py's _WRAPPER_RESOLVE).
+    ("dispatch", "constraints"),
+})
 
 _ARG_DO_NOT_WRAP: dict[tuple[str, str], str] = {
     (command, dest): reason
@@ -3612,6 +3617,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("next-stage"); sp.add_argument("--session", required=True)
     sp = add("dispatch"); sp.add_argument("--session", required=True)
     sp.add_argument("--budget", default="medium"); sp.add_argument("--complexity", default="medium")
+    sp.add_argument("--constraints", default="",
+                    help="clarification for the spawned specialist that bounds HOW it does "
+                         "the already-approved stage — never a scope or done-criterion change; "
+                         "long text as '@<path>' (forwarded, resolved by the specialist itself)")
     sp.add_argument("--dry-run", action="store_true")
     sp = add("resolve-permission"); sp.add_argument("--session", required=True)
     sp.add_argument("--decision", choices=["granted", "denied"], required=True)
