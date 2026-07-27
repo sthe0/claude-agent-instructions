@@ -14,10 +14,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from lib import argv_text
+
 from .state import CriterionType, Stage
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SPAWN_CLI = REPO_ROOT / "scripts" / "spawn-specialist.py"
+
+# Conservative staging threshold for a value THIS process forwards on to a
+# child's argv — well under MAX_ARG_STRLEN (131072) so a caller that reaches
+# dispatch_stage directly (a test, or a future in-process driver) rather than
+# via OS argv is covered too; OS argv already bounds a CLI-supplied value to
+# roughly this process's own received argv size, which the ceiling alone does
+# not guarantee for a direct Python call.
+_FORWARD_STAGE_THRESHOLD_BYTES = 32768
 
 # Source of truth: spawn-specialist.py RETURN_MARKERS / MARKER_RE. Mirrored here
 # (the engine routes the marker spawn-specialist already parsed onto stdout); a
@@ -105,6 +115,8 @@ def build_argv(
     complexity: str = "medium",
     dry_run: bool = False,
     continue_worktree: str | None = None,
+    constraints: str = "",
+    done_criterion: str | None = None,
 ) -> list[str]:
     kind = stage.spawn_kind()
     if not kind:
@@ -117,7 +129,7 @@ def build_argv(
         "--plan",
         plan_path,
         "--done-criterion",
-        stage.criterion.done_criterion,
+        done_criterion if done_criterion is not None else stage.criterion.done_criterion,
         "--criterion-type",
         _CRITERION_FLAG.get(stage.criterion.criterion_type, "measurable"),
         "--budget",
@@ -128,9 +140,39 @@ def build_argv(
     argv.extend(["--stage-index", str(stage.index)])
     if continue_worktree:
         argv.extend(["--continue-worktree", continue_worktree])
+    if constraints:
+        argv.extend(["--constraints", constraints])
     if dry_run:
         argv.append("--dry-run")
     return argv
+
+
+def _normalize_forward_value(value: str) -> tuple[str, Path | None]:
+    """Prepare one FORWARD-class value for a spawned child's argv.
+
+    The child resolves this value itself (via its own ``read_arg_text``), so
+    this process must never read a ``@``-reference's contents and inline them —
+    that would relocate the E2BIG defect one hop later rather than remove it.
+    Returns ``(value_for_argv, staged_path)``; the caller deletes
+    ``staged_path`` (when not ``None``) once the child has exited.
+    """
+    if not value:
+        return value, None
+    kind, payload = argv_text.classify_arg_text(value)
+    if kind == "ref":
+        resolved = Path(payload).resolve()
+        if not argv_text.is_readable_file(resolved):
+            raise SystemExit(argv_text.file_arg_error("forwarded reference", payload))
+        return f"@{resolved}", None
+    # escaped or inline: forward `value` VERBATIM — preserving its own '@@'
+    # escaping, if any — as long as it fits the child's argv comfortably. Only
+    # an oversized payload is staged, and it is staged UN-escaped (a file's
+    # contents carry no further '@' meaning), so read_arg_text on the child's
+    # side recovers the same text either way.
+    if len(value.encode("utf-8")) <= _FORWARD_STAGE_THRESHOLD_BYTES:
+        return value, None
+    staged = argv_text.stage_text_to_tempfile(payload)
+    return f"@{staged}", staged
 
 
 def dispatch_stage(
@@ -143,16 +185,27 @@ def dispatch_stage(
     dry_run: bool = False,
     continue_worktree: str | None = None,
     cwd: str | None = None,
+    constraints: str = "",
 ) -> RunResult:
-    argv = build_argv(
-        stage, plan_path, budget=budget, complexity=complexity, dry_run=dry_run,
-        continue_worktree=continue_worktree,
+    norm_constraints, staged_constraints = _normalize_forward_value(constraints)
+    norm_done_criterion, staged_done_criterion = _normalize_forward_value(
+        stage.criterion.done_criterion
     )
-    run = runner or subprocess_runner
-    # cwd is only threaded to the runner when set, so every pre-existing
-    # single-arg fake runner (and the None -> inherit-cwd default) stays
-    # byte-identical; a session carrying delivery_worktree/repo_root is the
-    # sole case that now requires the runner to accept a `cwd` kwarg.
-    if cwd is not None:
-        return run(argv, cwd=cwd)
-    return run(argv)
+    try:
+        argv = build_argv(
+            stage, plan_path, budget=budget, complexity=complexity, dry_run=dry_run,
+            continue_worktree=continue_worktree, constraints=norm_constraints,
+            done_criterion=norm_done_criterion,
+        )
+        run = runner or subprocess_runner
+        # cwd is only threaded to the runner when set, so every pre-existing
+        # single-arg fake runner (and the None -> inherit-cwd default) stays
+        # byte-identical; a session carrying delivery_worktree/repo_root is the
+        # sole case that now requires the runner to accept a `cwd` kwarg.
+        if cwd is not None:
+            return run(argv, cwd=cwd)
+        return run(argv)
+    finally:
+        for staged in (staged_constraints, staged_done_criterion):
+            if staged is not None:
+                staged.unlink(missing_ok=True)
