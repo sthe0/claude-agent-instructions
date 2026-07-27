@@ -33,7 +33,7 @@ print_section() {
 print_section "cwd"
 pwd
 
-# VCS layer: arc takes priority (Arcadia mount); fall back to git if not arc.
+# VCS layer: arc takes priority; fall back to git if not arc.
 if [ -d .arc ] || [ -f a.yaml ] || arc info >/dev/null 2>&1; then
     print_section "arc"
     arc info 2>/dev/null | sed -n '1,8p'
