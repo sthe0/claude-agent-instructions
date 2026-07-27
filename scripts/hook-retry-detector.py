@@ -33,12 +33,39 @@ THRESHOLD = 3
 NOISE_RE = re.compile(r"\s*(;\s*(exit\s+0|true|:)\s*)+$")
 WHITESPACE_RE = re.compile(r"\s+")
 
-# Very short/cheap commands that are fine to repeat — don't nudge for these
-ALLOWLIST_RE = re.compile(
-    r"^(ls|pwd|echo|date|whoami|git status|git log|arc status|arc log|arc diff|"
-    r"cat\s|head\s|tail\s|wc\s|grep\s|rg\s|find\s|which\s|python3 -c|jq\s)",
-    re.IGNORECASE,
+# Very short/cheap commands that are fine to repeat — don't nudge for these.
+# Core lists the org-neutral ones; a deployment adds its own VCS's read verbs
+# via `retry_detector_allowlist=` in the config root's agent-identity.local.
+# Comma-separated, not whitespace-separated like the other list-valued identity
+# keys: a command prefix contains spaces ("hg status").
+_CORE_ALLOWLIST = (
+    "ls", "pwd", "echo", "date", "whoami", "git status", "git log", "git diff",
+    r"cat\s", r"head\s", r"tail\s", r"wc\s", r"grep\s", r"rg\s", r"find\s",
+    r"which\s", "python3 -c", r"jq\s",
 )
+
+
+def _extra_allowlist(identity_path=None) -> tuple[str, ...]:
+    """Machine-local extra command prefixes, regex-escaped (they are literal
+    commands, not patterns). Fail-open: any error yields no extras."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from difficulty_channel.authority import read_local_identity, LOCAL_IDENTITY_PATH
+
+        raw = read_local_identity(identity_path or LOCAL_IDENTITY_PATH).get(
+            "retry_detector_allowlist", ""
+        )
+        return tuple(re.escape(p) for p in re.split(r"\s*,\s*", raw.strip()) if p)
+    except Exception:
+        return ()
+
+
+def build_allowlist_re(extra=None) -> "re.Pattern[str]":
+    resolved = _extra_allowlist() if extra is None else tuple(re.escape(p) for p in extra)
+    return re.compile(r"^(" + "|".join(_CORE_ALLOWLIST + resolved) + r")", re.IGNORECASE)
+
+
+ALLOWLIST_RE = build_allowlist_re()
 
 
 def normalize(cmd: str) -> str:

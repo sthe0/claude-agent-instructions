@@ -2,13 +2,16 @@
 # Single bootstrap call: aggregates what the agent typically asks about at the
 # very start of a session — working directory, VCS branch / status / recent
 # log, project agent-memory listing, in-progress markers — into one compact
-# digest. Replaces the 4–5 separate `pwd` / `arc info` / `arc status` /
-# `arc log` / `ls .claude/agent-memory/` calls observed at the start of
-# typical sessions.
+# digest. Replaces the 4–5 separate `pwd` / VCS info / VCS status / VCS log /
+# `ls .claude/agent-memory/` calls observed at the start of typical sessions.
 #
 # Output is one screen of text (≤ ~80 lines). Each section is delimited by a
-# `--- <name> ---` line; missing sections (no arc, no agent memory) are
+# `--- <name> ---` line; missing sections (no VCS, no agent memory) are
 # silently skipped.
+#
+# git is the only VCS Core knows. A deployment on another VCS drops an
+# executable at <config root>/session-digest-vcs.local; it is run first with the
+# project root as $1 and, when it exits 0, its output replaces the git section.
 #
 # Usage:
 #     ~/claude-agent-instructions/scripts/session-start-digest.sh
@@ -33,14 +36,17 @@ print_section() {
 print_section "cwd"
 pwd
 
-# VCS layer: arc takes priority; fall back to git if not arc.
-if [ -d .arc ] || [ -f a.yaml ] || arc info >/dev/null 2>&1; then
-    print_section "arc"
-    arc info 2>/dev/null | sed -n '1,8p'
-    print_section "arc status"
-    arc status 2>/dev/null | sed -n '1,15p'
-    print_section "arc log (5 most recent)"
-    arc log -n 5 --oneline 2>/dev/null | sed -n '1,5p'
+# VCS layer: the machine-local plugin takes priority; fall back to git.
+vcs_plugin="${CLAUDE_SESSION_DIGEST_VCS:-$(agent_home_read)/session-digest-vcs.local}"
+vcs_done=0
+if [ -x "$vcs_plugin" ]; then
+    if plugin_out=$("$vcs_plugin" "$ROOT" 2>/dev/null); then
+        printf '%s\n' "$plugin_out"
+        vcs_done=1
+    fi
+fi
+if [ "$vcs_done" -eq 1 ]; then
+    :
 elif [ -d .git ] || git rev-parse --git-dir >/dev/null 2>&1; then
     print_section "git"
     printf 'branch: %s\n' "$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
