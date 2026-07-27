@@ -27,6 +27,8 @@ Modes:
   policy-scorecard.py --ledger-only [--days N]   upsert only (for the hook)
   policy-scorecard.py rate <session_id> <1-5> [--note "..."]
                                                  attach a manual quality rating
+  policy-scorecard.py reprice [--dry-run]        re-price stored rows in place
+                                                 at the current rate table
 """
 from __future__ import annotations
 
@@ -35,6 +37,7 @@ import datetime as dt
 import importlib.util
 import json
 import re
+import shutil
 import subprocess
 import sys
 from collections import Counter, defaultdict
@@ -54,6 +57,7 @@ _is_tool_result = cost_report._is_tool_result
 INTERRUPT_SENTINEL = cost_report.INTERRUPT_SENTINEL
 CORRECTION_RE = cost_report.CORRECTION_RE
 PRICING = cost_report.PRICING_USD_PER_MTOK
+PRICING_SHA = cost_report.PRICING_SHA
 
 # --- reuse hook-si-freetext-answer.py's option-label comparison (no copy-paste) ---
 _FTA_PATH = Path(__file__).resolve().parent / "hook-si-freetext-answer.py"
@@ -82,7 +86,12 @@ _GIT_TIMEOUT_S = 5
 GATE_LOGS = tuple(dict.fromkeys(
     (agentctl_gate_log(), legacy_home() / "agentctl" / "gate-log.jsonl")))
 
-MODEL_KEYS = ("opus", "sonnet", "haiku")
+# Derived from the price table, never written in parallel with it: every model-keyed
+# structure below (token buckets, spawn counts, cache-read pricing) follows this, so
+# registering a model is one row in cost-report.py's PRICING_USD_PER_MTOK. A
+# hand-written tuple that merely happens to match would re-create the two-lists-
+# disagree defect — a key here with no price row raises on every scan.
+MODEL_KEYS = tuple(PRICING)
 USAGE_FIELDS = (
     ("in", "input_tokens"),
     ("out", "output_tokens"),
@@ -329,12 +338,11 @@ def _scan_session(main_file: Path) -> dict | None:
         "model_tokens": model_tokens,
         "cost_usd": round(cost, 6),
         "cache_read_usd": round(_cache_read_cost(model_tokens), 6),
+        "priced_by": PRICING_SHA,
         "main_read_bash": main_read_bash,
         "agent_spawns": {
             "total": spawns_total,
-            "opus": spawns["opus"],
-            "sonnet": spawns["sonnet"],
-            "haiku": spawns["haiku"],
+            **{k: spawns[k] for k in MODEL_KEYS},
             "no_explicit_model": no_explicit_model,
             "inherit_opus": inherit_opus,
         },
@@ -389,6 +397,71 @@ def write_ledger(rows: dict[str, dict]) -> None:
     with LEDGER.open("w", encoding="utf-8") as fh:
         for row in ordered:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+# ------------------------------------------------------------------ repricing
+
+def _stored_model_tokens(row: dict) -> dict:
+    """A stored row's token buckets in today's shape. A row written before a
+    model joined the price table has no bucket for it, so every level defaults."""
+    stored = row.get("model_tokens", {})
+    out = _empty_model_tokens()
+    for k in MODEL_KEYS:
+        bucket = stored.get(k, {})
+        for short, _ in USAGE_FIELDS:
+            out[k][short] = int(bucket.get(short, 0) or 0)
+    return out
+
+
+def _row_costs(model_tokens: dict) -> tuple[float, float]:
+    """(cost_usd, cache_read_usd) for one row's buckets at today's rates. The
+    bucket key IS the model, so token_cost runs once per bucket instead of once
+    per API call — the same linear sum over the same tokens at the same rates."""
+    total = 0.0
+    for k in MODEL_KEYS:
+        b = model_tokens[k]
+        total += token_cost({raw: b[short] for short, raw in USAGE_FIELDS}, k)
+    return total, _cache_read_cost(model_tokens)
+
+
+def _stale_priced_rows(rows: dict[str, dict]) -> int:
+    return sum(1 for r in rows.values() if r.get("priced_by") != PRICING_SHA)
+
+
+def reprice(dry_run: bool = False) -> str:
+    """Re-price the stored ledger in place at the current table.
+
+    In place, not rebuilt: `upsert` re-scans a session only while its transcript
+    keeps growing, and a manual `quality_rating` exists nowhere but this file —
+    so deleting the ledger to regenerate it would buy identical dollars at the
+    cost of every rating ever attached. Only the two dollar fields and the rate
+    stamp are written; every other field is carried through untouched."""
+    rows = load_ledger()
+    if not rows:
+        return f"ledger has no rows ({LEDGER}) — nothing to reprice."
+    before = sum(r.get("cost_usd", 0.0) or 0.0 for r in rows.values())
+    changed = 0
+    for r in rows.values():
+        cost, cache_read = _row_costs(_stored_model_tokens(r))
+        cost, cache_read = round(cost, 6), round(cache_read, 6)
+        if (r.get("cost_usd") != cost or r.get("cache_read_usd") != cache_read
+                or r.get("priced_by") != PRICING_SHA):
+            changed += 1
+        r["cost_usd"] = cost
+        r["cache_read_usd"] = cache_read
+        r["priced_by"] = PRICING_SHA
+    after = sum(r["cost_usd"] for r in rows.values())
+    out = [f"rows {len(rows)}  ·  repriced {changed}  ·  table {PRICING_SHA}",
+           f"total cost_usd ${before:.2f} → ${after:.2f}"]
+    if dry_run:
+        out.append("--dry-run: ledger untouched, no backup written.")
+        return "\n".join(out)
+    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    backup = LEDGER.with_name(LEDGER.name + f".bak-{stamp}")
+    shutil.copy2(LEDGER, backup)
+    write_ledger(rows)
+    out.append(f"backup: {backup}")
+    return "\n".join(out)
 
 
 def in_window_files(days: int, project: str | None) -> list[Path]:
@@ -464,9 +537,11 @@ def _aggregate(window: list[dict]) -> dict:
         "sessions": len(window),
         "sessions_with_agent": sum(1 for r in window if r["agent_spawns"]["total"] > 0),
         "spawns_total": sum(r["agent_spawns"]["total"] for r in window),
-        "spawn_opus": sum(r["agent_spawns"]["opus"] for r in window),
-        "spawn_sonnet": sum(r["agent_spawns"]["sonnet"] for r in window),
-        "spawn_haiku": sum(r["agent_spawns"]["haiku"] for r in window),
+        # Rows written before a model joined the price table have no bucket for it.
+        **{
+            f"spawn_{k}": sum(r["agent_spawns"].get(k, 0) for r in window)
+            for k in MODEL_KEYS
+        },
         "no_explicit_model": sum(r["agent_spawns"]["no_explicit_model"] for r in window),
         "inherit_opus": sum(r["agent_spawns"]["inherit_opus"] for r in window),
         "main_read_bash": sum(r.get("main_read_bash", 0) for r in window),
@@ -493,9 +568,11 @@ def _aggregate(window: list[dict]) -> dict:
     a["cache_read_share"] = a["cache_read_usd"] / a["cost_usd"] if a["cost_usd"] else 0.0
     tok = _empty_model_tokens()
     for r in window:
+        stored = r.get("model_tokens", {})
         for k in MODEL_KEYS:
+            bucket = stored.get(k, {})
             for short, _ in USAGE_FIELDS:
-                tok[k][short] += r["model_tokens"][k][short]
+                tok[k][short] += bucket.get(short, 0)
     a["model_tokens"] = tok
     return a
 
@@ -693,8 +770,9 @@ def scorecard(rows: dict[str, dict], days: int, project: str | None) -> str:
              f"{_arrow(cur['sessions_with_agent'], prev['sessions_with_agent'], higher_is_worse=False)}")
     L.append("")
     L.append("## Policy compliance (headline)")
+    per_model = " / ".join(f"{k} {cur[f'spawn_{k}']}" for k in MODEL_KEYS)
     L.append(f"- Agent spawns: **{cur['spawns_total']}**  "
-             f"(opus {cur['spawn_opus']} / haiku {cur['spawn_haiku']} / sonnet {cur['spawn_sonnet']})  "
+             f"({per_model})  "
              f"{_arrow(cur['spawns_total'], prev['spawns_total'], higher_is_worse=False)}")
     L.append(f"- No explicit `model:` (\"inherit\"): **{cur['no_explicit_model']}/{cur['spawns_total']}**  "
              f"· of which ran opus (inherit→opus): **{cur['inherit_opus']}**  "
@@ -710,6 +788,10 @@ def scorecard(rows: dict[str, dict], days: int, project: str | None) -> str:
              f"{_arrow(cur['cost_per_session'], prev['cost_per_session'])}")
     L.append(f"- cache_read share of cost: **{cur['cache_read_share']:.0%}**  "
              f"{_arrow(cur['cache_read_share'], prev['cache_read_share'])}")
+    stale = _stale_priced_rows(rows)
+    if stale:
+        L.append(f"- ⚠ **{stale}** ledger row(s) priced by an older rate table — "
+                 f"dollar comparisons mix two tables until `policy-scorecard.py reprice`.")
     L.append("- Tokens by model (main thread = opus; sub-agents = their own model):")
     L.extend(_fmt_tokens(cur["model_tokens"]) or ["  (none)"])
     L.append("")
@@ -815,6 +897,13 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--note")
         a = p.parse_args(argv[1:])
         return cmd_rate(a.session_id, a.rating, a.note)
+    if argv and argv[0] == "reprice":
+        p = argparse.ArgumentParser(prog="policy-scorecard.py reprice")
+        p.add_argument("--dry-run", action="store_true",
+                       help="report the delta without writing the ledger")
+        a = p.parse_args(argv[1:])
+        print(reprice(dry_run=a.dry_run))
+        return 0
 
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--days", type=int, default=7, help="window size in days (default 7)")

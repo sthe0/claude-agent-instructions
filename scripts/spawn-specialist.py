@@ -326,6 +326,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 # Task difficulty -> model. The manager judges difficulty per spawn; this is the
 # primary lever (see --complexity). Aliases resolve to the latest of each family.
+# The ladder deliberately terminates at opus: fable is a tier above it at 2x the
+# per-token price, so routing any complexity band there is a spend decision for the
+# user to make explicitly via `--model fable`, not a default.
 COMPLEXITY_MODEL = {"low": "haiku", "medium": "sonnet", "high": "opus"}
 
 # Fallback model per specialization, used only when neither --model nor --complexity
@@ -349,36 +352,29 @@ def resolve_model(args: argparse.Namespace) -> str | None:
     return MODEL_BY_KIND.get(args.kind)
 
 
-# Absolute context ceiling before auto-compaction (tokens). The harness knob is a
-# percent of the window, so we convert per-model: pct = ceiling / window. This is
-# passed to the child via `claude --settings` (see cmd construction) rather than
-# process env, because env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE in ~/.claude/settings.json
-# would otherwise win over process env (settings.json env is applied after process
-# start). See memory-global leaves autocompact-threshold-policy.md and
-# claude-code-settings-env-precedence.md.
+# Absolute context ceiling before auto-compaction (tokens) — our own intent, not a
+# copy of anything Anthropic owns. It reaches the child via `claude --settings`
+# (highest in the settings precedence ladder) rather than the child's process env,
+# because an env entry in ~/.claude/settings.json is applied after process start and
+# would win over process env. See memory-global leaves autocompact-threshold-policy.md
+# and claude-code-settings-env-precedence.md.
 AUTOCOMPACT_CEILING_TOKENS = 150_000
 
-# Context window per model family (tokens). With the 1M context tier disabled
-# (env.CLAUDE_CODE_DISABLE_1M_CONTEXT=1 in ~/.claude/settings.json) every model is
-# 200k -> 75% -> 150k. If 1M is re-enabled for a model, bump its window here (and
-# DEFAULT) so the derived percent tracks it.
-MODEL_WINDOW_TOKENS = {"opus": 200_000, "sonnet": 200_000, "haiku": 200_000, "fable": 200_000}
-DEFAULT_WINDOW_TOKENS = 200_000
-
-
-def autocompact_pct_for_model(model: str | None) -> str:
-    """Percent of the window at which the child should auto-compact, so the
-    absolute context ceiling stays AUTOCOMPACT_CEILING_TOKENS regardless of which
-    model (window) the child runs. Matches a family by substring so both aliases
-    (`sonnet`) and full ids (`claude-sonnet-4-6`) resolve."""
-    window = DEFAULT_WINDOW_TOKENS
-    if model:
-        for family, w in MODEL_WINDOW_TOKENS.items():
-            if family in model:
-                window = w
-                break
-    pct = round(AUTOCOMPACT_CEILING_TOKENS / window * 100)
-    return str(max(1, min(95, pct)))
+# The client resolves the effective window as min(model max, configured), then fires
+# auto-compaction at min(round((window - 20000) * (1 - frac)), (window - 20000) - 13000).
+# Pinning the WINDOW rather than a percentage lets that min() do the per-model work,
+# so no per-model window table is needed here: a Haiku child clamps itself to its own
+# 200k maximum with nothing about Haiku recorded in this file.
+# Residual exposure, stated rather than hidden: `frac` is server-driven (flags
+# tengu_amber_moleskin / tengu_amber_rokovoko in client 2.1.220), so a fraction change
+# moves the trigger. The previous percentage mechanism carried the same exposure —
+# the fraction term is an outer min() in the client's trigger — so nothing is lost.
+OUTPUT_RESERVE_TOKENS = 20_000        # min(maxOutputTokens, 20000) in the client
+PRECOMPUTE_BUFFER_FRACTION = 0.2      # client default; server-tunable (see above)
+SPAWN_AUTOCOMPACT_WINDOW_TOKENS = (
+    round(AUTOCOMPACT_CEILING_TOKENS / (1 - PRECOMPUTE_BUFFER_FRACTION))
+    + OUTPUT_RESERVE_TOKENS
+)
 
 
 # Code-executing permission scoped to developer spawns only, injected into the
@@ -388,11 +384,16 @@ def autocompact_pct_for_model(model: str | None) -> str:
 DEVELOPER_SETTINGS_ALLOW = ["Bash(python3 -m pytest:*)"]
 
 
-def build_child_settings(kind: str, model: str | None) -> dict:
-    """Child `--settings` payload: the per-model autocompact override for every
-    kind, plus a developer-scoped exec allow (pytest) so a spawned developer can
-    run the suite without an approval prompt."""
-    settings: dict = {"env": {"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": autocompact_pct_for_model(model)}}
+def build_child_settings(kind: str) -> dict:
+    """Child `--settings` payload: the auto-compaction window pin for every kind
+    (both forms, mirroring settings/base.json — the env key wins in the client's
+    window resolution, the top-level key is the settings-path fallback), plus a
+    developer-scoped exec allow (pytest) so a spawned developer can run the suite
+    without an approval prompt."""
+    settings: dict = {
+        "env": {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(SPAWN_AUTOCOMPACT_WINDOW_TOKENS)},
+        "autoCompactWindow": SPAWN_AUTOCOMPACT_WINDOW_TOKENS,
+    }
     if kind == "developer":
         settings["permissions"] = {"allow": list(DEVELOPER_SETTINGS_ALLOW)}
     return settings
@@ -570,13 +571,13 @@ def main(argv: list[str] | None = None) -> int:
         cap,
         "--output-format",
         "json",
-        # Pass the per-model autocompact threshold via --settings (highest in the
-        # settings precedence ladder) so it beats env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
-        # in ~/.claude/settings.json. Setting it in the child's process env does NOT
+        # Pass the child's autocompact window pin via --settings (highest in the
+        # settings precedence ladder) so it beats the same key in
+        # ~/.claude/settings.json. Setting it in the child's process env does NOT
         # work: settings.json env is applied after process start and wins (see
         # memory-global leaf claude-code-settings-env-precedence.md).
         "--settings",
-        json.dumps(build_child_settings(args.kind, model)),
+        json.dumps(build_child_settings(args.kind)),
     ]
     permission_mode = resolve_permission_mode(args)
     if permission_mode is not None:

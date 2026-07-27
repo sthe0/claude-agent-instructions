@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
+import hashlib
 import json
 import re
 import statistics
@@ -32,17 +33,30 @@ PROJECTS_DIR = agent_home() / "projects"  # system root (isolated or legacy)
 
 # USD per 1M tokens. Rates change — refresh via the `claude-api` skill.
 # cache_write = 5-minute cache-creation rate (1.25x base input); cache_read = 0.1x base input.
+# This table is also the model REGISTRY: policy-scorecard.py derives its per-model
+# token buckets from these keys, so a new model is one row here, not an edit in six
+# places. Keys are matched against a model id by substring, so no key may be a
+# substring of another.
 PRICING_USD_PER_MTOK = {
-    "opus":   {"input": 15.0, "output": 75.0, "cache_write": 18.75, "cache_read": 1.50},
+    "opus":   {"input": 5.0,  "output": 25.0, "cache_write": 6.25,  "cache_read": 0.50},
     "sonnet": {"input": 3.0,  "output": 15.0, "cache_write": 3.75,  "cache_read": 0.30},
     "haiku":  {"input": 1.0,  "output": 5.0,  "cache_write": 1.25,  "cache_read": 0.10},
+    "fable":  {"input": 10.0, "output": 50.0, "cache_write": 12.5,  "cache_read": 1.00},
 }
 _FALLBACK_RATES = PRICING_USD_PER_MTOK["opus"]
+
+# Short content hash of the rate table, stamped onto each ledger row as `priced_by`
+# so a rate change announces itself instead of silently splitting the ledger across
+# two tables. Derived, never hand-written: a version string nobody remembers to bump
+# is the same rotting mirror this table's consumers exist to avoid.
+PRICING_SHA = hashlib.sha256(
+    json.dumps(PRICING_USD_PER_MTOK, sort_keys=True).encode("utf-8")
+).hexdigest()[:12]
 
 
 def _rates_for(model: str | None) -> dict:
     m = (model or "").lower()
-    for key in ("opus", "sonnet", "haiku"):
+    for key in PRICING_USD_PER_MTOK:
         if key in m:
             return PRICING_USD_PER_MTOK[key]
     return _FALLBACK_RATES

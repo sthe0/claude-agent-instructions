@@ -55,18 +55,18 @@ def _args(tmp_path, **overrides):
 
 
 def test_developer_child_settings_carry_pytest_allow():
-    settings = MOD.build_child_settings("developer", "sonnet")
+    settings = MOD.build_child_settings("developer")
     assert settings["permissions"]["allow"] == ["Bash(python3 -m pytest:*)"]
 
 
 def test_non_developer_child_settings_omit_permissions_key():
-    settings = MOD.build_child_settings("thinker", "sonnet")
+    settings = MOD.build_child_settings("thinker")
     assert "permissions" not in settings
 
 
 def test_developer_child_settings_still_carry_autocompact_env():
-    settings = MOD.build_child_settings("developer", "sonnet")
-    assert "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE" in settings["env"]
+    settings = MOD.build_child_settings("developer")
+    assert "CLAUDE_CODE_AUTO_COMPACT_WINDOW" in settings["env"]
 
 
 def test_base_settings_has_no_pytest_entry():
