@@ -2,7 +2,7 @@
 
 Per-machine subagent definitions that should not live in the global git repo. Files placed here are symlinked into `~/.claude-agent/agents/` by `setup-symlinks.sh` and are excluded from version control via `.gitignore` (`agents-local/*`).
 
-Project-specific subagents (e.g. agents for `robot/deepagent` or other Arcadia projects) belong in **that project's** own `.claude/agents/` tree, not here.
+Project-specific subagents belong in **that project's** own `.claude/agents/` tree, not here.
 
 ## Usage
 

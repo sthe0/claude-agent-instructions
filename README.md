@@ -70,7 +70,7 @@ Auth is per-root — log the system root in once with `CLAUDE_CONFIG_DIR=~/.clau
 
 ### Using this in another organization
 
-Core is org-neutral by default — only **internal-only** Yandex facilities (Arcadia `arc`, Startrek) are couplings, and they are **opt-in**, not assumed. Publicly-reachable services stay available (e.g. `yandex-cloud-expert`, since `yandex.cloud` is public). Onboarding in a non-Yandex org is three commands:
+Core is org-neutral by default — **internal-only** facilities (a company monorepo, an in-house tracker) attach as **opt-in** plugins, never assumed. Publicly-reachable services stay available (e.g. `yandex-cloud-expert`, since `yandex.cloud` is public). Onboarding in a new org is three commands:
 
 ```bash
 ~/claude-agent-instructions/scripts/setup-symlinks.sh   # symlinks + settings + hooks
@@ -78,7 +78,7 @@ Core is org-neutral by default — only **internal-only** Yandex facilities (Arc
 ~/claude-agent-instructions/scripts/doctor.sh           # expect all [ OK ]
 ```
 
-Git itself needs no special setup — Claude uses `git`/`gh` natively. Org-specific runbooks go in each project's `<project>/.claude/`, never in Core. The opt-in surface and what stays Yandex-flavored (and why it's harmless) are in [docs/operations/org-portability.md](docs/operations/org-portability.md).
+Git itself needs no special setup — Claude uses `git`/`gh` natively. Org-specific runbooks go in each project's `<project>/.claude/`, never in Core. The opt-in surface and what stays vendor-flavored (and why it's harmless) are in [docs/operations/org-portability.md](docs/operations/org-portability.md).
 
 ## Getting started — your first task
 
@@ -98,12 +98,12 @@ Mention a ticket key (e.g. `ABC-123`) anywhere in your request and the `tracker-
 Instead of `cd`-ing into a working copy by hand, `claude-task` does the whole entry in one step — resolves the issue, makes an isolated working copy, `cd`s into it, and launches `claude`:
 
 ```
-claude-task DEEPAGENT-123        # resolve a tracker issue → isolated git worktree + launch
+claude-task ABC-123              # resolve a tracker issue → isolated git worktree + launch
 claude-task --new "title"        # create an issue, then enter
 claude-task <name>               # named scratch workspace (no tracker)
 ```
 
-The manual `cd ~/my-project && claude-agent` flow still works — `claude-task` is an optional shortcut. (Bare `claude` is your untouched personal install, **not** the system.) It selects a **workspace** backend (`git` worktree by default; `arc` mount where present) and a **tracker** backend (GitHub Issues by default), auto-detected and overridable; auth variants `claude-<profile>` (e.g. `claude-team`) are the same entry on a machine-local auth profile. Backend/registry detail: [docs/operations/setup.md](docs/operations/setup.md#starting-a-task-with-claude-task) and [docs/operations/org-portability.md](docs/operations/org-portability.md).
+The manual `cd ~/my-project && claude-agent` flow still works — `claude-task` is an optional shortcut. (Bare `claude` is your untouched personal install, **not** the system.) It selects a **workspace** backend (`git` worktree by default; a plugin-supplied mount backend where present) and a **tracker** backend (GitHub Issues by default), auto-detected and overridable; auth variants `claude-<profile>` (e.g. `claude-team`) are the same entry on a machine-local auth profile. Backend/registry detail: [docs/operations/setup.md](docs/operations/setup.md#starting-a-task-with-claude-task) and [docs/operations/org-portability.md](docs/operations/org-portability.md).
 
 `claude-task` / `claude-team` also give the agent the first turn: it reads whatever ticket context and prior plan/branch/comment artifacts already exist and either opens a requirements dialogue or resumes in-flight work without re-asking what's already settled — see [docs/operations/setup.md § The opening dialogue](docs/operations/setup.md#the-opening-dialogue).
 

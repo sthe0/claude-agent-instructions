@@ -172,6 +172,6 @@ Edit policy for `~/claude-agent-instructions/`: `sync-instructions-repo.sh pull`
 
 ## Project / org gates
 
-There is no global `org-yandex.mdc` or single Arcadia mount. Project-specific gates (Tracker workflows, mount procedures, runbooks) live **inside each project's own `.claude/`** tree — `rules/*.mdc` (Cursor project rules, symlinked into `<project>/.cursor/rules/`), `agent-memory/` (project memory), `agents/` and `skills/` (project-local). When you open a project, those apply alongside this global rule.
+There is no global org-specific rule file or single shared monorepo mount. Project-specific gates (Tracker workflows, mount procedures, runbooks) live **inside each project's own `.claude/`** tree — `rules/*.mdc` (Cursor project rules, symlinked into `<project>/.cursor/rules/`), `agent-memory/` (project memory), `agents/` and `skills/` (project-local). When you open a project, those apply alongside this global rule.
 
 **Not mirrored in Cursor:** the `Skill` tool (invoke skills by reading `SKILL.md`), native auto-memory writing (write memory files directly), and the `@~/.claude-agent/memory-global/MEMORY.md` import (read it directly when relevant).
