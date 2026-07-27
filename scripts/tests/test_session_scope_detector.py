@@ -103,25 +103,27 @@ def test_detect_conflicts_ignores_stale_other_session():
     assert conflicts == []
 
 
-def test_detect_conflicts_arc_mount_paths_overlap():
+def test_detect_conflicts_mount_paths_overlap():
     records = [
-        _rec("s1", 100.0, touched_paths=["/arc/mount1/src/a.py"], vcs="arc"),
-        _rec("s2", 100.0, touched_paths=["/arc/mount1/src/a.py"], vcs="arc"),
+        _rec("s1", 100.0, touched_paths=["/vcsmnt/mount1/src/a.py"], vcs="othervcs"),
+        _rec("s2", 100.0, touched_paths=["/vcsmnt/mount1/src/a.py"], vcs="othervcs"),
     ]
     conflicts = detect_conflicts(
-        records, this_session="s1", candidate_paths=["/arc/mount1/src/a.py"], now_ts=100.0, ttl_s=30.0
+        records, this_session="s1", candidate_paths=["/vcsmnt/mount1/src/a.py"], now_ts=100.0,
+        ttl_s=30.0,
     )
     assert len(conflicts) == 1
     assert conflicts[0].other_session == "s2"
 
 
-def test_detect_conflicts_arc_distinct_mounts_no_conflict():
+def test_detect_conflicts_distinct_mounts_no_conflict():
     records = [
-        _rec("s1", 100.0, touched_paths=["/arc/mount1/src/a.py"], vcs="arc"),
-        _rec("s2", 100.0, touched_paths=["/arc/mount2/src/a.py"], vcs="arc"),
+        _rec("s1", 100.0, touched_paths=["/vcsmnt/mount1/src/a.py"], vcs="othervcs"),
+        _rec("s2", 100.0, touched_paths=["/vcsmnt/mount2/src/a.py"], vcs="othervcs"),
     ]
     conflicts = detect_conflicts(
-        records, this_session="s1", candidate_paths=["/arc/mount1/src/a.py"], now_ts=100.0, ttl_s=30.0
+        records, this_session="s1", candidate_paths=["/vcsmnt/mount1/src/a.py"], now_ts=100.0,
+        ttl_s=30.0,
     )
     assert conflicts == []
 

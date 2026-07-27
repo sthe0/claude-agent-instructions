@@ -11,10 +11,10 @@
 # path-overlap, which is what stops the conflict hook from firing again.
 #
 # Backend-blind: the workspace-backend name resolves through registry.sh, so both
-# the built-in git (backends/git.sh) and a machine-local plugin backend such as arc
-# (registered at registry.sh's _plugin_dir — $CLAUDE_PROJECT_PLUGIN_DIR override, else
-# the isolated $CLAUDE_AGENT_HOME/project-entry-plugins, else a legacy
-# ~/.claude/project-entry-plugins — /backends/arc.sh) attach with no change to this
+# the built-in git (backends/git.sh) and a machine-local plugin backend for another
+# VCS (registered at registry.sh's _plugin_dir — $CLAUDE_PROJECT_PLUGIN_DIR override,
+# else the isolated $CLAUDE_AGENT_HOME/project-entry-plugins, else a legacy
+# ~/.claude/project-entry-plugins — /backends/<name>.sh) attach with no change to this
 # file — detect_backend.py picks the name, registry.sh finds the implementation, and
 # this script calls the same contract functions either way.
 #
