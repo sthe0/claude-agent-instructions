@@ -68,7 +68,7 @@ Before (parent inlines experience entries):
 ```
 ## Resolved-task experience
 
-- [2026-05-26 — DEEPAGENT-415 Stage A smoke](experience/2026-05-26-deepagent-415-stage-a-smoke.md) — long description
+- [2026-05-26 — Session A Stage A smoke](experience/2026-05-26-session-a-stage-a-smoke.md) — long description
 - [2026-05-27 — Token-saving audit](experience/2026-05-27-token-saving-audit.md) — long description
 ... (3rd, 4th, Nth entries accumulating)
 ```
@@ -89,7 +89,7 @@ Sub-index `experience/MEMORY.md`:
 Chronological log of leaves recording how non-trivial tasks were resolved — lessons,
 artifacts, costs.
 
-- [2026-05-26 — DEEPAGENT-415 Stage A smoke](2026-05-26-deepagent-415-stage-a-smoke.md) — long description
+- [2026-05-26 — Session A Stage A smoke](2026-05-26-session-a-stage-a-smoke.md) — long description
 - [2026-05-27 — Token-saving audit](2026-05-27-token-saving-audit.md) — long description
 ```
 

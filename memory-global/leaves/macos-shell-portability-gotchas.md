@@ -9,7 +9,7 @@ last_verified: 2026-06-30
 
 ## Difficulty
 
-A shell script (or its tests) written and verified on Linux silently misbehaves on macOS because macOS ships **BSD userland** and an ancient **bash 3.2.57** (`/usr/bin/env bash` → `/bin/bash`; Apple froze it pre-GPLv3). The symptoms look like product bugs but are portability traps; each cost real rediscovery time on the `project_entry` launcher subsystem (DEEPAGENT-era task-entry on this machine, 2026-06-30).
+A shell script (or its tests) written and verified on Linux silently misbehaves on macOS because macOS ships **BSD userland** and an ancient **bash 3.2.57** (`/usr/bin/env bash` → `/bin/bash`; Apple froze it pre-GPLv3). The symptoms look like product bugs but are portability traps; each cost real rediscovery time on the `project_entry` launcher subsystem (a past era's task-entry subsystem on this machine, 2026-06-30).
 
 ## Guidance
 

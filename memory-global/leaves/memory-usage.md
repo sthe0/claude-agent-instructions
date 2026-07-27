@@ -14,7 +14,7 @@ The three memory scopes (personal / global / project) say *where* a fact goes bu
 ## Guidance
 
 - **Read** the relevant scope index when the task touches a domain it knows, when the user references prior-conversation work, or before assuming repo/infra conventions.
-- **Verify** specific paths / function names / flags from memory before recommending them — code moves. A leaf describing **mutable state** (PR/ticket status, working-tree contents, "pending"/"in progress" work, a session checkpoint) must be reconciled against the live source (`arc status` / `arc log`, PR API) **before** you present it as current; a checkpoint's own "next session" checklist counts only if you actually run it.
+- **Verify** specific paths / function names / flags from memory before recommending them — code moves. A leaf describing **mutable state** (PR/ticket status, working-tree contents, "pending"/"in progress" work, a session checkpoint) must be reconciled against the live source (VCS status / VCS log, PR API) **before** you present it as current; a checkpoint's own "next session" checklist counts only if you actually run it.
 - **Write** when a fact is durable and non-obvious: corrections that should not recur, decisions and their reasons, user role and preferences, project state, prod / external-pipeline runbooks, **post-resolution task experiences** (CLAUDE.md § On task resolution).
 - **Cite the source for OS / binary / version-dependent claims** — add a `> verified by: …` line (manpage, log line, command output, doc URL). Without it, future you treats a stale claim as ground truth and wastes diagnosis time.
 - **Do not** write: ephemeral task state (use the task list), one-session plan drafts (use a plan file), secrets, content already covered by `CLAUDE.md`.

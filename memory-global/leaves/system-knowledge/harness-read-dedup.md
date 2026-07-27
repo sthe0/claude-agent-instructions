@@ -42,7 +42,7 @@ The built-in does **not** catch every wasteful Read pattern:
 
 For now (2026-05-27) these are not observed at meaningful frequency. If they show up in future cost analysis, add a PreToolUse hook then — not before.
 
-> verified by: live tool call observation in `~/.claude/projects/-home-the0-arcadia-robot-deepagent/eae4ea0f-9c8a-40ba-9aea-3df06793cc7b.jsonl`, 2026-05-27.
+> verified by: live tool call observation in `~/.claude/projects/<project-slug>/eae4ea0f-9c8a-40ba-9aea-3df06793cc7b.jsonl`, 2026-05-27.
 
 ## See also
 

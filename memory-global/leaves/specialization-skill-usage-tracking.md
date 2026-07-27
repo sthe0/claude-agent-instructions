@@ -15,7 +15,7 @@ The post-resolution experience leaf (see `~/.claude-agent/CLAUDE.md` § On task 
 | Source | Captured how | Counted as |
 |---|---|---|
 | `Skill` tool calls (inline skills: `overcome-difficulty`, `self-improvement`, `tracker-management`, project-local skills, etc.) | `name:"Skill"` `tool_use` blocks in the parent session transcript | row keyed by `input.skill` |
-| `Agent` / `Task` tool calls (subagents: `yandex-guru`, project-local agents) | `name:"Agent"` (or legacy `"Task"`) `tool_use` blocks in the parent transcript | row keyed by `input.subagent_type` |
+| `Agent` / `Task` tool calls (subagents: a domain-expert subagent, project-local agents) | `name:"Agent"` (or legacy `"Task"`) `tool_use` blocks in the parent transcript | row keyed by `input.subagent_type` |
 | `claude -p` spawns (spawned specializations: `developer`, `planner`, `thinker`, `yandex-cloud-expert`, project-local specializations) | one entry per spawn in `~/.local/log/claude-spawn-costs.jsonl` (written by `scripts/spawn-specialist.py`) | row keyed by `kind`; purpose is the spawn's `return_marker` + exit-code summary (the cost log does not store the prompt itself) |
 
 Include **all** invocations, including the trivial ones (a single `tracker-management` call to post one comment, the `self-improvement` invocation that wrote the leaf itself). The user wants the raw counts, not a curated subset — bias would defeat the analysis.
@@ -48,9 +48,9 @@ The script extracts purpose strings automatically — first line of `Skill.args`
 ```markdown
 | Kind | Name | Count | Purposes |
 |---|---|---|---|
-| Skill | `overcome-difficulty` | 2 | "Stage 2 verification mismatch on YT path"; "Cannot observe Nirvana TTL via UI" |
+| Skill | `overcome-difficulty` | 2 | "Stage 2 verification mismatch on a data-warehouse path"; "Cannot observe job TTL via UI" |
 | Skill | `self-improvement` | 1 | "User feedback: prefer AskUserQuestion at every confirmation gate" |
-| Agent | `yandex-guru` | 3 | "What is dsv3?"; "Nirvana TTL layers"; "Logos runtime vs VH3" |
+| Agent | `org-guru` | 3 | "What is component X?"; "Job TTL layers"; "Runtime vs alternate stack" |
 | spawn | `developer` | 4 | "COMPLETED"; "REPLAN"; "INCOMPLETE"; +1 more |
 | spawn | `planner` | 1 | "PLAN-READY" |
 

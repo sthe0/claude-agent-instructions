@@ -19,7 +19,7 @@ last_verified: 2026-07-22
 > **stdin**, so a plan of any size dispatches cleanly — splitting is **no longer needed to make a
 > large plan dispatchable**, only to save re-read tokens. See the corrected § below.
 
-The planner skill (`skills/specializations/planner/SKILL.md`) writes plans to `~/.claude-agent/plans/<slug>.md`. For a typical 4–6-stage plan this is fine. For larger plans, observed cost in the 2026-05-27 deepagent sessions reached **25 KB per plan file, re-read 3–10 times** as the work moved through stages. See [token-economy-plan.md](token-economy-plan.md) item 6.
+The planner skill (`skills/specializations/planner/SKILL.md`) writes plans to `~/.claude-agent/plans/<slug>.md`. For a typical 4–6-stage plan this is fine. For larger plans, observed cost in past sessions reached **25 KB per plan file, re-read 3–10 times** as the work moved through stages. See [token-economy-plan.md](token-economy-plan.md) item 6.
 
 The harness Read dedup ([system-knowledge/harness-read-dedup.md](system-knowledge/harness-read-dedup.md)) suppresses redundant Reads of an unchanged plan. The split still helps the **changed-plan** path: when the manager appends `Actual effort:` for stage N or refines stage N+1, the entire single-file plan is considered changed, and the next Read returns the full 25 KB again. With per-stage files, only the touched stage file changes and the next Read of an untouched stage stays deduped.
 

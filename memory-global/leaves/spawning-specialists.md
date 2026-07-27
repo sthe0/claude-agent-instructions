@@ -61,7 +61,7 @@ Before deciding the next move (accept, re-spawn, manual takeover), check **both*
 
 ```bash
 arc status      # uncommitted changes only
-arc log -n 5    # whether the spawn committed on-scope work before drifting
+git log -n 5    # whether the spawn committed on-scope work before drifting
 ```
 
 (git equivalents in non-arc repos.) A spawn killed for off-scope behavior may still have committed legitimate on-scope work before drifting — `status` is clean, but `log` shows the commit. Skipping `log` has cost a redundant verification spawn in one observed case.
@@ -70,7 +70,7 @@ arc log -n 5    # whether the spawn committed on-scope work before drifting
 
 The wrapper defaults `kind=developer` to `--permission-mode bypassPermissions` so the child can perform unattended Read / Grep / Write on the assigned mount. The harness no longer prompts on individual writes — that safety is replaced by **prompt-level discipline**:
 
-- The `--constraints` / dossier **must** contain an explicit hard-deny list — no `cd` / no Write / no Edit / no `arc commit` outside `<assigned-mount>`, no `ya package` / `docker push` / smoke tests of other tickets — plus a self-check at session start (`pwd` ⊆ expected mount; if not, return `CLARIFY:`).
+- The `--constraints` / dossier **must** contain an explicit hard-deny list — no `cd` / no Write / no Edit / no VCS commit outside `<assigned-mount>`, no internal package-build / `docker push` / smoke tests of other tickets — plus a self-check at session start (`pwd` ⊆ expected mount; if not, return `CLARIFY:`).
 - Without this discipline the child treats sibling mounts (referenced as "analogs") as fair game for "understanding through execution".
 
 ## Return markers

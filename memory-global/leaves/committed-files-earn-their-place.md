@@ -9,7 +9,7 @@ last_verified: 2026-07-13
 
 ## Difficulty
 
-Helper scripts written to verify or support one task get committed into the product tree by reflex, with no in-repo caller and no usage doc beyond a docstring. Two symmetric failures follow: a genuinely reusable helper is dropped (or buried in an evidence dir) because "nothing calls it", and a one-shot self-check is committed as permanent product clutter a future reader cannot interpret. The wrong keep-criterion is "does something in the repo call it" — a file with no caller can still be the most useful thing another developer finds, and a file with a caller can still be task-local noise. (Trigger: DEEPAGENT-449 committed `assert_nirvana_run_succeeded.py` to `robot/deepagent/scripts/` with no in-repo caller and no when/how doc.)
+Helper scripts written to verify or support one task get committed into the product tree by reflex, with no in-repo caller and no usage doc beyond a docstring. Two symmetric failures follow: a genuinely reusable helper is dropped (or buried in an evidence dir) because "nothing calls it", and a one-shot self-check is committed as permanent product clutter a future reader cannot interpret. The wrong keep-criterion is "does something in the repo call it" — a file with no caller can still be the most useful thing another developer finds, and a file with a caller can still be task-local noise. (Trigger: a past ticket committed a job-success-assertion script to an internal project's scripts directory with no in-repo caller and no when/how doc.)
 
 ## Guidance
 

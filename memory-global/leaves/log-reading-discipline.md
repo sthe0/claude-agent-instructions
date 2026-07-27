@@ -14,7 +14,7 @@ Rule is per tool call, per file. Not per session, not per turn.
 
 ## Why
 
-Logs are the worst context-economy material there is: high volume, low signal density, easy to dump thousands of lines that the model then has to carry through every subsequent turn. The 10-line cap forces you to aggregate first (counts, distributions, top-K, time windows) and surface only the lines that materially change the hypothesis. Adapted from `<arcadia>/ai/artifacts/skills/gena/gena-investigate/SKILL.md`.
+Logs are the worst context-economy material there is: high volume, low signal density, easy to dump thousands of lines that the model then has to carry through every subsequent turn. The 10-line cap forces you to aggregate first (counts, distributions, top-K, time windows) and surface only the lines that materially change the hypothesis. Adapted from an internal engineering-practices skill's investigation guide.
 
 ## What to do instead
 
@@ -35,5 +35,5 @@ If after three staged passes you still cannot localize the issue, that is a diff
 
 ## See also
 
-- `<arcadia>/ai/artifacts/skills/gena/gena-investigate/SKILL.md` — upstream rule + a 20-min investigation budget that pairs well with this discipline.
+- An internal engineering-practices skill's investigation guide — upstream rule + a 20-min investigation budget that pairs well with this discipline.
 - `~/.claude-agent/skills/overcome-difficulty/SKILL.md` — when log search isn't converging.

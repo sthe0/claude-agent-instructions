@@ -12,7 +12,7 @@ A separate question from § Classify task weight in CLAUDE.md. Weight class deci
 
 This is **delivery partition** — how the *approved plan* is cut into shippable units — and is deliberately distinct from the planner's *step-level decomposition* of the task into stages. (That is why the engine stage is named `partition`, not `decompose`.)
 
-Applied after the plan is approved, **before** execution — the `agentctl` engine enforces this: `agentctl partition` sits between the APPROVED and EXECUTING nodes on the spawn route, so a substantive task cannot reach execution without an M1–M4 assessment. You supply the four marker booleans (the cognition below); the engine computes the verdict and renders the section. Adapted from `<arcadia>/ai/artifacts/skills/gena/gena-decompose` — but the framework is repo-agnostic.
+Applied after the plan is approved, **before** execution — the `agentctl` engine enforces this: `agentctl partition` sits between the APPROVED and EXECUTING nodes on the spawn route, so a substantive task cannot reach execution without an M1–M4 assessment. You supply the four marker booleans (the cognition below); the engine computes the verdict and renders the section. Adapted from an internal engineering-practices skill's decomposition guide — but the framework is repo-agnostic.
 
 ## Markers (evaluate top-down)
 
@@ -69,4 +69,4 @@ The generic **`ref`** field holds whatever the environment's materialization ass
 ## See also
 
 - `~/.claude-agent/CLAUDE.md` § Classify task weight — chat / small / substantive routing (orthogonal axis).
-- `<arcadia>/ai/artifacts/skills/gena/gena-decompose/SKILL.md` — the upstream skill this is adapted from.
+- An internal engineering-practices skill's decomposition guide — the upstream skill this is adapted from.

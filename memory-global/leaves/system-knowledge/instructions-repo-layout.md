@@ -27,7 +27,6 @@ skills/                              # flat skills + specializations container
   overcome-difficulty/SKILL.md       # flat skill (invoked inline)
   self-improvement/SKILL.md + policy.md
   tracker-management/SKILL.md
-  ccgram-management/SKILL.md         # CCGram Telegram bridge ops (per-machine setup, daily ops, troubleshooting)
   specializations/
     planner/SKILL.md                 # specialization skill (spawned as claude -p)
     developer/SKILL.md
@@ -60,7 +59,6 @@ docs/                                # optional documentation
 scripts/
   setup-symlinks.sh
   setup-project-memory.sh
-  setup-ccgram.sh                      # bootstrap CCGram on a new machine (uv + ccgram + autostart + hooks)
   doctor.sh                            # new-user readiness preflight ("am I ready to start?"): claude CLI, $CLAUDE_AGENT_HOME/CLAUDE.md symlink, engine hooks in settings.json, agentctl, git hooks — read-only
   verify-instructions-sync.sh
   verify-layout-contract.sh
@@ -76,7 +74,7 @@ scripts/
   hook-self-critique-reminder.py       # PostToolUse Write: nudge to invoke `self-improvement` when an experience leaf has substantive § Self-critique
   hook-tracker-reminder.py             # UserPromptSubmit: detect tracker references (ticket keys, keywords) and nudge to invoke `tracker-management`
   hook-push-confirmation-reminder.py   # PreToolUse Bash: nudge to verify user push-confirmation before `git push` / `sync-instructions-repo.sh push`
-  hook-readme-currency-reminder.py     # PreToolUse Bash: before git/arc commit, list READMEs next to changed code that aren't in the changeset — verify currency
+  hook-readme-currency-reminder.py     # PreToolUse Bash: before a VCS commit (git or otherwise), list READMEs next to changed code that aren't in the changeset — verify currency
   hook-resolution-reminder.py          # UserPromptSubmit: nudge when user reply is brief gratitude — do NOT treat as resolution confirmation
   hook-context-growth-reminder.py      # UserPromptSubmit: nudge when live context size crosses a band (reads transcript usage); throttled per band per session
   install-reminder-hooks.sh            # idempotently wire the canonical reminder-hook set into machine-local settings.json (hooks are not merged from base.json)
@@ -101,7 +99,7 @@ githooks/
   post-commit                          # push reminder
 ```
 
-**Forbidden in global `scripts/`:** project-specific or machine-specific scripts (Arcadia mount helpers, deepagent runbook scripts, etc.) — those belong in the relevant project's own `.claude/scripts/` tree.
+**Forbidden in global `scripts/`:** project-specific or machine-specific scripts (VCS-mount helpers, project-specific runbook scripts, etc.) — those belong in the relevant project's own `.claude/scripts/` tree.
 
 ### Runtime symlinks after `setup-symlinks.sh`
 
