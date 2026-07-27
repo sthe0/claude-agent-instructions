@@ -155,11 +155,11 @@ Two surveys with one classifier (tier 0 = state/execution; tier 1 = refuted prin
 | Corpus | Tier-1 | Share | Character |
 |---|---|---|---|
 | Self-improvement (`memory-global/leaves/experience`, 17) | 11 | ~65 % | biased: the work *is* principle design |
-| Product task-work (deepagent, 14) | 1 (+1 ambiguous) | ~7 % (max 14 %) | unbiased: tier-0 dominates (a missing platform/infra fact) |
+| Product task-work (one product project, 14) | 1 (+1 ambiguous) | ~7 % (max 14 %) | unbiased: tier-0 dominates (a missing platform/infra fact) |
 
 **Aufhebung signature in line count:** `CLAUDE.md` over 24–27 June went `284 → 200` (−30 %) — the ruleset compression landed exactly on the peak of principle work. Aufhebung happens — but by hand.
 
-**Conclusion.** The fuel is real but **rare in task-work and concentrated in self-improvement** — σ is essentially the operator of self-improvement itself. The single product tier-1 case (`deepagent-415`: static checks green, runtime fails from a frozen porto layer; `P0` "static checks suffice" → `P1` "a live E2E is required before module resolution") was **already promoted to a principle by hand** (the "verify the load-bearing axis" rule in `CLAUDE.md`). The manual path works for the rare case → build is deferred until a trigger fires.
+**Conclusion.** The fuel is real but **rare in task-work and concentrated in self-improvement** — σ is essentially the operator of self-improvement itself. The single product tier-1 case (one product ticket: static checks green, runtime fails from a frozen container layer; `P0` "static checks suffice" → `P1` "a live E2E is required before module resolution") was **already promoted to a principle by hand** (the "verify the load-bearing axis" rule in `CLAUDE.md`). The manual path works for the rare case → build is deferred until a trigger fires.
 
 ## Open questions
 
