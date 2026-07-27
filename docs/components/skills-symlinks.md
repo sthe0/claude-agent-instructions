@@ -17,7 +17,7 @@ ls -1 ~/.claude-agent/skills
 Check where one skill points:
 
 ```bash
-readlink -f ~/.claude-agent/skills/arc
+readlink -f ~/.claude-agent/skills/overcome-difficulty
 ```
 
 Find broken symlinks:
