@@ -147,7 +147,7 @@ def build_argv(
     return argv
 
 
-def _normalize_forward_value(value: str) -> tuple[str, Path | None]:
+def _normalize_forward_value(value: str, element: str) -> tuple[str, Path | None]:
     """Prepare one FORWARD-class value for a spawned child's argv.
 
     The child resolves this value itself (via its own ``read_arg_text``), so
@@ -155,6 +155,11 @@ def _normalize_forward_value(value: str) -> tuple[str, Path | None]:
     that would relocate the E2BIG defect one hop later rather than remove it.
     Returns ``(value_for_argv, staged_path)``; the caller deletes
     ``staged_path`` (when not ``None``) once the child has exited.
+
+    ``element`` names the failing flag/field (e.g. ``"--constraints"``) and is
+    prefixed onto a missing-``@ref`` error so a reader can tell which forwarded
+    element failed instead of guessing between ``--constraints`` and the plan's
+    ``--done-criterion``.
     """
     if not value:
         return value, None
@@ -162,7 +167,7 @@ def _normalize_forward_value(value: str) -> tuple[str, Path | None]:
     if kind == "ref":
         resolved = Path(payload).resolve()
         if not argv_text.is_readable_file(resolved):
-            raise SystemExit(argv_text.file_arg_error("forwarded reference", payload))
+            raise SystemExit(f"{element}: {argv_text.ref_error(payload)}")
         return f"@{resolved}", None
     # escaped or inline: forward `value` VERBATIM — preserving its own '@@'
     # escaping, if any — as long as it fits the child's argv comfortably. Only
@@ -187,11 +192,18 @@ def dispatch_stage(
     cwd: str | None = None,
     constraints: str = "",
 ) -> RunResult:
-    norm_constraints, staged_constraints = _normalize_forward_value(constraints)
-    norm_done_criterion, staged_done_criterion = _normalize_forward_value(
-        stage.criterion.done_criterion
-    )
+    staged: list[Path] = []
     try:
+        norm_constraints, staged_constraints = _normalize_forward_value(
+            constraints, "--constraints"
+        )
+        if staged_constraints is not None:
+            staged.append(staged_constraints)
+        norm_done_criterion, staged_done_criterion = _normalize_forward_value(
+            stage.criterion.done_criterion, "--done-criterion (from plan)"
+        )
+        if staged_done_criterion is not None:
+            staged.append(staged_done_criterion)
         argv = build_argv(
             stage, plan_path, budget=budget, complexity=complexity, dry_run=dry_run,
             continue_worktree=continue_worktree, constraints=norm_constraints,
@@ -206,6 +218,8 @@ def dispatch_stage(
             return run(argv, cwd=cwd)
         return run(argv)
     finally:
-        for staged in (staged_constraints, staged_done_criterion):
-            if staged is not None:
-                staged.unlink(missing_ok=True)
+        # Cleanup runs only after `run()` returns, so a --dry-run preview (which
+        # resolves a staged @<tmp> ref synchronously inside that same child call)
+        # always sees the file; nothing downstream is left holding a stale path.
+        for path in staged:
+            path.unlink(missing_ok=True)

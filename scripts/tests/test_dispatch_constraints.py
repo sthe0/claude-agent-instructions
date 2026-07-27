@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 from agentctl import cli
-from agentctl.dispatch import RunResult, build_argv, dispatch_stage
+from agentctl.dispatch import RunResult, _normalize_forward_value, build_argv, dispatch_stage
 from agentctl.state import Actor, Criterion, Means, Stage, Subject
 from lib import argv_text
 
@@ -183,6 +183,69 @@ def test_dispatch_stage_cleans_up_staged_file_even_when_runner_raises():
     with pytest.raises(RuntimeError):
         dispatch_stage(stage, "/tmp/plan.toml", runner=runner, constraints=big)
     assert not staged_path_holder[0].exists()
+
+
+def test_dispatch_stage_cleans_up_staged_constraints_when_done_criterion_normalize_raises(
+    tmp_path, monkeypatch
+):
+    # constraints (oversized -> staged) normalizes fine; done_criterion normalizes
+    # SECOND and raises on a missing @ref. Both normalize calls must live inside
+    # the same try/finally so the constraints tempfile staged before the raise is
+    # still cleaned up, not leaked.
+    missing = tmp_path / "absent.md"
+    stage = _make_spawn_stage(done_criterion=f"@{missing}")
+    big = "c" * 40000
+
+    staged_paths = []
+    real_stage_to_tempfile = argv_text.stage_text_to_tempfile
+
+    def spy_stage_to_tempfile(text):
+        path = real_stage_to_tempfile(text)
+        staged_paths.append(path)
+        return path
+
+    monkeypatch.setattr(argv_text, "stage_text_to_tempfile", spy_stage_to_tempfile)
+
+    def runner(argv, cwd=None):
+        raise AssertionError("runner must not be reached: done_criterion ref is missing")
+
+    with pytest.raises(SystemExit):
+        dispatch_stage(stage, "/tmp/plan.toml", runner=runner, constraints=big)
+
+    assert len(staged_paths) == 1
+    assert not staged_paths[0].exists()
+
+
+# --- T(v') == T(v): normalizing a forwarded value must not change what the -----
+# --- child ultimately resolves via its own read_arg_text -----------------------
+
+@pytest.mark.parametrize("kind", [
+    "short-inline",
+    "short-escaped",
+    "ref",
+    "oversized-inline",
+    "oversized-escaped",
+])
+def test_normalize_forward_value_preserves_read_arg_text_round_trip(kind, tmp_path):
+    if kind == "short-inline":
+        original = "stay inside module X"
+    elif kind == "short-escaped":
+        original = "@@literal-not-a-path"
+    elif kind == "ref":
+        f = tmp_path / "dossier.md"
+        f.write_text("dossier body", encoding="utf-8")
+        original = f"@{f}"
+    elif kind == "oversized-inline":
+        original = "x" * 40000
+    else:  # oversized-escaped
+        original = "@@" + "x" * 40000
+
+    normalized, staged = _normalize_forward_value(original, "--constraints")
+    try:
+        assert argv_text.read_arg_text(normalized) == argv_text.read_arg_text(original)
+    finally:
+        if staged is not None:
+            staged.unlink(missing_ok=True)
 
 
 # --- MAX_ARG_STRLEN bound on every forwarded element ----------------------------

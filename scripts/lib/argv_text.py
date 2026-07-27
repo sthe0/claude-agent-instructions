@@ -196,11 +196,18 @@ def _read_file_or_none(path: str | Path | None) -> str | None:
 def _read_ref(ref: str) -> str:
     text = _read_file_or_none(ref)
     if text is None:
-        raise SystemExit(_ref_error(ref))
+        raise SystemExit(ref_error(ref))
     return text
 
 
-def _ref_error(ref: str) -> str:
+def ref_error(ref: str) -> str:
+    """The one wording for "a `@<path>` reference does not name a readable file".
+
+    Shared with a FORWARD-side normalizer (a value this process hands on to a
+    child rather than reading itself) so both name the same `@@` escape remedy
+    instead of drifting into `file_arg_error`'s path-only wording, which wrongly
+    claims the flag "never takes the text itself".
+    """
     return (
         f"error: '@{abbreviate(ref)}' does not name a readable file. "
         "A leading '@' means \"read this value from the file at this path\" — "
