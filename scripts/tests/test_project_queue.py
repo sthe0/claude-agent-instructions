@@ -15,10 +15,10 @@ def _write_project_json(directory: Path, queue: str) -> None:
 
 
 def test_resolves_from_direct_ancestor(tmp_path):
-    _write_project_json(tmp_path, "DEEPAGENT")
+    _write_project_json(tmp_path, "PROJQUEUE")
     sub = tmp_path / "a" / "b"
     sub.mkdir(parents=True)
-    assert resolve_project_queue(sub) == "DEEPAGENT"
+    assert resolve_project_queue(sub) == "PROJQUEUE"
 
 
 def test_returns_none_when_absent(tmp_path):
@@ -44,10 +44,10 @@ def test_nearest_ancestor_wins(tmp_path):
 
 
 def test_resolves_from_file_path(tmp_path):
-    _write_project_json(tmp_path, "DEEPAGENT")
+    _write_project_json(tmp_path, "PROJQUEUE")
     target_file = tmp_path / "CLAUDE.md"
     target_file.write_text("# test", encoding="utf-8")
-    assert resolve_project_queue(target_file) == "DEEPAGENT"
+    assert resolve_project_queue(target_file) == "PROJQUEUE"
 
 
 def test_ignores_empty_instruction_queue(tmp_path):

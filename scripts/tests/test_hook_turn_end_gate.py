@@ -461,11 +461,11 @@ def test_long_job_silent_when_background_waiter_armed(tmp_path, isolated_state):
 
 
 def test_long_job_silent_when_launched_run_in_background(tmp_path, isolated_state):
-    # Orchestrator launch done directly as a harness-tracked background Bash: detect()
-    # fires, but the same tool_use is run_in_background:true -> auto-wake -> silent.
+    # Launch done directly as a harness-tracked background Bash: detect() fires,
+    # but the same tool_use is run_in_background:true -> auto-wake -> silent.
     t = _write_transcript(tmp_path, [
         _user_line("start the pipeline"),
-        _assistant_bash_line("nirvana workflow start --id abc", True),
+        _assistant_bash_line("nohup ./pipeline.sh --id abc &", True),
     ])
     assert _mod.decide({"transcript_path": str(t), "stop_hook_active": False}) is None
 

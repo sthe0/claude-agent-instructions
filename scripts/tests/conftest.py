@@ -90,6 +90,18 @@ def _code_review_gate_off_by_default(monkeypatch):
     monkeypatch.setenv("AGENTCTL_CODE_REVIEW", "0")
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_recursion_depth(monkeypatch):
+    """Drop the ambient AGENT_RECURSION_DEPTH for the suite at large.
+
+    hook-turn-end-gate's decide() returns None outright at depth >= 1 (a spawned
+    specialist's turn-end contract is its return marker, not a root obligation),
+    so a suite run from inside a spawned specialist silently allows every case
+    that asserts a block. The three tests that own that predicate set the var
+    themselves, which overrides this."""
+    monkeypatch.delenv("AGENT_RECURSION_DEPTH", raising=False)
+
+
 @pytest.fixture
 def store(tmp_path):
     return FileStateStore(tmp_path / "state")

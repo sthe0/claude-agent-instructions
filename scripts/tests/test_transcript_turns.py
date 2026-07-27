@@ -40,7 +40,7 @@ def queued_command_entry(ts: float) -> dict:
 
 
 # Real fixture 1 (delivered/terminal shape — ALLOW-eligible): transcript
-# .claude/projects/-home-the0-task-mounts-main-robot-deepagent/
+# .claude/projects/<a task-mount project dir>/
 # 038d367a-a877-41d3-a732-746c1bdf2653.jsonl, assistant entry
 # uuid=78c79ee9-594e-4887-9081-fd2c2ab2b0ed, timestamp=2026-06-30T18:21:13.208Z.
 # Content is a single terminal text block with no tool_use — the shape that
@@ -79,8 +79,8 @@ def text_then_tool_use_entry(ts: float, text: str = REAL_TEXT_THEN_TOOL_USE) -> 
 
 
 # Real fixture 3 (majority pre-tool-call trap shape [thinking, text, tool_use]):
-# transcript .claude/projects/-home-the0-arcadia-DEEPAGENT-433-qwen3-default-
-# robot-deepagent/04c47a03-a673-4e99-a549-c9f2076a594f.jsonl, assistant entry
+# transcript .claude/projects/<a ticket task-mount project dir>/
+# 04c47a03-a673-4e99-a549-c9f2076a594f.jsonl, assistant entry
 # uuid=50ea1627-b8e8-49c7-be34-edcb470368d8, version=2.1.178. The leading text
 # block again precedes a same-message tool_use (a Skill call) — same trap,
 # with a thinking block ahead of it (the majority live shape).
