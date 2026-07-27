@@ -12,11 +12,14 @@ signatures in the raw command.
 Each matched class fires once per session (state file) so a repeated operation
 does not flood context. Advisory only: stdout, exit 0, never blocks.
 
-The tracker class detects a host-agnostic REST-API shape (a `tracker.` subdomain,
-a `/v2/issues` or `/rest/api/<n>/issue` path) plus any operator-supplied host/path
-fragments from `skill_first_tracker_hosts=` (comma/space-separated) in the system
-config root's `agent-identity.local` — so a specific tracker's exact hostname is
-opt-in configuration, not a Core default.
+Core ships exactly one operation class — `tracker`, whose signature is a
+host-agnostic REST-API shape (a `tracker.` subdomain, a `/v2/issues` or
+`/rest/api/<n>/issue` path) plus any operator-supplied host/path fragments from
+`skill_first_tracker_hosts=` (comma/space-separated) in the system config root's
+`agent-identity.local`. Every other class is machine-local: a JSON array of
+`{"name", "pattern", "skill"}` objects at `config_root.skill_first_classes_file()`.
+Which command verbs count as "a known domain operation" is an org fact, so Core
+holds the mechanism and the deployment holds the data.
 """
 from __future__ import annotations
 
@@ -51,30 +54,45 @@ def _build_tracker_re(extra_hosts=None) -> "re.Pattern[str]":
     return re.compile(r"curl\b[^\n]*\b(" + "|".join(fragments) + r")\b", re.IGNORECASE)
 
 
-# operation-class -> (compiled signature, suggested skill family). High
-# precision: each pattern targets a write/domain op a skill clearly covers.
-CLASSES: list[tuple[str, re.Pattern, str]] = [
-    ("vcs", re.compile(r"\barc\s+(add|commit|push|pr|branch|checkout)\b"),
-     "arc / arc-worktrees / create-pr"),
-    ("secrets", re.compile(r"\bya\s+vault\b"),
-     "ya-vault"),
-    ("codesearch", re.compile(r"\barc\s+grep\b"),
-     "codesearch / ast-index"),
-    ("tracker", _build_tracker_re(),
-     "tracker / tracker-management / tracker-client"),
-    ("ci", re.compile(r"\bya\s+(make\s+-A|test)\b|\bsandbox\b.*\b(create|run)\b",
-                      re.IGNORECASE),
-     "ci / sandbox / sandbox-client"),
-    ("yt", re.compile(r"\byt\s+(read-table|write-table|map|reduce|map-reduce|select|list)\b"),
-     "yt / yql"),
-    ("wiki", re.compile(r"curl\b[^\n]*\bwiki-api\b|\bwiki\s+(page|upload)\b", re.IGNORECASE),
-     "wiki / wiki-client"),
-]
+def _local_classes(classes_path=None) -> list[tuple[str, "re.Pattern[str]", str]]:
+    """Load machine-local operation classes: a JSON array of objects carrying
+    `name`, `pattern` (a Python regex, matched case-insensitively) and `skill`.
+    Fail-open per entry — a malformed file or an uncompilable pattern costs the
+    nudge, never the Bash call this hook advises on."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from lib import config_root
+
+        path = classes_path or config_root.skill_first_classes_file()
+        entries = json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    out = []
+    for e in entries if isinstance(entries, list) else []:
+        try:
+            out.append((e["name"], re.compile(e["pattern"], re.IGNORECASE), e["skill"]))
+        except Exception:
+            continue
+    return out
 
 
-def detect(cmd: str) -> list[tuple[str, str]]:
+def build_classes(classes_path=None, extra_hosts=None) -> list[tuple[str, "re.Pattern[str]", str]]:
+    """operation-class -> (compiled signature, suggested skill family). High
+    precision: each pattern targets a write/domain op a skill clearly covers.
+    Core's only builtin is `tracker`; the rest come from the machine-local file."""
+    return [
+        ("tracker", _build_tracker_re(extra_hosts),
+         "tracker / tracker-management / tracker-client"),
+    ] + _local_classes(classes_path)
+
+
+CLASSES = build_classes()
+
+
+def detect(cmd: str, classes=None) -> list[tuple[str, str]]:
     """Return [(class_name, skill_family), …] for every matched operation class."""
-    return [(name, skill) for name, rx, skill in CLASSES if rx.search(cmd)]
+    return [(name, skill) for name, rx, skill in (CLASSES if classes is None else classes)
+            if rx.search(cmd)]
 
 
 def state_path(session_id: str) -> Path:
