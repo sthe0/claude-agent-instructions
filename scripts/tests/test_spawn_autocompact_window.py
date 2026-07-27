@@ -30,6 +30,10 @@ SCRIPT = Path(__file__).resolve().parent.parent / "spawn-specialist.py"
 # never needed to name it.
 CLIENT_FIXED_BUFFER = 13_000
 HAIKU_MAX_WINDOW = 200_000
+# `o7` clamps a configured window into this range before using it, so a pin
+# outside it is silently rewritten and the trigger arithmetic below — which
+# assumes the pin is honoured verbatim — would describe a window nobody got.
+CLIENT_WINDOW_RANGE = (100_000, 1_000_000)
 # Post-compaction context floor observed at ~90–97k (memory-global leaf
 # autocompact-threshold-policy.md). A trigger near the floor thrashes: the
 # session compacts, lands just under the trigger, and compacts again.
@@ -62,12 +66,19 @@ def test_window_is_derived_from_the_ceiling():
     )
 
 
-# (b) on a model whose maximum exceeds the pin, the trigger IS our ceiling
+# (b) the pin survives the client's window parser unaltered — the one constraint
+#     on it that the trigger arithmetic does not already imply
+def test_pin_is_inside_the_client_window_parser_range():
+    low, high = CLIENT_WINDOW_RANGE
+    assert low <= MOD.SPAWN_AUTOCOMPACT_WINDOW_TOKENS <= high
+
+
+# (c) on a model whose maximum exceeds the pin, the trigger IS our ceiling
 def test_unclamped_trigger_equals_our_ceiling():
     assert _client_trigger(MOD.SPAWN_AUTOCOMPACT_WINDOW_TOKENS) == MOD.AUTOCOMPACT_CEILING_TOKENS
 
 
-# (c) on a model whose maximum is below the pin, the client clamps and the
+# (d) on a model whose maximum is below the pin, the client clamps and the
 #     trigger stays clear of the post-compaction floor rather than thrashing
 def test_clamped_trigger_keeps_margin_above_the_post_compaction_floor():
     trigger = _client_trigger(MOD.SPAWN_AUTOCOMPACT_WINDOW_TOKENS, model_max=HAIKU_MAX_WINDOW)
@@ -75,7 +86,7 @@ def test_clamped_trigger_keeps_margin_above_the_post_compaction_floor():
     assert trigger - POST_COMPACTION_FLOOR >= MIN_MARGIN_ABOVE_FLOOR
 
 
-# (d) every kind gets the pin, in both forms the client reads
+# (e) every kind gets the pin, in both forms the client reads
 def test_every_kind_gets_the_window_pin_in_both_forms():
     for kind in ("developer", "planner", "thinker", "code-reviewer", "tech-writer"):
         settings = MOD.build_child_settings(kind)
@@ -84,7 +95,7 @@ def test_every_kind_gets_the_window_pin_in_both_forms():
         assert settings["autoCompactWindow"] == MOD.SPAWN_AUTOCOMPACT_WINDOW_TOKENS
 
 
-# (e) the per-model table and the percentage mechanism are gone for good —
+# (f) the per-model table and the percentage mechanism are gone for good —
 #     re-adding either is the regression, in the source as well as the API
 def test_no_per_model_window_table_and_no_percentage_key():
     for gone in ("MODEL_WINDOW_TOKENS", "DEFAULT_WINDOW_TOKENS", "autocompact_pct_for_model"):

@@ -89,6 +89,20 @@ def _row(ps, session_id: str, *, model_tokens: dict, agent_spawns: dict,
     return row
 
 
+def _write_transcript(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as fh:
+        for r in rows:
+            fh.write(json.dumps(r) + "\n")
+
+
+def _assistant_usage(ts: str, model: str, **usage) -> dict:
+    """One billed assistant turn. The scanner prices it per call from `model`;
+    `_row_costs` re-prices it per bucket — that is the identity under test."""
+    return {"type": "assistant", "timestamp": ts,
+            "message": {"model": model, "usage": usage, "content": []}}
+
+
 def _tokens(ps, **per_model) -> dict:
     tok = ps._empty_model_tokens()
     for k, fields in per_model.items():
@@ -197,6 +211,48 @@ def test_g_no_price_key_collides_with_a_reserved_row_field(ps):
 
 # ---------------------------------------------------------------- (h) reprice
 
+def test_h_reprice_prices_each_bucket_exactly_as_the_scanner_priced_each_call(ps, tmp_path):
+    """The identity that makes repricing EXACT rather than an estimate.
+
+    The scanner prices every API call individually from that call's own model;
+    `reprice` has only the summed per-model buckets and prices each bucket once.
+    Those two agree only while the bucketer (`_model_key`) and the price resolver
+    (`_rates_for`) read the same table — which is the whole point of deriving both
+    from `PRICING`. Pinning the expectation to the scanner's OWN output, rather
+    than to a hand-computed number, is what makes this an equivalence check: a
+    bucket priced at the wrong model's rates diverges here even though every
+    other case in this file stays green.
+    """
+    main_file = tmp_path / "projects" / "proj" / "sess-eq.jsonl"
+    _write_transcript(main_file, [
+        _assistant_usage(_ts(1), "claude-opus-5",
+                         input_tokens=120_000, output_tokens=40_000,
+                         cache_read_input_tokens=900_000, cache_creation_input_tokens=70_000),
+        _assistant_usage(_ts(1), "claude-sonnet-5",
+                         input_tokens=300_000, output_tokens=90_000,
+                         cache_read_input_tokens=1_500_000, cache_creation_input_tokens=25_000),
+        _assistant_usage(_ts(1), "claude-haiku-4-5",
+                         input_tokens=500_000, output_tokens=200_000,
+                         cache_read_input_tokens=800_000, cache_creation_input_tokens=10_000),
+    ])
+    # a sub-agent transcript, because that is where a non-inherited model shows up
+    _write_transcript(main_file.parent / "sess-eq" / "subagents" / "sub-1.jsonl", [
+        _assistant_usage(_ts(1), "claude-fable-5",
+                         input_tokens=200_000, output_tokens=60_000,
+                         cache_read_input_tokens=400_000, cache_creation_input_tokens=15_000),
+    ])
+
+    row = ps._scan_session(main_file)
+
+    busy = [k for k in ps.MODEL_KEYS if any(row["model_tokens"][k].values())]
+    assert sorted(busy) == sorted(ps.MODEL_KEYS), (
+        "every bucket must carry tokens, or the equivalence is vacuous", busy)
+
+    cost, cache_read = ps._row_costs(row["model_tokens"])
+    assert cost == pytest.approx(row["cost_usd"], abs=1e-6)
+    assert cache_read == pytest.approx(row["cache_read_usd"], abs=1e-6)
+
+
 def test_h_reprice_rewrites_dollars_in_place_and_keeps_everything_else(ps, tmp_path):
     stale = _row(
         ps, "s-stale",
@@ -250,6 +306,26 @@ def test_h_reprice_dry_run_writes_nothing(ps, tmp_path):
     assert list(tmp_path.glob("ledger.jsonl.bak-*")) == []
 
 
+def test_h_reprice_leaves_a_row_with_no_model_tokens_exactly_as_it_found_it(ps):
+    """A row the scanner never wrote (corrupt, or from another tool) has no
+    buckets to price from. Reading its absent buckets as zero would rewrite real
+    dollars to $0.00 — so it is skipped whole, stamp included, and keeps counting
+    as stale, which is the honest report: no known table priced it."""
+    row = _row(ps, "s-corrupt", model_tokens=_tokens(ps), agent_spawns=_spawns(ps),
+               cost_usd=12.34, cache_read_usd=1.0, quality_rating=5)
+    del row["model_tokens"]  # the one field this test is about
+    ps.write_ledger({"s-corrupt": row})
+    before = ps.LEDGER.read_text(encoding="utf-8")
+
+    ps.reprice()
+
+    assert ps.LEDGER.read_text(encoding="utf-8") == before
+    r = ps.load_ledger()["s-corrupt"]
+    assert (r["cost_usd"], r["cache_read_usd"], r["quality_rating"]) == (12.34, 1.0, 5)
+    assert "priced_by" not in r
+    assert "older rate table" in ps.scorecard(ps.load_ledger(), 7, None)
+
+
 def test_h_reprice_on_an_absent_ledger_is_a_no_op(ps):
     assert not ps.LEDGER.exists()
     assert "nothing to reprice" in ps.reprice()
@@ -272,3 +348,17 @@ def test_i_scorecard_warns_while_any_row_is_priced_by_an_older_table(ps):
     for r in rows.values():
         r["priced_by"] = ps.PRICING_SHA
     assert "older rate table" not in ps.scorecard(rows, 7, None)
+
+
+def test_i_a_row_carrying_no_priced_by_at_all_counts_as_stale(ps):
+    """The shape of every row already on disk the moment the stamp shipped: no
+    `priced_by` key at all. Unstamped must read as stale, not as current, or the
+    warning stays silent on exactly the ledger that needs it."""
+    rows = {
+        "s1": _row(ps, "s1", model_tokens=_tokens(ps), agent_spawns=_spawns(ps)),
+        "s2": _row(ps, "s2", model_tokens=_tokens(ps), agent_spawns=_spawns(ps),
+                   priced_by=ps.PRICING_SHA),
+    }
+    assert "priced_by" not in rows["s1"]
+    report = ps.scorecard(rows, 7, None)
+    assert "**1** ledger row(s) priced by an older rate table" in report

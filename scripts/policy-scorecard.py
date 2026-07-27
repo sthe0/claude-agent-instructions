@@ -442,6 +442,13 @@ def reprice(dry_run: bool = False) -> str:
     before = sum(r.get("cost_usd", 0.0) or 0.0 for r in rows.values())
     changed = 0
     for r in rows.values():
+        if "model_tokens" not in r:
+            # Left exactly as found, stamp included. `_scan_session` always writes
+            # model_tokens, so a row without it is corrupt or foreign — treating its
+            # absent buckets as zero would rewrite real dollars to $0.00. It keeps
+            # counting as stale below, which is the honest report: no known table
+            # priced it.
+            continue
         cost, cache_read = _row_costs(_stored_model_tokens(r))
         cost, cache_read = round(cost, 6), round(cache_read, 6)
         if (r.get("cost_usd") != cost or r.get("cache_read_usd") != cache_read
@@ -788,6 +795,8 @@ def scorecard(rows: dict[str, dict], days: int, project: str | None) -> str:
              f"{_arrow(cur['cost_per_session'], prev['cost_per_session'])}")
     L.append(f"- cache_read share of cost: **{cur['cache_read_share']:.0%}**  "
              f"{_arrow(cur['cache_read_share'], prev['cache_read_share'])}")
+    # Whole-ledger, unlike every figure above it: `reprice` is whole-ledger too, so
+    # a stale row outside this window still needs the same single command.
     stale = _stale_priced_rows(rows)
     if stale:
         L.append(f"- ⚠ **{stale}** ledger row(s) priced by an older rate table — "
