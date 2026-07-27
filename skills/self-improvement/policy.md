@@ -119,13 +119,13 @@ This is the propose-not-execute / no-veto driver: a non-author surfaces difficul
 
 ## Routing a difficulty to its queue by tier
 
-*Difficulty removed: a difficulty filed against the wrong tier's tracker (or with the wrong stream) is invisible to the people who can act on it — an Org-specific refinement filed as a Core GitHub Issue is read by no Yandex author; a planning item filed with the report label pollutes the difficulty digest.*
+*Difficulty removed: a difficulty filed against the wrong tier's tracker (or with the wrong stream) is invisible to the people who can act on it — an Org-specific refinement filed as a Core GitHub Issue is read by no org author; a planning item filed with the report label pollutes the difficulty digest.*
 
 A difficulty's **tier** decides its destination; the destination's mechanics are structural (the 3-tier model is in [instruction-dev-queues.md](../../memory-global/leaves/instruction-dev-queues.md)). Classifying the tier is **cognition** (the model reads the target and decides); the queue/label **lookup and routing** is **structure** (the per-project field + `file-difficulty.py --queue/--stream` from that leaf's wiring) — do not hand-encode a binding the field already carries.
 
 - **Core** (org-neutral artifact) → the difficulty-channel (GitHub Issues), per § Authority above. Reports carry the `difficulty` label; a planned backlog item carries `backlog` (`--stream backlog`) so the digest never pulls it.
-- **Org** (Yandex-specific but cross-project) → Startrek: a **report** to `OOSEVENREPORT` (default `--stream report`), a planned **backlog** item to `OOSEVEN` (`--stream backlog`).
-- **Project** (e.g. `robot/deepagent`) → the single queue named by the project's `instruction_queue` field (`agent-project.json`), resolved automatically from the target path by `file-difficulty.py`; backlog and reports collapse onto it because project participants edit project instructions directly.
+- **Org** (org-specific but cross-project) → the org tracker channel: a **report** to the org report queue (default `--stream report`), a planned **backlog** item to the org backlog queue (`--stream backlog`); the queue names come from the machine-local channel config, not from Core.
+- **Project** (e.g. a product repo under an org path) → the single queue named by the project's `instruction_queue` field (`agent-project.json`), resolved automatically from the target path by `file-difficulty.py`; backlog and reports collapse onto it because project participants edit project instructions directly.
 
 The model classifies the tier; `--queue`/`--stream` (or the resolved project field) carry it to the right surface.
 
@@ -145,7 +145,7 @@ On a machine with Core edit authority (`is_author()` true), the **first** propos
 
 ## Cache-aware editing
 
-Anthropic prompt caching is **strict-prefix**: any byte change in a file that sits in the cached prompt prefix forces `cache_create` on every byte that follows. Observed cost in the 2026-05-27 deepagent sessions was 1.5M–2.8M `cache_create` tokens per long session, traced largely to mid-task edits of `CLAUDE.md` and `MEMORY.md`. See [token-economy-plan.md](../../memory-global/leaves/token-economy-plan.md).
+Anthropic prompt caching is **strict-prefix**: any byte change in a file that sits in the cached prompt prefix forces `cache_create` on every byte that follows. Observed cost in the 2026-05-27 sessions was 1.5M–2.8M `cache_create` tokens per long session, traced largely to mid-task edits of `CLAUDE.md` and `MEMORY.md`. See [token-economy-plan.md](../../memory-global/leaves/token-economy-plan.md).
 
 ### Files that count as the cached prefix
 
@@ -184,7 +184,7 @@ All agent instructions — prompts in `agents/`, skill prompts in `skills/`, `CL
 - **User-facing replies** — same language as the user's request (the language the user writes in). That is output, not stored instruction text. This explicitly includes **technical / design narratives, analyses, and the question + option-label text of every `AskUserQuestion`** — structured or technical content is **not** an exemption.
 - **Plan files** in `~/.claude-agent/plans/<name>.md` — per-session artefacts the user reviews and approves; follow the same-language-as-user rule (they are output, not stored instructions). Plans committed *into* the instructions repo or any `.claude/agent-memory/` still follow English-by-default.
 - **Quoted examples** of what the user might say (`"ok"`, `"do it now"`) — keep quotes literal; surrounding prose stays English.
-- **Proper nouns and API identifiers** (Tracker, Arcadia, `arc`, ticket keys, model names) — not "another language".
+- **Proper nouns and API identifiers** (Tracker, a monorepo or VCS name, ticket keys, model names) — not "another language".
 
 ### Register in a user-facing reply
 
@@ -342,7 +342,7 @@ git -C ~/claude-agent-instructions worktree add -b <branch> <path> origin/main
 cd <path>   # author, test, and commit here
 ```
 
-- Enforced by `scripts/hook-guard-canon-readonly.py` (PreToolUse, renamed from `hook-guard-serving-checkout-offmain.py`): it **denies** an `Edit`/`Write` (or a `git commit`) whose target lands in a canonical checkout **on any branch** — no on-`main` carve-out, no `memory-global/` exemption. It fails open only for a **linked** worktree, a second arc mount, personal auto-memory under `~/.claude-agent`, and `/tmp`. Canon detection is org-neutral: a machine-local list (`~/.claude-agent/canon-roots.local`, via `config_root.canon_roots_file()`) names the canonical roots, so the public Core repo carries zero arc specifics — arc canon is opt-in per install.
+- Enforced by `scripts/hook-guard-canon-readonly.py` (PreToolUse, renamed from `hook-guard-serving-checkout-offmain.py`): it **denies** an `Edit`/`Write` (or a `git commit`) whose target lands in a canonical checkout **on any branch** — no on-`main` carve-out, no `memory-global/` exemption. It fails open only for a **linked** worktree, a second mount, personal auto-memory under `~/.claude-agent`, and `/tmp`. Canon detection is org-neutral: a machine-local list (`~/.claude-agent/canon-roots.local`, via `config_root.canon_roots_file()`) names the canonical roots, so the public Core repo carries zero VCS-tool specifics — a mounted-VCS canon is opt-in per install.
 - **Operational consequence:** recording an experience / self-improvement leaf into `memory-global/` now requires a worktree — the primary Core checkout denies the write — then land.
 - The guard's deny message points at `session-isolate.sh` to relocate a session whose cwd sits inside a canon.
 - Land by fast-forwarding the worktree branch onto `origin/main` (per § After editing), then remove the worktree and delete the branch.
