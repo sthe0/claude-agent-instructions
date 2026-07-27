@@ -27,6 +27,10 @@ from difficulty_channel import authority  # noqa: E402
 from difficulty_channel.adapters import BUILTIN_NAMES, load_adapter  # noqa: E402
 from difficulty_channel.adapters.github import DIFFICULTY_LABEL as _GH_DIFFICULTY_LABEL, BACKLOG_LABEL as _GH_BACKLOG_LABEL  # noqa: E402
 from difficulty_channel.project_queue import resolve_project_queue  # noqa: E402
+from lib import config_root  # noqa: E402
+from lib import term_ruleset as tr  # noqa: E402
+
+REPO_ROOT = SCRIPTS_DIR.parent
 
 
 def _now_iso() -> str:
@@ -179,6 +183,37 @@ def main(argv: list[str] | None = None, _ts: str | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+
+    # Blocking gate: a difficulty record is about to leave this machine for a
+    # PUBLIC channel (the report stream lands in the Core repo's issue
+    # tracker) — no org-internal term may ride along in the body. Fails
+    # closed on a hit; fails OPEN (files anyway, flagged UNCHECKED rather
+    # than silently passed) when no ruleset is installed, mirroring
+    # check-org-neutral.py's missing-config behavior.
+    try:
+        term_rulesets = tr.discover_rulesets(
+            agent_home=config_root.agent_home(),
+            project_dir=REPO_ROOT,
+            guarded_repo_root=REPO_ROOT,
+        )
+    except tr.RulesetError as exc:
+        print(f"error loading term ruleset: {exc}", file=sys.stderr)
+        return 2
+
+    if not term_rulesets:
+        print("UNCHECKED: no term ruleset installed")
+    else:
+        body = "\n".join([record.target, record.functional_ground, record.evidence])
+        hits = tr.scan(body, term_rulesets)
+        if hits:
+            print(
+                "error: org-internal term(s) found in the difficulty record body "
+                "(do not file to a public channel):",
+                file=sys.stderr,
+            )
+            for h in hits:
+                print(f"  {h.format()}", file=sys.stderr)
+            return 1
 
     try:
         handle = authority.file_core_difficulty(record, channel=channel_name, **submit_kwargs)

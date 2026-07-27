@@ -24,6 +24,7 @@ bash scripts/verify-layout-contract.sh # layout check — run separately (not in
 | [scripts/verify-memory-index.py](../../scripts/verify-memory-index.py) | Every leaf pointer in `MEMORY.md` index files resolves to an existing file. | Yes |
 | [scripts/verify-experience-leaf.py](../../scripts/verify-experience-leaf.py) | Experience leaves (`difficulty/v1`) have required frontmatter fields including `resolution_confirmed_by_user`. | Yes |
 | [scripts/verify-language.py](../../scripts/verify-language.py) | Files in the repo that must stay English do not contain significant Russian text (and vice-versa for user-facing reply surfaces). | Yes |
+| [scripts/verify-terms.py](../../scripts/verify-terms.py) | Every tracked file (content and path) is scanned against the discovered term ruleset(s) (see [org-portability.md](org-portability.md) § Term neutrality). Zero rulesets installed → reported no-op, not a silent pass. | Yes |
 | [scripts/lint-prose-length.py](../../scripts/lint-prose-length.py) | Governed prose files (`CLAUDE.md`, `cursor/rules/claude-code-sync.mdc`, skill `SKILL.md`/`policy.md`, `README.md`) stay within their line/byte ceilings defined in `config.md`. | Yes |
 | [scripts/lint-permissions.py](../../scripts/lint-permissions.py) | `permissions/global.json` and any project permission files are valid JSON and match the expected schema. | Yes |
 | [scripts/lint-settings-base.py](../../scripts/lint-settings-base.py) | `settings/base.json` is valid and the action taxonomy is consistent. | Yes |

@@ -43,6 +43,9 @@ DESIRED = [
     ("PreToolUse",       "Edit|Write", "hook-memory-consistency.py",         5),
     ("PreToolUse",       "Edit|Write", "hook-prewrite-plan-check.py", 5),
     ("PreToolUse",       "Edit|Write", "hook-state-gate.py",          5),
+    # Advisory (never blocks): warn when a Write/Edit would introduce a hit
+    # against a discovered term ruleset (C1 org-neutrality mechanism).
+    ("PreToolUse",       "Edit|Write", "hook-term-neutrality.py",     5),
     # Hard gate: deny a plan-approval AskUserQuestion issued the same turn the
     # plan was submitted — pre-tool-call text may never render, so the click-
     # question would arrive with nothing behind it ("Я не вижу плана").
