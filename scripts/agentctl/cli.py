@@ -2858,6 +2858,30 @@ def cmd_unblock(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     return Directive(True, state.node, "continue", "unblocked; resume from prior node")
 
 
+def cmd_check_coverage(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Read-only pre-flight: would `replan --plan <new>` clear the critique coverage
+    gate right now? Calls gates.replan_coverage_blockers directly — the same check
+    cmd_replan runs — so a coverage miss surfaces BEFORE the coordinator spends a
+    thinker plan-review on a corrected plan that would only bounce off replan's own
+    gate afterward. Mirrors cmd_replan's OLD/NEW loading contract exactly (snapshot-
+    else-plan_path, lenient OLD / strict NEW) but never saves, never logs a gate,
+    never transitions state — a pre-flight that mutated what it inspects would
+    corrupt the very state a later real replan diffs against."""
+    state = _require(store, args.session)
+    if not (state.difficulty and state.difficulty.critique):
+        return Directive(True, state.node, "inspect", "no active critique; nothing to cover")
+    snap = state.plan_snapshot_path
+    old_path = snap if (snap and Path(snap).exists()) else state.plan_path
+    old = load_plan(old_path, strict=False)
+    new = load_plan(args.new)
+    blockers = gates.replan_coverage_blockers(old, new, state.difficulty.critique)
+    if blockers:
+        return Directive(False, state.node, "inspect",
+                         "coverage blockers: " + "; ".join(blockers),
+                         data={"coverage_blockers": blockers})
+    return Directive(True, state.node, "inspect", "OK — coverage clear")
+
+
 def cmd_status(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = store.load(args.session) if getattr(args, "session", None) else None
     if state is None:
@@ -3254,6 +3278,7 @@ COMMANDS = {
     "resolve": cmd_resolve,
     "reject": cmd_reject,
     "replan": cmd_replan,
+    "check-coverage": cmd_check_coverage,
     "block": cmd_block,
     "unblock": cmd_unblock,
     "status": cmd_status,
@@ -3301,8 +3326,8 @@ _SESSION_COMMANDS = (
     "stage-review", "code-review", "approve", "partition", "partition-units",
     "next-stage", "dispatch", "resolve-permission", "record-result", "declare",
     "investigate", "critique", "normalize", "verify-final", "resolve", "reject",
-    "replan", "block", "unblock", "status", "drive", "close", "push-subplan",
-    "pop-subplan",
+    "replan", "check-coverage", "block", "unblock", "status", "drive", "close",
+    "push-subplan", "pop-subplan",
 )
 
 # (dest, subcommands that declare it)
@@ -3356,6 +3381,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("artifact", ("ledger-enumerate",), "path to the deliverable being cross-checked"),
     ("target", ("question-raise", "plan-review"), "plan element address or plan file path"),
     ("plan", ("plan-render", "submit-plan", "replan", "drive", "push-subplan"), "plan file path"),
+    ("new", ("check-coverage",), "corrected plan file path — the object under a coverage pre-check, not narrative"),
     ("rendering_file", ("present-plan",), "path to the rendered presentation"),
     ("by", ("confirm-delivery", "approve", "resolve"), "who acted — a name, not a narrative"),
     ("reviewer", ("plan-review", "stage-review", "code-review"), "reviewer name"),
@@ -3697,6 +3723,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--normalization-waiver", dest="normalization_waiver", default=None,
                     help="close a difficulty WITHOUT a re-norming record when the exposed factor "
                          "is genuinely one-off; a recorded reason (refused if empty)")
+    sp = add("check-coverage"); sp.add_argument("--session", required=True)
+    sp.add_argument("--new", required=True,
+                    help="corrected plan file to check against the active critique, "
+                         "BEFORE spending a thinker plan-review on it")
     sp = add("block"); sp.add_argument("--session", required=True); sp.add_argument("--reason", default="")
     sp = add("unblock"); sp.add_argument("--session", required=True)
     sp = add("status"); sp.add_argument("--session", required=False)
