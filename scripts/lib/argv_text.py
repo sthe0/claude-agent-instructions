@@ -36,9 +36,16 @@ CAVEAT a reader must not have to discover from the source: file contents are
 spawn wrappers. So a value routed through a file is NOT byte-identical to the same
 text passed inline — a trailing newline is lost. This is cosmetic for every
 consumer here (prose fields, all stripped before storage) but it is real.
+
+The module's second entry point serves the flags that are ALREADY path-only and
+stay that way — ``--plan``, ``--context-dossier``. They need no ``@``: the path is
+the whole value. What they need is ``read_required_file`` / ``is_readable_file``,
+which state the file-path contract when a caller passes prose instead of a path,
+rather than leaking the ``OSError`` a bare ``Path`` operation raises.
 """
 from __future__ import annotations
 
+import os
 import tempfile
 from pathlib import Path
 
@@ -94,28 +101,89 @@ def stage_text_to_tempfile(text: str) -> Path:
     return Path(tmp.name)
 
 
-def _read_ref(ref: str) -> str:
-    # The probe is guarded as well as the read: on an over-long value the
-    # `is_file()` call itself raises OSError (ENAMETOOLONG), which is exactly the
-    # illegible traceback this convention exists to replace.
+def is_readable_file(path: str | Path | None) -> bool:
+    """Whether `path` names a file this process can read — and NEVER raises.
+
+    The naive ``Path(x).is_file()`` is itself unsafe as a probe: handed prose
+    instead of a path it raises OSError (ENAMETOOLONG) rather than returning
+    False, which is the illegible traceback this module exists to replace. So the
+    PROBE is guarded, not only the read — a guard around ``read_text`` alone
+    leaves the original traceback reachable one call earlier.
+
+    Every OSError means "not a readable file" here (ENAMETOOLONG, EACCES, ELOOP,
+    ENOTDIR alike): the caller's remedy is the same for all of them, and a
+    narrower catch would let the rarer ones escape as tracebacks.
+    """
+    if not path:
+        return False
     try:
-        path = Path(ref)
-        if ref and path.is_file():
-            return path.read_text(encoding="utf-8").rstrip()
+        candidate = Path(path)
+        return candidate.is_file() and os.access(candidate, os.R_OK)
+    except OSError:
+        return False
+
+
+def read_required_file(path: str | Path, flag_name: str) -> str:
+    """Read the file `flag_name` was given, or exit stating the contract.
+
+    For path-typed arguments that take no ``@``. On any failure the ``SystemExit``
+    names the flag, says a readable file PATH is expected, echoes (truncated) what
+    arrived instead, and gives the remedy — so the reader fixes their argument
+    rather than investigating the filesystem.
+    """
+    text = _read_file_or_none(path)
+    if text is None:
+        raise SystemExit(file_arg_error(flag_name, path))
+    return text
+
+
+def file_arg_error(flag_name: str, value: object) -> str:
+    """The one wording for "this flag takes a file path, and that was not one".
+
+    Shared so a wrapper's early pre-check and the read at prompt-assembly time
+    cannot drift into saying different things about the same contract.
+    """
+    return (
+        f"error: {flag_name} expects the path of a readable file, but got "
+        f"'{abbreviate(value)}'. Write the text to a file and pass its path — "
+        f"{flag_name} never takes the text itself."
+    )
+
+
+def abbreviate(value: object) -> str:
+    """Render an argv value for a diagnostic, bounded in length.
+
+    Without this a 120 KB payload mistaken for a path becomes a 120 KB error
+    message — unreadable in a terminal and in the refusal log alike.
+    """
+    text = str(value)
+    if len(text) <= _REF_SNIPPET_CHARS:
+        return text
+    return f"{text[:_REF_SNIPPET_CHARS]}... ({len(text)} chars)"
+
+
+def _read_file_or_none(path: str | Path | None) -> str | None:
+    if not is_readable_file(path):
+        return None
+    try:
+        return Path(path).read_text(encoding="utf-8").rstrip()
     except (OSError, UnicodeDecodeError):
         # UnicodeDecodeError (a ValueError, not an OSError) is how a file that
         # exists but is not utf-8 surfaces — "unreadable" per the contract, so it
-        # takes the same clean SystemExit rather than an illegible traceback.
-        pass
-    raise SystemExit(_ref_error(ref))
+        # takes the same clean exit rather than an illegible traceback.
+        return None
+
+
+def _read_ref(ref: str) -> str:
+    text = _read_file_or_none(ref)
+    if text is None:
+        raise SystemExit(_ref_error(ref))
+    return text
 
 
 def _ref_error(ref: str) -> str:
-    shown = ref[:_REF_SNIPPET_CHARS]
-    if len(ref) > _REF_SNIPPET_CHARS:
-        shown += f"... ({len(ref)} chars)"
     return (
-        f"error: '@{shown}' does not name a readable file. "
+        f"error: '@{abbreviate(ref)}' does not name a readable file. "
         "A leading '@' means \"read this value from the file at this path\" — "
         "write the text to a file and pass '@<path>'. "
         "To pass text that really starts with '@', double it: '@@'."

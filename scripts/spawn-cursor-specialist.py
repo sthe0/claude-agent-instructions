@@ -31,6 +31,7 @@ import time
 from pathlib import Path
 
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
+from lib import argv_text  # one place decides how an argv value names its text
 from lib import marker_extract  # unconditional second-pass marker extraction (model is the primary classifier)
 from lib.config_root import skills_dir  # config-root resolver (isolated system root)
 from lib.planner_plan_check import (  # single shared home for return-marker + plan checks
@@ -128,9 +129,14 @@ def assemble_prompt(
     skill_body: str,
     cursor_bootstrap: str | None,
 ) -> str:
-    plan = read_text_or_file(None, args.plan)
+    # --plan is optional here (--smoke runs without one); an absent plan stays "".
+    plan = argv_text.read_required_file(args.plan, "--plan") if args.plan else ""
     constraints = read_text_or_file(args.constraints, None)
-    dossier = read_text_or_file(None, args.context_dossier) if args.context_dossier else ""
+    dossier = (
+        argv_text.read_required_file(args.context_dossier, "--context-dossier")
+        if args.context_dossier
+        else ""
+    )
 
     sections = [f"AGENT_RECURSION_DEPTH={depth}", ""]
     if cursor_bootstrap:
@@ -330,9 +336,9 @@ def main(argv: list[str] | None = None) -> int:
         log_refused("unknown-kind", {"kind": args.kind})
         return 2
 
-    if not args.smoke and args.plan is not None and not args.plan.exists():
-        print(f"error: plan file not found: {args.plan}", file=sys.stderr)
-        log_refused("plan-not-found", {"kind": args.kind, "plan": str(args.plan)})
+    if not args.smoke and args.plan is not None and not argv_text.is_readable_file(args.plan):
+        print(argv_text.file_arg_error("--plan", args.plan), file=sys.stderr)
+        log_refused("plan-not-found", {"kind": args.kind, "plan": argv_text.abbreviate(args.plan)})
         return 2
 
     constants = parse_config_md()

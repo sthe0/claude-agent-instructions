@@ -35,6 +35,7 @@ import time
 from pathlib import Path
 
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
+from lib import argv_text  # one place decides how an argv value names its text
 from lib import marker_extract  # unconditional second-pass marker extraction (model is the primary classifier)
 from lib.config_root import skills_dir  # config-root resolver (isolated system root)
 from lib.planner_plan_check import (  # single shared home for return-marker + plan checks
@@ -150,9 +151,13 @@ def permissions_digest(project_file: Path | None) -> str:
 
 
 def assemble_prompt(args: argparse.Namespace, depth: int, permissions: str) -> str:
-    plan = read_text_or_file(None, args.plan)
+    plan = argv_text.read_required_file(args.plan, "--plan")
     constraints = read_text_or_file(args.constraints, None)
-    dossier = read_text_or_file(None, args.context_dossier) if args.context_dossier else ""
+    dossier = (
+        argv_text.read_required_file(args.context_dossier, "--context-dossier")
+        if args.context_dossier
+        else ""
+    )
 
     sections = [f"AGENT_RECURSION_DEPTH={depth}", ""]
     continue_worktree = getattr(args, "continue_worktree", None)
@@ -516,9 +521,9 @@ def _build_extraction(result_text: str, kind: str) -> "marker_extract.Extraction
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
-    if not args.plan.exists():
-        print(f"error: plan file not found: {args.plan}", file=sys.stderr)
-        log_refused("plan-not-found", {"kind": args.kind, "plan": str(args.plan)})
+    if not argv_text.is_readable_file(args.plan):
+        print(argv_text.file_arg_error("--plan", args.plan), file=sys.stderr)
+        log_refused("plan-not-found", {"kind": args.kind, "plan": argv_text.abbreviate(args.plan)})
         return 2
     skill = skill_path(args.kind)
     if not skill.exists():
