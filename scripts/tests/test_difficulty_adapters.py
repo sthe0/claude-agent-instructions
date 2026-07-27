@@ -3,7 +3,7 @@
 NO live network: the GitHub adapter's pure record->fields mapping is asserted directly, and its
 submit()/pull() are exercised through an injected fake HTTP client.
 
-The org-specific adapter (formerly ``startrek``) is no longer resident in Core — it attaches
+The org-specific adapter that once shipped alongside it is no longer resident in Core — it attaches
 through the machine-local plugin seam instead (see ``test_difficulty_channel.py``'s
 plugin-loading tests: plugin-present / plugin-absent / no-plugin-dir default).
 """

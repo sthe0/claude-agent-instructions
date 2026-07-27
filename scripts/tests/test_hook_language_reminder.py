@@ -32,7 +32,7 @@ def test_english_prompt_not_detected():
 def test_mostly_english_with_one_cyrillic_word_not_detected():
     # a single transliterated word amid English stays under the ratio
     assert not mod.is_cyrillic_prompt(
-        "Run the DEEPAGENT-430 pipeline and report the resulting metrics now да")
+        "Run the PROJ-430 pipeline and report the resulting metrics right now да")
 
 
 def test_ticket_key_alone_not_detected():

@@ -270,7 +270,7 @@ def test_near_duplicate_flags_high_overlap_pair(tmp_path):
 
 def test_distinct_leaves_not_flagged(tmp_path):
     _leaf(tmp_path / "a.md", "token-economy", "context engineering and cache aware spend reduction")
-    _leaf(tmp_path / "b.md", "robot-acl", "yt nirvana robot identity read acl for humans")
+    _leaf(tmp_path / "b.md", "robot-acl", "cluster job robot identity read acl for humans")
     assert sd.scan_near_duplicates(tmp_path, threshold=0.6) == []
 
 

@@ -37,7 +37,7 @@ def _make_project_dir(projects_dir: Path, project: str, session_ids: list[str]) 
 
 def test_aggregate_counts_resolved_and_invocations():
     task_rows = [
-        {"session": "s1", "quality": 4, "tracker_key": "DEEPAGENT-1"},
+        {"session": "s1", "quality": 4, "tracker_key": "PROJ-1"},
         {"session": "s2", "quality": 5, "tracker_key": None},
     ]
     policy_rows = [{"project": "p"}, {"project": "p"}, {"project": "p"}]
@@ -55,7 +55,7 @@ def test_aggregate_counts_resolved_and_invocations():
 
 def test_aggregate_marked_precedents_equals_rows_with_tracker_key():
     task_rows = [
-        {"session": "s1", "quality": 3, "tracker_key": "DEEPAGENT-1"},
+        {"session": "s1", "quality": 3, "tracker_key": "PROJ-1"},
         {"session": "s2", "quality": 3, "tracker_key": "org/repo#7"},
         {"session": "s3", "quality": 3, "tracker_key": None},
     ]
@@ -133,7 +133,7 @@ def test_main_project_vs_global_yield_different_counts(tmp_path, capsys):
     _make_project_dir(projects_dir, "proj-b", ["s2"])
 
     task_log = _write_jsonl(tmp_path / "task.jsonl", [
-        {"ts": "2026-07-01T00:00:00+00:00", "session": "s1", "quality": 5, "tracker_key": "DEEPAGENT-1"},
+        {"ts": "2026-07-01T00:00:00+00:00", "session": "s1", "quality": 5, "tracker_key": "PROJ-1"},
         {"ts": "2026-07-01T00:00:00+00:00", "session": "s2", "quality": 3, "tracker_key": None},
     ])
     policy_log = _write_jsonl(tmp_path / "policy.jsonl", [

@@ -51,12 +51,12 @@ def test_path_overlaps_normalizes_dotdot_and_relative_segments():
     assert path_overlaps("/repo/./sub/../a.py", "/repo/a.py") is True
 
 
-def test_path_overlaps_arc_mounts_same_mount_overlap():
-    assert path_overlaps("/arc/mount1/src/file.py", "/arc/mount1/src") is True
+def test_path_overlaps_vcs_mounts_same_mount_overlap():
+    assert path_overlaps("/mnt/vcs1/src/file.py", "/mnt/vcs1/src") is True
 
 
-def test_path_overlaps_arc_mounts_distinct_mounts_no_overlap():
-    assert path_overlaps("/arc/mount1/src/file.py", "/arc/mount2/src/file.py") is False
+def test_path_overlaps_vcs_mounts_distinct_mounts_no_overlap():
+    assert path_overlaps("/mnt/vcs1/src/file.py", "/mnt/vcs2/src/file.py") is False
 
 
 # ── detect_conflicts: liveness + overlap combined ───────────────────────────

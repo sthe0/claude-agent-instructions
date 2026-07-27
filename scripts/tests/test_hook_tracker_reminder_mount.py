@@ -38,29 +38,29 @@ def test_fires_on_wrong_mount(monkeypatch=None):
     mod = _load_module()
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
-        root = _make_root(tmp, "main", "DEEPAGENT-440-foo")
+        root = _make_root(tmp, "main", "PROJ-440-foo")
         _set_root(mod, root)
-        out = mod.mount_mismatches(["DEEPAGENT-440"], str(root / "main"))
-        assert out == [("DEEPAGENT-440", "main", ["DEEPAGENT-440-foo"])], out
+        out = mod.mount_mismatches(["PROJ-440"], str(root / "main"))
+        assert out == [("PROJ-440", "main", ["PROJ-440-foo"])], out
 
 
 def test_lists_multiple_matching_mounts():
     mod = _load_module()
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
-        root = _make_root(tmp, "main", "DEEPAGENT-440-a", "DEEPAGENT-440-b")
+        root = _make_root(tmp, "main", "PROJ-440-a", "PROJ-440-b")
         _set_root(mod, root)
-        out = mod.mount_mismatches(["DEEPAGENT-440"], str(root / "main" / "sub"))
-        assert out == [("DEEPAGENT-440", "main", ["DEEPAGENT-440-a", "DEEPAGENT-440-b"])], out
+        out = mod.mount_mismatches(["PROJ-440"], str(root / "main" / "sub"))
+        assert out == [("PROJ-440", "main", ["PROJ-440-a", "PROJ-440-b"])], out
 
 
 def test_silent_when_already_in_ticket_mount():
     mod = _load_module()
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
-        root = _make_root(tmp, "DEEPAGENT-440-foo")
+        root = _make_root(tmp, "PROJ-440-foo")
         _set_root(mod, root)
-        out = mod.mount_mismatches(["DEEPAGENT-440"], str(root / "DEEPAGENT-440-foo" / "robot"))
+        out = mod.mount_mismatches(["PROJ-440"], str(root / "PROJ-440-foo" / "robot"))
         assert out == [], out
 
 
@@ -70,7 +70,7 @@ def test_silent_when_no_matching_mount():
         tmp = Path(td)
         root = _make_root(tmp, "main", "OTHER-1-x")
         _set_root(mod, root)
-        out = mod.mount_mismatches(["DEEPAGENT-440"], str(root / "main"))
+        out = mod.mount_mismatches(["PROJ-440"], str(root / "main"))
         assert out == [], out
 
 
@@ -78,9 +78,9 @@ def test_silent_when_cwd_outside_root():
     mod = _load_module()
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
-        root = _make_root(tmp, "main", "DEEPAGENT-440-foo")
+        root = _make_root(tmp, "main", "PROJ-440-foo")
         _set_root(mod, root)
-        out = mod.mount_mismatches(["DEEPAGENT-440"], str(tmp / "elsewhere" / "repo"))
+        out = mod.mount_mismatches(["PROJ-440"], str(tmp / "elsewhere" / "repo"))
         assert out == [], out
 
 
@@ -92,7 +92,7 @@ def test_noop_when_no_root(monkeypatch=None):
         import os
         os.environ["CLAUDE_TASK_MOUNT_ROOT"] = str(missing)
         try:
-            out = mod.mount_mismatches(["DEEPAGENT-440"], str(missing / "main"))
+            out = mod.mount_mismatches(["PROJ-440"], str(missing / "main"))
             assert out == [], out
         finally:
             os.environ.pop("CLAUDE_TASK_MOUNT_ROOT", None)
@@ -102,8 +102,8 @@ def test_end_to_end_stdout():
     """Full hook run: tracker-reminder line always, mount-check line on mismatch."""
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
-        root = _make_root(tmp, "main", "DEEPAGENT-440-foo")
-        payload = {"prompt": "continue DEEPAGENT-440 please", "cwd": str(root / "main")}
+        root = _make_root(tmp, "main", "PROJ-440-foo")
+        payload = {"prompt": "continue PROJ-440 please", "cwd": str(root / "main")}
         env = {"CLAUDE_TASK_MOUNT_ROOT": str(root)}
         import os
         full_env = {**os.environ, **env}
@@ -114,7 +114,7 @@ def test_end_to_end_stdout():
         assert res.returncode == 0, res.returncode
         assert "[tracker-reminder]" in res.stdout, res.stdout
         assert "[mount-check]" in res.stdout, res.stdout
-        assert "DEEPAGENT-440-foo" in res.stdout, res.stdout
+        assert "PROJ-440-foo" in res.stdout, res.stdout
 
 
 def _set_root(mod, root: Path) -> None:

@@ -115,7 +115,7 @@ class TestScanCount:
         tree = _make_tree(
             tmp_path,
             "```bash\ncd ~/x && claude-agent\n```\n",
-            "```bash\nclaude-task DEEPAGENT-1\n```\n",
+            "```bash\nclaude-task PROJ-1\n```\n",
         )
         rc = main(["--root", str(tree)])
         out = capsys.readouterr().out
