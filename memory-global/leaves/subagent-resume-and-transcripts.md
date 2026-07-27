@@ -40,9 +40,9 @@ This is the data source for reading prior subagent work during investigation (e.
 
 ### Subagent auto-compaction
 
-A long-running subagent has its own context budget. When it hits ~95% of its own context window, it auto-compacts the same way the parent does. The compaction event is written into the transcript as a `compact_boundary` row, and a sibling file `agent-acompact-<id>.jsonl` records the compaction metadata (e.g. `preTokens`).
+A long-running subagent has its own context budget and auto-compacts the same way the parent does once it crosses its trigger. The trigger is **not** ~95% of the window: the client derives it as `min(window − round(window × 0.2), window − 13000)` over the window already reduced by the 20 000-token output reserve, which lands near 80% of that reduced figure — about 152k on the 210k pin this fleet uses. The arithmetic, the live symbol names, and the per-model table live in [[autocompact-threshold-policy]]; do not re-derive them here. The compaction event is written into the transcript as a `compact_boundary` row, and a sibling file `agent-acompact-<id>.jsonl` records the compaction metadata (e.g. `preTokens`).
 
-Threshold can be lowered: `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=50` triggers at 50% instead of 95%.
+`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` still works in the client (it replaces the 0.2 fraction with `⌊window × pct/100⌋`, still capped at `window − 13000`), but **this fleet does not use it**: `set-context-cap.sh` deletes the key and `lint-settings-base.py` carries it in `DEPRECATED_ENV_KEYS`. To move a child's trigger, pin its window instead — that is exactly what `spawn-specialist.py` does.
 
 Practical implication: do not assume "subagent ran out of context" when work just gets long — auto-compaction handles it. If you really want a fresh state, spawn a new `Task` instead.
 

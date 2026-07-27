@@ -6,7 +6,7 @@ schema: difficulty/v1
 resolution_confirmed_by_user: "<migrated 2026-06-11 to difficulty/v1; per-context confirmations preserved inline>"
 refs: [2026-05-26-agent-system-plan-vs-reality-drift]
 created: 2026-06-11
-last_verified: 2026-07-16
+last_verified: 2026-07-28
 ---
 
 # Verify the load-bearing axis, not the surface signal
@@ -62,6 +62,10 @@ Confirmed: "Да, пришёл — закрываем". ccgram "связь от�
 - Lesson: **an unexecuted verify_command is an untested assertion promoted to arbiter** — its most likely failure (a pattern that never matches: ANSI colour, changed output format, a renamed label) is silent and blind in both directions. Author it, then run it on both sides before binding it into a plan. And a gate must guard both halves of its criterion — what must disappear *and* what must survive; pinning only the negative half certifies trees that violate the positive one.
 - Landed: PR [14482842](https://a.yandex-team.ru/review/14482842) → merged as `r20352065`, verified on the synced trunk ref (`arc show trunk:` → 0 `Write`, 3 `Edit`, placeholders intact) — template cleaned + a `no dead Write(...) permission rules` regression assertion in `test-composition.sh` (34 PASS / 1 FAIL vs the trunk baseline 33/1; the single FAIL is the pre-existing T5 `clean tree reports no issues`, measured on trunk with both files reverted — reported to the user, not absorbed).
 
+
+### 2026-07-28 — Model lineup refresh (Opus 5 / Fable 5 / Sonnet 5) invalidated four pinned representations at once
+- Where it arose: claude-agent-instructions: scripts/spawn-specialist.py, scripts/policy-scorecard.py, scripts/cost-report.py, CLAUDE.md, memory-global/leaves/autocompact-threshold-policy.md — landed on main as b5f59f3
+- Working plan: 1. Read the live client bundle for every symbol before asserting anything about it — the window/trigger formula was re-derived, not recalled. 2. Delete the hand-maintained model-keyed table wherever the platform already derives the value. 3. Where a model-keyed table must exist, derive it from one source and stamp its consumers with a hash of that source. 4. Sweep the prose records LAST, and refuse any suggested wording whose premise you cannot verify in the live config: the plan proposed naming a 'model alias pin (opus[1m])', settings/base.json has no model key at all, so that phrasing was dropped rather than written.
 ## Common core & variations
 **Common:** trust a *direct observation of the axis that carries the conclusion*, not a proxy that merely correlates with it. Mirrors [[2026-05-26-agent-system-plan-vs-reality-drift]]'s static-vs-runtime verification trap.
 
