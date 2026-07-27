@@ -64,17 +64,17 @@ If OD proposes a rule patch — push back. Usually the right move is the archite
 
 ## Worked example (this session)
 
-Across the 2026-05-27 session — DEEPAGENT-367/414/415 audit + follow-ups — multiple instances of the same shape surfaced:
+Across the 2026-05-27 session — a past audit + follow-ups — multiple instances of the same shape surfaced:
 
-- yandex-guru subagent existed in `.claude/agents/` but had **0 invocations** in 9 transcripts.
+- a domain-expert subagent existed in `.claude/agents/` but had **0 invocations** in 9 transcripts.
 - `overcome-difficulty` was rule-mentioned 3 times in global CLAUDE.md but had **0 invocations** in those same 9 transcripts.
 - `fewer-permission-prompts` skill existed but I audited prompts by hand instead.
-- A range of skills (`arc`, `arcanum`, `ya-vault`, `codesearch`, `paste`, …) were available but I tackled their domains via direct `Bash`.
+- A range of skills (a VCS skill, a VCS-review skill, a secrets skill, a code-search skill, a paste-sharing skill, …) were available but I tackled their domains via direct `Bash`.
 
-**Systemic pattern:** *capability exists in the registry → trigger does not fire → user has to point it out*. Repeated across yandex-guru, OD, skill-pool. Not a one-off.
+**Systemic pattern:** *capability exists in the registry → trigger does not fire → user has to point it out*. Repeated across the domain-expert subagent, OD, skill-pool. Not a one-off.
 
 **Architectural improvements** that came out of OD-style analysis:
-- **Project-memory trigger leaves** with concrete signals + examples (yandex-guru-trigger.md, overcome-difficulty-trigger.md). These are not "another copy of the rule" — they're a *project-local activation surface* the global rule lacked.
+- **Project-memory trigger leaves** with concrete signals + examples (a domain-expert-subagent trigger leaf, an overcome-difficulty trigger leaf). These are not "another copy of the rule" — they're a *project-local activation surface* the global rule lacked.
 - **Skill-first dispatch** (global discipline leaf + project mapping table). New navigation surface, not a louder rule.
 - **Allow-list parity with policy** (`acting-without-asking.md` § Policy ↔ settings.json). New documented alignment surface.
 - **Memory hierarchy with sub-indexes** (this leaf's neighbor). Structural refactor from physical-3-level / navigational-2-level to coherent 3-level.

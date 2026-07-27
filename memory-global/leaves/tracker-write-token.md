@@ -1,28 +1,17 @@
 ---
 name: tracker-write-token
-description: Yandex Tracker (Startrek) writes need ~/.tracker-token, not $OAUTH_TOKEN; MCP tracker tools are read-only.
+description: A tracker's write path may need a dedicated write-scoped token distinct from a general-purpose read-only env token; a tracker's MCP integration may expose reads only.
 type: reference
 created: 2026-06-16
 last_verified: 2026-06-16
 ---
 
-# Tracker (Startrek) write path on this machine
+# Tracker write path — separate write token from read-only env token
 
-Creating / editing / linking Yandex Tracker issues from the shell:
+Creating / editing / linking tracker issues from the shell, when the tracker distinguishes scopes:
 
-- **Use the token in `~/.tracker-token`** (a dedicated file, OAuth scheme).
-  ```bash
-  TT=$(cat ~/.tracker-token | tr -d '\n\r ')
-  curl -s -H "Authorization: OAuth $TT" ...  https://st-api.yandex-team.ru/v2/...
-  ```
-- **`$OAUTH_TOKEN` (env) is read-only** — it returns 200 on `/v2/myself` and GETs but **403 on writes** with
-  `"startrek:write OAuth scope is required"`. Do not use it for POST/PATCH.
-- **MCP `mcp__tracker__*` tools are read-only** (Get/Search only — no Create/Comment/Link). Use them for reads;
-  for writes fall back to `~/.tracker-token` + REST.
+- **Prefer a dedicated write-scoped token file** over a general-purpose env token when one exists — some tracker deployments provision a narrower-scoped credential specifically for write operations.
+- **A general-purpose env token may be read-only** — it can return success on reads (`GET`/`whoami`-style calls) but **403 on writes** with a scope-required error. Do not assume read success implies write capability.
+- **A tracker's MCP integration may be read-only** (Get/Search only — no Create/Comment/Link) even when a REST API supports writes. Use MCP for reads; fall back to the dedicated write-scoped token + the tracker's REST API for writes.
 
-API quick refs:
-- Create issue: `POST /v2/issues` body `{"queue":"DEEPAGENT","type":{"key":"task"},"assignee":"the0","summary":..,"description":..}` → 201, returns `key`.
-- Link issues: `POST /v2/issues/<KEY>/links` body `{"relationship":"relates","issue":"<OTHER-KEY>"}`. 422 with
-  "уже связаны" means the link already exists (idempotent-safe to ignore).
-
-> verified by: this session 2026-06-14 (created DEEPAGENT-430, $OAUTH_TOKEN 403'd, ~/.tracker-token 201'd).
+> verified by: a past session — the general-purpose env token 403'd on a write while the dedicated write-scoped token file succeeded on the same call.

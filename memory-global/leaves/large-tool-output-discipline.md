@@ -8,16 +8,16 @@ last_verified: 2026-05-27
 
 # Large tool-output discipline
 
-The model's context window pays full price for every byte a tool returns. Observed in 2026-05-27 deepagent sessions: single Tracker comment responses of 14 KB, plan-file Reads of 25 KB, Nirvana instance JSONs of 24 KB — each landing in cache as a permanent fixture of the conversation prefix. See [token-economy-plan.md](token-economy-plan.md) item 5 and Anthropic's [tool-clearing Cookbook recipe](https://platform.claude.com/cookbook/tool-use-context-engineering-context-engineering-tools).
+The model's context window pays full price for every byte a tool returns. Observed in past sessions: single Tracker comment responses of 14 KB, plan-file Reads of 25 KB, orchestration-platform instance JSONs of 24 KB — each landing in cache as a permanent fixture of the conversation prefix. See [token-economy-plan.md](token-economy-plan.md) item 5 and Anthropic's [tool-clearing Cookbook recipe](https://platform.claude.com/cookbook/tool-use-context-engineering-context-engineering-tools).
 
 ## When to wrap a command
 
 Apply the wrapper proactively before running:
 
-- A `find` / `rg` / `arc grep` / `ya tool grep` that might match many files.
+- A `find` / `rg` / an internal VCS's grep / an internal build-tool's grep that might match many files.
 - A log tail or `juggler` / `monium` query that could return hundreds of lines.
-- A `tracker-cli.sh` / `arcanum-cli.sh` / similar JSON dump where the model needs a few fields, not the entire blob.
-- A `gh pr view --comments` / `arc pr show` on a heavily-discussed PR.
+- A `tracker-cli.sh` / a VCS-review-tool CLI / similar JSON dump where the model needs a few fields, not the entire blob.
+- A `gh pr view --comments` / an internal VCS's PR-show command on a heavily-discussed PR.
 - A `docker logs` / `kubectl logs` invocation.
 
 Heuristic: if you would normally pipe through `head -50` to keep the context clean — instead pipe through `offload-large.sh`, which keeps the head **and** lets you go back for the tail.

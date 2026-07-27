@@ -9,7 +9,7 @@ last_verified: 2026-07-13
 
 ## Difficulty
 
-The local usage report (`agent-stats.py`, see [[solved-by-007-marker-and-usage-stats]]) answers "how much is this system used *on this machine*", but a single machine's usage was invisible to any other — there was no way to see usage across a fleet of installations "in one place", including non-Yandex installations that never touch Startrek. A naive cross-machine rollup would either ship other installations' data without consent or leak task ids / tracker keys / paths into a shared surface. The mechanism must collect a fleet-wide rollup while (1) never emitting anything from a machine that did not opt in and (2) never emitting anything but anonymized counts.
+The local usage report (`agent-stats.py`, see [[solved-by-007-marker-and-usage-stats]]) answers "how much is this system used *on this machine*", but a single machine's usage was invisible to any other — there was no way to see usage across a fleet of installations "in one place", including installations that never touch any particular org's internal tracker. A naive cross-machine rollup would either ship other installations' data without consent or leak task ids / tracker keys / paths into a shared surface. The mechanism must collect a fleet-wide rollup while (1) never emitting anything from a machine that did not opt in and (2) never emitting anything but anonymized counts.
 
 ## Guidance
 
@@ -27,7 +27,7 @@ The local usage report (`agent-stats.py`, see [[solved-by-007-marker-and-usage-s
   "schema": "usage/v1",
   "period": "2026-W28",
   "installation_id": "<16-hex salted sha256>",
-  "channel": "github" | "startrek",
+  "channel": "github" | "<other-channel>",
   "n_invocations": 0, "n_resolved": 0, "n_quality_rated": 0,
   "n_marked_precedents": 0, "mean_quality": null,
   "total_cost_usd": 0.0, "n_spawns": 0
@@ -47,10 +47,10 @@ The local usage report (`agent-stats.py`, see [[solved-by-007-marker-and-usage-s
 
 **Cadence.** Run `emit` once per closed ISO week (a cron / scheduled step, never on the `resolve` hot path — emit is a separate opt-in periodic action). Re-emitting the same week is safe: `pull` keeps the latest comment per `(installation_id, period)`.
 
-**Reachability constraint (honest scope, not overclaimed).** A **private** GitHub sink is reachable only by the operator's own fleet plus accounts explicitly granted repo access — an arbitrary external fork cannot contribute to it without a granted sink credential. So "all installations" means, in practice, **the operator's fleet + granted collaborators** on the GitHub (non-Yandex) side and **all internally-reachable Yandex installations** (which all reach the internal ticket) on the Startrek side. A truly public global rollup would require a **public** sink, which the "closed/private" requirement excludes — that tension is real and documented here rather than silently papered over.
+**Reachability constraint (honest scope, not overclaimed).** A **private** GitHub sink is reachable only by the operator's own fleet plus accounts explicitly granted repo access — an arbitrary external fork cannot contribute to it without a granted sink credential. So "all installations" means, in practice, **the operator's fleet + granted collaborators** on the GitHub (public) side and **all internally-reachable installations** (which all reach the same internal ticket) on any other channel's side. A truly public global rollup would require a **public** sink, which the "closed/private" requirement excludes — that tension is real and documented here rather than silently papered over.
 
 ## See also
 
 - [[solved-by-007-marker-and-usage-stats]] — the local usage report + the `solved_by_007` marker this telemetry sits atop; `emit` reuses its `aggregate`.
-- [[tracker-write-token]] — the `~/.tracker-token` write-auth the Startrek `add_comment` reuses.
+- [[tracker-write-token]] — the write-scoped-token discipline a tracker channel's `add_comment` reuses.
 - `scripts/core-difficulty-digest.py` — the existing channel-pull aggregator whose shape `usage-digest.py` mirrors.

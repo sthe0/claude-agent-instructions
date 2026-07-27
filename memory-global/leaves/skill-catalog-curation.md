@@ -8,7 +8,7 @@ last_verified: 2026-05-27
 
 # Skill catalog curation
 
-The "user-invocable skills" section in every session's system reminder is rendered from the skills directory tree. In a fresh deepagent session the block is ~100 lines and several thousand bytes — every byte sits in the cached prefix, paid once per turn at the cache-read rate and re-paid in full on every prefix invalidation (CLAUDE.md / MEMORY.md edit). See [token-economy-plan.md](token-economy-plan.md) item 4 and arXiv [SkillReducer](https://arxiv.org/html/2603.29919v1) for the principle (tiered architecture > monolithic).
+The "user-invocable skills" section in every session's system reminder is rendered from the skills directory tree. In a fresh session the block is ~100 lines and several thousand bytes — every byte sits in the cached prefix, paid once per turn at the cache-read rate and re-paid in full on every prefix invalidation (CLAUDE.md / MEMORY.md edit). See [token-economy-plan.md](token-economy-plan.md) item 4 and arXiv [SkillReducer](https://arxiv.org/html/2603.29919v1) for the principle (tiered architecture > monolithic).
 
 ## What "in the catalog" means here
 

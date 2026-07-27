@@ -10,7 +10,7 @@ last_verified: 2026-06-15
 
 **Fact**: variables under the `env` key in `~/.claude-agent/settings.json` are applied by Claude Code itself after process start and override values from the parent shell, **including `env -u`** (unsetting in the shell does not help).
 
-**Empirical verification (2026-05-24, the0.klg.yp-c.yandex.net)**: with `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` set in settings.json (ELIZA proxy), running `env -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_BASE_URL claude --print "..."` resolved to the same ELIZA endpoint with the same token (same 429 quota response, same request_id pattern). Shell-side override had zero effect.
+**Empirical verification (2026-05-24, a remote dev host)**: with `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` set in settings.json (an internal auth proxy), running `env -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_BASE_URL claude --print "..."` resolved to the same ELIZA endpoint with the same token (same 429 quota response, same request_id pattern). Shell-side override had zero effect.
 
 ## Consequence
 

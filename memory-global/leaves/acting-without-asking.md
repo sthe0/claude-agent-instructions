@@ -36,7 +36,7 @@ Once the user has approved a plan (planner returned `PLAN-READY:` and the user s
 
 - **File edits** in any path listed under `## Reference files` `### To modify` or as a stage's `Output:`.
 - **Artifact creation** for outputs the plan declares (datasets, configs, generated files, PR drafts).
-- **VCS operations** declared in the plan's scope: `arc commit` / `git commit` on the assigned branch; `push` to the declared remote and branch; `pr create` if the plan names a PR; **excludes** force-push to shared branches unless explicitly declared.
+- **VCS operations** declared in the plan's scope: a commit on the assigned branch; `push` to the declared remote and branch; `pr create` if the plan names a PR; **excludes** force-push to shared branches unless explicitly declared.
 - **External calls** named in the plan: API calls, MCP write tools, CLI commands listed in `Required resources` or stage bodies.
 - **Side-effect-free actions** (see § 1) anywhere, plan or no plan.
 
@@ -139,7 +139,7 @@ then in-thread execution can beat a cold spawn that would only re-derive the pre
 - **Burning 4 tool calls to "be sure" about a new MCP's side-effect class.** Budget is 1 lookup; after that — `PERMISSION-REQUEST:` (it's a single click for the user vs minutes of agent thrashing).
 - **Quietly expanding scope** ("while I was at it I also fixed X in the adjacent file"). § 5 violation — silent substantive change. Ask first, even if the side change feels obviously beneficial.
 - **Treating "refinement" as cover for substantive change.** Adding a file to `Reference files` is substantive (§ 5), not refinement, even though it looks like "just an addition".
-- **Asking about a referenced file / script / skill without reading it first.** If the user mentions a file / script / skill you don't see in your working tree — `Read` it (and refresh the VCS view first if it's a tracked path that may have landed since your branch diverged — e.g. `arc fetch trunk` then `arc show arcadia/trunk:<path>`). Only `AskUserQuestion` *after* you have the actual content. Asking "how do we adapt X?" before reading X is the inverse of § 1 (`Read` is pre-authorized).
+- **Asking about a referenced file / script / skill without reading it first.** If the user mentions a file / script / skill you don't see in your working tree — `Read` it (and refresh the VCS view first if it's a tracked path that may have landed since your branch diverged — e.g. fetch the trunk/main ref then show the file at that path via your VCS's read commands). Only `AskUserQuestion` *after* you have the actual content. Asking "how do we adapt X?" before reading X is the inverse of § 1 (`Read` is pre-authorized).
 - **Surfacing the executor choice (manager in-thread vs `developer` spawn) to the user.** Who types the code is an *internal* routing decision (CLAUDE.md § Classify task weight + the in-context carve-out) — decide it yourself and proceed. The user approves the **plan and its scope**, not the implementer. An `AskUserQuestion` offering "in-thread vs developer-spawn" is friction, not a genuine user decision.
 - **Re-asking to commit an in-scope edit.** `commit` on the assigned branch is plan-scope-declared (§ 2) — commit and report it. Only **push** (or a commit to a shared / protected branch) is a separate gate. Asking "commit in-thread?" for a file the plan exists to change is the same over-ask as asking permission for the edit itself.
 - **Asking whether to file a backlog / tracker / issue record the agent can file itself.** Recording a difficulty (`file-difficulty.py`, a backlog ticket, an issue) is an additive, reversible bookkeeping act within standing authority — file it and report the key/link. Offering it as an `AskUserQuestion` option converts a zero-cost act into a user click (user: "Почему не предлагаешь сразу сделать? У тебя же есть все права", 2026-07-02).
@@ -147,11 +147,11 @@ then in-thread execution can beat a cold spawn that would only re-derive the pre
 
 ## Policy ↔ settings.json alignment
 
-The carve-outs in § 1 are **policy**; the **harness** only honors them when the matching patterns are present in `~/.claude-agent/settings.json` `permissions.allow`. If you see permission prompts for items § 1 calls side-effect-free (`ls`, `head`, `cat`, `find`, `wc`, `grep`, `git status`, `arc log`, etc.), the policy is current but the settings haven't caught up — add the patterns. Maintain global read-only Bash idioms in **global** settings.json (cross-machine, cross-project), and project-specific Edit/Write paths in `<cwd>/.claude/settings.local.json`. Audit habit: `Skill(skill="fewer-permission-prompts")` after a click-heavy session.
+The carve-outs in § 1 are **policy**; the **harness** only honors them when the matching patterns are present in `~/.claude-agent/settings.json` `permissions.allow`. If you see permission prompts for items § 1 calls side-effect-free (`ls`, `head`, `cat`, `find`, `wc`, `grep`, `git status`, `git log`, etc.), the policy is current but the settings haven't caught up — add the patterns. Maintain global read-only Bash idioms in **global** settings.json (cross-machine, cross-project), and project-specific Edit/Write paths in `<cwd>/.claude/settings.local.json`. Audit habit: `Skill(skill="fewer-permission-prompts")` after a click-heavy session.
 
 ## See also
 
 - `~/.claude-agent/CLAUDE.md` § Acting without asking — the short pointer that loads this leaf.
 - `~/.claude-agent/CLAUDE.md` § On task resolution § Cost & effort — per-stage `Actual effort:` from the plan file is the breakdown referenced from the experience leaf.
 - `~/.claude-agent/skills/specializations/planner/SKILL.md` § Plan format — Required resources (optional) and the per-stage `Actual effort:` field.
-- `~/claude-agent-instructions/permissions/README.md` — for **specific named** persistent grants (`arc push origin/main`), not for categorical pre-authorizations like the ones in this leaf.
+- `~/claude-agent-instructions/permissions/README.md` — for **specific named** persistent grants (`git push origin/main`), not for categorical pre-authorizations like the ones in this leaf.

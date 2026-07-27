@@ -20,7 +20,7 @@ A code link that names a line or an identifier without a pinned revision rots: t
 
 **Org-neutral — the mechanism is a permalink, not a specific host.** Two examples, neither is *the rule*:
 
-- Arcadia: append `?rev=rNNNNNNNN` (e.g. `…/scripts/foo.py?rev=r20395226#L42`).
+- An internal VCS with revision-tagged URLs: append `?rev=rNNNNNNNN` (e.g. `…/scripts/foo.py?rev=r20395226#L42`).
 - GitHub: use a commit-SHA permalink — `…/blob/<40-hex-commit-sha>/path#L42` (the `y`-shortcut in the GitHub UI rewrites a branch URL to this form).
 
 Any VCS host with an immutable revision/commit addressing scheme qualifies; use whichever the deliverable's host provides.
