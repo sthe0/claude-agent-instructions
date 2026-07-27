@@ -45,18 +45,32 @@ cat >"$CLEAN_MD" <<'EOF'
 One example stage.
 EOF
 
-# A marker word from check-org-neutral.py's own MARKERS list, needed to
-# exercise the refusal path for real — but split across a concatenation so
-# this file's own source text never spells the contiguous word (the
-# added-line guard would otherwise flag this test file's own diff); the
-# heredoc below is unquoted so the split rejoins into the real marker only
-# in the fixture FILE this test writes, not in the script's source lines.
-MARKER_WORD="yan""dex"
+# check-org-neutral.py is ruleset-driven (lib/term_ruleset.py); with no
+# ruleset installed it reports every input clean, so exercising the refusal
+# path for real needs a hermetic synthetic ruleset, scoped via
+# CLAUDE_TERM_RULESET_DIR around the two refusal cases below (2, 8) — see
+# RULESET_DIR. The fixture term is the same synthetic "zorblex" used across
+# the C1 pytest suite (test_check_org_neutral.py et al.), never a real org
+# identifier.
+MARKER_WORD="zorblex"
 MARKED_TOML="$TMP/plan-marked.toml"
 cat >"$MARKED_TOML" <<EOF
 [[stage]]
 index = 1
 title = "deploy via $MARKER_WORD infra"
+EOF
+
+# The ruleset itself: outside the repo tree (self-publication refusal would
+# otherwise apply), cleaned up by the trap above via $TMP. Only exported
+# around the two refusal cases (2, 8) below — the success cases (1, 3
+# override, 7) keep passing with zero rulesets installed, matching a real
+# machine with no ruleset configured.
+RULESET_DIR="$TMP/term-rulesets"
+mkdir -p "$RULESET_DIR"
+cat >"$RULESET_DIR/synthetic.toml" <<'EOF'
+[[deny]]
+pattern = '\bzorblex\b'
+label = "internal-codename"
 EOF
 
 # --- gh stub, controlled via env vars read at call time -------------------
@@ -122,7 +136,9 @@ check "publish success: comment contains markdown body" 'grep -q "One example st
 STUB_LOG="$TMP/log-2"; : >"$STUB_LOG"
 STUB_GIST_COPY="$TMP/gist-copy-2"
 STUB_COMMENT_COPY="$TMP/comment-copy-2"
+export CLAUDE_TERM_RULESET_DIR="$RULESET_DIR"
 out="$(tracker_publish_plan "$KEY" "$MARKED_TOML" "$CLEAN_MD" 2>"$TMP/stderr-2.log")"; rc=$?
+unset CLAUDE_TERM_RULESET_DIR
 check "publish refusal: exit nonzero"        '[[ $rc -ne 0 ]]'
 check "publish refusal: zero gh calls"       '[[ ! -s "$STUB_LOG" ]]'
 check "publish refusal: stderr reason"       '[[ -s "$TMP/stderr-2.log" ]]'
@@ -187,7 +203,9 @@ cp "$MARKED_TOML" "$MARKED_MD"
 STUB_LOG="$TMP/log-8"; : >"$STUB_LOG"
 STUB_GIST_COPY="$TMP/gist-copy-8"
 STUB_COMMENT_COPY="$TMP/comment-copy-8"
+export CLAUDE_TERM_RULESET_DIR="$RULESET_DIR"
 out="$(tracker_comment "$KEY" "$MARKED_MD" 2>"$TMP/stderr-8.log")"; rc=$?
+unset CLAUDE_TERM_RULESET_DIR
 check "comment refusal: exit nonzero"    '[[ $rc -ne 0 ]]'
 check "comment refusal: zero gh calls"   '[[ ! -s "$STUB_LOG" ]]'
 check "comment refusal: stderr reason"   '[[ -s "$TMP/stderr-8.log" ]]'
