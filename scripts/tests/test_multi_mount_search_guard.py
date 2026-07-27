@@ -123,7 +123,7 @@ def test_bash_rg_no_path_cwd_project_allow():
 # --- Bash: grep -rn inside a single mount → ALLOW ---
 
 def test_bash_grep_rn_inside_single_mount_allow():
-    single_root = f"{HOME}/arcadia_claude_local/robot"
+    single_root = f"{HOME}/monorepo_local/sub"  # inside exactly one of MOUNTS_5
     r = decide("Bash", {"command": f"grep -rn foo {single_root}"}, single_root, MOUNTS_5)
     assert r is None
 
@@ -140,7 +140,7 @@ def test_bash_git_status_allow():
     assert r is None
 
 
-# --- No arc mounts → ALLOW regardless ---
+# --- No FUSE mounts → ALLOW regardless ---
 
 def test_no_mounts_grep_allow():
     r = decide("Grep", {"path": HOME}, HOME, [])
