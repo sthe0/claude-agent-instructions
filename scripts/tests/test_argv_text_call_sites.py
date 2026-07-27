@@ -258,6 +258,96 @@ wrappers = pytest.mark.parametrize(
 )
 
 
+# --- the spawn wrappers: mechanical exhaustiveness, mirroring the cli.py walk ---
+#
+# The cli.py walk above computes its candidate set from `agentctl`'s OWN parser,
+# so a new subcommand option can never slip by unclassified. A wrapper is a
+# separate process with its own parser, so it needs its own walk: a hardcoded
+# `parametrize("flag", [...])` here would be exactly the prose list the cli.py
+# side exists to abolish — a new narrative wrapper flag would be silently
+# uncovered. Each wrapper gets a small per-wrapper partition (RESOLVE / DO-NOT-
+# WRAP; no FORWARD member exists on the wrapper side — both narrative flags are
+# consumed locally into the assembled prompt, never handed on unresolved) and
+# the same three exhaustiveness assertions the cli.py side makes.
+
+_WRAPPER_FILES = (
+    ("spawn-specialist.py", "spawn_specialist"),
+    ("spawn-cursor-specialist.py", "spawn_cursor_specialist"),
+)
+
+wrapper_modules = pytest.mark.parametrize(
+    "filename,module_name", _WRAPPER_FILES, ids=[f for f, _ in _WRAPPER_FILES]
+)
+
+# Both wrappers declare the same two narrative flags, consumed via
+# argv_text.read_arg_text into the assembled prompt.
+_WRAPPER_RESOLVE = frozenset({"done_criterion", "constraints"})
+
+_WRAPPER_DO_NOT_WRAP: dict[str, dict[str, str]] = {
+    "spawn-specialist.py": {
+        "kind": "specialization name — an id from a fixed catalog (SKILL.md directory names), not prose",
+        "model": "model alias/id (e.g. sonnet, opus) — a token, not prose",
+        "continue_worktree": "a worktree path — a filesystem reference, not prose",
+    },
+    "spawn-cursor-specialist.py": {
+        "kind": "specialization name — an id from a fixed catalog (SKILL.md directory names), not prose",
+        "model": "model alias/id (e.g. composer-2.5) — a token, not prose",
+    },
+}
+
+
+def _wrapper_candidates(filename: str, module_name: str) -> set[str]:
+    """Every dest `filename`'s parser declares that could carry free text,
+    via the SAME structural `_is_candidate` predicate the cli.py walk uses."""
+    mod = _load(filename, module_name)
+    return {a.dest for a in mod.build_parser()._actions if _is_candidate(a)}
+
+
+@wrapper_modules
+def test_wrapper_every_candidate_argument_is_classified(filename, module_name):
+    classified = _WRAPPER_RESOLVE | set(_WRAPPER_DO_NOT_WRAP[filename])
+    unclassified = _wrapper_candidates(filename, module_name) - classified
+    assert not unclassified, (
+        f"{filename}: arguments the parser declares but the wrapper partition does "
+        f"not classify (add each to _WRAPPER_RESOLVE or _WRAPPER_DO_NOT_WRAP): "
+        f"{sorted(unclassified)}"
+    )
+
+
+@wrapper_modules
+def test_wrapper_no_argument_is_classified_twice(filename, module_name):
+    overlap = _WRAPPER_RESOLVE & set(_WRAPPER_DO_NOT_WRAP[filename])
+    assert not overlap, (
+        f"{filename}: an argument in both RESOLVE and DO-NOT-WRAP has no defined "
+        f"behaviour: {sorted(overlap)}"
+    )
+
+
+@wrapper_modules
+def test_wrapper_no_classification_names_an_argument_the_parser_lost(filename, module_name):
+    candidates = _wrapper_candidates(filename, module_name)
+    stale_resolve = sorted(_WRAPPER_RESOLVE - candidates)
+    stale_do_not_wrap = sorted(set(_WRAPPER_DO_NOT_WRAP[filename]) - candidates)
+    assert not stale_resolve and not stale_do_not_wrap, (
+        f"{filename}: classified but no longer declared by the parser: "
+        f"resolve={stale_resolve} do_not_wrap={stale_do_not_wrap}"
+    )
+
+
+@wrapper_modules
+def test_wrapper_every_do_not_wrap_entry_states_a_reason(filename, module_name):
+    unexplained = sorted(
+        k for k, reason in _WRAPPER_DO_NOT_WRAP[filename].items() if not reason.strip()
+    )
+    assert not unexplained, (
+        f"{filename}: a DO-NOT-WRAP entry without a reason is an unreviewable "
+        f"exemption: {unexplained}"
+    )
+
+
+# --- behaviour: the two RESOLVE flags honour the convention (both wrappers) -----
+
+
 def _plan_file(tmp_path: Path) -> str:
     plan = tmp_path / "plan.md"
     plan.write_text("the plan body", encoding="utf-8")

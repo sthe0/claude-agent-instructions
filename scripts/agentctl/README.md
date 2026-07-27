@@ -159,7 +159,7 @@ A check declares one of two `CheckVenue` values: `Criterion.verify_venue` on a s
 
 ## Passing large text (`@<path>`)
 
-Any narrative argument this CLI consumes — a goal, a replanning task, a critique, a concern, an observation — accepts **`@<path>` in place of the text itself**, and reads the value from that file. Both spawn wrappers (`spawn-specialist.py`, `spawn-cursor-specialist.py`) accept it on `--constraints` and `--done-criterion`.
+Any narrative argument this CLI consumes — a goal, a replanning task, a critique, a concern, an observation — accepts **`@<path>` in place of the text itself**, and reads the value from that file. Both spawn wrappers (`spawn-specialist.py`, `spawn-cursor-specialist.py`) accept it on `--constraints` and `--done-criterion`. The Cursor recursive-escape wrapper (`spawn-cursor-escape.py`) does **not yet** apply the convention — its narrative flags (`--expected`/`--actual`/`--mismatch`/`--tried`) take inline text only.
 
 ```bash
 python3 -m agentctl critique --session s --functional-ground fg --replanning-task @/tmp/task.md
