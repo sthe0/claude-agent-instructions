@@ -1,6 +1,6 @@
 # Skills (symlinks)
 
-Skills are not versioned in this repository: `~/.claude-agent/skills/` is a directory of symlinks into Arcadia (`ai/artifacts/skills/…`) and plugins.
+Skills are not versioned in this repository: `~/.claude-agent/skills/` is a directory of symlinks into their source trees (this repo, a machine-local overlay, or a plugin).
 
 **Current list** — only from the live tree (do not commit a snapshot, it goes stale):
 

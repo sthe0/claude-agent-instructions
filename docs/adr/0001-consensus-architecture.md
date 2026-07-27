@@ -163,7 +163,7 @@ Per-audience adapters map that record onto each tracker's native fields, routed 
 
 | Adapter | Audience | Mapping |
 |---|---|---|
-| **Startrek** | internal developers | queue `OOSEVENREPORT`; `severity→priority`; `functional_ground→tag`; `evidence→description` (token `~/.tracker-token`, `tracker-management` skill) |
+| **Internal tracker** (machine-local plugin) | developers inside one organization | the org's report queue; `severity→priority`; `functional_ground→tag`; `evidence→description` (write token in the contributor's home, `tracker-management` skill) |
 | **GitHub** (Issues, `sthe0/claude-agent-instructions`) | external developers | same record → issue title + body + labels (token: `GITHUB_TOKEN` or `gh auth`) |
 
 This satisfies the constraint that the submission surface be one the contributor already has, while
@@ -172,8 +172,8 @@ added without touching the submission logic.
 
 **2. Aggregation (author, has push).** `core-difficulty-digest.py` **pulls from every configured
 channel**, normalizes each adapter's records to the common schema, and **clusters by functional
-ground — a channel-agnostic join key**. The same difficulty reported via Startrek *and* the external
-tracker therefore lands in **one** cluster, not two: functional ground unifies reports across sources
+ground — a channel-agnostic join key**. The same difficulty reported via an internal tracker *and* the
+external one therefore lands in **one** cluster, not two: functional ground unifies reports across sources
 exactly as it unifies divergent edits (the commonality primitive applied to *sources*). Cluster mass
 = Σ `severity`-weight (optionally recency-decayed); the digest flags any cluster with
 `mass ≥ core-difficulty-mass-threshold` (a new `config.md` constant) **or** any `critical` item.
@@ -194,8 +194,8 @@ End-to-end: **submit (audience adapter, no push) → pull + normalize + cluster-
 **Report inbox vs planned backlog.** The channel above is the **report inbox** (reactive, filed by
 contributors). It is distinct from the tier's **internal backlog** (proactive items the tier's authors
 plan). When a flagged cluster is surfaced, it **graduates** from the inbox into a backlog item the
-author plans against. The two streams stay formally separable: where a tier owns two trackers (Org:
-`OOSEVENREPORT` reports / `OOSEVEN` backlog) the **queues** separate them; where one tracker holds both
+author plans against. The two streams stay formally separable: where a tier owns two trackers (Org: one
+queue for reports, a separate queue for the backlog) the **queues** separate them; where one tracker holds both
 (Core GitHub Issues) a **label** does — reports carry `difficulty` (the digest pulls only these),
 backlog items carry `backlog`. The full per-tier model is `memory-global/leaves/instruction-dev-queues.md`.
 
@@ -224,16 +224,16 @@ backlog items carry `backlog`. The full per-tier model is `memory-global/leaves/
 
 - Critique-as-a-service for semantic conflicts needs a behavioural eval suite (run cost).
 - The critical-mass formula is a heuristic and needs calibration.
-- The submission channel must be operated and maintained per audience (a Startrek queue, an external
-  tracker), and each new audience adds an adapter.
+- The submission channel must be operated and maintained per audience (an internal tracker queue, an
+  external tracker), and each new audience adds an adapter.
 - The active synthesizer is the original, non-off-the-shelf part of this design → higher risk; it
   needs validation against real conflict streams.
 
 ## Open questions
 
 1. ~~Physical home of the difficulty inbox.~~ **Resolved** (see *Difficulty-accumulation mechanism*):
-   submission is decoupled from push via a pluggable `DifficultyChannel` (Startrek for internal devs,
-   an external tracker for external devs); the author-side digest aggregates across all channels by
+   submission is decoupled from push via a pluggable `DifficultyChannel` (an internal tracker for
+   internal devs, an external tracker for external devs); the author-side digest aggregates across all channels by
    functional ground.
 2. ~~Exact critical-mass formula (weighted count vs. recency-decayed) and threshold value
    (`core-difficulty-mass-threshold`).~~ **Resolved:** weighted count over the geometric severity

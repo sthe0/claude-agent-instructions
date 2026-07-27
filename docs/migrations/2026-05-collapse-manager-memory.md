@@ -26,7 +26,7 @@ Read this if you (Claude Code or human) have just pulled the instructions repo o
 - `git status` clean, `behind=0`. New repo state is in place.
 - On disk under `~/.claude/`:
   - `~/.claude/agents/manager.md`, `~/.claude/agents/memory.md`, `~/.claude/agents/self-improvement.md` — **dangling symlinks** (their targets in the repo are gone).
-  - `~/.claude/memory/` — old local-memory directory, possibly with symlinks into the now-removed `memory-meta/` or into the local arc tree. The new layout does **not** use `~/.claude/memory/`.
+  - `~/.claude/memory/` — old local-memory directory, possibly with symlinks into the now-removed `memory-meta/` or into a machine-local overlay tree. The new layout does **not** use `~/.claude/memory/`.
   - `~/.claude/skills/` — does not exist yet or is empty; the new global skills are not symlinked in.
 - `verify-layout-contract.sh` FAILs (it now requires the new structure).
 
@@ -46,7 +46,7 @@ git log --oneline -1            # expect 4671a41 or later commit on main
 
 The old `~/.claude/memory/` directory is **superseded**. Two cases:
 
-- **Symlinks into the local arc tree** (Yandex/Arcadia: `junk/the0/agents/memory-local/`). The arc tree still exists, but the new model expects project-specific runbooks to live in `<project_cwd>/.claude/agent-memory/`. Plan a follow-up to move each runbook (deepagent, etc.) into the corresponding project, then commit `agent-memory/` to the project's git. For now, you can leave the arc tree alone — only the `~/.claude/memory/` runtime mount goes away.
+- **Symlinks into a machine-local overlay tree** (a personal agents directory inside a VCS monorepo mount, say). That tree still exists, but the new model expects project-specific runbooks to live in `<project_cwd>/.claude/agent-memory/`. Plan a follow-up to move each runbook into the project it belongs to, then commit `agent-memory/` to the project's git. For now, you can leave the overlay tree alone — only the `~/.claude/memory/` runtime mount goes away.
 - **No machine-local content worth keeping.** Just delete the directory.
 
 Either way, the directory itself must go (`verify-layout-contract.sh` insists):
@@ -55,7 +55,7 @@ Either way, the directory itself must go (`verify-layout-contract.sh` insists):
 rm -rf ~/.claude/memory
 ```
 
-If you have an `~/arcadia_the0-agents/junk/the0/agents/memory-local/` you want to preserve, that lives in arc and is unaffected by this step.
+If you have a machine-local overlay directory of memory files you want to preserve, it lives outside this repo and is unaffected by this step.
 
 ### 3. Re-run `setup-symlinks.sh`
 

@@ -40,7 +40,6 @@ docs/operations/setup.md	51	~/.claude	keep:legacy-fallback
 skills-local/README.md	5	~/.claude	convert
 skills-local/README.md	9	~/.claude	convert
 skills-local/README.md	12	~/.claude	convert
-skills/ccgram-management/SKILL.md	17	~/.claude	keep:harness-owned
 skills/self-improvement/SKILL.md	54	~/.claude	convert
 skills/self-improvement/SKILL.md	55	~/.claude	convert
 skills/self-improvement/SKILL.md	56	~/.claude	convert
@@ -255,8 +254,6 @@ scripts/agentctl/exempt_paths.py	12	~/.claude	keep:code-governed-by-S2
 scripts/agentctl/exempt_paths.py	74	~/.claude	keep:code-governed-by-S2
 scripts/agentctl/state.py	24	~/.claude	keep:code-governed-by-S2
 scripts/set-context-cap.sh	113	~/.claude	keep:code-governed-by-S2
-scripts/setup-ccgram.sh	211	$HOME/.claude	keep:code-governed-by-S2
-scripts/setup-ccgram.sh	214	~/.claude	keep:code-governed-by-S2
 scripts/tests/test_hook_guard_destructive_rm.py	22	~/.claude	keep:code-governed-by-S2
 scripts/tests/test_hook_guard_destructive_rm.py	23	$HOME/.claude	keep:code-governed-by-S2
 scripts/tests/test_hook_guard_destructive_rm.py	23	~/.claude	keep:code-governed-by-S2
