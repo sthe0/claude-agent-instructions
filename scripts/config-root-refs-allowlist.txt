@@ -40,9 +40,9 @@ docs/migrations/2026-05-cursor-namespace.md:102  # keep:migration-doc — migrat
 docs/migrations/README.md:3  # keep:migration-doc — migration doc — describes the legacy layout by nature
 docs/migrations/README.md:5  # keep:migration-doc — migration doc — describes the legacy layout by nature
 docs/operations/git-workflow.md:13  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-docs/operations/org-portability.md:36  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-docs/operations/org-portability.md:75  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-docs/operations/org-portability.md:71  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+docs/operations/org-portability.md:52  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+docs/operations/org-portability.md:103  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+docs/operations/org-portability.md:107  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
 docs/operations/setup.md:35  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
 docs/operations/setup.md:37  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
 docs/operations/setup.md:40  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
