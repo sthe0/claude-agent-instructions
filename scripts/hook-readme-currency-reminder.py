@@ -12,6 +12,12 @@ Fallback path (nearest-README heuristic): for changed files that match NO
 registered concept, applies the original nearest-README walk — READMEs next to
 changed code but absent from the changeset are listed.
 
+Core knows git and nothing else: which front-ends' `<tool> commit` this hook
+watches comes from `commit_command_verbs=` in the config root's
+agent-identity.local, and a non-git changeset comes from an executable at
+`<config root>/changeset-vcs.local` ($CLAUDE_CHANGESET_VCS) printing the repo
+root then one changed path per line.
+
 Warn-only by design (house style; same stance as
 hook-push-confirmation-reminder.py and
 memory-global/leaves/feedback-no-hard-caps-on-memory.md — a false block of a
@@ -31,7 +37,29 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib import git_cwd  # noqa: E402
 
-COMMIT_RE = re.compile(r"\b(?:git|arc)\s+commit(?=\s|$)")
+def _commit_verbs(identity_path=None) -> tuple[str, ...]:
+    """VCS front-ends whose `<tool> commit` this hook watches. Core knows git;
+    a deployment adds its own via `commit_command_verbs=` (comma/space-separated
+    tool names) in the config root's agent-identity.local. Fail-open: any error
+    yields git alone."""
+    try:
+        from difficulty_channel.authority import read_local_identity, LOCAL_IDENTITY_PATH
+
+        raw = read_local_identity(identity_path or LOCAL_IDENTITY_PATH).get(
+            "commit_command_verbs", ""
+        )
+        extra = tuple(v for v in re.split(r"[,\s]+", raw.strip()) if v)
+    except Exception:
+        extra = ()
+    return ("git",) + extra
+
+
+def build_commit_re(verbs=None) -> "re.Pattern[str]":
+    resolved = _commit_verbs() if verbs is None else tuple(verbs)
+    return re.compile(r"\b(?:" + "|".join(re.escape(v) for v in resolved) + r")\s+commit(?=\s|$)")
+
+
+COMMIT_RE = build_commit_re()
 # `git commit -a` / `-am` / `--all` also sweep in tracked-but-unstaged edits.
 GIT_ALL_RE = re.compile(r"\bcommit\b.*?(?:\s--all\b|\s-[a-z]*a[a-z]*\b)")
 README_RE = re.compile(r"^README(\.[A-Za-z0-9]+)?$")
@@ -86,25 +114,25 @@ def _git_changeset(cwd: str, sweep_all: bool) -> tuple[str, list[str]] | None:
     return root, [p for p in paths if p]
 
 
-def _arc_changeset(cwd: str) -> tuple[str, list[str]] | None:
-    root = _run(["arc", "root"], cwd)
-    if not root:
+def _plugin_changeset(cwd: str, plugin_path=None) -> tuple[str, list[str]] | None:
+    """Changeset from a machine-local VCS plugin: an executable at
+    `<config root>/changeset-vcs.local` ($CLAUDE_CHANGESET_VCS), run in `cwd`,
+    printing the repo root on the first line and one changed path per line
+    after it. Core knows only git; every other VCS attaches here."""
+    from lib import config_root
+
+    path = plugin_path or os.environ.get("CLAUDE_CHANGESET_VCS") or (
+        config_root.agent_home() / "changeset-vcs.local"
+    )
+    if not os.access(str(path), os.X_OK):
         return None
-    root = root.strip()
-    raw = _run(["arc", "status", "--json"], cwd)
-    if not raw:
+    out = _run([str(path)], cwd)
+    if not out:
         return None
-    try:
-        data = json.loads(raw)
-    except Exception:
+    lines = [ln for ln in out.split("\n") if ln.strip()]
+    if not lines:
         return None
-    changed = (data.get("status") or {}).get("changed") or []
-    paths = [
-        e.get("path", "")
-        for e in changed
-        if isinstance(e, dict) and e.get("type") == "file" and e.get("path")
-    ]
-    return root, paths
+    return lines[0].strip(), lines[1:]
 
 
 def _is_readme(path: str) -> bool:
@@ -199,7 +227,7 @@ def main() -> int:
     cwd = git_cwd.effective_git_cwd(command, payload.get("cwd") or os.getcwd())
     sweep_all = bool(GIT_ALL_RE.search(command))
 
-    cs = _git_changeset(cwd, sweep_all) or _arc_changeset(cwd)
+    cs = _git_changeset(cwd, sweep_all) or _plugin_changeset(cwd)
     if cs is None:
         print(
             "hook-readme-currency-reminder: about to commit.\n"
