@@ -28,7 +28,7 @@ Verify a stage's actual work independently when the spawn wrapper reports failur
 
 
 ### 2026-07-01 — Full macOS-portability audit + fix of Core (follow-up resolving the /proc crash)
-- Where it arose: ~/claude-agent-instructions; 8 audited defects: proc_tree.py, sync-instructions-repo.sh, doctor.sh, verify-instructions-sync.sh, cursor/scripts/{migrate-cursor-namespace,install-cursor-links}.sh, install-sync-systemd-timer.sh, setup-messaging-bridge.sh, hook-multi-mount-search-guard.py
+- Where it arose: ~/claude-agent-instructions; 8 audited defects: proc_tree.py, sync-instructions-repo.sh, doctor.sh, verify-instructions-sync.sh, cursor/scripts/{migrate-cursor-namespace,install-cursor-links}.sh, install-sync-systemd-timer.sh, the messaging-bridge bootstrap script, hook-multi-mount-search-guard.py
 - Working plan: Explore-agent audit (grep BSD/GNU/bash-3.2/proc idioms) -> planner TOML (4 stages) -> approval -> stage1 via harness Agent (spawn-specialist.py itself broken on macOS = bootstrapping), stages 2-4 parallel via Agent on disjoint files -> per-stage independent verify + engine record-result -> final checks incl. live reap.
 
 ## Common core & variations
