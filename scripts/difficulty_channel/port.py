@@ -8,6 +8,7 @@ new audience is added as an adapter under ``adapters/`` without ever touching th
 from __future__ import annotations
 
 import abc
+import dataclasses
 import enum
 from dataclasses import dataclass, field
 from typing import Callable
@@ -57,6 +58,20 @@ class DifficultyRecord:
         object.__setattr__(self, "severity", Severity.parse(self.severity))
         if not self.functional_ground.strip():
             raise ValueError("functional_ground is the cluster key and must be non-empty")
+
+    def scan_text(self) -> str:
+        """Every field's text, joined — what a pre-publication gate must scan.
+
+        Adapters render the published artifact out of these fields and nothing
+        else, so this is a superset of any channel's body. Enumerating the
+        dataclass fields rather than listing them keeps a newly added field
+        covered by the gate instead of silently unscanned.
+        """
+        values = []
+        for f in dataclasses.fields(self):
+            value = getattr(self, f.name)
+            values.append(value.value if isinstance(value, enum.Enum) else str(value))
+        return "\n".join(values)
 
 
 class DifficultyChannel(abc.ABC):

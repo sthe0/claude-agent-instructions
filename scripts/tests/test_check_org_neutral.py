@@ -27,13 +27,52 @@ def _ruleset_dir(tmp_path: Path) -> Path:
     return d
 
 
-def run(text: str, ruleset_dir: Path | None, tmp_path: Path) -> subprocess.CompletedProcess:
+def run(text: str, ruleset_dir: Path | None, tmp_path: Path, *flags: str) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env["CLAUDE_TERM_RULESET_DIR"] = str(ruleset_dir) if ruleset_dir is not None else str(tmp_path / "empty")
     return subprocess.run(
-        [sys.executable, str(SCRIPT), "-"],
+        [sys.executable, str(SCRIPT), *flags, "-"],
         input=text, capture_output=True, text=True, env=env,
     )
+
+
+SCISSORS = "# ------------------------ >8 ------------------------"
+
+
+def test_commit_msg_mode_ignores_the_appended_diff(tmp_path):
+    text = f"a neutral subject\n\n{SCISSORS}\ndiff --git a/f b/f\n-zorblex was here\n"
+    r = run(text, _ruleset_dir(tmp_path), tmp_path, "--commit-msg")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_commit_msg_mode_still_sees_the_message(tmp_path):
+    text = f"subject mentions zorblex\n\n{SCISSORS}\ndiff --git a/f b/f\n+neutral\n"
+    r = run(text, _ruleset_dir(tmp_path), tmp_path, "--commit-msg")
+    assert r.returncode == 1
+    assert "zorblex" in r.stdout
+
+
+def test_commit_msg_mode_ignores_comment_lines(tmp_path):
+    r = run("clean subject\n# on branch zorblex-fix\n", _ruleset_dir(tmp_path), tmp_path, "--commit-msg")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_without_commit_msg_mode_the_whole_file_is_scanned(tmp_path):
+    """The cleanup is opt-in: an issue/PR body must keep being scanned whole."""
+    text = f"a neutral subject\n\n{SCISSORS}\n-zorblex was here\n"
+    r = run(text, _ruleset_dir(tmp_path), tmp_path)
+    assert r.returncode == 1
+
+
+def test_unreadable_input_is_an_error_not_a_hit(tmp_path):
+    """Exit 2, never 1 — callers key their refusal on the hit code alone."""
+    env = dict(os.environ)
+    env["CLAUDE_TERM_RULESET_DIR"] = str(_ruleset_dir(tmp_path))
+    r = subprocess.run(
+        [sys.executable, str(SCRIPT), str(tmp_path / "no-such-file")],
+        capture_output=True, text=True, env=env,
+    )
+    assert r.returncode == 2
 
 
 def test_zero_rulesets_reports_clean_not_silent(tmp_path):

@@ -151,10 +151,23 @@ if bodies:
 # _gh_orgcheck <file> [<file> ...] -> 0 if every file is clean of org-internal
 # markers (or the override is set), 1 otherwise, with the marker report on
 # stderr. Shared refusal gate for tracker_comment / tracker_publish_plan.
+# Publication is irreversible, so both a hit (exit 1) and a checker failure
+# (any other non-zero) refuse — but they are reported apart, and the override
+# lifts only the hit: CLAUDE_PUBLISH_ALLOW_INTERNAL says "internal content is
+# fine at this venue", which says nothing about an unverified one.
 _gh_orgcheck() {
-  local f report
+  local f report rc
   for f in "$@"; do
-    report="$(python3 "$_GH_ORGCHECK_PY" "$f" 2>&1)" && continue
+    report="$(python3 "$_GH_ORGCHECK_PY" "$f" 2>&1)"
+    rc=$?
+    if [[ $rc -eq 0 ]]; then
+      continue
+    fi
+    if [[ $rc -ne 1 ]]; then
+      printf 'github tracker: refused to publish %q — org-neutrality check failed to run (exit %d), so the text is UNVERIFIED:\n%s\n' \
+        "$f" "$rc" "$report" >&2
+      return 1
+    fi
     if [[ "${CLAUDE_PUBLISH_ALLOW_INTERNAL:-}" == "1" ]]; then
       continue
     fi

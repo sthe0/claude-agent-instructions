@@ -66,12 +66,35 @@ def _env(tmp_path: Path, ruleset_dir: Path | None) -> dict:
     return env
 
 
-def _commit(repo: Path, env: dict, message: str) -> "subprocess.CompletedProcess[str]":
+def _commit(repo: Path, env: dict, message: str, content: str = "x") -> "subprocess.CompletedProcess[str]":
     target = repo / "file.txt"
-    target.write_text((target.read_text(encoding="utf-8") if target.exists() else "") + "x", encoding="utf-8")
+    target.write_text((target.read_text(encoding="utf-8") if target.exists() else "") + content, encoding="utf-8")
     subprocess.run(["git", "add", "file.txt"], cwd=repo, check=True, env=env)
     return subprocess.run(
         ["git", "commit", "-m", message], cwd=repo, capture_output=True, text=True, env=env, timeout=15,
+    )
+
+
+def _commit_verbose(repo: Path, env: dict, message: str, content: str) -> "subprocess.CompletedProcess[str]":
+    """`git commit -v`: git appends the staged diff below the scissors line, so
+    the message file the hook receives carries the diff too."""
+    target = repo / "file.txt"
+    target.write_text(content, encoding="utf-8")
+    subprocess.run(["git", "add", "file.txt"], cwd=repo, check=True, env=env)
+    editor_env = dict(env)
+    # A non-interactive editor that keeps whatever git prepared and prepends
+    # the message — the diff below the scissors survives into the hook's $1.
+    editor = repo / "fake-editor.sh"
+    editor.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$MSG_LINE" | cat - "$1" > "$1.tmp" && mv "$1.tmp" "$1"\n',
+        encoding="utf-8",
+    )
+    editor.chmod(0o755)
+    editor_env["GIT_EDITOR"] = str(editor)
+    editor_env["MSG_LINE"] = message
+    return subprocess.run(
+        ["git", "commit", "-v"], cwd=repo, capture_output=True, text=True, env=editor_env, timeout=15,
     )
 
 
@@ -105,3 +128,45 @@ def test_zero_rulesets_lets_the_same_denied_term_through(tmp_path):
     result = _commit(repo, env, "mentions zorblex in the message")
 
     assert result.returncode == 0, result.stderr
+
+
+def test_denied_term_below_the_scissors_does_not_block(tmp_path):
+    """`git commit -v` appends the diff below the scissors line. A commit whose
+    diff REMOVES a denied term must not be blocked by its own removal."""
+    repo = _install_throwaway_repo(tmp_path)
+    env = _env(tmp_path, _ruleset_dir(tmp_path))
+    _commit(repo, env, "seed the file", content="zorblex lives here\n")
+
+    result = _commit_verbose(repo, env, "drop the codename from the seeded file", content="neutral text\n")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    subject = subprocess.run(
+        ["git", "log", "-1", "--pretty=%s"], cwd=repo, capture_output=True, text=True, env=env,
+    ).stdout.strip()
+    assert subject == "drop the codename from the seeded file"
+
+
+def test_denied_term_in_the_message_still_blocks_under_commit_v(tmp_path):
+    """The counterpart of the test above: stripping the diff must not strip the
+    message, or the gate would pass everything under `commit -v`."""
+    repo = _install_throwaway_repo(tmp_path)
+    env = _env(tmp_path, _ruleset_dir(tmp_path))
+    _commit(repo, env, "seed the file", content="neutral seed\n")
+
+    result = _commit_verbose(repo, env, "mentions zorblex in the message", content="still neutral\n")
+
+    assert result.returncode != 0
+    assert "zorblex" in (result.stdout + result.stderr)
+
+
+def test_checker_error_is_surfaced_but_does_not_block(tmp_path):
+    """A checker that cannot run (exit != 1) says nothing about the message —
+    blocking on it would turn any unrelated breakage into a commit-wide outage."""
+    repo = _install_throwaway_repo(tmp_path)
+    env = _env(tmp_path, _ruleset_dir(tmp_path))
+    (repo / "scripts" / "check-org-neutral.py").unlink()
+
+    result = _commit(repo, env, "a perfectly clean message")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "term check could not run" in result.stderr
