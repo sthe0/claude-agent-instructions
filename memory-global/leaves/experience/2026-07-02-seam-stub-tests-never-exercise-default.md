@@ -23,11 +23,11 @@ Root-cause the failing path by reading how the default is DERIVED ($_HOOK_DIR/..
 ## Contexts
 
 ### 2026-07-02 — initial
-- Where it arose: junk/the0/agents/common/onboard/10-arc-mount.sh + tests/test-arc-mount-hook.sh; PR 14232164; generalizes to every X_BIN-style seam whose default is a relative path
+- Where it arose: junk/<user>/agents/common/onboard/10-arc-mount.sh + tests/test-arc-mount-hook.sh; PR 14232164; generalizes to every X_BIN-style seam whose default is a relative path
 - Working plan: /home/the0/.claude-agent/plans/fix-task-entry-onboarding-failures.toml
 
 ## Cost
-~40 min wall-clock, 3 stages in-thread, 1 arc PR, 2 Core commits
+~40 min wall-clock, 3 stages in-thread, 1 vcs PR, 2 Core commits
 
 ## Self-critique of the agent system
 The regression shipped in a layout-move commit this agent system authored; a dry-run default-path assertion at that time would have caught it. Also: verify-all.py (pre-commit) does not run the shell layout contract — same class of gap (checker exists, gate never fires), left as recorded follow-up.

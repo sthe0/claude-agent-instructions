@@ -24,7 +24,7 @@ A domain-authority user (SMD methodology) rejected a landed mechanization at acc
 ## Contexts
 
 ### 2026-07-14 — SMD principle=norm category error
-- Where it arose: sthe0/claude-agent-instructions (agent's own instruction/engine repo); agentctl engine; SMD/MMK activity-theory mechanization (DEEPAGENT-448 adjacent, cai-wt-smd worktrees)
+- Where it arose: sthe0/claude-agent-instructions (agent's own instruction/engine repo); agentctl engine; SMD/MMK activity-theory mechanization (PROJ-448 adjacent, cai-wt-smd worktrees)
 - Working plan: Two executing stages of the v4 plan: Stage 1 (R4) drop statement_kind across state.py+plan.py+verify-plan-file.py, ADR-0004 supersedes ADR-0003 §1, grandfather legacy carriers on load; Stage 4 (R2) reframe failure_address values to ресурсное|нормативное|not_applicable обеспечение, decouple from StatementKind (now deleted). Stages 2&3 landed under v3, untouched. Order 1→4. Landed 0b607b1 + 6dd638a, merged to origin/main 663aefb via SSH --no-ff. <!-- Language exception: SMD source-ontology terms preserved verbatim for traceability. -->
 
 ## Cost

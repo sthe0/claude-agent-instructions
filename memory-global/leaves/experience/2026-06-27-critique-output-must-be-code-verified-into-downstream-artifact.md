@@ -22,7 +22,7 @@ Structure the split (Critique fields) -> capture at CLI -> coverage gate in repl
 
 ## Contexts
 
-### 2026-06-27 — Wire critique split into replan (DEEPAGENT machine, claude-agent-instructions Core)
+### 2026-06-27 — Wire critique split into replan (the project's dev machine, claude-agent-instructions Core)
 - Where it arose: agentctl engine (state.py Critique, cli.py cmd_critique/cmd_replan, gates.py, plan.py diff_plans) + overcome-difficulty SKILL
 - Working plan: Approach A (structure + hard coverage gate) over advisory/prose-only: the user asked for programmatic use, and a verification gate is the form of that compatible with code=control-flow/prose=cognition. One developer spawn for the coupled ~320-line change; manager verified each stage's verify_command and the full battery independently before recording passed.
 

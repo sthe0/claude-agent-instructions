@@ -30,4 +30,4 @@ Landing the solved_by_007+telemetry PR to Core main: the fine-grained PAT (login
 1 session (post-compaction continuation); ~7 spawns prior; landing itself ~15 tool calls, 2 conflict resolutions, 1 self-corrected stash mistake.
 
 ## Self-critique of the agent system
-The guarded stash-pop was a real self-inflicted error: 'git stash list | grep -q .' tests global stash presence, not whether a stash belongs to THIS task — I popped another session's stash. Lesson folded into the leaf. Also: I could have checked the deepagent-leaf and main-moved state before assuming my 3-day-old snapshot; doubt-own-snapshot caught it but only at report time.
+The guarded stash-pop was a real self-inflicted error: 'git stash list | grep -q .' tests global stash presence, not whether a stash belongs to THIS task — I popped another session's stash. Lesson folded into the leaf. Also: I could have checked the project-state leaf and main-moved state before assuming my 3-day-old snapshot; doubt-own-snapshot caught it but only at report time.
