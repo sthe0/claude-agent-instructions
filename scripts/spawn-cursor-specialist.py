@@ -80,12 +80,6 @@ def budget_timeout_sec(tier: str) -> int:
     return BUDGET_TIMEOUT_SEC[tier]
 
 
-def read_text_or_file(text: str | None, file: Path | None) -> str:
-    if file is not None:
-        return file.read_text(encoding="utf-8").rstrip()
-    return (text or "").rstrip()
-
-
 def strip_frontmatter(text: str) -> str:
     if text.startswith("---\n"):
         end = text.find("\n---\n", 4)
@@ -131,7 +125,8 @@ def assemble_prompt(
 ) -> str:
     # --plan is optional here (--smoke runs without one); an absent plan stays "".
     plan = argv_text.read_required_file(args.plan, "--plan") if args.plan else ""
-    constraints = read_text_or_file(args.constraints, None)
+    constraints = (argv_text.read_arg_text(args.constraints) or "").rstrip()
+    done_criterion = argv_text.read_arg_text(args.done_criterion)
     dossier = (
         argv_text.read_required_file(args.context_dossier, "--context-dossier")
         if args.context_dossier
@@ -146,7 +141,7 @@ def assemble_prompt(
     sections += [
         "## Done criterion for this step",
         "",
-        f"{args.done_criterion}  *({args.criterion_type})*",
+        f"{done_criterion}  *({args.criterion_type})*",
         "",
     ]
     if constraints:
@@ -244,13 +239,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="path to the markdown plan; mark the step the specialist owns with **<<this step>>**",
     )
-    p.add_argument("--done-criterion", help="concrete done criterion for the step")
+    p.add_argument("--done-criterion",
+                   help="concrete done criterion for the step; '@<path>' reads it from a file")
     p.add_argument(
         "--criterion-type",
         choices=("measurable", "acceptance-review"),
         help="how the criterion will be verified",
     )
-    p.add_argument("--constraints", default="", help="scope / do-not-touch / deadlines (inline)")
+    p.add_argument("--constraints", default="",
+                   help="scope / do-not-touch / deadlines; '@<path>' reads them from a file")
     p.add_argument(
         "--context-dossier",
         type=Path,

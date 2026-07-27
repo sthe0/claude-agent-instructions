@@ -33,6 +33,8 @@ Cognitive inputs the manager supplies (mechanics are in `--help`):
 - `--budget` (cost ceiling) — see table below. `--complexity` (`low`/`medium`/`high` → haiku/sonnet/opus) sets the sub-agent model by **assessed task difficulty**, overriding the per-kind default; rubric in `--help`. Budget and complexity are distinct axes — a cheap-budget task can still need opus.
 - `--project-permissions <project>/.claude/agent-memory/permissions.json` if inside a project tree.
 
+**Large text travels as a file, never as inline argv.** A dossier, a replanning task, a long brief or a multi-paragraph constraints block goes into a file, and the flag gets `@<path>`: `--constraints @/tmp/constraints.md`, `--done-criterion @/tmp/criterion.md`. Linux caps a single argv string at 131072 bytes (`MAX_ARG_STRLEN`), and the kernel refuses the whole spawn with `E2BIG` *before the child starts* — so the failure lands on the one spawn whose brief was finally substantial enough to matter. Prose that legitimately begins with `@` is doubled (`@@`); a `@` reference to a file that does not exist exits loudly rather than being recorded as literal prose. The same convention holds across every narrative `agentctl` argument — see [`scripts/agentctl/README.md`](../../scripts/agentctl/README.md) § Passing large text.
+
 **Budget tiers** (resolve to `budget-*-usd` in `config.md`):
 
 | Tier | Use for |

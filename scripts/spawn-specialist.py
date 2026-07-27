@@ -125,12 +125,6 @@ def build_child_lineage(inherited: "str | None", own_id: "str | None") -> str:
     return registry.format_lineage(ids)
 
 
-def read_text_or_file(text: str | None, file: Path | None) -> str:
-    if file is not None:
-        return file.read_text(encoding="utf-8").rstrip()
-    return (text or "").rstrip()
-
-
 def permissions_digest(project_file: Path | None) -> str:
     """Run permissions-cli.py digest for global + optional project file. Empty string if no grants."""
     chunks: list[str] = []
@@ -152,7 +146,8 @@ def permissions_digest(project_file: Path | None) -> str:
 
 def assemble_prompt(args: argparse.Namespace, depth: int, permissions: str) -> str:
     plan = argv_text.read_required_file(args.plan, "--plan")
-    constraints = read_text_or_file(args.constraints, None)
+    constraints = (argv_text.read_arg_text(args.constraints) or "").rstrip()
+    done_criterion = argv_text.read_arg_text(args.done_criterion)
     dossier = (
         argv_text.read_required_file(args.context_dossier, "--context-dossier")
         if args.context_dossier
@@ -177,7 +172,7 @@ def assemble_prompt(args: argparse.Namespace, depth: int, permissions: str) -> s
     sections += [
         "## Done criterion for this step",
         "",
-        f"{args.done_criterion}  *({args.criterion_type})*",
+        f"{done_criterion}  *({args.criterion_type})*",
         "",
     ]
     if constraints:
@@ -281,14 +276,16 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--kind", required=True, help="specialization name (must exist at ~/.claude/skills/<kind>/SKILL.md)")
     p.add_argument("--plan", type=Path, required=True, help="path to the markdown plan; mark the step the specialist owns with **<<this step>>**")
-    p.add_argument("--done-criterion", required=True, help="concrete done criterion for the step")
+    p.add_argument("--done-criterion", required=True,
+                   help="concrete done criterion for the step; '@<path>' reads it from a file")
     p.add_argument(
         "--criterion-type",
         choices=("measurable", "acceptance-review"),
         required=True,
         help="how the criterion will be verified",
     )
-    p.add_argument("--constraints", default="", help="scope / do-not-touch / deadlines (inline)")
+    p.add_argument("--constraints", default="",
+                   help="scope / do-not-touch / deadlines; '@<path>' reads them from a file")
     p.add_argument("--context-dossier", type=Path, help="path to a file with the conversation-context digest")
     p.add_argument("--budget", choices=("small", "medium", "large"), default="medium", help="budget tier from config.md (kind=developer floors small->medium: the static prefix alone ~$1)")
     p.add_argument("--project-permissions", type=Path, help="project-scope permissions.json to also include in the digest")

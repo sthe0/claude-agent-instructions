@@ -32,8 +32,8 @@ delivered — a silent false-green, the failure mode this repo's gate design exi
 to prevent. The raise is loud and names its own remedy.
 
 CAVEAT a reader must not have to discover from the source: file contents are
-``rstrip()``-ed, matching the existing ``read_text_or_file`` semantics in both
-spawn wrappers. So a value routed through a file is NOT byte-identical to the same
+``rstrip()``-ed, matching the rstrip both spawn wrappers have always applied to a
+constraints value. So a value routed through a file is NOT byte-identical to the same
 text passed inline — a trailing newline is lost. This is cosmetic for every
 consumer here (prose fields, all stripped before storage) but it is real.
 

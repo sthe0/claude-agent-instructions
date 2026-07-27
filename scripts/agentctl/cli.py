@@ -22,7 +22,7 @@ import sys
 import time
 from pathlib import Path
 
-from lib import config_root
+from lib import argv_text, config_root
 
 from . import advisor, continuations, cost, delivery, gates, ledger, permissions, plugins, plugins_ledger, plugins_premise, premise, solved_marker
 from .classify import TRACKER_KEY_RE, Signals, classify
@@ -3263,6 +3263,157 @@ COMMANDS = {
 }
 
 
+# --- Argument partition for the `@<path>` convention ---------------------------
+#
+# Every argument the parser below declares belongs to exactly one of the three
+# structures here. scripts/tests/test_argv_text_call_sites.py walks the parser
+# itself — the root parser and every subparser — and goes RED on an argument that
+# is in none of them, in two of them, or named here but no longer declared.
+#
+# OWNERSHIP RULE: the change that INTRODUCES an argument registers it here, in
+# that same change. The table is exhaustive only as long as it stays exhaustive,
+# and nobody re-derives it retroactively.
+#
+#   _ARG_RESOLVE      narrative free text this process CONSUMES. Resolved through
+#                     lib.argv_text before dispatch, so the value may be written
+#                     '@<path>' once the text outgrows a single argv string
+#                     (Linux MAX_ARG_STRLEN = 131072 bytes).
+#   _ARG_FORWARD      narrative free text this process only HANDS ON to a child,
+#                     which resolves it at its own boundary. Resolving it here
+#                     would inline the text straight back into the child's argv —
+#                     the very ceiling the convention exists to stay under.
+#   _ARG_DO_NOT_WRAP  identifiers, slugs, digests, file paths, enum-like tokens.
+#                     Never prose, so a leading '@' carries no meaning; each entry
+#                     states why in one line.
+
+_ROOT = "<root>"  # sentinel subcommand key for the top-level parser's own options
+
+# Every subcommand that takes --session. Spelled out rather than derived: a
+# derivation would silently classify the next subcommand someone adds.
+_SESSION_COMMANDS = (
+    "start", "reset", "plugin-activate", "plugin-deactivate", "plugin-record",
+    "ledger-add", "ledger-check", "ledger-candidate", "ledger-dispose",
+    "ledger-enumerate", "question-raise", "question-research", "question-dispose",
+    "question-rebind", "question-retire", "question-list", "question-check",
+    "question-enumerate", "question-candidate-dispose", "classify", "plan",
+    "plan-render", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
+    "stage-review", "code-review", "approve", "partition", "partition-units",
+    "next-stage", "dispatch", "resolve-permission", "record-result", "declare",
+    "investigate", "critique", "normalize", "verify-final", "resolve", "reject",
+    "replan", "block", "unblock", "status", "drive", "close", "push-subplan",
+    "pop-subplan",
+)
+
+# (dest, subcommands that declare it)
+_RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("goal", ("start", "reset")),
+    ("done_criterion", ("start", "reset")),
+    ("note", ("plugin-record", "confirm-delivery", "plan-review", "stage-review", "code-review")),
+    ("statement", ("ledger-add", "ledger-candidate")),
+    ("source", ("ledger-add", "question-dispose")),
+    ("premises", ("ledger-add",)),
+    ("basis", ("ledger-add", "question-dispose")),
+    ("reason", ("ledger-dispose", "question-retire", "question-candidate-dispose", "reject", "block")),
+    ("question", ("question-raise", "question-candidate-dispose")),
+    ("attempted", ("question-research",)),
+    ("answer", ("question-dispose",)),
+    ("derivation", ("question-dispose",)),
+    ("risk", ("question-dispose",)),
+    ("confirm_still_valid", ("question-rebind",)),
+    ("concerns", ("plan-review", "stage-review", "code-review")),
+    ("observation", ("stage-review", "record-result", "close")),
+    ("actual", ("record-result", "declare", "close")),
+    ("control", ("record-result", "close")),
+    ("expected", ("declare",)),
+    ("mismatch", ("declare",)),
+    ("localized_expectation", ("investigate",)),
+    ("localized_actual", ("investigate",)),
+    ("hypotheses", ("investigate",)),
+    ("functional_ground", ("critique",)),
+    ("replanning_task", ("critique",)),
+    ("invariants_to_preserve", ("critique",)),
+    ("differences_to_remove", ("critique",)),
+    ("factor", ("normalize",)),
+    ("quality_note", ("resolve", "close")),
+    ("coverage_waiver", ("replan",)),
+    ("normalization_waiver", ("replan",)),
+)
+
+# (dest, subcommands that declare it, why '@' means nothing here)
+_DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
+    ("state_root", (_ROOT,), "directory path the state store is rooted at"),
+    ("session", _SESSION_COMMANDS, "session id — the slug state is keyed by"),
+    ("task", ("start", "reset", "push-subplan"), "task slug, not a description"),
+    ("criterion_type", ("start", "reset"), "one of two fixed verification kinds"),
+    ("plugin", ("plugin-activate", "plugin-deactivate", "plugin-record"), "plugin registry name"),
+    ("phase", ("plugin-record",), "plugin phase name from a fixed vocabulary"),
+    ("tracker_key", ("plugin-activate", "classify", "drive"), "tracker issue key (ABC-123)"),
+    ("id", ("ledger-add", "ledger-candidate", "ledger-dispose", "question-raise",
+            "question-research", "question-dispose", "question-rebind", "question-retire",
+            "question-candidate-dispose"), "claim / question id"),
+    ("claim", ("ledger-dispose",), "id of the grounding claim, not its text"),
+    ("artifact", ("ledger-enumerate",), "path to the deliverable being cross-checked"),
+    ("target", ("question-raise", "plan-review"), "plan element address or plan file path"),
+    ("plan", ("plan-render", "submit-plan", "replan", "drive", "push-subplan"), "plan file path"),
+    ("rendering_file", ("present-plan",), "path to the rendered presentation"),
+    ("by", ("confirm-delivery", "approve", "resolve"), "who acted — a name, not a narrative"),
+    ("reviewer", ("plan-review", "stage-review", "code-review"), "reviewer name"),
+    ("plan_digest", ("plan-review",), "sha256 the review binds to"),
+    ("code_ref", ("code-review", "record-result"), "commit / PR reference the verdict binds to"),
+    ("unit", ("partition", "partition-units"), "'|'-delimited partition-unit record"),
+    ("budget", ("dispatch",), "budget tier name"),
+    ("complexity", ("dispatch",), "complexity tier name"),
+    ("cost_log", ("record-result", "resolve"), "cost log file path (test override)"),
+    ("quality_by", ("resolve", "close"), "how the quality rating was obtained — a fixed token"),
+    ("confirmed_by", ("close",), "who confirmed — a name, not a narrative"),
+    ("approved_by", ("drive",), "who approved — a name, not a narrative"),
+)
+
+_ARG_RESOLVE: frozenset[tuple[str, str]] = frozenset(
+    (command, dest) for dest, commands in _RESOLVE_ROWS for command in commands
+)
+
+# Empty by construction, and declared anyway: a forwarding argument gets a
+# MEMBER here, not a new mechanism.
+_ARG_FORWARD: frozenset[tuple[str, str]] = frozenset()
+
+_ARG_DO_NOT_WRAP: dict[tuple[str, str], str] = {
+    (command, dest): reason
+    for dest, commands, reason in _DO_NOT_WRAP_ROWS
+    for command in commands
+}
+
+
+def resolve_arg_text(args: argparse.Namespace) -> None:
+    """Apply the `@<path>` convention in place to this command's RESOLVE arguments.
+
+    One pass over the parsed namespace before dispatch, so no cmd_* body sees an
+    unresolved reference and none has to remember to call the helper itself.
+
+    Deliberately not an argparse ``type=`` converter: a SystemExit raised inside a
+    converter is attributed to argparse's own error path rather than to the
+    convention, and an append action applies its converter per element — which
+    cannot preserve the None-vs-empty-list distinction the helpers guarantee.
+    """
+    for command, dest in _ARG_RESOLVE:
+        # A _ROOT entry belongs to the top-level parser, so it applies whatever
+        # subcommand ran. Matching only args.command would leave a root narrative
+        # option classified RESOLVE but never actually resolved — the silent
+        # false-green this partition exists to make impossible.
+        if command not in (args.command, _ROOT):
+            continue
+        value = getattr(args, dest)
+        # An append dest arrives as a list once given and as None when never
+        # given; both helpers pass None through unchanged.
+        setattr(
+            args,
+            dest,
+            argv_text.read_arg_text_list(value)
+            if isinstance(value, list)
+            else argv_text.read_arg_text(value),
+        )
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="agentctl", description="deterministic coordination state machine")
     p.add_argument("--state-root", help="override state directory (tests/inspection)")
@@ -3620,6 +3771,7 @@ def main(argv: list[str] | None = None) -> int:
         list(sys.argv[1:] if argv is None else argv), harness
     )
     args = build_parser().parse_args(raw)
+    resolve_arg_text(args)
     if harness and getattr(args, "session", None) and args.session != harness:
         print(
             f"agentctl: warning: --session {args.session!r} differs from "

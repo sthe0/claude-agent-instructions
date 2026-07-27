@@ -157,6 +157,22 @@ A check declares one of two `CheckVenue` values: `Criterion.verify_venue` on a s
 
 `_attach_advisories` is the single chokepoint that resolves `enabled` via `advisor.resolve_enabled(weight_class)`, threading each call site's session `weight_class` through rather than re-deriving the rule per site: `AGENTCTL_ADVISOR` env overrides in both directions (`1` forces on, `0` forces off); absent the env override, the advisor is on iff config.md's `advisor-mode` key (`off` | `substantive`, shipped `substantive`) is `substantive` **and** the session's `weight_class` is `SUBSTANTIVE` — auto-activation is scoped to substantive work only, and a missing/unreadable `advisor-mode` key fails closed (off).
 
+## Passing large text (`@<path>`)
+
+Any narrative argument this CLI consumes — a goal, a replanning task, a critique, a concern, an observation — accepts **`@<path>` in place of the text itself**, and reads the value from that file. Both spawn wrappers (`spawn-specialist.py`, `spawn-cursor-specialist.py`) accept it on `--constraints` and `--done-criterion`.
+
+```bash
+python3 -m agentctl critique --session s --functional-ground fg --replanning-task @/tmp/task.md
+```
+
+- **`@@` escapes.** A value that really begins with one `@` is written `@@text` and arrives as `@text`.
+- **A missing referent is fatal, by design.** `@/tmp/dosier.md` (a typo) exits with a message naming the path, the contract and the `@@` escape — it is never silently recorded as nine characters of literal prose while the coordinator believes a dossier was delivered.
+- **Nothing else changes.** A value that does not begin with `@` is passed through byte-identical, and an argument never given stays `None`.
+
+Why: Linux caps a **single argv string** at `MAX_ARG_STRLEN = 32 * PAGE_SIZE = 131072` bytes. Past that the kernel raises `E2BIG` *before the child process starts*, or — when the receiver is path-typed — an illegible `OSError: File name too long`. Neither failure names the actual contract, and both arrive at the worst moment: when the text finally got substantial.
+
+Which arguments take `@` is not a prose list. [`cli.py`](cli.py) declares a partition — `_ARG_RESOLVE` (read here), `_ARG_FORWARD` (handed to a child that resolves it at its own boundary), `_ARG_DO_NOT_WRAP` (ids, slugs, digests, paths; each with a one-line reason) — and [`../tests/test_argv_text_call_sites.py`](../tests/test_argv_text_call_sites.py) walks the parser itself, root parser included, requiring every argument that could carry prose to sit in **exactly one** class. An unclassified new argument fails RED; so does a classification the parser no longer declares. **The change that introduces an argument classifies it, in that same change.** The rule itself lives in [`../lib/argv_text.py`](../lib/argv_text.py).
+
 ## Modules
 
 Core spine: `classify`, `config`, `state`, `store`, `machine`, `gates`, `directive`, `cli`, `dispatch`, `partition`, `permissions`, `plan`, `continuations`, `advisor`, `cost`, `exempt_paths`, `text_shape`. Plugin framework: `plugins`, `plugins_tracker`, `plugins_experience` (§ Plugins). `cost` is covered in § Cost tracking; `exempt_paths` backs the `hook-state-gate.py` production-path lockstep, `text_shape` renders Directive text.
