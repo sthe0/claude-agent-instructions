@@ -425,6 +425,18 @@ def test_plugin_changeset_root_only_yields_empty_path_list(tmp_path):
     assert mod._plugin_changeset(str(tmp_path), plugin_path=plugin) == ("/repo/root", [])
 
 
+def test_plugin_changeset_is_fail_open_on_a_broken_config_root(tmp_path, monkeypatch):
+    """Path resolution imports a sibling module and stats the filesystem; this hook
+    promises never to break a commit, so a raise there must yield None, not propagate."""
+    mod = _load_module()
+
+    def boom(*_a, **_kw):
+        raise RuntimeError("config root unreadable")
+
+    monkeypatch.setattr(mod.os, "access", boom)
+    assert mod._plugin_changeset(str(tmp_path)) is None
+
+
 def test_plugin_changeset_is_run_in_the_effective_cwd(tmp_path):
     mod = _load_module()
     plugin = tmp_path / "pwd-echo"

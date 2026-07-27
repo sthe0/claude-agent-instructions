@@ -118,13 +118,19 @@ def _plugin_changeset(cwd: str, plugin_path=None) -> tuple[str, list[str]] | Non
     """Changeset from a machine-local VCS plugin: an executable at
     `<config root>/changeset-vcs.local` ($CLAUDE_CHANGESET_VCS), run in `cwd`,
     printing the repo root on the first line and one changed path per line
-    after it. Core knows only git; every other VCS attaches here."""
-    from lib import config_root
+    after it. Core knows only git; every other VCS attaches here.
 
-    path = plugin_path or os.environ.get("CLAUDE_CHANGESET_VCS") or (
-        config_root.agent_home() / "changeset-vcs.local"
-    )
-    if not os.access(str(path), os.X_OK):
+    Fail-open like the rest of this hook: resolving the config root touches the
+    filesystem and imports a sibling module, and no commit may die on either."""
+    try:
+        from lib import config_root
+
+        path = plugin_path or os.environ.get("CLAUDE_CHANGESET_VCS") or (
+            config_root.agent_home() / "changeset-vcs.local"
+        )
+        if not os.access(str(path), os.X_OK):
+            return None
+    except Exception:
         return None
     out = _run([str(path)], cwd)
     if not out:
