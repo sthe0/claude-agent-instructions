@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse hook (Bash): before `git commit` / `arc commit`, surface docs
+"""PreToolUse hook (Bash): before a `<vcs> commit`, surface docs
 that sit next to (or are concept-bound to) changed code but are NOT in the
 changeset — i.e. the docs most likely to have gone stale.
 

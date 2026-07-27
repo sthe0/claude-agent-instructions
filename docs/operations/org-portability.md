@@ -178,7 +178,6 @@ The scoping is the load-bearing half: a suppression only applies to hits from pa
 ## What stays vendor-named (and why it is not a coupling)
 
 - **`yandex-cloud-expert`** — kept on purpose. Yandex Cloud is a public vendor cloud with public documentation and public sign-up, so the specialization is useful to anyone who uses that cloud and inert for anyone who does not. It is carved out as a permanent `exempt` entry, never a `grandfather` one: the distinction matters, because grandfather entries are supposed to shrink to zero and this one never will.
-- **`hook-multi-mount-search-guard.py`** — an advisory guard against a recursive search fanning out across large VCS FUSE mounts. Its filename and its rule are VCS-neutral, but the mount **fstype** string it matches on is still an internal identifier; that residue is tracked as a grandfather entry pending a redesign that reads mount types from configuration instead of a literal. With no such mount present the hook is simply inert.
 
 ## Honest scope: what "org-neutral" does and does not claim
 

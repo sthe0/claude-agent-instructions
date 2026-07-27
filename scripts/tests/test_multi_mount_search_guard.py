@@ -1,4 +1,4 @@
-"""Tests for hook-multi-mount-search-guard.py: deny recursive searches spanning ≥2 arc FUSE mounts."""
+"""Tests for hook-multi-mount-search-guard.py: deny recursive searches spanning ≥2 FUSE mounts."""
 from __future__ import annotations
 
 import importlib.util
@@ -15,19 +15,19 @@ spec = importlib.util.spec_from_file_location("hook_multi_mount_search_guard", s
 _mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(_mod)
 decide = _mod.decide
-arc_mounts_from_text = _mod.arc_mounts_from_text
+fuse_mounts_from_text = _mod.fuse_mounts_from_text
 
 _PROC_TEXT = """
 sysfs /sys sysfs rw 0 0
 proc /proc proc rw 0 0
-arc /home/the0/arcadia fuse.arc rw 0 0
-arc /home/the0/arcadia_claude_local fuse.arc rw 0 0
-arc /home/the0/arcadia_PROJ-100 fuse.arc rw 0 0
-arc /home/the0/arcadia_PROJ-200 fuse.arc rw 0 0
-arc /home/the0/arcadia_PROJ-300 fuse.arc rw 0 0
+vcsfs /home/the0/monorepo fuse.vcsfs rw 0 0
+vcsfs /home/the0/monorepo_local fuse.vcsfs rw 0 0
+vcsfs /home/the0/monorepo_PROJ-100 fuse.vcsfs rw 0 0
+vcsfs /home/the0/monorepo_PROJ-200 fuse.vcsfs rw 0 0
+vcsfs /home/the0/monorepo_PROJ-300 fuse.vcsfs rw 0 0
 """
 
-MOUNTS_5 = arc_mounts_from_text(_PROC_TEXT)
+MOUNTS_5 = fuse_mounts_from_text(_PROC_TEXT)
 HOME = "/home/the0"
 PROJ = f"{HOME}/claude-agent-instructions"
 
@@ -48,16 +48,16 @@ def _hermetic_home(monkeypatch):
     monkeypatch.setattr(_mod.os.path, "realpath", lambda p, **kw: p)
 
 
-# --- arc_mounts_from_text ---
+# --- fuse_mounts_from_text ---
 
-def test_arc_mounts_from_text_extracts_fuse_home_only():
+def test_fuse_mounts_from_text_extracts_fuse_home_only():
     assert len(MOUNTS_5) == 5
     assert all(m.startswith("/home/the0/") for m in MOUNTS_5)
 
 
-def test_arc_mounts_from_text_octal_decode():
-    text = "arc /home/the0/dir\\040with\\040spaces fuse.arc rw 0 0\n"
-    mounts = arc_mounts_from_text(text)
+def test_fuse_mounts_from_text_octal_decode():
+    text = "vcsfs /home/the0/dir\\040with\\040spaces fuse.vcsfs rw 0 0\n"
+    mounts = fuse_mounts_from_text(text)
     assert mounts == ["/home/the0/dir with spaces"]
 
 

@@ -13,8 +13,8 @@ call, no filesystem I/O of its own — it only reasons over ScopeRecord objects
 already loaded by the caller via registry.load_all.
 
 VCS-agnosticism: path_overlaps operates on normalized filesystem paths alone,
-never on a VCS's own diff/status. A git working tree and an arc mount are both,
-at this layer, just directories — two sessions rooted in physically distinct
+never on a VCS's own diff/status. A git working tree and a network-backed VCS
+mount are both, at this layer, just directories — two sessions rooted in distinct
 worktrees/mounts naturally produce non-overlapping paths with no VCS-specific
 branch needed, which is what makes isolate-not-serialize automatic: isolating a
 task into its own worktree/mount is what stops the detector from firing again.
