@@ -326,6 +326,25 @@ def test_h_reprice_leaves_a_row_with_no_model_tokens_exactly_as_it_found_it(ps):
     assert "older rate table" in ps.scorecard(ps.load_ledger(), 7, None)
 
 
+def test_h_reprice_survives_a_skipped_row_that_also_has_no_cost_usd(ps):
+    """Truncated rather than merely un-bucketed — the ordinary shape of the row the
+    skip guard exists for. Both dollar totals must read the field defensively: the
+    guard leaves a skipped row without `cost_usd`, so an indexed read of it turns a
+    corrupt row into a crash on the whole ledger."""
+    ps.write_ledger({
+        "s-truncated": {"session_id": "s-truncated", "project": "p"},
+        "s-healthy": _row(ps, "s-healthy", model_tokens=_tokens(ps, opus={"in": 1_000_000}),
+                          agent_spawns=_spawns(ps), cost_usd=15.0),
+    })
+
+    out = ps.reprice()
+
+    assert "rows 2" in out
+    rows = ps.load_ledger()
+    assert rows["s-truncated"] == {"session_id": "s-truncated", "project": "p"}
+    assert rows["s-healthy"]["cost_usd"] == pytest.approx(ps.PRICING["opus"]["input"])
+
+
 def test_h_reprice_on_an_absent_ledger_is_a_no_op(ps):
     assert not ps.LEDGER.exists()
     assert "nothing to reprice" in ps.reprice()

@@ -457,7 +457,7 @@ def reprice(dry_run: bool = False) -> str:
         r["cost_usd"] = cost
         r["cache_read_usd"] = cache_read
         r["priced_by"] = PRICING_SHA
-    after = sum(r["cost_usd"] for r in rows.values())
+    after = sum(r.get("cost_usd", 0.0) or 0.0 for r in rows.values())
     out = [f"rows {len(rows)}  ·  repriced {changed}  ·  table {PRICING_SHA}",
            f"total cost_usd ${before:.2f} → ${after:.2f}"]
     if dry_run:
