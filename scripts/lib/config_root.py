@@ -87,6 +87,18 @@ def canon_roots_file() -> Path:
     return agent_home() / "canon-roots.local"
 
 
+def skill_first_classes_file() -> Path:
+    """Machine-local extra operation classes for hook-skill-first.py
+    (``<root>/skill-first-classes.local``, JSON). Org-neutral by construction,
+    the same way ``canon_roots_file()`` is: Core code only ever sees an opaque
+    name/regex/skill-family triple, never an org-specific command verb. Honors a
+    ``$CLAUDE_SKILL_FIRST_CLASSES_FILE`` override."""
+    override = os.environ.get("CLAUDE_SKILL_FIRST_CLASSES_FILE")
+    if override:
+        return Path(override).expanduser()
+    return agent_home() / "skill-first-classes.local"
+
+
 def agentctl_scopes_dir() -> Path:
     """Session-scope registry directory (``<root>/agentctl/scopes`` — see
     session_scope/registry.py)."""

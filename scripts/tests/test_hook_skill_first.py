@@ -1,10 +1,22 @@
 """Stage 5: skill-first advisory hook — nudges on hand-rolled domain ops,
-silent on plain shell, never blocks, once per operation-class per session."""
+silent on plain shell, never blocks, once per operation-class per session.
+
+Core ships exactly one operation class (`tracker`, a host-agnostic REST shape);
+every other class is machine-local data, so the tests below exercise the loading
+contract with SYNTHETIC class definitions rather than any deployment's real
+command verbs."""
 import importlib.util
 import io
 import json
 import uuid
 from pathlib import Path
+
+# A synthetic operation class: the shape a deployment writes into
+# config_root.skill_first_classes_file(), with a verb no real tool owns.
+SYNTHETIC = [
+    {"name": "widgetry", "pattern": r"\bwidgetctl\s+(apply|destroy)\b", "skill": "widget-ops"},
+    {"name": "ledgering", "pattern": r"\bledgerctl\s+post\b", "skill": "ledger-client"},
+]
 
 _SPEC = importlib.util.spec_from_file_location(
     "hook_skill_first",
@@ -22,17 +34,52 @@ def _run(monkeypatch, capsys, command, session=None, tool="Bash"):
     return rc, capsys.readouterr().out, sid
 
 
+def _classes_file(tmp_path, entries) -> Path:
+    p = tmp_path / "skill-first-classes.local"
+    p.write_text(json.dumps(entries), encoding="utf-8")
+    return p
+
+
+# --- machine-local operation classes ------------------------------------------
+
+def test_core_ships_only_the_tracker_class():
+    """The org-neutrality invariant: with no machine-local file, Core's own class
+    list is exactly {tracker}. A future builtin naming a specific tool's verbs
+    fails here rather than shipping to every deployment."""
+    assert [n for n, _, _ in mod.build_classes(classes_path="/nonexistent/classes.local")] \
+        == ["tracker"]
+
+
+def test_local_classes_extend_detection(tmp_path):
+    classes = mod.build_classes(classes_path=_classes_file(tmp_path, SYNTHETIC))
+    assert [n for n, _, _ in classes] == ["tracker", "widgetry", "ledgering"]
+    assert [n for n, _ in mod.detect("widgetctl apply -f x.yaml", classes)] == ["widgetry"]
+    assert mod.detect("widgetctl status", classes) == []
+
+
+def test_local_classes_are_matched_case_insensitively(tmp_path):
+    classes = mod.build_classes(classes_path=_classes_file(tmp_path, SYNTHETIC))
+    assert [n for n, _ in mod.detect("WidgetCtl DESTROY prod", classes)] == ["widgetry"]
+
+
+def test_local_classes_fail_open_per_entry(tmp_path):
+    """A malformed entry costs its own nudge, not the whole file — and never the
+    Bash call the hook advises on."""
+    path = _classes_file(tmp_path, [
+        {"name": "broken", "pattern": r"[unclosed", "skill": "x"},
+        {"no_name_key": True},
+        SYNTHETIC[0],
+    ])
+    assert [n for n, _, _ in mod.build_classes(classes_path=path)] == ["tracker", "widgetry"]
+
+
+def test_local_classes_malformed_file_yields_core_builtin_only(tmp_path):
+    path = tmp_path / "classes.local"
+    path.write_text("not json", encoding="utf-8")
+    assert [n for n, _, _ in mod.build_classes(classes_path=path)] == ["tracker"]
+
+
 # --- detector unit ------------------------------------------------------------
-
-def test_detect_vcs():
-    names = [n for n, _ in mod.detect("arc commit -m wip && arc push")]
-    assert "vcs" in names
-
-
-def test_detect_vault_and_grep():
-    assert any(n == "secrets" for n, _ in mod.detect("ya vault get version sec-xxx"))
-    assert any(n == "codesearch" for n, _ in mod.detect("arc grep -n TODO"))
-
 
 def test_detect_tracker_rest():
     names = [n for n, _ in mod.detect(
@@ -64,15 +111,18 @@ def test_silent_on_plain_shell():
 
 # --- hook behaviour -----------------------------------------------------------
 
-def test_fires_once_per_class(monkeypatch, capsys):
-    rc, out, sid = _run(monkeypatch, capsys, "arc push")
-    assert rc == 0 and "skill-first" in out and "vcs" in out
+def test_fires_once_per_class(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(
+        mod, "CLASSES", mod.build_classes(classes_path=_classes_file(tmp_path, SYNTHETIC))
+    )
+    rc, out, sid = _run(monkeypatch, capsys, "widgetctl apply -f x.yaml")
+    assert rc == 0 and "skill-first" in out and "widgetry" in out
     # same class again -> silent
-    rc2, out2, _ = _run(monkeypatch, capsys, "arc commit -m x", session=sid)
+    rc2, out2, _ = _run(monkeypatch, capsys, "widgetctl destroy prod", session=sid)
     assert rc2 == 0 and out2 == ""
     # a different class in the same session still fires
-    rc3, out3, _ = _run(monkeypatch, capsys, "ya vault get x", session=sid)
-    assert rc3 == 0 and "secrets" in out3
+    rc3, out3, _ = _run(monkeypatch, capsys, "ledgerctl post 42", session=sid)
+    assert rc3 == 0 and "ledgering" in out3
 
 
 def test_silent_on_negative(monkeypatch, capsys):
@@ -81,5 +131,8 @@ def test_silent_on_negative(monkeypatch, capsys):
 
 
 def test_ignores_non_bash(monkeypatch, capsys):
-    rc, out, _ = _run(monkeypatch, capsys, "arc push", tool="Write")
+    rc, out, _ = _run(
+        monkeypatch, capsys,
+        "curl -X PATCH https://tracker.example.com/v2/issues/ABC-1", tool="Write",
+    )
     assert rc == 0 and out == ""
