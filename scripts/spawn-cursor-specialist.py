@@ -197,15 +197,19 @@ def resolve_api_key(api_key_file: Path) -> str | None:
 
 def build_agent_cmd(
     agent_bin: str,
-    prompt: str,
     workspace: Path,
     model: str,
     timeout_sec: int,
 ) -> list[str]:
+    # The prompt is NOT an argv element: with the plan inlined it exceeds Linux
+    # MAX_ARG_STRLEN (32 pages = 131072 bytes for a single argv string), which execve
+    # rejects with E2BIG before the child starts. It travels via stdin instead (see
+    # the launch below); `agent -p` reads its prompt from stdin when no positional
+    # prompt is given (`-p`/`--print` is a boolean switch, the prompt a separate
+    # positional).
     cmd = [
         agent_bin,
         "-p",
-        prompt,
         "--trust",
         "--force",
         "--approve-mcps",
@@ -355,17 +359,16 @@ def main(argv: list[str] | None = None) -> int:
         prompt = assemble_prompt(args, depth_next, perms, skill_body, cursor_bootstrap)
 
     agent_bin = find_agent_binary()
-    cmd = build_agent_cmd(agent_bin or "agent", prompt, workspace, args.model, timeout_sec)
+    cmd = build_agent_cmd(agent_bin or "agent", workspace, args.model, timeout_sec)
 
     if args.dry_run:
-        print("=== assembled prompt ===")
+        print("=== assembled prompt (delivered via stdin) ===")
         print(prompt)
         print("\n=== command (not executed) ===")
-        if cmd[0] == "timeout":
-            printable = cmd[:3] + [f"<prompt {len(prompt)} chars>"] + cmd[-5:]
-        else:
-            printable = cmd[:2] + [f"<prompt {len(prompt)} chars>"] + cmd[-5:]
-        print(" ".join(repr(c) if " " in c else c for c in printable))
+        # The prompt is piped via stdin, so it is not a member of cmd; print cmd
+        # verbatim and note the stdin payload size separately.
+        print(" ".join(repr(c) if " " in c else c for c in cmd))
+        print(f"# stdin: <prompt {len(prompt)} chars>")
         api_key = resolve_api_key(args.api_key_file)
         print(f"\nCURSOR_API_KEY={'set' if api_key else 'missing'}")
         print(f"timeout_sec={timeout_sec} (budget_tier={args.budget})")
@@ -395,11 +398,14 @@ def main(argv: list[str] | None = None) -> int:
     # harness sends SIGTERM ~5s before SIGKILL, and a manual `kill` lands the same
     # SIGTERM), so the agent subtree is never orphaned.
     proc = proc_tree.launch_supervised(
-        cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        cmd, env=env, stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
     proc_tree.install_teardown(proc)
     try:
-        stdout_str, stderr_str = proc.communicate()
+        # communicate feeds stdin and drains stdout/stderr concurrently, which is
+        # what avoids the pipe-buffer deadlock a manual write()+read() would risk.
+        stdout_str, stderr_str = proc.communicate(input=prompt)
     finally:
         proc_tree.kill_tree(proc)
     completed = subprocess.CompletedProcess(
