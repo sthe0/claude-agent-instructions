@@ -195,7 +195,7 @@ Durable, non-self-evident facts about systems / processes / org structure / code
 
 - **Keep the main thread lean** — ~90% of spend is cache read/write on accumulated context, so **delegate verbose / exploratory work to a sub-agent** (multi-file reads, log diving, broad search, test runs, bulk research): only the conclusion returns, the volume stays in the sub-agent. **Set the sub-agent model explicitly** — `haiku` retrieval/polling, `sonnet` search-with-judgment, `opus` hard reasoning only; the `Agent` tool **inherits opus** unless `model:` is set. Two delegate-always shapes: [delegatable-work-patterns.md](memory-global/leaves/delegatable-work-patterns.md).
 - **One task ≈ one session:** `/clear` between unrelated tasks; lower `/effort` for chat / dispatch, reserve high/xhigh for implementation (thinking bills as output). On `/compact`, keep goal + done criterion, approved plan + active stage, decisions/why, open blockers; drop verbose tool output.
-- Harness enforces the rest (model `opus` 200k, `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`, `BASH_MAX_OUTPUT_LENGTH`); use `/usage` to attribute burn. Full programme: [token-economy-plan.md](memory-global/leaves/token-economy-plan.md).
+- Harness enforces the rest (auto-compaction window pinned at **210k** via `CLAUDE_CODE_AUTO_COMPACT_WINDOW` + `autoCompactWindow`, whatever the model's own max; `BASH_MAX_OUTPUT_LENGTH`); use `/usage` to attribute burn. Full programme: [token-economy-plan.md](memory-global/leaves/token-economy-plan.md).
 
 ---
 

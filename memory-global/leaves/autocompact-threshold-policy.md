@@ -3,7 +3,7 @@ name: autocompact-threshold-policy
 description: Keep the auto-compaction trigger comfortably ABOVE the ~90–97k post-compaction floor — a trigger at/below the floor re-fires every turn (thrash). Primary knob CLAUDE_CODE_AUTO_COMPACT_WINDOW pins the effective window (precedence, value auto|100k–1M). Verified trigger = min(round((window−20k)·(1−frac)), window−33k), frac≈0.2 default (server-tunable). The /context "Autocompact buffer" (33k = 20k+13k, window-independent) is a DISPLAY reserve, NOT window−trigger. Current: window=210k, 1M on, no PCT -> trigger ~152k (= the minimum safe window; floor ~100k + 50k margin).
 type: feedback
 created: 2026-06-15
-last_verified: 2026-06-24
+last_verified: 2026-07-27
 ---
 
 **Difficulty:** keep the working context bounded before auto-compaction **without** destabilizing the session — and the hard constraint is that the auto-compaction *trigger* cannot live near the **~90–97k post-compaction floor**. That floor is structural and remarkably stable: static prefix ~60k (system prompt + tools + MCP + memory + skills) + the compaction summary ~14–20k + first reads ≈ **~90–97k** (measured across 5 sessions, 2026-06-17). It can be pushed *higher* by large retained tool outputs (the harness itself warns "a file/tool output is likely too large"). Env is read **once at session start**; a hook cannot re-threshold a live session.
@@ -41,12 +41,16 @@ The fire **trigger** and the `/context` **"Autocompact buffer"** are two differe
 **`/context` "Autocompact buffer"** (`pF8`): a window-independent display reserve = `min(maxOut,20000) + 13000` = **33000** (shown as 33000/window, e.g. 11% at 300k). It is **NOT** `window − trigger`. Don't size against it.
 
 - **frac is server-driven** (LaunchDarkly flag `tengu_amber_moleskin`); the binary only carries the 0.2 fallback. A larger live frac lowers the real trigger, so the computed trigger is an estimate — keep margin / verify empirically.
-- **1M tier:** `CLAUDE_CODE_DISABLE_1M_CONTEXT=1` makes the 1M-capability check (`IR`/`bfH`) return false for Opus 4.7/4.8/Fable → model max = **200k**. With 1M on, model max = 1M, so the window setting governs.
+- **1M tier:** `CLAUDE_CODE_DISABLE_1M_CONTEXT=1` makes the 1M-capability check (`IR`/`bfH`) return false for Opus 4.7/4.8/Fable → model max = **200k**. With 1M on, model max = 1M, so the window setting governs. **2026-07-27:** the key still exists in the 2.1.220 bundle but is set **nowhere in this fleet** — `lint-settings-base.py` lists it in `DEPRECATED_ENV_KEYS` and `set-context-cap.sh` deletes it — so the 1M tier is live for every model that has it, and the window pin is the only thing capping the trigger.
 - `CLAUDE_CODE_AUTO_COMPACT_WINDOW` is the **precedence-taking** knob: `min(setting, model max)`. Settable via env or `/config → Auto-compact window`. Value: `auto` or `100k…1M` (parser `sAq`). `autoCompactEnabled` / `DISABLE_AUTO_COMPACT` is the on/off toggle.
 
 **Worked example (window 300k, no override, frac 0.2):** `z = 280000`; trigger `= min(round(280000·0.8), 280000−13000) = min(224000, 267000) = 224000`. Display buffer = 33000.
 
 > verified by: decompiled `bin/claude.exe` functions `Rr4`/`nAq`/`zB8`/`w1H`/`WYH`/`MU`/`IR`/`bfH`/`sAq`/`pF8` and constants `Ks4=13000`/`js4=20000`/`lAq=0.2` (byte-offset extraction); floor ~90–97k and the thrash band ~90k verified empirically against 5 session transcripts (`compactMetadata.preTokens` + post-compaction input/cache) — 2026-06-17 session.
+
+**Re-verified 2026-07-27 against client 2.1.220.** The arithmetic above is unchanged; the minified symbol names are not, so the older names stay recorded as what was verified on 2026-06-17 and these are the current ones: window resolution `o7` (returns `{window, configured, source}`, `window = min(model max, configured)`), effective window `vSe`, fire trigger `Mds(z, o) = min(z − round(z·o.precomputeBufferFraction), yfo(z, o))`, the pct/floor term `yfo` (`z − 13000`, or `min(⌊z·pct/100⌋, z−13000)` when `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`/`testPctOverride` is set), fraction lookup `Uds` with scalar fallback `$ds` and literal `Pds = 0.2`, window parser `Fds` (accepts `auto` or `100000…1000000`, constants `_fo = 1e5` / `Nds = 1e6`), output reserve `sOu = 20000`.
+
+The one genuinely **new** finding: `frac` is no longer a single server-driven scalar. `Uds` reads flag `tengu_amber_moleskin` as a **table keyed by window size** — entries matched exactly on the resolved window with a `default` entry as fallback, and **separate `sdk` and `repl` values per entry**, so a spawned `claude -p` child and this REPL can run different fractions at the same window. Only if that flag is absent or malformed does it fall back to the scalar flag `tengu_amber_rokovoko` (`$ds`), and only then to the `0.2` literal. Practical consequence: the fraction is server-tunable in more ways than this leaf recorded, so the computed trigger stays an estimate and the margin above the floor is what keeps it safe.
 
 ## Policy
 
@@ -54,7 +58,7 @@ The fire **trigger** and the `/context` **"Autocompact buffer"** are two differe
 - **Never pick a window below ~210k.** Its trigger lands at/near the ~90–97k floor and thrashes (see Failure modes). 210k is the minimum — its ~55k margin is comfortable under normal load but thins if a session retains large tool outputs (which raise the floor); cap big outputs rather than going lower. For a tighter active session, use `/compact` by hand — don't lower the auto-trigger into the floor.
 - **Env is read at session start** — a settings change takes effect only on the **next Claude Code restart**, never the current session. After any change: **restart and verify in the new session via `/context`** (window + "will trigger soon" line) before trusting it.
 - **`apply-settings.sh` is additive — dropping a key from base does NOT remove it from live.** `env = base.env + live.env` with live winning on conflict. So (a) a stale live value silently shadows base (the drift that caused the overshoot), and (b) when you *remove* a key from `base.json` (as `fc7c5ce` removed `pct`/`DISABLE_1M`) you must also delete it from `~/.claude-agent/settings.json` by hand or it persists. Always verify the live `env` after applying.
-- **Spawned `claude -p` sub-agents:** `scripts/spawn-specialist.py` may inject `--settings '{"env":{...}}'` (precedence above file `env`, per-key). Keep sub-agent caps subject to the same floor rule. See [[claude-code-settings-env-precedence]].
+- **Spawned `claude -p` sub-agents:** `scripts/spawn-specialist.py` pins the **child's window** through `--settings` (env `CLAUDE_CODE_AUTO_COMPACT_WINDOW` + top-level `autoCompactWindow`, precedence above file `env`, per-key) rather than injecting a percentage — the same knob the main session uses, for the same reason. The pin is **207500**, derived from a declared 150k child ceiling by the client's own arithmetic (`round(150000 / (1 − 0.2)) + 20000`): unclamped it yields a **150k** trigger, and a Haiku child, whose 200k max clamps the window, gets **144k** — both far above the ~90–97k floor, which is the rule that governs here too. A per-model window table was deleted along with the percentage path: the client already computes `min(model max, configured)`, so the child needs no local copy of anyone's window size. See [[claude-code-settings-env-precedence]], [[spawning-specialists]].
 
 **Why:** keep the working context bounded so cost (cache read/write scales with retained context) and quality stay predictable, independent of which model/window is active. See [[token-economy-plan]].
 
@@ -66,9 +70,10 @@ At the current 210k default pin:
 
 | Model | Max window | Effective window (z = effW−20k) | Trigger ≈ round(z·0.8) |
 |---|---|---|---|
-| Opus 4.7 / 4.8 | 1M | min(210k, 1M)=210k → z=190k | **~152k** (1M tier on) |
-| Fable | 1M | min(210k, 1M)=210k → z=190k | **~152k** |
-| Sonnet | 200k | min(210k, 200k)=200k → z=180k | **~144k** (sub-agent) |
-| Haiku | 200k | min(210k, 200k)=200k → z=180k | **~144k** (sub-agent) |
+| Opus 5 | 1M | min(210k, 1M)=210k → z=190k | **~152k** (1M tier on) |
+| Opus 4.8 / 4.7 | 1M | min(210k, 1M)=210k → z=190k | **~152k** |
+| Fable 5 | 1M | min(210k, 1M)=210k → z=190k | **~152k** |
+| Sonnet 5 / 4.6 | 1M | min(210k, 1M)=210k → z=190k | **~152k** |
+| Haiku 4.5 | 200K | min(210k, 200k)=200k → z=180k | **~144k** (sub-agent) |
 
-> The window-pin only *lowers* below the model max (`min`), so the 210k pin caps Opus/Fable at 210k and is a near-no-op on 200k-max models (Sonnet/Haiku → effW 200k, trigger ~144k). All four land ~144–152k, comfortably above the verified ~90–97k floor (margin ~50–60k). The unsafe direction is always a trigger at/below the *actual* post-compaction floor — which large retained tool outputs can raise.
+> Rebuilt 2026-07-27 against the current catalog. The row that was wrong is Sonnet: it was recorded at 200k and is 1M on the Claude 5 generation, so Haiku 4.5 is now the **only** current model with a genuinely 200K max. The window-pin only *lowers* below the model max (`min`), so the 210k pin caps every 1M model at 210k and is a near-no-op on Haiku (effW 200k, trigger ~144k). Every row lands ~144–152k, comfortably above the verified ~90–97k floor (margin ~50–60k). The unsafe direction is always a trigger at/below the *actual* post-compaction floor — which large retained tool outputs can raise.

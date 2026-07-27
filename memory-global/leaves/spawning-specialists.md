@@ -3,7 +3,7 @@ name: spawning-specialists
 description: Full mechanics of spawning a specialist via claude -p — spawn template inputs, budget tiers, recursion cap, monitoring a running spawn, after-spawn checks, bypassPermissions discipline, return markers.
 type: reference
 created: 2026-06-04
-last_verified: 2026-06-25
+last_verified: 2026-07-27
 ---
 
 # Spawning specialists
@@ -12,7 +12,7 @@ A **spawned specialist** is a fresh Claude Code process (`claude -p`) with a spe
 
 ## When NOT to spawn — tiny-edit-in-large-file
 
-Means is chosen by *what the work needs to hold in context*, not only by work type. A spawn carries a ~150k autocompact ceiling (`spawn-specialist.py` injects `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`); a developer that full-Reads a large file (>~1000 lines) re-reads it after each autocompact and **thrashes** — the harness emits *"Autocompact is thrashing: context refilled to the limit within N turns"*, the process dies `MALFORMED`, and **no commits land**. This is mis-assigned means: the task is tiny (a few-line edit, or restoring an existing commit) but the executor cannot hold the file context.
+Means is chosen by *what the work needs to hold in context*, not only by work type. A spawn carries a ~150k autocompact ceiling (`spawn-specialist.py` pins the child's window via `CLAUDE_CODE_AUTO_COMPACT_WINDOW` + top-level `autoCompactWindow` in `--settings`, and the client derives the trigger from it — see [[autocompact-threshold-policy]]); a developer that full-Reads a large file (>~1000 lines) re-reads it after each autocompact and **thrashes** — the harness emits *"Autocompact is thrashing: context refilled to the limit within N turns"*, the process dies `MALFORMED`, and **no commits land**. This is mis-assigned means: the task is tiny (a few-line edit, or restoring an existing commit) but the executor cannot hold the file context.
 
 To remove this divergence: when the edit is surgical (≤ a few lines) but the target file is large, or the change is "restore an existing commit", **do it in-thread** — `arc cherry-pick <sha>` recovers a commit without dumping its diff into context; a ranged Read (`offset`/`limit`) + Edit touches only the edit region, never the whole file. If a spawn is genuinely unavoidable (multi-file, needs fresh context), the dossier **must** forbid full-file Reads (ranged only) and route large command outputs through `head` / `scripts/offload-large.sh`. Two consecutive `MALFORMED`-with-thrash on the same step is the overcome-difficulty signal — switch means, do not re-spawn a third time.
 
