@@ -56,9 +56,9 @@ done
 From `~/claude-agent-instructions/` after pull:
 
 ```bash
-# Every project root discovered on this machine — `--help` names the
-# discovery flag, which an overlay names after its own project:
-bash cursor/scripts/migrate-cursor-namespace.sh --help
+# Every project root this machine configures (the `cursor_project_roots=`
+# identity key; `--help` shows the flag):
+bash cursor/scripts/migrate-cursor-namespace.sh --all-configured-roots
 
 # Or explicit roots only:
 bash cursor/scripts/migrate-cursor-namespace.sh \

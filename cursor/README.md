@@ -16,5 +16,5 @@ Cursor-specific assets are isolated here so they do not leak into Claude Code ru
 Installers:
 
 - `cursor/scripts/install-cursor-links.sh` — user-level `~/.cursor/*`
-- `cursor/scripts/link-project-cursor-agents.sh` — per-mount `robot/deepagent/.cursor/agents/*`
-- `cursor/scripts/migrate-cursor-namespace.sh` — global + optional `--all-deepagent-mounts`
+- `cursor/scripts/link-project-cursor-agents.sh` — per-project `<project_root>/.cursor/agents/*`
+- `cursor/scripts/migrate-cursor-namespace.sh` — global + optional `--all-configured-roots`

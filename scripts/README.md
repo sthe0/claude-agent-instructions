@@ -6,9 +6,9 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 | Script | Purpose |
 |---|---|
 | [install-cursor-links.sh](../cursor/scripts/install-cursor-links.sh) | Apply Cursor-only symlinks (`~/.cursor/rules/*`, `~/.cursor/agents/*`) |
-| [link-project-cursor-agents.sh](../cursor/scripts/link-project-cursor-agents.sh) | Symlink `<project>/.cursor/agents/*` → `cursor/agents/` (used by deepagent `setup-local.sh`) |
+| [link-project-cursor-agents.sh](../cursor/scripts/link-project-cursor-agents.sh) | Symlink `<project>/.cursor/agents/*` → `cursor/agents/` (used by a project's `setup-local.sh`) |
 | [lint-cursor-mirror.py](../cursor/scripts/lint-cursor-mirror.py) | Detect structural drift between `skills/` and the cursor mirror (flat-skill parity, specialization parity, trigger markers) |
-| [migrate-cursor-namespace.sh](../cursor/scripts/migrate-cursor-namespace.sh) | Migrate global + all `~/arcadia*/robot/deepagent` mounts (`--all-deepagent-mounts`) |
+| [migrate-cursor-namespace.sh](../cursor/scripts/migrate-cursor-namespace.sh) | Migrate global links + every project root in the machine's `cursor_project_roots=` identity key (`--all-configured-roots`) |
 | [agent-stats.py](agent-stats.py) | One local usage report over the existing ledgers (invocations, resolved tasks, `solved_by_007` precedents, mean quality, cost, spawns); `--project` / `--global` slices, markdown or `--json`; `--cross-machine` delegates to `usage-digest.py pull` |
 | [agent_commit_trailer.py](agent_commit_trailer.py) | Build the `Agent-Session`/`Agent-Task` commit trailer lines for the current session (reads agentctl state); called by `githooks/commit-msg` and by `arc-land-pr.sh` so the trailer is byte-identical across git and arc |
 | [apply-mcp-local.sh](apply-mcp-local.sh) | Merge `mcp-local/*.json` into `$CLAUDE_AGENT_HOME/settings.local.json` under `mcpServers` (idempotent) |
