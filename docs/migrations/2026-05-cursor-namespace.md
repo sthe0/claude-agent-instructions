@@ -30,39 +30,40 @@ scripts/verify-instructions-sync.sh
 
 This wires **user-level** Cursor paths only (`~/.cursor/rules/`, `~/.cursor/agents/`).
 
-## Project mounts (`robot/deepagent`)
+## Project mounts
 
-Cursor also reads **project-local** subagents from `<mount>/robot/deepagent/.cursor/agents/`. That tree is listed in `.arcignore` (machine-local overlay, not product arc history). Before this migration, copies of `*-spawn.md` were often committed only on disk as **regular files** and drifted from `~/claude-agent-instructions/cursor/agents/`.
+Cursor also reads **project-local** subagents from `<project_root>/.cursor/agents/`. Where the project root sits inside a VCS monorepo mount, that tree is normally ignored by the monorepo's VCS — a machine-local overlay, not product history. Before this migration, copies of `*-spawn.md` were often left on disk as **regular files** and drifted from `~/claude-agent-instructions/cursor/agents/`.
 
-**Active project today:** `robot/deepagent` under each Arcadia working mount. Typical paths:
+One project root lives under each working mount. Typical paths:
 
 | Mount | Project root |
 |---|---|
-| Main trunk | `~/arcadia/robot/deepagent` |
-| Ticket / branch mounts | `~/arcadia_*/robot/deepagent` |
+| Main trunk | `<trunk_mount>/<project_path>` |
+| Ticket / branch mounts | `<ticket_mount>/<project_path>` |
 
 Discover mounts on this machine:
 
 ```bash
-for root in "$HOME/arcadia/robot/deepagent" "$HOME"/arcadia_*/robot/deepagent; do
+for root in "$HOME"/<mount_glob>/<project_path>; do
   [[ -d "$root" ]] && echo "$root"
 done
 ```
 
-(Other products, e.g. `logos`, are separate — only run their `setup-local.sh` if you use them.)
+(Other projects on the same machine are separate — only run their `setup-local.sh` if you use them.)
 
 ### Per-mount steps
 
 From `~/claude-agent-instructions/` after pull:
 
 ```bash
-# All deepagent roots found above:
-bash cursor/scripts/migrate-cursor-namespace.sh --all-deepagent-mounts
+# Every project root discovered on this machine — `--help` names the
+# discovery flag, which an overlay names after its own project:
+bash cursor/scripts/migrate-cursor-namespace.sh --help
 
 # Or explicit roots only:
 bash cursor/scripts/migrate-cursor-namespace.sh \
-  ~/arcadia/robot/deepagent \
-  ~/arcadia_MY-TICKET-slug/robot/deepagent
+  <trunk_mount>/<project_path> \
+  <ticket_mount>/<project_path>
 ```
 
 Each project root runs:
@@ -76,7 +77,7 @@ Each project root runs:
 `link-project-cursor-agents.sh` will **not** overwrite a regular file. If you have stale copies:
 
 ```bash
-cd <mount>/robot/deepagent
+cd <project_root>
 ls -la .cursor/agents/
 # move aside any non-symlink *-spawn.md, then re-run setup-local or link-project-cursor-agents.sh
 mv .cursor/agents/developer-spawn.md .cursor/agents/developer-spawn.md.bak.$(date +%Y%m%d)  # example
@@ -85,11 +86,9 @@ mv .cursor/agents/developer-spawn.md .cursor/agents/developer-spawn.md.bak.$(dat
 
 Optional: remove the backup after `readlink .cursor/agents/developer-spawn.md` points at `~/claude-agent-instructions/cursor/agents/`.
 
-### deepagent storage (`arcadia_claude_local`)
+### Overlay storage
 
-`setup-local.sh` in  
-`~/arcadia_claude_local/junk/the0/agents/robot/deepagent/scripts/`  
-must include step 7 (project Cursor agents). After updating storage on trunk, re-run `setup-local.sh` from **each** mount so every `~/arcadia*` copy picks up symlinks.
+Where `setup-local.sh` lives in a machine-local overlay tree rather than in the project itself, that copy must include step 7 (project Cursor agents) too. After updating the overlay on trunk, re-run `setup-local.sh` from **each** mount so every copy picks up the symlinks.
 
 ## Expected runtime state after migration
 
@@ -101,17 +100,17 @@ must include step 7 (project Cursor agents). After updating storage on trunk, re
 - `~/.cursor/agents/thinker-spawn.md` → `~/claude-agent-instructions/cursor/agents/thinker-spawn.md`
 - `~/.claude/agents/` remains independent (Claude Code only).
 
-**Per mount (`robot/deepagent`):**
+**Per mount (each project root):**
 
-- `<mount>/robot/deepagent/.cursor/agents/*-spawn.md` → symlinks to the same `~/claude-agent-instructions/cursor/agents/*.md`
-- `<mount>/robot/deepagent/.cursor/rules/deepagent-project.mdc` → via `.claude/rules/project.mdc` (unchanged)
+- `<project_root>/.cursor/agents/*-spawn.md` → symlinks to the same `~/claude-agent-instructions/cursor/agents/*.md`
+- `<project_root>/.cursor/rules/<project>-project.mdc` → via `.claude/rules/project.mdc` (unchanged)
 - No duplicate regular-file copies of spawn agents left in the mount.
 
 ## Verify
 
 ```bash
 cd ~/claude-agent-instructions && ./scripts/verify-all.py
-for root in "$HOME/arcadia/robot/deepagent" "$HOME"/arcadia_*/robot/deepagent; do
+for root in "$HOME"/<mount_glob>/<project_path>; do
   [[ -d "$root" ]] || continue
   echo "== $root =="
   ls -la "$root/.cursor/agents/"*spawn*.md 2>/dev/null || true

@@ -1,12 +1,13 @@
 # Cross-session filesystem-scope isolation
 
-Parallel Claude Code sessions share one working tree (a git checkout or an arc
-mount). Without coordination, one session's uncommitted edits get attributed to,
-staged by, or clobbered by another. Protection used to be purely reactive — a
-manual playbook (detect via `git status`, isolate via `git worktree add` off a
-pinned SHA, recover via cherry-pick). This subsystem makes the *detection*
-deterministic: each live session records the filesystem scope it is touching, and
-an online detector fires when two live sessions overlap.
+Parallel Claude Code sessions share one working tree (a git checkout, or another
+VCS's working mount). Without coordination, one session's uncommitted edits get
+attributed to, staged by, or clobbered by another. Protection used to be purely
+reactive — a manual playbook (detect via `git status`, isolate via
+`git worktree add` off a pinned SHA, recover via cherry-pick). This subsystem
+makes the *detection* deterministic: each live session records the filesystem
+scope it is touching, and an online detector fires when two live sessions
+overlap.
 
 The design law is **isolate, not serialize**: concurrent sessions keep running,
 each in its own working tree / mount; integration happens only at the
@@ -23,7 +24,7 @@ isolation — the model's call).
 | **A — scope-track hook** | `scripts/hook-scope-track.py` (PostToolUse Edit\|Write + Bash) | Heartbeats the session, accumulates touched paths, and records the durable session process's pid (resolved once per session via an age-based ancestor walk — see `session_pid()`). Non-blocking. |
 | **B — conflict detector** | `scripts/session_scope/detector.py` | Pure path-prefix overlap + severity classification over the registry records. VCS-agnostic. |
 | **B — conflict hook** | `scripts/hook-scope-conflict.py` (PreToolUse Edit\|Write) | On a write, asks the detector whether the target overlaps another **live** session's scope, then denies / warns / allows. |
-| **C — isolation router** | `scripts/session-isolate.sh` (+ `project_entry` backends) | Routes a contended task into its own workspace by reusing `project_entry`'s workspace-backend contract (`backend_ensure_workspace`), then re-registers the session's scope at the new root. The built-in git backend (`backends/git.sh`) and a machine-local plugin backend such as arc (registered at `${CLAUDE_PROJECT_PLUGIN_DIR:-…}/backends/arc.sh`), resolved by name — the router is backend-blind. |
+| **C — isolation router** | `scripts/session-isolate.sh` (+ `project_entry` backends) | Routes a contended task into its own workspace by reusing `project_entry`'s workspace-backend contract (`backend_ensure_workspace`), then re-registers the session's scope at the new root. The built-in git backend (`backends/git.sh`) and any machine-local plugin backend (registered at `${CLAUDE_PROJECT_PLUGIN_DIR:-…}/backends/<name>.sh`), resolved by name — the router is backend-blind. |
 
 ## How the conflict hook decides
 
@@ -47,8 +48,8 @@ already held by **another live session** (liveness — see § Liveness below):
   single-session flow is completely unchanged.
 
 The detector is **VCS-agnostic** because it reasons over normalized filesystem
-paths alone, never a VCS's own diff/status. A git working tree and an arc mount
-are both just directories at this layer; two sessions rooted in physically
+paths alone, never a VCS's own diff/status. A git working tree and another VCS's
+mount are both just directories at this layer; two sessions rooted in physically
 distinct worktrees / mounts naturally produce non-overlapping paths, which is
 exactly why isolating a task stops the detector from firing again.
 
@@ -122,39 +123,41 @@ The router is **backend-blind**: it resolves a backend *name*
 (`$CLAUDE_WORKSPACE_BACKEND` override, else `detect_backend.py`, else git) through
 `project_entry/registry.sh` and calls the same three contract functions
 regardless of which backend answers. The built-in git worktree backend
-(`backends/git.sh`, the org-neutral default Core ships) and a machine-local plugin
-backend such as the arc mount backend (registered at
-`${CLAUDE_PROJECT_PLUGIN_DIR:-$CLAUDE_AGENT_HOME/project-entry-plugins}/backends/arc.sh`)
+(`backends/git.sh`, the org-neutral default Core ships) and any machine-local plugin
+backend (registered at
+`${CLAUDE_PROJECT_PLUGIN_DIR:-$CLAUDE_AGENT_HOME/project-entry-plugins}/backends/<name>.sh`)
 are drop-in implementations of that one contract, so a new backend attaches with no
 change to `session-isolate.sh`.
 
-#### The arc backend (a machine-local plugin)
+#### A plugin backend (machine-local)
 
-arc is Yandex-specific, so Core ships no arc backend: it is installed as a
-machine-local plugin at `${CLAUDE_PROJECT_PLUGIN_DIR:-…}/backends/arc.sh` and
-resolved by name through `registry.sh` (which searches the Core built-ins first,
-then the plugin dir). On a machine without that plugin, `session-isolate.sh`
-degrades to the git default. Where the plugin is installed, arc has no `worktree`
-command; its equivalent is a second `arc mount` that shares the main mount's
-`--object-store` (the `using-arc-multiple-mounts` skill). So on arc,
-`backend_ensure_workspace <name> <branch>`:
+Where a VCS belongs to one organization, Core ships no backend for it: the backend
+is installed as a machine-local plugin at
+`${CLAUDE_PROJECT_PLUGIN_DIR:-…}/backends/<name>.sh` and resolved by name through
+`registry.sh` (which searches the Core built-ins first, then the plugin dir). On a
+machine without that plugin, `session-isolate.sh` degrades to the git default.
 
-1. Reads `arc mount --list --json`, finds the mounted entry that is an ancestor of
-   the anchor directory (`$CLAUDE_WORKSPACE_ROOT` when set, else `$PWD`), and
-   extracts its `mount` path (`MAIN_MOUNT`) and `object-store`.
-2. Targets a new mount at `<MAIN_MOUNT>_<name>` — reused as-is if a mount already
-   exists there, never recreated.
-3. Otherwise creates it: `mkdir` the path, `arc mount -m <path> --object-store
-   <store> --override-object-store`, then `arc checkout -b <branch>` inside it.
+A plugin satisfies `backend_ensure_workspace <name> <branch>` with whatever its VCS
+provides. A VCS with no `worktree` command, for instance, can use a second working
+mount sharing the main mount's object store:
 
-Every `arc` call goes through the `ARC_BIN` seam (default `arc`) so the tests can
-stub it, and under `CLAUDE_DRY_RUN` no mount-creating command runs and no
-directory is made — the would-be mount path is still reported so the detector can
-be shown the isolated root. Two arc mounts are physically distinct directories, so
-the same path-prefix overlap logic that separates two git worktrees separates two
-arc mounts — the detector needs no arc-specific branch dimension. The mount, like a
-git worktree, already carries the repo's `.claude` tree, so `backend_compose` is a
-no-op.
+1. Find the mounted entry that is an ancestor of the anchor directory
+   (`$CLAUDE_WORKSPACE_ROOT` when set, else `$PWD`), and read its mount path and
+   its object store.
+2. Target a new mount derived from that path and `<name>` — reused as-is if a
+   mount already exists there, never recreated.
+3. Otherwise create it, pointing it at the same object store, and check out
+   `<branch>` inside it.
+
+Two conventions make such a plugin testable and safe: route every call to the VCS
+binary through a seam of the plugin's own (defaulting to the bare command name) so
+tests can stub it, and honour `CLAUDE_DRY_RUN` by running no workspace-creating
+command and creating no directory — while still reporting the would-be workspace
+path, so the detector can be shown the isolated root. Two such mounts are
+physically distinct directories, so the same path-prefix overlap logic that
+separates two git worktrees separates them; the detector needs no VCS-specific
+branch dimension. A mount that already carries the repo's `.claude` tree, as a git
+worktree does, leaves `backend_compose` a no-op.
 
 ### Landing back
 
@@ -178,10 +181,10 @@ created.
 
 A generalization of the earlier serving-checkout-off-main guard. Both
 canonical checkouts on a machine — the Core repo's primary/serving checkout
-(`~/claude-agent-instructions`) and, where installed, the arc anchor mount
+(`~/claude-agent-instructions`) and, where installed, a plugin VCS's anchor mount
 (`~/task-mounts/main`) — are read-only to a session's own edits. They are
 mutated **only** by `pull`; all code/memory edits flow through a separate
-linked worktree (Core) or second arc mount, then land back.
+linked worktree (Core) or second mount, then land back.
 
 `scripts/hook-guard-canon-readonly.py` (PreToolUse, renamed from
 `hook-guard-serving-checkout-offmain.py`) enforces this. Its predicate: the
@@ -190,9 +193,9 @@ a canonical root **on any branch** — there is no on-`main` carve-out and no
 `memory-global/` exemption (both existed on the old serving-checkout guard
 and are dropped here, decision D1). Canon roots are read from a
 machine-local list, `~/.claude-agent/canon-roots.local` (via
-`config_root.canon_roots_file()`), so the Core repo stays org-neutral — arc
-canon is opt-in per install, not hardcoded. The guard still fails open for a
-linked worktree, a second arc mount, personal auto-memory under
+`config_root.canon_roots_file()`), so the Core repo stays org-neutral — a
+plugin VCS's canon is opt-in per install, not hardcoded. The guard still fails
+open for a linked worktree, a second mount, personal auto-memory under
 `~/.claude-agent`, `/tmp`, and `git pull` itself; its deny message points at
 `session-isolate.sh` to relocate.
 

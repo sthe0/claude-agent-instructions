@@ -36,7 +36,7 @@ docs/migrations/2026-05-collapse-manager-memory.md:83  # keep:migration-doc — 
 docs/migrations/2026-05-collapse-manager-memory.md:96  # keep:migration-doc — migration doc — describes the legacy layout by nature
 docs/migrations/2026-05-collapse-manager-memory.md:98  # keep:migration-doc — migration doc — describes the legacy layout by nature
 docs/migrations/2026-05-cursor-namespace.md:14  # keep:migration-doc — migration doc — describes the legacy layout by nature
-docs/migrations/2026-05-cursor-namespace.md:102  # keep:migration-doc — migration doc — describes the legacy layout by nature
+docs/migrations/2026-05-cursor-namespace.md:101  # keep:migration-doc — migration doc — describes the legacy layout by nature
 docs/migrations/README.md:3  # keep:migration-doc — migration doc — describes the legacy layout by nature
 docs/migrations/README.md:5  # keep:migration-doc — migration doc — describes the legacy layout by nature
 docs/operations/git-workflow.md:13  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
