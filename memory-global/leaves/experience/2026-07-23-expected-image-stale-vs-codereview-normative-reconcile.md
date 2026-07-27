@@ -13,10 +13,10 @@ last_verified: 2026-07-23
 # Stale expected-image vs a code-review decision: reconcile as an invariants-only normative replan
 
 ## Difficulty
-Expected: stage-2 live verification passes — every synthetic-payload decision matches the plan's expected image. Actual: 15/16 matched, but 'arc pr create --dry-run' was DENIED by the delivered+merged hook while the plan expected ALLOW. Mismatch: the plan's verification norm (expected-image) predicted pre-code-review behavior; the code-review had removed the --dry-run exemption (arc pr create has no --dry-run flag, so a bare one is a publish-less create → correctly denied). A stale norm that would have FAILED a correct artifact.
+Expected: stage-2 live verification passes — every synthetic-payload decision matches the plan's expected image. Actual: 15/16 matched, but the internal VCS CLI's `pr create --dry-run` invocation was DENIED by the delivered+merged hook while the plan expected ALLOW. Mismatch: the plan's verification norm (expected-image) predicted pre-code-review behavior; the code-review had removed the --dry-run exemption (the CLI's `pr create` has no --dry-run flag, so a bare one is a publish-less create → correctly denied). A stale norm that would have FAILED a correct artifact.
 
 ## Order & criterion
-declare (Expected/Actual/Mismatch) → investigate with 2 hypotheses (H1 code false-deny FALSIFIED via 'arc pr create --help' showing no --dry-run flag + is_exempt() has no dry-run branch; H2 expected-image stale CONFIRMED) → critique routing failure-address normative → normalize → replan (refinement re-classified substantive by the engine because the control criterion changed → re-approval).
+declare (Expected/Actual/Mismatch) → investigate with 2 hypotheses (H1 code false-deny FALSIFIED via the CLI's `pr create --help` output showing no --dry-run flag + is_exempt() has no dry-run branch; H2 expected-image stale CONFIRMED) → critique routing failure-address normative → normalize → replan (refinement re-classified substantive by the engine because the control criterion changed → re-approval).
 
 **Acceptance check:** measurable — verify_command (merge-commit pin + both hermetic suites) green on a clean trunk checkout; plus a 16/16 synthetic-payload exercise of the composed hook (7 DENY / 9 ALLOW after reconciliation).
 

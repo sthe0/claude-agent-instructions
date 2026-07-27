@@ -1,6 +1,6 @@
 ---
 name: 2026-07-08-secret-on-argv-curl-config-stdin
-description: A shell script (ccgram-watchdog.sh) passed a Telegram bot token in the curl URL argument, so osquery captured the full token into Splunk and into a SECALERTS ticket (hunt fired risk 90, curl_exfiltration — a false positive for C2 but a real secret-on-argv leak). Fix: feed the token to curl via a printf-built '-K -' config stream on stdin so nothing sensitive reaches argv (mirroring the already-hardened sibling ccgram-topic-sweep.sh); rotate the compromised token in BotFather (a logged secret is compromised — hardening the emitter does not un-leak the past value); answer SOC and let them close as false-positive.
+description: A shell script (the messaging-bridge watchdog) passed a Telegram bot token in the curl URL argument, so osquery captured the full token into Splunk and into a SECALERTS ticket (hunt fired risk 90, curl_exfiltration — a false positive for C2 but a real secret-on-argv leak). Fix: feed the token to curl via a printf-built '-K -' config stream on stdin so nothing sensitive reaches argv (mirroring the already-hardened sibling messaging-bridge topic-sweep script); rotate the compromised token in BotFather (a logged secret is compromised — hardening the emitter does not un-leak the past value); answer SOC and let them close as false-positive.
 type: reference
 schema: difficulty/v1
 generality: 0
@@ -23,11 +23,11 @@ A secret passed as a curl command-line argument (token in the URL, or --data wit
 ## Contexts
 
 ### 2026-07-08 — secret-on-argv → curl -K - stdin config
-- Where it arose: the0.klg.yp-c.yandex.net; CCGram watchdog; SECALERTS-1123779
-- Working plan: 4-stage TOML plan (harden → argv-clean+E2E verify → rotate token → answer SOC); mirrored the working sibling caller (ccgram-topic-sweep.sh tg_delete) rather than inventing a new mechanism.
+- Where it arose: the0.klg.yp-c (an internal corp host); messaging-bridge watchdog; SECALERTS-1123779
+- Working plan: 4-stage TOML plan (harden → argv-clean+E2E verify → rotate token → answer SOC); mirrored the working sibling caller (the messaging-bridge topic-sweep script's tg_delete) rather than inventing a new mechanism.
 
 ## Cost
 ~1 session; 4 stages; in-thread edits + tracker + BotFather (user-side revoke).
 
 ## Self-critique of the agent system
-The watchdog was missed when its sibling ccgram-topic-sweep.sh was hardened with the same pattern — a secret-hygiene fix applied to one emitter should trigger a grep of all sibling emitters (curl|wget with an interpolated token) in the same family, not just the one in hand.
+The watchdog was missed when its sibling messaging-bridge topic-sweep script was hardened with the same pattern — a secret-hygiene fix applied to one emitter should trigger a grep of all sibling emitters (curl|wget with an interpolated token) in the same family, not just the one in hand.

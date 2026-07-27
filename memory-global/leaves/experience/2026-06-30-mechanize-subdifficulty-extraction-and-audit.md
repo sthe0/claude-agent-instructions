@@ -23,11 +23,11 @@ A recording discipline ('extract child difficulties to their own searchable leaf
 ## Contexts
 
 ### 2026-06-30 — initial
-- Where it arose: claude-agent-instructions verify-experience-leaf.py gate + global & project memory corpus audit (DEEPAGENT robot/deepagent)
+- Where it arose: claude-agent-instructions verify-experience-leaf.py gate + global & project memory corpus audit (a project, robot/project)
 - Working plan: /home/the0/.claude/plans/enforce-subdifficulty-extraction.toml
 
 ## Cost
 manager in-thread, engine-driven 4-stage agentctl spine + one substantive replan (Stage-4 gate rescope); 3-agent read-only Explore fan-out for the corpus audit; Stage-3 artifact + project landing required Bash-heredoc and arc-pr-merge workarounds around two over-broad hooks.
 
 ## Self-critique of the agent system
-Two enforcement-hook defects surfaced mid-task and are routed to a follow-up self-improvement task (not yet extracted as leaves): the over-broad plan-freeze hook that blocks Write/Edit to ANY ~/.claude/plans/ file during EXECUTING (it should freeze only the executing plan, not the Stage-3 audit artifact) — see future [[plan-freeze-hook-freezes-whole-plans-dir-not-executing-plan]]; and the pr-bypass-gate that classifies by harness cwd rather than the payload's changed paths, falsely tagging a junk/the0 owner-sandbox PR as non-junk and fail-closed denying legitimate automerge — see future [[pr-bypass-gate-classifies-by-cwd-not-changed-paths]]. Process slip flagged by the user: defaulted to automerge-and-wait for an owner self-ship PR fully inside junk/the0 instead of the sanctioned force-merge fast-path.
+Two enforcement-hook defects surfaced mid-task and are routed to a follow-up self-improvement task (not yet extracted as leaves): the over-broad plan-freeze hook that blocks Write/Edit to ANY ~/.claude/plans/ file during EXECUTING (it should freeze only the executing plan, not the Stage-3 audit artifact) — see future [[plan-freeze-hook-freezes-whole-plans-dir-not-executing-plan]]; and the pr-bypass-gate that classifies by harness cwd rather than the payload's changed paths, falsely tagging a junk/<user> owner-sandbox PR as non-junk and fail-closed denying legitimate automerge — see future [[pr-bypass-gate-classifies-by-cwd-not-changed-paths]]. Process slip flagged by the user: defaulted to automerge-and-wait for an owner self-ship PR fully inside junk/<user> instead of the sanctioned force-merge fast-path.

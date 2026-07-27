@@ -5,7 +5,7 @@ type: reference
 schema: difficulty/v1
 generality: 0
 resolution_confirmed_by_user: "user"
-refs: [https://a.yandex-team.ru/review/14170183, trunk r20151520, Core dae4558..a0bdbf1, leaves/pr-land-review-gate.md]
+refs: [internal-review/14170183, trunk r20151520, Core dae4558..a0bdbf1, leaves/pr-land-review-gate.md]
 created: 2026-06-30
 last_verified: 2026-06-30
 ---
@@ -23,11 +23,11 @@ A behavioral rule that lives only in prose ('inside your own namespace, self-lan
 ## Contexts
 
 ### 2026-06-30 — agent-system / policy-as-code
-- Where it arose: 2026-06-30 deepagent workspace. Convert the PR-landing rule into code. Landed Layer B on trunk (self-ship PR merged r20151520); pushed an org-neutral generalization kernel to Core (long-job-monitoring.md). Layer A (server-side review config) deferred per user decision because the review system cannot name a bare login.
+- Where it arose: 2026-06-30 project workspace. Convert the PR-landing rule into code. Landed Layer B on trunk (self-ship PR merged r20151520); pushed an org-neutral generalization kernel to Core (long-job-monitoring.md). Layer A (server-side review config) deferred per user decision because the review system cannot name a bare login.
 - Working plan: 7 stages: (1) login-aware pure classifier, (2) PreToolUse bypass-deny gate, (3) detached monitor trio, (4) hermetic test, (5) wire hooks + compose + live E2E, (6) project-memory leaf (Layer B deployed + deferred Layer-A ABC recipe), (7) org-neutral Core kernel. Stages 1-4 built+verified independently; 5-7 in-thread under the in-context carve-out.
 
 ## Cost
-0 specialist spawns (`agentctl resolve` spawn_count=0) — stages 1–4 were built by a single earlier developer pass, stages 5–7 done in-thread under the in-context carve-out. Spanned one context-compaction boundary (the DIAGNOSING recovery re-ran declare/investigate/critique from scratch). Per-stage USD/duration not split (in-thread tokens are not attributed per stage). Dominant cost driver: the platform-capability discovery for Layer A (two yandex-guru doc consults) and the replan coverage-gate iteration (verbatim-invariant edits), not the code itself.
+0 specialist spawns (`agentctl resolve` spawn_count=0) — stages 1–4 were built by a single earlier developer pass, stages 5–7 done in-thread under the in-context carve-out. Spanned one context-compaction boundary (the DIAGNOSING recovery re-ran declare/investigate/critique from scratch). Per-stage USD/duration not split (in-thread tokens are not attributed per stage). Dominant cost driver: the platform-capability discovery for Layer A (two org-specific doc-search consults) and the replan coverage-gate iteration (verbatim-invariant edits), not the code itself.
 
 ## Self-critique of the agent system
 Recovered the engine from DIAGNOSING across a context boundary (the difficulty record does not survive compaction; re-ran declare/investigate/critique). The replan coverage gate forced verbatim invariant strings into stage text — a reminder that the gate checks plain-substring landing, not semantics. Watch: nearly reported the trunk landing from a stale local ref; only a re-pull made ls-tree truthful.

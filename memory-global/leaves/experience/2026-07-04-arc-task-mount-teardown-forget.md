@@ -1,11 +1,11 @@
 ---
 name: 2026-07-04-arc-task-mount-teardown-forget
-description: Per-task arc mounts were torn down with plain arc unmount, which is a detach (store under ~/.arc/stores/ + registry entry in ~/.arc/mount-points persist by design) — 11 stale WARN registry entries and 4 unused stores (~6.3G) accumulated silently. Full teardown is arc unmount --forget; stale WARN entries (store already gone) additionally need --force. Before forgetting a materialized store, check unpushed state: arc branch -v --json (remote field = tracking ref), arc log --oneline <remote>..<branch> per branch, arc status -s. Sweep mechanized as junk/the0/agents/common/scripts/arc-mounts-gc.sh (PR 14261429).
+description: Per-task arc mounts were torn down with plain arc unmount, which is a detach (store under ~/.arc/stores/ + registry entry in ~/.arc/mount-points persist by design) — 11 stale WARN registry entries and 4 unused stores (~6.3G) accumulated silently. Full teardown is arc unmount --forget; stale WARN entries (store already gone) additionally need --force. Before forgetting a materialized store, check unpushed state: the vcs branch -v --json listing (remote field = tracking ref), the vcs log --oneline <remote>..<branch> per branch, arc status -s. Sweep mechanized as junk/<user>/agents/common/scripts/arc-mounts-gc.sh (PR 14261429).
 type: reference
 schema: difficulty/v1
 generality: 0
 resolution_confirmed_by_user: "user"
-refs: [memory-global/leaves/system-knowledge/landing-changes-core-git-and-arc.md, https://a.yandex-team.ru/review/14261429]
+refs: [memory-global/leaves/system-knowledge/landing-changes-core-git-and-arc.md, https://<internal-review-host>/review/14261429]
 created: 2026-07-04
 last_verified: 2026-07-04
 ---
@@ -13,22 +13,22 @@ last_verified: 2026-07-04
 # Arc task-mount lifecycle must end with unmount --forget; GC mechanized
 
 ## Difficulty
-Desired: task-mount teardown leaves no residue. Actual: plain arc unmount kept stores+registry entries; 11 stale WARN lines and 6.3G of dead stores accumulated across weeks, discovered only when the user ran arc mount -l. Root cause: the arc backend workflow creates mounts but has no teardown verb (git side has land-branch.py deleting worktree+branch; arc side had nothing), and no mechanism invoked cleanup at any lifecycle point.
+Desired: task-mount teardown leaves no residue. Actual: plain arc unmount kept stores+registry entries; 11 stale WARN lines and 6.3G of dead stores accumulated across weeks, discovered only when the user ran the vcs mount listing. Root cause: the arc backend workflow creates mounts but has no teardown verb (git side has land-branch.py deleting worktree+branch; arc side had nothing), and no mechanism invoked cleanup at any lifecycle point.
 
 ## Order & criterion
-1) Inspect: parse ~/.arc/mount-points + arc mount -l; classify garbage into stale registry entries / unused stores / orphan dirs. 2) For each unused store: remount, check unpushed branches (arc log <remote>..<branch>) + arc status -s; keep-and-report dirty ones. 3) Forget clean ones (arc unmount --forget; --force --forget for stale entries). 4) For the kept dirty store: verify its unique content against trunk byte-for-byte before deciding — the unpushed commit and uncommitted files can be fully superseded. 5) Mechanize: GC script + wiring into lifecycle (resolution-gate hook nudge; backend teardown verb).
+1) Inspect: parse ~/.arc/mount-points + the vcs mount listing; classify garbage into stale registry entries / unused stores / orphan dirs. 2) For each unused store: remount, check unpushed branches (the vcs log <remote>..<branch>) + arc status -s; keep-and-report dirty ones. 3) Forget clean ones (arc unmount --forget; --force --forget for stale entries). 4) For the kept dirty store: verify its unique content against trunk byte-for-byte before deciding — the unpushed commit and uncommitted files can be fully superseded. 5) Mechanize: GC script + wiring into lifecycle (resolution-gate hook nudge; backend teardown verb).
 
-**Acceptance check:** arc mount -l shows only live mounts: zero WARN lines, zero stores without a mount, orphan dirs removed; every deletion preceded by a persisted inspection log proving the store was clean or superseded.
+**Acceptance check:** the vcs mount listing shows only live mounts: zero WARN lines, zero stores without a mount, orphan dirs removed; every deletion preceded by a persisted inspection log proving the store was clean or superseded.
 
 ## Contexts
 
 ### 2026-07-04 — initial
-- Where it arose: Machine with arc task-mount workflow (~/task-mounts anchor model); any session that creates per-task arc mounts or reviews arc mount -l output.
+- Where it arose: Machine with arc task-mount workflow (~/task-mounts anchor model); any session that creates per-task arc mounts or reviews the vcs mount listing.
 - Working plan: ~/.claude-agent/plans/arc-mount-store-cleanup-v1.toml (5 stages, all PASSED)
 
 
 ### 2026-07-04 — Mechanized the invocation points (same day, follow-up task autonomous-arc-mount-teardown)
-- Where it arose: User pushed twice: 'why no autonomous cleanup proposal' and 'why is edit 2 text, not code' — the SI tie-breaker (existing mechanism > prose) applied; both fixes delivered as code in one Arcadia PR 14261837.
+- Where it arose: User pushed twice: 'why no autonomous cleanup proposal' and 'why is edit 2 text, not code' — the SI tie-breaker (existing mechanism > prose) applied; both fixes delivered as code in one VCS-trunk PR 14261837.
 - Working plan: Plan autonomous-arc-mount-teardown-v1.toml (2 stages: spawn:developer PR, in_thread verification); thinker review r1=revise(6)/r2=pass; developer needed 2 spawns (first INCOMPLETE at 3 USD cap — recurring pattern, continuation via context dossier); PR adds fs-only residue nudge to hook-resolution-land-arc.py + backend_teardown_workspace() with CLAUDE_DRY_RUN + teardown-arc-mount.sh CLI; 34/34 hermetic tests; verification mount itself torn down by the new CLI (dogfood).
 
 ## Common core & variations
