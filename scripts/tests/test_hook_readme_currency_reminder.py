@@ -214,7 +214,7 @@ def test_main_concept_warns_when_doc_absent(monkeypatch, capsys, tmp_path):
         "_git_changeset",
         lambda cwd, sweep: (str(tmp_path), ["scripts/agentctl/state.py"]),
     )
-    monkeypatch.setattr(mod, "_arc_changeset", lambda cwd: None)
+    monkeypatch.setattr(mod, "_plugin_changeset", lambda cwd: None)
     monkeypatch.setattr("sys.stdin", io.StringIO(_payload("git commit -m 'x'")))
     rc = mod.main()
     assert rc == 0
@@ -235,7 +235,7 @@ def test_main_concept_silent_when_doc_in_changeset(monkeypatch, capsys, tmp_path
             ["scripts/agentctl/state.py", "README.md"],
         ),
     )
-    monkeypatch.setattr(mod, "_arc_changeset", lambda cwd: None)
+    monkeypatch.setattr(mod, "_plugin_changeset", lambda cwd: None)
     monkeypatch.setattr("sys.stdin", io.StringIO(_payload("git commit -m 'x'")))
     rc = mod.main()
     assert rc == 0
@@ -254,7 +254,7 @@ def test_main_unmatched_file_falls_back_to_nearest_readme(
         "_git_changeset",
         lambda cwd, sweep: (str(tmp_path), ["some_file.py"]),
     )
-    monkeypatch.setattr(mod, "_arc_changeset", lambda cwd: None)
+    monkeypatch.setattr(mod, "_plugin_changeset", lambda cwd: None)
     monkeypatch.setattr("sys.stdin", io.StringIO(_payload("git commit -m 'x'")))
     rc = mod.main()
     assert rc == 0
@@ -273,7 +273,7 @@ def test_main_missing_registry_falls_back_to_heuristic(
         "_git_changeset",
         lambda cwd, sweep: (str(tmp_path), ["some_file.py"]),
     )
-    monkeypatch.setattr(mod, "_arc_changeset", lambda cwd: None)
+    monkeypatch.setattr(mod, "_plugin_changeset", lambda cwd: None)
     monkeypatch.setattr("sys.stdin", io.StringIO(_payload("git commit -m 'x'")))
     rc = mod.main()
     assert rc == 0
@@ -287,7 +287,7 @@ def test_main_malformed_registry_no_crash_exit_zero(monkeypatch, capsys, tmp_pat
     monkeypatch.setattr(
         mod, "_git_changeset", lambda cwd, sweep: (str(tmp_path), [])
     )
-    monkeypatch.setattr(mod, "_arc_changeset", lambda cwd: None)
+    monkeypatch.setattr(mod, "_plugin_changeset", lambda cwd: None)
     monkeypatch.setattr("sys.stdin", io.StringIO(_payload("git commit -m 'x'")))
     rc = mod.main()
     assert rc == 0
@@ -295,7 +295,7 @@ def test_main_malformed_registry_no_crash_exit_zero(monkeypatch, capsys, tmp_pat
 
 # ---------------------------------------------------------------------------
 # Integration: main() routes the changeset cwd through git_cwd.effective_git_cwd
-# so a cross-repo commit (the standard `cd <worktree> && git/arc commit` landing
+# so a cross-repo commit (the standard `cd <worktree> && <vcs> commit` landing
 # pattern) computes the changeset against the tree the command actually targets,
 # not the ambient session cwd. Blind-spot fix — see scripts/lib/git_cwd.py.
 # ---------------------------------------------------------------------------
@@ -304,12 +304,13 @@ def test_main_malformed_registry_no_crash_exit_zero(monkeypatch, capsys, tmp_pat
 def _capture_changeset_cwd(monkeypatch, mod):
     """Record the cwd _git_changeset receives and short-circuit main(): the stub
     MUST return None (dict.update does; dict.setdefault would return the truthy
-    string and make main() unpack a path → ValueError). _arc_changeset is stubbed
-    to None so the `_git_changeset(...) or _arc_changeset(...)` fallback stays
-    None and the hook takes its no-changeset branch after the capture."""
+    string and make main() unpack a path → ValueError). _plugin_changeset is
+    stubbed to None so the `_git_changeset(...) or _plugin_changeset(...)`
+    fallback stays None and the hook takes its no-changeset branch after the
+    capture."""
     seen = {}
     monkeypatch.setattr(mod, "_git_changeset", lambda cwd, sweep: seen.update(cwd=cwd))
-    monkeypatch.setattr(mod, "_arc_changeset", lambda cwd: None)
+    monkeypatch.setattr(mod, "_plugin_changeset", lambda cwd: None)
     return seen
 
 
@@ -326,14 +327,15 @@ def test_main_effective_cwd_cd_redirect(monkeypatch):
     assert seen["cwd"] == "/repo/b"
 
 
-def test_main_effective_cwd_cd_redirect_arc(monkeypatch):
-    """The leading-cd branch is command-agnostic, so it also fixes `arc commit`
-    (COMMIT_RE fires on `arc commit` too)."""
+def test_main_effective_cwd_cd_redirect_non_git_vcs(monkeypatch):
+    """The leading-cd branch is command-agnostic, so it also fixes a machine-local
+    VCS front-end once its verb is configured (COMMIT_RE is built from them)."""
     mod = _load_module()
+    monkeypatch.setattr(mod, "COMMIT_RE", mod.build_commit_re(("git", "othervcs")))
     seen = _capture_changeset_cwd(monkeypatch, mod)
     monkeypatch.setattr(
         "sys.stdin",
-        io.StringIO(_payload("cd /repo/b && arc commit -m x", cwd="/repo/a")),
+        io.StringIO(_payload("cd /repo/b && othervcs commit -m x", cwd="/repo/a")),
     )
     assert mod.main() == 0
     assert seen["cwd"] == "/repo/b"
@@ -367,3 +369,68 @@ def test_main_dash_c_form_does_not_trigger_hook(monkeypatch):
     )
     assert mod.main() == 0
     assert seen == {}  # _git_changeset never called — hook did not fire
+
+
+# ---------------------------------------------------------------------------
+# Org-neutrality seams: Core knows git; another VCS attaches through a
+# machine-local commit verb (agent-identity.local `commit_command_verbs=`) and a
+# machine-local changeset program (<config root>/changeset-vcs.local).
+# ---------------------------------------------------------------------------
+
+
+def test_core_watches_git_and_nothing_else():
+    """The invariant: with no machine-local config, the only commit verb Core
+    fires on is git. A future builtin naming a specific VCS fails here."""
+    mod = _load_module()
+    assert mod._commit_verbs(Path("/nonexistent/agent-identity.local")) == ("git",)
+    rx = mod.build_commit_re(("git",))
+    assert rx.search("git commit -m x")
+    assert rx.search("othervcs commit -m x") is None
+
+
+def test_configured_verb_extends_the_watch(monkeypatch):
+    rx = _load_module().build_commit_re(("git", "othervcs"))
+    assert rx.search("othervcs commit -m x")
+    assert rx.search("git commit -m x")
+    # still anchored to the `commit` subcommand, not the tool as a whole
+    assert rx.search("othervcs status") is None
+
+
+def test_plugin_changeset_parses_root_then_paths(tmp_path):
+    mod = _load_module()
+    plugin = tmp_path / "changeset-vcs.local"
+    plugin.write_text("#!/bin/sh\nprintf '/repo/root\\ndocs/a.md\\nscripts/b.py\\n'\n")
+    plugin.chmod(0o755)
+    assert mod._plugin_changeset(str(tmp_path), plugin_path=plugin) == (
+        "/repo/root", ["docs/a.md", "scripts/b.py"]
+    )
+
+
+def test_plugin_changeset_absent_or_failing_yields_none(tmp_path):
+    mod = _load_module()
+    assert mod._plugin_changeset(str(tmp_path), plugin_path=tmp_path / "absent") is None
+    failing = tmp_path / "failing"
+    failing.write_text("#!/bin/sh\necho /repo/root\nexit 3\n")
+    failing.chmod(0o755)
+    assert mod._plugin_changeset(str(tmp_path), plugin_path=failing) is None
+
+
+def test_plugin_changeset_root_only_yields_empty_path_list(tmp_path):
+    """A clean tree: the plugin prints a root and no paths — a real, empty
+    changeset, distinct from the None that means "no plugin"."""
+    mod = _load_module()
+    plugin = tmp_path / "clean"
+    plugin.write_text("#!/bin/sh\necho /repo/root\n")
+    plugin.chmod(0o755)
+    assert mod._plugin_changeset(str(tmp_path), plugin_path=plugin) == ("/repo/root", [])
+
+
+def test_plugin_changeset_is_run_in_the_effective_cwd(tmp_path):
+    mod = _load_module()
+    plugin = tmp_path / "pwd-echo"
+    plugin.write_text("#!/bin/sh\npwd\n")
+    plugin.chmod(0o755)
+    work = tmp_path / "work"
+    work.mkdir()
+    root, paths = mod._plugin_changeset(str(work), plugin_path=plugin)
+    assert root == str(work) and paths == []
