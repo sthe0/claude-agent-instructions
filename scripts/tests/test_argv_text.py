@@ -64,6 +64,16 @@ def test_directory_reference_raises_rather_than_leaking_an_oserror(tmp_path):
         argv_text.read_arg_text(f"@{tmp_path}")
 
 
+def test_non_utf8_file_raises_cleanly_not_a_unicodedecodeerror(tmp_path):
+    # A file that exists but is not utf-8 is "unreadable" per the contract; it
+    # must take the clean SystemExit, not leak a raw UnicodeDecodeError (which is
+    # a ValueError, not an OSError, so it escapes a bare `except OSError`).
+    f = tmp_path / "binary.md"
+    f.write_bytes(b"\xff\xfe\x00garbage")
+    with pytest.raises(SystemExit):
+        argv_text.read_arg_text(f"@{f}")
+
+
 def test_overlong_reference_is_a_clean_exit_not_an_enametoolong_traceback():
     # An inline payload that happens to start with '@' would blow up inside
     # Path.is_file() with OSError ENAMETOOLONG; the guard must convert it.

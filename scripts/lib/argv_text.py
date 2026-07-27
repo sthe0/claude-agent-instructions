@@ -102,7 +102,10 @@ def _read_ref(ref: str) -> str:
         path = Path(ref)
         if ref and path.is_file():
             return path.read_text(encoding="utf-8").rstrip()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
+        # UnicodeDecodeError (a ValueError, not an OSError) is how a file that
+        # exists but is not utf-8 surfaces — "unreadable" per the contract, so it
+        # takes the same clean SystemExit rather than an illegible traceback.
         pass
     raise SystemExit(_ref_error(ref))
 
