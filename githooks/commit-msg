@@ -23,13 +23,23 @@ fi
 # mechanism — a bad commit message can't be fixed post-landing without a
 # forbidden history rewrite, so this is hard-blocking, unlike the advisory
 # pre-write hook). Silent no-op on a machine with zero rulesets installed.
-# See scripts/check-org-neutral.py + scripts/lib/term_ruleset.py.
-if ! python3 "$REPO_ROOT/scripts/check-org-neutral.py" "$1"; then
+# --commit-msg keeps the scan off the `commit -v` diff below the scissors.
+# Only exit 1 is a term hit; any other non-zero is the checker itself failing
+# (exit 2, a crash, a missing file), which is surfaced but must not reject an
+# otherwise-clean commit. See scripts/check-org-neutral.py + scripts/lib/term_ruleset.py.
+set +e
+python3 "$REPO_ROOT/scripts/check-org-neutral.py" --commit-msg "$1"
+term_rc=$?
+set -e
+if [ "$term_rc" -eq 1 ]; then
   echo "commit-msg: org-internal term(s) found in the commit message (see" \
        "above) - rewrite the message WITHOUT quoting the removed term" \
        "verbatim. Do not bypass with --no-verify; if truly unavoidable," \
        "record why in the commit body and surface it to the coordinator." >&2
   exit 1
+elif [ "$term_rc" -ne 0 ]; then
+  echo "commit-msg: term check could not run (exit $term_rc) - the message was" \
+       "NOT scanned. Commit allowed; fix the checker or the ruleset." >&2
 fi
 # Blocking gate: self-improvement skill edits. See verify-self-improvement-edit.py.
 exec python3 "$REPO_ROOT/scripts/verify-self-improvement-edit.py" "$1"

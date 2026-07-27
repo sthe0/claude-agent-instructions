@@ -186,10 +186,12 @@ def main(argv: list[str] | None = None, _ts: str | None = None) -> int:
 
     # Blocking gate: a difficulty record is about to leave this machine for a
     # PUBLIC channel (the report stream lands in the Core repo's issue
-    # tracker) — no org-internal term may ride along in the body. Fails
-    # closed on a hit; fails OPEN (files anyway, flagged UNCHECKED rather
-    # than silently passed) when no ruleset is installed, mirroring
-    # check-org-neutral.py's missing-config behavior.
+    # tracker) — no org-internal term may ride along in ANY field the adapter
+    # publishes, hence record.scan_text() rather than a hand-picked subset:
+    # the adapter body also carries layer, reporter and ts. Fails closed on a
+    # hit; fails OPEN (files anyway, flagged UNCHECKED rather than silently
+    # passed) when no ruleset is installed, mirroring check-org-neutral.py's
+    # missing-config behavior.
     try:
         term_rulesets = tr.discover_rulesets(
             agent_home=config_root.agent_home(),
@@ -203,8 +205,7 @@ def main(argv: list[str] | None = None, _ts: str | None = None) -> int:
     if not term_rulesets:
         print("UNCHECKED: no term ruleset installed")
     else:
-        body = "\n".join([record.target, record.functional_ground, record.evidence])
-        hits = tr.scan(body, term_rulesets)
+        hits = tr.scan(record.scan_text(), term_rulesets)
         if hits:
             print(
                 "error: org-internal term(s) found in the difficulty record body "

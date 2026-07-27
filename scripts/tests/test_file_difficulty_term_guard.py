@@ -88,6 +88,50 @@ def test_denied_term_in_evidence_is_blocked(no_plugin_dir, monkeypatch, tmp_path
     assert ch.pull() == []
 
 
+def test_denied_term_in_layer_is_blocked(no_plugin_dir, monkeypatch, tmp_path, capsys):
+    """--layer and --reporter reach the published body too (the adapter renders
+    every record field), so the gate must scan the whole record, not a subset."""
+    _point_at_ruleset_dir(monkeypatch, _ruleset_dir(tmp_path))
+    ch = dc.NullChannel()
+    dc.register_channel("null-guard-5", lambda: ch)
+
+    rc = _run("--target", "CLAUDE.md", "--ground", "gate wording ambiguous",
+              "--layer", "zorblex", "--channel", "null-guard-5")
+
+    assert rc == 1
+    assert "zorblex" in capsys.readouterr().err
+    assert ch.pull() == []
+
+
+def test_denied_term_in_reporter_is_blocked(no_plugin_dir, monkeypatch, tmp_path, capsys):
+    _point_at_ruleset_dir(monkeypatch, _ruleset_dir(tmp_path))
+    ch = dc.NullChannel()
+    dc.register_channel("null-guard-6", lambda: ch)
+
+    rc = _run("--target", "CLAUDE.md", "--ground", "gate wording ambiguous",
+              "--reporter", "zorblex-bot", "--channel", "null-guard-6")
+
+    assert rc == 1
+    assert "zorblex" in capsys.readouterr().err
+    assert ch.pull() == []
+
+
+def test_scan_text_covers_every_published_field():
+    """The gate's coverage guarantee: no record field escapes the scanned text,
+    including any field added later."""
+    import dataclasses
+
+    record = dc.DifficultyRecord(
+        ts="2026-06-27T00:00:00+00:00", layer="core", target="CLAUDE.md",
+        functional_ground="ground", severity="high", reporter="someone",
+        evidence="a log line",
+    )
+    scanned = record.scan_text()
+    for f in dataclasses.fields(record):
+        value = getattr(record, f.name)
+        assert (value.value if hasattr(value, "value") else str(value)) in scanned
+
+
 def test_clean_body_files_successfully(no_plugin_dir, monkeypatch, tmp_path, capsys):
     _point_at_ruleset_dir(monkeypatch, _ruleset_dir(tmp_path))
     ch = dc.NullChannel()
