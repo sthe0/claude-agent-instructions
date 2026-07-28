@@ -385,14 +385,22 @@ def test_body_stripper_is_called_once_on_the_bash_path():
     in the source text: a comment that names the function is not a call site, and
     the count would report one as a violation with a message pointing at the
     wrong thing.
+
+    Both call shapes are matched. `shell_tokens.strip_heredoc_bodies(...)` parses
+    to an `ast.Attribute`, but a second call site introduced through
+    `from lib.shell_tokens import strip_heredoc_bodies` parses to an `ast.Name` —
+    matching only the first would leave exactly the kind of second consumer this
+    test exists to catch invisible to it.
     """
     tree = ast.parse(HOOK_SCRIPT.read_text())
     calls = [
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "strip_heredoc_bodies"
+        and (
+            (isinstance(node.func, ast.Attribute) and node.func.attr == "strip_heredoc_bodies")
+            or (isinstance(node.func, ast.Name) and node.func.id == "strip_heredoc_bodies")
+        )
     ]
     assert len(calls) == 1, f"{len(calls)} call sites, expected exactly one"
 

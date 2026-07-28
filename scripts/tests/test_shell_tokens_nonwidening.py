@@ -337,7 +337,10 @@ _REVIEWER_FAMILIES = [
 # This is the overlap the differential predicate actually needs -- body removal
 # is exercised AND real bash reaches the marker -- and it is where the claim
 # "body text only is ever removed, so a path on the command line survives" is
-# put under load across every writing member of `CONSUMERS`.
+# put under load. These twelve are ONE invariant instanced twelve times, over a
+# SUBSET of `CONSUMERS` (`rev`, `base64` and `md5sum` are not among them): they
+# load the predicate's `bash_writes` conjunct heavily, but they add one family
+# to its diversity, not twelve.
 _INERT_CONSUMER_WRITES = [
     ("absolute cat tee canon", f"/bin/cat <<'EOF' | tee {CANON}/{MARKER}{NL}x{NL}EOF"),
     ("head append to canon", f"head <<'EOF' >> {CANON}/{MARKER}{NL}x{NL}EOF"),
@@ -514,16 +517,23 @@ def test_body_removal_never_turns_a_real_write_from_deny_into_allow(canon):
     assert not regressions, "body removal widened the guard: " + "; ".join(regressions)
     # Neither number is derivable from `len(CASES)`, and a rule change that
     # quietly stopped recognizing most of the table would leave the assertion
-    # above vacuously true, so both floors are asserted. They are MEASURED, not
+    # above vacuously true, so both counts are asserted. They are MEASURED, not
     # chosen: as committed, this loop counts exercised=75 and bash-reached=28
     # over a corpus of 186. To re-derive them, add a `print` beside these asserts
     # and run the test with `-s`; both are plain loop counters over `CASES` and
-    # nothing else feeds them. The floors sit a little under the
-    # measured values so one incidental case whose bash verdict shifts (a missing
-    # `zsh`, a differently-built coreutils) does not break the build, and far
-    # enough above the pre-review values -- exercised=55, bash-reached=15 -- that
-    # a regression back to those fails here.
-    assert exercised >= 70, f"only {exercised} of {len(CASES)} constructions were stripped at all"
+    # nothing else feeds them.
+    #
+    # The two are asserted DIFFERENTLY, because only one of them can move on its
+    # own. `exercised` is a pure function of `strip_heredoc_bodies` and the table
+    # -- no environment feeds it -- so any drift in it IS a rule change and there
+    # is no honest slack to grant: it is pinned exactly. `bash_reached` additionally
+    # depends on what the local shell and coreutils really do, so it carries a floor
+    # a little under the measured value, and the floor still sits far enough above
+    # the pre-review value (15) that a regression to that state fails here.
+    assert exercised == 75, (
+        f"{exercised} of {len(CASES)} constructions were stripped, expected exactly 75: "
+        "this count cannot move without a change to the recognition rule or the table"
+    )
     assert bash_reached >= 25, (
         f"only {bash_reached} of {exercised} stripped constructions actually wrote canon: "
         "the predicate's `bash_writes` conjunct is barely loaded"
