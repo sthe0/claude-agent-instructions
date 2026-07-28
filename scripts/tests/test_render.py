@@ -10,16 +10,29 @@ from agentctl.plan import load_plan, parse_plan
 from agentctl.render import cmd_plan_render, render_plan_md
 
 
-def _doc(n_stages: int):
+def _doc(n_stages: int, verify_venue=None, verify_venue_at_final=None):
+    # verify_venue/verify_venue_at_final, when given, are attached to every
+    # stage — used by the schema-24 second-venue rendering tests below.
+    venue_keys = {}
+    if verify_venue is not None:
+        venue_keys["verify_venue"] = verify_venue
+    if verify_venue_at_final is not None:
+        venue_keys["verify_venue_at_final"] = verify_venue_at_final
+    meta = {
+        "task_id": "render-test",
+        "goal": "g",
+        "done_criterion": "d",
+        "criterion_type": "measurable",
+        "weight_class": "substantive",
+        "external_research": "n/a",
+    }
+    if verify_venue_at_final is not None:
+        # V3 requires a delivery_worktree distinct from repo_root before a stage
+        # may declare a second venue that differs from verify_venue.
+        meta["repo_root"] = "/tmp/render-test-repo"
+        meta["delivery_worktree"] = "/tmp/render-test-worktree"
     data = {
-        "meta": {
-            "task_id": "render-test",
-            "goal": "g",
-            "done_criterion": "d",
-            "criterion_type": "measurable",
-            "weight_class": "substantive",
-            "external_research": "n/a",
-        },
+        "meta": meta,
         "stage": [
             {
                 "index": i,
@@ -29,6 +42,7 @@ def _doc(n_stages: int):
                 "criterion_type": "measurable",
                 "done_criterion": f"done {i}",
                 "verify_command": "true",
+                **venue_keys,
                 "material": "m",
                 "means": "e",
                 "method": "meth",
@@ -177,3 +191,20 @@ derivation = "der2 follows from src"
 confidence = "medium"
 refutation = "ref"
 '''
+
+
+def test_render_shows_both_venues_when_verify_venue_at_final_declared():
+    # Schema 24: a stage that opts into the two-moment lifecycle renders a
+    # second-venue bullet naming both the execution and resolution venues.
+    doc = _doc(2, verify_venue="delivery", verify_venue_at_final="repo_root")
+    md = render_plan_md(doc)
+    assert "**Verified in:** delivery; re-verified at resolution in repo_root" in md
+
+
+def test_render_omits_second_venue_line_without_verify_venue_at_final():
+    # V4's byte-identity invariant, pinned in the projection: a plan that never
+    # declares verify_venue_at_final renders no "re-verified at resolution" line,
+    # exactly as it did before the field existed. This guards against the append
+    # escaping its `is not None` guard and silently changing every legacy plan.
+    md = render_plan_md(_doc(2))
+    assert "re-verified at resolution" not in md
