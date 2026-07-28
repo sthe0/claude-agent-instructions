@@ -25,6 +25,10 @@ Modes:
   policy-scorecard.py [--days N] [--project P]   upsert in-window rows, print
                                                  the markdown scorecard
   policy-scorecard.py --ledger-only [--days N]   upsert only (for the hook)
+  policy-scorecard.py [...] --ledger PATH        override the ledger path
+                                                 (tests / the cadence hook use
+                                                 this so a run never touches
+                                                 the real ledger)
   policy-scorecard.py rate <session_id> <1-5> [--note "..."]
                                                  attach a manual quality rating
   policy-scorecard.py reprice [--dry-run]        re-price stored rows in place
@@ -918,7 +922,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--days", type=int, default=7, help="window size in days (default 7)")
     p.add_argument("--project", help="restrict to one project dir under ~/.claude/projects")
     p.add_argument("--ledger-only", action="store_true", help="upsert without printing (for the hook)")
+    p.add_argument("--ledger", type=Path,
+                   help="override the ledger path (default: the real ~/.local/log ledger) — "
+                        "tests and the cadence hook use this so a run never touches live state")
     a = p.parse_args(argv)
+
+    if a.ledger:
+        # Every reader/writer below (load_ledger, write_ledger, the trailing
+        # `_ledger:` line) refers to this module-global by bare name, so
+        # rebinding it here is enough to redirect the whole run.
+        global LEDGER
+        LEDGER = a.ledger
 
     rows, scanned, skipped = upsert(a.days, a.project)
     if a.ledger_only:
