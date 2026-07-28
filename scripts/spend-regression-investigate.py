@@ -204,11 +204,12 @@ def investigate(ledger_rows: dict[str, dict], days: int,
 
 def format_report(result: dict, days: int) -> str:
     cost_delta = result["cur_cost"] - result["prev_cost"]
+    delta_sign = "+" if cost_delta >= 0 else "-"
     lines = [
         f"Spend-driver movement -- last {days}d vs previous {days}d "
         f"({result['n_prev']} → {result['n_cur']} sessions)",
-        f"Actual cost_usd movement: ${result['prev_cost']:.2f} → "
-        f"${result['cur_cost']:.2f} ({cost_delta:+.2f})",
+        f"Actual cost_usd movement: ${result['prev_cost']:,.2f} → "
+        f"${result['cur_cost']:,.2f} ({delta_sign}${abs(cost_delta):,.2f})",
         "",
     ]
     if not result["ranked"]:

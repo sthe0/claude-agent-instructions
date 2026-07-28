@@ -211,7 +211,7 @@ def test_report_header_carries_the_actual_cost_delta(sri):
 
     assert "Actual cost_usd movement: $3.00" in report
     assert "$9.00" in report
-    assert "+6.00" in report
+    assert "+$6.00" in report
 
 
 def test_report_carries_a_non_additivity_caveat_when_impacts_are_ranked(sri):
@@ -225,6 +225,52 @@ def test_report_carries_a_non_additivity_caveat_when_impacts_are_ranked(sri):
     report = sri.format_report(result, days=7)
 
     assert "not additive" in report.lower()
+
+
+def test_count_driver_comma_grouped_and_usd_driver_carries_dollar_sign(sri):
+    # inherit_opus's cur value (1,201) crosses 1000, so a reverted {:.3g}
+    # format would render it in scientific notation (1.2e+03) instead of
+    # comma-grouped -- a three-digit fixture would pass under both the old
+    # and new formatting and prove nothing.
+    rows = {
+        "p1": _row("p1", "2026-07-14T00:00:00+00:00", cost_usd=1.0,
+                  inherit_opus=1, cache_read_usd=1.0),
+        "c1": _row("c1", "2026-07-22T00:00:00+00:00", cost_usd=3000.0,
+                  inherit_opus=1201, cache_read_usd=21.0),
+    }
+
+    result = sri.investigate(rows, days=7, now=NOW)
+    ranked_keys = [r["key"] for r in result["ranked"]]
+    assert "inherit-opus" in ranked_keys
+    assert "cache-read-share" in ranked_keys
+
+    report = sri.format_report(result, days=7)
+
+    assert "1→1,201" in report
+    assert "$1.00→$21.00" in report
+
+
+def test_format_report_no_ranked_impacts_branch(sri):
+    # every driver's per-session value is identical across both windows --
+    # zero movement for all six, so nothing is ranked. The header and the
+    # no-candidate line must still print, the non-additivity caveat must NOT
+    # (there is nothing to caveat), and the omitted section must still list
+    # all six drivers. Today's behaviour is already correct -- this pins it,
+    # not changes it.
+    rows = {
+        "p1": _row("p1", "2026-07-14T00:00:00+00:00", cost_usd=1.0),
+        "c1": _row("c1", "2026-07-22T00:00:00+00:00", cost_usd=1.0),
+    }
+
+    result = sri.investigate(rows, days=7, now=NOW)
+    assert result["ranked"] == []
+
+    report = sri.format_report(result, days=7)
+
+    assert "Actual cost_usd movement: $1.00" in report
+    assert "(no candidate driver rose between the two windows)" in report
+    assert "not additive" not in report.lower()
+    assert f"Not ranked ({len(result['omitted'])}): " in report
 
 
 # --------------------------------------------------------------------- 6. CLI

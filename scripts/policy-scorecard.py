@@ -286,11 +286,13 @@ FAILURE_RATE_STABILITY_DAYS = 8
 # 52% of the 44 that were unlabeled) — the rest were `Explore`-type spawns
 # that default to a cheap tier on their own — and stated "in zero cases did
 # the coordinator deliberately choose a cheap model." The prior threshold,
-# 0.5, sat just above that founding figure (and just below the
-# unlabeled-only reading, 52% — the same case, harder to miss): per this
-# stage's own principle, a threshold sitting at or above the largest
-# instance a policy already produced has decided that instance is
-# acceptable, which a compliance detector must not do.
+# 0.5, sat just above the denominator the detector actually uses —
+# `_aggregate`'s inherit_opus / spawns_total, all spawns (23/48 = 47.92%) —
+# but just below the unlabeled-only reading (23/44 = 52.27%), where it would
+# have fired on this same founding instance: per this stage's own principle,
+# a threshold sitting at or above the largest instance a policy already
+# produced has decided that instance is acceptable, which a compliance
+# detector must not do.
 #
 # Re-derived against the 1835-row ledger copy (`--ledger` snapshot,
 # 2026-06-11..2026-07-28, identical row count to the live ledger at inspection
@@ -323,7 +325,7 @@ FAILURE_RATE_STABILITY_DAYS = 8
 # ack/snooze path is what keeps that from being alert fatigue, not a higher
 # threshold. Fires on 8/19 current-regime samples (42%) — and on both cited
 # leak figures, 33.5% (67/200, the 2026-07-20 window below) and 30.50%
-# (43/141, the 2026-07-22 window below).
+# (43/141, the 2026-07-22 window below — one spawn above the 0.30 line).
 #
 # Grid is 0.05, not SPEND_RATE_FACTOR_GRID's 0.25: that grid rounds a
 # multiplicative ratio typically in [1, 3]; this constant is a raw proportion
