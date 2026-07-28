@@ -64,6 +64,9 @@ def ps(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "SPAWN_LEDGER", tmp_path / "no-spawn-ledger.jsonl")
     monkeypatch.setattr(mod.findings_store, "DEFAULT_STORE",
                         tmp_path / "must-not-be-the-real-store.jsonl")
+    # `store_path(None)` consults the env var BEFORE the default, so redirecting
+    # only DEFAULT_STORE leaves a machine that exports it still reachable.
+    monkeypatch.delenv(mod.findings_store.STORE_ENV, raising=False)
     return mod
 
 
@@ -147,16 +150,50 @@ def test_non_spawn_rows_are_excluded_from_both_terms(ps):
     assert ps._spawn_failure_stats(W29_W30 + noise, _ago(7), NOW) == (320, 10)
 
 
+def test_a_row_that_cannot_be_placed_in_time_is_skipped_not_raised(ps):
+    """Two unusable shapes, and only one of them announces itself at the parse. A
+    malformed string raises ValueError there; a tz-NAIVE one parses cleanly and
+    raises TypeError at `lo <= ts < hi`, past the guard. Both must drop the row.
+
+    The naive shape is not invented for the test — tests/test_usage_digest_emit.py
+    writes one into a spawn-ledger fixture, so it is a shape this repo already
+    produces, and an unhandled TypeError here would take down the whole scorecard
+    run rather than one row of it."""
+    unusable = [
+        {"event": "spawn", "ts": "not-a-timestamp", "exit_code": 1},
+        {"event": "spawn", "ts": _ago(3).replace(tzinfo=None).isoformat(), "exit_code": 1},
+        {"event": "spawn", "ts": "", "exit_code": 1},
+    ]
+
+    assert ps._spawn_failure_stats(W29_W30 + unusable, _ago(7), NOW) == (320, 10)
+    # The sweep collects the same stamps, and a naive one poisons `min`/`max`
+    # there instead — a different line, the same missing class.
+    samples, lo, hi = ps._failure_rate_samples(W29_W30 + unusable, 7)
+    assert lo is not None and lo.tzinfo is not None
+    assert hi is not None and hi.tzinfo is not None
+
+
 def test_the_protocol_axis_is_not_folded_into_the_process_axis(ps):
     """MALFORMED is protocol-parse hygiene — the specialist ran and returned, the
     marker just did not parse. At the calibration snapshot 41% of spawns were
     malformed while 14% exited non-zero, so averaging the two axes would produce
-    a number describing neither. This flag governs the process axis only; a
-    ledger that is entirely malformed but exits clean is silent."""
-    rows = (_spawns(400, 0, _ago(35), _ago(7), malformed=True)
+    a number describing neither. This flag governs the process axis only.
+
+    The fixture is asymmetric ON PURPOSE, and the earlier symmetric one is why:
+    100% malformed in BOTH windows moves numerator and denominator together, the
+    ratio stays 1.0, and folding `malformed` into the numerator is silent — the
+    test passed with or without the defect it names. Here the baseline is clean
+    and the current window is malformed-but-exiting-zero, so the fold has nowhere
+    to hide: it would read 320/320 = 100% against a 0% baseline and fire."""
+    rows = (_spawns(400, 0, _ago(35), _ago(7))
             + _spawns(320, 0, _ago(7), NOW, malformed=True))
 
     assert ps._failure_rate_flag(rows, NOW, 7) is None
+    # And the discrimination is real: the same rows counted on the protocol axis
+    # are a 100-point departure from the baseline, i.e. the largest signal this
+    # flag could possibly emit. Silence here is a choice, not an absence of data.
+    assert ps._spawn_failure_stats(rows, _ago(7), NOW) == (320, 0)
+    assert sum(1 for r in rows if r["malformed"] and r["event"] == "spawn") == 320
 
 
 # ------------------------------------------------- 2. the axis: firing behaviour
@@ -215,6 +252,15 @@ def test_a_failure_free_baseline_uses_the_rule_of_three_not_a_division_by_zero(p
     fired = ps._failure_rate_flag(base + _spawns(320, 20, _ago(7), NOW), NOW, 7)
     assert fired is not None
     assert 20 / 320 > floor * ps.FAILURE_RATE_FACTOR
+
+    # And the SENTENCE has to close arithmetically, which is a separate property
+    # from firing. Naming the raw baseline while dividing by the floor renders
+    # "6.2% is 8.33× the baseline 0.0%" — a multiple the reader cannot reproduce
+    # from any number on the line, in a module whose whole subject is a figure
+    # that read as sound while being wrong.
+    assert "rule-of-three floor 0.8%" in fired
+    assert f"{(20 / 320) / floor:.2f}×" in fired
+    assert "baseline 0.0% (400 spawns)" not in fired
 
 
 def test_the_baseline_is_pooled_not_averaged(ps):
@@ -459,6 +505,33 @@ def test_routing_does_not_resolve_the_other_producers_rows(ps, tmp_path):
     assert ps.findings_store.row_source(rows[0]) == ps.findings_store.SOURCE_SELF_DIAGNOSE
 
 
+def test_a_self_diagnose_scan_does_not_resolve_out_the_scorecard_rows(ps, tmp_path):
+    """The same partition read in the other direction — and the direction that
+    actually runs often. The scorecard is weekly; the self-diagnose scan runs at
+    every session start, so an unpartitioned resolve-out there would wipe a flag
+    within minutes of it being written, and the store would look empty for the
+    reason that most resembles "nothing is wrong".
+
+    A partition tested one way only is half a test: `source` is read on the write
+    path, and nothing forced it to be read symmetrically."""
+    store = tmp_path / "findings.jsonl"
+    ps.route_flags(_fired(ps), store_path=store, now=NOW)
+
+    rows = ps.findings_store.upsert_findings(
+        [{"kind": "orphan-leaf", "path": "leaves/x.md", "detail": "unreferenced"}],
+        path=store, now=NOW)
+
+    kinds = {r["kind"] for r in rows}
+    assert kinds == {"orphan-leaf", ps.findings_store.KIND_POLICY_FLAG}
+    kept = [r for r in rows if r["kind"] == ps.findings_store.KIND_POLICY_FLAG]
+    assert len(kept) == 1
+    assert ps.findings_store.row_source(kept[0]) == ps.findings_store.SOURCE_POLICY_SCORECARD
+    # And it survives on DISK, not merely in the returned list — the resolve-out
+    # is a rewrite of the file, so an in-memory-only check would miss the drop.
+    stored = ps.findings_store.load_rows(store, NOW)
+    assert [r["kind"] for r in stored].count(ps.findings_store.KIND_POLICY_FLAG) == 1
+
+
 def test_routing_is_additive_to_what_the_scorecard_prints(ps, tmp_path):
     """The rendering contract: routing adds closure state and changes no output.
     The flag line is still rendered from the message."""
@@ -471,9 +544,17 @@ def test_routing_is_additive_to_what_the_scorecard_prints(ps, tmp_path):
     assert store.exists()
 
 
-def test_no_test_here_touches_the_real_store(ps):
-    """The guard on the guard. Stage 5's store must still not exist when this
-    stage lands: its first live firing has to be genuine, and a test that
-    defaulted the path would have manufactured it."""
-    assert not (Path.home() / ".local" / "state"
-                / "claude-self-diagnose-findings.jsonl").exists()
+def test_no_test_here_touches_the_real_store(ps, tmp_path):
+    """The guard on the guard: no test in this module can reach the live store,
+    because the fixture has moved the default out of the way.
+
+    It asserts the INJECTED invariant rather than the absence of
+    ~/.local/state/claude-self-diagnose-findings.jsonl, and the difference is not
+    cosmetic. That file's absence is not this module's to promise: a genuine flag
+    firing on a real machine creates it, and the earlier form would then have gone
+    red for the instrument working as designed — a test asserting a fact about the
+    machine instead of a property of the code. What IS this module's to promise is
+    that a call which forgot its `store_path` lands in tmp_path, and that is what
+    is checked here."""
+    assert tmp_path in ps.findings_store.DEFAULT_STORE.parents
+    assert ps.findings_store.store_path(None) == ps.findings_store.DEFAULT_STORE

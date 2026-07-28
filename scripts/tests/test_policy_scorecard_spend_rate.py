@@ -39,13 +39,19 @@ def _load_module():
 @pytest.fixture
 def ps(monkeypatch, tmp_path):
     """A fresh module instance with every real-machine path redirected into
-    tmp_path, so no test reads or mutates this machine's ledgers."""
+    tmp_path, so no test reads or mutates this machine's ledgers.
+
+    SPAWN_LEDGER included: `scorecard()` defaults `spawn_rows` to reading it, and
+    the tests below assert on the whole rendered Flags section. Left live, a real
+    failure-rate flag on this machine's telemetry would turn them red — the suite
+    would break precisely when the instrument works."""
     mod = _load_module()
     monkeypatch.setattr(mod, "LEDGER", tmp_path / "ledger.jsonl")
     monkeypatch.setattr(mod, "TASK_QUALITY_LEDGER", tmp_path / "task-quality.jsonl")
     monkeypatch.setattr(mod, "PROJECTS_DIR", tmp_path / "projects")
     monkeypatch.setattr(mod, "GATE_LOGS", (tmp_path / "no-gate-log.jsonl",))
     monkeypatch.setattr(mod, "REPO_ROOT", tmp_path / "no-instrepo")
+    monkeypatch.setattr(mod, "SPAWN_LEDGER", tmp_path / "no-spawn-ledger.jsonl")
     return mod
 
 

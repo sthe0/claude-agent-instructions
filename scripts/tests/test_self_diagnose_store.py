@@ -96,6 +96,30 @@ def test_finding_gone_from_the_scan_is_resolved_out(store_file):
     assert sds.load_rows(store_file, T0 + timedelta(days=1)) == rows
 
 
+def test_a_clean_scan_does_not_call_an_absent_store_into_existence(tmp_path):
+    """The store's EXISTENCE is read as evidence that something once fired — the
+    leaf tracking this instrument says exactly that of its own pending first
+    firing. A clean scan writing an empty file would erase that reading, and every
+    routed run is a clean scan until the day one is not.
+
+    The guard is deliberately narrow, and the next test is why: an empty scan over
+    an EXISTING store is the resolve-out signal, not a no-op."""
+    store = tmp_path / "never-written.jsonl"
+
+    assert sds.upsert_findings([], store, T0) == []
+    assert not store.exists()
+
+
+def test_a_clean_scan_still_resolves_out_an_existing_store(store_file):
+    """The other side of the guard. Skipping the write whenever `findings` is
+    empty would make a fixed condition accuse forever — absence from a completed
+    scan is precisely how a finding closes."""
+    sds.upsert_findings([ORPHAN], store_file, T0)
+
+    assert sds.upsert_findings([], store_file, T0 + timedelta(days=1)) == []
+    assert sds.load_rows(store_file, T0 + timedelta(days=1)) == []
+
+
 # --- store: actionability table and the age debounce ------------------------
 
 def test_actionability_table_is_exactly_the_declared_kinds():
@@ -160,6 +184,12 @@ def test_every_detector_kind_is_placed_in_exactly_one_table():
     assert (sds.ACTIONABLE_KINDS | sds.ADVISORY_KINDS) - sds.EXTERNAL_KINDS == detector
     assert set(sds.REMEDIATION) - sds.EXTERNAL_KINDS == detector
     assert sds.EXTERNAL_KINDS <= set(sds.REMEDIATION)
+    # …and placed in a table, not merely remediated. The four assertions above are
+    # all satisfied by a kind declared in EXTERNAL_KINDS and REMEDIATION alone,
+    # which then defaults to advisory — `is_actionable` is a membership test, so
+    # absence reads as "advisory" rather than as "undeclared". For an external
+    # producer that means its findings quietly stop blocking anything.
+    assert sds.EXTERNAL_KINDS <= sds.ACTIONABLE_KINDS | sds.ADVISORY_KINDS
 
 
 def test_ceiling_proximity_never_blocks(store_file):
@@ -313,6 +343,22 @@ def _recording_filer(rc=0, ref="issue-1"):
     return filer
 
 
+@pytest.fixture
+def core_leaf(tmp_path):
+    """(stand-in Core root, a real file inside it).
+
+    The tier filter requires the candidate to EXIST, so these tests can no longer
+    name a placeholder under the real repo — `leaves/x.md` was never there, and
+    asserting on it asserted the shape of a string rather than a Core file. A tmp
+    root with a real file makes the fixture honest and hermetic at once: nothing
+    here now depends on which leaves the repo happens to carry today."""
+    root = tmp_path / "core"
+    leaf = root / "memory-global" / "leaves" / "x.md"
+    leaf.parent.mkdir(parents=True)
+    leaf.write_text("leaf\n", encoding="utf-8")
+    return root, str(leaf)
+
+
 def test_digest_channel_files_nothing(store_file):
     rows = sds.upsert_findings([CEILING], store_file, T0)
     filer = _recording_filer()
@@ -332,50 +378,84 @@ def test_backlog_tier_filter_refuses_a_personal_memory_path(store_file):
     assert rows[0]["filed_ref"] is None
 
 
-def test_backlog_files_a_core_repo_path(store_file):
-    core = str(SCRIPTS_DIR.parent / "memory-global" / "leaves" / "x.md")
+def test_backlog_files_a_core_repo_path(store_file, core_leaf):
+    root, core = core_leaf
     rows = sds.upsert_findings([_finding("near-duplicate", core)], store_file, T0)
     filer = _recording_filer()
-    filed = sds.route_advisory(rows, "backlog", filer, path=store_file)
+    filed = sds.route_advisory(rows, "backlog", filer, core_root=root, path=store_file)
     assert [r["path"] for r in filed] == [core]
     assert filer.calls == [core]
     assert sds.load_rows(store_file, T0)[0]["filed_ref"] == "issue-1"
 
 
-def test_a_refused_filing_is_never_marked_filed(store_file):
+def test_a_refused_filing_is_never_marked_filed(store_file, core_leaf):
     """file-difficulty.py exits 2 on an author machine — every filing here is
     refused. A non-zero exit must leave the row unfiled and in the digest; a
     channel that can silently swallow a finding is a drain in a channel's
     clothes."""
-    core = str(SCRIPTS_DIR.parent / "memory-global" / "leaves" / "y.md")
+    root, core = core_leaf
     rows = sds.upsert_findings([_finding("near-duplicate", core)], store_file, T0)
     filer = _recording_filer(rc=2, ref="")
-    assert sds.route_advisory(rows, "backlog", filer, path=store_file) == []
+    assert sds.route_advisory(rows, "backlog", filer, core_root=root,
+                              path=store_file) == []
     assert rows[0]["filed_ref"] is None
     assert len(sds.digest_lines(rows, T0)) == 1
     assert sds.load_rows(store_file, T0)[0]["filed_ref"] is None
 
 
 @pytest.mark.parametrize("where", ["repo-root", "elsewhere"])
-def test_the_tier_filter_does_not_move_with_the_working_directory(where, tmp_path, monkeypatch):
+def test_the_tier_filter_does_not_move_with_the_working_directory(where, tmp_path, monkeypatch,
+                                                                  core_leaf):
     """ceiling-proximity findings carry repo-RELATIVE paths. Resolving those
     against the process CWD made this guard answer differently for the same
     finding depending on where the caller was started — and a guard whose verdict
     moves with the caller's working directory is not a guard."""
+    root, _ = core_leaf
     monkeypatch.chdir(SCRIPTS_DIR.parent if where == "repo-root" else tmp_path)
+    rel = "memory-global/leaves/x.md"
+    assert sds.inside_core(rel, root) is True
+    assert sds.inside_core(str(Path.home() / ".claude-agent" / "projects" / "p" / "x.md"),
+                           root) is False
+    assert sds.inside_core("", root) is False
+    # …and the DEFAULT base is the Core repo, not wherever the process started.
     assert sds.inside_core("CLAUDE.md") is True
-    assert sds.inside_core("memory-global/leaves/x.md") is True
-    assert sds.inside_core(str(Path.home() / ".claude-agent" / "projects" / "p" / "x.md")) is False
-    assert sds.inside_core("") is False
 
 
-def test_a_filed_row_is_never_refiled(store_file):
-    core = str(SCRIPTS_DIR.parent / "memory-global" / "leaves" / "z.md")
+def test_a_finding_path_that_is_not_a_path_does_not_clear_the_tier_filter():
+    """This filter guards a PUBLIC venue, and `Path.resolve()` is non-strict: any
+    string at all resolves under the root and so had `root in parents` answering
+    True. The store's second producer supplies exactly such strings —
+    policy-scorecard.py's routed flags carry `subagent-failure-rate/7d` in the
+    path field — which made internal fleet telemetry read as publishable Core
+    content. Requiring the candidate to EXIST makes the guard test the property
+    it names rather than the shape of a string."""
+    for key in ("subagent-failure-rate/7d", "spend-rate/7d", "correction-rate/7d"):
+        assert sds.inside_core(key) is False
+    assert sds.inside_core("memory-global/leaves/no-such-leaf-here.md") is False
+
+
+def test_no_external_kind_row_reaches_the_public_filer(store_file):
+    """The end-to-end statement the unit test above only implies. A policy flag is
+    ACTIONABLE, so `advisory_open` already excludes it — but that is one condition
+    away from a leak, and the condition lives in a different function than the one
+    a reader checks when asking "can this reach GitHub?". Pinned here so that
+    reclassifying a policy flag as advisory cannot quietly open the path."""
+    rows = sds.upsert_findings(
+        [_finding(sds.KIND_POLICY_FLAG, "subagent-failure-rate/7d",
+                  "rate 6.2% is 8.33x baseline")], store_file, T0)
+    filer = _recording_filer()
+    assert sds.route_advisory(rows, "backlog", filer, path=store_file) == []
+    assert filer.calls == []
+
+
+def test_a_filed_row_is_never_refiled(store_file, core_leaf):
+    root, core = core_leaf
     rows = sds.upsert_findings([_finding("near-duplicate", core)], store_file, T0)
-    sds.route_advisory(rows, "backlog", _recording_filer(), path=store_file)
+    sds.route_advisory(rows, "backlog", _recording_filer(), core_root=root,
+                       path=store_file)
     again = _recording_filer()
     assert sds.route_advisory(sds.load_rows(store_file, T0), "backlog", again,
-                              path=store_file) == []
+                              core_root=root, path=store_file) == []
     assert again.calls == []
 
 
@@ -462,6 +542,25 @@ def test_rows_differing_only_in_directory_collapse_to_one_line():
     assert "add a pointer line" in collapsed
     # the singleton keeps its full per-row rendering
     assert sds.describe(rows[4], T0) in lines
+
+
+def test_external_kind_rows_do_not_collapse_on_their_window():
+    """The collapse asks "one condition, several directories", and reads the
+    basename to answer. An external producer's path is an opaque key whose
+    basename is its WINDOW — "7d" for every policy flag alike — so three unrelated
+    flags were one basename apart, held distinct only by their free-text detail.
+    Two that worded it the same would have merged into a line naming neither."""
+    rows = sds.upsert_findings(
+        [_finding(sds.KIND_POLICY_FLAG, "subagent-failure-rate/7d", "same wording"),
+         _finding(sds.KIND_POLICY_FLAG, "spend-rate/7d", "same wording"),
+         _finding(sds.KIND_POLICY_FLAG, "correction-rate/7d", "same wording")],
+        None, T0)
+
+    lines = sds.describe_rows(rows, T0)
+    assert len(lines) == 3
+    assert not any("paths:" in line for line in lines)
+    for row in rows:
+        assert sds.describe(row, T0) in lines
 
 
 # --- the turn-boundary guardian ---------------------------------------------

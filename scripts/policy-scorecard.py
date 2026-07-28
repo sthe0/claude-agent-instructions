@@ -244,38 +244,37 @@ FAILURE_RATE_MIN_BASELINE_SPAWNS = 60
 #
 # Calibrated against a NAMED ledger snapshot, re-derived by
 #     policy-scorecard.py --calibrate-failure-rate --calibrate-until 2026-07-28
-# (the cutoff drops the still-live current day, so the rows it keeps are settled;
-# the spawn ledger grew by one row mid-calibration and changed the last sample,
-# which is the whole reason for the pin). At that snapshot — 1182 spawn rows,
-# 2026-05-25→2026-07-27, a 7d window rolled one day at a time against the pooled
-# preceding 28 days, 36 samples:
+# (the cutoff drops the still-live current day, so the snapshot is settled and the
+# figures below reproduce against a file that keeps growing). At that snapshot —
+# 1182 spawn rows, 2026-05-25→2026-07-27, a 7d window rolled one day at a time
+# against the pooled preceding 28 days, 36 samples:
 #     q50 0.64  q75 0.85  q90 0.93  q95 0.96  max 1.04
 # THE HISTORY CONTAINS NO FIRING EPISODE. This axis has only ever improved:
-# weekly 50.0 / 60.0 / 26.3 / 33.3 / 11.8 / 15.1 / 15.5 / 16.5 / 3.1%. So stage
-# 7's rule — the first grid step at or above q90 of the ratios — is NOT
-# transferable here: it would pick 1.00 and fire on half of ordinary weeks. A
-# tolerated-firing-frequency rule needs firings to budget against.
+# weekly 50.0 / 60.0 / 26.3 / 33.3 / 11.8 / 15.1 / 15.5 / 16.5 / 3.1%. So the
+# quantile rule SPEND_RATE_FACTOR uses is NOT transferable here: calibrating to a
+# tolerated firing frequency needs firings to budget against, and at q90 it would
+# pick 1.00 and fire on half of ordinary weeks.
 # What ships instead is a NOVELTY threshold with two terms, both computed from
 # the ledger (`_failure_rate_factor`), taking the first grid step at or above
 # both:
 #   (a) the empirical envelope, max observed ratio 1.041 — fire when the metric
 #       leaves the band its entire history has stayed inside; and
-#   (b) the sampling-noise floor, 1 + 3 × the relative binomial sd at the median
-#       window (n=191, p=19.44% -> rel sd 0.147) = 1.442 — so a threshold can
-#       never sit inside the range two identical regimes differ by from counting
-#       noise alone. Term (b) binds here; (a) is what stops the rule collapsing
-#       when a future quiet period makes the noise term small.
+#   (b) the sampling-noise floor, 1 + 3 × the relative binomial sd at median
+#       n=191 and median baseline p=19.44% (rel sd 0.147) = 1.442 — so a
+#       threshold can never sit inside the range two identical regimes differ by
+#       from counting noise alone. Term (b) binds here; (a) is what stops the rule
+#       collapsing when a future quiet period makes the noise term small.
 # -> first 0.25 step at or above max(1.041, 1.442) = 1.50, and re-applying the
 # rule to the ledger as it stood on each of the 8 preceding days gives 1.50 every
 # time — largest 1-day move 0.00 (the reproducer prints that sweep).
 #   Honest limits. (1) A threshold no observation has ever crossed is calibrated
-#   for SILENCE, not for detection: this rule can say what is clearly normal, and
-#   cannot say from this data what a real degradation looks like. The opposed
-#   test in test_scorecard_flag_routing.py is a constructed elevation, not a
-#   measured one. (2) 36 rolling 7d samples overlap by 6/7, so this is ~9
-#   independent points. (3) The regime shift at W30 (16.5%->3.1%) is inside the
-#   baseline window, which drags the baseline down and makes the flag MORE
-#   sensitive over the next month, not less — re-derive then and re-quote the pin.
+#   for SILENCE, not for detection: it can say what is clearly normal, and cannot
+#   say from this data what a real degradation looks like — the opposed test in
+#   test_scorecard_flag_routing.py is a constructed elevation, not a measured one.
+#   (2) 36 rolling 7d samples overlap by 6/7, so this is ~9 independent points.
+#   (3) The W30 regime shift (16.5%->3.1%) is inside the baseline window, which
+#   drags the baseline down and makes the flag MORE sensitive over the next month,
+#   not less — re-derive then and re-quote the pin.
 FAILURE_RATE_FACTOR = 1.5
 FAILURE_RATE_FACTOR_GRID = 0.25       # the rule rounds up to this
 FAILURE_RATE_NOISE_SIGMAS = 3.0
@@ -1013,6 +1012,23 @@ class Flag(NamedTuple):
 QUALITY_FLAG_KEYS = ("task-quality", "correction-rate")
 
 
+def _placeable_ts(raw: str) -> "dt.datetime | None":
+    """A timestamp this module can place in a window, or None.
+
+    A row's ts is unusable in two ways and only one of them raises at the parse:
+    a malformed string raises ValueError here, but a tz-NAIVE one parses fine and
+    raises TypeError later — at the first comparison against an aware window edge,
+    a line no `except ValueError` around the parse can reach. Naive rows do occur
+    (tests/test_usage_digest_emit.py writes one into a spawn-ledger fixture). To a
+    caller both are the same event: this row cannot be located in time, so it
+    cannot be counted in a window."""
+    try:
+        ts = parse_ts(raw)
+    except (ValueError, TypeError):
+        return None
+    return ts if ts.tzinfo is not None else None
+
+
 def _spawn_failure_stats(spawn_rows: list[dict], lo: dt.datetime,
                          hi: dt.datetime) -> tuple[int, int]:
     """(spawns, process failures) over the spawn ledger rows in [lo, hi).
@@ -1022,19 +1038,16 @@ def _spawn_failure_stats(spawn_rows: list[dict], lo: dt.datetime,
     exit_code != 0. Numerator ⊆ denominator by construction, over identical rows
     and an identical time extent — so the ratio is a proportion per spawn, an
     INTENSIVE quantity that carries no time dimension for a window edge to
-    stretch. That is the property the two neighbouring defects lacked: the old
-    `subagent_failures` counted transcript text against native Agent uses (two
-    populations), and the spend rate divided a whole-session sum by in-window
-    days (one population, two time extents)."""
+    stretch. Both neighbours in this file lack one half of that: `subagent_failures`
+    counts transcript text against native Agent uses (two populations), and
+    `cost_per_active_day` divides a whole-session sum by in-window days (two time
+    extents)."""
     n = bad = 0
     for row in spawn_rows:
         if row.get("event") != "spawn":
             continue
-        try:
-            ts = parse_ts(row.get("ts", ""))
-        except ValueError:
-            continue
-        if not lo <= ts < hi:
+        ts = _placeable_ts(row.get("ts", ""))
+        if ts is None or not lo <= ts < hi:
             continue
         n += 1
         if row.get("exit_code") != 0:
@@ -1100,13 +1113,23 @@ def _failure_rate_flag(spawn_rows: list[dict], now: dt.datetime,
     # smallest claim the evidence supports — without it a 0%→1 -failure move
     # would divide by zero and fire on a single event.
     floor = 3.0 / base_n
-    if rate <= max(baseline, floor) * FAILURE_RATE_FACTOR:
+    comparator = max(baseline, floor)
+    if rate <= comparator * FAILURE_RATE_FACTOR:
         return None
+    # Name the comparator the multiple was actually divided by. Reporting the
+    # multiple against `comparator` while naming `baseline` produces a sentence
+    # whose own arithmetic does not close whenever the floor binds — "6.2% is
+    # 8.33× the baseline 0.0%" — and the act this flag requests begins with a
+    # reader reproducing the number.
+    against = (f"the pooled trailing {FAILURE_RATE_BASELINE_WINDOWS}-window "
+               f"baseline {baseline:.1%} ({base_n} spawns)")
+    if floor > baseline:
+        against = (f"the rule-of-three floor {floor:.1%} — the 95% ceiling "
+                   f"{base_n} baseline spawns support, which stands above the "
+                   f"observed pooled baseline {baseline:.1%}")
     return (f"sub-agent process-failure rate {rate:.1%} ({bad}/{n} spawns exited "
-            f"non-zero) is {rate / max(baseline, floor):.2f}× the pooled trailing "
-            f"{FAILURE_RATE_BASELINE_WINDOWS}-window baseline {baseline:.1%} "
-            f"({base_n} spawns) — spawns are failing to complete, which no "
-            "per-session metric here can see.")
+            f"non-zero) is {rate / comparator:.2f}× {against} — spawns are "
+            "failing to complete, which no per-session metric here can see.")
 
 
 def _flags(cur: dict, prev: dict, cur_q: dict | None = None, prev_q: dict | None = None,
@@ -1455,10 +1478,9 @@ def _failure_rate_samples(spawn_rows: list[dict],
     for r in spawn_rows:
         if r.get("event") != "spawn":
             continue
-        try:
-            stamps.append(parse_ts(r.get("ts", "")))
-        except ValueError:
-            continue
+        ts = _placeable_ts(r.get("ts", ""))
+        if ts is not None:
+            stamps.append(ts)
     if not stamps:
         return [], None, None
     lo_all, hi_all = min(stamps), max(stamps)
@@ -1479,11 +1501,18 @@ def _failure_rate_samples(spawn_rows: list[dict],
 
 
 def _failure_noise_floor(samples: list[FailureSample]) -> float:
-    """1 + N sigma of pure binomial sampling noise, relative, at the median window.
+    """1 + N sigma of pure binomial sampling noise, relative, at a typical window.
 
     Two windows drawn from an IDENTICAL regime still differ, by an amount set by
     how many spawns each counted. This is that amount: a threshold below it would
-    fire on a difference that carries no information about the regime at all."""
+    fire on a difference that carries no information about the regime at all.
+
+    "Typical" is two MARGINAL medians — median n over the windows, median baseline
+    over the windows — not the pair belonging to any one window. That is
+    deliberate: a single window can carry p = 0, at which the relative sigma is
+    undefined, so summarising each term separately keeps the floor defined
+    wherever the history has any failures at all. It is a summary of the regime,
+    not a description of one sample, and the two need not co-occur."""
     if not samples:
         return 1.0
     n = sorted(s.n for s in samples)[len(samples) // 2]
@@ -1568,8 +1597,9 @@ def calibrate_failure_rate(spawn_rows: list[dict], days: int) -> str:
     med_p = sorted(s.base for s in samples)[len(samples) // 2]
     out.append(f"selection rule: first {FAILURE_RATE_FACTOR_GRID} step at or above BOTH")
     out.append(f"  empirical envelope (max observed ratio) {envelope:.3f}")
-    out.append(f"  noise floor 1 + {FAILURE_RATE_NOISE_SIGMAS:g}sd at the median window "
-               f"(n={med_n}, p={med_p:.2%}) {floor:.3f}")
+    out.append(f"  noise floor 1 + {FAILURE_RATE_NOISE_SIGMAS:g}sd at median n={med_n}, "
+               f"median baseline p={med_p:.2%} (marginal medians, not one window) "
+               f"{floor:.3f}")
     out.append(f"  -> {_failure_rate_factor(samples):.2f}   [shipped {FAILURE_RATE_FACTOR}]")
     if not any(s.ratio > FAILURE_RATE_FACTOR for s in samples):
         # Said out loud, because a silent 0/N is indistinguishable from a

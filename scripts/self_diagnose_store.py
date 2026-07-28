@@ -292,6 +292,14 @@ def upsert_findings(
     the second occurrence is dropped rather than appended as a second row with a
     double-counted times_surfaced."""
     now = now or _utcnow()
+    # A clean scan against a store that does not exist writes nothing. The guard
+    # is narrow on purpose: `if not findings: return` would break the resolve-out,
+    # since an empty scan over an EXISTING store is exactly the signal that every
+    # condition has closed. With no store there is nothing to resolve out, so the
+    # only effect of writing would be to bring an empty file into existence — and
+    # a store's existence is read elsewhere as evidence that something once fired.
+    if not findings and not store_path(path).exists():
+        return []
     stored = load_rows(path, now)
     existing = {r["key"]: r for r in stored if row_source(r) == source}
     rows: "list[dict]" = [r for r in stored if row_source(r) != source]
@@ -410,16 +418,20 @@ def describe_rows(rows: "list[dict]", now: "datetime | None" = None) -> "list[st
     own key and stays independently closable, and the collapsed line carries
     every one of those keys. What it removes is the block text reading as noise:
     the live population has one leaf replicated across four project-memory roots,
-    which is four rows naming one condition."""
+    which is four rows naming one condition.
+
+    The collapse is by BASENAME, which presumes `path` is a filesystem path. An
+    external producer's is not — every policy flag's basename is its window, the
+    literal "7d" — so unrelated flags would differ only in free-text detail and
+    two that happened to word it alike would merge into one line naming neither.
+    For those kinds the whole key is the identity."""
     now = now or _utcnow()
     groups: "dict[tuple[str, str, str], list[dict]]" = {}
     for row in rows:
-        key = (
-            str(row.get("kind", "")),
-            Path(str(row.get("path", ""))).name,
-            str(row.get("detail", "")),
-        )
-        groups.setdefault(key, []).append(row)
+        kind = str(row.get("kind", ""))
+        path = str(row.get("path", ""))
+        ident = path if kind in EXTERNAL_KINDS else Path(path).name
+        groups.setdefault((kind, ident, str(row.get("detail", ""))), []).append(row)
 
     lines: "list[str]" = []
     for (kind, basename, detail), members in groups.items():
@@ -495,13 +507,24 @@ def inside_core(finding_path: str, core_root: "Path | None" = None) -> bool:
     to pin it is stronger than accuracy: resolving against the CWD makes this
     guard answer True or False for the same finding depending on where the caller
     happened to be started, and a guard whose verdict moves with the caller's
-    working directory is not a guard."""
+    working directory is not a guard.
+
+    The candidate must also EXIST. `Path.resolve()` is non-strict, so a `path`
+    that is not a filesystem path at all still resolves —
+    `subagent-failure-rate/7d` becomes `<core_root>/subagent-failure-rate/7d`,
+    whose parents contain the root, and it reads as publishable Core content.
+    That is not hypothetical: policy-scorecard.py's routed flags put exactly such
+    a key in this field, and internal fleet telemetry is the last thing that
+    should clear a filter guarding a public venue. Requiring existence makes the
+    guard test the property it claims — "this finding names a file in the Core
+    repo" — rather than the syntax of a string."""
     try:
         root = Path(core_root or REPO_ROOT).resolve()
         candidate = Path(finding_path).expanduser()
         if not candidate.is_absolute():
             candidate = root / candidate
-        return root in candidate.resolve().parents
+        resolved = candidate.resolve()
+        return root in resolved.parents and resolved.exists()
     except (OSError, RuntimeError, ValueError):
         return False
 

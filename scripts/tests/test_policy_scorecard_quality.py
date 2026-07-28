@@ -37,13 +37,20 @@ def _load_module():
 def ps(monkeypatch, tmp_path):
     """A freshly-loaded module instance with every real-machine path
     redirected into tmp_path, so no test reads or mutates this machine's
-    actual ledgers/gate-log/instructions repo."""
+    actual ledgers/gate-log/instructions repo.
+
+    SPAWN_LEDGER is one of those paths: `scorecard()` defaults `spawn_rows` to
+    reading it, so a fixture that left it live would calibrate the failure-rate
+    flag against the fleet's own telemetry — the tests would then pass or fail on
+    what this machine happened to spawn last week, and the flag firing for real
+    would turn a test red for being right."""
     mod = _load_module()
     monkeypatch.setattr(mod, "LEDGER", tmp_path / "ledger.jsonl")
     monkeypatch.setattr(mod, "TASK_QUALITY_LEDGER", tmp_path / "task-quality.jsonl")
     monkeypatch.setattr(mod, "PROJECTS_DIR", tmp_path / "projects")
     monkeypatch.setattr(mod, "GATE_LOGS", (tmp_path / "no-gate-log.jsonl",))
     monkeypatch.setattr(mod, "REPO_ROOT", tmp_path / "no-instrepo")
+    monkeypatch.setattr(mod, "SPAWN_LEDGER", tmp_path / "no-spawn-ledger.jsonl")
     return mod
 
 
@@ -350,7 +357,13 @@ def test_flags_correction_rate_up_over_1_5x(ps):
 
     flags = ps._flags(_neutral_agg(), _neutral_agg(), cur_q, prev_q)
 
-    assert any(f.key.startswith("correction-rate/") for f in flags)
+    # Both halves. The key is what the store rows on; the message is the only
+    # thing the reader of the report ever sees, and it is the half that says WHAT
+    # went up — after the rewrite to keys, "user-correction/free-text-answer"
+    # survived in exactly one place in the repo, the line that emits it.
+    assert any(f.key.startswith("correction-rate/")
+               and "user-correction/free-text-answer rate per task up 100%" in f.message
+               for f in flags)
 
 
 def test_flags_correction_rate_below_threshold_no_flag(ps):
@@ -359,7 +372,10 @@ def test_flags_correction_rate_below_threshold_no_flag(ps):
 
     flags = ps._flags(_neutral_agg(), _neutral_agg(), cur_q, prev_q)
 
+    # Keyed AND worded, so that a flag renamed out of the `correction-rate/`
+    # prefix cannot fire here while this test keeps passing.
     assert not any(f.key.startswith("correction-rate/") for f in flags)
+    assert not any("user-correction" in f.message for f in flags)
 
 
 # --------------------------------------------------- 5. commit-range rendering
