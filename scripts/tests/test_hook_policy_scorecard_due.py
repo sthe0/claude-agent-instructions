@@ -9,6 +9,8 @@ from __future__ import annotations
 import datetime as dt
 import importlib.util
 import io
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -174,3 +176,40 @@ def test_default_launch_uses_detached_supervised_popen(monkeypatch):
     assert captured["cmd"] == [sys.executable, "-c", "pass"]
     assert captured["kwargs"].get("stdout") is not None
     assert captured["kwargs"].get("stderr") is not None
+
+
+# ------------------------------------------------ the real --ledger CLI path
+
+def test_ledger_upsert_cmd_base_shape():
+    assert hook.ledger_upsert_cmd() == [
+        sys.executable, str(hook.POLICY_SCORECARD),
+        "--ledger-only", "--days", str(hook.SCORECARD_WINDOW_DAYS),
+    ]
+
+
+def test_scorecard_cli_honours_the_ledger_flag(tmp_path):
+    """Everything else in this file stops at the hook boundary with an injected
+    launcher, so nothing proves --ledger actually reaches policy-scorecard.py's
+    LEDGER global — it could be renamed, or registered after an early return,
+    and the other tests would stay green.
+
+    HOME and CLAUDE_AGENT_HOME are redirected as well, so a *broken* --ledger
+    falls back inside the sandbox instead of rewriting this machine's live
+    ledger; the empty projects dir is what keeps the scan instant.
+    """
+    home = tmp_path / "home"
+    (home / "projects").mkdir(parents=True)
+    override = tmp_path / "override.jsonl"
+    fallback = home / ".local" / "log" / "claude-policy-ledger.jsonl"
+
+    proc = subprocess.run(
+        [sys.executable, str(hook.POLICY_SCORECARD), "--ledger-only",
+         "--days", "7", "--ledger", str(override)],
+        env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+             "HOME": str(home), "CLAUDE_AGENT_HOME": str(home)},
+        capture_output=True, text=True, timeout=120,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert override.exists()
+    assert not fallback.exists()
