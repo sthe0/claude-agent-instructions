@@ -146,12 +146,20 @@ def test_every_detector_kind_is_placed_in_exactly_one_table():
     advisory with the fallback remediation "investigate and close" and no test
     fails. The DEFAULT direction stays safe — `is_actionable` remains a membership
     test against ACTIONABLE_KINDS alone, so an unknown kind can still never
-    block; what this adds is that it can no longer arrive unnoticed."""
+    block; what this adds is that it can no longer arrive unnoticed.
+
+    EXTERNAL_KINDS is subtracted rather than tolerated: the store now serves a
+    second producer (policy-scorecard.py), and its kinds are not in the
+    detector's vocabulary. Declaring them in one named set keeps this an
+    equality check — a kind belonging to neither the detector nor a declared
+    external producer still fails."""
     detector = _detector_kinds()
     assert len(detector) >= 8, f"kind extraction broke: {detector}"
     assert sds.ACTIONABLE_KINDS & sds.ADVISORY_KINDS == frozenset()
-    assert sds.ACTIONABLE_KINDS | sds.ADVISORY_KINDS == detector
-    assert set(sds.REMEDIATION) == detector
+    assert sds.EXTERNAL_KINDS & detector == frozenset()
+    assert (sds.ACTIONABLE_KINDS | sds.ADVISORY_KINDS) - sds.EXTERNAL_KINDS == detector
+    assert set(sds.REMEDIATION) - sds.EXTERNAL_KINDS == detector
+    assert sds.EXTERNAL_KINDS <= set(sds.REMEDIATION)
 
 
 def test_ceiling_proximity_never_blocks(store_file):

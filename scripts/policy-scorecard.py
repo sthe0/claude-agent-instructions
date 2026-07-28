@@ -11,6 +11,13 @@ memory-global/leaves/policy-effectiveness-tracking.md.
 Data sources, per session:
   - main transcript  ~/.claude/projects/<project>/<session>.jsonl
   - sub-agent transcripts  <project>/<session>/subagents/*.jsonl
+  - spawn-cost ledger  ~/.local/log/claude-spawn-costs.jsonl (the process-failure
+    axis; read through agentctl.cost.read_rows, never re-parsed here)
+
+Fired flags are routed into the self-diagnose findings store, so a flag outlives
+the run that printed it and re-surfaces at the turn boundary until it is acked or
+stops firing. Rendering is unchanged by that routing, and no model is consulted:
+this script stays a pure reader.
 The pricing / usage / attention helpers are imported from cost-report.py (no
 copy-paste): the per-model price table, token_cost(), parse_ts(), the JSONL
 iterator, the interrupt sentinel and the correction regex.
@@ -39,6 +46,13 @@ Modes:
                                                  figures a shipped comment
                                                  quotes stay reproducible as
                                                  the ledger grows
+  policy-scorecard.py --calibrate-failure-rate [--calibrate-until YYYY-MM-DD]
+                                                 same for FAILURE_RATE_FACTOR,
+                                                 over the SPAWN ledger
+  policy-scorecard.py [...] --spawn-ledger PATH  override the spawn-cost ledger
+  policy-scorecard.py [...] --findings-store PATH
+                                                 override the store fired flags
+                                                 are routed into
   policy-scorecard.py rate <session_id> <1-5> [--note "..."]
                                                  attach a manual quality rating
   policy-scorecard.py reprice [--dry-run]        re-price stored rows in place
@@ -57,6 +71,7 @@ import subprocess
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
+from typing import NamedTuple
 
 # --- reuse cost-report.py (hyphenated filename -> load by path, no copy-paste) ---
 _CR_PATH = Path(__file__).resolve().parent / "cost-report.py"
@@ -84,6 +99,11 @@ free_text_questions = hook_si_freetext_answer.free_text_questions
 # System root (resolved via config_root) for transcripts
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.config_root import agent_home, agentctl_gate_log, legacy_home
+# The store that gives a fired flag closure state, and the spawn ledger's reader.
+# Both are reused as-is: a second store schema or a second ledger parser would be
+# two places to keep in step, and the ledger's attribution is already solved.
+import self_diagnose_store as findings_store
+from agentctl.cost import COST_LOG as SPAWN_LEDGER, read_rows as read_spawn_rows
 PROJECTS_DIR = agent_home() / "projects"
 LEDGER = Path.home() / ".local" / "log" / "claude-policy-ledger.jsonl"
 # Per-task quality ledger written by `agentctl resolve --quality` (agentctl/cli.py
@@ -189,6 +209,77 @@ SPEND_RATE_STABILITY_DAYS = 8         # end dates the calibrator re-applies each
 # per-unit cost fell by more than 5% is getting cheaper per unit of work, which
 # is the benign-volume-growth shape the conjunction exists to stay silent on.
 SPEND_RATE_EFFICIENCY_TOLERANCE = 0.05
+
+# --- sub-agent process-failure rate ----------------------------------------
+# WHICH AXIS, and why only one. A spawn can go wrong on two independent axes and
+# they must not be averaged into a single "failure" number:
+#   PROCESS   exit_code != 0 — the spawn did not complete. This is what the flag
+#             governs. It is the axis whose remedy is a policy change (budget,
+#             tier, task size), which is what a scorecard flag can actually ask
+#             for.
+#   PROTOCOL  malformed / a non-COMPLETED return_marker — the specialist finished
+#             but its reply did not parse, or it reported a blocker. That is
+#             parse hygiene and legitimate escalation respectively, not a failed
+#             spawn: at the pinned snapshot below 41% of spawns are `malformed`
+#             while 14% exit non-zero, and folding them together would make a
+#             marker-format change look like a reliability collapse.
+# Only the process axis ships. A protocol flag would need its own key and its own
+# threshold, not a shared one — see subagent-failure-rate-w29-w30.md.
+#
+# The rate JOINS the spawn ledger, ~/.local/log/claude-spawn-costs.jsonl, and is
+# read through agentctl.cost.read_rows. It does NOT reuse `subagent_failures`
+# below, which is a regex over transcript text: that counter's numerator and
+# denominator count different populations, so its "rate" reached 2.65 — see the
+# render in `scorecard()`.
+FAILURE_RATE_BASELINE_WINDOWS = 4     # trailing windows POOLED into the baseline
+# Pooled, not a median of per-window rates: the quantity is a proportion, so the
+# right aggregate over several windows is total failures / total spawns, which
+# weights each window by the evidence it carries instead of by existing.
+FAILURE_RATE_MIN_SPAWNS = 30          # below this the current window is not evidence
+FAILURE_RATE_MIN_BASELINE_SPAWNS = 60
+# Why 30: at n < 30 one spawn moves the rate by more than 3.3 points, which is
+# larger than the whole 2026-W30 rate (3.1%) — a single event could carry the
+# flag by itself. 60 for the baseline keeps the denominator of the ratio at least
+# twice the numerator's evidence.
+#
+# Calibrated against a NAMED ledger snapshot, re-derived by
+#     policy-scorecard.py --calibrate-failure-rate --calibrate-until 2026-07-28
+# (the cutoff drops the still-live current day, so the rows it keeps are settled;
+# the spawn ledger grew by one row mid-calibration and changed the last sample,
+# which is the whole reason for the pin). At that snapshot — 1182 spawn rows,
+# 2026-05-25→2026-07-27, a 7d window rolled one day at a time against the pooled
+# preceding 28 days, 36 samples:
+#     q50 0.64  q75 0.85  q90 0.93  q95 0.96  max 1.04
+# THE HISTORY CONTAINS NO FIRING EPISODE. This axis has only ever improved:
+# weekly 50.0 / 60.0 / 26.3 / 33.3 / 11.8 / 15.1 / 15.5 / 16.5 / 3.1%. So stage
+# 7's rule — the first grid step at or above q90 of the ratios — is NOT
+# transferable here: it would pick 1.00 and fire on half of ordinary weeks. A
+# tolerated-firing-frequency rule needs firings to budget against.
+# What ships instead is a NOVELTY threshold with two terms, both computed from
+# the ledger (`_failure_rate_factor`), taking the first grid step at or above
+# both:
+#   (a) the empirical envelope, max observed ratio 1.041 — fire when the metric
+#       leaves the band its entire history has stayed inside; and
+#   (b) the sampling-noise floor, 1 + 3 × the relative binomial sd at the median
+#       window (n=191, p=19.44% -> rel sd 0.147) = 1.442 — so a threshold can
+#       never sit inside the range two identical regimes differ by from counting
+#       noise alone. Term (b) binds here; (a) is what stops the rule collapsing
+#       when a future quiet period makes the noise term small.
+# -> first 0.25 step at or above max(1.041, 1.442) = 1.50, and re-applying the
+# rule to the ledger as it stood on each of the 8 preceding days gives 1.50 every
+# time — largest 1-day move 0.00 (the reproducer prints that sweep).
+#   Honest limits. (1) A threshold no observation has ever crossed is calibrated
+#   for SILENCE, not for detection: this rule can say what is clearly normal, and
+#   cannot say from this data what a real degradation looks like. The opposed
+#   test in test_scorecard_flag_routing.py is a constructed elevation, not a
+#   measured one. (2) 36 rolling 7d samples overlap by 6/7, so this is ~9
+#   independent points. (3) The regime shift at W30 (16.5%->3.1%) is inside the
+#   baseline window, which drags the baseline down and makes the flag MORE
+#   sensitive over the next month, not less — re-derive then and re-quote the pin.
+FAILURE_RATE_FACTOR = 1.5
+FAILURE_RATE_FACTOR_GRID = 0.25       # the rule rounds up to this
+FAILURE_RATE_NOISE_SIGMAS = 3.0
+FAILURE_RATE_STABILITY_DAYS = 8
 
 
 def _model_key(model: str | None) -> str:
@@ -900,52 +991,216 @@ def _spend_rate_flag(cur: dict, prev: dict, baseline: float | None) -> str | Non
             "more work per dollar.")
 
 
+class Flag(NamedTuple):
+    """A fired flag and its STABLE identity.
+
+    `key` is flag kind + window granularity and nothing else — never the
+    formatted message. A key derived from the message would change with every
+    number in it, so the same standing condition would arrive as a new finding on
+    every run and could never be acked, deduped or resolved. `__str__` is the
+    message, so existing render and test call sites that interpolate a flag are
+    unaffected."""
+    key: str
+    message: str
+
+    def __str__(self) -> str:
+        return self.message
+
+
+# Keys whose firing means "look at the instruction-commit range" — a membership
+# test on stable keys, replacing a `message.startswith("task quality")` prefix
+# match that any rewording of the message silently broke.
+QUALITY_FLAG_KEYS = ("task-quality", "correction-rate")
+
+
+def _spawn_failure_stats(spawn_rows: list[dict], lo: dt.datetime,
+                         hi: dt.datetime) -> tuple[int, int]:
+    """(spawns, process failures) over the spawn ledger rows in [lo, hi).
+
+    ONE population, filtered twice. The denominator is every `event == "spawn"`
+    row whose ts is in the window; the numerator is the subset of THOSE rows with
+    exit_code != 0. Numerator ⊆ denominator by construction, over identical rows
+    and an identical time extent — so the ratio is a proportion per spawn, an
+    INTENSIVE quantity that carries no time dimension for a window edge to
+    stretch. That is the property the two neighbouring defects lacked: the old
+    `subagent_failures` counted transcript text against native Agent uses (two
+    populations), and the spend rate divided a whole-session sum by in-window
+    days (one population, two time extents)."""
+    n = bad = 0
+    for row in spawn_rows:
+        if row.get("event") != "spawn":
+            continue
+        try:
+            ts = parse_ts(row.get("ts", ""))
+        except ValueError:
+            continue
+        if not lo <= ts < hi:
+            continue
+        n += 1
+        if row.get("exit_code") != 0:
+            bad += 1
+    return n, bad
+
+
+def _failure_rate(spawns: int, failures: int) -> float:
+    """The proportion, with the invariant a rate over one population must obey.
+
+    A rate whose numerator is a subset of its denominator CANNOT exceed 1. The
+    old counter's reached 2.65 and stood for six weeks because nothing checked.
+    Asserting it costs nothing and converts that class of defect from a silent
+    wrong number into a crash at the first bad run.
+
+    `assert` is stripped under `python -O`. Nothing in this repo runs it that way
+    — no hook, script, or test passes -O or sets PYTHONOPTIMIZE — and the check
+    is a self-consistency guard on this function's own arithmetic, not input
+    validation, so a stripped build loses a tripwire rather than a protection."""
+    if not spawns:
+        return 0.0
+    assert 0 <= failures <= spawns, (
+        f"process-failure rate over one population: {failures} failures cannot "
+        f"exceed {spawns} spawns — numerator and denominator have diverged")
+    return failures / spawns
+
+
+def _failure_rate_baseline(spawn_rows: list[dict], now: dt.datetime,
+                           days: int) -> tuple[float, int] | None:
+    """(pooled rate, spawns) over the FAILURE_RATE_BASELINE_WINDOWS windows
+    trailing the current one, or None when that stretch is too thin to be a
+    baseline.
+
+    Pooled over one contiguous stretch rather than averaged across per-window
+    rates: proportions from unequal denominators do not average, and a quiet
+    window of 3 spawns would otherwise weigh as much as a busy one of 300."""
+    hi = now - dt.timedelta(days=days)
+    lo = now - dt.timedelta(days=days * (FAILURE_RATE_BASELINE_WINDOWS + 1))
+    n, bad = _spawn_failure_stats(spawn_rows, lo, hi)
+    if n < FAILURE_RATE_MIN_BASELINE_SPAWNS:
+        return None
+    return _failure_rate(n, bad), n
+
+
+def _failure_rate_flag(spawn_rows: list[dict], now: dt.datetime,
+                       days: int) -> str | None:
+    """The sub-agent process-failure-rate flag, or None.
+
+    Relative to the ledger's own recent history, not to a fixed percentage: the
+    absolute rate has ranged from 60% to 3% in nine weeks, so any fixed ceiling
+    is either always firing or never. See the FAILURE_RATE_* block for the axis
+    choice and for why this threshold is calibrated for silence."""
+    n, bad = _spawn_failure_stats(spawn_rows, now - dt.timedelta(days=days), now)
+    if n < FAILURE_RATE_MIN_SPAWNS:
+        return None
+    base = _failure_rate_baseline(spawn_rows, now, days)
+    if base is None:
+        return None
+    baseline, base_n = base
+    rate = _failure_rate(n, bad)
+    # A failure-free baseline has no ratio. The rule of three gives the 95% upper
+    # bound on a rate that produced 0 failures in base_n trials, which is the
+    # smallest claim the evidence supports — without it a 0%→1 -failure move
+    # would divide by zero and fire on a single event.
+    floor = 3.0 / base_n
+    if rate <= max(baseline, floor) * FAILURE_RATE_FACTOR:
+        return None
+    return (f"sub-agent process-failure rate {rate:.1%} ({bad}/{n} spawns exited "
+            f"non-zero) is {rate / max(baseline, floor):.2f}× the pooled trailing "
+            f"{FAILURE_RATE_BASELINE_WINDOWS}-window baseline {baseline:.1%} "
+            f"({base_n} spawns) — spawns are failing to complete, which no "
+            "per-session metric here can see.")
+
+
 def _flags(cur: dict, prev: dict, cur_q: dict | None = None, prev_q: dict | None = None,
-           spend_baseline: float | None = None) -> list[str]:
+           spend_baseline: float | None = None, days: int = 7,
+           spawn_rows: list[dict] | None = None,
+           now: dt.datetime | None = None) -> list[Flag]:
+    """Every fired flag, each carrying a stable key.
+
+    The key's window granularity (`/7d`) is part of the identity because the same
+    condition at two window sizes is two findings with two thresholds; sharing a
+    key would make the last run to finish silently overwrite the other's."""
     flags = []
+    w = f"/{days}d"
     spend_flag = _spend_rate_flag(cur, prev, spend_baseline)
     if spend_flag:
-        flags.append(spend_flag)
+        flags.append(Flag("spend-rate" + w, spend_flag))
+    if spawn_rows is not None:
+        # Deliberately NOT `cur["subagent_failures"]`, which is in scope and looks
+        # like the right input: that counter is a marker-word regex over transcript
+        # text, not a spawn outcome, and it is divided by a different population.
+        # This flag joins to the spawn ledger so numerator and denominator are the
+        # same rows.
+        fail_flag = _failure_rate_flag(spawn_rows, now or dt.datetime.now(dt.timezone.utc),
+                                       days)
+        if fail_flag:
+            flags.append(Flag("subagent-failure-rate" + w, fail_flag))
     if cur["spawns_total"] and cur["inherit_opus_rate"] > 0.5:
-        flags.append(
+        flags.append(Flag("inherit-opus" + w,
             f"inherit→opus rate {cur['inherit_opus_rate']:.0%} "
             f"({cur['inherit_opus']}/{cur['spawns_total']} spawns ran opus with no explicit cheap model:) "
-            "— policy says name the tier (delegatable-work-patterns).")
+            "— policy says name the tier (delegatable-work-patterns)."))
     if cur["clusters_per_session"] > 0.5:
-        flags.append(
+        flags.append(Flag("missed-delegation" + w,
             f"missed-delegation clusters {cur['clusters']} over {cur['sessions']} sessions "
             f"({cur['clusters_per_session']:.2f}/session) — ≥{CLUSTER_MIN} consecutive "
-            "mechanical main-thread calls that belonged on a cheap sub-agent.")
+            "mechanical main-thread calls that belonged on a cheap sub-agent."))
     if prev["cost_per_session"] and cur["cost_per_session"] > prev["cost_per_session"] * 1.25:
-        flags.append(
+        flags.append(Flag("cost-per-session" + w,
             f"$/session up {(cur['cost_per_session']/prev['cost_per_session']-1)*100:.0f}% "
-            f"(${prev['cost_per_session']:.2f}→${cur['cost_per_session']:.2f}).")
+            f"(${prev['cost_per_session']:.2f}→${cur['cost_per_session']:.2f})."))
     if prev["sessions"] and cur["resolution_rate"] < prev["resolution_rate"] - 0.1:
-        flags.append(
+        flags.append(Flag("resolution-rate" + w,
             f"resolution-confirmed rate down {prev['resolution_rate']:.0%}→{cur['resolution_rate']:.0%} "
-            "(proxy: user-side confirmation phrase present).")
+            "(proxy: user-side confirmation phrase present)."))
     if cur["avg_quality"] is not None and cur["avg_quality"] < 3:
-        flags.append(f"avg manual quality {cur['avg_quality']} (<3) over {cur['n_rated']} rated session(s).")
+        flags.append(Flag("manual-quality-low" + w,
+            f"avg manual quality {cur['avg_quality']} (<3) over {cur['n_rated']} rated session(s)."))
     if (cur["avg_quality"] is not None and prev.get("avg_quality") is not None
             and cur["avg_quality"] < prev["avg_quality"] - 0.5):
-        flags.append(f"avg manual quality down {prev['avg_quality']}→{cur['avg_quality']}.")
+        flags.append(Flag("manual-quality-down" + w,
+            f"avg manual quality down {prev['avg_quality']}→{cur['avg_quality']}."))
     if cur_q and cur_q.get("avg_rating") is not None:
         down = (prev_q is not None and prev_q.get("avg_rating") is not None
                 and cur_q["avg_rating"] < prev_q["avg_rating"] - 0.5)
         if cur_q["avg_rating"] < 3.5 or down:
             reason = (f"down {prev_q['avg_rating']}→{cur_q['avg_rating']}" if down
                      else f"{cur_q['avg_rating']} < 3.5")
-            flags.append(
+            flags.append(Flag("task-quality" + w,
                 f"task quality avg over {cur_q['n_rated']} rated task(s): {reason} "
-                "— see Task quality section.")
+                "— see Task quality section."))
     if (cur_q and prev_q and cur_q.get("correction_rate") is not None
             and prev_q.get("correction_rate")
             and cur_q["correction_rate"] > prev_q["correction_rate"] * 1.5):
-        flags.append(
+        flags.append(Flag("correction-rate" + w,
             "user-correction/free-text-answer rate per task up "
             f"{(cur_q['correction_rate'] / prev_q['correction_rate'] - 1) * 100:.0f}% "
-            f"({prev_q['correction_rate']}→{cur_q['correction_rate']}).")
+            f"({prev_q['correction_rate']}→{cur_q['correction_rate']})."))
     return flags
+
+
+def route_flags(flags: list[Flag], *, store_path=None,
+                now: dt.datetime | None = None) -> list[dict]:
+    """Upsert the fired flags into the findings store and return the store rows.
+
+    ADDITIVE: nothing here changes what the scorecard prints, and no model is
+    consulted — the scorecard stays a pure reader. What it adds is CLOSURE STATE.
+    A flag printed to stdout dies with the run; a store row carries first_seen /
+    times_surfaced / status, so `hook-turn-end-gate.py` re-surfaces it at the turn
+    boundary once per session until it is acked, snoozed, or stops firing.
+
+    Passing the WHOLE fired set (not just the new ones) is what lets the store
+    resolve out a flag that has stopped firing — `upsert_findings` treats absence
+    from a completed scan as the condition being gone, and `source` scopes that
+    to this producer's own rows so a self-diagnose scan is untouched.
+
+    ACTIONABLE_MIN_AGE_DAYS applies: a newly fired flag is silent at the turn
+    boundary for two days before it may block. That delay is deliberate and
+    inherited unmodified — the scorecard's cadence is weekly, so a flag worth
+    blocking on is standing, not momentary."""
+    findings = [{"kind": findings_store.KIND_POLICY_FLAG, "path": f.key, "detail": f.message}
+                for f in flags]
+    return findings_store.upsert_findings(
+        findings, path=store_path, now=now,
+        source=findings_store.SOURCE_POLICY_SCORECARD)
 
 
 def _fmt_tokens(tok: dict) -> list[str]:
@@ -1004,8 +1259,12 @@ def _gates_lines(days: int, now: dt.datetime) -> list[str]:
     return lines
 
 
-def scorecard(rows: dict[str, dict], days: int, project: str | None) -> str:
+def scorecard(rows: dict[str, dict], days: int, project: str | None,
+              spawn_rows: list[dict] | None = None,
+              route: bool = False, store_path=None) -> str:
     now = dt.datetime.now(dt.timezone.utc)
+    if spawn_rows is None:
+        spawn_rows = read_spawn_rows(SPAWN_LEDGER)
     cur_lo = now - dt.timedelta(days=days)
     prev_lo = now - dt.timedelta(days=2 * days)
     cur = _aggregate(_window_rows(rows, cur_lo, now), cur_lo, now)
@@ -1075,7 +1334,21 @@ def scorecard(rows: dict[str, dict], days: int, project: str | None) -> str:
     L.append(f"- Resolution-confirmed sessions: **{cur['resolution_confirmed']}/{cur['sessions']}**  "
              f"({cur['resolution_rate']:.0%})  {_arrow(cur['resolution_rate'], prev['resolution_rate'], higher_is_worse=False)}")
     L.append(f"- REPLAN: **{cur['replans']}**  ·  overcome-difficulty: **{cur['overcome_difficulty']}**  "
-             f"·  sub-agent failures: **{cur['subagent_failures']}**  ·  rework edits: **{cur['rework_edits']}**")
+             f"·  rework edits: **{cur['rework_edits']}**")
+    # The old `subagent_failures` used to render here as "sub-agent failures",
+    # which it is not: it is a marker regex over the joined text of EVERY tool
+    # result, so a Read of a file containing "ESCALATE:" counts — 93% of its
+    # matches were incidental, and it was divided by native Agent uses, a
+    # different population, giving a "rate" of 2.65. It is RELABELLED rather than
+    # deleted (the series is six weeks long and still tracks something real about
+    # how often those words appear), and the ledger-derived figure it was mistaken
+    # for is rendered beside it so no reader takes one for the other.
+    fail_n, fail_bad = _spawn_failure_stats(spawn_rows, cur_lo, now)
+    L.append(f"- Sub-agent spawns: **{fail_n}**  ·  process failures (exit≠0): "
+             f"**{fail_bad}** ({_failure_rate(fail_n, fail_bad):.1%})  ·  "
+             f"marker words in tool-result text: **{cur['subagent_failures']}** "
+             "(transcript scan, mostly incidental — not a spawn outcome; see "
+             "system-knowledge/subagent-failure-rate-w29-w30.md)")
     aq = cur["avg_quality"]
     L.append(f"- Manual quality (1–5): **{aq if aq is not None else '—'}**  "
              f"(rated {cur['n_rated']}/{cur['sessions']}; attach via `rate <session_id> <1-5>`)")
@@ -1106,11 +1379,13 @@ def scorecard(rows: dict[str, dict], days: int, project: str | None) -> str:
     L.extend(_gates_lines(days, now))
     L.append("")
     L.append("## Flags")
-    fl = _flags(cur, prev, cur_q, prev_q, spend_baseline=spend_baseline)
+    fl = _flags(cur, prev, cur_q, prev_q, spend_baseline=spend_baseline,
+                days=days, spawn_rows=spawn_rows, now=now)
+    if route:
+        route_flags(fl, store_path=store_path, now=now)
     if fl:
-        L.extend(f"- ⚠ {f}" for f in fl)
-        quality_flags = [f for f in fl if f.startswith("task quality")
-                         or f.startswith("user-correction")]
+        L.extend(f"- ⚠ {f.message}" for f in fl)
+        quality_flags = [f for f in fl if f.key.split("/")[0] in QUALITY_FLAG_KEYS]
         if quality_flags:
             good = prev_q.get("last_instructions_head")
             bad = cur_q.get("last_instructions_head")
@@ -1159,6 +1434,168 @@ def _rolling_ratio_samples(rows: dict[str, dict],
             samples.append((now.date(), rate, base, rate / base))
         now += dt.timedelta(days=1)
     return samples, lo_all, hi_all
+
+
+class FailureSample(NamedTuple):
+    """One rolling window of the process-failure axis."""
+    end: dt.date
+    n: int
+    bad: int
+    rate: float
+    base_n: int
+    base: float
+    ratio: float
+
+
+def _failure_rate_samples(spawn_rows: list[dict],
+                          days: int) -> tuple[list[FailureSample],
+                                              dt.datetime | None, dt.datetime | None]:
+    """Every rolling window of the failure-rate axis, one day apart."""
+    stamps = []
+    for r in spawn_rows:
+        if r.get("event") != "spawn":
+            continue
+        try:
+            stamps.append(parse_ts(r.get("ts", "")))
+        except ValueError:
+            continue
+    if not stamps:
+        return [], None, None
+    lo_all, hi_all = min(stamps), max(stamps)
+    samples: list[FailureSample] = []
+    now = lo_all + dt.timedelta(days=days * FAILURE_RATE_BASELINE_WINDOWS)
+    # +1 day for the same reason as the spend-rate sweep: half-open windows mean
+    # a loop stopping at hi_all never samples the newest row's own day.
+    while now <= hi_all + dt.timedelta(days=1):
+        n, bad = _spawn_failure_stats(spawn_rows, now - dt.timedelta(days=days), now)
+        base = _failure_rate_baseline(spawn_rows, now, days)
+        if n >= FAILURE_RATE_MIN_SPAWNS and base is not None:
+            baseline, base_n = base
+            rate = _failure_rate(n, bad)
+            samples.append(FailureSample(now.date(), n, bad, rate, base_n, baseline,
+                                         rate / max(baseline, 3.0 / base_n)))
+        now += dt.timedelta(days=1)
+    return samples, lo_all, hi_all
+
+
+def _failure_noise_floor(samples: list[FailureSample]) -> float:
+    """1 + N sigma of pure binomial sampling noise, relative, at the median window.
+
+    Two windows drawn from an IDENTICAL regime still differ, by an amount set by
+    how many spawns each counted. This is that amount: a threshold below it would
+    fire on a difference that carries no information about the regime at all."""
+    if not samples:
+        return 1.0
+    n = sorted(s.n for s in samples)[len(samples) // 2]
+    p = sorted(s.base for s in samples)[len(samples) // 2]
+    if not n or not p:
+        return 1.0
+    return 1.0 + FAILURE_RATE_NOISE_SIGMAS * math.sqrt(p * (1 - p) / n) / p
+
+
+def _failure_rate_factor(samples: list[FailureSample]) -> float:
+    """The SHIPPED selection rule: the first grid step at or above BOTH the
+    empirical envelope and the sampling-noise floor.
+
+    A NOVELTY rule, not a firing budget. `_factor_by_quantile` calibrates to a
+    tolerated firing frequency, which needs firings to budget against; this axis
+    has none — see the FAILURE_RATE_FACTOR comment. So the threshold is placed
+    outside everything the history has done (the envelope) and outside what two
+    identical regimes would differ by from counting noise (the floor), and the
+    binding term is whichever is larger."""
+    if not samples:
+        return FAILURE_RATE_FACTOR
+    envelope = max(s.ratio for s in samples)
+    target = max(envelope, _failure_noise_floor(samples))
+    return math.ceil(target / FAILURE_RATE_FACTOR_GRID) * FAILURE_RATE_FACTOR_GRID
+
+
+def _truncated_spawn_rows(spawn_rows: list[dict], before: dt.date) -> list[dict]:
+    """The spawn ledger as it stood before `before` — the input to
+    `--calibrate-until`, so a figure quoted in a comment stays reproducible
+    against an append-only file that has grown since."""
+    out = []
+    for r in spawn_rows:
+        try:
+            if parse_ts(r.get("ts", "")).date() < before:
+                out.append(r)
+        except ValueError:
+            continue
+    return out
+
+
+def calibrate_failure_rate(spawn_rows: list[dict], days: int) -> str:
+    """Re-derive FAILURE_RATE_FACTOR from the spawn ledger's own history."""
+    samples, lo_all, hi_all = _failure_rate_samples(spawn_rows, days)
+    if lo_all is None:
+        return "calibrate: spawn ledger has no dated spawn rows."
+    if not samples:
+        return (f"calibrate: spawn ledger spans {(hi_all - lo_all).days}d — too short "
+                f"for {FAILURE_RATE_BASELINE_WINDOWS} baseline windows of {days}d, or "
+                f"too few spawns per window (min {FAILURE_RATE_MIN_SPAWNS}).")
+    ratios = sorted(s.ratio for s in samples)
+    n = len(ratios)
+    spawn_total = sum(1 for r in spawn_rows if r.get("event") == "spawn")
+    out = [f"failure-rate calibration — axis exit_code != 0, window {days}d, baseline "
+           f"POOLED over the trailing {FAILURE_RATE_BASELINE_WINDOWS} windows "
+           f"(min {FAILURE_RATE_MIN_SPAWNS} spawns current / "
+           f"{FAILURE_RATE_MIN_BASELINE_SPAWNS} baseline)",
+           f"ledger {spawn_total} spawn rows, {lo_all.date()} → {hi_all.date()} "
+           f"({(hi_all - lo_all).days}d); {n} rolling samples",
+           "  " + "  ".join(f"q{int(p*100)} {_quantile(ratios, p):.2f}"
+                            for p in (0.5, 0.75, 0.9, 0.95))
+           + f"  max {ratios[-1]:.2f}",
+           "",
+           f"{'window end':>12}{'n':>6}{'bad':>5}{'rate':>9}{'base n':>8}"
+           f"{'baseline':>10}{'ratio':>8}"]
+    for s in samples:
+        out.append(f"{str(s.end):>12}{s.n:>6}{s.bad:>5}{s.rate:>9.2%}{s.base_n:>8}"
+                   f"{s.base:>10.2%}{s.ratio:>8.2f}")
+    out.append("")
+    for factor in sorted({1.25, 1.5, 2.0, 2.5, 3.0, FAILURE_RATE_FACTOR}):
+        firing = [s.end for s in samples if s.ratio > factor]
+        episodes = sum(1 for i, d in enumerate(firing)
+                       if i == 0 or (d - firing[i - 1]).days > 1)
+        mark = "  <- shipped" if factor == FAILURE_RATE_FACTOR else ""
+        out.append(f"  factor {factor}: {len(firing):>2}/{n} samples in "
+                   f"{episodes} distinct episode(s){mark}")
+    out.append("Rolling samples overlap, so n over-states the independent evidence "
+               f"(~{max(1, (hi_all - lo_all).days // days)} independent points here).")
+    out.append("")
+    envelope = max(s.ratio for s in samples)
+    floor = _failure_noise_floor(samples)
+    med_n = sorted(s.n for s in samples)[len(samples) // 2]
+    med_p = sorted(s.base for s in samples)[len(samples) // 2]
+    out.append(f"selection rule: first {FAILURE_RATE_FACTOR_GRID} step at or above BOTH")
+    out.append(f"  empirical envelope (max observed ratio) {envelope:.3f}")
+    out.append(f"  noise floor 1 + {FAILURE_RATE_NOISE_SIGMAS:g}sd at the median window "
+               f"(n={med_n}, p={med_p:.2%}) {floor:.3f}")
+    out.append(f"  -> {_failure_rate_factor(samples):.2f}   [shipped {FAILURE_RATE_FACTOR}]")
+    if not any(s.ratio > FAILURE_RATE_FACTOR for s in samples):
+        # Said out loud, because a silent 0/N is indistinguishable from a
+        # well-behaved threshold and this one is calibrated for silence: the axis
+        # has only ever improved, so nothing here demonstrates the flag can
+        # detect a real degradation. Only the constructed opposed test does.
+        out.append("NOTE: no sample in this history fires. The ratio never exceeds "
+                   f"{envelope:.2f}, so this threshold is calibrated for SILENCE — "
+                   "it bounds what is clearly normal and cannot, from this data, "
+                   "say what a real degradation looks like.")
+    out.append("stability — the rule re-applied to the ledger as it stood BEFORE that date:")
+    out.append(f"{'ledger before':>14}{'n':>5}{'envelope':>10}{'noise':>8}{'pick':>7}")
+    picks = []
+    for back in range(FAILURE_RATE_STABILITY_DAYS, 0, -1):
+        cutoff = hi_all.date() - dt.timedelta(days=back - 1)
+        older, _, _ = _failure_rate_samples(_truncated_spawn_rows(spawn_rows, cutoff), days)
+        if len(older) < 2:
+            continue
+        pick = _failure_rate_factor(older)
+        picks.append(pick)
+        out.append(f"{str(cutoff):>14}{len(older):>5}{max(s.ratio for s in older):>10.2f}"
+                   f"{_failure_noise_floor(older):>8.2f}{pick:>7.2f}")
+    if picks:
+        out.append(f"{'largest 1-day move':>19}"
+                   f"{max((abs(b - a) for a, b in zip(picks, picks[1:])), default=0.0):>10.2f}")
+    return "\n".join(out)
 
 
 def _quantile(sorted_vals: list[float], p: float) -> float:
@@ -1344,9 +1781,18 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--calibrate-spend-rate", action="store_true",
                    help="re-derive SPEND_RATE_FACTOR from the stored ledger and exit "
                         "(read-only: no scan, no upsert)")
+    p.add_argument("--calibrate-failure-rate", action="store_true",
+                   help="re-derive FAILURE_RATE_FACTOR from the spawn ledger and exit "
+                        "(read-only)")
     p.add_argument("--calibrate-until", metavar="YYYY-MM-DD",
                    help="calibrate against the ledger as it stood before this date, so the "
                         "snapshot a shipped comment names stays reproducible as the ledger grows")
+    p.add_argument("--spawn-ledger", type=Path,
+                   help="override the spawn-cost ledger path (default: the real "
+                        "~/.local/log one) — the failure-rate axis reads it")
+    p.add_argument("--findings-store", type=Path,
+                   help="override the self-diagnose findings store that fired flags are "
+                        "routed into, so a run never touches live state")
     a = p.parse_args(argv)
 
     if a.ledger:
@@ -1356,17 +1802,29 @@ def main(argv: list[str] | None = None) -> int:
         global LEDGER
         LEDGER = a.ledger
 
+    spawn_ledger = a.spawn_ledger or SPAWN_LEDGER
+
+    cutoff = None
+    if a.calibrate_until:
+        try:
+            cutoff = dt.date.fromisoformat(a.calibrate_until)
+        except ValueError:
+            print(f"calibrate: --calibrate-until wants YYYY-MM-DD, got "
+                  f"{a.calibrate_until!r}", file=sys.stderr)
+            return 1
+
     if a.calibrate_spend_rate:
         ledger_rows = load_ledger()
-        if a.calibrate_until:
-            try:
-                cutoff = dt.date.fromisoformat(a.calibrate_until)
-            except ValueError:
-                print(f"calibrate: --calibrate-until wants YYYY-MM-DD, got "
-                      f"{a.calibrate_until!r}", file=sys.stderr)
-                return 1
+        if cutoff:
             ledger_rows = _truncated(ledger_rows, cutoff)
         print(calibrate_spend_rate(ledger_rows, a.days))
+        return 0
+
+    if a.calibrate_failure_rate:
+        spawn_rows = read_spawn_rows(spawn_ledger)
+        if cutoff:
+            spawn_rows = _truncated_spawn_rows(spawn_rows, cutoff)
+        print(calibrate_failure_rate(spawn_rows, a.days))
         return 0
 
     rows, scanned, skipped = upsert(a.days, a.project)
@@ -1374,7 +1832,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"policy-scorecard: ledger upsert — scanned {scanned}, "
               f"unchanged {skipped}, total rows {len(rows)}", file=sys.stderr)
         return 0
-    print(scorecard(rows, a.days, a.project))
+    print(scorecard(rows, a.days, a.project,
+                    spawn_rows=read_spawn_rows(spawn_ledger),
+                    route=True, store_path=a.findings_store))
     print(f"\n_ledger: {LEDGER} ({len(rows)} rows; this run scanned {scanned}, "
           f"reused {skipped} unchanged)_")
     return 0

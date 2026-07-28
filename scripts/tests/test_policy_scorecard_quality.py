@@ -323,7 +323,7 @@ def test_flags_task_quality_below_absolute_threshold(ps):
 
     flags = ps._flags(_neutral_agg(), _neutral_agg(), cur_q, prev_q)
 
-    assert any(f.startswith("task quality avg") and "< 3.5" in f for f in flags)
+    assert any(f.key.startswith("task-quality/") and "< 3.5" in f.message for f in flags)
 
 
 def test_flags_task_quality_down_vs_previous_window(ps):
@@ -332,7 +332,7 @@ def test_flags_task_quality_down_vs_previous_window(ps):
 
     flags = ps._flags(_neutral_agg(), _neutral_agg(), cur_q, prev_q)
 
-    assert any(f.startswith("task quality avg") and "down 4.6" in f for f in flags)
+    assert any(f.key.startswith("task-quality/") and "down 4.6" in f.message for f in flags)
 
 
 def test_flags_task_quality_healthy_no_flag(ps):
@@ -341,7 +341,7 @@ def test_flags_task_quality_healthy_no_flag(ps):
 
     flags = ps._flags(_neutral_agg(), _neutral_agg(), cur_q, prev_q)
 
-    assert not any(f.startswith("task quality avg") for f in flags)
+    assert not any(f.key.startswith("task-quality/") for f in flags)
 
 
 def test_flags_correction_rate_up_over_1_5x(ps):
@@ -350,7 +350,7 @@ def test_flags_correction_rate_up_over_1_5x(ps):
 
     flags = ps._flags(_neutral_agg(), _neutral_agg(), cur_q, prev_q)
 
-    assert any("user-correction/free-text-answer rate" in f for f in flags)
+    assert any(f.key.startswith("correction-rate/") for f in flags)
 
 
 def test_flags_correction_rate_below_threshold_no_flag(ps):
@@ -359,7 +359,7 @@ def test_flags_correction_rate_below_threshold_no_flag(ps):
 
     flags = ps._flags(_neutral_agg(), _neutral_agg(), cur_q, prev_q)
 
-    assert not any("user-correction/free-text-answer rate" in f for f in flags)
+    assert not any(f.key.startswith("correction-rate/") for f in flags)
 
 
 # --------------------------------------------------- 5. commit-range rendering

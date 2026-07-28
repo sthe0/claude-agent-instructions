@@ -71,8 +71,23 @@ ACTIONABLE_KINDS = frozenset(
         "broken-hook-registration",
         "orphan-leaf",
         "orphan-index",
+        "policy-flag",
     }
 )
+
+# Kinds contributed by a producer OTHER than self-diagnose.py. Declared, not
+# inferred: the vocabulary test below asserts that every kind the DETECTOR emits
+# is placed in exactly one table, and without this set a second producer's kind
+# would either fail that test or force it to be weakened into accepting anything.
+#
+# `policy-flag` is policy-scorecard.py's. It is ACTIONABLE for the same reason
+# the three above are: the remediation is one concrete named act (invoke
+# `self-improvement`, then record the movement), and the failure mode it removes
+# is precisely a detection with no closure state — the scorecard printed its
+# flags to stdout once per session and nothing recorded that any of them was
+# ever acted on.
+KIND_POLICY_FLAG = "policy-flag"
+EXTERNAL_KINDS = frozenset({KIND_POLICY_FLAG})
 
 # The declared complement. Nothing reads this at runtime — `is_actionable` stays
 # a membership test against ACTIONABLE_KINDS alone, so an UNKNOWN kind still
@@ -121,7 +136,25 @@ REMEDIATION = {
     "dangling-pointer": "fix the link target, or drop the pointer line",
     "oversized-index": "spin off a sub-index (memory-hierarchy.md)",
     "no-root-index": "create the root MEMORY.md for that memory root",
+    "policy-flag": "invoke `self-improvement` to adjust the policy, then record the adjustment and the observed metric movement in memory-global/leaves/policy-effectiveness-tracking.md",
 }
+
+# --- producers --------------------------------------------------------------
+#
+# One store, several detectors. `source` PARTITIONS the resolve-out in
+# `upsert_findings`: a scan may only retire rows it could itself have produced.
+# Without it the second producer's every run would silently resolve away the
+# first's whole worklist, because "absent from this scan" would be read as "the
+# condition is gone" for rows the scan never looked for.
+SOURCE_SELF_DIAGNOSE = "self-diagnose"
+SOURCE_POLICY_SCORECARD = "policy-scorecard"
+
+
+def row_source(row: dict) -> str:
+    """A row written before `source` existed is self-diagnose's — that was the
+    only producer then, so the default is a fact about the history, not a guess."""
+    return str(row.get("source") or SOURCE_SELF_DIAGNOSE)
+
 
 _STATUS_OPEN = "open"
 _STATUS_ACKED = "acked"
@@ -240,6 +273,7 @@ def upsert_findings(
     findings,
     path: "str | Path | None" = None,
     now: "datetime | None" = None,
+    source: str = SOURCE_SELF_DIAGNOSE,
 ) -> "list[dict]":
     """Merge one scan's findings into the store and return the resulting rows.
 
@@ -248,13 +282,19 @@ def upsert_findings(
     therefore pass the findings of a scan that actually COMPLETED; a failed scan
     is not an empty one.
 
+    That resolve-out is scoped to `source`: rows written by a DIFFERENT producer
+    pass through untouched, because this scan never looked for their conditions
+    and so cannot have observed them gone. Returned rows are foreign-first then
+    this scan's, so the caller still sees the whole store.
+
     One scan may legitimately emit the same (kind, path) twice — `near-duplicate`
     keys on the first leaf of each pair, so A-vs-B and A-vs-C both key on A — so
     the second occurrence is dropped rather than appended as a second row with a
     double-counted times_surfaced."""
     now = now or _utcnow()
-    existing = {r["key"]: r for r in load_rows(path, now)}
-    rows: "list[dict]" = []
+    stored = load_rows(path, now)
+    existing = {r["key"]: r for r in stored if row_source(r) == source}
+    rows: "list[dict]" = [r for r in stored if row_source(r) != source]
     seen: "set[str]" = set()
     for finding in findings:
         kind, fpath, detail = _as_record(finding)
@@ -271,6 +311,7 @@ def upsert_findings(
                 "kind": kind,
                 "path": fpath,
                 "detail": detail,
+                "source": source,
                 "first_seen": _iso(now),
                 "last_seen": _iso(now),
                 "times_surfaced": 1,
@@ -282,6 +323,7 @@ def upsert_findings(
             }
         else:
             row["detail"] = detail
+            row["source"] = source  # stamps rows written before `source` existed
             row["last_seen"] = _iso(now)
             row["times_surfaced"] = int(row.get("times_surfaced") or 0) + 1
         rows.append(row)
