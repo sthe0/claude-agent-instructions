@@ -288,3 +288,143 @@ def test_question_check_matches_gate_blockers(store, tmp_path):
     assert check.data["blockers"] == gate
     # ok tracks emptiness of the blocker list
     assert check.ok is (len(gate) == 0)
+
+
+# --- #48(b) dispose/rebind twin: --plan stamps against a NAMED plan -------------
+#
+# _bound_stage_key previously read only state.plan_path, which is not yet the
+# CORRECTED plan of a replan (cmd_replan evaluates the gate against args.plan,
+# and that only becomes state.plan_path once the replan succeeds). Without a way
+# to name the corrected plan, dispose/rebind could only ever re-stamp the OLD
+# plan's key — the enumeration channel's identical defect (752969e / 0fc6313),
+# mirrored here for the other two writers of disposed_at_key.
+
+def test_dispose_plan_flag_stamps_against_the_named_plan(store, tmp_path):
+    current = _write_plan(tmp_path / "plan.toml", [(1, "img-one"), (2, "img-two")])
+    corrected = _write_plan(
+        tmp_path / "corrected.toml", [(1, "img-one-EDITED"), (2, "img-two")])
+    _state(store, plan_path=current)
+    _raise(store, "s", id="Q1", target="stage:1.result")
+    _research(store, "s", id="Q1", attempted="r1")
+
+    d = cli.cmd_question_dispose(Namespace(
+        session="s", id="Q1", to="researched", answer="a1", source="src1",
+        derivation="follows", basis="", risk="", plan=str(corrected)), store=store)
+    assert d.ok is True
+
+    doc_corrected = load_plan(str(corrected))
+    stage1_corrected = next(s for s in doc_corrected.stages if s.index == 1)
+    assert _q(store, "s", "Q1")["disposed_at_key"] == stage_question_key(stage1_corrected)
+
+    # NOT the session's own (unedited) plan's stage 1 key
+    doc_current = load_plan(str(current))
+    stage1_current = next(s for s in doc_current.stages if s.index == 1)
+    assert _q(store, "s", "Q1")["disposed_at_key"] != stage_question_key(stage1_current)
+
+
+def test_rebind_plan_flag_stamps_against_the_named_plan(store, tmp_path):
+    current = _write_plan(tmp_path / "plan.toml", [(1, "img-one"), (2, "img-two")])
+    corrected = _write_plan(
+        tmp_path / "corrected.toml", [(1, "img-one-EDITED"), (2, "img-two")])
+    _state(store, plan_path=current)
+    _raise(store, "s", id="Q1", target="stage:1.result")
+    _research(store, "s", id="Q1", attempted="r1")
+    _dispose(store, "s", id="Q1", to="researched", answer="a1", source="src1",
+             derivation="follows")
+
+    d = cli.cmd_question_rebind(Namespace(
+        session="s", id="Q1", confirm_still_valid="re-read against the corrected "
+        "stage 1; still holds", plan=str(corrected)), store=store)
+    assert d.ok is True
+
+    doc_corrected = load_plan(str(corrected))
+    stage1_corrected = next(s for s in doc_corrected.stages if s.index == 1)
+    assert _q(store, "s", "Q1")["disposed_at_key"] == stage_question_key(stage1_corrected)
+
+
+# --- default path (no --plan) is byte-identical to before the flag existed ------
+
+def test_dispose_omitting_plan_flag_reproduces_previous_behaviour(store, tmp_path):
+    """Both call shapes must resolve to state.plan_path: an args object carrying
+    plan=None, and one with no `plan` attribute at all (every pre-existing
+    caller — including this file's own _dispose helper)."""
+    plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one")])
+    doc = load_plan(str(plan_path))
+    stage1 = next(s for s in doc.stages if s.index == 1)
+    expected = stage_question_key(stage1)
+
+    _state(store, sid="explicit-none", plan_path=plan_path)
+    _raise(store, "explicit-none", id="Q1", target="stage:1.result")
+    _research(store, "explicit-none", id="Q1", attempted="r1")
+    cli.cmd_question_dispose(Namespace(
+        session="explicit-none", id="Q1", to="researched", answer="a1", source="src1",
+        derivation="follows", basis="", risk="", plan=None), store=store)
+    assert _q(store, "explicit-none", "Q1")["disposed_at_key"] == expected
+
+    _state(store, sid="absent-attr", plan_path=plan_path)
+    _raise(store, "absent-attr", id="Q1", target="stage:1.result")
+    _research(store, "absent-attr", id="Q1", attempted="r1")
+    cli.cmd_question_dispose(Namespace(
+        session="absent-attr", id="Q1", to="researched", answer="a1", source="src1",
+        derivation="follows", basis="", risk=""), store=store)  # no `plan` attribute
+    assert _q(store, "absent-attr", "Q1")["disposed_at_key"] == expected
+
+
+def test_rebind_omitting_plan_flag_reproduces_previous_behaviour(store, tmp_path):
+    plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one")])
+    doc = load_plan(str(plan_path))
+    stage1 = next(s for s in doc.stages if s.index == 1)
+    expected = stage_question_key(stage1)
+
+    _state(store, sid="explicit-none", plan_path=plan_path)
+    _raise(store, "explicit-none", id="Q1", target="stage:1.result")
+    _research(store, "explicit-none", id="Q1", attempted="r1")
+    _dispose(store, "explicit-none", id="Q1", to="researched", answer="a1",
+             source="src1", derivation="follows")
+    cli.cmd_question_rebind(Namespace(
+        session="explicit-none", id="Q1", confirm_still_valid="still holds",
+        plan=None), store=store)
+    assert _q(store, "explicit-none", "Q1")["disposed_at_key"] == expected
+
+    _state(store, sid="absent-attr", plan_path=plan_path)
+    _raise(store, "absent-attr", id="Q1", target="stage:1.result")
+    _research(store, "absent-attr", id="Q1", attempted="r1")
+    _dispose(store, "absent-attr", id="Q1", to="researched", answer="a1",
+             source="src1", derivation="follows")
+    cli.cmd_question_rebind(Namespace(
+        session="absent-attr", id="Q1", confirm_still_valid="still holds"),
+        store=store)  # no `plan` attribute at all
+    assert _q(store, "absent-attr", "Q1")["disposed_at_key"] == expected
+
+
+# --- an empty --plan is rejected, not silently treated as absent ----------------
+
+def test_dispose_plan_flag_rejects_an_empty_path(store, tmp_path):
+    plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one")])
+    _state(store, plan_path=plan_path)
+    _raise(store, "s", id="Q1", target="stage:1.result")
+    _research(store, "s", id="Q1", attempted="r1")
+
+    d = cli.cmd_question_dispose(Namespace(
+        session="s", id="Q1", to="researched", answer="a1", source="src1",
+        derivation="follows", basis="", risk="", plan="   "), store=store)
+    assert d.ok is False
+    assert "empty path" in d.detail
+    # the disposition did NOT land — no partial write on the rejected path
+    assert _q(store, "s", "Q1")["disposition"] == "open"
+
+
+def test_rebind_plan_flag_rejects_an_empty_path(store, tmp_path):
+    plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one")])
+    _state(store, plan_path=plan_path)
+    _raise(store, "s", id="Q1", target="stage:1.result")
+    _research(store, "s", id="Q1", attempted="r1")
+    _dispose(store, "s", id="Q1", to="researched", answer="a1", source="src1",
+             derivation="follows")
+    original = _q(store, "s", "Q1")["disposed_at_key"]
+
+    d = cli.cmd_question_rebind(Namespace(
+        session="s", id="Q1", confirm_still_valid="still holds", plan=""), store=store)
+    assert d.ok is False
+    assert "empty path" in d.detail
+    assert _q(store, "s", "Q1")["disposed_at_key"] == original

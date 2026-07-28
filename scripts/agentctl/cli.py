@@ -861,21 +861,32 @@ def _question_bag(store: StateStore, session_id: str):
     return state, state.plugins.get("premise")
 
 
-def _bound_stage_key(state, question: "premise.Question") -> str:
+def _bound_stage_key(state, question: "premise.Question", plan_path: str | None = None) -> str:
     """The current stage_question_key of the stage a Question is bound to — the
     value dispose/rebind stamp into `disposed_at_key`. Returns "" for
     plan.goal / plan.done_criterion targets (no per-goal key repeats under a stage
     index), for an unparseable target, and when no plan has been submitted yet
     (`state.plan_path` empty) — exactly the cases premise.validate_questions
     exempts from the key-mismatch check. Reads only; the WRITE lives in the two
-    disposing verbs so the package-wide single-writer scan stays exact."""
+    disposing verbs so the package-wide single-writer scan stays exact.
+
+    `plan_path`, when given, is read INSTEAD of `state.plan_path` — for the
+    CORRECTED plan of a replan, which is not `state.plan_path` until that replan
+    succeeds: `cmd_replan` evaluates the plan_approval gate against `args.plan`,
+    and premise.validate_questions blocks a disposed question whose stamped
+    `disposed_at_key` no longer matches its bound stage's key under THAT plan.
+    Without a way to stamp against the corrected plan, dispose/rebind could only
+    ever re-stamp the OLD plan's key and the gate blocked the very replan that
+    would clear it — the enumeration channel's identical defect (#48(b)),
+    mirrored here for the other two writers of `disposed_at_key`."""
     parsed = premise.parse_target(question.target)
     if parsed is None:
         return ""
     kind, stage_index, _element = parsed
     if kind != "stage":
         return ""
-    plan_path = getattr(state, "plan_path", None)
+    if plan_path is None:
+        plan_path = getattr(state, "plan_path", None)
     if not plan_path:
         return ""
     doc = load_plan(plan_path)
@@ -943,10 +954,20 @@ def cmd_question_dispose(args, *, store: StateStore, runner: Runner | None = Non
     UX fast-fail, NOT the authority — the authority is premise.validate_questions
     rule 5 at the plan_approval gate (both exist on purpose; the CLI refusal is a
     courtesy, the gate refusal is the control). Other required fields per
-    disposition stay permissive here and are enforced only at the gate."""
+    disposition stay permissive here and are enforced only at the gate.
+
+    `--plan` names the plan `disposed_at_key` is stamped against, defaulting to
+    `state.plan_path` so every pre-existing invocation is byte-identical — see
+    `_bound_stage_key`. An empty `--plan` is rejected rather than silently falling
+    back, mirroring `question-enumerate --plan`'s `0fc6313` fix (#48(b))."""
     state, bag = _question_bag(store, args.session)
     if bag is None:
         return Directive(False, state.node, "noop", "plugin 'premise' is not active")
+    named_plan = getattr(args, "plan", None)
+    if named_plan is not None and not str(named_plan).strip():
+        return Directive(False, state.node, "noop",
+                         "--plan was given an empty path; omit the flag to disposition "
+                         "against the session's own plan, or name a real one")
     questions = premise.questions_from_dicts(bag.get("questions", []))
     match = next((q for q in questions if q.id == args.id), None)
     if match is None:
@@ -969,7 +990,7 @@ def cmd_question_dispose(args, *, store: StateStore, runner: Runner | None = Non
         match.basis = args.basis
     if args.risk:
         match.risk = args.risk
-    match.disposed_at_key = _bound_stage_key(state, match)
+    match.disposed_at_key = _bound_stage_key(state, match, named_plan)
     bag["questions"] = premise.questions_to_dicts(questions)
     state.log("question_dispose", question=args.id, disposition=args.to)
     store.save(state)
@@ -987,15 +1008,30 @@ def cmd_question_rebind(args, *, store: StateStore, runner: Runner | None = None
     (--confirm-still-valid carries that reason). This is the reachable route out of
     blocker 12 (bound-stage-definition-changed); without it a refusal with no
     resolution path trains a bypass. Requires a non-empty reason (argparse-enforced).
-    The second — and only other — writer of disposed_at_key."""
+    The second — and only other — writer of disposed_at_key.
+
+    `--plan` names the plan the re-stamp is read against, defaulting to
+    `state.plan_path` so every pre-existing invocation is byte-identical — see
+    `_bound_stage_key`. It exists for the CORRECTED plan of a replan (not yet
+    `state.plan_path`): `cmd_replan` evaluates the plan_approval gate against
+    `args.plan`, so without a way to name it here, a rebind could only ever
+    re-stamp the OLD plan's key and blocker 12 would keep firing against the
+    corrected one — the very deadlock this verb exists to make unreachable
+    (#48(b), the enumeration channel's `752969e`/`0fc6313` fix mirrored here). An
+    empty `--plan` is rejected rather than silently falling back."""
     state, bag = _question_bag(store, args.session)
     if bag is None:
         return Directive(False, state.node, "noop", "plugin 'premise' is not active")
+    named_plan = getattr(args, "plan", None)
+    if named_plan is not None and not str(named_plan).strip():
+        return Directive(False, state.node, "noop",
+                         "--plan was given an empty path; omit the flag to rebind "
+                         "against the session's own plan, or name a real one")
     questions = premise.questions_from_dicts(bag.get("questions", []))
     match = next((q for q in questions if q.id == args.id), None)
     if match is None:
         return Directive(False, state.node, "noop", f"no such question {args.id!r}")
-    match.disposed_at_key = _bound_stage_key(state, match)
+    match.disposed_at_key = _bound_stage_key(state, match, named_plan)
     bag["questions"] = premise.questions_to_dicts(questions)
     state.log("question_rebind", question=args.id, reason=args.confirm_still_valid)
     store.save(state)
@@ -3640,7 +3676,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("artifact", ("ledger-enumerate",), "path to the deliverable being cross-checked"),
     ("target", ("question-raise", "plan-review"), "plan element address or plan file path"),
     ("plan", ("plan-render", "submit-plan", "replan", "drive", "push-subplan",
-              "question-enumerate"), "plan file path"),
+              "question-enumerate", "question-dispose", "question-rebind"), "plan file path"),
     ("new", ("check-coverage",), "corrected plan file path — the object under a coverage pre-check, not narrative"),
     ("rendering_file", ("present-plan",), "path to the rendered presentation"),
     ("by", ("confirm-delivery", "approve", "resolve"), "who acted — a name, not a narrative"),
@@ -3784,11 +3820,17 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--derivation", default="", help="how the answer follows from the source (researched)")
     sp.add_argument("--basis", default="", help="the ground the assumption rests on (assumed)")
     sp.add_argument("--risk", default="", help="what breaks if the assumption is wrong (assumed)")
+    sp.add_argument("--plan", default=None,
+                    help="stamp disposed_at_key against this plan instead of the session's "
+                         "current plan_path (use when disposing against a CORRECTED plan)")
 
     sp = add("question-rebind"); sp.add_argument("--session", required=True)
     sp.add_argument("--id", required=True, help="disposed question id to re-stamp against its stage's current key")
     sp.add_argument("--confirm-still-valid", dest="confirm_still_valid", required=True,
                     help="why the disposition still holds against the changed stage (non-empty)")
+    sp.add_argument("--plan", default=None,
+                    help="re-stamp disposed_at_key against this plan instead of the session's "
+                         "current plan_path (use when preparing a CORRECTED plan for replan)")
 
     sp = add("question-retire"); sp.add_argument("--session", required=True)
     sp.add_argument("--id", required=True, help="question id whose target stage no longer exists")

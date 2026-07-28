@@ -798,3 +798,149 @@ def test_corrected_plan_is_enumerable_so_the_premise_gate_stops_deadlocking_repl
     state = store.load(sid)
     assert state.node == Node.PLAN_READY.value
     assert [s.index for s in state.stages] == [1, 2, 3]
+
+
+def test_corrected_plan_is_rebindable_so_the_premise_gate_stops_deadlocking_replan(
+        store, fixtures_dir, monkeypatch):
+    """The `question-rebind` twin of #48(b): `_bound_stage_key` previously read
+    only `state.plan_path`, which is not yet the CORRECTED plan of a replan
+    (`cmd_replan` evaluates the plan_approval gate against `args.plan`, and that
+    only becomes `state.plan_path` once the replan succeeds). A disposed
+    question's `disposed_at_key` then only ever matched the OLD plan's stage key,
+    tripping premise.validate_questions rule 12 (bound-stage-definition-changed)
+    against the corrected one — and `question-rebind`, the reachable route out of
+    that very blocker, could only re-stamp the same stale key, blocking the
+    replan that would clear it.
+
+    Every step here is an ordinary CLI call; the bag is never touched directly."""
+    monkeypatch.delenv("AGENTCTL_PREMISE", raising=False)
+    from agentctl import plugins_premise
+
+    sid = "deadlock-rebind"
+    base = str(fixtures_dir / "plan_two_stage.toml")
+    corrected = str(fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml")
+
+    def _silent_advisor(argv, **kw):
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    cli.cmd_start(ns(session=sid, task="demo-two-stage", goal="", done_criterion="",
+                     criterion_type="measurable", recursion_depth=0), store=store)
+    cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
+                        wall_clock_min=60, tracker_key=None, architectural=True,
+                        external_effect=False, new_dependency=False,
+                        public_api_change=False), store=store)
+    cli.cmd_plan(ns(session=sid), store=store)
+    cli.cmd_submit_plan(ns(session=sid, plan=base), store=store)
+    assert "premise" in store.load(sid).plugins  # gate really is live
+
+    # a question bound to stage 1, disposed against the BASE plan's stage 1 key
+    cli.cmd_question_raise(ns(session=sid, id="Q1", target="stage:1.result",
+                              question="does the scaffold need a __init__.py?"),
+                           store=store)
+    cli.cmd_question_research(ns(session=sid, id="Q1", attempted="checked the fixture"),
+                              store=store)
+    cli.cmd_question_dispose(ns(session=sid, id="Q1", to="researched", answer="no",
+                                source="fixture", derivation="single-module package",
+                                basis="", risk="", plan=None), store=store)
+
+    cli.cmd_question_enumerate(ns(session=sid, plan=None), store=store,
+                               runner=_silent_advisor)
+    assert cli.cmd_approve(ns(session=sid, by="user"), store=store).ok is True
+    cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
+                         m3_severe=False, m4_severe=False), store=store)
+    cli.cmd_next_stage(ns(session=sid), store=store)
+
+    # the deadlock itself: Q1's stamp is bound to the OLD (unretitled) stage 1
+    blocked = cli.cmd_replan(ns(session=sid, plan=corrected), store=store)
+    assert blocked.ok is False
+    assert any("definition changed" in b for b in blocked.data.get("blockers", []))
+    assert store.load(sid).node == Node.EXECUTING.value  # nothing moved
+
+    # the route out: rebind Q1 against the corrected plan by name, and enumerate
+    # it too (the retitle also moves the content digest — the enumeration
+    # channel's own #48(b) fix, already landed, clears that half)
+    d = cli.cmd_question_rebind(ns(session=sid, id="Q1", plan=corrected,
+                                   confirm_still_valid="re-read against the "
+                                   "retitled stage 1; the answer still holds"),
+                               store=store)
+    assert d.ok is True
+    d = cli.cmd_question_enumerate(ns(session=sid, plan=corrected), store=store,
+                                   runner=_silent_advisor)
+    assert d.ok is True
+
+    d = cli.cmd_replan(ns(session=sid, plan=corrected), store=store)
+    assert d.ok is True, d.detail
+    assert d.marker == "PLAN-READY"
+    state = store.load(sid)
+    assert state.node == Node.PLAN_READY.value
+    assert state.stage(1).title == "Scaffold module (revised)"
+
+
+def test_corrected_plan_is_redisposable_so_the_premise_gate_stops_deadlocking_replan(
+        store, fixtures_dir, monkeypatch):
+    """The `question-dispose` twin of #48(b): a question whose ANSWER genuinely
+    changes under the corrected plan is re-dispositioned (not merely rebound —
+    rebind is for 're-read; still holds', dispose is for 'the answer changed'),
+    and re-disposition is the OTHER writer of `disposed_at_key` that could
+    previously only stamp against `state.plan_path`, the stale OLD plan."""
+    monkeypatch.delenv("AGENTCTL_PREMISE", raising=False)
+
+    sid = "deadlock-dispose"
+    base = str(fixtures_dir / "plan_two_stage.toml")
+    corrected = str(fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml")
+
+    def _silent_advisor(argv, **kw):
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    cli.cmd_start(ns(session=sid, task="demo-two-stage", goal="", done_criterion="",
+                     criterion_type="measurable", recursion_depth=0), store=store)
+    cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
+                        wall_clock_min=60, tracker_key=None, architectural=True,
+                        external_effect=False, new_dependency=False,
+                        public_api_change=False), store=store)
+    cli.cmd_plan(ns(session=sid), store=store)
+    cli.cmd_submit_plan(ns(session=sid, plan=base), store=store)
+    assert "premise" in store.load(sid).plugins  # gate really is live
+
+    cli.cmd_question_raise(ns(session=sid, id="Q1", target="stage:1.result",
+                              question="does the scaffold need a __init__.py?"),
+                           store=store)
+    cli.cmd_question_research(ns(session=sid, id="Q1", attempted="checked the fixture"),
+                              store=store)
+    cli.cmd_question_dispose(ns(session=sid, id="Q1", to="researched", answer="no",
+                                source="fixture", derivation="single-module package",
+                                basis="", risk="", plan=None), store=store)
+
+    cli.cmd_question_enumerate(ns(session=sid, plan=None), store=store,
+                               runner=_silent_advisor)
+    assert cli.cmd_approve(ns(session=sid, by="user"), store=store).ok is True
+    cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
+                         m3_severe=False, m4_severe=False), store=store)
+    cli.cmd_next_stage(ns(session=sid), store=store)
+
+    blocked = cli.cmd_replan(ns(session=sid, plan=corrected), store=store)
+    assert blocked.ok is False
+    assert any("definition changed" in b for b in blocked.data.get("blockers", []))
+    assert store.load(sid).node == Node.EXECUTING.value
+
+    # the route out: the retitle prompted a genuinely different answer, so this is
+    # a fresh disposition rather than a mere rebind — and it must stamp against
+    # the corrected plan, named directly, in the same act
+    d = cli.cmd_question_dispose(ns(session=sid, id="Q1", to="researched",
+                                    answer="yes — the revised scaffold packages "
+                                    "as a namespace package", source="fixture",
+                                    derivation="split-module layout needs it",
+                                    basis="", risk="", plan=corrected), store=store)
+    assert d.ok is True
+    d = cli.cmd_question_enumerate(ns(session=sid, plan=corrected), store=store,
+                                   runner=_silent_advisor)
+    assert d.ok is True
+
+    d = cli.cmd_replan(ns(session=sid, plan=corrected), store=store)
+    assert d.ok is True, d.detail
+    assert d.marker == "PLAN-READY"
+    state = store.load(sid)
+    assert state.node == Node.PLAN_READY.value
+    live = store.load(sid)
+    q1 = next(q for q in live.plugins["premise"]["questions"] if q["id"] == "Q1")
+    assert q1["answer"].startswith("yes")
