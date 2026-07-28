@@ -62,6 +62,9 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 
+sys.path.insert(0, str(SCRIPT_DIR))
+from lib import config_root  # noqa: E402
+
 # Mirrors memory-global/MEMORY.md's own "keep this index under ~200 lines" note
 # (CONFIRMED real cap, verified 2026-07-23 — see that file's line 5).
 MEMORY_INDEX_LINE_THRESHOLD = 200
@@ -356,18 +359,23 @@ def scan_orphans(memory_root: Path) -> "list[Difficulty]":
 
 
 def default_settings_paths() -> "list[Path]":
-    """User + project settings.json / settings.local.json that exist on disk,
-    de-duplicated by resolved path (a project symlink to a shared file scanned
-    once). $CLAUDE_PROJECT_DIR (else cwd) supplies the project location — both
-    are generic Claude Code settings homes, not arc/composed-dir specifics."""
+    """User + project + agent-home settings.json / settings.local.json that
+    exist on disk, de-duplicated by resolved path (a project symlink to a
+    shared file scanned once). $CLAUDE_PROJECT_DIR (else cwd) supplies the
+    project location; config_root.agent_home() supplies the agent-home
+    location — all generic Claude Code settings homes, not arc/composed-dir
+    specifics."""
     home = Path.home()
     proj = os.environ.get("CLAUDE_PROJECT_DIR")
     proj_dir = Path(proj) if proj else Path.cwd()
+    agent_home = config_root.agent_home()
     candidates = [
         home / ".claude" / "settings.json",
         home / ".claude" / "settings.local.json",
         proj_dir / ".claude" / "settings.json",
         proj_dir / ".claude" / "settings.local.json",
+        agent_home / "settings.json",
+        agent_home / "settings.local.json",
     ]
     seen: "set[Path]" = set()
     out: "list[Path]" = []
@@ -461,6 +469,19 @@ def default_memory_roots() -> "list[Path]":
     return roots
 
 
+def _qualify(root: Path, sub: str) -> str:
+    """Root-qualify a scanner's path, unless it is already absolute.
+
+    Each scanner reports memory-root-RELATIVE paths, and one root's `leaves/x.md`
+    is another's, so `scan` prefixes the root to keep the finding identifiable
+    across roots — that prefix is also what makes the store's (kind, path) key
+    stable and what the advisory tier filter resolves. But `scan_orphans` reports
+    the ROOT ITSELF for no-root-index, and prefixing an absolute path with its own
+    parent produced `/…/memory-global//…/memory-global`: a path naming nothing,
+    which no reader can act on and no filter can classify."""
+    return sub if Path(sub).is_absolute() else f"{root}/{sub}"
+
+
 def scan(
     memory_roots: "list[Path]",
     repo_root: "Path | None",
@@ -475,13 +496,13 @@ def scan(
         out.extend(scan_broken_hooks(paths))
     for root in memory_roots:
         for d in scan_oversized_indexes(root, threshold):
-            out.append(Difficulty(d.kind, f"{root}/{d.path}", d.detail))
+            out.append(Difficulty(d.kind, _qualify(root, d.path), d.detail))
         for d in scan_dangling_pointers(root):
-            out.append(Difficulty(d.kind, f"{root}/{d.path}", d.detail))
+            out.append(Difficulty(d.kind, _qualify(root, d.path), d.detail))
         for d in scan_near_duplicates(root, near_dup_threshold):
-            out.append(Difficulty(d.kind, f"{root}/{d.path}", d.detail))
+            out.append(Difficulty(d.kind, _qualify(root, d.path), d.detail))
         for d in scan_orphans(root):
-            out.append(Difficulty(d.kind, f"{root}/{d.path}", d.detail))
+            out.append(Difficulty(d.kind, _qualify(root, d.path), d.detail))
     if repo_root is not None:
         out.extend(scan_ceiling_proximity(repo_root))
     return out

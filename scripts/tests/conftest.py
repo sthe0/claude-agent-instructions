@@ -91,6 +91,20 @@ def _code_review_gate_off_by_default(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_self_diagnose_store(tmp_path, monkeypatch):
+    """Redirect the self-diagnose findings store to tmp for the suite at large.
+
+    hook-turn-end-gate's build_context reads the store to decide whether an open
+    actionable finding blocks this turn. The real store on a live machine
+    normally HAS open findings, so without this every unrelated turn-gate test
+    would pick up a spurious extra blocker — and a test that writes would corrupt
+    live runtime state. Same accommodation as `_isolate_task_quality_ledger`."""
+    monkeypatch.setenv(
+        "CLAUDE_SELF_DIAGNOSE_STORE", str(tmp_path / "self-diagnose-findings.jsonl")
+    )
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_recursion_depth(monkeypatch):
     """Drop the ambient AGENT_RECURSION_DEPTH for the suite at large.
 

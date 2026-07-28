@@ -130,6 +130,35 @@ def test_scan_combines_memory_roots_and_repo(tmp_path, monkeypatch):
     assert "dangling-pointer" in kinds
 
 
+def test_scan_root_qualifies_relative_paths_and_leaves_absolute_ones_alone(tmp_path):
+    """Downstream consumers key on, resolve, and print this path, so its shape is
+    a contract and not a display detail.
+
+    Every scanner but one reports memory-root-relative, and `scan` prefixes the
+    root so one root's `leaves/x.md` is distinguishable from another's.
+    `scan_orphans` is the exception: no-root-index names the ROOT itself, already
+    absolute, and prefixing it with its own parent yielded
+    `/…/mem//…/mem` — a path naming nothing, which the store then keys on and the
+    advisory tier filter then resolves."""
+    root = tmp_path / "mem"
+    (root / "leaves").mkdir(parents=True)
+    (root / "leaves" / "x.md").write_text("content\n", encoding="utf-8")
+
+    findings = sd.scan([root], None, scan_hooks=False)
+
+    no_root = [f for f in findings if f.kind == "no-root-index"]
+    assert [f.path for f in no_root] == [str(root)]
+
+    with_index = tmp_path / "mem2"
+    (with_index / "leaves").mkdir(parents=True)
+    (with_index / "MEMORY.md").write_text("no links here\n", encoding="utf-8")
+    (with_index / "leaves" / "x.md").write_text("content\n", encoding="utf-8")
+
+    orphans = [f for f in sd.scan([with_index], None, scan_hooks=False)
+               if f.kind == "orphan-leaf"]
+    assert [f.path for f in orphans] == [f"{with_index}/leaves/x.md"]
+
+
 def test_scan_no_repo_skips_ceiling_scan(tmp_path):
     findings = sd.scan([], None, scan_hooks=False)
     assert findings == []
@@ -247,9 +276,32 @@ def test_default_settings_paths_dedups_by_resolved(tmp_path, monkeypatch):
     (proj / ".claude" / "settings.json").symlink_to(real)
     monkeypatch.setattr(sd.Path, "home", staticmethod(lambda: home))
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(proj))
+    # No real agent-home settings file exists under `home`, but the live
+    # environment may still export CLAUDE_AGENT_HOME/CLAUDE_CONFIG_DIR
+    # pointing at a real machine settings.json — strip both so the dedup
+    # set stays exactly the two paths this test seeds.
+    monkeypatch.delenv("CLAUDE_AGENT_HOME", raising=False)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     paths = sd.default_settings_paths()
     resolved = {p.resolve() for p in paths}
     assert resolved == {real.resolve()}
+
+
+def test_default_settings_paths_includes_agent_home(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    agent_home = tmp_path / "agent-home"
+    agent_home.mkdir()
+    agent_settings = agent_home / "settings.json"
+    agent_settings.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sd.Path, "home", staticmethod(lambda: home))
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("CLAUDE_AGENT_HOME", str(agent_home))
+    paths = sd.default_settings_paths()
+    resolved = {p.resolve() for p in paths}
+    assert agent_settings.resolve() in resolved
 
 
 # ── scan_near_duplicates ─────────────────────────────────────────────────────
