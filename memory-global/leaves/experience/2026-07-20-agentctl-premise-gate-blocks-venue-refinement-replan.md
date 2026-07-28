@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "user (Fedor Solovyev)"
 refs: [2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan, 2026-07-09-gate-must-execute-what-it-attests, 2026-07-03-engine-replan-artifact-discipline]
 created: 2026-07-20
-last_verified: 2026-07-23
+last_verified: 2026-07-28
 ---
 
 # Premise gate blocks a verify_command-venue refinement replan — nudge plan_path + re-enumerate
@@ -47,6 +47,10 @@ Passable recipe: (1) nudge the gate-exempt state.plan_path to the corrected plan
 - Where it arose: Core instructions repo, task spawn-dispatch-cwd-pytest-quality-salience; substantive replan v2->v3 targeting a genuinely SEPARATE plan file after the Fix #2 base.json->spawn-injection correction caught at final verification; premise gate compared enumerate's v1-stamped digest against v3.
 - Working plan: /Users/the0/.claude-agent/plans/spawn-dispatch-cwd-pytest-quality-salience-v3.toml
 
+
+### 2026-07-28 — substantive done_criterion correction (dispatch-ergonomics v3), NOT a venue refinement
+- Where it arose: agentctl session 6bb52797 · plan argv-large-text-via-file-v3.toml · worktree cai-wt-dispatch-ergonomics
+- Working plan: /home/the0/.claude-agent/plans/argv-large-text-via-file-v3.toml
 ## Common core & variations
 **Common:** Same recipe as the 2026-07-20 head context: a refinement replan that touches a stage verify_command re-stales BOTH the premise digest (re-run question-enumerate) AND the plan-review (fresh thinker review bound to the NEW sha256). replan_coverage then requires every critique.invariants_to_preserve item to substring-land (casefold+collapsed-ws) in a stage conditions/invariants field. After replan: next-stage -> EXECUTING -> record-result, engine re-runs the check itself (exit 0). The 2026-07-23 spawn-cwd/pytest occurrence confirms the recipe holds verbatim even when the replan TARGET is a genuinely separate plan file (v2->v3 full file swap), not an in-place venue edit — re-point the gate-exempt state.plan_path to the target file via the store API, re-enumerate to stamp the new digest, and rely on plan_snapshot_path protecting the coverage baseline.
 
