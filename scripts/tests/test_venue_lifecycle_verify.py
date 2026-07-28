@@ -29,6 +29,16 @@ Proves the plan's four cases verbatim:
       check, and a landed check;
   (d) a plan/state with no venue fields at all produces the identical
       directive and command sequence it produced before this change.
+
+Re-entry idempotency (the stage-2 review's blocking finding): verify-final's
+body transitions the node (`final` -> RESOLUTION on success, `diagnose` ->
+DIAGNOSING on a refusal/failure), both legal only from VERIFYING, while its
+resolution gate is node-agnostic. A second verify-final call after a prior
+refusal routed the session to DIAGNOSING must therefore NOT re-run the
+transitioning body (that raised an uncaught TransitionError); it returns a
+legible directive back into the difficulty cycle. Same guard makes a re-call
+from RESOLUTION idempotent. `test_reinvoke_*` prove both, venue-restored and
+venue-still-missing.
 """
 import shlex
 import shutil
@@ -174,7 +184,7 @@ def test_bare_delivery_venue_still_refuses_when_worktree_gone(store, tmp_path):
     cap = _CaptureAll()
     d = cli.cmd_verify_final(ns(session="b1"), store=store, runner=cap)
     assert d.ok is False
-    assert d.action == "fix_venue"
+    assert d.action == "declare"
     assert cap.calls == []  # refusal short-circuits before the check ever runs
     assert store.load("b1").stage(1).outcome.status != StageStatus.FAILED.value
 
@@ -195,7 +205,7 @@ def test_stage_shell_refusal_reaches_diagnosing_and_declare_is_accepted(store, t
     d = cli.cmd_verify_final(ns(session="c1"), store=store, runner=_CaptureAll())
     assert d.ok is False
     assert d.node == Node.DIAGNOSING.value
-    assert d.action == "fix_venue"
+    assert d.action == "declare"
     assert d.marker == "OVERCOME-DIFFICULTY"
 
     reloaded = store.load("c1")
@@ -227,7 +237,7 @@ def test_final_check_shell_refusal_reaches_diagnosing_and_declare_is_accepted(st
     d = cli.cmd_verify_final(ns(session="c2"), store=store, runner=_CaptureAll())
     assert d.ok is False
     assert d.node == Node.DIAGNOSING.value
-    assert d.action == "fix_venue"
+    assert d.action == "declare"
     assert d.marker == "OVERCOME-DIFFICULTY"
 
     reloaded = store.load("c2")
@@ -257,7 +267,7 @@ def test_landed_check_refusal_reaches_diagnosing_and_declare_is_accepted(store):
     d = cli.cmd_verify_final(ns(session="c3"), store=store, runner=_CaptureAll())
     assert d.ok is False
     assert d.node == Node.DIAGNOSING.value
-    assert d.action == "fix_venue"
+    assert d.action == "declare"
     assert d.marker == "OVERCOME-DIFFICULTY"
 
     reloaded = store.load("c3")
@@ -292,3 +302,74 @@ def test_absent_verify_venue_at_final_is_byte_identical_to_pre_change(store, tmp
     # Same tree cmd_dispatch/cmd_record_result would have used — the venue never
     # moves to repo_root just because this field now exists on the Criterion.
     assert cap.calls == [["bash", "-c", f"cd {shlex.quote(str(worktree))} && pytest -q"]]
+
+
+# --- re-entry idempotency: verify-final called again from DIAGNOSING/RESOLUTION --
+
+def test_reinvoke_verify_final_from_diagnosing_venue_restored_does_not_crash(store, tmp_path):
+    # A refusal routed the session to DIAGNOSING; the coordinator (mis)reads the
+    # directive as "recreate the venue and re-run verify-final". Before the guard
+    # this re-entered the transitioning body from DIAGNOSING and raised
+    # TransitionError on the success-path `final` edge. Now it returns a legible
+    # directive pointing back into the difficulty cycle.
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    worktree = tmp_path / "worktrees" / "w6"
+    worktree.mkdir(parents=True)
+
+    stage = _stage(verify_venue="delivery", status=StageStatus.PASSED.value)
+    s = _verifying("e1", [stage], repo_root=str(repo_root), delivery_worktree=str(worktree))
+    store.save(s)
+    shutil.rmtree(worktree)
+
+    d1 = cli.cmd_verify_final(ns(session="e1"), store=store, runner=_CaptureAll())
+    assert d1.node == Node.DIAGNOSING.value
+
+    worktree.mkdir(parents=True)  # venue "fixed", re-run
+    d2 = cli.cmd_verify_final(ns(session="e1"), store=store, runner=_CaptureAll())
+    assert d2.ok is False
+    assert d2.node == Node.DIAGNOSING.value
+    assert d2.action == "declare"
+    assert d2.marker == "OVERCOME-DIFFICULTY"
+
+
+def test_reinvoke_verify_final_from_diagnosing_venue_still_missing_does_not_crash(store, tmp_path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    worktree = tmp_path / "worktrees" / "w7"
+    worktree.mkdir(parents=True)
+
+    stage = _stage(verify_venue="delivery", status=StageStatus.PASSED.value)
+    s = _verifying("e2", [stage], repo_root=str(repo_root), delivery_worktree=str(worktree))
+    store.save(s)
+    shutil.rmtree(worktree)
+
+    d1 = cli.cmd_verify_final(ns(session="e2"), store=store, runner=_CaptureAll())
+    assert d1.node == Node.DIAGNOSING.value
+
+    d2 = cli.cmd_verify_final(ns(session="e2"), store=store, runner=_CaptureAll())  # still gone
+    assert d2.ok is False
+    assert d2.node == Node.DIAGNOSING.value
+    assert d2.action == "declare"
+    assert d2.marker == "OVERCOME-DIFFICULTY"
+
+
+def test_reinvoke_verify_final_from_resolution_is_idempotent(store, tmp_path):
+    # The success side of the same guard: once verify-final has passed and armed
+    # the resolution gate (node RESOLUTION), a second call must not re-run the
+    # `final` transition (illegal from RESOLUTION) — it returns the resolve hint.
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+
+    stage = _stage(verify_venue="repo_root", status=StageStatus.PASSED.value)
+    s = _verifying("e3", [stage], repo_root=str(repo_root))
+    store.save(s)
+
+    d1 = cli.cmd_verify_final(ns(session="e3"), store=store, runner=_CaptureAll())
+    assert d1.ok is True
+    assert d1.node == Node.RESOLUTION.value
+
+    d2 = cli.cmd_verify_final(ns(session="e3"), store=store, runner=_CaptureAll())
+    assert d2.ok is True
+    assert d2.node == Node.RESOLUTION.value
+    assert d2.action == "resolve"

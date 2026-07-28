@@ -411,17 +411,22 @@ def _diagnose_venue_refusal(state: SessionState, store: StateStore, message: str
     instead of stranding the session at VERIFYING — from VERIFYING, declare/
     investigate/critique all refuse ("difficulty commands run only in the
     DIAGNOSING cycle"), and only `reset --force` escaped. Mirrors the
-    FAILURE branch's transition below verbatim, but `next` stays "fix_venue"
-    (not "declare"): unlike a stage/final_check FAILURE, which is corrected by
-    changing the code, a venue refusal is corrected by changing the venue
-    declaration, and the token names that precisely. No stage is marked
-    FAILED — `_resolve_or_refuse`'s refusal/failure split is preserved;
-    only the destination node changes."""
+    final_check FAILURE branch below verbatim, `next` included: like a
+    stage/final_check FAILURE it directs the coordinator to `declare` and work
+    the difficulty through declare -> investigate -> critique -> replan. A venue
+    refusal is corrected by the replan (fixing the venue declaration), NOT by a
+    bare "recreate the venue and re-run verify-final" — that shortcut re-entered
+    verify-final from DIAGNOSING and crashed on the illegal transition, which is
+    why the token names the difficulty cycle, not a direct venue edit. No stage
+    is marked FAILED — `_resolve_or_refuse`'s refusal/failure split is preserved;
+    only the destination node changes. Only ever reached from VERIFYING
+    (cmd_verify_final's entry guard returns before here for any other node), so
+    the `diagnose` transition is always legal."""
     state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
     state.difficulty = Difficulty()
     store.save(state)
     return Directive(
-        False, state.node, "fix_venue", message,
+        False, state.node, "declare", message,
         marker="OVERCOME-DIFFICULTY",
     )
 
@@ -2431,6 +2436,34 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
 
 def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
+    # Idempotency guard (must precede the node-agnostic resolution gate below):
+    # verify-final's body performs node transitions — `final` -> RESOLUTION on
+    # success, `diagnose` -> DIAGNOSING on a refusal/failure — that are legal ONLY
+    # from VERIFYING (machine.TRANSITIONS). The resolution gate checks stage
+    # outcomes, not the node, so a re-invocation after a prior refusal/failure has
+    # already routed the session to DIAGNOSING would re-enter and raise an uncaught
+    # TransitionError. From any node other than VERIFYING, return a legible
+    # directive instead of re-running the transitioning body.
+    if state.node == Node.DIAGNOSING.value:
+        return Directive(
+            False, state.node, "declare",
+            "a prior final-verification refusal/failure already routed this session "
+            "into the difficulty cycle; complete overcome-difficulty (declare -> "
+            "investigate -> critique -> replan — replan re-arms verification) before "
+            "re-running verify-final",
+            marker="OVERCOME-DIFFICULTY",
+        )
+    if state.node == Node.RESOLUTION.value:
+        return Directive(
+            True, state.node, "resolve",
+            "final verification already passed; the resolution gate is armed — "
+            "run `resolve` once the user confirms",
+        )
+    if state.node != Node.VERIFYING.value:
+        return Directive(
+            False, state.node, "inspect",
+            f"verify-final runs only from VERIFYING; node is {state.node}",
+        )
     blockers = gates.blockers(state, "resolution")
     _log_gate(state, "resolution", blockers, passed=not blockers)
     if blockers:

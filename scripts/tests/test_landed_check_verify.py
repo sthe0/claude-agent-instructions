@@ -294,7 +294,7 @@ def test_nonexistent_target_ref_refuses(tmp_path):
     state = _verifying("nr1", [stage], repo_root=str(work), final_check=[fc])
     d = cli.cmd_verify_final(ns(session="nr1"), store=_MemStore(state), runner=None)
     assert d.ok is False
-    assert d.action == "fix_venue"
+    assert d.action == "declare"
     assert d.node == Node.DIAGNOSING.value
     assert state.stage(1).outcome.status != StageStatus.FAILED.value
 
@@ -314,7 +314,7 @@ def test_option_shaped_target_refuses(tmp_path):
     state = _verifying("os1", [stage], repo_root=str(work), final_check=[fc])
     d = cli.cmd_verify_final(ns(session="os1"), store=_MemStore(state), runner=None)
     assert d.ok is False
-    assert d.action == "fix_venue"
+    assert d.action == "declare"
 
 
 def test_unknown_delivered_commit_refuses(tmp_path):
@@ -327,7 +327,7 @@ def test_unknown_delivered_commit_refuses(tmp_path):
     state = _verifying("uc1", [stage], repo_root=str(work), final_check=[fc])
     d = cli.cmd_verify_final(ns(session="uc1"), store=_MemStore(state), runner=None)
     assert d.ok is False
-    assert d.action == "fix_venue"
+    assert d.action == "declare"
 
 
 def test_delivered_stage_with_no_frozen_head_refuses(tmp_path):
@@ -348,7 +348,7 @@ def test_delivered_stage_with_no_frozen_head_refuses(tmp_path):
 
 def test_resolved_venue_missing_refuses_landed_but_fails_shell_control(tmp_path):
     """Same broken repo_root (a path that does not exist on disk), two checks:
-    a landed final_check must REFUSE (exit 97, fix_venue) while an ordinary
+    a landed final_check must REFUSE (exit 97, routed to declare/DIAGNOSING) while an ordinary
     shell final_check genuinely FAILS (a `cd`-into-nowhere shell failure) —
     proving the two are distinguished, not both collapsed into one behaviour."""
     missing = str(tmp_path / "does-not-exist")
@@ -361,7 +361,7 @@ def test_resolved_venue_missing_refuses_landed_but_fails_shell_control(tmp_path)
     state = _verifying("mv1", [stage], repo_root=missing, final_check=[landed_fc])
     d = cli.cmd_verify_final(ns(session="mv1"), store=_MemStore(state), runner=None)
     assert d.ok is False
-    assert d.action == "fix_venue"
+    assert d.action == "declare"
 
     shell_fc = FinalCheck(command="true", expected_exit=0, label="control", venue="repo_root")
     state2 = _verifying("mv2", [_shell_stage(1, status=StageStatus.PASSED.value)],
