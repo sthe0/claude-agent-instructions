@@ -43,6 +43,7 @@ from .state import (
     _EXECUTION_NODES,
     _MAX_PLAN_STACK,
     Actor,
+    CheckKind,
     CheckVenue,
     CodeReview,
     Critique,
@@ -54,6 +55,7 @@ from .state import (
     FinalCheck,
     Investigation,
     JudgeBypass,
+    LANDED_GIT_ERROR_EXIT,
     Partition,
     PartitionUnit,
     PARTITION_UNIT_MODES,
@@ -355,6 +357,73 @@ def _resolve_or_refuse(state: SessionState, venue: str) -> tuple[str | None, str
         f"or repo_root); create the venue, or set venue = \"repo_root\" if a "
         f"delivery venue is no longer needed"
     )
+
+
+def _freeze_delivered_head(state: SessionState, stage, runner: Runner | None) -> None:
+    """Best-effort `git rev-parse HEAD` at this stage's resolved verify venue,
+    stamped onto `stage.outcome.delivered_head` — the delivered-head freeze
+    `cmd_record_result` performs for every recorded stage, BEFORE that same
+    call dispatches any verification, so a `kind = "landed"` check whose
+    `delivered_stage` names THIS stage (a self-reference) already finds its
+    own frozen commit in place. Re-stamps on every record-result call for the
+    stage (a retried, previously-FAILED stage may deliver new commits) — but
+    once stamped, no landed check ever re-derives it: only this call site
+    writes the field, everyone else only reads it (SessionState.render_landed_command).
+    Fails open: an unresolvable venue or a git error leaves whatever was
+    already stamped (if anything) untouched, rather than clobbering it."""
+    cwd = state.resolve_check_venue(stage.criterion.verify_venue)
+    if not cwd:
+        return
+    run = runner or subprocess_runner
+    result = run(["git", "-C", cwd, "rev-parse", "HEAD"])
+    if result.returncode == 0 and result.stdout.strip():
+        stage.outcome.delivered_head = result.stdout.strip()
+
+
+def _needs_delivered_head_freeze(state: SessionState, stage_index: int) -> bool:
+    """True when SOME landed check in this plan — a stage's own criterion (a
+    self-reference) or a final_check — names `stage_index` as its
+    `delivered_stage`. Freezing is the only case that matters; skipping it
+    otherwise keeps every plan with no landed check byte-identical to before
+    (no runner call record-result did not already make) — the regression an
+    unconditional freeze would otherwise introduce for every ordinary stage."""
+    for s in state.stages:
+        crit = s.criterion
+        if (crit.verify_kind == CheckKind.LANDED.value and crit.landed
+                and crit.landed.delivered_stage == stage_index):
+            return True
+    for fc in state.final_check:
+        if (fc.kind == CheckKind.LANDED.value and fc.landed
+                and fc.landed.delivered_stage == stage_index):
+            return True
+    return False
+
+
+def _landed_check_result(
+    state: SessionState, spec, runner: Runner | None
+) -> tuple[bool, str | None, object]:
+    """Dispatch one `kind = "landed"` check: render + run + classify. Returns
+    (ok, refusal, result). `refusal` is set only when the check could not be
+    attempted at all — SessionState.render_landed_command's own refusal
+    (no repo_root / unknown delivered_stage / no frozen delivered_head yet),
+    or the synthesized script exiting LANDED_GIT_ERROR_EXIT (git itself could
+    not resolve `target`/`remote` — a ref that doesn't exist locally or on the
+    remote). Only a genuine exit 0 (contained) or exit 1 (git's honest "not an
+    ancestor") is a real pass/fail; a refusal must never be recorded as a
+    stage FAILED or routed into DIAGNOSING — the shared rationale behind
+    `_resolve_or_refuse`'s refusal/failure split, applied to the landed axis."""
+    command, refusal = state.render_landed_command(spec)
+    if refusal:
+        return False, refusal, None
+    run = runner or subprocess_runner
+    result = run(["bash", "-c", command])
+    if result.returncode == LANDED_GIT_ERROR_EXIT:
+        return False, (
+            f"landed check could not resolve {spec.target!r} (or "
+            f"{spec.remote}/{spec.target!r}) against the delivered commit — "
+            f"git could not answer (exit {LANDED_GIT_ERROR_EXIT})"
+        ), result
+    return result.returncode == 0, None, result
 
 
 def _is_recursion_refusal(result) -> bool:
@@ -2146,30 +2215,58 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
                 stage_index=stage.index, kind="killswitch", reviewer="",
                 note="AGENTCTL_STAGE_REVIEW=0"))
 
-    # Machine-executed verification: for a measurable stage carrying a verify_command,
-    # the engine runs it and OVERRIDES a 'passed' claim the command contradicts. A
-    # contradicted pass becomes a real failure (digest + DIAGNOSING), so "report
-    # honestly" is an invariant for the measurable subset, not a discipline.
+    # Delivered-head freeze: stamp what commit this stage delivered BEFORE any
+    # verification below dispatches — a landed check self-referencing this same
+    # stage must find its own frozen head already present (see
+    # _freeze_delivered_head). Only when some landed check in the plan actually
+    # names this stage as its delivered_stage (_needs_delivered_head_freeze) —
+    # a plan with no landed check makes no extra runner call, unchanged from
+    # before schema 23.
+    if _needs_delivered_head_freeze(state, stage.index):
+        _freeze_delivered_head(state, stage, runner)
+
+    # Machine-executed verification: for a measurable stage carrying a verify_command
+    # (or a `kind = "landed"` check), the engine runs it and OVERRIDES a 'passed'
+    # claim the command contradicts. A contradicted pass becomes a real failure
+    # (digest + DIAGNOSING), so "report honestly" is an invariant for the
+    # measurable subset, not a discipline.
     if passed:
         crit = stage.criterion
-        cwd = None
-        if crit.verify_command and crit.criterion_type == CriterionType.MEASURABLE.value:
-            cwd, refusal = _resolve_or_refuse(state, crit.verify_venue)
+        if crit.criterion_type == CriterionType.MEASURABLE.value and crit.verify_kind == CheckKind.LANDED.value:
+            ok, refusal, result = _landed_check_result(state, crit.landed, runner)
             if refusal:
                 store.save(state)
                 return Directive(
                     False, state.node, "fix_venue",
-                    f"stage {stage.index} verify_command refused: {refusal}",
+                    f"stage {stage.index} landed check refused: {refusal}",
                 )
-        ok, result = _verify_command_result(stage, runner, cwd=cwd)
-        if not ok:
-            passed = False
-            note = (
-                f"verify_command exit {result.returncode} != expected "
-                f"{stage.criterion.expected_exit}: {stage.criterion.verify_command}"
-            )
-            actual = (actual + "\n" + note) if actual else note
-            stage.outcome.actual = actual
+            if not ok:
+                passed = False
+                note = (
+                    f"landed check: delivered commit not (yet) contained in "
+                    f"{crit.landed.target!r} (or {crit.landed.remote}/{crit.landed.target})"
+                )
+                actual = (actual + "\n" + note) if actual else note
+                stage.outcome.actual = actual
+        else:
+            cwd = None
+            if crit.verify_command and crit.criterion_type == CriterionType.MEASURABLE.value:
+                cwd, refusal = _resolve_or_refuse(state, crit.verify_venue)
+                if refusal:
+                    store.save(state)
+                    return Directive(
+                        False, state.node, "fix_venue",
+                        f"stage {stage.index} verify_command refused: {refusal}",
+                    )
+            ok, result = _verify_command_result(stage, runner, cwd=cwd)
+            if not ok:
+                passed = False
+                note = (
+                    f"verify_command exit {result.returncode} != expected "
+                    f"{stage.criterion.expected_exit}: {stage.criterion.verify_command}"
+                )
+                actual = (actual + "\n" + note) if actual else note
+                stage.outcome.actual = actual
 
     # Attribute cost for spawn stages from the cost log. In-thread stages leave
     # None — cost splitting per in-thread stage is out of scope for this attribution.
@@ -2244,6 +2341,22 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     failures: list[str] = []
     for stage in state.stages:
         crit = stage.criterion
+        if crit.criterion_type == CriterionType.MEASURABLE.value and crit.verify_kind == CheckKind.LANDED.value:
+            # No re-freeze here: verify-final re-checks the delivered_head each
+            # stage's own record-result already froze, never a live re-derive.
+            ok, refusal, result = _landed_check_result(state, crit.landed, runner)
+            if refusal:
+                return Directive(
+                    False, state.node, "fix_venue",
+                    f"stage {stage.index} landed check refused: {refusal}",
+                )
+            if not ok:
+                failures.append(
+                    f"stage {stage.index}: landed check — delivered commit not "
+                    f"contained in {crit.landed.target!r} (or "
+                    f"{crit.landed.remote}/{crit.landed.target})"
+                )
+            continue
         cwd = None
         if crit.verify_command and crit.criterion_type == CriterionType.MEASURABLE.value:
             cwd, refusal = _resolve_or_refuse(state, crit.verify_venue)
@@ -2259,6 +2372,21 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
                 f"{stage.criterion.expected_exit} ({stage.criterion.verify_command})"
             )
     for fc in state.final_check:
+        if fc.kind == CheckKind.LANDED.value:
+            ok, refusal, result = _landed_check_result(state, fc.landed, runner)
+            if refusal:
+                return Directive(
+                    False, state.node, "fix_venue",
+                    f"final_check '{fc.label or fc.landed.target}' refused: {refusal}",
+                )
+            if not ok:
+                label = fc.label or fc.landed.target
+                failures.append(
+                    f"final_check '{label}': landed check — delivered commit not "
+                    f"contained in {fc.landed.target!r} (or "
+                    f"{fc.landed.remote}/{fc.landed.target})"
+                )
+            continue
         cwd, refusal = _resolve_or_refuse(state, fc.venue)
         if refusal:
             return Directive(

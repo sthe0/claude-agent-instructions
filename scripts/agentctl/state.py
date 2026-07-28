@@ -16,6 +16,7 @@ dataclass — the seam store.py persists.
 from __future__ import annotations
 
 import json
+import shlex
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 
@@ -998,6 +999,60 @@ class SessionState:
         if venue == CheckVenue.REPO_ROOT.value:
             return self.repo_root
         return self.delivery_worktree or self.repo_root
+
+    # --- landed check synthesis --------------------------------------------
+    def render_landed_command(self, spec: "LandedSpec") -> tuple[str | None, str | None]:
+        """Render the ONE durable shell script for a `kind = "landed"` check:
+        monotone `git merge-base --is-ancestor` containment of the commit
+        `spec.delivered_stage` delivered (the LITERAL string frozen on that
+        stage's Outcome.delivered_head, never re-resolved here) against both
+        the local `target` ref and its local `remote/target` remote-tracking
+        ref. Returns (command, refusal): `command` is the exact string a
+        caller passes as `bash -c <command>` — it carries its own
+        `git -C <repo_root>`, so it needs no cwd/`cd`; `refusal` is set
+        instead when the check cannot even be attempted (no repo_root, an
+        unknown delivered_stage, or that stage has not yet frozen a delivered
+        commit) — the caller must surface this as a legible refusal, never a
+        stage failure.
+
+        No network call, no SHA equality, no live `rev-parse`: ancestry is
+        monotone in a shared trunk (which only ever gains commits) and in this
+        frozen commit (which never changes once stamped), so a check that goes
+        green cannot later go red without a history rewrite — see CheckKind's
+        module comment for the 20-incident background this replaces."""
+        if not self.repo_root:
+            return None, (
+                "landed check requires [meta].repo_root to be set (nothing to "
+                "resolve the target/remote refs against)"
+            )
+        try:
+            stage = self.stage(spec.delivered_stage)
+        except KeyError:
+            return None, (
+                f"landed check's delivered_stage {spec.delivered_stage} does "
+                "not name an existing stage"
+            )
+        delivered = stage.outcome.delivered_head
+        if not delivered:
+            return None, (
+                f"stage {spec.delivered_stage} has not yet frozen a delivered "
+                "commit (record-result must run for that stage, with a "
+                "resolvable delivery venue, before this landed check can be "
+                "evaluated)"
+            )
+        repo_root = shlex.quote(self.repo_root)
+        commit = shlex.quote(delivered)
+        target = shlex.quote(spec.target)
+        remote_target = shlex.quote(f"{spec.remote}/{spec.target}")
+        command = (
+            f"for R in {target} {remote_target}; do "
+            f'git -C {repo_root} merge-base --is-ancestor {commit} "$R"; s=$?; '
+            f'[ "$s" -eq 0 ] && continue; '
+            f'[ "$s" -eq 1 ] && exit 1; '
+            f"exit {LANDED_GIT_ERROR_EXIT}; "
+            "done; exit 0"
+        )
+        return command, None
 
     # --- stage helpers ----------------------------------------------------
     def stage(self, index: int) -> Stage:
