@@ -255,22 +255,6 @@ def unpushed_branch_hint(repo_dir: str) -> str | None:
     return None
 
 
-def _push_probe_runner(cmd: list[str]) -> int:
-    """Timeout-bounded runner for the `git push --dry-run` capability probe.
-    authority.probe_push_capability's default runner has NO timeout, and this
-    hint fires on every open-resolution-gate prompt — a network stall on the
-    probe must not hang the user's turn (a hang is not an exception, so the
-    outer try/except cannot catch it). Any timeout/failure returns non-zero,
-    which is_author reads as 'no direct push rights' — the safe default (don't
-    tell the user to push directly when we could not quickly confirm rights)."""
-    try:
-        return subprocess.run(
-            cmd, cwd=authority.REPO_ROOT, capture_output=True, timeout=GIT_TIMEOUT_SEC
-        ).returncode
-    except Exception:
-        return 1
-
-
 def direct_push_no_pr_hint(repo_dir: str) -> str | None:
     """Best-effort DIRECT_PUSH_NO_PR_HINT when repo_dir is at or under the Core
     instructions repo root AND the current machine holds direct push rights to
@@ -278,10 +262,12 @@ def direct_push_no_pr_hint(repo_dir: str) -> str | None:
     on "at or under" rather than exact equality since a session's cwd is often
     a subdirectory (e.g. scripts/) — same semantics as the `git -C repo_dir`
     calls in the sibling hint functions above, which resolve correctly from
-    any subdirectory of the repo. The probe is timeout-bounded via
-    _push_probe_runner so a network stall cannot hang the turn. Any failure
-    (authority unimportable, repo_dir not resolvable, probe exception/timeout)
-    degrades silently to None so the hook never breaks a resolution turn."""
+    any subdirectory of the repo. The probe is timeout-bounded by
+    authority.probe_push_capability's own default runner, so a network stall
+    cannot hang the turn; this hint therefore needs no runner of its own. Any
+    failure (authority unimportable, repo_dir not resolvable, probe
+    exception/timeout) degrades silently to None so the hook never breaks a
+    resolution turn."""
     if authority is None:
         return None
     try:
@@ -289,9 +275,7 @@ def direct_push_no_pr_hint(repo_dir: str) -> str | None:
         root = authority.REPO_ROOT.resolve()
         if resolved != root and not resolved.is_relative_to(root):
             return None
-        if not authority.is_author(
-            probe=lambda: authority.probe_push_capability(runner=_push_probe_runner)
-        ):
+        if not authority.is_author():
             return None
     except Exception:
         return None

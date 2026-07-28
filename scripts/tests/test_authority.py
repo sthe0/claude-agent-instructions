@@ -4,6 +4,8 @@ No real push: the capability probe is mocked. Proves the push-capability probe d
 (no config-flag branch), the flag param is a test seam, and a non-author resolves to
 'route-to-channel'. Also tests channel selection from the machine-local identity file.
 """
+import subprocess
+
 import difficulty_channel as dc
 from difficulty_channel import authority
 
@@ -40,6 +42,53 @@ def test_probe_uses_dry_run_no_real_push():
 
     assert authority.probe_push_capability(runner=fake_runner) is True
     assert "--dry-run" in seen["cmd"] and "push" in seen["cmd"]
+
+
+def _fake_run(returncode=0, raises=None, seen=None):
+    """Stand-in for subprocess.run on the DEFAULT runner path (no injected runner), so these
+    tests exercise the real default rather than a stub of it."""
+    def _run(cmd, **kwargs):
+        if seen is not None:
+            seen["cmd"], seen["kwargs"] = cmd, kwargs
+        if raises is not None:
+            raise raises
+        return subprocess.CompletedProcess(cmd, returncode)
+    return _run
+
+
+def test_default_runner_passes_a_timeout_to_subprocess(monkeypatch):
+    """A hang is not an exception, so the bound must reach subprocess.run itself — asserting only
+    that a TimeoutExpired is handled would still pass against an unbounded call that never raises."""
+    seen = {}
+    monkeypatch.setattr(authority.subprocess, "run", _fake_run(seen=seen))
+
+    assert authority.probe_push_capability() is True
+    assert seen["kwargs"]["timeout"] == authority.GIT_TIMEOUT_SEC
+    assert "--dry-run" in seen["cmd"]
+
+
+def test_default_runner_reports_no_push_rights_on_timeout(monkeypatch):
+    """A stalled probe answers 'not an author' (fail-safe) instead of raising at the caller."""
+    stall = subprocess.TimeoutExpired(cmd=["git", "push"], timeout=authority.GIT_TIMEOUT_SEC)
+    monkeypatch.setattr(authority.subprocess, "run", _fake_run(raises=stall))
+
+    assert authority.probe_push_capability() is False
+
+
+def test_default_runner_reports_no_push_rights_when_git_is_absent(monkeypatch):
+    """The other way the subprocess never returns a code: git missing raises OSError."""
+    monkeypatch.setattr(authority.subprocess, "run", _fake_run(raises=FileNotFoundError("git")))
+
+    assert authority.probe_push_capability() is False
+
+
+def test_default_runner_answers_from_the_exit_code(monkeypatch):
+    """The timeout guard must not swallow the ordinary outcome it wraps."""
+    monkeypatch.setattr(authority.subprocess, "run", _fake_run(returncode=0))
+    assert authority.probe_push_capability() is True
+
+    monkeypatch.setattr(authority.subprocess, "run", _fake_run(returncode=128))
+    assert authority.probe_push_capability() is False
 
 
 def test_non_author_routes_to_channel_not_core():

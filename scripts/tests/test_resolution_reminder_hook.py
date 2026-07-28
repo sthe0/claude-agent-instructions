@@ -510,9 +510,9 @@ def test_direct_push_no_pr_hint_absent_for_non_core_repo(monkeypatch, capsys, tm
 
 def test_direct_push_no_pr_hint_absent_when_probe_times_out(monkeypatch, capsys, tmp_path):
     """Real is_author path (not stubbed): the git push --dry-run probe stalls
-    and its subprocess raises TimeoutExpired. _push_probe_runner must catch it
-    and return non-zero (no direct-push rights) so the helper degrades to no
-    hint and the turn is not hung — exit 0, line absent."""
+    and its subprocess raises TimeoutExpired. probe_push_capability's default
+    runner must catch it and return non-zero (no direct-push rights) so the
+    helper degrades to no hint and the turn is not hung — exit 0, line absent."""
     mod = _load_module()
     session_id = _arm_gate(mod, monkeypatch, tmp_path)
     _suppress_other_hints(mod, monkeypatch)
