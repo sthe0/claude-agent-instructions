@@ -94,4 +94,4 @@ scripts/README.md:111  # keep:enumerator-self-ref — documents this enumerator;
 skills/overcome-difficulty/SKILL.md:57  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 skills/overcome-difficulty/policy.md:57  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 skills/self-improvement/SKILL.md:76  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
-memory-global/leaves/system-knowledge/subagent-failure-rate-w29-w30.md:112  # keep:legacy-fallback — names the legacy ~/.claude/projects transcript root precisely to warn that it is frozen and yields zero rows; the generic form would erase the distinction the line exists to draw
+memory-global/leaves/system-knowledge/subagent-failure-rate-w29-w30.md:216  # keep:legacy-fallback — names the legacy ~/.claude/projects transcript root precisely to warn that it yields essentially zero rows for W29–W30; the generic form would erase the live-vs-legacy distinction the line exists to draw
