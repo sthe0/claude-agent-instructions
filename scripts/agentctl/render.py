@@ -62,6 +62,15 @@ def render_plan_md(doc: PlanDoc) -> str:
             )
         elif s.criterion.verify_command:
             lines.append(f"- **Verify command:** `{s.criterion.verify_command}`")
+            # Only rendered when the stage opts into the schema-24 lifecycle —
+            # a plan declaring no `verify_venue_at_final` renders byte-identical
+            # to before this field existed (V4's identity, made visible here too).
+            if s.criterion.verify_venue_at_final is not None:
+                lines.append(
+                    f"- **Verified in:** {s.criterion.verify_venue}; "
+                    f"re-verified at resolution in "
+                    f"{s.criterion.verify_venue_at_final}"
+                )
         if s.depends_on:
             lines.append(f"- **Depends on:** {', '.join(str(d) for d in sorted(s.depends_on))}")
         if s.principle is not None:

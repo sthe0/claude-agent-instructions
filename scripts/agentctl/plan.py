@@ -649,7 +649,10 @@ def check_venue_warnings(
     `cd` target agree (including a "repo_root"-venue check cd-ing to canon —
     the intentional post-landing confirmation), or when delivery_worktree is
     unset (no second venue exists to contradict) or repo_root is unset
-    (nothing to resolve relative `cd` targets against)."""
+    (nothing to resolve relative `cd` targets against). Also carries the
+    schema-24 survivability warning: a bare "delivery"-venue stage check in a
+    plan that asserts landing, which will refuse at verify-final once the
+    delivery venue is gone — see the check near the end of this function."""
     if not delivery_worktree or not repo_root:
         return []
     repo_root_p = Path(repo_root).resolve()
@@ -708,6 +711,38 @@ def check_venue_warnings(
     for fi, fc in enumerate(final_check or [], 1):
         label = fc.label or fc.command
         _warn_if_contradicts_venue(fc.command, fc.venue, f"final_check {fi} ({label!r})")
+
+    # Survivability warning (schema 24): a plan that asserts landing removes its
+    # own delivery venue as part of that landing, so a "delivery"-venue stage
+    # check with no `verify_venue_at_final` WILL refuse the moment verify-final
+    # re-runs it — the exact defect this schema-24 field exists to let a plan
+    # opt out of. Fires only when the plan also asserts landing somewhere
+    # (a `kind = "landed"` stage or final_check): with no landed assertion the
+    # delivery venue has no declared reason to disappear, so warning would be
+    # noise. Deliberately advisory, never a blocker — `--keep-branch` lets a
+    # delivery venue legitimately survive landing (this plan's own stage 5 is
+    # such a case), so the condition is a strong signal, not a proof.
+    asserts_landing = any(
+        s.criterion.verify_kind == CheckKind.LANDED.value for s in stages or []
+    ) or any(fc.kind == CheckKind.LANDED.value for fc in final_check or [])
+    if asserts_landing:
+        for s in stages or []:
+            crit = s.criterion
+            if (
+                crit.verify_command
+                and crit.verify_kind != CheckKind.LANDED.value
+                and crit.verify_venue == CheckVenue.DELIVERY.value
+                and crit.verify_venue_at_final is None
+            ):
+                warnings.append(
+                    f"stage {s.index} ({s.title!r}) declares venue = \"delivery\" "
+                    f"with no verify_venue_at_final, but this plan asserts landing "
+                    f"elsewhere — landing removes the delivery worktree, so this "
+                    f"check will REFUSE at verify-final unless the worktree happens "
+                    f"to survive (e.g. `land-branch.py --keep-branch`); declare "
+                    f"verify_venue_at_final = \"repo_root\" if the check should "
+                    f"re-verify against the landed artifact instead."
+                )
     return warnings
 
 
