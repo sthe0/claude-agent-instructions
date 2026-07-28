@@ -33,6 +33,12 @@ Modes:
                                                  re-derive SPEND_RATE_FACTOR
                                                  from the stored ledger
                                                  (read-only: no scan, no upsert)
+  policy-scorecard.py --calibrate-spend-rate --calibrate-until YYYY-MM-DD
+                                                 same, over the ledger as it
+                                                 stood on that date, so the
+                                                 figures a shipped comment
+                                                 quotes stay reproducible as
+                                                 the ledger grows
   policy-scorecard.py rate <session_id> <1-5> [--note "..."]
                                                  attach a manual quality rating
   policy-scorecard.py reprice [--dry-run]        re-price stored rows in place
@@ -44,6 +50,7 @@ import argparse
 import datetime as dt
 import importlib.util
 import json
+import math
 import re
 import shutil
 import subprocess
@@ -140,31 +147,44 @@ QUESTION_RE = re.compile(r"\?")
 SPEND_RATE_FLAG_MODE = "conjunction"  # "conjunction" | "rate_only"
 SPEND_RATE_BASELINE_WINDOWS = 4       # trailing windows whose median is the baseline
 SPEND_RATE_MIN_BASELINE_WINDOWS = 3   # fewer non-empty than this -> no flag, not a guess
-# Calibrated 2026-07-28 against this ledger's OWN history, not chosen by taste,
-# and re-derivable at any time with `--calibrate-spend-rate` (which prints every
-# figure below). Rolling a 7d window one day at a time over 1733 rows spanning
-# 2026-06-11→2026-07-28 and dividing each window's $/active-day by the median of
-# its trailing 4 windows gives 20 samples:
-#     q50 1.38  q75 2.22  q90 2.66  q95 2.95  max 3.14
-# Sorted, they fall into an ordinary regime topping out at 1.79 and an elevated
-# one starting at 2.19. The 1.79→2.19 step is the largest gap anywhere in the
-# distribution (0.40; next largest 0.31), so the threshold is placed in it: 2.0
-# separates the two regimes rather than cutting through either. It fires on 6/20
-# samples forming 2 distinct episodes, and the reference W29→W30 event (≈×2.7 on
-# $/active-day) clears it. Neighbouring values are worse for reasons the data
-# shows: 1.5 fires on 10/20 in 3 episodes, catching ordinary 1.51/1.58 windows;
-# 2.5 cuts through the middle of the sustained 07-23→07-27 episode (one window
-# dips to 2.19) and reports it as 3 separate ones.
-#   Honest limits. (1) 20 rolling samples over a 47-day span with 7-day windows
-#   overlap by 6/7, so this is ~6 independent points — a small-sample gap, and it
-#   should be re-derived as the ledger grows. (2) The elevated regime includes
-#   the very event this axis was built for, so the calibration set is not
-#   event-free; the gap argument survives that only because the ordinary regime
-#   is 14 of the 20 samples. (3) It is inseparable from the baseline depth above,
-#   and it is derived at the DEFAULT 7d window only — 4 trailing 14d windows need
-#   56 days, more than this ledger spans, so `--calibrate-spend-rate --days 14`
-#   correctly refuses rather than extrapolating.
-SPEND_RATE_FACTOR = 2.0
+# Calibrated against a NAMED ledger snapshot, because a number derived from a
+# growing file is not reproducible unless it says what it was derived from. The
+# whole block below is re-derived by
+#     policy-scorecard.py --calibrate-spend-rate --calibrate-until 2026-07-28
+# which is the pin: it drops the still-live current day, so the rows it keeps
+# are finished sessions that no later re-scan moves. At that snapshot — 1680
+# rows, 2026-06-11→2026-07-27, a 7d window rolled one day at a time over the
+# median of its trailing 4 windows, 19 samples:
+#     q50 1.24  q75 1.90  q90 2.08  q95 2.20  max 2.44
+# THE RULE IS A FIRING BUDGET, NOT A GAP. There is no gap here to place a
+# threshold in: the sorted samples run continuously from 0.65 to 2.44 with no
+# step wider than 0.27, so the "two regimes" the previous calibration described
+# were an artefact of the numerator defect fixed above (it inflated the rate by
+# a drifting 1.0-1.7×, which manufactured the separation). What survives is a
+# tolerated firing frequency: take the first 0.25 step at or above q90 → 2.25,
+# which fires on 1/19 samples in 1 episode.
+#   Why not the largest gap. Re-applying each rule to the ledger as it stood on
+#   each of the 8 preceding days (the stability block the reproducer prints) the
+#   gap rule's pick drops 2.22→1.67 on one day's data, holds, then returns to
+#   2.30 once the last day is in — 0.54 in a single step, non-monotone, as lone
+#   samples land either side of its widest gap. The quantile rule never
+#   moves more than one grid step (0.25) per day. Its FULL range over that sweep
+#   is wider, 0.75 against 0.54, and that is not a point against it: the move is
+#   monotone 1.50→2.25 as the late-July elevated episode enters the sample,
+#   which is a rule tracking new data rather than reacting to noise.
+#   Honest limits. (1) 19 rolling samples over 46 days with 7d windows overlap
+#   by 6/7, so this is ~6 independent points, and q90 of 19 samples sits 2
+#   samples from the top — re-derive as the ledger grows, and re-quote the pin
+#   when you do. (2) The sample includes the very event this axis was built for,
+#   so the calibration set is not event-free. (3) It is inseparable from the
+#   baseline depth above, and derived at the DEFAULT 7d window only — 4 trailing
+#   14d windows need 56 days, more than this ledger spans, so
+#   `--calibrate-spend-rate --days 14` correctly refuses rather than
+#   extrapolating.
+SPEND_RATE_FACTOR = 2.25
+SPEND_RATE_TARGET_QUANTILE = 0.90     # the selection rule's tolerated firing frequency
+SPEND_RATE_FACTOR_GRID = 0.25         # the rule rounds up to this, so it cannot report spurious precision
+SPEND_RATE_STABILITY_DAYS = 8         # end dates the calibrator re-applies each rule to
 # "$/prompt is not improving": current >= previous * (1 - this). A window whose
 # per-unit cost fell by more than 5% is getting cheaper per unit of work, which
 # is the benign-volume-growth shape the conjunction exists to stay silent on.
@@ -591,16 +611,72 @@ def _window_rows(rows: dict[str, dict], lo: dt.datetime, hi: dt.datetime) -> lis
     return out
 
 
-def _active_days(window: list[dict],
-                 lo: dt.datetime | None = None,
-                 hi: dt.datetime | None = None) -> int:
-    """Distinct calendar days on which at least one session was live.
+def _row_day_span(r: dict,
+                  lo: dt.datetime | None = None,
+                  hi: dt.datetime | None = None) -> tuple[list[dt.date], int]:
+    """(the row's calendar days that fall inside [lo, hi), its own total days).
 
     Built from `first_ts`/`last_ts` — the min/max of the session's own message
     timestamps — and never from the row's `date` field, which is only
     `last_ts.date()`: a session running 23:00→01:00 is one `date` but two days
     of activity, and one that ran all day is still one `date`. Daily sums built
     off `date` are lumpy for exactly that reason.
+
+    Both numbers come from here so the rate's denominator (`_active_days`, the
+    union of the first element) and its numerator (`_in_window_share`, the
+    ratio of the two) cannot describe different time extents — which is the
+    defect they did have.
+    """
+    try:
+        last = parse_ts(r.get("last_ts", ""))
+    except ValueError:
+        return [], 0
+    try:
+        first = parse_ts(r.get("first_ts", ""))
+    except ValueError:
+        first = last
+    if first > last:
+        first = last
+    total = (last.date() - first.date()).days + 1
+    if lo is not None and first < lo:
+        first = lo
+    if hi is not None and last >= hi:
+        last = hi - dt.timedelta(microseconds=1)
+    days = []
+    d = first.date()
+    while d <= last.date():
+        days.append(d)
+        d += dt.timedelta(days=1)
+    return days, total
+
+
+def _row_tokens(r: dict) -> int:
+    """Every token a session used, over all models and usage fields."""
+    stored = r.get("model_tokens", {})
+    return sum(stored.get(k, {}).get(short, 0)
+               for k in MODEL_KEYS for short, _ in USAGE_FIELDS)
+
+
+def _in_window_share(r: dict,
+                     lo: dt.datetime | None = None,
+                     hi: dt.datetime | None = None) -> float:
+    """How much of a row's cost and tokens belongs to [lo, hi), as a fraction.
+
+    APPROXIMATE, and this is the only approximation in the rate: a session's
+    spend is assumed uniform across its own calendar days, because the ledger
+    stores first_ts/last_ts and a single total — no per-day breakdown. It is
+    EXACT for any session lying wholly inside the window (share 1.0), which is
+    the overwhelming majority, and the error is bounded by the spend of the one
+    session straddling each window edge.
+    """
+    in_window, total = _row_day_span(r, lo, hi)
+    return len(in_window) / total if total else 0.0
+
+
+def _active_days(window: list[dict],
+                 lo: dt.datetime | None = None,
+                 hi: dt.datetime | None = None) -> int:
+    """Distinct calendar days on which at least one session was live.
 
     Days are clamped to [lo, hi) when the window is known, so a session that
     began before the window contributes only its in-window days. That clamp is
@@ -609,24 +685,7 @@ def _active_days(window: list[dict],
     """
     days: set[dt.date] = set()
     for r in window:
-        try:
-            last = parse_ts(r.get("last_ts", ""))
-        except ValueError:
-            continue
-        try:
-            first = parse_ts(r.get("first_ts", ""))
-        except ValueError:
-            first = last
-        if first > last:
-            first = last
-        if lo is not None and first < lo:
-            first = lo
-        if hi is not None and last >= hi:
-            last = hi - dt.timedelta(microseconds=1)
-        d = first.date()
-        while d <= last.date():
-            days.add(d)
-            d += dt.timedelta(days=1)
+        days.update(_row_day_span(r, lo, hi)[0])
     return len(days)
 
 
@@ -685,19 +744,30 @@ def _aggregate(window: list[dict],
             for short, _ in USAGE_FIELDS:
                 tok[k][short] += bucket.get(short, 0)
     a["model_tokens"] = tok
-    # Spend rate. Both ratios divide over the SAME population — the rows of this
-    # window — so numerator and denominator describe the same thing: `cost_usd`
-    # and `prompts` are summed above from those rows, and `active_days` counts
-    # the days those same rows were live. (Stated because the neighbouring
-    # `subagent_failures` counter divides two different populations and was
-    # wrong for six weeks — see system-knowledge/subagent-failure-rate-w29-w30.)
     a["active_days"] = _active_days(window, lo, hi)
     a["window_days"] = (_window_span_days(lo, hi)
                         if lo is not None and hi is not None else 0)
     a["tokens_total"] = sum(tok[k][short] for k in MODEL_KEYS for short, _ in USAGE_FIELDS)
-    a["cost_per_active_day"] = a["cost_usd"] / a["active_days"] if a["active_days"] else 0.0
-    a["tokens_per_active_day"] = a["tokens_total"] / a["active_days"] if a["active_days"] else 0.0
+    # Spend rate. Its numerator covers exactly the time extent its denominator
+    # does — the days of [lo, hi) — so spend a session earned BEFORE the window
+    # opened is left out of a window it did not happen in. `cost_usd` above is
+    # the whole-session sum every other metric here is built on and keeps that
+    # meaning; only the rate uses the apportioned one. Without this the two
+    # sides measured different extents and the 7d rate on this ledger read 1.3×
+    # high on average and 1.7× at worst — a drifting bias, so it did not cancel
+    # in the ratio against the baseline. (The neighbouring `subagent_failures`
+    # counter had the same shape of defect and went unnoticed for six weeks —
+    # see system-knowledge/subagent-failure-rate-w29-w30.)
+    shares = [(r, _in_window_share(r, lo, hi)) for r in window]
+    a["cost_usd_in_window"] = sum(r["cost_usd"] * s for r, s in shares)
+    a["tokens_in_window"] = sum(_row_tokens(r) * s for r, s in shares)
+    a["cost_per_active_day"] = (a["cost_usd_in_window"] / a["active_days"]
+                                if a["active_days"] else 0.0)
+    a["tokens_per_active_day"] = (a["tokens_in_window"] / a["active_days"]
+                                  if a["active_days"] else 0.0)
     a["cost_per_prompt"] = a["cost_usd"] / a["prompts"] if a["prompts"] else 0.0
+    assert not a["window_days"] or a["active_days"] <= a["window_days"], (
+        f"active_days {a['active_days']} > window span {a['window_days']}")
     return a
 
 
@@ -789,7 +859,10 @@ def _spend_rate_baseline(rows: dict[str, dict], now: dt.datetime, days: int) -> 
         hi = now - dt.timedelta(days=days * i)
         lo = now - dt.timedelta(days=days * (i + 1))
         agg = _aggregate(_window_rows(rows, lo, hi), lo, hi)
-        if agg["active_days"] and agg["cost_usd"] > 0:
+        # The apportioned numerator, not the whole-session sum: a trailing
+        # window whose only rows are straddlers carrying no in-window days has
+        # a rate of 0, and a 0 must not enter a median of rates.
+        if agg["active_days"] and agg["cost_usd_in_window"] > 0:
             rates.append(agg["cost_per_active_day"])
     if len(rates) < SPEND_RATE_MIN_BASELINE_WINDOWS:
         return None
@@ -975,6 +1048,11 @@ def scorecard(rows: dict[str, dict], days: int, project: str | None) -> str:
              f"·  **{cur['tokens_per_active_day']/1e6:,.1f}M tokens per active day**  "
              f"(over **{cur['active_days']}** active day(s) of {cur['window_days']})  "
              f"{_arrow(cur['cost_per_active_day'], prev['cost_per_active_day'])}")
+    # Otherwise the rate and the Cost line above cannot be reconciled by eye:
+    # sessions that started before the window keep their whole cost there.
+    if abs(cur["cost_usd_in_window"] - cur["cost_usd"]) > 0.01 * max(cur["cost_usd"], 1e-9):
+        L.append(f"  · rate numerator **${cur['cost_usd_in_window']:,.2f}** — the rest of the "
+                 f"**${cur['cost_usd']:,.2f}** was earned before this window opened")
     if spend_baseline:
         L.append(f"  · trailing {SPEND_RATE_BASELINE_WINDOWS}-window baseline "
                  f"**${spend_baseline:,.2f}/active day**  ·  "
@@ -1054,12 +1132,10 @@ def scorecard(rows: dict[str, dict], days: int, project: str | None) -> str:
     return "\n".join(L)
 
 
-def calibrate_spend_rate(rows: dict[str, dict], days: int) -> str:
-    """Re-derive SPEND_RATE_FACTOR from the ledger's own history (read-only).
-
-    Rolls the window one day at a time across the whole ledger and reports the
-    distribution of rate / trailing-baseline, so the constant's comment can be
-    checked rather than believed."""
+def _rolling_ratio_samples(rows: dict[str, dict],
+                           days: int) -> tuple[list[tuple[dt.date, float, float, float]],
+                                               dt.datetime | None, dt.datetime | None]:
+    """(window end, $/active-day, baseline, ratio) for every rolling window."""
     stamps = []
     for r in rows.values():
         try:
@@ -1067,7 +1143,7 @@ def calibrate_spend_rate(rows: dict[str, dict], days: int) -> str:
         except ValueError:
             continue
     if not stamps:
-        return "calibrate: ledger has no dated rows."
+        return [], None, None
     lo_all, hi_all = min(stamps), max(stamps)
     samples: list[tuple[dt.date, float, float, float]] = []
     now = lo_all + dt.timedelta(days=days * SPEND_RATE_BASELINE_WINDOWS)
@@ -1082,6 +1158,65 @@ def calibrate_spend_rate(rows: dict[str, dict], days: int) -> str:
             rate = cur["cost_per_active_day"]
             samples.append((now.date(), rate, base, rate / base))
         now += dt.timedelta(days=1)
+    return samples, lo_all, hi_all
+
+
+def _quantile(sorted_vals: list[float], p: float) -> float:
+    n = len(sorted_vals)
+    k = (n - 1) * p
+    f, c = int(k), min(int(k) + 1, n - 1)
+    return sorted_vals[f] + (sorted_vals[c] - sorted_vals[f]) * (k - f)
+
+
+def _factor_by_quantile(ratios: list[float]) -> float:
+    """The SHIPPED selection rule: the first grid step at or above the target
+    quantile of the ratio distribution. Calibrating to a tolerated firing
+    frequency rather than to a gap in the histogram, because this distribution
+    has no gap to find — see the SPEND_RATE_FACTOR comment."""
+    return math.ceil(_quantile(sorted(ratios), SPEND_RATE_TARGET_QUANTILE)
+                     / SPEND_RATE_FACTOR_GRID) * SPEND_RATE_FACTOR_GRID
+
+
+def _widest_step(sorted_vals: list[float]) -> tuple[float, float]:
+    """The adjacent pair furthest apart; a lone sample is its own pair."""
+    return max(zip(sorted_vals, sorted_vals[1:]),
+               key=lambda p: p[1] - p[0],
+               default=(sorted_vals[0], sorted_vals[0]))
+
+
+def _factor_by_largest_gap(ratios: list[float]) -> float:
+    """The REJECTED rule, kept because rejecting it is a claim the reproducer
+    has to be able to substantiate: it picks the midpoint of the widest gap
+    between consecutive sorted samples, and the stability block below shows how
+    far that midpoint travels on one day of extra data."""
+    s = sorted(ratios)
+    lo, hi = _widest_step(s)
+    return (lo + hi) / 2
+
+
+def _truncated(rows: dict[str, dict], before: dt.date) -> dict[str, dict]:
+    """The ledger as it stood before `before` — the input to a stability sweep,
+    and to `--calibrate-until`, which is how a figure quoted in a comment stays
+    reproducible against a ledger that has grown since."""
+    out = {}
+    for sid, r in rows.items():
+        try:
+            if parse_ts(r.get("last_ts", "")).date() < before:
+                out[sid] = r
+        except ValueError:
+            continue
+    return out
+
+
+def calibrate_spend_rate(rows: dict[str, dict], days: int) -> str:
+    """Re-derive SPEND_RATE_FACTOR from the ledger's own history (read-only).
+
+    Rolls the window one day at a time across the whole ledger and reports the
+    distribution of rate / trailing-baseline, so the constant's comment can be
+    checked rather than believed."""
+    samples, lo_all, hi_all = _rolling_ratio_samples(rows, days)
+    if lo_all is None:
+        return "calibrate: ledger has no dated rows."
     if not samples:
         return (f"calibrate: ledger spans {(hi_all - lo_all).days}d — too short for "
                 f"{SPEND_RATE_BASELINE_WINDOWS} baseline windows of {days}d.")
@@ -1089,9 +1224,7 @@ def calibrate_spend_rate(rows: dict[str, dict], days: int) -> str:
     n = len(ratios)
 
     def q(p: float) -> float:
-        k = (n - 1) * p
-        f, c = int(k), min(int(k) + 1, n - 1)
-        return ratios[f] + (ratios[c] - ratios[f]) * (k - f)
+        return _quantile(ratios, p)
 
     out = [f"spend-rate calibration — window {days}d, baseline median of trailing "
            f"{SPEND_RATE_BASELINE_WINDOWS} windows (min {SPEND_RATE_MIN_BASELINE_WINDOWS} non-empty)",
@@ -1107,7 +1240,7 @@ def calibrate_spend_rate(rows: dict[str, dict], days: int) -> str:
     # Consecutive rolling windows overlap by days-1, so one real episode shows up
     # as a run of adjacent firing dates. Counting runs, not samples, is the only
     # honest answer to "how often would this have fired".
-    for factor in (1.5, 2.0, 2.5, 3.0, 3.5, 4.0):
+    for factor in sorted({1.5, 2.0, 2.5, 3.0, 3.5, 4.0, SPEND_RATE_FACTOR}):
         firing = [s[0] for s in samples if s[3] > factor]
         episodes = sum(1 for i, d in enumerate(firing)
                        if i == 0 or (d - firing[i - 1]).days > 1)
@@ -1116,6 +1249,43 @@ def calibrate_spend_rate(rows: dict[str, dict], days: int) -> str:
                    f"{episodes} distinct episode(s){mark}")
     out.append("Rolling samples overlap, so n over-states the independent evidence "
                f"(~{max(1, (hi_all - lo_all).days // days)} independent points here).")
+    out.append("")
+    out.append(f"selection rule: first {SPEND_RATE_FACTOR_GRID} step at or above "
+               f"q{int(SPEND_RATE_TARGET_QUANTILE * 100)} "
+               f"({q(SPEND_RATE_TARGET_QUANTILE):.2f}) -> "
+               f"{_factor_by_quantile(ratios):.2f}   [shipped {SPEND_RATE_FACTOR}]")
+    gap_lo, gap_hi = _widest_step(ratios)
+    out.append(f"  range {ratios[0]:.2f}-{ratios[-1]:.2f}; widest step between adjacent "
+               f"samples {gap_hi - gap_lo:.2f} ({gap_lo:.2f}->{gap_hi:.2f}), which the "
+               f"largest-gap rule would read as a regime boundary at "
+               f"{_factor_by_largest_gap(ratios):.2f}")
+    out.append("stability — each rule re-applied to the ledger as it stood BEFORE that date:")
+    out.append(f"{'ledger before':>14}{'n':>5}{'quantile rule':>15}{'largest-gap rule':>18}")
+    picks_q, picks_g = [], []
+    for back in range(SPEND_RATE_STABILITY_DAYS, 0, -1):
+        cutoff = hi_all.date() - dt.timedelta(days=back - 1)
+        older, _, _ = _rolling_ratio_samples(_truncated(rows, cutoff), days)
+        if len(older) < 2:
+            continue
+        r_older = [s[3] for s in older]
+        pq, pg = _factor_by_quantile(r_older), _factor_by_largest_gap(r_older)
+        picks_q.append(pq)
+        picks_g.append(pg)
+        out.append(f"{str(cutoff):>14}{len(older):>5}{pq:>15.2f}{pg:>18.2f}")
+
+    def _biggest_step(picks: list[float]) -> float:
+        return max((abs(b - a) for a, b in zip(picks, picks[1:])), default=0.0)
+
+    if picks_q:
+        # The statistic is the biggest ONE-DAY move, not the range. A rule that
+        # tracks genuinely new data will drift across a sweep and should; the
+        # failure mode is a rule that lurches — the gap rule drops 2.22->1.67 and
+        # climbs back to 2.30 as single samples land either side of its widest
+        # gap, while the quantile rule never moves more than one grid step.
+        out.append(f"{'largest 1-day move':>19}{_biggest_step(picks_q):>10.2f}"
+                   f"{_biggest_step(picks_g):>18.2f}")
+        out.append(f"{'full range':>19}{max(picks_q) - min(picks_q):>10.2f}"
+                   f"{max(picks_g) - min(picks_g):>18.2f}")
     return "\n".join(out)
 
 
@@ -1174,6 +1344,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--calibrate-spend-rate", action="store_true",
                    help="re-derive SPEND_RATE_FACTOR from the stored ledger and exit "
                         "(read-only: no scan, no upsert)")
+    p.add_argument("--calibrate-until", metavar="YYYY-MM-DD",
+                   help="calibrate against the ledger as it stood before this date, so the "
+                        "snapshot a shipped comment names stays reproducible as the ledger grows")
     a = p.parse_args(argv)
 
     if a.ledger:
@@ -1184,7 +1357,16 @@ def main(argv: list[str] | None = None) -> int:
         LEDGER = a.ledger
 
     if a.calibrate_spend_rate:
-        print(calibrate_spend_rate(load_ledger(), a.days))
+        ledger_rows = load_ledger()
+        if a.calibrate_until:
+            try:
+                cutoff = dt.date.fromisoformat(a.calibrate_until)
+            except ValueError:
+                print(f"calibrate: --calibrate-until wants YYYY-MM-DD, got "
+                      f"{a.calibrate_until!r}", file=sys.stderr)
+                return 1
+            ledger_rows = _truncated(ledger_rows, cutoff)
+        print(calibrate_spend_rate(ledger_rows, a.days))
         return 0
 
     rows, scanned, skipped = upsert(a.days, a.project)

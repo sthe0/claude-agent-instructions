@@ -173,12 +173,84 @@ def test_aggregate_reports_rate_over_the_same_population(ps):
     assert agg["cost_per_prompt"] == 4.0
 
 
-# ----------------------------------------------- 2. the two opposed flag tests
+# ------------------------------ 2. numerator and denominator share one extent
+
+def test_rate_numerator_excludes_spend_earned_before_the_window(ps):
+    """The MF-1 defect. `active_days` is clamped to the window, so a session
+    that began before `lo` contributes only its in-window days to the
+    DENOMINATOR — but the whole of its `cost_usd` used to land in the
+    NUMERATOR. Same rows, two different time extents: the rate then reports
+    weeks of spending as if it had all happened inside a 7-day window.
+
+    Here a 22-day session carrying $1000 has 2 of its days inside the window,
+    so $90.91 of it belongs to this window's rate — not the full $1000.
+    """
+    lo, hi = NOW - dt.timedelta(days=7), NOW
+    straddler = _row("straddler", _at(27), _at(6), cost=1000.0, prompts=50,
+                     tokens=22_000_000)
+    inside = _row("inside", _at(1), _at(1), cost=100.0, prompts=10,
+                  tokens=1_000_000)
+
+    agg = ps._aggregate([straddler, inside], lo, hi)
+
+    assert agg["active_days"] == 3            # 07-21, 07-22 from the straddler; 07-27
+    assert agg["cost_per_active_day"] == pytest.approx((1000.0 * 2 / 22 + 100.0) / 3)
+    assert agg["tokens_per_active_day"] == pytest.approx((22_000_000 * 2 / 22
+                                                          + 1_000_000) / 3)
+    assert agg["cost_usd"] == 1100.0          # whole-session sum: unchanged
+    assert agg["cost_usd_in_window"] == pytest.approx(1000.0 * 2 / 22 + 100.0)
+
+
+def test_a_session_wholly_inside_the_window_is_apportioned_in_full(ps):
+    """Apportionment must be a no-op for the ordinary case, or every rate in
+    the ledger's history would shift."""
+    lo, hi = NOW - dt.timedelta(days=7), NOW
+    rows = [_row("a", _at(3), _at(3), cost=10.0, prompts=4, tokens=1_000_000),
+            _row("b", _at(2, hour=23), _at(1, hour=1), cost=30.0, prompts=6)]
+
+    agg = ps._aggregate(rows, lo, hi)
+
+    assert agg["cost_per_active_day"] == 40.0 / agg["active_days"]
+    assert agg["cost_usd_in_window"] == agg["cost_usd"] == 40.0
+
+
+def test_in_window_cost_never_exceeds_the_whole_session_cost(ps):
+    """The share is a fraction of the row's own days, so it cannot manufacture
+    spend. Swept over every start offset that straddles the window edge."""
+    lo, hi = NOW - dt.timedelta(days=7), NOW
+
+    for start in range(0, 30):
+        row = _row(f"s{start}", _at(start), _at(1), cost=100.0, prompts=1)
+        agg = ps._aggregate([row], lo, hi)
+
+        assert 0.0 < agg["cost_usd_in_window"] <= agg["cost_usd"] == 100.0
+
+
+def test_the_further_back_a_session_began_the_less_of_it_is_this_window(ps):
+    """The same $600 spread over more days is a lower daily burn, so the share
+    landing inside a fixed window must FALL as `first_ts` is dragged earlier.
+    Under the defect it was constant: the numerator ignored `first_ts`
+    entirely, and a month-long session's whole cost counted as this week's."""
+    lo, hi = NOW - dt.timedelta(days=7), NOW
+    # last_ts pinned, so the in-window days (and the denominator) never change.
+    rates = [ps._aggregate([_row(f"s{start}", _at(start), _at(6), cost=600.0,
+                                 prompts=1)], lo, hi)["cost_per_active_day"]
+             for start in (8, 15, 30, 60)]
+
+    assert rates == sorted(rates, reverse=True)
+    assert len(set(rates)) == len(rates)
+
+
+# ----------------------------------------------- 3. the two opposed flag tests
 #
 # The measured W29→W30 shape, from the plan's own figures: 452M tok / $456 over
 # 7 active days → 912M / $865 over 5 active days, with $/prompt FALLING
 # 3.38 → 2.59. Prompt counts are chosen so the fixture's own cost/prompts
 # reproduces those two $/prompt figures exactly rather than asserting them.
+# These are pre-apportionment figures — they were measured before the rate's
+# numerator was clamped to the window. They are kept verbatim because what they
+# exercise is the flag PREDICATE over a fixed pair of aggregates; the tests
+# below pass the aggregates in directly and never re-derive them from a ledger.
 W29 = dict(cost=456.0, tokens=452_000_000, active_days=7, prompts=135)   # $3.378/prompt
 W30 = dict(cost=865.0, tokens=912_000_000, active_days=5, prompts=334)   # $2.590/prompt
 
@@ -266,7 +338,7 @@ def test_rate_below_the_factor_never_fires(ps):
     assert ps._spend_rate_flag(cur, prev, prev["cost_per_active_day"]) is None
 
 
-# ------------------------------------------------------------ 3. the baseline
+# ------------------------------------------------------------ 4. the baseline
 
 def _ledger(ps, rows: list[dict]) -> dict[str, dict]:
     ps.LEDGER.parent.mkdir(parents=True, exist_ok=True)
@@ -318,7 +390,7 @@ def test_flag_absent_without_a_baseline(ps):
     assert ps._spend_rate_flag(cur, prev, None) is None
 
 
-# ------------------------------------------------------------- 4. the render
+# ------------------------------------------------------------- 5. the render
 
 def test_scorecard_renders_the_rate_unconditionally(ps):
     """The figure is informational and always shown; only the flag is gated."""
@@ -343,7 +415,7 @@ def test_existing_flags_unaffected_by_the_new_signature(ps):
     assert ps._flags(_neutral(), _neutral(), None, None) == []
 
 
-# --------------------------------------------------------- 5. the calibrator
+# --------------------------------------------------------- 6. the calibrator
 
 def test_calibrate_reports_insufficient_history_honestly(ps):
     rows = _ledger(ps, [_row("a", _at(2), _at(2), cost=1.0, prompts=1)])
@@ -385,3 +457,83 @@ def test_calibrate_counts_episodes_not_overlapping_samples(ps):
     n_samples = int(line.split()[2].split("/")[0])
     n_episodes = int(line.split("in")[1].split()[0])
     assert n_samples > n_episodes == 1
+
+
+# ------------------------------------------- 7. the selection rule (MF-2)
+
+def test_the_shipped_factor_is_what_the_rule_picks(ps):
+    """The constant is derived, not chosen: whatever `_factor_by_quantile`
+    returns for the snapshot named in its comment is what ships. This guards
+    the rule and the constant against drifting apart in either direction."""
+    # The pinned snapshot's own distribution, from --calibrate-until 2026-07-28.
+    pinned = [0.65, 0.71, 0.78, 0.80, 0.85, 0.87, 0.88, 0.92, 1.09, 1.24,
+              1.29, 1.49, 1.51, 1.84, 1.96, 1.99, 2.06, 2.17, 2.44]
+
+    assert ps._factor_by_quantile(pinned) == ps.SPEND_RATE_FACTOR
+
+
+def test_the_rule_rounds_up_onto_the_grid(ps):
+    """Rounding UP, never down: rounding to nearest would put the threshold
+    below the quantile it was calibrated to and raise the firing rate above the
+    budget the rule exists to hold."""
+    ratios = [1.0] * 9 + [2.01]
+
+    picked = ps._factor_by_quantile(ratios)
+
+    assert picked >= ps._quantile(sorted(ratios), ps.SPEND_RATE_TARGET_QUANTILE)
+    assert picked % ps.SPEND_RATE_FACTOR_GRID == pytest.approx(0.0)
+
+
+def test_both_rules_survive_a_single_sample(ps):
+    """A ledger just long enough for one rolling window has no adjacent pair to
+    step between. Both rules must still answer, because the calibrator prints
+    both on every run and a crash there is a crash of the reproducer the
+    SPEND_RATE_FACTOR comment tells the reader to run."""
+    assert ps._factor_by_largest_gap([1.7]) == pytest.approx(1.7)
+    assert ps._factor_by_quantile([1.7]) == pytest.approx(1.75)
+
+
+def test_the_quantile_rule_moves_at_most_one_grid_step_per_day(ps):
+    """MF-2's real finding: 'largest gap' swung by more than half a point on one
+    day of extra data. The shipped rule is a quantile, which by construction
+    cannot move more than one grid step when a single sample is appended."""
+    base = [0.6, 0.9, 1.1, 1.3, 1.5, 1.7, 1.9, 2.0, 2.1, 2.2]
+
+    for extra in (0.1, 1.0, 2.5, 9.9):
+        before = ps._factor_by_quantile(base)
+        after = ps._factor_by_quantile(base + [extra])
+
+        assert abs(after - before) <= ps.SPEND_RATE_FACTOR_GRID + 1e-9
+
+
+def test_calibrate_prints_the_stability_evidence_and_the_rule(ps):
+    """The comment claims a rule, a quantile and a stability comparison. A
+    reproducer that does not print them leaves the claims uncheckable — which
+    is the defect this section exists to close."""
+    rows = _ledger(ps, [
+        _row(f"s{i}", _at(i), _at(i), cost=10.0 + (i % 5) * 20, prompts=2)
+        for i in range(1, 45)
+    ])
+
+    out = ps.calibrate_spend_rate(rows, 7)
+
+    assert "selection rule:" in out
+    assert f"q{int(ps.SPEND_RATE_TARGET_QUANTILE * 100)}" in out
+    assert "widest step between adjacent samples" in out
+    assert "largest-gap rule" in out
+    assert "largest 1-day move" in out
+
+
+def test_calibrate_until_truncates_to_a_reproducible_snapshot(ps):
+    """The pin. The same cutoff must give the same figures however much the
+    ledger has grown past it — that is what makes a quoted number checkable."""
+    old = [_row(f"s{i}", _at(i), _at(i), cost=10.0 + (i % 5) * 20, prompts=2)
+           for i in range(1, 45)]
+    cutoff = dt.date.fromisoformat(_at(1)[:10])
+
+    before = ps.calibrate_spend_rate(ps._truncated(_ledger(ps, old), cutoff), 7)
+    grown = old + [_row("late", _at(0.5), _at(0.5), cost=9_999.0, prompts=1)]
+    after = ps.calibrate_spend_rate(ps._truncated(_ledger(ps, grown), cutoff), 7)
+
+    assert before == after
+    assert ps._truncated(_ledger(ps, grown), cutoff).keys() < set(r["session_id"] for r in grown)
