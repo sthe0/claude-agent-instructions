@@ -1018,13 +1018,14 @@ def _placeable_ts(raw: str) -> "dt.datetime | None":
     A row's ts is unusable in two ways and only one of them raises at the parse:
     a malformed string raises ValueError here, but a tz-NAIVE one parses fine and
     raises TypeError later — at the first comparison against an aware window edge,
-    a line no `except ValueError` around the parse can reach. Naive rows do occur
-    (tests/test_usage_digest_emit.py writes one into a spawn-ledger fixture). To a
-    caller both are the same event: this row cannot be located in time, so it
-    cannot be counted in a window."""
+    a line no `except` around the parse can reach, which is why the naive case is
+    handled by the return below rather than by the clause above. Naive rows do
+    occur (tests/test_usage_digest_emit.py writes one into a spawn-ledger
+    fixture). To a caller both are the same event: this row cannot be located in
+    time, so it cannot be counted in a window."""
     try:
         ts = parse_ts(raw)
-    except (ValueError, TypeError):
+    except ValueError:
         return None
     return ts if ts.tzinfo is not None else None
 
