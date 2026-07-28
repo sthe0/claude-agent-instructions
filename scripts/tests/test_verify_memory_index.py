@@ -3,12 +3,19 @@
 Builds a minimal memory-global/ tree under tmp_path and checks both invariants:
 every leaf is referenced from some index, and every leaf carries a valid
 top-level `type:` frontmatter key (not a nested metadata.type).
+
+The trees that are not `git init`-ed exercise the rglob fallback (a root that
+is not a git work tree); the `_git_tree` ones exercise the git-index
+enumeration, where an untracked draft is out of scope and a staged one is not.
 """
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 _SCRIPTS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_SCRIPTS))
@@ -39,6 +46,22 @@ def _make_tree(tmp: Path) -> Path:
     (tmp / "memory-global" / "MEMORY.md").write_text(
         "# Global memory\n\n- [Alpha](leaves/alpha.md) — a\n- [Beta](leaves/beta.md) — b\n"
     )
+    return leaves
+
+
+def _git(tmp: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", "-C", str(tmp), "-c", "user.name=t", "-c", "user.email=t@example.test", *args],
+        check=True, capture_output=True,
+    )
+
+
+def _git_tree(tmp: Path) -> Path:
+    """A _make_tree whose leaves and index are tracked in a fresh git repo."""
+    leaves = _make_tree(tmp)
+    _git(tmp, "init", "-q")
+    _git(tmp, "add", "-A")
+    _git(tmp, "commit", "-qm", "base")
     return leaves
 
 
@@ -96,6 +119,36 @@ def test_missing_temporal_dates_returns_1(tmp_path):
     (tmp_path / "memory-global" / "MEMORY.md").write_text(
         "# Global memory\n\n- [Alpha](leaves/alpha.md) — a\n"
         "- [Beta](leaves/beta.md) — b\n")
+    assert main(["--root", str(tmp_path)]) == 1
+
+
+def test_tracked_unindexed_leaf_returns_1(tmp_path):
+    leaves = _git_tree(tmp_path)
+    (leaves / "orphan.md").write_text(_leaf())
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-qm", "orphan")
+    assert main(["--root", str(tmp_path)]) == 1
+
+
+def test_untracked_leaf_is_out_of_scope(tmp_path):
+    leaves = _git_tree(tmp_path)
+    # Never git-added: a local draft is not repo content the gate may judge.
+    (leaves / "orphan.md").write_text(_leaf())
+    assert main(["--root", str(tmp_path)]) == 0
+
+
+def test_staged_unindexed_leaf_returns_1(tmp_path):
+    leaves = _git_tree(tmp_path)
+    (leaves / "orphan.md").write_text(_leaf())
+    _git(tmp_path, "add", "memory-global/leaves/orphan.md")
+    assert main(["--root", str(tmp_path)]) == 1
+
+
+def test_non_git_root_falls_back_to_rglob(tmp_path):
+    leaves = _make_tree(tmp_path)
+    if _mod._tracked_leaf_files(tmp_path) is not None:
+        pytest.skip("tmp_path is inside a git work tree")
+    (leaves / "orphan.md").write_text(_leaf())
     assert main(["--root", str(tmp_path)]) == 1
 
 

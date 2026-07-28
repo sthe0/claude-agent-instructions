@@ -115,7 +115,7 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 | [verify-language.py](verify-language.py) | Enforce English-by-default policy with adjacent-exception rule |
 | [verify-layout-contract.sh](verify-layout-contract.sh) | Compare tree to the layout in `skills/self-improvement/policy.md` |
 | [verify-leaf-structure.py](verify-leaf-structure.py) | Verify non-experience leaves: `schema:leaf/v1` enforces 3 sections; grandfathered SK leaves get the difficulty-lead baseline |
-| [verify-memory-index.py](verify-memory-index.py) | Verify every memory-global leaf is referenced from an index and carries a valid top-level `type:` frontmatter key |
+| [verify-memory-index.py](verify-memory-index.py) | Verify every git-tracked memory-global leaf is referenced from an index and carries a valid top-level `type:` frontmatter key |
 | [verify-no-conflict-markers.py](verify-no-conflict-markers.py) | Reject committed git merge-conflict markers (`<<<<<<<` / `=======` / `>>>>>>>` / `\|\|\|\|\|\|\|`) in tracked text files; `--staged` / `--hook` modes |
 | [verify-onboarding-entrypoint.py](verify-onboarding-entrypoint.py) | Forbid bare `claude` as a fenced-block launch command in onboarding docs (README.md, docs/operations/setup.md) — the system entry point is `claude-agent`/`claude-task`/`claude-<profile>`; `--staged` mode |
 | [verify-readme.py](verify-readme.py) | Verify the README inventory sentinels (scripts / flat skills / specializations) match the filesystem; `--fix` reconciles, `--root` for project repos |

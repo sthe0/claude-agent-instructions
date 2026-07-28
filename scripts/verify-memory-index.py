@@ -4,11 +4,13 @@
 Two mechanical invariants that prose alone cannot keep true (see CLAUDE.md
 § Memory — "add a one-line pointer here"):
 
-  1. Every leaf file under memory-global/leaves/ (recursively, excluding the
-     MEMORY.md index files themselves) is referenced from at least one index:
-     the main memory-global/MEMORY.md or a sub-index MEMORY.md. The reverse
-     direction (index entry resolves to a file) is already covered by
-     verify-cross-refs.py.
+  1. Every GIT-TRACKED leaf file under memory-global/leaves/ (recursively,
+     excluding the MEMORY.md index files themselves) is referenced from at
+     least one index: the main memory-global/MEMORY.md or a sub-index
+     MEMORY.md. An untracked draft on disk is out of scope until it is
+     git-added — the index reflects the git index, so a staged leaf is
+     already enforced at commit time. The reverse direction (index entry
+     resolves to a file) is already covered by verify-cross-refs.py.
 
   2. Every leaf carries a top-level `type:` frontmatter key (one of
      user / feedback / project / reference) — not buried inside a nested
@@ -22,6 +24,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -91,7 +94,36 @@ def _date_violations(rel: str, fm_body: str) -> list[str]:
     return issues
 
 
-def _leaf_files(leaves: Path) -> list[Path]:
+def _tracked_leaf_files(root: Path) -> list[Path] | None:
+    """Leaf paths from the git index, or None if `root` is not a git work tree."""
+    try:
+        completed = subprocess.run(
+            # -z: NUL-separated and unquoted, so a non-ASCII filename is not
+            # silently skipped by core.quotePath escaping.
+            ["git", "-C", str(root), "ls-files", "-z", "--", LEAVES_REL],
+            capture_output=True, text=True,
+        )
+    except OSError:
+        return None
+    if completed.returncode != 0:
+        return None
+    files: list[Path] = []
+    for rel in completed.stdout.split("\0"):
+        if not rel.endswith(".md"):
+            continue
+        path = root / rel
+        # A tracked leaf may be deleted on disk but not yet staged for removal;
+        # rglob would not yield it either, so skip rather than crash on read.
+        if path.name == "MEMORY.md" or not path.is_file():
+            continue
+        files.append(path)
+    return files
+
+
+def _leaf_files(leaves: Path, root: Path) -> list[Path]:
+    tracked = _tracked_leaf_files(root)
+    if tracked is not None:
+        return tracked
     return [p for p in leaves.rglob("*.md") if p.name != "MEMORY.md"]
 
 
@@ -150,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     failures: list[str] = []
-    leaf_files = _leaf_files(leaves)
+    leaf_files = _leaf_files(leaves, root)
     referenced = _referenced_leaves(_index_files(leaves, root))
 
     for leaf in sorted(leaf_files):
