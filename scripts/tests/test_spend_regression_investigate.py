@@ -250,6 +250,27 @@ def test_count_driver_comma_grouped_and_usd_driver_carries_dollar_sign(sri):
     assert "$1.00→$21.00" in report
 
 
+def test_report_header_signs_a_negative_cost_delta(sri):
+    # spend FELL between the two windows. The header builds its sign by hand
+    # (delta_sign plus abs(cost_delta)) rather than with a `:+` format, so the
+    # negative branch is a path of its own -- hardcoding delta_sign = "+",
+    # which would silently mis-sign every drop, leaves every other test in
+    # this file green.
+    rows = {
+        "p1": _row("p1", "2026-07-14T00:00:00+00:00", cost_usd=9.0),
+        "c1": _row("c1", "2026-07-22T00:00:00+00:00", cost_usd=3.0),
+    }
+
+    result = sri.investigate(rows, days=7, now=NOW)
+    assert result["prev_cost"] == pytest.approx(9.0)
+    assert result["cur_cost"] == pytest.approx(3.0)
+
+    report = sri.format_report(result, days=7)
+
+    assert "Actual cost_usd movement: $9.00 → $3.00 (-$6.00)" in report
+    assert "(+$6.00)" not in report
+
+
 def test_format_report_no_ranked_impacts_branch(sri):
     # every driver's per-session value is identical across both windows --
     # zero movement for all six, so nothing is ranked. The header and the
