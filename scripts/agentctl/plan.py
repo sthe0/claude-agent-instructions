@@ -1012,7 +1012,11 @@ def stage_carry_key(stage) -> tuple:
         _normalize_string(stage.criterion.verify_venue),
         _normalize_string(stage.criterion.verify_kind),
         stage.criterion.landed,
-        _normalize_string(stage.criterion.verify_venue_at_final or ""),
+        # Contribute the field ONLY when declared, so a plan without it hashes
+        # byte-identically to a schema-23 plan (the V4 identity), uniform with
+        # stage_question_key where this identity is load-bearing across processes.
+        *((_normalize_string(stage.criterion.verify_venue_at_final),)
+          if stage.criterion.verify_venue_at_final else ()),
     )
 
 
@@ -1068,7 +1072,13 @@ def stage_question_key(stage) -> str:
         _normalize_string(stage.criterion.verify_venue),
         _normalize_string(stage.criterion.verify_kind),
         stage.criterion.landed,
-        _normalize_string(stage.criterion.verify_venue_at_final or ""),
+        # Persisted in Question.disposed_at_key and compared at the plan_approval
+        # gate across processes, so an absent field MUST reproduce the schema-23
+        # digest exactly (the V4 identity) — contribute it only when declared,
+        # never as `... or ""` (which would flip every disposed question of every
+        # live session to a spurious "stage definition changed" blocker).
+        *((_normalize_string(stage.criterion.verify_venue_at_final),)
+          if stage.criterion.verify_venue_at_final else ()),
     ))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -1100,7 +1110,8 @@ def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
              _normalize_string(s.criterion.verify_venue),
              _normalize_string(s.criterion.verify_kind),
              s.criterion.landed,
-             _normalize_string(s.criterion.verify_venue_at_final or ""))
+             *((_normalize_string(s.criterion.verify_venue_at_final),)
+               if s.criterion.verify_venue_at_final else ()))
             for s in doc.stages
         ]
     def _fc(doc: PlanDoc):

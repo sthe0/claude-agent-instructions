@@ -223,3 +223,36 @@ def test_plan_with_no_verify_venue_at_final_round_trips_byte_identical_modulo_sc
     reloaded = SessionState.from_json(state.to_json())
     assert reloaded.stages[0].criterion.verify_venue_at_final is None
     assert reloaded.schema_version == SCHEMA_VERSION
+
+
+# --- back-compat: an ABSENT field must not perturb any persisted digest ----
+
+# stage_question_key of a plan that does not declare verify_venue_at_final,
+# pinned under schema 24. `stage_question_key` is persisted in
+# Question.disposed_at_key and compared across processes at the plan_approval
+# gate, so this digest MUST equal the schema-23 value — an absent field has to
+# contribute nothing to the tuple. A `... or ""` member (the stage-1 review's
+# blocking finding) would append an empty string and change this hash, flipping
+# every disposed question of every unrelated live session to a spurious "stage
+# definition changed" blocker. If an intentional later change to the stage tuple
+# alters this golden, re-pin it AND re-confirm the absent-field identity still
+# holds (a schema-N plan and its schema-(N+1) reparse hash equally).
+_PRE_FIELD_QUESTION_KEY = "35a6dba386aa51a269c65f672e1604a7fbe272fb2d03a0a122781bac8dfc3d8e"
+
+
+def test_absent_verify_venue_at_final_reproduces_pinned_question_key():
+    stage = _full_substantive_stage()
+    doc = parse_plan({"meta": _substantive_meta(), "stage": [stage]})
+    assert doc.stages[0].criterion.verify_venue_at_final is None
+    assert stage_question_key(doc.stages[0]) == _PRE_FIELD_QUESTION_KEY
+
+
+def test_declared_verify_venue_at_final_changes_question_key_off_the_pin():
+    # The pin is specifically the ABSENT-field value: declaring the field must
+    # move the digest away from it (the member is contributed when present).
+    stage = _full_substantive_stage(verify_venue_at_final="repo_root")
+    doc = parse_plan({
+        "meta": _substantive_meta(delivery_worktree="/tmp/some-worktree"),
+        "stage": [stage],
+    })
+    assert stage_question_key(doc.stages[0]) != _PRE_FIELD_QUESTION_KEY

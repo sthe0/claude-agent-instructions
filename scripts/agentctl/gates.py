@@ -597,7 +597,10 @@ def _operative_surface(doc) -> tuple:
             _normalize_string(s.actor.executor),
             _normalize_string(s.criterion.verify_kind),
             _landed_sort_key(s.criterion.landed),
-            _normalize_string(s.criterion.verify_venue_at_final or ""),
+            # Declared-only (not `... or ""`), so an absent field reproduces the
+            # schema-23 operative surface exactly — uniform with the plan.py keys.
+            *((_normalize_string(s.criterion.verify_venue_at_final),)
+              if s.criterion.verify_venue_at_final else ()),
         )
         for s in doc.stages
     )
