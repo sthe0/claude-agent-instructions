@@ -76,11 +76,14 @@ from pathlib import Path
 
 from .state import (
     Actor,
+    CheckKind,
     CheckVenue,
     Confidence,
     Criterion,
     CriterionType,
     FinalCheck,
+    LandedSpec,
+    LANDED_GIT_ERROR_EXIT,
     Means,
     Outcome,
     Principle,
@@ -146,6 +149,106 @@ def _parse_check_venue(raw: object, context: str) -> str:
     return value
 
 
+_CHECK_KIND_VALUES = {v.value for v in CheckKind}
+
+
+def _parse_check_kind(raw: object, context: str) -> str:
+    """Validate a stage's `verify_kind` or a final_check's `kind` against the
+    CheckKind vocabulary, defaulting to "shell" when absent — mirrors
+    _parse_check_venue exactly (schema 23). A free-text kind is rejected the
+    same way an out-of-vocabulary venue is."""
+    if raw is None:
+        return CheckKind.SHELL.value
+    value = str(raw)
+    if value not in _CHECK_KIND_VALUES:
+        raise PlanError(
+            f"{context} kind {value!r} is not one of {sorted(_CHECK_KIND_VALUES)}"
+        )
+    return value
+
+
+def _parse_landed_venue(raw_venue: object, context: str) -> str:
+    """A landed check's venue is always "repo_root" (R3): default it there when
+    absent, reject any other EXPLICIT value. Deliberately bypasses
+    _parse_check_venue's "delivery" default — the two kinds disagree on it,
+    since a landed assertion is about the canonical checkout's trunk, not the
+    delivery worktree."""
+    if raw_venue is None:
+        return CheckVenue.REPO_ROOT.value
+    value = str(raw_venue)
+    if value != CheckVenue.REPO_ROOT.value:
+        raise PlanError(
+            f"{context}: a landed check's venue must be \"repo_root\" (got {value!r}); "
+            f"the assertion is about the canonical checkout's trunk, so an "
+            f"explicit \"delivery\" (or any other) venue is rejected rather than "
+            f"silently overridden"
+        )
+    return value
+
+
+# A landed check's target/remote are git ref NAMES, never shell content: no
+# whitespace, no shell metacharacters. Structural validation of a name's SHAPE,
+# not classification of free-text meaning.
+_LANDED_REF_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
+
+
+def _parse_landed_spec(
+    raw_table: object,
+    *,
+    kind: str,
+    context: str,
+    stage_indices: set[int],
+    owner_index: int | None,
+) -> "LandedSpec | None":
+    """Validate and build the typed LandedSpec payload of a `kind = "landed"`
+    check (R2/R4/R5); reject a `[*.landed]` table on a kind="shell" check (R7 —
+    never silently ignored). `owner_index` is the declaring stage's own index
+    for a stage criterion, or None for a [[final_check]] (which may name any
+    existing stage index — it runs after every stage). Returns None for a
+    shell check carrying no landed table (the common case)."""
+    if kind != CheckKind.LANDED.value:
+        if raw_table:
+            raise PlanError(
+                f"{context}: a [*.landed] table is only valid with kind = "
+                f"\"landed\" (this check is kind={kind!r}); drop the table or "
+                f"set the kind (R7)"
+            )
+        return None
+    if not isinstance(raw_table, dict) or not raw_table:
+        raise PlanError(f"{context}: kind = \"landed\" requires a [*.landed] table")
+    target = raw_table.get("target")
+    if not target or not isinstance(target, str):
+        raise PlanError(f"{context}: landed.target is required (non-empty string) (R2)")
+    if not _LANDED_REF_RE.match(target):
+        raise PlanError(
+            f"{context}: landed.target {target!r} is not a valid git ref name "
+            f"(expected to match {_LANDED_REF_RE.pattern}) (R2)"
+        )
+    remote = str(raw_table.get("remote", "origin"))
+    if not _LANDED_REF_RE.match(remote):
+        raise PlanError(
+            f"{context}: landed.remote {remote!r} is not a valid git ref name "
+            f"(expected to match {_LANDED_REF_RE.pattern}) (R2)"
+        )
+    raw_stage = raw_table.get("delivered_stage")
+    if raw_stage is None:
+        raise PlanError(f"{context}: landed.delivered_stage is required (R4)")
+    delivered_stage = int(raw_stage)
+    if delivered_stage not in stage_indices:
+        raise PlanError(
+            f"{context}: landed.delivered_stage {delivered_stage} does not name "
+            f"an existing stage (R4)"
+        )
+    if owner_index is not None and delivered_stage > owner_index:
+        raise PlanError(
+            f"{context}: landed.delivered_stage {delivered_stage} is later than "
+            f"the declaring stage {owner_index} — a forward reference cannot "
+            f"have been recorded yet (self-reference, delivered_stage == "
+            f"{owner_index}, is fine) (R5)"
+        )
+    return LandedSpec(target=target, remote=remote, delivered_stage=delivered_stage)
+
+
 # The only two executor shapes the engine dispatches: in-thread, or a named spawn
 # kind matching a spawn-specialist.py --kind. Anything else (a typo, a free-text
 # description) must be rejected at submission — a silent default to in_thread
@@ -165,7 +268,12 @@ def _validate_substantive_stage(s: dict, index: int) -> None:
                 f"stage {index} missing {field_name!r} (required for substantive plans)"
             )
     crit_type = str(s.get("criterion_type", CriterionType.MEASURABLE.value))
-    if crit_type == CriterionType.MEASURABLE.value and not s.get("verify_command"):
+    verify_kind = str(s.get("verify_kind", CheckKind.SHELL.value))
+    if (
+        crit_type == CriterionType.MEASURABLE.value
+        and not s.get("verify_command")
+        and verify_kind != CheckKind.LANDED.value
+    ):
         raise PlanError(
             f"stage {index} is a substantive measurable stage but has no verify_command "
             f"(a measurable criterion you cannot execute is really acceptance_review)"
@@ -618,18 +726,52 @@ def parse_plan(
     if not m.get("task_id"):
         raise PlanError("[meta] missing task_id")
     raw_weight = m.get("weight_class")
+
+    raw_stages = data.get("stage", [])
+    if not raw_stages:
+        raise PlanError("plan defines no [[stage]] entries")
+    # Pre-scanned so a [[final_check]]'s landed.delivered_stage (R4) can be
+    # validated against the full stage-index domain before any Stage is built;
+    # the per-stage loop below reuses the same domain for its own R4/R5 checks.
+    _stage_index_domain = {int(s.get("index", i)) for i, s in enumerate(raw_stages, start=1)}
+
     raw_fcs = data.get("final_check", [])
     final_checks: list[FinalCheck] = []
     for fi, fc in enumerate(raw_fcs, 1):
-        cmd = fc.get("command", "")
-        if not cmd or not isinstance(cmd, str):
-            raise PlanError(f"final_check {fi} missing 'command' (required, non-empty string)")
-        xc = fc.get("expected_exit", 0)
-        if not isinstance(xc, int):
-            raise PlanError(f"final_check {fi} expected_exit must be an int")
-        venue = _parse_check_venue(fc.get("venue"), f"final_check {fi}")
+        fc_ctx = f"final_check {fi}"
+        fc_kind = _parse_check_kind(fc.get("kind"), fc_ctx)
+        fc_landed = _parse_landed_spec(
+            fc.get("landed"), kind=fc_kind, context=fc_ctx,
+            stage_indices=_stage_index_domain, owner_index=None,
+        )
+        if fc_kind == CheckKind.LANDED.value:
+            if fc.get("command"):
+                raise PlanError(
+                    f"{fc_ctx}: kind = \"landed\" must not carry 'command' (R1) "
+                    f"— the engine synthesizes the check"
+                )
+            if "expected_exit" in fc:
+                raise PlanError(
+                    f"{fc_ctx}: kind = \"landed\" must not carry 'expected_exit' "
+                    f"(R1) — the synthesized command's exit contract is fixed "
+                    f"(0 contained / 1 not landed / {LANDED_GIT_ERROR_EXIT} git error)"
+                )
+            cmd = ""
+            xc = 0
+            venue = _parse_landed_venue(fc.get("venue"), fc_ctx)
+        else:
+            cmd = fc.get("command", "")
+            if not cmd or not isinstance(cmd, str):
+                raise PlanError(f"{fc_ctx} missing 'command' (required, non-empty string)")
+            xc = fc.get("expected_exit", 0)
+            if not isinstance(xc, int):
+                raise PlanError(f"{fc_ctx} expected_exit must be an int")
+            venue = _parse_check_venue(fc.get("venue"), fc_ctx)
         final_checks.append(
-            FinalCheck(command=cmd, expected_exit=xc, label=str(fc.get("label", "")), venue=venue)
+            FinalCheck(
+                command=cmd, expected_exit=xc, label=str(fc.get("label", "")),
+                venue=venue, kind=fc_kind, landed=fc_landed,
+            )
         )
 
     meta = PlanMeta(
@@ -643,10 +785,6 @@ def parse_plan(
         delivery_worktree=str(m["delivery_worktree"]) if m.get("delivery_worktree") else None,
         final_check=final_checks,
     )
-
-    raw_stages = data.get("stage", [])
-    if not raw_stages:
-        raise PlanError("plan defines no [[stage]] entries")
 
     is_substantive = meta.weight_class is not None and meta.weight_class.lower() == "substantive"
 
@@ -694,6 +832,39 @@ def parse_plan(
                     confidence=str(raw_principle.get("confidence", "")),
                     refutation=str(raw_principle.get("refutation", "")),
                 )
+        stage_ctx = f"stage {index}"
+        crit_type = str(s.get("criterion_type", CriterionType.MEASURABLE.value))
+        verify_kind = _parse_check_kind(s.get("verify_kind"), stage_ctx)
+        landed = _parse_landed_spec(
+            s.get("landed"), kind=verify_kind, context=stage_ctx,
+            stage_indices=_stage_index_domain, owner_index=index,
+        )
+        if verify_kind == CheckKind.LANDED.value:
+            if s.get("verify_command"):
+                raise PlanError(
+                    f"{stage_ctx}: verify_kind = \"landed\" must not carry "
+                    f"'verify_command' (R1) — the engine synthesizes the check"
+                )
+            if "expected_exit" in s:
+                raise PlanError(
+                    f"{stage_ctx}: verify_kind = \"landed\" must not carry "
+                    f"'expected_exit' (R1) — the synthesized command's exit "
+                    f"contract is fixed (0 contained / 1 not landed / "
+                    f"{LANDED_GIT_ERROR_EXIT} git error)"
+                )
+            if crit_type != CriterionType.MEASURABLE.value:
+                raise PlanError(
+                    f"{stage_ctx}: verify_kind = \"landed\" requires "
+                    f"criterion_type = \"measurable\" (a landed assertion is "
+                    f"objective, never acceptance-review) (R6)"
+                )
+            verify_venue = _parse_landed_venue(s.get("verify_venue"), stage_ctx)
+            verify_command = None
+            expected_exit = 0
+        else:
+            verify_venue = _parse_check_venue(s.get("verify_venue"), stage_ctx)
+            verify_command = str(s["verify_command"]) if s.get("verify_command") else None
+            expected_exit = int(s.get("expected_exit", 0))
         stages.append(
             Stage(
                 index=index,
@@ -714,13 +885,13 @@ def parse_plan(
                     ),
                 ),
                 criterion=Criterion(
-                    criterion_type=str(s.get("criterion_type", CriterionType.MEASURABLE.value)),
+                    criterion_type=crit_type,
                     done_criterion=str(s["done_criterion"]),
-                    verify_command=(
-                        str(s["verify_command"]) if s.get("verify_command") else None
-                    ),
-                    expected_exit=int(s.get("expected_exit", 0)),
-                    verify_venue=_parse_check_venue(s.get("verify_venue"), f"stage {index}"),
+                    verify_command=verify_command,
+                    expected_exit=expected_exit,
+                    verify_venue=verify_venue,
+                    verify_kind=verify_kind,
+                    landed=landed,
                 ),
                 principle=principle,
                 conditions=str(s["conditions"]) if s.get("conditions") else None,

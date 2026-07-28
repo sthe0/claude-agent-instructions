@@ -19,7 +19,7 @@ import json
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -78,6 +78,51 @@ class CriterionType(str, Enum):
 class CheckVenue(str, Enum):
     DELIVERY = "delivery"
     REPO_ROOT = "repo_root"
+
+
+# The check-kind discriminator for a stage Criterion or a FinalCheck (schema 23).
+# SHELL (default) is today's free-text verify_command/command executed literally.
+# LANDED synthesizes the ONE durable check the engine trusts for a point-in-time
+# "did this commit reach trunk" assertion — monotone `git merge-base --is-ancestor`
+# containment against a commit FROZEN at record-result time — from a declared
+# LandedSpec, so SHA equality, a literal commit range, or a live-resolved head
+# (the shapes behind 20 recorded false-fail incidents, experience leaf
+# 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md) become
+# unrepresentable rather than merely discouraged. Deliberately no enum for "source
+# of the delivered commit" — Outcome.delivered_head is the only one that may ever
+# exist.
+class CheckKind(str, Enum):
+    SHELL = "shell"
+    LANDED = "landed"
+
+
+# The exit code the landed-check synthesizer reserves for "git could not answer
+# the question" (an unresolvable target/remote ref, a broken repository) —
+# distinct from exit 1 (git's genuine "not an ancestor") so every verify site can
+# map ONLY this code to a legible refusal instead of a false-failed stage. Chosen
+# to collide with nothing else on the same exit-code axis: `git merge-base
+# --is-ancestor` itself uses 0/1; git ref-resolution/usage errors use 128/129;
+# the shell uses 126/127/128+N; pytest uses 0-5.
+LANDED_GIT_ERROR_EXIT = 97
+
+
+@dataclass
+class LandedSpec:
+    """The declarative payload of a `kind = "landed"` check (schema 23): assert
+    that the commit stage `delivered_stage` delivered is contained in `target`
+    (and its `remote` remote-tracking ref) — never SHA equality, never a
+    live-resolved head. See plan.py's `_parse_landed_spec` for the validation
+    rules this must satisfy before construction."""
+    target: str
+    delivered_stage: int
+    remote: str = "origin"
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "LandedSpec":
+        """Rebuild a LandedSpec from its JSON dict, ignoring unknown keys —
+        mirrors Principle.from_dict's tolerant-reconstruction template."""
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in d.items() if k in known})
 
 
 class StageStatus(str, Enum):
@@ -551,6 +596,22 @@ class Criterion:
     # Defaults to "delivery" so an un-annotated stage keeps observing the
     # same tree dispatch wrote to (the venue-symmetry fix), not repo_root.
     verify_venue: str = "delivery"
+    # The check-kind discriminator (CheckKind value, schema 23): "shell"
+    # (default) executes verify_command literally; "landed" ignores
+    # verify_command (plan.py's R1 forbids one being declared) and instead
+    # runs the engine-synthesized containment check described by `landed`.
+    verify_kind: str = "shell"
+    landed: "LandedSpec | None" = None
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Criterion":
+        """Rebuild a Criterion from its JSON dict, reconstructing a nested
+        `landed` table as a typed LandedSpec rather than a raw dict (mirrors
+        Partition.from_dict's `units` handling) so kind="landed" code can read
+        `criterion.landed.target` by attribute, not by key."""
+        d = dict(d)
+        landed = d.pop("landed", None)
+        return cls(landed=LandedSpec.from_dict(landed) if landed else None, **d)
 
 
 @dataclass
@@ -609,6 +670,19 @@ class FinalCheck:
     label: str = ""
     # schema 22 — see Criterion.verify_venue for the shared default rationale.
     venue: str = "delivery"
+    # schema 23 — see Criterion.verify_kind / .landed for the shared rationale.
+    # A landed FinalCheck carries command = "" (required str, never None) since
+    # the engine synthesizes the check rather than running an author command.
+    kind: str = "shell"
+    landed: "LandedSpec | None" = None
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "FinalCheck":
+        """Rebuild a FinalCheck from its JSON dict — see Criterion.from_dict
+        for why the nested `landed` table needs explicit reconstruction."""
+        d = dict(d)
+        landed = d.pop("landed", None)
+        return cls(landed=LandedSpec.from_dict(landed) if landed else None, **d)
 
 
 @dataclass
@@ -645,6 +719,13 @@ class Outcome:
     cost_usd: float | None = None
     duration_ms: int | None = None
     spawn_count: int = 0
+    # The ONE field a landed check (schema 23) may ever read as its delivered
+    # commit source — frozen once at record-result time, never re-resolved, so
+    # the containment predicate stays monotone on both axes (trunk AND the
+    # delivered commit). None until a stage with a landed-referencing check
+    # records a result; absent on every pre-schema-23 state (default via
+    # from_dict), so legacy states load unchanged.
+    delivered_head: str | None = None
 
 
 @dataclass
@@ -715,7 +796,7 @@ class Stage:
                 subject=Subject(**d["subject"]),
                 means=Means(**d["means"]),
                 actor=Actor(**d["actor"]),
-                criterion=Criterion(**d["criterion"]),
+                criterion=Criterion.from_dict(d["criterion"]),
                 principle=Principle.from_dict(d["principle"]) if d.get("principle") else None,
                 conditions=d.get("conditions"),
                 supplies=[Supply(**s) for s in d.get("supplies", [])],
@@ -962,7 +1043,7 @@ class SessionState:
         data.pop("self_improvement", None)  # legacy field (schema <=4); self-improvement now runs on the standard spine
         data.setdefault("plugins", {})            # migration: schema <=5 has no plugin layer
         data.setdefault("plugins_archive", {})
-        data["final_check"] = [FinalCheck(**fc) for fc in data.get("final_check", [])]
+        data["final_check"] = [FinalCheck.from_dict(fc) for fc in data.get("final_check", [])]
         data["stages"] = [Stage.from_dict(s) for s in data.get("stages", [])]
         decomp = data.get("partition")
         data["partition"] = Partition.from_dict(decomp) if decomp else None
@@ -994,7 +1075,7 @@ class SessionState:
                 route=f.get("route"),
                 repo_root=f.get("repo_root"),
                 delivery_worktree=f.get("delivery_worktree"),
-                final_check=[FinalCheck(**fc) for fc in f.get("final_check", [])],
+                final_check=[FinalCheck.from_dict(fc) for fc in f.get("final_check", [])],
                 partition=Partition.from_dict(f["partition"]) if f.get("partition") else None,
                 approval=GateRecord(**f["approval"]),
                 resolution=GateRecord(**f["resolution"]),

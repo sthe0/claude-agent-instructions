@@ -1,0 +1,43 @@
+[meta]
+task_id = "landed-example"
+goal = "Demonstrate declarative landed checks"
+done_criterion = "the delivered commit is contained in trunk"
+criterion_type = "measurable"
+weight_class = "substantive"
+external_research = "checked wiki; none applies"
+
+[[stage]]
+index = 1
+title = "Deliver the change"
+executor = "spawn:developer"
+expected_result_image = "commit pushed to the ticket branch"
+criterion_type = "measurable"
+done_criterion = "commit exists on the ticket branch"
+verify_kind = "landed"
+material = "existing code"
+means = "git commit + push"
+method = "implement and push"
+conditions = "EXECUTING node"
+invariants = "trunk unaffected until landing"
+capability_required = "git"
+
+[stage.landed]
+target = "ticket/agentctl-landed-check-kind"
+remote = "origin"
+delivered_stage = 1
+
+[stage.principle]
+statement = "a landed containment check is the one durable assertion for point-in-time landedness"
+source = "experience leaf 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
+derivation = "that leaf records 20 accumulated false-fail contexts from SHA equality and live rev-parse, so a monotone git merge-base --is-ancestor check removes the recurring failure mode"
+confidence = "high"
+refutation = "refuted if a landed check ever needs to observe a moving, non-frozen head"
+
+[[final_check]]
+kind = "landed"
+label = "trunk contains the delivered commit"
+
+[final_check.landed]
+target = "main"
+remote = "origin"
+delivered_stage = 1
