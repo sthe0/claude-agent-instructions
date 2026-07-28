@@ -2,8 +2,8 @@
 
 This is the SHARED, path-agnostic autonomous variant of
 `~/claude-agent-instructions/` used for headless SWE-bench execution (an
-internal verified-execution platform, Stage 2+ of `swe-bench-own-agent`, AND the
-`public-ablation-benchmark-pilot` plan, which reuses this exact tree — see
+internal verified-execution platform, Stage 2+ of `swe-bench-own-agent`, AND
+the `public-ablation-benchmark-pilot` plan, which reuses this exact tree — see
 `## Canonical artifact` below). The original interactive tree is untouched.
 
 ## Removed
@@ -48,10 +48,10 @@ internal verified-execution platform, Stage 2+ of `swe-bench-own-agent`, AND the
   future session to benefit from written memory, and no time budget to spend
   reading a large memory tree that mostly encodes org-specific
   process knowledge irrelevant to fixing one Go bug.
-- **Non-coding skills**: `instruction-grooming`,
-  `overcome-difficulty`, `self-improvement`, `tracker-management`,
-  `yandex-cloud-expert`, `tech-writer` — all org/meta-workflow skills with no
-  role in a single-shot autonomous code fix.
+- **Non-coding skills**: `instruction-grooming`, `overcome-difficulty`,
+  `self-improvement`, `tracker-management`, `yandex-cloud-expert`,
+  `tech-writer` — all org/meta-workflow skills with no role in a single-shot
+  autonomous code fix.
 - **`config.md` numeric constants** (recursion depth, budget tiers, wall-clock
   thresholds): all keyed to the agentctl spine and the spawn/budget machinery
   that no longer exists in this profile.
