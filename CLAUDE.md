@@ -161,7 +161,7 @@ Numeric constants for the coordination machinery (recursion cap, budget tiers, t
 
 *Difficulty removed: a started external job left unmonitored fails silently and burns wall-clock before anyone notices.*
 
-After starting an external workflow / job graph — report ids/URLs and drive it to terminal state **yourself**; never offload monitoring cadence to the user. Not via polling: a detached poller (zero tokens) + self-scheduled `ScheduleWakeup` wakeups report transitions: [long-job-monitoring.md](memory-global/leaves/long-job-monitoring.md).
+After starting an external workflow / job graph — **surface its run URL to the user as a clickable link in the launching turn** (a scratch/recovery file is not surfacing) — and drive it to terminal state **yourself**; never offload monitoring cadence to the user. Not via polling: a detached poller (zero tokens) + self-scheduled `ScheduleWakeup` wakeups report transitions: [long-job-monitoring.md](memory-global/leaves/long-job-monitoring.md).
 
 ---
 

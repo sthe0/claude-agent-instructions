@@ -121,6 +121,12 @@ DESIRED = [
     # marker under state/turn-gate/) and blockers from every guardian aggregate
     # into one block, so the worst case is exactly one extra model turn.
     ("Stop",             None,    "hook-turn-end-gate.py",   5),
+    # Advisory (not a gate): nudge when a launched run/graph URL appeared in
+    # this session's tool output but was never surfaced to the user in a chat
+    # message — the structural guard for CLAUDE.md long-running-jobs /
+    # outcome-format point 3 (recurring miss recorded 2026-07-28). Fail-open,
+    # exit 0 always.
+    ("Stop",             None,    "hook-run-url-surfaced-reminder.py", 5),
     # Structure/confirmation gates on memory-leaf Writes. These run on ANY
     # Write (any repo), so they are the only enforcement point for project
     # memory (whose own git pre-commit does not run verify-all).
