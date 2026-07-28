@@ -375,12 +375,54 @@ def _resolve_or_refuse(state: SessionState, venue: str) -> tuple[str | None, str
     distinct from a check failure — the caller must surface it without
     recording a stage FAILED or entering DIAGNOSING."""
     cwd = state.resolve_check_venue(venue)
+    return cwd, _refuse_missing_cwd(state, cwd)
+
+
+def _refuse_missing_cwd(state: SessionState, cwd: str | None) -> str | None:
+    """The existence check shared by _resolve_or_refuse and its verify-final
+    counterpart _resolve_final_or_refuse: given an already-resolved cwd,
+    return a refusal message when the venue is declared but missing on disk,
+    else None. Kept as the ONE place that turns "missing directory" into a
+    refusal, so the two call sites cannot drift on what counts as refusable."""
     if not cwd or state.delivery_worktree is None or Path(cwd).is_dir():
-        return cwd, None
-    return cwd, (
+        return None
+    return (
         f"check venue {cwd!r} does not exist (declared by [meta] delivery_worktree "
         f"or repo_root); create the venue, or set venue = \"repo_root\" if a "
         f"delivery venue is no longer needed"
+    )
+
+
+def _resolve_final_or_refuse(state: SessionState, criterion: Criterion) -> tuple[str | None, str | None]:
+    """verify-final's counterpart to _resolve_or_refuse: resolves the
+    criterion's FINAL venue (SessionState.resolve_final_check_venue —
+    verify_venue_at_final when declared, else verify_venue) instead of its
+    execution venue, then applies the identical existence-refusal rule. Used
+    ONLY by cmd_verify_final for stage checks; cmd_dispatch and
+    cmd_record_result keep resolving crit.verify_venue via _resolve_or_refuse,
+    since during execution the delivery venue is the only tree the change
+    exists in at all."""
+    cwd = state.resolve_final_check_venue(criterion)
+    return cwd, _refuse_missing_cwd(state, cwd)
+
+
+def _diagnose_venue_refusal(state: SessionState, store: StateStore, message: str) -> Directive:
+    """Route a verify-final venue refusal into the ordinary DIAGNOSING cycle
+    instead of stranding the session at VERIFYING — from VERIFYING, declare/
+    investigate/critique all refuse ("difficulty commands run only in the
+    DIAGNOSING cycle"), and only `reset --force` escaped. Mirrors the
+    FAILURE branch's transition below verbatim, but `next` stays "fix_venue"
+    (not "declare"): unlike a stage/final_check FAILURE, which is corrected by
+    changing the code, a venue refusal is corrected by changing the venue
+    declaration, and the token names that precisely. No stage is marked
+    FAILED — `_resolve_or_refuse`'s refusal/failure split is preserved;
+    only the destination node changes."""
+    state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
+    state.difficulty = Difficulty()
+    store.save(state)
+    return Directive(
+        False, state.node, "fix_venue", message,
+        marker="OVERCOME-DIFFICULTY",
     )
 
 
@@ -2404,9 +2446,8 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
             # stage's own record-result already froze, never a live re-derive.
             ok, refusal, result = _landed_check_result(state, crit.landed, runner)
             if refusal:
-                return Directive(
-                    False, state.node, "fix_venue",
-                    f"stage {stage.index} landed check refused: {refusal}",
+                return _diagnose_venue_refusal(
+                    state, store, f"stage {stage.index} landed check refused: {refusal}",
                 )
             if not ok:
                 failures.append(
@@ -2417,11 +2458,10 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
             continue
         cwd = None
         if crit.verify_command and crit.criterion_type == CriterionType.MEASURABLE.value:
-            cwd, refusal = _resolve_or_refuse(state, crit.verify_venue)
+            cwd, refusal = _resolve_final_or_refuse(state, crit)
             if refusal:
-                return Directive(
-                    False, state.node, "fix_venue",
-                    f"stage {stage.index} verify_command refused: {refusal}",
+                return _diagnose_venue_refusal(
+                    state, store, f"stage {stage.index} verify_command refused: {refusal}",
                 )
         ok, result = _verify_command_result(stage, runner, cwd=cwd)
         if not ok:
@@ -2433,9 +2473,8 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
         if fc.kind == CheckKind.LANDED.value:
             ok, refusal, result = _landed_check_result(state, fc.landed, runner)
             if refusal:
-                return Directive(
-                    False, state.node, "fix_venue",
-                    f"final_check '{fc.label or fc.landed.target}' refused: {refusal}",
+                return _diagnose_venue_refusal(
+                    state, store, f"final_check '{fc.label or fc.landed.target}' refused: {refusal}",
                 )
             if not ok:
                 label = fc.label or fc.landed.target
@@ -2447,9 +2486,8 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
             continue
         cwd, refusal = _resolve_or_refuse(state, fc.venue)
         if refusal:
-            return Directive(
-                False, state.node, "fix_venue",
-                f"final_check '{fc.label or fc.command}' refused: {refusal}",
+            return _diagnose_venue_refusal(
+                state, store, f"final_check '{fc.label or fc.command}' refused: {refusal}",
             )
         ok, result = _run_check(fc.command, fc.expected_exit, runner, cwd=cwd)
         if not ok:

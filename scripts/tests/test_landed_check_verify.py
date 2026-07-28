@@ -277,7 +277,10 @@ def test_headline_landing_regression(tmp_path):
     assert d_still_pass.ok is True
 
 
-# --- refusals: engine cannot evaluate, never a stage failure ------------------
+# --- refusals: engine cannot evaluate, never a stage failure — but DOES route
+# into DIAGNOSING (the venue-lifecycle plan's stage 2): a refusal at verify-final
+# is a difficulty the coordinator must be able to declare/investigate/critique,
+# not a dead end reachable only via `reset --force`. ------------------------
 
 def test_nonexistent_target_ref_refuses(tmp_path):
     work = make_repo_with_remote(tmp_path)
@@ -292,7 +295,8 @@ def test_nonexistent_target_ref_refuses(tmp_path):
     d = cli.cmd_verify_final(ns(session="nr1"), store=_MemStore(state), runner=None)
     assert d.ok is False
     assert d.action == "fix_venue"
-    assert d.node != Node.DIAGNOSING.value
+    assert d.node == Node.DIAGNOSING.value
+    assert state.stage(1).outcome.status != StageStatus.FAILED.value
 
 
 def test_option_shaped_target_refuses(tmp_path):
