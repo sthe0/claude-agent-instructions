@@ -21,12 +21,27 @@ STAMP_REPO="$(cd "$(dirname "$0")/.." && pwd)"
 [[ -f "$SETTINGS" ]] || echo '{}' > "$SETTINGS"
 
 SCRIPTS_DIR="$REPO/scripts" STAMP_SCRIPTS_DIR="$STAMP_REPO/scripts" python3 - "$SETTINGS" <<'PY'
+import importlib.util
 import json, os, shutil, sys
+from pathlib import Path
 
 settings_path = sys.argv[1]
 scripts = os.environ["SCRIPTS_DIR"]
 sys.path.insert(0, os.environ["STAMP_SCRIPTS_DIR"])
 from agentctl import edit_ledger
+
+# Reuse self-diagnose.py's own absolute-script resolution so the prune pass
+# below and the broken-hook-registration detector agree by construction.
+# Loaded from STAMP_SCRIPTS_DIR (this script's own, always-real location)
+# rather than SCRIPTS_DIR, which a test may point at a minimal fake repo.
+_sd_spec = importlib.util.spec_from_file_location(
+    "_install_reminder_self_diagnose",
+    os.path.join(os.environ["STAMP_SCRIPTS_DIR"], "self-diagnose.py"),
+)
+_sd_mod = importlib.util.module_from_spec(_sd_spec)
+sys.modules[_sd_spec.name] = _sd_mod
+_sd_spec.loader.exec_module(_sd_mod)
+_hook_script_path = _sd_mod._hook_script_path
 
 # (event, matcher-or-None, script-basename [+ optional args], timeout)
 DESIRED = [
@@ -171,15 +186,58 @@ for event, matcher, script, timeout in DESIRED:
     grp["hooks"].append({"type": "command", "command": cmd, "timeout": timeout})
     changed.append(f"{event}/{matcher or '*'}: {script}")
 
-if changed:
+
+def prune_dangling_managed_hooks(hooks, managed_dir):
+    """Remove any hook entry whose resolved script lies under managed_dir
+    (this installer's own scripts dir) and no longer exists on disk. An
+    entry pointing outside managed_dir — a legitimate machine-local hook —
+    is left alone even if dangling, so a hand-wired foreign hook is never
+    silently deleted. A group emptied by pruning is dropped."""
+    pruned = []
+    managed = Path(managed_dir).resolve()
+    for event in list(hooks.keys()):
+        kept_groups = []
+        for grp in hooks[event]:
+            kept_hooks = []
+            for hk in grp.get("hooks", []) or []:
+                cmd = hk.get("command", "")
+                script = _hook_script_path(cmd)
+                if script is not None:
+                    try:
+                        resolved = script.resolve()
+                    except OSError:
+                        resolved = script
+                    under_managed = resolved == managed or managed in resolved.parents
+                    if under_managed and not script.exists():
+                        pruned.append(f"{event}/{grp.get('matcher') or '*'}: {cmd}")
+                        continue
+                kept_hooks.append(hk)
+            grp["hooks"] = kept_hooks
+            if grp["hooks"]:
+                kept_groups.append(grp)
+        if kept_groups:
+            hooks[event] = kept_groups
+        else:
+            del hooks[event]
+    return pruned
+
+
+pruned = prune_dangling_managed_hooks(hooks, scripts)
+
+if changed or pruned:
     shutil.copy2(settings_path, settings_path + ".bak")
     with open(settings_path, "w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=2, ensure_ascii=False)
         fh.write("\n")
     edit_ledger.stamp(settings_path, "script:install-reminder-hooks")
-    print("install-reminder-hooks: wired " + str(len(changed)) + " hook(s):")
-    for c in changed:
-        print("  + " + c)
+    if changed:
+        print("install-reminder-hooks: wired " + str(len(changed)) + " hook(s):")
+        for c in changed:
+            print("  + " + c)
+    if pruned:
+        print("install-reminder-hooks: pruned " + str(len(pruned)) + " dangling hook registration(s):")
+        for p in pruned:
+            print("  - " + p)
 else:
     print("install-reminder-hooks: all canonical reminder hooks already wired")
 PY

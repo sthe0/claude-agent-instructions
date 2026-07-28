@@ -62,6 +62,9 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 
+sys.path.insert(0, str(SCRIPT_DIR))
+from lib import config_root  # noqa: E402
+
 # Mirrors memory-global/MEMORY.md's own "keep this index under ~200 lines" note
 # (CONFIRMED real cap, verified 2026-07-23 — see that file's line 5).
 MEMORY_INDEX_LINE_THRESHOLD = 200
@@ -356,18 +359,23 @@ def scan_orphans(memory_root: Path) -> "list[Difficulty]":
 
 
 def default_settings_paths() -> "list[Path]":
-    """User + project settings.json / settings.local.json that exist on disk,
-    de-duplicated by resolved path (a project symlink to a shared file scanned
-    once). $CLAUDE_PROJECT_DIR (else cwd) supplies the project location — both
-    are generic Claude Code settings homes, not arc/composed-dir specifics."""
+    """User + project + agent-home settings.json / settings.local.json that
+    exist on disk, de-duplicated by resolved path (a project symlink to a
+    shared file scanned once). $CLAUDE_PROJECT_DIR (else cwd) supplies the
+    project location; config_root.agent_home() supplies the agent-home
+    location — all generic Claude Code settings homes, not arc/composed-dir
+    specifics."""
     home = Path.home()
     proj = os.environ.get("CLAUDE_PROJECT_DIR")
     proj_dir = Path(proj) if proj else Path.cwd()
+    agent_home = config_root.agent_home()
     candidates = [
         home / ".claude" / "settings.json",
         home / ".claude" / "settings.local.json",
         proj_dir / ".claude" / "settings.json",
         proj_dir / ".claude" / "settings.local.json",
+        agent_home / "settings.json",
+        agent_home / "settings.local.json",
     ]
     seen: "set[Path]" = set()
     out: "list[Path]" = []

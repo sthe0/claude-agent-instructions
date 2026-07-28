@@ -247,9 +247,32 @@ def test_default_settings_paths_dedups_by_resolved(tmp_path, monkeypatch):
     (proj / ".claude" / "settings.json").symlink_to(real)
     monkeypatch.setattr(sd.Path, "home", staticmethod(lambda: home))
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(proj))
+    # No real agent-home settings file exists under `home`, but the live
+    # environment may still export CLAUDE_AGENT_HOME/CLAUDE_CONFIG_DIR
+    # pointing at a real machine settings.json — strip both so the dedup
+    # set stays exactly the two paths this test seeds.
+    monkeypatch.delenv("CLAUDE_AGENT_HOME", raising=False)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     paths = sd.default_settings_paths()
     resolved = {p.resolve() for p in paths}
     assert resolved == {real.resolve()}
+
+
+def test_default_settings_paths_includes_agent_home(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    agent_home = tmp_path / "agent-home"
+    agent_home.mkdir()
+    agent_settings = agent_home / "settings.json"
+    agent_settings.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sd.Path, "home", staticmethod(lambda: home))
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("CLAUDE_AGENT_HOME", str(agent_home))
+    paths = sd.default_settings_paths()
+    resolved = {p.resolve() for p in paths}
+    assert agent_settings.resolve() in resolved
 
 
 # ── scan_near_duplicates ─────────────────────────────────────────────────────
