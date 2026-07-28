@@ -13,6 +13,21 @@ def test_load_two_stage_plan(fixtures_dir):
     assert doc.stages[1].depends_on == [1]
 
 
+def test_malformed_toml_raises_plan_error_not_the_tomllib_type(tmp_path):
+    """A TOML syntax error leaves load_plan as PlanError, like every other bad plan.
+
+    Callers handle a bad plan by catching PlanError; if the commonest malformation of all
+    escaped as TOMLDecodeError instead, it would be the one case none of them caught, and
+    a caller-supplied path (`--plan`, `plan-render`, `plan-diff`) would surface a traceback
+    where its own message belongs.
+    """
+    bad = tmp_path / "bad.toml"
+    bad.write_text("not = [toml\n", encoding="utf-8")
+    with pytest.raises(PlanError) as exc:
+        load_plan(bad)
+    assert "malformed TOML" in str(exc.value)
+
+
 def test_missing_meta_raises():
     with pytest.raises(PlanError):
         parse_plan({"stage": [{"title": "x"}]})

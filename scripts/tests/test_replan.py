@@ -616,8 +616,14 @@ def _to_passed_stage1_via_dispatch(store, sid, plan_path):
 
 def _submit_edit_approve(store, sid, plan_path, edited_text):
     """Submit a plan, then edit it IN PLACE at PLAN_READY before approving — the
-    plan-review REVISE cycle, which `_refresh_caches_from_plan_path` exists to
-    absorb (PLAN_READY is deliberately plan-mutable)."""
+    edit `_refresh_caches_from_plan_path` exists to absorb (PLAN_READY is
+    deliberately plan-mutable).
+
+    This reaches `approve` only because conftest turns the plan-review and
+    presentation gates off. In production those gates re-hash the file and refuse
+    an edit made after the plan was presented, so the real REVISE cycle re-presents
+    first — the fields exercised here are the right ones, but the sequence is the
+    gates-off shape, not the production one."""
     cli.cmd_start(ns(session=sid, task="demo-two-stage", goal="", done_criterion="",
                      criterion_type="measurable", recursion_depth=0), store=store)
     cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,

@@ -1108,7 +1108,20 @@ def cmd_question_enumerate(args, *, store: StateStore, runner: Runner | None = N
     # still computed from the bytes actually enumerated and still has to equal the
     # digest of the plan being approved, so naming a THIRD plan stamps a digest
     # matching neither and blocks exactly as before.
-    plan_path = getattr(args, "plan", None) or getattr(state, "plan_path", None)
+    #
+    # One failure mode IS new. An ABANDONED --plan pass leaves its candidates behind:
+    # ids are upserted, so if a later pass over a different plan raises FEWER, the
+    # surplus survive as `raised` and validate_question_candidates blocks approve on
+    # candidates belonging to a plan no longer under evaluation. Rather than silently
+    # truncating (which would discard a genuine candidate whenever a pass legitimately
+    # shrinks), the bag records WHICH plan the standing candidates came from, so an
+    # operator meeting an unexplained one can see it is an orphan and dispose of it.
+    named_plan = getattr(args, "plan", None)
+    if named_plan is not None and not str(named_plan).strip():
+        return Directive(False, state.node, "noop",
+                         "--plan was given an empty path; omit the flag to enumerate the "
+                         "session's own plan, or name a real one")
+    plan_path = named_plan or getattr(state, "plan_path", None)
     if not plan_path:
         return Directive(False, state.node, "noop",
                          "no plan submitted yet — run submit-plan before question-enumerate")
@@ -1146,6 +1159,7 @@ def cmd_question_enumerate(args, *, store: StateStore, runner: Runner | None = N
 
     bag["enumerated"] = True
     bag["enumerated_at"] = plugins_premise._plan_content_digest(doc)
+    bag["enumerated_plan"] = str(plan_path)
     bag["enumerated_runner_ok"] = runner_ok
     bag["enumerated_count"] = len(pairs)
     state.log("question_enumerate", raised=len(raised), runner_ok=runner_ok)

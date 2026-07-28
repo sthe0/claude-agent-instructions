@@ -254,3 +254,53 @@ def test_plan_flag_rejects_an_unreadable_path(store, tmp_path):
     assert d.ok is False
     assert "cannot read plan" in d.detail
     assert store.load("s").plugins["premise"]["enumerated"] is False
+
+
+def test_plan_flag_rejects_a_malformed_plan(store, tmp_path):
+    """An existing but unparseable --plan is a SECOND kind of bad caller input and
+    takes a different branch from the unreadable-path case: the file reads fine and
+    `load_plan` raises. Without the handler it comes out of the command as a
+    traceback rather than a Directive, so the branch is pinned separately rather
+    than assumed covered by the OSError one."""
+    current = _write_plan(tmp_path / "plan.toml", [(1, "img-one")])
+    _state(store, plan_path=current)
+    broken = tmp_path / "broken.toml"
+    broken.write_text("not = [toml\n", encoding="utf-8")
+
+    d = cli.cmd_question_enumerate(
+        Namespace(session="s", plan=str(broken)), store=store, runner=_runner(""))
+    assert d.ok is False
+    assert "cannot parse plan" in d.detail
+    assert store.load("s").plugins["premise"]["enumerated"] is False
+
+
+def test_plan_flag_rejects_an_empty_path(store, tmp_path):
+    """`--plan ''` is nonsense input, and falling back to the session's own plan
+    would enumerate a DIFFERENT plan than the caller named while reporting success —
+    the silent-wrong-object shape this flag exists to make impossible."""
+    current = _write_plan(tmp_path / "plan.toml", [(1, "img-one")])
+    _state(store, plan_path=current)
+
+    d = cli.cmd_question_enumerate(
+        Namespace(session="s", plan="   "), store=store, runner=_runner(""))
+    assert d.ok is False
+    assert "empty path" in d.detail
+    assert store.load("s").plugins["premise"]["enumerated"] is False
+
+
+def test_enumerated_plan_records_which_plan_was_read(store, tmp_path):
+    """Provenance for the orphan-candidate case `--plan` introduces: an abandoned
+    pass can leave candidates raised from a plan no longer under evaluation, and
+    without this the operator meets an unexplained approve blocker with nothing to
+    trace it to."""
+    current = _write_plan(tmp_path / "plan.toml", [(1, "img-one")])
+    other = _write_plan(tmp_path / "corrected.toml", [(1, "img-one"), (2, "img-two")])
+    _state(store, plan_path=current)
+
+    cli.cmd_question_enumerate(
+        Namespace(session="s", plan=str(other)), store=store, runner=_runner(""))
+    assert store.load("s").plugins["premise"]["enumerated_plan"] == str(other)
+
+    cli.cmd_question_enumerate(
+        Namespace(session="s", plan=None), store=store, runner=_runner(""))
+    assert store.load("s").plugins["premise"]["enumerated_plan"] == str(current)

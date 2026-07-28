@@ -914,8 +914,16 @@ def load_plan(
     p = Path(path)
     if not p.exists():
         raise PlanError(f"plan file not found: {p}")
+    # A syntax error in the TOML is a malformed plan like any other, so it leaves here as
+    # PlanError rather than as the tomllib type. Every caller that already handles a bad
+    # plan handles it by catching PlanError; letting TOMLDecodeError through meant the
+    # single commonest malformation was the one case none of them caught, surfacing as a
+    # traceback instead of the caller's own message.
     with p.open("rb") as fh:
-        data = tomllib.load(fh)
+        try:
+            data = tomllib.load(fh)
+        except tomllib.TOMLDecodeError as exc:
+            raise PlanError(f"malformed TOML in plan file {p}: {exc}") from exc
     return parse_plan(data, strict=strict, strict_executor=strict_executor)
 
 
