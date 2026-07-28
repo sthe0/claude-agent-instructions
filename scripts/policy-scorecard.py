@@ -282,17 +282,21 @@ FAILURE_RATE_STABILITY_DAYS = 8
 
 # --- inherit→opus rate (delegation-policy compliance) ----------------------
 # `delegatable-work-patterns.md`'s founding audit (2026-06-17, 48 spawns) found
-# only ~48% of unlabeled-model sub-agent spawns actually ran opus by
-# inheritance — the rest were `Explore`-type spawns that default to a cheap
-# tier on their own — and stated "in zero cases did the coordinator
-# deliberately choose a cheap model." The prior threshold, 0.5, sat AT that
-# founding figure: per this stage's own principle, a threshold sitting at or
-# above the largest instance a policy already produced has decided that
-# instance is acceptable, which a compliance detector must not do.
+# only ~48% of ALL sub-agent spawns actually ran opus by inheritance (23/48;
+# 52% of the 44 that were unlabeled) — the rest were `Explore`-type spawns
+# that default to a cheap tier on their own — and stated "in zero cases did
+# the coordinator deliberately choose a cheap model." The prior threshold,
+# 0.5, sat just above that founding figure (and just below the
+# unlabeled-only reading, 52% — the same case, harder to miss): per this
+# stage's own principle, a threshold sitting at or above the largest
+# instance a policy already produced has decided that instance is
+# acceptable, which a compliance detector must not do.
 #
 # Re-derived against the 1835-row ledger copy (`--ledger` snapshot,
 # 2026-06-11..2026-07-28, identical row count to the live ledger at inspection
-# time) using rolling 7d windows stepped 1 day, min 30 spawns/window — denser
+# time) using rolling 7d windows stepped 1 day, min 30 spawns/window, each
+# window required COMPLETE (start + 7d <= last_date + 1, dropping the
+# trailing partial windows a naive day-sweep would still emit) — denser
 # than the weekly 3-point series a naive calibration would dress up. The full
 # 32-sample series shows a clean regime break: every window whose 7d span
 # starts before 2026-07-04 sits in 40.4%-57.1% (13 samples); every window
@@ -318,8 +322,8 @@ FAILURE_RATE_STABILITY_DAYS = 8
 # to push typical behaviour down needs to do; the Stage 5/8 findings-store
 # ack/snooze path is what keeps that from being alert fatigue, not a higher
 # threshold. Fires on 8/19 current-regime samples (42%) — and on both cited
-# leak figures, 33.5% (67/200, the 2026-07-20 window below) and 31.7%
-# (129/407).
+# leak figures, 33.5% (67/200, the 2026-07-20 window below) and 30.50%
+# (43/141, the 2026-07-22 window below).
 #
 # Grid is 0.05, not SPEND_RATE_FACTOR_GRID's 0.25: that grid rounds a
 # multiplicative ratio typically in [1, 3]; this constant is a raw proportion
@@ -335,7 +339,7 @@ FAILURE_RATE_STABILITY_DAYS = 8
 # EXACTLY 5/3 of sonnet's (input, output, cache_write, cache_read alike), so
 # moving a spawn from opus to sonnet saves exactly 2/5 of its cost regardless
 # of token mix. 67 spawns x $20.36 x 0.4 ~= $546 in avoidable opus premium for
-# that single week (the 2026-07-22 window, 129/407 = 31.7%, prices to ~$1050
+# that single week (the 2026-07-22 window, 43/141 = 30.50%, prices to ~$350
 # the same way).
 #   Honest limits. (1) The OLS slope is a whole-ledger average that does not
 #   isolate inherited-opus spawns from explicit-opus or main-thread cost —

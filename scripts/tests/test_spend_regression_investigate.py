@@ -184,7 +184,50 @@ def test_single_window_ledger_raises_insufficient_history(sri):
         sri.investigate(rows, days=7, now=NOW)
 
 
-# --------------------------------------------------------------------- 5. CLI
+# -------------------------------------------------------------- 5. format_report
+
+# Both rows below make the fixture used by the two tests: inherit-opus and
+# missed-delegation both move and both price out positive, and their combined
+# dollar_impact (~$11.93) genuinely exceeds the window's actual cost_usd
+# movement (+$6.00) -- the double-counting the module's own docstring warns
+# about (independent whole-ledger slopes fit against one shared cost_usd).
+# If this over-claim ever stopped holding for these rows, the fixture itself
+# would need to change; the two tests below are what would go RED, not this
+# comment.
+_REPORT_FIXTURE_ROWS = {
+    "p1": _row("p1", "2026-07-14T00:00:00+00:00", cost_usd=1.0, inherit_opus=0, clusters=0),
+    "p2": _row("p2", "2026-07-15T00:00:00+00:00", cost_usd=2.0, inherit_opus=1, clusters=0),
+    "c1": _row("c1", "2026-07-22T00:00:00+00:00", cost_usd=4.0, inherit_opus=3, clusters=2),
+    "c2": _row("c2", "2026-07-23T00:00:00+00:00", cost_usd=5.0, inherit_opus=4, clusters=3),
+}
+
+
+def test_report_header_carries_the_actual_cost_delta(sri):
+    result = sri.investigate(_REPORT_FIXTURE_ROWS, days=7, now=NOW)
+    assert result["prev_cost"] == pytest.approx(3.0)
+    assert result["cur_cost"] == pytest.approx(9.0)
+
+    report = sri.format_report(result, days=7)
+
+    assert "Actual cost_usd movement: $3.00" in report
+    assert "$9.00" in report
+    assert "+6.00" in report
+
+
+def test_report_carries_a_non_additivity_caveat_when_impacts_are_ranked(sri):
+    result = sri.investigate(_REPORT_FIXTURE_ROWS, days=7, now=NOW)
+    ranked_sum = sum(r["dollar_impact"] for r in result["ranked"])
+    actual_delta = result["cur_cost"] - result["prev_cost"]
+    # sanity: this fixture must genuinely over-claim, or the caveat it drives
+    # isn't testing what it claims to.
+    assert ranked_sum > actual_delta
+
+    report = sri.format_report(result, days=7)
+
+    assert "not additive" in report.lower()
+
+
+# --------------------------------------------------------------------- 6. CLI
 
 def test_main_help_exits_zero(sri):
     with pytest.raises(SystemExit) as exc:

@@ -166,6 +166,9 @@ def investigate(ledger_rows: dict[str, dict], days: int,
     all_rows = list(ledger_rows.values())
     all_cost = [r.get("cost_usd", 0.0) for r in all_rows]
 
+    cur_cost = sum(r.get("cost_usd", 0.0) for r in cur_window)
+    prev_cost = sum(r.get("cost_usd", 0.0) for r in prev_window)
+
     ranked = []
     omitted = []
     for d in DRIVERS:
@@ -194,24 +197,36 @@ def investigate(ledger_rows: dict[str, dict], days: int,
     return {
         "cur_lo": cur_lo, "now": now, "prev_lo": prev_lo,
         "n_cur": len(cur_window), "n_prev": len(prev_window),
+        "cur_cost": cur_cost, "prev_cost": prev_cost,
         "ranked": ranked, "omitted": omitted,
     }
 
 
 def format_report(result: dict, days: int) -> str:
+    cost_delta = result["cur_cost"] - result["prev_cost"]
     lines = [
         f"Spend-driver movement -- last {days}d vs previous {days}d "
         f"({result['n_prev']} → {result['n_cur']} sessions)",
+        f"Actual cost_usd movement: ${result['prev_cost']:.2f} → "
+        f"${result['cur_cost']:.2f} ({cost_delta:+.2f})",
         "",
     ]
     if not result["ranked"]:
         lines.append("(no candidate driver rose between the two windows)")
+    else:
+        lines.append(
+            "Ranked impacts below are independent per-driver OLS correlational "
+            "estimates, not additive -- they will typically sum past the actual "
+            "movement above."
+        )
+        lines.append("")
     for r in result["ranked"]:
         slope_note = f", slope ${r['slope']:.4f}/unit" if r["slope"] is not None else ""
-        lines.append(
-            f"  ${r['dollar_impact']:+.2f}  {r['label']}: "
-            f"{r['prev']:.3g}→{r['cur']:.3g}{slope_note}"
-        )
+        if r["unit"] == "usd":
+            move = f"${r['prev']:.2f}→${r['cur']:.2f}"
+        else:
+            move = f"{r['prev']:,.0f}→{r['cur']:,.0f}"
+        lines.append(f"  ${r['dollar_impact']:+.2f}  {r['label']}: {move}{slope_note}")
         lines.append(f"      rule: {r['rule']}")
         lines.append(f"      remediation: memory-global/leaves/{r['leaf']}.md")
     if result["omitted"]:
