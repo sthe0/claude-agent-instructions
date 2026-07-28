@@ -1378,8 +1378,10 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
         verify_command_scope_warnings(doc.stages, doc.meta.final_check)
     )
     # Deterministic check-venue lint (#45) — same warn-only channel; fires
-    # only when [meta] delivery_worktree names a venue distinct from repo_root,
-    # and only when a check's `cd` target contradicts its own declared venue.
+    # only when [meta] delivery_worktree names a venue distinct from repo_root.
+    # Two triggers (see check_venue_warnings): a check whose `cd` target
+    # contradicts its declared venue, and (schema 24) a bare "delivery"-venue
+    # stage in a plan that asserts landing, which will refuse at verify-final.
     d.data.setdefault("advisories", []).extend(
         check_venue_warnings(doc.stages, doc.meta.final_check, doc.meta.repo_root, doc.meta.delivery_worktree)
     )

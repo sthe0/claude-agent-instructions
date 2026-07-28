@@ -28,14 +28,15 @@ def ns(**kw):
 
 
 def _stage(index=1, verify_command="pytest -q", verify_venue="delivery",
-           verify_venue_at_final=None, verify_kind="shell", landed=None):
+           verify_venue_at_final=None, verify_kind="shell", landed=None,
+           criterion_type="measurable"):
     return Stage(
         index=index, title="s%d" % index,
         subject=Subject(material="m", result="img"),
         means=Means(means="bash", method="run"),
         actor=Actor(executor="in_thread"),
         criterion=Criterion(
-            criterion_type="measurable", done_criterion="c",
+            criterion_type=criterion_type, done_criterion="c",
             verify_command=verify_command, verify_venue=verify_venue,
             verify_venue_at_final=verify_venue_at_final,
             verify_kind=verify_kind, landed=landed,
@@ -80,6 +81,20 @@ def test_no_landed_assertion_anywhere_silences_warning(tmp_path):
     worktree = tmp_path / "worktree"
     stage = _stage()
     assert check_venue_warnings([stage], [], str(repo_root), str(worktree)) == []
+
+
+def test_acceptance_review_stage_never_warns(tmp_path):
+    """An acceptance-review stage's verify_command is never re-run at
+    verify-final (only measurable stages are), so it cannot refuse there —
+    the survivability warning must not fire for it even in the bare
+    delivery-venue + landing-asserted shape that warns for a measurable stage."""
+    repo_root = tmp_path / "repo"
+    worktree = tmp_path / "worktree"
+    stage = _stage(criterion_type="acceptance_review")
+    warnings = check_venue_warnings(
+        [stage], [_landed_final_check()], str(repo_root), str(worktree)
+    )
+    assert warnings == []
 
 
 def test_repo_root_venue_stage_never_warns(tmp_path):

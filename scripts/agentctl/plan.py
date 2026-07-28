@@ -720,8 +720,10 @@ def check_venue_warnings(
     # (a `kind = "landed"` stage or final_check): with no landed assertion the
     # delivery venue has no declared reason to disappear, so warning would be
     # noise. Deliberately advisory, never a blocker — `--keep-branch` lets a
-    # delivery venue legitimately survive landing (this plan's own stage 5 is
-    # such a case), so the condition is a strong signal, not a proof.
+    # delivery venue legitimately survive landing, so the condition is a strong
+    # signal, not a proof. Restricted to measurable stages because verify-final
+    # re-runs a verify_command only for those (an acceptance-review stage's
+    # command never re-runs at final, so it cannot refuse there).
     asserts_landing = any(
         s.criterion.verify_kind == CheckKind.LANDED.value for s in stages or []
     ) or any(fc.kind == CheckKind.LANDED.value for fc in final_check or [])
@@ -730,6 +732,7 @@ def check_venue_warnings(
             crit = s.criterion
             if (
                 crit.verify_command
+                and crit.criterion_type == CriterionType.MEASURABLE.value
                 and crit.verify_kind != CheckKind.LANDED.value
                 and crit.verify_venue == CheckVenue.DELIVERY.value
                 and crit.verify_venue_at_final is None
