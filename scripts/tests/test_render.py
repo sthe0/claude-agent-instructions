@@ -6,7 +6,7 @@ pure (no filesystem); cmd_plan_render wraps it and never writes to disk.
 """
 from __future__ import annotations
 
-from agentctl.plan import parse_plan
+from agentctl.plan import load_plan, parse_plan
 from agentctl.render import cmd_plan_render, render_plan_md
 
 
@@ -102,6 +102,26 @@ def test_cmd_plan_render_reads_toml_returns_markdown(tmp_path):
     assert d.data["markdown"] == d.detail
     # The engine must never have written the render to disk.
     assert list(tmp_path.glob("*.md")) == []
+
+
+def test_render_landed_stage_criterion_and_final_check(fixtures_dir):
+    # A landed check has no verify_command/command to print — render must show the
+    # DECLARATIVE fields (which stage, target, remote) instead of an empty bullet,
+    # and every stage must still appear (the one render invariant).
+    doc = load_plan(fixtures_dir / "plan_landed_example.toml", strict=True)
+    md = render_plan_md(doc)
+    assert "## Stage 1: Deliver the change" in md
+    assert (
+        "**Landed check:** stage 1's delivered commit must be contained in "
+        "`ticket/agentctl-landed-check-kind` and "
+        "`origin/ticket/agentctl-landed-check-kind`"
+    ) in md
+    assert (
+        "**landed check:** stage 1's delivered commit must be contained in "
+        "`main` and `origin/main`"
+    ) in md
+    # No leftover empty-command bullet from the FinalCheck.command == "" default.
+    assert "``" not in md
 
 
 def _toml_two_stage() -> str:

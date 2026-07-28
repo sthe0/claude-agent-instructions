@@ -195,6 +195,46 @@ Plan structure is defined **primarily by typed code**, not prose. `plan.py`'s `p
 
 **Executable end-to-end checks (`[[final_check]]`).** An optional typed `[[final_check]]` list (each entry: `command`, `expected_exit`, `label`) may be added to the plan. `verify-final` runs each entry after the per-stage re-runs; any mismatch refuses the `RESOLUTION` transition. Absent: back-compat (empty list, behaviour unchanged). Turns the plan's *Final verification* from prose the engine never reads into a machine fact.
 
+### Landed checks (`kind = "landed"`)
+
+A point-in-time "did the delivery reach the trunk" assertion has exactly one durable form — monotone containment of a frozen delivered commit in a moving trunk ref — so it is a typed, engine-synthesized check rather than author-written shell (the `CheckKind` discriminator, schema 23). This closes a recorded 20-instance failure family (`memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md`) where a hand-written landed-ness check used SHA equality or a live-resolved head and false-failed the moment the shared trunk moved.
+
+**Authoring keys** mirror the existing `verify_venue`/`venue` struct-prefix asymmetry: on a stage, write `verify_kind = "landed"` plus a `[stage.landed]` table; on a `[[final_check]]`, write `kind = "landed"` plus a `[final_check.landed]` table. The `[*.landed]` payload:
+
+- `target` (required) — the trunk ref name the delivered commit must be contained in (e.g. `main`).
+- `remote` (default `"origin"`) — the remote whose tracking ref (`<remote>/<target>`) is checked alongside `target`.
+- `delivered_stage` (required) — the index of the stage whose delivery this assertion is about. On a stage criterion it must be `<=` the declaring stage's own index (self-reference — a landing stage asserting its own delivery — is the normal case and is safe: the delivered head is frozen *before* the verification block runs); a `[[final_check]]` may name any stage, since it runs after every stage.
+
+**A landed check carries no author shell.** `command` / `verify_command` / an explicit `expected_exit` alongside `kind = "landed"` is a `PlanError` — the engine synthesizes the check and owns its exit contract. A landed check's venue is always `"repo_root"` (an explicit `"delivery"` venue is rejected, not silently overridden): the assertion is about the canonical checkout's trunk. A landed **stage** criterion must be `criterion_type = "measurable"` (a landed assertion is objective, never acceptance-review) and needs no `verify_command` of its own — `_validate_substantive_stage` accepts the engine-synthesized command in its place.
+
+**Exit contract.** The synthesized command exits `0` (contained in both refs), `1` (git's genuine "not an ancestor" — the stage genuinely FAILED), or `97` (`state.LANDED_GIT_ERROR_EXIT` — git could not answer: an unresolvable `target`/`remote` ref, an unknown delivered commit, or a broken repository). Every verify site maps `97` to a legible **refusal** (the same `fix_venue` directive shape a missing check-venue already uses), never to `DIAGNOSING` — only exit `1` may FAIL a stage.
+
+**Refusal, not failure.** Besides exit `97`, a landed check refuses when `[meta].repo_root` is unset, or when `delivered_stage` names a stage that has not yet frozen a delivered commit (`record-result` must run for that stage first). There is deliberately no way to point a landed check at a live worktree head — the delivered commit is always the frozen `Outcome.delivered_head` a stage's `record-result` stamped, never a `rev-parse` re-run at verify time.
+
+**Migration recipe.** Convert a free-shell landed check by dropping its `command`/`expected_exit` and declaring the fields above instead:
+
+```toml
+# BEFORE (do not copy)
+[[final_check]]
+label = "trunk contains the delivered commit"
+command = "sh -c 'D=$(git rev-parse HEAD) && git merge-base --is-ancestor $D main && git merge-base --is-ancestor $D origin/main'"
+expected_exit = 0
+```
+
+```toml
+# AFTER
+[[final_check]]
+kind = "landed"
+label = "trunk contains the delivered commit"
+
+[final_check.landed]
+target = "main"
+remote = "origin"
+delivered_stage = 1
+```
+
+The worked example is [`../tests/fixtures/plan_landed_example.toml`](../tests/fixtures/plan_landed_example.toml), which declares both a landed stage criterion and a landed `[[final_check]]`. A plan already registered in a live session is **not** rewritten in place — a registered plan is frozen, and a landed-check correction is a `replan` (refinement-class: `verify_kind`/`landed`/`verify_venue` participate in the diff, carry-key and coverage-surface comparisons, so the correction is never silently dropped). Machine-local plans under `~/.claude-agent/plans/` are converted opportunistically, not tracked by any in-repo check.
+
 ## Plugins
 
 The core spine above is a **closed monolith** — its nodes and gates are the contract every session obeys, edited only via `self-improvement`. But a skill/tool/specialization whose own workflow is deterministic (most acutely `tracker-management`) can hang a **sub-state-machine** off that spine without touching the three core literals (`machine.TRANSITIONS`, `gates.GUARDIANS`, `cli.COMMANDS`). That mechanism is [`plugins.py`](plugins.py).
