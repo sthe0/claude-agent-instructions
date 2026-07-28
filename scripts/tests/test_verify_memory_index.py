@@ -144,6 +144,24 @@ def test_staged_unindexed_leaf_returns_1(tmp_path):
     assert main(["--root", str(tmp_path)]) == 1
 
 
+def test_subdir_root_still_enumerates_tracked_leaves(tmp_path):
+    """A --root BELOW the repo top: enumeration must stay root-relative.
+
+    `git ls-files --full-name` would emit paths relative to the repo TOP, which
+    do not resolve under such a root — the enumerator would yield nothing and a
+    tracked-but-unindexed leaf would pass unseen.
+    """
+    project = tmp_path / "project"
+    project.mkdir()
+    leaves = _make_tree(project)
+    _git(tmp_path, "init", "-q")
+    (leaves / "orphan.md").write_text(_leaf())
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-qm", "base")
+    assert _mod._tracked_leaf_files(project), "tracked leaves must resolve under a subdirectory root"
+    assert main(["--root", str(project)]) == 1
+
+
 def test_non_git_root_falls_back_to_rglob(tmp_path):
     leaves = _make_tree(tmp_path)
     if _mod._tracked_leaf_files(tmp_path) is not None:
