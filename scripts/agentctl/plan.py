@@ -963,6 +963,9 @@ def stage_carry_key(stage) -> tuple:
         stage.means.means,
         stage.means.method,
         stage.conditions,
+        _normalize_string(stage.criterion.verify_venue),
+        _normalize_string(stage.criterion.verify_kind),
+        stage.criterion.landed,
     )
 
 
@@ -1015,6 +1018,9 @@ def stage_question_key(stage) -> str:
         stage.conditions,
         principle_tuple,
         supplies_tuple,
+        _normalize_string(stage.criterion.verify_venue),
+        _normalize_string(stage.criterion.verify_kind),
+        stage.criterion.landed,
     ))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -1027,15 +1033,33 @@ def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
     # conditions/invariants are included so that adjusting a stage's MEANS to remove
     # a difficulty (the overcome-difficulty replan) classifies as 'refinement', not
     # 'no_change' — otherwise the corrected means would be silently dropped.
+    #
+    # verify_venue/verify_kind/landed (and fc.venue/fc.kind/fc.landed below) close
+    # two latent omissions found while adding the landed kind (schema 23): venue
+    # was engine-executed (SessionState.resolve_check_venue) but absent from both
+    # _prose and _fc, so a venue-only correction diffed as 'no_change' and was
+    # silently dropped — the exact failure this key family exists to prevent
+    # (experience leaf 2026-06-29 instances 6/9). verify_venue/verify_kind pass
+    # through _normalize_string for whitespace/case robustness, matching
+    # _operative_surface's convention; landed's target/remote are compared RAW
+    # (git ref names are case-sensitive — casefolding "Main" and "main" together
+    # would silently drop a real correction, the very bug this key closes).
     def _prose(doc: PlanDoc):
         return [
             (s.index, s.title, s.subject.result, s.subject.invariants,
              s.means.means, s.means.method, s.conditions,
-             s.criterion.verify_command, s.criterion.expected_exit)
+             s.criterion.verify_command, s.criterion.expected_exit,
+             _normalize_string(s.criterion.verify_venue),
+             _normalize_string(s.criterion.verify_kind),
+             s.criterion.landed)
             for s in doc.stages
         ]
     def _fc(doc: PlanDoc):
-        return [(fc.command, fc.expected_exit, fc.label) for fc in doc.meta.final_check]
+        return [
+            (fc.command, fc.expected_exit, fc.label,
+             _normalize_string(fc.venue), _normalize_string(fc.kind), fc.landed)
+            for fc in doc.meta.final_check
+        ]
     if (_prose(old) != _prose(new) or old.meta.goal != new.meta.goal
             or old.meta.repo_root != new.meta.repo_root
             or _fc(old) != _fc(new)):

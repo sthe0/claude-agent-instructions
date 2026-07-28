@@ -562,17 +562,31 @@ def code_review_blockers(
     return [f"code-reviewer verdict is {review.verdict!r} — pass blocked until a passing verdict (or an explicit override) is recorded"]
 
 
+def _landed_sort_key(landed) -> tuple:
+    """Fixed-shape, orderable stand-in for a `LandedSpec | None` inside a
+    `sorted(...)`-built tuple. `LandedSpec` is a plain dataclass with no
+    `__lt__`, so embedding it directly would raise TypeError the moment two
+    stages/final_checks tie on every earlier field and `sorted` falls back to
+    comparing it. The sentinel ("", "", -1) sorts before any real spec, whose
+    `delivered_stage` is always >= 1 (R5)."""
+    if landed is None:
+        return ("", "", -1)
+    return (landed.target, landed.remote, landed.delivered_stage)
+
+
 def _operative_surface(doc) -> tuple:
     """The plan's operative surface: what the engine executes or dispatches on,
     as opposed to its prose (title/goal/done_criterion/expected_result_image/
     material/conditions/invariants/principle) — the latter is deliberately
     excluded so no amount of narrative rewriting can satisfy the CHANGE half
     below. Per stage: means, method, verify_command, expected_exit, the
-    declared check venue and the executor. Plan level: repo_root,
-    delivery_worktree and every final_check's (command, expected_exit, venue).
+    declared check venue/kind and its landed payload, and the executor. Plan
+    level: repo_root, delivery_worktree and every final_check's (command,
+    expected_exit, venue, kind, landed payload).
     Every string component passes through `_normalize_string` so a whitespace-
     or-case-only rephrasing does not register as a change; expected_exit stays
-    a literal int comparison."""
+    a literal int comparison. `target`/`remote` inside a landed payload are
+    compared raw (git ref names are case-sensitive)."""
     stage_surface = sorted(
         (
             _normalize_string(s.means.means),
@@ -581,6 +595,8 @@ def _operative_surface(doc) -> tuple:
             s.criterion.expected_exit,
             _normalize_string(s.criterion.verify_venue),
             _normalize_string(s.actor.executor),
+            _normalize_string(s.criterion.verify_kind),
+            _landed_sort_key(s.criterion.landed),
         )
         for s in doc.stages
     )
@@ -589,6 +605,8 @@ def _operative_surface(doc) -> tuple:
             _normalize_string(fc.command),
             fc.expected_exit,
             _normalize_string(fc.venue),
+            _normalize_string(fc.kind),
+            _landed_sort_key(fc.landed),
         )
         for fc in doc.meta.final_check
     )
