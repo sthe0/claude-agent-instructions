@@ -51,6 +51,10 @@ Passable recipe: (1) nudge the gate-exempt state.plan_path to the corrected plan
 ### 2026-07-28 — substantive done_criterion correction (dispatch-ergonomics v3), NOT a venue refinement
 - Where it arose: agentctl session 6bb52797 · plan argv-large-text-via-file-v3.toml · worktree cai-wt-dispatch-ergonomics
 - Working plan: /home/the0/.claude-agent/plans/argv-large-text-via-file-v3.toml
+
+### 2026-07-28 — the chicken-and-egg is CLOSED in the engine: question-enumerate --plan
+- Where it arose: agentctl session 188d655c · plan harm-now-guard-parse-and-replan-carry.toml · worktree cai-wt-harm-fixes · landed on main at 234ae7e
+- Working plan: /home/the0/.claude-agent/plans/harm-now-guard-parse-and-replan-carry.toml
 ## Common core & variations
 **Common:** Same recipe as the 2026-07-20 head context: a refinement replan that touches a stage verify_command re-stales BOTH the premise digest (re-run question-enumerate) AND the plan-review (fresh thinker review bound to the NEW sha256). replan_coverage then requires every critique.invariants_to_preserve item to substring-land (casefold+collapsed-ws) in a stage conditions/invariants field. After replan: next-stage -> EXECUTING -> record-result, engine re-runs the check itself (exit 0). The 2026-07-23 spawn-cwd/pytest occurrence confirms the recipe holds verbatim even when the replan TARGET is a genuinely separate plan file (v2->v3 full file swap), not an in-place venue edit — re-point the gate-exempt state.plan_path to the target file via the store API, re-enumerate to stamp the new digest, and rely on plan_snapshot_path protecting the coverage baseline.
 
