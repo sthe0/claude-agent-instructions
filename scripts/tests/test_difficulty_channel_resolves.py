@@ -3,7 +3,8 @@ outside this repo because it is org-specific.
 
 Three pieces are under test:
   * verify-difficulty-channel-resolves.sh passes for an unconfigured or built-in
-    channel and fails loudly when the configured channel has no adapter,
+    channel and fails loudly when the configured channel has no adapter, or has
+    one that loads without registering under that name,
   * verify-plugin-tests.sh is fail-open by default but fails on demand when the
     tests it was told to expect are missing,
   * setup-symlinks.sh creates the plugin directory the loader reads from.
@@ -31,6 +32,8 @@ SYNC = SCRIPTS / "verify-instructions-sync.sh"
 # Not a channel anyone runs — the point is that the control reports whatever
 # name it is given without knowing any of them.
 FAKE_CHANNEL = "acmecorp"
+# A second fabricated name, for the adapter that registers under the wrong one.
+OTHER_CHANNEL = "acmecorp_eu"
 
 
 def _env(agent_home: Path) -> "dict[str, str]":
@@ -139,6 +142,40 @@ def test_a_broken_adapter_is_reported_as_not_resolving(tmp_path):
 
     assert result.returncode != 0
     assert "FAIL" in result.stdout
+
+
+def test_an_adapter_that_registers_under_another_name_fails(tmp_path):
+    """Importing is only half the plugin contract: the submit path then calls
+    get_channel(name), which raises for a name nobody registered. An adapter
+    that imports cleanly but registers something else passes any load-only
+    check and blows up at the first real filing."""
+    home = _agent_home(tmp_path, channel=FAKE_CHANNEL)
+    _install_adapter(home, FAKE_CHANNEL).write_text(
+        "from difficulty_channel.port import NullChannel, register_channel\n"
+        f"register_channel({OTHER_CHANNEL!r}, NullChannel)\n",
+        encoding="utf-8",
+    )
+
+    result = _run(RESOLVE, home)
+
+    assert result.returncode != 0
+    assert "FAIL" in result.stdout
+    assert "did not register" in result.stdout
+    assert FAKE_CHANNEL in result.stdout
+
+
+def test_an_adapter_that_registers_nothing_fails(tmp_path):
+    """The same gap reached the other way — a module with no register_channel
+    call at all."""
+    home = _agent_home(tmp_path, channel=FAKE_CHANNEL)
+    _install_adapter(home, FAKE_CHANNEL).write_text(
+        "SOME_CONSTANT = 1\n", encoding="utf-8",
+    )
+
+    result = _run(RESOLVE, home)
+
+    assert result.returncode != 0
+    assert "did not register" in result.stdout
 
 
 # ── verify-plugin-tests.sh ───────────────────────────────────────────────────
