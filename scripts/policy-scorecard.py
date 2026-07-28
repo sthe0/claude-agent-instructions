@@ -1019,10 +1019,19 @@ def _placeable_ts(raw: str) -> "dt.datetime | None":
     a malformed string raises ValueError here, but a tz-NAIVE one parses fine and
     raises TypeError later — at the first comparison against an aware window edge,
     a line no `except` around the parse can reach, which is why the naive case is
-    handled by the return below rather than by the clause above. Naive rows do
-    occur (tests/test_usage_digest_emit.py writes one into a spawn-ledger
-    fixture). To a caller both are the same event: this row cannot be located in
-    time, so it cannot be counted in a window."""
+    handled by the return below rather than by the clause above.
+
+    No PRODUCER of this ledger emits a naive row today. Enumerated rather than
+    assumed, because the arm removed in b5453c7 was justified on an unchecked
+    single-writer claim: `~/.local/log/claude-spawn-costs.jsonl` is opened for
+    append in exactly one place in this repo — spawn-specialist.py's
+    `log_cost_entry`, reached from `log_refused` and from the spawn path — and
+    both callers build `ts` as `dt.datetime.now(dt.timezone.utc).isoformat(...)`.
+    The sibling spawners spawn-cursor-specialist.py and spawn-cursor-escape.py
+    write a DIFFERENT ledger (cursor-spawn-costs.jsonl) that never reaches this
+    function. The guard stays because a producer is one commit away from
+    changing, and to a caller both unusable shapes are the same event: this row
+    cannot be located in time, so it cannot be counted in a window."""
     try:
         ts = parse_ts(raw)
     except ValueError:
@@ -1093,6 +1102,20 @@ def _failure_rate_baseline(spawn_rows: list[dict], now: dt.datetime,
     return _failure_rate(n, bad), n
 
 
+def _read_pct(value: float, places: int = 2) -> "tuple[str, float]":
+    """A percentage rendered, and the number a reader reads back off it.
+
+    Returned as a pair because a flag sentence has to close arithmetically over
+    its OWN printed figures — divide the printed rate by the printed comparator
+    and you must land on the printed multiple. Deriving the multiple from the
+    unrounded inputs breaks that silently: 6.25% against 3/400 printed at one
+    decimal reads "6.2% is 8.33× the floor 0.8%", and 6.2/0.8 is 7.75. The reader
+    the flag asks to act starts by reproducing the number, so the numbers are
+    computed from what they will see, not from what produced it."""
+    text = f"{value:.{places}%}"
+    return text, float(text.rstrip("%"))
+
+
 def _failure_rate_flag(spawn_rows: list[dict], now: dt.datetime,
                        days: int) -> str | None:
     """The sub-agent process-failure-rate flag, or None.
@@ -1117,19 +1140,29 @@ def _failure_rate_flag(spawn_rows: list[dict], now: dt.datetime,
     comparator = max(baseline, floor)
     if rate <= comparator * FAILURE_RATE_FACTOR:
         return None
-    # Name the comparator the multiple was actually divided by. Reporting the
-    # multiple against `comparator` while naming `baseline` produces a sentence
-    # whose own arithmetic does not close whenever the floor binds — "6.2% is
-    # 8.33× the baseline 0.0%" — and the act this flag requests begins with a
-    # reader reproducing the number.
+    # Name the comparator the multiple was actually divided by, AND divide the
+    # figures the reader can see. Reporting the multiple against `comparator`
+    # while naming `baseline` produces a sentence whose arithmetic does not close
+    # whenever the floor binds — "6.2% is 8.33× the baseline 0.0%" — and rounding
+    # the comparator after dividing by it breaks the same property one step
+    # later: "6.2% is 8.33× the floor 0.8%", where 6.2/0.8 is 7.75. The act this
+    # flag requests begins with a reader reproducing the number, so every figure
+    # in the sentence is derivable from the others in it.
+    rate_text, rate_read = _read_pct(rate)
+    comp_text, comp_read = _read_pct(comparator)
+    base_text, _ = _read_pct(baseline)
+    if comp_read <= 0:
+        # Only reachable with a baseline population in the tens of thousands, but
+        # a comparator that renders as 0.00% is one the reader cannot divide by.
+        comp_text, comp_read = _read_pct(comparator, 4)
     against = (f"the pooled trailing {FAILURE_RATE_BASELINE_WINDOWS}-window "
-               f"baseline {baseline:.1%} ({base_n} spawns)")
+               f"baseline {comp_text} ({base_n} spawns)")
     if floor > baseline:
-        against = (f"the rule-of-three floor {floor:.1%} — the 95% ceiling "
+        against = (f"the rule-of-three floor {comp_text} — the 95% ceiling "
                    f"{base_n} baseline spawns support, which stands above the "
-                   f"observed pooled baseline {baseline:.1%}")
-    return (f"sub-agent process-failure rate {rate:.1%} ({bad}/{n} spawns exited "
-            f"non-zero) is {rate / comparator:.2f}× {against} — spawns are "
+                   f"observed pooled baseline {base_text}")
+    return (f"sub-agent process-failure rate {rate_text} ({bad}/{n} spawns exited "
+            f"non-zero) is {rate_read / comp_read:.2f}× {against} — spawns are "
             "failing to complete, which no per-session metric here can see.")
 
 

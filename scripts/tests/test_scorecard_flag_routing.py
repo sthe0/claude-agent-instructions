@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import datetime as dt
 import importlib.util
+import re
 from pathlib import Path
 
 import pytest
@@ -217,8 +218,13 @@ def test_an_elevated_failure_rate_fires(ps):
     flag = ps._failure_rate_flag(rows, NOW, 7)
 
     assert flag is not None
-    assert "50.0%" in flag and "160/320" in flag
-    assert "3.03×" in flag
+    assert "160/320" in flag
+    # Same reproducibility property as the rule-of-three case, on the branch
+    # where the pooled baseline itself is the comparator: 50.00 / 16.50 = 3.03.
+    rate_pct, comp_pct = (float(m) for m in re.findall(r"(\d+\.\d+)%", flag)[:2])
+    multiple = float(re.search(r"is (\d+\.\d+)×", flag).group(1))
+    assert (rate_pct, comp_pct) == (pytest.approx(50.0), pytest.approx(16.5))
+    assert rate_pct / comp_pct == pytest.approx(multiple, abs=0.005)
 
 
 def test_the_threshold_is_where_the_constant_says_it_is(ps):
@@ -239,6 +245,25 @@ def test_a_window_too_thin_to_be_evidence_does_not_fire(ps):
     assert ps._failure_rate_flag(rows, NOW, 7) is None
 
 
+def test_read_pct_returns_the_number_its_text_shows(ps):
+    """The helper's contract, pinned on a value whose rendering is LOSSY.
+
+    Every population these flag tests use lands on a percentage that is exact at
+    two decimals — 6.25%, 0.75%, 50.00%, 16.50% — and for such a value the number
+    read back off the text and the unrounded input are the same float. So no
+    assertion on a rendered sentence can distinguish them: return the unrounded
+    value instead of the read-back one and every test above stays green on
+    byte-identical output. That leaves the mechanism those tests rest on
+    unexercised, which is the same shape of gap as the literals this file
+    replaced. 20/319 renders 6.27% from an input of 6.2696…, and what the reader
+    can take off the line is the former."""
+    text, read = ps._read_pct(20 / 319)
+
+    assert text == "6.27%"
+    assert read == float(text.rstrip("%"))
+    assert read != pytest.approx(20 / 319 * 100, abs=1e-9)
+
+
 def test_a_failure_free_baseline_uses_the_rule_of_three_not_a_division_by_zero(ps):
     """A 0% baseline has no ratio. The rule of three gives the 95% upper bound on
     a rate that produced 0 failures in n trials — the smallest claim the evidence
@@ -254,12 +279,29 @@ def test_a_failure_free_baseline_uses_the_rule_of_three_not_a_division_by_zero(p
     assert 20 / 320 > floor * ps.FAILURE_RATE_FACTOR
 
     # And the SENTENCE has to close arithmetically, which is a separate property
-    # from firing. Naming the raw baseline while dividing by the floor renders
-    # "6.2% is 8.33× the baseline 0.0%" — a multiple the reader cannot reproduce
-    # from any number on the line, in a module whose whole subject is a figure
-    # that read as sound while being wrong.
-    assert "rule-of-three floor 0.8%" in fired
-    assert f"{(20 / 320) / floor:.2f}×" in fired
+    # from firing. Two ways it failed: naming the raw baseline while dividing by
+    # the floor ("6.2% is 8.33× the baseline 0.0%"), then naming the right
+    # comparator but rounding it after dividing by it ("6.2% is 8.33× the floor
+    # 0.8%", where 6.2/0.8 is 7.75). Both are a multiple no number on the line
+    # produces, in a module whose whole subject is a figure that read as sound
+    # while being wrong.
+    #
+    # So assert the PROPERTY, not the two literals a fix happens to render:
+    # parse the figures back out of the sentence and require the division to
+    # hold at the precision shown. Pinning the literals is what let the second
+    # form survive the first fix.
+    assert "rule-of-three floor" in fired
+    rate_pct, comp_pct = (float(m) for m in re.findall(r"(\d+\.\d+)%", fired)[:2])
+    multiple = float(re.search(r"is (\d+\.\d+)×", fired).group(1))
+    assert rate_pct / comp_pct == pytest.approx(multiple, abs=0.005)
+    # Reproducibility alone is satisfiable by rendering everything coarsely —
+    # 6.2/0.8 = 7.75 closes arithmetically while understating a 8.33× elevation
+    # by 7%. So the printed multiple must also be the TRUE one, which pins the
+    # display precision to what the comparator needs rather than to a default.
+    assert multiple == pytest.approx((20 / 320) / floor, abs=0.01)
+    # The comparator named is the one divided by — the floor here, not the 0%
+    # pooled baseline that the floor is standing in for.
+    assert comp_pct == pytest.approx(floor * 100, abs=0.005)
     assert "baseline 0.0% (400 spawns)" not in fired
 
 

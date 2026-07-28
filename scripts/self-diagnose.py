@@ -469,6 +469,19 @@ def default_memory_roots() -> "list[Path]":
     return roots
 
 
+def _qualify(root: Path, sub: str) -> str:
+    """Root-qualify a scanner's path, unless it is already absolute.
+
+    Each scanner reports memory-root-RELATIVE paths, and one root's `leaves/x.md`
+    is another's, so `scan` prefixes the root to keep the finding identifiable
+    across roots — that prefix is also what makes the store's (kind, path) key
+    stable and what the advisory tier filter resolves. But `scan_orphans` reports
+    the ROOT ITSELF for no-root-index, and prefixing an absolute path with its own
+    parent produced `/…/memory-global//…/memory-global`: a path naming nothing,
+    which no reader can act on and no filter can classify."""
+    return sub if Path(sub).is_absolute() else f"{root}/{sub}"
+
+
 def scan(
     memory_roots: "list[Path]",
     repo_root: "Path | None",
@@ -483,13 +496,13 @@ def scan(
         out.extend(scan_broken_hooks(paths))
     for root in memory_roots:
         for d in scan_oversized_indexes(root, threshold):
-            out.append(Difficulty(d.kind, f"{root}/{d.path}", d.detail))
+            out.append(Difficulty(d.kind, _qualify(root, d.path), d.detail))
         for d in scan_dangling_pointers(root):
-            out.append(Difficulty(d.kind, f"{root}/{d.path}", d.detail))
+            out.append(Difficulty(d.kind, _qualify(root, d.path), d.detail))
         for d in scan_near_duplicates(root, near_dup_threshold):
-            out.append(Difficulty(d.kind, f"{root}/{d.path}", d.detail))
+            out.append(Difficulty(d.kind, _qualify(root, d.path), d.detail))
         for d in scan_orphans(root):
-            out.append(Difficulty(d.kind, f"{root}/{d.path}", d.detail))
+            out.append(Difficulty(d.kind, _qualify(root, d.path), d.detail))
     if repo_root is not None:
         out.extend(scan_ceiling_proximity(repo_root))
     return out

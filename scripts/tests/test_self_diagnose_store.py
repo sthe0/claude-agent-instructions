@@ -421,6 +421,36 @@ def test_the_tier_filter_does_not_move_with_the_working_directory(where, tmp_pat
     assert sds.inside_core("CLAUDE.md") is True
 
 
+def test_the_filter_classifies_the_path_shapes_production_actually_emits(tmp_path, core_leaf):
+    """Every other test here feeds a repo-RELATIVE path. Production emits that
+    shape for exactly one kind.
+
+    `self-diagnose.py`'s memory scanners report paths relative to their own
+    memory root, and `scan` then root-qualifies each one — so the six memory
+    kinds arrive ABSOLUTE, through a symlink for Core-backed roots
+    (~/.claude-agent/memory-global -> the repo's memory-global/). Only
+    ceiling-proximity is repo-relative, and only external producers supply a
+    non-path key. A filter guarding a public venue that has never been shown the
+    shape its caller sends is untested where it matters, whichever way it
+    happens to answer, so all four shapes are pinned here together."""
+    core, _ = core_leaf
+    # …as production emits it: absolute, and reached through the symlink.
+    agent_home = tmp_path / "agent-home"
+    agent_home.mkdir()
+    (agent_home / "memory-global").symlink_to(core / "memory-global")
+    assert sds.inside_core(f"{agent_home}/memory-global/leaves/x.md", core) is True
+
+    # Personal memory: same absolute shape, resolves outside the repo.
+    personal = tmp_path / "agent-home" / "projects" / "p" / "memory"
+    personal.mkdir(parents=True)
+    (personal / "MEMORY.md").write_text("index\n", encoding="utf-8")
+    assert sds.inside_core(f"{personal}/MEMORY.md", core) is False
+
+    # ceiling-proximity: repo-relative. An external key: not a path at all.
+    assert sds.inside_core("memory-global/leaves/x.md", core) is True
+    assert sds.inside_core("subagent-failure-rate/7d", core) is False
+
+
 def test_a_finding_path_that_is_not_a_path_does_not_clear_the_tier_filter():
     """This filter guards a PUBLIC venue, and `Path.resolve()` is non-strict: any
     string at all resolves under the root and so had `root in parents` answering
@@ -544,7 +574,7 @@ def test_rows_differing_only_in_directory_collapse_to_one_line():
     assert sds.describe(rows[4], T0) in lines
 
 
-def test_external_kind_rows_do_not_collapse_on_their_window():
+def test_external_kind_rows_do_not_collapse_on_their_window(store_file):
     """The collapse asks "one condition, several directories", and reads the
     basename to answer. An external producer's path is an opaque key whose
     basename is its WINDOW — "7d" for every policy flag alike — so three unrelated
@@ -554,7 +584,7 @@ def test_external_kind_rows_do_not_collapse_on_their_window():
         [_finding(sds.KIND_POLICY_FLAG, "subagent-failure-rate/7d", "same wording"),
          _finding(sds.KIND_POLICY_FLAG, "spend-rate/7d", "same wording"),
          _finding(sds.KIND_POLICY_FLAG, "correction-rate/7d", "same wording")],
-        None, T0)
+        store_file, T0)
 
     lines = sds.describe_rows(rows, T0)
     assert len(lines) == 3
