@@ -14,9 +14,11 @@ Plus the two properties the generalization introduces:
     whose reason names both, and the SAME message never blocks a second time
     even when only one of the two obligations was addressed;
   - BEHAVIORAL guardian purity: every guardian in TURN_GUARDIANS is invoked with
-    subprocess.Popen/run, socket.socket and builtins.open monkeypatched to raise,
-    and must still return its blocker list. A guardian that delegates its I/O one
-    call deep passes a source-substring search but fails this test.
+    every I/O and clock primitive it could plausibly reach monkeypatched to raise
+    — not just builtins.open, but the pathlib and os.stat routes a Path(...)
+    .read_text() / .exists() takes, subprocess, sockets and the clock — and must
+    still return its blocker list. A guardian that delegates its I/O one call deep
+    passes a source-substring search but fails this test.
 
 Transcript fixtures are small JSONL files built in tmp_path.
 """
@@ -24,10 +26,13 @@ from __future__ import annotations
 
 import builtins
 import importlib.util
+import io
 import json
+import os
 import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -396,6 +401,49 @@ def test_raising_guardian_alone_never_wedges(tmp_path, isolated_state, monkeypat
 
 # --- behavioral guardian purity ---------------------------------------------
 
+class _ImpureGuardian(BaseException):
+    """Raised by the purity traps. Derives from BaseException, not Exception, on
+    purpose: guardians live in a fail-open module and a regression that reads the
+    store would plausibly wrap that read in `except Exception` — which would
+    swallow an ordinary trap and leave the net reading as coverage while catching
+    nothing. Verified: with an Exception-derived trap, the mutation this net was
+    widened for passed."""
+
+
+_PURITY_TRAPS = [
+    (builtins, "open"),
+    # pathlib does NOT go through builtins.open: Path.open calls io.open and
+    # Path.exists calls os.stat, so patching builtins.open alone would let the
+    # single most likely regression — moving a store read back into a guardian as
+    # Path(...).read_text() — leave this whole suite green.
+    (io, "open"),
+    (os, "stat"),
+    (os, "lstat"),
+    (os, "listdir"),
+    (os, "scandir"),
+    (Path, "open"),
+    (Path, "read_text"),
+    (Path, "read_bytes"),
+    (Path, "stat"),
+    (Path, "exists"),
+    (Path, "is_file"),
+    (Path, "is_dir"),
+    (Path, "glob"),
+    (subprocess, "Popen"),
+    (subprocess, "run"),
+    (socket, "socket"),
+    (socket, "create_connection"),
+    # the clock: an age or deadline computed at decision time is not a frozen fact
+    (time, "time"),
+    (time, "monotonic"),
+]
+
+# The store's own clock, trapped by identity rather than by module name: it binds
+# `datetime` at its import, so patching the datetime module would not reach it.
+if getattr(_mod, "_sd_store", None) is not None:
+    _PURITY_TRAPS.append((_mod._sd_store, "_utcnow"))
+
+
 def test_guardians_are_behaviorally_pure():
     """Every registered guardian must decide from the frozen TurnContext alone.
 
@@ -415,19 +463,24 @@ def test_guardians_are_behaviorally_pure():
     )
 
     def _forbidden(*args, **kwargs):
-        raise AssertionError("guardian performed I/O")
+        raise _ImpureGuardian("guardian performed I/O or read the clock")
 
-    saved = (builtins.open, subprocess.Popen, subprocess.run, socket.socket)
+    saved = [(obj, attr, getattr(obj, attr)) for obj, attr in _PURITY_TRAPS]
     results: dict[str, list[str]] = {}
-    builtins.open = _forbidden
-    subprocess.Popen = _forbidden
-    subprocess.run = _forbidden
-    socket.socket = _forbidden
+    impure: list[str] = []
+    for obj, attr in _PURITY_TRAPS:
+        setattr(obj, attr, _forbidden)
     try:
         for name, guardian in _mod.TURN_GUARDIANS.items():
-            results[name] = guardian(ctx)
+            try:
+                results[name] = guardian(ctx)
+            except _ImpureGuardian:
+                impure.append(name)
     finally:
-        builtins.open, subprocess.Popen, subprocess.run, socket.socket = saved
+        for obj, attr, original in saved:
+            setattr(obj, attr, original)
+
+    assert impure == [], f"impure guardian(s): {impure}"
 
     assert set(results) == set(_mod.TURN_GUARDIANS)
     for name, blockers in results.items():

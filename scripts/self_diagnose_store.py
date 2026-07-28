@@ -74,6 +74,22 @@ ACTIONABLE_KINDS = frozenset(
     }
 )
 
+# The declared complement. Nothing reads this at runtime — `is_actionable` stays
+# a membership test against ACTIONABLE_KINDS alone, so an UNKNOWN kind still
+# defaults to advisory and can never block. It exists so the suite can assert
+# ACTIONABLE_KINDS | ADVISORY_KINDS == self-diagnose.py's own vocabulary: a ninth
+# kind added to the detector then fails a test until someone places it in exactly
+# one of the two tables, instead of defaulting silently.
+ADVISORY_KINDS = frozenset(
+    {
+        "ceiling-proximity",
+        "near-duplicate",
+        "dangling-pointer",
+        "oversized-index",
+        "no-root-index",
+    }
+)
+
 ACTIONABLE_MIN_AGE_DAYS = 2
 
 # int -> ack expires after this many days and the row returns to `open`;
@@ -151,7 +167,11 @@ def finding_key(kind: str, path: str) -> str:
 def load_rows(path: "str | Path | None" = None, now: "datetime | None" = None) -> "list[dict]":
     """Every stored row, with expiries applied. Fail-open: a missing, empty or
     corrupt store yields the rows it can parse (possibly none) and never raises,
-    because no finding is worth a wedged turn boundary."""
+    because no finding is worth a wedged turn boundary.
+
+    `kind` is coerced to str here: a hand-edited or partially-corrupt row can
+    carry any JSON type, and an unhashable one turns every `kind in ...`
+    membership test downstream into a TypeError."""
     now = now or _utcnow()
     sp = store_path(path)
     rows: "list[dict]" = []
@@ -168,16 +188,22 @@ def load_rows(path: "str | Path | None" = None, now: "datetime | None" = None) -
         except json.JSONDecodeError:
             continue  # a truncated mid-row write must not lose the rest
         if isinstance(row, dict) and row.get("key"):
+            row["kind"] = str(row.get("kind") or "")
             rows.append(_apply_expiry(row, now))
     return rows
 
 
 def save_rows(rows: "list[dict]", path: "str | Path | None" = None) -> None:
+    """Replace the store atomically — a crash mid-write leaves the previous store
+    intact rather than a truncated one. The temp name carries the pid so two
+    writers cannot interleave into one another's partial file."""
     sp = store_path(path)
     sp.parent.mkdir(parents=True, exist_ok=True)
-    sp.write_text(
+    tmp = sp.with_name(f"{sp.name}.{os.getpid()}.tmp")
+    tmp.write_text(
         "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8"
     )
+    os.replace(tmp, sp)
 
 
 def _apply_expiry(row: dict, now: datetime) -> dict:
@@ -218,15 +244,26 @@ def upsert_findings(
     """Merge one scan's findings into the store and return the resulting rows.
 
     A row absent from the newest scan is RESOLVED — the condition is gone, so it
-    is dropped rather than lingering as a permanent accusation."""
+    is dropped rather than lingering as a permanent accusation. Callers must
+    therefore pass the findings of a scan that actually COMPLETED; a failed scan
+    is not an empty one.
+
+    One scan may legitimately emit the same (kind, path) twice — `near-duplicate`
+    keys on the first leaf of each pair, so A-vs-B and A-vs-C both key on A — so
+    the second occurrence is dropped rather than appended as a second row with a
+    double-counted times_surfaced."""
     now = now or _utcnow()
     existing = {r["key"]: r for r in load_rows(path, now)}
     rows: "list[dict]" = []
+    seen: "set[str]" = set()
     for finding in findings:
         kind, fpath, detail = _as_record(finding)
         if not kind:
             continue
         key = finding_key(kind, fpath)
+        if key in seen:
+            continue
+        seen.add(key)
         row = existing.get(key)
         if row is None:
             row = {
@@ -255,7 +292,7 @@ def upsert_findings(
 # --- views ------------------------------------------------------------------
 
 def is_actionable(kind: str) -> bool:
-    return kind in ACTIONABLE_KINDS
+    return str(kind) in ACTIONABLE_KINDS
 
 
 def _age_days(row: dict, now: datetime) -> float:
@@ -265,40 +302,98 @@ def _age_days(row: dict, now: datetime) -> float:
     return (now - first).total_seconds() / 86400.0
 
 
+def _is_open(row: dict) -> bool:
+    return (row.get("status") or _STATUS_OPEN) == _STATUS_OPEN
+
+
 def open_actionable(
     rows: "list[dict]",
     now: "datetime | None" = None,
     min_age_days: "float | None" = None,
 ) -> "list[dict]":
+    """Actionable, open, and past the debounce — the rows that may block."""
     now = now or _utcnow()
     floor = ACTIONABLE_MIN_AGE_DAYS if min_age_days is None else min_age_days
     return [
         r
         for r in rows
         if is_actionable(r.get("kind", ""))
-        and (r.get("status") or _STATUS_OPEN) == _STATUS_OPEN
+        and _is_open(r)
         and _age_days(r, now) >= floor
     ]
 
 
-def advisory_open(rows: "list[dict]", now: "datetime | None" = None) -> "list[dict]":
+def debounced_actionable(
+    rows: "list[dict]",
+    now: "datetime | None" = None,
+    min_age_days: "float | None" = None,
+) -> "list[dict]":
+    """Actionable and open, but still inside ACTIONABLE_MIN_AGE_DAYS.
+
+    The third bucket. Without it a fresh actionable finding is counted in neither
+    `open_actionable` nor `advisory_open`, so the very line that reports where
+    each finding went would silently account for none of them. Together the three
+    views PARTITION the open rows: every open row is in exactly one."""
+    now = now or _utcnow()
+    floor = ACTIONABLE_MIN_AGE_DAYS if min_age_days is None else min_age_days
     return [
         r
         for r in rows
-        if not is_actionable(r.get("kind", ""))
-        and (r.get("status") or _STATUS_OPEN) == _STATUS_OPEN
+        if is_actionable(r.get("kind", ""))
+        and _is_open(r)
+        and _age_days(r, now) < floor
     ]
 
 
-def describe(row: dict) -> str:
+def advisory_open(rows: "list[dict]", now: "datetime | None" = None) -> "list[dict]":
+    return [r for r in rows if not is_actionable(r.get("kind", "")) and _is_open(r)]
+
+
+def describe(row: dict, now: "datetime | None" = None) -> str:
     """One human-readable line carrying the finding AND its remediation, so a
     surfaced finding supplies rectification data rather than only detection."""
-    kind = row.get("kind", "?")
+    kind = str(row.get("kind", "?"))
     fix = REMEDIATION.get(kind, "investigate and close")
     return (
         f"[{row.get('key')}] {kind}: {row.get('path')} — {row.get('detail')} "
-        f"(open {int(_age_days(row, _utcnow()))}d, surfaced {row.get('times_surfaced')}x; fix: {fix})"
+        f"(open {int(_age_days(row, now or _utcnow()))}d, surfaced {row.get('times_surfaced')}x; fix: {fix})"
     )
+
+
+def describe_rows(rows: "list[dict]", now: "datetime | None" = None) -> "list[str]":
+    """One line per DISTINCT condition, collapsing rows that differ only in which
+    directory the file sits in.
+
+    Presentation only — the store still keys on (kind, path), each row keeps its
+    own key and stays independently closable, and the collapsed line carries
+    every one of those keys. What it removes is the block text reading as noise:
+    the live population has one leaf replicated across four project-memory roots,
+    which is four rows naming one condition."""
+    now = now or _utcnow()
+    groups: "dict[tuple[str, str, str], list[dict]]" = {}
+    for row in rows:
+        key = (
+            str(row.get("kind", "")),
+            Path(str(row.get("path", ""))).name,
+            str(row.get("detail", "")),
+        )
+        groups.setdefault(key, []).append(row)
+
+    lines: "list[str]" = []
+    for (kind, basename, detail), members in groups.items():
+        if len(members) == 1:
+            lines.append(describe(members[0], now))
+            continue
+        keys = " ".join(str(m.get("key")) for m in members)
+        parents = ", ".join(str(Path(str(m.get("path", ""))).parent) for m in members)
+        age = max(int(_age_days(m, now)) for m in members)
+        surfaced = max(int(m.get("times_surfaced") or 0) for m in members)
+        lines.append(
+            f"[{keys}] {kind}: {basename} — {detail} "
+            f"({len(members)} paths: {parents}; open {age}d, surfaced {surfaced}x; "
+            f"fix: {REMEDIATION.get(kind, 'investigate and close')})"
+        )
+    return lines
 
 
 def digest_lines(rows: "list[dict]", now: "datetime | None" = None) -> "list[str]":
@@ -350,10 +445,21 @@ def inside_core(finding_path: str, core_root: "Path | None" = None) -> bool:
     Symlink resolution is deliberate: ~/.claude-agent/memory-global is a symlink
     INTO the Core repo, so those findings genuinely are public Core content,
     while personal and project memory resolve elsewhere and are filtered out.
-    Fails SAFE — any resolution error means "not Core", hence not publishable."""
-    root = (core_root or REPO_ROOT)
+    Fails SAFE — any resolution error means "not Core", hence not publishable.
+
+    A RELATIVE finding path is resolved against `core_root`, never against the
+    process CWD. Only the ceiling-proximity scan emits one, and it emits it as
+    `relative_to(repo_root)`, so the repo root is its real base — but the reason
+    to pin it is stronger than accuracy: resolving against the CWD makes this
+    guard answer True or False for the same finding depending on where the caller
+    happened to be started, and a guard whose verdict moves with the caller's
+    working directory is not a guard."""
     try:
-        return Path(root).resolve() in Path(finding_path).expanduser().resolve().parents
+        root = Path(core_root or REPO_ROOT).resolve()
+        candidate = Path(finding_path).expanduser()
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        return root in candidate.resolve().parents
     except (OSError, RuntimeError, ValueError):
         return False
 

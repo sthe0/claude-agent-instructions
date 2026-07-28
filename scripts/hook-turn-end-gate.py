@@ -148,9 +148,10 @@ class TurnContext:
                      prefilter + agentctl.advisor.judge_binary_ask semantic model
                      verdict over the concatenated assistant text). Computed by
                      the shell.
-    self_diagnose_findings : one pre-formatted line per OPEN, ACTIONABLE
-                     self-diagnose finding older than the store's debounce, or
-                     empty when this session has already been blocked on them.
+    self_diagnose_findings : one pre-formatted line per distinct OPEN, ACTIONABLE
+                     self-diagnose CONDITION older than the store's debounce
+                     (rows differing only in directory collapse into one line),
+                     or empty when this session has already been blocked on them.
                      The store read (and the per-session marker stat) happen in
                      the shell; the guardian only reads the frozen tuple.
     """
@@ -531,7 +532,7 @@ def _open_self_diagnose_findings(session_key: str) -> tuple[str, ...]:
         if _session_marker_path(session_key).exists():
             return ()
         rows = _sd_store.load_rows()
-        return tuple(_sd_store.describe(row) for row in _sd_store.open_actionable(rows))
+        return tuple(_sd_store.describe_rows(_sd_store.open_actionable(rows)))
     except Exception:
         return ()
 

@@ -16,8 +16,11 @@ store, never the real channel.
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
+import os
+import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -99,14 +102,56 @@ def test_actionability_table_is_exactly_the_declared_kinds():
     assert sds.is_actionable("orphan-leaf")
     assert sds.is_actionable("orphan-index")
     assert sds.is_actionable("broken-hook-registration")
-    for advisory in (
-        "ceiling-proximity",
-        "near-duplicate",
-        "dangling-pointer",
-        "oversized-index",
-        "no-root-index",
-    ):
+    for advisory in sds.ADVISORY_KINDS:
         assert not sds.is_actionable(advisory), advisory
+
+
+def _detector_kinds() -> "set[str]":
+    """Every `kind` string self-diagnose.py can emit, read out of its source.
+
+    Read rather than duplicated, so adding a ninth kind to the detector breaks
+    this file instead of silently defaulting to advisory with the fallback
+    remediation. `scan_orphans` picks its kind through a conditional bound to a
+    local before the Difficulty(...) call, hence the second branch. An expression
+    shape neither branch understands yields nothing and trips the caller's
+    minimum-size assertion — the extraction fails loud, never vacuously."""
+
+    def _value_strings(node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            yield node.value
+        elif isinstance(node, ast.IfExp):
+            yield from _value_strings(node.body)
+            yield from _value_strings(node.orelse)
+
+    tree = ast.parse((SCRIPTS_DIR / "self-diagnose.py").read_text(encoding="utf-8"))
+    kinds: "set[str]" = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and getattr(node.func, "id", None) == "Difficulty"
+            and node.args
+        ):
+            kinds |= set(_value_strings(node.args[0]))
+        elif isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "kind" for t in node.targets
+        ):
+            kinds |= set(_value_strings(node.value))
+    return kinds
+
+
+def test_every_detector_kind_is_placed_in_exactly_one_table():
+    """A ninth kind added to self-diagnose.py must force a deliberate decision.
+
+    Without this the detector and the store drift silently: an unplaced kind is
+    advisory with the fallback remediation "investigate and close" and no test
+    fails. The DEFAULT direction stays safe — `is_actionable` remains a membership
+    test against ACTIONABLE_KINDS alone, so an unknown kind can still never
+    block; what this adds is that it can no longer arrive unnoticed."""
+    detector = _detector_kinds()
+    assert len(detector) >= 8, f"kind extraction broke: {detector}"
+    assert sds.ACTIONABLE_KINDS & sds.ADVISORY_KINDS == frozenset()
+    assert sds.ACTIONABLE_KINDS | sds.ADVISORY_KINDS == detector
+    assert set(sds.REMEDIATION) == detector
 
 
 def test_ceiling_proximity_never_blocks(store_file):
@@ -124,6 +169,69 @@ def test_fresh_finding_does_not_block_its_own_author(store_file):
     assert sds.open_actionable(rows, T0 + timedelta(hours=1)) == []
     aged = T0 + timedelta(days=sds.ACTIONABLE_MIN_AGE_DAYS + 1)
     assert len(sds.open_actionable(sds.load_rows(store_file, aged), aged)) == 1
+
+
+def test_the_three_views_partition_the_open_rows(store_file):
+    """No open row may fall between the buckets the SessionStart summary reports."""
+    fresh = _finding("orphan-leaf", "/mem/fresh.md")
+    aged = _finding("orphan-leaf", "/mem/aged.md")
+    sds.upsert_findings([aged], store_file, T0)
+    sds.upsert_findings([aged, fresh, CEILING], store_file, T0 + timedelta(days=30))
+
+    now = T0 + timedelta(days=30)
+    rows = sds.load_rows(store_file, now)
+    buckets = (
+        sds.open_actionable(rows, now),
+        sds.debounced_actionable(rows, now),
+        sds.advisory_open(rows, now),
+    )
+    assert [len(b) for b in buckets] == [1, 1, 1]
+    keys = [r["key"] for b in buckets for r in b]
+    assert sorted(keys) == sorted(r["key"] for r in rows)
+    assert len(set(keys)) == len(keys)
+
+
+def test_a_duplicated_key_within_one_scan_is_one_row(store_file):
+    """near-duplicate keys on the FIRST leaf of each pair, so A-vs-B and A-vs-C
+    both arrive keyed on A in a single scan."""
+    dup = _finding("near-duplicate", "/mem/a.md", "0.7 Jaccard vs b.md")
+    rows = sds.upsert_findings([dup, dup], store_file, T0)
+    assert len(rows) == 1
+    assert rows[0]["times_surfaced"] == 1
+    assert len(sds.load_rows(store_file, T0)) == 1
+
+
+def test_save_rows_replaces_atomically(store_file, monkeypatch):
+    """A crash between the write and the rename leaves the previous store intact
+    rather than a truncated one."""
+    sds.upsert_findings([ORPHAN], store_file, T0)
+    before = store_file.read_bytes()
+
+    def _die(src, dst):
+        raise OSError("crash between write and rename")
+
+    monkeypatch.setattr(os, "replace", _die)
+    with pytest.raises(OSError):
+        sds.save_rows([], store_file)
+
+    assert store_file.read_bytes() == before
+
+
+def test_a_non_string_kind_never_raises_out_of_a_view(store_file):
+    """A hand-edited or partially-corrupt row must not traceback the CLI: an
+    unhashable `kind` would make every `kind in ...` membership test a TypeError."""
+    store_file.write_text(
+        json.dumps({"key": "abc", "kind": ["orphan-leaf"], "path": "/x", "detail": "d",
+                    "first_seen": sds._iso(T0), "last_seen": sds._iso(T0),
+                    "times_surfaced": 1, "status": "open"}) + "\n",
+        encoding="utf-8",
+    )
+    rows = sds.load_rows(store_file, T0)
+    assert sds.open_actionable(rows, T0) == []
+    assert len(sds.advisory_open(rows, T0)) == 1
+    assert sds.describe(rows[0], T0)
+    assert sds.digest_lines(rows, T0)
+    assert sds.main(["--store", str(store_file), "--list"]) == 0
 
 
 # --- store: disposal --------------------------------------------------------
@@ -240,6 +348,19 @@ def test_a_refused_filing_is_never_marked_filed(store_file):
     assert sds.load_rows(store_file, T0)[0]["filed_ref"] is None
 
 
+@pytest.mark.parametrize("where", ["repo-root", "elsewhere"])
+def test_the_tier_filter_does_not_move_with_the_working_directory(where, tmp_path, monkeypatch):
+    """ceiling-proximity findings carry repo-RELATIVE paths. Resolving those
+    against the process CWD made this guard answer differently for the same
+    finding depending on where the caller was started — and a guard whose verdict
+    moves with the caller's working directory is not a guard."""
+    monkeypatch.chdir(SCRIPTS_DIR.parent if where == "repo-root" else tmp_path)
+    assert sds.inside_core("CLAUDE.md") is True
+    assert sds.inside_core("memory-global/leaves/x.md") is True
+    assert sds.inside_core(str(Path.home() / ".claude-agent" / "projects" / "p" / "x.md")) is False
+    assert sds.inside_core("") is False
+
+
 def test_a_filed_row_is_never_refiled(store_file):
     core = str(SCRIPTS_DIR.parent / "memory-global" / "leaves" / "z.md")
     rows = sds.upsert_findings([_finding("near-duplicate", core)], store_file, T0)
@@ -248,6 +369,91 @@ def test_a_filed_row_is_never_refiled(store_file):
     assert sds.route_advisory(sds.load_rows(store_file, T0), "backlog", again,
                               path=store_file) == []
     assert again.calls == []
+
+
+# --- store: the default filer -----------------------------------------------
+#
+# Dead while ADVISORY_CHANNEL is 'digest', and never exercised against the real
+# file-difficulty.py: on a machine holding Core push rights that script refuses
+# every filing with exit 2, and the venue it would otherwise reach is a public
+# repo. The argv shape and the timeout are exactly what will be wrong the day the
+# switch flips, so they are pinned against a FAKE script.
+
+def _fake_filer_script(tmp_path, body):
+    (tmp_path / "file-difficulty.py").write_text(
+        "#!/usr/bin/env python3\nimport sys\n" + body + "\n", encoding="utf-8"
+    )
+    return tmp_path
+
+
+def test_default_filer_argv_shape_and_success(tmp_path, monkeypatch):
+    argv_dump = tmp_path / "argv.json"
+    _fake_filer_script(
+        tmp_path,
+        f"import json; json.dump(sys.argv[1:], open({str(argv_dump)!r}, 'w'))\n"
+        "print('noise')\nprint('ISSUE-7')",
+    )
+    monkeypatch.setattr(sds, "SCRIPT_DIR", tmp_path)
+
+    rc, ref = sds._default_filer(
+        {"path": "/core/x.md", "kind": "near-duplicate", "detail": "0.7 Jaccard vs y.md"}
+    )
+    assert (rc, ref) == (0, "ISSUE-7")
+
+    argv = json.loads(argv_dump.read_text(encoding="utf-8"))
+    assert dict(zip(argv[::2], argv[1::2])) == {
+        "--target": "/core/x.md",
+        "--ground": "self-diagnose near-duplicate: 0.7 Jaccard vs y.md",
+        "--severity": "low",
+        "--stream": "backlog",
+        "--reporter": "self-diagnose",
+    }
+
+
+def test_default_filer_reports_a_refusal_rather_than_a_ref(tmp_path, monkeypatch):
+    _fake_filer_script(tmp_path, "sys.exit(2)")
+    monkeypatch.setattr(sds, "SCRIPT_DIR", tmp_path)
+    rc, ref = sds._default_filer({"path": "/core/x.md", "kind": "near-duplicate", "detail": "d"})
+    assert rc == 2
+    assert ref == ""
+
+
+def test_default_filer_bounds_the_subprocess(tmp_path, monkeypatch):
+    seen = {}
+
+    def _fake_run(argv, **kwargs):
+        seen.update(kwargs)
+        raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+
+    monkeypatch.setattr(sds, "SCRIPT_DIR", tmp_path)
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    assert sds._default_filer({"path": "/core/x.md", "kind": "k", "detail": "d"}) == (1, "")
+    assert seen["timeout"] == 60
+
+
+# --- presentation: one line per condition ------------------------------------
+
+def test_rows_differing_only_in_directory_collapse_to_one_line():
+    """The live population replicates one leaf across four project-memory roots:
+    four rows naming one condition. Per-path identity is right — each row is
+    independently closable — so the collapse is presentation only, and the line
+    carries every key."""
+    rows = sds.upsert_findings(
+        [_finding("orphan-leaf", f"/mem/p{i}/memory/leaves/qprov.md", "not reachable")
+         for i in range(4)]
+        + [_finding("orphan-leaf", "/mem/other.md", "not reachable")],
+        None,
+        T0,
+    )
+    lines = sds.describe_rows(rows, T0)
+    assert len(lines) == 2
+    collapsed = next(line for line in lines if "qprov.md" in line)
+    assert "4 paths" in collapsed
+    for row in rows[:4]:
+        assert row["key"] in collapsed
+    assert "add a pointer line" in collapsed
+    # the singleton keeps its full per-row rendering
+    assert sds.describe(rows[4], T0) in lines
 
 
 # --- the turn-boundary guardian ---------------------------------------------

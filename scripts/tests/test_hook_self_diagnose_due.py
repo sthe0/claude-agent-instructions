@@ -4,9 +4,11 @@ scanner invocation, and the --dry-run/--force-run CLI modes.
 from __future__ import annotations
 
 import importlib.util
+import re
 import stat
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -40,7 +42,8 @@ def test_run_scanner_returns_records(tmp_path, monkeypatch):
     assert hook.run_scanner() == [{"kind": "orphan-leaf", "path": "b", "detail": "c"}]
 
 
-def test_run_scanner_clean_tree_is_empty(tmp_path, monkeypatch):
+def test_run_scanner_clean_tree_is_an_empty_list(tmp_path, monkeypatch):
+    """A COMPLETED scan over a clean tree — the one case that may resolve rows out."""
     script = _make_script(tmp_path, "fake.py", "print('[]')\nraise SystemExit(0)")
     monkeypatch.setattr(hook, "SELF_DIAGNOSE", script)
     assert hook.run_scanner() == []
@@ -49,26 +52,80 @@ def test_run_scanner_clean_tree_is_empty(tmp_path, monkeypatch):
 def test_run_scanner_unparseable_output_fails_open(tmp_path, monkeypatch):
     script = _make_script(tmp_path, "fake.py", "print('not json')\nraise SystemExit(1)")
     monkeypatch.setattr(hook, "SELF_DIAGNOSE", script)
-    assert hook.run_scanner() == []
+    assert hook.run_scanner() is None
+
+
+def test_run_scanner_non_list_json_fails_open(tmp_path, monkeypatch):
+    script = _make_script(tmp_path, "fake.py", "print('{\"kind\": \"x\"}')")
+    monkeypatch.setattr(hook, "SELF_DIAGNOSE", script)
+    assert hook.run_scanner() is None
 
 
 def test_run_scanner_missing_script_fails_open(tmp_path, monkeypatch):
     monkeypatch.setattr(hook, "SELF_DIAGNOSE", tmp_path / "does-not-exist.py")
-    assert hook.run_scanner() == []
+    assert hook.run_scanner() is None
 
 
 def test_run_scanner_timeout_fails_open(tmp_path, monkeypatch):
     script = _make_script(tmp_path, "slow.py", "import time\ntime.sleep(5)")
     monkeypatch.setattr(hook, "SELF_DIAGNOSE", script)
     monkeypatch.setattr(hook, "SCAN_TIMEOUT_S", 0.2)
-    assert hook.run_scanner() == []
+    assert hook.run_scanner() is None
 
 
 def test_run_scanner_crash_fails_open(tmp_path, monkeypatch):
     script = _make_script(tmp_path, "crash.py", "raise RuntimeError('boom')")
     monkeypatch.setattr(hook, "SELF_DIAGNOSE", script)
-    # a non-zero exit with stderr noise but no stdout still yields no findings
-    assert hook.run_scanner() == []
+    # a non-zero exit with stderr noise but no stdout is a FAILED scan, not a clean one
+    assert hook.run_scanner() is None
+
+
+# ── a failed scan is not a clean tree ────────────────────────────────────────
+
+def _seeded_store(monkeypatch, tmp_path):
+    """Two rows, one of them explicitly ACKED, in an isolated store."""
+    store_file = tmp_path / "seeded.jsonl"
+    monkeypatch.setenv("CLAUDE_SELF_DIAGNOSE_STORE", str(store_file))
+    monkeypatch.setattr(hook, "STAMP", tmp_path / "stamp")
+    hook.store.upsert_findings(
+        [
+            {"kind": "orphan-leaf", "path": "/mem/a.md", "detail": "d"},
+            {"kind": "orphan-leaf", "path": "/mem/b.md", "detail": "d"},
+        ]
+    )
+    hook.store.ack(hook.store.finding_key("orphan-leaf", "/mem/a.md"), "deliberate")
+    return store_file
+
+
+def test_a_failed_scan_leaves_the_store_byte_identical(tmp_path, monkeypatch):
+    """One scanner hiccup must not wipe every first_seen, times_surfaced and
+    explicit ack. This is one half of the contract; the resolve-out test below is
+    the other, and a fix that satisfies only this one — never resolving anything —
+    would break the store's whole closure model."""
+    store_file = _seeded_store(monkeypatch, tmp_path)
+    before = store_file.read_bytes()
+    assert len(hook.store.load_rows()) == 2
+
+    monkeypatch.setattr(hook, "SELF_DIAGNOSE", tmp_path / "does-not-exist.py")
+    assert hook.main(["--force-run"]) == 0
+
+    assert store_file.read_bytes() == before
+    rows = {r["path"]: r for r in hook.store.load_rows()}
+    assert set(rows) == {"/mem/a.md", "/mem/b.md"}
+    assert rows["/mem/a.md"]["status"] == "acked"
+    assert rows["/mem/b.md"]["times_surfaced"] == 1
+
+
+def test_a_clean_scan_still_resolves_rows_out(tmp_path, monkeypatch):
+    """A finding that disappeared from a COMPLETED scan is fixed, and closing it is
+    the point — so the store must still empty out here, ack and all."""
+    store_file = _seeded_store(monkeypatch, tmp_path)
+    script = _make_script(tmp_path, "clean.py", "print('[]')\nraise SystemExit(0)")
+    monkeypatch.setattr(hook, "SELF_DIAGNOSE", script)
+
+    assert hook.main(["--force-run"]) == 0
+    assert hook.store.load_rows() == []
+    assert store_file.read_bytes() == b""
 
 
 # ── stamp bookkeeping ────────────────────────────────────────────────────────
@@ -164,6 +221,32 @@ def test_persist_fails_open_on_a_broken_store(tmp_path, monkeypatch):
         hook.store, "upsert_findings", lambda *a, **k: (_ for _ in ()).throw(OSError("nope"))
     )
     assert hook.persist([{"kind": "orphan-leaf", "path": "p", "detail": "d"}]) == []
+
+
+def test_the_summary_accounts_for_every_open_row(tmp_path, monkeypatch, capsys):
+    """The line reports where each finding went, so no open row may fall between
+    its buckets. A fresh actionable finding used to be counted in neither: too
+    young to block, and excluded from the advisory count by its kind."""
+    monkeypatch.setenv("CLAUDE_SELF_DIAGNOSE_STORE", str(tmp_path / "s.jsonl"))
+    monkeypatch.setattr(hook, "STAMP", tmp_path / "stamp")
+    # one aged actionable (blocks), one fresh actionable (debounced), one advisory
+    old = datetime.now(timezone.utc) - timedelta(days=30)
+    hook.store.upsert_findings([{"kind": "orphan-leaf", "path": "/mem/old.md", "detail": "d"}], now=old)
+    monkeypatch.setattr(
+        hook,
+        "run_scanner",
+        lambda: [
+            {"kind": "orphan-leaf", "path": "/mem/old.md", "detail": "d"},
+            {"kind": "orphan-leaf", "path": "/mem/new.md", "detail": "d"},
+            {"kind": "near-duplicate", "path": "/mem/dup.md", "detail": "d"},
+        ],
+    )
+    assert hook.main(["--force-run"]) == 0
+
+    err = capsys.readouterr().err
+    counts = [int(n) for n in re.findall(r"(\d+) (?:actionable|advisory)", err)]
+    assert counts == [1, 1, 1]
+    assert sum(counts) == len(hook.store.load_rows())
 
 
 def test_report_caps_printed_lines(monkeypatch, capsys):
