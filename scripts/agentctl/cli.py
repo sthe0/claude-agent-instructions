@@ -32,6 +32,7 @@ from .directive import Directive
 from .dispatch import Runner, dispatch_stage, parse_marker, subprocess_runner
 from .machine import transition
 from .plan import (
+    PlanError,
     check_venue_warnings,
     load_plan,
     stage_question_key,
@@ -1095,16 +1096,35 @@ def cmd_question_enumerate(args, *, store: StateStore, runner: Runner | None = N
     state, bag = _question_bag(store, args.session)
     if bag is None:
         return Directive(False, state.node, "noop", "plugin 'premise' is not active")
-    plan_path = getattr(state, "plan_path", None)
+    # --plan names the plan to enumerate, defaulting to the session's current one so
+    # every pre-existing invocation is byte-identical. It exists for the CORRECTED
+    # plan of a replan, which is not state.plan_path until that replan succeeds:
+    # premise_blockers stamps staleness by comparing bag['enumerated_at'] against the
+    # digest of the plan under evaluation, and cmd_replan evaluates that gate against
+    # args.plan, so without a way to name the corrected plan the gate can only ever be
+    # left stale and blocks the replan that would clear it.
+    #
+    # The flag changes which plan is READ, never what the gate accepts: the digest is
+    # still computed from the bytes actually enumerated and still has to equal the
+    # digest of the plan being approved, so naming a THIRD plan stamps a digest
+    # matching neither and blocks exactly as before.
+    plan_path = getattr(args, "plan", None) or getattr(state, "plan_path", None)
     if not plan_path:
         return Directive(False, state.node, "noop",
                          "no plan submitted yet — run submit-plan before question-enumerate")
-    doc = load_plan(plan_path)
     try:
         plan_text = Path(plan_path).read_text(encoding="utf-8")
     except OSError as exc:
         return Directive(False, state.node, "noop",
                          f"cannot read plan {plan_path!r}: {exc}")
+    # --plan accepts a path from the caller, so an unparseable one is ordinary bad
+    # input and gets a Directive; state.plan_path is only ever set after a successful
+    # load, so this branch is reachable only for the flag.
+    try:
+        doc = load_plan(plan_path)
+    except PlanError as exc:
+        return Directive(False, state.node, "noop",
+                         f"cannot parse plan {plan_path!r}: {exc}")
 
     run = runner if runner is not None else advisor.subprocess_runner
     runner_ok, pairs = advisor.enumerate_questions_health(
@@ -3532,7 +3552,8 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("claim", ("ledger-dispose",), "id of the grounding claim, not its text"),
     ("artifact", ("ledger-enumerate",), "path to the deliverable being cross-checked"),
     ("target", ("question-raise", "plan-review"), "plan element address or plan file path"),
-    ("plan", ("plan-render", "submit-plan", "replan", "drive", "push-subplan"), "plan file path"),
+    ("plan", ("plan-render", "submit-plan", "replan", "drive", "push-subplan",
+              "question-enumerate"), "plan file path"),
     ("new", ("check-coverage",), "corrected plan file path — the object under a coverage pre-check, not narrative"),
     ("rendering_file", ("present-plan",), "path to the rendered presentation"),
     ("by", ("confirm-delivery", "approve", "resolve"), "who acted — a name, not a narrative"),
@@ -3692,6 +3713,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = add("question-check"); sp.add_argument("--session", required=True)
     sp = add("question-enumerate"); sp.add_argument("--session", required=True)
+    sp.add_argument("--plan", default=None,
+                    help="enumerate against this plan instead of the session's current "
+                         "plan_path (use when preparing a CORRECTED plan for replan)")
 
     sp = add("question-candidate-dispose"); sp.add_argument("--session", required=True)
     sp.add_argument("--id", required=True, help="candidate id (qenum-N) to disposition")

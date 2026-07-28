@@ -198,3 +198,59 @@ def test_stale_enumerated_at_reblocks(store, tmp_path):
     live = store.load("s")
     blockers = plugins_premise.premise_blockers(live, live.plugins["premise"])
     assert any("different plan content" in b for b in blockers)
+
+
+# --- #48: --plan names the plan to enumerate -----------------------------------
+
+def test_plan_flag_binds_enumerated_at_to_the_named_plan(store, tmp_path):
+    """The corrected plan of a replan is not yet state.plan_path, so without a way
+    to name it the enumeration could only ever stamp the OLD plan's digest — and the
+    premise gate, which cmd_replan evaluates against the corrected plan, then blocked
+    the very replan that would clear it."""
+    from agentctl.plan import load_plan
+
+    current = _write_plan(tmp_path / "plan.toml", [(1, "img-one")])
+    corrected = _write_plan(tmp_path / "corrected.toml", [(1, "img-one"), (2, "img-two")])
+    _state(store, plan_path=current)
+
+    d = cli.cmd_question_enumerate(
+        Namespace(session="s", plan=str(corrected)), store=store, runner=_runner(""))
+    assert d.ok is True
+
+    bag = store.load("s").plugins["premise"]
+    assert bag["enumerated_at"] == plugins_premise._plan_content_digest(load_plan(corrected))
+    assert bag["enumerated_at"] != plugins_premise._plan_content_digest(load_plan(current))
+
+
+def test_omitting_plan_flag_reproduces_previous_behaviour(store, tmp_path):
+    """The default must be byte-identical to the pre-flag command, for both call
+    shapes: an args object carrying plan=None, and one with no `plan` attribute at
+    all (every pre-existing caller, including the parser-free test helper)."""
+    from agentctl.plan import load_plan
+
+    current = _write_plan(tmp_path / "plan.toml", [(1, "img-one")])
+    expected = plugins_premise._plan_content_digest(load_plan(current))
+
+    _state(store, sid="explicit-none", plan_path=current)
+    cli.cmd_question_enumerate(
+        Namespace(session="explicit-none", plan=None), store=store, runner=_runner(""))
+    assert store.load("explicit-none").plugins["premise"]["enumerated_at"] == expected
+
+    _state(store, sid="absent-attr", plan_path=current)
+    cli.cmd_question_enumerate(
+        Namespace(session="absent-attr"), store=store, runner=_runner(""))
+    assert store.load("absent-attr").plugins["premise"]["enumerated_at"] == expected
+
+
+def test_plan_flag_rejects_an_unreadable_path(store, tmp_path):
+    """--plan takes a caller-supplied path, so a bad one is ordinary bad input and
+    must return a Directive rather than raising out of the command."""
+    current = _write_plan(tmp_path / "plan.toml", [(1, "img-one")])
+    _state(store, plan_path=current)
+
+    d = cli.cmd_question_enumerate(
+        Namespace(session="s", plan=str(tmp_path / "nope.toml")),
+        store=store, runner=_runner(""))
+    assert d.ok is False
+    assert "cannot read plan" in d.detail
+    assert store.load("s").plugins["premise"]["enumerated"] is False

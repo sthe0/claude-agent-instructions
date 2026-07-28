@@ -5,6 +5,7 @@ Also covers the loop guard on repeated identical stage failures, the
 import json
 from argparse import Namespace
 from pathlib import Path
+from types import SimpleNamespace
 
 from agentctl import cli
 from agentctl.plan import diff_plans, load_plan
@@ -729,3 +730,65 @@ def test_substantive_replan_rearms_stage_whose_done_criterion_changed(
     d = cli.cmd_replan(ns(session=sid, plan=str(corrected)), store=store)
     assert d.marker == "PLAN-READY"
     assert store.load(sid).stage(1).outcome.status == StageStatus.PENDING.value
+
+
+def test_corrected_plan_is_enumerable_so_the_premise_gate_stops_deadlocking_replan(
+        store, fixtures_dir, monkeypatch):
+    """#48(b) end to end, with the premise gate LIVE (the suite force-off deleted).
+
+    `cmd_replan` evaluates the plan_approval plugin gate against the CORRECTED plan,
+    and premise_blockers rejects an `enumerated_at` that does not match that plan's
+    content digest. The corrected plan is not `state.plan_path` yet and only becomes
+    so once the replan succeeds — so before `--plan`, the enumeration could only ever
+    re-stamp the OLD plan's digest and the gate blocked the very replan that would
+    clear it, with no route out that did not edit session state by hand.
+
+    Every step here is an ordinary CLI call; the point of the test is that the bag is
+    never touched directly."""
+    monkeypatch.delenv("AGENTCTL_PREMISE", raising=False)
+    from agentctl import plugins_premise
+
+    sid = "deadlock"
+    base = str(fixtures_dir / "plan_two_stage.toml")
+    corrected = str(fixtures_dir / "plan_two_stage_substantive.toml")
+
+    def _silent_advisor(argv, **kw):
+        # healthy runner, no questions raised: the flag flips, and the gate is then
+        # carried purely by the enumerated_at binding this test is about.
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    cli.cmd_start(ns(session=sid, task="demo-two-stage", goal="", done_criterion="",
+                     criterion_type="measurable", recursion_depth=0), store=store)
+    cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
+                        wall_clock_min=60, tracker_key=None, architectural=True,
+                        external_effect=False, new_dependency=False,
+                        public_api_change=False), store=store)
+    cli.cmd_plan(ns(session=sid), store=store)
+    cli.cmd_submit_plan(ns(session=sid, plan=base), store=store)
+    assert "premise" in store.load(sid).plugins  # gate really is live
+
+    cli.cmd_question_enumerate(ns(session=sid, plan=None), store=store,
+                               runner=_silent_advisor)
+    assert cli.cmd_approve(ns(session=sid, by="user"), store=store).ok is True
+    cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
+                         m3_severe=False, m4_severe=False), store=store)
+    cli.cmd_next_stage(ns(session=sid), store=store)
+
+    # the deadlock itself: the enumeration on record is bound to the OLD plan
+    blocked = cli.cmd_replan(ns(session=sid, plan=corrected), store=store)
+    assert blocked.ok is False
+    assert any(plugins_premise._ENUMERATE_STALE in b        # plugin gate prefixes "[premise] "
+               for b in blocked.data.get("blockers", []))
+    assert store.load(sid).node == Node.EXECUTING.value  # nothing moved
+
+    # the route out: enumerate the corrected plan by name, then replan
+    d = cli.cmd_question_enumerate(ns(session=sid, plan=corrected), store=store,
+                                   runner=_silent_advisor)
+    assert d.ok is True
+
+    d = cli.cmd_replan(ns(session=sid, plan=corrected), store=store)
+    assert d.ok is True, d.detail
+    assert d.marker == "PLAN-READY"
+    state = store.load(sid)
+    assert state.node == Node.PLAN_READY.value
+    assert [s.index for s in state.stages] == [1, 2, 3]
