@@ -55,6 +55,37 @@ link_local_skills() {
   return 0
 }
 
+# The difficulty-channel plugin seam. A channel whose adapter is not built in
+# resolves from this machine-local directory, so on a fresh machine the seam is
+# silently absent and a configured non-built-in channel fails only when someone
+# tries to file. Core may create the DIRECTORY and document what belongs in it;
+# the adapter itself is machine-local data and never ships here. The dirname is
+# pinned to difficulty_channel.adapters.PLUGIN_DIR_NAME by
+# scripts/tests/test_difficulty_channel_resolves.py.
+ensure_plugin_dir() {
+  local dir="$CLAUDE_AGENT_HOME/difficulty-channel-plugins"
+  mkdir -p "$dir/adapters"
+  [[ -f "$dir/README.md" ]] && return 0
+  cat > "$dir/README.md" <<'PLUGIN_README'
+# Machine-local difficulty-channel plugins
+
+Nothing here is versioned. Everything in this directory is specific to this
+machine and never reaches the instructions repo — that is the point of the
+directory: the repo ships the channel *mechanism*, this is where an
+implementation the repo must not publish attaches to it.
+
+| Path | What it is |
+|---|---|
+| `adapters/<channel>.py` | Adapter for a channel that is not built in. Must call `difficulty_channel.port.register_channel(<name>, <factory>)` at import time, and use absolute imports only (it runs under a synthetic package name). |
+| `detect.py` | Optional hook `detect(hostname, has_command, path_exists, getenv) -> DetectResult \| None` deciding which channel this machine belongs to. |
+| `tests/` | pytest files covering the above. Run them with `scripts/verify-plugin-tests.sh`. |
+
+Select a channel with `difficulty_channel=<name>` in `agent-identity.local`.
+`scripts/verify-difficulty-channel-resolves.sh` then checks that the configured
+name actually resolves here, and fails loudly when it does not.
+PLUGIN_README
+}
+
 prune_dangling() {
   local dir="$1"
   local logfile="$HOME/.local/log/setup-symlinks-prune.log"
@@ -133,7 +164,7 @@ fi
 link_local_skills "$REPO/skills-local"
 link_local_skills "$CLAUDE_AGENT_HOME/skills-local"
 
-chmod +x "$REPO/scripts/verify-instructions-sync.sh" "$REPO/scripts/verify-layout-contract.sh" "$REPO/scripts/verify-extracted-skills-resolve.sh" "$REPO/scripts/setup-project-memory.sh" "$REPO/scripts/apply-settings.sh" "$REPO/cursor/scripts/install-cursor-links.sh" "$REPO/cursor/scripts/link-project-cursor-agents.sh" "$REPO/cursor/scripts/migrate-cursor-namespace.sh" "$REPO/scripts/migrate-to-isolated.sh"
+chmod +x "$REPO/scripts/verify-instructions-sync.sh" "$REPO/scripts/verify-layout-contract.sh" "$REPO/scripts/verify-extracted-skills-resolve.sh" "$REPO/scripts/verify-difficulty-channel-resolves.sh" "$REPO/scripts/verify-plugin-tests.sh" "$REPO/scripts/setup-project-memory.sh" "$REPO/scripts/apply-settings.sh" "$REPO/cursor/scripts/install-cursor-links.sh" "$REPO/cursor/scripts/link-project-cursor-agents.sh" "$REPO/cursor/scripts/migrate-cursor-namespace.sh" "$REPO/scripts/migrate-to-isolated.sh"
 
 # Every hook is exec'd directly by the harness (via /bin/sh); a missing +x bit
 # makes it fail silently with "Permission denied". chmod the whole family so a
@@ -148,6 +179,9 @@ CLAUDE_SETTINGS="$CLAUDE_AGENT_HOME/settings.json" "$REPO/scripts/apply-settings
 
 # Create $CLAUDE_AGENT_HOME/agent-identity.local (per-machine difficulty channel) if absent.
 "$REPO/scripts/configure-identity.sh"
+
+# ...and the directory the channel it names may need an adapter from.
+ensure_plugin_dir
 
 # Wire the canonical reminder-hook set into settings.json. Hooks are a
 # machine-specific key (apply-settings.sh does not merge them), so the repo's
