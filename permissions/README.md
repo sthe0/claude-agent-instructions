@@ -21,7 +21,7 @@ deploy to staging", etc.).
 {
   "permissions": [
     {
-      "pattern": "arc push origin/main",
+      "pattern": "deploy push origin/main",
       "granted_at": "2026-05-25",
       "context": "Routine work-machine flow"
     }
@@ -42,10 +42,10 @@ Field rules:
 
 ```bash
 scripts/permissions-cli.py list                    # all global grants
-scripts/permissions-cli.py check "arc push main"   # exit 0 if matched, 1 otherwise
-scripts/permissions-cli.py grant "arc push *" \
+scripts/permissions-cli.py check "deploy push main"   # exit 0 if matched, 1 otherwise
+scripts/permissions-cli.py grant "deploy push *" \
     --context "Routine work-machine flow"      # append (idempotent on pattern)
-scripts/permissions-cli.py revoke "arc push *"     # remove by exact pattern match
+scripts/permissions-cli.py revoke "deploy push *"     # remove by exact pattern match
 scripts/permissions-cli.py digest                  # human-readable summary for prompts
 ```
 

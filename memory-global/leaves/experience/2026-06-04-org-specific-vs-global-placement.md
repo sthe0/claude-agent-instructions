@@ -12,7 +12,7 @@ last_verified: 2026-06-11
 # Org-specific vs. global instruction placement
 
 ## Difficulty
-Encoding a dispatch rule (prefer local/community skills over MCP for tracker/the orchestration platform; logos only from a `logos/` cwd), the first draft put org-specific names (`mcp__tracker__`, `community/`, `logos`) into the *global* org-agnostic instructions. The rule "skill maps belong in project memory" already existed in `skill-first-dispatch.md` but didn't fire until the user pushed back. Secondary: committing the project memory looked impossible — `arc status` from the VCS monorepo mount said "outside repository".
+Encoding a dispatch rule (prefer local/community skills over MCP for tracker/the orchestration platform; logos only from a `logos/` cwd), the first draft put org-specific names (`mcp__tracker__`, `community/`, `logos`) into the *global* org-agnostic instructions. The rule "skill maps belong in project memory" already existed in `skill-first-dispatch.md` but didn't fire until the user pushed back. Secondary: committing the project memory looked impossible — the VCS status command from the VCS monorepo mount said "outside repository".
 
 ## Order & criterion
 Org-specific guidance → project memory; only the generic principle → global. **Reusable test:** would this rule make sense on a machine outside this org? If it names an org tool, it is project-scope. Commit that project's memory from the `arcadia_claude_local` mount (it rides the personal `junk/` branch, not a trunk PR). **Acceptance check:** global instructions contain no org names; the project-memory commit lands cleanly from the correct mount.

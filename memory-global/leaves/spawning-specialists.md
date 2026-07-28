@@ -62,11 +62,11 @@ On refuse — **do not retry**. Stop, summarize for the user (original task, cur
 Before deciding the next move (accept, re-spawn, manual takeover), check **both** uncommitted state *and* commit history on the assigned branch:
 
 ```bash
-arc status      # uncommitted changes only
+git status -s   # uncommitted changes only
 git log -n 5    # whether the spawn committed on-scope work before drifting
 ```
 
-(git equivalents in non-arc repos.) A spawn killed for off-scope behavior may still have committed legitimate on-scope work before drifting — `status` is clean, but `log` shows the commit. Skipping `log` has cost a redundant verification spawn in one observed case.
+(same idea on any VCS — check status before log.) A spawn killed for off-scope behavior may still have committed legitimate on-scope work before drifting — `status` is clean, but `log` shows the commit. Skipping `log` has cost a redundant verification spawn in one observed case.
 
 ## `bypassPermissions` for `developer`
 
