@@ -33,6 +33,7 @@ from lib.config_root import identity_file  # noqa: E402
 
 LOCAL_IDENTITY_PATH = identity_file()
 DEFAULT_CHANNEL = "github"
+GIT_TIMEOUT_SEC = 5
 
 
 def probe_push_capability(
@@ -40,9 +41,23 @@ def probe_push_capability(
     remote: str = "origin",
     ref: str = "HEAD",
 ) -> bool:
-    """`git push --dry-run` capability probe. No actual push (dry-run). Mockable via runner."""
+    """`git push --dry-run` capability probe. No actual push (dry-run). Mockable via runner.
+
+    The default runner is timeout-bounded because this is a real network operation reached from
+    interactive paths (a resolution-gate hint, a difficulty filing), and a stall is NOT an
+    exception — no caller's try/except can rescue a hung turn, so the bound has to live where the
+    subprocess is created. Anything that prevents confirming push rights (timeout, git absent)
+    answers non-zero, which ``is_author`` reads as "not an author" — the fail-safe direction.
+    A caller needing a different budget still injects its own ``runner``; only the default stops
+    being unbounded.
+    """
     def _default_runner(cmd: list[str]) -> int:
-        return subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True).returncode
+        try:
+            return subprocess.run(
+                cmd, cwd=REPO_ROOT, capture_output=True, timeout=GIT_TIMEOUT_SEC
+            ).returncode
+        except (subprocess.TimeoutExpired, OSError):
+            return 1
 
     run = runner or _default_runner
     return run(["git", "push", "--dry-run", remote, ref]) == 0
