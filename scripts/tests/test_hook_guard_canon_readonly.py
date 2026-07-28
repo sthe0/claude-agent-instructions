@@ -278,6 +278,33 @@ def test_bash_unrelated_mentioning_git_commit_allows(tmp_path):
         assert _allowed(proc), f"{cmd!r}: {proc.stdout}"
 
 
+def test_bash_heredoc_body_mentioning_git_commit_allows(tmp_path):
+    """A here-document BODY is data. `_is_git_commit` tokenizes the raw command,
+    so before the body stripper a commit message being written to /tmp read as a
+    commit in canon — the second consumer of the same `shlex` defect, and the
+    reason the strip happens at the Bash entry point rather than inside the
+    write-verb scanner alone."""
+    core = make_core(tmp_path)
+    proc = run_hook(core, {
+        "tool_name": "Bash",
+        "tool_input": {"command": "cat > /tmp/msg.txt <<'EOF'\nthen run git commit -m fix\nEOF"},
+        "cwd": str(core),
+    })
+    assert _allowed(proc), proc.stdout
+
+
+def test_bash_heredoc_body_with_real_commit_after_still_denies(tmp_path):
+    """Non-widening on the commit consumer: a genuine `git commit` outside the
+    body is command-line text and survives body removal."""
+    core = make_core(tmp_path)
+    proc = run_hook(core, {
+        "tool_name": "Bash",
+        "tool_input": {"command": "cat <<'EOF' > /tmp/m.txt\nbody\nEOF\ngit commit -m x"},
+        "cwd": str(core),
+    })
+    assert _denied(proc), proc.stdout
+
+
 def test_git_pull_allows(tmp_path):
     core = make_core(tmp_path)
     proc = run_hook(core, {

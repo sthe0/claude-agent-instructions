@@ -26,7 +26,13 @@ Everything else is ALLOWED (fail-open): a linked worktree, a second mount, a
 path outside canon entirely, `/tmp`, and any git error or missing canon-roots
 file. Non-`git commit` git commands (pull, fetch, merge --ff-only, update-ref,
 ...) are never inspected — only Bash commands that literally run `git commit`
-are denied. Always exits 0 — a hook crash must never wedge the workflow.
+are denied. Here-document bodies and here-string operands are DATA and are
+removed before any Bash command is inspected (`lib/shell_tokens.py`), so a
+Markdown blockquote line inside a body is not read as a redirect. Always exits
+0 — a hook crash must never wedge the workflow.
+
+This guard raises the cost of an ACCIDENTAL canon write; it is not an
+evasion-proof boundary. See NAMED RESIDUAL below for what reaches canon today.
 
 DENY is signaled with the PreToolUse permissionDecision JSON on stdout (mirrors
 hook-guard-destructive-rm.py):
@@ -43,7 +49,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib import config_root, git_cwd  # noqa: E402
+from lib import config_root, git_cwd, shell_tokens  # noqa: E402
 
 GIT_TIMEOUT_S = 3
 
@@ -156,13 +162,39 @@ def _is_git_commit(command: str) -> bool:
 # The helpers below close the DETECTABLE write verbs, fail-open (any parse doubt
 # ALLOWS), and allow the identical verbs targeting a worktree / second mount.
 #
-# NAMED RESIDUAL (not closable by any PreToolUse hook, do not claim otherwise):
+# WHAT THIS GUARD IS. It raises the cost of an ACCIDENTAL canon write. It is not
+# an evasion-proof boundary and must not be described as one: anyone who wants to
+# write canon from a Bash call can, and the list below says how. The durable
+# guarantees are the tool-level Edit/Write deny and keeping feature work out of
+# the canon checkout entirely (`scripts/session-isolate.sh`).
+#
+# NAMED RESIDUAL — shell-invisible writes, not closable by any PreToolUse hook:
 # an interpreter one-liner that opens a path for writing internally
 # (`python3 -c "open(p,'w')"`, `perl -e '...'`, an `eval`'d string, any program
 # that writes a file with no shell-visible write verb) and a redirection glued to
-# a preceding word (`foo>bar`, `2>bar`) carry no token this hook can key on. The
-# durable guarantee for those is the tool-level Edit/Write deny plus keeping
-# feature work out of the canon checkout entirely.
+# a preceding word (`foo>bar`, `2>bar`) carry no token this hook can key on.
+#
+# NAMED RESIDUAL — write verbs measured to reach canon TODAY, out of scope here
+# and unchanged by the here-document handling: `exec 3>f`, `exec 3>>f`, `dd of=f`,
+# `cp`/`mv` in forms the dest parser misses, `>|f`, `sort -o f`, `sed 'w f'`,
+# `awk '{print > "f"}'`, and `python3 <<EOF` (an interpreter consumer, which the
+# body stripper refuses to touch for exactly this reason). Closing these is a
+# separate change with its own evidence; do not read their absence as coverage.
+#
+# NAMED RESIDUAL — a path holding an UNEXPANDED `$VAR` is denied BY DESIGN, not by
+# accident. Each Bash tool call is a fresh shell, so `$S` assigned in an earlier
+# call is unset and `cat > $S/x.md` really does write `<cwd>/$S/x.md`. The hook
+# receives byte-identical input whether `$S` is unset or would have expanded into
+# canon, so it cannot distinguish them and must deny both; `_deny_msg` names the
+# cause instead of pretending the path was literal.
+#
+# NAMED RESIDUAL — spurious DENYs the body stripper leaves behind, all in the safe
+# direction: only the FIRST here-document body is removed, so a second body on the
+# same command (`cat <<A <<B`) is still read as syntax; a `$(` opened inside a
+# quoted-delimiter body and closed after it leaves an unbalanced `)` in the
+# residue; and an unbalanced QUOTE anywhere makes `shlex.split` raise, which is the
+# module's one genuinely reachable fail-open path (measured — a here-document body
+# never raises, which is why the stripper exists at all).
 
 _BASH_SEPS = {";", "&&", "||", "|", "|&", "&"}
 
@@ -326,9 +358,31 @@ def _canon_bash_write(command: str, payload_cwd: str) -> str | None:
     return None
 
 
+def _unexpanded_variable_note(target: str) -> str:
+    """The extra sentence a target still carrying a `$` needs, or "".
+
+    This deny is CORRECT and stays: each Bash tool call is a fresh shell, so a
+    variable assigned in an earlier call is unset here and `$S/x.md` really does
+    resolve under the cwd — which, in canon, is a canon write. What the bare
+    message lacked was the CAUSE: `<canon>/$S/x.md` reads as a bizarre literal
+    path rather than as the predictable consequence of a shell that does not
+    persist. The hook cannot tell an unset `$S` from an `$S` that would have
+    expanded to canon anyway (identical bytes reach it either way), so naming the
+    cause is the whole of the fix — nothing about what is permitted changes.
+    """
+    if "$" not in target:
+        return ""
+    return (
+        " Note the literal `$` in that path: shell state does not persist between tool "
+        "calls, so a shell variable used in a path is always unset here and the path "
+        "lands under the current directory instead of where you meant. Write the "
+        "absolute path out literally."
+    )
+
+
 def _deny_msg(target: str) -> str:
     return (
-        f"Refusing to modify canon ({target}) directly from a live agent session. Canon "
+        f"Refusing to modify canon ({target}) directly from a live agent session.{_unexpanded_variable_note(target)} Canon "
         f"checkouts (the PRIMARY Core-instructions worktree, on any branch, and any path "
         f"registered as a canon root) are read-only from here — this is the live hook code "
         f"and reference source every session on the machine runs. Do the work in an isolated "
@@ -347,6 +401,14 @@ def decide(payload: dict) -> str | None:
         command = (tool_input.get("command") or "").strip()
         if not command:
             return None
+        # A here-document body is DATA, not syntax: a Markdown blockquote line
+        # inside one is not a `>` redirect, and a `git commit` MENTIONED in one is
+        # not a commit. Strip once, here, so that BOTH consumers below read the
+        # same text — `_is_git_commit` has the identical defect, and neither
+        # consumer's fail-open path can cover it, because `shlex` is a lexer and
+        # never raises on a body. Body text only is removed, so a canon path
+        # riding the command line survives this byte-for-byte.
+        command = shell_tokens.strip_heredoc_bodies(command)
         payload_cwd = payload.get("cwd") or os.getcwd()
         if _is_git_commit(command):
             cwd = git_cwd.effective_git_cwd(command, payload_cwd)

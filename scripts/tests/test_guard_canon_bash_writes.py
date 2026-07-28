@@ -220,3 +220,139 @@ def test_unbalanced_quote_fails_open(tmp_path):
     core = make_core(tmp_path)
     proc = run_hook(core, "sed -i 's/x/y/ scripts/existing.py", cwd=core)  # unterminated quote
     assert _allowed(proc), proc.stdout
+
+
+# --- here-document bodies are DATA, not syntax ---
+#
+# Every ALLOW case below is DENIED by the guard without the body stripper: the
+# body carries a `>` that `shlex` hands over as an ordinary token, and `shlex`
+# raises on none of it, so the module's fail-open path cannot cover these.
+
+def test_heredoc_body_blockquote_allows(tmp_path):
+    """A Markdown blockquote line inside a body is prose, not a redirect."""
+    core = make_core(tmp_path)
+    cmd = "cat > /tmp/notes.md <<'EOF'\n> a quoted line\nEOF"
+    assert _allowed(run_hook(core, cmd, cwd=core))
+
+
+def test_here_string_operand_allows(tmp_path):
+    core = make_core(tmp_path)
+    assert _allowed(run_hook(core, 'cat <<< "> notes.txt"', cwd=core))
+
+
+def test_heredoc_bare_delimiter_inert_body_allows(tmp_path):
+    """An unquoted delimiter is fine when the body itself triggers no expansion."""
+    core = make_core(tmp_path)
+    cmd = "cat > /tmp/x.md <<EOF\n> plain line\nEOF"
+    assert _allowed(run_hook(core, cmd, cwd=core))
+
+
+def test_heredoc_tab_indented_form_allows(tmp_path):
+    core = make_core(tmp_path)
+    cmd = "cat > /tmp/x.md <<-'EOF'\n\t> tabbed line\n\tEOF"
+    assert _allowed(run_hook(core, cmd, cwd=core))
+
+
+# --- the same handling must not widen: these still DENY ---
+
+def test_heredoc_redirect_on_command_line_still_denies(tmp_path):
+    """Body text only is removed; a canon path on the command line survives."""
+    core = make_core(tmp_path)
+    cmd = "cat <<'EOF' > scripts/existing.py\nbody\nEOF"
+    assert _denied(run_hook(core, cmd, cwd=core))
+
+
+def test_heredoc_piped_to_tee_into_canon_still_denies(tmp_path):
+    core = make_core(tmp_path)
+    cmd = "cat <<'EOF' | tee scripts/existing.py\nbody\nEOF"
+    assert _denied(run_hook(core, cmd, cwd=core))
+
+
+def test_heredoc_into_interpreter_still_denies(tmp_path):
+    """`bash` is not on the consumer allowlist: its body really is executed."""
+    core = make_core(tmp_path)
+    cmd = "bash <<'EOF'\necho x > scripts/existing.py\nEOF"
+    assert _denied(run_hook(core, cmd, cwd=core))
+
+
+def test_heredoc_into_rebound_interpreter_still_denies(tmp_path):
+    """A pipeline-WIDE allowlist check — a first-word check passes this one."""
+    core = make_core(tmp_path)
+    cmd = "cat <<'EOF' | bash\necho x > scripts/existing.py\nEOF"
+    assert _denied(run_hook(core, cmd, cwd=core))
+
+
+def test_heredoc_expanding_body_still_denies(tmp_path):
+    """With an unquoted delimiter the SHELL expands the body before any consumer
+    starts, so a bare-delimiter body carrying `$` is never treated as inert."""
+    core = make_core(tmp_path)
+    cmd = "cat <<EOF > /tmp/x.md\n$(echo x > scripts/existing.py)\nEOF"
+    assert _denied(run_hook(core, cmd, cwd=core))
+
+
+def test_heredoc_body_executed_by_later_statement_still_denies(tmp_path):
+    """An inert consumer can still PERSIST a body that a later statement runs, so
+    a residue holding more than one statement strips nothing."""
+    core = make_core(tmp_path)
+    cmd = "cat <<'EOF' > /tmp/s.sh\necho x > scripts/existing.py\nEOF\nbash /tmp/s.sh"
+    assert _denied(run_hook(core, cmd, cwd=core))
+
+
+def test_heredoc_delimiter_not_ending_at_word_boundary_still_denies(tmp_path):
+    """`<<EOF.X` terminates on `EOF.X` in bash. Reading the delimiter as `EOF`
+    overshoots that terminator and swallows the next real statement as body."""
+    core = make_core(tmp_path)
+    cmd = (
+        "cat <<EOF.X > /tmp/junk.txt\nfiller\nEOF.X\n"
+        "echo x > scripts/existing.py\nEOF"
+    )
+    assert _denied(run_hook(core, cmd, cwd=core))
+
+
+def test_here_string_glued_redirect_denies(tmp_path):
+    """The here-string operand ends at `>` — a bash metacharacter — so the redirect
+    after it is command-line text and survives body removal.
+
+    This one is DENIED HERE AND ALLOWED BEFORE the stripper existed, so it is a
+    pre-existing bypass incidentally closed rather than a non-regression case:
+    `shlex` handed the whole of `x>scripts/existing.py` over as one token, which
+    matched no redirect pattern. bash genuinely writes there, so tightening is the
+    correct direction — but it IS a behaviour change, not a pure false-positive
+    removal, and is pinned here so a later reader does not mistake it for one."""
+    core = make_core(tmp_path)
+    assert _denied(run_hook(core, "cat <<< x>scripts/existing.py", cwd=core))
+
+
+def test_heredoc_in_function_definition_still_denies(tmp_path):
+    """A definition anywhere disqualifies: the consumer name may be rebound."""
+    core = make_core(tmp_path)
+    cmd = "cat() { bash; }\ncat <<'EOF'\necho x > scripts/existing.py\nEOF"
+    assert _denied(run_hook(core, cmd, cwd=core))
+
+
+# --- 1b: the deny stays, the message explains it ---
+
+def test_unexpanded_variable_deny_names_the_cause(tmp_path):
+    """`cat > $S/x.md` resolves to a literal `$S` under the cwd — the deny is
+    correct (a fresh shell per tool call leaves `$S` unset, and the hook cannot
+    tell that from an `$S` that would have expanded into canon anyway). Only the
+    message changes."""
+    core = make_core(tmp_path)
+    proc = run_hook(core, "cat hi > $S/x.md", cwd=core)
+    assert _denied(proc), proc.stdout
+    assert "shell state does not persist between tool calls" in proc.stdout
+    assert "absolute path" in proc.stdout
+
+
+def test_ordinary_deny_omits_the_variable_note(tmp_path):
+    core = make_core(tmp_path)
+    proc = run_hook(core, "echo hi >> scripts/existing.py", cwd=core)
+    assert _denied(proc), proc.stdout
+    assert "shell state does not persist" not in proc.stdout
+
+
+def test_body_stripper_has_exactly_one_call_site(tmp_path):
+    """Applied once, at the Bash entry point of `decide()`. A second call site
+    means a consumer was fixed in isolation and the next one will be missed."""
+    source = HOOK_SCRIPT.read_text()
+    assert source.count("strip_heredoc_bodies") == 1
