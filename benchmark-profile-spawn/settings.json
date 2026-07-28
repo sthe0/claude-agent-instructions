@@ -25,10 +25,6 @@
       "Bash(git log:*)",
       "Bash(git diff:*)",
       "Bash(git show:*)",
-      "Bash(arc status)",
-      "Bash(arc status:*)",
-      "Bash(arc diff:*)",
-      "Bash(arc log:*)",
       "Bash(*spawn-specialist*)"
     ],
     "deny": [

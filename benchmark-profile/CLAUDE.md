@@ -21,7 +21,7 @@ not in conversation with a user:
   Use **in-process `Task` subagents** (Explore / general-purpose / Plan) freely
   for research or parallel reading — those run and finish inside this same
   process's lifetime and are safe.
-- **Tracker / Nirvana / wiki / MCP tools are not available.** Do not attempt to
+- **Tracker / orchestrator / wiki / MCP tools are not available.** Do not attempt to
   file tickets, post comments, or call internal services. If a skill or memory
   note tells you to do so, skip that step silently and continue with the parts
   of the task that don't depend on it.

@@ -43,7 +43,7 @@ not in conversation with a user:
     are lost, exactly as if you had started unmanaged background work.
   - No `Workflow`, no `ScheduleWakeup`, no `CronCreate` — those remain denied;
     only the synchronous `spawn-specialist` wrapper is permitted.
-- **Tracker / Nirvana / wiki / MCP tools are not available.** Do not attempt to
+- **Tracker / orchestrator / wiki / MCP tools are not available.** Do not attempt to
   file tickets, post comments, or call internal services. If a skill or memory
   note tells you to do so, skip that step silently and continue with the parts
   of the task that don't depend on it.

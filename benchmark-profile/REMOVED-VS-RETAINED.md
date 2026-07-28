@@ -1,8 +1,8 @@
 # benchmark-profile: removed vs retained
 
 This is the SHARED, path-agnostic autonomous variant of
-`~/claude-agent-instructions/` used for headless SWE-bench execution (internal
-arcadia/verified platform, Stage 2+ of `swe-bench-own-agent`, AND the
+`~/claude-agent-instructions/` used for headless SWE-bench execution (an
+internal verified-execution platform, Stage 2+ of `swe-bench-own-agent`, AND the
 `public-ablation-benchmark-pilot` plan, which reuses this exact tree — see
 `## Canonical artifact` below). The original interactive tree is untouched.
 
@@ -32,13 +32,13 @@ arcadia/verified platform, Stage 2+ of `swe-bench-own-agent`, AND the
   un-prohibits `spawn-specialist.py` under a bounded delegation contract — see
   `## Variant: benchmark-profile-spawn` below. It is a **separate tree**
   selected by `AGENT_BENCH_ALLOW_SPAWN=1` in `agent-bench/runner/config_layers.py`,
-  not an edit to this one; the arcadia/platform consumer only ever sees this
+  not an edit to this one; the internal-platform consumer only ever sees this
   directory and is unaffected.
 - **Escalation markers** (`CLARIFY:` / `PERMISSION-REQUEST:` / `ESCALATE:` /
   `REPLAN:`): the manager-facing marker protocol assumes a manager process
   reads and answers them; headless there is nobody to. `CLAUDE.md` tells the
   agent to make the call itself instead of emitting these.
-- **Tracker / Nirvana / wiki / MCP integration**: the `tracker-management`
+- **Tracker / orchestrator / wiki / MCP integration**: the `tracker-management`
   skill, tracker MCP tools, wiki MCP tools are not carried over; the
   prompt.template environment has no network access to them anyway.
   `CLAUDE.md` instructs the agent to no-op past any leftover reference rather
@@ -46,9 +46,9 @@ arcadia/verified platform, Stage 2+ of `swe-bench-own-agent`, AND the
 - **Memory system**: `~/.claude-agent/memory-global/` and the auto-memory
   mechanism are not part of this profile. A single-shot benchmark task has no
   future session to benefit from written memory, and no time budget to spend
-  reading a large memory tree that mostly encodes org-specific (Yandex)
+  reading a large memory tree that mostly encodes org-specific
   process knowledge irrelevant to fixing one Go bug.
-- **Non-coding skills**: `ccgram-management`, `instruction-grooming`,
+- **Non-coding skills**: `instruction-grooming`,
   `overcome-difficulty`, `self-improvement`, `tracker-management`,
   `yandex-cloud-expert`, `tech-writer` — all org/meta-workflow skills with no
   role in a single-shot autonomous code fix.
