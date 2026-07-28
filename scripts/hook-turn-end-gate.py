@@ -86,6 +86,11 @@ try:
 except Exception:  # pragma: no cover - fail-open if the resolver is unavailable
     config_root = None
 
+try:
+    import self_diagnose_store as _sd_store  # noqa: E402
+except Exception:  # pragma: no cover - fail-open if the store is unavailable
+    _sd_store = None
+
 # Kill-switches for the semantic judges: set to "0" to force a given judge off
 # without a code change. Direction is safe-by-default: an unset or
 # unrecognised value leaves the detector ENABLED, so a forgotten wire never
@@ -143,6 +148,11 @@ class TurnContext:
                      prefilter + agentctl.advisor.judge_binary_ask semantic model
                      verdict over the concatenated assistant text). Computed by
                      the shell.
+    self_diagnose_findings : one pre-formatted line per OPEN, ACTIONABLE
+                     self-diagnose finding older than the store's debounce, or
+                     empty when this session has already been blocked on them.
+                     The store read (and the per-session marker stat) happen in
+                     the shell; the guardian only reads the frozen tuple.
     """
 
     last_user_text: str
@@ -157,6 +167,7 @@ class TurnContext:
     difficulty_declared: bool = False
     self_improvement_feedback: bool = False
     prose_binary_ask: bool = False
+    self_diagnose_findings: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -245,6 +256,33 @@ def prose_binary_ask_blockers(ctx: TurnContext) -> list[str]:
     ]
 
 
+def self_diagnose_findings_blockers(ctx: TurnContext) -> list[str]:
+    """Open ACTIONABLE self-diagnose findings are still open at this turn boundary.
+
+    The SessionStart scan used to print its worklist to stderr, where it scrolled
+    away unread — the same broken hook registration every session for four days.
+    The findings now persist in a keyed store, and this guardian is what makes
+    them re-surface until each is closed.
+
+    Every gate that keeps this from becoming noise is applied by the shell before
+    the tuple is frozen: only kinds in the store's explicit ACTIONABLE table (never
+    `ceiling-proximity`, which already has its own debounced channel), only rows
+    older than ACTIONABLE_MIN_AGE_DAYS, only rows still `open` after ack/snooze
+    expiry, and at most once per session. Pure: reads only the frozen tuple.
+    """
+    if not ctx.self_diagnose_findings:
+        return []
+    listing = "\n".join(f"  - {f}" for f in ctx.self_diagnose_findings)
+    return [
+        "Open self-diagnose findings are still unclosed — each has been detected "
+        "on every scan and nothing has acted on it:\n"
+        f"{listing}\n"
+        "Fix each one (the remediation is named above), or dispose of it "
+        "explicitly: `python3 scripts/self_diagnose_store.py --ack <key> --reason "
+        "<why>` / `--snooze <key> --days N`."
+    ]
+
+
 def resolution_turn_blockers(ctx: TurnContext) -> list[str]:
     """A substantive plan whose every stage has PASSED sits at the resolution gate
     with the gate still open, yet this turn shows no sign closure is being sought
@@ -323,6 +361,7 @@ TURN_GUARDIANS: dict[str, Callable[[TurnContext], list[str]]] = {
     "escalation_without_diagnosis": escalation_without_diagnosis_blockers,
     "long_job_autowake": long_job_autowake_blockers,
     "prose_binary_ask": prose_binary_ask_blockers,
+    "self_diagnose_findings": self_diagnose_findings_blockers,
     "resolution": resolution_turn_blockers,
 }
 
@@ -469,6 +508,34 @@ def _difficulty_declared(state) -> bool:
     return getattr(difficulty, "declaration", None) is not None
 
 
+def _session_marker_path(session_key: str) -> Path:
+    """Per-SESSION marker for the self-diagnose guardian.
+
+    The generic marker keys on (session, triggering message), which caps a block
+    at one per MESSAGE — but a standing finding is present all session, so that
+    would fire on every message. This second, session-scoped marker is what makes
+    it once per session instead."""
+    digest = hashlib.sha256(session_key.encode("utf-8")).hexdigest()[:32]
+    return _state_dir() / f"selfdiag-{digest}"
+
+
+def _open_self_diagnose_findings(session_key: str) -> tuple[str, ...]:
+    """The open actionable findings this session has not yet been blocked on.
+
+    All the store I/O the guardian must not do. Fail-open in every direction: no
+    store module, an unreadable or corrupt store, or any unexpected error yields
+    an empty tuple and therefore no blocker."""
+    if _sd_store is None:
+        return ()
+    try:
+        if _session_marker_path(session_key).exists():
+            return ()
+        rows = _sd_store.load_rows()
+        return tuple(_sd_store.describe(row) for row in _sd_store.open_actionable(rows))
+    except Exception:
+        return ()
+
+
 def _load_agentctl_state(session_id: str | None):
     """Best-effort read of the engine's SessionState. None on any failure.
 
@@ -514,13 +581,14 @@ def build_context(payload: dict, *, runner: Callable | None = None) -> TurnConte
     session_id = payload.get("session_id")
     if not isinstance(session_id, str) or not session_id:
         session_id = None
+    session_key = session_id or transcript_path
     agentctl_state = _load_agentctl_state(session_id)
     assistant_text = _assistant_text_of(turn_entries)
     return TurnContext(
         last_user_text=last_user_text,
         invocations=frozenset(invocations),
         transcript_path=transcript_path,
-        session_key=session_id or transcript_path,
+        session_key=session_key,
         agentctl_state=agentctl_state,
         closure_sought=_closure_sought(turn_entries),
         long_job_launched=any(
@@ -549,6 +617,7 @@ def build_context(payload: dict, *, runner: Callable | None = None) -> TurnConte
             runner,
             enabled=os.environ.get(_BINARY_ASK_KILLSWITCH_ENV) != "0",
         ),
+        self_diagnose_findings=_open_self_diagnose_findings(session_key),
     )
 
 
@@ -601,6 +670,17 @@ def decide(payload: dict, *, runner: Callable | None = None) -> dict | None:
         marker.touch()
     except OSError:
         pass  # best-effort; stop_hook_active still caps the loop
+
+    # A standing self-diagnose finding is present all session, so the per-message
+    # marker above would let it fire on every message. Consume its session-scoped
+    # marker here, once the block that carries it is actually issued.
+    if ctx.self_diagnose_findings:
+        try:
+            session_marker = _session_marker_path(ctx.session_key)
+            session_marker.parent.mkdir(parents=True, exist_ok=True)
+            session_marker.touch()
+        except OSError:
+            pass
 
     return {"decision": "block", "reason": format_reason(blockers)}
 

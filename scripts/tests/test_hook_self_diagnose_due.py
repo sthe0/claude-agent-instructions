@@ -9,6 +9,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 _HOOK_PATH = Path(__file__).resolve().parent.parent / "hook-self-diagnose-due.py"
@@ -27,14 +29,25 @@ def _make_script(tmp_path, name, body):
 
 # ── run_scanner ──────────────────────────────────────────────────────────────
 
-def test_run_scanner_returns_stdout_lines(tmp_path, monkeypatch):
-    script = _make_script(tmp_path, "fake.py", "print('a: b — c')\nprint('d: e — f')\nraise SystemExit(1)")
+def test_run_scanner_returns_records(tmp_path, monkeypatch):
+    script = _make_script(
+        tmp_path,
+        "fake.py",
+        "print('[{\"kind\": \"orphan-leaf\", \"path\": \"b\", \"detail\": \"c\"}]')\n"
+        "raise SystemExit(1)",
+    )
     monkeypatch.setattr(hook, "SELF_DIAGNOSE", script)
-    assert hook.run_scanner() == ["a: b — c", "d: e — f"]
+    assert hook.run_scanner() == [{"kind": "orphan-leaf", "path": "b", "detail": "c"}]
 
 
 def test_run_scanner_clean_tree_is_empty(tmp_path, monkeypatch):
-    script = _make_script(tmp_path, "fake.py", "raise SystemExit(0)")
+    script = _make_script(tmp_path, "fake.py", "print('[]')\nraise SystemExit(0)")
+    monkeypatch.setattr(hook, "SELF_DIAGNOSE", script)
+    assert hook.run_scanner() == []
+
+
+def test_run_scanner_unparseable_output_fails_open(tmp_path, monkeypatch):
+    script = _make_script(tmp_path, "fake.py", "print('not json')\nraise SystemExit(1)")
     monkeypatch.setattr(hook, "SELF_DIAGNOSE", script)
     assert hook.run_scanner() == []
 
@@ -96,7 +109,9 @@ def test_main_force_run_bypasses_throttle_without_consuming(tmp_path, monkeypatc
     monkeypatch.setattr(hook, "STAMP", tmp_path / "stamp")
     hook.record_run(time.time())
     before = hook.last_run()
-    monkeypatch.setattr(hook, "run_scanner", lambda: ["x: y — z"])
+    monkeypatch.setattr(
+        hook, "run_scanner", lambda: [{"kind": "orphan-leaf", "path": "y", "detail": "z"}]
+    )
     assert hook.main(["--force-run"]) == 0
     assert hook.last_run() == before
 
@@ -111,15 +126,51 @@ def test_main_dry_run_never_touches_stamp(tmp_path, monkeypatch):
 
 def test_main_reports_findings_to_stderr(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(hook, "STAMP", tmp_path / "stamp")
-    monkeypatch.setattr(hook, "run_scanner", lambda: ["oversized-index: foo — 300 lines > 200"])
+    monkeypatch.setattr(
+        hook,
+        "run_scanner",
+        lambda: [{"kind": "oversized-index", "path": "foo", "detail": "300 lines > 200"}],
+    )
     assert hook.main(["--dry-run"]) == 0
     err = capsys.readouterr().err
     assert "1 self-friction item(s)" in err
     assert "oversized-index: foo" in err
 
 
+def test_dry_run_reports_without_persisting(tmp_path, monkeypatch, capsys):
+    """--dry-run is the verification mode; it must not perturb durable state."""
+    monkeypatch.setattr(hook, "STAMP", tmp_path / "stamp")
+    monkeypatch.setattr(
+        hook, "run_scanner", lambda: [{"kind": "orphan-leaf", "path": "p", "detail": "d"}]
+    )
+    monkeypatch.setattr(hook, "persist", lambda findings: pytest.fail("persisted on --dry-run"))
+    assert hook.main(["--dry-run"]) == 0
+    assert "orphan-leaf: p" in capsys.readouterr().err
+
+
+def test_main_persists_the_scan(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(hook, "STAMP", tmp_path / "stamp")
+    monkeypatch.setattr(
+        hook, "run_scanner", lambda: [{"kind": "orphan-leaf", "path": "p", "detail": "d"}]
+    )
+    assert hook.main(["--force-run"]) == 0
+    rows = hook.store.load_rows()
+    assert [r["kind"] for r in rows] == ["orphan-leaf"]
+    assert "actionable will re-surface at the turn boundary" in capsys.readouterr().err
+
+
+def test_persist_fails_open_on_a_broken_store(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        hook.store, "upsert_findings", lambda *a, **k: (_ for _ in ()).throw(OSError("nope"))
+    )
+    assert hook.persist([{"kind": "orphan-leaf", "path": "p", "detail": "d"}]) == []
+
+
 def test_report_caps_printed_lines(monkeypatch, capsys):
-    findings = [f"kind: path{i} — detail" for i in range(hook.MAX_PRINTED_LINES + 3)]
+    findings = [
+        {"kind": "near-duplicate", "path": f"path{i}", "detail": "detail"}
+        for i in range(hook.MAX_PRINTED_LINES + 3)
+    ]
     hook.report(findings)
     err = capsys.readouterr().err
     assert "... and 3 more" in err

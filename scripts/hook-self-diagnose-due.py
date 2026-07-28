@@ -14,6 +14,13 @@ overcome-difficulty, with any resulting edit authored through
 self-improvement. The hook itself never diagnoses or edits anything; it only
 surfaces the mechanically-decidable worklist.
 
+The worklist also lands in the durable keyed store `self_diagnose_store.py`,
+which is what gives a finding closure state: the open ACTIONABLE rows re-surface
+at the turn boundary via hook-turn-end-gate.py until they are fixed, acked or
+snoozed, and the advisory remainder reaches ADVISORY_CHANNEL. Printing alone was
+the drain this store closes — the same finding scrolled past unread every
+session for four days.
+
 Self-throttled via STAMP and strictly fail-open, mirroring
 hook-orphan-worktree-sweep.py / hook-policy-scorecard-due.py: a scanner
 timeout, crash, or missing script never blocks or slows session start — the
@@ -29,12 +36,20 @@ Two manual modes, mirroring hook-orphan-worktree-sweep.py:
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
+
+try:
+    import self_diagnose_store as store
+except Exception:  # pragma: no cover - fail-open if the store is unavailable
+    store = None
+
 SELF_DIAGNOSE = SCRIPT_DIR / "self-diagnose.py"
 STAMP = Path.home() / ".local" / "state" / "claude-self-diagnose.stamp"
 THROTTLE_HOURS = 24.0
@@ -57,8 +72,11 @@ def record_run(now_ts: float) -> None:
         pass
 
 
-def run_scanner() -> "list[str]":
-    """Run self-diagnose.py and return its worklist lines.
+def run_scanner() -> "list[dict]":
+    """Run self-diagnose.py and return its worklist as kind/path/detail records.
+
+    Uses the scanner's own --json mode rather than re-parsing its display lines,
+    so the (kind, path) pair the store keys on arrives structured.
 
     Never raises — a missing script, a timeout, a crash, or a non-UTF8
     surprise all yield an empty worklist so the hook stays fail-open."""
@@ -66,15 +84,38 @@ def run_scanner() -> "list[str]":
         return []
     try:
         out = subprocess.run(
-            [sys.executable, str(SELF_DIAGNOSE)],
+            [sys.executable, str(SELF_DIAGNOSE), "--json"],
             capture_output=True, text=True, timeout=SCAN_TIMEOUT_S,
         )
     except Exception:
         return []
-    return [ln for ln in out.stdout.splitlines() if ln.strip()]
+    try:
+        records = json.loads(out.stdout or "[]")
+    except json.JSONDecodeError:
+        return []
+    return [r for r in records if isinstance(r, dict) and r.get("kind")]
 
 
-def report(findings: "list[str]") -> None:
+def _as_line(record: dict) -> str:
+    return f"{record.get('kind')}: {record.get('path')} — {record.get('detail')}"
+
+
+def persist(findings: "list[dict]") -> "list[dict]":
+    """Merge the scan into the durable store and route the advisory remainder.
+
+    Fail-open: a store that cannot be read or written must never cost a session
+    start, so every failure degrades to "printed but not persisted"."""
+    if store is None:
+        return []
+    try:
+        rows = store.upsert_findings(findings)
+        store.route_advisory(rows)
+        return rows
+    except Exception:
+        return []
+
+
+def report(findings: "list[dict]", rows: "list[dict] | None" = None) -> None:
     if not findings:
         return
     print(
@@ -83,11 +124,23 @@ def report(findings: "list[str]") -> None:
         "overcome-difficulty proactively, don't wait for the user to notice.",
         file=sys.stderr,
     )
-    for line in findings[:MAX_PRINTED_LINES]:
-        print(f"  - {line}", file=sys.stderr)
+    for record in findings[:MAX_PRINTED_LINES]:
+        print(f"  - {_as_line(record)}", file=sys.stderr)
     remaining = len(findings) - MAX_PRINTED_LINES
     if remaining > 0:
         print(f"  ... and {remaining} more (run scripts/self-diagnose.py for the full list)", file=sys.stderr)
+    if rows and store is not None:
+        try:
+            blocking = store.open_actionable(rows)
+            advisory = store.advisory_open(rows)
+        except Exception:
+            return
+        print(
+            f"  ({len(blocking)} actionable will re-surface at the turn boundary until "
+            f"closed; {len(advisory)} advisory in the digest — "
+            "scripts/self_diagnose_store.py --list)",
+            file=sys.stderr,
+        )
 
 
 def main(argv: "list[str] | None" = None) -> int:
@@ -99,6 +152,8 @@ def main(argv: "list[str] | None" = None) -> int:
     now_ts = time.time()
 
     if args.dry_run:
+        # Verification mode: report without perturbing any durable state, the
+        # store included.
         report(run_scanner())
         return 0
 
@@ -107,7 +162,8 @@ def main(argv: "list[str] | None" = None) -> int:
         if prev is not None and (now_ts - prev) < THROTTLE_HOURS * 3600.0:
             return 0
 
-    report(run_scanner())
+    findings = run_scanner()
+    report(findings, persist(findings))
 
     if not args.force_run:
         record_run(now_ts)
