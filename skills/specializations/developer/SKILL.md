@@ -77,6 +77,8 @@ These almost always need `PERMISSION-REQUEST:` before execution unless the grant
 
 On a **personal ticket / working branch** (anything not main / master / release-*), commit in small increments and **push after each commit**. Frequent pushed commits make rollback cheap and keep the manager's PR current — never withhold ticket-branch pushes waiting for the coordinator to "handle the PR". Pushing to an **open PR's branch is safe**: on VCSs with draft PRs the pushed commits land as a **draft** update and are not shown to reviewers until an explicit publish. Only **shared-branch** pushes (§ When the plan step involves external / irreversible actions) need `PERMISSION-REQUEST:`.
 
+**Address the worktree in the commit itself:** `git -C <worktree> commit …`, never a bare `git commit`. A `cd` does not persist between tool calls, so a bare commit runs in the *session's* directory — if that is the canonical checkout, it commits canon's index (a linked worktree keeps its own), which the canon guard correctly denies. Background: `docs/decisions/canon-guard-bare-commit-verdict.md`.
+
 When your work updates an open PR, add a **short PR comment** for anything **launched manually by us** (test / smoke runs, orchestrator work items — even non-graph scripts): one line of result / status + the exact **relaunch command** + link (work item / CI run / paste). Reviewers must be able to reproduce without spelunking.
 
 ## Rebase / merge conflicts (deleted on upstream)

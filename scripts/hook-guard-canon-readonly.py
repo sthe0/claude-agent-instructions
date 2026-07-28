@@ -26,10 +26,14 @@ Everything else is ALLOWED (fail-open): a linked worktree, a second mount, a
 path outside canon entirely, `/tmp`, and any git error or missing canon-roots
 file. Non-`git commit` git commands (pull, fetch, merge --ff-only, update-ref,
 ...) are never inspected — only Bash commands that literally run `git commit`
-are denied. Here-document bodies and here-string operands are DATA and are
-removed before any Bash command is inspected (`lib/shell_tokens.py`), so a
-Markdown blockquote line inside a body is not read as a redirect. Always exits
-0 — a hook crash must never wedge the workflow.
+are denied. A BARE `git commit` from a session whose directory is canon is denied
+by design, not by a detection gap: a linked worktree keeps its own index, so such a
+commit reaches canon's index and never the worktree's (reproduction and verdict:
+docs/decisions/canon-guard-bare-commit-verdict.md, #44). Here-document bodies and
+here-string operands are DATA and are removed before any Bash command is
+inspected (`lib/shell_tokens.py`), so a Markdown blockquote line inside a body is
+not read as a redirect. Always exits 0 — a hook crash must never wedge the
+workflow.
 
 This guard raises the cost of an ACCIDENTAL canon write; it is not an
 evasion-proof boundary. See NAMED RESIDUAL below for what reaches canon today.
@@ -380,6 +384,62 @@ def _unexpanded_variable_note(target: str) -> str:
     )
 
 
+_WORKTREE_HINT_LIMIT = 5
+
+
+def _linked_worktrees(core_root: str) -> list[str]:
+    """Absolute paths of the repo's LINKED worktrees, primary omitted (git lists it
+    first), or [] on any failure — the deny message then degrades to generic advice
+    rather than the hook failing."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", core_root, "worktree", "list", "--porcelain"],
+            capture_output=True, text=True, timeout=GIT_TIMEOUT_S, check=False,
+        )
+    except Exception:
+        return []
+    if proc.returncode != 0:
+        return []
+    paths = [ln[len("worktree "):].strip() for ln in proc.stdout.splitlines()
+             if ln.startswith("worktree ")]
+    return [p for p in paths[1:] if p]
+
+
+def _commit_deny_msg(target: str) -> str:
+    """The deny for a `git commit` whose effective cwd is canon.
+
+    Separate from `_deny_msg` because the cause and the cure are specific, and the
+    generic text actively misleads here. This deny is CORRECT and is not a
+    misdetected worktree commit: a linked worktree keeps its index at
+    `<git-common-dir>/worktrees/<name>/index`, so a commit running in canon reads
+    canon's index and can never reach the worktree's staged content — it commits
+    canon or fails with "nothing to commit". Reproduction, evidence and the falsified
+    alternative: docs/decisions/canon-guard-bare-commit-verdict.md (#44).
+
+    So what the caller needs is the ADDRESSED form of their own command, not the
+    isolation advice `_deny_msg` gives — a session hitting this already has a
+    worktree; it just did not name it.
+    """
+    worktrees = _linked_worktrees(target)
+    shown = worktrees[:_WORKTREE_HINT_LIMIT]
+    if len(shown) == 1:
+        hint = f" This repo's linked worktree: `git -C {shown[0]} commit ...`."
+    elif shown:
+        more = "" if len(shown) == len(worktrees) else f", +{len(worktrees) - len(shown)} more"
+        hint = f" Linked worktrees of this repo: {', '.join(shown)}{more}."
+    else:
+        hint = (" This repo has no linked worktree yet — make one with "
+                "`scripts/session-isolate.sh <task-name>`.")
+    return (
+        f"Refusing to run `git commit` in canon ({target}) from a live agent session. A `cd` does "
+        f"not persist between tool calls, so this command runs in the session's own directory — "
+        f"canon — and commits canon's index. A linked worktree keeps a SEPARATE index, so its "
+        f"staged changes are invisible from here: this would either fail with \"nothing to commit\" "
+        f"or land a real commit in canon. Name the target tree explicitly instead: "
+        f"`git -C <worktree> commit -m ...`.{hint}"
+    )
+
+
 def _deny_msg(target: str) -> str:
     return (
         f"Refusing to modify canon ({target}) directly from a live agent session.{_unexpanded_variable_note(target)} Canon "
@@ -416,7 +476,7 @@ def decide(payload: dict) -> str | None:
             if target_dir is None:
                 return None
             if _is_primary_core(target_dir):
-                return _deny_msg(os.path.realpath(str(_core_root())))
+                return _commit_deny_msg(os.path.realpath(str(_core_root())))
             return None
         # Non-commit Bash: best-effort deny of an in-place write into canon.
         hit = _canon_bash_write(command, payload_cwd)

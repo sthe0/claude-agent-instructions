@@ -467,3 +467,108 @@ def test_malformed_stdin_allows(tmp_path):
     )
     assert proc.returncode == 0
     assert proc.stdout.strip() == ""
+
+
+# --- #44 residual: the bare-`git commit`-under-cwd-reset deny is CORRECT -------
+#
+# Verdict, procedure and the falsified alternative:
+# docs/decisions/canon-guard-bare-commit-verdict.md.
+
+
+def test_bare_commit_from_canon_cwd_cannot_reach_worktree_index(tmp_path):
+    """The premise the #44 verdict rests on, pinned so it breaks loudly if git's
+    worktree-index behaviour ever changes: a linked worktree keeps a SEPARATE
+    index, so a bare commit whose process cwd is the primary checkout cannot
+    commit the worktree's staged content. It commits canon's index, or nothing."""
+    core = make_core(tmp_path)
+    wt = tmp_path / "wt"
+    git("worktree", "add", "--quiet", "-b", "wt-branch", str(wt), "main", cwd=core)
+
+    (wt / "README.md").write_text("worktree edit\n")
+    git("add", "README.md", cwd=wt)
+
+    core_index = git("rev-parse", "--git-path", "index", cwd=core).stdout.strip()
+    wt_index = git("rev-parse", "--git-path", "index", cwd=wt).stdout.strip()
+    assert core_index != wt_index, (core_index, wt_index)
+
+    # The worktree's staged path is invisible from canon's cwd...
+    assert git("diff", "--cached", "--name-only", cwd=wt).stdout.split() == ["README.md"]
+    assert git("diff", "--cached", "--name-only", cwd=core).stdout.strip() == ""
+
+    # ...so a bare commit there commits nothing, and leaves the worktree pending.
+    head_before = git("rev-parse", "HEAD", cwd=core).stdout.strip()
+    proc = git("commit", "-m", "bare", cwd=core, check=False)
+    assert proc.returncode != 0, proc.stdout
+    assert "nothing to commit" in proc.stdout
+    assert git("rev-parse", "HEAD", cwd=core).stdout.strip() == head_before
+    assert git("diff", "--cached", "--name-only", cwd=wt).stdout.split() == ["README.md"]
+
+    # With canon's OWN index non-empty the same command lands a real canon commit —
+    # which is exactly what the guard's deny prevents.
+    (core / "g.txt").write_text("canon edit\n")
+    git("add", "g.txt", cwd=core)
+    git("commit", "--quiet", "-m", "canon", cwd=core)
+    assert git("rev-parse", "HEAD", cwd=core).stdout.strip() != head_before
+    assert git("rev-parse", "HEAD", cwd=wt).stdout.strip() == head_before
+
+    # And the signal #44's "Proposed" section wanted to key on points at canon.
+    assert git("rev-parse", "--show-toplevel", cwd=core).stdout.strip() == str(core.resolve())
+
+
+def test_bash_bare_git_commit_deny_names_the_addressed_command(tmp_path):
+    """The deny stays (it is correct); what changed is that it now states the cause
+    and names the command that works, instead of offering isolation advice to a
+    session that is already isolated."""
+    core = make_core(tmp_path)
+    proc = run_hook(core, {
+        "tool_name": "Bash",
+        "tool_input": {"command": "git commit -m 'wip'"},
+        "cwd": str(core),
+    })
+    assert _denied(proc), proc.stdout
+    assert "git -C " in proc.stdout
+    assert "SEPARATE index" in proc.stdout
+    assert "does not persist between tool calls" in proc.stdout
+
+
+def test_bash_git_commit_deny_names_the_repos_linked_worktree(tmp_path):
+    """When the repo has exactly one linked worktree, the message spells out the
+    corrective command with its real path — the whole point of the fix."""
+    core = make_core(tmp_path)
+    wt = tmp_path / "wt"
+    git("worktree", "add", "--quiet", "-b", "wt-branch", str(wt), "main", cwd=core)
+    proc = run_hook(core, {
+        "tool_name": "Bash",
+        "tool_input": {"command": "git commit -m 'wip'"},
+        "cwd": str(core),
+    })
+    assert _denied(proc), proc.stdout
+    assert f"git -C {wt} commit" in proc.stdout
+
+
+def test_bash_git_commit_deny_without_worktree_points_at_isolation(tmp_path):
+    """No linked worktree to name — the message falls back to making one, and still
+    carries the addressed form so the reader knows what shape the fix takes."""
+    core = make_core(tmp_path)
+    proc = run_hook(core, {
+        "tool_name": "Bash",
+        "tool_input": {"command": "git commit -m 'wip'"},
+        "cwd": str(core),
+    })
+    assert _denied(proc), proc.stdout
+    assert "session-isolate.sh" in proc.stdout
+    assert "git -C <worktree> commit" in proc.stdout
+
+
+def test_non_commit_canon_write_keeps_the_generic_deny(tmp_path):
+    """Non-widening on the message split: only the commit path got the new text.
+    An in-place write into canon still gets the isolation message, unchanged."""
+    core = make_core(tmp_path)
+    proc = run_hook(core, {
+        "tool_name": "Bash",
+        "tool_input": {"command": f"tee {core / 'scripts' / 'existing.py'}"},
+        "cwd": str(core),
+    })
+    assert _denied(proc), proc.stdout
+    assert "session-isolate.sh" in proc.stdout
+    assert "SEPARATE index" not in proc.stdout
