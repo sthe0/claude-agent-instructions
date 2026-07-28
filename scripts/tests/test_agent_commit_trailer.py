@@ -1,14 +1,16 @@
 """agent_commit_trailer.py: Agent-Session/Agent-Task commit trailer helper.
 
 Covers the pure `trailers()` logic (no session id, no state file, task-field
-precedence, the no-goal-leak rule) and a LIVE end-to-end path: a throwaway
-git repo carrying its own copy of the real githooks/commit-msg hook, a fake
-agentctl state file, and CLAUDE_CODE_SESSION_ID set — proving the hook
-injects the trailer into a real commit, that amend does not duplicate it,
-and that a human commit (no session env) gets no trailer at all.
+precedence, the no-goal-leak rule, org-internal task-key neutralization via a
+synthetic term ruleset) and a LIVE end-to-end path: a throwaway git repo
+carrying its own copy of the real githooks/commit-msg hook, a fake agentctl
+state file, and CLAUDE_CODE_SESSION_ID set — proving the hook injects the
+trailer into a real commit, that amend does not duplicate it, and that a
+human commit (no session env) gets no trailer at all.
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -16,6 +18,12 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+DENY_ZORBLEX = """
+[[deny]]
+pattern = 'zorblex'
+label = "codename"
+"""
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 REPO_ROOT = SCRIPTS_DIR.parent
@@ -82,6 +90,56 @@ def test_malformed_state_file_yields_no_trailers(monkeypatch, tmp_path):
     state_dir.mkdir(parents=True)
     (state_dir / "sess-bad.json").write_text("{not json", encoding="utf-8")
     assert trailer_mod.trailers(session_id="sess-bad") == []
+
+
+# ---------------------------------------------------------------------------
+# Agent-Task neutralization: org-internal key -> h:<sha12>
+# ---------------------------------------------------------------------------
+
+def _ruleset_dir(tmp_path: Path) -> Path:
+    d = tmp_path / "rulesets"
+    d.mkdir(exist_ok=True)
+    (d / "synthetic.toml").write_text(DENY_ZORBLEX, encoding="utf-8")
+    return d
+
+
+def test_org_internal_task_key_is_hashed_when_ruleset_matches(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("CLAUDE_TERM_RULESET_DIR", str(_ruleset_dir(tmp_path)))
+    _write_state(tmp_path, "sess-internal", {"tracker_key": "ZORBLEX-440"})
+
+    lines = trailer_mod.trailers(session_id="sess-internal")
+
+    expected_hash = hashlib.sha256(b"ZORBLEX-440").hexdigest()[:12]
+    assert lines == [
+        "Agent-Session: sess-internal",
+        f"Agent-Task: h:{expected_hash}",
+    ]
+    assert "ZORBLEX-440" not in lines[1]
+    # deterministic: same key -> same hash across independent calls
+    assert trailer_mod.trailers(session_id="sess-internal") == lines
+
+
+def test_task_key_not_matched_by_ruleset_stays_raw(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("CLAUDE_TERM_RULESET_DIR", str(_ruleset_dir(tmp_path)))
+    _write_state(tmp_path, "sess-clean", {"tracker_key": "ABC-123"})
+
+    assert trailer_mod.trailers(session_id="sess-clean") == [
+        "Agent-Session: sess-clean",
+        "Agent-Task: ABC-123",
+    ]
+
+
+def test_org_internal_task_key_stays_raw_when_no_ruleset_installed(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("CLAUDE_TERM_RULESET_DIR", str(tmp_path / "empty-does-not-exist"))
+    _write_state(tmp_path, "sess-no-ruleset", {"tracker_key": "ZORBLEX-440"})
+
+    assert trailer_mod.trailers(session_id="sess-no-ruleset") == [
+        "Agent-Session: sess-no-ruleset",
+        "Agent-Task: ZORBLEX-440",
+    ]
 
 
 # ---------------------------------------------------------------------------
