@@ -20,7 +20,7 @@ import shlex
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -603,6 +603,16 @@ class Criterion:
     # runs the engine-synthesized containment check described by `landed`.
     verify_kind: str = "shell"
     landed: "LandedSpec | None" = None
+    # The optional SECOND venue (CheckVenue value, schema 24), read ONLY by
+    # SessionState.resolve_final_check_venue at verify-final; cmd_dispatch and
+    # cmd_record_result always resolve `verify_venue` instead, because during
+    # execution the delivery venue is the only tree where an un-landed change
+    # exists. None (the default) means "same as verify_venue" (V4) — the
+    # back-compat identity that keeps every plan authored before this field
+    # existed byte-identical. Set it (typically to "repo_root") for a check
+    # whose delivery venue disappears once the change lands — see plan.py's
+    # V1-V4 validation rules and README.md for the two-moment rationale.
+    verify_venue_at_final: str | None = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "Criterion":
@@ -999,6 +1009,19 @@ class SessionState:
         if venue == CheckVenue.REPO_ROOT.value:
             return self.repo_root
         return self.delivery_worktree or self.repo_root
+
+    def resolve_final_check_venue(self, criterion: "Criterion") -> str | None:
+        """Resolve a stage Criterion's check venue AT VERIFY-FINAL only:
+        `criterion.verify_venue_at_final` when declared, else
+        `criterion.verify_venue` (V4 — the identity that keeps a plan authored
+        before schema 24 byte-identical). Delegates the venue -> cwd resolution
+        to resolve_check_venue, the ONE function that knows how to turn a
+        CheckVenue value into a concrete tree; this accessor only picks WHICH
+        of the two declared fields verify-final reads. cmd_dispatch and
+        cmd_record_result never call this — they always resolve verify_venue,
+        because during execution the delivery venue is the only tree where the
+        un-landed change exists."""
+        return self.resolve_check_venue(criterion.verify_venue_at_final or criterion.verify_venue)
 
     # --- landed check synthesis --------------------------------------------
     def render_landed_command(self, spec: "LandedSpec") -> tuple[str | None, str | None]:

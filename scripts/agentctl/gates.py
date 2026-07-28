@@ -597,6 +597,7 @@ def _operative_surface(doc) -> tuple:
             _normalize_string(s.actor.executor),
             _normalize_string(s.criterion.verify_kind),
             _landed_sort_key(s.criterion.landed),
+            _normalize_string(s.criterion.verify_venue_at_final or ""),
         )
         for s in doc.stages
     )

@@ -149,6 +149,22 @@ def _parse_check_venue(raw: object, context: str) -> str:
     return value
 
 
+def _parse_verify_venue_at_final(raw: object, context: str) -> str | None:
+    """Validate a stage's optional `verify_venue_at_final` against the same
+    CheckVenue vocabulary as `verify_venue` (schema 24). Unlike
+    `_parse_check_venue`, absence is NOT defaulted to "delivery" — it returns
+    None, distinguishing "not declared" (V4: resolves to verify_venue at read
+    time via SessionState.resolve_final_check_venue) from "declared and equal"."""
+    if raw is None:
+        return None
+    value = str(raw)
+    if value not in _CHECK_VENUE_VALUES:
+        raise PlanError(
+            f"{context} verify_venue_at_final {value!r} is not one of {sorted(_CHECK_VENUE_VALUES)}"
+        )
+    return value
+
+
 _CHECK_KIND_VALUES = {v.value for v in CheckKind}
 
 
@@ -839,6 +855,7 @@ def parse_plan(
             s.get("landed"), kind=verify_kind, context=stage_ctx,
             stage_indices=_stage_index_domain, owner_index=index,
         )
+        raw_vvaf = s.get("verify_venue_at_final")
         if verify_kind == CheckKind.LANDED.value:
             if s.get("verify_command"):
                 raise PlanError(
@@ -858,13 +875,33 @@ def parse_plan(
                     f"criterion_type = \"measurable\" (a landed assertion is "
                     f"objective, never acceptance-review) (R6)"
                 )
+            if raw_vvaf is not None:
+                raise PlanError(
+                    f"{stage_ctx}: verify_venue_at_final must not be declared "
+                    f"on a verify_kind = \"landed\" criterion (V2) — a landed "
+                    f"check's venue is already fixed at repo_root (R3), so a "
+                    f"second venue is meaningless"
+                )
             verify_venue = _parse_landed_venue(s.get("verify_venue"), stage_ctx)
             verify_command = None
             expected_exit = 0
+            verify_venue_at_final = None
         else:
             verify_venue = _parse_check_venue(s.get("verify_venue"), stage_ctx)
             verify_command = str(s["verify_command"]) if s.get("verify_command") else None
             expected_exit = int(s.get("expected_exit", 0))
+            verify_venue_at_final = _parse_verify_venue_at_final(raw_vvaf, stage_ctx)
+            if (
+                verify_venue_at_final is not None
+                and not meta.delivery_worktree
+                and verify_venue_at_final != verify_venue
+            ):
+                raise PlanError(
+                    f"{stage_ctx}: verify_venue_at_final {verify_venue_at_final!r} "
+                    f"differs from verify_venue {verify_venue!r} but [meta] "
+                    f"delivery_worktree is unset — there is no second venue for "
+                    f"it to name (V3)"
+                )
         stages.append(
             Stage(
                 index=index,
@@ -892,6 +929,7 @@ def parse_plan(
                     verify_venue=verify_venue,
                     verify_kind=verify_kind,
                     landed=landed,
+                    verify_venue_at_final=verify_venue_at_final,
                 ),
                 principle=principle,
                 conditions=str(s["conditions"]) if s.get("conditions") else None,
@@ -974,6 +1012,7 @@ def stage_carry_key(stage) -> tuple:
         _normalize_string(stage.criterion.verify_venue),
         _normalize_string(stage.criterion.verify_kind),
         stage.criterion.landed,
+        _normalize_string(stage.criterion.verify_venue_at_final or ""),
     )
 
 
@@ -1029,6 +1068,7 @@ def stage_question_key(stage) -> str:
         _normalize_string(stage.criterion.verify_venue),
         _normalize_string(stage.criterion.verify_kind),
         stage.criterion.landed,
+        _normalize_string(stage.criterion.verify_venue_at_final or ""),
     ))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -1059,7 +1099,8 @@ def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
              s.criterion.verify_command, s.criterion.expected_exit,
              _normalize_string(s.criterion.verify_venue),
              _normalize_string(s.criterion.verify_kind),
-             s.criterion.landed)
+             s.criterion.landed,
+             _normalize_string(s.criterion.verify_venue_at_final or ""))
             for s in doc.stages
         ]
     def _fc(doc: PlanDoc):
