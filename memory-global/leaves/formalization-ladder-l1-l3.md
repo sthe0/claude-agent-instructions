@@ -4,7 +4,7 @@ description: The L1-L3 formalization ladder for a reasoning/research deliverable
 schema: leaf/v1
 type: reference
 created: 2026-07-14
-last_verified: 2026-07-14
+last_verified: 2026-07-28
 ---
 
 ## Difficulty
@@ -15,7 +15,7 @@ A reasoning/research task can be "verified" at wildly different depths, and both
 
 Treat formalization as a three-rung ladder. Each rung names **when to climb to it** and, for the top, **when to refuse**.
 
-**L1 — bookkeeping / type-check (the claim ledger). ~80% of the value; always, for every reasoning/research deliverable.** Every load-bearing claim — a **decision** or **judgment**, not numbers only — must be grounded (`axiom`, cited to a source), derived (`derivation`, from other recorded claims), or explicitly marked (`assumption`). The deliverable is not resolved until the ledger *closes*: no free claim presented as fact, and every enumeration candidate the cross-check raised is recorded or dismissed. This is the Curry-Howard framing — a fabricated ("додуманное") claim is a **free variable in a term asserted to be closed**; closure is the type-check, and it is decidable and LLM-free once the claims are typed. Arm it at `classify --deliverable-kind reasoning|mixed`.
+**L1 — bookkeeping / type-check (the claim ledger). ~80% of the value; always, for every reasoning/research deliverable.** Every load-bearing claim — a **decision** or **judgment**, not numbers only — must be grounded (`axiom`, cited to a source), derived (`derivation`, from other recorded claims), or explicitly marked (`assumption`). The deliverable is not resolved until the ledger *closes*: no free claim presented as fact, and every enumeration candidate the cross-check raised is recorded or dismissed. This is the Curry-Howard framing — a fabricated ("додуманное") claim is a **free variable in a term asserted to be closed**; closure is the type-check, and it is decidable and LLM-free once the claims are typed. Arm it at `classify --deliverable-kind reasoning|mixed`. **An `axiom` grounded in an external run or artifact must cite an *openable* reference** — the run/graph URL plus its terminal status, and, for a failed-but-salvaged run, the recompute method that recovered the number — not merely name a source. A ground the reader cannot open is indistinguishable from a fabricated one, so an unlinkable external axiom does not close the ledger; a failed run whose number was recovered off-graph reads as "all green" unless the failure and the salvage are stated. This grounding requirement has three delivery-side specializations that inherit it: the tech-writer exposition rule (link the evidence under every conclusion), the `tracker-management` rule (publish every relied-upon run's URL + status in the ticket), and [[long-job-monitoring]] step 0 (cite the run in the durable artifact, not only the launch chat).
 
 **L2 — decidable re-computation. Climb here for a numeric derivation.** Recompute the number from its measured inputs and show the formula plus the inputs, so a reader re-runs the arithmetic. Applies only where a claim *is* a derivation from measured quantities (e.g. quota tokens/hour from λ and window). It does not apply to a judgment or a raw measurement — those are L1 axioms, grounded by citation, not by recomputation.
 
