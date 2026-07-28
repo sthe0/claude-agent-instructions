@@ -543,3 +543,48 @@ def test_calibrate_until_truncates_to_a_reproducible_snapshot(ps):
 
     assert before == after
     assert ps._truncated(_ledger(ps, grown), cutoff).keys() < set(r["session_id"] for r in grown)
+
+
+# --------------------------------------------- 8. inherit→opus rate (Stage 9)
+#
+# The prior threshold, 0.5, sat AT `delegatable-work-patterns.md`'s founding
+# audit figure (~48%) rather than below it — a threshold at the largest
+# instance a policy already produced has decided that instance is acceptable.
+# INHERIT_OPUS_RATE_THRESHOLD's derivation (rolling 7d windows over the
+# ledger, current-regime q50 grid-rounded to 0.30) lives in the module
+# constant's own comment in policy-scorecard.py. The two tests below are
+# opposed on purpose, mirroring test_scorecard_flag_routing.py's
+# `test_the_threshold_is_where_the_constant_says_it_is` pattern: a single
+# firing test would be satisfied by a flag that always fires, and a single
+# silent test by one that never does.
+#
+# Both replay REAL rolling 7d windows from the ledger snapshot the constant
+# was derived against, not invented ratios: 67/200 (2026-07-20 window, the
+# cited leak, 33.5%) and 34/122 (2026-07-21 window, 27.9% — just under the
+# threshold, not zero).
+
+def test_inherit_opus_threshold_fires_on_measured_leak(ps):
+    """The measured leak, 67/200 = 33.5%, must fire under the recalibrated
+    threshold — the whole point of lowering it off the prior 0.5."""
+    cur = _neutral() | {"spawns_total": 200, "inherit_opus": 67,
+                        "inherit_opus_rate": 67 / 200}
+
+    flags = ps._flags(cur, _neutral())
+
+    matches = [f for f in flags if f.key == "inherit-opus/7d"]
+    assert len(matches) == 1
+    assert "67/200" in matches[0].message
+    assert "policy says name the tier (delegatable-work-patterns)" in matches[0].message
+
+
+def test_inherit_opus_rate_just_below_threshold_stays_silent(ps):
+    """A real recent window, 34/122 = 27.9%, sits just under the threshold —
+    not at zero. A flag that fires on any nonzero rate would pass the test
+    above for the wrong reason: it would never have to find the line."""
+    cur = _neutral() | {"spawns_total": 122, "inherit_opus": 34,
+                        "inherit_opus_rate": 34 / 122}
+    assert 0 < cur["inherit_opus_rate"] < ps.INHERIT_OPUS_RATE_THRESHOLD
+
+    flags = ps._flags(cur, _neutral())
+
+    assert not any(f.key == "inherit-opus/7d" for f in flags)

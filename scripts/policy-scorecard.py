@@ -280,6 +280,74 @@ FAILURE_RATE_FACTOR_GRID = 0.25       # the rule rounds up to this
 FAILURE_RATE_NOISE_SIGMAS = 3.0
 FAILURE_RATE_STABILITY_DAYS = 8
 
+# --- inherit→opus rate (delegation-policy compliance) ----------------------
+# `delegatable-work-patterns.md`'s founding audit (2026-06-17, 48 spawns) found
+# only ~48% of unlabeled-model sub-agent spawns actually ran opus by
+# inheritance — the rest were `Explore`-type spawns that default to a cheap
+# tier on their own — and stated "in zero cases did the coordinator
+# deliberately choose a cheap model." The prior threshold, 0.5, sat AT that
+# founding figure: per this stage's own principle, a threshold sitting at or
+# above the largest instance a policy already produced has decided that
+# instance is acceptable, which a compliance detector must not do.
+#
+# Re-derived against the 1835-row ledger copy (`--ledger` snapshot,
+# 2026-06-11..2026-07-28, identical row count to the live ledger at inspection
+# time) using rolling 7d windows stepped 1 day, min 30 spawns/window — denser
+# than the weekly 3-point series a naive calibration would dress up. The full
+# 32-sample series shows a clean regime break: every window whose 7d span
+# starts before 2026-07-04 sits in 40.4%-57.1% (13 samples); every window
+# starting on or after 2026-07-04 sits in 22.99%-34.11% (19 samples, current
+# as of the 2026-07-22 window at 30.50%). The break lands within days of
+# `delegatable-work-patterns.md` landing, which is the more likely cause than
+# noise — this is a policy taking effect, not a manufactured split (contrast
+# the numerator defect the SPEND_RATE_FACTOR comment above documents, where NO
+# gap existed and dressing up "two regimes" was the error).
+#
+# Current-regime rates (window-start >= 2026-07-04), sorted:
+#   0.230 0.230 0.232 0.234 0.235 0.236 0.250 0.260 0.268 0.273 0.279 0.305
+#   0.318 0.322 0.322 0.324 0.325 0.335 0.341
+# q50 = 0.2727 -> first 0.05-grid step at or above it = 0.30.
+#
+# Why q50, not SPEND_RATE_FACTOR's q90. That axis budgets for RARE firing on
+# an anomaly against otherwise-normal operation. This one is a standing
+# compliance rule the coordinating policy already names
+# (delegatable-work-patterns.md): the median current-regime week is ALREADY
+# the violation, so budgeting for rarity would re-certify the median as fine —
+# the exact failure this stage's principle names. A q50 threshold instead
+# fires on any week at or worse than typical, which is what a detector meant
+# to push typical behaviour down needs to do; the Stage 5/8 findings-store
+# ack/snooze path is what keeps that from being alert fatigue, not a higher
+# threshold. Fires on 8/19 current-regime samples (42%) — and on both cited
+# leak figures, 33.5% (67/200, the 2026-07-20 window below) and 31.7%
+# (129/407).
+#
+# Grid is 0.05, not SPEND_RATE_FACTOR_GRID's 0.25: that grid rounds a
+# multiplicative ratio typically in [1, 3]; this constant is a raw proportion
+# in [0, 1], where a 0.25 step has only 4 possible values (0.5 was one of
+# them) and cannot report the resolution the underlying rate carries.
+#
+# Dollar cost of the leak. The window 2026-07-20..2026-07-27 (one of the
+# ledger's own rolling windows above, not a synthetic figure) carries 200
+# spawns, 67 of them inherited opus — 33.5%, the cited leak. Marginal $/spawn
+# is estimated by an OLS regression of session cost_usd on agent_spawns.total
+# over the full 1835-row ledger (slope $20.36/spawn, intercept $5.29,
+# r=0.86); every rate cost-report.py's PRICING_USD_PER_MTOK gives opus is
+# EXACTLY 5/3 of sonnet's (input, output, cache_write, cache_read alike), so
+# moving a spawn from opus to sonnet saves exactly 2/5 of its cost regardless
+# of token mix. 67 spawns x $20.36 x 0.4 ~= $546 in avoidable opus premium for
+# that single week (the 2026-07-22 window, 129/407 = 31.7%, prices to ~$1050
+# the same way).
+#   Honest limits. (1) The OLS slope is a whole-ledger average that does not
+#   isolate inherited-opus spawns from explicit-opus or main-thread cost —
+#   sessions with more spawns also tend to be sessions with more main-thread
+#   reasoning, which likely biases the slope up. (2) It averages over ALL
+#   spawns, not specifically inherited ones, on the assumption the ledger
+#   gives no reason to think inherited spawns run systematically bigger or
+#   smaller than labeled ones. (3) It is therefore an order-of-magnitude
+#   figure, not an audited one — re-run spend-regression-investigate.py's
+#   underlying data for a movement-based view rather than a point estimate.
+INHERIT_OPUS_RATE_THRESHOLD = 0.30
+
 
 def _model_key(model: str | None) -> str:
     m = (model or "").lower()
@@ -979,7 +1047,8 @@ def _spend_rate_flag(cur: dict, prev: dict, baseline: float | None) -> str | Non
             f"{rate / baseline:.2f}× the trailing {SPEND_RATE_BASELINE_WINDOWS}-window "
             f"baseline ${baseline:,.2f}")
     if SPEND_RATE_FLAG_MODE == "rate_only":
-        return head + " — budget consumption, not necessarily degradation."
+        return (head + " — budget consumption, not necessarily degradation. "
+                 "Rank candidate drivers with spend-regression-investigate.py.")
     cur_pp, prev_pp = cur.get("cost_per_prompt", 0.0), prev.get("cost_per_prompt", 0.0)
     if not prev_pp:
         return None  # no prior per-unit cost: the second conjunct is unevaluable
@@ -987,7 +1056,8 @@ def _spend_rate_flag(cur: dict, prev: dict, baseline: float | None) -> str | Non
         return None  # cheaper per unit of work: volume growth, not degradation
     return (head + f", and $/prompt is not improving "
             f"(${prev_pp:.3f}→${cur_pp:.3f}) — the rate rise is not paying for "
-            "more work per dollar.")
+            "more work per dollar. Rank candidate drivers with "
+            "spend-regression-investigate.py.")
 
 
 class Flag(NamedTuple):
@@ -1190,7 +1260,7 @@ def _flags(cur: dict, prev: dict, cur_q: dict | None = None, prev_q: dict | None
                                        days)
         if fail_flag:
             flags.append(Flag("subagent-failure-rate" + w, fail_flag))
-    if cur["spawns_total"] and cur["inherit_opus_rate"] > 0.5:
+    if cur["spawns_total"] and cur["inherit_opus_rate"] > INHERIT_OPUS_RATE_THRESHOLD:
         flags.append(Flag("inherit-opus" + w,
             f"inherit→opus rate {cur['inherit_opus_rate']:.0%} "
             f"({cur['inherit_opus']}/{cur['spawns_total']} spawns ran opus with no explicit cheap model:) "
