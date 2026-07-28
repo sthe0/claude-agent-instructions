@@ -190,10 +190,25 @@ def _snapshot_approved_plan(store: StateStore, state: SessionState) -> tuple[str
 
 
 def _apply_refined_stage_fields(cur, refined) -> None:
-    """Copy the prose+verify definition fields of a freshly-loaded stage onto the
-    matching live stage. Shared by both replan branches that re-materialize from a
-    corrected plan (refinement, and the no_change refresh) so the two never drift.
-    Outcome/status is NOT touched — re-arm logic stays with each caller."""
+    """Copy the definition fields of a freshly-loaded stage onto the matching live
+    stage. Shared by both replan branches that re-materialize from a corrected plan
+    (refinement, and the no_change refresh) and by `_refresh_caches_from_plan_path`
+    at approve, so the three never drift. Outcome/status is NOT touched — re-arm
+    logic stays with each caller.
+
+    The copied set must COVER every field `plan.stage_carry_key` reads. That
+    coupling is the contract: the carry key decides whether a substantive replan
+    keeps a stage's PASSED outcome, so a field this function fails to copy leaves
+    the live stage stale against the plan bytes and re-arms a stage whose plan text
+    never changed. `test_refresh_covers_every_carry_key_field` pins the relation, so
+    a field added to the key but not here fails there rather than as an unexplained
+    re-arm later.
+
+    Some of the copied fields (executor, supplies, done_criterion, criterion_type)
+    are `_structural_signature`'s per-stage tuple, so a change to one classifies the
+    replan substantive: copying them is a no-op for the two replan callers and
+    load-bearing only for the approve-time refresh, which absorbs an in-place edit
+    made at plan-mutable PLAN_READY."""
     cur.title = refined.title
     cur.subject.result = refined.subject.result
     cur.means.means = refined.means.means
@@ -202,6 +217,15 @@ def _apply_refined_stage_fields(cur, refined) -> None:
     cur.conditions = refined.conditions
     cur.criterion.verify_command = refined.criterion.verify_command
     cur.criterion.expected_exit = refined.criterion.expected_exit
+    cur.criterion.done_criterion = refined.criterion.done_criterion
+    cur.criterion.criterion_type = refined.criterion.criterion_type
+    cur.criterion.verify_venue = refined.criterion.verify_venue
+    cur.criterion.verify_kind = refined.criterion.verify_kind
+    cur.criterion.landed = refined.criterion.landed
+    cur.actor.executor = refined.actor.executor
+    # depends_on is a read-only projection over `supplies`, so the backing edges
+    # are what must be copied for the key's deps element to track the plan.
+    cur.supplies = list(refined.supplies)
 
 
 def _refresh_caches_from_plan_path(state: SessionState) -> None:

@@ -8,7 +8,9 @@ from pathlib import Path
 
 from agentctl import cli
 from agentctl.plan import diff_plans, load_plan
-from agentctl.state import Node, StageStatus
+from agentctl.state import (
+    Actor, Criterion, LandedSpec, Means, Node, Stage, StageStatus, Subject, Supply,
+)
 
 
 def ns(**kw):
@@ -593,3 +595,137 @@ def test_no_change_replan_with_snapshot_is_idempotent(store, fixtures_dir):
     assert state.plan_snapshot_path == snap_before  # untouched
     assert state.stage(1).criterion.verify_command == cmd_before
     assert state.node == Node.EXECUTING.value
+
+
+# --- #48: a mid-execution correction must not re-arm reviewed stages -----------
+
+def _to_passed_stage1_via_dispatch(store, sid, plan_path):
+    """Drive stage 1 the way a real session does — dispatch the spawn, then record
+    the result — rather than assigning PASSED onto state. Issue #48 names dispatch
+    as the mutator, so a test that skips it cannot see the defect it reports."""
+    from agentctl.dispatch import RunResult
+
+    cli.cmd_next_stage(ns(session=sid), store=store)
+    cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium",
+                        dry_run=False, constraints=""), store=store,
+                     runner=lambda argv, **kw: RunResult(0, stdout="COMPLETED: done\n"))
+    cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
+                             control="reviewed: ok", observation=""), store=store)
+
+
+def _submit_edit_approve(store, sid, plan_path, edited_text):
+    """Submit a plan, then edit it IN PLACE at PLAN_READY before approving — the
+    plan-review REVISE cycle, which `_refresh_caches_from_plan_path` exists to
+    absorb (PLAN_READY is deliberately plan-mutable)."""
+    cli.cmd_start(ns(session=sid, task="demo-two-stage", goal="", done_criterion="",
+                     criterion_type="measurable", recursion_depth=0), store=store)
+    cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
+                        wall_clock_min=60, tracker_key=None, architectural=True,
+                        external_effect=False, new_dependency=False,
+                        public_api_change=False), store=store)
+    cli.cmd_plan(ns(session=sid), store=store)
+    cli.cmd_submit_plan(ns(session=sid, plan=str(plan_path)), store=store)
+    Path(plan_path).write_text(edited_text, encoding="utf-8")
+    cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
+                         m3_severe=False, m4_severe=False), store=store)
+
+
+def test_refresh_covers_every_carry_key_field():
+    """The relation, not one instance of it: `_apply_refined_stage_fields` must copy
+    every field `stage_carry_key` reads. While the copied set was a strict SUBSET,
+    an in-place PLAN_READY edit to any of the seven uncopied fields left the live
+    stage stale, and the next substantive replan re-armed a PASSED stage whose plan
+    text never changed. Adding a field to the key without adding it here fails HERE,
+    at the coupling, rather than as a puzzling re-arm in some later session.
+
+    Both stages are built with EVERY carry-key field distinct, so the assertion
+    cannot pass by the two sides happening to agree on an uncopied field — which is
+    exactly how a fixture-pair version of this test passed against the defect."""
+    from agentctl.plan import stage_carry_key
+
+    def _stage(tag, *, venue, kind, deps):
+        return Stage(
+            index=1,
+            title=f"title-{tag}",
+            subject=Subject(material=f"material-{tag}", result=f"result-{tag}",
+                            invariants=f"invariants-{tag}"),
+            means=Means(means=f"means-{tag}", method=f"method-{tag}"),
+            actor=Actor(executor=f"spawn:{tag}"),
+            criterion=Criterion(criterion_type=tag,
+                                done_criterion=f"done-{tag}",
+                                verify_command=f"verify-{tag}",
+                                expected_exit=len(tag),
+                                verify_venue=venue,
+                                verify_kind=kind,
+                                landed=LandedSpec(target=f"target-{tag}",
+                                                  delivered_stage=deps)),
+            conditions=f"conditions-{tag}",
+            supplies=[Supply(on=deps)],
+        )
+
+    live = _stage("aaa", venue="delivery", kind="shell", deps=2)
+    refined = _stage("bb", venue="repo_root", kind="landed", deps=3)
+
+    # every element of the key differs, so nothing is compared trivially
+    assert all(a != b for a, b in zip(stage_carry_key(live), stage_carry_key(refined)))
+
+    cli._apply_refined_stage_fields(live, refined)
+    assert stage_carry_key(live) == stage_carry_key(refined)
+
+
+def test_substantive_replan_carries_forward_passed_stage_edited_at_plan_ready(
+        store, fixtures_dir, tmp_path):
+    """The #48 carry-forward defect. Stage 1's done_criterion is edited at PLAN_READY
+    and the corrected plan carries that same edit, so stage 1's text is UNCHANGED
+    between the approved plan and the corrected one — its PASSED outcome must survive.
+    done_criterion is one of the seven carry-key fields the refresh used to miss."""
+    sid = "carry48"
+    plan_path = tmp_path / "plan.toml"
+    base = (fixtures_dir / "plan_two_stage.toml").read_text()
+    plan_path.write_text(base)
+    edited = base.replace("python -c 'import mod' exits 0",
+                          "python -c 'import mod' exits 0 cleanly")
+    assert edited != base, "fixture no longer carries the string this test edits"
+
+    _submit_edit_approve(store, sid, plan_path, edited)
+    _to_passed_stage1_via_dispatch(store, sid, plan_path)
+    assert store.load(sid).stage(1).outcome.status == StageStatus.PASSED.value
+
+    corrected = tmp_path / "corrected.toml"
+    corrected.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text()
+                         .replace("python -c 'import mod' exits 0",
+                                  "python -c 'import mod' exits 0 cleanly"))
+
+    d = cli.cmd_replan(ns(session=sid, plan=str(corrected)), store=store)
+    assert d.marker == "PLAN-READY"
+    state = store.load(sid)
+    assert state.stage(1).outcome.status == StageStatus.PASSED.value
+    assert state.stage(1).outcome.actual == "ok"
+
+
+def test_substantive_replan_rearms_stage_whose_done_criterion_changed(
+        store, fixtures_dir, tmp_path):
+    """The companion, and the half that keeps the fix honest: the refresh now copies
+    done_criterion, so this test proves the copy did not turn into a blanket carry —
+    a stage whose definition GENUINELY changed between the approved and corrected
+    plans is still re-armed, exactly as before."""
+    sid = "rearm48"
+    plan_path = tmp_path / "plan.toml"
+    base = (fixtures_dir / "plan_two_stage.toml").read_text()
+    plan_path.write_text(base)
+    edited = base.replace("python -c 'import mod' exits 0",
+                          "python -c 'import mod' exits 0 cleanly")
+
+    _submit_edit_approve(store, sid, plan_path, edited)
+    _to_passed_stage1_via_dispatch(store, sid, plan_path)
+
+    # the corrected plan changes stage 1's done_criterion AGAIN -> genuinely different
+    corrected = tmp_path / "corrected.toml"
+    corrected.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text()
+                         .replace("python -c 'import mod' exits 0",
+                                  "python -c 'import mod' exits 0 under coverage"))
+
+    d = cli.cmd_replan(ns(session=sid, plan=str(corrected)), store=store)
+    assert d.marker == "PLAN-READY"
+    assert store.load(sid).stage(1).outcome.status == StageStatus.PENDING.value
