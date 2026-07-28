@@ -4,7 +4,7 @@ description: When you hold both the tools and the rights to carry out a step, do
 type: feedback
 schema: leaf/v1
 created: 2026-07-02
-last_verified: 2026-07-02
+last_verified: 2026-07-28
 ---
 
 # Don't offload to the user an action you can perform yourself
@@ -26,8 +26,13 @@ Before concluding a domain operation *"has no CLI path"* and sending the user in
 
 A capability gap asserted without both checks is unverified.
 
+### Decision-offload, not only execution-offload
+
+*To achieve autonomous within-authority gate resolution, resolve engine gates yourself instead of escalating their mechanics.* The rule covers offloaded **decisions**, not only offloaded **execution**. When an engine gate (`agentctl code-review` / `stage-review`, or any blocked directive) stops your action and you hold a within-authority resolution — an `override` verdict carrying a **named escape-class**, a coordinator `stage-review --verdict pass` — **decide and record it yourself**. Escalating *which gate-clearing path to take* offloads a decision that is exactly the coordinator cognition the engine defers to; it matches none of the CLAUDE.md § Escalation triggers (the criterion is defined, access is held, there is no risk-bearing strategy fork). And never let *"the alternative path costs a spawn"* justify the ask — on a flat plan a spawn is telemetry, not money ([[flat-max-billing-cost-framing]]). The structural end-state is the engine annotating a blocked gate as coordinator-resolvable; until then the naming here carries the salience.
+
 ## See also
 
 - `~/.claude-agent/CLAUDE.md` § Acting without asking — the short pointer that loads this leaf.
 - [[doubt-own-snapshot]] — the perception-side twin: doubt your own stale snapshot before doubting the user's requirement.
 - [[acting-without-asking]] — the pre-authorization carve-outs that make "just do it" safe.
+- [[flat-max-billing-cost-framing]] — the cost-framing twin: a spawn's dollar figure is telemetry on a flat plan, never a reason to escalate.
