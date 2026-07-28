@@ -9,6 +9,7 @@ subprocess with a JSON payload on stdin. Mirrors test_hook_guard_canon_readonly.
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
 import subprocess
@@ -235,6 +236,31 @@ def test_heredoc_body_blockquote_allows(tmp_path):
     assert _allowed(run_hook(core, cmd, cwd=core))
 
 
+def test_heredoc_body_append_marker_allows(tmp_path):
+    """The append twin of the blockquote case: `>>` at the start of a body line
+    is prose, and the guard's token walk looks for `>>` on the same pass."""
+    core = make_core(tmp_path)
+    cmd = "cat > /tmp/notes.md <<'EOF'\n>> a quoted line\nEOF"
+    assert _allowed(run_hook(core, cmd, cwd=core))
+
+
+def test_heredoc_body_absolute_canon_path_allows(tmp_path):
+    """The cwd-independent anchor of the family, asserted at BOTH cwds.
+
+    Every other false positive here denies only when the payload cwd is canon,
+    because its bogus token is relative and `_canon_target` resolves it against
+    the effective cwd — so a test for one of those written at an outside cwd
+    passes without the fix and pins nothing. This body carries an ABSOLUTE canon
+    path instead, which denied at every cwd before the stripper existed. That is
+    what isolates "a body is data" from the cwd-resolution behaviour, and it is
+    why the outside-cwd half is asserted rather than assumed.
+    """
+    core = make_core(tmp_path)
+    cmd = f"cat > /tmp/notes.md <<'EOF'\n> {core}/f.txt\nEOF"
+    for cwd in (core, Path("/tmp")):
+        assert _allowed(run_hook(core, cmd, cwd=cwd)), f"cwd={cwd}"
+
+
 def test_here_string_operand_allows(tmp_path):
     core = make_core(tmp_path)
     assert _allowed(run_hook(core, 'cat <<< "> notes.txt"', cwd=core))
@@ -351,8 +377,28 @@ def test_ordinary_deny_omits_the_variable_note(tmp_path):
     assert "shell state does not persist" not in proc.stdout
 
 
-def test_body_stripper_has_exactly_one_call_site(tmp_path):
+def test_body_stripper_is_called_once_on_the_bash_path():
     """Applied once, at the Bash entry point of `decide()`. A second call site
-    means a consumer was fixed in isolation and the next one will be missed."""
-    source = HOOK_SCRIPT.read_text()
-    assert source.count("strip_heredoc_bodies") == 1
+    means a consumer was fixed in isolation and the next one will be missed.
+
+    Asserted over the parsed AST rather than by counting the symbol's occurrences
+    in the source text: a comment that names the function is not a call site, and
+    the count would report one as a violation with a message pointing at the
+    wrong thing.
+    """
+    tree = ast.parse(HOOK_SCRIPT.read_text())
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "strip_heredoc_bodies"
+    ]
+    assert len(calls) == 1, f"{len(calls)} call sites, expected exactly one"
+
+    decide = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "decide"
+    )
+    assert calls[0] in set(ast.walk(decide)), "the single call site is not inside decide()"

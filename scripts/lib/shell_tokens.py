@@ -181,74 +181,74 @@ def _holds_multiple_statements(residue: str) -> bool:
     depth = 0
     i = 0
     quote = None
-    current = ""
-    parts = []
+    statements = 0  # separated segments that held something
+    filled = False  # does the segment being scanned hold something?
     while i < len(residue):
         c = residue[i]
         if quote:
             if c == "\\" and quote == '"':
                 i += 2
-                current += "  "
                 continue
             if c == quote:
                 quote = None
-            current += c
+            filled = True
             i += 1
             continue
         if c in "'\"":
             quote = c
-            current += c
+            filled = True
             i += 1
             continue
         if residue.startswith("$((", i) or residue.startswith("((", i):
             depth += 1
             i += 2
-            current += "  "
             continue
         if residue.startswith("))", i):
             depth = max(0, depth - 1)
             i += 2
-            current += "  "
             continue
         if residue.startswith("$(", i):
             depth += 1
             i += 2
-            current += "  "
             continue
         if residue.startswith("[[", i):
             depth += 1
             i += 2
-            current += "  "
             continue
         if residue.startswith("]]", i):
             depth = max(0, depth - 1)
             i += 2
-            current += "  "
             continue
         if c == "(":
             depth += 1
+            filled = True
             i += 1
-            current += c
             continue
         if c == ")":
             depth = max(0, depth - 1)
+            filled = True
             i += 1
-            current += c
             continue
         if c == "`":
+            # Backticks do not nest, so one toggles between outside and inside
+            # its own substitution -- but only from depth 0 or 1. Deeper, we are
+            # already inside some other construct and there is no reliable
+            # partner to pair this backtick with, so leave the depth alone.
             depth = 1 - depth if depth in (0, 1) else depth
+            filled = True
             i += 1
-            current += c
             continue
         if depth == 0 and c in ";&\n":
-            parts.append(current)
-            current = ""
+            if filled:
+                statements += 1
+            filled = False
             i += 1
             continue
-        current += c
+        filled = filled or not c.isspace()
         i += 1
-    parts.append(current)
-    return sum(1 for part in parts if part.strip()) > 1
+    if filled:
+        statements += 1
+    return statements > 1
 
 
 def _body_inert(delimiter_quoted: bool, text: str) -> bool:

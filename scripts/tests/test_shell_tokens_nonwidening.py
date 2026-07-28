@@ -16,11 +16,25 @@ denied and makes it allowed. Pre-existing bypasses stay pre-existing bypasses an
 are named in `hook-guard-canon-readonly.py`'s NAMED RESIDUAL block, not silently
 laundered through this file.
 
-Cases whose stripped form is byte-identical to the raw form are pruned: the guard
-receives the same input, so its decision is the same by construction and no
-oracle run can add information. The count of pruned cases is asserted, so a rule
-change that quietly stops recognizing everything cannot pass by pruning the whole
-table.
+THREE DIFFERENT NUMBERS, which this file is careful never to conflate:
+
+  CORPUS       -- every construction in `CASES`. The breadth of shell grammar the
+                  rule has been pointed at. Asserted by `test_case_table_is_large_enough`.
+  EXERCISED    -- the subset whose stripped form DIFFERS from its raw form. Only
+                  these can carry the differential predicate: where stripping is a
+                  no-op the guard receives the same bytes and returns the same
+                  decision by construction, so the remaining cases are pruned and
+                  no oracle run can add information about them. Pruned cases are
+                  corpus, not control.
+  BASH-REACHED -- the subset of EXERCISED that real bash was measured to actually
+                  write canon in. Only these reach the `bash_writes` conjunct, so
+                  only these can ever expose a widening.
+
+A corpus of any size proves nothing if the rule stops recognizing it, so EXERCISED
+and BASH-REACHED are both asserted at floors set from measurement (see
+`test_body_removal_never_turns_a_real_write_from_deny_into_allow`). Reading the
+corpus figure as if it were the control's strength is the specific mistake those
+assertions exist to prevent.
 
 ORACLE BLIND SPOT, stated rather than papered over: `bash_writes` observes the
 filesystem after the command's foreground process group exits. A write performed
@@ -97,12 +111,18 @@ BASH_TIMEOUT_S = 10
 #   measure_closed3.py     -> _DELIMITER_QUOTING                         (16)
 #   measure_closed4.py     -> _EXPANSION_AND_TERMINATOR                  (16)
 #   measure_closed5.py     -> _DELIMITER_BOUNDARY, 15 new delimiter-word
-#                             attacks, plus 3 named false-positive re-tests:
-#                             "fp blockquote gt closed5 retest" and "fp bare
-#                             plain unquoted delim" are genuinely new payloads
-#                             (added to FALSE_POSITIVES); the third re-test is
-#                             byte-identical to "fp here-string operand" above
-#                             and is not duplicated
+#                             attacks, plus 1 named false-positive re-test ("fp
+#                             bare plain unquoted delim", a genuinely new
+#                             payload, added to FALSE_POSITIVES); its other two
+#                             re-tests were byte-identical to entries already
+#                             present and are not duplicated
+#   an independent review   -> _REVIEWER_FAMILIES (22) and
+#     of this stage            _INERT_CONSUMER_WRITES (12). The review built its
+#                             own 38-construction oracle and named eight families
+#                             this table had not reached; both groups below were
+#                             reconstructed from those families and measured here
+#                             rather than copied over, so every verdict in them is
+#                             one this file observed
 #   the nine pre-existing   -> _COMMAND_LINE_WRITERS: exec 3>, exec 3>>,
 #     bypasses                 dd of=, cp, >|, sed 'w', awk '{print >}' are
 #                             named entries there; "sort -o" additionally gets
@@ -268,6 +288,71 @@ _DELIMITER_BOUNDARY = [
     ("delim then paren", f"cat <<EOF){NL}{R}{NL}EOF"),
 ]
 
+# Eight grammar families an independent review's own oracle covered and this
+# table did not. Reconstructed here and measured against real bash: none is a
+# regression, and nine of the twenty-two are EXERCISED, so they widen the
+# control rather than only the corpus.
+_REVIEWER_FAMILIES = [
+    # A closing quote with no opener: the delimiter reader must not treat the
+    # stray quote as if it closed something, and bash rejects the command
+    # outright, so nothing may ride on the two agreeing.
+    ("delim close squote no open", f"cat <<EOF' > /tmp/t.md{NL}{R}{NL}EOF"),
+    ("delim close dquote no open", f'cat <<EOF" > /tmp/t.md{NL}{R}{NL}EOF'),
+    ("delim squote pair after word", f"cat <<EOF'' > /tmp/t.md{NL}> {CANON}/f.txt{NL}EOF"),
+    ("delim dquote pair after word", f'cat <<EOF"" > /tmp/t.md{NL}> {CANON}/f.txt{NL}EOF'),
+    # A tab between the operator and the delimiter: bash accepts it, the reader
+    # skips only spaces, so it must fail closed rather than misread the word.
+    ("tab after operator", f"cat <<\tEOF > /tmp/t.md{NL}{R}{NL}EOF"),
+    ("tab after operator quoted", f"cat <<\t'EOF' > /tmp/t.md{NL}{R}{NL}EOF"),
+    # A redirect BEFORE the command word -- legal bash, and the shape clause has
+    # to survive a command line that does not start with its consumer.
+    ("redirect before command word", f"> /tmp/t.md cat <<'EOF'{NL}> {CANON}/f.txt{NL}EOF"),
+    ("redirect first canon target", f"> {CANON}/{MARKER} cat <<'EOF'{NL}x{NL}EOF"),
+    ("append first then command", f">> /tmp/t.md cat <<'EOF'{NL}> {CANON}/f.txt{NL}EOF"),
+    # Here-string operands glued to the operator with no separating space.
+    ("here-string glued squote", f"cat <<<'> {CANON}/f.txt'"),
+    ("here-string glued dquote", f'cat <<<"> {CANON}/f.txt"'),
+    ("here-string glued bare canon", f"cat <<<{CANON}/f.txt"),
+    # An allowlisted consumer named by absolute path: `_consumer_ok` takes the
+    # basename, so these must behave exactly as their bare-name siblings do --
+    # including the interpreter one, which must stay denied.
+    ("absolute cat consumer", f"/bin/cat <<'EOF' > /tmp/t.md{NL}> {CANON}/f.txt{NL}EOF"),
+    ("absolute tee canon argv", f"cat <<'EOF' | /usr/bin/tee {CANON}/{MARKER}{NL}x{NL}EOF"),
+    ("absolute cat piped to absolute bash", f"/bin/cat <<'EOF' | /bin/bash{NL}{R}{NL}EOF"),
+    # Pipelines with an empty element, where splitting on `|` yields a segment
+    # that is no command at all.
+    ("or-list then exec", f"cat <<'EOF' > /tmp/a5.sh || bash /tmp/a5.sh{NL}{R}{NL}EOF"),
+    ("empty leading pipeline element", f"| cat <<'EOF' > /tmp/t.md{NL}> {CANON}/f.txt{NL}EOF"),
+    ("pipe to empty then bash", f"cat <<'EOF' |&  bash{NL}{R}{NL}EOF"),
+    # Carriage returns: bash's terminator match is byte-exact, this reader's is
+    # `str.strip()`, so a CRLF body is a place the two could disagree.
+    ("CRLF body and terminator", "cat <<'EOF' > /tmp/t.md\r\n> " + CANON + "/f.txt\r\nEOF\r\n"),
+    ("CR on terminator only", f"cat <<'EOF' > /tmp/t.md{NL}> {CANON}/f.txt{NL}EOF\r"),
+    # The operator on the second line, where `_command_line` saw only the first.
+    ("heredoc on second line", f"cat /dev/null{NL}cat <<'EOF' > /tmp/t.md{NL}> {CANON}/f.txt{NL}EOF"),
+    ("interpreter on second line", f"cat /dev/null{NL}bash <<'EOF'{NL}{R}{NL}EOF"),
+]
+
+# Allowlisted consumers that DO write canon, each with a strippable heredoc.
+# This is the overlap the differential predicate actually needs -- body removal
+# is exercised AND real bash reaches the marker -- and it is where the claim
+# "body text only is ever removed, so a path on the command line survives" is
+# put under load across every writing member of `CONSUMERS`.
+_INERT_CONSUMER_WRITES = [
+    ("absolute cat tee canon", f"/bin/cat <<'EOF' | tee {CANON}/{MARKER}{NL}x{NL}EOF"),
+    ("head append to canon", f"head <<'EOF' >> {CANON}/{MARKER}{NL}x{NL}EOF"),
+    ("tail out to canon", f"tail <<'EOF' > {CANON}/{MARKER}{NL}x{NL}EOF"),
+    ("sha256sum out to canon", f"sha256sum <<'EOF' > {CANON}/{MARKER}{NL}x{NL}EOF"),
+    ("nl out to canon", f"nl <<'EOF' > {CANON}/{MARKER}{NL}x{NL}EOF"),
+    ("sort out to canon", f"sort <<'EOF' > {CANON}/{MARKER}{NL}x{NL}EOF"),
+    ("uniq out to canon", f"uniq <<'EOF' > {CANON}/{MARKER}{NL}x{NL}EOF"),
+    ("wc glued canon redirect", f"wc <<'EOF' >{CANON}/{MARKER}{NL}x{NL}EOF"),
+    ("here-string append canon", f'cat <<< "x" >> {CANON}/{MARKER}'),
+    ("absolute tee -a canon", f"cat <<'EOF' | /usr/bin/tee -a {CANON}/{MARKER}{NL}x{NL}EOF"),
+    ("bare delim inert body canon", f"cat <<EOF > {CANON}/{MARKER}{NL}plain{NL}EOF"),
+    ("here-string bare operand canon", f"cat <<< x > {CANON}/{MARKER}"),
+]
+
 _BOUND_ASYMMETRY = [
     ("amp after non-first-line heredoc", f"cat f0{NL}cat <<EOF & {R}{NL}body{NL}EOF"),
     ("and-and after non-first line", f"cat f0{NL}cat <<EOF && {R}{NL}body{NL}EOF"),
@@ -303,12 +388,6 @@ FALSE_POSITIVES = [
     ("fp here-string operand", 'cat <<< "> notes.txt"'),
     ("fp git commit mention", f"cat > /tmp/x.md <<'EOF'{NL}run git commit here{NL}EOF"),
     ("fp absolute canon path", f"cat > /tmp/x.md <<'EOF'{NL}> {CANON}/f.txt{NL}EOF"),
-    # measure_closed5.py's round-9 delimiter-boundary sweep re-attacked the
-    # false positives with a different body and an unquoted delimiter; two of
-    # its three re-tests are genuinely new payloads (the third, a bare
-    # here-string, is byte-identical to "fp here-string operand" above and is
-    # not duplicated).
-    ("fp blockquote gt closed5 retest", f"cat > /tmp/x.md <<'EOF'{NL}> quoted{NL}EOF"),
     # Delimiter UNQUOTED sibling of "fp absolute canon path": clause (vi) calls
     # the body inert either because the delimiter is quoted, OR because the
     # body has no `$`/backtick/backslash -- this exercises the second branch.
@@ -323,6 +402,8 @@ CASES = (
     + _DELIMITER_QUOTING
     + _EXPANSION_AND_TERMINATOR
     + _DELIMITER_BOUNDARY
+    + _REVIEWER_FAMILIES
+    + _INERT_CONSUMER_WRITES
     + _BOUND_ASYMMETRY
     + _COMMAND_LINE_WRITERS
     + FALSE_POSITIVES
@@ -341,6 +422,15 @@ def bash_writes(command: str) -> bool:
     The command runs in a throwaway directory with `@CANON@` pointed at it, so a
     construction that "writes canon" writes there and nowhere else. stdin is
     /dev/null -- a consumer left reading a terminal would otherwise hang the run.
+
+    Nothing is caught here, deliberately. A blanket `except Exception: return
+    False` would score a `TimeoutExpired` as "this construction writes nothing",
+    which silently drops the case out of the differential predicate -- the one
+    conjunct that makes it a control. A payload that times out is a broken
+    payload and must fail the run loudly. Note that a shell syntax error is NOT
+    an exception: `bash -c` reports it on stderr and exits nonzero, which is a
+    perfectly good "wrote nothing" observation and is what several delimiter
+    cases below rely on.
     """
     sandbox = tempfile.mkdtemp(prefix="shell-tokens-oracle-")
     try:
@@ -356,8 +446,6 @@ def bash_writes(command: str) -> bool:
             return True
         time.sleep(SETTLE_S)  # bounds the detached-write blind spot
         return os.path.exists(marker)
-    except Exception:
-        return False
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
 
@@ -394,8 +482,13 @@ def canon(tmp_path_factory):
 
 
 def test_case_table_is_large_enough():
-    """A shrinking table is the cheapest way to make this control pass falsely."""
-    assert len(CASES) >= 153, len(CASES)
+    """A shrinking table is the cheapest way to make this control pass falsely.
+
+    This is the CORPUS floor and the weakest of the three: breadth of grammar
+    pointed at the rule, not control strength. The floors that carry the control
+    are EXERCISED and BASH-REACHED, asserted in the differential test below.
+    """
+    assert len(CASES) >= 153, len(CASES)  # measured 186
     assert len({name for name, _ in CASES}) == len(CASES), "duplicate case names"
 
 
@@ -403,26 +496,38 @@ def test_case_table_is_large_enough():
 def test_body_removal_never_turns_a_real_write_from_deny_into_allow(canon):
     """The differential predicate, over every construction in the table."""
     regressions = []
-    pruned = 0
     exercised = 0
+    bash_reached = 0
     for name, raw in CASES:
         stripped = shell_tokens.strip_heredoc_bodies(raw)
         if stripped == raw:
             # Identical input reaches the guard, so its decision is identical and
             # no oracle run can distinguish the two. Proof, not sampling.
-            pruned += 1
             continue
         exercised += 1
         if not bash_writes(raw):
             continue
+        bash_reached += 1
         for cwd in (canon, Path("/tmp")):
             if guard_denies(canon, raw, cwd) and not guard_denies(canon, stripped, cwd):
                 regressions.append(f"{name} (cwd={cwd})")
     assert not regressions, "body removal widened the guard: " + "; ".join(regressions)
-    # Nothing is silently skipped: a rule that recognized nothing would prune the
-    # whole table and pass the assertion above vacuously.
-    assert exercised >= 20, f"only {exercised} of {len(CASES)} constructions were stripped at all"
-    assert pruned + exercised == len(CASES)
+    # Neither number is derivable from `len(CASES)`, and a rule change that
+    # quietly stopped recognizing most of the table would leave the assertion
+    # above vacuously true, so both floors are asserted. They are MEASURED, not
+    # chosen: as committed, this loop counts exercised=75 and bash-reached=28
+    # over a corpus of 186. To re-derive them, add a `print` beside these asserts
+    # and run the test with `-s`; both are plain loop counters over `CASES` and
+    # nothing else feeds them. The floors sit a little under the
+    # measured values so one incidental case whose bash verdict shifts (a missing
+    # `zsh`, a differently-built coreutils) does not break the build, and far
+    # enough above the pre-review values -- exercised=55, bash-reached=15 -- that
+    # a regression back to those fails here.
+    assert exercised >= 70, f"only {exercised} of {len(CASES)} constructions were stripped at all"
+    assert bash_reached >= 25, (
+        f"only {bash_reached} of {exercised} stripped constructions actually wrote canon: "
+        "the predicate's `bash_writes` conjunct is barely loaded"
+    )
 
 
 @pytest.mark.skipif(not _bash_available(), reason="no bash: oracle has no ground truth")
