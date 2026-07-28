@@ -546,6 +546,28 @@ def test_bash_git_commit_deny_names_the_repos_linked_worktree(tmp_path):
     assert f"git -C {wt} commit" in proc.stdout
 
 
+def test_bash_git_commit_deny_truncates_a_long_worktree_list(tmp_path):
+    """With more linked worktrees than the message shows, the list is truncated and
+    SAYS SO. A silently-cut list reads as exhaustive, so a reader whose worktree fell
+    off the end concludes it does not exist — the exact wrong-conclusion this deny
+    message exists to prevent."""
+    core = make_core(tmp_path)
+    made = []
+    for i in range(7):
+        wt = tmp_path / f"wt{i}"
+        git("worktree", "add", "--quiet", "-b", f"wt-branch-{i}", str(wt), "main", cwd=core)
+        made.append(wt)
+    proc = run_hook(core, {
+        "tool_name": "Bash",
+        "tool_input": {"command": "git commit -m 'wip'"},
+        "cwd": str(core),
+    })
+    assert _denied(proc), proc.stdout
+    assert "+2 more" in proc.stdout
+    # Which five are shown is git's listing order, not ours; that exactly five are is ours.
+    assert sum(str(wt) in proc.stdout for wt in made) == 5, proc.stdout
+
+
 def test_bash_git_commit_deny_without_worktree_points_at_isolation(tmp_path):
     """No linked worktree to name — the message falls back to making one, and still
     carries the addressed form so the reader knows what shape the fix takes."""

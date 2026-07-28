@@ -35,29 +35,40 @@ git -C "$CORE" worktree add --quiet -b wt-branch "$WT" main
 
 # A1: stage a change in the LINKED WORKTREE only, then compare the two indexes.
 printf 'worktree edit\n' > "$WT/f.txt"; git -C "$WT" add f.txt
+echo '--- worktree index (git -C $WT diff --cached --name-only):'
 git -C "$WT" diff --cached --name-only
+echo '--- canon index seen from cwd=canon (cd $CORE; git diff --cached --name-only):'
 ( cd "$CORE" && git diff --cached --name-only )
+echo '--- canon status seen from cwd=canon:'
 ( cd "$CORE" && git status --porcelain )
+echo '--- index file each cwd resolves to:'
 ( cd "$CORE" && echo "cwd=canon  -> $(git rev-parse --git-path index)" )
 ( cd "$WT"   && echo "cwd=wt     -> $(git rev-parse --git-path index)" )
 
 # A2: bare `git commit` with process cwd = canon, worktree staged, canon index empty.
 ( cd "$CORE" && git commit -m 'bare commit from canon cwd'; echo "exit=$?" )
+echo '--- did canon HEAD move? (should still be the seed commit)'
 git -C "$CORE" log --oneline -1
+echo "--- is the worktree's staged change still uncommitted?"
 git -C "$WT" diff --cached --name-only
 
 # A3: the same, with something ALSO staged in canon.
 printf 'canon edit\n' > "$CORE/g.txt"; ( cd "$CORE" && git add g.txt )
 ( cd "$CORE" && git commit -q -m 'bare commit from canon cwd, canon index non-empty'; echo "exit=$?" )
+echo '--- canon HEAD after:'
 git -C "$CORE" log --oneline -1
-git -C "$CORE" show --stat --oneline HEAD | sed -n '1,5p'
+echo '--- files in that commit:'
+git -C "$CORE" show --stat --oneline HEAD | sed -n '2,5p'
+echo '--- worktree HEAD after (unchanged, and its staged change still pending):'
 git -C "$WT" log --oneline -1
 git -C "$WT" diff --cached --name-only
 
 # A4: the signal issue #44's "Proposed" section wants to key on.
+echo '--- from cwd=canon, what does git report as the target tree?'
 ( cd "$CORE" && echo "show-toplevel   = $(git rev-parse --show-toplevel)" )
 ( cd "$CORE" && echo "git-dir         = $(git rev-parse --absolute-git-dir)" )
 ( cd "$CORE" && echo "staged paths    = [$(git diff --cached --name-only | tr '\n' ' ')]" )
+echo '--- for comparison, from cwd=worktree:'
 ( cd "$WT" && echo "show-toplevel   = $(git rev-parse --show-toplevel)" )
 ( cd "$WT" && echo "git-dir         = $(git rev-parse --absolute-git-dir)" )
 ```
@@ -67,6 +78,9 @@ then a second, separate Bash tool call containing only `pwd`. Compare the two, a
 harness's own trailing notice on the first call.
 
 ## Observation
+
+Unedited output of the script above, label for label. The commit hashes are timestamp-derived, so a
+re-run reproduces every line but those.
 
 **A1 — a linked worktree has its own index, and canon cannot see it.**
 
@@ -122,7 +136,16 @@ git-dir         = /tmp/repro-44/fixture/core/.git/worktrees/wt
 The first call returned `/tmp/repro-44` followed by the harness's own notice
 `Shell cwd was reset to /home/the0/cai-wt-harm-fixes`; the second call, containing only `pwd`,
 returned `/home/the0/cai-wt-harm-fixes`. The value the hook reads from the payload's `cwd` field and
-the value the shell starts in are the same session directory, so they cannot diverge.
+the value the shell **starts** in are the same session directory, so they cannot diverge **between**
+tool calls.
+
+They can still diverge **within** a single call, and nothing here claims otherwise. A command may
+change directory after its first token (`git status && cd <wt> && git commit`), do it in a subshell
+(`(cd <wt> && git commit)`), use `pushd`, or set `GIT_DIR`/`GIT_WORK_TREE` — and then the commit
+really does reach the worktree. `effective_git_cwd` reads only `git -C <dir>` and a leading
+`cd <dir> &&`, so all four are denied today. Those denials pre-date this verdict and it does not
+change them. What B establishes is narrower, and it is all the *Verdict* below rests on: when the
+command carries no target the guard can read, it runs in the session directory.
 
 ## Verdict
 

@@ -26,10 +26,14 @@ Everything else is ALLOWED (fail-open): a linked worktree, a second mount, a
 path outside canon entirely, `/tmp`, and any git error or missing canon-roots
 file. Non-`git commit` git commands (pull, fetch, merge --ff-only, update-ref,
 ...) are never inspected — only Bash commands that literally run `git commit`
-are denied. A BARE `git commit` from a session whose directory is canon is denied
-by design, not by a detection gap: a linked worktree keeps its own index, so such a
-commit reaches canon's index and never the worktree's (reproduction and verdict:
-docs/decisions/canon-guard-bare-commit-verdict.md, #44). Here-document bodies and
+are denied. A `git commit` naming no target this module can read — neither
+`git -C <dir>` nor a leading `cd <dir> &&` — from a session whose directory is canon
+is denied by design, not by a detection gap: a linked worktree keeps its own index,
+so such a commit reaches canon's index and never the worktree's (reproduction and
+verdict: docs/decisions/canon-guard-bare-commit-verdict.md, #44). A commit that
+reaches a worktree by a route this module does not parse (a `cd` after the first
+token, a subshell, `GIT_DIR`) is denied too — conservatively, per `git_cwd`'s
+contract, and it was denied before that verdict as well. Here-document bodies and
 here-string operands are DATA and are removed before any Bash command is
 inspected (`lib/shell_tokens.py`), so a Markdown blockquote line inside a body is
 not read as a redirect. Always exits 0 — a hook crash must never wedge the
@@ -431,12 +435,15 @@ def _commit_deny_msg(target: str) -> str:
         hint = (" This repo has no linked worktree yet — make one with "
                 "`scripts/session-isolate.sh <task-name>`.")
     return (
-        f"Refusing to run `git commit` in canon ({target}) from a live agent session. A `cd` does "
-        f"not persist between tool calls, so this command runs in the session's own directory — "
-        f"canon — and commits canon's index. A linked worktree keeps a SEPARATE index, so its "
-        f"staged changes are invisible from here: this would either fail with \"nothing to commit\" "
-        f"or land a real commit in canon. Name the target tree explicitly instead: "
-        f"`git -C <worktree> commit -m ...`.{hint}"
+        f"Refusing to run `git commit` in canon ({target}) from a live agent session. This command "
+        f"names no target this guard can read — neither `git -C <dir>` nor a leading `cd <dir> &&` "
+        f"— and a `cd` does not persist between tool calls, so it is taken to run in the session's "
+        f"own directory: canon. A commit there commits canon's index, and a linked worktree keeps a "
+        f"SEPARATE index whose staged changes are invisible from here, so this would either fail "
+        f"with \"nothing to commit\" or land a real commit in canon. Name the target tree "
+        f"explicitly: `git -C <worktree> commit -m ...` — that is also the only form this guard "
+        f"reads, so a mid-command `cd`, a subshell or `GIT_DIR` is refused here even when it really "
+        f"would have reached the worktree.{hint}"
     )
 
 
