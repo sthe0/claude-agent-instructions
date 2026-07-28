@@ -40,6 +40,21 @@ if [[ -x "$REPO/scripts/verify-extracted-skills-resolve.sh" ]]; then
   "$REPO/scripts/verify-extracted-skills-resolve.sh" || FAIL=1
 fi
 
+# The same failure shape one seam over: a channel whose adapter was extracted to
+# the machine-local plugin dir is invisible to every in-repo check, so a machine
+# configured for it but missing the plugin only finds out when someone files.
+if [[ -x "$REPO/scripts/verify-difficulty-channel-resolves.sh" ]]; then
+  echo "=== Difficulty channel ==="
+  "$REPO/scripts/verify-difficulty-channel-resolves.sh" || FAIL=1
+fi
+
+# Extraction took the adapter out of this repo's suite; --require-if-plugin-installed
+# demands tests exactly where such extracted code exists, and stays a no-op elsewhere.
+if [[ -x "$REPO/scripts/verify-plugin-tests.sh" ]]; then
+  echo "=== Plugin tests ==="
+  "$REPO/scripts/verify-plugin-tests.sh" --require-if-plugin-installed || FAIL=1
+fi
+
 echo "=== Global symlinks ==="
 check_link "$CLAUDE_AGENT_HOME/CLAUDE.md" "$REPO/CLAUDE.md"
 check_link "$HOME/.cursor/rules/claude-code-sync.mdc" "$REPO/cursor/rules/claude-code-sync.mdc"

@@ -44,3 +44,20 @@ Two controls enforce the contract for every name the manifest lists:
   fails if the name does not resolve to a real skill under
   `~/.claude-agent/skills/` (i.e. `setup-symlinks.sh` has not linked the
   overlay copy in, or the link is dangling).
+
+## The other overlay: difficulty-channel plugins
+
+Skills are not the only thing extracted out of this repo. A difficulty channel
+whose adapter is org-specific attaches the same way, from
+`<agent-home>/difficulty-channel-plugins/` — `setup-symlinks.sh` creates that
+directory and writes a README into it describing what belongs where. Its two
+controls mirror the pair above:
+
+- [`scripts/verify-difficulty-channel-resolves.sh`](../scripts/verify-difficulty-channel-resolves.sh) —
+  fails if the channel named in `agent-identity.local` is not built in and its
+  adapter does not load from the plugin dir.
+- [`scripts/verify-plugin-tests.sh`](../scripts/verify-plugin-tests.sh) — runs
+  the plugin dir's own pytest suite, since an adapter extracted out of this repo
+  left this repo's suite behind with it.
+
+Both are no-ops on a machine with no overlay, so a foreign clone is unaffected.
