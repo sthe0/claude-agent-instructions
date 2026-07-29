@@ -32,6 +32,7 @@ from .directive import Directive
 from .dispatch import Runner, dispatch_stage, parse_marker, subprocess_runner
 from .machine import transition
 from .plan import (
+    PlanDoc,
     PlanError,
     check_venue_warnings,
     load_plan,
@@ -229,6 +230,37 @@ def _apply_refined_stage_fields(cur, refined) -> None:
     cur.supplies = list(refined.supplies)
 
 
+def _sync_venue_from_plan(state: SessionState, doc: "PlanDoc | None" = None) -> None:
+    """Derive state.repo_root and state.delivery_worktree from a plan's [meta].
+
+    The ONE place that answers "which trees is this session executing in", called
+    from every route that establishes, re-establishes or re-reads which plan the
+    session is running. The pair is set TOGETHER: a route that refreshed only
+    repo_root left `resolve_check_venue` falling back to the canonical checkout
+    for a plan that declares a delivery worktree, so dispatch launched the
+    executor in a tree it is forbidden to write — the venue asymmetry that
+    resolver exists to remove, reintroduced one route down.
+
+    `doc` is the already-loaded plan when the caller has one; otherwise
+    state.plan_path is loaded here. The load is lenient: only [meta] is read, and
+    one caller (pop-subplan) is a restore path against a parent plan that may
+    predate a later schema tightening.
+
+    Fail-safe by contract: an absent, unreadable or unparseable plan leaves both
+    existing values untouched and never raises. Two callers depend on that — the
+    pop-subplan restore, which falls back to the frame's snapshotted venue, and
+    the approve-time refresh, whose whole contract is best-effort."""
+    if doc is None:
+        if not state.plan_path:
+            return
+        try:
+            doc = load_plan(state.plan_path, strict=False)
+        except (OSError, PlanError):
+            return
+    state.repo_root = doc.meta.repo_root
+    state.delivery_worktree = doc.meta.delivery_worktree
+
+
 def _refresh_caches_from_plan_path(state: SessionState) -> None:
     """Re-load state.plan_path and refresh state.final_check plus each live
     stage's prose/criterion fields from those bytes.
@@ -271,6 +303,7 @@ def _refresh_caches_from_plan_path(state: SessionState) -> None:
         if not unchanged and cur.outcome.status == StageStatus.PASSED.value:
             cur.outcome.status = StageStatus.PENDING.value
     state.final_check = refreshed.meta.final_check
+    _sync_venue_from_plan(state, refreshed)
 
 
 def _log_gate(state: SessionState, gate: str, blockers: list[str], *, passed: bool) -> None:
@@ -1355,8 +1388,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
         )
     doc = load_plan(plan_path)
     state.stages = doc.stages
-    state.repo_root = doc.meta.repo_root
-    state.delivery_worktree = doc.meta.delivery_worktree
+    _sync_venue_from_plan(state, doc)
     state.final_check = doc.meta.final_check
     if not state.goal:
         state.goal = doc.meta.goal
@@ -3053,6 +3085,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         # next to the stage loop above — a self-diffed no_change still means the
         # FILE changed relative to what was cached at submit-plan/last replan.
         state.final_check = new.meta.final_check
+        _sync_venue_from_plan(state, new)
         # Backfill a snapshot for a legacy (pre-snapshot) session so the NEXT replan
         # diffs against real approved bytes instead of self-diffing plan_path.
         if not (state.plan_snapshot_path and Path(state.plan_snapshot_path).exists()):
@@ -3088,7 +3121,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             if cur.outcome.status == StageStatus.FAILED.value:
                 cur.outcome.status = StageStatus.PENDING.value
         state.plan_path = args.plan
-        state.repo_root = new.meta.repo_root
+        _sync_venue_from_plan(state, new)
         state.final_check = new.meta.final_check
         if diagnosing:
             state.difficulty = None
@@ -3113,7 +3146,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
                 and stage_carry_key(prev) == stage_carry_key(ns)):
             ns.outcome = prev.outcome
     state.stages = new.stages
-    state.repo_root = new.meta.repo_root
+    _sync_venue_from_plan(state, new)
     state.final_check = new.meta.final_check
     state.plan_path = args.plan
     state.plan_verified = True
@@ -3243,6 +3276,12 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
     state.overall_criterion_type = CriterionType.MEASURABLE.value
     state.weight_class = None
     state.route = None
+    # Deliberately NOT _sync_venue_from_plan: the child's venue is unknown until
+    # its own submit_plan reads it, and the null window cannot be observed —
+    # this same reset empties state.stages and moves EXECUTING -> CLASSIFIED, so
+    # no stage exists to dispatch until submit_plan refills both fields. The
+    # window is closed by the state machine, not by a convention that would
+    # silently stop holding if dispatch ever became reachable from CLASSIFIED.
     state.repo_root = None
     state.delivery_worktree = None
     state.final_check = []
@@ -3295,6 +3334,11 @@ def cmd_pop_subplan(args, *, store: StateStore, runner: Runner | None = None) ->
     state.resolution = frame.resolution
     state.stages = frame.stages
     state.node = new_node
+    # The parent PLAN FILE is authoritative for the venue, so re-derive it here
+    # rather than trust the frame: a frame captured after the value was already
+    # lost would keep it lost. The frame fields stay as the fallback the helper
+    # leaves in place when that file cannot be read.
+    _sync_venue_from_plan(state)
     # Mark the originating stage as satisfied and clear the active-stage pointer.
     try:
         orig = state.stage(frame.originating_stage)

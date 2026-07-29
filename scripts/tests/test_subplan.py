@@ -355,3 +355,59 @@ def test_push_defaults_originating_stage_to_current_stage(store):
     )
     state = store.load("default-orig")
     assert state.plan_stack[0].originating_stage == 2
+
+
+# --- pop re-derives the parent venue from the parent plan file ----------------
+
+def _parent_plan(fixtures_dir, tmp_path, *, repo_root, delivery_worktree):
+    inject = f'repo_root = "{repo_root}"\ndelivery_worktree = "{delivery_worktree}"\n'
+    path = tmp_path / "parent.toml"
+    path.write_text(
+        (fixtures_dir / "plan_two_stage.toml").read_text().replace("[meta]\n", "[meta]\n" + inject, 1)
+    )
+    return path
+
+
+def test_pop_subplan_rederives_venue_from_plan(store, fixtures_dir, tmp_path):
+    """The parent plan FILE is authoritative for the parent's venue, so pop must
+    re-derive it rather than restore whatever the frame happened to snapshot: a
+    frame captured after the value was already lost keeps it lost forever, which
+    is how the parent stays dispatching into the canonical checkout. The frame
+    values remain the fallback for a parent plan that cannot be read."""
+    plan = _parent_plan(fixtures_dir, tmp_path,
+                        repo_root="/tmp/canon", delivery_worktree="/tmp/canon-wt")
+    state = _executing_state(store, "pv1")
+    state.plan_path = str(plan)
+    state.repo_root = "/tmp/canon"
+    state.delivery_worktree = None  # the value the defect loses before the push
+    store.save(state)
+
+    cli.cmd_push_subplan(
+        ns(session="pv1", plan="/tmp/child.toml", task="child", originating_stage=1),
+        store=store,
+    )
+    _resolve_child(store, "pv1")
+    d = cli.cmd_pop_subplan(ns(session="pv1"), store=store)
+
+    assert d.ok is True
+    state = store.load("pv1")
+    assert state.delivery_worktree == "/tmp/canon-wt"
+    assert state.repo_root == "/tmp/canon"
+
+    # Fail-safe half of the same contract: an absent or unparseable parent plan
+    # leaves the frame's snapshotted venue in place and never raises out of pop.
+    state = _executing_state(store, "pv2")
+    state.plan_path = str(tmp_path / "never-written.toml")
+    store.save(state)
+
+    cli.cmd_push_subplan(
+        ns(session="pv2", plan="/tmp/child.toml", task="child", originating_stage=1),
+        store=store,
+    )
+    _resolve_child(store, "pv2")
+    d = cli.cmd_pop_subplan(ns(session="pv2"), store=store)
+
+    assert d.ok is True
+    state = store.load("pv2")
+    assert state.repo_root == "/tmp/repo"
+    assert state.delivery_worktree == "/tmp/repo/.wt"

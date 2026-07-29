@@ -7,6 +7,8 @@ from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from agentctl import cli
 from agentctl.plan import diff_plans, load_plan
 from agentctl.state import (
@@ -944,3 +946,61 @@ def test_corrected_plan_is_redisposable_so_the_premise_gate_stops_deadlocking_re
     live = store.load(sid)
     q1 = next(q for q in live.plugins["premise"]["questions"] if q["id"] == "Q1")
     assert q1["answer"].startswith("yes")
+
+
+# --- venue re-derivation: [meta] delivery_worktree must reach session state -----
+
+def _plan_with_venue(fixtures_dir, name, *, repo_root=None, delivery_worktree=None):
+    """Fixture text with the [meta] venue keys injected (omitted when None)."""
+    inject = ""
+    if repo_root:
+        inject += f'repo_root = "{repo_root}"\n'
+    if delivery_worktree:
+        inject += f'delivery_worktree = "{delivery_worktree}"\n'
+    return (fixtures_dir / name).read_text().replace("[meta]\n", "[meta]\n" + inject, 1)
+
+
+# kind: (base fixture, base worktree, new fixture, new worktree, expected)
+# delivery_worktree is absent from diff_plans' comparison keys, so a venue-ONLY
+# edit self-diffs to no_change — the branch that today refreshes stage fields
+# and final_check but no venue field at all.
+_VENUE_REPLAN_CASES = {
+    "no_change": ("plan_two_stage.toml", None,
+                  "plan_two_stage.toml", "/tmp/wt-one", "/tmp/wt-one"),
+    "refinement": ("plan_two_stage.toml", "/tmp/wt-one",
+                   "plan_two_stage_refined.toml", "/tmp/wt-two", "/tmp/wt-two"),
+    "substantive": ("plan_two_stage.toml", "/tmp/wt-one",
+                    "plan_two_stage_substantive.toml", None, None),
+}
+
+
+@pytest.mark.parametrize("kind", sorted(_VENUE_REPLAN_CASES))
+def test_replan_refresh_delivery_worktree(store, fixtures_dir, tmp_path, kind):
+    """A replan that INTRODUCES, CHANGES or REMOVES [meta] delivery_worktree must
+    land that value in session state on every diff kind, exactly as repo_root
+    already does. Losing it silently re-arms the venue asymmetry that
+    resolve_check_venue exists to remove: dispatch then sends the executor into
+    the canonical checkout while the plan declares a delivery worktree."""
+    repo = "/tmp/canon"
+    base_name, base_wt, new_name, new_wt, expected = _VENUE_REPLAN_CASES[kind]
+
+    sid = f"rvw-{kind}"
+    base = tmp_path / f"{kind}-base.toml"
+    base.write_text(_plan_with_venue(fixtures_dir, base_name,
+                                     repo_root=repo, delivery_worktree=base_wt))
+    _to_executing_stage1(store, sid, str(base))
+    assert store.load(sid).delivery_worktree == base_wt
+
+    new = tmp_path / f"{kind}-new.toml"
+    new.write_text(_plan_with_venue(fixtures_dir, new_name,
+                                    repo_root=repo, delivery_worktree=new_wt))
+    # Pin the branch each case claims to exercise: without this, a change to
+    # diff_plans' comparison keys would silently reclassify a case and drop that
+    # branch's coverage while the test stayed green.
+    assert diff_plans(load_plan(base, strict=False), load_plan(new)) == kind
+    d = cli.cmd_replan(ns(session=sid, plan=str(new)), store=store)
+    assert d.ok is True, d.detail
+
+    state = store.load(sid)
+    assert state.delivery_worktree == expected
+    assert state.repo_root == repo

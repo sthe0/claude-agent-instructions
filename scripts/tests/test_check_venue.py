@@ -202,3 +202,46 @@ def test_missing_delivery_worktree_refuses_without_failing_stage(store, tmp_path
     reloaded = store.load("v6")
     assert reloaded.stage(1).outcome.status != StageStatus.FAILED.value
     assert reloaded.node != Node.DIAGNOSING.value
+
+
+# --- approve re-derives the venue from a plan edited in place at PLAN_READY ----
+
+def test_approve_rederives_venue_from_edited_plan(store, tmp_path, fixtures_dir):
+    """The plan-review cycle answers a REVISE verdict by editing plan_path IN
+    PLACE at the deliberately plan-mutable PLAN_READY, which is exactly how a
+    plan acquires a delivery worktree it did not declare at submit time. The
+    approve-path refresh already copies each stage's verify_venue from those
+    edited bytes, so leaving the state-level fields those venues RESOLVE against
+    stale is the worst instance of the asymmetry: the gate attests to a delivery
+    venue the session then never uses."""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    plan_path = tmp_path / "plan.toml"
+    submitted = (fixtures_dir / "plan_two_stage.toml").read_text().replace(
+        "[meta]\n", f'[meta]\nrepo_root = "{repo_root}"\n', 1
+    )
+    plan_path.write_text(submitted)
+
+    sid = "av1"
+    cli.cmd_start(ns(session=sid, task="venue", goal="", done_criterion="",
+                     criterion_type="measurable", recursion_depth=0), store=store)
+    cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
+                        wall_clock_min=60, tracker_key=None, architectural=True,
+                        external_effect=False, new_dependency=False,
+                        public_api_change=False), store=store)
+    cli.cmd_plan(ns(session=sid), store=store)
+    cli.cmd_submit_plan(ns(session=sid, plan=str(plan_path)), store=store)
+    assert store.load(sid).delivery_worktree is None
+
+    plan_path.write_text(
+        submitted.replace("[meta]\n", f'[meta]\ndelivery_worktree = "{worktree}"\n', 1)
+    )
+
+    d = cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    assert d.ok is True, d.detail
+
+    state = store.load(sid)
+    assert state.delivery_worktree == str(worktree)
+    assert state.resolve_check_venue("delivery") == str(worktree)
