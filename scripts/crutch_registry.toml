@@ -1207,6 +1207,22 @@ disposition = "keep"
 ground = "Reads only ctx.self_improvement_feedback, which build_context() sets from si_feedback_detect.find_signals (prefilter) gated by a semantic judge — this guardian itself is pure boolean logic over that frozen result, per its own docstring (\"Pure: reads only the frozen ctx booleans\")."
 
 [[entry]]
+id = "c1cb7445ba8984c8"
+domain = "code"
+file = "scripts/lib/git_cwd.py"
+class = "structural"
+disposition = "keep"
+ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
+
+[[entry]]
+id = "1844603e416f57af"
+domain = "code"
+file = "scripts/lib/git_cwd.py"
+class = "structural"
+disposition = "keep"
+ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
+
+[[entry]]
 id = "32916389896957d8"
 domain = "code"
 file = "scripts/lib/planner_plan_check.py"
@@ -6415,6 +6431,14 @@ disposition = "keep"
 ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "9df5e70ce85e7810"
+domain = "code_file_rollup"
+file = "scripts/lib/git_cwd.py"
+class = "structural"
+disposition = "keep"
+ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "38282418dd74f963"
 domain = "code_file_rollup"
 file = "scripts/lib/planner_plan_check.py"
@@ -7525,7 +7549,15 @@ disposition = "keep"
 ground = "CLAUDE.md's own § Coordination heading names this class explicitly: \"Cognition the engine does NOT replace (always yours)\" — escalation timing, task-weight judgment, verification-axis discipline, and outcome framing are judgment calls over conversational/task content, not predicates decidable from observable repo/engine state."
 
 [[entry]]
-id = "bf8e1f050502b95f"
+id = "7c9198c19000e8c6"
+domain = "prose"
+file = "CLAUDE.md"
+class = "perception"
+disposition = "keep"
+ground = "CLAUDE.md's own § Coordination heading names this class explicitly: \"Cognition the engine does NOT replace (always yours)\" — escalation timing, task-weight judgment, verification-axis discipline, and outcome framing are judgment calls over conversational/task content, not predicates decidable from observable repo/engine state."
+
+[[entry]]
+id = "91bbd6e0c31959df"
 domain = "prose"
 file = "CLAUDE.md"
 class = "perception"
@@ -8158,6 +8190,14 @@ ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's
 
 [[entry]]
 id = "29653384bf278350"
+domain = "prose"
+file = "memory-global/leaves/capability-before-offload.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "11756dc9e726b7ab"
 domain = "prose"
 file = "memory-global/leaves/capability-before-offload.md"
 class = "perception"
