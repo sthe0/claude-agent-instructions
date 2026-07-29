@@ -411,3 +411,56 @@ def test_pop_subplan_rederives_venue_from_plan(store, fixtures_dir, tmp_path):
     state = store.load("pv2")
     assert state.repo_root == "/tmp/repo"
     assert state.delivery_worktree == "/tmp/repo/.wt"
+
+
+# --- pop restores the active-stage pointer from stage status, not the frame ----
+
+def test_pop_subplan_restores_pointer_to_active_stage(store):
+    """Reproduces the live wedge: a stage is left ACTIVE by a prior push while
+    current_stage has already gone missing (the exact shape a previous buggy pop
+    leaves behind), and the sub-plan being popped now satisfies a DIFFERENT
+    stage. Restoring frame.current_stage verbatim would restore None and leave
+    the ACTIVE stage unreachable by every ordinary verb; the pointer must
+    instead be derived from which stage is still ACTIVE."""
+    state = _executing_state(store, "ptr1", n_stages=2, current=2)  # stage 2 ACTIVE
+    state.current_stage = None  # pointer already lost, as the defect leaves it
+    store.save(state)
+
+    cli.cmd_push_subplan(
+        ns(session="ptr1", plan="/tmp/child.toml", task="child-task", originating_stage=1),
+        store=store,
+    )
+    frame = store.load("ptr1").plan_stack[0]
+    assert frame.current_stage is None  # confirms the reproduced shape
+
+    _resolve_child(store, "ptr1")
+    cli.cmd_pop_subplan(ns(session="ptr1"), store=store)
+
+    state = store.load("ptr1")
+    # Originating stage 1 satisfied by the sub-plan.
+    assert state.stage(1).outcome.status == StageStatus.PASSED.value
+    # Stage 2 was left ACTIVE by the push and must remain re-enterable.
+    assert state.stage(2).outcome.status == StageStatus.ACTIVE.value
+    assert state.current_stage == 2
+    assert state.active_stage() is state.stage(2)
+
+
+def test_pop_subplan_clears_pointer_when_originating_stage_was_active(store):
+    """The other direction: when the ACTIVE stage IS the one the sub-plan
+    satisfies, the pop marks it PASSED and no stage is left ACTIVE — the
+    derivation must run AFTER the PASSED marking, or it would re-point at an
+    already-satisfied stage instead of correctly leaving no pointer."""
+    _executing_state(store, "ptr2", n_stages=2, current=1)  # stage 1 ACTIVE
+
+    cli.cmd_push_subplan(
+        ns(session="ptr2", plan="/tmp/child.toml", task="child-task", originating_stage=1),
+        store=store,
+    )
+    _resolve_child(store, "ptr2")
+    cli.cmd_pop_subplan(ns(session="ptr2"), store=store)
+
+    state = store.load("ptr2")
+    assert state.stage(1).outcome.status == StageStatus.PASSED.value
+    assert state.stage(2).outcome.status == StageStatus.PENDING.value
+    assert state.current_stage is None
+    assert state.active_stage() is None

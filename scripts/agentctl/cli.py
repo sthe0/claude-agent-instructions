@@ -261,6 +261,22 @@ def _sync_venue_from_plan(state: SessionState, doc: "PlanDoc | None" = None) -> 
     state.delivery_worktree = doc.meta.delivery_worktree
 
 
+def _restore_current_stage(state: SessionState) -> None:
+    """Derive state.current_stage from the restored stages' own status, rather
+    than trusting whatever the frame snapshotted or hardcoding None.
+
+    Mirrors _sync_venue_from_plan's derive-don't-trust reasoning: a pop can
+    restore a stage the earlier push left ACTIVE, mid-flight, while the frame's
+    own current_stage snapshot may already be None — a live wedge one buggy pop
+    can leave behind. Restoring that snapshot verbatim would keep the pointer
+    lost; the per-stage ACTIVE status is the authoritative record of what's in
+    flight, so the pointer is always recomputed from it instead. Fail-safe in
+    the ambiguous cases — zero or more than one ACTIVE stage — both yield None,
+    matching today's behaviour."""
+    active = [s for s in state.stages if s.outcome.status == StageStatus.ACTIVE.value]
+    state.current_stage = active[0].index if len(active) == 1 else None
+
+
 def _refresh_caches_from_plan_path(state: SessionState) -> None:
     """Re-load state.plan_path and refresh state.final_check plus each live
     stage's prose/criterion fields from those bytes.
@@ -3339,14 +3355,16 @@ def cmd_pop_subplan(args, *, store: StateStore, runner: Runner | None = None) ->
     # lost would keep it lost. The frame fields stay as the fallback the helper
     # leaves in place when that file cannot be read.
     _sync_venue_from_plan(state)
-    # Mark the originating stage as satisfied and clear the active-stage pointer.
+    # Mark the originating stage as satisfied, THEN derive the active-stage
+    # pointer from stage status — order is load-bearing: deriving first would
+    # re-point at a stage this same call is about to mark PASSED.
     try:
         orig = state.stage(frame.originating_stage)
         orig.outcome.status = StageStatus.PASSED.value
         orig.control = f"satisfied by sub-plan {child_task_id}"
     except KeyError:
         pass
-    state.current_stage = None
+    _restore_current_stage(state)
     state.log("pop_subplan", child_task_id=child_task_id, originating_stage=frame.originating_stage,
               depth=len(state.plan_stack))
     store.save(state)
