@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import re
 import stat
+import subprocess
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -71,6 +72,28 @@ def test_run_scanner_timeout_fails_open(tmp_path, monkeypatch):
     monkeypatch.setattr(hook, "SELF_DIAGNOSE", script)
     monkeypatch.setattr(hook, "SCAN_TIMEOUT_S", 0.2)
     assert hook.run_scanner() is None
+
+
+def test_run_scanner_argv_is_pinned(tmp_path, monkeypatch):
+    """Pin the SCAN's own argv, not just its output handling.
+
+    Every other test here stubs SELF_DIAGNOSE and inspects what run_scanner does
+    with the RESULT, so all of them stay green if a future edit adds
+    `--settings-path` or `--no-hooks` to this invocation. Such a flag changes what
+    the scan COVERS while the hook keeps reporting a clean tree, silently
+    falsifying the label any control built on this hook carries — the scan says
+    "the tree is clean" when it means "the subset I still look at is clean"."""
+    script = _make_script(tmp_path, "fake.py", "print('[]')")
+    monkeypatch.setattr(hook, "SELF_DIAGNOSE", script)
+    seen = {}
+
+    def _capture(argv, **kwargs):
+        seen["argv"] = argv
+        return subprocess.CompletedProcess(argv, 0, stdout="[]", stderr="")
+
+    monkeypatch.setattr(hook.subprocess, "run", _capture)
+    hook.run_scanner()
+    assert seen["argv"] == [sys.executable, str(script), "--json"]
 
 
 def test_run_scanner_crash_fails_open(tmp_path, monkeypatch):
