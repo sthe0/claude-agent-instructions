@@ -142,6 +142,13 @@ DESIRED = [
     # outcome-format point 3 (recurring miss recorded 2026-07-28). Fail-open,
     # exit 0 always.
     ("Stop",             None,    "hook-run-url-surfaced-reminder.py", 5),
+    # Advisory (not a gate): nudge when a review this session AUTHORED (a create
+    # verb in a Bash command + its URL in tool output) has no monitor armed in
+    # the monitored-reviews registry — the structural guard for
+    # leaves/review-accompanies-code.md (the author drives an open review to
+    # mergeable unprompted) and leaves/long-job-monitoring.md § Generalization
+    # (the zero-token mechanism). Fail-open, exit 0 always.
+    ("Stop",             None,    "hook-review-mergeable-guardian.py", 5),
     # Structure/confirmation gates on memory-leaf Writes. These run on ANY
     # Write (any repo), so they are the only enforcement point for project
     # memory (whose own git pre-commit does not run verify-all).

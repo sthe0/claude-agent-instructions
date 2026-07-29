@@ -41,6 +41,10 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import transcript_read  # noqa: E402
+
 # Any http(s) URL, minus trailing punctuation / markdown / quote delimiters.
 _URL_RE = re.compile(r"https?://[^\s)\]}>\"'`]+", re.IGNORECASE)
 
@@ -58,7 +62,7 @@ _RUN_SEGMENT_RE = re.compile(
 # (surfaced) collapses to one identity.
 _VIEW_SUFFIX_RE = re.compile(r"/(graph|status|view|details|state)/?$", re.IGNORECASE)
 
-MAX_LISTED = 3
+MAX_LISTED = transcript_read.MAX_LISTED
 
 
 def _identity(url: str) -> str | None:
@@ -87,52 +91,11 @@ def _run_ids(text: str) -> dict:
     return out
 
 
-def _iter_transcript(path: Path):
-    with path.open(encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                yield json.loads(line)
-            except json.JSONDecodeError:
-                continue
-
-
-def _assistant_text(msg: dict) -> str:
-    """Concatenate `type=="text"` blocks of an assistant message — the only
-    channel that counts as surfacing to the user."""
-    content = msg.get("content")
-    if isinstance(content, str):
-        return content
-    if not isinstance(content, list):
-        return ""
-    parts = []
-    for item in content:
-        if isinstance(item, dict) and item.get("type") == "text":
-            parts.append(item.get("text") or "")
-    return "\n".join(parts)
-
-
-def _tool_result_text(msg: dict) -> str:
-    """Concatenate the textual content of `tool_result` blocks in a (user-role)
-    message — where a launched run's URL first appears (a dev spawn's report,
-    a `cat LAUNCH.txt`, a status-API response)."""
-    content = msg.get("content")
-    if not isinstance(content, list):
-        return ""
-    parts = []
-    for item in content:
-        if not isinstance(item, dict) or item.get("type") != "tool_result":
-            continue
-        inner = item.get("content")
-        if isinstance(inner, str):
-            parts.append(inner)
-        elif isinstance(inner, list):
-            for sub in inner:
-                if isinstance(sub, dict) and sub.get("type") == "text":
-                    parts.append(sub.get("text") or "")
-    return "\n".join(parts)
+# Transcript parsing is shared with the sibling Stop hooks — see
+# transcript_read.py for why it lives in an importable module.
+_iter_transcript = transcript_read.iter_transcript
+_assistant_text = transcript_read.assistant_text
+_tool_result_text = transcript_read.tool_result_text
 
 
 def analyze(entries) -> dict:
