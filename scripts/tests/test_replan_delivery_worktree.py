@@ -66,7 +66,9 @@ def test_no_change_replan_refreshes_delivery_worktree(store, fixtures_dir, tmp_p
     is edited IN PLACE self-diffs to no_change (old==new==plan_path, for lack of a
     snapshot to diff against). The no_change branch must still refresh
     state.delivery_worktree from the file, mirroring the existing verify_command
-    backfill it already performs."""
+    backfill it already performs. Stage 1 is PASSED so this also exercises the
+    no_change branch's visibility-event call site — without it that call can be
+    deleted with every test still green."""
     sid = "nc-dw"
     plan_path = tmp_path / "plan.toml"
     plan_path.write_text((fixtures_dir / "plan_two_stage_verifyfix_delivery.toml").read_text())
@@ -75,6 +77,7 @@ def test_no_change_replan_refreshes_delivery_worktree(store, fixtures_dir, tmp_p
     state = store.load(sid)
     state.plan_snapshot_path = None
     state.plan_snapshot_hash = None
+    state.stage(1).outcome.status = StageStatus.PASSED.value
     store.save(state)
     assert state.delivery_worktree == "/tmp/test-delivery-a"
 
@@ -87,6 +90,11 @@ def test_no_change_replan_refreshes_delivery_worktree(store, fixtures_dir, tmp_p
     assert d.action == "continue"  # no_change, resumes without re-approval
     state = store.load(sid)
     assert state.delivery_worktree == "/tmp/test-delivery-a2"
+    events = _delivery_worktree_events(state)
+    assert len(events) == 1
+    assert events[0]["old"] == "/tmp/test-delivery-a"
+    assert events[0]["new"] == "/tmp/test-delivery-a2"
+    assert events[0]["affected_stages"] == [{"index": 1, "status": "PASSED"}]
 
 
 def test_changed_worktree_with_a_passed_stage_is_logged(store, fixtures_dir):
