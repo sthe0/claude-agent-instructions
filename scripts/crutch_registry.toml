@@ -1212,7 +1212,7 @@ domain = "code"
 file = "scripts/lib/git_cwd.py"
 class = "structural"
 disposition = "keep"
-ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
+ground = "Shared primitives that read shell, path or VCS-command GRAMMAR — tokenization, separator and redirect shape, path containment, fixed-vocabulary lookups — and carry no allow/deny policy of their own: each consumer resolves the result in its own direction, so no regex here reaches a hard-outcome sink. Matching a known token's occurrence is not classifying what a sentence MEANS. Example: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist, the same shape as a secret scanner."
 
 [[entry]]
 id = "1844603e416f57af"
@@ -1220,7 +1220,7 @@ domain = "code"
 file = "scripts/lib/git_cwd.py"
 class = "structural"
 disposition = "keep"
-ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
+ground = "Shared primitives that read shell, path or VCS-command GRAMMAR — tokenization, separator and redirect shape, path containment, fixed-vocabulary lookups — and carry no allow/deny policy of their own: each consumer resolves the result in its own direction, so no regex here reaches a hard-outcome sink. Matching a known token's occurrence is not classifying what a sentence MEANS. Example: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist, the same shape as a secret scanner."
 
 [[entry]]
 id = "32916389896957d8"
@@ -1228,7 +1228,7 @@ domain = "code"
 file = "scripts/lib/planner_plan_check.py"
 class = "structural"
 disposition = "keep"
-ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
+ground = "Shared primitives that read shell, path or VCS-command GRAMMAR — tokenization, separator and redirect shape, path containment, fixed-vocabulary lookups — and carry no allow/deny policy of their own: each consumer resolves the result in its own direction, so no regex here reaches a hard-outcome sink. Matching a known token's occurrence is not classifying what a sentence MEANS. Example: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist, the same shape as a secret scanner."
 
 [[entry]]
 id = "5dc6ce21a56ff368"
@@ -1236,7 +1236,7 @@ domain = "code"
 file = "scripts/lib/planner_plan_check.py"
 class = "structural"
 disposition = "keep"
-ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
+ground = "Shared primitives that read shell, path or VCS-command GRAMMAR — tokenization, separator and redirect shape, path containment, fixed-vocabulary lookups — and carry no allow/deny policy of their own: each consumer resolves the result in its own direction, so no regex here reaches a hard-outcome sink. Matching a known token's occurrence is not classifying what a sentence MEANS. Example: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist, the same shape as a secret scanner."
 
 [[entry]]
 id = "2225e5b7903637a3"
@@ -1244,7 +1244,7 @@ domain = "code"
 file = "scripts/lib/planner_plan_check.py"
 class = "structural"
 disposition = "keep"
-ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
+ground = "Shared primitives that read shell, path or VCS-command GRAMMAR — tokenization, separator and redirect shape, path containment, fixed-vocabulary lookups — and carry no allow/deny policy of their own: each consumer resolves the result in its own direction, so no regex here reaches a hard-outcome sink. Matching a known token's occurrence is not classifying what a sentence MEANS. Example: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist, the same shape as a secret scanner."
 
 [[entry]]
 id = "a5b6daa3bdedad0c"
@@ -1252,7 +1252,7 @@ domain = "code"
 file = "scripts/lib/shell_tokens.py"
 class = "structural"
 disposition = "keep"
-ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
+ground = "Shared primitives that read shell, path or VCS-command GRAMMAR — tokenization, separator and redirect shape, path containment, fixed-vocabulary lookups — and carry no allow/deny policy of their own: each consumer resolves the result in its own direction, so no regex here reaches a hard-outcome sink. Matching a known token's occurrence is not classifying what a sentence MEANS. Example: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist, the same shape as a secret scanner."
 
 [[entry]]
 id = "edfdc13f0294b9e7"
@@ -1260,7 +1260,7 @@ domain = "code"
 file = "scripts/lib/shell_tokens.py"
 class = "structural"
 disposition = "keep"
-ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
+ground = "Shared primitives that read shell, path or VCS-command GRAMMAR — tokenization, separator and redirect shape, path containment, fixed-vocabulary lookups — and carry no allow/deny policy of their own: each consumer resolves the result in its own direction, so no regex here reaches a hard-outcome sink. Matching a known token's occurrence is not classifying what a sentence MEANS. Example: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist, the same shape as a secret scanner."
 
 [[entry]]
 id = "d4a691715bd3eb8f"
@@ -1268,7 +1268,7 @@ domain = "code"
 file = "scripts/lib/shell_tokens.py"
 class = "structural"
 disposition = "keep"
-ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
+ground = "Shared primitives that read shell, path or VCS-command GRAMMAR — tokenization, separator and redirect shape, path containment, fixed-vocabulary lookups — and carry no allow/deny policy of their own: each consumer resolves the result in its own direction, so no regex here reaches a hard-outcome sink. Matching a known token's occurrence is not classifying what a sentence MEANS. Example: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist, the same shape as a secret scanner."
 
 [[entry]]
 id = "99ad0805395c0b4c"
@@ -1276,7 +1276,7 @@ domain = "code"
 file = "scripts/lib/shell_tokens.py"
 class = "structural"
 disposition = "keep"
-ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
+ground = "Shared primitives that read shell, path or VCS-command GRAMMAR — tokenization, separator and redirect shape, path containment, fixed-vocabulary lookups — and carry no allow/deny policy of their own: each consumer resolves the result in its own direction, so no regex here reaches a hard-outcome sink. Matching a known token's occurrence is not classifying what a sentence MEANS. Example: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist, the same shape as a secret scanner."
 
 [[entry]]
 id = "aa7aea3f8974cf5c"
@@ -1284,7 +1284,7 @@ domain = "code"
 file = "scripts/lib/term_ruleset.py"
 class = "structural"
 disposition = "keep"
-ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
+ground = "Shared primitives that read shell, path or VCS-command GRAMMAR — tokenization, separator and redirect shape, path containment, fixed-vocabulary lookups — and carry no allow/deny policy of their own: each consumer resolves the result in its own direction, so no regex here reaches a hard-outcome sink. Matching a known token's occurrence is not classifying what a sentence MEANS. Example: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist, the same shape as a secret scanner."
 
 [[entry]]
 id = "8692c40d3535fd90"
@@ -1292,7 +1292,7 @@ domain = "code"
 file = "scripts/lib/term_ruleset.py"
 class = "structural"
 disposition = "keep"
-ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
+ground = "Shared primitives that read shell, path or VCS-command GRAMMAR — tokenization, separator and redirect shape, path containment, fixed-vocabulary lookups — and carry no allow/deny policy of their own: each consumer resolves the result in its own direction, so no regex here reaches a hard-outcome sink. Matching a known token's occurrence is not classifying what a sentence MEANS. Example: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist, the same shape as a secret scanner."
 
 [[entry]]
 id = "f099b46103d5996a"
@@ -1300,7 +1300,7 @@ domain = "code"
 file = "scripts/lib/term_ruleset.py"
 class = "structural"
 disposition = "keep"
-ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
+ground = "Shared primitives that read shell, path or VCS-command GRAMMAR — tokenization, separator and redirect shape, path containment, fixed-vocabulary lookups — and carry no allow/deny policy of their own: each consumer resolves the result in its own direction, so no regex here reaches a hard-outcome sink. Matching a known token's occurrence is not classifying what a sentence MEANS. Example: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist, the same shape as a secret scanner."
 
 [[entry]]
 id = "c80bc195bfa4637a"
@@ -3178,6 +3178,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "c79449cd3e4a8ddb"
 domain = "code"
 file = "scripts/tests/test_gates.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "fc71d3c8270478ba"
+domain = "code"
+file = "scripts/tests/test_guard_canon_bash_writes.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
@@ -6436,7 +6444,7 @@ domain = "code_file_rollup"
 file = "scripts/lib/git_cwd.py"
 class = "structural"
 disposition = "keep"
-ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means. (file-level rollup of the file's scopes.)"
+ground = "Shared primitives that read shell, path or VCS-command GRAMMAR — tokenization, separator and redirect shape, path containment, fixed-vocabulary lookups — and carry no allow/deny policy of their own: each consumer resolves the result in its own direction, so no regex here reaches a hard-outcome sink. Matching a known token's occurrence is not classifying what a sentence MEANS. Example: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist, the same shape as a secret scanner. (file-level rollup of the file's scopes.)"
 
 [[entry]]
 id = "38282418dd74f963"
@@ -6444,7 +6452,7 @@ domain = "code_file_rollup"
 file = "scripts/lib/planner_plan_check.py"
 class = "structural"
 disposition = "keep"
-ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means. (file-level rollup of the file's scopes.)"
+ground = "Shared primitives that read shell, path or VCS-command GRAMMAR — tokenization, separator and redirect shape, path containment, fixed-vocabulary lookups — and carry no allow/deny policy of their own: each consumer resolves the result in its own direction, so no regex here reaches a hard-outcome sink. Matching a known token's occurrence is not classifying what a sentence MEANS. Example: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist, the same shape as a secret scanner. (file-level rollup of the file's scopes.)"
 
 [[entry]]
 id = "8ae0d0962c4ae1a7"
@@ -6452,7 +6460,7 @@ domain = "code_file_rollup"
 file = "scripts/lib/shell_tokens.py"
 class = "structural"
 disposition = "keep"
-ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means. (file-level rollup of the file's scopes.)"
+ground = "Shared primitives that read shell, path or VCS-command GRAMMAR — tokenization, separator and redirect shape, path containment, fixed-vocabulary lookups — and carry no allow/deny policy of their own: each consumer resolves the result in its own direction, so no regex here reaches a hard-outcome sink. Matching a known token's occurrence is not classifying what a sentence MEANS. Example: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist, the same shape as a secret scanner. (file-level rollup of the file's scopes.)"
 
 [[entry]]
 id = "31045be7f8672200"
@@ -6460,7 +6468,7 @@ domain = "code_file_rollup"
 file = "scripts/lib/term_ruleset.py"
 class = "structural"
 disposition = "keep"
-ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means. (file-level rollup of the file's scopes.)"
+ground = "Shared primitives that read shell, path or VCS-command GRAMMAR — tokenization, separator and redirect shape, path containment, fixed-vocabulary lookups — and carry no allow/deny policy of their own: each consumer resolves the result in its own direction, so no regex here reaches a hard-outcome sink. Matching a known token's occurrence is not classifying what a sentence MEANS. Example: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist, the same shape as a secret scanner. (file-level rollup of the file's scopes.)"
 
 [[entry]]
 id = "4fd49cf00d83425e"

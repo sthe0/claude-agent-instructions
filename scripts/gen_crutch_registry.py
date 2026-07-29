@@ -116,9 +116,14 @@ CODE_PARTITIONS = [
         lambda f: f.startswith("scripts/lib/"),
         "structural",
         "keep",
-        "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier "
-        "denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — "
-        "matching a known TERM's occurrence, not classifying what a sentence means.",
+        "Shared primitives that read shell, path or VCS-command GRAMMAR — "
+        "tokenization, separator and redirect shape, path containment, "
+        "fixed-vocabulary lookups — and carry no allow/deny policy of their own: "
+        "each consumer resolves the result in its own direction, so no regex here "
+        "reaches a hard-outcome sink. Matching a known token's occurrence is not "
+        "classifying what a sentence MEANS. Example: term_ruleset.py's "
+        "`deny`/`exempt` patterns are a literal org-identifier denylist, the same "
+        "shape as a secret scanner.",
     ),
     (
         "scripts/crutch-inventory.py (self)",
