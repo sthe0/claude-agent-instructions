@@ -43,6 +43,12 @@ bash scripts/verify-layout-contract.sh # layout check — run separately (not in
 
 Steps 3–5 are enforced bidirectionally by `verify-layout-contract.sh`'s hook-registration section — a missing registration is a hard pre-commit failure.
 
+## Live machine state
+
+`scripts/install-reminder-hooks.sh` reconciles machine-local settings files — `$CLAUDE_AGENT_HOME/settings.json` (add + prune, its `DESIRED` set) and `~/.claude/settings.json` (prune-only, never added to) — deleting a hook registration only when its resolved script path lies under the repo's `scripts/` directory and is missing on disk; an unowned dangling entry is reported, never deleted. This is deliberately **not** wired into `verify-all.py`: that suite must stay machine-independent and green on a fresh clone, while these settings files are per-machine state absent there. Run it directly (or via `scripts/self-diagnose.py --json` for a read-only report first) when a hook script has been renamed or removed upstream.
+
+The gap this closes recurs: `fdbc543` and `767e0df` each deleted a hook script and left its registration behind, because the reconciler could neither see an interpreter-prefixed command (`python3 /abs/x.py`) nor reach `~/.claude/settings.json`. One residual remains by design: a command shaped `/absolute/interpreter/path /abs/script.py` resolves at the interpreter (which exists) and its script argument is never walked, so a missing script behind an *absolute* interpreter still goes unflagged — the accepted cost of never false-flagging a working machine-local hook (the live `/Users/the0/.local/share/uv/tools/ccgram/bin/python -m ccgram.main hook` entry is exactly this shape).
+
 ## See also
 
 - [guards.md](guards.md) (this file) — the guard inventory.
