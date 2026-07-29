@@ -260,6 +260,50 @@ def test_absolute_interpreter_with_module_not_flagged(tmp_path):
     assert sd.scan_broken_hooks([settings]) == []
 
 
+def test_interpreter_prefixed_missing_script_is_flagged(tmp_path):
+    missing = tmp_path / "missing-hook.py"
+    settings = tmp_path / "settings.json"
+    _write_settings(settings, [f"python3 {missing}"])
+    findings = sd.scan_broken_hooks([settings])
+    assert len(findings) == 1
+    assert findings[0].kind == "broken-hook-registration"
+    assert "missing-hook.py not found" in findings[0].detail
+
+
+def test_interpreter_prefixed_present_script_not_flagged(tmp_path):
+    script = tmp_path / "present-hook.py"
+    script.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    settings = tmp_path / "settings.json"
+    _write_settings(settings, [f"python3 {script}"])
+    assert sd.scan_broken_hooks([settings]) == []
+
+
+def test_bash_c_inline_shell_text_not_flagged(tmp_path):
+    settings = tmp_path / "settings.json"
+    _write_settings(settings, ["bash -c 'echo hi'"])
+    assert sd.scan_broken_hooks([settings]) == []
+
+
+def test_bash_c_quoted_absolute_script_with_args_not_flagged(tmp_path):
+    # The whitespace rule: a quoted payload containing spaces is never treated
+    # as a path, even though it starts with '/' and the script inside it
+    # exists — so this must NOT be flagged regardless of the script's state.
+    script = tmp_path / "script.sh"
+    script.write_text("#!/bin/sh\n", encoding="utf-8")
+    settings = tmp_path / "settings.json"
+    _write_settings(settings, [f"bash -c '{script} arg1'"])
+    assert sd.scan_broken_hooks([settings]) == []
+
+
+def test_env_var_assignment_then_interpreter_missing_is_flagged(tmp_path):
+    missing = tmp_path / "missing-hook.py"
+    settings = tmp_path / "settings.json"
+    _write_settings(settings, [f"env VAR=v python3 {missing}"])
+    findings = sd.scan_broken_hooks([settings])
+    assert len(findings) == 1
+    assert findings[0].kind == "broken-hook-registration"
+
+
 def test_broken_hook_missing_or_malformed_settings_skipped(tmp_path):
     missing = tmp_path / "nope.json"
     malformed = tmp_path / "bad.json"

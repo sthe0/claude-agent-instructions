@@ -11,6 +11,11 @@ set -euo pipefail
 REPO="${CLAUDE_INSTRUCTIONS_REPO:-$HOME/claude-agent-instructions}"
 source "$REPO/scripts/lib/config-root.sh"
 SETTINGS="$CLAUDE_AGENT_HOME/settings.json"
+# Files that get PRUNE-ONLY treatment: a dangling entry this installer owns
+# is removed from them, but no DESIRED entry is ever added, and a missing or
+# unparseable file is skipped rather than created or truncated. $CLAUDE_AGENT_HOME
+# above is the only file the ADD pass ever writes to.
+PRUNE_ONLY_SETTINGS=("$HOME/.claude/settings.json")
 command -v python3 >/dev/null || { echo "install-reminder-hooks: python3 required" >&2; exit 1; }
 
 # Ledger-stamp resolution: THIS script's own location, not the canonical $REPO
@@ -20,12 +25,13 @@ STAMP_REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
 [[ -f "$SETTINGS" ]] || echo '{}' > "$SETTINGS"
 
-SCRIPTS_DIR="$REPO/scripts" STAMP_SCRIPTS_DIR="$STAMP_REPO/scripts" python3 - "$SETTINGS" <<'PY'
+SCRIPTS_DIR="$REPO/scripts" STAMP_SCRIPTS_DIR="$STAMP_REPO/scripts" python3 - "$SETTINGS" "${PRUNE_ONLY_SETTINGS[@]+"${PRUNE_ONLY_SETTINGS[@]}"}" <<'PY'
 import importlib.util
 import json, os, shutil, sys
 from pathlib import Path
 
 settings_path = sys.argv[1]
+prune_only_paths = sys.argv[2:]
 scripts = os.environ["SCRIPTS_DIR"]
 sys.path.insert(0, os.environ["STAMP_SCRIPTS_DIR"])
 from agentctl import edit_ledger
@@ -253,4 +259,36 @@ if changed or pruned:
             print("  - " + p)
 else:
     print("install-reminder-hooks: all canonical reminder hooks already wired")
+
+
+# Prune-only pass: same ownership predicate (prune_dangling_managed_hooks),
+# reused rather than reimplemented. Never adds a DESIRED entry to these files;
+# a missing or unparseable one is skipped, never created or truncated.
+for path_str in prune_only_paths:
+    path = Path(path_str)
+    if not path.is_file():
+        print(f"install-reminder-hooks: {path} not found, skipping prune-only pass", file=sys.stderr)
+        continue
+    try:
+        with open(path, encoding="utf-8") as fh:
+            other_data = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"install-reminder-hooks: {path} unparseable ({exc}), skipping prune-only pass", file=sys.stderr)
+        continue
+    if not isinstance(other_data, dict):
+        print(f"install-reminder-hooks: {path} is not a JSON object, skipping prune-only pass", file=sys.stderr)
+        continue
+    other_hooks = other_data.get("hooks")
+    if not isinstance(other_hooks, dict):
+        continue
+    other_pruned = prune_dangling_managed_hooks(other_hooks, scripts)
+    if other_pruned:
+        shutil.copy2(path, str(path) + ".bak")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(other_data, fh, indent=2, ensure_ascii=False)
+            fh.write("\n")
+        edit_ledger.stamp(str(path), "script:install-reminder-hooks")
+        print(f"install-reminder-hooks: pruned {len(other_pruned)} dangling hook registration(s) in {path}:")
+        for p in other_pruned:
+            print("  - " + p)
 PY

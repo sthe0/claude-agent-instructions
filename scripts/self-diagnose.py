@@ -159,15 +159,35 @@ def scan_dangling_pointers(memory_root: Path) -> "list[Difficulty]":
     return out
 
 
+# Interpreter basenames whose leading token, once found, means the actual
+# script is a later token rather than tokens[0] itself.
+_HOOK_INTERPRETER_BASENAMES = {
+    "python", "python3", "python2", "bash", "sh", "zsh", "dash", "ksh",
+    "env", "node", "nodejs", "ruby", "perl",
+}
+
+_VAR_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+
 def _hook_script_path(command: str) -> "Path | None":
     """The absolute script path a hook command invokes, or None when there is
     nothing on disk to resolve.
 
-    We expand ~ and env vars ($CLAUDE_PROJECT_DIR etc.), take the command's
-    leading token, and return it only when it is absolute. Bare commands
-    (`jq`, `bash -c ...`) and unresolved vars (a `$CLAUDE_PROJECT_DIR` left
-    literal because the var is unset) stay unflagged — fail-safe: we would
-    rather miss a broken hook than false-flag a legitimate bare command.
+    We expand ~ and env vars ($CLAUDE_PROJECT_DIR etc.) and shlex-split the
+    command. If the first token (after skipping any leading `VAR=val`
+    assignments) is itself an absolute path, that IS the script — return it
+    directly without walking further, so an absolute interpreter invoked with
+    module args (`/abs/python -m pkg.main`) resolves at the interpreter, not
+    past it. Otherwise, if that token's basename names a known interpreter
+    (python/bash/sh/env/...), the real script is a later token: scan the
+    remaining tokens, skipping flags and further `VAR=val` assignments, for
+    the first absolute path. A candidate token CONTAINING WHITESPACE (a
+    quoted inline payload, e.g. `bash -c '/abs/script.sh arg1'`) is never
+    treated as a path — that whole payload is shell text, not a script to
+    walk, and treating it as one would false-flag a working hook. Bare
+    non-interpreter commands (`jq`, unresolved `$VAR`s left literal) stay
+    unflagged either way — fail-safe: we would rather miss a broken hook than
+    false-flag a legitimate bare command.
     """
     if not command:
         return None
@@ -178,8 +198,29 @@ def _hook_script_path(command: str) -> "Path | None":
         return None
     if not tokens:
         return None
-    lead = Path(tokens[0])
-    return lead if lead.is_absolute() else None
+
+    idx = 0
+    while idx < len(tokens) and _VAR_ASSIGNMENT_RE.match(tokens[idx]):
+        idx += 1
+    if idx >= len(tokens):
+        return None
+
+    candidate = Path(tokens[idx])
+    if candidate.is_absolute():
+        return candidate
+    if candidate.name not in _HOOK_INTERPRETER_BASENAMES:
+        return None
+
+    for tok in tokens[idx + 1:]:
+        if tok.startswith("-"):
+            continue
+        if _VAR_ASSIGNMENT_RE.match(tok):
+            continue
+        if re.search(r"\s", tok):
+            continue
+        if tok.startswith("/"):
+            return Path(tok)
+    return None
 
 
 def scan_broken_hooks(settings_paths: "list[Path]") -> "list[Difficulty]":
