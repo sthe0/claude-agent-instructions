@@ -213,7 +213,13 @@ def _split_segments(tokens: list[str]):
     tokenized command, split on the shell separators `; && || | |& &` — the
     separator is the token that PRECEDED the segment (`None` for the first).
     Best-effort: a separator glued inside a single shlex token (`a;b`) is left
-    intact — an accepted residual."""
+    intact — an accepted residual.
+
+    The yielded separator has no consumer here yet: it is the enabling half of
+    the leading-`cd` fix, which needs to tell `;` from `&&`, and it is read in
+    `lib/git_cwd.py`'s `_split_on_seps` — a near-duplicate splitter that differs
+    only in dropping empty segments. Consolidating the two must pick one of those
+    two empty-segment semantics deliberately, not by whichever copy survives."""
     seg: list[str] = []
     sep: str | None = None
     for tok in tokens:

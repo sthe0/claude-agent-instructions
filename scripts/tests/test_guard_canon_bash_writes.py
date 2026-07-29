@@ -180,19 +180,72 @@ def test_non_leading_cd_verdicts_unchanged(tmp_path):
 
 
 def test_leading_cd_outside_safe_shape_stays_allowed(tmp_path):
-    """Shapes the safe-shape check deliberately excludes — a grouping construct
-    anywhere, more than two segments, or a glued non-literal (glob) target —
-    keep today's ALLOW verdict for an absolute, nonexistent `cd` target."""
+    """Every shape the safe-shape allowlist declines keeps today's ALLOW verdict
+    for an absolute, nonexistent `cd` target. Grouped by the clause that excludes
+    it; each was measured under `bash -c` to write nothing in the original cwd,
+    except where noted as a deliberately accepted lost deny."""
     core = make_core(tmp_path)
     missing = tmp_path / "does-not-exist"
     commands = [
+        # (d) grouping construct — `_split_segments` flattens groups, so an
+        # `&&`-guarded write reads as `;`-separated while the shell never runs it.
+        f"cd {missing} && {{ echo a ; echo b > s2 ; }}",
+        f"cd {missing} && ( echo a ; echo b > s2 )",
+        f"cd {missing} && if true ; then echo b > s2 ; fi",
+        f"cd {missing} && {{ echo a ; git commit -m x ; }}",
         f"cd {missing} ; ( echo b > s2 )",
-        f"cd {missing} ; exit ; echo b > s2",
+        # (d) tested by CONTAINMENT: `shlex.split` glues an unspaced paren to its
+        # neighbour, so each glued form must give the same verdict as its spaced
+        # twin above. An equality-based check accepts these and denies them.
+        f"cd {missing} && (echo a ; echo b > s2)",
+        f"cd {missing} ; (cd /tmp; echo b > s2)",
+        f"cd {missing} ; ( cd /tmp ; echo b > s2 )",
+        # (e) a later `cd` can succeed where the leading one failed.
+        f"cd {missing} ; cd /tmp && cp /tmp/a f",
+        # (b) non-literal target — not the path the shell will use, so the
+        # stage's own isdir premise does not hold. `cd /tmp/$NOPE` exits 0 having
+        # written /tmp/s2; `cd -` writes to $OLDPWD.
+        "cd /tmp/$NOPE ; echo b > s2",
+        "cd /home/the0/wt-$TASK ; cp /tmp/a notes.md",
         f"cd {missing}* ; echo b > s2",
+        # (f) `&&`/`||` gate on the exit status of the command IMMEDIATELY before
+        # them, which after the first segment is no longer the `cd` — a rule
+        # computing reachability from separator KIND denies all three.
+        f"cd {missing} ; false && echo b > s2",
+        f"cd {missing} ; true || echo b > s2",
+        f"cd {missing} && echo b > s2",
+        # (f) an intervening segment is an actor the guard does not model: it can
+        # end the shell or move it.
+        f"cd {missing} ; exit 1 ; echo b > s2",
+        f"cd {missing} ; set -e ; false ; echo b > s2",
+        f"cd {missing} ; pushd /tmp ; echo b > s2",
+        f"cd {missing} ; exit ; echo b > s2",
+        # (f) the accepted LOST denies: these really do write into the original
+        # cwd and are allowed anyway, because the two-segment rule buys the
+        # absence of false denies with a class of lost ones. The trailing `;`
+        # is the same class reached by accident — it yields an empty third
+        # segment, so the count check declines. (A trailing `;;` does NOT: it is
+        # not a separator, so it rides inside segment 2 and still denies.)
+        f"cd {missing} ; echo a ; echo b > s2",
+        f"cd {missing} ; echo b > s2 ;",
     ]
     for cmd in commands:
         proc = run_hook(core, cmd, cwd=core / "scripts")
         assert _allowed(proc), f"{cmd!r}: {proc.stdout}"
+
+
+def test_leading_cd_dash_deny_is_pre_existing_and_unchanged(tmp_path):
+    """`cd -` is outside the safe shape (clause b), but unlike the other
+    non-literal targets it still DENIES — and did so identically before this
+    stage. `-` is not absolute, so the general relocation branch joins it onto
+    the payload cwd and the write resolves under canon. Measured pre- and
+    post-fix: both `<cwd>/-`. The real target is `$OLDPWD`, unknowable from the
+    command text, so this sits with the by-design `$VAR` deny rather than with
+    the false denies. Pinned as UNCHANGED, not as correct — closing it is not
+    this stage's rule."""
+    core = make_core(tmp_path)
+    proc = run_hook(core, "cd - ; echo b > s2", cwd=core / "scripts")
+    assert _denied(proc), proc.stdout
 
 
 # --- same verbs into a linked worktree: ALLOW ---

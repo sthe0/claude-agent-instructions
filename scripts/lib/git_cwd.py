@@ -32,14 +32,19 @@ import re
 import shlex
 
 _SEPS = {";", "&&", "||", "|", "|&", "&"}
-_GROUPING_TOKENS = {"(", ")", "{", "}"}
+_GROUPING_CHARS = "(){}"
 _COMPOUND_KEYWORDS = {"if", "for", "while", "until", "case", "do", "then", "esac", "done", "fi"}
 _NON_LITERAL_CD_TARGET = re.compile(r"[$`~*?\[\]]")
 
 
 def _split_on_seps(tokens: list[str]):
     """Segments of `tokens` split on the shell list separators, each paired with
-    the separator token that preceded it (`None` for the first segment)."""
+    the separator token that preceded it (`None` for the first segment).
+
+    Near-duplicate of `hook-guard-canon-readonly.py`'s `_split_segments`, which
+    DROPS empty segments where this one keeps them — the safe-shape check counts
+    segments, so a trailing `;` must register. Consolidating the two means
+    choosing between those semantics, not merging them silently."""
     seg: list[str] = []
     sep: str | None = None
     for tok in tokens:
@@ -59,8 +64,18 @@ def _leading_cd_noop_on_failure(tokens: list[str], payload_cwd: str) -> bool:
     this check cannot see), the leading segment exactly `cd <literal-target>`
     with no OTHER segment itself a `cd`, and `<literal-target>` does not exist
     right now — the one shape where a failed `cd` provably leaves the next
-    segment running against `payload_cwd` unchanged."""
-    if any(t in _GROUPING_TOKENS or t in _COMPOUND_KEYWORDS for t in tokens):
+    segment running against `payload_cwd` unchanged.
+
+    Grouping is tested by CONTAINMENT, not token equality: `shlex.split` glues an
+    unspaced paren to its neighbour (`(cd` / `s2)`), so an equality test would
+    accept the glued form and decline its spaced twin — the same command, two
+    verdicts, one of them a false deny on a fail-open guard. Containment costs
+    two denies it cannot separate from that twin (`cd <absent> ; (echo b > s2)`,
+    which does write here, and any commit whose MESSAGE carries parentheses);
+    both fall in the fail-open direction and are accepted. Compound keywords stay
+    an EQUALITY test — containment would match `fi` inside `confirm`."""
+    if any(any(c in t for c in _GROUPING_CHARS) or t in _COMPOUND_KEYWORDS
+           for t in tokens):
         return False
     segments = list(_split_on_seps(tokens))
     if len(segments) != 2:
