@@ -4,7 +4,7 @@ description: The regex-crutch principle was named once and fixed at three sites 
 type: reference
 schema: difficulty/v1
 generality: 0
-resolution_confirmed_by_user: "PENDING — set at final resolution gate, not yet confirmed by the user"
+resolution_confirmed_by_user: "the user (fedor.solovyev) — confirmed at the resolution gate 2026-07-29; approved the fast-forward land to public trunk, accepted the agent-proposed 4/5 quality"
 refs: [memory-global/leaves/regex-not-for-semantic-classification.md, docs/operations/crutch-registry.md, scripts/crutch-inventory.py, scripts/crutch_registry.toml, scripts/gen_crutch_registry.py, scripts/verify-semantic-gates.py, scripts/self-diagnose.py]
 plan_file: /home/the0/.claude-agent/plans/anti-crutch-audit-and-registry.toml
 created: 2026-07-29
