@@ -32,6 +32,7 @@ from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import transcript_read  # noqa: E402
 from lib.config_root import agent_home
 
 COST_LOG = Path.home() / ".local" / "log" / "claude-spawn-costs.jsonl"
@@ -62,17 +63,13 @@ def parse_ts(s: str) -> dt.datetime | None:
 
 
 def iter_transcript_lines(paths: list[Path]):
+    """Every JSON entry across several transcripts. Unlike the hooks (which are
+    handed one transcript by the harness), this report scans a whole project
+    dir, so an unreadable file is reported and skipped rather than aborting the
+    scan — the per-file parsing itself is the shared reader's."""
     for p in paths:
         try:
-            with p.open(encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        yield json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
+            yield from transcript_read.iter_transcript(p)
         except OSError as exc:
             print(f"warning: cannot read {p}: {exc}", file=sys.stderr)
 
@@ -101,12 +98,7 @@ def collect_invocations(
             continue
         if msg.get("role") != "assistant":
             continue
-        content = msg.get("content")
-        if not isinstance(content, list):
-            continue
-        for item in content:
-            if not isinstance(item, dict) or item.get("type") != "tool_use":
-                continue
+        for item in transcript_read.tool_use_blocks(msg):
             tool_name = item.get("name")
             tool_input = item.get("input") or {}
             if tool_name == SKILL_TOOL:

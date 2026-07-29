@@ -29,6 +29,16 @@
 # operator- or project-supplied (exactly as long_job_detect.py takes its
 # orchestrator names from agent-identity.local and ships none).
 #
+# With --probe omitted the template is read from `review_probe=` in the config
+# root's agent-identity.local — the same operator-configured surface that
+# supplies review_open_verbs= and long_job_orchestrators=. That default is what
+# lets a monitor be armed by MACHINERY (hook-review-monitor-arm.py, which fires
+# on a review-opening command) rather than only by a human who remembers the
+# platform's status command: the hook can name the review it just saw, but it
+# can never know this machine's probe. With neither --probe nor review_probe=
+# set, the launch is refused — a poller with no probe can only log
+# PROBE_UNREADABLE until its cap.
+#
 # The --probe value is a command template run through `sh -c` after two
 # substitutions: `{id}` becomes the --review-id value verbatim (the review URL,
 # normally), and `{num}` becomes the review's bare numeric id extracted from it
@@ -61,7 +71,7 @@
 # rather than only the final state (leaves/long-job-monitoring.md step 1).
 #
 # USAGE
-#   review-monitor.sh --review-id <id> --probe '<cmd with {id}>' --out <file>
+#   review-monitor.sh --review-id <id> --out <file> [--probe '<cmd with {id}>']
 #                     [--max N] [--sleep S] [--registry <file>]
 #
 #   --review-id  the review URL (preferred). It is interpolated into --probe as
@@ -72,7 +82,8 @@
 #                identity can be derived from it, so its registry key cannot
 #                match what the guardian derives from the review's URL and the
 #                nudge will keep firing. The script warns when you pass one.
-#   --probe      status command template (see PROBE CONTRACT above)
+#   --probe      status command template (see PROBE CONTRACT above). Optional:
+#                defaults to `review_probe=` in agent-identity.local
 #   --out        marker log file (parent dir created if absent)
 #   --max        max poll iterations before CAP_HIT (default 288)
 #   --sleep      seconds between polls (default 300)
@@ -111,8 +122,15 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# An omitted --probe falls back to the operator's configured template. Resolved
+# through the same module the guardian uses, so the config key has one reader.
+if [[ -z "$PROBE" ]]; then
+  PROBE="$(python3 "$SCRIPT_DIR/review_open_detect.py" probe 2>/dev/null || true)"
+fi
+
 if [[ -z "$REVIEW_ID" || -z "$PROBE" || -z "$OUT" ]]; then
-  echo "review-monitor: --review-id, --probe and --out are all required" >&2
+  echo "review-monitor: --review-id and --out are required, and --probe must be given" \
+       "or configured as review_probe= in agent-identity.local" >&2
   usage >&2
   exit 2
 fi

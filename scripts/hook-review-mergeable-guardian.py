@@ -59,13 +59,7 @@ def analyze(entries, armed=None) -> dict:
 def _state_dir() -> Path:
     """Durable marker dir `<agent-home>/state/review-guardian/`, mirroring
     hook-turn-end-gate's `state/turn-gate/`."""
-    try:
-        from lib.config_root import agent_home
-
-        home = agent_home()
-    except Exception:
-        home = Path.home() / ".claude-agent"
-    return home / "state" / "review-guardian"
+    return review_open_detect.state_dir("review-guardian")
 
 
 def _marker_path(session_id: str, identity: str) -> Path:

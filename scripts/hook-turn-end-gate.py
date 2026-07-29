@@ -73,6 +73,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from si_feedback_detect import find_signals, strip_injected_context  # noqa: E402
 from long_job_detect import detect as _detect_long_job  # noqa: E402
 from outage_escalation_detect import detect as _detect_outage  # noqa: E402
+import transcript_read  # noqa: E402
 from timer_arm_detect import (  # noqa: E402
     closure_sought as _closure_sought,
     waiter_armed as _waiter_armed,
@@ -396,51 +397,24 @@ def _state_dir() -> Path:
     """Durable marker dir: <agent-home>/state/turn-gate/ (created on demand)."""
     if config_root is not None:
         try:
-            home = config_root.agent_home()
+            return config_root.hook_state_dir("turn-gate")
         except Exception:
-            home = Path.home() / ".claude-agent"
-    else:
-        home = Path.home() / ".claude-agent"
-    return home / "state" / "turn-gate"
+            pass
+    return Path.home() / ".claude-agent" / "state" / "turn-gate"
 
 
-def _iter_transcript(path: Path):
-    """Yield parsed JSON objects from a JSONL transcript, skipping bad lines."""
-    with path.open(encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                yield json.loads(line)
-            except json.JSONDecodeError:
-                continue
-
-
-def _user_text(msg: dict) -> str:
-    """Extract the human-authored text of a user message, '' for tool_result
-    turns (whose content carries no `text` block)."""
-    content = msg.get("content")
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = []
-        for item in content:
-            if isinstance(item, dict) and item.get("type") == "text":
-                parts.append(item.get("text") or "")
-        return "\n".join(parts)
-    return ""
+# Transcript parsing is shared with the sibling Stop hooks — see
+# transcript_read.py for why it lives in an importable module. `_user_text` is
+# role-agnostic on purpose: the same `type=="text"` extraction is what the
+# human's prompt and this turn's assistant prose both need.
+_iter_transcript = transcript_read.iter_transcript
+_user_text = transcript_read.message_text
 
 
 def _invocations_in(msg: dict) -> set[str]:
     """Every tool name / skill id / subagent_type invoked by an assistant message."""
     out: set[str] = set()
-    content = msg.get("content")
-    if not isinstance(content, list):
-        return out
-    for item in content:
-        if not isinstance(item, dict) or item.get("type") != "tool_use":
-            continue
+    for item in transcript_read.tool_use_blocks(msg):
         tool_input = item.get("input") or {}
         if not isinstance(tool_input, dict):
             tool_input = {}

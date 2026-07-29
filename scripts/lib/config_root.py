@@ -60,6 +60,20 @@ def identity_file() -> Path:
     return agent_home() / "agent-identity.local"
 
 
+def hook_state_dir(name: str) -> Path:
+    """Durable marker/log directory for one hook (``<root>/state/<name>``).
+
+    Hooks that must remember something across turns (turn-gate's per-turn
+    markers, the review guardian's per-review nudge markers, the review
+    auto-arm hook's claim markers and poller logs) each derived this path
+    themselves, so a relocated config root had to be honored in as many places
+    as there were hooks. The single derivation lives here; each caller keeps
+    only its own fail-open guard around the import, which is the part a shared
+    function cannot cover.
+    """
+    return agent_home() / "state" / str(name)
+
+
 def agentctl_dir() -> Path:
     """Root of agentctl's own persisted state (``<root>/agentctl``)."""
     return agent_home() / "agentctl"

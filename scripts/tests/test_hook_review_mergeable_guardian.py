@@ -5,6 +5,7 @@ review path segment, never by host."""
 import importlib.util
 import io
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -132,6 +133,41 @@ def test_verb_list_override_read_from_identity_file(tmp_path):
 def test_verb_list_falls_back_to_default_when_unset(tmp_path):
     identity = tmp_path / "absent-identity.local"
     assert detect.review_open_verbs(identity_path=identity) == detect.DEFAULT_REVIEW_OPEN_VERBS
+
+
+def test_read_verb_list_override_read_from_identity_file(tmp_path):
+    # Same operator seam as `review_open_verbs=`: a platform whose CLI words its
+    # read commands differently configures them rather than patching Core.
+    identity = tmp_path / "agent-identity.local"
+    identity.write_text("review_read_verbs=my-cli peek, review inspect\n", encoding="utf-8")
+    verbs = detect.review_read_verbs(identity_path=identity)
+    assert verbs == ("my-cli peek", "review inspect")
+    assert detect.reads_review("my-cli peek 42", verbs)
+    assert not detect.reads_review("my-review-cli pr view 42", verbs)
+
+
+def test_read_verb_list_falls_back_to_default_when_unset(tmp_path):
+    identity = tmp_path / "absent-identity.local"
+    assert detect.review_read_verbs(identity_path=identity) == detect.DEFAULT_REVIEW_READ_VERBS
+
+
+def test_read_verbs_match_whole_tokens_only():
+    assert detect.reads_review("my-review-cli pr view 42")
+    assert detect.reads_review("my-review-cli merge request status 42")
+    # A create is not a read, and a longer hyphenated command name that merely
+    # contains the phrase must not count (the `npm publish` lesson, read side).
+    assert not detect.reads_review(_CREATE_CMD)
+    assert not detect.reads_review("./my-pr-view-helper --all")
+    assert not detect.reads_review("")
+
+
+def test_state_dir_resolves_under_the_agent_home(tmp_path, monkeypatch):
+    # One resolution for the whole review family: the guardian's markers and the
+    # arm hook's claim markers must land under the SAME relocated root.
+    monkeypatch.setenv("CLAUDE_AGENT_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    assert detect.state_dir("review-guardian") == tmp_path / "home" / "state" / "review-guardian"
+    assert detect.state_dir("review-monitor") == tmp_path / "home" / "state" / "review-monitor"
 
 
 def test_authored_reviews_needs_both_signals():
@@ -346,10 +382,66 @@ def test_monitor_help_prints_contract_without_side_effects(tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
+def test_monitor_help_documents_the_configured_probe_default(tmp_path):
+    proc = subprocess.run(["bash", str(SCRIPTS / "review-monitor.sh"), "--help"],
+                          capture_output=True, text=True, cwd=tmp_path, timeout=30)
+    assert "review_probe=" in proc.stdout
+
+
 def test_monitor_requires_its_arguments(tmp_path):
     proc = subprocess.run(["bash", str(SCRIPTS / "review-monitor.sh")],
                           capture_output=True, text=True, cwd=tmp_path, timeout=30)
     assert proc.returncode == 2
+
+
+def _monitor_env(tmp_path, identity_text=None):
+    """A hermetic env for the poller subprocess: this machine's own
+    agent-identity.local must not decide whether the probe defaults."""
+    env = dict(os.environ)
+    env.pop("CLAUDE_CONFIG_DIR", None)
+    env["CLAUDE_AGENT_HOME"] = str(tmp_path / "agent-home")
+    identity = tmp_path / "agent-identity.local"
+    if identity_text is not None:
+        identity.write_text(identity_text, encoding="utf-8")
+    env["CLAUDE_AGENT_IDENTITY"] = str(identity)
+    return env
+
+
+def test_monitor_defaults_the_probe_from_the_identity_file(tmp_path):
+    # The auto-launch hook must be able to arm a monitor without embedding a
+    # platform-specific probe string, so the operator's config supplies it.
+    out = tmp_path / "markers.log"
+    proc = subprocess.run(
+        ["bash", str(SCRIPTS / "review-monitor.sh"),
+         "--review-id", _REVIEW, "--out", str(out),
+         "--registry", str(tmp_path / "registry.json"), "--sleep", "0"],
+        capture_output=True, text=True, timeout=60,
+        env=_monitor_env(tmp_path, "review_probe=echo merged=true\n"))
+    assert proc.returncode == 0
+    assert "MERGED" in out.read_text(encoding="utf-8")
+
+
+def test_monitor_refuses_when_neither_flag_nor_config_supplies_a_probe(tmp_path):
+    proc = subprocess.run(
+        ["bash", str(SCRIPTS / "review-monitor.sh"),
+         "--review-id", _REVIEW, "--out", str(tmp_path / "markers.log")],
+        capture_output=True, text=True, timeout=60,
+        env=_monitor_env(tmp_path))
+    assert proc.returncode == 2
+    assert "review_probe=" in proc.stderr
+
+
+def test_an_explicit_probe_wins_over_the_configured_one(tmp_path):
+    out = tmp_path / "markers.log"
+    subprocess.run(
+        ["bash", str(SCRIPTS / "review-monitor.sh"),
+         "--review-id", _REVIEW, "--out", str(out), "--probe", "echo merged=true",
+         "--registry", str(tmp_path / "registry.json"), "--sleep", "0"],
+        capture_output=True, text=True, timeout=60,
+        env=_monitor_env(tmp_path, "review_probe=echo tests=failure\n"))
+    markers = out.read_text(encoding="utf-8")
+    assert "MERGED" in markers
+    assert "CHECK_FAILED" not in markers
 
 
 def test_monitor_terminal_on_failed_check(tmp_path):

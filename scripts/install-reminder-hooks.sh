@@ -106,6 +106,12 @@ DESIRED = [
     # Non-blocking by design — never emits a permissionDecision.
     ("PostToolUse",      "Edit|Write", "hook-scope-track.py",        5),
     ("PostToolUse",      "Bash",  "hook-scope-track.py",             5),
+    # Autopilot for the review-mergeable mechanism: when one Bash call both
+    # carried a review-create verb and printed that review's URL, launch the
+    # detached poller for it — the ACT the Stop guardian below can only advise.
+    # Silent no-op unless `review_probe=` is configured (Core ships no probe).
+    # Spawns and returns immediately, so a short timeout is the right bound.
+    ("PostToolUse",      "Bash",  "hook-review-monitor-arm.py",      5),
     ("SessionStart",     None,    "hook-policy-scorecard-due.py",    5),
     # Throttled nudge (once/7d): runs budget-calibration.py --check and speaks only
     # when a spawn budget tier looks miscalibrated against realized spend, routing

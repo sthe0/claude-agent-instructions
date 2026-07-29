@@ -46,10 +46,13 @@ def _blocks(msg: dict) -> list:
     return content if isinstance(content, list) else []
 
 
-def assistant_text(msg: dict) -> str:
-    """Concatenate `type=="text"` blocks of an assistant message — the only
-    channel that counts as surfacing something to the user. A `thinking` block
-    or a tool_use input is deliberately excluded."""
+def message_text(msg: dict) -> str:
+    """Concatenate the `type=="text"` blocks of a message, of either role.
+
+    This is the prose channel: what a human typed, or what the agent wrote back
+    in chat. A `thinking` block and a tool_use input are deliberately excluded,
+    and a `tool_result` turn (whose content carries no `text` block) yields "".
+    """
     content = msg.get("content") if isinstance(msg, dict) else None
     if isinstance(content, str):
         return content
@@ -59,6 +62,17 @@ def assistant_text(msg: dict) -> str:
         if isinstance(item, dict) and item.get("type") == "text"
     ]
     return "\n".join(parts)
+
+
+def assistant_text(msg: dict) -> str:
+    """The prose an ASSISTANT message put in front of the user — the only channel
+    that counts as *surfacing* something.
+
+    Same extraction as `message_text`; the separate name is what a caller
+    enforcing the surfacing rule asserts about its argument, so its call sites
+    stay readable when the rule is what is under test.
+    """
+    return message_text(msg)
 
 
 def tool_results(msg: dict) -> list[dict]:

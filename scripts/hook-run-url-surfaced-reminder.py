@@ -44,9 +44,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import transcript_read  # noqa: E402
-
-# Any http(s) URL, minus trailing punctuation / markdown / quote delimiters.
-_URL_RE = re.compile(r"https?://[^\s)\]}>\"'`]+", re.IGNORECASE)
+import url_scan  # noqa: E402
 
 # A URL is a "run URL" when its PATH contains one of these run/job/graph
 # segments — the generic surface shared by orchestration and CI platforms.
@@ -79,12 +77,17 @@ def _identity(url: str) -> str | None:
 
 
 def _run_ids(text: str) -> dict:
-    """Map {run_identity -> a representative URL} for run URLs found in text."""
+    """Map {run_identity -> a representative URL} for run URLs found in text.
+
+    Trailing sentence punctuation is trimmed by the shared scan before matching.
+    Without it `launched <url>/graph.` and `<url>/runs/7: ok` are dropped — the
+    trailing character leaves the run segment followed by neither `/` nor
+    end-of-path, so the segment test fails — and the same character also splits
+    one run into two identities, making a URL the agent DID surface read as
+    unsurfaced.
+    """
     out: dict = {}
-    if not text:
-        return out
-    for m in _URL_RE.finditer(text):
-        url = m.group(0)
+    for url in url_scan.iter_urls(text):
         ident = _identity(url)
         if ident and ident not in out:
             out[ident] = url

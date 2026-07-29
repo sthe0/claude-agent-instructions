@@ -59,6 +59,23 @@ def test_identity_collapses_graph_suffix():
     assert mod._identity(_GRAPH) == mod._identity(_BARE)
 
 
+def test_run_url_detected_through_trailing_punctuation():
+    # A run URL that ENDS a sentence used to be dropped: the trailing character
+    # leaves the run segment followed by neither "/" nor end-of-path, so the
+    # segment test failed and the reminder went silently missing.
+    for text in (f"launched {_GRAPH}.", f"{_GRAPH}: running",
+                 f"see {_GRAPH}, watching it", f"started {_GRAPH}!"):
+        assert mod._run_ids(text) == {mod._identity(_GRAPH): _GRAPH}, text
+
+
+def test_sentence_ending_run_url_is_still_one_identity_when_surfaced():
+    # The same trailing character also split one run into two identities, so a
+    # URL the agent DID surface read as unsurfaced.
+    entries = [_tool_result(f"graph created at {_GRAPH}."),
+               _assistant(f"Ссылка: {_GRAPH}")]
+    assert mod.analyze(entries) == {}
+
+
 def test_analyze_flags_seen_but_not_surfaced():
     entries = [_tool_result(f"graph created at {_GRAPH}"),
                _assistant("Прогон запущен, идёт.")]
@@ -78,6 +95,14 @@ def test_analyze_thinking_does_not_count_as_surfaced():
 
 
 # --- hook behaviour -----------------------------------------------------------
+
+def test_fires_for_a_run_url_that_ends_a_sentence(monkeypatch, capsys, tmp_path):
+    p = _write(tmp_path, [_tool_result(f"graph created at {_GRAPH}."),
+                          _assistant("Прогон запущен.")])
+    rc, out = _run(monkeypatch, capsys, p)
+    assert rc == 0
+    assert "run-url-surfaced" in out
+
 
 def test_fires_and_is_advisory(monkeypatch, capsys, tmp_path):
     p = _write(tmp_path, [_tool_result(f"graph created at {_GRAPH}"),

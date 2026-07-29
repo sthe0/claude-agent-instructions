@@ -21,9 +21,11 @@ Vendor-neutral by design, in two places:
   review platform. No host is hard-coded.
 - The "I authored it" evidence is a *create verb* seen in a Bash command, and
   the verb list is operator-configurable via `review_open_verbs=` in the config
-  root's `agent-identity.local`. Core ships a generic default set; an org whose
-  review CLI uses different wording configures it there rather than patching
-  this file.
+  root's `agent-identity.local`. Its complement `review_read_verbs=` names the
+  verbs that merely inspect a review, which is how a command that both creates
+  and reads is recognized as ambiguous. Core ships a generic default set for
+  each; an org whose review CLI uses different wording configures them there
+  rather than patching this file.
 
 Detection is deliberately STRICTER than the sibling run-URL scan, which nudges
 on any run URL merely seen. Nagging about every review the agent happens to
@@ -56,16 +58,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import transcript_read  # noqa: E402
-
-# Any http(s) URL, minus trailing markdown / quote delimiters.
-_URL_RE = re.compile(r"https?://[^\s)\]}>\"'`]+", re.IGNORECASE)
-
-# Sentence punctuation the URL regex cannot exclude (a URL may legally contain
-# these mid-path), trimmed from the END of a match. Tool output routinely reads
-# "review created: <url>." or "status of <url>: green", and without this trim
-# the trailing character defeats the numeric-id match and the review goes
-# undetected — silently, which is the expensive direction for this guard.
-_TRAILING_PUNCT = ".,;:!?"
+import url_scan  # noqa: E402
 
 # A URL is a "review URL" when its path carries one of these segments followed
 # by a numeric id. Vendor-neutral: the segment vocabulary is what review
@@ -99,6 +92,47 @@ DEFAULT_REVIEW_OPEN_VERBS: tuple[str, ...] = (
     "pull request publish",
     "merge-request publish",
     "merge request publish",
+)
+
+# The READ half of the same vocabulary: verbs that inspect a review without
+# authoring one. Their only job is to make a command that both creates and reads
+# recognizable as ambiguous, so nothing is armed from it (`to_arm` in
+# hook-review-monitor-arm.py). Operator-configurable via `review_read_verbs=`,
+# mirroring `review_open_verbs=` — Core must not hardcode one platform's CLI.
+#
+# Erring wide is safe here in a way it is not for the create verbs: a read verb
+# recognized in error only suppresses an arm, and a missed arm is recoverable
+# (the Stop guardian still advises a manual one) while a wrongful arm trains the
+# agent to ignore the guard.
+DEFAULT_REVIEW_READ_VERBS: tuple[str, ...] = (
+    "pr view",
+    "pr show",
+    "pr status",
+    "pr checks",
+    "pr diff",
+    "pr list",
+    "review view",
+    "review show",
+    "review status",
+    "review checks",
+    "review diff",
+    "review list",
+    "pull-request view",
+    "pull request view",
+    "pull-request show",
+    "pull request show",
+    "pull-request status",
+    "pull request status",
+    "pull-request list",
+    "pull request list",
+    "merge-request view",
+    "merge request view",
+    "merge-request show",
+    "merge request show",
+    "merge-request status",
+    "merge request status",
+    "merge-request list",
+    "merge request list",
 )
 
 # Word characters for verb-boundary purposes. `-` counts as one so a verb never
@@ -144,11 +178,8 @@ def review_urls(text: str) -> dict:
     that ends a sentence or precedes a colon is still recognized.
     """
     out: dict = {}
-    if not text:
-        return out
     try:
-        for m in _URL_RE.finditer(text):
-            url = m.group(0).rstrip(_TRAILING_PUNCT)
+        for url in url_scan.iter_urls(text):
             ident = review_identity(url)
             if ident and ident not in out:
                 out[ident] = url
@@ -157,30 +188,64 @@ def review_urls(text: str) -> dict:
     return out
 
 
-def review_open_verbs(identity_path=None) -> tuple[str, ...]:
-    """Resolve the create-verb list.
+def _verb_list(key: str, default: tuple, identity_path=None) -> tuple:
+    """Resolve one operator-configurable verb list from `agent-identity.local`.
 
-    Reads `review_open_verbs=` from the resolved `agent-identity.local`,
-    falling back to DEFAULT_REVIEW_OPEN_VERBS. Entries are comma-separated so a
-    multi-word phrase survives; a value carrying no comma at all is split on
-    whitespace instead, so a single-word list reads naturally too. Fail-open:
-    any error yields the default.
+    Entries are comma-separated so a multi-word phrase survives; a value
+    carrying no comma at all is split on whitespace instead, so a single-word
+    list reads naturally too. Fail-open: any error yields `default`.
     """
     try:
         from difficulty_channel.authority import LOCAL_IDENTITY_PATH, read_local_identity
 
         raw = read_local_identity(identity_path or LOCAL_IDENTITY_PATH).get(
-            "review_open_verbs", ""
+            key, ""
         ).strip()
         if not raw:
-            return DEFAULT_REVIEW_OPEN_VERBS
+            return default
         pieces = raw.split(",") if "," in raw else raw.split()
         verbs = tuple(
             v for v in (" ".join(p.split()).lower() for p in pieces) if v
         )
-        return verbs or DEFAULT_REVIEW_OPEN_VERBS
+        return verbs or default
     except Exception:
-        return DEFAULT_REVIEW_OPEN_VERBS
+        return default
+
+
+def review_open_verbs(identity_path=None) -> tuple[str, ...]:
+    """The create-verb list: `review_open_verbs=`, else the Core default."""
+    return _verb_list("review_open_verbs", DEFAULT_REVIEW_OPEN_VERBS, identity_path)
+
+
+def review_read_verbs(identity_path=None) -> tuple[str, ...]:
+    """The read-verb list: `review_read_verbs=`, else the Core default."""
+    return _verb_list("review_read_verbs", DEFAULT_REVIEW_READ_VERBS, identity_path)
+
+
+def review_probe(identity_path=None) -> str:
+    """The operator-configured probe template, or "" when unset.
+
+    Reads `review_probe=` from the resolved `agent-identity.local`. Core ships no
+    value and no default: which CLI or API reports a review's state is
+    platform-specific, exactly as `long_job_orchestrators=` supplies the
+    orchestrator names Core cannot know. The value is the `--probe` template
+    documented by `review-monitor.sh --help`.
+
+    This is what lets a monitor be armed by machinery — the auto-launch hook, or
+    `review-monitor.sh` invoked without `--probe` — rather than only by a human
+    who remembers the platform's status command. An empty result is a real
+    answer: "this machine has no probe", which every caller reads as "do not arm
+    a poller that could only ever log PROBE_UNREADABLE". Fail-open: any error
+    yields "".
+    """
+    try:
+        from difficulty_channel.authority import LOCAL_IDENTITY_PATH, read_local_identity
+
+        return read_local_identity(identity_path or LOCAL_IDENTITY_PATH).get(
+            "review_probe", ""
+        ).strip()
+    except Exception:
+        return ""
 
 
 @functools.lru_cache(maxsize=64)
@@ -214,6 +279,42 @@ def opens_review(cmd: str, verbs=None) -> bool:
         return bool(pattern and pattern.search(normalized))
     except Exception:
         return False
+
+
+def reads_review(cmd: str, verbs=None) -> bool:
+    """True when a Bash command carries a review-READ verb as whole tokens.
+
+    The complement of `opens_review`, used to disqualify a command that both
+    creates and inspects: such a call's output carries URLs from two different
+    actions, and nothing in it says which URL came from which.
+    """
+    try:
+        normalized = " ".join((cmd or "").split()).lower()
+        if not normalized:
+            return False
+        resolved = review_read_verbs() if verbs is None else verbs
+        pattern = _verb_pattern(tuple(resolved))
+        return bool(pattern and pattern.search(normalized))
+    except Exception:
+        return False
+
+
+def state_dir(name: str) -> Path:
+    """Durable per-hook state dir `<agent-home>/state/<name>/`.
+
+    One resolution for the whole review-monitoring family — the Stop guardian's
+    nudge markers (`review-guardian`) and the auto-arm hook's claim markers and
+    poller logs (`review-monitor`) — so the two cannot drift onto different
+    roots on a machine that relocates its config. Fail-open, like everything
+    else here: an unimportable config root falls back to the default home
+    rather than raising inside a hook.
+    """
+    try:
+        from lib.config_root import hook_state_dir
+
+        return hook_state_dir(name)
+    except Exception:
+        return Path.home() / ".claude-agent" / "state" / str(name)
 
 
 def referenced_ids(cmd: str, verbs=None) -> set:
@@ -409,6 +510,14 @@ def _cli(argv) -> int:
             return 1
         print(ident)
         return 0
+    if args[:1] == ["probe"]:
+        probe = review_probe()
+        if not probe:
+            # Exit non-zero with no stdout so the shell caller distinguishes
+            # "no probe configured" from "the configured probe is this text".
+            return 1
+        print(probe)
+        return 0
     if len(args) >= 2 and args[0] == "registry-upsert":
         opts = dict(zip(args[2::2], args[3::2]))
         ok = registry_upsert(
@@ -421,6 +530,7 @@ def _cli(argv) -> int:
         return 0 if ok else 1
     print(
         "usage: review_open_detect.py identity <url-or-id>\n"
+        "       review_open_detect.py probe\n"
         "       review_open_detect.py registry-upsert <url-or-id> "
         "--out <file> --pid <n> --status running|done [--registry <file>]",
         file=sys.stderr,

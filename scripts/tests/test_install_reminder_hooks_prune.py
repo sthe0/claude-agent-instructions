@@ -164,6 +164,25 @@ def test_prune_survives_repo_diverging_from_the_installers_own_tree(tmp_path):
     assert dangling not in all_commands
 
 
+def test_review_monitor_arm_is_wired_once_under_posttooluse_bash(tmp_path):
+    """The generic tests above cover "every DESIRED entry gets wired" and "a
+    re-run changes nothing"; this pins the EVENT and MATCHER, which decide
+    whether the auto-arm hook ever sees a Bash call's output at all."""
+    env = _shell_env(tmp_path)
+    settings = Path(env["CLAUDE_AGENT_HOME"]) / "settings.json"
+
+    assert _run(env).returncode == 0
+    second = _run(env)
+    assert second.returncode == 0
+    assert "already wired" in second.stdout
+
+    data = json.loads(settings.read_text(encoding="utf-8"))
+    bash_groups = [g for g in data["hooks"]["PostToolUse"] if g.get("matcher") == "Bash"]
+    commands = [h["command"] for g in bash_groups for h in g["hooks"]]
+    armed = [c for c in commands if os.path.basename(c) == "hook-review-monitor-arm.py"]
+    assert len(armed) == 1, commands
+
+
 def test_no_desired_entry_is_ever_removed(tmp_path):
     env = _shell_env(tmp_path)
     settings = Path(env["CLAUDE_AGENT_HOME"]) / "settings.json"
