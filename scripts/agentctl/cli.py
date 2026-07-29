@@ -191,6 +191,28 @@ def _snapshot_approved_plan(store: StateStore, state: SessionState) -> tuple[str
     return str(snap), digest
 
 
+def _log_delivery_worktree_change(state, old_delivery_worktree: str | None) -> None:
+    """Emit a 'delivery_worktree_changed' event when a replan moves [meta]
+    delivery_worktree while at least one stage has already consumed the OLD
+    value — PASSED (verified there) or ACTIVE (dispatched into it: cli.py's
+    `_continuation_worktree` and `cmd_dispatch` both read
+    state.delivery_worktree at dispatch time). A PASSED stage fails loudly at
+    verify-final if its venue moved; an ACTIVE stage does not — it is already
+    writing into the old tree while live state now names the new one, and
+    without this event nothing reports it. Not a blocker: refusing the replan
+    would strand exactly the sessions that most need to correct their venue."""
+    if old_delivery_worktree == state.delivery_worktree:
+        return
+    affected = [
+        {"index": s.index, "status": s.outcome.status}
+        for s in state.stages
+        if s.outcome.status in (StageStatus.PASSED.value, StageStatus.ACTIVE.value)
+    ]
+    if affected:
+        state.log("delivery_worktree_changed", old=old_delivery_worktree,
+                   new=state.delivery_worktree, affected_stages=affected)
+
+
 def _apply_refined_stage_fields(cur, refined) -> None:
     """Copy the definition fields of a freshly-loaded stage onto the matching live
     stage. Shared by both replan branches that re-materialize from a corrected plan
@@ -3078,6 +3100,10 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             _log_gate(state, "replan_coverage_waiver", cov, passed=True)
 
     kind = diff_plans(old, new)
+    # captured once, before any branch may reassign state.delivery_worktree, so
+    # all three branches share one before/after comparison for the visibility
+    # event below (_log_delivery_worktree_change).
+    old_delivery_worktree = state.delivery_worktree
 
     # if we are exiting the DIAGNOSING cycle (difficulty complete), the failed
     # stage is re-armed and we leave the cycle back to VERIFYING so next_stage can
@@ -3102,6 +3128,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         # FILE changed relative to what was cached at submit-plan/last replan.
         state.final_check = new.meta.final_check
         _sync_venue_from_plan(state, new)
+        _log_delivery_worktree_change(state, old_delivery_worktree)
         # Backfill a snapshot for a legacy (pre-snapshot) session so the NEXT replan
         # diffs against real approved bytes instead of self-diffing plan_path.
         if not (state.plan_snapshot_path and Path(state.plan_snapshot_path).exists()):
@@ -3138,6 +3165,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
                 cur.outcome.status = StageStatus.PENDING.value
         state.plan_path = args.plan
         _sync_venue_from_plan(state, new)
+        _log_delivery_worktree_change(state, old_delivery_worktree)
         state.final_check = new.meta.final_check
         if diagnosing:
             state.difficulty = None
@@ -3161,8 +3189,13 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
                 and prev.outcome.status == StageStatus.PASSED.value
                 and stage_carry_key(prev) == stage_carry_key(ns)):
             ns.outcome = prev.outcome
-    state.stages = new.stages
+    # visibility check BEFORE state.stages is replaced: the carry-forward loop
+    # above only preserves PASSED (not ACTIVE) outcomes into new.stages, so an
+    # ACTIVE stage's status must be read from the still-live state.stages here
+    # or it is invisible to _log_delivery_worktree_change after the reassignment.
     _sync_venue_from_plan(state, new)
+    _log_delivery_worktree_change(state, old_delivery_worktree)
+    state.stages = new.stages
     state.final_check = new.meta.final_check
     state.plan_path = args.plan
     state.plan_verified = True
