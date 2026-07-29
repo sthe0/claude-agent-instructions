@@ -3259,6 +3259,245 @@ def cmd_check_coverage(args, *, store: StateStore, runner: Runner | None = None)
     return Directive(True, state.node, "inspect", "OK — coverage clear")
 
 
+# --- check-controls: does a declared check RUN at all? -------------------------
+#
+# A control earns trust from TWO independent properties: it goes RED on a real
+# mutation of the code under test, and its GREEN direction is REACHABLE.
+# submit-plan mechanizes the second only as a static property of the literal
+# PATHS a command names (verify_command_reachability_blockers) — it cannot know
+# whether the command RUNS. So a check that dies before reaching its own
+# predicate (a renamed scanner, a node id that collects nothing, an unknown
+# subcommand) is indistinguishable, by exit code alone, from an honestly-red
+# check, and survives authoring, review and approval — surfacing at verify-final
+# or never.
+#
+# This verb reports ONE decidable bit per declared check: did the command RUN,
+# or could it not run at all. It NEVER asserts a check is green — a control
+# authored before its work exists is legitimately red, and a red predicate is a
+# PASS of this verb. `ok = False` on a plan whose later stages have not run yet
+# is therefore the EXPECTED reading, not an alarm: this is a report, not a gate.
+
+CONTROL_RAN = "RAN"
+CONTROL_COULD_NOT_RUN = "COULD-NOT-RUN"
+CONTROL_REFUSED = "REFUSED"
+CONTROL_SKIPPED = "SKIPPED"
+_CONTROL_VERDICTS = (CONTROL_RAN, CONTROL_COULD_NOT_RUN, CONTROL_REFUSED, CONTROL_SKIPPED)
+
+# 2x the longest legitimate wait in this repository's own plan corpus: the
+# efficiency-observability-loop plan's final_check polls
+# `for i in $(seq 1 150); do ... sleep 2; done` — up to 300 s — and is a CORRECT
+# control that a shorter ceiling would false-alarm on, reporting COULD-NOT-RUN
+# for a check that merely waits. Calibrated against that measurement, not picked
+# as a round number: re-measure the corpus before retuning it.
+_CONTROL_TIMEOUT_S = 600
+
+# The closed COULD-NOT-RUN evidence set. Every member was measured on this
+# machine (2026-07-29) and the comment names the command that produced it, so a
+# later reader re-runs rather than re-derives.
+#
+# ONE HONEST RESIDUAL: a check that deliberately exits with one of these codes as
+# a GENUINE verdict is misreported as COULD-NOT-RUN. That is the safe direction —
+# the verb over-reports inability and never under-reports it — and no check in
+# this repository uses any of these codes as a predicate VALUE.
+_CONTROL_DEAD_EXITS = {
+    2: "exit 2 — argparse usage error, a pytest COLLECTION error, or a missing "
+       "script (`python3 -m agentctl no-such-subcommand`, a test module raising at "
+       "import time, and `python3 /nope.py` all measured 2)",
+    4: "exit 4 — pytest usage error: nothing to collect (a missing test FILE and an "
+       "unmatched node id in a real file both measured 4)",
+    5: "exit 5 — pytest collected no tests at all",
+    126: "exit 126 — found but not executable (`/etc/hostname` measured 126, "
+         "'Permission denied')",
+    127: "exit 127 — command not found (`definitely-not-a-command-xyz` measured 127)",
+    128: "exit 128 — git fatal / invalid exit argument (`git merge-base "
+         "--is-ancestor <bogus-sha> HEAD` measured 128, 'fatal: Not a valid commit name')",
+}
+
+# Interpreter-level diagnostics that accompany an ORDINARY exit code. The hole
+# they close: a dead interpreter invocation does not raise — it prints one line
+# and exits 1 (`python3 -m nosuchmodule_xyz` measured rc 1, stderr
+# `No module named nosuchmodule_xyz`, NO traceback), which by exit code alone is
+# indistinguishable from an honest false predicate. Every stage verify_command in
+# the plan that specifies this verb is `python3 -m pytest`, so a venue whose
+# interpreter lacks pytest produces exactly this shape.
+_CONTROL_INTERPRETER_DIAGNOSTICS = (
+    "No module named",
+    "can't open file",
+    "command not found",
+)
+
+# Probed on stdout AND stderr, not stderr alone. Measured: `python3 boom.py`
+# puts it on stderr, `python3 boom.py 2>&1` puts it on stdout — and `2>&1` is
+# exactly the redirection the fail-open pipeline idiom uses, so a stderr-only
+# probe misses the shape most likely to carry a dead control.
+_CONTROL_TRACEBACK = "Traceback (most recent call last):"
+
+
+def classify_control_run(
+    returncode: int | None, stdout: str = "", stderr: str = "", *, timed_out: bool = False
+) -> tuple[str, str]:
+    """Classify ONE executed check as RAN or COULD-NOT-RUN; return (verdict, evidence).
+
+    A merely-false predicate is RAN — that is the whole contract. Only evidence
+    that the command never reached its own predicate downgrades it.
+
+    A zero exit short-circuits every text probe below, because it is direct
+    evidence the command reached its verdict; without that order a check whose
+    OUTPUT merely quotes a traceback (a log scanner — this repository's own
+    self-diagnose among them) would be reported as unable to run."""
+    if timed_out:
+        return CONTROL_COULD_NOT_RUN, f"no exit within {_CONTROL_TIMEOUT_S}s (timeout)"
+    if returncode == 0:
+        return CONTROL_RAN, "exit 0"
+    if returncode in _CONTROL_DEAD_EXITS:
+        return CONTROL_COULD_NOT_RUN, _CONTROL_DEAD_EXITS[returncode]
+    for stream, text in (("stdout", stdout or ""), ("stderr", stderr or "")):
+        if _CONTROL_TRACEBACK in text:
+            return CONTROL_COULD_NOT_RUN, (
+                f"unhandled exception: {_CONTROL_TRACEBACK!r} on {stream} (exit {returncode})"
+            )
+    for needle in _CONTROL_INTERPRETER_DIAGNOSTICS:
+        if needle in (stderr or ""):
+            return CONTROL_COULD_NOT_RUN, (
+                f"interpreter-level diagnostic on stderr: {needle!r} (exit {returncode})"
+            )
+    return CONTROL_RAN, f"exit {returncode} — a predicate the command reached and answered"
+
+
+def _probe_control(
+    command: str, cwd: str | None, runner: Runner | None
+) -> tuple[int | None, str, str, bool]:
+    """Execute one declared check the way the real gate will — `bash -c`, with
+    the same `cd <venue> && ` prefix _run_check uses — and return
+    (returncode, stdout, stderr, timed_out).
+
+    Deliberately NOT `runner or subprocess_runner`: the engine's shared runner
+    has no timeout, and a hanging check has wedged this engine before. An
+    injected runner is a test double and is called as-is."""
+    cmd = f"cd {shlex.quote(cwd)} && {command}" if cwd else command
+    argv = ["bash", "-c", cmd]
+    if runner is not None:
+        result = runner(argv)
+        return result.returncode, result.stdout, result.stderr, False
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=_CONTROL_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return None, "", "", True
+    return proc.returncode, proc.stdout, proc.stderr, False
+
+
+def _control_record(where: str, label: str, command: str, venue: str) -> dict:
+    """The shared shape of one reported check. `expected_exit` is deliberately
+    absent: carrying it would invite reading a green/red verdict off this report,
+    and the verb never asserts greenness."""
+    return {"where": where, "label": label or "", "command": command, "venue": venue}
+
+
+def _check_one_control(
+    state: SessionState, where: str, label: str, command: str, venue: str, runner: Runner | None
+) -> dict:
+    record = _control_record(where, label, command, venue)
+    cwd, refusal = _resolve_or_refuse(state, venue)
+    record["cwd"] = cwd
+    if refusal:
+        record.update(verdict=CONTROL_REFUSED, exit=None, evidence=refusal)
+        return record
+    if cwd and not Path(cwd).is_dir():
+        # The residual case _refuse_missing_cwd leaves alone (no delivery_worktree
+        # declared, so a missing repo_root is not refusable): `cd` would fail and
+        # `&&` short-circuit before the check ran.
+        record.update(
+            verdict=CONTROL_COULD_NOT_RUN, exit=None,
+            evidence=f"venue {cwd!r} is not a directory; `cd` fails before the check runs",
+        )
+        return record
+    rc, out, err, timed_out = _probe_control(command, cwd, runner)
+    verdict_, evidence = classify_control_run(rc, out, err, timed_out=timed_out)
+    record.update(verdict=verdict_, exit=rc, evidence=evidence)
+    return record
+
+
+def cmd_check_controls(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Read-only pre-flight: does every check this plan declares actually RUN?
+
+    Classifies each measurable stage `verify_command` and each `[[final_check]]`
+    as RAN / COULD-NOT-RUN / REFUSED (plus SKIPPED for an engine-synthesized
+    `kind = "landed"` check, which no author wrote and so carries no authoring
+    risk). Mirrors cmd_check_coverage's contract: never saves, never logs a gate,
+    never transitions — a pre-flight that mutated what it inspects would corrupt
+    the state a later replan diffs against.
+
+    Deliberately NOT folded into submit-plan, and never auto-invoked: this verb
+    EXECUTES author-supplied shell, and submit-plan is run on every plan and must
+    stay free of effects on the operator's machine. submit-plan only NUDGES.
+
+    Venue resolution is PLAN-FIRST: the plan named by `--plan` is this verb's
+    subject, so its own [meta] governs where each check is placed, through the
+    same resolver the live gate uses. `--session` only fills a venue field the
+    plan leaves unset.
+
+    That precedence is load-bearing, not a preference. `main` appends
+    `--session $CLAUDE_CODE_SESSION_ID` to every subcommand that accepts the flag
+    (`_inject_default_session`), so an operator who passes no session still
+    arrives here carrying whatever session happens to be live — and this verb's
+    whole point is to run BEFORE approval, when no session is driving this plan
+    yet. Reading venues from that ambient session resolved both of them to None
+    whenever it declared no repo_root, which dropped the `cd` prefix entirely and
+    ran every check in the caller's cwd: the verdicts silently depended on which
+    directory the verb was invoked from. `plan-render` reaches the same
+    conclusion by the same route — see its parser entry, which accepts the
+    injected flag and ignores it."""
+    doc = load_plan(args.plan)
+    session = store.load(args.session) if getattr(args, "session", None) else None
+    state = SessionState(
+        session_id=session.session_id if session else "",
+        task_id=doc.meta.task_id,
+        repo_root=doc.meta.repo_root or (session.repo_root if session else None),
+        delivery_worktree=(
+            doc.meta.delivery_worktree or (session.delivery_worktree if session else None)
+        ),
+    )
+    records: list[dict] = []
+    for stage in doc.stages:
+        crit = stage.criterion
+        if crit.criterion_type != CriterionType.MEASURABLE.value:
+            continue
+        where = f"stage {stage.index}"
+        if crit.verify_kind == CheckKind.LANDED.value:
+            record = _control_record(where, stage.title, "", crit.verify_venue)
+            record.update(verdict=CONTROL_SKIPPED, exit=None, evidence="engine-synthesized")
+            records.append(record)
+            continue
+        if not crit.verify_command:
+            continue
+        records.append(_check_one_control(
+            state, where, stage.title, crit.verify_command, crit.verify_venue, runner,
+        ))
+    for i, fc in enumerate(doc.meta.final_check, start=1):
+        where = f"final_check {i}"
+        if fc.kind == CheckKind.LANDED.value:
+            record = _control_record(where, fc.label, "", fc.venue)
+            record.update(verdict=CONTROL_SKIPPED, exit=None, evidence="engine-synthesized")
+            records.append(record)
+            continue
+        records.append(_check_one_control(
+            state, where, fc.label, fc.command, fc.venue, runner,
+        ))
+    counts = {v: sum(1 for r in records if r["verdict"] == v) for v in _CONTROL_VERDICTS}
+    ok = counts[CONTROL_COULD_NOT_RUN] == 0 and counts[CONTROL_REFUSED] == 0
+    detail = (
+        f"{len(records)} declared check(s): {counts[CONTROL_RAN]} ran, "
+        f"{counts[CONTROL_COULD_NOT_RUN]} could not run, {counts[CONTROL_REFUSED]} refused, "
+        f"{counts[CONTROL_SKIPPED]} skipped (engine-synthesized). A RED predicate counts as "
+        f"RAN; COULD-NOT-RUN means the command never reached its own predicate, and before "
+        f"the work exists that is the expected reading — this is a report, not a gate."
+    )
+    # The reported node is the SESSION's, not the synthetic venue-carrier's: the
+    # verb never transitions, and echoing the live node is how a caller sees that.
+    return Directive(ok, session.node if session else state.node, "inspect", detail,
+                     data={"checks": records, "counts": counts})
+
+
 def cmd_status(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = store.load(args.session) if getattr(args, "session", None) else None
     if state is None:
@@ -3669,6 +3908,7 @@ COMMANDS = {
     "reject": cmd_reject,
     "replan": cmd_replan,
     "check-coverage": cmd_check_coverage,
+    "check-controls": cmd_check_controls,
     "block": cmd_block,
     "unblock": cmd_unblock,
     "status": cmd_status,
@@ -3716,8 +3956,8 @@ _SESSION_COMMANDS = (
     "stage-review", "code-review", "approve", "partition", "partition-units",
     "next-stage", "dispatch", "resolve-permission", "record-result", "declare",
     "investigate", "critique", "normalize", "verify-final", "resolve", "reject",
-    "replan", "check-coverage", "block", "unblock", "status", "drive", "close",
-    "push-subplan", "pop-subplan",
+    "replan", "check-coverage", "check-controls", "block", "unblock", "status",
+    "drive", "close", "push-subplan", "pop-subplan",
 )
 
 # (dest, subcommands that declare it)
@@ -3771,7 +4011,8 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("artifact", ("ledger-enumerate",), "path to the deliverable being cross-checked"),
     ("target", ("question-raise", "plan-review"), "plan element address or plan file path"),
     ("plan", ("plan-render", "submit-plan", "replan", "drive", "push-subplan",
-              "question-enumerate", "question-dispose", "question-rebind"), "plan file path"),
+              "question-enumerate", "question-dispose", "question-rebind",
+              "check-controls"), "plan file path"),
     ("new", ("check-coverage",), "corrected plan file path — the object under a coverage pre-check, not narrative"),
     ("rendering_file", ("present-plan",), "path to the rendered presentation"),
     ("by", ("confirm-delivery", "approve", "resolve"), "who acted — a name, not a narrative"),
@@ -4127,6 +4368,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--new", required=True,
                     help="corrected plan file to check against the active critique, "
                          "BEFORE spending a thinker plan-review on it")
+    sp = add("check-controls"); sp.add_argument("--plan", required=True)
+    sp.add_argument("--session", required=False,
+                    help="optional; venues resolve PLAN-FIRST from the plan's own [meta], "
+                         "and a session only fills a venue field the plan leaves unset")
     sp = add("block"); sp.add_argument("--session", required=True); sp.add_argument("--reason", default="")
     sp = add("unblock"); sp.add_argument("--session", required=True)
     sp = add("status"); sp.add_argument("--session", required=False)
