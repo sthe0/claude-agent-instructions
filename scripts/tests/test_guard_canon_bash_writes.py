@@ -182,17 +182,23 @@ def test_non_leading_cd_verdicts_unchanged(tmp_path):
 def test_leading_cd_outside_safe_shape_stays_allowed(tmp_path):
     """Every shape the safe-shape allowlist declines keeps today's ALLOW verdict
     for an absolute, nonexistent `cd` target. Grouped by the clause that excludes
-    it; each was measured under `bash -c` to write nothing in the original cwd,
-    except where noted as a deliberately accepted lost deny."""
+    it. Each was run under `bash -c` in a scratch cwd and observed: most write
+    nothing there, and the four that DO are marked as accepted lost denies —
+    ALLOW is the right pin either way, since the rule buys the absence of false
+    denies with a bounded class of lost ones."""
     core = make_core(tmp_path)
     missing = tmp_path / "does-not-exist"
     commands = [
-        # (d) grouping construct — `_split_segments` flattens groups, so an
-        # `&&`-guarded write reads as `;`-separated while the shell never runs it.
+        # (d) grouping construct — neither `_split_on_seps` nor the hook's
+        # `_split_segments` models group boundaries, so a segment count taken
+        # across a group says nothing about what the shell will run: a group can
+        # hide a conditional re-entry the check cannot see.
         f"cd {missing} && {{ echo a ; echo b > s2 ; }}",
         f"cd {missing} && ( echo a ; echo b > s2 )",
         f"cd {missing} && if true ; then echo b > s2 ; fi",
         f"cd {missing} && {{ echo a ; git commit -m x ; }}",
+        # LOST DENY (measured: writes s2 in the original cwd) — a subshell with
+        # no `cd` of its own inherits the failed `cd`'s directory.
         f"cd {missing} ; ( echo b > s2 )",
         # (d) tested by CONTAINMENT: `shlex.split` glues an unspaced paren to its
         # neighbour, so each glued form must give the same verdict as its spaced
@@ -202,11 +208,14 @@ def test_leading_cd_outside_safe_shape_stays_allowed(tmp_path):
         f"cd {missing} ; ( cd /tmp ; echo b > s2 )",
         # (e) a later `cd` can succeed where the leading one failed.
         f"cd {missing} ; cd /tmp && cp /tmp/a f",
-        # (b) non-literal target — not the path the shell will use, so the
-        # stage's own isdir premise does not hold. `cd /tmp/$NOPE` exits 0 having
-        # written /tmp/s2; `cd -` writes to $OLDPWD.
+        # (b) non-literal target — the text is not the path the shell will use,
+        # so the isdir premise the safe shape rests on does not hold. Measured:
+        # unset `$NOPE` collapses the target to /tmp, where the `cd` SUCCEEDS
+        # and the write lands — nothing reaches the original cwd.
         "cd /tmp/$NOPE ; echo b > s2",
         "cd /home/the0/wt-$TASK ; cp /tmp/a notes.md",
+        # LOST DENY (measured: writes s2 in the original cwd) — an unmatched
+        # glob expands to itself, so this `cd` fails like a literal absent one.
         f"cd {missing}* ; echo b > s2",
         # (f) `&&`/`||` gate on the exit status of the command IMMEDIATELY before
         # them, which after the first segment is no longer the `cd` — a rule
@@ -220,12 +229,11 @@ def test_leading_cd_outside_safe_shape_stays_allowed(tmp_path):
         f"cd {missing} ; set -e ; false ; echo b > s2",
         f"cd {missing} ; pushd /tmp ; echo b > s2",
         f"cd {missing} ; exit ; echo b > s2",
-        # (f) the accepted LOST denies: these really do write into the original
-        # cwd and are allowed anyway, because the two-segment rule buys the
-        # absence of false denies with a class of lost ones. The trailing `;`
-        # is the same class reached by accident — it yields an empty third
-        # segment, so the count check declines. (A trailing `;;` does NOT: it is
-        # not a separator, so it rides inside segment 2 and still denies.)
+        # (f) LOST DENIES (measured: both write s2 in the original cwd) — the
+        # cost of the two-segment limit. The trailing `;` reaches the same class
+        # by accident: it yields an empty third segment, so the count check
+        # declines. (A trailing `;;` does NOT — it is not a separator, so it
+        # rides inside segment 2 and the command still denies.)
         f"cd {missing} ; echo a ; echo b > s2",
         f"cd {missing} ; echo b > s2 ;",
     ]
