@@ -148,6 +148,53 @@ def test_cd_into_canon_then_sed_denies(tmp_path):
     assert _denied(proc), proc.stdout
 
 
+def test_leading_cd_missing_dir_semicolon_into_canon_denies(tmp_path):
+    """The 2026-07-29 incident shape: `cd <missing-dir> ; <write>` fails the `cd`
+    at runtime, and `;` unconditionally runs the write anyway — in the session's
+    actual (canon) directory, not the failed target. Previously ALLOWED because
+    the guard read the failed `cd`'s literal target as a relocation."""
+    core = make_core(tmp_path)
+    missing = tmp_path / "does-not-exist"
+    proc = run_hook(core, f"cd {missing} ; echo b > s2", cwd=core / "scripts")
+    assert _denied(proc), proc.stdout
+
+
+def test_leading_cd_missing_dir_and_short_circuits_stays_allowed(tmp_path):
+    """`&&` gates on the leading `cd`'s exit status: a failed `cd` to a missing
+    dir short-circuits the list, so the write never runs and the verdict must
+    stay ALLOWED — the discriminator a naive isdir-only fix would get wrong."""
+    core = make_core(tmp_path)
+    missing = tmp_path / "does-not-exist"
+    proc = run_hook(core, f"cd {missing} && echo b > s2", cwd=core / "scripts")
+    assert _allowed(proc), proc.stdout
+
+
+def test_non_leading_cd_verdicts_unchanged(tmp_path):
+    """A `cd` that is not the FIRST segment never reaches the new safe-shape
+    check (it only inspects `tokens[0]`) — the pre-existing (accepted) false
+    deny for a since-created directory stays exactly as it was."""
+    core = make_core(tmp_path)
+    made = tmp_path / "made"
+    proc = run_hook(core, f"mkdir -p {made} && cd {made} && echo b > s2", cwd=core / "scripts")
+    assert _denied(proc), proc.stdout
+
+
+def test_leading_cd_outside_safe_shape_stays_allowed(tmp_path):
+    """Shapes the safe-shape check deliberately excludes — a grouping construct
+    anywhere, more than two segments, or a glued non-literal (glob) target —
+    keep today's ALLOW verdict for an absolute, nonexistent `cd` target."""
+    core = make_core(tmp_path)
+    missing = tmp_path / "does-not-exist"
+    commands = [
+        f"cd {missing} ; ( echo b > s2 )",
+        f"cd {missing} ; exit ; echo b > s2",
+        f"cd {missing}* ; echo b > s2",
+    ]
+    for cmd in commands:
+        proc = run_hook(core, cmd, cwd=core / "scripts")
+        assert _allowed(proc), f"{cmd!r}: {proc.stdout}"
+
+
 # --- same verbs into a linked worktree: ALLOW ---
 
 def test_sed_in_place_into_worktree_allows(tmp_path):

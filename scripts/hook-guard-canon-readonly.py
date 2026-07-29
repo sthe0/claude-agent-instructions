@@ -27,10 +27,11 @@ path outside canon entirely, `/tmp`, and any git error or missing canon-roots
 file. Non-`git commit` git commands (pull, fetch, merge --ff-only, update-ref,
 ...) are never inspected — only Bash commands that literally run `git commit`
 are denied. A `git commit` naming no target this module can read — neither
-`git -C <dir>` nor a leading `cd <dir> &&` — from a session whose directory is canon
-is denied by design, not by a detection gap: a linked worktree keeps its own index,
-so such a commit reaches canon's index and never the worktree's (reproduction and
-verdict: docs/decisions/canon-guard-bare-commit-verdict.md, #44). A commit that
+`git -C <dir>` nor a leading `cd <dir> &&` / `cd <dir> ;` — from a session
+whose directory is canon is denied by design, not by a detection gap: a
+linked worktree keeps its own index, so such a commit reaches canon's index
+and never the worktree's (reproduction and verdict:
+docs/decisions/canon-guard-bare-commit-verdict.md, #44). A commit that
 reaches a worktree by a route this module does not parse (a `cd` after the first
 token, a subshell, `GIT_DIR`) is denied too — conservatively, per `git_cwd`'s
 contract, and it was denied before that verdict as well. Here-document bodies and
@@ -208,19 +209,23 @@ _BASH_SEPS = {";", "&&", "||", "|", "|&", "&"}
 
 
 def _split_segments(tokens: list[str]):
-    """Yield the pipeline/list segments of a tokenized command, split on the
-    shell separators `; && || | |& &`. Best-effort: a separator glued inside a
-    single shlex token (`a;b`) is left intact — an accepted residual."""
+    """Yield `(separator, segment)` pairs for the pipeline/list segments of a
+    tokenized command, split on the shell separators `; && || | |& &` — the
+    separator is the token that PRECEDED the segment (`None` for the first).
+    Best-effort: a separator glued inside a single shlex token (`a;b`) is left
+    intact — an accepted residual."""
     seg: list[str] = []
+    sep: str | None = None
     for tok in tokens:
         if tok in _BASH_SEPS:
             if seg:
-                yield seg
+                yield sep, seg
             seg = []
+            sep = tok
         else:
             seg.append(tok)
     if seg:
-        yield seg
+        yield sep, seg
 
 
 def _canon_target(candidate: str, eff_cwd: str) -> str | None:
@@ -359,7 +364,7 @@ def _canon_bash_write(command: str, payload_cwd: str) -> str | None:
     if not tokens:
         return None
     eff_cwd = git_cwd.effective_git_cwd(command, payload_cwd)
-    for seg in _split_segments(tokens):
+    for _sep, seg in _split_segments(tokens):
         hit = _segment_write_target(seg, eff_cwd)
         if hit:
             return hit
@@ -436,7 +441,8 @@ def _commit_deny_msg(target: str) -> str:
                 "`scripts/session-isolate.sh <task-name>`.")
     return (
         f"Refusing to run `git commit` in canon ({target}) from a live agent session. This command "
-        f"names no target this guard can read — neither `git -C <dir>` nor a leading `cd <dir> &&` "
+        f"names no target this guard can read — neither `git -C <dir>` nor a leading "
+        f"`cd <dir> &&` / `cd <dir> ;` "
         f"— and a `cd` does not persist between tool calls, so it is taken to run in the session's "
         f"own directory: canon. A commit there commits canon's index, and a linked worktree keeps a "
         f"SEPARATE index whose staged changes are invisible from here, so this would either fail "
