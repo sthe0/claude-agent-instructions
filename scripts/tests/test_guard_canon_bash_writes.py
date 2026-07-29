@@ -183,7 +183,7 @@ def test_leading_cd_outside_safe_shape_stays_allowed(tmp_path):
     """Every shape the safe-shape allowlist declines keeps today's ALLOW verdict
     for an absolute, nonexistent `cd` target. Grouped by the clause that excludes
     it. Each was run under `bash -c` in a scratch cwd and observed: most write
-    nothing there, and the four that DO are marked as accepted lost denies —
+    nothing there, and the five that DO are marked as accepted lost denies —
     ALLOW is the right pin either way, since the rule buys the absence of false
     denies with a bounded class of lost ones."""
     core = make_core(tmp_path)
@@ -209,10 +209,15 @@ def test_leading_cd_outside_safe_shape_stays_allowed(tmp_path):
         # (e) a later `cd` can succeed where the leading one failed.
         f"cd {missing} ; cd /tmp && cp /tmp/a f",
         # (b) non-literal target — the text is not the path the shell will use,
-        # so the isdir premise the safe shape rests on does not hold. Measured:
-        # unset `$NOPE` collapses the target to /tmp, where the `cd` SUCCEEDS
-        # and the write lands — nothing reaches the original cwd.
+        # so the isdir premise the safe shape rests on does not hold. Where the
+        # collapsed target lands decides whether anything reaches the original
+        # cwd, and the two pins below fall on opposite sides of that.
+        # Measured: unset `$NOPE` collapses the target to /tmp, where the `cd`
+        # SUCCEEDS and the write lands — nothing reaches the original cwd.
         "cd /tmp/$NOPE ; echo b > s2",
+        # LOST DENY (measured: writes notes.md in the original cwd) — unset
+        # `$TASK` collapses the target to /home/the0/wt-, which does not exist,
+        # so this `cd` fails like a literal absent one.
         "cd /home/the0/wt-$TASK ; cp /tmp/a notes.md",
         # LOST DENY (measured: writes s2 in the original cwd) — an unmatched
         # glob expands to itself, so this `cd` fails like a literal absent one.
