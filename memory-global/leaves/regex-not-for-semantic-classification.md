@@ -4,7 +4,7 @@ description: A regex that classifies free-text MEANING to drive a hard block det
 type: reference
 schema: leaf/v1
 created: 2026-07-22
-last_verified: 2026-07-22
+last_verified: 2026-07-29
 ---
 
 ## Difficulty
@@ -28,28 +28,15 @@ Not all regex use in a hard-enforcement gate is the anti-pattern. The boundary:
 - **STRUCTURAL (legitimate regex)** — the regex reads TOOL-INVOCATION SHAPE, COMMAND SYNTAX, or a FILE PATH: does this Bash command match a known long-running-job pattern, does this tool call look like a timer-arm request, is this path inside a protected mount. These are decidable from the input's *structure*, not its meaning — a regex is the right determinization level and needs no judge behind it.
 - **SEMANTIC (the anti-pattern)** — the regex reads NATURAL-LANGUAGE MEANING to decide whether a hard block should fire: is this text a behavioral correction, is this text an outage escalation, is this text a request to do something risky. These require the prefilter → fail-open judge → block shape above.
 
-### Structural-vs-semantic audit of the hook suite
+### The live enumeration (supersedes the original hand audit)
 
-Enumerated every hard-enforcement site in the 35-hook suite (`grep` for the three enforcement contracts: PreToolUse `"permissionDecision": "deny"`, a Stop `"decision": "block"`, and `sys.exit(2)`/exit-code-2 — the last found nowhere in the suite). Eight files carry a hard-enforcement path; `hook-turn-end-gate.py` alone aggregates five independent guardians. Each is classified below.
+The original audit here was a hand-built table: `grep` for three enforcement contracts (PreToolUse `"permissionDecision": "deny"`, a Stop `"decision": "block"`, `sys.exit(2)`) across the hook suite, each hit classified by hand. It closed with a UNIVERSAL claim — "no further semantic hard-block was found in the suite" — that its own bounded domain cannot support: a regex driving a hard *behaviour* (a routed/dispatched/suppressed/recorded decision) rather than a deny/block/exit uses none of the three contracts and so is invisible to a grep built around them. A universally-quantified claim is only discharged against a mechanically enumerated domain (`CLAUDE.md` § On task resolution); a hand-built list is existential evidence about the sites someone thought to grep for.
 
-| Site | Reads | Class | Disposition |
-|---|---|---|---|
-| `hook-guard-destructive-rm.py` (deny) | shell command shape: `rm -rf` + interpolated-`$VAR` worst-case path expansion | STRUCTURAL | legitimate, unchanged |
-| `hook-guard-canon-readonly.py` (deny) | git state + a machine-local canon-path list, realpath-compared | STRUCTURAL | legitimate, unchanged |
-| `hook-multi-mount-search-guard.py` (deny) | `/proc/self/mounts` shape + recursive-search tool/command names (`find`/`rg`/`fd`/`grep -r`) | STRUCTURAL | legitimate, unchanged |
-| `hook-state-gate.py` (deny) | the `agentctl` engine node/state machine | STRUCTURAL | legitimate, unchanged |
-| `hook-scope-conflict.py` (deny + Stop block) | the cross-session `session_scope` registry (live path-overlap check) | STRUCTURAL | legitimate, unchanged |
-| `hook-plan-delivery-gate.py` (deny) | verbatim / normalized substring presence of the registered plan essence in delivered transcript text (exact bytes, not meaning) | STRUCTURAL | legitimate, unchanged — a byte/shape presence check, not a meaning classification |
-| `hook-escalation-diagnosis-gate.py` (deny) | `outage_escalation_detect` regex prefilter over free NL text | **SEMANTIC** | **FIXED this task** — prefilter-AND-`judge_outage_escalation` |
-| `hook-turn-end-gate.py` → `self_improvement_blockers` (Stop block) | `si_feedback_detect.find_signals` regex prefilter over free NL text | **SEMANTIC** | **FIXED this task** — prefilter-AND-`judge_feedback_signal` |
-| `hook-turn-end-gate.py` → `escalation_without_diagnosis_blockers` (Stop block) | `outage_escalation_detect` regex prefilter over free NL text (Stop-hook backstop for the PreToolUse gate above) | **SEMANTIC** | **FIXED this task** — same judge-backed `ctx.outage_escalation_sought` as the PreToolUse gate |
-| `hook-turn-end-gate.py` → `prose_binary_ask_blockers` (Stop block) | a punctuation prefilter + `agentctl.advisor.judge_binary_ask` over free NL text | SEMANTIC | **already correctly judge-backed** — this is the pre-existing exemplar the other two fixes mirror, not a new fix |
-| `hook-turn-end-gate.py` → `resolution_turn_blockers` (Stop block) | the `agentctl` `SessionState` (weight class, stage outcomes, resolution-gate flag) | STRUCTURAL | legitimate, unchanged |
-| `hook-turn-end-gate.py` → `long_job_autowake_blockers` (Stop block) | `long_job_detect` (Bash command-pattern shape) + `timer_arm_detect.waiter_armed` (tool-invocation shape: `run_in_background`/`CronCreate`) | STRUCTURAL | legitimate, unchanged |
+A follow-on task replaced the hand audit with a mechanical enumerator (`scripts/crutch-inventory.py`) over both this leaf's domain (regex-driven hard-outcome code sites, widened past the three-contract boundary) and a second domain never audited before — candidate decidable-rule statements left as prose. The classification is recorded as data in `scripts/crutch_registry.toml`, re-checked on every run by `scripts/verify-semantic-gates.py` so a regression cannot land silently. **That registry, not the table this section used to carry, is the live source of the current state of any site.** Full documentation of the mechanism — how a site gets a class, how to add one, and its honest limits — lives in [docs/operations/crutch-registry.md](../../docs/operations/crutch-registry.md).
 
-`closure_sought` (gates `prose_binary_ask_blockers` and `resolution_turn_blockers`) reads `timer_arm_detect.ask_emitted`/`timer_armed` — tool-invocation shape (was `AskUserQuestion` called, is a backgrounded `sleep` armed), not NL meaning — STRUCTURAL.
+As of the mechanical enumeration: **2042 sites total** (752 code + 166 code-file-rollup + 1124 prose — the prose count includes this leaf's own rewrite and its companion experience leaf, both self-registered by the loop that produced this text). **7 code sites are `semantic-guarded`** — a regex feeding a hard outcome with a fail-open judge on the same path, including the four sites that task classified semantic (three it fixed, one already judge-backed), now re-verified structurally rather than carried by memory — and **0 are `semantic-unguarded`**: the anti-pattern this leaf names does not currently exist anywhere in the enumerated domain, and the verifier fails the moment one is introduced. Three `decidable` prose rules in `CLAUDE.md` remain explicitly `defer`red, each with a named, dated reason (two blocked on the verifier's own landing, one judged not worth building yet relative to the size of the win) — the full deferral list is published in [docs/operations/crutch-registry.md](../../docs/operations/crutch-registry.md).
 
-**Result: the semantic-hard-block set is exactly four sites, and every one is prefilter-AND-fail-open-judge — no unguarded regex-only semantic decision remains.** Three of the four share two detector modules (`si_feedback_detect`, `outage_escalation_detect`) across three consumers (one PreToolUse gate — `hook-escalation-diagnosis-gate.py`; two Stop guardians — `self_improvement_blockers`, `escalation_without_diagnosis_blockers`); all three were unguarded regex-only decisions before this task and were fixed here. The fourth (`prose_binary_ask`) is a distinct semantic site backed by `judge_binary_ask` behind a punctuation prefilter — already prefilter-AND-judge before this task began, unchanged, and the pre-existing exemplar the other three now mirror. No further semantic hard-block was found in the suite — no additional fix or follow-up is named.
+**What this corrected claim is honestly built on, and what it is not.** The registry closes exactly the gap the original table's grep missed (hard behaviour, not only deny/block/exit) and adds a domain the original table never attempted (prose). It does not see dynamic pattern construction, a crutch expressed without a regex or a modal keyword, or cross-file semantic duplicates of the same rule — the full limits list is in the docs page above, restated there rather than here so the claim and its boundary do not drift apart. For the prose domain specifically, the honest word is "routed" (a new statement is surfaced and must be dispositioned by a model pass) — never "verified" (no mechanical judgement is made about whether a statement is genuine perception).
 
 ## See also
 

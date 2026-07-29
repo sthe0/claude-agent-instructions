@@ -38,14 +38,24 @@ Read-only, mechanical scans over the agent's OWN functional elements:
                         to — the reachability half of the same norm. Reachability
                         follows both markdown [](path) links and [[slug]]
                         wikilinks (resolved via a frontmatter name: index).
+  crutch-defer-overdue  a scripts/crutch_registry.toml entry disposed "defer"
+                        that has gone unreviewed past a horizon, keyed to that
+                        entry's own deferred_since date (an authored literal —
+                        see gen_crutch_registry.py's CLAUDE_MD_OVERRIDES).
+  crutch-registry-drift  the count of code sites verify-semantic-gates.py's
+                        own condition (a) finds unregistered has risen since
+                        the last scan (tracked in a small history file).
 
 The DECIDABLE rule is mechanized here; the PERCEPTION (is a flagged candidate
 worth re-norming, and how) stays the model's — this scanner only detects and
 lists, it never merges, moves, or edits.
 
-Never edits anything. `main()` prints the worklist and exits 1 if non-empty
-(0 if clean) — for use as a scriptable check; the SessionStart hook that
-drives this at session start is always fail-open regardless of this exit code.
+Never edits repo or memory content. `main()` prints the worklist and exits 1
+if non-empty (0 if clean) — for use as a scriptable check; the SessionStart
+hook that drives this at session start is always fail-open regardless of this
+exit code. One narrow exception: scan_crutch_regressions persists a small
+trend counter under ~/.local/state (external runtime bookkeeping, not repo or
+memory content) — see that function's own docstring.
 """
 from __future__ import annotations
 
@@ -56,6 +66,7 @@ import os
 import re
 import shlex
 import sys
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -451,6 +462,132 @@ def scan_ceiling_proximity(repo_root: Path) -> "list[Difficulty]":
     return out
 
 
+# Each "defer" entry carries its own deferred_since (an authored-literal
+# YYYY-MM-DD date in gen_crutch_registry.py's CLAUDE_MD_OVERRIDES, never
+# computed at generation time) so the horizon below is keyed per-entry, not
+# to the registry file's own mtime — which any unrelated tree change resets.
+CRUTCH_DEFER_HORIZON_DAYS = 90
+CRUTCH_REGISTRY_HISTORY_PATH = Path.home() / ".local" / "state" / "claude-crutch-registry-history.json"
+
+
+def _load_verify_semantic_gates(repo_root: Path):
+    """Fail-open: a syntax/import error in verify-semantic-gates.py must not
+    propagate through scan() and take down every other scanner's findings
+    for the session — this module's own "never re-derive, always fail-open"
+    norm (see scan_crutch_regressions' docstring) applies to the load step
+    too, not only to the calls that follow it."""
+    path = repo_root / "scripts" / "verify-semantic-gates.py"
+    if not path.is_file():
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location("self_diagnose_verify_semantic_gates", path)
+        if spec is None or spec.loader is None:
+            return None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    except Exception:
+        return None
+    return mod
+
+
+def _parse_deferred_since(value) -> "float | None":
+    """Parse a registry entry's deferred_since (YYYY-MM-DD, an authored
+    literal — see gen_crutch_registry.py's CLAUDE_MD_OVERRIDES) into a Unix
+    epoch. Returns None on anything missing/unparsable so a malformed or
+    absent date fails open (no finding) rather than crashing the scanner."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return time.mktime(time.strptime(value, "%Y-%m-%d"))
+    except ValueError:
+        return None
+
+
+def scan_crutch_regressions(
+    repo_root: Path,
+    history_path: "Path | None" = None,
+    defer_horizon_days: int = CRUTCH_DEFER_HORIZON_DAYS,
+) -> "list[Difficulty]":
+    """Advisory-only: scripts/crutch_registry.toml entries deferred past a
+    review horizon, and a rising trend in verify-semantic-gates.py's own
+    condition (a) (code sites with no registry entry at all).
+
+    Reuses verify-semantic-gates.py's find_regressions (never re-derives its
+    AST logic here) — this scanner only reads the registry's own disposition
+    field and tracks a small persisted count, mirroring the rest of this
+    module's "mechanize the rule part, never re-derive it elsewhere" norm.
+
+    Deliberate, narrow exception to this module's "never edits anything"
+    invariant (see module docstring): history_path is external runtime
+    bookkeeping (a trend counter under ~/.local/state), not repo or memory
+    content, so persisting it does not touch anything else this scanner is
+    meant to leave untouched. Fail-open: any I/O/parse/import error yields [].
+    """
+    out: "list[Difficulty]" = []
+    registry_path = repo_root / "scripts" / "crutch_registry.toml"
+    if not registry_path.is_file():
+        return out
+    vsg = _load_verify_semantic_gates(repo_root)
+    if vsg is None:
+        return out
+    try:
+        inv = vsg._load_inventory_module()
+        registry = inv._load_registry(registry_path)
+    except Exception:
+        return out
+
+    now = time.time()
+    for eid, entry in sorted(registry.items()):
+        if entry.get("disposition") != "defer":
+            continue
+        since_epoch = _parse_deferred_since(entry.get("deferred_since"))
+        if since_epoch is None:
+            continue
+        age_days = (now - since_epoch) / 86400
+        if age_days < defer_horizon_days:
+            continue
+        ground = str(entry.get("ground", ""))[:120]
+        out.append(
+            Difficulty(
+                "crutch-defer-overdue",
+                f"scripts/crutch_registry.toml#{eid}",
+                f"deferred entry ({entry.get('file', '?')}) unreviewed for >= {defer_horizon_days}d "
+                f"(deferred_since {entry.get('deferred_since')}, {age_days:.0f}d ago); ground: {ground}",
+            )
+        )
+
+    try:
+        missing, _stale, _reverted, _all_code = vsg.find_regressions(inv, repo_root / "scripts", registry_path)
+    except Exception:
+        return out
+
+    hpath = history_path if history_path is not None else CRUTCH_REGISTRY_HISTORY_PATH
+    prev_count = None
+    try:
+        if hpath.is_file():
+            prev_count = json.loads(hpath.read_text(encoding="utf-8")).get("missing_count")
+    except (OSError, json.JSONDecodeError, AttributeError):
+        prev_count = None
+
+    current_count = len(missing)
+    if isinstance(prev_count, int) and current_count > prev_count:
+        out.append(
+            Difficulty(
+                "crutch-registry-drift",
+                "scripts/crutch_registry.toml",
+                f"unregistered code sites (condition a) rose from {prev_count} to {current_count}",
+            )
+        )
+
+    try:
+        hpath.parent.mkdir(parents=True, exist_ok=True)
+        hpath.write_text(json.dumps({"missing_count": current_count}), encoding="utf-8")
+    except OSError:
+        pass
+
+    return out
+
+
 def default_memory_roots() -> "list[Path]":
     home = Path.home()
     roots: "list[Path]" = []
@@ -505,6 +642,7 @@ def scan(
             out.append(Difficulty(d.kind, _qualify(root, d.path), d.detail))
     if repo_root is not None:
         out.extend(scan_ceiling_proximity(repo_root))
+        out.extend(scan_crutch_regressions(repo_root))
     return out
 
 

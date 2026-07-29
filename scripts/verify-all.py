@@ -34,6 +34,7 @@ CHECKS: list[str] = [
     "verify-config-root-refs",
     "rule-salience-report",
     "verify-terms",
+    "verify-semantic-gates",
 ]
 
 # Checks whose main() takes its own flags instead of the shared --staged.

@@ -102,6 +102,8 @@ ADVISORY_KINDS = frozenset(
         "dangling-pointer",
         "oversized-index",
         "no-root-index",
+        "crutch-defer-overdue",
+        "crutch-registry-drift",
     }
 )
 
@@ -137,6 +139,8 @@ REMEDIATION = {
     "oversized-index": "spin off a sub-index (memory-hierarchy.md)",
     "no-root-index": "create the root MEMORY.md for that memory root",
     "policy-flag": "invoke `self-improvement` to adjust the policy, then record the adjustment and the observed metric movement in memory-global/leaves/policy-effectiveness-tracking.md",
+    "crutch-defer-overdue": "re-run scripts/gen_crutch_registry.py and re-disposition the entry (keep it deferred with an updated ground, or remediate it)",
+    "crutch-registry-drift": "run scripts/verify-semantic-gates.py to see the newly-unregistered sites, then re-run scripts/gen_crutch_registry.py to classify and register them",
 }
 
 # --- producers --------------------------------------------------------------

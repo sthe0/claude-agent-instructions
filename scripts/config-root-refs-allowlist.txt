@@ -88,9 +88,9 @@ memory-global/leaves/system-knowledge/harness-read-dedup.md:45  # keep:harness-o
 memory-global/leaves/system-knowledge/instructions-repo-layout.md:106  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
 memory-global/leaves/token-economy-plan.md:30  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 memory-global/leaves/token-economy-plan.md:66  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
-scripts/README.md:34  # keep:protected-path — hook-guard-destructive-rm.py row lists ~/.claude among the protected paths it guards
-scripts/README.md:81  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-scripts/README.md:116  # keep:enumerator-self-ref — documents this enumerator; quotes the very pattern it searches
+scripts/README.md:36  # keep:protected-path — hook-guard-destructive-rm.py row lists ~/.claude among the protected paths it guards
+scripts/README.md:83  # keep:legacy-fallback — migrate-to-isolated.sh relocates the in-place/legacy ~/.claude system install
+scripts/README.md:118  # keep:enumerator-self-ref — verify-config-root-refs.py documents this enumerator; quotes the very pattern it searches
 skills/overcome-difficulty/SKILL.md:57  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 skills/overcome-difficulty/policy.md:57  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 skills/self-improvement/SKILL.md:76  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
