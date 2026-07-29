@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -193,6 +194,115 @@ def deny_if(text, runner):
     rollups = inv.enumerate_code_file_rollups(tmp_path)
     assert len(rollups) == 1
     assert rollups[0].judge_guarded is True
+
+
+# --- Git-tracked enumeration domain ---------------------------------------------
+
+def _git(*args, cwd):
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+
+def _init_git_repo(repo: Path) -> Path:
+    _git("init", "-q", cwd=repo)
+    _git("config", "user.email", "test@example.com", cwd=repo)
+    _git("config", "user.name", "Test", cwd=repo)
+    return repo
+
+
+def test_enumeration_domain_is_git_tracked_not_raw_working_tree(tmp_path):
+    """BLOCKING regression: a raw rglob walk enumerates untracked working-tree
+    files (e.g. a parallel session's in-progress WIP), so an untracked file
+    must NEVER be enumerated, while both a committed file and a
+    staged-but-uncommitted file (git add, no commit) must be — the commit
+    boundary this fix must not weaken (--check must still catch a newly
+    `git add`ed crutch before it's committed)."""
+    repo = _init_git_repo(tmp_path)
+    scripts_dir = repo / "scripts"
+    scripts_dir.mkdir()
+    leaves_dir = repo / "memory-global" / "leaves"
+    leaves_dir.mkdir(parents=True)
+
+    (scripts_dir / "committed_site.py").write_text(_HARD_OUTCOME_FIXTURE, encoding="utf-8")
+    (leaves_dir / "committed_leaf.md").write_text(
+        "# Heading\n\nYou must never skip this rule.\n", encoding="utf-8"
+    )
+    _git("add", "scripts/committed_site.py", "memory-global/leaves/committed_leaf.md", cwd=repo)
+    _git("commit", "-q", "-m", "initial", cwd=repo)
+
+    (scripts_dir / "staged_site.py").write_text(_NON_HARD_FIXTURE, encoding="utf-8")
+    _git("add", "scripts/staged_site.py", cwd=repo)
+
+    (scripts_dir / "untracked_site.py").write_text(_NON_HARD_FIXTURE, encoding="utf-8")
+    (leaves_dir / "untracked_leaf.md").write_text(
+        "# Heading\n\nYou must never see this rule.\n", encoding="utf-8"
+    )
+
+    code_files = {Path(s.file).name for s in inv.enumerate_code_sites(scripts_dir)}
+    assert "committed_site.py" in code_files
+    assert "staged_site.py" in code_files
+    assert "untracked_site.py" not in code_files
+
+    rollup_files = {Path(r.file).name for r in inv.enumerate_code_file_rollups(scripts_dir)}
+    assert "committed_site.py" in rollup_files
+    assert "staged_site.py" in rollup_files
+    assert "untracked_site.py" not in rollup_files
+
+    prose_names = {p.name for p in inv.discover_prose_paths(repo)}
+    assert "committed_leaf.md" in prose_names
+    assert "untracked_leaf.md" not in prose_names
+
+
+def test_tracked_files_immune_to_inherited_git_hook_env(tmp_path, monkeypatch):
+    """BLOCKING regression, found by actually running this repo's own
+    githooks/pre-commit (which runs verify-all.py --staged, which reaches
+    crutch-inventory.py through verify-semantic-gates.py): a git hook process
+    inherits GIT_DIR / GIT_INDEX_FILE / GIT_PREFIX set by git for the OUTER
+    commit. With GIT_PREFIX="" (empty, i.e. "invoked from repo root") and
+    GIT_WORK_TREE unset, git silently makes `-C <subdir>` a no-op for path
+    relativization: `ls-files` reports repo-root-relative paths regardless of
+    `-C`, and `rev-parse --show-toplevel` echoes the `-C`'d subdir back as if
+    IT were the toplevel. Combined, every resolved tracked path landed outside
+    the queried subtree and enumeration silently collapsed to zero sites —
+    caught only by running the real pre-commit hook, not by any fixture that
+    invokes git from a clean environment. This test poisons the CURRENT
+    process's environment with exactly that shape and asserts enumeration is
+    unaffected."""
+    repo = _init_git_repo(tmp_path)
+    scripts_dir = repo / "scripts"
+    scripts_dir.mkdir()
+    (scripts_dir / "committed_site.py").write_text(_HARD_OUTCOME_FIXTURE, encoding="utf-8")
+    _git("add", "scripts/committed_site.py", cwd=repo)
+    _git("commit", "-q", "-m", "initial", cwd=repo)
+
+    git_dir = subprocess.run(
+        ["git", "rev-parse", "--git-dir"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    git_dir_abs = (repo / git_dir).resolve()
+    monkeypatch.setenv("GIT_DIR", str(git_dir_abs))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(git_dir_abs / "index"))
+    monkeypatch.setenv("GIT_PREFIX", "")
+    monkeypatch.delenv("GIT_WORK_TREE", raising=False)
+
+    inv._tracked_files.cache_clear()
+    try:
+        sites = inv.enumerate_code_sites(scripts_dir)
+        rollups = inv.enumerate_code_file_rollups(scripts_dir)
+    finally:
+        inv._tracked_files.cache_clear()
+
+    assert any(Path(s.file).name == "committed_site.py" for s in sites)
+    assert any(Path(r.file).name == "committed_site.py" for r in rollups)
+
+
+def test_git_tracked_helper_falls_back_to_rglob_outside_git(tmp_path):
+    """The existing tmp_path-based unit tests above rely on this fallback:
+    pytest's tmp_path is not inside a git checkout, so enumeration must still
+    work via a plain recursive walk."""
+    (tmp_path / "loose_site.py").write_text(_NON_HARD_FIXTURE, encoding="utf-8")
+    code_files = {Path(s.file).name for s in inv.enumerate_code_sites(tmp_path)}
+    assert "loose_site.py" in code_files
+    rollup_files = {Path(r.file).name for r in inv.enumerate_code_file_rollups(tmp_path)}
+    assert "loose_site.py" in rollup_files
 
 
 # --- Domain B: prose sites -----------------------------------------------------

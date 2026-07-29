@@ -124,9 +124,12 @@ from __future__ import annotations
 
 import argparse
 import ast
+import functools
 import hashlib
 import json
+import os
 import re
+import subprocess
 import sys
 import tomllib
 from dataclasses import asdict, dataclass, field
@@ -135,6 +138,65 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 REGISTRY_PATH = SCRIPTS_DIR / "crutch_registry.toml"
+
+
+def _clean_git_env() -> dict[str, str]:
+    """The ambient environment with every `GIT_*` variable stripped. A caller
+    invoked as a git hook (this repo's own pre-commit) inherits GIT_DIR /
+    GIT_INDEX_FILE / GIT_PREFIX set for the OUTER git process; GIT_PREFIX in
+    particular makes `-C <subdir>` a no-op for path relativization (ls-files
+    reports repo-root-relative paths even without --full-name) and makes
+    `rev-parse --show-toplevel` echo the -C'd subdir back as if it were the
+    toplevel. Stripping GIT_* forces fresh, `-C`-rooted discovery so this
+    helper's result does not depend on who happens to have invoked us."""
+    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+
+@functools.lru_cache(maxsize=None)
+def _tracked_files(root: Path) -> frozenset[Path] | None:
+    """The git-tracked (committed + staged) file set of the repo containing
+    `root`, as absolute paths, or None if `root` is not inside a git checkout
+    (or git is unavailable) — callers then fall back to a raw directory walk.
+    Committed AND staged-but-uncommitted files are both included (`git
+    ls-files` reads the index, not the working tree), so a newly `git add`ed
+    crutch is still caught; a plain untracked file is not. `--full-name`
+    plus resolving against `--show-toplevel` (rather than `root` itself)
+    keeps this correct when `root` is a subdirectory of the repo, since
+    `ls-files` without `--full-name` reports paths relative to the invoked
+    directory, not the repo root."""
+    env = _clean_git_env()
+    try:
+        toplevel = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            check=True,
+            text=True,
+            env=env,
+        ).stdout.strip()
+        listing = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "-z", "--full-name"],
+            capture_output=True,
+            check=True,
+            env=env,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    toplevel_path = Path(toplevel)
+    return frozenset(
+        toplevel_path / entry for entry in listing.decode("utf-8").split("\0") if entry
+    )
+
+
+def _list_py_files(root: Path) -> list[Path]:
+    """The *.py files under `root`, restricted to the git-tracked set when
+    `root` is inside a git checkout so an untracked working-tree file (e.g.
+    another session's WIP) never enters the enumeration domain; falls back
+    to a recursive walk when git is unavailable."""
+    tracked = _tracked_files(root)
+    if tracked is None:
+        return sorted(root.rglob("*.py"))
+    return sorted(p for p in tracked if p.suffix == ".py" and p.is_relative_to(root))
+
 
 # --- Domain A: code sites ---------------------------------------------------
 
@@ -387,7 +449,7 @@ def enumerate_code_sites(root: Path) -> list[CodeSite]:
     locally reaches a hard-outcome sink, or both. Deterministic: files and
     scopes are visited and returned in a fixed sorted order."""
     sites: list[CodeSite] = []
-    for path in sorted(root.rglob("*.py")):
+    for path in _list_py_files(root):
         collected = _collect_file(path)
         if collected is None:
             continue
@@ -447,7 +509,7 @@ def enumerate_code_file_rollups(root: Path) -> list[FileRollup]:
     that calls any judge_*/detect function in that file) would otherwise
     vanish without a trace."""
     rollups: list[FileRollup] = []
-    for path in sorted(root.rglob("*.py")):
+    for path in _list_py_files(root):
         collected = _collect_file(path)
         if collected is None:
             continue
@@ -596,18 +658,34 @@ def enumerate_prose_sites(paths: list[Path]) -> list[ProseSite]:
 
 def discover_prose_paths(repo_root: Path) -> list[Path]:
     """The real-usage file list for Domain B, per the stage-1 material:
-    CLAUDE.md, skills/**/SKILL.md, skills/**/policy.md, memory-global/leaves/**."""
-    paths: set[Path] = set()
+    CLAUDE.md, skills/**/SKILL.md, skills/**/policy.md, memory-global/leaves/**.
+    Restricted to the git-tracked set when `repo_root` is inside a git
+    checkout (see `_tracked_files`); falls back to the raw directory walk
+    otherwise."""
     claude_md = repo_root / "CLAUDE.md"
-    if claude_md.exists():
-        paths.add(claude_md)
     skills_dir = repo_root / "skills"
-    if skills_dir.exists():
-        paths.update(skills_dir.rglob("SKILL.md"))
-        paths.update(skills_dir.rglob("policy.md"))
     leaves_dir = repo_root / "memory-global" / "leaves"
-    if leaves_dir.exists():
-        paths.update(leaves_dir.rglob("*.md"))
+
+    tracked = _tracked_files(repo_root)
+    if tracked is None:
+        paths: set[Path] = set()
+        if claude_md.exists():
+            paths.add(claude_md)
+        if skills_dir.exists():
+            paths.update(skills_dir.rglob("SKILL.md"))
+            paths.update(skills_dir.rglob("policy.md"))
+        if leaves_dir.exists():
+            paths.update(leaves_dir.rglob("*.md"))
+        return sorted(paths)
+
+    paths = set()
+    if claude_md in tracked:
+        paths.add(claude_md)
+    for p in tracked:
+        if p.is_relative_to(skills_dir) and p.name in ("SKILL.md", "policy.md"):
+            paths.add(p)
+        elif p.is_relative_to(leaves_dir) and p.suffix == ".md":
+            paths.add(p)
     return sorted(paths)
 
 
