@@ -11,3 +11,5 @@ Three disciplines keep the mirror honest:
 - **Mechanically linted.** [lint-cursor-mirror.py](../../cursor/scripts/lint-cursor-mirror.py) (in `verify-all` / pre-commit) checks skill/specialization parity, `**TRIGGER:**` markers, the `resolution_confirmed_by_user` rule, forbids the invented path `~/.claude-agent/scripts` (scripts live under `~/claude-agent-instructions/scripts/`), requires the canon self-diagnose path, and requires an explicit Claude-Code-only caveat whenever the mirror mentions hook gates / "blocks the turn" (Cursor has no SessionStart/Stop hooks).
 
 At runtime the rule is wired to `~/.cursor/rules/claude-code-sync.mdc` by `setup-symlinks.sh`, the same single wiring command that installs the Claude-side symlinks.
+
+Cursor sessions still run the `agentctl` spine when the engine is available (CLI + hooks); the mirror's thin prose must not be read as a hand-walk carve-out. Claude Code's `AskUserQuestion` maps to Cursor's **AskQuestion** when that tool is attached (otherwise ask the same fixed-choice question in prose).

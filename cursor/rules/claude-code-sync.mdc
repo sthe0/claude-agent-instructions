@@ -23,7 +23,7 @@ There is no separate manager subagent. Coordinate every substantive task yoursel
 |---|---|---|
 | **Chat** | Bare "ok"/"thanks", clarification question, opinion, ≤ 3-sentence factual answer with no file changes | Answer directly; no plan, no specialization read, no memory record |
 | **Small change** | ≤ `small-change-max-lines` changed lines, single file, no architectural decision, no external / irreversible action, no new dependency, no public-API change | Do it yourself; optionally consult a specialization SKILL.md inline; no plan-approval gate |
-| **Substantive** | Anything not covered above | Full coordination: produce a plan (apply `planner` principles), get user approval, execute step by step applying the relevant specialization principles |
+| **Substantive** | Anything not covered above | Full coordination via `agentctl` (classify → TOML plan → plan-review → present/approve → execute → verify-final); markdown hand-walk only if engine unavailable |
 
 When in doubt — pick the heavier class once, downgrade if reality fits a lighter one. Do not silently upgrade (scope creep without approval).
 
@@ -33,14 +33,19 @@ Numeric thresholds (`small-change-max-lines`, `max-recursion-depth`, budget tier
 
 ### On a substantive task
 
-1. Restate the goal and a **done criterion** — mark as *measurable* (test, command output, file present) or *acceptance-review* (user accepts on review when no objective check exists).
-2. Produce a markdown plan in-thread (using `planner` principles, read inline — see § Specializations in Cursor).
-3. Run a critical **plan review** before presenting: an inline adversarial pass over the plan's reasoning and internal consistency (`thinker` principles — in Claude Code this is a machine-blocked gate, `agentctl plan-review`, before `approve` and before every `replan`; in Cursor apply it inline). Then get user approval on the plan before execution. This is a **hard gate** — never skip it.
-4. Carry out the plan step by step in this same Cursor session, applying the relevant specialization principles.
+1. Restate the goal and a **done criterion** — *measurable* (test, command output, file present) or *acceptance-review* (user accepts on review when no objective check exists).
+2. Drive with **`agentctl`**: `classify` → TOML plan under `~/.claude-agent/plans/` → `plan-review` (inline `thinker` cognition; record via `agentctl plan-review` when using the engine) → present/approve → execute stages → `verify-final`. Commands: `cd ~/claude-agent-instructions/scripts && python3 -m agentctl <cmd>`. Live state: `agentctl status`. Apply specialization principles in-thread at each leaf.
+3. **Plan approval is a hard gate** before any production Edit — never skip it.
+4. Markdown hand-walk is **only** the fallback when `agentctl` is unavailable (`memory-global/leaves/spine-fallback.md`) — do not treat this thin mirror as license to skip the engine when it runs.
 
 Coordination cycle: Need → Options → Plan → Resources → Execution → Verification → (done? — no → back to Need).
 
 **Verification** by criterion type: *measurable* — run the check and read the result; *acceptance-review* — present the result and ask the user explicitly for accept / reject.
+
+
+### Fixed-choice asks (AskQuestion)
+
+Claude Code's `AskUserQuestion` maps to Cursor's **AskQuestion** tool when the host attaches it; if AskQuestion is not in the tool list, ask the same fixed-choice question in prose (Recommended first). Do not invent a settings toggle — attachment is host/model-gated.
 
 ## Acting without asking
 
