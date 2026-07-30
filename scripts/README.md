@@ -22,6 +22,7 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 | [core-difficulty-digest.py](core-difficulty-digest.py) | Pull difficulty records from every configured channel, cluster by functional ground (reusing `record-experience.py` search), compute mass = Σseverity, and flag clusters ≥ `core-difficulty-mass-threshold` or any critical (ADR-0001 difficulty-accumulation); flags only — never edits Core |
 | [cost-report.py](cost-report.py) | Aggregate `~/.local/log/claude-spawn-costs.jsonl` (totals, by kind/tier/day, depth/marker distributions, refused events) |
 | [crutch-inventory.py](crutch-inventory.py) | Mechanically enumerate both crutch domains (regex-driven hard-outcome code sites via AST/import-graph; candidate decidable-rule prose statements in CLAUDE.md/SKILL.md/policy.md/leaves) with zero classification; `--check` fails if any enumerated site lacks a disposition in `crutch_registry.toml` |
+| [cursor-launchers.sh](cursor-launchers.sh) | Cursor backend registration on the shared agent-dispatch library: sourced shell functions (`cursor-task`, per-profile `cursor-<P>`); no plain-launch twin (name taken by the CLI binary); runs on the user's `~/.cursor`; source from `~/.bashrc` |
 | [doctor.sh](doctor.sh) | Readiness preflight ("am I ready to start?") for a new user: checks `claude` CLI on PATH, `$CLAUDE_AGENT_HOME/CLAUDE.md` symlink into the repo, engine hooks (state-gate + engine-start) wired in settings.json, `agentctl` importable, git hooks installed; read-only, exits non-zero on any hard failure |
 | [edit-ledger.py](edit-ledger.py) | Query CLI over the durable edit-ledger: `by-session <id>` / `by-file <path>`, `--json` for raw records; read-only |
 | [enter-task.sh](enter-task.sh) | Org-neutral entry point for starting work on a task: resolves workspace (git worktree default) and optional tracker backend, derives task name + branch, wires `.claude`; prints the project cwd as final stdout; machine-local backends attach as plugins |
@@ -146,7 +147,7 @@ Sourced companions under `project_entry/` (not top-level inventory entries — `
 
 | Script | Purpose |
 |---|---|
-| [agent-dispatch.sh](project_entry/agent-dispatch.sh) | Backend-agnostic task-entry dispatch (`_dispatch_agent`, onboard, usage); backends register five descriptor functions and thin entry points (see `claude-launchers.sh`) |
+| [agent-dispatch.sh](project_entry/agent-dispatch.sh) | Backend-agnostic task-entry dispatch (`_dispatch_agent`, onboard, usage); backends register five descriptor functions and thin entry points (see `claude-launchers.sh`, `cursor-launchers.sh`) |
 
 ## Change attribution
 

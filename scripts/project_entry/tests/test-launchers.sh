@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Hermetic test for claude-launchers.sh + auth-profiles.sh.
+# Hermetic test for claude-launchers.sh + cursor-launchers.sh + auth-profiles.sh.
 #
 # Stubs:
 #   CLAUDE_AUTH_PROFILE_DIR  -> temp dir with stub eliza/team/personal profiles
+#   CURSOR_AUTH_PROFILE_DIR  -> temp dir with stub personal profile (probe var)
 #   ENTER_TASK_BIN           -> stub enter-task.sh (echoes a canned dir)
 #   OPENING_BIN              -> stub opening.py (default: exit 3, suppressed —
 #                               keeps every pre-existing case hermetic)
-#   claude binary            -> stub in $TMP added to PATH front (records env/args)
+#   claude / cursor-agent    -> stubs in $TMP added to PATH front (record env/args)
 #
-# No real enter-task/claude/git is called. Exit 0 on all-pass.
+# No real enter-task/claude/cursor-agent/git is called. Exit 0 on all-pass.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -84,20 +85,48 @@ if [ "$#" -gt 0 ]; then
 fi
 SCRIPT
 chmod +x "$FAKE_CLAUDE"
-# Prepend TMP so command claude finds the stub.
+
+# ── Stub cursor auth-profile directory ───────────────────────────────────────
+export CURSOR_AUTH_PROFILE_DIR="$TMP/cursor-auth-profiles.d"
+mkdir -p "$CURSOR_AUTH_PROFILE_DIR"
+cat >"$CURSOR_AUTH_PROFILE_DIR/personal.sh" <<'PROFILE'
+export TEST_CURSOR_PERSONAL_VAR=cursor-personal-active
+PROFILE
+
+# ── Stub cursor-agent binary ─────────────────────────────────────────────────
+# command cursor-agent bypasses functions, so we provide a real binary at PATH front.
+export CURSOR_ENV_RECORDED="$TMP/cursor-env.log"
+export CURSOR_ARGS="$TMP/cursor-args.log"
+: >"$CURSOR_ENV_RECORDED" >"$CURSOR_ARGS"
+
+FAKE_CURSOR="$TMP/cursor-agent"
+cat >"$FAKE_CURSOR" <<'SCRIPT'
+#!/usr/bin/env bash
+env >> "$CURSOR_ENV_RECORDED"
+# NUL-delimited: same idiom as the claude stub (multi-line opening prompts).
+if [ "$#" -gt 0 ]; then
+  printf '%s\0' "$@" >> "$CURSOR_ARGS"
+fi
+SCRIPT
+chmod +x "$FAKE_CURSOR"
+
+# Prepend TMP so command claude / cursor-agent find the stubs.
 export PATH="$TMP:$PATH"
 
 # Onboard call-log (defined before reset_logs so the function can clear it).
 export ONBOARD_LOG="$TMP/onboard.log"
 : >"$ONBOARD_LOG"
 
-# ── Source the launchers (profile dir is already set via env) ────────────────
+# ── Source the launchers (profile dirs already set via env) ──────────────────
 # shellcheck source=scripts/claude-launchers.sh
 source "$SCRIPTS_DIR/claude-launchers.sh"
+# shellcheck source=scripts/cursor-launchers.sh
+source "$SCRIPTS_DIR/cursor-launchers.sh"
 
 # ── Helper: reset per-test log files ─────────────────────────────────────────
 reset_logs() {
-  : >"$ET_CALLS" >"$CLAUDE_ENV_RECORDED" >"$CLAUDE_ARGS" >"$ONBOARD_LOG"
+  : >"$ET_CALLS" >"$CLAUDE_ENV_RECORDED" >"$CLAUDE_ARGS" \
+    >"$CURSOR_ENV_RECORDED" >"$CURSOR_ARGS" >"$ONBOARD_LOG"
 }
 
 # ── Helper: read the NUL-delimited CLAUDE_ARGS log into _CLAUDE_ARGV ─────────
@@ -107,6 +136,33 @@ _claude_argv() {
   while IFS= read -r -d '' _item; do
     _CLAUDE_ARGV+=("$_item")
   done <"$CLAUDE_ARGS"
+}
+
+# ── Helper: read the NUL-delimited CURSOR_ARGS log into _CURSOR_ARGV ─────────
+_cursor_argv() {
+  _CURSOR_ARGV=()
+  local _item
+  while IFS= read -r -d '' _item; do
+    _CURSOR_ARGV+=("$_item")
+  done <"$CURSOR_ARGS"
+}
+
+# _assert_cursor_argv <label> [expected_arg]...
+_assert_cursor_argv() {
+  local _label="$1"; shift
+  _cursor_argv
+  if [[ "${#_CURSOR_ARGV[@]}" -eq "$#" ]]; then
+    local _i=0 _mismatch=0 _exp
+    for _exp in "$@"; do
+      [[ "${_CURSOR_ARGV[_i]}" == "$_exp" ]] || _mismatch=1
+      ((_i++))
+    done
+    if [[ "$_mismatch" -eq 0 ]]; then
+      ok "$_label"
+      return
+    fi
+  fi
+  fail "$_label (got: ${_CURSOR_ARGV[*]:-<empty>}; want: $*)"
 }
 
 # ── Onboard global setup — empty hook dir so existing tests are unaffected ───
@@ -802,6 +858,104 @@ if [[ "${#_CLAUDE_ARGV[@]}" -eq 1 && "${_CLAUDE_ARGV[0]}" == "-c" ]] \
   ok "opening:crash-suppresses-loudly"
 else
   fail "opening:crash-suppresses-loudly (argv: ${_CLAUDE_ARGV[*]:-<empty>}, stderr: $(cat "$_se_crash"))"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Test 16 — cursor backend: function presence, in-place, enter, argv, env
+# ═══════════════════════════════════════════════════════════════════════════
+printf '\n--- cursor backend ---\n'
+
+for _fn in cursor-task cursor-personal; do
+  if declare -f "$_fn" &>/dev/null; then
+    ok "$_fn is defined"
+  else
+    fail "$_fn is NOT defined"
+  fi
+done
+
+# Bare cursor-personal -> in-place launch of cursor-agent in cwd
+reset_logs
+cursor-personal 2>/dev/null || true
+if [[ -s "$ET_CALLS" ]]; then
+  fail "bare cursor-personal should NOT call enter-task (et-calls: $(cat "$ET_CALLS"))"
+else
+  ok "bare cursor-personal: enter-task not called (in-place)"
+fi
+if [[ -s "$CURSOR_ENV_RECORDED" ]]; then
+  ok "bare cursor-personal: cursor-agent launched in-place"
+else
+  fail "bare cursor-personal: cursor-agent was not launched"
+fi
+if grep -qF "PWD=$PWD" "$CURSOR_ENV_RECORDED"; then
+  ok "bare cursor-personal: launched in cwd"
+else
+  fail "bare cursor-personal: PWD mismatch (want PWD=$PWD)"
+fi
+
+# cursor-personal <name> -> --name forwarded; launch inside returned dir
+reset_logs
+cursor-personal mysmoke 2>/dev/null || true
+if grep -qF -- '--name mysmoke' "$ET_CALLS"; then
+  ok "cursor-personal <name>: --name forwarded to enter-task"
+else
+  fail "cursor-personal <name>: --name not forwarded (et-calls: $(cat "$ET_CALLS"))"
+fi
+if grep -qF "PWD=$ET_DIR" "$CURSOR_ENV_RECORDED"; then
+  ok "cursor-personal <name>: launched inside enter-task dir"
+else
+  fail "cursor-personal <name>: not launched in enter-task dir (PWD want=$ET_DIR)"
+fi
+
+# Opening prompt is cursor-agent's first argv; trailing user flags after it
+reset_logs
+printf 'CURSOR-PROMPT' >"$OPEN_TEXT.cursor"
+_make_opening_stub "$TMP/opening-cursor.sh" "$OPEN_TEXT.cursor" 0
+OPENING_BIN="$TMP/opening-cursor.sh" \
+  cursor-personal ABC-123 --trust --force 2>/dev/null || true
+_assert_cursor_argv "cursor:opening-prompt-then-flags" \
+  "CURSOR-PROMPT" "--trust" "--force"
+
+# Personal profile probe var present in cursor-agent env
+if grep -q 'TEST_CURSOR_PERSONAL_VAR=cursor-personal-active' "$CURSOR_ENV_RECORDED"; then
+  ok "cursor-personal: personal profile probe var in cursor-agent env"
+else
+  fail "cursor-personal: probe var missing (recorded: $(grep TEST_CURSOR "$CURSOR_ENV_RECORDED" || echo none))"
+fi
+
+# Usage: cursor-personal, never claude-personal; no lowercase 'claude'; no See also
+reset_logs
+_cur_help="$(cursor-personal --help 2>/dev/null)"
+if printf '%s\n' "$_cur_help" | grep -q 'Usage: cursor-personal'; then
+  ok "cursor-personal --help: Usage names cursor-personal"
+else
+  fail "cursor-personal --help: missing Usage: cursor-personal (got: $_cur_help)"
+fi
+if printf '%s\n' "$_cur_help" | grep -q 'claude-personal'; then
+  fail "cursor-personal --help: must not mention claude-personal"
+else
+  ok "cursor-personal --help: no claude-personal"
+fi
+# Case-sensitive: shared usage still names CLAUDE_LAUNCH_ASSUME_YES=1 (uppercase).
+if printf '%s\n' "$_cur_help" | grep -q 'claude'; then
+  fail "cursor-personal --help: contains lowercase token 'claude' (got: $_cur_help)"
+else
+  ok "cursor-personal --help: no lowercase token claude"
+fi
+if printf '%s\n' "$_cur_help" | grep -q 'See also:'; then
+  fail "cursor-personal --help: must not contain See also: (empty plain_cmd)"
+else
+  ok "cursor-personal --help: no See also: line"
+fi
+
+# Negative: CLAUDE_CONFIG_DIR is NOT present in recorded cursor-agent environment
+reset_logs
+# Ensure the parent shell does not leak CLAUDE_CONFIG_DIR into the child.
+unset CLAUDE_CONFIG_DIR
+cursor-personal 2>/dev/null || true
+if grep -q '^CLAUDE_CONFIG_DIR=' "$CURSOR_ENV_RECORDED"; then
+  fail "cursor-agent env must not contain CLAUDE_CONFIG_DIR"
+else
+  ok "cursor-agent env: CLAUDE_CONFIG_DIR absent"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
