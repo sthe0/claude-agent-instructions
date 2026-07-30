@@ -10,6 +10,9 @@
 set -euo pipefail
 
 export CLAUDE_SKIP_ONBOARD="${CLAUDE_SKIP_ONBOARD:-1}"
+# The Core checkout is not under an arc project mount; pin git worktrees so the
+# smoke does not depend on whichever workspace backend the ambient cwd selects.
+export CLAUDE_WORKSPACE_BACKEND="${CLAUDE_WORKSPACE_BACKEND:-git}"
 
 CANON="${HOME}/claude-agent-instructions"
 LAUNCHERS="${CANON}/scripts/cursor-launchers.sh"
