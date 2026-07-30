@@ -16,7 +16,7 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 | [apply-settings.sh](apply-settings.sh) | Merge the versioned policy base (`settings/base.json`) into machine-local `$CLAUDE_AGENT_HOME/settings.json` (additive, idempotent) |
 | [budget-calibration.py](budget-calibration.py) | Calibrate the spawn budget tiers from recorded spend: groups realized cost by (kind × tier) and by task-type (weight_class × deliverable_kind) over `--last N`/`--all`, flags tiers to raise/lower vs the configured `budget-*-usd` labels; `--check` for the nudge hook. Read-only over both ledgers. See `memory-global/leaves/policy-effectiveness-tracking.md` |
 | [check-org-neutral.py](check-org-neutral.py) | Pre-publish gate: exit 1 if text destined for a PUBLIC venue (Core repo issues/PRs/commits) contains org-internal markers; run BEFORE posting, never after (watcher e-mails are irrecoverable) |
-| [claude-launchers.sh](claude-launchers.sh) | Sourced shell functions for Claude Code sessions (`claude-task` and per-profile `claude-<P>` launchers); source from `~/.bashrc`; org-neutral Core with machine-local profile plugins |
+| [claude-launchers.sh](claude-launchers.sh) | Claude backend registration on the shared agent-dispatch library: sourced shell functions (`claude-task`, per-profile `claude-<P>`, `claude-agent`); source from `~/.bashrc`; org-neutral Core with machine-local profile plugins |
 | [configure-identity.sh](configure-identity.sh) | Idempotent: create `$CLAUDE_AGENT_HOME/agent-identity.local` with an auto-detected `difficulty_channel` (`github` unless the machine-local plugin detect hook names another channel) if the file is absent; called by `setup-symlinks.sh` |
 | [consensus-synthesizer.py](consensus-synthesizer.py) | Active synthesizer (ADR-0001 Variant D): normalize → cluster (reuses the digest) → detect-conflict → induce-invariant (critique primitive: commonality/difference) → ranked menu → promote-to-layer. PROPOSES only — no veto, no auto-edit; Core stays byte-unchanged until a human approves via planner → approval → developer |
 | [core-difficulty-digest.py](core-difficulty-digest.py) | Pull difficulty records from every configured channel, cluster by functional ground (reusing `record-experience.py` search), compute mass = Σseverity, and flag clusters ≥ `core-difficulty-mass-threshold` or any critical (ADR-0001 difficulty-accumulation); flags only — never edits Core |
@@ -139,6 +139,14 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 | [verify-tests-accompany-code.py](verify-tests-accompany-code.py) | `commit-msg` advisory (warn-only, never blocks): nudge when staged non-test `scripts/**.py` carries no test delta; `[skip-test-guard: <reason>]` trailer suppresses it |
 | [verify-ticket-plan-sync.py](verify-ticket-plan-sync.py) | Compare a ticket's posted plan against the local TOML via an embedded/extracted `plan_sha256` marker (`--emit-marker` / `--plan … --comment-file -` / `--marker`); tracker-agnostic, `--selftest` covers the OK/DRIFT/NO-PLAN cases |
 <!-- inventory:scripts:end -->
+
+## Project-entry libraries
+
+Sourced companions under `project_entry/` (not top-level inventory entries — `verify-readme.py` catalogues `scripts/*` and `cursor/scripts/*` only):
+
+| Script | Purpose |
+|---|---|
+| [agent-dispatch.sh](project_entry/agent-dispatch.sh) | Backend-agnostic task-entry dispatch (`_dispatch_agent`, onboard, usage); backends register five descriptor functions and thin entry points (see `claude-launchers.sh`) |
 
 ## Change attribution
 
