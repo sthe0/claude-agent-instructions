@@ -4,7 +4,7 @@ description: Difficulty it removes — you need a headless agent spawn inside Cu
 type: reference
 schema: leaf/v1
 created: 2026-06-03
-last_verified: 2026-06-24
+last_verified: 2026-07-30
 ---
 
 # Cursor Agent CLI spawn (Cursor sessions)
@@ -71,6 +71,6 @@ Both: recursion cap from `config.md`, `CURSOR_API_KEY` from env or `~/.cursor_ap
 ~/claude-agent-instructions/scripts/spawn-cursor-specialist.py --smoke --workspace /path/to/project
 ```
 
-> verified by: smoke on the0 2026-06-03 — `agent` 2026.06.02-8c11d9f, exit 0, `RESOLVED: ping` (escape), `COMPLETED: ping` (specialist).
+> verified by: smoke on the0 2026-07-30 — `agent` 2026.07.23-e383d2b, exit 0, `RESOLVED: ping` (escape; Cursor wrappers use legacy line-start marker scan — they do not invoke `claude`-backed `marker_extract`). Specialist smoke: run `--smoke` after install.
 
 ## See also

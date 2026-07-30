@@ -30,7 +30,7 @@ bash scripts/verify-layout-contract.sh # layout check — run separately (not in
 | [scripts/lint-permissions.py](../../scripts/lint-permissions.py) | `permissions/global.json` and any project permission files are valid JSON and match the expected schema. | Yes |
 | [scripts/lint-settings-base.py](../../scripts/lint-settings-base.py) | `settings/base.json` is valid and the action taxonomy is consistent. | Yes |
 | [scripts/lint-hooks-executable.py](../../scripts/lint-hooks-executable.py) | Every `scripts/hook-*.py` file is executable. | Yes |
-| [cursor/scripts/lint-cursor-mirror.py](../../cursor/scripts/lint-cursor-mirror.py) | The Cursor mirror (`cursor/rules/claude-code-sync.mdc`) stays within its line ceiling. | Yes |
+| [cursor/scripts/lint-cursor-mirror.py](../../cursor/scripts/lint-cursor-mirror.py) | The Cursor mirror stays in lockstep with `skills/` (parity + TRIGGER + `resolution_confirmed_by_user`) and does not invent install paths or claim Claude hooks as live Cursor gates. Line/char ceilings are a separate check (`lint-prose-length.py`). | Yes |
 | [scripts/verify-layout-contract.sh](../../scripts/verify-layout-contract.sh) | On-disk layout matches `skills/self-improvement/policy.md` § File structure; every `scripts/hook-*.py` is registered in both this contract and `scripts/README.md` (bidirectional guard). **Not in `verify-all`** — run separately. | No |
 
 ## Adding a new guard

@@ -30,7 +30,7 @@ import time
 from pathlib import Path
 
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
-from lib import marker_extract  # unconditional second-pass marker extraction (model is the primary classifier)
+from lib import marker_extract  # kept for Extraction typing / telemetry; Cursor path does not invoke it (see _build_extraction)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_MD = REPO_ROOT / "config.md"
@@ -210,14 +210,17 @@ def build_agent_cmd(
 
 
 def _build_extraction(result_text: str) -> "marker_extract.Extraction | None":
-    """The call site's guard, factored out so a test can drive it directly
-    without invoking main()'s subprocess plumbing. The shared implementation
-    (``marker_extract.build_extraction``) runs the pass unconditionally
-    whenever it can, not only after the legacy first-non-blank-line scan
-    (``validate_marker``) failed. Passes this wrapper's own local
-    ``RETURN_MARKERS`` vocabulary rather than going through
-    ``lib.planner_plan_check.check_planner_return``."""
-    return marker_extract.build_extraction(result_text, allowed=RETURN_MARKERS)
+    """Cursor hard gate: never invoke ``claude``. ``marker_extract`` shells out
+    to ``claude -p``, so this wrapper stays on the legacy line-start scan
+    (same outcome as ``AGENTCTL_MARKER_EXTRACTOR=0``). Return ``None`` so the
+    caller takes that path. A future ``agent``-backed extractor can replace
+    this stub without changing the call site.
+
+    ``result_text`` is unused on purpose — kept so the signature matches the
+    Claude-side wrappers and existing tests can drive the call site.
+    """
+    del result_text
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:

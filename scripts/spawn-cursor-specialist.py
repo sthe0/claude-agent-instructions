@@ -32,7 +32,7 @@ from pathlib import Path
 
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
 from lib import argv_text  # one place decides how an argv value names its text
-from lib import marker_extract  # unconditional second-pass marker extraction (model is the primary classifier)
+from lib import marker_extract  # kept for Extraction typing / telemetry; Cursor path does not invoke it (see _build_extraction)
 from lib.config_root import skills_dir  # config-root resolver (isolated system root)
 from lib.planner_plan_check import (  # single shared home for return-marker + plan checks
     MARKER_RE,
@@ -232,7 +232,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--kind",
         default="developer",
-        help="specialization name (must exist at ~/.claude/skills/<kind>/SKILL.md; default: developer)",
+        help="specialization name (must exist at ~/.claude-agent/skills/<kind>/SKILL.md; default: developer)",
     )
     p.add_argument(
         "--plan",
@@ -293,11 +293,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _build_extraction(result_text: str, kind: str) -> "marker_extract.Extraction | None":
-    """The call site's guard, factored out so a test can drive it directly
-    without invoking main()'s subprocess plumbing. The shared implementation
-    (``marker_extract.build_extraction``) runs the pass unconditionally
-    whenever it can, not only after the legacy any-line regex scan failed."""
-    return marker_extract.build_extraction(result_text, kind=kind)
+    """Cursor hard gate: never invoke ``claude``. ``marker_extract`` shells out
+    to ``claude -p``, so this wrapper stays on the legacy any-line scan
+    (same outcome as ``AGENTCTL_MARKER_EXTRACTOR=0``). Return ``None`` so the
+    caller takes that path. A future ``agent``-backed extractor can replace
+    this stub without changing the call site.
+
+    ``result_text`` / ``kind`` are unused on purpose — kept so the signature
+    matches the Claude-side wrappers and existing tests can drive the call site.
+    """
+    del result_text, kind
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:

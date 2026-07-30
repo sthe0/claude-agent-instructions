@@ -102,20 +102,19 @@ def test_wrapper_binds_the_shared_validate_marker(wrapper):
 
 @pytest.mark.parametrize("wrapper", ["spawn-specialist.py", "spawn-cursor-specialist.py"])
 def test_wrapper_binds_the_shared_marker_extract_module(wrapper):
-    # Both wrappers invoke the unconditional second-pass extraction via the
-    # SAME module object as everything else in the test battery — pins the
-    # import both files' `_build_extraction` call sites rely on.
+    # Both wrappers import the SAME marker_extract module object. Claude-side
+    # spawn-specialist invokes it; Cursor wrappers keep the import for typing /
+    # telemetry but _build_extraction returns None (hard gate: no claude -p).
     mod = _load_wrapper(wrapper)
     assert mod.marker_extract is marker_extract
 
 
-# --- call-site guard: _build_extraction is unconditional, not rescue-only ----
+# --- call-site guard: Claude wrappers run extractor unconditionally ------------
 #
-# These drive each wrapper's own `_build_extraction` helper (which delegates to
-# marker_extract.build_extraction, the shared call-site guard) with an injected
-# runner, proving the extractor is invoked even when the legacy scan would
-# already have succeeded — the whole point of "unconditional" over the prior
-# rescue-only wiring, which skipped the extractor whenever `ok` was already True.
+# These drive each wrapper's own `_build_extraction` helper. Claude-side
+# spawn-specialist delegates to marker_extract.build_extraction (unconditional,
+# not rescue-only). Cursor wrappers deliberately return None without calling
+# claude (hard gate) — covered by the cursor-specific tests below.
 
 def _spy_runner(marker: str = "COMPLETED", returncode: int = 0):
     calls = []
@@ -128,9 +127,8 @@ def _spy_runner(marker: str = "COMPLETED", returncode: int = 0):
     return calls, run
 
 
-@pytest.mark.parametrize("wrapper", ["spawn-specialist.py", "spawn-cursor-specialist.py"])
-def test_build_extraction_not_invoked_when_kill_switch_off(wrapper, monkeypatch):
-    mod = _load_wrapper(wrapper)
+def test_build_extraction_not_invoked_when_kill_switch_off(monkeypatch):
+    mod = _load_wrapper("spawn-specialist.py")
     monkeypatch.setenv(marker_extract.ENV_KILL_SWITCH, "0")
     calls, spy = _spy_runner()
     monkeypatch.setattr(mod.marker_extract, "subprocess_runner", spy)
@@ -141,12 +139,11 @@ def test_build_extraction_not_invoked_when_kill_switch_off(wrapper, monkeypatch)
     assert calls == []  # the injected runner was NEVER called
 
 
-@pytest.mark.parametrize("wrapper", ["spawn-specialist.py", "spawn-cursor-specialist.py"])
-def test_build_extraction_invoked_unconditionally_on_clean_marker(wrapper, monkeypatch):
+def test_build_extraction_invoked_unconditionally_on_clean_marker(monkeypatch):
     # A clean, unambiguous marker: the legacy any-line regex scan would
     # already succeed on this text. Under the old rescue-only wiring the
-    # extractor would never run here. It must run anyway.
-    mod = _load_wrapper(wrapper)
+    # extractor would never run here. It must run anyway (Claude path only).
+    mod = _load_wrapper("spawn-specialist.py")
     monkeypatch.delenv(marker_extract.ENV_KILL_SWITCH, raising=False)
     monkeypatch.setattr(marker_extract.shutil, "which", lambda name: "/usr/bin/claude")
     calls, spy = _spy_runner()
@@ -160,7 +157,27 @@ def test_build_extraction_invoked_unconditionally_on_clean_marker(wrapper, monke
     assert extraction.degraded is False
 
 
+@pytest.mark.parametrize("wrapper", ["spawn-cursor-specialist.py", "spawn-cursor-escape.py"])
+def test_cursor_build_extraction_never_invokes_claude(wrapper, monkeypatch):
+    """Cursor hard gate: _build_extraction must not shell out to claude -p."""
+    mod = _load_wrapper(wrapper)
+    monkeypatch.delenv(marker_extract.ENV_KILL_SWITCH, raising=False)
+    monkeypatch.setattr(marker_extract.shutil, "which", lambda name: "/usr/bin/claude")
+    calls, spy = _spy_runner("RESOLVED" if "escape" in wrapper else "COMPLETED")
+    monkeypatch.setattr(mod.marker_extract, "subprocess_runner", spy)
+
+    if "escape" in wrapper:
+        extraction = mod._build_extraction("RESOLVED: root-caused and fixed.\n")
+    else:
+        extraction = mod._build_extraction("COMPLETED: shipped it, tests green.\n", "developer")
+
+    assert extraction is None
+    assert calls == []
+
+
 def test_escape_build_extraction_not_invoked_when_kill_switch_off(monkeypatch):
+    # Retained: Cursor escape always returns None; kill-switch off is redundant
+    # but must not regress into calling claude.
     mod = _load_wrapper("spawn-cursor-escape.py")
     monkeypatch.setenv(marker_extract.ENV_KILL_SWITCH, "0")
     calls, spy = _spy_runner("RESOLVED")
@@ -170,17 +187,3 @@ def test_escape_build_extraction_not_invoked_when_kill_switch_off(monkeypatch):
 
     assert extraction is None
     assert calls == []
-
-
-def test_escape_build_extraction_invoked_unconditionally_on_clean_marker(monkeypatch):
-    mod = _load_wrapper("spawn-cursor-escape.py")
-    monkeypatch.delenv(marker_extract.ENV_KILL_SWITCH, raising=False)
-    monkeypatch.setattr(marker_extract.shutil, "which", lambda name: "/usr/bin/claude")
-    calls, spy = _spy_runner("RESOLVED")
-    monkeypatch.setattr(mod.marker_extract, "subprocess_runner", spy)
-
-    extraction = mod._build_extraction("RESOLVED: root-caused and fixed.\n")
-
-    assert len(calls) == 1
-    assert extraction is not None
-    assert extraction.marker == "RESOLVED"

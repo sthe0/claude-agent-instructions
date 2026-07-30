@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 r"""Lint the cursor rule mirror for structural drift against `skills/`.
 
-Three presence checks — no full-text comparison (formulations legitimately
-differ between Claude Code and Cursor contexts):
+Presence and path/caveat checks — no full-text comparison (formulations
+legitimately differ between Claude Code and Cursor contexts):
 
   1. Flat-skill parity. Every directory `skills/<name>/` with a SKILL.md
      (excluding `skills/specializations/`) must appear as a `### \`<name>\``
@@ -24,6 +24,18 @@ differ between Claude Code and Cursor contexts):
      statement, so it must not silently drift out of the mirror when
      CLAUDE.md changes.
 
+  5. No invented install path `~/.claude-agent/scripts` — scripts live in the
+     instructions repo (`~/claude-agent-instructions/scripts/`), not under the
+     config root. A false path silently breaks proactive Cursor checks
+     (e.g. self-diagnose).
+
+  6. `self-diagnose.py` references must use the canon repo path
+     `~/claude-agent-instructions/scripts/self-diagnose.py`.
+
+  7. Hook machine-enforcement claims (`hook-*-gate.py`, "blocks the turn")
+     must carry an explicit Claude-Code-only / Cursor-hooks-do-not-run caveat
+     so Cursor agents do not treat Claude hooks as live gates.
+
 Exit code 1 on any drift.
 """
 from __future__ import annotations
@@ -40,6 +52,18 @@ MIRROR_FILE = REPO_ROOT / "cursor" / "rules" / "claude-code-sync.mdc"
 SKILL_HEADING_RE = re.compile(r"^###\s+`([^`]+)`")
 SPEC_ROW_RE = re.compile(r"^\|\s*`([^`]+)`\s*\|")
 SECTION_HEADING_RE = re.compile(r"^##\s")
+
+# Scripts never install under the config root; they live in the repo.
+FORBIDDEN_AGENT_SCRIPTS_RE = re.compile(
+    r"(?:~/|\$HOME/)\.claude-agent/scripts\b"
+)
+SELF_DIAGNOSE_CANON = "~/claude-agent-instructions/scripts/self-diagnose.py"
+HOOK_GATE_RE = re.compile(r"hook-[a-z0-9-]*gate\.py|blocks the turn", re.IGNORECASE)
+# At least one of these must appear when HOOK_GATE_RE matches.
+HOOK_CAVEAT_RE = re.compile(
+    r"Claude Code|hooks do not run|not (?:enforced )?in Cursor|prose-enforced",
+    re.IGNORECASE,
+)
 
 
 def disk_skills() -> tuple[set[str], set[str]]:
@@ -79,11 +103,8 @@ def slice_section(lines: list[str], heading_prefix: str) -> list[str]:
     return lines[start:end]
 
 
-def parse_mirror() -> dict:
-    """Parse the cursor mirror; return structure for the lints."""
-    if not MIRROR_FILE.exists():
-        return {"error": f"mirror file not found: {MIRROR_FILE}"}
-    text = MIRROR_FILE.read_text(encoding="utf-8")
+def parse_mirror(text: str) -> dict:
+    """Parse mirror text; return structure for the lints."""
     lines = text.splitlines()
 
     skills_section = slice_section(lines, "## Skills ")
@@ -125,6 +146,81 @@ def parse_mirror() -> dict:
     }
 
 
+def check_path_invariants(text: str) -> list[str]:
+    """Return errors for invented script paths and self-diagnose canon drift."""
+    errors: list[str] = []
+    if FORBIDDEN_AGENT_SCRIPTS_RE.search(text):
+        errors.append(
+            "mirror references `~/.claude-agent/scripts` (or $HOME/.claude-agent/scripts) "
+            "— scripts live under `~/claude-agent-instructions/scripts/`, not the config root"
+        )
+    if "self-diagnose.py" in text and SELF_DIAGNOSE_CANON not in text:
+        errors.append(
+            f"mirror mentions self-diagnose.py without the canon path `{SELF_DIAGNOSE_CANON}`"
+        )
+    return errors
+
+
+def check_hook_caveat(text: str) -> list[str]:
+    """Return errors when hook machine-gates are claimed without a Cursor caveat."""
+    if not HOOK_GATE_RE.search(text):
+        return []
+    if HOOK_CAVEAT_RE.search(text):
+        return []
+    return [
+        "mirror mentions a hook gate / 'blocks the turn' without a Claude-Code-only "
+        "or 'hooks do not run' / prose-enforced caveat for Cursor"
+    ]
+
+
+def collect_errors(
+    text: str,
+    *,
+    disk_flat: set[str],
+    disk_spec: set[str],
+) -> list[str]:
+    """Run all mirror lints against `text`; return the error list (empty = OK)."""
+    errors: list[str] = []
+    mirror = parse_mirror(text)
+
+    if not mirror["skills_section_present"]:
+        errors.append("mirror is missing the '## Skills ...' section")
+    if not mirror["spec_section_present"]:
+        errors.append("mirror is missing the '## Specializations ...' section")
+
+    mirror_flat = set(mirror["flat_blocks"])
+    for name in sorted(disk_flat - mirror_flat):
+        errors.append(
+            f"flat skill on disk not in mirror: skills/{name}/  "
+            f"(add a `### `{name}`` block under '## Skills ...')"
+        )
+    for name in sorted(mirror_flat - disk_flat):
+        errors.append(f"mirror references flat skill not on disk: `### `{name}``")
+
+    mirror_spec = mirror["spec_names"]
+    for name in sorted(disk_spec - mirror_spec):
+        errors.append(
+            f"specialization on disk not in mirror table: skills/specializations/{name}/"
+        )
+    for name in sorted(mirror_spec - disk_spec):
+        errors.append(f"mirror specialization table references missing skill: `{name}`")
+
+    for name, body in mirror["flat_blocks"].items():
+        if not any("**TRIGGER:**" in line for line in body):
+            errors.append(f"mirror skill block lacks **TRIGGER:** marker: `{name}`")
+
+    if "resolution_confirmed_by_user" not in text:
+        errors.append(
+            "mirror is missing the `resolution_confirmed_by_user` frontmatter rule "
+            "(see CLAUDE.md § On task resolution § What to record). Cursor agents "
+            "depend on the prose statement — keep the requirement explicit."
+        )
+
+    errors.extend(check_path_invariants(text))
+    errors.extend(check_hook_caveat(text))
+    return errors
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -134,49 +230,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.parse_args(argv)
 
-    disk_flat, disk_spec = disk_skills()
-    mirror = parse_mirror()
-    if "error" in mirror:
-        print(f"lint-cursor-mirror: FAIL — {mirror['error']}")
+    if not MIRROR_FILE.exists():
+        print(f"lint-cursor-mirror: FAIL — mirror file not found: {MIRROR_FILE}")
         return 1
 
-    errors: list[str] = []
-
-    if not mirror["skills_section_present"]:
-        errors.append("mirror is missing the '## Skills ...' section")
-    if not mirror["spec_section_present"]:
-        errors.append("mirror is missing the '## Specializations ...' section")
-
-    mirror_flat = set(mirror["flat_blocks"])
-    missing_from_mirror = sorted(disk_flat - mirror_flat)
-    orphan_in_mirror = sorted(mirror_flat - disk_flat)
-    for name in missing_from_mirror:
-        errors.append(f"flat skill on disk not in mirror: skills/{name}/  (add a `### `{name}`` block under '## Skills ...')")
-    for name in orphan_in_mirror:
-        errors.append(f"mirror references flat skill not on disk: `### `{name}``")
-
-    mirror_spec = mirror["spec_names"]
-    missing_spec = sorted(disk_spec - mirror_spec)
-    orphan_spec = sorted(mirror_spec - disk_spec)
-    for name in missing_spec:
-        errors.append(f"specialization on disk not in mirror table: skills/specializations/{name}/")
-    for name in orphan_spec:
-        errors.append(f"mirror specialization table references missing skill: `{name}`")
-
-    for name, body in mirror["flat_blocks"].items():
-        if not any("**TRIGGER:**" in line for line in body):
-            errors.append(f"mirror skill block lacks **TRIGGER:** marker: `{name}`")
-
-    mirror_text = MIRROR_FILE.read_text(encoding="utf-8")
-    if "resolution_confirmed_by_user" not in mirror_text:
-        errors.append(
-            "mirror is missing the `resolution_confirmed_by_user` frontmatter rule "
-            "(see CLAUDE.md § On task resolution § What to record). Cursor agents "
-            "depend on the prose statement — keep the requirement explicit."
-        )
+    disk_flat, disk_spec = disk_skills()
+    text = MIRROR_FILE.read_text(encoding="utf-8")
+    errors = collect_errors(text, disk_flat=disk_flat, disk_spec=disk_spec)
 
     if errors:
-        print(f"lint-cursor-mirror: FAIL — {len(errors)} drift(s) in {MIRROR_FILE.relative_to(REPO_ROOT)}")
+        print(
+            f"lint-cursor-mirror: FAIL — {len(errors)} drift(s) in "
+            f"{MIRROR_FILE.relative_to(REPO_ROOT)}"
+        )
         for error in errors:
             print(f"  {error}")
         return 1
