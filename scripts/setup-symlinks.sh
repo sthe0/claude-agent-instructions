@@ -164,7 +164,7 @@ fi
 link_local_skills "$REPO/skills-local"
 link_local_skills "$CLAUDE_AGENT_HOME/skills-local"
 
-chmod +x "$REPO/scripts/verify-instructions-sync.sh" "$REPO/scripts/verify-layout-contract.sh" "$REPO/scripts/verify-extracted-skills-resolve.sh" "$REPO/scripts/verify-difficulty-channel-resolves.sh" "$REPO/scripts/verify-plugin-tests.sh" "$REPO/scripts/setup-project-memory.sh" "$REPO/scripts/apply-settings.sh" "$REPO/cursor/scripts/install-cursor-links.sh" "$REPO/cursor/scripts/link-project-cursor-agents.sh" "$REPO/cursor/scripts/migrate-cursor-namespace.sh" "$REPO/scripts/migrate-to-isolated.sh"
+chmod +x "$REPO/scripts/verify-instructions-sync.sh" "$REPO/scripts/verify-layout-contract.sh" "$REPO/scripts/verify-extracted-skills-resolve.sh" "$REPO/scripts/verify-difficulty-channel-resolves.sh" "$REPO/scripts/verify-plugin-tests.sh" "$REPO/scripts/setup-project-memory.sh" "$REPO/scripts/apply-settings.sh" "$REPO/cursor/scripts/apply-cursor-config.sh" "$REPO/cursor/scripts/install-cursor-links.sh" "$REPO/cursor/scripts/link-project-cursor-agents.sh" "$REPO/cursor/scripts/migrate-cursor-namespace.sh" "$REPO/scripts/migrate-to-isolated.sh"
 
 # Every hook is exec'd directly by the harness (via /bin/sh); a missing +x bit
 # makes it fail silently with "Permission denied". chmod the whole family so a

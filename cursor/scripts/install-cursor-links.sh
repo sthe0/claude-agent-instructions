@@ -55,4 +55,7 @@ for file_path in "$REPO/cursor/agents/"*.md; do
   [[ -f "$file_path" ]] && link_cursor_agent_md "$file_path"
 done
 
+# Merge versioned CLI policy + link permissions.json (owned by apply script).
+"$REPO/cursor/scripts/apply-cursor-config.sh"
+
 echo "Cursor links updated."

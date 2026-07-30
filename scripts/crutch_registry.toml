@@ -2047,6 +2047,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "94594e49f4f1a9d2"
+domain = "code"
+file = "scripts/tests/test_apply_cursor_config.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "7360e76206387897"
 domain = "code"
 file = "scripts/tests/test_ast_purity.py"
@@ -6647,6 +6655,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "5fcab9b230897a90"
+domain = "code_file_rollup"
+file = "scripts/tests/test_apply_cursor_config.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "300ec70fc9ab31ca"
 domain = "code_file_rollup"
 file = "scripts/tests/test_ast_purity.py"
@@ -7533,7 +7549,15 @@ disposition = "keep"
 ground = "CLAUDE.md's own § Coordination heading names this class explicitly: \"Cognition the engine does NOT replace (always yours)\" — escalation timing, task-weight judgment, verification-axis discipline, and outcome framing are judgment calls over conversational/task content, not predicates decidable from observable repo/engine state."
 
 [[entry]]
-id = "bf8e1f050502b95f"
+id = "7c9198c19000e8c6"
+domain = "prose"
+file = "CLAUDE.md"
+class = "perception"
+disposition = "keep"
+ground = "CLAUDE.md's own § Coordination heading names this class explicitly: \"Cognition the engine does NOT replace (always yours)\" — escalation timing, task-weight judgment, verification-axis discipline, and outcome framing are judgment calls over conversational/task content, not predicates decidable from observable repo/engine state."
+
+[[entry]]
+id = "91bbd6e0c31959df"
 domain = "prose"
 file = "CLAUDE.md"
 class = "perception"
@@ -8166,6 +8190,14 @@ ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's
 
 [[entry]]
 id = "29653384bf278350"
+domain = "prose"
+file = "memory-global/leaves/capability-before-offload.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "11756dc9e726b7ab"
 domain = "prose"
 file = "memory-global/leaves/capability-before-offload.md"
 class = "perception"
@@ -14310,6 +14342,14 @@ ground = "System-knowledge leaves document durable FACTS about how an external s
 
 [[entry]]
 id = "10cb60e974649d1a"
+domain = "prose"
+file = "memory-global/leaves/system-knowledge/cursor-agent-cli-spawn.md"
+class = "not-normative"
+disposition = "keep"
+ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
+
+[[entry]]
+id = "3849b4ce8b0c005a"
 domain = "prose"
 file = "memory-global/leaves/system-knowledge/cursor-agent-cli-spawn.md"
 class = "not-normative"

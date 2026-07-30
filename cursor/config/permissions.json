@@ -1,0 +1,15 @@
+{
+  "autoRun": {
+    "allow_instructions": [
+      "Allow routine local development: reading/searching the workspace, running tests, formatters, linters, builds, and non-destructive git status/diff/log/add/commit on personal or ticket branches.",
+      "Allow installing packages into the current project or the user's venv when that is clearly part of the user's request.",
+      "Prefer allowing shell and MCP calls that stay inside the current workspace and do not touch secrets, production, or shared trunk branches."
+    ],
+    "block_instructions": [
+      "Any force-push, rewrite of shared history, or push directly to main/master/trunk should ask for approval.",
+      "Destructive recursive deletes (rm -rf) outside the current workspace or of .git, home config, or credential directories should ask for approval.",
+      "Commands that read or exfiltrate secrets (.env, credentials, tokens, private keys, cloud auth) or change production systems should ask for approval.",
+      "sudo, privilege escalation, disk formatting, and machine power/user management should ask for approval or be blocked."
+    ]
+  }
+}

@@ -5,6 +5,7 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 <!-- inventory:scripts:begin -->
 | Script | Purpose |
 |---|---|
+| [apply-cursor-config.sh](../cursor/scripts/apply-cursor-config.sh) | Merge versioned Cursor CLI policy (`cursor/config/cli-base.json`) into `~/.cursor/cli-config.json` and symlink `permissions.json` (additive, idempotent) |
 | [install-cursor-links.sh](../cursor/scripts/install-cursor-links.sh) | Apply Cursor-only symlinks (`~/.cursor/rules/*`, `~/.cursor/agents/*`) |
 | [link-project-cursor-agents.sh](../cursor/scripts/link-project-cursor-agents.sh) | Symlink `<project>/.cursor/agents/*` → `cursor/agents/` (used by a project's `setup-local.sh`) |
 | [lint-cursor-mirror.py](../cursor/scripts/lint-cursor-mirror.py) | Detect structural drift between `skills/` and the cursor mirror (flat-skill / specialization parity, TRIGGER markers, `resolution_confirmed_by_user`) plus Cursor-specific path/caveat invariants (no `~/.claude-agent/scripts`, canon self-diagnose path, hook machine-gate claims need a Claude-Code-only caveat) |
