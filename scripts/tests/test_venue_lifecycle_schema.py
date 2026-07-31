@@ -70,10 +70,10 @@ def _substantive_meta(**overrides):
     return base
 
 
-# --- SCHEMA_VERSION 24 --------------------------------------------------
+# --- SCHEMA_VERSION 25 --------------------------------------------------
 
-def test_schema_version_is_24():
-    assert SCHEMA_VERSION == 24
+def test_schema_version_is_25():
+    assert SCHEMA_VERSION == 25
 
 
 # --- V1: free-text value rejected with the CheckVenue vocabulary ---------

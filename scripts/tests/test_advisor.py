@@ -546,3 +546,81 @@ class TestJudgeOutageEscalation:
 
         advisor.judge_outage_escalation("some text", recording_runner)
         assert seen["argv"][:4] == ["claude", "-p", "--model", "haiku"]
+
+
+# ── runtime_host threading: every judge/enumerate call builds `agent -p` argv
+# for runtime_host="cursor" instead of `claude -p`, and never mixes the two ──
+
+class TestRuntimeHostArgv:
+    @pytest.fixture(autouse=True)
+    def _pin_cursor_binary(self, monkeypatch):
+        # Pin which Cursor binary host_llm.binary_for resolves to, independent
+        # of whether `agent`/`cursor-agent` happen to be installed on the
+        # machine running the suite (hermeticity, same accommodation as
+        # test_marker_extract.py's host_llm.shutil.which monkeypatches).
+        from lib import host_llm
+        monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/agent" if name == "agent" else None)
+
+    def _recording_runner(self, seen, stdout="YES\nreason"):
+        def runner(argv, **kwargs):
+            seen.append(argv)
+            return RunResult(0, stdout=stdout, stderr="")
+        return runner
+
+    def test_judge_cursor_host_builds_agent_argv(self):
+        seen = []
+        advisor.judge(
+            "weight_classification", {}, self._recording_runner(seen, "concern"),
+            enabled=True, runtime_host="cursor",
+        )
+        argv = seen[0]
+        assert argv[0] == "/usr/bin/agent"
+        assert "claude" not in argv
+        assert "--model" in argv and "composer-2.5" in argv  # medium tier
+
+    def test_enumerate_claims_cursor_host_builds_agent_argv(self):
+        seen = []
+        advisor.enumerate_claims("some deliverable text", self._recording_runner(seen, "claim one"),
+                                 runtime_host="cursor")
+        assert seen[0][0] == "/usr/bin/agent"
+
+    def test_enumerate_questions_health_cursor_host_builds_agent_argv(self):
+        seen = []
+        advisor.enumerate_questions_health(
+            "goal", "done", "plan text", self._recording_runner(seen, "target\tquestion"),
+            runtime_host="cursor",
+        )
+        assert seen[0][0] == "/usr/bin/agent"
+
+    def test_acceptance_judge_cursor_host_builds_agent_argv(self):
+        seen = []
+        advisor.acceptance_judge(
+            "observation", "expected", self._recording_runner(seen), enabled=True,
+            runtime_host="cursor",
+        )
+        argv = seen[0]
+        assert argv[0] == "/usr/bin/agent"
+        assert "composer-2.5-fast" in argv  # low tier (haiku's cursor analogue)
+
+    def test_judge_binary_ask_cursor_host_builds_agent_argv(self):
+        seen = []
+        advisor.judge_binary_ask("Apply this change?", self._recording_runner(seen),
+                                 runtime_host="cursor")
+        assert seen[0][0] == "/usr/bin/agent"
+
+    def test_judge_feedback_signal_cursor_host_builds_agent_argv(self):
+        seen = []
+        advisor.judge_feedback_signal("ты не так сделал", self._recording_runner(seen),
+                                      runtime_host="cursor")
+        assert seen[0][0] == "/usr/bin/agent"
+
+    def test_judge_outage_escalation_cursor_host_builds_agent_argv(self):
+        seen = []
+        advisor.judge_outage_escalation("the service is down, what now?", self._recording_runner(seen),
+                                        runtime_host="cursor")
+        assert seen[0][0] == "/usr/bin/agent"
+
+    def test_default_runtime_host_is_claude_for_backward_compat(self):
+        seen = []
+        advisor.judge("weight_classification", {}, self._recording_runner(seen, "concern"), enabled=True)
+        assert seen[0][0] == "claude"

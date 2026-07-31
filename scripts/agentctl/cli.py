@@ -24,7 +24,7 @@ from pathlib import Path
 
 from lib import argv_text, config_root
 
-from . import advisor, continuations, cost, delivery, gates, ledger, permissions, plugins, plugins_ledger, plugins_premise, premise, solved_marker
+from . import advisor, continuations, cost, delivery, gates, ledger, permissions, plugins, plugins_ledger, plugins_premise, premise, runtime_host, solved_marker
 from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
 from .partition import render_section, render_units, verdict
@@ -373,14 +373,21 @@ def _write_quality_row(row: dict) -> None:
 
 
 def _attach_advisories(d: Directive, kind: str, payload: dict, runner: Runner | None,
-                       *, weight_class: str | None = None) -> None:
+                       *, weight_class: str | None = None,
+                       runtime_host_: str = runtime_host.HOST_CLAUDE) -> None:
     """Attach warn-only advisory strings to d.data['advisories']. Never changes d.ok or d.node.
 
     Single chokepoint for the enabled resolution: env override, else config-mode +
     weight_class (advisor.resolve_enabled) — every call site threads its session's
-    weight_class through here rather than re-deriving the rule per site."""
+    weight_class through here rather than re-deriving the rule per site.
+
+    `runtime_host_` (trailing underscore to avoid shadowing the `runtime_host`
+    module import) defaults to HOST_CLAUDE so a call site that predates a bound
+    session field (or an unbound state) stays byte-identical to the pre-host-aware
+    behaviour; every call site below passes the session's own bound host once
+    classify has set it."""
     enabled = advisor.resolve_enabled(weight_class)
-    advisories = advisor.judge(kind, payload, runner, enabled=enabled)
+    advisories = advisor.judge(kind, payload, runner, enabled=enabled, runtime_host=runtime_host_)
     if advisories:
         d.data.setdefault("advisories", []).extend(advisories)
 
@@ -595,6 +602,10 @@ def cmd_start(args, *, store: StateStore, runner: Runner | None = None) -> Direc
         overall_criterion_type=getattr(args, "criterion_type", CriterionType.MEASURABLE.value),
         recursion_depth=int(getattr(args, "recursion_depth", 0) or 0),
     )
+    # Best-effort (require=False): a fresh state's runtime_host is always None, so
+    # this can only resolve or stay unbound — never conflict. classify is the hard
+    # gate; this just lets an early --host stick before classify runs.
+    runtime_host.bind_runtime_host(state, getattr(args, "host", None), require=False)
     state.log("start", task=state.task_id)
     store.save(state)
     return Directive(True, state.node, "classify", "session registered; run classify next")
@@ -624,6 +635,9 @@ def cmd_reset(args, *, store: StateStore, runner: Runner | None = None) -> Direc
         overall_criterion_type=getattr(args, "criterion_type", CriterionType.MEASURABLE.value),
         recursion_depth=int(getattr(args, "recursion_depth", 0) or 0),
     )
+    # Best-effort, same as cmd_start: `new` is a fresh state, so this can only
+    # resolve or stay unbound — never conflict.
+    runtime_host.bind_runtime_host(new, getattr(args, "host", None), require=False)
     new.log("reset", task=new.task_id, prior_task=(prior.task_id if prior else None))
     store.save(new)
     # Hygiene, not a security boundary (delivery.delete_stamp's own docstring):
@@ -877,7 +891,9 @@ def cmd_ledger_enumerate(args, *, store: StateStore, runner: Runner | None = Non
         return Directive(False, state.node, "noop",
                          f"cannot read artifact {args.artifact!r}: {exc}")
     run = runner if runner is not None else advisor.subprocess_runner
-    statements = advisor.enumerate_claims(text, run)
+    statements = advisor.enumerate_claims(
+        text, run, runtime_host=state.runtime_host or runtime_host.HOST_CLAUDE
+    )
     candidates = bag.setdefault("candidates", [])
     raised: list[str] = []
     for i, statement in enumerate(statements):
@@ -1273,7 +1289,9 @@ def cmd_question_enumerate(args, *, store: StateStore, runner: Runner | None = N
 
     run = runner if runner is not None else advisor.subprocess_runner
     runner_ok, pairs = advisor.enumerate_questions_health(
-        doc.meta.goal, doc.meta.done_criterion, plan_text, run)
+        doc.meta.goal, doc.meta.done_criterion, plan_text, run,
+        runtime_host=state.runtime_host or runtime_host.HOST_CLAUDE,
+    )
 
     candidates = bag.setdefault("candidates", [])
     raised: list[str] = []
@@ -1317,6 +1335,15 @@ def cmd_question_enumerate(args, *, store: StateStore, runner: Runner | None = N
 
 def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
+    # Hard gate (schema 25): classify is where an unbound session MUST resolve a
+    # runtime_host — every advisory judge below and, downstream, cmd_dispatch's
+    # spawn all key off this one field, so a session must not leave classify
+    # without it. Sticky: an explicit --host that contradicts an already-bound
+    # host (e.g. from a prior cmd_start) refuses rather than silently rebinding.
+    try:
+        runtime_host.bind_runtime_host(state, getattr(args, "host", None), require=True)
+    except (runtime_host.HostAmbiguousError, runtime_host.HostConflictError) as exc:
+        return Directive(False, state.node, "noop", str(exc))
     thr = Thresholds()
     sig = Signals(
         is_chat=bool(getattr(args, "chat", False)),
@@ -1374,7 +1401,8 @@ def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Di
     d = Directive(True, state.node, action, detail, data={"reasons": result.reasons})
     _attach_advisories(d, "weight_classification",
                        {"goal": state.goal, "weight_class": state.weight_class, "route": state.route},
-                       runner, weight_class=state.weight_class)
+                       runner, weight_class=state.weight_class,
+                       runtime_host_=state.runtime_host or runtime_host.HOST_CLAUDE)
     return d
 
 
@@ -1455,7 +1483,8 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     _attach_advisories(d, "plan_completeness",
                        {"plan": plan_path, "stage_count": len(state.stages),
                         "titles": [s.title for s in state.stages]},
-                       runner, weight_class=state.weight_class)
+                       runner, weight_class=state.weight_class,
+                       runtime_host_=state.runtime_host or runtime_host.HOST_CLAUDE)
     # Deterministic scope lint (experience leaf 2026-06-29) — always runs,
     # independent of the optional LLM advisor above; warn-only, never blocks.
     d.data.setdefault("advisories", []).extend(
@@ -2142,6 +2171,14 @@ def _continuation_worktree(state: SessionState, stage: Stage) -> str | None:
 def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
                  perm_checker=None) -> Directive:
     state = _require(store, args.session)
+    # A session must have bound a host by classify (schema 25) before it can
+    # spawn anything — dispatch_stage's spawn_cli_for selects the wrapper script
+    # (spawn-specialist.py vs spawn-cursor-specialist.py) FROM this value, so an
+    # unbound session must refuse rather than silently defaulting to one host.
+    try:
+        host = runtime_host.require_bound_host(state)
+    except runtime_host.HostAmbiguousError as exc:
+        return Directive(False, state.node, "noop", str(exc))
     stage = state.active_stage()
     if stage is None:
         return Directive(False, state.node, "next_stage", "no active stage to dispatch")
@@ -2162,6 +2199,7 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
         # "delivery" — dispatch has no verify_venue/venue of its own to read,
         # and delivery is where a spawned developer must write.
         cwd=state.resolve_check_venue(CheckVenue.DELIVERY.value),
+        runtime_host=host,
     )
     if dry_run:
         # #10: a dry-run is a pure preview — no event log, no state save, no
@@ -2371,7 +2409,9 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
         if gates.stage_review_active(state):
             judge_runner = runner if runner is not None else advisor.subprocess_runner
             verdict, reason = advisor.acceptance_judge(
-                observation, stage.subject.result, judge_runner, enabled=True)
+                observation, stage.subject.result, judge_runner, enabled=True,
+                runtime_host=state.runtime_host or runtime_host.HOST_CLAUDE,
+            )
             if verdict is not None:
                 _record_stage_review(
                     state,
@@ -2491,7 +2531,8 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
                 and not gates.stage_review_active(state)):
             _attach_advisories(d, "acceptance_observation",
                                {"expected": stage.subject.result, "observation": observation},
-                               runner, weight_class=state.weight_class)
+                               runner, weight_class=state.weight_class,
+                               runtime_host_=state.runtime_host or runtime_host.HOST_CLAUDE)
         return d
 
     # failed: loop guard — same stage failing twice on the same actual digest -> escalate
@@ -2920,7 +2961,8 @@ def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Di
         "hypotheses": inv.hypotheses if inv else [],
         "declaration": {"expected": decl.expected, "actual": decl.actual, "mismatch": decl.mismatch}
         if decl else {},
-    }, runner, weight_class=state.weight_class)
+    }, runner, weight_class=state.weight_class,
+       runtime_host_=state.runtime_host or runtime_host.HOST_CLAUDE)
     return d
 
 
@@ -3816,12 +3858,18 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--criterion-type", dest="criterion_type", default=CriterionType.MEASURABLE.value)
     sp.add_argument("--recursion-depth", dest="recursion_depth", type=int, default=0)
     sp.add_argument("--if-absent", dest="if_absent", action="store_true")
+    sp.add_argument("--host", choices=runtime_host.HOSTS, default=None,
+                    help="coordination host this session dispatches through (claude|cursor); "
+                         "auto-detected when omitted (best-effort; classify is the hard gate)")
 
     sp = add("reset"); sp.add_argument("--session", required=True); sp.add_argument("--task", required=True)
     sp.add_argument("--goal", default=""); sp.add_argument("--done-criterion", dest="done_criterion", default="")
     sp.add_argument("--criterion-type", dest="criterion_type", default=CriterionType.MEASURABLE.value)
     sp.add_argument("--recursion-depth", dest="recursion_depth", type=int, default=0)
     sp.add_argument("--force", action="store_true")
+    sp.add_argument("--host", choices=runtime_host.HOSTS, default=None,
+                    help="coordination host this session dispatches through (claude|cursor); "
+                         "auto-detected when omitted (best-effort; classify is the hard gate)")
 
     sp = add("plugin-activate"); sp.add_argument("--session", required=True)
     sp.add_argument("--plugin", required=True)
@@ -3928,6 +3976,10 @@ def build_parser() -> argparse.ArgumentParser:
                     choices=["", "reasoning", "code", "ops", "mixed"],
                     help="what kind of artifact this task produces; 'reasoning'/'mixed' "
                          "arms the claim-provenance ledger plugin on a SUBSTANTIVE session")
+    sp.add_argument("--host", choices=runtime_host.HOSTS, default=None,
+                    help="coordination host this session dispatches through (claude|cursor); "
+                         "REQUIRED to resolve here if not already bound/detectable — classify "
+                         "is the hard host-binding gate")
 
     sp = add("plan"); sp.add_argument("--session", required=True)
     sp = add("plan-render"); sp.add_argument("--plan", required=True,

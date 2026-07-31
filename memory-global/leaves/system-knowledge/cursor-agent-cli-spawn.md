@@ -4,7 +4,7 @@ description: Difficulty it removes — you need a headless agent spawn inside Cu
 type: reference
 schema: leaf/v1
 created: 2026-06-03
-last_verified: 2026-07-30
+last_verified: 2026-07-31
 ---
 
 # Cursor Agent CLI spawn (Cursor sessions)
@@ -52,11 +52,16 @@ timeout 120 agent -p "Reply with exactly one line: RESOLVED: ping" \
 
 Flags for unattended: `--trust`, `--force`, `--approve-mcps`.
 
+
+### agentctl (`runtime_host=cursor`)
+
+A Cursor-bound `agentctl` session (`--host cursor` on `start`/`classify`, sticky `state.runtime_host`) dispatches spawn stages via `spawn-cursor-specialist.py`, not `spawn-specialist.py`. Advisor / marker_extract short calls use `lib.host_llm` → `agent -p` with Cursor model slugs (`composer-2.5` / `composer-2.5-fast`). Wrappers refuse when `AGENTCTL_RUNTIME_HOST` names the other host. No cross-CLI fallback.
+
 ### Wrappers
 
 | Script | Use |
 |---|---|
-| `spawn-cursor-specialist.py` | Specialization spawn (`--kind planner\|developer\|…`): inline SKILL.md + plan/done-criterion prompt, budget tier → timeout (300/600/900s), same return markers as `spawn-specialist.py` |
+| `spawn-cursor-specialist.py` | Specialization spawn (`--kind planner\|developer\|…`): inline SKILL.md + plan/done-criterion prompt, `--complexity` / `--model`, `--stage-index`, `--continue-worktree`, budget tier → timeout (300/600/900s), same return markers as `spawn-specialist.py`; selected by `agentctl.dispatch.spawn_cli_for("cursor")` |
 | `spawn-cursor-escape.py` | Overcome-difficulty recursive escape: `RESOLVED:` / `INVESTIGATION:` / `LOOP_DETECTED:` |
 
 Both: recursion cap from `config.md`, `CURSOR_API_KEY` from env or `~/.cursor_api_key`, cost log `~/.local/log/cursor-spawn-costs.jsonl`, `--dry-run`, optional `--smoke`.

@@ -105,6 +105,18 @@ def _isolate_self_diagnose_store(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _default_claude_runtime_host(monkeypatch):
+    """Default CLAUDE_CODE_SESSION_ID so agentctl.runtime_host.detect_host()
+    resolves to "claude" for the suite at large — cmd_classify's require=True
+    host bind (schema 25) would otherwise raise HostAmbiguousError for every
+    walkthrough that never names --host explicitly, which is nearly all of them.
+    A test exercising the opposite state (unbound / cursor / ambiguous) calls
+    monkeypatch.delenv on this var itself, which overrides the default for that
+    one test only — same accommodation as `_no_ambient_recursion_depth` below."""
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "agentctl-test-session")
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_recursion_depth(monkeypatch):
     """Drop the ambient AGENT_RECURSION_DEPTH for the suite at large.
 

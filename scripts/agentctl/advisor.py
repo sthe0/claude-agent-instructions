@@ -12,20 +12,38 @@ from __future__ import annotations
 import os
 import subprocess
 
+from lib import host_llm
+from lib.runtime_models import HOST_CLAUDE, model_for
+
 from .config import Thresholds
 from .dispatch import RunResult
 
 # Cheap model + hard cap: the advisor auto-activates for every substantive session's
 # cognition points, so each call must stay bounded in cost and can never hang a
-# coordination step.
-_ADVISOR_MODEL = "sonnet"
+# coordination step. "medium" complexity per lib.runtime_models — Claude's sonnet,
+# byte-identical to the pre-host-aware constant this module always used.
+_ADVISOR_COMPLEXITY = "medium"
+_ADVISOR_MODEL = model_for(HOST_CLAUDE, _ADVISOR_COMPLEXITY)
 _ADVISOR_TIMEOUT_S = 20
 
 # The acceptance judge is a SEPARATE, cheaper tier than the warn-only advisor: it
 # gates a real transition (via the pure acceptance-review guardian), so it runs on the
 # cheapest model and is fail-open (a missing verdict blocks at the gate, never passes).
-_JUDGE_MODEL = "haiku"
+# "low" complexity per lib.runtime_models — Claude's haiku, byte-identical to the
+# pre-host-aware constant.
+_JUDGE_COMPLEXITY = "low"
+_JUDGE_MODEL = model_for(HOST_CLAUDE, _JUDGE_COMPLEXITY)
 JUDGE_REVIEWER = "judge:haiku"
+
+
+def _prompt_argv(runtime_host: str, complexity: str, prompt: str) -> list[str]:
+    """The one place every judge/enumerate call builds its argv: resolve
+    `runtime_host`'s model for `complexity`, then hand off to host_llm for the
+    per-host `claude -p` / `agent -p` shape. Every call site that used to hardcode
+    `["claude", "-p", "--model", <model>, prompt]` now goes through here instead,
+    so a runtime_host=cursor session never shells out to `claude`."""
+    model = model_for(runtime_host, complexity)
+    return host_llm.build_prompt_argv(runtime_host, model, prompt)
 _JUDGE_PASS = "pass"
 _JUDGE_REVISE = "revise"
 
@@ -63,7 +81,7 @@ _ENUMERATE_PROMPT = (
 )
 
 
-def enumerate_claims(artifact_text: str, runner) -> list[str]:
+def enumerate_claims(artifact_text: str, runner, *, runtime_host: str = HOST_CLAUDE) -> list[str]:
     """Independent semantic re-reading of an outgoing deliverable that RAISES the
     load-bearing decisions/judgments/claims it detects, one statement per line.
 
@@ -72,16 +90,17 @@ def enumerate_claims(artifact_text: str, runner) -> list[str]:
     deterministic disposition gate (ledger.validate_candidates) is what turns each
     raised item into a blocker; this call only supplies the candidates.
 
-    Cost-bounded exactly like the warn-only advisor: `claude -p --model sonnet`
-    with the timeout carried by the runner (advisor.subprocess_runner). Fail-open:
-    a None runner, a non-zero exit, or any exception returns [] — an empty
-    enumeration is a valid (if unhelpful) result; the mandatory-cross-check blocker
-    is discharged by the `enumerated` flag the caller sets, not by the count."""
+    Cost-bounded exactly like the warn-only advisor: `claude -p --model sonnet` (or
+    `agent -p --model composer-2.5` when `runtime_host="cursor"`) with the timeout
+    carried by the runner (advisor.subprocess_runner). Fail-open: a None runner, a
+    non-zero exit, or any exception returns [] — an empty enumeration is a valid
+    (if unhelpful) result; the mandatory-cross-check blocker is discharged by the
+    `enumerated` flag the caller sets, not by the count."""
     if runner is None:
         return []
     try:
         prompt = _ENUMERATE_PROMPT.format(payload=artifact_text)
-        result = runner(["claude", "-p", "--model", _ADVISOR_MODEL, prompt])
+        result = runner(_prompt_argv(runtime_host, _ADVISOR_COMPLEXITY, prompt))
         if result.returncode != 0:
             return []
         return [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
@@ -109,7 +128,7 @@ _ENUMERATE_QUESTIONS_PROMPT = (
 
 
 def enumerate_questions_health(
-    goal: str, done_criterion: str, plan_text: str, runner
+    goal: str, done_criterion: str, plan_text: str, runner, *, runtime_host: str = HOST_CLAUDE
 ) -> tuple[bool | None, list[tuple[str, str]]]:
     """Independent re-reading of a WHOLE plan that RAISES the questions its
     construction should have provoked, as (target, question) pairs, together with a
@@ -141,7 +160,7 @@ def enumerate_questions_health(
     try:
         payload = f"GOAL:\n{goal}\n\nDONE CRITERION:\n{done_criterion}\n\nPLAN:\n{plan_text}"
         prompt = _ENUMERATE_QUESTIONS_PROMPT.format(payload=payload)
-        result = runner(["claude", "-p", "--model", _ADVISOR_MODEL, prompt])
+        result = runner(_prompt_argv(runtime_host, _ADVISOR_COMPLEXITY, prompt))
         if result.returncode != 0:
             return False, []
         pairs: list[tuple[str, str]] = []
@@ -159,15 +178,17 @@ def enumerate_questions_health(
 
 
 def enumerate_questions(
-    goal: str, done_criterion: str, plan_text: str, runner
+    goal: str, done_criterion: str, plan_text: str, runner, *, runtime_host: str = HOST_CLAUDE
 ) -> list[tuple[str, str]]:
     """Thin wrapper over enumerate_questions_health returning only the (target,
     question) pairs — the recall-widener surface, symmetric with enumerate_claims. A
     caller that also needs to record runner health calls the _health variant directly."""
-    return enumerate_questions_health(goal, done_criterion, plan_text, runner)[1]
+    return enumerate_questions_health(goal, done_criterion, plan_text, runner, runtime_host=runtime_host)[1]
 
 
-def judge(kind: str, payload: dict, runner, *, enabled: bool | None = None) -> list[str]:
+def judge(
+    kind: str, payload: dict, runner, *, enabled: bool | None = None, runtime_host: str = HOST_CLAUDE
+) -> list[str]:
     """Return advisory strings for the given cognition point, or [] if disabled/failed.
 
     Warn-only: callers MUST NOT branch on the return value for control flow.
@@ -182,7 +203,7 @@ def judge(kind: str, payload: dict, runner, *, enabled: bool | None = None) -> l
         if not template:
             return []
         prompt = template.format(payload=payload)
-        result = runner(["claude", "-p", "--model", _ADVISOR_MODEL, prompt])
+        result = runner(_prompt_argv(runtime_host, _ADVISOR_COMPLEXITY, prompt))
         if result.returncode != 0:
             return []
         return [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
@@ -190,7 +211,9 @@ def judge(kind: str, payload: dict, runner, *, enabled: bool | None = None) -> l
         return []
 
 
-def acceptance_judge(observation: str, expected: str, runner, *, enabled: bool) -> tuple[str | None, str]:
+def acceptance_judge(
+    observation: str, expected: str, runner, *, enabled: bool, runtime_host: str = HOST_CLAUDE
+) -> tuple[str | None, str]:
     """Cheap external judge for an acceptance observation, backing the acceptance-review
     gate. Returns (verdict, reason) where verdict is 'pass' | 'revise' | None.
 
@@ -215,7 +238,7 @@ def acceptance_judge(observation: str, expected: str, runner, *, enabled: bool) 
             "and adequate) or NO (it is vague, generic, or a rephrase of the expected). "
             "On the SECOND line give a one-line reason."
         )
-        result = runner(["claude", "-p", "--model", _JUDGE_MODEL, prompt])
+        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY, prompt))
         if result.returncode != 0:
             return None, "judge exited non-zero (fail-open)"
         lines = [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
@@ -281,7 +304,12 @@ _BINARY_ASK_PROMPT = (
 
 
 def judge_binary_ask(
-    final_text: str, runner, *, enabled: bool = True, timeout: int = _BINARY_ASK_TIMEOUT_S
+    final_text: str,
+    runner,
+    *,
+    enabled: bool = True,
+    timeout: int = _BINARY_ASK_TIMEOUT_S,
+    runtime_host: str = HOST_CLAUDE,
 ) -> bool:
     """Language-independent semantic judge: does ``final_text`` end with a binary /
     confirm question that should have gone through an AskUserQuestion click-gate?
@@ -308,7 +336,7 @@ def judge_binary_ask(
         return False
     try:
         prompt = _BINARY_ASK_PROMPT.format(text=final_text)
-        result = runner(["claude", "-p", "--model", _JUDGE_MODEL, prompt], timeout=timeout)
+        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY, prompt), timeout=timeout)
         if result.returncode != 0:
             return False
         lines = [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
@@ -353,7 +381,12 @@ _OUTAGE_ESCALATION_JUDGE_PROMPT = (
 
 
 def judge_feedback_signal(
-    user_text: str, runner, *, enabled: bool = True, timeout: int = _BINARY_ASK_TIMEOUT_S
+    user_text: str,
+    runner,
+    *,
+    enabled: bool = True,
+    timeout: int = _BINARY_ASK_TIMEOUT_S,
+    runtime_host: str = HOST_CLAUDE,
 ) -> bool:
     """Semantic judge behind the self-improvement regex prefilter: does
     ``user_text`` carry genuine agent-behavior feedback (a correction, a stated
@@ -382,7 +415,7 @@ def judge_feedback_signal(
         return False
     try:
         prompt = _FEEDBACK_JUDGE_PROMPT.format(text=user_text)
-        result = runner(["claude", "-p", "--model", _JUDGE_MODEL, prompt], timeout=timeout)
+        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY, prompt), timeout=timeout)
         if result.returncode != 0:
             return False
         lines = [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
@@ -394,7 +427,12 @@ def judge_feedback_signal(
 
 
 def judge_outage_escalation(
-    assistant_text: str, runner, *, enabled: bool = True, timeout: int = _BINARY_ASK_TIMEOUT_S
+    assistant_text: str,
+    runner,
+    *,
+    enabled: bool = True,
+    timeout: int = _BINARY_ASK_TIMEOUT_S,
+    runtime_host: str = HOST_CLAUDE,
 ) -> bool:
     """Semantic judge behind the outage-escalation regex prefilter: does
     ``assistant_text`` escalate a live, un-diagnosed external-service failure to
@@ -419,7 +457,7 @@ def judge_outage_escalation(
         return False
     try:
         prompt = _OUTAGE_ESCALATION_JUDGE_PROMPT.format(text=assistant_text)
-        result = runner(["claude", "-p", "--model", _JUDGE_MODEL, prompt], timeout=timeout)
+        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY, prompt), timeout=timeout)
         if result.returncode != 0:
             return False
         lines = [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
