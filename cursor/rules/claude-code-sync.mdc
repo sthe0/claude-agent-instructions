@@ -47,6 +47,8 @@ Coordination cycle: Need → Options → Plan → Resources → Execution → Ve
 
 Claude Code's `AskUserQuestion` maps to Cursor's **AskQuestion** tool when the host attaches it; if AskQuestion is not in the tool list, ask the same fixed-choice question in prose (Recommended first). Do not invent a settings toggle — attachment is host/model-gated.
 
+**Web search language.** `WebSearch` / `WebFetch` queries use the **dialogue language** (same as replies); English is additive for docs/API, not a default substitute. Detail: `planner/SKILL.md` § Research; `CLAUDE.md` § Acting without asking.
+
 ## Acting without asking
 
 Carve-outs that minimize per-action confirmation (full policy: `~/.claude-agent/memory-global/leaves/acting-without-asking.md`; anti-pattern row in `memory-global/leaves/coordinator-pitfalls.md`):
