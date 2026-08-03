@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -591,3 +592,121 @@ def test_oracle_goes_red_against_a_superseded_rule(canon):
             if guard_denies(canon, raw, cwd) and not guard_denies(canon, stripped, cwd):
                 caught.append(name)
     assert caught, "the oracle passed a rule known to be unsound — it measures nothing"
+
+
+# ---------------------------------------------------------------------------
+# `tokenize` and the vocabulary built on it
+# ---------------------------------------------------------------------------
+
+
+def test_tokenize_splits_glued_redirects():
+    # each of these hides its redirect from `shlex.split`, which returns the
+    # operator glued to a neighbour (`['exec', '3>f']`) and so shows a scanner
+    # no redirect at all
+    assert shell_tokens.tokenize("exec 3>f") == ["exec", "3", ">", "f"]
+    assert shell_tokens.tokenize("printf hi 2>f") == ["printf", "hi", "2", ">", "f"]
+    assert shell_tokens.tokenize("echo a>b") == ["echo", "a", ">", "b"]
+    assert shell_tokens.tokenize("echo hi>>f") == ["echo", "hi", ">>", "f"]
+    assert shell_tokens.tokenize(">|f") == [">|", "f"]
+
+
+def test_tokenize_splits_glued_separator_but_not_quoted_one():
+    assert shell_tokens.tokenize("echo hi;cp a f") == ["echo", "hi", ";", "cp", "a", "f"]
+    # the same `;` inside a quoted sed script is DATA, and must not open a segment
+    assert shell_tokens.tokenize("sed 's/a;b/c/' f") == ["sed", "'s/a;b/c/'", "f"]
+    segments = [seg for _sep, seg in
+                shell_tokens.split_segments(shell_tokens.tokenize("sed 's/a;b/c/' f"))]
+    assert len(segments) == 1
+
+
+def test_operator_hood_is_decided_before_quote_removal():
+    # the whole reason quotes are RETAINED: `grep ">" f` redirects nothing,
+    # `grep > f` does, and after quote removal the two are the same tokens
+    quoted = shell_tokens.tokenize('grep ">" README.md')
+    bare = shell_tokens.tokenize("grep > README.md")
+    assert quoted == ["grep", '">"', "README.md"]
+    assert bare == ["grep", ">", "README.md"]
+    assert quoted[1] not in shell_tokens.REDIRECT_OPS
+    assert bare[1] in shell_tokens.WRITE_REDIRECT_OPS
+
+
+def test_fd_reference_after_redirect_and_amp_is_not_a_write_target():
+    for operand in ("1", "2", "1-", "-"):
+        assert shell_tokens.redirect_write_target(">&", operand) is None
+    # a quoted fd is still an fd -- the operand is read AFTER quote removal,
+    # unlike the operator, which is read before it
+    assert shell_tokens.redirect_write_target(">&", '"1"') is None
+    # but a FILENAME after `>&` is a real write
+    assert shell_tokens.redirect_write_target(">&", "out.log") == "out.log"
+    assert shell_tokens.redirect_write_target("&>", "out.log") == "out.log"
+    # and a read redirect never yields a target
+    assert shell_tokens.redirect_write_target("<", "in.txt") is None
+
+
+def test_tokenize_keeps_variable_inside_its_word():
+    assert shell_tokens.tokenize("cp /tmp/a $S/x.md") == ["cp", "/tmp/a", "$S/x.md"]
+
+
+def test_drop_substitutions_removes_contents_from_the_outer_stream():
+    # `$(mktemp)` arrives as four tokens, so its INTERIOR would otherwise be read
+    # as operands of `cp` -- a copy to a file named `mktemp`
+    assert shell_tokens.drop_substitutions(
+        shell_tokens.tokenize("cp /tmp/a $(mktemp)")) == ["cp", "/tmp/a"]
+    assert shell_tokens.drop_substitutions(
+        shell_tokens.tokenize("diff <(sort a) <(sort b)")) == ["diff"]
+    assert shell_tokens.drop_substitutions(
+        shell_tokens.tokenize("cp /tmp/a `mktemp`")) == ["cp", "/tmp/a"]
+    # a bare `(` is a subshell GROUP, not a substitution, and survives: it is a
+    # statement boundary its callers still have to see
+    assert "(" in shell_tokens.drop_substitutions(
+        shell_tokens.tokenize("(echo a ; echo b > s2)"))
+
+
+def test_tokenize_raises_on_unbalanced_quote_exactly_as_shlex_split():
+    command = 'git commit -m "unterminated'
+    with pytest.raises(ValueError):
+        shlex.split(command)
+    with pytest.raises(ValueError):
+        shell_tokens.tokenize(command)
+
+
+def test_unquote_word_and_was_quoted_are_the_two_halves_of_the_hazard():
+    # path arithmetic must see the unquoted value ...
+    assert shell_tokens.unquote_word('"/tmp/b"') == "/tmp/b"
+    assert shell_tokens.unquote_word("'s/a;b/c/'") == "s/a;b/c/"
+    assert shell_tokens.unquote_word("/tmp/b") == "/tmp/b"
+    # ... while `~` expansion runs the other way: quoted, it stays literal
+    assert shell_tokens.was_quoted('"~/x"') is True
+    assert shell_tokens.was_quoted("~/x") is False
+
+
+def test_strip_command_prefix_strips_assignments_wrappers_and_keywords():
+    def stripped(command):
+        return shell_tokens.strip_command_prefix(shell_tokens.tokenize(command))
+
+    assert stripped("FOO=1 BAR=2 git commit -m x") == (["git", "commit", "-m", "x"], True)
+    assert stripped("sudo -n git commit -m x") == (["git", "commit", "-m", "x"], True)
+    assert stripped("env FOO=1 git commit -m x") == (["git", "commit", "-m", "x"], True)
+    assert stripped("nohup git commit -m x") == (["git", "commit", "-m", "x"], True)
+    assert stripped("then git commit -m x") == (["git", "commit", "-m", "x"], True)
+    # `timeout DURATION COMMAND` puts an operand before the command word
+    assert stripped("timeout 5 git commit -m x") == (["git", "commit", "-m", "x"], True)
+    # a positively-listed value option consumes its value, and only it
+    assert stripped("sudo -u root git commit -m x") == (["git", "commit", "-m", "x"], True)
+    assert stripped("env -u FOO git commit -m x") == (["git", "commit", "-m", "x"], True)
+
+
+def test_strip_command_prefix_doubts_options_outside_the_allowlists():
+    def recognized(command):
+        return shell_tokens.strip_command_prefix(shell_tokens.tokenize(command))[1]
+
+    # `sudo -i` takes NO value: a shared "short option that takes a value" regex
+    # swallowed `git` here, which is why both option sets are allowlists
+    assert recognized("sudo -i git commit -m x") is True
+    # `sudo -h` is ambiguous in sudo's own help -- both `--help` and
+    # `--host=host` -- so no reading of it is safe
+    assert recognized("sudo -h git commit -m x") is False
+    # `env -C` changes the very directory the caller is resolving; consuming its
+    # value would discard that silently
+    assert recognized("env -C /tmp git commit -m x") is False
+    assert recognized("sudo --frobnicate git commit -m x") is False
