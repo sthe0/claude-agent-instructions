@@ -298,6 +298,26 @@ def test_cd_into_worktree_then_sed_allows(tmp_path):
     assert _allowed(proc), proc.stdout
 
 
+def test_cd_into_worktree_then_commit_with_nested_quotes_allows(tmp_path):
+    """The fleet's standard landing idiom, whose closing `)"` the punctuation
+    lexer refuses while the guard's own commit detector (`shlex.split`) parses
+    it. A resolver that reads that refusal as doubt bails to the session cwd —
+    canon — and DENIES a commit that lands in the worktree, wedging `Bash` for
+    every session sitting in canon."""
+    core = make_core(tmp_path)
+    wt = make_worktree(core, tmp_path)
+    command = f'cd {wt} && git commit -m "$(printf %s "subject")"'
+    proc = run_hook(core, command, cwd=core)
+    assert _allowed(proc), proc.stdout
+    # the plain-quoted twin, which both lexers parse, is the control
+    proc = run_hook(core, f'cd {wt} && git commit -m "plain subject"', cwd=core)
+    assert _allowed(proc), proc.stdout
+    # ... and the same nested-quote idiom targeting CANON must still DENY, so
+    # the fallback cannot become a blanket escape from the commit deny
+    proc = run_hook(core, f'cd {core} && git commit -m "$(printf %s "subject")"', cwd=wt)
+    assert _denied(proc), proc.stdout
+
+
 # --- copying OUT of canon is a read of the source: ALLOW ---
 
 def test_cp_canon_source_out_allows(tmp_path):

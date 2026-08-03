@@ -72,6 +72,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 
 from lib.shell_tokens import (
     drop_substitutions,
@@ -240,6 +241,47 @@ def _leading_cd_noop_on_failure(tokens: list[str], payload_cwd: str) -> bool:
     return not os.path.isdir(_resolve(target, payload_cwd))
 
 
+def _tokenize_for_cwd(command: str) -> list[str] | None:
+    """`command`'s tokens for CWD RESOLUTION, or `None` when no lexer parses it.
+
+    The punctuation-aware `tokenize` is tried first and is what the resolution
+    rules are written against. Its refusal set does NOT contain `shlex.split`'s,
+    though — measured over 3197 harvested commands, 21 parse under `shlex.split`
+    and raise here, and 20 do the reverse. The minimal divergence is 6
+    characters, a `"` glued to a punctuation character:
+
+        '""h")"'    shlex.split -> ['h)']    tokenize -> ValueError
+
+    which is the closing `)"` of the `git commit -m "$(... "...")"` idiom.
+
+    That asymmetry is not this module's to absorb quietly, because a caller that
+    keys a DENY off this answer reads a bail-out to `payload_cwd` as "the commit
+    lands in the session's own directory" — the deny-producing answer, reached
+    on a command whose `cd` the legacy lexer resolves perfectly well. Before the
+    punctuation lexer arrived, one lexer served both the caller's detector and
+    this resolver, so a command either was not recognized as a commit at all or
+    was resolved correctly; splitting the lexers broke that coupling in the
+    direction a fail-open consumer cannot afford.
+
+    So the fallback is the LEGACY lexer, restoring the coupling, rather than a
+    posix fallback inside `tokenize` itself: `tokenize`'s contract is that it
+    retains quotes, and callers doing path arithmetic distinguish a quoted
+    redirect operator from a real one by exactly that. Handing them a
+    quote-stripped stream under any condition would silently reintroduce the
+    class of false denies the retention exists to prevent.
+
+    `None` (neither lexer parses) leaves the caller its own doubt policy.
+    """
+    try:
+        return tokenize(command)
+    except ValueError:
+        pass
+    try:
+        return shlex.split(command)
+    except ValueError:
+        return None
+
+
 def command_default_cwd(command: str, payload_cwd: str) -> str:
     """The directory the SHELL runs `command`'s segments in: the leading
     `cd <dir> &&` / `cd <dir> ;` redirect the command itself performs, or
@@ -251,9 +293,8 @@ def command_default_cwd(command: str, payload_cwd: str) -> str:
     still fail the literal-target test on its `$`, which stripping the
     substitution would remove from view.
     """
-    try:
-        tokens = tokenize(command)
-    except ValueError:
+    tokens = _tokenize_for_cwd(command)
+    if tokens is None:
         return payload_cwd
     if len(tokens) >= 2 and unquote_word(tokens[0]) == "cd":
         if _leading_cd_noop_on_failure(tokens, payload_cwd):
@@ -373,19 +414,25 @@ def effective_git_cwd(command: str, payload_cwd: str) -> str:
     / `cd <dir> ;`), or `payload_cwd` when the command has no such redirect —
     including the narrow `cd <literal-absent-dir> ; <segment>` shape, where the
     `cd` demonstrably fails and `payload_cwd` is where `<segment>` actually
-    runs (see module docstring). Best-effort: any parse doubt (or the harness's
-    tracked shell cwd getting reset out from under a `cd`/`-C` the command
-    actually issues) falls back to `payload_cwd`, never to a MORE permissive
-    guess.
+    runs (see module docstring). Best-effort: a command NO lexer parses (see
+    `_tokenize_for_cwd`), or the harness's tracked shell cwd getting reset out
+    from under a `cd`/`-C` the command actually issues, falls back to
+    `payload_cwd`.
+
+    That fallback is not a safe default in general, and it is deliberately not
+    described as one: a consumer that denies on canon reads `payload_cwd` as the
+    DENY-producing answer, so bailing out here costs a false deny rather than a
+    lost one. What keeps it acceptable is that `_tokenize_for_cwd` reaches it
+    only for a command neither lexer parses — which is also a command the
+    caller's own detector cannot have parsed into a commit.
 
     COMMIT-SCOPED: the `-C` of a segment that does not provably commit is not
     honored, because it moves only that segment. `git -C a status && git commit`
     commits in the shell's directory, not in `a`.
     """
     default_cwd = command_default_cwd(command, payload_cwd)
-    try:
-        tokens = tokenize(command)
-    except ValueError:
+    tokens = _tokenize_for_cwd(command)
+    if tokens is None:
         return payload_cwd
     for _sep, segment in split_segments(drop_substitutions(tokens)):
         if segment and _segment_runs_commit(segment, ("git",)) is True:

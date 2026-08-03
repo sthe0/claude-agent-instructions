@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import os
 
+import pytest
+
 from lib import git_cwd, shell_tokens
 
 
@@ -92,17 +94,55 @@ def test_segment_git_cwd_is_per_segment():
 
 
 def test_first_committing_segment_wins_over_a_later_dash_C():
-    # The ONE guard-verdict change the per-segment rule produces, pinned here so
-    # it stays deliberate. The pre-stage adjacency scan found `-C /repo/b`
-    # anywhere in the command and applied it command-wide, so this resolved to
-    # /repo/b and the guard allowed it. The first COMMITTING segment carries no
-    # `-C`, so it really does commit in the session's own cwd -- the old reading
-    # was a lost deny, not a permission this stage removes.
+    # The guard-verdict change the per-segment rule produces, pinned here so it
+    # stays deliberate. The pre-stage adjacency scan found `-C /repo/b` anywhere
+    # in the command and applied it command-wide, so this resolved to /repo/b and
+    # the guard allowed it. The first COMMITTING segment carries no `-C`, so it
+    # really does commit in the session's own cwd -- the old reading was a lost
+    # deny, not a permission this stage removes.
+    #
+    # It is a FAMILY, not one command: the separator does not matter, and neither
+    # does which tree the later `-C` names. Measured 2026-08-03 over 48 328
+    # harvested commands x 4 cwds, this family is 3 of the 4 commands whose
+    # verdict moves, all ALLOW -> DENY; the fourth is pinned by
+    # `test_leading_cd_target_is_split_from_a_glued_separator`.
+    for variant in (
+        "git commit -m x && git -C /repo/b commit -m y",
+        "git commit -m x ; git -C /repo/b commit -m y",
+        "git commit -m y && git -C /repo/c commit -m x",
+    ):
+        assert git_cwd.effective_git_cwd(variant, "/repo/a") == "/repo/a", variant
     command = "git commit -m x && git -C /repo/b commit -m y"
-    assert git_cwd.effective_git_cwd(command, "/repo/a") == "/repo/a"
     first, second = _segments(command)
     assert git_cwd.segment_git_cwd(first, "/repo/a") == "/repo/a"
     assert git_cwd.segment_git_cwd(second, "/repo/a") == "/repo/b"
+
+
+def test_leading_cd_target_is_split_from_a_glued_separator(tmp_path):
+    """A `cd` target written flush against its separator -- `cd /repo/b; cmd`,
+    the shape a human types -- must resolve to `/repo/b`, not to `/repo/b;`.
+
+    This is the second measured verdict change of the tokenizer swap, and the
+    only one the widened real-traffic corpus contributed: `shlex.split` has no
+    punctuation vocabulary, so it handed the leading-`cd` rule a target with the
+    `;` still attached. That target matched no real directory, so the rule placed
+    the commit outside canon and the guard ALLOWED a command it meant to deny.
+    The punctuation lexer separates the two, so the rule now answers as it always
+    intended -- a recovered deny, not a widened one.
+
+    The target must EXIST, or `_leading_cd_noop_on_failure` answers `payload_cwd`
+    for its own reason and the glue is never exercised.
+    """
+    target = tmp_path / "b"
+    target.mkdir()
+    base = str(tmp_path / "a")
+    glued = f"cd {target}; git commit -m x"
+    assert git_cwd.command_default_cwd(glued, base) == str(target)
+    assert git_cwd.effective_git_cwd(glued, base) == str(target)
+    # the spaced twin was never affected and must keep the identical answer
+    assert git_cwd.effective_git_cwd(f"cd {target} ; git commit -m x", base) == str(target)
+    # `&&` glues the same way
+    assert git_cwd.command_default_cwd(f"cd {target}&& git commit -m x", base) == str(target)
 
 
 def test_runs_commit_doubts_relocating_globals():
@@ -132,6 +172,38 @@ def test_redirect_target_uses_shell_cwd_not_git_C():
     # direction 2: git's own repo operation really does happen in the `-C` dir
     segment = _segments(command)[-1]
     assert git_cwd.segment_git_cwd(segment, "/repo/here") == "/repo/other"
+
+
+def test_cwd_resolution_survives_lexer_disagreement():
+    """The two lexers' refusal sets are not nested, so the resolver must not
+    treat the punctuation lexer's refusal as doubt: a command `shlex.split`
+    parses is one the CALLER's detector parsed too, and bailing to `payload_cwd`
+    there is the deny-producing answer on a command whose `cd` is plain.
+
+    Measured 2026-08-03 — the divergence is bidirectional and 6 characters wide,
+    a `"` glued to a punctuation character, which is the closing `)"` of the
+    `git commit -m "$(... "...")"` landing idiom.
+    """
+    import shlex
+
+    minimal = '""h")"'
+    assert shlex.split(minimal) == ["h)"]
+    with pytest.raises(ValueError):
+        shell_tokens.tokenize(minimal)
+
+    # the idiom itself: the punctuation lexer refuses it, the legacy one does not
+    command = 'cd /repo/b && git commit -m "$(printf %s "subject")"'
+    with pytest.raises(ValueError):
+        shell_tokens.tokenize(command)
+    assert shlex.split(command)  # the legacy lexer parses it fine
+
+    # so the resolver still reports the tree the `cd` names, NOT payload_cwd
+    assert git_cwd.command_default_cwd(command, "/repo/a") == "/repo/b"
+    assert git_cwd.effective_git_cwd(command, "/repo/a") == "/repo/b"
+
+    # and a command NEITHER lexer parses still falls back to payload_cwd
+    unparseable = 'cd /repo/b && git commit -m "unterminated'
+    assert git_cwd.effective_git_cwd(unparseable, "/repo/a") == "/repo/a"
 
 
 def test_runs_commit_tri_state():
