@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -551,14 +552,72 @@ def _segment_write_target(seg: list[str], default_cwd: str) -> str | None:
     return None
 
 
-def _redirect_write(tokens: list[str], shell_cwd: str) -> str | None:
-    """The canon path any output redirection in `tokens` opens, or None.
+_MASK = "\x01"
 
-    Scanned over the WHOLE command's raw tokens, not per segment, for two
-    reasons: every redirect is opened by the shell in the shell's own cwd, so
-    segmentation carries no information here; and the tokens must stay raw,
-    because a redirect INSIDE a command substitution (`$(echo x > f)`) is a real
-    write that dropping substitutions would hide."""
+
+def _mask_quoted(command: str) -> tuple[str, list[str]] | None:
+    """`command` with each quoted region replaced by a punctuation-free
+    placeholder, plus the regions in order, or None on an unterminated quote.
+
+    Operator-hood is settled before quote removal, and the punctuation lexer
+    settles it WRONG for a quote that opens mid-word: it splits `<` and `>` out
+    of `--format="%H%n%an <%ae>%n%s"` and reports two redirects the shell never
+    performs. Measured over the harvested corpus, that one reading moved 456
+    commands from allow to deny. Masking answers the quoting question first, so
+    only operators the shell would honour reach the lexer at all.
+    """
+    regions: list[str] = []
+    out: list[str] = []
+    i, n = 0, len(command)
+    while i < n:
+        c = command[i]
+        if c == "\\" and i + 1 < n:
+            out.append(command[i:i + 2])
+            i += 2
+            continue
+        if c not in "'\"":
+            out.append(c)
+            i += 1
+            continue
+        j = i + 1
+        while j < n:
+            if c == '"' and command[j] == "\\" and j + 1 < n:
+                j += 2
+                continue
+            if command[j] == c:
+                break
+            j += 1
+        if j >= n:
+            return None
+        out.append(f"{_MASK}{len(regions)}{_MASK}")
+        regions.append(command[i:j + 1])
+        i = j + 1
+    return "".join(out), regions
+
+
+def _unmask(token: str, regions: list[str]) -> str:
+    """`token` with its placeholders replaced by the quoted text they stand for."""
+    for index, region in enumerate(regions):
+        token = token.replace(f"{_MASK}{index}{_MASK}", region)
+    return token
+
+
+def _redirect_write(command: str, shell_cwd: str) -> str | None:
+    """The canon path any output redirection in `command` opens, or None.
+
+    Scanned over the WHOLE command, not per segment, for two reasons: every
+    redirect is opened by the shell in the shell's own cwd, so segmentation
+    carries no information here; and the text must stay raw, because a redirect
+    INSIDE a command substitution (`$(echo x > f)`) is a real write that
+    dropping substitutions would hide."""
+    masked = _mask_quoted(command)
+    if masked is None:
+        return None
+    text, regions = masked
+    try:
+        tokens = shell_tokens.tokenize(text)
+    except Exception:
+        return None
     for i, tok in enumerate(tokens):
         if tok not in shell_tokens.REDIRECT_OPS:
             continue
@@ -567,6 +626,8 @@ def _redirect_write(tokens: list[str], shell_cwd: str) -> str | None:
             continue
         if operand == "$" and i + 2 < len(tokens) and tokens[i + 2] == "(":
             continue  # the target is whatever a substitution prints — unknowable
+        if operand is not None:
+            operand = _unmask(operand, regions)
         target = shell_tokens.redirect_write_target(tok, operand)
         if target is None:
             continue
@@ -576,13 +637,188 @@ def _redirect_write(tokens: list[str], shell_cwd: str) -> str | None:
     return None
 
 
+_ASSIGNMENT = re.compile(r"\A([A-Za-z_][A-Za-z0-9_]*)=(.*)\Z", re.S)
+_EXPANSION = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
+
+# Variables the shell always has, whatever happened in an earlier tool call, and
+# whose value this process shares because the hook runs as the same user.
+_AMBIENT = ("HOME", "PWD", "TMPDIR", "USER", "LOGNAME", "SHELL", "HOSTNAME")
+
+
+def _variable_values(tokens: list[str]) -> tuple[dict[str, str], set[str]]:
+    """The variable values this command settles by itself, and the names it
+    assigns at all.
+
+    The two differ, and the difference is the whole point: `D=/some/dir` gives a
+    value the scan can substitute, while `D=$(mktemp -d)` gives only the
+    knowledge that `$D` is NOT the unset variable the deny below assumes."""
+    values = {name: os.environ[name] for name in _AMBIENT if name in os.environ}
+    assigned: set[str] = set()
+    for token in tokens:
+        match = _ASSIGNMENT.match(token)
+        if not match:
+            continue
+        name, raw = match.groups()
+        assigned.add(name)
+        word = shell_tokens.unquote_word(raw)
+        if "$" not in word and "`" not in word:
+            values.setdefault(name, word)
+    return values, assigned
+
+
+def _expand_variables(command: str, values: dict[str, str]) -> str:
+    """`command` with every variable of known value substituted.
+
+    Without this the scan reads `$D/x.md` as a literal directory named `$D`
+    under the cwd, which is the right answer only while `$D` is unset. When the
+    command assigns `D` itself the shell opens a completely different path --
+    and resolving it is what keeps a `D=<canon>` assignment DENIED instead of
+    trading one wrong verdict for the opposite one."""
+    def replace(match: re.Match[str]) -> str:
+        name = match.group(1) or match.group(2)
+        return values.get(name, match.group(0))
+    return _EXPANSION.sub(replace, command)
+
+
+def _commit_cwd_settled(command: str, cwd: str) -> bool:
+    """Whether the directory a detected `git commit` runs in is actually known.
+
+    The commit deny is only sound when the cwd it fires on is the cwd the
+    command really has, and two ways of not knowing it both end at the SAME
+    innocent-looking answer -- `payload_cwd`, which in canon is a deny. The cwd
+    resolver bails to `payload_cwd` on a command its lexer refuses (52 corpus
+    commands: a `git commit -F -` whose here-document body carries an
+    apostrophe, every one of them `cd`-ing into a worktree first), and an
+    unresolved variable leaves a `$` in the answer -- where reading it as a
+    canon-relative directory is wrong in both directions, since bash sends
+    `cd $UNSET` to HOME rather than into the current directory.
+
+    Neither case says the commit is safe; both say this hook cannot tell, which
+    in a fail-open guard is an allow. The refusal case still has to be narrowed
+    to commands whose cwd the answer actually MISSES, though -- reading every
+    refusal as doubt would hand the same escape to `cd <canon> && git commit`,
+    the very command this deny exists for."""
+    if "$" in cwd:
+        return False
+    return not _unfollowed_cd(command, cwd)
+
+
+def _unfollowed_cd(command: str, cwd: str) -> bool:
+    """Whether `command` changes directory somewhere the resolved `cwd` is not.
+
+    The resolver answers only the LEADING `cd`, so `WT=<worktree> ; cd "$WT" ;
+    git commit` gets `payload_cwd` back -- and in canon that is a deny on a
+    commit that lands in a worktree. A `cd` the resolver did not take is exactly
+    the evidence that its answer is not this command's cwd.
+
+    It cannot become a blanket escape, because a `cd` the resolver DID take
+    compares equal and settles nothing loose: `cd <canon> && git commit` still
+    denies."""
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return True
+    for index, word in enumerate(words[:-1]):
+        if word != "cd":
+            continue
+        target = words[index + 1]
+        if not os.path.isabs(target):
+            target = os.path.join(cwd, target)
+        if os.path.realpath(target) != os.path.realpath(cwd):
+            return True
+    return False
+
+
+_SUBSTITUTION = re.compile(r"\$\((?:[^()]|\([^()]*\))*\)", re.S)
+_DELIMITER = re.compile(r"<<-?\s*(?P<q>['\"]?)(?P<word>[^\s'\"]+)(?P=q)")
+
+# A shell named ANYWHERE in the command, not just as the here-document's
+# consumer: the body may be executed by a later statement, or by a function
+# whose definition rebinds an inert-looking name (`cat() { bash; }`), and both
+# are shapes `heredoc_body_runs_as_shell` reads as consumer-inert.
+_SHELL_WORD = re.compile(r"(?<![\w./-])(?:ba|z|k|da)?sh\b|(?<![\w./-])(?:eval|source|exec)\b")
+
+
+def _outside_heredoc_body(command: str) -> str:
+    """`command` reduced to the text the SHELL reads as syntax when a here-document
+    body survived `strip_heredoc_bodies`.
+
+    A body it refuses to strip is data for an interpreter, and the write scan was
+    reading that data as shell: prose, python and log text supplied 70 of the
+    corpus's false denies, with targets like `<canon>/scripts/=0` and
+    `<canon>/scripts/Qwen`. Only two parts of such a command are syntax -- the
+    line the here-document opens on, and any command substitution, which an
+    EXPANDING body really does run. Text after the body is dropped with it,
+    which can hide a real later write; that is the fail-open direction, and the
+    body is the only place this hook cannot tell data from syntax at all."""
+    index = command.find("<<")
+    if index < 0 or shell_tokens.heredoc_body_runs_as_shell(command):
+        return command
+    if _SHELL_WORD.search(command):
+        return command  # a shell named anywhere may yet run the body
+    line_end = command.find("\n", index)
+    delimiter = _DELIMITER.match(command[index:])
+    if line_end < 0 or not delimiter:
+        return command
+    # Text after the body is command line again, so it is kept -- a real write
+    # on a later statement (`EOF` then `echo x > scripts/existing.py`) must not
+    # ride out on the body's exemption.
+    body = command[line_end:]
+    lines = body.split("\n")
+    word = delimiter.group("word")
+    ends = [n for n, line in enumerate(lines) if line.strip() == word]
+    tail = "\n".join(lines[ends[-1] + 1:]) if ends else ""
+    return " ; ".join([command[:line_end], *_SUBSTITUTION.findall(body), tail])
+
+
+def _normalized(command: str) -> tuple[str, set[str]]:
+    """`command` with newlines read as the statement separators bash reads them
+    as and every known-value variable substituted, plus the names it assigns.
+
+    Both readings belong to the same normalization because both are about what
+    the SHELL sees rather than what the tokenizer sees, and both the commit
+    detector and the write scan need them: without the first, a `cd` on line 2
+    never moves the shell; without the second, `cd "$WT"` reads as a directory
+    literally named `$WT` under the cwd -- and in canon that one misreading
+    denied 52 corpus commits that target a worktree."""
+    command = _statement_newlines(command)
+    try:
+        tokens = shell_tokens.tokenize(command)
+    except Exception:
+        return command, set()
+    values, assigned = _variable_values(tokens)
+    return _expand_variables(command, values), assigned
+
+
+def _live_expansion(target: str, assigned: set[str]) -> bool:
+    """Whether `target` still carries a `$VAR` that this command assigns.
+
+    The deny on an unexpanded variable is CORRECT for the case it was written
+    for (`_unexpanded_variable_note`): a variable assigned in an EARLIER tool
+    call is unset in this fresh shell, so `$S/x.md` really does land under the
+    cwd. It is wrong the moment the command assigns the variable itself from
+    something unresolvable (`D=$(mktemp -d)`), because then the shell opens a
+    path this hook never saw. Same bytes, opposite verdicts, so the two are
+    separated here rather than merged -- and the unknowable side is doubt, which
+    in a fail-open guard means allow."""
+    names = {a or b for a, b in _EXPANSION.findall(target)}
+    return bool(names & assigned)
+
+
 def _canon_bash_write(command: str, payload_cwd: str) -> str | None:
     """Best-effort: the canon path a Bash command writes in place, or None.
     Fail-open on any parse error (allow).
 
     The command's default cwd is computed ONCE (a leading `cd <dir>` moves the
     SHELL, hence every later segment), and each segment's own write targets are
-    then resolved against the cwd that segment's own command runs in."""
+    then resolved against the cwd that segment's own command runs in.
+
+    Newlines are normalized to statement separators first, for the same reason
+    the commit detector does it: a newline ends a statement in bash but not in
+    the tokenizer, so without this a `cd` on line 2 never moves the shell and
+    every later line's relative write is resolved against the wrong directory --
+    46 of the corpus's false denies were exactly that."""
+    command, assigned = _normalized(_outside_heredoc_body(command))
     try:
         tokens = shell_tokens.tokenize(command)
     except Exception:
@@ -590,14 +826,14 @@ def _canon_bash_write(command: str, payload_cwd: str) -> str | None:
     if not tokens:
         return None
     shell_cwd = git_cwd.command_default_cwd(command, payload_cwd)
-    hit = _redirect_write(tokens, shell_cwd)
-    if hit:
+    hit = _redirect_write(command, shell_cwd)
+    if hit and not _live_expansion(hit, assigned):
         return hit
     for _sep, seg in shell_tokens.split_segments(shell_tokens.drop_substitutions(tokens)):
         if not seg:
             continue
         hit = _segment_write_target(seg, shell_cwd)
-        if hit:
+        if hit and not _live_expansion(hit, assigned):
             return hit
     return None
 
@@ -716,10 +952,11 @@ def decide(payload: dict) -> str | None:
         payload_cwd = payload.get("cwd") or os.getcwd()
         # The commit detector reads statement boundaries; the write scan below
         # deliberately does not, so the rewrite is scoped to this pair.
-        commit_command = _statement_newlines(command)
+        commit_command, _assigned = _normalized(command)
         if _is_git_commit(commit_command):
             cwd = git_cwd.effective_git_cwd(commit_command, payload_cwd)
-            target_dir = _nearest_existing_dir(cwd)
+            settled = _commit_cwd_settled(commit_command, cwd)
+            target_dir = _nearest_existing_dir(cwd) if settled else None
             if target_dir is not None and _is_primary_core(target_dir):
                 return _commit_deny_msg(os.path.realpath(str(_core_root())))
             # A commit targeting a worktree does not end the scan: the SAME

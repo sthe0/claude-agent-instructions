@@ -385,6 +385,21 @@ def _strip_bodies(command: str) -> str:
     return command if quote is not None else "".join(out)
 
 
+def heredoc_body_runs_as_shell(command: str) -> bool:
+    """Whether any here-document body in `command` is executed as SHELL.
+
+    `strip_heredoc_bodies` refuses a command for two different reasons -- the
+    body is fed to a shell (`bash <<'EOF'`, `cat <<'EOF' | bash`), or the body is
+    interpreter data carrying an expansion trigger -- and a caller that scans the
+    unstripped residue needs them apart. Only the first makes body text shell
+    syntax; reading an interpreter's data as syntax is what turned prose and
+    python into 70 measured false denies."""
+    for index, _ in enumerate(command):
+        if command.startswith("<<", index) and not _pipeline_consumers_ok(command, index):
+            return True
+    return False
+
+
 def strip_heredoc_bodies(command: str) -> str:
     """`command` with here-document bodies and here-string operands removed, or
     `command` verbatim when it falls outside the recognized shape.
