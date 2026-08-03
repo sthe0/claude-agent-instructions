@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 
-from lib import git_cwd
+from lib import git_cwd, shell_tokens
 
 
 def test_cd_redirect_absolute():
@@ -69,3 +69,84 @@ def test_git_C_wins_over_failed_leading_cd(tmp_path):
     assert git_cwd.effective_git_cwd(
         f"cd {missing} ; git -C {worktree} commit -m x", str(tmp_path)
     ) == str(worktree)
+
+
+def _segments(command):
+    return [seg for _sep, seg in
+            shell_tokens.split_segments(shell_tokens.tokenize(command)) if seg]
+
+
+def test_segment_git_cwd_is_per_segment():
+    # `-C` moves ONE git invocation and is not transitive: the `status` segment
+    # runs in /repo/b, the `commit` segment right after it does not
+    first, second = _segments("git -C /repo/b status ; git commit -m x")
+    assert git_cwd.segment_git_cwd(first, "/repo/a") == "/repo/b"
+    assert git_cwd.segment_git_cwd(second, "/repo/a") == "/repo/a"
+    # and the commit-scoped resolver agrees: it must not carry the `status`
+    # segment's `-C` across the separator
+    assert git_cwd.effective_git_cwd("git -C /repo/b status ; git commit -m x", "/repo/a") == "/repo/a"
+    # cumulative within ONE segment, each resolved against the previous
+    # (measured against git 2.43.0: `-C cum/x -C y` reports cum/x/y/.git)
+    (both,) = _segments("git -C /repo/b -C sub commit -m x")
+    assert git_cwd.segment_git_cwd(both, "/repo/a") == os.path.join("/repo/b", "sub")
+
+
+def test_first_committing_segment_wins_over_a_later_dash_C():
+    # The ONE guard-verdict change the per-segment rule produces, pinned here so
+    # it stays deliberate. The pre-stage adjacency scan found `-C /repo/b`
+    # anywhere in the command and applied it command-wide, so this resolved to
+    # /repo/b and the guard allowed it. The first COMMITTING segment carries no
+    # `-C`, so it really does commit in the session's own cwd -- the old reading
+    # was a lost deny, not a permission this stage removes.
+    command = "git commit -m x && git -C /repo/b commit -m y"
+    assert git_cwd.effective_git_cwd(command, "/repo/a") == "/repo/a"
+    first, second = _segments(command)
+    assert git_cwd.segment_git_cwd(first, "/repo/a") == "/repo/a"
+    assert git_cwd.segment_git_cwd(second, "/repo/a") == "/repo/b"
+
+
+def test_runs_commit_doubts_relocating_globals():
+    for command in (
+        "git --git-dir=/repo/a/.git commit -m x",
+        "git --work-tree=/repo/b commit -m x",
+        "git --namespace=ns commit -m x",
+        "git --git-dir /repo/a/.git --work-tree /repo/b commit -m x",
+    ):
+        assert git_cwd.runs_commit(command) is None, command
+        # containment is bought by shrinking the DETECTOR, not by growing the
+        # resolver: `segment_git_cwd` reads `-C` only, so these move nothing
+        (segment,) = _segments(command)
+        assert git_cwd.segment_git_cwd(segment, "/repo/a") == "/repo/a", command
+    # the doubt is scoped to the commit; a non-commit subcommand carrying the
+    # same global stays a plain False
+    assert git_cwd.runs_commit("git --git-dir=/repo/a/.git status") is False
+
+
+def test_redirect_target_uses_shell_cwd_not_git_C():
+    # measured 2026-08-03: `cd here && git -C ../other status > notes.md`
+    # creates here/notes.md, never other/notes.md -- the shell opens the
+    # redirect in ITS cwd before git runs
+    command = "cd /repo/here && git -C /repo/other status > notes.md"
+    # direction 1: the redirect is opened in the SHELL's cwd
+    assert git_cwd.command_default_cwd(command, "/repo/a") == "/repo/here"
+    # direction 2: git's own repo operation really does happen in the `-C` dir
+    segment = _segments(command)[-1]
+    assert git_cwd.segment_git_cwd(segment, "/repo/here") == "/repo/other"
+
+
+def test_runs_commit_tri_state():
+    assert git_cwd.runs_commit("git commit -m x") is True
+    assert git_cwd.runs_commit("sudo -n git commit -m x") is True
+    assert git_cwd.runs_commit("git status") is False
+    assert git_cwd.runs_commit("cd /tmp && ls") is False
+    # the five doubt producers, one command each
+    assert git_cwd.runs_commit('git commit -m "unterminated') is None    # 1 tokenizer raises
+    assert git_cwd.runs_commit("sudo -h git commit -m x") is None        # 2 prefix stripper
+    assert git_cwd.runs_commit("git --frobnicate commit -m x") is None   # 3 scanner doubt
+    assert git_cwd.runs_commit("git bisect run ./t.sh") is None          # 4 command-taking
+    assert git_cwd.runs_commit("git --git-dir=/r/.git commit -m x") is None  # 5 relocating
+    # a print-and-exit global runs no subcommand at all -- that is KNOWN, not
+    # doubted, so it stays False
+    assert git_cwd.runs_commit("git --version commit") is False
+    # any one provable commit segment wins over doubt elsewhere
+    assert git_cwd.runs_commit("sudo -h ls ; git commit -m x") is True
