@@ -6,6 +6,7 @@ extraction stays behavior-identical to the original."""
 from __future__ import annotations
 
 import os
+import shlex
 
 import pytest
 
@@ -186,8 +187,6 @@ def test_cwd_resolution_survives_lexer_disagreement():
     which is the closing `)"` of the `git commit -m "$(... "...")"` landing
     idiom.
     """
-    import shlex
-
     minimal = '""h")"'
     assert shlex.split(minimal) == ["h)"]
     with pytest.raises(ValueError):
