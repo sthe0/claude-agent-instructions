@@ -180,9 +180,11 @@ def test_cwd_resolution_survives_lexer_disagreement():
     parses is one the CALLER's detector parsed too, and bailing to `payload_cwd`
     there is the deny-producing answer on a command whose `cd` is plain.
 
-    Measured 2026-08-03 — the divergence is bidirectional and 6 characters wide,
-    a `"` glued to a punctuation character, which is the closing `)"` of the
-    `git commit -m "$(... "...")"` landing idiom.
+    Measured 2026-08-03 over 48 328 harvested commands: 552 parse under
+    `shlex.split` and raise under `tokenize`, 373 the reverse. The minimal
+    divergence is 6 characters wide, a `"` glued to a punctuation character,
+    which is the closing `)"` of the `git commit -m "$(... "...")"` landing
+    idiom.
     """
     import shlex
 

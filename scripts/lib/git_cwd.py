@@ -246,9 +246,9 @@ def _tokenize_for_cwd(command: str) -> list[str] | None:
 
     The punctuation-aware `tokenize` is tried first and is what the resolution
     rules are written against. Its refusal set does NOT contain `shlex.split`'s,
-    though — measured over 3197 harvested commands, 21 parse under `shlex.split`
-    and raise here, and 20 do the reverse. The minimal divergence is 6
-    characters, a `"` glued to a punctuation character:
+    though — measured over 48 328 harvested commands, 552 parse under
+    `shlex.split` and raise here, and 373 do the reverse. The minimal divergence
+    is 6 characters, a `"` glued to a punctuation character:
 
         '""h")"'    shlex.split -> ['h)']    tokenize -> ValueError
 
