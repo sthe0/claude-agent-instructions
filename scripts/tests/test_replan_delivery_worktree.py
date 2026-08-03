@@ -34,6 +34,9 @@ def _delivery_worktree_events(state):
 
 
 def test_refinement_replan_refreshes_delivery_worktree(store, fixtures_dir):
+    """Pins that the refinement branch derives state.delivery_worktree via
+    _sync_venue_from_plan (canon's single venue-derivation point) rather than a
+    duplicate inline assignment beside it."""
     sid = "rf-dw"
     base = str(fixtures_dir / "plan_two_stage_verifyfix_delivery.toml")
     changed = str(fixtures_dir / "plan_two_stage_verifyfix_delivery_changed.toml")
@@ -48,6 +51,8 @@ def test_refinement_replan_refreshes_delivery_worktree(store, fixtures_dir):
 
 
 def test_substantive_replan_refreshes_delivery_worktree(store, fixtures_dir):
+    """Pins that the substantive branch derives state.delivery_worktree via
+    _sync_venue_from_plan rather than a duplicate inline assignment beside it."""
     sid = "sb-dw"
     base = str(fixtures_dir / "plan_two_stage.toml")
     bigger = str(fixtures_dir / "plan_two_stage_substantive_delivery.toml")
@@ -65,10 +70,10 @@ def test_no_change_replan_refreshes_delivery_worktree(store, fixtures_dir, tmp_p
     """A legacy session (plan_snapshot_path=None) whose plan file's delivery_worktree
     is edited IN PLACE self-diffs to no_change (old==new==plan_path, for lack of a
     snapshot to diff against). The no_change branch must still refresh
-    state.delivery_worktree from the file, mirroring the existing verify_command
-    backfill it already performs. Stage 1 is PASSED so this also exercises the
-    no_change branch's visibility-event call site — without it that call can be
-    deleted with every test still green."""
+    state.delivery_worktree from the file via _sync_venue_from_plan, mirroring the
+    existing verify_command backfill it already performs. Stage 1 is PASSED so this
+    also exercises the no_change branch's visibility-event call site — without it
+    that call can be deleted with every test still green."""
     sid = "nc-dw"
     plan_path = tmp_path / "plan.toml"
     plan_path.write_text((fixtures_dir / "plan_two_stage_verifyfix_delivery.toml").read_text())
@@ -98,10 +103,11 @@ def test_no_change_replan_refreshes_delivery_worktree(store, fixtures_dir, tmp_p
 
 
 def test_changed_worktree_with_a_passed_stage_is_logged(store, fixtures_dir):
-    """A refinement replan that moves delivery_worktree while stage 1 is already
-    PASSED (verified in the OLD venue) must log the change — PASSED stages don't
-    lose their Outcome on refinement, but a mover here means a later verify-final
-    re-run reads a different tree than the one that actually PASSED."""
+    """A refinement replan that moves delivery_worktree (via _sync_venue_from_plan)
+    while stage 1 is already PASSED (verified in the OLD venue) must log the
+    change — PASSED stages don't lose their Outcome on refinement, but a mover
+    here means a later verify-final re-run reads a different tree than the one
+    that actually PASSED."""
     sid = "pw-dw"
     base = str(fixtures_dir / "plan_two_stage_verifyfix_delivery.toml")
     changed = str(fixtures_dir / "plan_two_stage_verifyfix_delivery_changed.toml")
@@ -125,9 +131,10 @@ def test_changed_worktree_with_a_passed_stage_is_logged(store, fixtures_dir):
 def test_changed_worktree_with_an_active_stage_is_logged(store, fixtures_dir):
     """A substantive replan discards any outcome the carry-forward loop doesn't
     explicitly preserve (it only carries PASSED forward), so an ACTIVE stage —
-    already dispatched into the OLD delivery_worktree — would be silently
-    invisible to a check made AFTER state.stages is replaced. This pins that the
-    visibility check reads the pre-replan stage list."""
+    already dispatched into the OLD delivery_worktree derived by
+    _sync_venue_from_plan — would be silently invisible to a check made AFTER
+    state.stages is replaced. This pins that the visibility check reads the
+    pre-replan stage list."""
     sid = "aw-dw"
     base = str(fixtures_dir / "plan_two_stage.toml")
     bigger = str(fixtures_dir / "plan_two_stage_substantive_delivery.toml")
@@ -149,8 +156,9 @@ def test_changed_worktree_with_an_active_stage_is_logged(store, fixtures_dir):
 
 def test_unchanged_worktree_is_not_logged(store, fixtures_dir):
     """A refinement replan that does not touch delivery_worktree (both plans leave
-    it unset) must not emit the event, even with a PASSED stage in play — the
-    event is not vacuously present on every replan."""
+    it unset, so _sync_venue_from_plan derives the same None both times) must not
+    emit the event, even with a PASSED stage in play — the event is not vacuously
+    present on every replan."""
     sid = "un-dw"
     base = str(fixtures_dir / "plan_two_stage_verifyfix.toml")
     changed = str(fixtures_dir / "plan_two_stage_verifyfix_changed.toml")
@@ -164,3 +172,56 @@ def test_unchanged_worktree_is_not_logged(store, fixtures_dir):
     assert d.action == "continue"
     state = store.load(sid)
     assert not _delivery_worktree_events(state)
+
+
+def test_first_declared_worktree_with_an_active_stage_is_logged(store, fixtures_dir):
+    """delivery_worktree going from UNSET to a value (old_delivery_worktree is
+    None) must still log — a truthiness-guarded comparison (`if old and old !=
+    new`) would silently skip this direction because None is falsy. Both fixtures
+    are otherwise prose-identical, so the diff is no_change; that branch's
+    _sync_venue_from_plan call site is the one under test here."""
+    sid = "fd-dw"
+    base = str(fixtures_dir / "plan_two_stage_verifyfix.toml")
+    changed = str(fixtures_dir / "plan_two_stage_verifyfix_delivery.toml")
+    _to_executing_stage1(store, sid, base)
+    assert store.load(sid).delivery_worktree is None
+
+    state = store.load(sid)
+    state.stage(1).outcome.status = StageStatus.ACTIVE.value
+    store.save(state)
+
+    d = cli.cmd_replan(ns(session=sid, plan=changed), store=store)
+    assert d.action == "continue"
+    state = store.load(sid)
+    assert state.delivery_worktree == "/tmp/test-delivery-a"
+    events = _delivery_worktree_events(state)
+    assert len(events) == 1
+    assert events[0]["old"] is None
+    assert events[0]["new"] == "/tmp/test-delivery-a"
+    assert events[0]["affected_stages"] == [{"index": 1, "status": "ACTIVE"}]
+
+
+def test_undeclared_worktree_with_an_active_stage_is_logged(store, fixtures_dir):
+    """delivery_worktree going from a value to UNSET (state.delivery_worktree
+    becomes None) must still log — a comparison guarded on the NEW value's
+    truthiness (`if new and old != new`) would silently skip this direction. Both
+    fixtures are otherwise prose-identical, so the diff is no_change."""
+    sid = "ud-dw"
+    base = str(fixtures_dir / "plan_two_stage_verifyfix_delivery.toml")
+    changed = str(fixtures_dir / "plan_two_stage_verifyfix.toml")
+    _to_executing_stage1(store, sid, base)
+    assert store.load(sid).delivery_worktree == "/tmp/test-delivery-a"
+
+    state = store.load(sid)
+    state.stage(1).outcome.status = StageStatus.ACTIVE.value
+    store.save(state)
+
+    d = cli.cmd_replan(ns(session=sid, plan=changed), store=store)
+    assert d.action == "continue"
+    state = store.load(sid)
+    assert state.delivery_worktree is None
+    events = _delivery_worktree_events(state)
+    assert len(events) == 1
+    assert events[0]["old"] == "/tmp/test-delivery-a"
+    assert events[0]["new"] is None
+    assert events[0]["affected_stages"] == [{"index": 1, "status": "ACTIVE"}]
