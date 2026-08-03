@@ -475,6 +475,27 @@ def unquote_word(token: str) -> str:
     return parts[0] if len(parts) == 1 else token
 
 
+def operand_word(token: str) -> str:
+    """`token` as a caller doing PATH ARITHMETIC must read it: quotes removed and
+    a leading `~` expanded exactly where the shell would expand it.
+
+    Both halves are decided on the RAW token, which is why this cannot be folded
+    into `unquote_word`: quoting suppresses tilde expansion, so `"~/x"` really is
+    a directory named `~` while `~/x` is `$HOME/x` (measured, both quote kinds).
+    A `~` that is not the word's first character is not expanded either (`a~b`
+    stays `a~b`), which is why this is a prefix test rather than a substitution.
+
+    Every consumer that turns a token into a path goes through here. Reading the
+    raw `~` as a relative path instead is a false deny with a determinate right
+    answer -- unlike an unexpanded `$VAR`, whose value this process genuinely
+    does not know -- and it produced 12 of the corpus's false denies.
+    """
+    word = unquote_word(token)
+    if word.startswith("~") and not was_quoted(token):
+        return os.path.expanduser(word)
+    return word
+
+
 def redirect_write_target(op: str, operand: str | None) -> str | None:
     """The raw operand token `op` opens for writing, or `None`.
 

@@ -743,3 +743,161 @@ def test_write_after_worktree_commit_denied(tmp_path):
     # the commit's `-C <worktree>` must not move
     cmd = f"git -C {wt} commit -m x && cp /tmp/a notes.md"
     assert _denied(run_hook(core, cmd, cwd=core)), f"{cmd!r} reaches canon undetected"
+
+
+# --- tilde expansion: the operand is read where the shell reads it ---
+
+def _home_env(home: Path) -> dict:
+    """Run the hook with `$HOME` pointed at a fixture directory, so `~` is a
+    path the test controls rather than the developer's real home."""
+    return {"HOME": str(home)}
+
+
+def test_tilde_operand_expands_out_of_canon_allows(tmp_path):
+    """`~/x` is `$HOME/x`, not a directory named `~` under the cwd. Reading it
+    the second way put every such write under canon whenever the session sat
+    there — the largest single false-deny family measured over the corpus."""
+    core = make_core(tmp_path)
+    home = tmp_path / "home"
+    home.mkdir()
+    proc = run_hook(core, "cp /tmp/a ~/notes.md", cwd=core / "scripts",
+                    extra_env=_home_env(home))
+    assert _allowed(proc), proc.stdout
+
+
+def test_tilde_assigned_then_used_quoted_allows(tmp_path):
+    """Bash expands the tilde at ASSIGNMENT time, so the use site's quoting does
+    not matter (measured: `F=~/x ; echo "$F/y"` prints `$HOME/x/y`). Expanding
+    only at the use site left the `~` literal in the substituted value and the
+    quoted use then refused to expand it — correct rule, wrong site."""
+    core = make_core(tmp_path)
+    home = tmp_path / "home"
+    home.mkdir()
+    proc = run_hook(core, 'F=~/plans ; cp /tmp/a "$F/notes.md"', cwd=core / "scripts",
+                    extra_env=_home_env(home))
+    assert _allowed(proc), proc.stdout
+
+
+def test_leading_cd_tilde_moves_the_shell_allows(tmp_path):
+    """The third tilde site: the cwd resolver. `cd ~/plans` moves the shell to
+    `$HOME/plans`, so the relative write that follows is not a canon write."""
+    core = make_core(tmp_path)
+    home = tmp_path / "home"
+    (home / "plans").mkdir(parents=True)
+    proc = run_hook(core, "cd ~/plans\ncp /tmp/a notes.md", cwd=core / "scripts",
+                    extra_env=_home_env(home))
+    assert _allowed(proc), proc.stdout
+
+
+def test_tilde_resolving_into_canon_still_denies(tmp_path):
+    """The DENY direction of the same rule: expansion must not become an escape.
+    With canon inside `$HOME`, `~/core/...` IS canon and stays denied — the pin
+    that separates 'read the operand correctly' from 'stop reading it'."""
+    core = make_core(tmp_path)
+    proc = run_hook(core, "cp /tmp/a ~/core/scripts/existing.py", cwd=tmp_path,
+                    extra_env=_home_env(tmp_path))
+    assert _denied(proc), proc.stdout
+
+
+def test_quoted_tilde_is_not_expanded_and_denies(tmp_path):
+    """Quoting suppresses tilde expansion, so `"~/notes.md"` really is a
+    directory named `~` under the cwd — in canon, a canon write. This is why the
+    expansion is decided on the RAW token and cannot be folded into
+    `unquote_word`."""
+    core = make_core(tmp_path)
+    home = tmp_path / "home"
+    home.mkdir()
+    proc = run_hook(core, 'cp /tmp/a "~/notes.md"', cwd=core / "scripts",
+                    extra_env=_home_env(home))
+    assert _denied(proc), proc.stdout
+
+
+def test_mid_word_tilde_is_not_expanded_and_denies(tmp_path):
+    """A `~` that is not the first character is not expanded either, so the
+    rule is a prefix test, not a substitution."""
+    core = make_core(tmp_path)
+    home = tmp_path / "home"
+    home.mkdir()
+    proc = run_hook(core, "cp /tmp/a a~b", cwd=core / "scripts",
+                    extra_env=_home_env(home))
+    assert _denied(proc), proc.stdout
+
+
+def test_leading_cd_tilde_absent_dir_keeps_the_deny(tmp_path):
+    """The lost deny the expansion would otherwise buy. `cd ~/<absent> ; <write>`
+    fails the `cd` and `;` runs the write anyway — in the ORIGINAL cwd, which is
+    canon. Expanding the tilde is what lets the safe shape SEE that the target
+    is absent; while `~` counted as a non-literal target the shape declined and
+    the relocation branch moved the write to `$HOME` instead."""
+    core = make_core(tmp_path)
+    home = tmp_path / "home"
+    home.mkdir()
+    proc = run_hook(core, "cd ~/does-not-exist ; echo b > s2", cwd=core / "scripts",
+                    extra_env=_home_env(home))
+    assert _denied(proc), proc.stdout
+
+
+# --- a name bound by a loop is not the unset variable the deny assumes ---
+
+def test_loop_bound_variable_target_allows(tmp_path):
+    """`while read -r f ; do sed -i … "$f" ; done` settles `f` from data this
+    process cannot evaluate. Reading the leftover `$f` as a directory under the
+    cwd invents a target the shell never opens — the same case `_live_expansion`
+    already carved out for `D=$(mktemp -d)`, reached through a binding form that
+    carries no `=`."""
+    core = make_core(tmp_path)
+    cmd = ("grep -rl x /tmp/somewhere | while read -r f ; do "
+           "sed -i '/^drop:/d' \"$f\" ; done")
+    assert _allowed(run_hook(core, cmd, cwd=core / "scripts")), cmd
+    cmd = 'for f in a b ; do sed -i "s/x/y/" "$f" ; done'
+    assert _allowed(run_hook(core, cmd, cwd=core / "scripts")), cmd
+
+
+def test_unbound_variable_target_still_denies(tmp_path):
+    """The other direction, and the reason this is a binding scan rather than a
+    blanket `$`-means-doubt rule: a variable this command does NOT bind is unset
+    in a fresh shell, so `$S/x.md` really does land under the cwd. That deny is
+    correct and documented (`_unexpanded_variable_note`) and must survive."""
+    core = make_core(tmp_path)
+    proc = run_hook(core, 'sed -i "s/x/y/" "$S/existing.py"', cwd=core / "scripts")
+    assert _denied(proc), proc.stdout
+
+
+# --- a linked worktree nested under the canon PATH is still a worktree ---
+
+def test_worktree_nested_under_canon_path_allows(tmp_path):
+    """Deliberate: a linked worktree keeps its own index and HEAD, so an edit
+    there never reaches the canon checkout — which is why the guard tells
+    sessions to use one. `_is_primary_core` already said so; the registered-root
+    test could not, because it compares PATHS and a worktree created INSIDE the
+    canon directory shares canon's prefix while sharing none of its state.
+    Denying it would deny the workaround the deny message offers."""
+    core = make_core(tmp_path)
+    nested = core / ".claude" / "worktrees" / "session-task"
+    nested.parent.mkdir(parents=True)
+    git("worktree", "add", "-b", "nested-branch", str(nested), "main", cwd=core)
+    roots_file = tmp_path / "canon-roots.local"
+    roots_file.write_text(f"{core}\n")
+    proc = run_hook(core, "cp /tmp/a scripts/existing.py", cwd=nested,
+                    extra_env={"CLAUDE_CANON_ROOTS_FILE": str(roots_file)})
+    assert _allowed(proc), proc.stdout
+
+
+def test_registered_canon_root_itself_still_denies(tmp_path):
+    """The DENY direction of the same rule: the worktree carve-out must not
+    weaken the registered-root test for the canon checkout itself."""
+    core = make_core(tmp_path)
+    roots_file = tmp_path / "canon-roots.local"
+    roots_file.write_text(f"{core}\n")
+    proc = run_hook(core, "cp /tmp/a scripts/existing.py", cwd=core,
+                    extra_env={"CLAUDE_CANON_ROOTS_FILE": str(roots_file)})
+    assert _denied(proc), proc.stdout
+
+
+def test_binding_word_outside_command_position_binds_nothing(tmp_path):
+    """A keyword is only a keyword where a command word stands. `grep read data`
+    must not register `data` as settled and hand an unexpanded `$data` the doubt
+    carve-out that `test_unbound_variable_target_still_denies` denies it."""
+    core = make_core(tmp_path)
+    cmd = 'grep read data ; sed -i "s/x/y/" "$data/existing.py"'
+    assert _denied(run_hook(core, cmd, cwd=core / "scripts")), cmd

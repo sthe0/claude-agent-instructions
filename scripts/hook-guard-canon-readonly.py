@@ -150,7 +150,30 @@ def _under_registered_canon(file_path: str) -> bool:
     return False
 
 
+def _in_linked_worktree(target_dir: str) -> bool:
+    """True iff `target_dir` sits in a LINKED git worktree — its own gitdir, its
+    common dir elsewhere — rather than in the checkout that owns the repository.
+
+    DELIBERATE, not a side effect of a prefix test: a linked worktree is the
+    isolation this guard tells sessions to use, and it keeps its own index and
+    HEAD, so an edit there never reaches the canon checkout. `_is_primary_core`
+    already says so for the Core repo; `_under_registered_canon` could not,
+    because it compares PATHS, and a worktree created inside the canon directory
+    (`<canon>/.claude/worktrees/<name>`) shares canon's prefix while sharing none
+    of its state. Denying it would deny the very workaround the deny message
+    offers -- so the worktree question is answered from git, once, for both
+    routes, ahead of either.
+    """
+    info = _git_info(target_dir)
+    if info is None:
+        return False
+    _toplevel, git_dir_abs, git_common_abs, _branch = info
+    return git_dir_abs != git_common_abs
+
+
 def _is_in_canon(target_dir: str, file_path: str) -> bool:
+    if _in_linked_worktree(target_dir):
+        return False
     return _is_primary_core(target_dir) or _under_registered_canon(file_path)
 
 
@@ -270,24 +293,11 @@ def _is_git_commit(command: str) -> bool:
 # closed after it). They fall in the safe direction and are tracked with the rest
 # in the issue above rather than enumerated here.
 
-def _operand_word(raw: str) -> str:
-    """A raw token as the path arithmetic below must read it: quotes removed, and
-    a leading `~` expanded only when the shell itself would expand it.
-
-    Both halves are decided on the RAW token, which is why this cannot be folded
-    into `unquote_word`: `"~/x"` is a literal directory named `~` (measured), so
-    expanding it would turn a real canon-relative write into an allow."""
-    word = shell_tokens.unquote_word(raw)
-    if word.startswith("~") and not shell_tokens.was_quoted(raw):
-        return os.path.expanduser(word)
-    return word
-
-
 def _canon_target(raw: str, eff_cwd: str) -> str | None:
     """Realpath of the raw token `raw` (resolved rel to `eff_cwd`) iff it lands in
     canon, else None. A not-yet-existing write target resolves through its nearest
     existing parent so a redirect creating a new file in canon is still caught."""
-    candidate = _operand_word(raw)
+    candidate = shell_tokens.operand_word(raw)
     if not candidate:
         return None
     path = candidate if os.path.isabs(candidate) else os.path.join(eff_cwd, candidate)
@@ -446,7 +456,7 @@ def _patch_write_target(rest: list[str], eff_cwd: str) -> str | None:
 
 
 def _resolve_dir(raw: str, base: str) -> str:
-    word = _operand_word(raw)
+    word = shell_tokens.operand_word(raw)
     return word if os.path.isabs(word) else os.path.join(base, word)
 
 
@@ -645,6 +655,62 @@ _EXPANSION = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_
 _AMBIENT = ("HOME", "PWD", "TMPDIR", "USER", "LOGNAME", "SHELL", "HOSTNAME")
 
 
+_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+# Words after which the next token is a command word again. `while` and `until`
+# are here because the binding form this file cares about -- `... | while read
+# -r f ; do` -- puts `read` right after one.
+_STATEMENT_OPENERS = frozenset({"while", "until", "if", "elif", "do", "then", "else"})
+
+
+def _opens_a_statement(tokens: list[str], i: int) -> bool:
+    """Whether `tokens[i]` stands where a command word stands.
+
+    Without this, any token spelled `read` or `for` binds its neighbour: `grep
+    read data` would register `data` as a settled name and suppress a deny that
+    `_unexpanded_variable_note` is right to make. A keyword is only a keyword in
+    command position, so that is the position to test."""
+    if i == 0:
+        return True
+    previous = shell_tokens.unquote_word(tokens[i - 1])
+    return previous in shell_tokens.SEPARATORS or previous in _STATEMENT_OPENERS
+
+
+def _loop_bound(tokens: list[str]) -> set[str]:
+    """Names a `for` / `select` header or a `read` binds — bindings `_ASSIGNMENT`
+    cannot see, because they carry no `=`.
+
+    `grep -rl X dir | while read -r f ; do sed -i … "$f" ; done` settles `f`
+    itself, from data this process cannot evaluate. That is precisely the case
+    `_live_expansion` exists for, and reading the leftover `$f` as a directory
+    under the cwd invents a target the shell never opens: in canon, a deny on a
+    command whose real writes were somewhere else entirely. Only the BINDING is
+    collected, never a value — the point is to know the name is not the unset
+    variable `_unexpanded_variable_note` assumes, which is doubt, hence allow.
+    """
+    bound: set[str] = set()
+    for i, token in enumerate(tokens):
+        if not _opens_a_statement(tokens, i):
+            continue  # `grep read data` binds nothing; only a command word does
+        word = shell_tokens.unquote_word(token)
+        if word in ("for", "select"):
+            if i + 1 < len(tokens):
+                nxt = shell_tokens.unquote_word(tokens[i + 1])
+                if _NAME.fullmatch(nxt):
+                    bound.add(nxt)
+        elif word == "read":
+            # `read [-opts] NAME...` — options first, then names until anything
+            # that is not one (a separator, a redirect, a here-string operand).
+            for raw in tokens[i + 1:]:
+                nxt = shell_tokens.unquote_word(raw)
+                if nxt.startswith("-"):
+                    continue
+                if not _NAME.fullmatch(nxt):
+                    break
+                bound.add(nxt)
+    return bound
+
+
 def _variable_values(tokens: list[str]) -> tuple[dict[str, str], set[str]]:
     """The variable values this command settles by itself, and the names it
     assigns at all.
@@ -653,14 +719,20 @@ def _variable_values(tokens: list[str]) -> tuple[dict[str, str], set[str]]:
     value the scan can substitute, while `D=$(mktemp -d)` gives only the
     knowledge that `$D` is NOT the unset variable the deny below assumes."""
     values = {name: os.environ[name] for name in _AMBIENT if name in os.environ}
-    assigned: set[str] = set()
+    assigned: set[str] = _loop_bound(tokens)
     for token in tokens:
         match = _ASSIGNMENT.match(token)
         if not match:
             continue
         name, raw = match.groups()
         assigned.add(name)
-        word = shell_tokens.unquote_word(raw)
+        # The RHS is tilde-expanded HERE rather than at the use site, because
+        # bash expands it at assignment time: `F=~/x ; cp a "$F/y"` writes
+        # `$HOME/x/y` even though the USE is quoted (measured). Expanding only at
+        # the use site left the `~` literal in every substituted value, and the
+        # path arithmetic then read it as a directory named `~` under the cwd --
+        # in canon, a deny on 12 corpus commands that write nowhere near it.
+        word = shell_tokens.operand_word(raw)
         if "$" not in word and "`" not in word:
             values.setdefault(name, word)
     return values, assigned

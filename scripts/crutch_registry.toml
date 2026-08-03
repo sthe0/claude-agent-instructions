@@ -639,6 +639,14 @@ disposition = "keep"
 ground = "Already fixed by the prior audit (regex-not-for-semantic-classification.md): `decide()` runs the `outage_escalation_detect` prefilter AND `agentctl.advisor.judge_outage_escalation` before returning non-None; both enumerated scopes (`main`, `deny_with`) only reach the deny sink downstream of that guarded `decide()` call — confirmed by reading the source. File-rollup judge_guarded=True corroborates."
 
 [[entry]]
+id = "36d107b675781bcd"
+domain = "code"
+file = "scripts/hook-guard-canon-readonly.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+
+[[entry]]
 id = "1d0a0867a0ca9834"
 domain = "code"
 file = "scripts/hook-guard-canon-readonly.py"
@@ -648,6 +656,46 @@ ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-comm
 
 [[entry]]
 id = "923ce267b147f928"
+domain = "code"
+file = "scripts/hook-guard-canon-readonly.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+
+[[entry]]
+id = "375156a159fd2c7a"
+domain = "code"
+file = "scripts/hook-guard-canon-readonly.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+
+[[entry]]
+id = "e456ef3f2c9fe2a7"
+domain = "code"
+file = "scripts/hook-guard-canon-readonly.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+
+[[entry]]
+id = "ed852197fdb3b8ca"
+domain = "code"
+file = "scripts/hook-guard-canon-readonly.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+
+[[entry]]
+id = "75b15a261477a542"
+domain = "code"
+file = "scripts/hook-guard-canon-readonly.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+
+[[entry]]
+id = "c70ae85a86e86e0c"
 domain = "code"
 file = "scripts/hook-guard-canon-readonly.py"
 class = "structural"
@@ -3208,6 +3256,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 
 [[entry]]
 id = "fc71d3c8270478ba"
+domain = "code"
+file = "scripts/tests/test_guard_canon_bash_writes.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "8fdd1903edd5a2f9"
 domain = "code"
 file = "scripts/tests/test_guard_canon_bash_writes.py"
 class = "not-a-gate"
@@ -16452,42 +16508,3 @@ class = "perception"
 disposition = "keep"
 ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
 
-[[entry]]
-id = "36d107b675781bcd"
-domain = "code"
-file = "scripts/hook-guard-canon-readonly.py"
-class = "structural"
-disposition = "keep"
-ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
-
-[[entry]]
-id = "375156a159fd2c7a"
-domain = "code"
-file = "scripts/hook-guard-canon-readonly.py"
-class = "structural"
-disposition = "keep"
-ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
-
-[[entry]]
-id = "75b15a261477a542"
-domain = "code"
-file = "scripts/hook-guard-canon-readonly.py"
-class = "structural"
-disposition = "keep"
-ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
-
-[[entry]]
-id = "c70ae85a86e86e0c"
-domain = "code"
-file = "scripts/hook-guard-canon-readonly.py"
-class = "structural"
-disposition = "keep"
-ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
-
-[[entry]]
-id = "e456ef3f2c9fe2a7"
-domain = "code"
-file = "scripts/hook-guard-canon-readonly.py"
-class = "structural"
-disposition = "keep"
-ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."

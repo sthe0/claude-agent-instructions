@@ -76,6 +76,7 @@ import shlex
 
 from lib.shell_tokens import (
     drop_substitutions,
+    operand_word,
     split_segments,
     strip_command_prefix,
     tokenize,
@@ -84,7 +85,7 @@ from lib.shell_tokens import (
 
 _GROUPING_CHARS = "(){}"
 _COMPOUND_KEYWORDS = {"if", "for", "while", "until", "case", "do", "then", "esac", "done", "fi"}
-_NON_LITERAL_CD_TARGET = re.compile(r"[$`~*?\[\]]")
+_NON_LITERAL_CD_TARGET = re.compile(r"[$`*?\[\]]")
 
 # Git's global-option grammar, and the ONLY place it is encoded. Every entry was
 # settled on 2026-08-03 by running the option against the installed git 2.43.0
@@ -218,9 +219,16 @@ def _leading_cd_noop_on_failure(tokens: list[str], payload_cwd: str) -> bool:
     accepted. Compound keywords stay an EQUALITY test — containment would match
     `fi` inside `confirm`.
 
-    The literal-target test runs on the UNQUOTED target, because `cd "/repo/b"`
-    really does move to `/repo/b`; `~` and `$` survive quote removal and still
-    disqualify, so a quoted target is read exactly as its bare twin.
+    The literal-target test runs on the target as the SHELL reads it -- quotes
+    removed and a leading `~` expanded where the shell expands one -- because
+    `cd "/repo/b"` really does move to `/repo/b` and `cd ~/b` really does move to
+    `$HOME/b`. `$` and a glob still disqualify: their text is not the path the
+    shell will use, so the isdir premise this shape rests on does not hold. A
+    `~` is not in that class once it is expanded, and keeping it there had a
+    cost in the DENY direction, not a saving: `cd ~/<absent> ; <write>` runs the
+    write in the ORIGINAL cwd, which the safe shape must see in order to hold
+    the deny. A QUOTED `~` is not expanded and so is not a directory that
+    exists, which lands it on the same safe-shape branch by the honest route.
     """
     if any(any(c in t for c in _GROUPING_CHARS) or t in _COMPOUND_KEYWORDS
            for t in tokens):
@@ -233,7 +241,7 @@ def _leading_cd_noop_on_failure(tokens: list[str], payload_cwd: str) -> bool:
         return False
     if len(first_seg) != 2 or unquote_word(first_seg[0]) != "cd":
         return False
-    target = unquote_word(first_seg[1])
+    target = operand_word(first_seg[1])
     if target == "-" or _NON_LITERAL_CD_TARGET.search(target):
         return False
     if second_seg and unquote_word(second_seg[0]) == "cd":
@@ -292,6 +300,15 @@ def command_default_cwd(command: str, payload_cwd: str) -> str:
     RAW tokens rather than the substitution-stripped ones: `cd $(mktemp -d)` must
     still fail the literal-target test on its `$`, which stripping the
     substitution would remove from view.
+
+    The target goes through `operand_word`, so `cd ~/x` answers `$HOME/x` rather
+    than a directory named `~` under `payload_cwd`. That is the ONE tilde site
+    the safe-shape test above does not cover and must not: there, `~` stays a
+    disqualifier, because whether the target EXISTS decides the shape, and this
+    resolution only decides WHERE. On the `shlex.split` fallback the quoting bit
+    is already gone, so a quoted `cd "~/x"` expands here where the shell would
+    not -- it moves the answer away from the cwd, i.e. fail-open, and only for a
+    command the punctuation lexer already refused.
     """
     tokens = _tokenize_for_cwd(command)
     if tokens is None:
@@ -299,7 +316,7 @@ def command_default_cwd(command: str, payload_cwd: str) -> str:
     if len(tokens) >= 2 and unquote_word(tokens[0]) == "cd":
         if _leading_cd_noop_on_failure(tokens, payload_cwd):
             return payload_cwd
-        return _resolve(unquote_word(tokens[1]), payload_cwd)
+        return _resolve(operand_word(tokens[1]), payload_cwd)
     return payload_cwd
 
 
@@ -327,7 +344,7 @@ def segment_git_cwd(segment: list[str], default_cwd: str) -> str:
         return default_cwd
     cwd = default_cwd
     for raw in invocation.chdirs:
-        cwd = _resolve(unquote_word(raw), cwd)
+        cwd = _resolve(operand_word(raw), cwd)
     return cwd
 
 
