@@ -56,8 +56,10 @@ def make_worktree(core: Path, tmp_path: Path) -> Path:
     return wt
 
 
-def run_hook(core, command: str, cwd) -> subprocess.CompletedProcess:
+def run_hook(core, command: str, cwd, extra_env: "dict | None" = None) -> subprocess.CompletedProcess:
     env = {**os.environ, **GIT_ENV, "CLAUDE_INSTRUCTIONS_REPO": str(core)}
+    if extra_env:
+        env.update(extra_env)
     payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(cwd)}
     return subprocess.run(
         [sys.executable, str(HOOK_SCRIPT)],
@@ -543,3 +545,201 @@ def test_body_stripper_is_called_once_on_the_bash_path():
         if isinstance(node, ast.FunctionDef) and node.name == "decide"
     )
     assert calls[0] in set(ast.walk(decide)), "the single call site is not inside decide()"
+
+
+# --- 3: the scanner wired onto lib/shell_tokens + lib/git_cwd -----------------
+#
+# Two tests carry the change's two DIRECTIONS and are both RED before it: writes
+# the old token walk could not see (below), and denies it produced for commands
+# that write nothing (further down). Each keeps its controls IN THE SAME test, so
+# a fix that buys one direction with the other fails here rather than in review.
+
+
+def test_write_detection_gaps_denied(tmp_path):
+    """Canon writes the pre-stage-3 scanner did not see, and the controls that
+    say the fix is a widening of DETECTION and not of the resolver.
+
+    Every row was allowed before this stage for one of four reasons: `shlex`
+    hands a glued redirect over as an ordinary word (`3>f`, `2>f`), it does not
+    split a glued separator (`hi;cp`), the write verb sat behind a wrapper the
+    scanner did not strip (`sudo`/`env`/`xargs`), the verb was not modelled at
+    all (`dd of=`, `sort -o`), or the commit hid behind a git global option the
+    adjacency scan could not step over (`git -C <canon> commit`).
+    """
+    core = make_core(tmp_path)
+    denied = [
+        "exec 3>f",
+        "printf hi 2>f",
+        "echo hi;cp /tmp/a f",
+        "sudo cp /tmp/a f",
+        "env cp /tmp/a f",
+        "xargs cp /tmp/a f",
+        "dd if=/tmp/a of=f",
+        "sort -o f /tmp/a",
+        f"git -C {core} commit -m x",
+    ]
+    for cmd in denied:
+        assert _denied(run_hook(core, cmd, cwd=core)), f"{cmd!r} reaches canon undetected"
+
+    # CONTROLS — the plainest members of the same two families already denied and
+    # must keep denying, so a scanner that stopped reading redirects or operands
+    # altogether cannot pass this test by allowing everything.
+    for cmd in ("echo hi > f", "grep > README.md"):
+        assert _denied(run_hook(core, cmd, cwd=core)), f"{cmd!r} lost its deny"
+
+
+def test_live_false_denies_allowed(tmp_path):
+    """Commands that write nothing in canon and were DENIED anyway — the direction
+    that matters most here, because a false deny wedges `Bash` for every session
+    whose directory is canon until the guard is edited.
+
+    Grouped by the reading that produced each deny: a file descriptor read as a
+    path, a `sed` script expression read as a path, a substitution's interior read
+    as an operand, a MENTION of `commit`/`apply` read as the subcommand, a quoted
+    `>` read as an operator, an option value read as a `cp` destination, and an
+    unexpanded `~` joined onto the cwd. Its controls sit in the same test.
+    """
+    core = make_core(tmp_path)
+    wt = make_worktree(core, tmp_path)
+    allowed = [
+        # a file descriptor is not a path
+        "cp /etc/hostname /tmp/out 2>/dev/null",
+        "cmd >&-",
+        "cmd 2>&1",
+        "cmd 2>&-",
+        "echo hi >&1",
+        "echo hi >&2",
+        # a `sed` SCRIPT is not a path
+        "sed -i 's/foo/bar/' /tmp/f",
+        # a substitution's interior is not an operand of the outer command
+        "cp /tmp/a $(mktemp)",
+        # a MENTION of `git commit` is not a commit
+        "echo run git commit to save",
+        "grep -rn git commit .",
+        "git --help commit",
+        # ...nor is a subcommand that merely takes `apply` as an argument an apply
+        "git help apply",
+        "git log --grep apply",
+        "git status apply",
+        "git diff --name-only apply",
+        # ...nor is a NON-writing `git apply` / `patch` a write
+        "git apply --check p.patch",
+        "git apply --stat p.patch",
+        "git apply --help",
+        "patch --dry-run -p1 -i p",
+        "patch --version",
+        "patch -v",
+        # ...and a relocating `git apply` writes the tree it names, not this cwd
+        f"git -C {wt} apply p.patch",
+        # a `patch` told where to write does not write here
+        "patch -d /tmp -p1 -i p",
+        "patch -o /tmp/out -p1 -i p",
+        # a QUOTED redirect operator is an argument, not an operator
+        'grep ">" README.md',
+        'grep ">>" README.md',
+        'rg ">" scripts/',
+        'echo hi > "/tmp/out"',
+        'cp /tmp/a "/tmp/b"',
+        # an option VALUE is not the destination
+        "cp /tmp/a /tmp/b --suffix .bak",
+        # `git commit` that only prints
+        "git commit --help",
+        "git commit -h",
+        "git commit --dry-run",
+        # a git invocation whose tree this module refuses to resolve (relocating
+        # globals) is not attributed to canon — green in BOTH directions, i.e.
+        # allowed before this stage and still allowed after it
+        f"git --git-dir={wt}/.git --work-tree={wt} commit -m x",
+    ]
+    for cmd in allowed:
+        assert _allowed(run_hook(core, cmd, cwd=core)), f"{cmd!r} falsely denied"
+
+    # CONTROLS — each is the writing twin of a row above and must still DENY.
+    denied = [
+        "echo hi > f",                 # twin of the quoted `">"` rows
+        "grep > README.md",
+        'cp /tmp/a "scripts/x.md"',    # quoting the OPERAND changes nothing
+        "cp /tmp/src b 2>/dev/null",   # the fd is dropped, the real dest is not
+        "git apply p.patch",           # twin of `git apply --check`
+        "git stash apply",             # denies through a DIFFERENT reading than `git apply`
+        "patch -p1 -i p",              # twin of `patch --dry-run`
+        "cat hi > $S/x.md",            # by design: an unexpanded `$VAR` (see NAMED RESIDUAL)
+    ]
+    for cmd in denied:
+        assert _denied(run_hook(core, cmd, cwd=core)), f"{cmd!r} lost its deny"
+
+    # A shell REDIRECT is opened in the SHELL's directory; `git -C` moves only the
+    # git invocation. Wiring the redirect off `-C` flips both of these at once and
+    # leaves every other row here green, so both directions are asserted.
+    assert _denied(run_hook(core, f"git -C {wt} diff > out.patch", cwd=core))
+    assert _allowed(run_hook(core, f"git -C {core} diff > out.patch", cwd=wt))
+
+    # A leading `~` is expanded by the SHELL, so the guard must expand it too —
+    # unless it is quoted, in which case the shell writes a literal `~` here.
+    home = {"HOME": str(tmp_path)}
+    for cmd in (
+        "cp -a ~/.bashrc ~/.bashrc.bak",
+        "cp /tmp/a ~/x",
+        "cd ~/claude-agent-instructions && git status",
+    ):
+        assert _allowed(run_hook(core, cmd, cwd=core, extra_env=home)), f"{cmd!r} falsely denied"
+    for cmd in ('cp /tmp/a "~/x"', f"cp /tmp/a ~/{core.name}/notes.md"):
+        assert _denied(run_hook(core, cmd, cwd=core, extra_env=home)), f"{cmd!r} lost its deny"
+
+    # Two writes this guard has never seen and still does not: pinned so that a
+    # later reader does not mistake their ALLOW for a claim that they are safe.
+    for cmd in ("sed 'w f'", "awk '{print > \"f\"}'"):
+        assert _allowed(run_hook(core, cmd, cwd=core)), f"{cmd!r}: residual changed"
+
+
+def test_wrapper_prefixed_canon_commit_still_denied(tmp_path):
+    """Green in BOTH directions: a commit behind a wrapper denied before this
+    stage and must still deny after it.
+
+    The commit detector moves from an adjacency scan to `git_cwd.runs_commit`,
+    whose answer is TRI-state. Mapping its doubt to ALLOW converts every row here
+    into a silent canon commit, which is why doubt falls back to the adjacency
+    scan instead — the last row carries an option outside `sudo`'s measured
+    allowlist and is reachable ONLY through that fallback.
+    """
+    core = make_core(tmp_path)
+    for cmd in (
+        "nice git commit -m x",
+        "timeout 5 git commit -m x",
+        "sudo --preserve-env git commit -m x",
+        "sudo -i git commit -m x",
+        "env -u A git commit -m x",
+        "xargs -P4 git commit -m x",
+        "git submodule foreach git commit -m x",
+        "sudo --unknownopt git commit -m x",
+    ):
+        assert _denied(run_hook(core, cmd, cwd=core)), f"{cmd!r} lost its commit deny"
+
+
+def test_non_commit_git_head_does_not_relocate_later_write(tmp_path):
+    """Green in BOTH directions, and the counterweight to the test below: a
+    `git -C <dir>` moves ONLY its own invocation, so a NON-commit git command at
+    the head of a list must leave a later write resolving against the shell's
+    directory — the worktree here, not canon."""
+    core = make_core(tmp_path)
+    wt = make_worktree(core, tmp_path)
+    for sub in ("pull", "status", "log --oneline", "add -A"):
+        cmd = f"git -C {core} {sub} && cp /tmp/a notes.md"
+        assert _allowed(run_hook(core, cmd, cwd=wt)), f"{cmd!r} falsely denied"
+
+
+def test_write_after_worktree_commit_denied(tmp_path):
+    """RED in one direction: a command whose commit lands in the WORKTREE used to
+    return ALLOW for the whole command, taking a canon write in the same list with
+    it — the commit branch returned early instead of falling through to the write
+    scan, and the write scan then read the commit's `-C` as the whole command's
+    directory."""
+    core = make_core(tmp_path)
+    wt = make_worktree(core, tmp_path)
+    # absolute canon target, so the verdict does not depend on the cwd
+    cmd = f"git -C {wt} commit -m x && cp /tmp/a {core}/notes.md"
+    assert _denied(run_hook(core, cmd, cwd=wt)), f"{cmd!r} reaches canon undetected"
+    # relative target: the write resolves against the SHELL's cwd (canon), which
+    # the commit's `-C <worktree>` must not move
+    cmd = f"git -C {wt} commit -m x && cp /tmp/a notes.md"
+    assert _denied(run_hook(core, cmd, cwd=core)), f"{cmd!r} reaches canon undetected"

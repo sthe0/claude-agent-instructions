@@ -40,8 +40,11 @@ inspected (`lib/shell_tokens.py`), so a Markdown blockquote line inside a body i
 not read as a redirect. Always exits 0 — a hook crash must never wedge the
 workflow.
 
-This guard raises the cost of an ACCIDENTAL canon write; it is not an
-evasion-proof boundary. See NAMED RESIDUAL below for what reaches canon today.
+This guard is a FAIL-OPEN barrier that raises the cost of an ACCIDENTAL canon
+write, not a security boundary: known bypasses exist, and any form named in this
+file is illustrative rather than a claim that the rest are covered. The measured
+forms and their disposition are tracked in
+https://github.com/sthe0/claude-agent-instructions/issues/54.
 
 DENY is signaled with the PreToolUse permissionDecision JSON on stdout (mirrors
 hook-guard-destructive-rm.py):
@@ -150,9 +153,15 @@ def _is_in_canon(target_dir: str, file_path: str) -> bool:
     return _is_primary_core(target_dir) or _under_registered_canon(file_path)
 
 
-def _is_git_commit(command: str) -> bool:
-    """True iff the command runs `git commit` (tokenized, not substring). Any
-    parse doubt => False (allow)."""
+def _adjacent_git_commit(command: str) -> bool:
+    """The pre-scanner reading: a `git` token immediately followed by `commit`.
+
+    Kept as the DOUBT branch of `_is_git_commit`, not as dead code. It is wrong
+    in both directions (it reads a mention as a commit and misses a commit behind
+    a global option), but it denies seven live wrapper forms — `nice git commit`,
+    `sudo -i git commit`, `git submodule foreach git commit` and the rest — that
+    the scanner answers with doubt, and resolving that doubt to ALLOW instead was
+    measured to convert every one of them into an allow."""
     try:
         tokens = shlex.split(command)
     except Exception:
@@ -161,6 +170,69 @@ def _is_git_commit(command: str) -> bool:
         if os.path.basename(tokens[i]) == "git" and tokens[i + 1] == "commit":
             return True
     return False
+
+
+_INERT_COMMIT_OPTS = {"--help", "-h", "--dry-run"}
+
+
+def _every_commit_is_inert(command: str) -> bool:
+    """True iff the command has at least one `git commit` segment and EVERY one
+    of them only prints (`--help`, `-h`, `--dry-run`) — 13 such commands denied in
+    the measured corpus. False on any doubt, which keeps the deny."""
+    try:
+        tokens = shell_tokens.tokenize(command)
+    except Exception:
+        return False
+    found = False
+    for _sep, seg in shell_tokens.split_segments(shell_tokens.drop_substitutions(tokens)):
+        if not seg:
+            continue
+        stripped, recognized = shell_tokens.strip_command_prefix(seg)
+        if not recognized or not stripped:
+            continue
+        invocation = git_cwd.scan_git_invocation(stripped)
+        if invocation is None or invocation.doubt or invocation.subcommand != "commit":
+            continue
+        found = True
+        if not any(shell_tokens.unquote_word(t) in _INERT_COMMIT_OPTS for t in stripped[1:]):
+            return False
+    return found
+
+
+def _statement_newlines(command: str) -> str:
+    """`command` with each statement-ending newline rewritten to `;`.
+
+    A newline separates statements in bash but is plain whitespace to every lexer
+    here, so `cat > f\\ngit commit -m x` reads as ONE segment headed by `cat` —
+    which the scanner then answers "not a commit", provably rather than doubtfully,
+    so no fallback fires. Rewritten only when each line tokenizes on its own,
+    which proves no quoted string spans the boundary, and never after a `\\`
+    continuation, which is not a statement end."""
+    lines = command.split("\n")
+    if len(lines) == 1:
+        return command
+    for line in lines:
+        try:
+            shell_tokens.tokenize(line)
+        except Exception:
+            return command
+    out = lines[0]
+    for line in lines[1:]:
+        out += ("\n" if out.rstrip(" \t").endswith("\\") else " ; ") + line
+    return out
+
+
+def _is_git_commit(command: str) -> bool:
+    """True iff the command runs a `git commit` that would touch a working tree.
+
+    Doubt is resolved to the adjacency scan rather than to allow, and a commit
+    that only prints is demoted back to non-commit."""
+    verdict = git_cwd.runs_commit(command)
+    if verdict is None:
+        verdict = _adjacent_git_commit(command)
+    if not verdict:
+        return False
+    return not _every_commit_is_inert(command)
 
 
 # --- best-effort in-place Bash-write detection (extends the git-commit deny) ---
@@ -172,23 +244,18 @@ def _is_git_commit(command: str) -> bool:
 # ALLOWS), and allow the identical verbs targeting a worktree / second mount.
 #
 # WHAT THIS GUARD IS. It raises the cost of an ACCIDENTAL canon write. It is not
-# an evasion-proof boundary and must not be described as one: anyone who wants to
-# write canon from a Bash call can, and the list below says how. The durable
+# an evasion-proof boundary and must not be described as one. The durable
 # guarantees are the tool-level Edit/Write deny and keeping feature work out of
 # the canon checkout entirely (`scripts/session-isolate.sh`).
 #
-# NAMED RESIDUAL — shell-invisible writes, not closable by any PreToolUse hook:
-# an interpreter one-liner that opens a path for writing internally
-# (`python3 -c "open(p,'w')"`, `perl -e '...'`, an `eval`'d string, any program
-# that writes a file with no shell-visible write verb) and a redirection glued to
-# a preceding word (`foo>bar`, `2>bar`) carry no token this hook can key on.
-#
-# NAMED RESIDUAL — write verbs measured to reach canon TODAY, out of scope here
-# and unchanged by the here-document handling: `exec 3>f`, `exec 3>>f`, `dd of=f`,
-# `cp`/`mv` in forms the dest parser misses, `>|f`, `sort -o f`, `sed 'w f'`,
-# `awk '{print > "f"}'`, and `python3 <<EOF` (an interpreter consumer, which the
-# body stripper refuses to touch for exactly this reason). Closing these is a
-# separate change with its own evidence; do not read their absence as coverage.
+# FAIL-OPEN BARRIER, NOT A SECURITY BOUNDARY. Every parse doubt allows, so the set
+# of write forms that reach canon is open-ended: a write with no shell-visible
+# write verb, a write verb this scanner does not model, a path whose text is not
+# the path the shell will use, a statement boundary the segmenter does not see.
+# Forms named anywhere in this file are ILLUSTRATIVE — the absence of a form is
+# not coverage of it, and a reader looking for a guarantee will not find one here.
+# The measured forms and their disposition are tracked in
+# https://github.com/sthe0/claude-agent-instructions/issues/54.
 #
 # NAMED RESIDUAL — a path holding an UNEXPANDED `$VAR` is denied BY DESIGN, not by
 # accident. Each Bash tool call is a fresh shell, so `$S` assigned in an earlier
@@ -197,47 +264,29 @@ def _is_git_commit(command: str) -> bool:
 # canon, so it cannot distinguish them and must deny both; `_deny_msg` names the
 # cause instead of pretending the path was literal.
 #
-# NAMED RESIDUAL — spurious DENYs the body stripper leaves behind, all in the safe
-# direction: only the FIRST here-document body is removed, so a second body on the
-# same command (`cat <<A <<B`) is still read as syntax; a `$(` opened inside a
-# quoted-delimiter body and closed after it leaves an unbalanced `)` in the
-# residue; and an unbalanced QUOTE anywhere makes `shlex.split` raise, which is the
-# module's one genuinely reachable fail-open path (measured — a here-document body
-# never raises, which is why the stripper exists at all).
+# NAMED RESIDUAL — the body stripper leaves spurious DENYs behind (a second
+# here-document on one command, a `$(` opened inside a quoted-delimiter body and
+# closed after it). They fall in the safe direction and are tracked with the rest
+# in the issue above rather than enumerated here.
 
-_BASH_SEPS = {";", "&&", "||", "|", "|&", "&"}
+def _operand_word(raw: str) -> str:
+    """A raw token as the path arithmetic below must read it: quotes removed, and
+    a leading `~` expanded only when the shell itself would expand it.
 
-
-def _split_segments(tokens: list[str]):
-    """Yield `(separator, segment)` pairs for the pipeline/list segments of a
-    tokenized command, split on the shell separators `; && || | |& &` — the
-    separator is the token that PRECEDED the segment (`None` for the first).
-    Best-effort: a separator glued inside a single shlex token (`a;b`) is left
-    intact — an accepted residual.
-
-    The yielded separator has no consumer here yet: it is the enabling half of
-    the leading-`cd` fix, which needs to tell `;` from `&&`, and it is read in
-    `lib/git_cwd.py`'s `_split_on_seps` — a near-duplicate splitter that differs
-    only in dropping empty segments. Consolidating the two must pick one of those
-    two empty-segment semantics deliberately, not by whichever copy survives."""
-    seg: list[str] = []
-    sep: str | None = None
-    for tok in tokens:
-        if tok in _BASH_SEPS:
-            if seg:
-                yield sep, seg
-            seg = []
-            sep = tok
-        else:
-            seg.append(tok)
-    if seg:
-        yield sep, seg
+    Both halves are decided on the RAW token, which is why this cannot be folded
+    into `unquote_word`: `"~/x"` is a literal directory named `~` (measured), so
+    expanding it would turn a real canon-relative write into an allow."""
+    word = shell_tokens.unquote_word(raw)
+    if word.startswith("~") and not shell_tokens.was_quoted(raw):
+        return os.path.expanduser(word)
+    return word
 
 
-def _canon_target(candidate: str, eff_cwd: str) -> str | None:
-    """Realpath of `candidate` (resolved rel to `eff_cwd`) iff it lands in canon,
-    else None. A not-yet-existing write target resolves through its nearest
+def _canon_target(raw: str, eff_cwd: str) -> str | None:
+    """Realpath of the raw token `raw` (resolved rel to `eff_cwd`) iff it lands in
+    canon, else None. A not-yet-existing write target resolves through its nearest
     existing parent so a redirect creating a new file in canon is still caught."""
+    candidate = _operand_word(raw)
     if not candidate:
         return None
     path = candidate if os.path.isabs(candidate) else os.path.join(eff_cwd, candidate)
@@ -261,13 +310,19 @@ def _canon_cwd(eff_cwd: str) -> str | None:
     return None
 
 
-def _operands_until_redirect(rest: list[str]) -> list[str]:
+def _operands(rest: list[str]) -> list[str]:
     """Tokens of a segment (after the command word) up to the first redirection
-    operator — `<`/`>` starts an I/O target, not a positional of the verb."""
+    operator — a redirect starts an I/O target, not a positional of the verb.
+
+    The token immediately before that operator is dropped when it is bare digits:
+    in `cp A B 2>/dev/null` the `2` is the redirect's FILE DESCRIPTOR, and reading
+    it as `cp`'s last operand is what made that command deny (measured)."""
     out: list[str] = []
     for tok in rest:
-        if tok and tok[0] in "<>":
-            break
+        if tok in shell_tokens.REDIRECT_OPS:
+            if out and out[-1].isdigit():
+                out.pop()
+            return out
         out.append(tok)
     return out
 
@@ -283,95 +338,265 @@ def _sed_in_place(rest: list[str]) -> bool:
     return False
 
 
+# `cp`/`mv` options whose VALUE is the destination directory...
+_CP_DEST_OPTS = {"-t", "--target-directory"}
+# ...and those whose value is not a path at all, but still consumes the token
+# after them, so it must not be counted as the last operand.
+_CP_VALUE_OPTS = {"-S", "--suffix"}
+
+
 def _cp_mv_dest(rest: list[str]) -> str | None:
     """The write destination of a `cp`/`mv`: the `-t DIR` / `--target-directory`
-    value if present, else the last positional. Returning only the destination
-    keeps copying OUT of canon (canon source, outside dest) allowed."""
+    value if present, else the last OPERAND. Returning only the destination keeps
+    copying OUT of canon (canon source, outside dest) allowed.
+
+    "Last operand" and "last token" differ, and the difference is a false deny:
+    in `cp /tmp/a /tmp/b --suffix .bak` the trailing `.bak` is `--suffix`'s VALUE,
+    so the value-taking options have to be consumed rather than merely skipped."""
     positionals: list[str] = []
-    take_next = False
+    take_next: str | None = None
     dest_opt: str | None = None
-    for tok in rest:
-        if take_next:
-            dest_opt = tok
-            take_next = False
-        elif tok in ("-t", "--target-directory"):
-            take_next = True
+    for raw in rest:
+        tok = shell_tokens.unquote_word(raw)
+        if take_next is not None:
+            if take_next == "dest":
+                dest_opt = raw
+            take_next = None
+        elif tok in _CP_DEST_OPTS:
+            take_next = "dest"
+        elif tok in _CP_VALUE_OPTS:
+            take_next = "other"
         elif tok.startswith("--target-directory="):
-            dest_opt = tok.split("=", 1)[1]
-        elif tok.startswith("-"):
+            dest_opt = raw.split("=", 1)[1]
+        elif tok.startswith("-") and tok != "-":
             continue
         else:
-            positionals.append(tok)
+            positionals.append(raw)
     if dest_opt is not None:
         return dest_opt
     return positionals[-1] if positionals else None
 
 
-def _segment_write_target(seg: list[str], eff_cwd: str) -> str | None:
-    """The canon path a single command segment would write in place, or None.
-    Covers output redirection, `sed -i`, `tee`, `cp`/`mv` dest, `patch`, and
-    `git apply`; every path is resolved rel to `eff_cwd`."""
+_SED_SCRIPT_OPTS = {"-e", "-f", "--expression", "--file"}
+
+
+def _sed_files(rest: list[str]) -> list[str]:
+    """The FILE operands of a `sed`, with the script expression excluded.
+
+    `sed -i 's/a/b/' f` has two positionals and only one is a path; resolving the
+    script as a path made every such command deny (12 in the measured corpus).
+    When `-e`/`-f` supplies the script, every positional is a file instead."""
+    words = [shell_tokens.unquote_word(t) for t in rest]
+    script_seen = any(
+        w in _SED_SCRIPT_OPTS or w.startswith("--expression=") or w.startswith("--file=")
+        for w in words
+    )
+    files: list[str] = []
+    skip_value = False
+    for raw, word in zip(rest, words):
+        if skip_value:
+            skip_value = False
+            continue
+        if word in _SED_SCRIPT_OPTS:
+            skip_value = True
+            continue
+        if word.startswith("-") and word != "-":
+            continue
+        if not script_seen:
+            script_seen = True
+            continue
+        files.append(raw)
+    return files
+
+
+# `patch` forms that read the diff and write nothing. `-C`/`--check` is NOT here:
+# measured on GNU patch 2.7.6, `patch -C` exits 2 on the forms this guard sees,
+# so treating it as inert would allow a command that never runs anyway.
+_PATCH_INERT = {"--dry-run", "-h", "--help", "--version", "-v"}
+# `git apply` forms that report on the diff instead of applying it.
+_GIT_APPLY_INERT = {"--check", "--stat", "--numstat", "--summary", "-h", "--help"}
+
+
+def _patch_write_target(rest: list[str], eff_cwd: str) -> str | None:
+    """Where a `patch` invocation writes: the `-o FILE`, the `-d DIR` it moves to
+    first, or — since the paths come from the diff, not the command line — the
+    cwd itself."""
+    words = [shell_tokens.unquote_word(t) for t in rest]
+    if set(words) & _PATCH_INERT:
+        return None
+    pending: str | None = None
+    for raw, word in zip(rest, words):
+        if pending == "-o":
+            return _canon_target(raw, eff_cwd)
+        if pending == "-d":
+            return _canon_cwd(_resolve_dir(raw, eff_cwd))
+        if word in ("-o", "--output"):
+            pending = "-o"
+            continue
+        if word.startswith("--output="):
+            return _canon_target(raw.split("=", 1)[1], eff_cwd)
+        if word in ("-d", "--directory"):
+            pending = "-d"
+            continue
+        if word.startswith("--directory="):
+            return _canon_cwd(_resolve_dir(raw.split("=", 1)[1], eff_cwd))
+        pending = None
+    return _canon_cwd(eff_cwd)
+
+
+def _resolve_dir(raw: str, base: str) -> str:
+    word = _operand_word(raw)
+    return word if os.path.isabs(word) else os.path.join(base, word)
+
+
+def _git_write_target(seg: list[str], rest: list[str], default_cwd: str) -> str | None:
+    """Where a `git` segment writes, for the two subcommands that write paths the
+    command line does not name: `apply` and `stash apply` take them from the diff,
+    so the repo directory is the only decidable signal.
+
+    Keyed off the SUBCOMMAND rather than off `"apply"` appearing anywhere in the
+    segment, which denied `git help apply` and `git log --grep apply`. Where the
+    scanner cannot say which token is the subcommand, the old membership reading
+    is kept: dropping it there would widen the guard, and `git stash apply` is the
+    reason the membership test cannot simply be deleted."""
+    words = [shell_tokens.unquote_word(t) for t in rest]
+    invocation = git_cwd.scan_git_invocation(seg)
+    repo_cwd = git_cwd.segment_git_cwd(seg, default_cwd)
+    if invocation is None or invocation.doubt:
+        return _canon_cwd(repo_cwd) if "apply" in words else None
+    if invocation.subcommand == "apply" and not (set(words) & _GIT_APPLY_INERT):
+        return _canon_cwd(repo_cwd)
+    if invocation.subcommand == "stash" and "apply" in words:
+        return _canon_cwd(repo_cwd)
+    return None
+
+
+def _verb_write_target(seg: list[str], default_cwd: str) -> str | None:
+    """The canon path the write VERB heading `seg` would write, or None.
+
+    Scope, which is the whole reason the two cwds are separate arguments: a
+    subcommand's path operands resolve in the directory that command runs in
+    (`git -C <dir>`), while a redirect in the same segment is opened by the SHELL
+    in `default_cwd`. The redirect is therefore not scanned here at all."""
     if not seg:
         return None
+    verb = os.path.basename(shell_tokens.unquote_word(seg[0])) if seg[0] else ""
+    rest = _operands(seg[1:])
 
-    # (a) output redirection anywhere in the segment: `> f`, `>> f`, glued `>f`/`>>f`.
-    for i, tok in enumerate(seg):
-        redirect_tgt: str | None = None
-        if tok in (">", ">>"):
-            redirect_tgt = seg[i + 1] if i + 1 < len(seg) else None
-        elif tok.startswith(">") and tok.strip(">"):
-            redirect_tgt = tok.lstrip(">")
-        if redirect_tgt:
-            hit = _canon_target(redirect_tgt, eff_cwd)
-            if hit:
-                return hit
-
-    # (b) verb-based writers.
-    verb = os.path.basename(seg[0]) if seg[0] else ""
-    rest = _operands_until_redirect(seg[1:])
-
+    if verb == "git":
+        return _git_write_target(seg, rest, default_cwd)
     if verb == "patch":
-        return _canon_cwd(eff_cwd)
-    if verb == "git" and "apply" in rest:
-        return _canon_cwd(eff_cwd)
+        return _patch_write_target(rest, default_cwd)
     if verb == "sed" and _sed_in_place(rest):
-        for tok in rest:
-            if tok.startswith("-"):
-                continue
-            hit = _canon_target(tok, eff_cwd)
+        for raw in _sed_files(rest):
+            hit = _canon_target(raw, default_cwd)
             if hit:
                 return hit
         return None
     if verb == "tee":
-        for tok in rest:
-            if tok.startswith("-"):
+        for raw in rest:
+            if shell_tokens.unquote_word(raw).startswith("-"):
                 continue
-            hit = _canon_target(tok, eff_cwd)
+            hit = _canon_target(raw, default_cwd)
             if hit:
                 return hit
         return None
     if verb in ("cp", "mv"):
         dest = _cp_mv_dest(rest)
-        if dest:
-            return _canon_target(dest, eff_cwd)
+        return _canon_target(dest, default_cwd) if dest else None
+    if verb == "dd":
+        for raw in rest:
+            if shell_tokens.unquote_word(raw).startswith("of="):
+                return _canon_target(raw.split("=", 1)[1], default_cwd)
         return None
+    if verb == "sort":
+        return _sort_write_target(rest, default_cwd)
+    return None
+
+
+def _sort_write_target(rest: list[str], eff_cwd: str) -> str | None:
+    """`sort -o f` writes `f` in place — its three spellings, `-o f`, `-of` and
+    `--output=f`."""
+    pending = False
+    for raw in rest:
+        word = shell_tokens.unquote_word(raw)
+        if pending:
+            return _canon_target(raw, eff_cwd)
+        if word == "-o":
+            pending = True
+        elif word.startswith("--output="):
+            return _canon_target(raw.split("=", 1)[1], eff_cwd)
+        elif word.startswith("-o") and not word.startswith("--") and len(word) > 2:
+            return _canon_target(raw[raw.index("o") + 1:], eff_cwd)
+    return None
+
+
+def _segment_write_target(seg: list[str], default_cwd: str) -> str | None:
+    """The canon path one command segment writes in place, or None.
+
+    The segment is read twice: once as it stands, then once with its command
+    PREFIX removed (`sudo`, `env -u A`, `xargs -P4`, a `VAR=v` assignment), so a
+    wrapped write verb is seen. `recognized=False` means the prefix stripper met
+    an option outside its measured allowlist and no longer knows which token is
+    the command word — the retry is skipped and the segment reads exactly as it
+    did before this fallback existed."""
+    if not seg:
+        return None
+    hit = _verb_write_target(seg, default_cwd)
+    if hit:
+        return hit
+    stripped, recognized = shell_tokens.strip_command_prefix(seg)
+    if recognized and stripped and stripped != seg:
+        return _verb_write_target(stripped, default_cwd)
+    return None
+
+
+def _redirect_write(tokens: list[str], shell_cwd: str) -> str | None:
+    """The canon path any output redirection in `tokens` opens, or None.
+
+    Scanned over the WHOLE command's raw tokens, not per segment, for two
+    reasons: every redirect is opened by the shell in the shell's own cwd, so
+    segmentation carries no information here; and the tokens must stay raw,
+    because a redirect INSIDE a command substitution (`$(echo x > f)`) is a real
+    write that dropping substitutions would hide."""
+    for i, tok in enumerate(tokens):
+        if tok not in shell_tokens.REDIRECT_OPS:
+            continue
+        operand = tokens[i + 1] if i + 1 < len(tokens) else None
+        if operand in shell_tokens.SEPARATORS or operand in shell_tokens.REDIRECT_OPS:
+            continue
+        if operand == "$" and i + 2 < len(tokens) and tokens[i + 2] == "(":
+            continue  # the target is whatever a substitution prints — unknowable
+        target = shell_tokens.redirect_write_target(tok, operand)
+        if target is None:
+            continue
+        hit = _canon_target(target, shell_cwd)
+        if hit:
+            return hit
     return None
 
 
 def _canon_bash_write(command: str, payload_cwd: str) -> str | None:
-    """Best-effort: the canon path a non-`git commit` Bash command writes in
-    place, or None. Fail-open on any parse error (allow), reusing the leading-`cd`
-    resolution so `cd <wt> && sed -i ... f` keys off the worktree, not the
-    session cwd."""
+    """Best-effort: the canon path a Bash command writes in place, or None.
+    Fail-open on any parse error (allow).
+
+    The command's default cwd is computed ONCE (a leading `cd <dir>` moves the
+    SHELL, hence every later segment), and each segment's own write targets are
+    then resolved against the cwd that segment's own command runs in."""
     try:
-        tokens = shlex.split(command)
+        tokens = shell_tokens.tokenize(command)
     except Exception:
         return None
     if not tokens:
         return None
-    eff_cwd = git_cwd.effective_git_cwd(command, payload_cwd)
-    for _sep, seg in _split_segments(tokens):
-        hit = _segment_write_target(seg, eff_cwd)
+    shell_cwd = git_cwd.command_default_cwd(command, payload_cwd)
+    hit = _redirect_write(tokens, shell_cwd)
+    if hit:
+        return hit
+    for _sep, seg in shell_tokens.split_segments(shell_tokens.drop_substitutions(tokens)):
+        if not seg:
+            continue
+        hit = _segment_write_target(seg, shell_cwd)
         if hit:
             return hit
     return None
@@ -489,15 +714,17 @@ def decide(payload: dict) -> str | None:
         # riding the command line survives this byte-for-byte.
         command = shell_tokens.strip_heredoc_bodies(command)
         payload_cwd = payload.get("cwd") or os.getcwd()
-        if _is_git_commit(command):
-            cwd = git_cwd.effective_git_cwd(command, payload_cwd)
+        # The commit detector reads statement boundaries; the write scan below
+        # deliberately does not, so the rewrite is scoped to this pair.
+        commit_command = _statement_newlines(command)
+        if _is_git_commit(commit_command):
+            cwd = git_cwd.effective_git_cwd(commit_command, payload_cwd)
             target_dir = _nearest_existing_dir(cwd)
-            if target_dir is None:
-                return None
-            if _is_primary_core(target_dir):
+            if target_dir is not None and _is_primary_core(target_dir):
                 return _commit_deny_msg(os.path.realpath(str(_core_root())))
-            return None
-        # Non-commit Bash: best-effort deny of an in-place write into canon.
+            # A commit targeting a worktree does not end the scan: the SAME
+            # command can still write canon (`git -C <wt> commit && cp x <canon>`).
+        # Best-effort deny of an in-place write into canon.
         hit = _canon_bash_write(command, payload_cwd)
         if hit:
             return _deny_msg(hit)

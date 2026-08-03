@@ -12,9 +12,9 @@ guard's pre-existing coverage, not this change. The predicate here is therefore
     NOT (bash writes canon AND the guard denied RAW AND the guard allows STRIPPED)
 
 which is exactly the claim the stage makes: body removal takes nothing that was
-denied and makes it allowed. Pre-existing bypasses stay pre-existing bypasses and
-are named in `hook-guard-canon-readonly.py`'s NAMED RESIDUAL block, not silently
-laundered through this file.
+denied and makes it allowed. Pre-existing bypasses stay pre-existing bypasses --
+tracked in https://github.com/sthe0/claude-agent-instructions/issues/54, since the
+guard names no exhaustive list -- and are not silently laundered through this file.
 
 THREE DIFFERENT NUMBERS, which this file is careful never to conflate:
 
