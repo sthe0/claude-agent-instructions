@@ -26,7 +26,9 @@ changed row is the regression this harness exists to report):
 `--update` prints what moved and, if the report is non-empty, refuses to write
 until rerun with `--force`: writing is a second, deliberate command. It does not
 make anyone READ the report — every genuine regeneration is non-empty, so
-`--force` is the normal case, not the exception.
+`--force` is the normal case, not the exception. The one exception is a
+bootstrap run, where no prior baseline exists to compare against: it announces
+itself and writes, because there is nothing to review.
 
 With no argument the same entry point prints the live-vs-fixture drift report
 and the current baseline comparison, which is how `scan_live_drift` is consumed
@@ -223,15 +225,24 @@ def _update_baseline(current: dict, baseline_path: Path, *, force: bool) -> int:
     into a rubber stamp — the "review the diff" instruction in the module
     docstring otherwise means reading an 8800-line JSON diff nobody reads.
     """
-    # A bootstrap run has no prior baseline, so `compare` reports all 55 plans as
+    # A bootstrap run has no prior baseline, so `compare` reports every plan as
     # new. Refusing there would demand `--force` to review a report whose content
     # is "everything, because there was nothing" — a gate with nothing behind it.
+    # It suppresses the GATE only, never the report: the first freeze has already
+    # happened, so the reachable trigger now is a deleted or badly-merged
+    # baseline, and a silent regeneration there would leave the harness green
+    # forever having lost the pre-tightening record it exists to hold.
     bootstrap = not baseline_path.exists()
+    if bootstrap:
+        print(
+            f"no prior baseline at {baseline_path} — bootstrapping from the "
+            f"current corpus; nothing is being compared against"
+        )
     old = {} if bootstrap else json.loads(baseline_path.read_text())
     report = compare(old, current)
-    if report and not bootstrap:
+    if report:
         print(json.dumps(report, indent=1))
-        if not force:
+        if not force and not bootstrap:
             print(
                 "refusing to write: review the report above, then rerun with "
                 "--force to write anyway"
@@ -290,20 +301,21 @@ def test_baseline_matches():
     assert not report, report
 
 
-def test_escape_from_load_is_recorded(monkeypatch):
+def test_escape_from_load_is_recorded(monkeypatch, tmp_path):
     """The widened `except` records ANY escape from `load_plan`, not just the
     one live defect that happens to produce one today.
 
     Stated separately from `test_non_planerror_escape_is_recorded` because that
-    test rides a real `plan.py` bug: moving principle-subfield validation to the
-    submission seam is in this plan's remaining scope, and when a later stage
-    does it, that test's pinned string goes stale and the natural fix is to
-    delete it — taking the property with it. This one cannot go stale."""
+    test rides a real `plan.py` bug: if principle-subfield validation moves to
+    the submission seam, its pinned string goes stale and the natural fix is to
+    delete it — taking the property with it. This one cannot go stale.
+
+    The path is never opened: `load_plan` is stubbed before it is reached."""
     def boom(path, strict=False, **kwargs):
         raise RuntimeError("synthetic escape from the loader")
 
-    monkeypatch.setattr("test_frozen_plan_compat.load_plan", boom)
-    record = record_plan(CORPUS_DIR / sorted(p.name for p in CORPUS_DIR.glob("*.toml"))[0])
+    monkeypatch.setattr(sys.modules[__name__], "load_plan", boom)
+    record = record_plan(tmp_path / "never-read.toml")
 
     assert record["lenient"]["outcome"] == "RuntimeError: synthetic escape from the loader"
     assert record["strict"]["outcome"] == record["lenient"]["outcome"]
@@ -318,10 +330,10 @@ def test_fingerprint_failure_still_propagates(monkeypatch):
     def boom(doc):
         raise RuntimeError("synthetic harness-side fingerprint bug")
 
-    monkeypatch.setattr("test_frozen_plan_compat.fingerprint", boom)
+    monkeypatch.setattr(sys.modules[__name__], "fingerprint", boom)
 
     with pytest.raises(RuntimeError, match="harness-side"):
-        record_plan(CORPUS_DIR / sorted(p.name for p in CORPUS_DIR.glob("*.toml"))[0])
+        record_plan(sorted(CORPUS_DIR.glob("*.toml"))[0])
 
 
 def test_non_planerror_escape_is_recorded(tmp_path):
@@ -535,6 +547,24 @@ def test_update_bootstraps_without_force(tmp_path):
 
     assert exit_code == 0
     assert json.loads(baseline_path.read_text()) == current
+
+
+def test_bootstrap_announces_itself(tmp_path, capsys):
+    """The bootstrap branch suppresses the GATE, and must not also suppress the
+    signal. Its reachable trigger is now a deleted or badly-merged baseline —
+    regenerating one silently there produces a permanently-green harness that
+    has lost the record it exists to hold, and the output would be
+    indistinguishable from a deliberate re-freeze."""
+    baseline_path = tmp_path / "baseline.json"
+    current = {"a.toml": {"lenient": {"outcome": "ok", "doc": {"meta.task_id": "a"}},
+                          "strict": {"outcome": "ok"}}}
+
+    _update_baseline(current, baseline_path, force=False)
+
+    out = capsys.readouterr().out
+    assert "no prior baseline" in out
+    assert "new_in_fixture" in out
+    assert "refusing to write" not in out
 
 
 def test_update_refuses_without_force(tmp_path):
