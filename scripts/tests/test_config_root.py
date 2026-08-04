@@ -197,7 +197,9 @@ _LEGACY_REF_ALLOWLIST = {
     "scripts/setup-project-memory.sh":       "legacy auto-memory dir is its migration source",
     "scripts/project_entry/projects.sh":     "legacy projects.d read fallback",
     "scripts/project_entry/projects.py":     "legacy projects.d read fallback (python side)",
-    "scripts/lib/config_root.py":            "the canonical legacy_home() accessor",
+    "scripts/lib/config_root.py":            "the canonical legacy_home() accessor, and "
+                                             "harness_config_root()'s ~/.claude default — the "
+                                             "CLI's own, not a legacy fallback",
     "scripts/hook-guard-destructive-rm.py":  "protective denylist covers BOTH roots",
     "scripts/install-reminder-hooks.sh":     "the personal root IS the prune-only second file",
 }
@@ -316,6 +318,46 @@ def test_py_identity_file_override(monkeypatch, tmp_path):
         CLAUDE_AGENT_IDENTITY=str(ident),
     )
     assert config_root.identity_file() == ident
+
+
+# ── harness_config_root: the root the CLI itself loads from ──────────────────
+#
+# Distinct from agent_home(): that one answers "where do system artifacts
+# live", this one "which root is the running harness reading hooks/settings
+# from". They coincide under claude-agent / claude-task and diverge under a
+# bare `claude` on a migrated machine — the divergence is pinned below, because
+# conflating them is what makes a wiring check report green from a root that is
+# not the one enforcing anything.
+
+def test_py_harness_root_follows_config_dir(monkeypatch, tmp_path):
+    custom = tmp_path / "cfg-dir"
+    _reload_env(monkeypatch, tmp_path, CLAUDE_CONFIG_DIR=str(custom))
+    assert config_root.harness_config_root() == custom
+    assert config_root.agent_home() == custom  # both roots are it
+
+
+def test_py_harness_root_diverges_from_agent_home(monkeypatch, tmp_path):
+    """The load-bearing case: migrated machine, bare `claude`. The system root
+    is ~/.claude-agent; the harness is still reading ~/.claude."""
+    (tmp_path / ".claude-agent").mkdir()
+    _reload_env(monkeypatch, tmp_path)
+    assert config_root.agent_home() == tmp_path / ".claude-agent"
+    assert config_root.harness_config_root() == tmp_path / ".claude"
+
+
+def test_py_harness_root_ignores_agent_home_env(monkeypatch, tmp_path):
+    """CLAUDE_AGENT_HOME relocates the SYSTEM root only — the CLI never reads
+    it, so the harness root must not follow it."""
+    _reload_env(monkeypatch, tmp_path, CLAUDE_AGENT_HOME=str(tmp_path / "agent-root"))
+    assert config_root.agent_home() == tmp_path / "agent-root"
+    assert config_root.harness_config_root() == tmp_path / ".claude"
+
+
+def test_py_harness_settings_file(monkeypatch, tmp_path):
+    _reload_env(monkeypatch, tmp_path, CLAUDE_CONFIG_DIR=str(tmp_path / "cfg"))
+    assert config_root.harness_settings_file() == tmp_path / "cfg" / "settings.json"
+    _reload_env(monkeypatch, tmp_path)
+    assert config_root.harness_settings_file() == tmp_path / ".claude" / "settings.json"
 
 
 # ── resolve_agentctl_state_file: current root first, legacy fallback ─────────

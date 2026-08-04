@@ -24,6 +24,28 @@ Resolution order (first hit wins):
   2. ``$CLAUDE_AGENT_HOME``  — explicit install-root override / overlay.
   3. ``~/.claude-agent``     — the isolated default, when it exists.
   4. ``~/.claude``           — legacy non-isolated fallback.
+
+Two roots, not one
+------------------
+
+``agent_home()`` answers *"where do the system's artifacts live"*. That is a
+different question from *"which config root is the running harness loading
+hooks, settings and skills from"*, and on a migrated machine the two answers
+differ. ``harness_config_root()`` answers the second one, using the CLI's own
+rule and nothing else: ``$CLAUDE_CONFIG_DIR`` else ``~/.claude``.
+
+- **They coincide** under the ``claude-agent`` / ``claude-task`` launchers,
+  which export ``CLAUDE_CONFIG_DIR=$CLAUDE_AGENT_HOME`` — the harness and the
+  system read the same directory.
+- **They diverge** under a bare ``claude`` on a migrated machine: the harness
+  loads ``~/.claude`` (the personal root, where the system installs nothing)
+  while ``agent_home()`` resolves ``~/.claude-agent``.
+
+Conflating them makes a gate report on a root that is not the one enforcing it:
+a check run against ``agent_home()`` finds every hook correctly registered and
+reports green, while the harness that would actually have to fire those hooks
+has none of them. Ask ``harness_config_root()`` whenever the subject is the
+harness's own wiring — registered hooks, ``settings.json``, permissions.
 """
 from __future__ import annotations
 
@@ -41,6 +63,27 @@ def agent_home() -> Path:
     if isolated.exists():
         return isolated
     return Path.home() / ".claude"
+
+
+def harness_config_root() -> Path:
+    """Resolve the config root the *running harness* loads from — the CLI's own
+    rule, ``$CLAUDE_CONFIG_DIR`` else ``~/.claude`` (see module docstring § Two
+    roots).
+
+    Deliberately does NOT probe for ``~/.claude-agent``: the CLI does not, so
+    probing would report a root the harness never reads and re-introduce the
+    very conflation this accessor exists to remove.
+    """
+    val = os.environ.get("CLAUDE_CONFIG_DIR")
+    if val:
+        return Path(val).expanduser()
+    return Path.home() / ".claude"
+
+
+def harness_settings_file() -> Path:
+    """The harness's live ``settings.json`` (``<harness root>/settings.json``) —
+    the file whose ``hooks`` block decides which hooks actually fire."""
+    return harness_config_root() / "settings.json"
 
 
 def skills_dir() -> Path:
