@@ -23,6 +23,9 @@ changed row is the regression this harness exists to report):
 
     python3 scripts/tests/test_frozen_plan_compat.py --update
 
+`--update` prints what moved and, if the report is non-empty, refuses to write
+until rerun with `--force` — so the diff above is read, not rubber-stamped.
+
 With no argument the same entry point prints the live-vs-fixture drift report
 and the current baseline comparison, which is how `scan_live_drift` is consumed
 outside the suite.
@@ -30,6 +33,7 @@ outside the suite.
 from __future__ import annotations
 
 import argparse
+import copy
 import dataclasses
 import json
 import shutil
@@ -41,7 +45,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from agentctl.plan import PlanError, load_plan  # noqa: E402
+from agentctl.plan import load_plan  # noqa: E402
 from agentctl.state import Subject  # noqa: E402
 from lib import config_root  # noqa: E402
 
@@ -51,14 +55,36 @@ BASELINE_PATH = FIXTURES_DIR / "plan_corpus_baseline.json"
 
 LIVE_PLANS_DIR = config_root.plans_dir()
 
+# `scan_live_drift`'s `live_only` count grows by construction (every plan authored
+# after the freeze adds one), so a bare count is not itself actionable. Past this
+# many live-only plans, the fixture corpus (55 plans) no longer represents current
+# plan-authoring patterns closely enough — consider re-freezing it (copy a
+# representative sample into CORPUS_DIR and run --update).
+LIVE_DRIFT_REFREEZE_THRESHOLD = 20
+
 _MODES = (("lenient", False), ("strict", True))
-_ABSENT = "<absent>"
+# A sentinel `object()`, not an in-band string: a baseline value that literally
+# equals a string sentinel (e.g. a plan whose outcome text IS "<absent>") would
+# make a genuine key removal invisible to `compare`'s `!=` checks below.
+_ABSENT = object()
 
 
-def _outcome_identity(exc: PlanError, path: Path) -> str:
-    """`PlanError: <first line>` — the failure's identity, so that a change in
-    WHICH rule rejects a plan is a visible baseline diff rather than a silent
-    swap under a shared "PlanError" label.
+def _display(value: object) -> object:
+    """JSON-printable form of a comparison value for the printed report —
+    `_ABSENT` is swapped for a readable marker only here, never compared as one."""
+    return "<absent>" if value is _ABSENT else value
+
+
+def _outcome_identity(exc: Exception, path: Path) -> str:
+    """`<ExceptionClassName>: <first line>` — the failure's identity, so that a
+    change in WHICH rule rejects a plan — or a change in WHICH exception class
+    escapes `parse_plan` — is a visible baseline diff rather than a silent swap
+    under a shared label. `record_plan` calls this for any exception, not only
+    `PlanError`: `parse_plan` direct-indexes some strict-mode fields (e.g. a
+    stage's `[stage.principle]` subfields) trusting an earlier guard that only
+    fires for substantive plans, so a non-substantive plan can make it raise
+    `KeyError` instead — an escaped exception class is itself the regression
+    class this harness exists to report.
 
     The plan's own path is substituted out because two error messages embed it,
     and a baseline carrying absolute paths would be red on every checkout but the
@@ -67,7 +93,7 @@ def _outcome_identity(exc: PlanError, path: Path) -> str:
     first = str(exc).splitlines()[0] if str(exc) else ""
     for concrete in (str(path), str(path.parent)):
         first = first.replace(concrete, "<plan>")
-    return f"PlanError: {first}"
+    return f"{type(exc).__name__}: {first}"
 
 
 def _flatten(value: object, prefix: str = "") -> dict:
@@ -105,12 +131,17 @@ def record_plan(path: Path) -> dict:
     plans are actually read through and the one that must not move; strict is
     allowed to tighten, so pinning its doc too would only add churn without
     adding a claim.
+
+    Known blind spot: because strict docs are never fingerprinted, a coercion
+    change on the strict-only path is invisible here — e.g. `plan.py` builds a
+    stage's `Principle` via direct indexing under strict vs `.get()` with
+    defaults under lenient, and only the lenient shape is pinned.
     """
     record: dict = {}
     for mode, strict in _MODES:
         try:
             doc = load_plan(path, strict=strict)
-        except PlanError as exc:
+        except Exception as exc:  # any escape is itself a reportable outcome
             record[mode] = {"outcome": _outcome_identity(exc, path)}
             continue
         entry: dict = {"outcome": "ok"}
@@ -155,8 +186,8 @@ def compare(baseline: dict, actual: dict) -> dict:
             act_mode = act_rec.get(mode, {})
             if base_mode.get("outcome") != act_mode.get("outcome"):
                 changed_outcome.setdefault(name, {})[mode] = {
-                    "baseline": base_mode.get("outcome", _ABSENT),
-                    "actual": act_mode.get("outcome", _ABSENT),
+                    "baseline": _display(base_mode.get("outcome", _ABSENT)),
+                    "actual": _display(act_mode.get("outcome", _ABSENT)),
                 }
             act_doc = act_mode.get("doc", {})
             for key, base_value in (base_mode.get("doc") or {}).items():
@@ -164,7 +195,7 @@ def compare(baseline: dict, actual: dict) -> dict:
                 if act_value != base_value:
                     changed_doc.setdefault(name, {})[key] = {
                         "baseline": base_value,
-                        "actual": act_value,
+                        "actual": _display(act_value),
                     }
     if changed_outcome:
         report["changed_outcome"] = changed_outcome
@@ -173,11 +204,39 @@ def compare(baseline: dict, actual: dict) -> dict:
     return report
 
 
+def _update_baseline(current: dict, baseline_path: Path, *, force: bool) -> int:
+    """Regenerate `baseline_path` from `current`, printing what moved and
+    refusing to write when that report is non-empty unless `force` is set.
+
+    Without this, `--update` rewrites the whole (megabyte-scale) baseline with
+    zero feedback about what changed, which is how a snapshot guard degrades
+    into a rubber stamp — the "review the diff" instruction in the module
+    docstring otherwise means reading an 8800-line JSON diff nobody reads.
+    """
+    old = json.loads(baseline_path.read_text()) if baseline_path.exists() else {}
+    report = compare(old, current)
+    if report:
+        print(json.dumps(report, indent=1))
+        if not force:
+            print(
+                "refusing to write: review the report above, then rerun with "
+                "--force to write anyway"
+            )
+            return 1
+    baseline_path.write_text(json.dumps(current, indent=1, sort_keys=True) + "\n")
+    print(f"wrote {baseline_path} — {len(current)} plans")
+    return 0
+
+
 def scan_live_drift(
     live_dir: Path = LIVE_PLANS_DIR, corpus_dir: Path = CORPUS_DIR
 ) -> dict:
     """Report, without ever raising or failing anything, how the live plans
     directory has drifted from the versioned fixture.
+
+    `live_only` grows by construction — every plan authored after the freeze
+    adds one — so the raw count alone is not actionable; `_live_drift_advisory`
+    turns it into one once it crosses `LIVE_DRIFT_REFREEZE_THRESHOLD`.
 
     A live directory that does not exist reports empty rather than erroring.
     Checked with `is_dir()` rather than a try/except around `glob()`: pathlib's
@@ -195,6 +254,19 @@ def scan_live_drift(
     }
 
 
+def _live_drift_advisory(live_only: list[str]) -> str | None:
+    """The actionable form of `scan_live_drift`'s `live_only` count: `None`
+    below `LIVE_DRIFT_REFREEZE_THRESHOLD`, else a one-line advisory naming the
+    threshold and the action (re-freeze the corpus)."""
+    if len(live_only) < LIVE_DRIFT_REFREEZE_THRESHOLD:
+        return None
+    return (
+        f"live-only plans: {len(live_only)} >= LIVE_DRIFT_REFREEZE_THRESHOLD "
+        f"({LIVE_DRIFT_REFREEZE_THRESHOLD}) — consider re-freezing the corpus "
+        "(copy a representative sample into plan_corpus/ and run --update)"
+    )
+
+
 def test_baseline_matches():
     """Every fixture plan still loads — in both modes — to what it loaded at
     baseline time, and still yields the same doc content."""
@@ -203,10 +275,48 @@ def test_baseline_matches():
     assert not report, report
 
 
+def test_non_planerror_escape_is_recorded(tmp_path):
+    """`record_plan` must RECORD a non-`PlanError` escape from `parse_plan`, not
+    crash the run: `plan.py` direct-indexes a stage's `[stage.principle]`
+    subfields under strict, guarded only when the plan is substantive, so a
+    non-substantive plan with a partial principle table raises `KeyError`."""
+    plan_path = tmp_path / "partial_principle.toml"
+    plan_path.write_text(
+        '[meta]\n'
+        'task_id = "partial-principle"\n'
+        'goal = "trigger a non-PlanError escape from parse_plan"\n'
+        'done_criterion = "n/a"\n'
+        'criterion_type = "measurable"\n'
+        'weight_class = "chat"\n'
+        '\n'
+        '[[stage]]\n'
+        'index = 1\n'
+        'title = "stage"\n'
+        'executor = "in_thread"\n'
+        'expected_result_image = "n/a"\n'
+        'criterion_type = "measurable"\n'
+        'done_criterion = "n/a"\n'
+        '\n'
+        '[stage.principle]\n'
+        'statement = "only the statement is present"\n'
+    )
+
+    record = record_plan(plan_path)
+
+    assert record["strict"]["outcome"] == "KeyError: 'source'"
+    assert record["lenient"]["outcome"] == "ok"
+
+
 def test_strict_column_discriminates():
     """The strict column's whole guard value is that it is non-constant on
     arrival: a stage that wrongly pushes a new requirement into `parse_plan`
-    instead of the submission-seam validator flips rows here."""
+    instead of the submission-seam validator flips rows here.
+
+    Resolution limit: `parse_plan` is fail-fast, so only the FIRST tripped rule
+    is ever observed per plan — 28 of the 30 strict failures in the corpus
+    collapse onto one rule, all at stage 1. A new strict rule ordered after that
+    one is unobservable on those 28 plans; the discrimination that matters lives
+    in the 25 "ok" rows."""
     baseline = json.loads(BASELINE_PATH.read_text())
     strict_outcomes = {rec["strict"]["outcome"] for rec in baseline.values()}
     assert "ok" in strict_outcomes
@@ -291,7 +401,8 @@ def test_added_field_does_not_redden():
         material_refs: list = field(default_factory=list)
 
     plan_path = sorted(CORPUS_DIR.glob("*.toml"))[0]
-    baseline = {plan_path.name: record_plan(plan_path)}
+    record = record_plan(plan_path)
+    baseline = {plan_path.name: record}
 
     doc = load_plan(plan_path, strict=False)
     stage = doc.stages[0]
@@ -300,7 +411,7 @@ def test_added_field_does_not_redden():
         result=stage.subject.result,
         invariants=stage.subject.invariants,
     )
-    widened = record_plan(plan_path)
+    widened = copy.deepcopy(record)
     widened["lenient"]["doc"] = fingerprint(doc)
     actual = {plan_path.name: widened}
 
@@ -330,6 +441,65 @@ def test_live_scan_tolerates_missing_live_dir(tmp_path):
     assert report == {"live_only": [], "fixture_only": []}
 
 
+def test_live_drift_advisory_fires_above_threshold():
+    """Below `LIVE_DRIFT_REFREEZE_THRESHOLD` the drift count stays silent;
+    at/above it, `_live_drift_advisory` names the threshold and the action —
+    the fix for a `live_only` count that is otherwise unactionable by design."""
+    below = ["p.toml"] * (LIVE_DRIFT_REFREEZE_THRESHOLD - 1)
+    at = ["p.toml"] * LIVE_DRIFT_REFREEZE_THRESHOLD
+
+    assert _live_drift_advisory(below) is None
+    advisory = _live_drift_advisory(at)
+    assert advisory is not None
+    assert str(LIVE_DRIFT_REFREEZE_THRESHOLD) in advisory
+
+
+def test_update_writes_when_report_is_empty(tmp_path):
+    """No pending diff (the baseline already matches `current`) — `--update`
+    writes without needing `--force`; only a non-empty report requires it."""
+    baseline_path = tmp_path / "baseline.json"
+    current = {"a.toml": {"lenient": {"outcome": "ok", "doc": {"meta.task_id": "a"}},
+                           "strict": {"outcome": "ok"}}}
+    baseline_path.write_text(json.dumps(current))
+
+    exit_code = _update_baseline(current, baseline_path, force=False)
+
+    assert exit_code == 0
+    assert json.loads(baseline_path.read_text()) == current
+
+
+def test_update_refuses_without_force(tmp_path):
+    """A non-empty pending report must block the write — `--update` without
+    `--force` is a dry run, not a rubber stamp."""
+    baseline_path = tmp_path / "baseline.json"
+    old = {"a.toml": {"lenient": {"outcome": "ok", "doc": {"meta.task_id": "a"}},
+                       "strict": {"outcome": "ok"}}}
+    baseline_path.write_text(json.dumps(old))
+    changed = {"a.toml": {"lenient": {"outcome": "ok", "doc": {"meta.task_id": "b"}},
+                           "strict": {"outcome": "ok"}}}
+
+    exit_code = _update_baseline(changed, baseline_path, force=False)
+
+    assert exit_code == 1
+    assert json.loads(baseline_path.read_text()) == old
+
+
+def test_update_writes_with_force(tmp_path):
+    """`--force` writes the reported diff — the escape hatch once the report
+    has actually been reviewed."""
+    baseline_path = tmp_path / "baseline.json"
+    old = {"a.toml": {"lenient": {"outcome": "ok", "doc": {"meta.task_id": "a"}},
+                       "strict": {"outcome": "ok"}}}
+    baseline_path.write_text(json.dumps(old))
+    changed = {"a.toml": {"lenient": {"outcome": "ok", "doc": {"meta.task_id": "b"}},
+                           "strict": {"outcome": "ok"}}}
+
+    exit_code = _update_baseline(changed, baseline_path, force=True)
+
+    assert exit_code == 0
+    assert json.loads(baseline_path.read_text()) == changed
+
+
 def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -337,15 +507,22 @@ def _main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="regenerate the committed baseline from the current corpus",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="with --update, write even when the pending report is non-empty",
+    )
     args = parser.parse_args(argv)
 
     current = records(CORPUS_DIR)
     if args.update:
-        BASELINE_PATH.write_text(json.dumps(current, indent=1, sort_keys=True) + "\n")
-        print(f"wrote {BASELINE_PATH} — {len(current)} plans")
-        return 0
+        return _update_baseline(current, BASELINE_PATH, force=args.force)
 
-    print(json.dumps(scan_live_drift(), indent=1))
+    drift = scan_live_drift()
+    print(json.dumps(drift, indent=1))
+    advisory = _live_drift_advisory(drift["live_only"])
+    if advisory:
+        print(advisory)
     report = compare(json.loads(BASELINE_PATH.read_text()), current)
     if report:
         print(json.dumps(report, indent=1))
