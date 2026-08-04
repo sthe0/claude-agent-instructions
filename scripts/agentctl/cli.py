@@ -34,6 +34,8 @@ from .machine import transition
 from .plan import (
     PlanDoc,
     PlanError,
+    _path_token_is_declared,
+    _reachability_path_tokens,
     check_venue_warnings,
     load_plan,
     stage_question_key,
@@ -3313,6 +3315,51 @@ _CONTROL_DEAD_EXITS = {
          "--is-ancestor <bogus-sha> HEAD` measured 128, 'fatal: Not a valid commit name')",
 }
 
+
+# The process-death class, which the dict above cannot hold: it is a RANGE and a
+# NEGATIVE value, so it has no key, and it arrives with COMPLETELY EMPTY output,
+# so no text probe below can rescue it. `timed_out` covers only this verb's own
+# ceiling, never a check that wraps itself in `timeout` or is OOM-killed.
+# Measured 2026-08-04 through the same `subprocess.run(["bash", "-c", ...])`
+# `_probe_control` uses, which is why the arms are not the ones an exit-code
+# table would predict:
+#
+#   kill -9 $$                      rc  -9   bash EXECS AWAY for a simple
+#                                            command, so Python sees the raw
+#                                            NEGATIVE signal and never 137
+#   timeout 1 sleep 5               rc 124   GNU timeout
+#   bash -c 'kill -9 $$'; exit $?   rc 137   a COMPOUND, so bash survives to reap
+#                                            its child and reports 128 + 9
+def _process_death_evidence(returncode: int | None) -> str | None:
+    """The COULD-NOT-RUN evidence for a check whose process was killed, else None.
+
+    The evidence names WHICH arm fired, and the signal number for the negative
+    arm, so a false alarm is self-diagnosing where it fires instead of sending
+    the reader into this source."""
+    if returncode is None:
+        return None
+    if returncode < 0:
+        return (
+            f"process death: killed by signal {-returncode} (rc {returncode}; bash execs "
+            f"away for a simple command, so the signal arrives negative)"
+        )
+    if returncode == 124:
+        return "exit 124 — a `timeout` wrapper killed the check before it reached its predicate"
+    if 129 <= returncode <= 192:
+        return (
+            f"exit {returncode} — bash survived and reaped a child killed by signal "
+            f"{returncode - 128}"
+        )
+    return None
+
+
+# BOTH MEMBERS BELOW ARE PROBED ON STDOUT AND STDERR, not stderr alone. One rule
+# over two members, stated where it governs both rather than sitting on one of
+# them. Measured: `python3 boom.py` puts its traceback on stderr, `python3
+# boom.py 2>&1` puts it on stdout — and `2>&1` is exactly the redirection the
+# fail-open pipeline idiom uses, so a stderr-only probe misses the shape most
+# likely to carry a dead control.
+
 # Interpreter-level diagnostics that accompany an ORDINARY exit code. The hole
 # they close: a dead interpreter invocation does not raise — it prints one line
 # and exits 1 (`python3 -m nosuchmodule_xyz` measured rc 1, stderr
@@ -3320,16 +3367,28 @@ _CONTROL_DEAD_EXITS = {
 # indistinguishable from an honest false predicate. Every stage verify_command in
 # the plan that specifies this verb is `python3 -m pytest`, so a venue whose
 # interpreter lacks pytest produces exactly this shape.
+#
+# NAMED RESIDUAL — the swallowed producer, left open because the zero-exit
+# short-circuit at the head of classify_control_run is load-bearing for
+# log-scanning checks and comes first. The discriminating observable, so a later
+# reader re-runs it rather than taking this comment's word: `bash -c
+# 'nosuchcmd_xyz; true'` measures rc 0 with `command not found` on stderr and is
+# classified RAN today. Any check ending in `; true`, `|| true` or a trailing
+# echo has that shape.
 _CONTROL_INTERPRETER_DIAGNOSTICS = (
     "No module named",
     "can't open file",
     "command not found",
 )
 
-# Probed on stdout AND stderr, not stderr alone. Measured: `python3 boom.py`
-# puts it on stderr, `python3 boom.py 2>&1` puts it on stdout — and `2>&1` is
-# exactly the redirection the fail-open pipeline idiom uses, so a stderr-only
-# probe misses the shape most likely to carry a dead control.
+# NAMED RESIDUAL — the traceback false alarm. This member fires at ANY nonzero
+# exit, and two shapes print the banner for a GENUINE predicate reason. Both
+# measured 2026-08-04, and both at exit 1, which is why no exit-code rule
+# separates them from an honestly-crashed check: a script that catches, calls
+# `traceback.print_exc()` and then `sys.exit(1)` (rc 1, banner on stderr), and
+# `python3 -m pytest --tb=native` on ONE honestly-failing test (rc 1, banner on
+# stdout). The hole is LATENT rather than live: the default `--tb` prints no
+# banner, and no plan or repo script currently passes `--tb=native`.
 _CONTROL_TRACEBACK = "Traceback (most recent call last):"
 
 
@@ -3351,16 +3410,20 @@ def classify_control_run(
         return CONTROL_RAN, "exit 0"
     if returncode in _CONTROL_DEAD_EXITS:
         return CONTROL_COULD_NOT_RUN, _CONTROL_DEAD_EXITS[returncode]
+    death = _process_death_evidence(returncode)
+    if death:
+        return CONTROL_COULD_NOT_RUN, death
     for stream, text in (("stdout", stdout or ""), ("stderr", stderr or "")):
         if _CONTROL_TRACEBACK in text:
             return CONTROL_COULD_NOT_RUN, (
                 f"unhandled exception: {_CONTROL_TRACEBACK!r} on {stream} (exit {returncode})"
             )
-    for needle in _CONTROL_INTERPRETER_DIAGNOSTICS:
-        if needle in (stderr or ""):
-            return CONTROL_COULD_NOT_RUN, (
-                f"interpreter-level diagnostic on stderr: {needle!r} (exit {returncode})"
-            )
+    for stream, text in (("stdout", stdout or ""), ("stderr", stderr or "")):
+        for needle in _CONTROL_INTERPRETER_DIAGNOSTICS:
+            if needle in text:
+                return CONTROL_COULD_NOT_RUN, (
+                    f"interpreter-level diagnostic {needle!r} on {stream} (exit {returncode})"
+                )
     return CONTROL_RAN, f"exit {returncode} — a predicate the command reached and answered"
 
 
@@ -3380,7 +3443,10 @@ def _probe_control(
         result = runner(argv)
         return result.returncode, result.stdout, result.stderr, False
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=_CONTROL_TIMEOUT_S)
+        proc = subprocess.run(
+            argv, capture_output=True, text=True, errors="replace",
+            timeout=_CONTROL_TIMEOUT_S,
+        )
     except subprocess.TimeoutExpired:
         return None, "", "", True
     return proc.returncode, proc.stdout, proc.stderr, False
@@ -3389,8 +3455,34 @@ def _probe_control(
 def _control_record(where: str, label: str, command: str, venue: str) -> dict:
     """The shared shape of one reported check. `expected_exit` is deliberately
     absent: carrying it would invite reading a green/red verdict off this report,
-    and the verb never asserts greenness."""
-    return {"where": where, "label": label or "", "command": command, "venue": venue}
+    and the verb never asserts greenness.
+
+    `not_yet_built` is a FIELD and never a fourth verdict, so `ok`'s definition
+    does not move: it separates a control that is dead on arrival from one whose
+    artifact a later stage still has to write, which the headline bit alone
+    conflates. None means the question was not asked (the record never reached
+    COULD-NOT-RUN); a string names the declared artifact found missing."""
+    return {
+        "where": where, "label": label or "", "command": command, "venue": venue,
+        "not_yet_built": None,
+    }
+
+
+def _missing_declared_artifact(record: dict, declared: list[str]) -> str | None:
+    """The declared-but-absent artifact this check names, else None.
+
+    Keyed on DECLARATION plus measured absence, never on the exit code: a pytest
+    node id that is not yet written exits 4 or 5, while a script that is not yet
+    written exits 2 with `can't open file`, and an exit-code rule would label the
+    first and miss the second. Shares `_path_token_is_declared` with plan.py's
+    reachability gate so the two surfaces cannot drift on what "covers" means."""
+    base = Path(record["cwd"]) if record.get("cwd") else Path(".")
+    for token in _reachability_path_tokens(record["command"]):
+        if (base / token).exists():
+            continue
+        if _path_token_is_declared(token, declared):
+            return token
+    return None
 
 
 def _check_one_control(
@@ -3429,7 +3521,8 @@ def cmd_check_controls(args, *, store: StateStore, runner: Runner | None = None)
 
     Deliberately NOT folded into submit-plan, and never auto-invoked: this verb
     EXECUTES author-supplied shell, and submit-plan is run on every plan and must
-    stay free of effects on the operator's machine. submit-plan only NUDGES.
+    stay free of effects on the operator's machine. submit-plan only NUDGES
+    (stage 5).
 
     Venue resolution is PLAN-FIRST: the plan named by `--plan` is this verb's
     subject, so its own [meta] governs where each check is placed, through the
@@ -3448,7 +3541,25 @@ def cmd_check_controls(args, *, store: StateStore, runner: Runner | None = None)
     conclusion by the same route — see its parser entry, which accepts the
     injected flag and ignores it."""
     doc = load_plan(args.plan)
-    session = store.load(args.session) if getattr(args, "session", None) else None
+    session = None
+    session_error = None
+    if getattr(args, "session", None):
+        try:
+            session = store.load(args.session)
+        except Exception as exc:  # noqa: BLE001 — breadth argued below
+            # ANY failure, not TypeError alone. Everything this load supplies is
+            # CONVENIENCE — two fallback venue fields the plan overrides wherever
+            # it declares them — so there is no failure of it this verb needs to
+            # honour, and naming today's exception type would leave the class open
+            # one type over: `from_dict` reaches KeyError, ValueError, TypeError,
+            # JSONDecodeError and OSError by the same schema drift. The measured
+            # trigger was `SessionState.__init__() got an unexpected keyword
+            # argument 'runtime_host'` from a file that parses as JSON perfectly
+            # well. The breadth stops HERE: load_plan above, the SessionState
+            # construction below and the whole probe path stay unguarded, because
+            # their failures are this verb's subject and material rather than
+            # ambient drift.
+            session_error = f"{type(exc).__name__}: {exc}"
     state = SessionState(
         session_id=session.session_id if session else "",
         task_id=doc.meta.task_id,
@@ -3460,15 +3571,27 @@ def cmd_check_controls(args, *, store: StateStore, runner: Runner | None = None)
     records: list[dict] = []
     for stage in doc.stages:
         crit = stage.criterion
-        if crit.criterion_type != CriterionType.MEASURABLE.value:
-            continue
         where = f"stage {stage.index}"
+        if crit.criterion_type != CriterionType.MEASURABLE.value:
+            record = _control_record(where, stage.title, "", crit.verify_venue)
+            record.update(
+                verdict=CONTROL_SKIPPED, exit=None,
+                evidence=f"criterion_type {crit.criterion_type!r} declares no executable check",
+            )
+            records.append(record)
+            continue
         if crit.verify_kind == CheckKind.LANDED.value:
             record = _control_record(where, stage.title, "", crit.verify_venue)
             record.update(verdict=CONTROL_SKIPPED, exit=None, evidence="engine-synthesized")
             records.append(record)
             continue
         if not crit.verify_command:
+            record = _control_record(where, stage.title, "", crit.verify_venue)
+            record.update(
+                verdict=CONTROL_SKIPPED, exit=None,
+                evidence="a measurable stage with no verify_command is a control that cannot fail",
+            )
+            records.append(record)
             continue
         records.append(_check_one_control(
             state, where, stage.title, crit.verify_command, crit.verify_venue, runner,
@@ -3483,19 +3606,35 @@ def cmd_check_controls(args, *, store: StateStore, runner: Runner | None = None)
         records.append(_check_one_control(
             state, where, fc.label, fc.command, fc.venue, runner,
         ))
+    declared_artifacts: list[str] = []
+    for stage in doc.stages:
+        declared_artifacts.extend(getattr(stage, "output_artifacts", []) or [])
+    for record in records:
+        if record["verdict"] != CONTROL_COULD_NOT_RUN:
+            continue
+        record["not_yet_built"] = _missing_declared_artifact(record, declared_artifacts)
     counts = {v: sum(1 for r in records if r["verdict"] == v) for v in _CONTROL_VERDICTS}
+    not_yet_built = sum(1 for r in records if r["not_yet_built"])
     ok = counts[CONTROL_COULD_NOT_RUN] == 0 and counts[CONTROL_REFUSED] == 0
     detail = (
         f"{len(records)} declared check(s): {counts[CONTROL_RAN]} ran, "
-        f"{counts[CONTROL_COULD_NOT_RUN]} could not run, {counts[CONTROL_REFUSED]} refused, "
-        f"{counts[CONTROL_SKIPPED]} skipped (engine-synthesized). A RED predicate counts as "
+        f"{counts[CONTROL_COULD_NOT_RUN]} could not run ({not_yet_built} of them naming an "
+        f"artifact a later stage still has to build), {counts[CONTROL_REFUSED]} refused, "
+        f"{counts[CONTROL_SKIPPED]} skipped. A RED predicate counts as "
         f"RAN; COULD-NOT-RUN means the command never reached its own predicate, and before "
         f"the work exists that is the expected reading — this is a report, not a gate."
     )
-    # The reported node is the SESSION's, not the synthetic venue-carrier's: the
-    # verb never transitions, and echoing the live node is how a caller sees that.
-    return Directive(ok, session.node if session else state.node, "inspect", detail,
-                     data={"checks": records, "counts": counts})
+    if session_error:
+        detail += (
+            f" DEGRADED: the ambient session could not be read ({session_error}), so venues "
+            f"come from the plan alone."
+        )
+    # The reported node is the SESSION's: the verb never transitions, and echoing
+    # the live node is how a caller sees that. With no readable session there is
+    # no node to echo, and the synthetic venue-carrier's default would read as one.
+    return Directive(ok, session.node if session else None, "inspect", detail,
+                     data={"checks": records, "counts": counts,
+                           "session_error": session_error})
 
 
 def cmd_status(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
