@@ -1,0 +1,66 @@
+[meta]
+task_id = "agentctl-question-candidate-dispose"
+goal = "Fix the agentctl premise-plugin bug where question-enumerate raises candidates into bag['candidates'] (qenum-N, disposition 'raised') but NO CLI command can disposition them: question-dispose/question-retire only touch bag['questions'], a structurally different store with a different entry shape and disposition vocabulary. Because validate_question_candidates treats every 'raised' candidate as an unconditional plan_approval blocker, once question-enumerate has run any DIAGNOSING->replan is permanently wedged with no CLI route out (the workaround is hand-editing state.json). Compounding it, cmd_question_enumerate's own success message advises `question-dispose --id <qenum-N>`, which returns 'no such question' because that command searches only bag['questions']. Fix (approach A, mirrors the already-correct ledger-dispose): add a question-candidate-dispose command operating on premise bag['candidates'] with the same recorded|dismissed shape as ledger-dispose, and correct the enumerate advice string to point at it."
+done_criterion = "A new `agentctl question-candidate-dispose --id <qenum-N> --as recorded --question <qid>` (or `--as dismissed --reason <text>`) sets the premise candidate's disposition in bag['candidates'], with the same validation as ledger-dispose (--question required+resolvable for recorded, --reason required for dismissed, error on unknown id); after dispositioning all candidates the premise plan_approval gate no longer blocks on them; cmd_question_enumerate's success message names question-candidate-dispose; new tests cover recorded/dismissed/error paths and the gate-unblock; verify-all.py stays 16/16 and the full pytest suite stays green; committed. Measurable gates resolution; the user gives final acceptance on review."
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/cai-wt-qcd"
+external_research = "none"
+
+[[stage]]
+index = 1
+title = "Add question-candidate-dispose command mirroring ledger-dispose; fix the enumerate advice string; add tests"
+executor = "spawn:developer"
+expected_result_image = "scripts/agentctl/cli.py gains cmd_question_candidate_dispose, structurally mirroring cmd_ledger_dispose (cli.py:603-631) but operating on state.plugins['premise']['candidates'] (premise.QuestionCandidate: id, statement, disposition, reason, question) instead of the ledger bag. It looks up --id in bag['candidates']; errors ('no such candidate') if absent; sets disposition to --as (recorded|dismissed, validated against premise.VALID_CANDIDATE_DISPOSITIONS); requires --question for recorded (and, like ledger-dispose's --claim check, verifies it resolves to an existing Question.id in bag['questions']); requires --reason for dismissed. A subparser 'question-candidate-dispose' is registered alongside the other question-* commands (near cli.py:3004-3011) and dispatched to the new function. cmd_question_enumerate's success message (cli.py:966-968) is corrected to advise `agentctl question-candidate-dispose --id <qenum-N> --as recorded --question <qid> | --as dismissed --reason <text>` instead of the non-working question-dispose. New tests in scripts/tests/ assert: recorded path (sets disposition+question), dismissed path (sets disposition+reason), error on unknown id, error on recorded-without-resolvable-question, error on dismissed-without-reason, and that a premise bag whose candidates are all dispositioned no longer trips validate_question_candidates. All edits happen in the ISOLATED WORKTREE /Users/the0/cai-wt-qcd (branch agentctl-question-candidate-dispose off origin/main); the canonical checkout /Users/the0/claude-agent-instructions is read-only to session edits (mutated only by pull) and stays untouched — the branch lands to main at the resolution gate."
+criterion_type = "measurable"
+done_criterion = "the new command exists and is dispatched; the new pytest file passes; `python3 -m agentctl question-candidate-dispose --help` shows the recorded/dismissed options"
+verify_command = "cd /Users/the0/cai-wt-qcd && python3 -m pytest scripts/tests/test_agentctl_question_candidate_dispose.py -q && (cd scripts && python3 -m agentctl question-candidate-dispose --help) && echo GATE_OK"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["scripts/agentctl/cli.py", "scripts/tests/test_agentctl_question_candidate_dispose.py"]
+material = "cmd_ledger_dispose as the template (cli.py:603-631); the question-* subparser table (cli.py:~3004-3011); the enumerate advice string (cli.py:966-968); premise.QuestionCandidate + VALID_CANDIDATE_DISPOSITIONS + validate_question_candidates (premise.py:235-306)"
+means = "Edit, Write, Bash (pytest, agentctl)"
+method = "read cmd_ledger_dispose and the ledger subparser registration as the exact template; add cmd_question_candidate_dispose reusing premise.QuestionCandidate/VALID_CANDIDATE_DISPOSITIONS and the recorded-needs-resolvable-referent + dismissed-needs-reason validation; register the subparser and dispatch; correct the enumerate advice string; author scripts/tests/test_agentctl_question_candidate_dispose.py covering recorded/dismissed/error/gate-unblock; run the new tests. CHANGED MEANS (replan): the verify_command's '-m agentctl' clause is invoked from scripts/ (subshell '(cd scripts && python3 -m agentctl ... --help)'), NOT from repo_root — because the agentctl package lives under scripts/ and '-m agentctl' only imports when scripts/ is on sys.path; pytest is cwd-immune (conftest fixes sys.path), the bare '-m' clause is not."
+conditions = "premise bag already has bag['candidates'] with QuestionCandidate entries written by question-enumerate (confirmed); ledger-dispose is the proven parallel (confirmed cli.py:603-631); work happens in the worktree /Users/the0/cai-wt-qcd, not the canonical checkout"
+invariants = "all edits confined to the worktree /Users/the0/cai-wt-qcd; the canonical checkout /Users/the0/claude-agent-instructions stays read-only (no session edits); operate ONLY on bag['candidates'] (never bag['questions']); do NOT alter validate_question_candidates gate semantics, question-dispose, question-retire, or ledger-dispose; recorded requires a --question resolving to an existing Question.id and dismissed requires --reason (mirror ledger-dispose's referent+reason validation); English-only; the command mirrors ledger-dispose's shape so the codebase stays consistent. PRESERVE (replan): The verify still asserts: the new pytest file is 8/8 green, 'question-candidate-dispose --help' prints --as {recorded,dismissed}/--reason/--question, and emits GATE_OK on success. PRESERVE (replan): the command/code and the 8-test file are unchanged (code review PASS stands); only the verify_command string changes."
+capability_required = "python + pytest + repo edit"
+
+[stage.principle]
+statement = "A gate that raises items into a store must provide a CLI verb to disposition that same store; the fix mirrors the existing correct sibling (ledger-dispose) rather than overloading a command bound to a different store"
+source = "premise deliberately does not reuse ledger.Candidate ('its claim field names the wrong referent', plugins_premise.py:15-18); ledger-dispose already implements the recorded|dismissed pattern correctly on its own bag['candidates']"
+derivation = "question-enumerate is the only writer of bag['candidates'] and validate_question_candidates makes every 'raised' entry a hard blocker, so without a disposing verb the gate is un-satisfiable through the CLI. The questions and candidates stores have different entry shapes and disposition vocabularies, so overloading question-dispose would conflate two contracts; the ledger plugin already proves the clean parallel — a dedicated dispose verb per store. Therefore add the missing verb mirroring ledger-dispose."
+confidence = "high"
+refutation = "if bag['candidates'] and bag['questions'] were in fact one store with one disposition vocabulary, a single dispose verb would suffice and a second command would be redundant"
+
+[[stage]]
+index = 2
+title = "Full-suite verification and commit"
+executor = "in_thread"
+expected_result_image = "In the worktree /Users/the0/cai-wt-qcd, python3 scripts/verify-all.py reports 16/16 OK and the full pytest suite (scripts/tests/) stays green including the new test file. One coherent commit on the worktree branch agentctl-question-candidate-dispose adds cmd_question_candidate_dispose, the corrected enumerate advice string, and the new test file, with a message naming the difficulty removed (premise candidates had no CLI disposition path — DIAGNOSING->replan wedged after enumerate). Nothing pushed/landed to main until a separate explicit user confirmation at the resolution gate."
+criterion_type = "measurable"
+done_criterion = "verify-all.py exits 0 (16/16); full pytest green; git log -1 on the worktree branch shows the commit over cli.py + the new test file"
+verify_command = "cd /Users/the0/cai-wt-qcd && python3 scripts/verify-all.py && python3 -m pytest scripts/tests/ -q && git log -1 --oneline && echo GATE_OK"
+expected_exit = 0
+depends_on = [1]
+output_artifacts = ["git commit"]
+material = "staged changes from stage 1"
+means = "Bash (python, pytest, git)"
+method = "in the worktree /Users/the0/cai-wt-qcd: run verify-all.py and the full pytest suite; git add cli.py + the new test file; commit on the branch with a difficulty-naming message; leave push/land-to-main for the resolution gate"
+conditions = "stage 1 complete, new tests green; work in the worktree /Users/the0/cai-wt-qcd"
+invariants = "commit only these changes on the worktree branch; the canonical checkout stays untouched; no push/land without a separate explicit user confirmation; the commit message names the difficulty removed; English-only"
+capability_required = "python + pytest + git"
+
+[stage.principle]
+statement = "An engine-code fix is not delivered until the whole verify surface (verify-all + the full test suite) is green, not just the new test — a change to a shared CLI can regress adjacent commands"
+source = "CLAUDE.md § On task resolution: verify the right axis; the full suite is the runtime axis for a shared entrypoint"
+derivation = "The new command shares cli.py's argparse tree and dispatch with every other agentctl command; a scoped new-test-green says nothing about regressions to sibling commands or the subparser table. verify-all + full pytest is the enclosing check that establishes no adjacent breakage."
+confidence = "high"
+refutation = "if the change were fully isolated from every other command and check, the scoped test alone would suffice"
+
+## Final verification
+# All checks run in the worktree /Users/the0/cai-wt-qcd (canonical checkout stays untouched).
+# 1. python3 scripts/verify-all.py -> 16/16 OK.
+# 2. python3 -m pytest scripts/tests/ -q -> all pass, including test_agentctl_question_candidate_dispose.py.
+# 3. (cd scripts && python3 -m agentctl question-candidate-dispose --help) -> shows --as recorded|dismissed, --question, --reason. NB: agentctl is a package under scripts/, so '-m agentctl' must run from scripts/ (or with PYTHONPATH=scripts), not from repo root.
+# 4. Manual: on a session state with 'raised' qenum-N candidates, `question-candidate-dispose --as dismissed --reason ...` clears the block that validate_question_candidates would otherwise raise (question-check no longer lists them).
+# 5. git log on the worktree branch shows one commit over cli.py + the new test file naming the difficulty; nothing pushed/landed to main yet.

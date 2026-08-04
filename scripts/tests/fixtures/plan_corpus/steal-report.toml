@@ -1,0 +1,62 @@
+[meta]
+task_id = "steal-report"
+goal = "Make steal tracking effortless: a report/analyzer script that reads ~/steal-monitor/steal.log over a rolling 3-day window and prints a plain verdict (quiet / elevated / sustained->act) plus stats, deployed to the0.fun and committed to this repo; plus a project-memory note so future the0.fun/VPN sessions auto-run it and volunteer the verdict. On-demand, no Telegram."
+done_criterion = "scripts/steal-report.sh deployed to /home/the0/steal-monitor/ and committed; running it on the0.fun prints a stats block + one-line verdict from the live log and writes ~/steal-monitor/steal-verdict.txt; project memory tells future sessions to surface it; user accepts on review"
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/projects/the0.fun"
+external_research = "none"
+
+[[stage]]
+index = 1
+title = "Author steal-report.sh + deploy + verify verdict on live log"
+executor = "in_thread"
+expected_result_image = "scripts/steal-report.sh: reads ~/steal-monitor/steal.log (CSV ts,steal%,load1), filters to last N days (default 3) via a date-computed cutoff and lexical ISO-timestamp compare, computes sample count / mean / max / %samples>=15 in a single awk pass (mawk-safe: no asort/gawk), prints a stats block + a one-line plain verdict (quiet <5% mean & <15% high; elevated; sustained->act if mean>=10 OR high>=40%), handles too-few-samples ('not enough data yet'), and writes the verdict to ~/steal-monitor/steal-verdict.txt. Deployed to /home/the0/steal-monitor/steal-report.sh chmod +x; running it on the0.fun prints a verdict from the real log."
+criterion_type = "measurable"
+done_criterion = "ssh run of the deployed script exits 0 and its output contains 'verdict:' AND ~/steal-monitor/steal-verdict.txt is written"
+verify_command = "ssh the0.fun 'bash ~/steal-monitor/steal-report.sh | grep -qi verdict && test -s ~/steal-monitor/steal-verdict.txt && echo OK'"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["scripts/steal-report.sh", "the0.fun:/home/the0/steal-monitor/steal-report.sh"]
+material = "steal.log CSV; rolling-window stats"
+means = "Write, Bash (ssh)"
+method = "author locally; heredoc/scp to server; chmod; run against live log to confirm verdict"
+conditions = "steal.log exists and accrues (from steal-monitor task); Debian date -d available; no sudo needed"
+invariants = "mawk-safe (no gawk-only asort); no sudo; /home/nick untouched; read-only on the log (never mutates steal.log); verdict thresholds anchored to the 2.25% baseline; EXPLICIT count==0 guard before any mean/%high division, and the too-few-samples fallback line MUST still contain the literal 'verdict:' so the verify grep passes; NO bare set -e (use set -uo pipefail) and every awk/grep whose nonzero exit is legitimate must be guarded (|| true / if) — mirrors the documented lesson in sibling scripts/steal-monitor.sh"
+capability_required = "bash + awk stats"
+
+[stage.principle]
+statement = "Reduce the mean over a multi-day window plus a high-sample fraction, not a single sample, so the verdict reflects a sustained trend not a momentary spike"
+source = "steal semantics; user wants sustained-vs-spike distinction"
+confidence = "high"
+refutation = "if a lone spike day flips the verdict to sustained, the window/threshold is wrong"
+
+[[stage]]
+index = 2
+title = "Commit script + project-memory note for auto-surfacing"
+executor = "in_thread"
+expected_result_image = "scripts/steal-report.sh committed on a branch; project memory (vpn_topology.md + MEMORY.md pointer) updated so a future the0.fun/VPN session runs steal-report and volunteers the verdict without the user having to remember thresholds — the user's only trigger is mentioning the0.fun."
+criterion_type = "measurable"
+done_criterion = "git log shows a commit adding scripts/steal-report.sh AND vpn_topology.md mentions steal-report / auto-surface"
+verify_command = "cd /Users/the0/projects/the0.fun && git log --oneline -1 -- scripts/steal-report.sh | grep -q . && grep -q steal-report .claude/agent-memory/vpn_topology.md"
+expected_exit = 0
+depends_on = [1]
+output_artifacts = ["git commit", ".claude/agent-memory/vpn_topology.md"]
+material = "authored script; project memory"
+means = "Bash (git), Edit"
+method = "git add+commit on branch; append auto-surface note to vpn_topology.md + index"
+conditions = "stage 1 script exists"
+invariants = "commit only the report script; memory note is factual + actionable"
+capability_required = "git + memory hygiene"
+
+[stage.principle]
+statement = "'Don't hold it in your head' is fulfilled by making the agent surface the verdict on the user's natural trigger, not by asking the user to poll"
+source = "user request: не хочу держать в голове"
+confidence = "high"
+refutation = "none"
+
+## Final verification
+# 1. ssh the0.fun: steal-report.sh runs, prints stats + 'verdict:', writes steal-verdict.txt.
+# 2. Verdict matches the live log (spot-check the numbers against tail of steal.log).
+# 3. scripts/steal-report.sh committed; vpn_topology.md + MEMORY.md updated to auto-surface.
+# 4. /home/nick untouched; no sudo; log never mutated.

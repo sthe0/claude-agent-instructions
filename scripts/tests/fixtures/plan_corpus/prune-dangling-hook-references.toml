@@ -1,0 +1,185 @@
+[meta]
+task_id = "prune-dangling-hook-references"
+goal = "Remove the two dangling hook registrations that make every AskUserQuestion emit a PostToolUse error (both point at scripts/hook-answer-delivery-reminder.py, deleted upstream in fdbc543), and close the class: make the reminder-hook reconciler able to DELETE its own stale entries, and make the self-diagnose scanner actually able to SEE them. Today apply-settings.sh is additive and install-reminder-hooks.sh is add-only, so every future upstream hook removal leaves the same landmine, surfacing only when the matcher next fires."
+done_criterion = "No hook command in ~/.claude/settings.json or ~/.claude-agent/settings.json points at a nonexistent path; install-reminder-hooks.sh --check exits non-zero when a dangling owned entry is present and 0 when clean; self-diagnose.py's broken-hook-registration scan flags an interpreter-prefixed command and reads the agent config root; new/extended tests green; change landed on main."
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/claude-agent-instructions-prune-dangling-hooks"
+external_research = "No external research warranted — this is a defect in this repo's own machinery, fully localized by reading scripts/self-diagnose.py, scripts/install-reminder-hooks.sh and scripts/sync-instructions-repo.sh. Two planner spawns established that both halves of the wanted mechanism already exist in-repo, so no prior art or third-party tool is in play. Upstream cause confirmed by git log: commit fdbc543 'retire-ask-split-crutch: remove turn-split hooks and scrub dangling references' deleted the script deliberately and left no successor."
+
+# ---------------------------------------------------------------------------
+# Stage 1 — DETECTION. Close the two enumeration gaps that made the existing
+# scanner structurally blind to both live entries. Rule was fine; reach was not.
+# ---------------------------------------------------------------------------
+[[stage]]
+index = 1
+title = "Close the two enumeration gaps in self-diagnose.py's broken-hook-registration scan"
+executor = "spawn:developer"
+expected_result_image = "scripts/self-diagnose.py: (a) _hook_script_path() resolves the script behind an interpreter-prefixed command — when tokens[0]'s basename is a known interpreter (python, python3, bash, sh, zsh, and `env` after skipping VAR=val assignments), it scans the remaining tokens for the first non-flag absolute path and returns that. Two fail-safe rules are explicit: (i) a candidate token CONTAINING WHITESPACE is rejected and never treated as a path — this is what keeps `bash -c '/abs/script.sh arg1'` from resolving to the whole quoted payload and false-flagging a working script as missing; (ii) when tokens[0] is ITSELF an absolute path, it is returned directly and the interpreter walk does not run, even if its basename looks like an interpreter — so the live `/Users/the0/.local/share/uv/tools/ccgram/bin/python -m ccgram.main hook` entry keeps today's behaviour (resolved to the interpreter binary, which exists, hence unflagged) rather than silently changing class. (b) default_settings_paths() additionally enumerates the agent config root's settings.json and settings.local.json via lib/config_root.agent_home(), keeping the existing resolve()-based de-duplication so a symlinked file is still scanned once. Both live dangling entries now appear as broken-hook-registration findings. scripts/tests/test_self_diagnose.py extended with cases for: interpreter-prefixed absolute script that is missing (flagged), interpreter-prefixed script that exists (not flagged), `bash -c` inline shell text (not flagged), `bash -c '/abs/path/script.sh arg1'` where the script EXISTS (not flagged — the whitespace rule prevents the false positive), `env VAR=v python3 /abs/x.py` with the assignment skipped (flagged when missing), an already-absolute interpreter with module args such as `/abs/bin/python -m pkg.mod hook` (not flagged, per rule ii), bare `jq` (not flagged), and agent-config-root enumeration."
+criterion_type = "measurable"
+done_criterion = "test_self_diagnose.py passes including the new cases, and running the scanner against the real machine reports both dangling entries"
+verify_command = "cd /Users/the0/claude-agent-instructions-prune-dangling-hooks && python3 -m pytest scripts/tests/test_self_diagnose.py -q && python3 scripts/self-diagnose.py --json | python3 -c \"import json,sys; d=json.load(sys.stdin); f=[x for x in d.get('difficulties',d if isinstance(d,list) else []) if 'hook-answer-delivery-reminder' in json.dumps(x)]; sys.exit(0 if len(f)>=2 else 1)\""
+expected_exit = 0
+depends_on = []
+output_artifacts = ["scripts/self-diagnose.py", "scripts/tests/test_self_diagnose.py"]
+material = "scripts/self-diagnose.py::_hook_script_path (takes shlex tokens[0] only, so `python3 /abs/x.py` resolves to the bare word `python3` and is discarded as non-absolute) and ::default_settings_paths (enumerates ~/.claude and the project dir, never the agent config root)"
+means = "Read, Edit, Bash (pytest); scripts/self-diagnose.py, scripts/tests/test_self_diagnose.py, scripts/lib/config_root.py"
+method = "Read the two functions and test_self_diagnose.py's existing fixture style. Add an interpreter-basename set and a token walk for the first non-flag absolute path; handle `env` by skipping leading VAR=val tokens. Extend the candidate list in default_settings_paths with agent_home()/settings.json and settings.local.json. Write the five test cases first, watch them fail, then make them pass."
+conditions = "Work happens in the isolated worktree /Users/the0/claude-agent-instructions-prune-dangling-hooks (the canon checkout is read-only from a live session). The two dangling entries are still present on the machine, so the live-scan half of the verify command is meaningful only before stage 3 runs."
+invariants = "self-diagnose.py NEVER edits anything — its docstring contract is load-bearing and hook-self-diagnose-due.py parses its stdout line shape and exit code; neither may change. Fail-safe direction preserved: an unresolvable command stays unflagged rather than false-flagged. No change to the Difficulty record shape."
+capability_required = "python, pytest, reading an existing test suite's conventions"
+
+[stage.principle]
+statement = "A detector that already encodes the right rule but misses real instances has an enumeration defect, not a rule defect, and must be fixed by widening its reach rather than by adding a second detector."
+source = "The observed failure: self-diagnose.py's broken-hook-registration scan exists, is SessionStart-wired via hook-self-diagnose-due.py, exits 1 on findings — and still reported neither live entry."
+derivation = "Both misses trace to inputs the scan never received: _hook_script_path returned None for a command whose script sits at tokens[1], and default_settings_paths never opened the file holding the second entry. The predicate 'resolved absolute path does not exist' would have fired correctly on both had they reached it; therefore the corrective locus is the input enumeration, and adding a parallel detector would duplicate a rule that is already right."
+confidence = "high"
+refutation = "If after widening both enumerations the scan still misses either live entry, the defect is in the rule or the traversal after all, and a separate detector becomes justified."
+
+# ---------------------------------------------------------------------------
+# Stage 2 — REMEDIATION. Give the existing add-only reconciler the delete
+# direction plus a report-only --check mode. No new executable.
+# ---------------------------------------------------------------------------
+[[stage]]
+index = 2
+title = "Add the prune direction and a --check mode to install-reminder-hooks.sh"
+executor = "spawn:developer"
+expected_result_image = "scripts/install-reminder-hooks.sh gains a prune pass and two flags. Ownership rule: an entry is OWNED iff its resolved script path lies inside $REPO/scripts/. The prune pass deletes an entry only when it is owned AND its script is missing; an unowned-and-missing entry is REPORTED to stderr and never deleted (a machine-local hook outside the repo is none of this script's business). A hook group left empty by a deletion is removed too, so no empty matcher stanza remains. The add pass keeps targeting the config root only; the prune pass runs over a HARD-CODED file list — the agent config root's settings.json/settings.local.json plus ~/.claude's — and deliberately does NOT reuse self-diagnose.py's default_settings_paths(), whose cwd-dependent project-local entry would let a prune run from an arbitrary cwd mutate an unrelated project's .claude/settings.local.json. Only the path-RESOLUTION helper from stage 1 is shared, never the file enumeration. The pass reuses the existing backup-before-write and JSON-validation path and the existing edit_ledger.stamp. Additionally this stage fixes the sibling defect in the installer's own basename_of(): it takes cmd.split()[0], so every interpreter-prefixed command resolves to the bare word `python3` instead of the script name, defeating the ADD pass's idempotency check — which is why duplicate hook entries have accumulated in both live files (measured: 5 duplicated (event, script) pairs of 39 entries in ~/.claude/settings.json, 3 of 45 in the agent config root). basename_of() is re-pointed at the shared stage-1 resolver so the add pass dedups correctly from now on. `--check` performs the same analysis, writes nothing, prints one line per dangling entry, and exits 1 if any owned dangling entry exists (0 when clean) so it can serve as a gate. Default invocation without flags stays behaviourally identical to today for the add direction. New scripts/tests/test_install_reminder_hooks_prune.py covers: owned+missing deleted, owned+present kept, unowned+missing reported-not-deleted, emptied group removed, --check exit codes both ways, backup written before mutation, basename_of() resolving an interpreter-prefixed command to the script name rather than to `python3`, and the add pass not re-adding an entry that is already present in interpreter-prefixed form."
+criterion_type = "measurable"
+done_criterion = "the new test file passes and --check exits 1 against a fixture containing an owned dangling entry, 0 against a clean fixture"
+verify_command = "cd /Users/the0/claude-agent-instructions-prune-dangling-hooks && python3 -m pytest scripts/tests/test_install_reminder_hooks_prune.py -q"
+expected_exit = 0
+depends_on = [1]
+output_artifacts = ["scripts/install-reminder-hooks.sh", "scripts/tests/test_install_reminder_hooks_prune.py"]
+material = "scripts/install-reminder-hooks.sh: the DESIRED table (~45 tuples) as the canonical registry of repo-owned hooks, its existing backup + JSON-validation + edit_ledger.stamp path, and the REPO (ownership matching) vs STAMP_REPO (own location) seam"
+means = "Read, Edit, Write, Bash (pytest, jq/python json); scripts/install-reminder-hooks.sh, scripts/tests/"
+method = "Read the installer end to end, including how DESIRED is applied and where the settings file is read/written. Add an ownership predicate over resolved script paths. Add a prune pass that walks every hook entry in every discovered settings file, classifies it owned/unowned and present/missing, and acts per the rule above. Add flag parsing for --check (analyse only) and --prune. Author the test file against the installer's existing test conventions (temp HOME + fixture settings.json), red first, then green."
+conditions = "Stage 1 landed the widened path resolution the ownership predicate should reuse rather than re-derive. Runs in the isolated worktree. The installer must remain runnable from a worktree copy against the canon repo via CLAUDE_INSTRUCTIONS_REPO=<canon>."
+invariants = "NEVER delete an unowned entry — report only. Backup before any mutation and validate the JSON parses before writing. --check is read-only. The prune pass's file list is hard-coded, never cwd-derived. The DESIRED table's contents are unchanged. The only change to the add direction is basename_of()'s resolution fix, which makes its existing idempotency intent work rather than altering it. No new executable script is introduced. EXPLICITLY OUT OF SCOPE: removing the duplicate entries that the old basename_of() already accumulated — this stage stops new ones, and de-duplicating the existing ones is a separate decision about live state that the user has not been asked for."
+capability_required = "bash, python, pytest, careful JSON manipulation"
+
+[stage.principle]
+statement = "The delete direction of a reconciliation belongs in the component that already owns the add direction and already runs at the event that creates the divergence."
+source = "install-reminder-hooks.sh holds the DESIRED registry and is already invoked from sync-instructions-repo.sh:189 rewire_reminder_hooks — the exact point where a pull removes a hook script."
+derivation = "Divergence between desired and live hook sets is created at pull time and is decidable only against the DESIRED registry, which this script alone holds; siting the delete direction anywhere else would require duplicating that registry and re-triggering at the same event, whereas siting it here reuses both, plus the existing backup/validation/stamp path. Placing it in self-diagnose.py is excluded independently by that script's never-edits contract."
+confidence = "high"
+refutation = "If ownership cannot be decided from $REPO/scripts/ containment — e.g. legitimate owned hooks are invoked through a path that does not resolve inside the repo — then the DESIRED table is not a sufficient registry and an explicit ownership marker per entry is needed instead."
+
+# ---------------------------------------------------------------------------
+# Stage 3 — THE SYMPTOM. Run the now-capable reconciler at the two live files.
+# ---------------------------------------------------------------------------
+[[stage]]
+index = 3
+title = "Prune the two live dangling entries after backing up both settings files"
+executor = "in_thread"
+expected_result_image = "A full before-inventory of hook entries in both live settings files is captured. Both files are copied to <path>.pre-prune. The stage-2 reconciler is then run in prune mode from the worktree against the canon repo (CLAUDE_INSTRUCTIONS_REPO=/Users/the0/claude-agent-instructions). Result: ~/.claude/settings.json loses PostToolUse[1] entirely (matcher AskUserQuestion, that dangling hook was its only member, so the emptied group goes too) and ~/.claude-agent/settings.json loses the dangling hook from PostToolUse[3] while its valid sibling survives. An after-inventory diff shows exactly these removals and nothing else. Both files still parse as JSON. An AskUserQuestion call then completes with no hook error."
+criterion_type = "measurable"
+done_criterion = "install-reminder-hooks.sh --check exits 0, both files parse as JSON, and the before/after inventory diff shows only the two intended removals"
+verify_command = "cd /Users/the0/claude-agent-instructions-prune-dangling-hooks && CLAUDE_INSTRUCTIONS_REPO=/Users/the0/claude-agent-instructions bash scripts/install-reminder-hooks.sh --check && python3 -c \"import json;[json.load(open(p)) for p in ['/Users/the0/.claude/settings.json','/Users/the0/.claude-agent/settings.json']]\" && ! grep -q hook-answer-delivery-reminder /Users/the0/.claude/settings.json /Users/the0/.claude-agent/settings.json"
+expected_exit = 0
+depends_on = [2]
+output_artifacts = ["/Users/the0/.claude/settings.json", "/Users/the0/.claude-agent/settings.json", "/Users/the0/.claude/settings.json.pre-prune", "/Users/the0/.claude-agent/settings.json.pre-prune"]
+material = "The two live settings files: ~/.claude/settings.json PostToolUse[1] (matcher AskUserQuestion, sole hook, command prefixed with python3) and ~/.claude-agent/settings.json PostToolUse[3] (matcher AskUserQuestion, 2 hooks, dangling one invoked directly by path)"
+means = "Bash (cp, python json), the stage-2 reconciler; no hand-editing of JSON"
+method = "Capture the before-inventory as event/matcher/command triples for both files. Copy each file to <path>.pre-prune. Run the reconciler in prune mode. Capture the after-inventory and diff. Confirm both files parse. Confirm the surviving sibling in the agent-config-root group is intact by name."
+conditions = "Stages 1-2 complete and their tests green. These are live user configuration files, not repo files, so the canon read-only guard does not apply — but a corrupted write would wedge the session, hence backup-first."
+invariants = "Backup before any write. Never hand-edit the JSON — the reconciler is the only mutator, so the mechanism is exercised rather than bypassed. The valid sibling hook in the agent-config-root group must survive. No unrelated hook entry changes."
+capability_required = "shell, JSON inspection, and the judgement to abort on an unexpected inventory diff"
+
+[stage.principle]
+statement = "Fix the live symptom by running the new mechanism, not by hand-editing the artifact the mechanism exists to manage."
+source = "CLAUDE.md § Separate rule from perception — mechanize the rule part structurally; a hand-applied fix leaves the mechanism unexercised."
+derivation = "Hand-deleting the two entries would satisfy the visible done criterion while leaving the stage-2 prune pass untested against real-world data, so the first genuine exercise of the delete direction would happen unattended on some future pull. Routing the live fix through the reconciler makes this run the mechanism's acceptance test, converting an unverified path into a verified one at zero extra cost."
+confidence = "high"
+refutation = "If the reconciler's prune pass proposes any removal beyond the two known dangling entries, the ownership rule is over-selecting; abort, restore from .pre-prune, and return to stage 2."
+
+# ---------------------------------------------------------------------------
+# Stage 4 — DOCS. An architectural change to the guard surface is not delivered
+# until the read-first surfaces reflect it.
+# ---------------------------------------------------------------------------
+[[stage]]
+index = 4
+title = "Document the reconciler's new delete direction and the live-machine-state guard"
+executor = "spawn:developer"
+expected_result_image = "scripts/README.md gains rows describing install-reminder-hooks.sh's --check and --prune modes and the ownership rule. docs/operations/guards.md gains a short 'live machine state' subsection explaining that this check runs against machine-local settings files rather than repo content, and therefore is deliberately NOT part of verify-all.py (which must stay machine-independent). memory-global/leaves/autocompact-threshold-policy.md gains one pointer line next to its existing 'apply-settings.sh is additive' note, pointing at the reconciler as the mechanism that now handles the removal direction for repo-owned hooks."
+criterion_type = "measurable"
+done_criterion = "all three files mention the new modes, and the prose-length lints still pass"
+verify_command = "cd /Users/the0/claude-agent-instructions-prune-dangling-hooks && grep -q -- '--prune' scripts/README.md && grep -qi 'live machine state' docs/operations/guards.md && grep -q 'install-reminder-hooks' memory-global/leaves/autocompact-threshold-policy.md && python3 scripts/lint-prose-length.py"
+expected_exit = 0
+depends_on = [2]
+output_artifacts = ["scripts/README.md", "docs/operations/guards.md", "memory-global/leaves/autocompact-threshold-policy.md"]
+material = "scripts/README.md's existing per-script row format; docs/operations/guards.md's existing section structure; the 'apply-settings.sh is additive' sentence already in autocompact-threshold-policy.md"
+means = "Read, Edit; scripts/lint-prose-length.py for the ceilings"
+method = "Match each file's existing row/section conventions rather than inventing a format. Keep additions minimal — the ceilings are already near their limits repo-wide. State the ownership rule and the report-don't-delete asymmetry explicitly, since that is the non-obvious part."
+conditions = "Stage 2 fixed the flag names and the ownership rule, so the docs describe shipped behaviour rather than intent. All repo text is English."
+invariants = "English only. Respect the prose-length ceilings — no file may cross its lint threshold. Do NOT wire this check into verify-all.py: that script must stay machine-independent, and a live-settings check would make it fail on a clean checkout."
+capability_required = "technical writing in the repo's established conventions"
+
+[stage.principle]
+statement = "A check that reads machine-local state must be documented as a guard but kept out of the machine-independent verification suite."
+source = "verify-all.py is the repo's integrity gate and runs on any checkout, including CI and a fresh clone."
+derivation = "The --check mode's inputs are ~/.claude and the agent config root, which differ per machine and are absent on a clean checkout; including it in verify-all.py would make the suite's result depend on the invoking machine's private state, so the suite would fail for reasons unrelated to repo integrity. Documenting it under guards preserves discoverability without importing that dependency."
+confidence = "high"
+refutation = "If verify-all.py already contains a check that reads machine-local state, the machine-independence premise is false and the placement decision should be revisited."
+
+# ---------------------------------------------------------------------------
+# Stage 5 — LAND. Terminal state is main, not a personal branch.
+# ---------------------------------------------------------------------------
+[[stage]]
+index = 5
+title = "Land the branch on main and clean up the worktree"
+executor = "in_thread"
+expected_result_image = "The prune-dangling-hooks branch is committed with a message naming the difficulty (dangling hook registrations survive an upstream hook removal because both apply-settings.sh and install-reminder-hooks.sh are add-only) and landed on main via land-on-main.sh. origin/main contains the commit. The worktree and the branch are removed, locally and remotely."
+criterion_type = "measurable"
+done_criterion = "origin/main contains the delivered commit and the worktree is gone"
+verify_command = "cd /Users/the0/claude-agent-instructions && git fetch origin main -q && git log --oneline origin/main -3 | grep -qi 'hook' && ! test -d /Users/the0/claude-agent-instructions-prune-dangling-hooks"
+expected_exit = 0
+depends_on = [3, 4]
+output_artifacts = ["origin/main"]
+material = "the worktree /Users/the0/claude-agent-instructions-prune-dangling-hooks on branch prune-dangling-hooks"
+means = "Bash (git), scripts/land-on-main.sh"
+method = "Stage and commit in the worktree; run land-on-main.sh -C <worktree> -m <message>; verify origin/main; remove the worktree and delete the branch locally and remotely."
+conditions = "Stages 3 and 4 verified. The instructions repo is sole-maintained, so a fast-forward land is appropriate and no PR review gate applies."
+invariants = "Never hand-roll checkout/reset --hard/clean on the canon tree. Leave any parallel-session WIP untouched. Push only this task's commits."
+capability_required = "git, and the landing script's interface"
+
+[stage.principle]
+statement = "Committed work is not delivered until it reaches trunk; a personal branch is a checkpoint, not a terminal state."
+source = "CLAUDE.md § On task resolution — landing discipline."
+derivation = "The fix's whole purpose is that every future pull on this and any other machine inherits the delete direction; a branch that never lands is invisible to sync-instructions-repo.sh pull, so the class-closing property claimed by stages 1-2 would hold nowhere but this worktree."
+confidence = "high"
+refutation = "If the repo turns out to be review-gated by a distinct human reviewer, the land must go through a PR rather than a fast-forward."
+
+# ---------------------------------------------------------------------------
+# Final verification — the end-to-end gate against the user's done criterion.
+# ---------------------------------------------------------------------------
+[[final_check]]
+kind = "shell"
+label = "no dangling hook reference remains in either live settings file"
+command = "! grep -q hook-answer-delivery-reminder /Users/the0/.claude/settings.json /Users/the0/.claude-agent/settings.json"
+expected_exit = 0
+venue = "repo_root"
+
+[[final_check]]
+kind = "shell"
+label = "the reconciler reports a clean machine and this change's own tests are green"
+command = "cd /Users/the0/claude-agent-instructions && CLAUDE_INSTRUCTIONS_REPO=/Users/the0/claude-agent-instructions bash scripts/install-reminder-hooks.sh --check && python3 -m pytest scripts/tests/test_self_diagnose.py scripts/tests/test_install_reminder_hooks_prune.py scripts/tests/test_hook_self_diagnose_due.py -q"
+expected_exit = 0
+venue = "repo_root"
+
+[[final_check]]
+kind = "landed"
+label = "origin/main contains the delivered commit"
+
+[final_check.landed]
+target = "main"
+remote = "origin"
+delivered_stage = 5
+
+## Final verification
+# 1. Neither live settings file mentions hook-answer-delivery-reminder.
+# 2. install-reminder-hooks.sh --check exits 0; the two test files and verify-all.py are green.
+# 3. origin/main contains the delivered commit; the worktree is removed.
+# 4. Acceptance observable: an AskUserQuestion call completes with no PostToolUse hook error —
+#    the symptom that opened this task. This is the user-visible check and cannot be asserted
+#    by a shell command, so it is confirmed at the resolution gate by observation.

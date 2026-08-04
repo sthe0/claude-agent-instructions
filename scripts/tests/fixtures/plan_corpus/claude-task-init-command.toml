@@ -1,0 +1,133 @@
+[meta]
+task_id = "claude-task-init-command"
+goal = "Add a single launcher command `claude-task --init <name>` that creates a new local git project and immediately makes the system track it (git init + project memory + initial commit + registry registration), then enters it."
+done_criterion = "test-enter-task.sh and test-launchers.sh exit 0 with new --init cases; live `claude-task --init <name>` yields a git repo with >=1 commit, .claude/agent-memory scaffold, auto-memory symlink, and a registry record with workspace_path."
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/claude-agent-instructions"
+external_research = "Not warranted: internal change to a bespoke in-repo shell subsystem; all reused mechanisms (git init, the existing backend provider contract, setup-project-memory.sh, projects.py register, the --register early-exit) already live in this repo. No external library or non-obvious best-practice involved; design grounded in the repo's own patterns."
+
+[[stage]]
+index = 1
+title = "Extend git backend + contract with repo-creation primitives"
+executor = "spawn:developer"
+expected_result_image = "sourcing backends/git.sh exposes backend_init_workspace and backend_seal_workspace; a CLAUDE_DRY_RUN init call prints the target path and invokes no real git."
+criterion_type = "measurable"
+done_criterion = "declare -F lists both new functions after sourcing git.sh"
+verify_command = "bash -c 'source scripts/project_entry/backends/git.sh; declare -F backend_init_workspace >/dev/null && declare -F backend_seal_workspace >/dev/null'"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["scripts/project_entry/backends/git.sh", "scripts/project_entry/registry.sh"]
+material = "scripts/project_entry/backends/git.sh (implements only detect/ensure_workspace/compose) and scripts/project_entry/registry.sh (provider-contract doc)."
+means = "The existing GIT_BIN seam + CLAUDE_DRY_RUN idiom already used in backend_ensure_workspace; the registry.sh contract comment block."
+method = "Add backend_init_workspace <name> <target> (dry-run: log+print target; else mkdir -p + `$GIT_BIN init $target`, no remote/forced-branch, print target as final line) and backend_seal_workspace <dir> <msg> (dry-run no-op; else `$GIT_BIN -C $dir add -A` then `commit -m`). Document both in registry.sh as optional init-only contract extensions."
+conditions = "All git access behind GIT_BIN; runs on any machine with git."
+invariants = "CLAUDE_DRY_RUN set => zero external effects; existing ensure_workspace/compose behaviour unchanged."
+capability_required = "Bash + git provider-contract familiarity (developer)."
+
+[stage.principle]
+statement = "Backend-specific repo creation belongs behind the provider contract, not as git glue in the org-neutral orchestrator."
+source = "Repo's own registry.sh contract + ensure_workspace/compose precedent."
+confidence = "high"
+refutation = "Would fail only if no VCS backend could implement init; the git default alone justifies the slot."
+
+[[stage]]
+index = 2
+title = "Add --init selector and orchestration to enter-task.sh"
+executor = "spawn:developer"
+expected_result_image = "enter-task.sh --init <name> --dry-run prints ${CLAUDE_PROJECT_INIT_BASE:-$PWD}/<slug> as the final line and performs no real git/memory/register; non-dry run orders init -> memory-setup -> commit -> register."
+criterion_type = "measurable"
+done_criterion = "dry-run --init prints the target dir as the final stdout line"
+verify_command = "bash -c 'B=$(mktemp -d); OUT=$(CLAUDE_PROJECT_INIT_BASE=$B bash scripts/enter-task.sh --init demo --dry-run 2>/dev/null | tail -1); [ \"$OUT\" = \"$B/demo\" ]'"
+expected_exit = 0
+depends_on = [1]
+output_artifacts = ["scripts/enter-task.sh"]
+material = "scripts/enter-task.sh: selector parse, empty-context guard (new|key), tracker force-none (name|reuse), task-name case, ensure/compose/print tail."
+means = "The existing selector machinery + project_local_root/project_register (as the --register early-exit uses) + a new CLAUDE_SETUP_PROJECT_MEMORY_BIN seam (default the real setup-project-memory.sh) for stubbability."
+method = "Add `--init) set_selector init` parse + header usage; exclude init from the empty-context guard; add init to the tracker-none case; after sourcing the backend add a capability guard (declare -F backend_init_workspace/seal_workspace or die); replace the final tail with a selector branch. Target-path resolution for init accepts BOTH a plain name and a path: if sel_arg is absolute (starts with /) or contains a slash, treat it as the target path verbatim (registry key + name = its basename, slugified); otherwise target=${CLAUDE_PROJECT_INIT_BASE:-$PWD}/$(slug sel_arg) and name=slug. Then refuse a non-empty existing target dir, call backend_init_workspace, then (non-dry) setup-project-memory seam -> backend_seal_workspace -> project_register workspace_path=<abs target>/workspace_backend, print project_dir (absolute). Existing selectors keep the current flow."
+conditions = "python3 + git present; a workspace backend supporting init resolved (else die)."
+invariants = "project_dir is ALWAYS the final stdout line; --dry-run performs zero external effects; existing selector paths behave identically."
+capability_required = "Bash; understanding of enter-task's backend-resolution flow (developer)."
+
+[stage.principle]
+statement = "Reuse the established orchestration seams (project_register, project_local_root, script-via-*_BIN-seam) rather than re-implementing repo/registry wiring."
+source = "Existing --register early-exit + the *_BIN test-seam convention in this repo."
+confidence = "high"
+refutation = "None observed; the seams already exist and are hermetically tested."
+
+[[stage]]
+index = 3
+title = "Wire --init into the launcher"
+executor = "spawn:developer"
+expected_result_image = "CLAUDE_LAUNCH_DRYRUN=1 CLAUDE_PROJECT_INIT_BASE=<tmp> claude-task --init demo prints `enter=<tmp>/demo profile=default`; --help mentions --init."
+criterion_type = "measurable"
+done_criterion = "claude-launchers.sh classifies --init and _launcher_usage documents it"
+verify_command = "bash -c 'grep -q -- \"--init\" scripts/claude-launchers.sh'"
+expected_exit = 0
+depends_on = [2]
+output_artifacts = ["scripts/claude-launchers.sh"]
+material = "scripts/claude-launchers.sh: _dispatch_with_profile token classification + _launcher_usage."
+means = "The existing --new special-case classification path and the resolve-dir -> cd -> launch tail."
+method = "Add a --init branch before the bare-claude-flag guard (require the name arg else usage+return 1; set _spec=(--init \"$2\")), ensure the `_tok == -* && _tok != --new` guard also excludes --init so it flows to the normal dir-resolve+launch tail; add a --init line to _launcher_usage. No confirmation gate (local, reversible, user-initiated)."
+conditions = "Sourced launcher environment; auth profiles resolvable."
+invariants = "Existing token classifications (tracker key, --new, bare name, bare flags, --list-projects/--register) unchanged; --init reaches the normal dir-resolve+launch tail."
+capability_required = "Bash; launcher dispatch familiarity (developer)."
+
+[stage.principle]
+statement = "New selectors slot into the existing token-classification structure beside --new; do not fork the dispatch."
+source = "_dispatch_with_profile current shape."
+confidence = "high"
+refutation = "None."
+
+[[stage]]
+index = 4
+title = "Hermetic tests for --init (tests-accompany-code)"
+executor = "spawn:developer"
+expected_result_image = "test-enter-task.sh and test-launchers.sh exit 0 with new --init dry-run + stubbed-real assertions."
+criterion_type = "measurable"
+done_criterion = "both hermetic test scripts exit 0"
+verify_command = "bash scripts/project_entry/tests/test-enter-task.sh && bash scripts/project_entry/tests/test-launchers.sh"
+expected_exit = 0
+depends_on = [3]
+output_artifacts = ["scripts/project_entry/tests/test-enter-task.sh", "scripts/project_entry/tests/test-launchers.sh"]
+material = "scripts/project_entry/tests/test-enter-task.sh and test-launchers.sh: hermetic harnesses with GIT_BIN/GH_BIN stubs + temp plugin dir."
+means = "The existing *_BIN stub harness; CLAUDE_SETUP_PROJECT_MEMORY_BIN, CLAUDE_PROJECTS_LOCAL_DIR, CLAUDE_PROJECT_INIT_BASE seams to keep the run hermetic."
+method = "Extend GIT_BIN stub to handle init/add/commit. Add to test-enter-task.sh a dry-run case (asserts target dir final line, no init/commit in git-calls log, no registry record) and a stubbed-real case (asserts git init+commit called, memory-setup stub ran, CLAUDE_PROJECTS_LOCAL_DIR/demo/agent-project.json exists with workspace_path=<base>/demo). Add to test-launchers.sh a CLAUDE_LAUNCH_DRYRUN case asserting `enter=<tmp>/demo profile=default` and a --help mentions --init assertion."
+conditions = "No real git/gh/.claude/registry touched; all via seams."
+invariants = "Tests exit 0 on all-pass matching existing harness convention; no real external state mutated."
+capability_required = "Bash test-harness authoring with stub seams (developer)."
+
+[stage.principle]
+statement = "Every code change ships with tests; hermetic *_BIN seams are this repo's established pattern for entry-subsystem tests."
+source = "memory-global/leaves/tests-accompany-code.md + existing test-enter-task.sh / test-launchers.sh."
+confidence = "high"
+refutation = "None."
+
+[[stage]]
+index = 5
+title = "Document the command"
+executor = "spawn:developer"
+expected_result_image = "docs/operations/setup.md lists `claude-task --init <name>` with the CLAUDE_PROJECT_INIT_BASE note."
+criterion_type = "measurable"
+done_criterion = "setup.md references --init"
+verify_command = "bash -c 'grep -q -- \"--init\" docs/operations/setup.md'"
+expected_exit = 0
+depends_on = [2]
+output_artifacts = ["docs/operations/setup.md"]
+material = "docs/operations/setup.md section 'Starting a task with claude-task'."
+means = "The existing command-list format in that section."
+method = "Add a `claude-task --init <name>` example row with a one-line description and a note on the CLAUDE_PROJECT_INIT_BASE override; English (instruction-repo default)."
+conditions = "Doc within section conventions."
+invariants = "Existing command examples unchanged."
+capability_required = "Technical doc editing (developer)."
+
+[stage.principle]
+statement = "A new user-facing command is not delivered until the read-first doc reflects it."
+source = "memory-global/leaves/docs-accompany-architectural-change.md."
+confidence = "high"
+refutation = "None."
+
+[[final_check]]
+label = "hermetic entry + launcher tests green"
+command = "bash scripts/project_entry/tests/test-enter-task.sh && bash scripts/project_entry/tests/test-launchers.sh"
+expected_exit = 0

@@ -1,0 +1,146 @@
+[meta]
+task_id = "isolate-agent-config-root"
+goal = "Isolate the agent-system into its own config root ~/.claude-agent via CLAUDE_CONFIG_DIR so that installing claude-agent-instructions never overwrites the user's personal ~/.claude and the user's personal config never interferes with the system. Bare `claude` = the user's personal config; `claude-agent`/`claude-task` = the system. Single shared login. The install root is a parameter (CLAUDE_AGENT_HOME) the Yandex junk/the0/agents overlay reuses."
+done_criterion = "With CLAUDE_AGENT_HOME=<tmp-root>, setup-symlinks.sh completes and <tmp-root> holds all system symlinks; a byte snapshot of ~/.claude before and after is identical (install touched nothing there); doctor.sh reports ready against the isolated root; and a live `claude-agent -p` (or CLAUDE_CONFIG_DIR=<root> claude -p) session reads the system CLAUDE.md and is logged in without a separate /login (or one documented one-time login if Stage A finds shared auth infeasible)."
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/claude-agent-instructions"
+external_research = "Done. (1) Empirical probe of CLAUDE_CONFIG_DIR on the installed CLI v2.1.178 this session — verified it relocates the ENTIRE config root incl. CLAUDE.md/settings.json/.claude.json/projects/sessions, leaving the default ~/.claude.json untouched, and that session/auth linkage is per-root ('Not logged in' in a fresh root). Decisive, and it contradicts stale GitHub issues. (2) `claude --help` — confirmed --settings/--agents/--add-dir/--plugin-dir/--mcp-config/--append-system-prompt exist as documented composition seams (fallbacks). (3) Historical subset-relocation behavior via Claude Code GitHub issues #3833/#25762/#30538 — hence the plan pins behavior to this version and re-checks it live in Final verification rather than trusting the env var blindly. Prose mirror: ~/.claude/plans/isolate-agent-config-root.md."
+
+[[stage]]
+index = 1
+title = "Determine the shared-auth mechanism empirically (service)"
+executor = "spawn:developer"
+expected_result_image = "A documented mechanism for which a throwaway /tmp config root reports authenticated WITHOUT an interactive /login; or, if none works, the output 'shared auth infeasible on this version -> degrade to a documented one-time claude-agent login' which narrows Stage 3."
+criterion_type = "acceptance-review"
+done_criterion = "A decision record naming the exact file/key/command Stage 3 must wire (or the documented degrade-to-one-login outcome), produced without any write to the real ~/.claude / ~/.claude.json / Keychain."
+depends_on = []
+output_artifacts = ["stage-A-auth-decision (appended to the plan prose mirror)"]
+material = "The installed CLI v2.1.178 auth model: where a logged-in session's linkage and credentials live for a config root (~/.claude.json fields incl. oauthAccount, ~/.claude/.credentials.json if present, macOS Keychain 'Claude Code' item), and whether apiKeyHelper / a symlinked credentials file / a copied oauthAccount block makes a second root (~/.claude-agent) report logged-in."
+means = "Throwaway config roots under /tmp (as in this session's CLAUDE_CONFIG_DIR probe), never touching the real ~/.claude. settings/base.json and `claude --help` auth notes for supported knobs. Candidates: (a) symlink .credentials.json and/or share the oauthAccount key; (b) apiKeyHelper in settings.json; (c) rely on a shared Keychain item."
+method = "1) Read-only inspect the real login storage (~/.claude.json keys, ~/.claude/.credentials.json presence, Keychain item). 2) Create /tmp/cc-auth-probe-<pid>; test candidate (a), then (b), then (c), recording which makes `claude config list` / a -p probe authenticated. 3) Choose the least-invasive mechanism that works and does not copy long-lived secrets into a versioned or world-readable path."
+conditions = "The real ~/.claude / ~/.claude.json / Keychain are READ-ONLY throughout."
+invariants = "No secret written into the repo or into ~/.claude-agent in cleartext beyond what the chosen mechanism strictly requires; prefer a symlink or helper over a copy."
+capability_required = "macOS auth/keychain + Claude Code config familiarity (developer, read-only/experiment)."
+
+[stage.principle]
+statement = "Auth storage is version- and OS-specific; determine the sharing mechanism by empirical probe on the target binary before wiring it, and design a graceful degrade (one documented login) so the isolation goal survives even if sharing is impossible."
+source = "Empirical probe on the target binary (the session already proved the config-dir model this way)."
+confidence = "medium"
+refutation = "A /tmp probe root that reports authenticated under the chosen mechanism refutes 'sharing is impossible'."
+
+[[stage]]
+index = 2
+title = "Introduce the CLAUDE_AGENT_HOME config-root seam + parameterize setup scripts"
+executor = "spawn:developer"
+expected_result_image = "CLAUDE_AGENT_HOME=/tmp/cc-root-test scripts/setup-symlinks.sh exits 0; /tmp/cc-root-test/CLAUDE.md -> repo CLAUDE.md, /tmp/cc-root-test/skills/planner and /tmp/cc-root-test/settings.json exist; no remaining install-target literal $HOME/.claude in the setup scripts (only the resolver default + genuinely-fixed paths like ~/.claude.json managed by the CLI and ~/.config/claude)."
+criterion_type = "measurable"
+done_criterion = "setup-symlinks.sh installs into $CLAUDE_AGENT_HOME and grep finds no residual install-target $HOME/.claude literal in the setup scripts."
+verify_command = "rm -rf /tmp/cc-root-test && CLAUDE_AGENT_HOME=/tmp/cc-root-test bash scripts/setup-symlinks.sh >/dev/null 2>&1 && [ -L /tmp/cc-root-test/CLAUDE.md ] && [ -e /tmp/cc-root-test/skills/planner ] && [ -f /tmp/cc-root-test/settings.json ]"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["scripts/lib/config-root.sh", "scripts/setup-symlinks.sh", "scripts/configure-identity.sh", "scripts/install-reminder-hooks.sh", "scripts/doctor.sh", "scripts/onboard.sh", "cursor/scripts/install-cursor-links.sh"]
+material = "The setup scripts that hardcode $HOME/.claude: setup-symlinks.sh (CLAUDE.md/config.md/memory-global + agents/* + skills/* + prune/legacy paths + final ls), configure-identity.sh, install-reminder-hooks.sh, cursor/scripts/install-cursor-links.sh, doctor.sh, onboard.sh. apply-settings.sh already honors CLAUDE_SETTINGS (default ~/.claude/settings.json) — the seam to mirror."
+means = "One shared resolver scripts/lib/config-root.sh exporting CLAUDE_AGENT_HOME=\"${CLAUDE_AGENT_HOME:-$HOME/.claude-agent}\" (single source of truth, env-overridable for the overlay and tests). apply-settings.sh driven by exporting CLAUDE_SETTINGS=\"$CLAUDE_AGENT_HOME/settings.json\"."
+method = "1) Create scripts/lib/config-root.sh (resolver + comment on default/override). 2) setup-symlinks.sh: source resolver; AGENT_HOME=\"$CLAUDE_AGENT_HOME\"; replace every $HOME/.claude/... target with $AGENT_HOME/...; export CLAUDE_SETTINGS before apply-settings.sh; pass the root to configure-identity.sh / install-reminder-hooks.sh via env. 3) configure-identity.sh, install-reminder-hooks.sh, install-cursor-links.sh, doctor.sh, onboard.sh: source resolver; swap the hardcoded root. 4) Audit: grep -rn 'HOME/.claude/' scripts/ finds no residual install-target literal."
+conditions = "With CLAUDE_AGENT_HOME unset the default is ~/.claude-agent (isolated by default). set -euo pipefail and macOS bash-3.2 portability preserved (macos-shell-portability-gotchas)."
+invariants = "Every script stays idempotent; apply-settings.sh merge logic unchanged (only its target path is redirected); genuinely-fixed paths (~/.claude.json, ~/.config/claude/onboard.d) NOT rerouted."
+capability_required = "Bash portability + the repo's setup-script conventions (developer)."
+
+[stage.principle]
+statement = "A single-source-of-truth resolver for the config root beats scattered hardcoded $HOME/.claude literals; mirror the repo's own existing CLAUDE_SETTINGS seam in apply-settings.sh rather than inventing a new pattern."
+source = "DRY / single-source-of-truth; in-repo precedent scripts/apply-settings.sh (CLAUDE_SETTINGS)."
+confidence = "high"
+refutation = "A surviving hardcoded $HOME/.claude install target that writes outside the root refutes 'fully parameterized'."
+
+[[stage]]
+index = 3
+title = "Launch the system under CLAUDE_CONFIG_DIR; add claude-agent; wire shared auth"
+executor = "spawn:developer"
+expected_result_image = "CLAUDE_LAUNCH_DRYRUN=1 claude-task reports the system path/profile; a live `claude-agent -p 'print the first word of your system prompt'` starts authenticated (no /login) with config root ~/.claude-agent (session/transcript lands there, not in ~/.claude); bare `claude` unchanged."
+criterion_type = "measurable"
+done_criterion = "Sourcing claude-launchers.sh defines claude-agent; the system entry paths export CLAUDE_CONFIG_DIR=$CLAUDE_AGENT_HOME around command claude; the Stage-1 auth mechanism is wired (or its documented one-login degrade applied)."
+verify_command = "bash -c 'set -e; source scripts/lib/config-root.sh; source scripts/project_entry/auth-profiles.sh 2>/dev/null || true; grep -q \"claude-agent\" scripts/claude-launchers.sh && grep -q \"CLAUDE_CONFIG_DIR\" scripts/claude-launchers.sh'"
+expected_exit = 0
+depends_on = [1, 2]
+output_artifacts = ["scripts/claude-launchers.sh", "settings/base.json (only if Stage 1 picks apiKeyHelper)"]
+material = "scripts/claude-launchers.sh (_dispatch_with_profile; the two `_auth_apply ... command claude` sites — the bare-in-place branch l140 and the workspace-entry branch l204-205; claude-task/claude-<profile> defs). settings/base.json if Stage 1 chose apiKeyHelper."
+means = "The resolver from Stage 2; the existing _auth_apply wrapper as the injection point; CLAUDE_CONFIG_DIR as the isolation seam empirically verified this session."
+method = "1) Source lib/config-root.sh in the launchers; wrap both `_auth_apply ... command claude` sites to run with CLAUDE_CONFIG_DIR=\"$CLAUDE_AGENT_HOME\" exported, so the system always runs on the isolated root while bare `claude` stays on ~/.claude. 2) Add claude-agent() { CLAUDE_CONFIG_DIR=\"$CLAUDE_AGENT_HOME\" command claude \"$@\"; } (system plain-launch) documented in _launcher_usage. 3) Apply the Stage-1 auth wiring (setup-time credential symlink into $CLAUDE_AGENT_HOME, or base.json apiKeyHelper, or the documented one-time login)."
+conditions = "Bare `claude` behavior unchanged (no CLAUDE_CONFIG_DIR leaks into the user's own shell env). Dry-run paths (CLAUDE_LAUNCH_DRYRUN) still work."
+invariants = "Auth wiring writes no cleartext secret into the repo; the auth-profile (_auth_apply) axis stays orthogonal and functional; workspace-entry cd/launch semantics unchanged."
+capability_required = "Bash (sourced functions, bash-3.2) + the launcher/auth-profile design (developer)."
+
+[stage.principle]
+statement = "Inject the config root at the launchers — the system's single entry seam already wrapping command claude — the minimal localized change; mirror the working _auth_apply wrapper instead of adding a parallel mechanism."
+source = "In-repo: claude-launchers.sh _dispatch_with_profile + project_entry/auth-profiles.sh; CLAUDE_CONFIG_DIR relocation empirically verified 2026-07-01."
+confidence = "high"
+refutation = "A session started via claude-agent that writes into ~/.claude refutes correct injection."
+
+[[stage]]
+index = 4
+title = "Migration for existing machines + non-clobber hardening"
+executor = "spawn:developer"
+expected_result_image = "migrate-to-isolated.sh --dry-run on this machine lists exactly the repo-pointing symlinks it would relocate and nothing personal; after a real run ~/.claude-agent holds the system symlinks, ~/.claude retains only non-system files, and doctor.sh no longer warns about a legacy in-place layout."
+criterion_type = "measurable"
+done_criterion = "migrate-to-isolated.sh exists, is idempotent, backs up first, moves only repo-pointing symlinks + system-managed files (never personal files); doctor.sh warns when ~/.claude still holds repo-pointing system symlinks. --dry-run verified."
+verify_command = "bash -c 'set -e; bash -n scripts/migrate-to-isolated.sh && test -x scripts/migrate-to-isolated.sh && grep -q \"dry-run\" scripts/migrate-to-isolated.sh && bash scripts/migrate-to-isolated.sh --dry-run >/dev/null 2>&1'"
+expected_exit = 0
+depends_on = [2]
+output_artifacts = ["scripts/migrate-to-isolated.sh", "scripts/doctor.sh"]
+material = "An existing in-place ~/.claude system install (this machine, the0.klg); doctor.sh; setup-symlinks.sh refuse/prune logic. Detection of system-owned entries = a symlink whose target resolves under the repo."
+means = "setup-project-memory.sh's migrate-with-backup pattern is the in-repo precedent for a safe relocate-and-backup; the CLAUDE.md destructive-command rule (non-empty path guards) for every rm/mv."
+method = "1) Write migrate-to-isolated.sh: backup ~/.claude -> timestamped .bak; move only repo-targeting symlinks (CLAUDE.md/config.md/memory-global/agents/*/skills/*) + system-managed settings.json/agent-identity.local into ~/.claude-agent; leave genuinely personal (non-symlink user) content in ~/.claude; report what moved and what was left; support --dry-run. Guard every interpolated path for non-emptiness ([[ -n \"$VAR\" ]]); no path may collapse to $HOME or ~/.claude root. 2) Add a doctor.sh advisory check: if ~/.claude holds repo-pointing system symlinks, warn 'legacy in-place layout — run migrate-to-isolated.sh'. 3) Confirm setup-symlinks.sh under the isolated default never writes into ~/.claude (link() refuse guard now protects the user's dir)."
+conditions = "Migration reversible (backup retained); --dry-run is the default demonstration path in verification."
+invariants = "No interpolated path can collapse to $HOME/~/.claude root; personal user files never moved or deleted; the operation is idempotent (safe to rerun)."
+capability_required = "Bash + safe filesystem-migration discipline (developer)."
+
+[stage.principle]
+statement = "Relocate only system-owned entries (repo-pointing symlinks), back up first, dry-run by default, and guard every interpolated path — a filesystem migration's blast radius is the risk, not the move itself."
+source = "In-repo precedent scripts/setup-project-memory.sh (migrate-with-backup); CLAUDE.md destructive-command rule."
+confidence = "medium"
+refutation = "A migration run that removes or moves a personal (non-system) file refutes 'system-owned only'."
+
+[[stage]]
+index = 5
+title = "Documentation + end-to-end verification"
+executor = "spawn:developer"
+expected_result_image = "README Setup + setup.md + org-portability.md document the isolated-by-default model (system in ~/.claude-agent, bare claude = personal, claude-agent = system, CLAUDE_AGENT_HOME override, shared-auth note, migrate-to-isolated.sh) and the overlay contract for junk/the0/agents (reuse CLAUDE_AGENT_HOME via lib/config-root.sh); lint-prose-length.py passes; the Final verification block passes end-to-end."
+criterion_type = "measurable"
+done_criterion = "Docs updated; lint-prose-length.py exits 0; the [[final_check]] block passes."
+verify_command = "python3 scripts/lint-prose-length.py"
+expected_exit = 0
+depends_on = [2, 3, 4]
+output_artifacts = ["README.md", "docs/operations/setup.md", "docs/operations/org-portability.md"]
+material = "README.md (Setup section), docs/operations/setup.md, docs/operations/org-portability.md."
+means = "docs-accompany-architectural-change (an install-model change is not delivered until the read-first surface reflects it); the repo's doc-length lints (lint-prose-length.py, readme-max-lines)."
+method = "1) Update README Setup + setup.md + org-portability.md: isolated model, claude-agent, CLAUDE_AGENT_HOME, migration path, and the overlay contract (junk/the0/agents must source lib/config-root.sh and reuse CLAUDE_AGENT_HOME rather than re-hardcoding a root, so it inherits isolation with zero divergence). 2) Run the Final verification end-to-end; capture output."
+conditions = "Doc-length lints pass; no behavioral claim documented that verification did not actually exercise."
+invariants = "English docs (instruction-repo language rule); existing doc structure/links preserved."
+capability_required = "Technical writing in English + the repo's doc conventions (developer)."
+
+[stage.principle]
+statement = "An install-model change is not delivered until the read-first surface (README + operations docs) reflects it; document the downstream-overlay contract so the Yandex variant composes without divergence."
+source = "memory-global/leaves/docs-accompany-architectural-change.md."
+confidence = "high"
+refutation = "A green system with a README still describing in-place ~/.claude install refutes 'delivered'."
+
+[[final_check]]
+label = "Non-clobber: install into a tmp root leaves ~/.claude byte-identical"
+command = "bash -c 'b=$(find \"$HOME/.claude\" -maxdepth 3 2>/dev/null | sort | shasum -a 256); rm -rf /tmp/cc-e2e-root; CLAUDE_AGENT_HOME=/tmp/cc-e2e-root bash scripts/setup-symlinks.sh >/dev/null 2>&1; a=$(find \"$HOME/.claude\" -maxdepth 3 2>/dev/null | sort | shasum -a 256); [ -L /tmp/cc-e2e-root/CLAUDE.md ] && [ \"$b\" = \"$a\" ]'"
+expected_exit = 0
+
+[[final_check]]
+label = "Isolation: a session on the tmp root writes its session/state there, not in ~/.claude"
+command = "bash -c 'rm -rf /tmp/cc-e2e-root2; CLAUDE_CONFIG_DIR=/tmp/cc-e2e-root2 claude config list >/dev/null 2>&1; [ -e /tmp/cc-e2e-root2/.claude.json ]'"
+expected_exit = 0
+
+[[final_check]]
+label = "Switch: launchers define claude-agent and inject CLAUDE_CONFIG_DIR"
+command = "bash -c 'grep -q claude-agent scripts/claude-launchers.sh && grep -q CLAUDE_CONFIG_DIR scripts/claude-launchers.sh'"
+expected_exit = 0
+
+[[final_check]]
+label = "No residual install-target hardcode + doc-length lints pass"
+command = "bash -c 'python3 scripts/lint-prose-length.py && ! grep -REn \"[$]HOME/[.]claude/(CLAUDE.md|config.md|memory-global|skills|agents|settings.json)\" scripts/setup-symlinks.sh'"
+expected_exit = 0

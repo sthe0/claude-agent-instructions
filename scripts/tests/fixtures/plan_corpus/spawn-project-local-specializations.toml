@@ -1,0 +1,56 @@
+[meta]
+task_id = "spawn-project-local-specializations"
+goal = "Extend spawn-specialist.py to resolve project-local specializations from <cwd>/.claude/skills/specializations/<kind>/SKILL.md so the documented convention becomes usable; add test + docs."
+done_criterion = "skill_path() falls back to project-local; new test green; docs updated; dry-run resolves a trips specialization"
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/claude-agent-instructions"
+external_research = "Not warranted — internal tooling change; the gap was diagnosed directly from spawn-specialist.py source (skill_path line 155-156, resolution 382-385) and spawning-specialists.md:29 which already lists 'project-local' as a --kind value the tooling never resolved."
+
+[[stage]]
+index = 1
+title = "Patch skill_path + test + docs"
+executor = "in_thread"
+expected_result_image = "skill_path() returns global path when it exists, else project-local <cwd>/.claude/skills/specializations/<kind>/SKILL.md, else global path; new test file; docs/components/skills.md and spawning-specialists.md note project-local resolution"
+criterion_type = "measurable"
+done_criterion = "pytest scripts/tests/test_spawn_specialist_skill_path.py green"
+verify_command = "cd /Users/the0/claude-agent-instructions && python3 -m pytest scripts/tests/test_spawn_specialist_skill_path.py -q"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["scripts/spawn-specialist.py", "scripts/tests/test_spawn_specialist_skill_path.py", "docs/components/skills.md", "memory-global/leaves/spawning-specialists.md"]
+material = "spawn-specialist.py skill_path() + tests dir + docs"
+means = "Edit, Write, pytest"
+method = "add project-local fallback in skill_path; write test with monkeypatched SKILLS_DIR + chdir; update 2 doc sites"
+conditions = "is_author=True (Core authority); repo synced"
+invariants = "global precedence preserved; additive; no behavior change when global exists"
+capability_required = "python editing + pytest"
+
+[stage.principle]
+statement = "Implement a documented convention in tooling rather than leave it aspirational — an unimplemented convention is a latent difficulty"
+source = "spawning-specialists.md:29 lists project-local but spawn-specialist.py never resolved it"
+confidence = "high"
+refutation = "if no project ever ships specializations, the fallback is dead code — but the concrete trips case refutes that"
+
+[[stage]]
+index = 2
+title = "Verify: full spawn tests + dry-run resolution"
+executor = "in_thread"
+expected_result_image = "spawn_specialist tests green with the pre-existing env-dependent teardown test (sigterm_reaps, fails on baseline too) deselected; dry-run from ~/projects/trips resolves .claude/skills/specializations/flights/SKILL.md"
+criterion_type = "measurable"
+done_criterion = "spawn_specialist suite green with the pre-existing sigterm_reaps env-test deselected; dry-run prints the project-local SKILL.md path"
+verify_command = "cd /Users/the0/claude-agent-instructions && python3 -m pytest scripts/tests/ -k 'spawn_specialist and not sigterm_reaps' -q"
+expected_exit = 0
+depends_on = [1]
+output_artifacts = []
+material = "patched tooling"
+means = "pytest with the pre-existing env-test deselected, spawn-specialist.py --dry-run"
+method = "run spawn-specialist suite excluding the baseline-failing sigterm_reaps env-test; dry-run a trips specialization from the project cwd to check project-local resolution"
+conditions = "stage 1 done; global-precedence and existing spawn behavior not broken"
+invariants = "no NEW regression vs baseline; global-precedence и текущее поведение spawn не сломаны; the pre-existing sigterm_reaps env-test is out of this change's scope"
+capability_required = "pytest + CLI dry-run"
+
+[stage.principle]
+statement = "A tooling change is verified on the runtime axis (dry-run resolves the real path), not only static test-green"
+source = "CLAUDE.md verify-the-right-axis"
+confidence = "high"
+refutation = "none"

@@ -1,0 +1,119 @@
+[meta]
+task_id = "macos-core-portability"
+goal = "Make Core (~/claude-agent-instructions) scripts run correctly on macOS (BSD userland, bash 3.2, no /proc). Fix the 8 audited portability defects — 4 breaks-hard, 4 noisy/degrading — the most important being proc_tree.py's /proc walk that crashes every engine-driven specialist spawn on macOS."
+done_criterion = "pytest scripts/tests/test_proc_tree.py exits 0 on macOS; a live launch_supervised()+kill_tree() of a real subprocess reaps it with zero survivors on macOS; no remaining GNU-only idiom (date -I*, bare readlink -f, mapfile, /proc walk without fallback) in the audited files; all touched shell scripts pass `bash -n`."
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/claude-agent-instructions"
+external_research = "Not warranted for design: the BSD/GNU + bash-3.2 divergences are already catalogued in this repo's own memory-global/leaves/macos-shell-portability-gotchas.md and the experience leaf 2026-07-01-engine-spawn-proc-tree-macos. The portable primitive for proc_tree (`ps -Ao pid=,ppid=,pgid=`) was empirically verified on this macOS (three columns, rc=0) before planning. No external library or non-obvious best practice is involved."
+
+[[stage]]
+index = 1
+title = "proc_tree.py: replace the /proc walk with a portable `ps` snapshot"
+executor = "spawn:developer"
+expected_result_image = "kill_tree() reaps a real launch_supervised() subtree on macOS with zero survivors; _all_pids/_ppid/_group_members derive from a single `ps -Ao pid=,ppid=,pgid=` snapshot; no `/proc` reference remains; pytest scripts/tests/test_proc_tree.py exits 0 on macOS."
+criterion_type = "measurable"
+done_criterion = "pytest test_proc_tree.py exits 0 and no `/proc` string remains in proc_tree.py"
+verify_command = "python3 -m pytest scripts/tests/test_proc_tree.py -q && ! grep -q '/proc' scripts/proc_tree.py"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["scripts/proc_tree.py", "scripts/tests/test_proc_tree.py"]
+material = "scripts/proc_tree.py: _PROC constant (l28), _all_pids (l50-51, os.listdir('/proc')), _ppid (l54-60, reads /proc/<pid>/stat), _group_members (l63-71), _descendants (l74-90). These feed both kill_tree branches, so every spawn-*.py that calls kill_tree crashes with FileNotFoundError on macOS."
+means = "The POSIX `ps` tool, verified present on macOS and Linux: `ps -Ao pid=,ppid=,pgid=` prints three numeric columns (empty headers) parseable identically on both OSes. subprocess (already imported). os.getpgid stays for the live per-pid checks (already portable)."
+method = "Add `_ps_snapshot() -> dict[int, tuple[int,int]]` that runs `subprocess.run(['ps','-Ao','pid=,ppid=,pgid='], capture_output=True, text=True)` and parses each line into pid -> (ppid, pgid). Reimplement `_all_pids` as `list(_ps_snapshot())`, `_ppid(pid)` as `_ps_snapshot()[pid][0]` (or accept a passed snapshot to avoid re-forking in the _descendants loop — build the child map from one snapshot), and `_group_members(pgid)` from the pgid column directly (drop the per-pid os.getpgid loop, which forced N syscalls). Remove `_PROC`. Keep _require_posix (ps is POSIX). Update the module docstring's `/proc` sentences. Then update tests/test_proc_tree.py: remove any implicit reliance on /proc, and add a macOS-exercising live test — launch_supervised a `sh -c 'sleep 30 & sleep 30 & wait'`, call kill_tree, assert all targets dead within grace."
+conditions = "Runs on any POSIX host with `ps` on PATH. bash/Python 3.11+ as already required."
+invariants = "Public API (launch_supervised/kill_tree/install_teardown signatures + reap semantics) unchanged; group-leader and descendant-walk branches both still function; Linux behaviour preserved (ps path replaces /proc path on both)."
+capability_required = "Python + POSIX process-group familiarity (developer)."
+
+[stage.principle]
+statement = "A single portable primitive (`ps` snapshot) that works on both OSes beats a platform branch: one code path, no #ifdef-style Darwin/Linux split, no new dependency (psutil rejected — adds a third-party dep for what ps already gives)."
+source = "memory-global/leaves/macos-shell-portability-gotchas.md; ps three-column output empirically verified on this macOS 2026-07-01."
+confidence = "high"
+refutation = "Would fail if `ps` column format differed across OSes for the requested `-o pid=,ppid=,pgid=` form; verified identical on macOS, and POSIX-specified on Linux."
+
+[[stage]]
+index = 2
+title = "sync-instructions-repo.sh: portable timestamp + SIGPIPE-safe pipeline"
+executor = "spawn:developer"
+expected_result_image = "log() and the stash push use a BSD/GNU-portable ISO timestamp; the two `git ... | grep -q .` guards are rewritten capture-then-test so pipefail+SIGPIPE cannot kill the script; `bash -n` passes and no `date -I` remains."
+criterion_type = "measurable"
+done_criterion = "bash -n passes and neither `date -I` nor `| grep -q .` remains in the script"
+verify_command = "bash -n scripts/sync-instructions-repo.sh && ! grep -qE 'date -I' scripts/sync-instructions-repo.sh"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["scripts/sync-instructions-repo.sh"]
+material = "scripts/sync-instructions-repo.sh under `set -euo pipefail`: `date -Is` at l14 (log) and l33 (stash message); `git stash list | grep -q .` at l39 and `git diff ... | grep -q .` at l87."
+means = "Portable `date -u +\"%Y-%m-%dT%H:%M:%SZ\"` (works on BSD+GNU); the capture-then-test idiom from macos-shell-portability-gotchas.md for SIGPIPE-safe pipelines."
+method = "Replace both `date -Is` with `date -u +\"%Y-%m-%dT%H:%M:%SZ\"`. Rewrite each `X | grep -q .` guard as `out=\"$(X 2>/dev/null || true)\"; if [[ -n \"$out\" ]]; then` so no pipe reader closes early under pipefail."
+conditions = "Script runs under set -euo pipefail on macOS or Linux."
+invariants = "Log line format stays ISO-8601-ish and sortable; stash/diff detection semantics unchanged (still trips only when there is stash/conflict content)."
+capability_required = "Bash portability (developer)."
+
+[stage.principle]
+statement = "`cmd | grep -q` under pipefail is a latent SIGPIPE-141 abort; capture then test the variable. GNU `date -I*` is not portable; use an explicit +format."
+source = "memory-global/leaves/macos-shell-portability-gotchas.md."
+confidence = "high"
+refutation = "None; both are documented BSD/GNU divergences."
+
+[[stage]]
+index = 3
+title = "Portable bash idioms: readlink -f (4 files) + mapfile (bash 3.2)"
+executor = "spawn:developer"
+expected_result_image = "No bare `readlink -f` and no `mapfile` remain in the audited scripts; each canonicalisation uses a portable helper; migrate-cursor-namespace.sh dedups without mapfile; every touched script passes `bash -n`."
+criterion_type = "measurable"
+done_criterion = "bash -n passes for all four scripts and no `readlink -f`/`mapfile` remains in them"
+verify_command = "bash -c 'set -e; for f in scripts/doctor.sh scripts/verify-instructions-sync.sh cursor/scripts/migrate-cursor-namespace.sh cursor/scripts/install-cursor-links.sh; do bash -n \"$f\"; done; ! grep -REn \"readlink -f|mapfile\" scripts/doctor.sh scripts/verify-instructions-sync.sh cursor/scripts/migrate-cursor-namespace.sh cursor/scripts/install-cursor-links.sh'"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["scripts/doctor.sh", "scripts/verify-instructions-sync.sh", "cursor/scripts/migrate-cursor-namespace.sh", "cursor/scripts/install-cursor-links.sh"]
+material = "readlink -f at doctor.sh:38, verify-instructions-sync.sh:16-17, migrate-cursor-namespace.sh:82, install-cursor-links.sh:35-36 (the last with `|| true` that silently empties the var on BSD). mapfile -t at migrate-cursor-namespace.sh:73 (bash 4+, but /bin/bash is 3.2 on macOS)."
+means = "A shared `_realpath()` shell helper delegating to python3 (`os.path.realpath`, present repo-wide) — the repo is Python-heavy so python3 is a safe dependency; a while-read dedup loop replacing mapfile."
+method = "Add a small `_realpath() { python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' \"$1\"; }` near the top of each of the 4 scripts (or a single sourced helper if the scripts already share one — check first) and replace `readlink -f X` call-sites with `_realpath X`. For install-cursor-links.sh:35 preserve the not-exist tolerance (guard for missing path, don't rely on `|| true` emptying). Replace the migrate-cursor-namespace.sh:73 mapfile with `_deduped=(); while IFS= read -r r; do _deduped+=(\"$r\"); done < <(printf '%s\\n' \"${PROJECT_ROOTS[@]}\" | sort -u); PROJECT_ROOTS=(\"${_deduped[@]}\")`."
+conditions = "Scripts invoked via /usr/bin/env bash resolving to bash 3.2 on macOS; python3 on PATH."
+invariants = "Canonicalisation results identical to readlink -f for existing paths; dedup result identical to the mapfile+sort -u; no behavioural change on Linux."
+capability_required = "Bash 3.2 portability (developer)."
+
+[stage.principle]
+statement = "BSD readlink lacks -f and bash 3.2 lacks mapfile; delegate canonicalisation to python3 (already a repo-wide dependency) and dedup via a while-read loop."
+source = "macOS portability audit 2026-07-01; macos-shell-portability-gotchas.md."
+confidence = "high"
+refutation = "readlink -f exists on macOS 12.3+, but the repo targets older BSD readlink too, so the helper is the safe floor."
+
+[[stage]]
+index = 4
+title = "Platform guards + arc-mount hook: systemd guard, loginctl SIGPIPE, /proc/self/mounts"
+executor = "spawn:developer"
+expected_result_image = "install-sync-systemd-timer.sh exits early with a clear message on non-Linux before writing any unit file; setup-ccgram.sh's loginctl linger check is SIGPIPE-safe; hook-arc-mount-search-guard.py no longer silently no-ops on macOS (reads mounts via `mount` on Darwin, or documents the intentional Linux-only scope with an explicit platform check instead of a swallowed FileNotFoundError)."
+criterion_type = "measurable"
+done_criterion = "bash -n passes for both shell scripts; the systemd script has a uname Linux guard before any mkdir/systemctl; the hook imports and its arc_mounts() has an explicit Darwin branch or documented guard; pytest for the hook (if present) exits 0"
+verify_command = "bash -c 'bash -n scripts/install-sync-systemd-timer.sh && bash -n scripts/setup-ccgram.sh && grep -qE \"uname .*(Linux|Darwin)\" scripts/install-sync-systemd-timer.sh && python3 -c \"import ast,sys; ast.parse(open(\\\"scripts/hook-arc-mount-search-guard.py\\\").read())\"'"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["scripts/install-sync-systemd-timer.sh", "scripts/setup-ccgram.sh", "scripts/hook-arc-mount-search-guard.py"]
+material = "install-sync-systemd-timer.sh (no platform guard; writes ~/.config/systemd + calls systemctl — fails midway on macOS). setup-ccgram.sh:193 `loginctl show-user | grep -q` under pipefail (Linux-only branch, but SIGPIPE mis-negates the linger check). hook-arc-mount-search-guard.py:43-48 opens /proc/self/mounts, swallows FileNotFoundError -> returns [] -> decide() allows all (silent no-op) on macOS."
+means = "`[[ \"$(uname -s)\" == Linux ]] || exit` guard idiom; the capture-then-test SIGPIPE fix; `platform.system()` branch + `mount` parsing (or an explicit documented Linux-only guard) for the hook."
+method = "install-sync-systemd-timer.sh: add `[[ \"$(uname -s)\" == \"Linux\" ]] || { echo 'systemd timer: Linux only — use install-sync-cron.sh / launchd on macOS' >&2; exit 1; }` before the first mkdir. setup-ccgram.sh:193: capture `linger=\"$(loginctl show-user \"$USER\" 2>/dev/null || true)\"` then test with `printf %s | grep -q`. hook-arc-mount-search-guard.py: in arc_mounts(), add `if platform.system()==\"Darwin\":` returning parsed `mount` output (arc FUSE lines) — or, if arc mounts never occur on macOS, replace the blanket `except Exception: return []` with an explicit `if not os.path.exists(proc_path): return []  # no arc mounts off-Linux` plus a comment, so the no-op is intentional and greppable rather than an accidental swallow. Pick the explicit-guard form (macOS has no arc mounts) and document it."
+conditions = "Scripts/hook run on macOS and Linux; hooks must never raise (crash = workflow block)."
+invariants = "Linux behaviour of all three unchanged; hook still fail-open on genuine read errors (never blocks the workflow); systemd script still works on Linux."
+capability_required = "Bash + Python; hook-safety awareness (developer)."
+
+[stage.principle]
+statement = "A Linux-only installer must guard on uname before side effects; a silent /proc read failure that flips a guard to allow-all must become an explicit, greppable platform decision, not a swallowed exception."
+source = "macOS portability audit 2026-07-01 findings 6/7/8."
+confidence = "high"
+refutation = "If arc FUSE mounts could appear on macOS the hook would need real Darwin `mount` parsing; on this machine they cannot, so the documented guard suffices."
+
+[[final_check]]
+label = "proc_tree unit tests green on macOS"
+command = "python3 -m pytest scripts/tests/test_proc_tree.py -q"
+expected_exit = 0
+
+[[final_check]]
+label = "live reap: launch_supervised + kill_tree leaves zero survivors on macOS"
+command = "python3 -c \"import sys; sys.path.insert(0,'scripts'); import proc_tree,time; p=proc_tree.launch_supervised(['sh','-c','sleep 30 & sleep 30 & wait']); time.sleep(0.3); t=proc_tree.kill_tree(p); time.sleep(0.2); alive=[x for x in t if proc_tree._is_alive(x)]; print('survivors',alive); sys.exit(1 if alive else 0)\""
+expected_exit = 0
+
+[[final_check]]
+label = "no GNU-only idioms remain in the audited files"
+command = "bash -c '! grep -REn \"date -I|readlink -f|mapfile| /proc\" scripts/sync-instructions-repo.sh scripts/doctor.sh scripts/verify-instructions-sync.sh cursor/scripts/migrate-cursor-namespace.sh cursor/scripts/install-cursor-links.sh scripts/proc_tree.py'"
+expected_exit = 0

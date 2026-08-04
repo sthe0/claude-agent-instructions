@@ -1,0 +1,32 @@
+[meta]
+task_id = "si-classify-external-effect"
+goal = "Clarify in CLAUDE.md § Classify that an external/irreversible effect delivered as commands/config for the user to run (sudo, LaunchDaemon) makes a task Substantive — the production-edit gate watches only agent file writes, so advisory output can slip the spine."
+done_criterion = "The new sentence is present in CLAUDE.md after the 'When in doubt between two classes' paragraph; lint-prose-length.py passes."
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/claude-agent-instructions"
+external_research = "No external research warranted — the fix is a wording clarification of an existing in-repo rule, grounded in this session's observed misclassification, not a factual/API question."
+
+[[stage]]
+index = 1
+title = "Add external-effect clarification to § Classify"
+executor = "in_thread"
+expected_result_image = "One sentence added after the 'When in doubt' paragraph; byte size stays under claude-md-max-bytes; lint passes."
+criterion_type = "measurable"
+done_criterion = "python3 scripts/lint-prose-length.py exits 0 and the sentence is present"
+verify_command = "python3 scripts/lint-prose-length.py"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["CLAUDE.md"]
+material = "CLAUDE.md § Classify task weight first, paragraph after the weight-class table"
+means = "Edit tool on the repo-canonical CLAUDE.md"
+method = "Insert one clarifying sentence naming the difficulty (advisory external-effect output slips the file-write gate) in to-achieve-X-do-Y form"
+conditions = "Repo synced (done); machine is Core author (verified)"
+invariants = "CLAUDE.md stays under claude-md-max-lines and claude-md-max-bytes; English-only; no triggers/skill descriptions touched so the Cursor .mdc mirror needs no change"
+capability_required = "Core commit authority (is_author True)"
+
+[stage.principle]
+statement = "Classify a task by the external effect it induces, not by who executes it — advisory output that hands the user irreversible commands is substantive."
+source = "This session: misclassified a sudo+LaunchDaemon macOS task as chat because the agent itself edited no production file."
+confidence = "high"
+refutation = "Refuted if a task delivering user-run sudo/system-config commands is legitimately non-substantive (no plan/approval needed) — not the case here."

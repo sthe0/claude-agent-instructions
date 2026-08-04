@@ -1,0 +1,63 @@
+[meta]
+task_id = "land-hook-prune-two-file"
+goal = "Land the reviewed branch hook-prune-two-file onto main, green, and commit the pending experience-leaf edit"
+done_criterion = "origin/main contains both branch commits; verify-all 19/19 and the pytest suite show no regression against the main baseline; the branch, its remote ref and its worktree are gone; the leaf edit is committed"
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/claude-agent-instructions"
+external_research = "none needed — all evidence is local: main baseline verify-all 19/19 and pytest 3446 passed with one pre-existing failure (test_argv_text::test_a_realistically_long_path_is_named_in_full, red on main too, macOS /private/var tmpdir path length)."
+
+[[stage]]
+index = 1
+title = "Make the rebased branch green"
+executor = "in_thread"
+expected_result_image = "The branch tip verifies green: verify-all 19/19 and the pytest suite failing only the one test that is red on the trunk baseline too. The control names the canonical checkout deliberately — before landing the evidence is produced in the worktree, and after landing that same tip IS the canonical tree, so the assertion stays true at verify-final time instead of pointing at a worktree stage 2 removes by design. Three deltas: the three shifted line numbers in config-root-refs-allowlist.txt (done), the regenerated crutch_registry.toml (done), and one new _LEGACY_REF_ALLOWLIST line for install-reminder-hooks.sh in tests/test_config_root.py (remaining)."
+criterion_type = "measurable"
+done_criterion = "verify-all 19/19; pytest failures == the main baseline set"
+verify_command = "cd /Users/the0/claude-agent-instructions/scripts && python3 /Users/the0/claude-agent-instructions/scripts/verify-all.py | tail -3"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["green branch tip"]
+material = "rebased branch (2 commits: c349bff, 95d9b26 -> 328ce06, f47937c)"
+means = "Edit + Bash in the worktree"
+method = "Add scripts/install-reminder-hooks.sh to _LEGACY_REF_ALLOWLIST with the reason that the personal root IS the prune-only second file; re-run verify-all and the suite; commit the three fixes onto the branch."
+conditions = "Edits happen only in the worktree; the canonical checkout stays read-only"
+invariants = "Do not weaken a check to pass it — the test allowlist entry is the intended mechanism for a deliberate legacy-root reference; do not touch the pre-existing test_argv_text failure"
+capability_required = "none beyond local repo access"
+
+[stage.principle]
+statement = "A branch lands green or does not land; a check that goes red on rebase is a real signal, not friction to route around"
+source = "CLAUDE.md § verify the right axis"
+derivation = "The two checks that went red are line-number and enumeration bookkeeping that only main's 16 intervening commits could invalidate, so they were green on the branch tip before the rebase and red after it — which is exactly the class of breakage a rebase is supposed to surface. Landing without re-running them would move a red tip onto trunk while every local signal still read green from the pre-rebase run."
+confidence = "high"
+refutation = "if a failure is red on main too, it is baseline and out of scope — attribute, do not fix under this task"
+
+[[stage]]
+index = 2
+title = "Land onto main and commit the pending leaf edit"
+executor = "in_thread"
+expected_result_image = "land-branch.py fast-forwards main to the branch tip and removes the remote branch, local branch and worktree; the working-tree edit to memory-global/leaves/experience/2026-07-20-agentctl-premise-gate-...md (4 lines recording that 7b3a624 fixed the root cause) is committed on main; both are pushed; origin/main == local main."
+criterion_type = "measurable"
+done_criterion = "git rev-list origin/main..main is empty and both commits are on origin/main"
+verify_command = "cd /Users/the0/claude-agent-instructions && git fetch --quiet origin && test -z \"$(git rev-list @{u}..HEAD)\" && git log --oneline -3"
+expected_exit = 0
+depends_on = [1]
+output_artifacts = ["origin/main advanced", "worktree removed"]
+material = "green branch from stage 1; the uncommitted leaf edit in the canonical checkout"
+means = "scripts/land-branch.py; git commit/push"
+method = "land-branch.py --branch hook-prune-two-file (ff-only, ref-only); then commit the leaf edit and push."
+conditions = "User confirmed landing into main; no other live session claims this tree"
+invariants = "Fast-forward only — no hand-rolled checkout/reset/clean on the shared tree; the leaf edit is committed as authored by the earlier session, not rewritten"
+capability_required = "push rights to origin/main (trunk push — user-confirmed)"
+
+[stage.principle]
+statement = "The terminal state is trunk, and branch deletion is part of landing, not a separate ask"
+source = "CLAUDE.md § On task resolution; memory-global/leaves/landing-discipline.md"
+derivation = "Work parked on a personal branch keeps decaying against trunk — this branch was already 16 commits behind after five days and two checks went red on the rebase alone, so every further day of parking adds reconciliation cost to the same two commits. Leaving the branch and its worktree in place after the fast-forward would leave a second tree claiming the same scope, which is the state that produced the read-only-canon and parallel-session conflicts this repo already guards against."
+confidence = "high"
+refutation = "if the branch were review-gated by a distinct human reviewer, it would need a PR instead of a fast-forward — this repo is sole-maintained and the branch already carries its independent code review from 2026-07-29"
+
+## Final verification
+# 1. origin/main contains 328ce06 + f47937c (rebased) and the leaf commit.
+# 2. verify-all 19/19 on main after landing.
+# 3. Branch, remote ref and worktree removed.

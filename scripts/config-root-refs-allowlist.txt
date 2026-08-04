@@ -113,3 +113,11 @@ memory-global/leaves/autocompact-threshold-policy.md:60:0a742cea  # keep:legacy-
 scripts/README.md:73:a5f3990f  # keep:legacy-fallback — the install-reminder-hooks.sh row names the personal ~/.claude/settings.json as the prune-only file class, distinct from the agent-home file it also wires
 scripts/agentctl/README.md:352:4ce7ac6c  # keep:harness-owned — states the harness's OWN root-resolution rule ($CLAUDE_CONFIG_DIR, else ~/.claude); the generic form would erase the very rule the line exists to state
 scripts/agentctl/README.md:360:37b335ef  # keep:legacy-fallback — names the personal ~/.claude/settings.json as the prune-only file class, distinct from the agent-home file; same two-file distinction the scripts/README.md and docs/operations/guards.md entries above already carry
+
+# --- Frozen data fixtures (glob form) ---
+# A committed byte-for-byte snapshot is not authored prose: its value IS its
+# fidelity to what was written at snapshot time, so migrating a config-root
+# reference inside it would destroy the very artifact. Pinned as a glob rather
+# than per line because the domain is "the whole fixture", not 192 individually
+# reasoned occurrences.
+scripts/tests/fixtures/plan_corpus/*.toml  # keep:frozen-fixture — historical plan snapshots backing scripts/tests/test_frozen_plan_compat.py; the harness proves plan-loading is unchanged against these exact bytes, so rewriting their legacy references would invalidate the non-regression claim they exist to support

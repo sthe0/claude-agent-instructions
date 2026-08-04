@@ -1,0 +1,144 @@
+[meta]
+task_id = "maritime-charter-specialization"
+goal = "Add maritime charter planning to the trips project: 3 new specializations (maritime-expert, passage-planning, marine-weather-safety), a charter flavor for the journey workspace, and transfer of marmaris-2025-04-11 work/experience (journey + regional knowledge base + routing/visualization tooling)."
+done_criterion = "3 maritime SKILL.md present and wired in docs/specializations.md; charter passage-plan template + charter trip.md fields; marmaris transferred as a journey + knowledge/regions/marmaris + tools/; project memory updated; committed"
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/projects/trips"
+external_research = "Stage 1 researches the general maritime-charter domain (charter platforms + skipper licensing; marine weather + safety tools; passage-planning/pilotage practices) via parallel web agents, so the specializations are region-general, not Marmaris-specific. Grounded additionally in the surveyed marmaris-2025-04-11 project (real skipper experience)."
+
+[[stage]]
+index = 1
+title = "Research: maritime charter domain (general)"
+executor = "in_thread"
+expected_result_image = "3 syntheses: (A) charter booking platforms + skipper licensing/bareboat requirements; (B) marine weather + safety tools/practices; (C) passage planning + pilotage/anchoring. Region-general, with sources."
+criterion_type = "acceptance_review"
+done_criterion = "3 syntheses gathered; sufficient to author region-general maritime SKILL.md"
+depends_on = []
+output_artifacts = ["/tmp/cc-scratch/maritime-research.md"]
+material = "3 maritime domains + surveyed marmaris material"
+means = "WebSearch/WebFetch via parallel sonnet agents"
+method = "one agent per topic; each returns structured synthesis with sources"
+conditions = "web tools available"
+invariants = "each claim source-linked; safety-critical facts flagged"
+capability_required = "web research + synthesis"
+
+[stage.principle]
+statement = "Design domain specializations region-general from prior art + real experience, not from a single trip"
+source = "user request + earlier trips-specialization research principle"
+confidence = "high"
+refutation = "if research adds nothing over the marmaris survey, note it and build on the survey"
+
+[[stage]]
+index = 2
+title = "Update docs/specializations.md (add 3 maritime specs + reuse map)"
+executor = "in_thread"
+expected_result_image = "design doc gains a Maritime charter section: 3 specs with roles/boundaries, split rationale, how they reuse the 6 land specs, passage-planning as sea analog of itinerary-architect"
+criterion_type = "acceptance_review"
+done_criterion = "docs/specializations.md documents the 3 maritime specs coherently with the land taxonomy"
+depends_on = [1]
+output_artifacts = ["docs/specializations.md"]
+material = "existing design doc + research + survey"
+means = "Edit"
+method = "add maritime section; keep single source of truth"
+conditions = "stage 1 done"
+invariants = "no contradiction with the 6 land specs; budget still cross-cutting"
+capability_required = "architecture documentation"
+
+[stage.principle]
+statement = "Extend the single source-of-truth doc rather than fork a separate maritime doc"
+source = "docs discipline"
+confidence = "high"
+refutation = "if maritime grows large, split into docs/maritime.md with a pointer"
+
+[[stage]]
+index = 3
+title = "Author 3 maritime SKILL.md"
+executor = "in_thread"
+expected_result_image = "maritime-expert, passage-planning, marine-weather-safety SKILL.md with frontmatter (name + TRIGGER/SKIP), boundaries, inputs/outputs, tactics, sources, pitfalls, invariant, checklist; region-general, grounded in research + marmaris"
+criterion_type = "acceptance_review"
+done_criterion = "3 SKILL.md under .claude/skills/specializations/, consistent with the design doc"
+depends_on = [2]
+output_artifacts = [".claude/skills/specializations/maritime-expert/", ".claude/skills/specializations/passage-planning/", ".claude/skills/specializations/marine-weather-safety/"]
+material = "design doc + research + survey"
+means = "Write"
+method = "per spec: frontmatter + body from research/survey"
+conditions = "stages 1-2 done"
+invariants = "names/boundaries match docs; anti-hallucination invariant; safety facts sourced; each spawnable via the project-local resolution shipped earlier"
+capability_required = "maritime domain writing + SKILL.md format"
+
+[stage.principle]
+statement = "A specialization is justified by distinct knowledge base + tactics + reuse"
+source = "trips split principle"
+confidence = "high"
+refutation = "if two maritime specs overlap heavily in practice, merge"
+
+[[stage]]
+index = 4
+title = "Charter flavor for the workspace"
+executor = "in_thread"
+expected_result_image = "alternative template gains passage-plan.md (nautical: legs table, anchorages, weather windows, buffer days); trip.md gains charter fields (boat, charter company, base, skipper license, crew); knowledge/ dir scaffold; docs/workspace.md notes the charter flavor"
+criterion_type = "acceptance_review"
+done_criterion = "charter passage-plan template + charter trip.md fields + knowledge/ scaffold exist and are documented"
+depends_on = [3]
+output_artifacts = ["journeys/_TEMPLATE/", "knowledge/", "docs/workspace.md"]
+material = "existing workspace templates + maritime model"
+means = "Write, Edit"
+method = "add optional passage-plan.md + charter fields; scaffold knowledge/regions/"
+conditions = "stage 3 done"
+invariants = "land journeys unaffected; charter fields optional"
+capability_required = "template design"
+
+[stage.principle]
+statement = "Extend the journey->alternative model with an optional charter flavor rather than a parallel model"
+source = "workspace model coherence"
+confidence = "high"
+refutation = "if charter diverges too far, add a dedicated _TEMPLATE-charter"
+
+[[stage]]
+index = 5
+title = "Transfer marmaris: journey + knowledge base + tools/"
+executor = "in_thread"
+expected_result_image = "journeys/marmaris-2025-04-11/ (trip.md + alternatives route2 chosen / route2b plan-B from route2.md/route2b.md); knowledge/regions/marmaris/ (anchorage encyclopedia from routes.md); tools/ (generate_routes.py + build*.js + deploy notes + README); maritime source whitelist captured"
+criterion_type = "measurable"
+done_criterion = "ls journeys/marmaris-2025-04-11/trip.md knowledge/regions/marmaris tools/ all present"
+verify_command = "ls /Users/the0/projects/trips/journeys/marmaris-2025-04-11/trip.md && ls -d /Users/the0/projects/trips/knowledge/regions/marmaris /Users/the0/projects/trips/tools"
+expected_exit = 0
+depends_on = [4]
+output_artifacts = ["journeys/marmaris-2025-04-11/", "knowledge/regions/marmaris/", "tools/"]
+material = "surveyed marmaris files"
+means = "Read (marmaris), Write/copy into trips"
+method = "copy route content into journey+knowledge; copy tooling into tools/ with a README noting deps + generalization TODO"
+conditions = "stage 4 done"
+invariants = "marmaris source project untouched (read-only); machine-local settings not copied"
+capability_required = "content transfer + light generalization"
+
+[stage.principle]
+statement = "Separate trip-experience (journey) from region-facts (knowledge base) when transferring"
+source = "user choice: journey + knowledge base"
+confidence = "high"
+refutation = "none"
+
+[[stage]]
+index = 6
+title = "Project memory + final verification + commit"
+executor = "in_thread"
+expected_result_image = "project MEMORY.md points to maritime specs + charter flavor + knowledge base + tools; final verification passes; committed"
+criterion_type = "measurable"
+done_criterion = "9 SKILL.md total under specializations; marmaris journey+knowledge+tools present; git log shows commit"
+verify_command = "ls /Users/the0/projects/trips/.claude/skills/specializations/*/SKILL.md | wc -l"
+expected_exit = 0
+depends_on = [5]
+output_artifacts = [".claude/agent-memory/MEMORY.md"]
+material = "all prior stages"
+means = "Write, git"
+method = "update memory index; run final verification; commit"
+conditions = "stage 5 done"
+invariants = "index reflects maritime additions"
+capability_required = "memory + git"
+
+[stage.principle]
+statement = "Project memory index must reflect new capabilities for future-session reuse"
+source = "CLAUDE.md Memory"
+confidence = "high"
+refutation = "none"

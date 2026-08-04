@@ -1,0 +1,205 @@
+# Plan (v2, post-replan): spawn-dispatch cwd + pytest exec-permission via spawn injection + quality-rating salience
+#
+# Three empirically-validated self-improvement fixes, delivered on an isolated
+# worktree of the Core instructions repo, landed to main only after a separate
+# resolution-gate confirmation (NOT a stage here).
+#
+# ## Replan rationale (v1 -> v2)
+#   v1 stage 3 delivered Fix #2's pytest exec-permission by adding
+#   `Bash(python3 -m pytest:*)` to settings/base.json. That FAILED final
+#   verification: settings/base.json is merged fleet-wide on `git pull` without a
+#   prompt, so by security invariant (lint-settings-base.py) it may hold ONLY
+#   read-only entries — a code-executing allow like pytest is rejected. The
+#   `json.tool` "sibling precedent" does not license pytest (json.tool is
+#   lint-whitelisted read-only via READONLY_PYTHON3; pytest is not). Corrected
+#   mechanism: inject the exec allow into the developer child's `--settings`
+#   payload in spawn-specialist.py (developer-spawn-scoped, versioned, never
+#   fleet-merged). base.json is reverted to read-only-only. See the new
+#   memory leaf memory-global/leaves/system-knowledge/settings-permission-tiers.md.
+#
+# ## Problem and done criteria
+#   End result (plain language): (1) `agentctl dispatch` launches every spawned
+#   specialist with its working directory pinned to the plan's delivery worktree
+#   (or repo_root), so a hard-sandboxed child can actually write the tree it was
+#   sent to change; (2) a spawned developer can run the pytest suite without an
+#   approval prompt (via a developer-scoped spawn-injected allow, NOT a base.json
+#   entry), and the developer spawn prompt tells it to invoke verification as bare
+#   single commands; (3) the two resolution-salience surfaces (CLAUDE.md
+#   resolution bullet + hook-resolution-reminder print) both name the
+#   agent-proposed 1-5 quality rating that must ride the resolution AskUserQuestion.
+#   Overall done criterion (acceptance-review): the user inspects the diff on the
+#   worktree branch and the Final-verification evidence (verify-all 16/16, full
+#   pytest green, and the live post-edit spawn that runs pytest without approval
+#   with the live global settings NOT carrying a pytest entry) and accepts it.
+
+[meta]
+task_id = "spawn-dispatch-cwd-pytest-quality-salience"
+goal = "Pin dispatched-spawn cwd to the delivery worktree; deliver a developer-scoped pytest exec-permission via spawn-specialist --settings injection (not base.json) + bare-command prompt hygiene; surface the 1-5 quality rating in both resolution salience surfaces."
+done_criterion = "User accepts, on review, the worktree diff plus Final-verification evidence: verify-all.py 16/16 (lint-settings-base green), full pytest green, and a live spawned developer running pytest without an approval prompt while live global settings carry NO pytest entry (proving the spawn injection is the sole source)."
+criterion_type = "acceptance_review"
+weight_class = "substantive"
+repo_root = "/Users/the0/claude-agent-instructions"
+delivery_worktree = "/Users/the0/claude-agent-instructions-spawn-cwd-pytest-quality-fixes"
+external_research = "Not warranted beyond the local codebase: the three fixes were empirically validated by in-repo probes plus a live diagnostic spawn during v1 execution. Prior-art within the tree was consulted; the `Bash(python3 -m json.tool:*)` base.json entry was initially taken as a precedent for the pytest entry but that precedent was found INAPPLICABLE at final verification — json.tool is lint-whitelisted as read-only (agentctl.classify.READONLY_PYTHON3), pytest executes code and is rejected by lint-settings-base.py. The corrected delivery (spawn-specialist --settings injection for kind==developer) mirrors the existing child --settings env-injection already in spawn-specialist.main()."
+
+# ---------------------------------------------------------------------------
+[[stage]]
+index = 1
+title = "Create the isolated delivery worktree and enter it"
+executor = "in_thread"
+material = "The canonical Core repo at /Users/the0/claude-agent-instructions on main; no isolated workspace exists yet for this task."
+means = "scripts/session-isolate.sh (existing worktree-provisioning helper; prints the created worktree dir as its final stdout line)."
+method = "Run `scripts/session-isolate.sh spawn-cwd-pytest-quality-fixes`, which git-worktree-adds a new branch checkout at the deterministic sibling path /Users/the0/claude-agent-instructions-spawn-cwd-pytest-quality-fixes. Set the coordinator's Bash working directory to that worktree and keep it there for the rest of the plan."
+conditions = "Run from the coordinator (root) session, which is not hard-sandboxed and may create and enter a sibling worktree."
+invariants = "The canonical checkout at repo_root is never mutated by this plan (edits happen only in the worktree); no other live session's worktree/scope is touched."
+capability_required = "Shell access to run session-isolate.sh and change the Bash cwd; git worktree permissions on the Core repo."
+expected_result_image = "Directory /Users/the0/claude-agent-instructions-spawn-cwd-pytest-quality-fixes exists and is a git worktree on a fresh branch; the coordinator's Bash cwd is inside it."
+criterion_type = "measurable"
+done_criterion = "git reports the worktree path is inside a work tree (exit 0)."
+verify_command = "git -C /Users/the0/claude-agent-instructions-spawn-cwd-pytest-quality-fixes rev-parse --is-inside-work-tree"
+expected_exit = 0
+output_artifacts = []
+
+[stage.principle]
+statement = "A worktree-delivered Core change needs its isolated checkout provisioned as an explicit first unit of work, because every later stage's material (the writable tree) does not exist until it is created."
+source = "planner SKILL.md — any unmet activity element (here: the writable delivery venue) becomes the order of a service sub-plan; task brief mandating an isolated worktree via session-isolate.sh with canon read-only."
+derivation = "The four edit stages all transform files that only exist under the worktree path; since that path is absent until session-isolate.sh runs, provisioning it is a precondition every edit stage depends_on, which by the ontology's service-stage rule is itself a stage rather than an implicit assumption."
+confidence = "high"
+refutation = "If session-isolate.sh returned a non-worktree path, or the worktree already existed and collided, the rev-parse check would still pass while the branch/venue is wrong — so this is falsified by the worktree resolving to an unexpected path or a pre-existing dirty tree."
+
+# ---------------------------------------------------------------------------
+[[stage]]
+index = 2
+title = "Fix #1: pin dispatched-spawn cwd to the delivery worktree (+ test)"
+executor = "spawn:developer"
+depends_on = [1]
+material = "scripts/agentctl/dispatch.py `subprocess_runner`/`dispatch_stage` (no cwd is passed to subprocess.run, so a child inherits the invoker cwd) and cli.py cmd_dispatch call site (~line 1868) where SessionState exposes delivery_worktree/repo_root."
+means = "Existing dispatch call chain (build_argv/dispatch_stage/subprocess_runner) and the injectable-runner test seam; scripts/tests/test_verify_command_scope.py as the test-style template."
+method = "Thread an optional `cwd: str | None = None` parameter through subprocess_runner (pass `cwd=cwd` to subprocess.run) and dispatch_stage; in cli.cmd_dispatch pass `cwd = state.delivery_worktree or state.repo_root` (None => inherit, byte-identical to today). Add scripts/tests/test_dispatch_cwd.py mirroring the scope-lint test's Namespace/injectable-runner style: assert (a) a plan with delivery_worktree set dispatches with that cwd, (b) delivery_worktree unset falls back to repo_root, (c) both unset => cwd None (back-compat). Do NOT add `--add-dir` (canon must stay read-only; cwd pinning is the whole fix)."
+conditions = "Because Fix #1 is not yet live during this plan's own execution, the spawned developer inherits the dispatching process's cwd; the coordinator MUST invoke the spawn for this stage from within the worktree (Bash cwd = the worktree) so the child's allowed working directory covers the worktree it must edit."
+invariants = "Default behaviour when neither delivery_worktree nor repo_root is set is unchanged (cwd None => inherit); the runner remains injectable so existing dispatch tests keep passing; no change to build_argv's spawn argv."
+capability_required = "Python editing of the agentctl engine; ability to run pytest on the new test."
+expected_result_image = "`python3 -m pytest .../scripts/tests/test_dispatch_cwd.py -q` exits 0; the three cwd cases (worktree / repo_root fallback / None back-compat) each assert the cwd passed to the injected runner."
+criterion_type = "measurable"
+done_criterion = "New dispatch-cwd test passes and the pre-existing dispatch tests still pass."
+verify_command = "python3 -m pytest /Users/the0/claude-agent-instructions-spawn-cwd-pytest-quality-fixes/scripts/tests/test_dispatch_cwd.py /Users/the0/claude-agent-instructions-spawn-cwd-pytest-quality-fixes/scripts/tests/test_dispatch_semantics.py -q"
+expected_exit = 0
+output_artifacts = ["scripts/agentctl/dispatch.py", "scripts/agentctl/cli.py", "scripts/tests/test_dispatch_cwd.py"]
+
+[stage.principle]
+statement = "A hard-sandboxed spawned child can only write the tree it is launched in, so the dispatcher must set the child's cwd to the delivery venue rather than relying on the invoker's ambient cwd."
+source = "Task dossier probe 3 (a spawned child is sandboxed to its launch-cwd git tree; absolute paths and bypassPermissions do NOT widen the boundary); mirror-the-working-caller memory leaf."
+derivation = "Since subprocess.run currently receives no cwd, the child inherits whatever cwd the agentctl process happened to have; the probe proves writes outside that tree are denied, so correctness requires dispatch to compute the venue (delivery_worktree or repo_root) from durable state and pass it explicitly — not depend on an ambient value it does not control."
+confidence = "high"
+refutation = "Falsified if a dispatched child could write a path outside its launch-cwd tree (making the cwd pin unnecessary), or if passing cwd broke the back-compat None case — both are guarded by the new test's fallback/back-compat assertions."
+
+# ---------------------------------------------------------------------------
+[[stage]]
+index = 3
+title = "Fix #2: developer-scoped pytest exec-permission via spawn --settings injection + bare-command hygiene (+ test)"
+executor = "spawn:developer"
+depends_on = [1]
+material = "settings/base.json allow array (currently carries a stray `Bash(python3 -m pytest:*)` entry from the v1 attempt — MUST be reverted); scripts/spawn-specialist.py main() cmd construction (~line 552) where the child --settings JSON is built as `json.dumps({\"env\": {CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: ...}})`; scripts/spawn-specialist.py assemble_prompt developer hygiene section (already added in v1, retained)."
+means = "The existing child --settings payload builder in main() and its kind==developer branch pattern (resolve_permission_mode already special-cases developer); the assemble_prompt developer branch; lint-settings-base.py as the base.json read-only guard."
+method = "(a) REVERT settings/base.json: remove the `Bash(python3 -m pytest:*)` allow entry so base.json is read-only-only again. (b) In spawn-specialist.py main(), build the child --settings object so that for kind==developer it also carries `\"permissions\": {\"allow\": [\"Bash(python3 -m pytest:*)\"]}` alongside the env override (non-developer kinds keep the env-only payload unchanged). (c) Retain the assemble_prompt developer hygiene section (bare single commands: no `&&`/`;`/pipes, no `$VAR`, no `python3 -c`; absolute paths). (d) Rewrite scripts/tests/test_spawn_pytest_allowlist_hygiene.py to assert: the built child --settings for kind==developer parses to JSON containing the pytest allow entry; for a non-developer kind the --settings has NO permissions key; settings/base.json contains NO pytest entry (read-only preserved); assemble_prompt(developer) still contains the hygiene text."
+conditions = "Same bootstrap condition as stage 2: dispatch this stage with the coordinator Bash cwd = the worktree so the spawned developer can write spawn-specialist.py, settings/base.json, and the test in the worktree. NO apply-settings and NO live-settings mutation for pytest happens in this stage — the injection is delivered at spawn time, not via base.json merge."
+invariants = "settings/base.json stays read-only-only (lint-settings-base must pass); the child --settings for NON-developer kinds is unchanged (env-only); assemble_prompt non-developer branches and the spawn argv are otherwise unchanged; base.json stays valid JSON."
+capability_required = "JSON + Python editing; ability to run pytest and lint-settings-base."
+expected_result_image = "`python3 -m pytest .../scripts/tests/test_spawn_pytest_allowlist_hygiene.py -q` exits 0; `lint-settings-base.py` exits 0 (base.json read-only); the injection (developer-only), the base.json revert, and the hygiene instruction are all asserted."
+criterion_type = "measurable"
+done_criterion = "The rewritten injection+hygiene test passes AND lint-settings-base passes (base.json read-only-only again)."
+verify_command = "python3 -m pytest /Users/the0/claude-agent-instructions-spawn-cwd-pytest-quality-fixes/scripts/tests/test_spawn_pytest_allowlist_hygiene.py -q && python3 /Users/the0/claude-agent-instructions-spawn-cwd-pytest-quality-fixes/scripts/lint-settings-base.py"
+expected_exit = 0
+output_artifacts = ["settings/base.json", "scripts/spawn-specialist.py", "scripts/tests/test_spawn_pytest_allowlist_hygiene.py", "memory-global/leaves/system-knowledge/settings-permission-tiers.md", "memory-global/leaves/system-knowledge/MEMORY.md"]
+
+[stage.principle]
+statement = "A code-executing permission a spawned developer needs must be granted at the spawn boundary (spawn-specialist --settings injection), never in the versioned read-only base merged fleet-wide on git pull; and the child must be told to invoke verification as a bare single command, so both the scoped grant and the prompt hygiene are required together."
+source = "v1 final-verification failure (lint-settings-base rejects an exec entry in base.json); memory leaf settings-permission-tiers.md; task dossier probe 2 (compound/`$VAR`/`-c` forms each trip a distinct approval classifier); the existing spawn-specialist child --settings env-injection precedent."
+derivation = "base.json is auto-applied fleet-wide without a prompt, so it is constrained to read-only entries; a pytest allow executes code and must therefore be scoped to the developer spawn via its --settings payload. That grant only pays off if the child also invokes pytest as a bare command (a chained/`$VAR`/`-c` form re-trips the classifier), so the test pins the injection, the base.json revert, and the hygiene text against silent regression."
+confidence = "high"
+refutation = "Falsified if a spawned developer still hit an approval prompt on a bare `python3 -m pytest` with the injection in place and live global settings carrying no pytest entry (injection insufficient) — checked live in stage 5 — or if lint-settings-base failed (base.json not read-only) or the hygiene text were absent (test fails)."
+
+# ---------------------------------------------------------------------------
+[[stage]]
+index = 4
+title = "Fix #3: surface the 1-5 quality rating in both resolution salience surfaces (+ guard test)"
+executor = "in_thread"
+depends_on = [1]
+material = "CLAUDE.md resolution bullet at line 132 and scripts/hook-resolution-reminder.py open-gate print block — both already edited in v1 (this stage is unchanged by the replan and its artifacts already verified 2/2 + lint exit 0)."
+means = "Direct prose/code edit in the worktree; the quality-regression-investigation memory leaf as the canonical reference for the agent-proposed, user-confirmed 1-5 rating."
+method = "(a) Extend the CLAUDE.md line-132 bullet with a minimal clause: the resolution AskUserQuestion carries the agent-proposed 1-5 quality rating as the first resolution option. (b) Add one line to the hook print block naming the quality rating + the quality-regression-investigation leaf. (c) Add scripts/tests/test_quality_salience.py asserting BOTH CLAUDE.md's resolution region names the 1-5 quality rating AND the hook print string names the quality rating and the leaf. (Already applied in v1.)"
+conditions = "In-thread carve-out: prose/small-string edits in single files the coordinator has read this session. Behavioral edits (CLAUDE.md, hook) carry the self-improvement review trailer at commit time (stage 5)."
+invariants = "CLAUDE.md stays within claude-md-max-lines (400) and claude-md-max-bytes (39000) — lint-prose-length must still pass; no other CLAUDE.md rule reworded; the hook's control-flow unchanged apart from the added quality line."
+capability_required = "Prose editing within byte ceilings; Python string editing; ability to run pytest and lint-prose-length."
+expected_result_image = "`python3 -m pytest .../scripts/tests/test_quality_salience.py -q` exits 0 AND `python3 .../scripts/lint-prose-length.py` exits 0 (CLAUDE.md under both ceilings)."
+criterion_type = "measurable"
+done_criterion = "The salience guard test passes and lint-prose-length passes (CLAUDE.md within ceilings)."
+verify_command = "python3 -m pytest /Users/the0/claude-agent-instructions-spawn-cwd-pytest-quality-fixes/scripts/tests/test_quality_salience.py -q && python3 /Users/the0/claude-agent-instructions-spawn-cwd-pytest-quality-fixes/scripts/lint-prose-length.py"
+expected_exit = 0
+output_artifacts = ["CLAUDE.md", "scripts/hook-resolution-reminder.py", "scripts/tests/test_quality_salience.py"]
+
+[stage.principle]
+statement = "A norm the agent must apply at resolution (proposing a 1-5 quality rating inside the resolution ask) has to be present on the salience surfaces the agent actually reads at that moment, or it is silently skipped despite existing in a leaf."
+source = "quality-regression-investigation memory leaf (rating is agent-proposed and user-confirmed in the same resolution AskUserQuestion); task dossier Fix #3 audit finding both surfaces omit it."
+derivation = "The resolution gate's cognition is driven by CLAUDE.md's resolution bullet and the hook reminder's printed text; since neither previously named the rating, the agent had no in-context prompt to include it, so making the norm effective means writing it onto exactly those two read-at-resolution surfaces and guarding it with a regression test."
+confidence = "high"
+refutation = "Falsified if the rating already reached the resolution ask reliably without either surface mentioning it (making the edit redundant), or if adding the CLAUDE.md clause pushed the file over a size ceiling (lint-prose-length fails)."
+
+# ---------------------------------------------------------------------------
+[[stage]]
+index = 5
+title = "Final verification: injection-only live spawn check, full suite, commits"
+executor = "in_thread"
+depends_on = [2, 3, 4]
+material = "The completed worktree with all three fixes applied (Fix #2 via spawn injection, base.json reverted); the live ~/.claude-agent/settings.json restored from .bak so it carries NO pytest entry; no commits yet on the worktree branch."
+means = "The WORKTREE's scripts/spawn-specialist.py (carrying the developer --settings injection) to launch a live diagnostic developer; scripts/verify-all.py (16 checks); full pytest; git on the worktree branch."
+method = "(1) Confirm live ~/.claude-agent/settings.json carries NO `Bash(python3 -m pytest:*)` allow entry (already restored from .bak), so the ONLY possible source of the child's pytest permission is the spawn injection. (2) Spawn a live diagnostic developer via the WORKTREE's spawn-specialist.py (kind=developer, cwd = the worktree) that runs `python3 -m pytest --version` then a bare `python3 -m pytest .../scripts/tests -q`, capturing stdout to /tmp/cc-scratch/pytest-spawn-check.out; confirm it ran WITHOUT an approval prompt / PERMISSION-REQUEST. (3) Run verify-all.py (expect 16/16, incl. lint-settings-base green) and the full pytest suite (green, baseline-relative — the 2 pre-existing environmental test_detect_backend reds are tolerated) against the worktree. (4) Commit the changes on the worktree branch (behavioral edits carry the self-improvement review trailer). Landing to main is NOT part of this stage — it happens only at the separate resolution gate."
+conditions = "NO live global-settings mutation for pytest occurs (the injection is the mechanism, not a base.json merge); the diagnostic MUST be launched via the WORKTREE's spawn-specialist.py (the copy carrying the injection), not the canonical checkout's."
+invariants = "The canonical checkout at repo_root is not mutated (only the worktree and, transiently, nothing in live settings for pytest); live global settings carry no pytest allow entry (injection-only); no landing/merge performed here."
+capability_required = "Spawn a live developer via the worktree's spawn-specialist.py; run verify-all and pytest; git commit on the worktree branch."
+expected_result_image = "verify-all.py prints 16/16 (exit 0); full pytest is baseline-green; the captured diagnostic-spawn output contains a pytest version string and NO `requires approval`/`PERMISSION-REQUEST`; live global settings carry no pytest entry; commit(s) exist on the worktree branch."
+criterion_type = "measurable"
+done_criterion = "verify-all 16/16 AND full pytest baseline-green AND the live spawn ran pytest without an approval prompt while live global settings carried no pytest entry."
+verify_command = "python3 /Users/the0/claude-agent-instructions-spawn-cwd-pytest-quality-fixes/scripts/verify-all.py && grep -qiE 'pytest' /tmp/cc-scratch/pytest-spawn-check.out && ! grep -qiE 'requires approval|PERMISSION-REQUEST' /tmp/cc-scratch/pytest-spawn-check.out && ! grep -q 'python3 -m pytest' /Users/the0/.claude-agent/settings.json"
+expected_exit = 0
+output_artifacts = []
+
+[stage.principle]
+statement = "The pytest exec-permission fix is verified only by a live spawned developer actually running pytest without an approval prompt WHILE live global settings carry no pytest entry — proving the developer-scoped spawn injection (not a fleet-wide base.json grant) is the sole source; a static test asserting the injected JSON cannot observe the runtime approval gate."
+source = "CLAUDE.md § Verify the right axis; v1 final-verification failure that exposed base.json as the wrong home; memory leaf settings-permission-tiers.md."
+derivation = "The approval gate is a runtime behaviour of a real `claude -p` child; the injection changes how that child's --settings grants pytest, a decision made only when a real child runs. Restoring live settings to carry no pytest entry removes the fleet-wide path, so a passing live spawn attributes the unblock uniquely to the injection."
+confidence = "high"
+refutation = "Falsified if the live diagnostic spawn surfaced an approval prompt for bare pytest (injection insufficient), or if live settings still carried a pytest entry (attribution ambiguous), or if verify-all dropped below 16/16 or the suite regressed beyond the 2 known environmental reds."
+
+# ---------------------------------------------------------------------------
+# ## Summary
+#   1 (in_thread)        Create + enter the isolated worktree.
+#   2 (spawn:developer)  Fix #1 dispatch cwd pinning + test.
+#   3 (spawn:developer)  Fix #2 pytest exec-permission via spawn --settings injection (base.json reverted) + hygiene + test + memory leaf.
+#   4 (in_thread)        Fix #3 quality-rating salience in CLAUDE.md + hook + guard test.
+#   5 (in_thread)        Final verification: injection-only live spawn check, verify-all, pytest, commits.
+#
+# ## Dependency graph
+#   1 -> 2 ; 1 -> 3 ; 1 -> 4 ; (2,3,4) -> 5
+#
+# ## Final verification
+#   Stage 5's verify_command is the end-to-end gate: verify-all.py 16/16 (incl.
+#   lint-settings-base green) AND a live spawned developer that ran pytest without
+#   an approval prompt (captured output shows a pytest version and no
+#   approval/PERMISSION-REQUEST) WHILE live global settings carry no pytest entry.
+#   The coordinator runs this gate before seeking resolution. Task is not done
+#   until it passes; landing to main is a separate resolution act.
+#
+# ## Risks
+#   - Bootstrap: Fix #1 is not live during this plan, so stages 2-3 must be
+#     dispatched with the coordinator Bash cwd inside the worktree, or the
+#     sandboxed child cannot write. Encoded as each spawn stage's Condition.
+#   - Attribution: stage 5 must launch the diagnostic via the WORKTREE's
+#     spawn-specialist.py (carrying the injection) and with live settings free of a
+#     pytest entry, or a pass could be mis-attributed to a stray global grant.
+#   - CLAUDE.md byte ceiling: only ~60 bytes of headroom under claude-md-max-bytes
+#     (39000; currently 38941); lint-prose-length (stage 4 verify + verify-all)
+#     guards it. Any future CLAUDE.md growth needs an extraction, not an append.
+#   - Permission-surface scope: the pytest exec-permission is now developer-spawn
+#     scoped (injected into the developer child --settings), NOT in base.json, so it
+#     does NOT widen the fleet-wide allow surface; lint-settings-base guards base.json.

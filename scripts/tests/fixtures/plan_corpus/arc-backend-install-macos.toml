@@ -1,0 +1,238 @@
+[meta]
+task_id = "arc-backend-install-macos"
+goal = "Make the arc workspace backend usable from claude-task on this macOS machine, so that entering a task creates an isolated arc working copy the same way the git backend creates a worktree today"
+done_criterion = "A live end-to-end run of BOTH entry and project creation, because the user's order was to START A NEW PROJECT in the arc layer, not merely to re-enter an existing one. (1) Creation: the enter-task --init selector creates and registers a NEW project on the arc backend and enters it — this requires the overlay's arc backend to define both backend_init_workspace and backend_seal_workspace, without which enter-task.sh:205-208 dies with 'workspace backend arc does not support --init'. (2) Entry: `claude-task <name>` (arc selected through the project record or through project_backend=arc in agent-identity.local) creates a real arc working copy on this Mac and launches the agent inside it. (3) Teardown: the working copy is removed with `arc unmount --forget`, leaving no WARN entry and no orphan store in the arc mount listing. Structural precondition, checked separately: `enter-task.sh --name arc-probe --workspace arc --dry-run` exits 0 instead of today's 'no backends backend named arc'. If stage 2 finds the two init verbs absent from the overlay, half (1) is unreachable without porting work on the overlay — that is a declared substantive replan (R6), not a silent narrowing of this criterion."
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/.claude-agent"
+external_research = "Local, repo and memory research done 2026-08-04; internet/intranet research on the arc client itself is deliberately DEFERRED INTO stage 1, because the authoritative source (docs.yandex-team.ru/arc) is behind corporate auth that this agent cannot complete unattended — every probe returned 302 to the auth redirect. What was established without it: (1) scripts/project_entry/registry.sh defines the workspace-backend contract a plugin must satisfy (backend_detect / backend_ensure_workspace / backend_compose, plus optional backend_init_workspace + backend_seal_workspace for --init and the teardown verb) and resolves a backend NAME built-in-dir first, machine-local plugin dir second; (2) docs/operations/org-portability.md states that a specialized backend is never committed to Core — it lives in the org project's workspace storage and is installed by that project's setup-local.sh, which symlinks into ${CLAUDE_PROJECT_PLUGIN_DIR:-<config root>/project-entry-plugins}/{backends,trackers}/; (3) memory leaf experience/2026-07-04-arc-task-mount-teardown-forget.md records the real arc task-mount lifecycle on the reference machine — mounts anchored under ~/task-mounts, teardown is `arc unmount --forget` (plain unmount only detaches; stores under ~/.arc/stores/ and registry entries in ~/.arc/mount-points persist), stale WARN entries need --force, and the GC was mechanized as junk/<user>/agents/common/scripts/arc-mounts-gc.sh, which also fixes the overlay's location in the monorepo; (4) memory leaf system-knowledge/home-dir-arc-fuse-mounts.md documents that reference machine as a Linux host with /home/the0 and several fuse.<vcs> mounts hanging directly off the home dir. Live probes on this Mac 2026-08-04: `enter-task.sh --workspace arc --dry-run` fails with 'no backends backend named arc' naming both searched paths; ~/.claude-agent/project-entry-plugins/ does not exist; arc and ya are absent from PATH; agent-identity.local has project_backend=git and tracker_backend=none; all four registered projects are on the git backend; corporate network is reachable (arcanum.yandex-team.ru resolves, api.eliza.yandex.net answers 401, docs.yandex-team.ru/arc answers 302); the old dev host the0.klg.yp-c.yandex.net from ~/.zshrc no longer resolves in DNS, so it cannot serve as a reference installation."
+
+[[stage]]
+index = 1
+title = "Install and authenticate the arc client on macOS"
+executor = "in_thread"
+expected_result_image = "`arc --version` exits 0 in a FRESH LOGIN shell — the control runs it through `bash -lc` on purpose, because this session's PATH was captured before the install and would read RED on a correctly installed client that only a new shell's profile exposes — AND one read-only server call succeeds under the machine's identity — the evidence file records that call verbatim and carries a line `AUTH: ok` only after it returned successfully (`AUTH: failed` otherwise, which is RED). The auth half is in the control because a locally-installed but unauthenticated client passes `arc --version` and then fails at stage 2's first working-copy creation, one stage away from its cause. Additionally recorded in the evidence file: which distribution channel was used (the exact command from the internal doc), whether a FUSE layer had to be installed alongside it, and whether that FUSE layer required a macOS security approval or a reboot."
+criterion_type = "measurable"
+done_criterion = "arc is on PATH, reports a version, and can talk to the server under the machine's existing skotty identity"
+verify_command = "bash -lc 'arc --version' && grep -qE '^AUTH: ok$' /Users/the0/.claude-agent/plans/arc-backend-install/install-log.md"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["/Users/the0/.claude-agent/plans/arc-backend-install/install-log.md"]
+material = "This macOS machine: corporate network reachable, skotty at /usr/local/bin/skotty already serving the SSH identity, Homebrew present with only the alexei-led/tap tap, no arc and no ya on PATH"
+means = "The internal arc documentation at docs.yandex-team.ru/arc as the single source for the install channel; skotty for the corporate identity; the user's own shell via the session's `!` prefix for any step that needs an interactive corporate login the agent cannot complete"
+method = "Do not guess the install channel. Open the internal arc doc and read its macOS install section; because the page is behind SSO and every unauthenticated probe returned 302, the user either pastes the install command into the session or runs it via `! <command>`. Execute exactly what the doc prescribes, then authenticate arc per the same doc (skotty-backed OAuth or an explicit `arc login`, whichever the doc names), then run `arc --version` and one read-only server call to prove the identity works. Record the channel, the FUSE requirement and the auth step in the evidence file, since none of this is currently written down anywhere on this machine."
+conditions = "Corporate network up (verified 2026-08-04); the user is present for any SSO or macOS security-approval prompt, which cannot be automated from this session"
+invariants = "No change to the existing agent configuration in this stage — agent-identity.local, the projects registry and settings.json are untouched; installing arc must not displace or reconfigure skotty, which the machine's ssh access depends on"
+capability_required = "Corporate SSO session in the user's browser; local admin rights on the Mac if a FUSE kernel component is required"
+
+[stage.principle]
+statement = "The arc client's macOS install channel and its FUSE prerequisite must be taken from the internal documentation rather than inferred, because a wrong channel yields a binary that either cannot authenticate or cannot mount, and both failures surface only at the end of the chain"
+source = "docs.yandex-team.ru/arc (probed 2026-08-04, HTTP 302 to SSO — reachable but not readable unattended); memory leaf system-knowledge/home-dir-arc-fuse-mounts.md, which establishes that an arc working copy is a fuse.<vcs> mount, not a plain directory"
+derivation = "The teardown leaf and the FUSE-mounts leaf together show that every arc working copy on the reference machine was a FUSE mount with a backing store under ~/.arc/stores/; a FUSE mount needs a filesystem driver, and on macOS a filesystem driver is a security-gated component rather than a plain userland binary. Therefore the install has a second, OS-specific dependency that the Linux reference machine never exposed, and only the vendor doc states how it is satisfied here."
+confidence = "medium"
+refutation = "If the doc shows the macOS client uses a userland-only working-copy mode with no FUSE component, the FUSE half of this stage is void and stage 5's teardown checks reduce to whatever that mode's own cleanup verb is"
+
+[[stage]]
+index = 2
+title = "Locate and inventory the existing agent overlay in the monorepo"
+executor = "in_thread"
+expected_result_image = "The evidence file /Users/the0/.claude-agent/plans/arc-backend-install/overlay-inventory.md exists and names, with absolute local paths, one item per line under a fixed marker prefix: an INSTALLER: line for the overlay's setup-local script, a BACKEND: line for its arc workspace backend, and a TRACKER: / AUTHPROFILE: / SCRIPTSLOCAL: line for each tracker backend, auth profile and machine-local script the overlay ships (the layout contract forbids the last kind living in the Core scripts dir). Six verdict lines are mandatory, each a read-out of the backend source rather than an opinion, and each MUST carry a bracketed `[<file>:<line>]` citation of the source lines it was read from — the control greps for the citation, so a verdict asserted without having opened the file is RED. `INIT: supported|absent [file:line]` — whether the backend defines BOTH backend_init_workspace and backend_seal_workspace, which is what enter-task.sh:205-208 gates the --init project-creation selector on. `INITTARGET: <one line> [file:line]` — what the backend's init verb DOES with the second argument enter-task.sh:288 passes it (a plain mkdir, an arc checkout of an existing monorepo path, a fresh repo), because enter-task.sh:264 defaults that target to `${CLAUDE_PROJECT_INIT_BASE:-$PWD}/<name>` and a creation run whose destination nobody chose lands wherever the shell happened to be. `SEAL: <one line> [file:line]` — what the seal verb commits, since enter-task.sh:296 calls it and for a monorepo backend a commit is not a local-only act. Under `INIT: absent` the two verbs do not exist, and the honest form of those lines is `INITTARGET: n/a — backend defines no init verb [<file>:<line of the last function definition read>]` and the same for SEAL: — the citation still points at the source that was actually read, so the verdict remains a read-out rather than a shrug. `DRYRUN: honoured|not-honoured [file:line]` — whether the backend's ensure_workspace verb checks CLAUDE_DRY_RUN before creating anything, which is a backend obligation and NOT a guarantee of the CLI (enter-task.sh:305 calls ensure_workspace unconditionally; only compose is gated at :308-312, and git.sh honours it at :40/:56/:70), so a not-honoured backend means stage 3's probe creates a real mount. `PORTABILITY: installer portable|linuxonly [file:line]` plus `PORTABILITY: backend portable|linuxonly [file:line]` — plus one such line per remaining item — flagging Linux-only assumptions (paths under /home, systemd units, Linux-only mount anchors, GNU-only sed/bash idioms per the macos-shell-portability-gotchas leaf)."
+criterion_type = "measurable"
+done_criterion = "The overlay is checked out locally and its installable surface is enumerated with a portability verdict per item"
+verify_command = "grep -qE '^INSTALLER: ' /Users/the0/.claude-agent/plans/arc-backend-install/overlay-inventory.md && grep -qE '^BACKEND: ' /Users/the0/.claude-agent/plans/arc-backend-install/overlay-inventory.md && grep -qE '^INIT: (supported|absent) \\[[^]]+:[0-9]+' /Users/the0/.claude-agent/plans/arc-backend-install/overlay-inventory.md && grep -qE '^INITTARGET: .+ \\[[^]]+:[0-9]+' /Users/the0/.claude-agent/plans/arc-backend-install/overlay-inventory.md && grep -qE '^SEAL: .+ \\[[^]]+:[0-9]+' /Users/the0/.claude-agent/plans/arc-backend-install/overlay-inventory.md && grep -qE '^DRYRUN: (honoured|not-honoured) \\[[^]]+:[0-9]+' /Users/the0/.claude-agent/plans/arc-backend-install/overlay-inventory.md && grep -qE '^PORTABILITY: installer (portable|linuxonly) \\[[^]]+:[0-9]+' /Users/the0/.claude-agent/plans/arc-backend-install/overlay-inventory.md && grep -qE '^PORTABILITY: backend (portable|linuxonly) \\[[^]]+:[0-9]+' /Users/the0/.claude-agent/plans/arc-backend-install/overlay-inventory.md"
+expected_exit = 0
+depends_on = [1]
+output_artifacts = ["/Users/the0/.claude-agent/plans/arc-backend-install/overlay-inventory.md"]
+material = "The agent overlay already committed to the monorepo — per the teardown experience leaf it sits under junk/<user>/agents/, whose common/scripts/ subtree holds arc-mounts-gc.sh; the exact path is confirmed by search, not assumed"
+means = "The arc client installed in stage 1 (mount or checkout of the relevant monorepo subtree); Grep/Glob over the resulting working copy; Core's registry.sh provider contract as the checklist against which the overlay's surface is read"
+method = "Create one arc working copy scoped to the overlay subtree rather than the whole monorepo. Read the backend source for the six mandatory verdicts before anything is installed, citing the file and line each one came from: which of the contract verbs it defines (INIT: is supported only if BOTH init and seal are there), what its init verb does with the target path it is handed and what its seal verb commits (INITTARGET:, SEAL:), whether its ensure_workspace verb returns early on CLAUDE_DRY_RUN (DRYRUN:), and what the git backend does at scripts/project_entry/backends/git.sh lines 40/56/70 as the reference implementation of that obligation. Find the overlay by searching for the filenames the Core repo already knows about — setup-local.sh, arc-mounts-gc.sh, arc-land-pr.sh, hook-resolution-land-arc.py, and the names Core's verify-layout-contract.sh forbids in its own tree (sync-junk-agents-arc.sh, junk-agents-arc-commit.sh, setup-the0-agents-mount.sh, install-junk-agents-sync-cron.sh) — since each of those is a fingerprint of the overlay. Read setup-local.sh end to end and write down every path it writes to. Then read backends/arc.sh against registry.sh's contract and note which of the five verbs it defines. Scope every recursive search to the overlay subtree, never to the home root: on a machine with FUSE mounts a home-rooted search fans out across all of them."
+conditions = "Stage 1 finished and arc can create a working copy; the overlay subtree is readable under the user's identity"
+invariants = "Read-only with respect to the monorepo — this stage creates a working copy and reads it, it never commits or lands anything; the Core instructions repo is not modified"
+capability_required = "arc working-copy creation; read access to the overlay subtree"
+
+[stage.principle]
+statement = "The installable surface must be read from the overlay's own setup-local.sh rather than reconstructed from the Core-side contract, because setup-local.sh is what actually decides which files land where, and it is also the only place a Linux-only assumption would be visible before it breaks"
+source = "docs/operations/org-portability.md section 'Workspace / tracker backends and the machine-local plugin dir'; memory leaf experience/2026-07-04-arc-task-mount-teardown-forget.md (overlay path fingerprint junk/<user>/agents/common/scripts/); scripts/verify-layout-contract.sh (the forbidden local-script names)"
+derivation = "org-portability.md states the install is performed by the project's own setup-local.sh symlinking into the plugin dirs, and that it 'fires only on a machine where the overlay's own toolchain is detected'. A detection predicate written for the reference Linux machine is exactly the kind of thing that silently no-ops on macOS, so reading the script is the only way to know whether the install will fire here at all — running it blind produces an empty plugin dir and no error."
+confidence = "high"
+refutation = "If the overlay turns out to ship no setup-local.sh (installation was done by hand on the reference machine), this stage's inventory instead becomes the input to a hand-install, and stage 3's method changes from 'run the installer' to 'place the symlinks the inventory names'"
+
+[[stage]]
+index = 3
+title = "Install the overlay's arc backend into the machine-local plugin dir"
+executor = "in_thread"
+expected_result_image = "The arc backend file exists in whichever machine-local plugin dir registry.sh resolves — the isolated /Users/the0/.claude-agent/project-entry-plugins/backends/arc.sh or the legacy /Users/the0/.claude/project-entry-plugins/backends/arc.sh, a symlink into the overlay working copy in either case — and the structural probe now passes: `enter-task.sh --name arc-probe --workspace arc --dry-run` exits 0 and prints a project_dir as its final stdout line, instead of today's 'registry: no backends backend named arc'. The probe is NOT assumed side-effect-free: enter-task.sh calls backend_ensure_workspace unconditionally at :305 and gates only compose on the dry-run flag (:308-312), so zero-effect is an obligation of the backend, not of the CLI, and this stage never asserts a property of an unread third-party file. The residue file /Users/the0/.claude-agent/plans/arc-backend-install/probe-residue.md therefore records the arc mount listing captured immediately before and immediately after the probe, the probe's exit status as `PROBE-EXIT: 0`, and ends with `PROBE-RESIDUE: none` only once the two listings are identical — if the probe did materialize an arc-probe mount, it is torn down here with `arc unmount --forget` before that line may be written. The verify_command deliberately does NOT re-run the probe: the probe is effectful whenever stage 2's DRYRUN verdict reads not-honoured, so a control that re-ran it would create a fresh untorn-down mount and then declare the stage clean. What the control re-runs is the pure part — registry name resolution, sourced directly from registry.sh — which is also why it does not hard-code a plugin directory: _plugin_dir at registry.sh:143-156 prefers the isolated root but falls back to the legacy ~/.claude one, so a `test -e` against the isolated path alone would go RED on a perfectly working legacy-dir install."
+criterion_type = "measurable"
+done_criterion = "The arc backend resolves by name, the dry-run path completes, and the probe leaves no mount behind"
+verify_command = "bash -c 'source /Users/the0/claude-agent-instructions/scripts/project_entry/registry.sh; registry_resolve_workspace arc' && grep -qE '^PROBE-EXIT: 0$' /Users/the0/.claude-agent/plans/arc-backend-install/probe-residue.md && grep -qE '^PROBE-RESIDUE: none$' /Users/the0/.claude-agent/plans/arc-backend-install/probe-residue.md"
+expected_exit = 0
+depends_on = [2]
+output_artifacts = ["/Users/the0/.claude-agent/plans/arc-backend-install/probe-residue.md"]
+material = "The overlay working copy from stage 2; the currently non-existent plugin dir /Users/the0/.claude-agent/project-entry-plugins/"
+means = "The overlay's own setup-local.sh (the sanctioned installer); Core's registry.sh name resolution as the acceptance probe; enter-task.sh --dry-run as the zero-side-effect check"
+method = "Run the overlay's setup-local.sh exactly as the inventory says it is meant to be run. Then verify what it actually created rather than trusting its exit code — list the plugin dirs and confirm the backend file is there and is executable/sourceable. If the installer no-oped because its toolchain detection did not recognize this Mac, do not patch Core: fix the detection or place the symlinks by hand as the inventory prescribes, and record which of the two happened. Then capture the arc mount listing, run the dry-run probe ONCE — `enter-task.sh --name arc-probe --workspace arc --dry-run`, which exercises registry name resolution, the sourcing of the backend file and its ensure_workspace verb, nothing more (backend_detect has zero production call sites in Core: only registry.sh's contract comment, git.sh's own definition and three test fixtures mention it) — record its exit status as PROBE-EXIT, capture the listing again, diff the two, tear down an arc-probe mount with `arc unmount --forget` if one appeared, and only then write the PROBE-RESIDUE line. Note which plugin dir the installer actually used: registry.sh:143-156 accepts either the isolated root or the legacy ~/.claude one, so both are correct installs and the control asserts resolution rather than a path."
+conditions = "Stage 2 produced an inventory with PORTABILITY: backend portable; arc from stage 1 is authenticated; stage 2's DRYRUN verdict is known — if it reads not-honoured, the probe is expected to materialize a mount and the teardown half of this stage's method is mandatory rather than contingent"
+invariants = "Nothing is written into the Core instructions repo — the plugin seam exists precisely so Core stays org-neutral; the git backend keeps working, so the four registered git projects must still enter normally after this stage"
+capability_required = "Ability to run the overlay installer and to create symlinks under the agent config root"
+
+[stage.principle]
+statement = "A backend attaches by dropping its file into the machine-local plugin dir and needs no edit to Core, so the install is complete exactly when registry.sh resolves the name — which the dry run tests without side effects"
+source = "scripts/project_entry/registry.sh (resolution order: built-in dir first, ${CLAUDE_PROJECT_PLUGIN_DIR:-<config root>/project-entry-plugins} second) and its failure message, observed live 2026-08-04, which names both searched paths"
+derivation = "The observed failure names exactly two candidate paths and the built-in one will never contain arc (Core is org-neutral by policy), so the only variable is the second path; making that file exist is therefore necessary, and the dry run — which resolves the name and sources the file, then runs ensure_workspace — is what makes it sufficient rather than merely present."
+confidence = "high"
+refutation = "If the dry run still fails with the file in place, the failure is inside ensure_workspace, the only backend verb the dry-run path actually invokes (missing ya, a Linux-only mount anchor, an unset env seam) — that is a portability defect in the overlay, not a Core problem, and it routes to overcome-difficulty with that verb as the material"
+
+[[stage]]
+index = 4
+title = "Make arc the default entry path: identity key plus a registry record"
+executor = "in_thread"
+expected_result_image = "`enter-task.sh --list-projects` prints a record whose BACKEND column reads arc AND still prints all four existing git rows, /Users/the0/.claude-agent/agent-identity.local carries project_backend=arc, and — the load-bearing half — THREE behavioural probes drive real selections through the ladder and read the backend it chose from the line enter-task.sh:170 emits on stderr: `--project arcadia --name arc-record-probe --dry-run` logs workspace=arc (the arc record is actually read — the positive side) and runs with CLAUDE_AGENT_IDENTITY pinned at a nonexistent file, WITHOUT which the probe would be confounded: record and identity both feed the same :170 line (:150 and :151), so after the identity flip it would pass even with the record's workspace_backend field missing or misspelled — the very failure it exists to catch. Pinning the identity away empties id_ws at :132-134, so workspace=arc can then only have come from the record; the identity file carries no projects_dir key, so the record set it reads is unchanged. Next, a bare `--name identity-probe --dry-run` run from /tmp, where no record matches, also logs workspace=arc (the identity default is actually in effect), and `--project the0.fun --name precedence-probe --dry-run` still logs workspace=git (no regression). The two arc-asserting probes run with CLAUDE_PROJECT_PLUGIN_DIR pointed at a nonexistent directory ON PURPOSE: :170 logs the SELECTED name before the backend file is resolved at :186-198, so the assertion lands first and the run then falls back to git (:190) instead of touching arc at all — those two are pure whatever stage 2's DRYRUN verdict says. The third probe selects git and needs no such pin; it is pure because git.sh honours CLAUDE_DRY_RUN at :40/:56/:70. The stored listing is deliberately NOT the control on either side: --list-projects prints records, so `grep ' arc '` cannot fail once the JSON is written and `grep ' git '` cannot fail at all. The identity check is likewise `sed -n 's/^project_backend=//p' | head -1`, exactly how enter-task.sh:133 reads it, not a bare grep — a bare grep passes on an APPENDED second key while the effective first-occurrence value is still git. The regression these guard is real and silent: `claude-task <name>` takes the --name selector and auto-detects the project from cwd (agent-dispatch.sh:117), so from a cwd matching no record the backend now falls through to the identity default, and enter-task.sh:193 makes the inferred-name path fall back without an error."
+criterion_type = "measurable"
+done_criterion = "The arc project is registered and selected by default from its own checkout, with no regression to the git projects"
+verify_command = "test ! -d /Users/the0/.claude-agent/projects.d && sed -n 's/^project_backend=//p' /Users/the0/.claude-agent/agent-identity.local | head -1 | grep -qx arc && bash /Users/the0/claude-agent-instructions/scripts/enter-task.sh --list-projects | grep -cE '^(marmaris-2025-04-11|the0.fun|the0.fun-agent|yandex-cloud) +git ' | grep -qx 4 && bash -c 'cd /tmp && CLAUDE_AGENT_IDENTITY=/nonexistent CLAUDE_PROJECT_PLUGIN_DIR=/nonexistent bash /Users/the0/claude-agent-instructions/scripts/enter-task.sh --project arcadia --name arc-record-probe --dry-run' 2>&1 | grep -q 'workspace=arc' && bash -c 'cd /tmp && CLAUDE_PROJECT_PLUGIN_DIR=/nonexistent bash /Users/the0/claude-agent-instructions/scripts/enter-task.sh --name identity-probe --dry-run' 2>&1 | grep -q 'workspace=arc' && bash /Users/the0/claude-agent-instructions/scripts/enter-task.sh --project the0.fun --name precedence-probe --dry-run 2>&1 | grep -q 'workspace=git'"
+expected_exit = 0
+depends_on = [3]
+output_artifacts = ["/Users/the0/.claude/projects.d/arcadia/agent-project.json"]
+material = "agent-identity.local (currently project_backend=git, tracker_backend=none) and the LIVE machine-local registry root, which is /Users/the0/.claude/projects.d — not the isolated-root path. The four git records live there, and projects.sh:29-40 reaches them through a legacy fallback that fires ONLY while /Users/the0/.claude-agent/projects.d does not exist; creating that directory would make the fallback stop and silently hide all four records, so this stage must not create it."
+means = "The identity key project_backend documented in docs/operations/org-portability.md; the named project registry (workspace_backend / workspace_path / workspace_subpath / tracker_backend / tracker_queue fields) written as agent-project.json directly. NOT enter-task.sh --register: it hardcodes workspace_backend=git at enter-task.sh:87 and accepts no backend or subpath argument, so it structurally cannot produce an arc record."
+method = "Write the registry record first and prove it selects arc, then flip the identity default — in that order, so that if the identity flip has to be reverted the project record still works via --project. Write it by hand as /Users/the0/.claude/projects.d/arcadia/agent-project.json, mirroring the field shape of the existing the0.fun record, with workspace_backend=arc plus the path/subpath fields stage 2's inventory says the arc backend reads; do not use --register, which would write a git record under the wrong backend. Do not create /Users/the0/.claude-agent/projects.d — see this stage's material. Leave tracker_backend at none: the internal tracker needs ~/.tracker-token, which this machine does not have (memory leaf tracker-write-token), so arming it here would produce 403s at the first write. Re-run --list-projects afterwards and read the whole table, not just the new row. Then run the three dry-run selection probes — arc-by-record, arc-by-identity from a cwd with no matching record, git-by-record for the0.fun — each with CLAUDE_PROJECT_PLUGIN_DIR pointed at a nonexistent dir so the assertion lands on the :170 log line before any backend file is touched, and read the workspace= field of each. Those three are the assertions that the ladder behaves as documented, and they are the only checks here that can go RED. Read the identity file's effective value the way enter-task.sh:133 does — first matching line — rather than grepping anywhere in the file, and edit the existing project_backend line in place instead of appending a second one."
+conditions = "Stage 3's dry-run probe passes; the monorepo subpath for the project is known from stage 2"
+invariants = "The four existing git projects keep resolving to the git backend — asserted behaviourally by the dry-run precedence probe in the verify command, not by re-reading the stored table — and all four stay VISIBLE, asserted by the row count plus the explicit `test ! -d /Users/the0/.claude-agent/projects.d` guard on the legacy-fallback condition; no tracker backend is armed in this stage"
+capability_required = "Write access to the agent config root (memory and config writes only; no production code)"
+
+[stage.principle]
+statement = "Backend selection is data, not code: the per-project record outranks the machine-wide identity default, so switching the default to arc cannot regress the existing git projects"
+source = "scripts/enter-task.sh header, 'Backend NAME selection precedence: explicit flag > env > project record > identity > detector'; docs/operations/org-portability.md section 'Named project registry'"
+derivation = "The precedence ladder is stated in the CLI's own contract and each of the four existing records carries workspace_backend=git explicitly (observed in --list-projects output 2026-08-04), so those records should win over the identity key. 'Should' is why the control is behavioural: the stored table cannot refute the claim, only a live resolution can, so the verify command drives an actual entry through the ladder in dry-run mode and reads the backend it chose."
+confidence = "high"
+refutation = "If after the flip a git project's row changes or it enters through arc, the precedence implementation does not match its documented contract, and the identity key must stay git with arc selected per-invocation via --workspace instead"
+
+[[stage]]
+index = 5
+title = "Live end-to-end run: create a new arc project, enter it, tear it down clean"
+executor = "in_thread"
+expected_result_image = "Three halves, all observed. (0) Creation — this is the half the user's original order names: the --init selector runs on the arc backend and produces a NEW registered project, not merely a working copy of an existing one. The exact invocation is `CLAUDE_PROJECT_INIT_BASE=<chosen base dir> enter-task.sh --init <scratch-name> --workspace arc` — --init takes the name as its OWN argument (enter-task.sh:65), so `--init --name <scratch>` would bind the selector argument to the literal string '--name' and die with 'unknown argument'; the destination is explicit rather than defaulted, because enter-task.sh:264 otherwise resolves the new project to `$PWD/<name>`, i.e. wherever the shell happened to be; and `--workspace arc` is explicit too, because without it a record auto-detected from the cwd (:109) outranks the identity default (:150 above :151) and an inferred name that fails to resolve falls back to git SILENTLY at :193-195 — so run from inside any registered git project, the creation half would seal a git commit, report success, and never touch arc. With the flag, a resolution failure dies loudly at :198 instead. The base dir is chosen from stage 2's INITTARGET verdict. enter-task.sh:205-208 refuses this half outright unless the backend defines both backend_init_workspace and backend_seal_workspace, so stage 2's INIT: verdict decides whether it can run at all; INIT: absent makes it RED here and routes to R6, it does not license quietly skipping it. Note that the init path also commits: enter-task.sh:296 calls backend_seal_workspace, whose meaning for a monorepo backend is read out in stage 2's SEAL: verdict before this half runs — and enter-task.sh:298-300 registers the new project itself with workspace_backend=arc, so no hand-written record is needed for it. (1) Entry: `claude-task <name>` creates a real arc working copy on this Mac and launches the agent with that copy as its cwd — the user sees a shell/session rooted in the monorepo working copy, and `arc info` (or the equivalent the client provides) run inside it reports a live mount. (2) Teardown: the workspace is removed with `arc unmount --forget` (plus --force if the registry entry is stale), after which the arc mount listing shows no WARN line for it and no store remains under ~/.arc/stores/ for that workspace. A short evidence file records all three halves so the final verification can confirm them without re-running anything: the exact --init invocation with its CLAUDE_PROJECT_INIT_BASE, the created project's path, the path of the registry record enter-task.sh:298-300 wrote and its workspace_backend field, the user's confirmation of the launched session's cwd, and the mount listing before and after."
+criterion_type = "acceptance-review"
+done_criterion = "User confirms a NEW arc project was created through --init, that the agent launched inside a real arc working copy, and that the post-teardown mount listing is clean"
+verify_command = "user observation: --init creates and registers a new arc project, claude-task entry lands in a live arc working copy, then a clean arc mount listing after unmount --forget"
+expected_exit = 0
+depends_on = [4]
+output_artifacts = ["/Users/the0/.claude-agent/plans/arc-backend-install/e2e-run.md"]
+material = "The registered arc project from stage 4; a throwaway task name for the workspace; an explicitly chosen creation base dir for the --init half (CLAUDE_PROJECT_INIT_BASE), taken from stage 2's INITTARGET verdict rather than from $PWD"
+means = "claude-task itself (the whole point of the exercise); the arc mount listing and ~/.arc/mount-points as the residue observable; the overlay's teardown verb or arc-mounts-gc.sh if the inventory found one"
+method = "Run the --init half first, with a scratch project name rather than a ticket, so no tracker write is attempted, and with CLAUDE_PROJECT_INIT_BASE set explicitly to the base dir stage 2's INITTARGET verdict prescribes — never relying on the $PWD default. If it dies with 'workspace backend arc does not support --init', stop and route to R6 rather than substituting the plain entry half and calling the stage green. Before running it, know from stage 2's SEAL verdict what the seal step commits and where, since enter-task.sh:296 invokes it unconditionally on this path. Confirm inside the launched session that the cwd is a live arc working copy and that the .claude wiring the backend's compose verb is responsible for is present. Exit, then tear down EVERY artifact this stage created — the entry working copy and, when the init verb materialized a separate one, the created project too, checking the mount listing against the pre-stage baseline rather than against memory — with the full verb — `arc unmount --forget`, not plain `arc unmount`, because plain unmount only detaches and leaves the store and the registry entry behind; that residue accumulated to 11 stale WARN entries and 6.3 GB on the reference machine before anyone noticed. Before forgetting, check the workspace has no unpushed branch and no dirty state. Capture the mount listing before and after into the evidence file."
+conditions = "Stages 1-4 complete; stage 2's INIT: verdict reads supported (otherwise the creation half is blocked — R6); free disk measured at 231 GiB on 2026-08-04 against a GB-scale store, so the disk condition is quantified and non-binding for a single workspace"
+invariants = "This stage can produce TWO arc artifacts — the project the --init half creates and the working copy the entry half creates (they coincide only if stage 2's INITTARGET verdict says the init verb materializes the same mount) — and BOTH are torn down before the stage is done, which is what makes Final-verification step 6's baseline comparison satisfiable. Everything this stage created is enumerated in its evidence file and each entry is accounted for as torn-down or deliberately kept. Any arc working copy that existed on the machine beforehand is left untouched, and no branch with unpushed commits is forgotten"
+capability_required = "User present to confirm the launched session is inside the arc working copy (the acceptance half of the criterion)"
+
+[stage.principle]
+statement = "A workspace backend is only proven by a real mount plus a clean teardown, because the failure modes it is bought to avoid — a compose verb that does not wire .claude, and a mount lifecycle with no teardown — are both invisible to a dry run"
+source = "memory leaf experience/2026-07-04-arc-task-mount-teardown-forget.md (plain unmount is a detach; stores and ~/.arc/mount-points entries persist by design; full teardown is unmount --forget, stale entries need --force)"
+derivation = "That leaf records the exact residue class this stage checks for, and records that it went unnoticed for weeks precisely because nothing in the lifecycle looked at it — the mount succeeded, the work happened, and only an explicit listing revealed the accumulation. So the acceptance check has to name the listing as its observable, not the successful entry."
+confidence = "high"
+refutation = "If the macOS client turns out to have no persistent store/registry model at all (see stage 1's refutation), the teardown half degrades to whatever cleanup verb that mode has, and the residue check is replaced by a plain 'the working copy directory is gone'"
+
+# ## Final verification
+# Run by the manager after stage 5, in this order.
+# NO step of this pass creates a workspace. The effectful create-enter-teardown run
+# happens ONCE, inside stage 5, and this pass confirms its outcome from stage 5's
+# evidence and from pure probes. Re-running --init here would create a second working
+# copy AND commit (enter-task.sh:296 seals), which nothing would then tear down and
+# which step 6's baseline comparison would fail on. Every step below is
+# side-effect-free by construction: 1 and 4 are pure probes, 2 and 3 read artifacts,
+# 5 and 6 are listings.
+#   1. bash -c 'source ~/claude-agent-instructions/scripts/project_entry/registry.sh;
+#        registry_resolve_workspace arc'      -> exits 0 (structural precondition;
+#      pure name resolution, no backend verb runs)
+#   2. Stage 5's evidence file records, for the ONE run it performed: the --init
+#      invocation with its explicit CLAUDE_PROJECT_INIT_BASE, the created project's
+#      path, the registry record enter-task.sh:298-300 wrote with
+#      workspace_backend=arc, the user's confirmation that the agent launched inside
+#      the working copy, and the mount listing before and after the teardown.
+#      (Blocked by R6 if the overlay's backend lacks init+seal.)
+#   3. The record from step 2 is present on disk and reads workspace_backend=arc.
+#   4. The three dry-run selection probes of stage 4 still hold: arc-by-record,
+#      arc-by-identity from /tmp, and git-by-record for the0.fun -> workspace=arc,
+#      workspace=arc, workspace=git. The two arc-asserting probes pin
+#      CLAUDE_PROJECT_PLUGIN_DIR at a nonexistent dir (and the record probe also pins
+#      CLAUDE_AGENT_IDENTITY, so identity cannot supply the answer the record is
+#      being tested for), so they assert on the enter-task.sh:170 log line and never
+#      reach a backend verb; the git probe needs no pin (git.sh honours the dry run).
+#   5. bash ~/claude-agent-instructions/scripts/enter-task.sh --list-projects
+#        -> all four git rows still listed; ~/.claude-agent/projects.d still absent
+#   6. The arc mount listing equals the one captured before stage 3's probe — i.e.
+#      neither stage 3's probe nor stage 5's workspace left residue behind.
+# Pass = all six. Anything less routes to overcome-difficulty, not to a close.
+#
+# ## Risks
+#   R1 macOS FUSE prerequisite. An arc working copy is a FUSE mount; on macOS the
+#      filesystem driver is security-gated and may need an approval plus a reboot.
+#      Surfaces in stage 1; mitigation is the user's presence at the prompt.
+#   R2 The overlay is Linux-shaped. It was written on a host with /home/the0 and a
+#      ~/task-mounts anchor. setup-local.sh may no-op here (its toolchain detection
+#      does not recognize this Mac) or backends/arc.sh may hardcode Linux paths.
+#      Surfaces in stage 2's portability verdict, bites in stage 3. If it bites, the
+#      fix is a port of the overlay (a developer spawn against the overlay repo,
+#      NOT an edit to Core) — that is a substantive replan, not a silent extension.
+#   R3 The reference machine is gone. the0.klg.yp-c.yandex.net no longer resolves,
+#      so nothing can be copied from a known-good installation and every step is a
+#      first-time install rather than a replication.
+#   R4 Tracker asymmetry. Arming the internal tracker backend needs ~/.tracker-token,
+#      absent here; stage 4 deliberately leaves tracker_backend=none, so ticket-keyed
+#      entry (claude-task ABC-123) will NOT work until that token is added. This is a
+#      known, stated scope limit of this plan, not an oversight.
+#   R5 Disk. Materialized arc stores are GB-scale; without the teardown discipline of
+#      stage 5 they accumulate silently (6.3 GB on the reference machine). Quantified:
+#      231 GiB free on this Mac 2026-08-04, so the risk is accumulation over time,
+#      not capacity for the single workspace this plan creates.
+#   R6 The overlay's arc backend may not implement project CREATION. --init is gated
+#      at enter-task.sh:205-208 on backend_init_workspace AND backend_seal_workspace;
+#      a backend that only defines ensure_workspace + compose supports entering an
+#      existing project and nothing more. Surfaces as stage 2's INIT: verdict, bites
+#      in stage 5's half (0). If it bites, the user's actual order ("start a NEW
+#      project in the arc layer") is unreachable without adding those two verbs to
+#      the overlay — a developer spawn against the OVERLAY repo, never against Core,
+#      and a substantive replan requiring approval, not a silent narrowing.
+#   R7 The dry-run probe may not be side-effect-free. enter-task.sh calls
+#      backend_ensure_workspace unconditionally (:305) and gates only compose on the
+#      flag (:308-312); honouring CLAUDE_DRY_RUN inside ensure_workspace is a backend
+#      obligation the git backend meets (git.sh:40/56/70) and the overlay's arc
+#      backend may not. Surfaces as stage 2's DRYRUN: verdict; if not-honoured, every
+#      "probe" in this plan creates a real mount, which is why stage 3 and Final
+#      verification both carry an explicit before/after listing and a teardown.
+#
+# ## Operator questions
+#   Q1 [assumption] The overlay lives under junk/<user>/agents/ in the monorepo, per
+#      the teardown experience leaf. Stage 2 confirms by search; if it is elsewhere,
+#      the path is a stage-2 finding, not a plan change.
+#   Q2 [decided] tracker_backend stays none in this plan (see R4). Adding the token
+#      and arming the internal tracker is a separate task.
+#   Q3 [assumption] Nothing needs to be recovered from the old dev host. If it does,
+#      that is a separate task blocked on restoring access to it. Bound to stage 2's
+#      material, not to the plan goal: the old host would only ever have served as a
+#      reference copy of the overlay installation stage 2 inventories.
+#   Q4 [decided] Project CREATION is in scope, not just task entry. The user's order
+#      was to start a NEW project in the arc layer, so --init is part of the done
+#      criterion and stage 5 carries a creation half. See R6 for what happens if the
+#      overlay cannot do it.
+#   Q5 [open, answered by stage 2] Does the overlay's arc backend honour
+#      CLAUDE_DRY_RUN inside ensure_workspace? Answered by the DRYRUN: verdict before
+#      any probe runs; see R7.
+#   Q6 [open, answered by stage 2] What does the arc backend's init verb do with the
+#      target path enter-task.sh hands it, and what does its seal verb commit? The
+#      INITTARGET: and SEAL: verdicts answer both before stage 5 invokes them; the
+#      creation destination is then passed explicitly via CLAUDE_PROJECT_INIT_BASE
+#      rather than left to the $PWD default at enter-task.sh:264.
+#   Q7 [decided] The live registry root on this machine is ~/.claude/projects.d, not
+#      the isolated-root path: projects.sh:29-40 falls back to it precisely because
+#      ~/.claude-agent/projects.d does not exist. Stage 4 writes there and asserts the
+#      isolated dir stays absent — creating it would hide all four git records.
+#
+# ## Residual weakness, stated rather than hidden
+#   Stages 1-3 are controlled by marker greps over evidence files the executor writes
+#   itself, so they are falsifiable only in the weak sense: an executor that fabricates
+#   a marker gets a green stage. The citation requirement on stage 2's verdicts
+#   ([file:line] per line) raises the cost of fabrication and makes review possible,
+#   but does not eliminate it. The strong controls in this plan are stage 3's registry
+#   resolution, stage 4's precedence probe and stage 5's user-observed run — those are
+#   the ones that can fail on their own.

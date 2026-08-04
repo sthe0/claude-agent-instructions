@@ -1,0 +1,127 @@
+[meta]
+task_id = "spb-slow-july-2026"
+goal = "Plan a calm, anti-touristy week in St. Petersburg for two, mid–late July 2026: local-loved (not guidebook) spots, unusual festivals/concerts/venues, something interesting on the water, unhurried walks, plus car day-trips in the окрестности. Deliver as filled journeys/spb-2026-07/ workspace with a slow-paced week itinerary and accommodation options (boutique hotels + charming apartments)."
+done_criterion = "journeys/spb-2026-07/ exists with a non-template trip.md, a decision.md, and ≥1 alternative (a-slow) carrying a day-by-day itinerary.md + options.md; INDEX.md has the row; the plan is grounded in dated web research (events, local spots, water, окрестности, lodging), each non-trivial fact sourced; user accepts the itinerary on review"
+criterion_type = "acceptance-review"
+weight_class = "substantive"
+repo_root = "/Users/the0/projects/trips"
+external_research = "REQUIRED and central — the whole value is dated, non-guidebook, event-and-season-sensitive research (July 2026 concert/festival calendar, local-loved spots vulnerable to staleness, boat-charter operators, drivable day-trips, boutique lodging availability). Done inline via web search + delegated to sonnet sub-agents to keep the main thread lean."
+
+[[stage]]
+index = 1
+title = "Scaffold workspace + capture trip.md"
+executor = "in_thread"
+expected_result_image = "journeys/spb-2026-07/ copied from _TEMPLATE; trip.md filled (2 travellers/пара; window mid–late July 2026, flexible to fit events; budget no-hard-cap, boutique-hotel + apartment lodging both wanted; vibe: calm, anti-touristy, local-loved, water, unhurried; car available — own or rental — for окрестности; from Moscow); charter block deleted (land trip); INDEX.md row added (planning)"
+criterion_type = "measurable"
+done_criterion = "trip.md non-template and INDEX.md references spb-2026-07"
+verify_command = "grep -q 'июл' /Users/the0/projects/trips/journeys/spb-2026-07/trip.md && grep -q spb-2026-07 /Users/the0/projects/trips/journeys/INDEX.md"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["journeys/spb-2026-07/", "journeys/INDEX.md"]
+material = "user's answers + journeys template"
+means = "Write, Edit"
+method = "copy template dir; fill trip.md constraints; add INDEX row"
+conditions = "template exists at journeys/_TEMPLATE/"
+invariants = "no invented facts; preferences captured in spirit; charter block removed"
+capability_required = "structured capture"
+
+[stage.principle]
+statement = "Capture trip context durably before heavy research so a fresh context can resume from trip.md"
+source = "project workspace model (docs/workspace.md)"
+confidence = "high"
+refutation = "none"
+
+[[stage]]
+index = 2
+title = "Research: July 2026 events + anti-touristy local spots + water + окрестности (parallel)"
+executor = "spawn:destinations"
+expected_result_image = "Four sourced research briefs (each fact with URL + check-date): (A) events — ONLY genuinely unusual/remarkable happenings in the July window (no events-for-the-sake-of-events; afisha is a light filter, not a driver — surface a handful of standout ones, if any, and note the quiet windows otherwise); (B) PRIMARY emphasis — local-loved non-guidebook spots + atmospheric places to walk (courtyards, embankments, backstreets, gardens, industrial-turned-cultural spaces, viewpoints) + unusual venues/заведения; (C) something-interesting-on-the-water beyond the standard кораблик (private/small-boat charter, SUP on small rivers/канавки, rowing, water route to Кронштадт/Петергоф, islands); (D) car day-trips in the окрестности (Карельский перешеек, Финский залив, Выборг, усадьбы, маяки, forests/lakes) with drive times + parking/rental notes; (E) Moscow↔SPb transit brief — Sapsan/other trains vs driving own car ~700km, with car-in-the-city logistics (needed all week or only for day-trip days? parking, city-driving pain) to inform the rent-vs-drive-vs-idle fork"
+criterion_type = "acceptance-review"
+done_criterion = "four briefs returned, each with dated sources, non-trivial (not the guidebook top-10), season/crowд flags noted; enough to choose a week window and build a slow itinerary"
+depends_on = [1]
+output_artifacts = ["journeys/spb-2026-07/research/ (events.md, local-spots.md, water.md, day-trips.md)"]
+material = "destinations + ground-transport specialization tactics; web (Atlas Obscura, local RU blogs, afisha, reddit, operator sites)"
+means = "Agent (sonnet, web search), Skill destinations, Skill ground-transport"
+method = "spawn 5 sonnet research sub-agents in parallel (A events, B walks/spots, C water, D day-trips, E Moscow↔SPb transit), each seeded with the specialization tactics; collect into research/ md files"
+conditions = "web reachable; dates within ~2 weeks so recency matters"
+invariants = "each non-trivial fact sourced+dated; anti-Atlas-Obscura-effect (prefer low-audience/local sources); name crowd/season risks explicitly; no guidebook top-10 passed off as a find"
+capability_required = "domain web research with source discipline"
+
+[stage.principle]
+statement = "For event- and season-sensitive, staleness-prone picks, ground every non-trivial fact in a dated source and prefer local low-audience channels over viral lists"
+source = "destinations SKILL.md § Подводные камни / Инвариант"
+confidence = "high"
+refutation = "if research surfaces no non-guidebook material, the anti-touristy goal is unmet — escalate"
+
+[[stage]]
+index = 3
+title = "Fix week window + Moscow↔SPb transit + accommodation options"
+executor = "in_thread"
+expected_result_image = "Optimal 7-night window chosen (reason: aligns to a genuinely-interesting happening OR the calmest window; avoid the День ВМФ crowd peak — last Sunday = 26 July 2026 — in the centre); Moscow↔SPb transit decided (Sapsan vs own car) with the car-use decision (rent-on-arrival for day-trips only vs drive own car all week) and its itinerary consequence; 3–5 lodging options split across boutique hotels and charming apartments in quiet local districts (Петроградка/Коломна/Васильевский backstreets), each with price band, location logic, and a WORKING booking link via a Russia-domestic channel — captured in options.md"
+criterion_type = "acceptance-review"
+done_criterion = "one dated window fixed; transit + car decision made; ≥3 lodging options with working (Russia-reachable) links across both formats, in calm non-central-touristy locations"
+depends_on = [2]
+output_artifacts = ["journeys/spb-2026-07/alternatives/a-slow/options.md"]
+material = "stage-2 events + transit briefs + accommodation research"
+means = "Agent (sonnet, web) for lodging, in-thread synthesis for window + transit"
+method = "choose window against the (lightly-weighted) event calendar; decide transit + car use from brief E; delegate lodging shortlist to a sonnet sub-agent steered to domestic platforms; record in options.md"
+conditions = "stage-2 briefs available"
+invariants = "window justified by an actual dated happening OR named as the quiet default; lodging links via Russia-reachable channels (Ostrovok.ru / Яндекс Путешествия / Суточно.ру / hotel-direct — NOT Booking/Airbnb which are unusable in RU) and live-checked; flag near-term (≈2-week) July peak-season availability risk explicitly and prefer refundable rates"
+capability_required = "synthesis + option curation"
+
+[stage.principle]
+statement = "Anchor the date window to the actual afisha, not the reverse — the calm-but-eventful goal depends on aligning the week to real dated happenings"
+source = "user constraint: flexible dates, tune to events"
+confidence = "high"
+refutation = "if no interesting events fall in any July week, default to the quietest window and say so"
+
+[[stage]]
+index = 4
+title = "Stitch the slow week itinerary (itinerary-architect)"
+executor = "in_thread"
+expected_result_image = "a-slow/itinerary.md — 7-day day-by-day table at a deliberately unhurried pace (1–2 anchors/day, ≥1 full buffer/rest day), with correct Day-1 arrival / Day-7 departure per the stage-3 transit decision, weaving in: any genuinely-interesting happening (optional, not forced); 1 water day; 1–2 car day-trips into the окрестности; the rest local walks/atmospheric places/заведения; rhythm exploiting SPb's long light July evenings (sunset ~22:30 — fading белые ночи, not peak); risks/opening-hours flagged; decision.md summarises the choice"
+criterion_type = "acceptance-review"
+done_criterion = "itinerary.md is a coherent 7-day slow plan honouring the pacing rules (1–2 activities/day, buffer day), integrating water + car + events; decision.md written"
+depends_on = [3]
+output_artifacts = ["journeys/spb-2026-07/alternatives/a-slow/itinerary.md", "journeys/spb-2026-07/decision.md"]
+material = "stages 2–3 outputs + itinerary-architect pacing rules"
+means = "Skill itinerary-architect (inline), Write, Edit"
+method = "sequence anchors across 7 days respecting pace/buffer; place car and water days to avoid fatigue; fill itinerary.md + decision.md"
+conditions = "window + options fixed"
+invariants = "pace ≤2 anchors/day, ≥1 buffer day; no backtracking marathons; calm-first ordering"
+capability_required = "constraint-satisfaction route stitching"
+
+[stage.principle]
+statement = "A calm trip is a pacing constraint, not a content one — under-fill the days and protect a rest day rather than maximise sights"
+source = "user constraint: no rush, calm; itinerary pacing rules (alt template)"
+confidence = "high"
+refutation = "none"
+
+[[stage]]
+index = 5
+title = "Optional: render + deploy the sharing page"
+executor = "in_thread"
+expected_result_image = "scripts/render_site.py run for a-slow → site HTML (timeline + Leaflet map); deployed (pages.dev/surge) with the URL recorded in decision.md — user opted IN for publication (confirm right before the deploy command)"
+criterion_type = "acceptance-review"
+done_criterion = "site HTML generated (and deployed + URL recorded) IF the user opts in; otherwise skipped explicitly"
+depends_on = [4]
+output_artifacts = ["site/a-slow.html", "journeys/spb-2026-07/decision.md"]
+material = "a-slow markdown"
+means = "scripts/render_site.py, scripts/deploy_site.sh"
+method = "render from markdown; deploy only on user opt-in (external effect — gated)"
+conditions = "itinerary.md complete; deploy creds sourced per cloudflare-deploy-creds memory"
+invariants = "HTML generated from markdown, never hand-edited; deploy only with explicit go"
+capability_required = "render + deploy tooling"
+
+[stage.principle]
+statement = "Publishing is an external effect — render freely, deploy only on explicit opt-in"
+source = "CLAUDE.md § acting without asking (external effects gated)"
+confidence = "high"
+refutation = "none"
+
+## Final verification
+# 1. journeys/spb-2026-07/trip.md non-template, INDEX row present.
+# 2. a-slow has itinerary.md (7-day slow table), options.md (lodging), decision.md.
+# 3. Every non-trivial factual claim in research/ + options.md carries a dated source.
+# 4. Itinerary honours pace (≤2 anchors/day, ≥1 buffer) and includes water + car + event.
+# 5. User accepts the itinerary on review (acceptance-review criterion).

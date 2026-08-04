@@ -1,0 +1,152 @@
+[meta]
+task_id = "agentctl-venue-propagation"
+goal = "Service sub-plan for the parent plan prune-dangling-hook-references-v7. Its stage 2 could not run: agentctl dispatched the spawned developer into the read-only canonical checkout instead of the delivery worktree the plan declares, so the child refused all work and returned PERMISSION-REQUEST. Root cause, read from the code: state.repo_root and state.delivery_worktree are meant to be derived from the [meta] of state.plan_path, but only cmd_submit_plan sets both (cli.py:1358-1359). cmd_replan refreshes repo_root on BOTH its branches (cli.py:3091 refinement, cli.py:3116 substantive) and delivery_worktree on NEITHER; its no_change branch refreshes final_check for the in-place-edit case but no venue field at all; cmd_pop_subplan restores both from the PlanFrame snapshot (cli.py:3290-3291) rather than re-deriving them from the parent plan file, so a frame captured while the value was already lost keeps it lost; and — found by the first review of this sub-plan, not by the original diagnosis — _refresh_caches_from_plan_path (cli.py:232-273, called from cmd_approve:1862) is a FIFTH route with the same hole, and a strictly worse one: it re-loads the plan and refreshes state.final_check and every live stage's criterion fields INCLUDING verify_venue, while refreshing neither repo_root nor delivery_worktree. Its own docstring names the hazard in these very words — 'the gate attests to a plan it never actually executes' — and it is reachable by the engine's DESIGNED cycle (submit-plan -> present -> plan-review revise -> edit plan_path in place at the deliberately plan-mutable PLAN_READY -> present -> approve), which is exactly how a plan acquires a delivery_worktree it did not have at submit time. Plan v7 introduced delivery_worktree after submit-plan, reaching the session by replan, so the value never propagated and resolve_check_venue fell back to repo_root (state.py:1011). The engine gave no refusal and no warning at dispatch time. This reintroduces, through the replan route, exactly the venue asymmetry resolve_check_venue exists to remove."
+done_criterion = "Every route that sets or re-reads state.plan_path re-derives state.repo_root and state.delivery_worktree from that plan's [meta] through one shared helper named _sync_venue_from_plan; a replan that introduces or changes [meta] delivery_worktree propagates it into session state, an approve that follows an in-place plan edit propagates it too, and a pop-subplan restores the parent's venue from the parent plan file rather than from a stale frame snapshot; all three properties are pinned by named regression tests; the agentctl README states the invariant; the change is landed on origin/main AND local main, so the canonical checkout this session invokes agentctl from is running the fixed code."
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/claude-agent-instructions"
+delivery_worktree = "/Users/the0/claude-agent-instructions-venue-sync"
+authored_against = "origin/main = 7d0b9e0. Every claim about the defect was read from that tree at authoring time, not recalled: cli.py:1356-1364 (submit_plan sets both fields), 3032-3075 (replan no_change branch: refreshes stage fields and final_check, no venue field), 3077-3100 (refinement: repo_root only), 3102-3124 (substantive: repo_root only), 3200-3264 (push_subplan: snapshots both into PlanFrame, then nulls both for the child, and resets state.stages to [] at 3252), 3267-3315 (pop_subplan: restores both from the frame, and unconditionally marks the originating stage PASSED at 3301), 232-273 (_refresh_caches_from_plan_path: refreshes final_check and every stage criterion field including verify_venue, refreshes neither venue field; its only caller is cmd_approve at 1862 — re-read and confirmed independently by the root after the first review raised it), 2095-2117 (dispatch pins the child cwd to resolve_check_venue(DELIVERY)), state.py:996-1011 (delivery_worktree or repo_root), plan.py:831-841 (both keys parse correctly from [meta] — the defect is propagation, not parsing)."
+external_research = "None warranted. The defect is entirely inside this repo's own engine and was localized by reading the four routes above; no external source can be more authoritative than the code."
+
+# ---------------------------------------------------------------------------
+# Stage 1 — a delivery vehicle. The canon is read-only to session edits, so the
+# fix cannot be written where the engine would otherwise have placed it.
+# ---------------------------------------------------------------------------
+[[stage]]
+index = 1
+title = "Fork a delivery worktree for the engine fix from origin/main"
+executor = "in_thread"
+expected_result_image = "A worktree /Users/the0/claude-agent-instructions-venue-sync exists on a new branch venue-sync forked directly from origin/main (7d0b9e0), registered in `git worktree list`, with a clean status. It must exist BEFORE stage 2 is dispatched, because cmd_dispatch pins the spawned developer's cwd to the delivery venue and a hard-sandboxed child can only write the tree it is launched in. The parent plan's own delivery worktree /Users/the0/claude-agent-instructions-hook-prune and its branch hook-prune-two-file are left completely untouched — this sub-plan is a separate deliverable on a separate branch and lands as a separate commit."
+criterion_type = "acceptance-review"
+verify_venue = "repo_root"
+done_criterion = "`git worktree list` shows the venue-sync worktree at the branch venue-sync, observed at execution time"
+depends_on = []
+output_artifacts = ["/Users/the0/claude-agent-instructions-venue-sync"]
+material = "the canonical checkout /Users/the0/claude-agent-instructions sitting on main at origin/main 7d0b9e0"
+means = "Bash: git fetch origin main, git worktree add -b venue-sync <path> origin/main"
+method = "`git -C /Users/the0/claude-agent-instructions fetch origin main -q`, then `git -C /Users/the0/claude-agent-instructions worktree add -b venue-sync /Users/the0/claude-agent-instructions-venue-sync origin/main`. Report `git worktree list` output as the observation. Do NOT hand-roll rm or any variable-built destructive command anywhere in this stage."
+conditions = "The canonical checkout is clean and on main. This stage is deliberately criterion_type = acceptance-review rather than measurable, and therefore carries NO verify_command: its done state — the worktree exists — is transient BY DESIGN, since stage 3 deletes it, and the engine re-runs every MEASURABLE stage's verify_command at verify-final. A `test -d` assertion here would be a guaranteed final-gate failure, which is the exact defect the parent plan's fourth review round found and removed. The observation is made and reported at execution time instead."
+invariants = "The canonical checkout is not edited — creating a worktree from it is not a session edit of its tracked files. No branch, worktree or remote ref other than the new venue-sync pair is created, moved or deleted; in particular the parent plan's hook-prune-two-file worktree and branch are untouched. No rm built from a variable."
+capability_required = "git worktree administration"
+
+[stage.principle]
+statement = "A stage whose product is deliberately destroyed by a later stage of the same plan must not assert that product's existence in a done-state instrument."
+source = "The fourth thinker review of the parent plan v7, which removed a /tmp `test -f` conjunct from stage 1 for exactly this reason."
+derivation = "verify-final re-runs every measurable stage's verify_command after all stages complete, so an assertion about a transient artifact is evaluated in a world where the artifact is already gone by design; the stage would flip from PASSED to FAILED for doing precisely what the plan told it to do. Either the assertion belongs to a monotone fact, or the stage's criterion is an execution-time observation."
+confidence = "high"
+refutation = "If verify-final is shown not to re-run measurable stages after completion, a transient assertion would be harmless and this stage could be measurable."
+
+# ---------------------------------------------------------------------------
+# Stage 2 — the fix. One shared helper, called on every plan-entry route, with
+# the lost venue pair pinned by three named regression tests.
+# ---------------------------------------------------------------------------
+[[stage]]
+index = 2
+title = "Derive the venue fields from the plan on every plan-entry route, with named regression tests"
+executor = "spawn:developer"
+expected_result_image = "scripts/agentctl/cli.py defines a module-level helper named EXACTLY `_sync_venue_from_plan` (a binding contract identifier: stage 3's landing instrument probes for it by name). It takes the live state and, optionally, an already-loaded plan document; when no document is passed it loads state.plan_path itself. It sets state.repo_root and state.delivery_worktree from that plan's [meta], TOGETHER, never one without the other. It is FAIL-SAFE: if the plan file is absent, unreadable or unparseable it leaves both existing values untouched and does not raise — a restore path must never crash the engine. It is called on every route that establishes, re-establishes or re-reads which plan the session is executing — FIVE call sites, enumerated from the code rather than assumed: (1) cmd_submit_plan, replacing today's two inline assignments at cli.py:1358-1359, with no behaviour change there; (2,3,4) all THREE branches of cmd_replan — no_change (which today refreshes stage fields and final_check for the in-place-edit case but no venue field), refinement (cli.py:3091), and substantive (cli.py:3116), each of which today refreshes repo_root alone; and (5) _refresh_caches_from_plan_path (cli.py:232-273), the approve-path refresh, whose miss is the worst of the set because it already copies each stage's verify_venue from the edited plan while leaving the state-level fields those venues resolve against stale. Site 5 keeps that function's existing best-effort contract: an absent or unloadable plan_path returns early and changes nothing. cmd_pop_subplan calls the helper AFTER restoring the parent frame, so the parent's venue is re-derived from the parent plan file, which is authoritative, and falls back to the frame's snapshotted values only when the helper cannot read that file; the PlanFrame fields stay in place as that fallback. cmd_push_subplan is DELIBERATELY not changed: it nulls both fields for the child on purpose, and no dispatch can occur before the child's own submit-plan refills them — with a comment stating that reason, so a future reader does not 'fix' it. scripts/agentctl/README.md gains a short statement of the resulting invariant containing the literal phrase `venue re-derivation`. Tests, three binding names: scripts/tests/test_replan.py gains `test_replan_refresh_delivery_worktree`, covering a replan that INTRODUCES [meta] delivery_worktree where the submitted plan had none, one that CHANGES it, and one that removes it — for the refinement, substantive and no_change diff kinds — asserting state.delivery_worktree matches the new plan each time and that repo_root keeps its existing correct behaviour. scripts/tests/test_subplan.py gains `test_pop_subplan_rederives_venue_from_plan`, covering: a parent whose live delivery_worktree was lost to None before the push still gets the plan-declared value back after pop; and a parent whose plan file is unreadable at pop time falls back to the frame values without raising. scripts/tests/test_check_venue.py — the suite that already owns venue behaviour — gains `test_approve_rederives_venue_from_edited_plan`, driving the engine's designed plan-review cycle end to end: submit a plan with no [meta] delivery_worktree, edit that same plan file IN PLACE at PLAN_READY to add one, approve, and assert state.delivery_worktree now matches the edited file and that resolve_check_venue(DELIVERY) returns it rather than repo_root."
+criterion_type = "measurable"
+verify_venue = "repo_root"
+done_criterion = "the three named regression tests exist and pass, the three touched agentctl suites stay green, and the README states the invariant"
+verify_command = '''D=/Users/the0/claude-agent-instructions-venue-sync; [ -d "$D" ] || D=/Users/the0/claude-agent-instructions; cd "$D" && python3 -m pytest "scripts/tests/test_replan.py::test_replan_refresh_delivery_worktree" "scripts/tests/test_subplan.py::test_pop_subplan_rederives_venue_from_plan" "scripts/tests/test_check_venue.py::test_approve_rederives_venue_from_edited_plan" -q && python3 -m pytest scripts/tests/test_replan.py scripts/tests/test_subplan.py scripts/tests/test_check_venue.py -q && grep -q 'venue re-derivation' scripts/agentctl/README.md'''
+expected_exit = 0
+depends_on = [1]
+output_artifacts = ["scripts/agentctl/cli.py", "scripts/agentctl/README.md", "scripts/tests/test_replan.py", "scripts/tests/test_subplan.py", "scripts/tests/test_check_venue.py"]
+material = "At origin/main 7d0b9e0: scripts/agentctl/cli.py — cmd_submit_plan (1356-1364), cmd_replan's three branches (no_change 3032-3075, refinement 3077-3100, substantive 3102-3124), _refresh_caches_from_plan_path (232-273) with its single caller cmd_approve (1862), cmd_push_subplan (3200-3264) and cmd_pop_subplan (3267-3315); scripts/agentctl/state.py::resolve_check_venue (996-1011) and the PlanFrame dataclass; scripts/agentctl/plan.py:831-841, which already parses both [meta] keys correctly; the existing suites scripts/tests/test_replan.py, test_subplan.py and test_check_venue.py, whose fixtures show how a session is driven end to end in a temp state root."
+means = "Read, Edit, Write, Bash (pytest, git); scripts/agentctl/cli.py, scripts/agentctl/README.md, scripts/tests/test_replan.py, scripts/tests/test_subplan.py, scripts/tests/test_check_venue.py"
+method = "Read all five call sites at the current tip first. Write ALL THREE named tests RED first and watch each fail for the RIGHT reason — each must fail on today's code by asserting the propagated value, not merely by not existing. This applies with particular force to test_approve_rederives_venue_from_edited_plan, whose node-id conjunct is otherwise satisfiable by an assertion-free stub: run it against unmodified cli.py and confirm it fails on the venue assertion before writing the helper's approve-path call site. Reuse the existing suites' temp-state-root fixtures rather than inventing a harness. Keep the helper small and total: one load, one guarded assignment pair, no side effects beyond the two fields. Commit on venue-sync and push the branch (pre-authorized: personal working branch)."
+conditions = "Stage 1 created /Users/the0/claude-agent-instructions-venue-sync; ALL work happens there, because the canonical checkout is read-only to session edits and is mutated only by pull — refusing to edit the canon remains the correct behaviour for any executor that finds itself placed there, and returning PERMISSION-REQUEST rather than editing it, as the parent's stage-2 child did, was right. The verify_command carries the `D=<worktree>; [ -d \"$D\" ] || D=<canon>` selector so it targets the worktree during execution and the canonical checkout after stage 3 has landed and removed the worktree; that is what keeps it true at the final gate."
+invariants = "The venue fields are set as a PAIR on every route — an asymmetry of exactly this kind is the defect being closed, so no route may refresh one without the other. Fail-safe: an unreadable or unparseable plan leaves the existing values alone and never raises, because one call site is a restore path and another (the approve refresh) is contractually best-effort. cmd_push_subplan's nulling is preserved and commented, not 'fixed' — and the comment must give the STRUCTURAL reason, not the sequencing one: push resets state.stages to [] and transitions EXECUTING -> CLASSIFIED (cli.py:3237, 3252), so no stage exists to dispatch until the child's submit_plan runs and sets both fields; the null window is closed by the state machine, not by a convention that would silently stop holding if dispatch ever became reachable from CLASSIFIED. No Node, no state-machine edge and no gate is added, changed or removed; this is a dataflow repair inside existing routes. The engine's public CLI surface is unchanged. On this stage's own control instrument: a verification instrument must be able to fail, and an assertion that holds in both the done state and the not-done state is not an instrument. Probed before submission CONJUNCT BY CONJUNCT, not merely as a conjunction, because a short-circuiting chain hides a vacuous earlier conjunct behind a later failure: the named node-ids exit 4 today (no such test exists); `venue re-derivation` returns 0 hits in scripts/agentctl/README.md and 0 repo-wide; `_sync_venue_from_plan` returns 0 hits repo-wide. The three-suite conjunct exits 0 today and is therefore VACUOUS ON ITS OWN — it is retained only as a no-regression guard, and the discriminating power of this instrument rests entirely on the node-id and grep conjuncts, which is why the node-id conjunct is placed FIRST rather than behind the suites."
+capability_required = "python, pytest, and the discipline to read all call sites of an invariant before repairing one"
+
+[stage.principle]
+statement = "An invariant that must hold on several routes belongs in one shared helper called from each, not re-implemented per route."
+source = "This defect: cmd_submit_plan set both venue fields, cmd_replan set one, cmd_pop_subplan restored a snapshot, and nothing tested the parity."
+derivation = "Three independent inline implementations of 'derive the venue from the plan' drifted apart silently because no single place named the obligation; the divergence was invisible until a plan happened to enter the session by the one route that had lost it. A single helper makes the obligation a named object that a reviewer can enumerate call sites of, and a named test can pin."
+confidence = "high"
+refutation = "If the routes turn out to need genuinely different venue semantics — for instance if push_subplan's nulling is one such case, which it is — then a shared helper is wrong for those routes and each divergence must be justified in a comment rather than unified. This plan already treats push_subplan as exactly that exception."
+
+# ---------------------------------------------------------------------------
+# Stage 3 — LAND. The canon must run the fixed code before the parent's
+# pop-subplan executes, or the parent stays blocked.
+# ---------------------------------------------------------------------------
+[[stage]]
+index = 3
+title = "Land venue-sync on main by fast-forward, pull the canonical checkout, and remove the worktree"
+executor = "in_thread"
+expected_result_image = "All work is committed on venue-sync with a message naming the difficulty (a plan that declares a delivery worktree via replan rather than submit-plan silently loses it, and the engine then dispatches into the read-only canonical checkout without refusal or warning). The branch is a strict descendant of origin/main, so `git merge-base --is-ancestor origin/main venue-sync` exits 0 and no merge or rebase is needed. The full repo suite (scripts/verify-all.py) plus ALL THREE named tests are green on the branch — scripts/verify-all.py runs no pytest at all (it is an 18-check aggregator), so those three named tests are the ONLY test coverage this stage asserts before landing, and omitting any one of them would leave that call site unverified until final_check 1, after the branch is already on main. The branch is landed on main by fast-forward via scripts/land-branch.py --remote-only, and the canonical checkout is then brought to the landed commit with `git pull --ff-only` BEFORE this stage's result is recorded. Both origin/main and local main carry _sync_venue_from_plan in scripts/agentctl/cli.py; the venue-sync worktree and branch are gone locally and remotely. From this point the `python3 -m agentctl` this session invokes from the canonical checkout is the FIXED code — which is the whole operational point of the sub-plan, because the parent's pop-subplan must re-derive the parent venue rather than restore the lost snapshot."
+criterion_type = "measurable"
+verify_venue = "repo_root"
+done_criterion = "both origin/main and local main carry the contract identifier, and the delivery worktree is gone"
+verify_command = '''cd /Users/the0/claude-agent-instructions && git fetch origin main -q && git grep -q _sync_venue_from_plan origin/main -- scripts/agentctl/cli.py && git grep -q _sync_venue_from_plan main -- scripts/agentctl/cli.py && ! test -d /Users/the0/claude-agent-instructions-venue-sync'''
+expected_exit = 0
+depends_on = [2]
+output_artifacts = ["origin/main"]
+material = "the worktree /Users/the0/claude-agent-instructions-venue-sync on branch venue-sync forked from origin/main 7d0b9e0 by stage 1, and the canonical checkout sitting on main"
+means = "Bash (git fetch, merge-base, push, pull --ff-only), scripts/land-branch.py (ref-only, fast-forward-only)"
+method = "Commit any remaining work in the worktree. `git -C <worktree> fetch origin main` and assert landability against the REMOTE tip: `git -C <worktree> merge-base --is-ancestor origin/main venue-sync` must exit 0. Do NOT rely on land-branch.py --check for that judgement: its assess() tests the LOCAL trunk (land-branch.py:122,133) and prints LANDABLE for a push that cannot succeed. If origin/main has moved, rebase onto the new tip and re-run the suite — safe here, because no instrument in this plan pins a commit SHA; the landing assertion is a content probe. Push the branch, then `scripts/land-branch.py -C /Users/the0/claude-agent-instructions --branch venue-sync --trunk main --remote origin --remote-only`, with --check first; --remote-only is required because the canonical checkout has main checked out and `git branch -f` on a checked-out branch is refused (land-branch.py:252-263). Then, BEFORE record-result, `git -C /Users/the0/claude-agent-instructions pull --ff-only` — the `main` conjunct of the verify_command exists precisely to catch a missed pull. land-branch.py performs the remote-branch, local-branch and worktree deletion itself; do not hand-roll any of them and never build an rm from a variable path."
+conditions = "Stage 2 verified. The instructions repo is sole-maintained, so a fast-forward land is appropriate and no PR review gate applies. The pull is the only mutation of the canonical checkout in this plan, and a pull is exactly what the read-only-to-session-edits rule permits. This stage changes the code of the very engine driving the session, mid-session: that is intended and is safe because each agentctl invocation is a fresh process that reads state.json from disk, so no in-memory state survives the swap."
+invariants = "Never hand-roll checkout / reset --hard / clean on the canonical tree, and never delete a path built from a variable. The parent plan's worktree /Users/the0/claude-agent-instructions-hook-prune and branch hook-prune-two-file are left untouched — only venue-sync is landed and deleted. Leave any parallel-session WIP alone. Push only this sub-plan's commits. Landability is asserted against origin/main, never against the local trunk. The landing instrument is a CONTENT probe on an identifier this plan introduces by contract, not a pinned SHA, so it is invariant under rebase and is false today and true only after the change reaches BOTH origin/main and local main. On this stage's own control instrument, probed conjunct by conjunct before submission: `git grep -q _sync_venue_from_plan origin/main -- scripts/agentctl/cli.py` exits 1 today; the identifier has 0 hits repo-wide; the worktree does not exist yet so its negation passes today, which makes that final conjunct non-discriminating on its own and it is retained only to assert cleanup."
+capability_required = "git, and the landing script's interface"
+
+[stage.principle]
+statement = "A fix to the machinery that is currently blocking the work must reach the copy of that machinery the session actually executes, not merely a branch."
+source = "CLAUDE.md § On task resolution — landing discipline, applied to the engine itself."
+derivation = "This session invokes `python3 -m agentctl` from the canonical checkout, so a fix living only on a branch changes nothing about the pop-subplan that must re-derive the parent's venue; the parent would resume just as blocked as before. Landing plus pull is therefore not a tidiness step here but the operative one."
+confidence = "high"
+refutation = "If the session were invoking agentctl from the delivery worktree rather than the canon, landing would still be required for durability but would not be a precondition of unblocking the parent."
+
+# ---------------------------------------------------------------------------
+# Final verification — the sub-plan's own end-to-end gate.
+# ---------------------------------------------------------------------------
+[[final_check]]
+kind = "shell"
+label = "the three named regression tests pass in the canonical checkout, the invariant is documented, and the whole repo suite is green"
+command = '''cd /Users/the0/claude-agent-instructions && python3 -m pytest "scripts/tests/test_replan.py::test_replan_refresh_delivery_worktree" "scripts/tests/test_subplan.py::test_pop_subplan_rederives_venue_from_plan" "scripts/tests/test_check_venue.py::test_approve_rederives_venue_from_edited_plan" -q && python3 -m pytest scripts/tests/test_replan.py scripts/tests/test_subplan.py scripts/tests/test_check_venue.py -q && grep -q 'venue re-derivation' scripts/agentctl/README.md && python3 scripts/verify-all.py'''
+expected_exit = 0
+venue = "repo_root"
+
+[[final_check]]
+kind = "shell"
+label = "the fix is on origin/main and on local main, so the canonical checkout runs it"
+command = '''cd /Users/the0/claude-agent-instructions && git fetch origin main -q && git grep -q _sync_venue_from_plan origin/main -- scripts/agentctl/cli.py && git grep -q _sync_venue_from_plan main -- scripts/agentctl/cli.py'''
+expected_exit = 0
+venue = "repo_root"
+
+## Final verification
+# 1. All three named regression tests pass in the canonical checkout; the three touched agentctl suites
+#    stay green; scripts/agentctl/README.md states the invariant; scripts/verify-all.py passes.
+# 2. _sync_venue_from_plan is present in scripts/agentctl/cli.py on BOTH origin/main and local main,
+#    so the agentctl this session invokes from the canonical checkout is the fixed code.
+# 3. Operational observable, checked by the PARENT plan and not by this gate: after pop-subplan,
+#    `agentctl status` for the parent session resolves the delivery venue to
+#    /Users/the0/claude-agent-instructions-hook-prune, and the re-dispatched parent stage 2 is
+#    launched there rather than in the canonical checkout. That is the parent's stage-2 result, not
+#    this sub-plan's done criterion, and it is what will falsify or confirm the one hypothesis this
+#    diagnosis could not falsify by reading alone — that the harness sandbox follows the child's
+#    launch directory rather than the session's original cwd.
+#
+# NOTE on vacuity disclosure, completed after the second review. `python3 scripts/verify-all.py` in
+# final_check 1 also exits 0 today (hand-run at the canon: 18 checks passed), so it is vacuous on its
+# own in the same way the three-suite pytest conjunct is. Both are retained deliberately as
+# no-regression guards; the discriminating power of final_check 1 rests on the three node-ids and the
+# `venue re-derivation` grep, which are false today. Recorded here so the disclosure is complete
+# rather than partial.
+#
+# NOTE for the parent cycle, not this plan. `cmd_pop_subplan` overwrites the originating stage's
+# `control` string, and `control` is a runtime attestation absent from the plan schema and NOT among
+# the fields `_apply_refined_stage_fields` copies — so the overwrite is unrecoverable by any later
+# replan, and its replacement text asserts something false about parent stage 1. Capture parent
+# stage 1's `control` verbatim BEFORE running pop-subplan. It cannot be restored afterwards by any
+# engine command: `cmd_record_result` acts only on `state.active_stage()` (cli.py:2242-2246) and
+# `cmd_pop_subplan` sets `state.current_stage = None` (cli.py:3305), so after the pop there is no
+# stage to record a control against. The remedy is therefore capture-and-re-state, not restore: keep
+# the true attestation in the session record and re-state it verbatim in the parent's stage-1 result
+# when reporting the parent plan's outcome.
+#
+# NOTE on the second final_check's `git fetch`. It performs a network action inside an instrument
+# that verify-final re-runs. This is accepted deliberately: the fetch only refreshes the remote-
+# tracking ref, its failure direction is fail-safe (a failed fetch fails the check rather than
+# passing it vacuously), and without it the origin/main conjunct would assert a possibly stale
+# local view of the remote. The same trade-off is made by the parent plan's stage 5.

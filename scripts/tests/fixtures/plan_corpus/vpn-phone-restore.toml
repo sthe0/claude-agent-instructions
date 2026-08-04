@@ -1,0 +1,110 @@
+[meta]
+task_id = "vpn-phone-restore"
+goal = "Restore the0.fun so the phone VLESS client connects again and Instagram loads"
+done_criterion = "From a phone on Russian mobile/Wi-Fi: VPN client connects to the0.fun VLESS endpoint; Instagram app opens feed (not endless spinner / connection error). Also: ssh the0.fun succeeds and Xray listens on :443 and/or :8443."
+criterion_type = "acceptance-review"
+weight_class = "substantive"
+repo_root = "/Users/the0/Projects/the0.fun"
+external_research = "check-host.net 2026-07-31: ICMP+TCP:443 to 81.22.132.183 TIMEOUT from CY/IN/IR/KZ/RO/UA/US/HK/JP/UK — host dead globally, not RU-only RKN. Mid-2026: plain VLESS+REALITY/TCP often throttled by TSPU behavioral analysis; xHTTP/gRPC/Hysteria2 preferred if Reality TCP still fails after restore."
+
+[[stage]]
+index = 1
+title = "Bring the VPS back online via SERVA ONE"
+executor = "in_thread"
+expected_result_image = "Host 81.22.132.183 answers ICMP and TCP:22 from ≥2 external probes (e.g. check-host) AND from this Mac (ssh the0.fun or by IP). Achieved by user/agent action in https://my.serva.one/: power-on / reboot / unpaid-invoice fix / support ticket if panel shows suspended. No Xray config change in this stage."
+criterion_type = "measurable"
+done_criterion = "ssh the0.fun returns uptime; check-host ping not all TIMEOUT"
+verify_command = "ssh -o ConnectTimeout=10 -o BatchMode=yes the0.fun 'uptime' && echo OK"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["live the0.fun SSH session"]
+material = "dead VPS IP 81.22.132.183 (SERVA ONE AS199058); panel my.serva.one"
+means = "SERVA ONE panel / support; Bash probes"
+method = "Confirm global deadness (already); open panel → VPS status → reboot or pay/unsuspend; re-probe SSH. If agent has no panel login: user does reboot once, agent verifies."
+conditions = "User has my.serva.one access OR shares enough for agent to act; Mac can reach NL without corp-VPN blackhole (en0 host-route already in Tunnelblick bypass)"
+invariants = "Do not wipe/rebuild disk unless panel shows no other path; do not change DNS; do not touch /home/nick"
+capability_required = "SERVA ONE panel access"
+
+[stage.principle]
+statement = "A phone VPN client cannot recover until the exit host answers on the network; protocol tweaks are useless while the IP is globally dark"
+source = "check-host all-TIMEOUT 2026-07-31; vpn_topology.md"
+confidence = "high"
+refutation = "if check-host from non-RU nodes succeeds while RU fails, reclassify as RKN IP block and pivot to IP change / chain"
+
+[[stage]]
+index = 2
+title = "Verify Xray (VLESS/Reality) is listening"
+executor = "in_thread"
+expected_result_image = "On the0.fun: xray process running; ss shows listeners on :443 and/or :8443; docker mtproto optional. If xray died across reboot and has no systemd unit, restart from known path (bin/xray-linux-amd64 -c bin/config.json as root — needs sudo path already used historically)."
+criterion_type = "measurable"
+done_criterion = "ss/ps show xray listening on 443 or 8443"
+verify_command = "ssh the0.fun 'ps -eo args | grep -E \"[x]ray\" && ss -tlnp 2>/dev/null | grep -E \":443|:8443\"' | head -20"
+expected_exit = 0
+depends_on = [1]
+output_artifacts = ["xray process up"]
+material = "existing Reality inbound on host (vpn_topology.md)"
+means = "Bash (ssh)"
+method = "Health check from vpn_topology; if down, restart xray with existing config (no transport migration yet)."
+conditions = "stage 1 SSH works; sudo/root path available for xray restart if needed"
+invariants = "Do not rewrite Reality keys/SNI in this stage; keep existing client links valid"
+capability_required = "ssh + possibly sudo for xray"
+
+[stage.principle]
+statement = "Reuse the working client link before inventing a new transport — phone already has the old VLESS URI"
+source = "planner reuse-before-invent; phone-first goal"
+confidence = "high"
+refutation = "if Reality TCP connects but Instagram media stalls under TSPU, stage 3 fails and stage 4 fires"
+
+[[stage]]
+index = 3
+title = "Phone acceptance: connect + open Instagram"
+executor = "in_thread"
+expected_result_image = "User (or agent-guided): update/import same VLESS subscription on phone client (v2rayNG / Streisand / Hiddify / etc.), connect to the0.fun, open Instagram — feed loads. Agent records pass/fail."
+criterion_type = "acceptance-review"
+done_criterion = "User confirms Instagram opens on phone via the0.fun VPN"
+verify_command = "user observation"
+expected_exit = 0
+depends_on = [2]
+output_artifacts = ["user confirmation"]
+material = "restored endpoint + existing phone profile"
+means = "phone client + user check"
+method = "Ask user to connect and open Instagram; if connect fails but ports open → capture client error; if connect OK but IG fails → stage 4"
+conditions = "stages 1–2 green"
+invariants = "No forced client-app change unless connect fails for app-specific reason"
+capability_required = "user phone"
+
+[stage.principle]
+statement = "Done criterion is phone Instagram, not only server-side listen — verify the user-facing axis"
+source = "CLAUDE.md verify-the-right-axis; acceptance-review"
+confidence = "high"
+refutation = "none"
+
+[[stage]]
+index = 4
+title = "Only if needed: migrate transport past Reality-TCP DPI"
+executor = "in_thread"
+expected_result_image = "Triggered only if stage 3 fails with connect-timeout / throttle while server is healthy. Add a second inbound (VLESS xHTTP or Hysteria2), export new phone link, user connects; Instagram works. Prefer additive inbound so old link can remain until cutover."
+criterion_type = "acceptance-review"
+done_criterion = "Phone Instagram works on the new transport link"
+verify_command = "user observation after new link import"
+expected_exit = 0
+depends_on = [3]
+output_artifacts = ["new inbound in xray/sing-box config", "phone share link"]
+material = "existing Xray; mid-2026 TSPU behavioral analysis of VLESS-TCP"
+means = "Xray/sing-box config + phone client"
+method = "If Reality TCP fails under DPI: enable xHTTP (or Hysteria2) inbound; give user one new URI; keep Reality until confirmed."
+conditions = "stage 3 failed for DPI/throttle reasons, not host-down"
+invariants = "Do not delete working Reality until phone confirms new link; ask before non-additive rewrite"
+capability_required = "root on VPS + user phone retest"
+
+[stage.principle]
+statement = "Transport migration is a contingency for TSPU behavioral blocks, not the first move when the host is offline"
+source = "MegaV Feb/Jun 2026 VLESS-TCP behavioral analysis; Habra volume-freeze reports"
+confidence = "medium"
+refutation = "if host stays down forever, migration is moot — stay on stage 1 / replace VPS"
+
+## Final verification
+# 1. check-host or local: 81.22.132.183 reachable (not all TIMEOUT).
+# 2. ssh the0.fun: xray up, :443/:8443 listen.
+# 3. User: phone VPN connected + Instagram feed visible.
+# 4. Optional stage 4 only if 3 failed under healthy server.

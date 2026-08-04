@@ -1,0 +1,32 @@
+[meta]
+task_id = "default-acceptedits-new-machine"
+goal = "Make new-machine init install permissions.defaultMode=acceptEdits by default, while respecting an existing local override"
+done_criterion = "After apply-settings.sh runs on a settings.json without defaultMode, .permissions.defaultMode == acceptEdits; an existing local defaultMode is preserved; lint+verify pass"
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/claude-agent-instructions"
+external_research = "Not warranted: the init mechanism is fully local (settings/base.json + scripts/apply-settings.sh jq merge, read this session); permission schema (defaultMode enum) is in the loaded update-config settings schema. No external prior art applies."
+
+[[stage]]
+index = 1
+title = "Add defaultMode to versioned base + propagate it in apply-settings.sh; update docs"
+executor = "in_thread"
+expected_result_image = "base.json permissions has defaultMode=acceptEdits; apply-settings.sh jq merge sets .permissions.defaultMode = local // base (omitted if neither); header comment + settings/README.md mention the new key; lint-settings-base.py and verify-all.py pass"
+criterion_type = "measurable"
+done_criterion = "temp-target test: fresh settings -> defaultMode=acceptEdits; preset local defaultMode=default -> stays default; lint-settings-base.py OK; verify-all.py OK"
+verify_command = "bash -c 'set -e; cd /Users/the0/claude-agent-instructions; t=$(mktemp); echo \"{}\" > \"$t\"; CLAUDE_SETTINGS=\"$t\" scripts/apply-settings.sh >/dev/null; jq -e \".permissions.defaultMode==\\\"acceptEdits\\\"\" \"$t\" >/dev/null; echo \"{\\\"permissions\\\":{\\\"defaultMode\\\":\\\"default\\\"}}\" > \"$t\"; CLAUDE_SETTINGS=\"$t\" scripts/apply-settings.sh >/dev/null; jq -e \".permissions.defaultMode==\\\"default\\\"\" \"$t\" >/dev/null; python3 scripts/lint-settings-base.py'"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["settings/base.json", "scripts/apply-settings.sh", "settings/README.md"]
+material = "settings/base.json (permissions.allow only), scripts/apply-settings.sh (jq merge sets only permissions.allow), settings/README.md"
+means = "Edit tool; jq merge logic; mktemp-based manual test"
+method = "Add base.defaultMode; extend jq with a conditional defaultMode set (local // base, no null); document in header + README"
+conditions = "agentctl at execution node so the gate permits the gated claude-agent-instructions edits; jq present"
+invariants = "permissions.allow union unchanged; other permissions keys (deny/ask) preserved; an existing local defaultMode is never clobbered; base stays read-only-allow-only so lint-settings-base passes; no null defaultMode written"
+capability_required = "edit access to claude-agent-instructions repo"
+
+[stage.principle]
+statement = "apply-settings.sh is additive and local-wins on conflict (env, autoCompactWindow); a new policy-grade key must follow the same local // base rule, not overwrite local state."
+source = "scripts/apply-settings.sh header + settings/README.md § Merge semantics (read this session)"
+confidence = "high"
+refutation = "If a machine with a deliberate local defaultMode override has it changed to acceptEdits after apply-settings, the local-wins invariant is violated and the approach is wrong."

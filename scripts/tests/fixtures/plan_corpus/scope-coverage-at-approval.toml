@@ -1,0 +1,399 @@
+# Plan: scope coverage at plan approval.
+#
+# The order (three elements, A/B/C) is stated in [meta].goal and decomposed one
+# element per stage. Explicitly OUT (named in the order brief, not folded in):
+# the root cause of the prior task's `approve` refusal incident; automating the
+# escape-hatch inventory; `plan-review --verdict override` coverage in the
+# escape-hatch report. None of the three is needed for A/B/C to work.
+
+[meta]
+task_id = "scope-coverage-at-approval"
+goal = """
+Close the hole through which a narrowing of scope made at PLAN-AUTHORING time \
+passes unnamed. Three elements: (A) extend the `premise` plugin seam so every \
+element of the order is raised and, before `approve`, is either covered by a \
+stage or explicitly cut with a reason, with the cut list visible in the \
+presented essence; (B) one sentence in CLAUDE.md § Escalation extending the \
+existing "an ask's options must span the full set your own analysis \
+enumerated" rule to the plan-against-the-order relation; (C) make the plan's \
+size visible in the presented essence before approval.
+"""
+done_criterion = """
+In the delivery worktree: `agentctl approve` refuses while any raised order \
+element is undispositioned; the essence rendering `present-plan --kind \
+essence` will stamp must carry the cut list and the stage count; CLAUDE.md \
+carries the order-vs-plan sentence; the targeted tests, `verify-all.py`, and \
+the rest of the pytest suite (minus one known pre-existing red) are green.
+"""
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/claude-agent-instructions"
+delivery_worktree = "/Users/the0/claude-agent-instructions-scope"
+external_research = """
+Internal reuse search RUN, external web search judged NOT warranted. Run: \
+`premise.py` / `plugins_premise.py` / `gates.py` / `cli.py` (question-* verbs, \
+present-plan, approve) / `plan.py` (substantive validation, reachability and \
+venue lints) / `render.py` / `delivery.py`; `scripts/agentctl/README.md` \
+§ Commands + § Plugins; `verify-agentctl.py` (the plugin scope fence: a plugin \
+may extend only an existing core gate); memory leaves \
+`question-provenance-gate`, `principles/verdict-covers-the-evidence-domain-it-\
+claims`, `principles/option-space-spans-axes-from-functional-ground`. Result: \
+the whole mechanism is REUSE — the existing `premise` plugin bag, its existing \
+`plan_approval` gate key, the existing `question-check` read-out, and the \
+existing `present-plan --kind full` stage-anchor completeness check as the \
+form to copy; nothing new is invented. Web/intranet search is not warranted: \
+the artifact is this repository's own private coordination engine, so external \
+prior art has no interface here to extend, and the reuse-before-invent search \
+that DOES apply (planner SKILL.md § Research, "the agent's own instructions & \
+mechanisms" row) is the internal one above.
+"""
+
+[[final_check]]
+label = "order-coverage gate, both directions (refuses on an open/cut-after-present element, allows once closed and presented)"
+command = "cd /Users/the0/claude-agent-instructions-scope && python3 -m pytest scripts/tests/test_order_coverage.py scripts/tests/test_order_coverage_essence.py -q"
+expected_exit = 0
+
+[[final_check]]
+label = "repo verifiers green (README inventory, cross-refs, language, doc-concepts, agentctl structure)"
+command = "cd /Users/the0/claude-agent-instructions-scope && python3 scripts/verify-all.py"
+expected_exit = 0
+
+[[final_check]]
+label = "no regression in the rest of the suite; the one deselected test is a pre-existing red on clean main (macOS /private/var path length), not ours"
+command = "cd /Users/the0/claude-agent-instructions-scope && python3 -m pytest scripts/tests -q --deselect scripts/tests/test_argv_text.py::test_a_realistically_long_path_is_named_in_full"
+expected_exit = 0
+
+[[final_check]]
+label = "CLAUDE.md carries the order-vs-plan sentence (PRESENCE check only — whether the wording is adequate is the plan/thinker review's perception, not this grep's)"
+command = "cd /Users/the0/claude-agent-instructions-scope && grep -q 'span the full set your own analysis enumerated' CLAUDE.md && grep -q 'the plan against the order' CLAUDE.md"
+expected_exit = 0
+
+# ---------------------------------------------------------------------------
+# Stage 1 — order element A, part 1: the RECORD.
+# ---------------------------------------------------------------------------
+[[stage]]
+index = 1
+title = "Order elements: model, verbs, and the approve-time closure blocker"
+executor = "spawn:developer"
+material = """
+`scripts/agentctl/premise.py` (today: Question + QuestionCandidate, two pure \
+validators, no notion of an order element), `scripts/agentctl/plugins_premise.py` \
+(today: `premise_blockers` folds three blocker families into the `plan_approval` \
+gate; `state_factory` mints questions/candidates/enumerated), and \
+`scripts/agentctl/cli.py` (today: seven `question-*` verbs).
+"""
+means = """
+REUSE, no new mechanism: the existing `premise` plugin bag, its existing \
+`plan_approval` gate key (verify-agentctl's scope fence forbids a plugin \
+keying a NEW core gate), `premise.QuestionCandidate`'s dataclass +\
+ tolerant-dict round-trip + per-disposition required-field table as the FORM to \
+mirror, `premise.validate_question_candidates`'s dangling-edge idiom, \
+`text_shape.PLACEHOLDER_SET`/`normalize_string` for the anti-template check, \
+and `cmd_question_raise`/`cmd_question_dispose`/`cmd_question_list` as the CLI \
+templates. `question-check` needs NO change: it already calls \
+`plugins_premise.premise_blockers`, so it reports the new blockers for free.
+"""
+method = """
+(1) premise.py: add `OrderElement(id, element, disposition, stage, reason)` with \
+`VALID_ORDER_DISPOSITIONS = {raised, covered, cut}`, plus \
+`order_elements_from_dicts`/`order_elements_to_dicts` mirroring the existing \
+round-trips. Add pure `validate_order_elements(elements, *, stage_indices, \
+plan_present)` -> blockers: `raised` always blocks (the element was never \
+dispositioned); `covered` needs a `stage` that is present in `stage_indices` \
+(dangling-edge blocker, worded like the question one); `cut` needs a non-empty, \
+non-placeholder `reason`; an unknown disposition blocks. UNLIKE the question \
+bag, an EMPTY bag BLOCKS once `plan_present` is true — see [stage.principle]. \
+(2) premise.py: add pure `render_coverage_block(elements, stage_count) -> str` \
+producing exactly:
+    [scope] plan has <N> stage(s); order: <M> element(s) — <C> covered, <K> cut
+    - covered: <element> -> stage <n>
+    - cut: <element> — <reason>
+(covered lines in stage order, then cut lines in id order; deterministic, no \
+timestamps). Stage 2 is its only other consumer — it is defined here so there \
+is ONE generator, never a second hand-written rendering to drift. \
+(3) plugins_premise.py: add `"order_elements": []` to `state_factory`, read it \
+as `bag.get("order_elements", [])` (a bag minted before this change must load, \
+not KeyError), and fold `validate_order_elements(..., stage_indices={s.index \
+for s in doc.stages}, plan_present=bool(plan_path))` into `premise_blockers` \
+next to the existing three families. \
+(4) cli.py: add `order-raise --session --id --element`, `order-dispose \
+--session --id --as covered --stage N | --as cut --reason <text>`, and \
+`order-list --session [--format md]` (the `--format md` output IS \
+`render_coverage_block`, so the coordinator pastes what the gate will check). \
+Register them everywhere the `question-*` verbs are registered (COMMANDS, the \
+plan-phase-allowed command list, the argparse builder, the shared arg-help \
+tables). `order-raise` is permissive UPSERT like `question-raise`; \
+`order-dispose` fast-fails on a missing `--stage`/`--reason` for its \
+disposition (courtesy, not the authority — the gate is). `order-raise`'s \
+`--element` help text says explicitly: enumerate FROM THE TEXT OF THE ORDER, \
+before `submit-plan` — the mechanism cannot enforce that timing (residual named \
+in stage 3), so the directive is where it lives. \
+(5) scripts/tests/test_order_coverage.py: the pure validator table (each blocker \
+rule, both directions), the CLI round-trip, and a gate-level e2e — a substantive \
+session with a submitted plan REFUSES at `plan_approval` with an open element \
+and ALLOWS once every element is covered/cut.
+"""
+conditions = """
+Runs in the delivery worktree /Users/the0/claude-agent-instructions-scope \
+(branch scope-coverage-at-approval); the canonical checkout is read-only. \
+No new core gate, no new plugin, no schema bump (the plugin bag is free-form). \
+The empty-bag blocker text must name its own way out (`order-raise`, then \
+`order-dispose --as covered|cut`): a session already in flight when this lands \
+meets the new blocker with a submitted plan and an empty bag, and a refusal \
+without a route is the failure mode this whole task is about.
+"""
+invariants = """
+Every existing `question-*` verb, its bag entries, and \
+`premise.validate_questions` behave byte-identically; a premise bag written \
+before this change still loads; `premise.py` stays pure (no filesystem, \
+subprocess or network); the plugin keys only the pre-existing `plan_approval` \
+core gate.
+"""
+capability_required = "Python; the agentctl plugin/gate seam and its pure-module purity contract; pytest"
+expected_result_image = """
+`agentctl question-check` on a substantive session with a submitted plan and \
+an undispositioned order element reports an `[premise]` order blocker and \
+`approve` refuses; after `order-dispose --as covered --stage N` (or `--as cut \
+--reason ...`) for every element, the same check is green and approve's premise \
+gate clears. `python3 -m pytest scripts/tests/test_order_coverage.py -q` exits 0.
+"""
+criterion_type = "measurable"
+done_criterion = "the new test module is green in the delivery worktree"
+verify_command = "cd /Users/the0/claude-agent-instructions-scope && python3 -m pytest scripts/tests/test_order_coverage.py -q"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["scripts/tests/test_order_coverage.py"]
+
+[stage.principle]
+statement = """
+`approve`'s verdict claims the plan is approved, but its evidence domain today \
+is the plan bytes alone — never the order the plan answers; so the order's \
+elements must become records the gate can read, and an EMPTY order bag must \
+block rather than pass.
+"""
+source = "memory-global/leaves/principles/verdict-covers-the-evidence-domain-it-claims.md (checker form: a checker enumerating its domain from one source while the verdict claims another answers OK 'for the wrong reason'); plus memory-global/leaves/question-provenance-gate.md (the rule/perception table this extends)."
+derivation = """
+The principle says a green that means 'I did not look' is worse than a red, \
+because a red gets investigated. Apply it to the two bags side by side: an \
+EMPTY question bag is honestly silent (a stage that needed to ask nothing \
+asked nothing), which is why premise.py's docstring defends tolerating it — but \
+EVERY task has an order, so an empty ORDER bag is not 'nothing to say', it is \
+'nobody looked', the exact state the prior task shipped in. The two bags \
+therefore take OPPOSITE empty-set rules from one principle, and the difference \
+is derived from whether the empty set can be a truthful observation, not from \
+a preference for strictness.
+"""
+confidence = "high"
+refutation = """
+Refuted if fail-closed-on-empty proves unsatisfiable in practice — e.g. a \
+substantive session whose order genuinely has no statable elements, or a \
+recurring pattern of one throwaway element recorded purely to clear the gate \
+(the decoy residual the premise leaf already names). Either would say the \
+blocker buys ceremony rather than coverage, and the empty-set rule should \
+revert to the question bag's tolerance with the discipline moved to the \
+thinker review.
+"""
+
+# ---------------------------------------------------------------------------
+# Stage 2 — order element A, part 2 (the cut list reaches the user) + element C.
+# ---------------------------------------------------------------------------
+[[stage]]
+index = 2
+title = "Bind the coverage block to the presented essence (cut list + stage count)"
+executor = "spawn:developer"
+material = """
+`cli.py::cmd_present_plan` (today: `--kind full` enforces stage-anchor \
+completeness against the plan; `--kind essence` gates on \
+`plan_review_blockers` and enforces `--rendering-file`, a byte cap and UTF-8 \
+decoding, but checks the rendering's CONTENT not at all — verified by reading \
+it (cli.py:1549-1585, whose comment records the absent anchor check as \
+by-design), which settles element C's 'check first': the essence carries no \
+size signal today, so C is a real change) and \
+`plugins_premise.premise_blockers` (today: no relation to the presentation \
+receipt).
+"""
+means = """
+REUSE: `render_coverage_block` from stage 1 as the single generator; \
+`cmd_present_plan`'s existing `--kind full` stage-anchor completeness check as \
+the FORM (a mechanical containment check over engine-generated text, never a \
+semantic read of prose — the `regex-not-for-semantic-classification` boundary); \
+`gates.plan_presentation_active` and `state.plan_presentations[*].rendering_text` \
+(already stored) for the gate half; the `question-dispose --to escalated` \
+refusal as the precedent for a CLI fast-fail that is a courtesy while the gate \
+is the authority.
+"""
+method = """
+(1) cmd_present_plan, `--kind essence` branch only: compute the block from the \
+loaded plan doc + the active premise bag and require every non-empty line of \
+it, stripped, to appear as a stripped line of the rendering text. On a miss, \
+stamp NOTHING and return the block verbatim in the directive so the coordinator \
+pastes it — the fast-fail exists because the essence is emitted as a turn's \
+final message, so discovering the omission at `approve` would cost the whole \
+present -> timer -> ask cycle. \
+(2) plugins_premise.premise_blockers: when `gates.plan_presentation_active(state)` \
+is true AND an essence receipt exists for `state.plan_path`, require that \
+receipt's `rendering_text` to contain the CURRENT block; blocker names \
+`present-plan --kind essence` as the route out. This is the half the fast-fail \
+cannot do: it catches an element cut AFTER the essence was presented, which the \
+plan_sha256 binding cannot see (the bag is not plan bytes). \
+(3) Guard both halves so no unsatisfiable demand is created: silent when plan \
+presentation is inactive (chat/small-change/AGENTCTL_PLAN_PRESENTATION=0) and \
+silent when no essence receipt exists at all — that absence is already \
+`gates.plan_presentation_blockers`' own refusal with its own route out, and \
+double-blocking it would leave a refusal whose route belongs to another gate. \
+(4) Element C rides the block's header line (`plan has <N> stage(s)`), so size \
+reaches the user through the mechanism already being built rather than a second \
+one. 'Expected volume' beyond the stage count is deliberately NOT mechanized: \
+the engine has no honest source for a line/token estimate, and a fabricated one \
+is worse than none — this is itself recorded as a CUT order element. \
+(5) scripts/tests/test_order_coverage_essence.py: present-plan refuses an \
+essence missing the block and stamps one containing it; the gate goes red when \
+an element is cut after presenting and green again after re-presenting; both \
+guards in (3) are proven silent.
+"""
+conditions = "Delivery worktree only; stage 1's `render_coverage_block` must already exist (depends_on = [1])."
+invariants = """
+`present-plan --kind full`, `--emit-skeleton`, the rendering byte cap, the \
+plan_sha256/rendering_sha256 bindings and the delivery-stamp gate are all \
+untouched; a session with plan presentation inactive sees no new blocker; \
+nothing parses the free prose of the essence — only containment of \
+engine-generated lines is checked.
+"""
+capability_required = "Python; the present-plan receipt/delivery-stamp binding and the gate's fail-closed/fail-open asymmetry; pytest"
+expected_result_image = """
+`present-plan --kind essence` refuses (stamping nothing) an essence rendering \
+that omits the `[scope] plan has N stage(s); order: M element(s) — C covered, \
+K cut` block or any of its per-element lines, and hands back the exact block to \
+paste; after a `cut` recorded post-presentation, `question-check` reports the \
+stale-essence blocker and `approve` refuses until the essence is re-presented. \
+`python3 -m pytest scripts/tests/test_order_coverage_essence.py -q` exits 0.
+"""
+criterion_type = "measurable"
+done_criterion = "the essence-binding test module is green in the delivery worktree"
+verify_command = "cd /Users/the0/claude-agent-instructions-scope && python3 -m pytest scripts/tests/test_order_coverage_essence.py -q"
+expected_exit = 0
+depends_on = [1]
+output_artifacts = ["scripts/tests/test_order_coverage_essence.py"]
+
+[stage.principle]
+statement = """
+Making the cut list VISIBLE to the user and SATISFYING the approval gate are \
+two different acts: the gate must bind on the essence actually containing the \
+CURRENT block, not on a block having been generated at some point.
+"""
+source = "memory-global/leaves/principles/verdict-covers-the-evidence-domain-it-claims.md § 'The corollary, which is where this is most often got wrong' (index-ENUMERATED yet manifest-SATISFIED; surfacing an obligation never discharges it)."
+derivation = """
+The corollary warns that a plan treating surfacing and satisfying as one step \
+produces a stage green precisely because nobody has looked yet. Trace the two \
+candidate designs against it: a present-plan-time check alone SURFACES (the \
+block was in the rendering when stamped) but does not SATISFY (a cut recorded \
+afterwards leaves the receipt's plan_sha256 valid, since the bag is not plan \
+bytes, so approve passes over a stale cut list). Only re-deriving the block at \
+gate time from live state closes that window — which is why the design carries \
+BOTH halves and assigns the authority to the gate, not to the courtesy check.
+"""
+confidence = "high"
+refutation = """
+Refuted if the post-presentation-mutation window is unreachable in practice — \
+if some other invariant already forces a re-presentation whenever the order bag \
+changes, the gate half is dead code and the fast-fail alone suffices. It is \
+also refuted from the other side if line-containment proves brittle against \
+ordinary markdown editing (the coordinator reformats the block and the gate \
+refuses honest work), which would push the check toward comparing a normalized \
+projection instead of raw lines.
+"""
+
+# ---------------------------------------------------------------------------
+# Stage 3 — order element B (the norm) + the documentation of what stages 1-2 built.
+# ---------------------------------------------------------------------------
+[[stage]]
+index = 3
+title = "The norm sentence in CLAUDE.md, and the docs for the new seam"
+executor = "in_thread"
+material = """
+`CLAUDE.md` § Escalation to the user (today: carries the rule that an ask's \
+options must span the full set your own analysis enumerated — the rule this \
+extends, and the reason no NEW rule is invented); \
+`scripts/agentctl/README.md` § Commands table + § Plugins premise paragraph \
+(today: seven `question-*` rows and a three-blocker-family description, both \
+now incomplete); `memory-global/leaves/question-provenance-gate.md` (today: \
+documents the seam and its honest ceiling, both now incomplete).
+"""
+means = """
+The EXISTING § Escalation rule, extended to a second instance rather than \
+restated as a new norm (planner SKILL.md § Research, 'the agent's own \
+instructions & mechanisms' row: extend or generalize before inventing); the \
+README's existing row format and the leaf's existing `## Guidance` / \
+'Honest ceiling' sections; `verify-all.py` (cross-refs, language, terms, \
+doc-concepts, README inventory) as the mechanical control on the edits.
+"""
+method = """
+(1) CLAUDE.md § Escalation, immediately after the ask-options sentence: one \
+sentence stating that the same applies to the plan against the order — name, in \
+the turn that carries the essence, what the plan does NOT cover and why. \
+(2) scripts/agentctl/README.md § Commands: three rows (`order-raise`, \
+`order-dispose`, `order-list`) in the existing format, adjacent to the \
+`question-*` rows; § Plugins premise paragraph: extend the blocker-family \
+sentence from three families to four, and name the essence-containment binding. \
+(3) memory-global/leaves/question-provenance-gate.md: extend `## Guidance` with \
+the order-coverage half (including the OPPOSITE empty-set rule and why) and add \
+the residuals this half inherits to the honest ceiling — a decoy order element, \
+a junk cut `--reason` (free text, uncheckable), the fact that WHICH elements \
+the order has remains perception, and — the largest — that the elements can be \
+enumerated from the ALREADY-WRITTEN plan, in which case coverage is trivially \
+total and proves nothing about the order (the question bag counters this with \
+`question-enumerate`; the order bag deliberately gets no analogue, so the \
+residual is NAMED, not mechanized). \
+(4) No other file: the escape-hatch report, `plan-review --verdict override` \
+coverage, and the prior incident's root cause stay out (named cuts).
+"""
+conditions = """
+Runs in-thread after approval under the § Classify in-context carve-out: \
+prose-only edits, no logic, and the root holds the design context from stages \
+1-2 (re-briefing a spawn would cost more than the edit). Delivery worktree only.
+"""
+invariants = """
+No behavioral rule is added beyond the single § Escalation sentence (the \
+mechanism is stages 1-2; this is its statement); no numbered-section or link \
+in CLAUDE.md breaks; the repo stays English; every added link resolves.
+"""
+capability_required = "The design context from stages 1-2; the repo's doc conventions and its verifier set"
+expected_result_image = """
+`grep -q 'the plan against the order' CLAUDE.md` succeeds; the README lists the \
+three new verbs and a four-family premise gate; the leaf's honest ceiling names \
+the order-coverage residuals; `python3 scripts/verify-all.py` exits 0.
+"""
+criterion_type = "measurable"
+done_criterion = "verify-all.py is green in the delivery worktree with the prose edits applied"
+verify_command = "cd /Users/the0/claude-agent-instructions-scope && python3 scripts/verify-all.py && grep -q 'the plan against the order' CLAUDE.md && grep -q 'order-raise' scripts/agentctl/README.md"
+expected_exit = 0
+depends_on = [1, 2]
+output_artifacts = []
+
+[stage.principle]
+statement = """
+The order-vs-plan rule is an EXTENSION of the existing 'an ask's options must \
+span the full set your own analysis enumerated' rule to a second instance, not \
+a new norm; and a mechanism whose documentation is not extended with it is a \
+mechanism nobody can apply.
+"""
+source = "CLAUDE.md § Escalation to the user (the existing ask-options rule); planner SKILL.md § Research (the agent's own instructions & mechanisms are reuse material — extend or generalize before inventing, because a narrow single-purpose norm bloats the norm-set the user must hold in memory)."
+derivation = """
+The existing rule constrains one act (an ask) against one domain (the options \
+the agent's own analysis enumerated), on the ground that a bound invented for \
+internal economy must not silently become the boundary of the user's choice. \
+The plan-against-the-order relation has the identical shape one level up: the \
+plan is the act, the order is the domain, and a narrowing chosen for the \
+agent's convenience silently becomes the boundary of what gets built. Same \
+ground, same constraint — so the norm-set grows by one sentence in an existing \
+section rather than by a new rule with its own heading, which is what the \
+reuse-before-invent guidance prescribes.
+"""
+confidence = "high"
+refutation = """
+Refuted if the two cases turn out to need different handling in practice — e.g. \
+if naming cuts in the essence turns out to require a structurally different \
+discipline from spanning an ask's options (a standing register rather than a \
+per-turn statement), in which case a single appended sentence under-specifies \
+and the norm deserves its own place.
+"""

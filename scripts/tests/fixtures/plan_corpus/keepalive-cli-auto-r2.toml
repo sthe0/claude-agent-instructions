@@ -1,0 +1,56 @@
+[meta]
+task_id = "keepalive-cli-auto"
+goal = "Provide a `claude-keepawake on|off|auto|status` CLI plus a root LaunchDaemon that, in auto mode, keeps macOS awake iff claude processes are running (so closing the lid keeps Claude alive only when it must), with zero sudo for daily on/off/auto use. Replaces the static com.local.disablesleep daemon."
+done_criterion = "claude-keepawake on -> SleepDisabled 1; off -> 0; auto with a claude process running -> 1, and with none -> 0; all on/off/auto invocations run without a sudo password; setting survives reboot."
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/projects"
+external_research = "No web research warranted — standard macOS pmset(disablesleep)/launchd(WatchPaths,StartInterval) territory. On-machine recon done: claude process signature (comm=claude for top sessions + .../claude-code/bin/claude.exe for subagents), PATH includes /usr/local/bin (root) and ~/.local/bin (user), existing com.local.disablesleep.plist to replace."
+
+[[stage]]
+index = 1
+title = "Author claude-keepawake CLI + daemon + install/uninstall (developer)"
+executor = "spawn:developer"
+expected_result_image = "In /tmp/keepalive/: (1) claude-keepawake script with subcommands on|off|auto|status|daemon-tick; (2) com.local.claude-keepawake.plist (ProgramArguments=/usr/local/bin/claude-keepawake daemon-tick, RunAtLoad, StartInterval=5, WatchPaths=[/usr/local/var/claude-keepawake.mode]); (3) install.sh; (4) uninstall.sh. Claude detection matches both `comm=claude` top sessions and `claude-code/bin/claude` subagents, excludes the watcher itself. Logic dry-tested without sudo (mode parse, claude count)."
+criterion_type = "measurable"
+done_criterion = "bash -n on every script passes and plutil -lint on the plist passes"
+verify_command = "bash -n /tmp/keepalive/claude-keepawake && bash -n /tmp/keepalive/install.sh && bash -n /tmp/keepalive/uninstall.sh && plutil -lint /tmp/keepalive/com.local.claude-keepawake.plist"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["/tmp/keepalive/claude-keepawake", "/tmp/keepalive/com.local.claude-keepawake.plist", "/tmp/keepalive/install.sh", "/tmp/keepalive/uninstall.sh"]
+material = "Empty /tmp/keepalive/ staging dir; on-machine facts (claude signature, PATH, pmset keys)"
+means = "developer specialist (spawned), bash + launchd/pmset knowledge"
+method = "Write a single self-contained claude-keepawake script whose daemon-tick reconciles SleepDisabled from (mode file, claude presence); a plist wiring WatchPaths+StartInterval=5s; idempotent install/uninstall that also remove the old com.local.disablesleep daemon"
+conditions = "No sudo used during authoring; all artifacts staged under /tmp/keepalive/ (not installed yet)"
+invariants = "Daily on/off/auto must need no sudo (CLI writes only the user-owned mode file); pmset only ever called by the root daemon; claude detector must not match the watcher/grep itself; scripts pass bash -n"
+capability_required = "Bash scripting, macOS launchd/pmset knowledge"
+
+[stage.principle]
+statement = "Split privilege from policy: a root daemon owns the privileged action (pmset), the unprivileged CLI only expresses intent via a user-writable file the daemon watches — so everyday use needs no sudo and the privileged surface stays minimal."
+source = "Standard launchd design; this session's zero-sudo requirement."
+confidence = "high"
+refutation = "Refuted if WatchPaths does not reliably fire on mode-file writes, forcing the CLI to call sudo pmset directly — then fall back to a scoped /etc/sudoers.d NOPASSWD rule for pmset."
+
+[[stage]]
+index = 2
+title = "Install (sudo) and verify on/off/auto behavior"
+executor = "in_thread"
+expected_result_image = "User runs `sudo bash /tmp/keepalive/install.sh` once. Then: claude-keepawake on->SleepDisabled 1; off->0; auto (claude running)->1; and the manual toggles need no password. Old disablesleep daemon gone; new daemon loaded."
+criterion_type = "measurable"
+done_criterion = "pmset -g shows SleepDisabled tracking each mode as specified, verified live; no password prompted on on/off/auto"
+verify_command = "pmset -g | grep -i sleepdisabled"
+expected_exit = 0
+depends_on = [1]
+output_artifacts = ["/usr/local/bin/claude-keepawake", "/Library/LaunchDaemons/com.local.claude-keepawake.plist", "/usr/local/var/claude-keepawake.mode"]
+material = "Staged artifacts from stage 1"
+means = "User-run sudo install; in-thread verification via pmset -g"
+method = "Guide the single sudo install command, then exercise each mode and read SleepDisabled; confirm auto reacts to claude presence"
+conditions = "User executes the sudo step (agent shell has no TTY for sudo password)"
+invariants = "Reboot-persistence via /Library/LaunchDaemons; a clean uninstall path exists"
+capability_required = "User sudo on this machine"
+
+[stage.principle]
+statement = "Verify the effect axis that matters: read SleepDisabled live under each mode rather than trusting that install 'succeeded'."
+source = "CLAUDE.md verify-the-right-axis; prior macOS task where SleepDisabled=1 was the load-bearing observable."
+confidence = "high"
+refutation = "Refuted if SleepDisabled is not the observable that governs lid-close sleep — contradicted by the prior task where it demonstrably was."

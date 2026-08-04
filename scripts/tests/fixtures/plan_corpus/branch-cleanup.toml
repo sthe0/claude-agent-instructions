@@ -1,0 +1,41 @@
+# Plan: branch-cleanup — ensure all non-main branches on origin
+# (github.com/sthe0/claude-agent-instructions) are merged into main and
+# deleted. In-conversation plan approved by the user ("Вливай" + clicked
+# "Удалить, решена (Recommended)"); this file registers the single stage
+# with the engine.
+
+[meta]
+task_id = "branch-cleanup"
+goal = "All non-main branches on origin are merged into main and deleted"
+done_criterion = "git branch -r on a pruned clone lists only origin/main (and HEAD); no non-main branch carries commits absent from main"
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/claude-agent-instructions"
+external_research = "Not warranted: standard git branch audit (git cherry, merge-base --is-ancestor, merge-tree dry-run) — no external unknowns."
+
+[[stage]]
+index = 1
+title = "Audit, merge and delete the one non-main origin branch"
+executor = "manager"
+expected_result_image = "users/the0/mount-check-tracker-reminder (2 unmerged commits from the qemu VM: AFK-timeout setting cbe290f, shared-tree leaf 7c351f2) is merged into main via a clean merge commit, pushed, and deleted on origin; the merged AFK setting is applied to the local ~/.claude/settings.json via apply-settings.sh; origin carries only main afterwards."
+criterion_type = "measurable"
+done_criterion = "origin lists only main; merged branch tip is an ancestor of main"
+verify_command = "bash -c 'test -z \"$(git branch -r | grep -v HEAD | grep -v origin/main$)\"'"
+expected_exit = 0
+material = "git remote origin (github.com/sthe0/claude-agent-instructions); origin/users/the0/mount-check-tracker-reminder; settings/base.json; scripts/apply-settings.sh"
+means = "git fetch --prune, git cherry, git merge-tree --write-tree (conflict dry-run), git merge --no-edit, sync-instructions-repo.sh push, git push origin --delete"
+method = "fetch+prune; enumerate non-main remote branches; for each, check patch-equivalence (git cherry) and ancestry; dry-run merge for conflicts; present findings and gate merge+push+delete on user confirmation; merge, push via sync script, delete remote branch, re-verify with prune"
+conditions = "working tree clean before merge; push to main and branch deletion each gated on explicit user confirmation"
+invariants = "no history rewrite on main; branch deleted only after its tip is an ancestor of main; local settings merge preserves machine-specific keys (apply-settings.sh contract)"
+capability_required = "git remote ops + instructions-repo sync scripts"
+
+[stage.principle]
+statement = "A remote branch is safe to delete exactly when its tip is an ancestor of the shared trunk; patch-equivalence (git cherry) — not branch names or age — decides whether content is already landed."
+source = "standard git branch-hygiene practice; verified here via merge-base --is-ancestor after the merge."
+confidence = "high"
+refutation = "If a branch encodes value beyond its commits (e.g. a deployment pointer or an open PR base), ancestry alone would not justify deletion."
+
+[[final_check]]
+command = "bash -c 'git fetch --prune origin >/dev/null 2>&1; test -z \"$(git branch -r | grep -v HEAD | grep -v origin/main$)\"'"
+expected_exit = 0
+label = "origin carries only main"

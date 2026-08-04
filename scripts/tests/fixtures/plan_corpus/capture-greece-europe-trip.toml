@@ -1,0 +1,32 @@
+[meta]
+task_id = "capture-greece-europe-trip"
+goal = "Capture the Greece+Europe September-2026 trip into the journeys/ workspace (filled trip.md + INDEX row) via the manage-trips 'завести поездку' command. Actual domain planning is a separate follow-up task."
+done_criterion = "journeys/greece-europe-2026-09/trip.md filled from the user's description; INDEX.md has the row; committed"
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/projects/trips"
+external_research = "Not warranted — this task only records the user's stated trip context; the research-backed planning (destinations/visa/itinerary) is the deferred follow-up task."
+
+[[stage]]
+index = 1
+title = "Capture trip.md + INDEX row"
+executor = "in_thread"
+expected_result_image = "trip.md filled (dates from 5 Sep 2026 post-Fethiye charter, 2 travellers, anti-touristy/authentic/wineries/small-towns vibe, Greece + Italy/France-N&W/Spain-N/Portugal candidates, open questions); INDEX.md row (idea)"
+criterion_type = "measurable"
+done_criterion = "trip.md non-template and INDEX.md references greece-europe-2026-09"
+verify_command = "grep -q 'сентября 2026' /Users/the0/projects/trips/journeys/greece-europe-2026-09/trip.md && grep -q greece-europe-2026-09 /Users/the0/projects/trips/journeys/INDEX.md"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["journeys/greece-europe-2026-09/", "journeys/INDEX.md"]
+material = "user's trip description + journeys template"
+means = "Write, Edit"
+method = "fill trip.md from the description; add INDEX row; land trip (charter separate)"
+conditions = "journey scaffold already copied from template"
+invariants = "no invented facts; preferences captured verbatim-in-spirit; charter noted as separate"
+capability_required = "structured capture"
+
+[stage.principle]
+statement = "Capture the user's trip context durably before heavy planning, so a fresh context can resume from trip.md"
+source = "cost discipline: large context, defer research to a post-/clear task"
+confidence = "high"
+refutation = "none"

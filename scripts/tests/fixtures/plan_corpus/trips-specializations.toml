@@ -1,0 +1,121 @@
+[meta]
+task_id = "trips-specializations"
+goal = "Инициализировать репозиторий ~/projects/trips как дом для проектных специализаций менеджера по планированию путешествий (6 специализаций + дизайн-док + проектная память), с наполнением на базе интернет-исследования."
+done_criterion = "git-репо инициализирован с коммитом; docs/specializations.md описывает 6 специализаций; 6 SKILL.md с валидным frontmatter под .claude/skills/specializations/; контент опирается на research; README+.gitignore на месте"
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/projects/trips"
+external_research = "Stage 1 плана целиком посвящён интернет-исследованию: 6 доменов (визы/направления/авиабилеты/жильё/наземный транспорт/синтез маршрута) + мета-тема multi-agent travel-planner design, через параллельные web-агенты; выводы обязаны отразиться в контенте (проверяется в final verification)."
+
+[[stage]]
+index = 1
+title = "Research: доменная экспертиза + мета-паттерны"
+executor = "in_thread"
+expected_result_image = "на каждую из 6 тем — сжатый синтез (подпроблемы, экспертные тактики/источники, факторы решения, подводные камни); мета-тема даёт валидацию/коррекцию границ таксономии"
+criterion_type = "acceptance_review"
+done_criterion = "7 синтезов получены и сведены; выводы достаточны для наполнения SKILL.md"
+depends_on = []
+output_artifacts = ["/tmp/cc-scratch/trips-research.md"]
+material = "6 доменов планирования путешествий + мета-тема мульти-агентной декомпозиции"
+means = "WebSearch/WebFetch через параллельные sonnet-агенты"
+method = "по одному агенту на тему; каждый возвращает структурированный синтез с источниками"
+conditions = "есть доступ к web-инструментам"
+invariants = "каждый вывод привязан к источнику; границы таксономии не расширяются без обоснования"
+capability_required = "web-исследование и синтез"
+
+[stage.principle]
+statement = "Проектировать доменную систему после обзора существующей экспертизы и prior art, а не из первых принципов"
+source = "запрос пользователя: «поисследовать интернет перед тем как строить систему»"
+confidence = "high"
+refutation = "если research не даёт нового поверх базовой модели — зафиксировать это явно и строить на базовой"
+
+[[stage]]
+index = 2
+title = "docs/specializations.md — дизайн-документ (источник истины)"
+executor = "in_thread"
+expected_result_image = "документ с таблицей 6 специализаций, принципом разбиения, решениями split/combine, картой взаимодействия и cross-cutting (бюджет), скорректированный research"
+criterion_type = "acceptance_review"
+done_criterion = "docs/specializations.md существует и согласуется с утверждённой таксономией + research"
+depends_on = [1]
+output_artifacts = ["docs/specializations.md"]
+material = "утверждённая таксономия из 6 специализаций + выводы Stage 1"
+means = "Write"
+method = "свести таксономию и research в структурированный markdown"
+conditions = "Stage 1 завершён"
+invariants = "6 специализаций; бюджет — cross-cutting, не отдельный агент"
+capability_required = "техническое письмо/архитектурная документация"
+
+[stage.principle]
+statement = "Единый источник истины по границам специализаций предотвращает рассинхрон SKILL.md"
+source = "CLAUDE.md § memory/docs discipline"
+confidence = "high"
+refutation = "если специализаций мало и границы очевидны — док избыточен"
+
+[[stage]]
+index = 3
+title = "Repo scaffold: git init + README + .gitignore"
+executor = "in_thread"
+expected_result_image = "репо с первым коммитом; README ссылается на docs; .gitignore для python/среды"
+criterion_type = "measurable"
+done_criterion = "git -C /Users/the0/projects/trips log --oneline показывает коммит"
+verify_command = "git -C /Users/the0/projects/trips log --oneline"
+depends_on = [2]
+output_artifacts = ["README.md", ".gitignore", ".git/"]
+material = "пустой каталог trips + готовый дизайн-док"
+means = "git, Write"
+method = "git init; написать README и .gitignore; первый коммит"
+conditions = "каталог существует и пуст"
+invariants = "не коммитить секреты/мусор"
+capability_required = "git и базовый scaffolding"
+
+[stage.principle]
+statement = "Тонкий README как точка входа, детали — в docs/"
+source = "CLAUDE.md config readme-max-lines"
+confidence = "high"
+refutation = "нет"
+
+[[stage]]
+index = 4
+title = "6 × SKILL.md специализаций"
+executor = "in_thread"
+expected_result_image = "6 валидных SKILL.md (frontmatter name + TRIGGER/SKIP description, границы, входы/выходы, источники, тактики, чек-листы), каждый ≤ ~200 строк, контент из research"
+criterion_type = "acceptance_review"
+done_criterion = "ls .claude/skills/specializations/*/SKILL.md → 6 файлов, согласованных с дизайн-доком"
+depends_on = [3]
+output_artifacts = [".claude/skills/specializations/"]
+material = "дизайн-док + research-выводы"
+means = "Write"
+method = "по домену: frontmatter, границы, тактики, чек-листы на базе research"
+conditions = "Stage 1–2 завершены"
+invariants = "имена и границы совпадают с docs/specializations.md; без generic-заглушек"
+capability_required = "доменное письмо + формат SKILL.md"
+
+[stage.principle]
+statement = "Специализация полезна при distinct базе знаний, тактике и переиспользуемости"
+source = "утверждённый принцип разбиения (диалог)"
+confidence = "high"
+refutation = "если домены перекрываются — объединить"
+
+[[stage]]
+index = 5
+title = "Project memory + final verification"
+executor = "in_thread"
+expected_result_image = "инициализирован .claude/agent-memory/ (индекс MEMORY.md); финальная проверка пройдена; коммит обновлён"
+criterion_type = "measurable"
+done_criterion = "ls .claude/skills/specializations/*/SKILL.md даёт 6 и git log показывает коммиты"
+verify_command = "ls /Users/the0/projects/trips/.claude/skills/specializations/*/SKILL.md | wc -l"
+expected_exit = 0
+depends_on = [4]
+output_artifacts = [".claude/agent-memory/MEMORY.md"]
+material = "готовые специализации + репо"
+means = "Write, git"
+method = "создать индекс проектной памяти; прогнать final verification; коммит"
+conditions = "Stage 4 завершён"
+invariants = "память — индекс + leaf-модель проекта"
+capability_required = "настройка проектной памяти"
+
+[stage.principle]
+statement = "Проектная память с индексом обеспечивает переиспользование опыта поездок"
+source = "CLAUDE.md § Memory (project scope)"
+confidence = "high"
+refutation = "нет"
