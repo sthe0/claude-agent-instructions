@@ -159,6 +159,112 @@ def test_ungoverned_ignores_self_ref_excluded_paths(tmp_path):
     assert vcr.find_ungoverned(tmp_path) == []
 
 
+# ── content anchors: path:line:<sha8> ─────────────────────────────────────────
+
+# The anchor of the line "See ~/.claude for config." — computed OUTSIDE this
+# codebase so the test cannot pass by agreeing with a self-consistently broken
+# implementation:
+#     printf '%s' 'See ~/.claude for config.' | shasum -a 256
+_SEE_ANCHOR = "d3b52e9e"
+
+
+def test_anchor_definition_matches_independent_literal():
+    """Outcome-independent anti-vacuity check: --repin writes anchors with the
+    same function scan() reads them with, so a self-consistently wrong
+    anchor_of would make every other anchor test green on a broken mechanism.
+    Only an independently-derived constant can refute that."""
+    assert vcr.anchor_of("See ~/.claude for config.") == _SEE_ANCHOR
+    assert vcr.anchor_of("   See ~/.claude for config.  ") == _SEE_ANCHOR
+
+
+def test_anchor_matches_at_pinned_line(tmp_path):
+    """(i) Anchor agrees with the pin — covered, exactly as a bare pin is."""
+    _write(tmp_path, "README.md", "See ~/.claude for config.\n")
+    allowlist = _write(tmp_path, "allow.txt", f"README.md:1:{_SEE_ANCHOR}  # legacy note\n")
+    assert vcr.scan(tmp_path, allowlist) == 0
+
+
+def test_anchor_relocates_to_single_other_occurrence(tmp_path):
+    """(ii) A line inserted above the reference must not redden the pin: the
+    anchor finds the reference one line down and the entry follows it."""
+    _write(tmp_path, "README.md", "filler\nSee ~/.claude for config.\n")
+    allowlist = _write(tmp_path, "allow.txt", f"README.md:1:{_SEE_ANCHOR}  # legacy note\n")
+    assert vcr.scan(tmp_path, allowlist) == 0
+
+    entries = vcr.parse_allowlist(allowlist)
+    relocations, ambiguities = vcr.resolve_entries(entries, vcr.find_occurrences(tmp_path))
+    assert ambiguities == []
+    assert [(r["old"], r["new"]) for r in relocations] == [(1, 2)]
+
+
+def test_anchor_matching_no_occurrence_is_stale(tmp_path):
+    """(iii) The silent hole a bare pin leaves open: the pinned line's own text
+    was rewritten, so the anchor matches nothing and the entry goes stale."""
+    _write(tmp_path, "README.md", "See ~/.claude for the OLD config.\n")
+    allowlist = _write(tmp_path, "allow.txt", f"README.md:1:{_SEE_ANCHOR}  # legacy note\n")
+    assert vcr.scan(tmp_path, allowlist) == 1
+
+    entries = vcr.parse_allowlist(allowlist)
+    occurrences = vcr.find_occurrences(tmp_path)
+    vcr.resolve_entries(entries, occurrences)
+    assert [e["raw"] for e in vcr.find_stale_entries(entries, occurrences)] == [
+        f"README.md:1:{_SEE_ANCHOR}  # legacy note"
+    ]
+
+
+def test_anchor_matching_two_occurrences_is_ambiguous(tmp_path):
+    """(iv) Two occurrences carry identical text and the pin matches neither —
+    a hard failure naming both, never a silent pick."""
+    _write(
+        tmp_path, "README.md",
+        "intro\nSee ~/.claude for config.\nmiddle\nSee ~/.claude for config.\n",
+    )
+    allowlist = _write(tmp_path, "allow.txt", f"README.md:1:{_SEE_ANCHOR}  # legacy note\n")
+    assert vcr.scan(tmp_path, allowlist) == 1
+
+    entries = vcr.parse_allowlist(allowlist)
+    relocations, ambiguities = vcr.resolve_entries(entries, vcr.find_occurrences(tmp_path))
+    assert relocations == []
+    assert [a["candidates"] for a in ambiguities] == [[2, 4]]
+
+
+def test_two_entries_resolving_to_same_occurrence_fail(tmp_path):
+    """(v) Two entries collapsing onto one occurrence: without this check one
+    silently double-covers while the occurrence the other named resurfaces as
+    unallowed with no stated cause."""
+    _write(tmp_path, "README.md", "See ~/.claude for config.\nLegacy note about ~/.claude here.\n")
+    allowlist = _write(
+        tmp_path, "allow.txt",
+        f"README.md:1:{_SEE_ANCHOR}  # first entry\n"
+        f"README.md:2:{_SEE_ANCHOR}  # second entry, same anchor\n",
+    )
+    assert vcr.scan(tmp_path, allowlist) == 1
+
+    entries = vcr.parse_allowlist(allowlist)
+    vcr.resolve_entries(entries, vcr.find_occurrences(tmp_path))
+    duplicates = vcr.find_duplicate_coverage(entries)
+    assert [(path, lineno, len(group)) for path, lineno, group in duplicates] == [
+        ("README.md", 1, 2)
+    ]
+
+
+def test_unanchored_pin_behaves_as_before(tmp_path):
+    """Back-compat: a bare path:line neither relocates nor gains an opinion —
+    it covers its own line and goes stale when that line stops matching."""
+    _write(tmp_path, "README.md", "filler\nSee ~/.claude for config.\n")
+    allowlist = _write(tmp_path, "allow.txt", "README.md:1  # legacy note\n")
+    assert vcr.scan(tmp_path, allowlist) == 1
+
+    entries = vcr.parse_allowlist(allowlist)
+    assert entries[0]["anchor"] is None
+    relocations, ambiguities = vcr.resolve_entries(entries, vcr.find_occurrences(tmp_path))
+    assert (relocations, ambiguities) == ([], [])
+    assert entries[0]["resolved_line"] == 1
+
+    _write(tmp_path, "README.md", "See ~/.claude for config.\n")
+    assert vcr.scan(tmp_path, allowlist) == 0
+
+
 # ── domain must be the git index, not the working tree (verifier-reproducibility) ──
 
 def test_iter_repo_files_skips_untracked(tmp_path):
