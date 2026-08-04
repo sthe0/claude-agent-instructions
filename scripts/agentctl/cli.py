@@ -1677,6 +1677,30 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
                 data={"missing": missing, "extra": extra},
             )
 
+    if kind == PLAN_PRESENTATION_KIND_ESSENCE:
+        # The scope-coverage block must be IN the essence — checked the same
+        # mechanical way the `full` branch above checks stage anchors (containment
+        # of engine-generated lines, never a read of the essence's own prose).
+        # A COURTESY, not the authority: plugins_premise.premise_blockers re-checks
+        # it at `approve`. It lives here because the essence is emitted as a turn's
+        # FINAL text message, so discovering the omission at `approve` would cost
+        # the whole present -> timer -> ask cycle — hence: stamp NOTHING, hand the
+        # block back verbatim to paste. Silent when the premise plugin is not armed
+        # (no order bag exists, and the gate half is equally silent) or when plan
+        # presentation is inactive.
+        bag = state.plugins.get("premise")
+        if bag is not None and gates.plan_presentation_active(state):
+            block = plugins_premise.coverage_block(state, bag)
+            missing = plugins_premise.coverage_block_missing_lines(block, text)
+            if missing:
+                return Directive(
+                    False, state.node, "noop",
+                    "essence rendering omits the scope-coverage block; stamping "
+                    "nothing — paste these lines into it verbatim and re-run: "
+                    + "; ".join(missing),
+                    data={"coverage_block": block, "missing_lines": missing},
+                )
+
     presentation = PlanPresentation(
         plan_path=state.plan_path,
         kind=kind,

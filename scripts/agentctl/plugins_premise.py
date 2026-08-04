@@ -27,9 +27,9 @@ from __future__ import annotations
 import hashlib
 import os
 
-from . import plan, premise
+from . import gates, plan, premise
 from .plugins import Plugin, PluginDirective, register
-from .state import WeightClass
+from .state import PLAN_PRESENTATION_KIND_ESSENCE, WeightClass
 
 
 def _auto_activate(state) -> bool:
@@ -73,6 +73,46 @@ def _plan_content_digest(doc: "plan.PlanDoc") -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def coverage_block(state, bag, *, doc=None) -> str | None:
+    """The scope-coverage block the presented essence must carry — the plan's stage
+    count plus what it does with each element of the order — or None when no plan is
+    submitted yet (nothing to size, nothing to cover). `doc` is an already-loaded
+    PlanDoc when the caller has one (premise_blockers does), so the block is derived
+    from the same bytes its other checks used. premise.render_coverage_block is the
+    single generator; this only supplies its two inputs."""
+    plan_path = getattr(state, "plan_path", None)
+    if not plan_path:
+        return None
+    if doc is None:
+        doc = plan.load_plan(plan_path)
+    elements = premise.order_elements_from_dicts(bag.get("order_elements", []))
+    return premise.render_coverage_block(elements, len(doc.stages))
+
+
+def coverage_block_missing_lines(block: str, rendering_text: str) -> list[str]:
+    """Which of the block's lines a rendering does not carry. A MECHANICAL
+    containment check over ENGINE-GENERATED text — the same form as
+    cmd_present_plan's `--kind full` stage-anchor completeness check — never a
+    semantic read of the essence's own prose. Lines are compared stripped, so the
+    surrounding indentation or markdown context is free; the generated line's own
+    text must appear intact."""
+    present = {line.strip() for line in rendering_text.splitlines()}
+    return [
+        line for line in block.splitlines()
+        if line.strip() and line.strip() not in present
+    ]
+
+
+def _essence_coverage_blocker(missing: list[str]) -> str:
+    return (
+        "the presented essence does not carry the current scope-coverage block "
+        "(the order bag changed after it was presented) — missing: "
+        + "; ".join(missing)
+        + " — re-present with `agentctl present-plan --kind essence` (`agentctl "
+        "order-list --format md` prints the block to paste)"
+    )
+
+
 def premise_blockers(state, bag) -> list[str]:
     """The full plan_approval-gate blocker set for a premise bag, so the read-only
     `question-check` command (stage 4) and the gate never diverge (the
@@ -95,6 +135,12 @@ def premise_blockers(state, bag) -> list[str]:
        is covered by a stage the CURRENT plan contains, or cut with a reason. Unlike
        (1) an EMPTY bag blocks here, but only once a plan exists — before
        submit-plan there is nothing to check coverage of.
+    5. the essence ACTUALLY PRESENTED to the user carries the CURRENT coverage
+       block (coverage_block_missing_lines against the receipt's rendering_text).
+       Surfacing the cut list and satisfying the gate are two different acts: a
+       block that was in the rendering when the receipt was stamped says nothing
+       about an element cut afterwards, which is why the block is re-derived here
+       from live state rather than trusted from the receipt's plan_sha256 binding.
     Skips both the stage-key binding checks and the staleness check when no plan
     has been submitted yet (`state.plan_path` empty) — there is nothing to key
     against, and premise.validate_questions already tolerates an empty
@@ -106,6 +152,7 @@ def premise_blockers(state, bag) -> list[str]:
         stage_keys = {s.index: plan.stage_question_key(s) for s in doc.stages}
         content_digest = _plan_content_digest(doc)
     else:
+        doc = None
         stage_keys = {}
         content_digest = None
 
@@ -124,6 +171,21 @@ def premise_blockers(state, bag) -> list[str]:
         blockers.append(_ENUMERATE_NOT_RUN)
     elif content_digest is not None and bag.get("enumerated_at") != content_digest:
         blockers.append(_ENUMERATE_STALE)
+
+    if doc is not None and gates.plan_presentation_active(state):
+        receipt = gates._plan_presentation_for(state, PLAN_PRESENTATION_KIND_ESSENCE)
+        # Silent when NO essence receipt exists, and when the one that exists
+        # presents another plan: both are already gates.plan_presentation_blockers'
+        # own refusals, each carrying its own route out, and a second blocker here
+        # would leave a refusal whose route belongs to another gate. What this half
+        # DOES catch is the window that gate structurally cannot see — an element
+        # cut (or covered, or raised) AFTER the essence was presented leaves the
+        # receipt's plan_sha256 valid, because the order bag is not plan bytes.
+        if receipt is not None and receipt.plan_path == plan_path:
+            missing = coverage_block_missing_lines(
+                coverage_block(state, bag, doc=doc), receipt.rendering_text)
+            if missing:
+                blockers.append(_essence_coverage_blocker(missing))
 
     return blockers
 
