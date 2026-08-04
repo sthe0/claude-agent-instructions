@@ -63,7 +63,7 @@ docs/operations/setup.md:55:0ffb98bc  # keep:legacy-fallback — legacy ~/.claud
 benchmark-profile/REMOVED-VS-RETAINED.md:17:edb18bff  # keep:harness-owned — describes the personal ~/.claude/settings.json where the hook family is registered
 memory-global/MEMORY.md:66:12cee453  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 memory-global/leaves/claude-code-settings-env-precedence.md:35:3f736904  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
-memory-global/leaves/coordinator-pitfalls.md:29:af7a029f  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
+memory-global/leaves/coordinator-pitfalls.md:31:af7a029f  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 memory-global/leaves/experience/2026-05-24-silent-architectural-decision-config-as-file.md:23:99aa1ea4  # keep:historical-experience — historical quote inside a resolved-task experience leaf
 memory-global/leaves/experience/2026-06-04-org-specific-vs-global-placement.md:23:2474afd5  # keep:historical-experience — historical quote inside a resolved-task experience leaf
 memory-global/leaves/experience/2026-06-11-project-memory-migrate-existing-native.md:3:d3c6bbab  # keep:historical-experience — historical quote inside a resolved-task experience leaf
@@ -100,9 +100,9 @@ memory-global/leaves/system-knowledge/harness-read-dedup.md:45:f4985350  # keep:
 memory-global/leaves/system-knowledge/instructions-repo-layout.md:106:66a3e851  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
 memory-global/leaves/token-economy-plan.md:30:bfc84cba  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 memory-global/leaves/token-economy-plan.md:66:84c7ad27  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
-scripts/README.md:38:ed324f81  # keep:protected-path — hook-guard-destructive-rm.py row lists ~/.claude among the protected paths it guards
-scripts/README.md:86:20e9417b  # keep:legacy-fallback — migrate-to-isolated.sh relocates the in-place/legacy ~/.claude system install
-scripts/README.md:122:21690c45  # keep:enumerator-self-ref — verify-config-root-refs.py documents this enumerator; quotes the very pattern it searches
+scripts/README.md:39:ed324f81  # keep:protected-path — hook-guard-destructive-rm.py row lists ~/.claude among the protected paths it guards
+scripts/README.md:87:20e9417b  # keep:legacy-fallback — migrate-to-isolated.sh relocates the in-place/legacy ~/.claude system install
+scripts/README.md:123:21690c45  # keep:enumerator-self-ref — verify-config-root-refs.py documents this enumerator; quotes the very pattern it searches
 skills/overcome-difficulty/SKILL.md:57:3f3d6be5  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 skills/overcome-difficulty/policy.md:57:6880def2  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 skills/self-improvement/SKILL.md:76:037b0dbc  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
@@ -110,4 +110,6 @@ memory-global/leaves/system-knowledge/subagent-failure-rate-w29-w30.md:216:3fd04
 docs/operations/guards.md:48:a657922a  # keep:legacy-fallback — names the personal ~/.claude/settings.json precisely: the prune-only second file is defined by being the user's personal root, distinct from $CLAUDE_AGENT_HOME; the generic form would erase the two-file distinction the section exists to draw
 docs/operations/guards.md:50:ead5e889  # keep:legacy-fallback — same two-file distinction: the recurrence evidence is that the reconciler could not reach the personal ~/.claude/settings.json
 memory-global/leaves/autocompact-threshold-policy.md:60:0a742cea  # keep:legacy-fallback — contrasts $CLAUDE_AGENT_HOME/settings.json with the prune-only personal ~/.claude/settings.json; the generic form would collapse both into one
-scripts/README.md:72:a5f3990f  # keep:legacy-fallback — the install-reminder-hooks.sh row names the personal ~/.claude/settings.json as the prune-only file class, distinct from the agent-home file it also wires
+scripts/README.md:73:a5f3990f  # keep:legacy-fallback — the install-reminder-hooks.sh row names the personal ~/.claude/settings.json as the prune-only file class, distinct from the agent-home file it also wires
+scripts/agentctl/README.md:352:4ce7ac6c  # keep:harness-owned — states the harness's OWN root-resolution rule ($CLAUDE_CONFIG_DIR, else ~/.claude); the generic form would erase the very rule the line exists to state
+scripts/agentctl/README.md:360:37b335ef  # keep:legacy-fallback — names the personal ~/.claude/settings.json as the prune-only file class, distinct from the agent-home file; same two-file distinction the scripts/README.md and docs/operations/guards.md entries above already carry

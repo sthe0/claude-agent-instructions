@@ -343,6 +343,53 @@ Alongside it sits a second, append-only store: `~/.claude-agent/agentctl/edit-lo
 
 The `Agent-Session`/`Agent-Task` commit trailer that ties a commit to a session is built by `../agent_commit_trailer.py`, called from both the git `commit-msg` hook and arc's `arc-land-pr.sh` so the two VCS contexts stamp byte-identical trailers. Arc has no `commit-msg` hook to test against a live landing, so trailer-injection coverage for arc is verified by the injection *intent* that `arc-land-pr.sh --dry-run` prints (a Core-side test) rather than by an actual arc landing.
 
+## Two config roots
+
+Read this before adding a gate whose satisfier is a hook.
+
+There are **two** roots, and they are not the same object:
+
+- the root the **harness** loads hooks from — `$CLAUDE_CONFIG_DIR`, else `~/.claude`, which is the
+  CLI's own rule and nothing else's (`lib/config_root.harness_config_root()`);
+- the root the **agent system** installs into — `$CLAUDE_AGENT_HOME`, default `~/.claude-agent`
+  (`lib/config_root.agent_home()`).
+
+Under `claude-task` / `claude-agent` the two coincide. Under a bare `claude` they diverge, and that
+divergence is **deliberate**: the personal root is the user's, the system root is the agent's.
+Nothing in this repo installs the system's hooks into the personal root —
+`install-reminder-hooks.sh` covers `$HOME/.claude/settings.json` prune-only, adding to it never.
+
+The consequence for an engine author is exact: **a gate whose proof is written by a hook is
+unsatisfiable in any session whose harness root does not carry that hook.** The delivery gate met
+this in the worst form — `approve` refused for "no delivery proof recorded" while the hook that
+writes the proof had never been registered in the loading root, so the refusal named a remedy
+("let the delivery hook verify the turn's transcript") that could not be reached.
+
+What the engine can and cannot do about it:
+
+- it **can** observe wiring — `lib/hook_wiring.probe(basename, root)` reads the harness root's
+  settings chain and answers `WIRED` / `ABSENT` / `UNKNOWN`. `UNKNOWN` is first class: an unreadable
+  or unmodelled member is not evidence of absence, and only a positively established `ABSENT` may
+  be reported as one;
+- it **can** diagnose — `gates._no_stamp_blocker` consults the probe *only on the branch already
+  about to block*, so the read is off every passing path, and any exception degrades to the
+  undiagnosed wording rather than raising;
+- it **cannot** repair, and must not try. Installing into the personal root would overwrite a
+  deliberate choice of the user's. The report is the whole intervention:
+  `hook-canon-guard-wired-check.py` runs at SessionStart and names every gate-bearing hook
+  (`lib/hook_wiring.GATE_BEARING_HOOKS`) that is absent from the loading root, together with the
+  enforcement each absence disables;
+- it **must not** change the verdict on wiring. A missing prover changes what a gate *says*, never
+  whether it blocks. Letting approval through because the hook is missing would convert every
+  un-onboarded machine into an ungated one.
+
+Where the gate genuinely cannot be satisfied, the escape must stay reachable, and each escape must
+record a **typed** reason (`confirm-delivery --escape-reason`, one of
+`delivery.DELIVERY_ESCAPE_REASONS`) so escapes are countable rather than an archive of free-text
+notes. `scripts/escape-hatch-report.py` is the standing count, and the inventory of the engine's
+other hatches. The norm behind all of this:
+[`verdict-covers-the-evidence-domain-it-claims`](../../memory-global/leaves/principles/verdict-covers-the-evidence-domain-it-claims.md).
+
 ## Keeping this doc current
 
 This README is a **registered concept doc** in [`../doc-bindings.json`](../doc-bindings.json) (concept `coordination-state-machine`): changing engine code under `scripts/agentctl/` should review this file in the same change. [`verify-doc-concepts.py`](../verify-doc-concepts.py) asserts the `## State machine` heading exists and the `Node` anchor still resolves; the commit-time reminder names this doc when engine code changes without it.

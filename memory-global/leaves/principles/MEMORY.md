@@ -25,4 +25,5 @@ the two sub-indexes stay physically separate but record two profiles of the same
 
 ## Level 2 — task-class rules
 
+- [A verdict covers the evidence domain it claims](verdict-covers-the-evidence-domain-it-claims.md) — a gate demanding proof whose PROVER is absent, and a checker enumerating from the git index while reading the working tree, are one fault: a verdict issued over evidence never actually looked at. Escape hatches stay reachable, diagnosed, typed and counted; surfacing an obligation never discharges it. ← `ask-user-question-split-turn`, `2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan`.
 - [The coordinator executes through specialists](coordinator-executes-through-specialists.md) — achieve production change by dispatch, not direct root edits; direct Bash/Edit/Write on substantive work is a difficulty signal. ← `coordinator-pitfalls`.
