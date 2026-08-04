@@ -4,6 +4,15 @@
 # mandatory), where sha8 is the first 8 hex of sha256 over the referenced line's
 # stripped text; `path:line` without an anchor still works and stays positional;
 # a bare `path` (no `:line`) covers the whole file.
+# Any spec that is not one of those two pinned forms is read as a GLOB matched
+# against the repo-relative path (`dir/*.toml`, and the bare-path form above as
+# its degenerate no-wildcard case). Reach for it only where per-line pinning
+# carries no review value — a set of files whose whole content is out of scope by
+# construction (a byte-for-byte snapshot fixture, a machine-generated artifact
+# regenerated wholesale), where the reasoned domain is "this file / this fixture",
+# not the individual occurrences. Everywhere else the pinned form is the default:
+# a glob's coverage is invisible to the staleness and double-coverage checks that
+# make an anchor worth having.
 # The anchor, not the ordinal, is the entry's identity. Against the file's
 # OCCURRENCE lines it resolves four ways: still at the pinned line -> covered;
 # at exactly one other occurrence -> relocated, covered, and the move is printed
@@ -120,4 +129,5 @@ scripts/agentctl/README.md:360:37b335ef  # keep:legacy-fallback — names the pe
 # reference inside it would destroy the very artifact. Pinned as a glob rather
 # than per line because the domain is "the whole fixture", not 192 individually
 # reasoned occurrences.
+scripts/tests/fixtures/plan_corpus_baseline.json  # keep:frozen-fixture — machine-generated projection of the snapshots above (regenerated wholesale by `test_frozen_plan_compat.py --update`), so its legacy references are copies of theirs and a per-line pin would be re-anchored on every regeneration with no review value
 scripts/tests/fixtures/plan_corpus/*.toml  # keep:frozen-fixture — historical plan snapshots backing scripts/tests/test_frozen_plan_compat.py; the harness proves plan-loading is unchanged against these exact bytes, so rewriting their legacy references would invalidate the non-regression claim they exist to support
