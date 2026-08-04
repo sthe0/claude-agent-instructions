@@ -14,8 +14,7 @@
 CLAUDE.md:150  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
 README.md:5  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
 README.md:37  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-README.md:69  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-README.md:122  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+README.md:116  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
 docs/migrations/2026-05-collapse-manager-memory.md:5  # keep:migration-doc — migration doc — describes the legacy layout by nature
 docs/migrations/2026-05-collapse-manager-memory.md:13  # keep:migration-doc — migration doc — describes the legacy layout by nature
 docs/migrations/2026-05-collapse-manager-memory.md:14  # keep:migration-doc — migration doc — describes the legacy layout by nature

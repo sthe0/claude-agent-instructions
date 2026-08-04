@@ -1,6 +1,6 @@
 ---
 name: developer
-description: Specialization. TRIGGER when a plan step calls for writing, refactoring, debugging, or reviewing production code; when implementing per an approved plan; when fixing bugs; when modifying tests / build / config. Invoke **inline** via the `Skill` tool when the manager already has the target files loaded and the plan's steps each fit the *small change* carve-out (see CLAUDE.md § Classify task weight); otherwise **spawn** as a separate `claude -p` process (see CLAUDE.md § Spawning specialists). SKIP for trivial read-only questions (the manager handles those directly) and for non-code work; for planning use the planner specialization — though `developer` MAY be spawned in a **read-only advisory capacity** to validate technical feasibility / architecture during planning (no code changes).
+description: Specialization. TRIGGER for writing, refactoring, debugging, or reviewing production code; implementing per an approved plan; fixing bugs; modifying tests/build/config. Invoke **inline** via `Skill` when the manager already has the target files loaded and the plan's steps fit the *small change* carve-out (CLAUDE.md § Classify task weight); otherwise **spawn** as a separate `claude -p` process (CLAUDE.md § Spawning specialists). SKIP for trivial read-only questions (manager handles directly) and non-code work; for planning use `planner` — though `developer` MAY be spawned **read-only advisory** to validate technical feasibility/architecture during planning (no code changes).
 ---
 
 # Developer specialization

@@ -60,13 +60,7 @@ A stock Claude fetches this README, **checks the Requirements above first**, run
 
 ### Equivalent steps
 
-```bash
-git clone git@github.com:sthe0/claude-agent-instructions.git ~/claude-agent-instructions   # read-only HTTPS clone works too
-~/claude-agent-instructions/scripts/setup-symlinks.sh        # symlinks + settings + reminder/git hooks (one command does all)
-~/claude-agent-instructions/scripts/doctor.sh                # "am I ready to start?" — expect all [ OK ]
-```
-
-Auth is per-root — log the system root in once with `CLAUDE_CONFIG_DIR=~/.claude-agent claude auth login`, then work with `claude-task`; bare `claude` stays your own. An older in-place install (symlinks in `~/.claude`) auto-migrates on an interactive `sync-instructions-repo.sh pull` / `onboard`. Push rights are **not** required — the system runs fully from a read-only clone; any upstream push is gated behind your explicit confirmation. Full procedure — symlink table, settings merge, login, migration ([migrate-to-isolated.sh](scripts/migrate-to-isolated.sh)), per-project setup, root⊕project composition: [docs/operations/setup.md](docs/operations/setup.md).
+Prefer a manual run over the bootstrap prompt? Full command sequence (clone, `setup-symlinks.sh`, `doctor.sh`), auth-per-root mechanics, and push-rights notes: [docs/operations/setup.md](docs/operations/setup.md).
 
 ### Using this in another organization
 
