@@ -20,7 +20,7 @@ import shlex
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -958,6 +958,13 @@ class SessionState:
     # '' on legacy states and on sessions where the coordinator did not pass
     # --deliverable-kind (absent key -> dataclass default via from_dict's cls(**data)).
     deliverable_kind: str = ""
+    # The coordination host this session dispatches specialists and advisory
+    # judges through (schema 25): "claude" or "cursor", or None until bound.
+    # Sticky once set — agentctl.runtime_host.bind_runtime_host refuses to
+    # rebind it. None on legacy pre-schema-25 states and on sessions that have
+    # not yet run classify/start with a resolvable host (absent key ->
+    # dataclass default via from_dict's cls(**data)).
+    runtime_host: str | None = None
     schema_version: int = SCHEMA_VERSION
 
     def __post_init__(self) -> None:

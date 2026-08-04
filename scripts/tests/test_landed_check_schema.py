@@ -377,8 +377,8 @@ def _landed_session(sid="s1"):
     )
 
 
-def test_schema_version_is_24():
-    assert SCHEMA_VERSION == 24
+def test_schema_version_is_25():
+    assert SCHEMA_VERSION == 25
 
 
 def test_landed_state_round_trips():
@@ -389,7 +389,7 @@ def test_landed_state_round_trips():
     assert reloaded.stages[0].outcome.delivered_head == "deadbeef"
     assert reloaded.final_check[0].kind == "landed"
     assert reloaded.final_check[0].landed == LandedSpec(target="main", remote="origin", delivered_stage=1)
-    assert reloaded.schema_version == 24
+    assert reloaded.schema_version == 25
 
 
 def test_landed_final_check_empty_command_not_none_round_trips():
