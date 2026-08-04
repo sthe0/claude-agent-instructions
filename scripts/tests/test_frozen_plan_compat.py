@@ -24,7 +24,9 @@ changed row is the regression this harness exists to report):
     python3 scripts/tests/test_frozen_plan_compat.py --update
 
 `--update` prints what moved and, if the report is non-empty, refuses to write
-until rerun with `--force` — so the diff above is read, not rubber-stamped.
+until rerun with `--force`: writing is a second, deliberate command. It does not
+make anyone READ the report — every genuine regeneration is non-empty, so
+`--force` is the normal case, not the exception.
 
 With no argument the same entry point prints the live-vs-fixture drift report
 and the current baseline comparison, which is how `scan_live_drift` is consumed
@@ -40,6 +42,8 @@ import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+import pytest
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 if str(SCRIPTS_DIR) not in sys.path:
@@ -57,9 +61,15 @@ LIVE_PLANS_DIR = config_root.plans_dir()
 
 # `scan_live_drift`'s `live_only` count grows by construction (every plan authored
 # after the freeze adds one), so a bare count is not itself actionable. Past this
-# many live-only plans, the fixture corpus (55 plans) no longer represents current
+# many live-only plans, the fixture corpus no longer represents current
 # plan-authoring patterns closely enough — consider re-freezing it (copy a
-# representative sample into CORPUS_DIR and run --update).
+# representative sample into CORPUS_DIR and run `--update --force`).
+#
+# Basis: ~a third of the corpus this is judged against (55 plans at the freeze).
+# Below that the fixture is still mostly what people write today; above it, more
+# than a quarter of the population the harness claims to represent was authored
+# after the sample was taken. A first calibration, not a measured one —
+# recalibrate here on first firing.
 LIVE_DRIFT_REFREEZE_THRESHOLD = 20
 
 _MODES = (("lenient", False), ("strict", True))
@@ -213,9 +223,13 @@ def _update_baseline(current: dict, baseline_path: Path, *, force: bool) -> int:
     into a rubber stamp — the "review the diff" instruction in the module
     docstring otherwise means reading an 8800-line JSON diff nobody reads.
     """
-    old = json.loads(baseline_path.read_text()) if baseline_path.exists() else {}
+    # A bootstrap run has no prior baseline, so `compare` reports all 55 plans as
+    # new. Refusing there would demand `--force` to review a report whose content
+    # is "everything, because there was nothing" — a gate with nothing behind it.
+    bootstrap = not baseline_path.exists()
+    old = {} if bootstrap else json.loads(baseline_path.read_text())
     report = compare(old, current)
-    if report:
+    if report and not bootstrap:
         print(json.dumps(report, indent=1))
         if not force:
             print(
@@ -263,7 +277,8 @@ def _live_drift_advisory(live_only: list[str]) -> str | None:
     return (
         f"live-only plans: {len(live_only)} >= LIVE_DRIFT_REFREEZE_THRESHOLD "
         f"({LIVE_DRIFT_REFREEZE_THRESHOLD}) — consider re-freezing the corpus "
-        "(copy a representative sample into plan_corpus/ and run --update)"
+        "(copy a representative sample into plan_corpus/ and run "
+        "--update --force)"
     )
 
 
@@ -275,11 +290,51 @@ def test_baseline_matches():
     assert not report, report
 
 
+def test_escape_from_load_is_recorded(monkeypatch):
+    """The widened `except` records ANY escape from `load_plan`, not just the
+    one live defect that happens to produce one today.
+
+    Stated separately from `test_non_planerror_escape_is_recorded` because that
+    test rides a real `plan.py` bug: moving principle-subfield validation to the
+    submission seam is in this plan's remaining scope, and when a later stage
+    does it, that test's pinned string goes stale and the natural fix is to
+    delete it — taking the property with it. This one cannot go stale."""
+    def boom(path, strict=False, **kwargs):
+        raise RuntimeError("synthetic escape from the loader")
+
+    monkeypatch.setattr("test_frozen_plan_compat.load_plan", boom)
+    record = record_plan(CORPUS_DIR / sorted(p.name for p in CORPUS_DIR.glob("*.toml"))[0])
+
+    assert record["lenient"]["outcome"] == "RuntimeError: synthetic escape from the loader"
+    assert record["strict"]["outcome"] == record["lenient"]["outcome"]
+
+
+def test_fingerprint_failure_still_propagates(monkeypatch):
+    """The complementary property, and the actual risk the widened `except`
+    introduces: `fingerprint` sits OUTSIDE the `try`, so a bug in the harness's
+    own projection must still crash rather than be recorded as if it were a
+    fact about the plan. A harness that reports its own breakage as a plan
+    outcome is a harness that can go green while blind."""
+    def boom(doc):
+        raise RuntimeError("synthetic harness-side fingerprint bug")
+
+    monkeypatch.setattr("test_frozen_plan_compat.fingerprint", boom)
+
+    with pytest.raises(RuntimeError, match="harness-side"):
+        record_plan(CORPUS_DIR / sorted(p.name for p in CORPUS_DIR.glob("*.toml"))[0])
+
+
 def test_non_planerror_escape_is_recorded(tmp_path):
     """`record_plan` must RECORD a non-`PlanError` escape from `parse_plan`, not
     crash the run: `plan.py` direct-indexes a stage's `[stage.principle]`
     subfields under strict, guarded only when the plan is substantive, so a
-    non-substantive plan with a partial principle table raises `KeyError`."""
+    non-substantive plan with a partial principle table raises `KeyError`.
+
+    Doubles as a canary on that `plan.py` direct-indexing bug: if a later stage
+    moves the check to the submission seam, this test goes red by design. The
+    mode-independent form of its property lives in
+    `test_escape_from_load_is_recorded`, so replacing the pinned string here
+    does not lose coverage."""
     plan_path = tmp_path / "partial_principle.toml"
     plan_path.write_text(
         '[meta]\n'
@@ -461,6 +516,20 @@ def test_update_writes_when_report_is_empty(tmp_path):
     current = {"a.toml": {"lenient": {"outcome": "ok", "doc": {"meta.task_id": "a"}},
                            "strict": {"outcome": "ok"}}}
     baseline_path.write_text(json.dumps(current))
+
+    exit_code = _update_baseline(current, baseline_path, force=False)
+
+    assert exit_code == 0
+    assert json.loads(baseline_path.read_text()) == current
+
+
+def test_update_bootstraps_without_force(tmp_path):
+    """With no baseline on disk, every plan reports as new — a report whose
+    content is "everything, because there was nothing". Demanding `--force` to
+    review that is a gate with nothing behind it, so the bootstrap run writes."""
+    baseline_path = tmp_path / "baseline.json"
+    current = {"a.toml": {"lenient": {"outcome": "ok", "doc": {"meta.task_id": "a"}},
+                          "strict": {"outcome": "ok"}}}
 
     exit_code = _update_baseline(current, baseline_path, force=False)
 
