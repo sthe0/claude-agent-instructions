@@ -3,7 +3,7 @@ name: coordinator-pitfalls
 description: Anti-patterns the root coordinator must avoid, with the corrective action for each. Read when sensing drift in your own coordination behavior, or when reviewing a session.
 type: reference
 created: 2026-05-22
-last_verified: 2026-07-31
+last_verified: 2026-08-04
 ---
 
 # Typical coordinator pitfalls
@@ -19,6 +19,8 @@ last_verified: 2026-07-31
 | Second CLI binary for one-off experiment | Local script/stash; one entry point in the repo |
 | User feedback on process → only apology | Invoke `self-improvement` skill in the same turn |
 | User asks "why no self-improvement?" / confirms "run it" | Invoke `self-improvement` skill in the same turn — the reminder is feedback |
+| Own analysis enumerates N findings; the `AskUserQuestion` offers options covering only a subset — typically a "top-K" inherited from a sub-agent's cost-bounded brief | The ask is where the user exercises scope authority; an option set narrower than your own enumeration exercises it *for* them. Offer the whole-set option; if a cut is genuine, name it and its reason in the same turn. Check before sending: does some option's scope equal the list I just printed? |
+| An ask written out as prose (a bulleted menu of options) and the turn ended without the tool call | The tool call **is** the gate — prose describing it is not an ask, and the user has to re-open the decision by hand. Before ending a turn that names a decision, confirm an `AskUserQuestion` call actually went out. |
 | Conditional "if not done" + artifact missing in repo → redo without status check | Read org runbook first; closed/done may mean stop — ask the user |
 | VCS branch/commit on a scoped task without user ask | Read-only + report until the user confirms scope |
 | Unknown internal term → guess in code | Infra-consultant subagent if present in `~/.claude-agent/agents/`, else intrasearch / domain MCP |
