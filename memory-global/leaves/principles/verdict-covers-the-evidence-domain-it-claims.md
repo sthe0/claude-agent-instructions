@@ -5,7 +5,7 @@ type: reference
 schema: principle/v1
 generality: 2
 domain: development
-induced_from: [ask-user-question-split-turn, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan]
+induced_from: [ask-user-question-split-turn, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan, 2026-07-09-gate-must-execute-what-it-attests]
 created: 2026-08-04
 last_verified: 2026-08-04
 ---
@@ -66,6 +66,10 @@ class. Finding one is what would promote it.
 - [[2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan]] — the verifier form, met
   first as a green stage followed by a red pre-commit: a checker enumerating from the git index over
   a working tree that had moved on.
+- [[2026-07-09-gate-must-execute-what-it-attests]] — the experience leaf this task extended. Its
+  (b) REFUSE-WITHOUT-A-ROUTE limb is the same fault one level in: a refusal with no reachable
+  resolution path. The 2026-08-04 context is the absent-PROVER twin — the route exists, but nothing
+  had built the road it points at.
 
 ## Refutation
 
