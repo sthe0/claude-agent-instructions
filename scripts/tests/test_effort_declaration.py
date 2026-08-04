@@ -10,11 +10,23 @@ respectively, and a dispatch-budget label is none of those questions.
 from __future__ import annotations
 
 import argparse
+import pathlib
 from argparse import Namespace
+
+import pytest
 
 from agentctl import cli
 from agentctl.dispatch import RunResult
-from agentctl.plan import _structural_signature, parse_plan, stage_carry_key, stage_question_key
+from agentctl.config import Thresholds
+from agentctl.plan import (
+    _COST_TIERS,
+    _structural_signature,
+    PlanError,
+    diff_plans,
+    parse_plan,
+    stage_carry_key,
+    stage_question_key,
+)
 from agentctl.state import (
     Actor,
     Criterion,
@@ -216,3 +228,125 @@ def test_argparse_budget_default_is_none():
     so an omitted flag is indistinguishable, at cmd_dispatch, from the in-process
     Namespace path — both fall through to the stage's declared cost_tier."""
     assert _dispatch_budget_action().default is None
+
+
+# --- (viii) the cost_tier vocabulary is closed, and rejected at submission ------
+# Not a style check: an unrecognized tier is accepted by parse_plan, survives
+# submit and approve, and then surfaces either as an argparse usage error inside
+# the spawn (spawn-specialist.py's --budget choices) or as a KeyError raised from
+# config.md lookup inside cmd_approve's arming. Both are three layers from the typo.
+
+def test_unknown_cost_tier_is_rejected_under_strict():
+    with pytest.raises(PlanError) as exc:
+        _doc([_stage_dict(cost_tier="Large")])
+    assert "cost_tier" in str(exc.value) and "vocabulary" in str(exc.value)
+
+
+@pytest.mark.parametrize("tier", ["small", "medium", "large"])
+def test_every_vocabulary_tier_is_accepted(tier):
+    assert _doc([_stage_dict(cost_tier=tier)]).stages[0].actor.cost_tier == tier
+
+
+def test_absent_cost_tier_is_not_rejected():
+    assert _doc([_stage_dict()]).stages[0].actor.cost_tier is None
+
+
+def test_cost_tier_vocabulary_matches_the_spawn_budget_choices():
+    """The parser's vocabulary and spawn-specialist.py's --budget choices are two
+    copies of one list; a tier accepted here but unknown there dies in the spawn."""
+    src = (pathlib.Path(__file__).resolve().parents[1] / "spawn-specialist.py").read_text()
+    for tier in _COST_TIERS:
+        assert f'"{tier}"' in src or f"'{tier}'" in src
+
+
+# --- (ix) a cost_tier-only edit is a refinement, not a no-op -------------------
+# cost_tier is engine-consumed but absent from _structural_signature and
+# stage_carry_key, which is the exact shape diff_plans' own comment records as the
+# venue defect. Without cost_tier in _prose the edit diffs as 'no_change', whose
+# branch does NOT rewrite state.plan_path — so the tier applies while the engine
+# keeps summing the cost ledger under the previous plan file.
+
+def test_cost_tier_only_edit_classifies_as_refinement():
+    old = _doc([_stage_dict(cost_tier="small")])
+    new = _doc([_stage_dict(cost_tier="large")])
+    assert diff_plans(old, new) == "refinement"
+
+
+def test_adding_a_cost_tier_to_an_undeclared_stage_is_a_refinement():
+    assert diff_plans(_doc([_stage_dict()]), _doc([_stage_dict(cost_tier="medium")])) == "refinement"
+
+
+def test_a_plan_without_cost_tier_still_diffs_as_no_change_against_itself():
+    """The conditional join must not perturb plans that omit the field."""
+    assert diff_plans(_doc([_stage_dict()]), _doc([_stage_dict()])) == "no_change"
+
+
+# --- (x) each accessor is bound to the config.md row it names -----------------
+# The stage's verify_command only greps config.md for the key literals, so nothing
+# otherwise fails when a row is renamed or an accessor's f-string drifts: the break
+# surfaces at runtime as a KeyError inside cmd_approve's arming.
+
+def test_every_effort_accessor_reads_a_row_that_exists_in_config_md():
+    thr = Thresholds()
+    assert thr.effort_divergence_multiple() > 0
+    assert thr.effort_replan_absolute() > 0
+    assert thr.effort_absolute_interactions() == 0  # ships accounting-only
+    for tier in _COST_TIERS:
+        assert thr.effort_stage_minutes(tier) > 0
+        assert thr.budget_usd_float(tier) > 0
+
+
+def test_effort_accessors_raise_a_named_keyerror_on_a_missing_row():
+    thr = Thresholds({})
+    for call in (thr.effort_divergence_multiple, thr.effort_replan_absolute,
+                 thr.effort_absolute_interactions):
+        with pytest.raises(KeyError, match="config.md"):
+            call()
+    with pytest.raises(KeyError, match="config.md"):
+        thr.effort_stage_minutes("medium")
+
+
+def test_the_three_wall_clock_rows_are_ordered_by_tier():
+    thr = Thresholds()
+    assert (thr.effort_stage_minutes("small") < thr.effort_stage_minutes("medium")
+            < thr.effort_stage_minutes("large"))
+    assert thr.effort_stage_minutes("small") * 5 >= thr.substantive_wall_clock_min
+
+
+# --- (xi) the approve-time refresh is the only path a tier reaches state by ----
+# A REVISE verdict is answered by editing plan_path IN PLACE at plan-mutable
+# PLAN_READY, so a cost_tier corrected during plan review reaches state.stages
+# only through _refresh_caches_from_plan_path. Arming reads state.stages, so a
+# tier that stopped at the file would be estimated against the stale value.
+
+def test_refresh_from_plan_path_picks_up_a_tier_edited_at_plan_ready(tmp_path):
+    plan = tmp_path / "p.toml"
+
+    def write(tier_line):
+        plan.write_text(
+            '[meta]\ntask_id = "t"\n\n[[stage]]\nindex = 1\ntitle = "s"\n'
+            'executor = "spawn:developer"\nexpected_result_image = "img"\n'
+            'done_criterion = "dc"\nmeans = "Edit"\nmethod = "do"\n' + tier_line
+        )
+
+    write('cost_tier = "small"\n')
+    state = SessionState(session_id="s1", task_id="t", plan_path=str(plan))
+    state.stages = [s for s in cli.load_plan(str(plan)).stages]
+    assert state.stage(1).actor.cost_tier == "small"
+
+    write('cost_tier = "large"\n')          # the plan-review REVISE edit
+    cli._refresh_caches_from_plan_path(state)
+    assert state.stage(1).actor.cost_tier == "large"
+
+
+def test_refresh_from_plan_path_propagates_a_cleared_tier(tmp_path):
+    plan = tmp_path / "p.toml"
+    head = ('[meta]\ntask_id = "t"\n\n[[stage]]\nindex = 1\ntitle = "s"\n'
+            'executor = "spawn:developer"\nexpected_result_image = "img"\n'
+            'done_criterion = "dc"\nmeans = "Edit"\nmethod = "do"\n')
+    plan.write_text(head + 'cost_tier = "large"\n')
+    state = SessionState(session_id="s1", task_id="t", plan_path=str(plan))
+    state.stages = [s for s in cli.load_plan(str(plan)).stages]
+    plan.write_text(head)
+    cli._refresh_caches_from_plan_path(state)
+    assert state.stage(1).actor.cost_tier is None

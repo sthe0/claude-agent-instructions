@@ -26,6 +26,13 @@ TOML shape (minimal):
     done_criterion = "python3 -m agentctl status exits 0"
     verify_command = "python3 -m agentctl status"  # optional; executable form of done_criterion
     expected_exit = 0                     # optional (default 0); engine gates passed on this exit
+    cost_tier = "medium"                  # optional; small|medium|large. Declares the
+                                          # stage's expected size: dispatch reads it as the
+                                          # spawn budget label, and the effort-divergence
+                                          # estimate sums it over the plan. Absent means
+                                          # "medium" at the point of use -- an inferred
+                                          # default, not a norm anyone chose, so declare it
+                                          # on any stage whose size is not typical.
     depends_on = []                       # optional
     output_artifacts = ["scripts/agentctl/"]  # optional; paths this stage produces.
                                               # Parsed onto Stage.output_artifacts and
@@ -270,6 +277,11 @@ def _parse_landed_spec(
 # description) must be rejected at submission — a silent default to in_thread
 # degrades the whole plan to in-thread execution with no visible error (#7).
 _EXECUTOR_RE = re.compile(r"^(in_thread|spawn:[a-z][a-z0-9_-]*)$")
+# Mirrors spawn-specialist.py's --budget choices and config.md's budget-<tier>-usd rows.
+# Rejected at submission rather than defaulted silently: an unrecognized tier would
+# otherwise surface as an argparse usage error three layers away in the spawn, or as a
+# KeyError raised from inside cmd_approve when the effort estimate reads the config row.
+_COST_TIERS = ("small", "medium", "large")
 
 # Extra stage fields required for substantive plans (8-element activity structure).
 _SUBSTANTIVE_STAGE_FIELDS = ("material", "means", "method", "conditions", "invariants", "capability_required")
@@ -860,6 +872,11 @@ def parse_plan(
                 f"stage {index} executor {s['executor']!r} is outside the vocabulary "
                 "(expected 'in_thread' or 'spawn:<kind>')"
             )
+        if strict and s.get("cost_tier") and str(s["cost_tier"]) not in _COST_TIERS:
+            raise PlanError(
+                f"stage {index} cost_tier {s['cost_tier']!r} is outside the vocabulary "
+                f"(expected one of {'|'.join(sorted(_COST_TIERS))})"
+            )
         if strict and is_substantive:
             _validate_substantive_stage(s, index)
         raw_principle = s.get("principle")
@@ -1131,6 +1148,13 @@ def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
     # a difficulty (the overcome-difficulty replan) classifies as 'refinement', not
     # 'no_change' — otherwise the corrected means would be silently dropped.
     #
+    # cost_tier (schema 25) is here for the same reason and joins conditionally, so a
+    # plan omitting it still hashes byte-identically: it is engine-consumed (dispatch
+    # budget + the effort estimate) but sits in neither _structural_signature nor
+    # stage_carry_key, so without this a tier-only edit would diff as 'no_change' —
+    # applied by _apply_refined_stage_fields, yet leaving state.plan_path naming the OLD
+    # file (only the refinement branch rewrites it) and the directive reporting a no-op.
+    #
     # verify_venue/verify_kind/landed (and fc.venue/fc.kind/fc.landed below) close
     # two latent omissions found while adding the landed kind (schema 23): venue
     # was engine-executed (SessionState.resolve_check_venue) but absent from both
@@ -1150,7 +1174,8 @@ def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
              _normalize_string(s.criterion.verify_kind),
              s.criterion.landed,
              *((_normalize_string(s.criterion.verify_venue_at_final),)
-               if s.criterion.verify_venue_at_final else ()))
+               if s.criterion.verify_venue_at_final else ()),
+             *((s.actor.cost_tier,) if s.actor.cost_tier else ()))
             for s in doc.stages
         ]
     def _fc(doc: PlanDoc):
