@@ -81,6 +81,7 @@ from .state import (
     Confidence,
     Criterion,
     CriterionType,
+    DifferentialSpec,
     FinalCheck,
     LandedSpec,
     LANDED_GIT_ERROR_EXIT,
@@ -263,6 +264,86 @@ def _parse_landed_spec(
             f"{owner_index}, is fine) (R5)"
         )
     return LandedSpec(target=target, remote=remote, delivered_stage=delivered_stage)
+
+
+def _parse_differential_spec(
+    raw_table: object,
+    *,
+    kind: str,
+    criterion_type: str,
+    has_command: bool,
+    repo_root: str | None,
+    context: str,
+) -> "DifferentialSpec | None":
+    """Validate and build the typed DifferentialSpec payload of a `[*.differential]`
+    table (D1-D7). Returns None for a check carrying no differential table (the
+    common case) — every rule below fires only once a table is present, so an
+    un-annotated check is entirely unaffected."""
+    if not raw_table:
+        return None
+    if kind == CheckKind.LANDED.value:
+        raise PlanError(
+            f"{context}: a [*.differential] table is not valid on a kind = "
+            f"\"landed\" check — a landed check's containment assertion is not "
+            f"a violation set to diff against a base; drop the table (D1)"
+        )
+    if criterion_type != CriterionType.MEASURABLE.value:
+        raise PlanError(
+            f"{context}: a [*.differential] table requires criterion_type = "
+            f"\"measurable\" (got {criterion_type!r}) — an acceptance-review "
+            f"criterion has no exit-code/output evidence to diff (D2)"
+        )
+    if not has_command:
+        raise PlanError(
+            f"{context}: a [*.differential] table requires a verify_command "
+            f"(stage) / command (final_check) to re-run at the base — none is "
+            f"declared (D3)"
+        )
+    if not isinstance(raw_table, dict):
+        raise PlanError(f"{context}: [*.differential] must be a table")
+    target = raw_table.get("target")
+    if not target or not isinstance(target, str):
+        raise PlanError(
+            f"{context}: differential.target is required (non-empty string) (D4)"
+        )
+    if not _LANDED_REF_RE.match(target):
+        raise PlanError(
+            f"{context}: differential.target {target!r} is not a valid git ref "
+            f"name (expected to match {_LANDED_REF_RE.pattern}) (D4)"
+        )
+    remote = str(raw_table.get("remote", "origin"))
+    if not _LANDED_REF_RE.match(remote):
+        raise PlanError(
+            f"{context}: differential.remote {remote!r} is not a valid git ref "
+            f"name (expected to match {_LANDED_REF_RE.pattern}) (D4)"
+        )
+    violation_pattern = raw_table.get("violation_pattern")
+    if violation_pattern is not None:
+        if not isinstance(violation_pattern, str):
+            raise PlanError(
+                f"{context}: differential.violation_pattern must be a string (D5)"
+            )
+        try:
+            re.compile(violation_pattern)
+        except re.error as exc:
+            raise PlanError(
+                f"{context}: differential.violation_pattern {violation_pattern!r} "
+                f"is not a valid regular expression ({exc}) (D5)"
+            ) from exc
+    if not repo_root:
+        raise PlanError(
+            f"{context}: a [*.differential] table requires [meta] repo_root to "
+            f"be set — the merge-base is resolved against the canonical "
+            f"checkout, not the delivery worktree (D6)"
+        )
+    known_keys = {"target", "remote", "violation_pattern"}
+    extra_keys = sorted(set(raw_table) - known_keys)
+    if extra_keys:
+        raise PlanError(
+            f"{context}: [*.differential] has unknown key(s) {extra_keys} — "
+            f"only {sorted(known_keys)} are valid (D7)"
+        )
+    return DifferentialSpec(target=target, remote=remote, violation_pattern=violation_pattern)
 
 
 # The only two executor shapes the engine dispatches: in-thread, or a named spawn
@@ -821,10 +902,21 @@ def parse_plan(
             if not isinstance(xc, int):
                 raise PlanError(f"{fc_ctx} expected_exit must be an int")
             venue = _parse_check_venue(fc.get("venue"), fc_ctx)
+        # A [[final_check]] carries no criterion_type field at all (it has no
+        # acceptance_review concept — it is always a shell command judged by
+        # exit code), so D2 is passed "measurable" unconditionally here: D2
+        # never fires for a final_check, it only guards a stage's criterion.
+        fc_differential = _parse_differential_spec(
+            fc.get("differential"), kind=fc_kind,
+            criterion_type=CriterionType.MEASURABLE.value, has_command=bool(cmd),
+            repo_root=str(m["repo_root"]) if m.get("repo_root") else None,
+            context=fc_ctx,
+        )
         final_checks.append(
             FinalCheck(
                 command=cmd, expected_exit=xc, label=str(fc.get("label", "")),
                 venue=venue, kind=fc_kind, landed=fc_landed,
+                differential=fc_differential,
             )
         )
 
@@ -940,6 +1032,11 @@ def parse_plan(
                     f"delivery_worktree is unset — there is no second venue for "
                     f"it to name (V3)"
                 )
+        differential = _parse_differential_spec(
+            s.get("differential"), kind=verify_kind, criterion_type=crit_type,
+            has_command=bool(verify_command), repo_root=meta.repo_root,
+            context=stage_ctx,
+        )
         stages.append(
             Stage(
                 index=index,
@@ -968,6 +1065,7 @@ def parse_plan(
                     verify_kind=verify_kind,
                     landed=landed,
                     verify_venue_at_final=verify_venue_at_final,
+                    differential=differential,
                 ),
                 principle=principle,
                 conditions=str(s["conditions"]) if s.get("conditions") else None,
@@ -1055,6 +1153,8 @@ def stage_carry_key(stage) -> tuple:
         # stage_question_key where this identity is load-bearing across processes.
         *((_normalize_string(stage.criterion.verify_venue_at_final),)
           if stage.criterion.verify_venue_at_final else ()),
+        # schema 25, same declared-only convention as verify_venue_at_final.
+        *((stage.criterion.differential,) if stage.criterion.differential else ()),
     )
 
 
@@ -1117,6 +1217,8 @@ def stage_question_key(stage) -> str:
         # live session to a spurious "stage definition changed" blocker).
         *((_normalize_string(stage.criterion.verify_venue_at_final),)
           if stage.criterion.verify_venue_at_final else ()),
+        # schema 25, same declared-only convention.
+        *((stage.criterion.differential,) if stage.criterion.differential else ()),
     ))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -1149,13 +1251,15 @@ def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
              _normalize_string(s.criterion.verify_kind),
              s.criterion.landed,
              *((_normalize_string(s.criterion.verify_venue_at_final),)
-               if s.criterion.verify_venue_at_final else ()))
+               if s.criterion.verify_venue_at_final else ()),
+             *((s.criterion.differential,) if s.criterion.differential else ()))
             for s in doc.stages
         ]
     def _fc(doc: PlanDoc):
         return [
             (fc.command, fc.expected_exit, fc.label,
-             _normalize_string(fc.venue), _normalize_string(fc.kind), fc.landed)
+             _normalize_string(fc.venue), _normalize_string(fc.kind), fc.landed,
+             *((fc.differential,) if fc.differential else ()))
             for fc in doc.meta.final_check
         ]
     if (_prose(old) != _prose(new) or old.meta.goal != new.meta.goal

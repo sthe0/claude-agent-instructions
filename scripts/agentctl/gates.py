@@ -574,6 +574,16 @@ def _landed_sort_key(landed) -> tuple:
     return (landed.target, landed.remote, landed.delivered_stage)
 
 
+def _differential_sort_key(differential) -> tuple:
+    """Fixed-shape, orderable stand-in for a `DifferentialSpec | None` inside a
+    `sorted(...)`-built tuple — mirrors `_landed_sort_key`'s rationale.
+    `violation_pattern` defaults to "" (never None) so the tuple's element
+    types stay uniform regardless of whether it was declared."""
+    if differential is None:
+        return ("", "", "")
+    return (differential.target, differential.remote, differential.violation_pattern or "")
+
+
 def _operative_surface(doc) -> tuple:
     """The plan's operative surface: what the engine executes or dispatches on,
     as opposed to its prose (title/goal/done_criterion/expected_result_image/
@@ -601,6 +611,9 @@ def _operative_surface(doc) -> tuple:
             # schema-23 operative surface exactly — uniform with the plan.py keys.
             *((_normalize_string(s.criterion.verify_venue_at_final),)
               if s.criterion.verify_venue_at_final else ()),
+            # schema 25, same declared-only convention.
+            *((_differential_sort_key(s.criterion.differential),)
+              if s.criterion.differential else ()),
         )
         for s in doc.stages
     )
@@ -611,6 +624,7 @@ def _operative_surface(doc) -> tuple:
             _normalize_string(fc.venue),
             _normalize_string(fc.kind),
             _landed_sort_key(fc.landed),
+            *((_differential_sort_key(fc.differential),) if fc.differential else ()),
         )
         for fc in doc.meta.final_check
     )

@@ -20,7 +20,7 @@ import shlex
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -122,6 +122,27 @@ class LandedSpec:
     def from_dict(cls, d: dict) -> "LandedSpec":
         """Rebuild a LandedSpec from its JSON dict, ignoring unknown keys —
         mirrors Principle.from_dict's tolerant-reconstruction template."""
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in d.items() if k in known})
+
+
+@dataclass
+class DifferentialSpec:
+    """The declarative payload of a `[*.differential]` table (schema 25): when
+    the check this is attached to fails, re-run it at the delivery branch's
+    merge-base against `target` (on `remote`) and report green iff no NEW
+    violation appears relative to that frozen base — see plan.py's
+    `_parse_differential_spec` for the D1-D7 validation rules this must satisfy
+    before construction. `violation_pattern`, when set, narrows which lines of
+    output count as a violation (stage 2's evaluation logic, not this stage)."""
+    target: str
+    remote: str = "origin"
+    violation_pattern: str | None = None
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "DifferentialSpec":
+        """Rebuild a DifferentialSpec from its JSON dict, ignoring unknown keys —
+        mirrors LandedSpec.from_dict's tolerant-reconstruction template."""
         known = {f.name for f in fields(cls)}
         return cls(**{k: v for k, v in d.items() if k in known})
 
@@ -613,16 +634,28 @@ class Criterion:
     # whose delivery venue disappears once the change lands — see plan.py's
     # V1-V4 validation rules and README.md for the two-moment rationale.
     verify_venue_at_final: str | None = None
+    # The optional differential-verify declaration (schema 25): when set, a
+    # FAILED verify_command is re-run at the frozen merge-base recorded in
+    # SessionState.differential_base and reported green iff it introduces no
+    # NEW violation relative to that base (stage 2/3's evaluation, not this
+    # field). None (the default) keeps every pre-existing plan's behaviour
+    # byte-identical — see plan.py's D1-D7 validation rules.
+    differential: "DifferentialSpec | None" = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "Criterion":
-        """Rebuild a Criterion from its JSON dict, reconstructing a nested
-        `landed` table as a typed LandedSpec rather than a raw dict (mirrors
-        Partition.from_dict's `units` handling) so kind="landed" code can read
-        `criterion.landed.target` by attribute, not by key."""
+        """Rebuild a Criterion from its JSON dict, reconstructing nested
+        `landed`/`differential` tables as typed objects rather than raw dicts
+        (mirrors Partition.from_dict's `units` handling) so kind="landed" code
+        can read `criterion.landed.target` by attribute, not by key."""
         d = dict(d)
         landed = d.pop("landed", None)
-        return cls(landed=LandedSpec.from_dict(landed) if landed else None, **d)
+        differential = d.pop("differential", None)
+        return cls(
+            landed=LandedSpec.from_dict(landed) if landed else None,
+            differential=DifferentialSpec.from_dict(differential) if differential else None,
+            **d,
+        )
 
 
 @dataclass
@@ -686,14 +719,22 @@ class FinalCheck:
     # the engine synthesizes the check rather than running an author command.
     kind: str = "shell"
     landed: "LandedSpec | None" = None
+    # schema 25 — see Criterion.differential for the shared rationale.
+    differential: "DifferentialSpec | None" = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "FinalCheck":
         """Rebuild a FinalCheck from its JSON dict — see Criterion.from_dict
-        for why the nested `landed` table needs explicit reconstruction."""
+        for why the nested `landed`/`differential` tables need explicit
+        reconstruction."""
         d = dict(d)
         landed = d.pop("landed", None)
-        return cls(landed=LandedSpec.from_dict(landed) if landed else None, **d)
+        differential = d.pop("differential", None)
+        return cls(
+            landed=LandedSpec.from_dict(landed) if landed else None,
+            differential=DifferentialSpec.from_dict(differential) if differential else None,
+            **d,
+        )
 
 
 @dataclass
@@ -958,6 +999,14 @@ class SessionState:
     # '' on legacy states and on sessions where the coordinator did not pass
     # --deliverable-kind (absent key -> dataclass default via from_dict's cls(**data)).
     deliverable_kind: str = ""
+    # The frozen differential-verify base (schema 25): one merge-base commit per
+    # "<remote>/<target>" key, written by exactly one call site (stage 3's
+    # resolve_base) and read everywhere else — never re-resolved mid-session, so
+    # a differential check's base cannot drift while the delivery branch or trunk
+    # moves underneath it. Empty on legacy states and on sessions that never
+    # exercise a differential check (absent key -> dataclass default via
+    # from_dict's cls(**data)).
+    differential_base: dict[str, str] = field(default_factory=dict)
     schema_version: int = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
