@@ -1,8 +1,8 @@
 """Real-git tests for agentctl/differential.py — Stage 2 of the
 differential-verify plan.
 
-Fifteen cases across base resolution (A2), the multiset comparison (A3), the
-empty-evidence guard (A3'), and the refusal taxonomy (A5). The git-plumbing
+Twenty-five cases across base resolution (A2), the multiset comparison (A3),
+the empty-evidence guard (A3'), and the refusal taxonomy (A5). The git-plumbing
 cases (base resolution, rebase, degenerate/frozen, the violation
 comparisons) run against REAL temporary git repositories with the real
 subprocess runner, so actual git semantics are exercised rather than mocked;
@@ -12,6 +12,7 @@ test_differential_schema.py, not repeated here.
 """
 from __future__ import annotations
 
+import re
 import shlex
 import subprocess
 import tempfile
@@ -83,12 +84,27 @@ CHECK_COMMAND = (
 
 NOISY_COMMAND = 'echo "debug: pid=$$"; ' + CHECK_COMMAND
 
+# Same check, but reporting ABSOLUTE paths — the shape that makes the `<VENUE>`
+# substitution load-bearing (with the relative `.` above, delivery and base
+# output are textually identical without any substitution at all).
+ABS_CHECK_COMMAND = (
+    'out=$(grep -rn VIOLATION_MARKER "$PWD" --include="*.txt" 2>/dev/null); '
+    'if [ -n "$out" ]; then echo "$out" | sed "s/^/FAIL: /"; exit 1; fi; exit 0'
+)
+
+# `pwd -P` resolves symlinks, so this reports the venue's REALPATH rather than
+# the (possibly symlinked) path the venue was addressed by.
+PHYS_CHECK_COMMAND = (
+    'out=$(grep -rn VIOLATION_MARKER "$(pwd -P)" --include="*.txt" 2>/dev/null); '
+    'if [ -n "$out" ]; then echo "$out" | sed "s/^/FAIL: /"; exit 1; fi; exit 0'
+)
+
 SPEC = DifferentialSpec(target="main", remote="origin")
 
 
-def _run_check(cwd, runner=None):
+def _run_check(cwd, runner=None, command=CHECK_COMMAND):
     run = runner or subprocess_runner
-    return run(["bash", "-c", f"cd {shlex.quote(str(cwd))} && {CHECK_COMMAND}"])
+    return run(["bash", "-c", f"cd {shlex.quote(str(cwd))} && {command}"])
 
 
 # --- 1: non-degenerate resolution stamps -------------------------------------
@@ -388,3 +404,175 @@ def test_no_network_argv_across_full_evaluate(tmp_path):
     assert verdict.status == "red"
     assert runner.calls
     _assert_no_network(runner)
+
+
+# --- 16: a path-anchored pattern never reads a new violation as green -------
+
+
+def test_path_anchored_pattern_does_not_hide_a_new_violation(tmp_path):
+    """The delivery side must be normalized IDENTICALLY wherever it is
+    consumed. With two normalizations — one with `paths`, one without — a
+    pattern that matches raw path text passes the A3' guard and is then
+    filtered out of the comparison, leaving an empty delivery multiset that
+    subtracts to green while a genuinely-new violation is on screen."""
+    work, origin = _init_repo(tmp_path)
+    _commit(work, "viol_a.txt", "VIOLATION_MARKER\n", "trunk-side violation")
+    _git(work, "push", "-q", "origin", "main")
+    _commit(work, "viol_b.txt", "VIOLATION_MARKER\n", "genuinely new violation")
+    state = _state()
+    spec = DifferentialSpec(
+        target="main", remote="origin", violation_pattern=re.escape(str(work))
+    )
+    delivery = _run_check(work, command=ABS_CHECK_COMMAND)
+    assert delivery.returncode == 1
+    assert "viol_b.txt" in delivery.stdout
+
+    verdict = differential.evaluate(
+        state, spec, ABS_CHECK_COMMAND, 0, str(work), delivery, None
+    )
+    # The pattern is incompatible with the venue substitution, so the honest
+    # verdict is the A3' empty-evidence red that says so — never green.
+    assert verdict.status == "red"
+    assert verdict.base_sha is None
+    assert "no comparable violation line" in verdict.message
+
+
+# --- 17: a <VENUE>-anchored pattern still evaluates --------------------------
+
+
+def test_venue_anchored_pattern_still_evaluates(tmp_path):
+    """The mirror of case 16: a pattern written against the NORMALIZED line
+    (which the plan's method invites) must not make every failing check
+    spuriously A3'-red — it has to reach the base comparison."""
+    work, origin = _init_repo(tmp_path)
+    _commit(work, "viol_a.txt", "VIOLATION_MARKER\n", "trunk-side violation")
+    _git(work, "push", "-q", "origin", "main")
+    _commit(work, "viol_b.txt", "VIOLATION_MARKER\n", "genuinely new violation")
+    state = _state()
+    spec = DifferentialSpec(
+        target="main", remote="origin", violation_pattern=r"^FAIL: <VENUE>/"
+    )
+    delivery = _run_check(work, command=ABS_CHECK_COMMAND)
+    assert delivery.returncode == 1
+
+    verdict = differential.evaluate(
+        state, spec, ABS_CHECK_COMMAND, 0, str(work), delivery, None
+    )
+    assert verdict.status == "red"
+    assert verdict.base_sha is not None  # it reached the base run, not A3'
+    assert len(verdict.new_violations) == 1
+    assert "viol_b.txt" in verdict.new_violations[0]
+    assert verdict.new_violations[0].startswith("FAIL: <VENUE>/")
+
+
+# --- 18: the comparison is a multiset, not a set -----------------------------
+
+
+def test_repeated_normalized_line_is_a_multiset_difference(tmp_path):
+    """Base has ONE instance of a violation line; delivery has TWO that
+    normalize to the same `:L:` text. A multiset difference reports the second
+    instance as new; a set difference cancels it and reads green."""
+    work, origin = _init_repo(tmp_path)
+    _commit(work, "viol_a.txt", "VIOLATION_MARKER\n", "one trunk-side instance")
+    _git(work, "push", "-q", "origin", "main")
+    _commit(work, "viol_a.txt", "VIOLATION_MARKER\nVIOLATION_MARKER\n", "a second instance")
+    state = _state()
+    delivery = _run_check(work)
+    assert delivery.returncode == 1
+
+    verdict = differential.evaluate(state, SPEC, CHECK_COMMAND, 0, str(work), delivery, None)
+    assert verdict.status == "red"
+    assert verdict.new_violations == ["FAIL: ./viol_a.txt:L:VIOLATION_MARKER"]
+
+
+# --- 19: <VENUE> substitution makes absolute paths comparable ----------------
+
+
+def test_venue_substitution_makes_absolute_paths_comparable(tmp_path):
+    """An unchanged violation reported by absolute path is green only because
+    the venue and the base worktree both normalize to `<VENUE>`; without the
+    substitution every line differs and the differential is falsely red."""
+    work, origin = _init_repo(tmp_path)
+    _commit(work, "viol_a.txt", "VIOLATION_MARKER\n", "trunk-side violation")
+    _git(work, "push", "-q", "origin", "main")
+    _commit(work, "unrelated.txt", "hi\n", "unrelated local change")
+    state = _state()
+    delivery = _run_check(work, command=ABS_CHECK_COMMAND)
+    assert delivery.returncode == 1
+    assert f"{work}/viol_a.txt" in delivery.stdout
+
+    verdict = differential.evaluate(
+        state, SPEC, ABS_CHECK_COMMAND, 0, str(work), delivery, None
+    )
+    assert verdict.status == "green"
+    assert verdict.new_violations == []
+
+
+# --- 20: the substitution covers the venue's realpath too --------------------
+
+
+def test_venue_realpath_is_substituted(tmp_path):
+    """A check that resolves symlinks reports the venue's realpath, which a
+    literal substitution of the symlinked path the venue was addressed by
+    would miss — turning every base line into a false new violation."""
+    work, origin = _init_repo(tmp_path)
+    _commit(work, "viol_a.txt", "VIOLATION_MARKER\n", "trunk-side violation")
+    _git(work, "push", "-q", "origin", "main")
+    _commit(work, "unrelated.txt", "hi\n", "unrelated local change")
+    venue = tmp_path / "symlinked-venue"
+    venue.symlink_to(work)
+    state = _state()
+    delivery = _run_check(venue, command=PHYS_CHECK_COMMAND)
+    assert delivery.returncode == 1
+    assert f"{work}/viol_a.txt" in delivery.stdout
+    assert str(venue) not in delivery.stdout
+
+    verdict = differential.evaluate(
+        state, SPEC, PHYS_CHECK_COMMAND, 0, str(venue), delivery, None
+    )
+    assert verdict.status == "green"
+    assert verdict.new_violations == []
+
+
+# --- 21-23: the rest of the refusal taxonomy (A5) ----------------------------
+
+
+def test_no_venue_refuses():
+    state = _state()
+    base_sha, refusal = differential.resolve_base(state, SPEC, None, None)
+    assert base_sha is None
+    assert "no check venue" in refusal
+
+
+def test_rev_parse_head_failure_refuses():
+    state = _state()
+
+    def runner(argv):
+        return RunResult(128, "", "fatal: not a git repository")
+
+    base_sha, refusal = differential.resolve_base(state, SPEC, "/nowhere", runner)
+    assert base_sha is None
+    assert "rev-parse HEAD" in refusal
+    assert "not a git repository" in refusal
+
+
+@pytest.mark.parametrize("merge_base_stdout", ["", "noise on stdout\n"])
+def test_merge_base_failure_refuses(merge_base_stdout):
+    """Both disjuncts of the failure test are pinned: a merge-base that
+    reports nothing, and one that exits nonzero while still writing stdout
+    (a wrapper or alias in front of git) — the latter is caught by the
+    returncode alone."""
+    state = _state()
+
+    def runner(argv):
+        if "merge-base" in argv:
+            return RunResult(
+                128, merge_base_stdout, "fatal: refusing to work with unrelated histories"
+            )
+        return RunResult(0, "abc123\n", "")
+
+    base_sha, refusal = differential.resolve_base(state, SPEC, "/nowhere", runner)
+    assert base_sha is None
+    assert "merge-base" in refusal
+    assert "unrelated histories" in refusal
+    assert "origin/main" not in state.differential_base

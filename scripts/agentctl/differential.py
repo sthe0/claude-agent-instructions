@@ -91,8 +91,10 @@ class DifferentialVerdict:
     whenever a base was actually resolved (the green and red cases that
     reached a base run; None for a refusal or an axis-A3' empty-evidence red,
     neither of which ever resolves one). `new_violations` carries the
-    normalized lines a red verdict should report. `refusal` is the
-    unanswerable-base message for a refused verdict (None otherwise).
+    normalized lines a red verdict should report — always in the same
+    `<VENUE>`-substituted, `:L:`-collapsed form, whichever red branch
+    produced them, since an operator reads this field directly. `refusal`
+    is the unanswerable-base message for a refused verdict (None otherwise).
     `message` is always a human-readable summary."""
 
     status: str
@@ -102,7 +104,7 @@ class DifferentialVerdict:
     message: str = ""
 
 
-def normalize(text: str, *, paths: tuple[str, ...] = ()) -> list[str]:
+def normalize(text: str, *, paths: tuple[str | None, ...] = ()) -> list[str]:
     """The comparison unit for a differential: split `text` on newlines,
     rstrip each line, drop blank lines, replace every occurrence of each
     path in `paths` with the literal `<VENUE>` (so the delivery venue and the
@@ -110,15 +112,31 @@ def normalize(text: str, *, paths: tuple[str, ...] = ()) -> list[str]:
     and collapse `:<digits>:` position tokens to `:L:` (so an unrelated
     line-number shift of an otherwise-unchanged violation is not read as
     new — the same stable-identity property external baseline tools get from
-    a content hash)."""
+    a content hash).
+
+    Each path is substituted BOTH as given and as its realpath: a check that
+    resolves symlinks (`realpath`, `pwd -P`, a Go/Rust tool that canonicalizes)
+    emits the resolved form, which a literal substitution of a symlinked venue
+    path — a symlinked `TMPDIR` is the common case — would miss, making every
+    base line differ and turning the whole differential falsely red.
+    Substitution runs longest-first (then lexicographically, so the order is
+    reproducible): a symlink and its target are routinely in a prefix
+    relation, and substituting the shorter one first would leave a mangled
+    tail on the longer. Empty and None entries are dropped."""
+    targets: set[str] = set()
+    for p in paths:
+        if not p:
+            continue
+        targets.add(p)
+        targets.add(os.path.realpath(p))
+    ordered = sorted(targets, key=lambda p: (-len(p), p))
     out = []
     for line in text.splitlines():
         line = line.rstrip()
         if not line:
             continue
-        for p in paths:
-            if p:
-                line = line.replace(p, "<VENUE>")
+        for p in ordered:
+            line = line.replace(p, "<VENUE>")
         line = _POSITION_RE.sub(":L:", line)
         out.append(line)
     return out
@@ -242,10 +260,22 @@ def evaluate(
 ) -> DifferentialVerdict:
     """The public entry point: given a check that has ALREADY FAILED (its
     `delivery_result` — the caller ran it; this never re-runs the delivery
-    side), decide green / red / refused per axes A2/A3/A3'/A5. Never raises:
-    every failure mode is a typed refusal on the returned verdict."""
+    side), decide green / red / refused per axes A2/A3/A3'/A5. Raises nothing
+    of its own: every failure mode it decides is a typed refusal on the
+    returned verdict. It does not shield the caller from the injected
+    `Runner`, though — the default `subprocess_runner` does not guard
+    `subprocess.run`, so an absent `git` binary still propagates."""
+    # The delivery side is normalized EXACTLY ONCE, and both the A3' guard
+    # below and the comparison further down consume this one list. Two
+    # separate normalizations with different `paths` would disagree whenever
+    # `violation_pattern` matches against path text: a genuinely-new violation
+    # could pass the guard and then be filtered out of the comparison, leaving
+    # an empty delivery multiset that subtracts to green. `base_dir` is
+    # deliberately absent from `paths` — the throwaway worktree cannot appear
+    # in output produced before it existed.
     delivery_evidence = _filter_pattern(
-        normalize(_combined_output(delivery_result)), spec.violation_pattern
+        normalize(_combined_output(delivery_result), paths=(venue_cwd,)),
+        spec.violation_pattern,
     )
     if not delivery_evidence:
         # Axis A3': empty evidence is never green, checked FIRST — before any
@@ -292,14 +322,11 @@ def evaluate(
                 message=f"the base ({base_sha}) passed; every violation is new",
             )
 
-        paths = (venue_cwd, base_dir)
-        delivery_lines = _filter_pattern(
-            normalize(_combined_output(delivery_result), paths=paths), spec.violation_pattern
-        )
         base_lines = _filter_pattern(
-            normalize(_combined_output(base_result), paths=paths), spec.violation_pattern
+            normalize(_combined_output(base_result), paths=(venue_cwd, base_dir)),
+            spec.violation_pattern,
         )
-        new = list((Counter(delivery_lines) - Counter(base_lines)).elements())
+        new = list((Counter(delivery_evidence) - Counter(base_lines)).elements())
         if not new:
             return DifferentialVerdict(
                 status="green",
