@@ -199,6 +199,7 @@ _LEGACY_REF_ALLOWLIST = {
     "scripts/project_entry/projects.py":     "legacy projects.d read fallback (python side)",
     "scripts/lib/config_root.py":            "the canonical legacy_home() accessor",
     "scripts/hook-guard-destructive-rm.py":  "protective denylist covers BOTH roots",
+    "scripts/install-reminder-hooks.sh":     "the personal root IS the prune-only second file",
 }
 
 
