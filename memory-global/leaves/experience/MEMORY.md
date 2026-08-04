@@ -6,6 +6,10 @@ Sub-index of `memory-global/leaves/experience/`. Pointed at from `memory-global/
 
 Most recent first. (Migrated 2026-06-11 from the older task-centric format — the prior 12 leaves were merged into these 7 by recurring difficulty.)
 
+## 2026-08
+
+- [2026-08-05 — A plan narrower than its order: every gate green over a domain nobody ordered](2026-08-05-scope-substitution-at-plan-authoring.md) — A two-part order was answered by a plan covering only the second part, and nothing anywhere compared plan to order — CLAUDE.md's contraction rule catches only edits to an ALREADY-APPROVED plan and the replan-coverage gate compares a new plan to the critique — so all 19 verifiers, the thinker review and the approval itself were honestly green over a scope the user never asked for; fixed by making order elements records the plan_approval gate reads (covered-by-a-stage or cut-with-a-reason, empty bag itself a blocker — the opposite rule from the question bag) and by putting the coverage block, plan size included, inside the essence the user approves, re-derived from live state at gate time so a post-presentation cut cannot hide behind the plan_sha256 binding; the enumeration of the order stays unmechanized on purpose and is the largest residual.
+
 ## 2026-07
 
 - [2026-07-31 — A schema error in a config file: fix the generator, not the artifact](2026-07-31-generated-config-fix-the-generator-not-the-artifact.md) — A tool rejected .cursor/cli.json for a missing permissions.deny; the file turned out to be GENERATED per-mount by a sync script, so the hand-patch would have been silently reverted by the next setup-local.sh run — and the generator was also emitting Claude-notation rules (Bash/Edit/mcp__x__y) that Cursor CLI cannot match at all. Before hand-editing any config/artifact, grep the repo for its path to find the writer; a generated file's real defect is in the generator.
