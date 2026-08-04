@@ -1,11 +1,24 @@
 # config-root-refs-allowlist.txt — doc-scope legacy ~/.claude references that
 # are legitimately KEPT (not converted to the config-root-generic form).
-# Grammar (verify-config-root-refs.py): `path:line  # reason` (reason mandatory),
-# or a bare `path` (no `:line`), which covers the whole file.
-# Prefer the line pin: a stale pin forces a human to re-read the reference. Reach
-# for the whole-file form only when the ordinal is not the reference's identity —
-# an append-only, machine-generated file, where any insertion above shifts every
-# pin below it and the re-pin carries no review value.
+# Grammar (verify-config-root-refs.py): `path:line:sha8  # reason` (reason
+# mandatory), where sha8 is the first 8 hex of sha256 over the referenced line's
+# stripped text; `path:line` without an anchor still works and stays positional;
+# a bare `path` (no `:line`) covers the whole file.
+# The anchor, not the ordinal, is the entry's identity. Against the file's
+# OCCURRENCE lines it resolves four ways: still at the pinned line -> covered;
+# at exactly one other occurrence -> relocated, covered, and the move is printed
+# on the default run; nowhere -> stale, even if the pinned line still carries
+# some other legacy reference (a rewritten line is a different reference and
+# must be re-read); at several -> ambiguous hard failure naming the candidates.
+# Two entries resolving onto ONE occurrence also fail: otherwise one silently
+# double-covers while the occurrence the other named resurfaces as unallowed.
+# `--repin` rewrites this file in place with current line numbers and fresh
+# anchors, preserving reason text verbatim; it refuses to touch a stale,
+# ambiguous or double-covering row rather than guess what was meant.
+# Accepted limit: two occurrence lines in one file with byte-identical text are
+# indistinguishable to an anchor, so neither can be pinned apart. That is the
+# one case for the whole-file form — as is an append-only, machine-generated
+# file, where the re-pin carries no review value.
 # An entry ships in the SAME commit as the file it governs: an entry added ahead
 # of its file reads as stale in every clean checkout (see 77ce06c).
 # Categories mirror docs/migrations/config-root-tails-worklist.tsv.
@@ -89,7 +102,7 @@ memory-global/leaves/token-economy-plan.md:30:bfc84cba  # keep:harness-owned —
 memory-global/leaves/token-economy-plan.md:66:84c7ad27  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 scripts/README.md:38:ed324f81  # keep:protected-path — hook-guard-destructive-rm.py row lists ~/.claude among the protected paths it guards
 scripts/README.md:86:20e9417b  # keep:legacy-fallback — migrate-to-isolated.sh relocates the in-place/legacy ~/.claude system install
-scripts/README.md:122:f5f6d7e6  # keep:enumerator-self-ref — verify-config-root-refs.py documents this enumerator; quotes the very pattern it searches
+scripts/README.md:122:21690c45  # keep:enumerator-self-ref — verify-config-root-refs.py documents this enumerator; quotes the very pattern it searches
 skills/overcome-difficulty/SKILL.md:57:3f3d6be5  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 skills/overcome-difficulty/policy.md:57:6880def2  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 skills/self-improvement/SKILL.md:76:037b0dbc  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
