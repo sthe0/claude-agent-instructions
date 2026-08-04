@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import pathlib
+import re
 from argparse import Namespace
 
 import pytest
@@ -255,8 +256,9 @@ def test_cost_tier_vocabulary_matches_the_spawn_budget_choices():
     """The parser's vocabulary and spawn-specialist.py's --budget choices are two
     copies of one list; a tier accepted here but unknown there dies in the spawn."""
     src = (pathlib.Path(__file__).resolve().parents[1] / "spawn-specialist.py").read_text()
-    for tier in _COST_TIERS:
-        assert f'"{tier}"' in src or f"'{tier}'" in src
+    m = re.search(r"--budget\"[^)]*?choices=\(([^)]*)\)", src)
+    assert m, "spawn-specialist.py's --budget no longer declares a choices tuple"
+    assert tuple(re.findall(r"[\"']([a-z]+)[\"']", m.group(1))) == _COST_TIERS
 
 
 # --- (ix) a cost_tier-only edit is a refinement, not a no-op -------------------
