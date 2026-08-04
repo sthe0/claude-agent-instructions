@@ -20,7 +20,7 @@ import shlex
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -570,6 +570,12 @@ class Actor:
     """Who executes the stage and what capability that demands."""
     executor: str  # "in_thread" | "spawn:<spec>"
     capability_required: str | None = None
+    # Declared dispatch-budget tier (schema 25): "small" | "medium" | "large",
+    # optional. Resolution order at dispatch is flag > this declaration > the
+    # "medium" default. Absent on legacy pre-schema-25 states (absent key ->
+    # dataclass default via Stage.from_dict's Actor(**d["actor"]) splat), so a
+    # stage that never declared a tier dispatches exactly as before.
+    cost_tier: str | None = None
 
 
 @dataclass

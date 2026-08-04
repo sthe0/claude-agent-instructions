@@ -958,6 +958,7 @@ def parse_plan(
                     capability_required=(
                         str(s["capability_required"]) if s.get("capability_required") else None
                     ),
+                    cost_tier=str(s["cost_tier"]) if s.get("cost_tier") else None,
                 ),
                 criterion=Criterion(
                     criterion_type=crit_type,

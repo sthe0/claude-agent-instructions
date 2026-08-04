@@ -225,6 +225,7 @@ def _apply_refined_stage_fields(cur, refined) -> None:
     cur.criterion.verify_kind = refined.criterion.verify_kind
     cur.criterion.landed = refined.criterion.landed
     cur.actor.executor = refined.actor.executor
+    cur.actor.cost_tier = refined.actor.cost_tier
     # depends_on is a read-only projection over `supplies`, so the backing edges
     # are what must be copied for the key's deps element to track the plan.
     cur.supplies = list(refined.supplies)
@@ -2261,10 +2262,15 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
     if not stage.is_spawn():
         return Directive(True, state.node, "execute_in_thread", f"stage {stage.index} is in-thread; no spawn")
     dry_run = bool(getattr(args, "dry_run", False))
+    # Tier resolution order: explicit --budget flag > the stage's declared
+    # Actor.cost_tier > the "medium" default — same precedence on the argparse
+    # path (getattr(args, "budget", None)) and any in-process Namespace caller
+    # that also omits --budget.
+    tier = getattr(args, "budget", None) or stage.actor.cost_tier or "medium"
     result = dispatch_stage(
         stage, state.plan_path or "",
         runner=runner,
-        budget=getattr(args, "budget", "medium"),
+        budget=tier,
         complexity=getattr(args, "complexity", "medium"),
         continue_worktree=_continuation_worktree(state, stage),
         constraints=getattr(args, "constraints", "") or "",
@@ -4157,7 +4163,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--unit", dest="unit", action="append", default=None, help=_UNIT_HELP)
     sp = add("next-stage"); sp.add_argument("--session", required=True)
     sp = add("dispatch"); sp.add_argument("--session", required=True)
-    sp.add_argument("--budget", default="medium"); sp.add_argument("--complexity", default="medium")
+    # None (not "medium") so cmd_dispatch can tell "flag omitted" apart from "flag
+    # explicitly set to medium" and fall through to the stage's declared cost_tier
+    # before the "medium" default.
+    sp.add_argument("--budget", default=None); sp.add_argument("--complexity", default="medium")
     sp.add_argument("--constraints", default="",
                     help="clarification for the spawned specialist that bounds HOW it does "
                          "the already-approved stage — never a scope or done-criterion change; "
