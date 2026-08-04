@@ -91,6 +91,10 @@ def premise_blockers(state, bag) -> list[str]:
        (bag['enumerated_at'] == the live content digest) — otherwise one
        enumerate call would silently discharge the flag forever across every
        later replan.
+    4. order coverage (premise.validate_order_elements): every element of the order
+       is covered by a stage the CURRENT plan contains, or cut with a reason. Unlike
+       (1) an EMPTY bag blocks here, but only once a plan exists — before
+       submit-plan there is nothing to check coverage of.
     Skips both the stage-key binding checks and the staleness check when no plan
     has been submitted yet (`state.plan_path` empty) — there is nothing to key
     against, and premise.validate_questions already tolerates an empty
@@ -107,8 +111,14 @@ def premise_blockers(state, bag) -> list[str]:
 
     questions = premise.questions_from_dicts(bag.get("questions", []))
     candidates = premise.question_candidates_from_dicts(bag.get("candidates", []))
+    # `.get` with a default, not `bag["order_elements"]`: a premise bag minted before
+    # the order-coverage half existed must load, not KeyError.
+    order_elements = premise.order_elements_from_dicts(bag.get("order_elements", []))
     blockers = premise.validate_questions(questions, stage_keys=stage_keys)
     blockers += premise.validate_question_candidates(candidates, questions)
+    blockers += premise.validate_order_elements(
+        order_elements, stage_indices=set(stage_keys), plan_present=bool(plan_path)
+    )
 
     if not bag.get("enumerated"):
         blockers.append(_ENUMERATE_NOT_RUN)
@@ -128,7 +138,8 @@ def _observe_approve(state, bag) -> list[PluginDirective]:
         return []
     return [PluginDirective(
         "premise", "close_questions",
-        "dispose every open question and run the enumeration cross-check before "
+        "dispose every open question, cover or cut every element of the order, and "
+        "run the enumeration cross-check before "
         f"approving — blockers: {'; '.join(blockers)} (use `agentctl question-raise "
         "...`, `agentctl question-research ...`, `agentctl question-dispose ...`, "
         "`agentctl question-enumerate`, then `agentctl question-check` to confirm "
@@ -147,6 +158,7 @@ register(
         state_factory=lambda: {
             "questions": [],
             "candidates": [],
+            "order_elements": [],
             "enumerated": False,
             "enumerated_at": "",
             "enumerated_runner_ok": None,

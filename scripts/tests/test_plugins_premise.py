@@ -50,6 +50,17 @@ def _new_state(sid="s", **kw):
     return SessionState(session_id=sid, task_id="t", **kw)
 
 
+def _cover_the_order(state, stage=1):
+    """Seed one covered order element. The gate's order-coverage half fail-closes on
+    an EMPTY order bag once a plan is submitted, so a test isolating a QUESTION-side
+    blocker (or asserting the gate is otherwise clear) must satisfy it — the order
+    half's own two-directional proof lives in test_order_coverage.py."""
+    state.plugins["premise"]["order_elements"] = [{
+        "id": "O1", "element": "the order this plan answers",
+        "disposition": "covered", "stage": stage, "reason": "",
+    }]
+
+
 def _stage(*, index=1, title="Scaffold", principle=None, supplies=(), method="build it"):
     """A fully-populated Stage for exercising stage_question_key. Every field the
     key reads is set explicitly so a test can mutate exactly one and observe."""
@@ -197,6 +208,7 @@ def test_gate_blocks_stale_enumerated_at(fixtures_dir):
     plan_path = str(fixtures_dir / "plan_two_stage.toml")
     state = _new_state(plan_path=plan_path)
     plugins.activate(state, "premise")
+    _cover_the_order(state)
     state.plugins["premise"]["enumerated"] = True
     state.plugins["premise"]["enumerated_at"] = "a-digest-of-some-earlier-plan"
     blockers = plugins.plugin_gate_blockers(state, "plan_approval")
@@ -218,6 +230,7 @@ def test_comment_only_plan_edit_does_not_reblock_enumeration(tmp_path, fixtures_
     digest_before = pp._plan_content_digest(plan.load_plan(str(plan_path)))
     state = _new_state(plan_path=str(plan_path))
     plugins.activate(state, "premise")
+    _cover_the_order(state)
     state.plugins["premise"]["enumerated"] = True
     state.plugins["premise"]["enumerated_at"] = digest_before
     assert plugins.plugin_gate_blockers(state, "plan_approval") == []

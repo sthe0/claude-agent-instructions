@@ -1143,6 +1143,80 @@ def cmd_question_list(args, *, store: StateStore, runner: Runner | None = None) 
     )
 
 
+def cmd_order_raise(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Record (or re-declare) one element of the ORDER the plan answers. Permissive
+    UPSERT by --id exactly like question-raise, last write wins — re-raising resets
+    the element to 'raised'. state.log stamps the act, and that timestamp is what
+    evidences enumeration-before-plan: an element first raised after submit-plan was
+    read off the plan, not off the order."""
+    state, bag = _question_bag(store, args.session)
+    if bag is None:
+        return Directive(False, state.node, "noop", "plugin 'premise' is not active")
+    elements = premise.order_elements_from_dicts(bag.get("order_elements", []))
+    elements = [e for e in elements if e.id != args.id]
+    elements.append(premise.OrderElement(id=args.id, element=args.element))
+    bag["order_elements"] = premise.order_elements_to_dicts(elements)
+    state.log("order_raise", element=args.id)
+    store.save(state)
+    return Directive(
+        True, state.node, "continue",
+        f"order element {args.id!r} raised (undispositioned)",
+        data={"order_elements": [e.id for e in elements]},
+    )
+
+
+def cmd_order_dispose(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Disposition one order element: covered (by --stage) or cut (with --reason).
+    Fast-fails on the missing field for the named disposition — a courtesy, NOT the
+    authority: premise.validate_order_elements at the plan_approval gate is the
+    control, and it re-checks both (the dangling-stage case is only decidable there,
+    against the plan actually submitted)."""
+    state, bag = _question_bag(store, args.session)
+    if bag is None:
+        return Directive(False, state.node, "noop", "plugin 'premise' is not active")
+    if args.as_ == "covered" and args.stage is None:
+        return Directive(False, state.node, "noop", "--stage is required for --as covered")
+    if args.as_ == "cut" and not args.reason:
+        return Directive(False, state.node, "noop", "--reason is required for --as cut")
+    elements = premise.order_elements_from_dicts(bag.get("order_elements", []))
+    match = next((e for e in elements if e.id == args.id), None)
+    if match is None:
+        return Directive(False, state.node, "noop", f"no such order element {args.id!r}")
+    match.disposition = args.as_
+    match.stage = args.stage if args.as_ == "covered" else None
+    match.reason = args.reason if args.as_ == "cut" else ""
+    bag["order_elements"] = premise.order_elements_to_dicts(elements)
+    state.log("order_dispose", element=args.id, disposition=args.as_)
+    store.save(state)
+    return Directive(
+        True, state.node, "continue",
+        f"order element {args.id!r} dispositioned as {args.as_!r}",
+        data={"element": args.id, "disposition": args.as_, "stage": match.stage},
+    )
+
+
+def cmd_order_list(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Read-only render of the order bag. `--format md` IS
+    premise.render_coverage_block — the same text the essence must carry — so the
+    coordinator pastes what the gate will check rather than composing a second
+    rendering of its own. A PROJECTION, never a source of truth. Does not mutate."""
+    state, bag = _question_bag(store, args.session)
+    if bag is None:
+        return Directive(False, state.node, "noop", "plugin 'premise' is not active")
+    elements = premise.order_elements_from_dicts(bag.get("order_elements", []))
+    plan_path = getattr(state, "plan_path", None)
+    stage_count = len(load_plan(plan_path).stages) if plan_path else 0
+    if getattr(args, "format", None) == "md":
+        detail = premise.render_coverage_block(elements, stage_count)
+    else:
+        detail = "; ".join(f"{e.id}={e.disposition}" for e in elements) or "no order elements"
+    return Directive(
+        True, state.node, "inspect", detail,
+        data={"order_elements": premise.order_elements_to_dicts(elements),
+              "stage_count": stage_count},
+    )
+
+
 def cmd_question_check(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Read-only: report the active premise bag's blockers via the SAME
     plugins_premise.premise_blockers the plan_approval gate uses, so check and gate
@@ -3626,6 +3700,9 @@ COMMANDS = {
     "question-check": cmd_question_check,
     "question-enumerate": cmd_question_enumerate,
     "question-candidate-dispose": cmd_question_candidate_dispose,
+    "order-raise": cmd_order_raise,
+    "order-dispose": cmd_order_dispose,
+    "order-list": cmd_order_list,
     "classify": cmd_classify,
     "plan": cmd_plan,
     "plan-render": cmd_plan_render,
@@ -3693,7 +3770,8 @@ _SESSION_COMMANDS = (
     "ledger-add", "ledger-check", "ledger-candidate", "ledger-dispose",
     "ledger-enumerate", "question-raise", "question-research", "question-dispose",
     "question-rebind", "question-retire", "question-list", "question-check",
-    "question-enumerate", "question-candidate-dispose", "classify", "plan",
+    "question-enumerate", "question-candidate-dispose",
+    "order-raise", "order-dispose", "order-list", "classify", "plan",
     "plan-render", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
     "stage-review", "code-review", "approve", "partition", "partition-units",
     "next-stage", "dispatch", "resolve-permission", "record-result", "declare",
@@ -3711,7 +3789,9 @@ _RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("source", ("ledger-add", "question-dispose")),
     ("premises", ("ledger-add",)),
     ("basis", ("ledger-add", "question-dispose")),
-    ("reason", ("ledger-dispose", "question-retire", "question-candidate-dispose", "reject", "block")),
+    ("reason", ("ledger-dispose", "question-retire", "question-candidate-dispose",
+                "order-dispose", "reject", "block")),
+    ("element", ("order-raise",)),
     ("question", ("question-raise", "question-candidate-dispose")),
     ("attempted", ("question-research",)),
     ("answer", ("question-dispose",)),
@@ -3748,7 +3828,8 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("tracker_key", ("plugin-activate", "classify", "drive"), "tracker issue key (ABC-123)"),
     ("id", ("ledger-add", "ledger-candidate", "ledger-dispose", "question-raise",
             "question-research", "question-dispose", "question-rebind", "question-retire",
-            "question-candidate-dispose"), "claim / question id"),
+            "question-candidate-dispose", "order-raise", "order-dispose"),
+     "claim / question / order-element id"),
     ("claim", ("ledger-dispose",), "id of the grounding claim, not its text"),
     ("artifact", ("ledger-enumerate",), "path to the deliverable being cross-checked"),
     ("target", ("question-raise", "plan-review"), "plan element address or plan file path"),
@@ -3932,6 +4013,27 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--reason", default="", help="required when --as dismissed")
     sp.add_argument("--question", default="",
                     help="question id this candidate resolves to, required when --as recorded")
+
+    sp = add("order-raise"); sp.add_argument("--session", required=True)
+    sp.add_argument("--id", required=True,
+                    help="order-element id; re-raising an existing id resets it to undispositioned")
+    sp.add_argument("--element", required=True,
+                    help="one element of the order, enumerated FROM THE TEXT OF THE ORDER "
+                         "and BEFORE submit-plan — elements read off an already-written "
+                         "plan make coverage trivially total and prove nothing")
+
+    sp = add("order-dispose"); sp.add_argument("--session", required=True)
+    sp.add_argument("--id", required=True, help="order-element id to disposition")
+    sp.add_argument("--as", dest="as_", required=True, choices=["covered", "cut"])
+    sp.add_argument("--stage", type=int, default=None,
+                    help="the stage that covers this element, required when --as covered")
+    sp.add_argument("--reason", default="", help="why the element is cut, required when --as cut")
+
+    sp = add("order-list"); sp.add_argument("--session", required=True)
+    sp.add_argument("--format", dest="format", default="", choices=["", "md"],
+                    help="md renders the scope-coverage block the essence must carry; "
+                         "default is a compact one-liner")
+
     sp = add("classify"); sp.add_argument("--session", required=True)
     sp.add_argument("--chat", action="store_true")
     sp.add_argument("--changed-lines", dest="changed_lines", type=int, default=0)

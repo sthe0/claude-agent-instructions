@@ -168,6 +168,13 @@ def test_approve_allowed_when_dispositioned_and_enumerated(capsys, root):
          "--to", "assumed", "--basis", "confirmed reachable by the reporter",
          "--risk", "the reporter may be wrong")
     _run(capsys, root, "question-enumerate", "--session", sid)
+    # the gate's order-coverage half fail-closes on an EMPTY order bag once a plan is
+    # submitted, so approve is only reachable with the order covered too (that half's
+    # own two-directional proof lives in test_order_coverage.py).
+    _run(capsys, root, "order-raise", "--session", sid, "--id", "O1",
+         "--element", "the order this plan answers")
+    _run(capsys, root, "order-dispose", "--session", sid, "--id", "O1",
+         "--as", "covered", "--stage", "1")
 
     rc, d = _run(capsys, root, "approve", "--session", sid, "--by", "user")
     assert rc == 0
