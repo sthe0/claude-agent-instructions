@@ -577,16 +577,24 @@ def _reachability_path_tokens(cmd: str) -> list[str]:
     return tokens
 
 
-def _path_is_reachable(token: str, declared: list[str], repo_root: str | None) -> bool:
-    base = Path(repo_root) if repo_root else Path(".")
-    if (base / token).exists():
-        return True
+def _path_token_is_declared(token: str, declared: list[str]) -> bool:
+    """Does some `output_artifacts` entry cover this path token? Split out of
+    `_path_is_reachable` so check-controls can ask the DECLARATION half alone
+    (an artifact declared and still absent is not-yet-built rather than
+    dead-on-arrival) without the two surfaces drifting on what "covers" means."""
     tnorm = token.rstrip("/")
     for decl in declared:
         dnorm = decl.rstrip("/")
         if tnorm == dnorm or tnorm.startswith(dnorm + "/") or dnorm.startswith(tnorm + "/"):
             return True
     return False
+
+
+def _path_is_reachable(token: str, declared: list[str], repo_root: str | None) -> bool:
+    base = Path(repo_root) if repo_root else Path(".")
+    if (base / token).exists():
+        return True
+    return _path_token_is_declared(token, declared)
 
 
 def verify_command_reachability_blockers(stages, final_check, repo_root) -> list[str]:
