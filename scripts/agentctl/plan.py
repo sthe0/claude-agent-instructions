@@ -333,8 +333,8 @@ def _parse_differential_spec(
     if not repo_root:
         raise PlanError(
             f"{context}: a [*.differential] table requires [meta] repo_root to "
-            f"be set — the merge-base is resolved against the canonical "
-            f"checkout, not the delivery worktree (D6)"
+            f"be set — the engine anchors the differential's trunk base and its "
+            f"canonical (verify-final) re-run on that checkout (D6)"
         )
     known_keys = {"target", "remote", "violation_pattern"}
     extra_keys = sorted(set(raw_table) - known_keys)

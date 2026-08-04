@@ -283,6 +283,39 @@ def test_differential_surfaces_in_replan_diff():
     assert diff_plans(doc_without, doc_with) != "no_change"
 
 
+def test_differential_on_final_check_changes_operative_surface():
+    """A [[final_check]]-only differential must contribute to the operative
+    surface via final_check_surface — otherwise a regression silently dropping
+    it there would go uncaught (the stage-level tests above exercise only the
+    per-stage contribution, not the final_check one)."""
+    meta = _substantive_meta()
+    doc_without = parse_plan({
+        "meta": meta, "stage": [_full_substantive_stage()],
+        "final_check": [{"command": "true"}],
+    })
+    doc_with = parse_plan({
+        "meta": meta, "stage": [_full_substantive_stage()],
+        "final_check": [{"command": "true", "differential": _differential_table()}],
+    })
+    assert _operative_surface(doc_without) != _operative_surface(doc_with)
+
+
+def test_differential_on_final_check_surfaces_in_replan_diff():
+    """A [[final_check]]-only differential must register in diff_plans (via its
+    _fc closure), so adding or removing it is at least a 'refinement', never
+    'no_change' — the replan-diff twin of the surface test above."""
+    meta = _substantive_meta()
+    doc_without = parse_plan({
+        "meta": meta, "stage": [_full_substantive_stage()],
+        "final_check": [{"command": "true"}],
+    })
+    doc_with = parse_plan({
+        "meta": meta, "stage": [_full_substantive_stage()],
+        "final_check": [{"command": "true", "differential": _differential_table()}],
+    })
+    assert diff_plans(doc_without, doc_with) != "no_change"
+
+
 def test_differential_absent_leaves_operative_surface_and_keys_unaffected_by_declaration_order():
     """A plan that never declares differential produces the same operative
     surface / carry key / question key regardless of the field's presence in

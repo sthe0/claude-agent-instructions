@@ -575,12 +575,11 @@ def _landed_sort_key(landed) -> tuple:
 
 
 def _differential_sort_key(differential) -> tuple:
-    """Fixed-shape, orderable stand-in for a `DifferentialSpec | None` inside a
-    `sorted(...)`-built tuple — mirrors `_landed_sort_key`'s rationale.
-    `violation_pattern` defaults to "" (never None) so the tuple's element
-    types stay uniform regardless of whether it was declared."""
-    if differential is None:
-        return ("", "", "")
+    """Fixed-shape, orderable stand-in for a declared `DifferentialSpec` inside
+    a `sorted(...)`-built tuple. Called only when a differential is present —
+    the declared-only contribution pattern, unlike `_landed_sort_key` which is
+    called unconditionally and therefore needs a None sentinel. `violation_pattern`
+    defaults to "" (never None) so the tuple's element types stay uniform."""
     return (differential.target, differential.remote, differential.violation_pattern or "")
 
 
