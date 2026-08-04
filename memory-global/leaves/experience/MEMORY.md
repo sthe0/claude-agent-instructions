@@ -9,6 +9,7 @@ Most recent first. (Migrated 2026-06-11 from the older task-centric format — t
 ## 2026-08
 
 - [2026-08-05 — A plan narrower than its order: every gate green over a domain nobody ordered](2026-08-05-scope-substitution-at-plan-authoring.md) — A two-part order was answered by a plan covering only the second part, and nothing anywhere compared plan to order — CLAUDE.md's contraction rule catches only edits to an ALREADY-APPROVED plan and the replan-coverage gate compares a new plan to the critique — so all 19 verifiers, the thinker review and the approval itself were honestly green over a scope the user never asked for; fixed by making order elements records the plan_approval gate reads (covered-by-a-stage or cut-with-a-reason, empty bag itself a blocker — the opposite rule from the question bag) and by putting the coverage block, plan size included, inside the essence the user approves, re-derived from live state at gate time so a post-presentation cut cannot hide behind the plan_sha256 binding; the enumeration of the order stays unmechanized on purpose and is the largest residual.
+- [2026-08-04 — Verification effort had no upper bound, so a collapsed task kept its heavyweight class](2026-08-04-no-circuit-breaker-on-verification-effort.md) — A task classified SUBSTANTIVE kept that class after the user contracted it to a few minutes of work; the engine's gates all guard against under-verification and none against over-verification, so ten locally-justified plan-review rounds ran on a plan that no longer warranted any.
 
 ## 2026-07
 
