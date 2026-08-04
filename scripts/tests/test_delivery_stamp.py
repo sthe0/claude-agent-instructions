@@ -64,6 +64,39 @@ def test_round_trip_override_stamp_with_by_and_note(tmp_path):
     assert delivery.read_stamp(state_file) == stamp
 
 
+def test_round_trip_preserves_the_escape_reason(tmp_path):
+    """The no-silent-drop half. A dataclass default alone would let the field be
+    WRITTEN and then read back empty, silently and forever — every stamp would
+    report no reason and the report the field exists to feed would show nothing
+    while looking correct. This asserts the reader's `.get`, not the writer."""
+    state_file = tmp_path / "sess.json"
+    stamp = DeliveryStamp(
+        plan_path="/plan.toml", plan_sha256="a" * 64, rendering_sha256="b" * 64,
+        verified_ts=42.0, source=delivery.SOURCE_OVERRIDE, by="fedor",
+        note="hook down", escape_reason=delivery.ESCAPE_HOOK_NOT_INSTALLED,
+    )
+    delivery.write_stamp(state_file, stamp)
+    back = delivery.read_stamp(state_file)
+    assert back == stamp
+    assert back.escape_reason == delivery.ESCAPE_HOOK_NOT_INSTALLED
+
+
+def test_old_on_disk_shape_without_escape_reason_still_loads(tmp_path):
+    """The back-compat half. read_stamp must stay fail-OPEN over the stamps
+    already on disk: a stricter reader would retroactively invalidate the only
+    evidence this whole change rests on."""
+    state_file = tmp_path / "sess.json"
+    delivery.stamp_path_for(state_file).write_text(json.dumps({
+        "plan_path": "/plan.toml", "plan_sha256": "a" * 64,
+        "rendering_sha256": "b" * 64, "verified_ts": 42.0,
+        "source": delivery.SOURCE_OVERRIDE, "by": "fedor", "note": "hook down",
+    }), encoding="utf-8")
+    back = delivery.read_stamp(state_file)
+    assert back is not None
+    assert back.by == "fedor" and back.note == "hook down"
+    assert back.escape_reason == ""
+
+
 def test_stamp_path_for_sibling_of_legacy_root_shaped_path():
     state_file = Path("/home/x/.claude/agentctl/state/sess1.json")
     target = delivery.stamp_path_for(state_file)

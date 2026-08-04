@@ -42,6 +42,28 @@ SOURCE_HOOK = "hook"
 SOURCE_OVERRIDE = "override"
 DELIVERY_STAMP_SOURCES = (SOURCE_HOOK, SOURCE_OVERRIDE)
 
+# The closed set of reasons a HUMAN may give for taking the override escape.
+# Typed rather than left to `note` because a free-text note is not aggregable:
+# on this machine 3 of the first 5 stamps were overrides and nothing recorded
+# WHY, so an escape designed as a rare exception had silently become the normal
+# path and no one could see it. "hook_not_installed x N" is a work item; N notes
+# are an archive nobody reads.
+ESCAPE_HOOK_NOT_INSTALLED = "hook_not_installed"
+ESCAPE_HOOK_NOT_FIRED = "hook_not_fired"
+ESCAPE_TRANSCRIPT_UNVERIFIABLE = "transcript_unverifiable"
+ESCAPE_DELIVERED_OUT_OF_BAND = "delivered_out_of_band"
+# The residual class. A closed set without one does not eliminate the unforeseen
+# case — it pushes it into the nearest wrong bucket and corrupts exactly the
+# counts the field exists to produce.
+ESCAPE_OTHER = "other"
+DELIVERY_ESCAPE_REASONS = (
+    ESCAPE_HOOK_NOT_INSTALLED,
+    ESCAPE_HOOK_NOT_FIRED,
+    ESCAPE_TRANSCRIPT_UNVERIFIABLE,
+    ESCAPE_DELIVERED_OUT_OF_BAND,
+    ESCAPE_OTHER,
+)
+
 
 @dataclass
 class DeliveryStamp:
@@ -52,7 +74,9 @@ class DeliveryStamp:
     this module importing state.py. `source` is "hook" for a positive
     out-of-band verification (the delivery hook confirmed the rendering's
     bytes reached the transcript) or "override" for the human escape
-    (`confirm-delivery`); `by`/`note` are populated only for "override"."""
+    (`confirm-delivery`); `by`/`note`/`escape_reason` are populated only for
+    "override". `escape_reason` is one of DELIVERY_ESCAPE_REASONS — the typed
+    half of the escape, next to `note`'s explanatory half."""
     plan_path: str
     plan_sha256: str
     rendering_sha256: str
@@ -60,9 +84,16 @@ class DeliveryStamp:
     source: str
     by: str = ""
     note: str = ""
+    escape_reason: str = ""
 
     @classmethod
     def from_dict(cls, d: dict) -> "DeliveryStamp":
+        # Every optional field is read with .get so a stamp written before that
+        # field existed still loads — the reader stays as fail-open as the
+        # module docstring promises. The .get here is the OTHER half of adding a
+        # field: a dataclass default alone would make every stamp round-trip
+        # through this reader with the value silently dropped, so the report the
+        # field exists to feed would show nothing, forever, and look correct.
         return cls(
             plan_path=d["plan_path"],
             plan_sha256=d["plan_sha256"],
@@ -71,6 +102,7 @@ class DeliveryStamp:
             source=d["source"],
             by=d.get("by", ""),
             note=d.get("note", ""),
+            escape_reason=d.get("escape_reason", ""),
         )
 
 

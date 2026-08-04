@@ -1677,16 +1677,30 @@ def cmd_confirm_delivery(args, *, store: StateStore, runner: Runner | None = Non
         )
     by = (getattr(args, "by", "") or "").strip()
     note = (getattr(args, "note", "") or "").strip()
+    escape_reason = (getattr(args, "escape_reason", "") or "").strip()
     missing = []
     if not by:
         missing.append("--by")
     if not note:
         missing.append("--note")
+    if not escape_reason:
+        missing.append("--escape-reason")
     if missing:
         return Directive(
             False, state.node, "noop",
-            f"confirm-delivery requires {' and '.join(missing)} (a named actor "
-            "and a stated reason for the manual override)",
+            f"confirm-delivery requires {' and '.join(missing)} (a named actor, "
+            "a typed reason from a closed set, and a stated explanation for the "
+            "manual override)",
+        )
+    if escape_reason not in delivery.DELIVERY_ESCAPE_REASONS:
+        # Refused in the body rather than by argparse `choices=`: the enum is
+        # also enforced when a caller builds the namespace directly, and the
+        # refusal joins the aggregate above instead of exiting the process.
+        return Directive(
+            False, state.node, "noop",
+            f"--escape-reason {escape_reason!r} is not one of "
+            f"{', '.join(delivery.DELIVERY_ESCAPE_REASONS)} — an untyped reason "
+            "is exactly what makes escapes uncountable",
         )
     if by.lower() == delivery.SOURCE_HOOK:
         return Directive(
@@ -1709,9 +1723,10 @@ def cmd_confirm_delivery(args, *, store: StateStore, runner: Runner | None = Non
         source=delivery.SOURCE_OVERRIDE,
         by=by,
         note=note,
+        escape_reason=escape_reason,
     )
     delivery.write_stamp(state_file, stamp)
-    state.log("confirm_delivery", by=by, note=note)
+    state.log("confirm_delivery", by=by, note=note, escape_reason=escape_reason)
     store.save(state)
     return Directive(
         True, state.node, "continue",
@@ -3742,6 +3757,9 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("new", ("check-coverage",), "corrected plan file path — the object under a coverage pre-check, not narrative"),
     ("rendering_file", ("present-plan",), "path to the rendered presentation"),
     ("by", ("confirm-delivery", "approve", "resolve"), "who acted — a name, not a narrative"),
+    ("escape_reason", ("confirm-delivery",),
+     "one token from delivery.DELIVERY_ESCAPE_REASONS — the narrative half of "
+     "the escape is --note, which is RESOLVE"),
     ("reviewer", ("plan-review", "stage-review", "code-review"), "reviewer name"),
     ("plan_digest", ("plan-review",), "sha256 the review binds to"),
     ("code_ref", ("code-review", "record-result"), "commit / PR reference the verdict binds to"),
@@ -3952,6 +3970,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the human who confirms delivery (must not be 'hook')")
     sp.add_argument("--note", required=True,
                     help="why the automated delivery hook could not verify this itself")
+    sp.add_argument("--escape-reason", dest="escape_reason", required=True,
+                    help="which of " + "/".join(delivery.DELIVERY_ESCAPE_REASONS) +
+                         " this escape is — the countable half; --note stays the "
+                         "explicable half")
     sp = add("plan-review"); sp.add_argument("--session", required=True)
     sp.add_argument("--verdict", choices=list(gates.PLAN_REVIEW_VERDICTS), required=True,
                     help="pass = clears the gate; revise = blocks; override = user's "

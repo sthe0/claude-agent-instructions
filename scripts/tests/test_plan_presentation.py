@@ -514,7 +514,8 @@ _GENERIC_NO_STAMP = (
     "no delivery proof recorded — the plan was presented but nothing "
     "confirms it reached the user; either let the delivery hook verify "
     "the turn's transcript, or run confirm-delivery --by <you> "
-    "--note <reason> as the escape"
+    "--note <why> --escape-reason <hook_not_installed|hook_not_fired|"
+    "transcript_unverifiable|delivered_out_of_band|other> as the escape"
 )
 
 
@@ -536,7 +537,8 @@ def test_no_stamp_absent_hook_names_hook_root_and_both_remedies(
     assert "any user-level settings member" in msg
     # Both remedies, and NOT the unreachable one.
     assert "claude-task" in msg and "claude-agent" in msg
-    assert "confirm-delivery --by <you> --note <reason>" in msg
+    assert "confirm-delivery --by <you> --note <why> --escape-reason " \
+           + delivery.ESCAPE_HOOK_NOT_INSTALLED in msg
     assert "let the delivery hook verify" not in msg
 
 
@@ -724,7 +726,7 @@ def test_confirm_delivery_rejects_by_hook_case_insensitively(home_store, fixture
         ns(session=sid, kind="essence", rendering_file=rendering, emit_skeleton=False),
         store=home_store,
     )
-    d = cli.cmd_confirm_delivery(ns(session=sid, by="HOOK", note="x"), store=home_store)
+    d = cli.cmd_confirm_delivery(ns(session=sid, by="HOOK", note="x", escape_reason=delivery.ESCAPE_HOOK_NOT_FIRED), store=home_store)
     assert d.ok is False
 
 
@@ -732,7 +734,7 @@ def test_confirm_delivery_requires_essence_receipt_first(home_store, fixtures_di
     sid = "cd2"
     plan = str(fixtures_dir / "plan_two_stage.toml")
     _to_plan_ready(home_store, sid, plan)
-    d = cli.cmd_confirm_delivery(ns(session=sid, by="fedor", note="x"), store=home_store)
+    d = cli.cmd_confirm_delivery(ns(session=sid, by="fedor", note="x", escape_reason=delivery.ESCAPE_HOOK_NOT_FIRED), store=home_store)
     assert d.ok is False
 
 
@@ -745,7 +747,7 @@ def test_confirm_delivery_missing_note_refuses(home_store, fixtures_dir, tmp_pat
         ns(session=sid, kind="essence", rendering_file=rendering, emit_skeleton=False),
         store=home_store,
     )
-    d = cli.cmd_confirm_delivery(ns(session=sid, by="fedor", note=""), store=home_store)
+    d = cli.cmd_confirm_delivery(ns(session=sid, by="fedor", note="", escape_reason=delivery.ESCAPE_HOOK_NOT_FIRED), store=home_store)
     assert d.ok is False
 
 
@@ -783,7 +785,8 @@ def test_approve_proceeds_with_receipt_and_matching_delivery_stamp(
         store=home_store,
     )
     cli.cmd_confirm_delivery(
-        ns(session=sid, by="fedor", note="hook not installed in test"), store=home_store,
+        ns(session=sid, by="fedor", note="hook not installed in test",
+           escape_reason=delivery.ESCAPE_HOOK_NOT_INSTALLED), store=home_store,
     )
     d = cli.cmd_approve(ns(session=sid, by="user"), store=home_store)
     assert d.node == Node.APPROVED.value

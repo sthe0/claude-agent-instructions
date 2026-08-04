@@ -58,7 +58,9 @@ together or a later reader "fixes" only the one they see: since Stage 2 made
 cmd_approve REQUIRE a stamp, a fail-open ALLOW here (transcript unreadable,
 etc.) no longer just permits the ask — it also means no stamp gets written,
 so `agentctl approve` will later REFUSE for lack of delivery proof. The
-escape is `agentctl confirm-delivery --by <you> --note <reason>`. The posture
+escape is `agentctl confirm-delivery --by <you> --note <why> --escape-reason
+<one of delivery.DELIVERY_ESCAPE_REASONS>` — typed so escapes are countable
+rather than an archive of free-text notes nobody aggregates. The posture
 is deliberately split: fail OPEN on the live turn (cheap to retry), fail
 CLOSED on recording approval (the irreversible act) — and that inversion only
 works because the escape stays reachable.

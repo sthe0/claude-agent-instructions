@@ -326,7 +326,8 @@ _NO_STAMP_GENERIC = (
     "no delivery proof recorded — the plan was presented but nothing "
     "confirms it reached the user; either let the delivery hook verify "
     "the turn's transcript, or run confirm-delivery --by <you> "
-    "--note <reason> as the escape"
+    "--note <why> --escape-reason <" +
+    "|".join(delivery.DELIVERY_ESCAPE_REASONS) + "> as the escape"
 )
 
 
@@ -360,7 +361,8 @@ def _no_stamp_blocker(probe) -> str:
         f"registered in any user-level settings member of {wiring.root}, so no "
         "automated proof can come from that evidence domain; either run this "
         "task under claude-task / claude-agent, where the hook IS wired, or run "
-        "confirm-delivery --by <you> --note <reason> as the escape"
+        "confirm-delivery --by <you> --note <why> --escape-reason " +
+        delivery.ESCAPE_HOOK_NOT_INSTALLED + " as the escape"
     )
 
 
@@ -452,7 +454,8 @@ def plan_presentation_blockers(
         return [
             "delivery proof is stale — it verified a different plan/rendering "
             "than the current presentation receipt; re-present and re-verify "
-            "(or confirm-delivery --by <you> --note <reason>)"
+            "(or confirm-delivery --by <you> --note <why> --escape-reason "
+            "<" + "|".join(delivery.DELIVERY_ESCAPE_REASONS) + ">)"
         ]
     if stamp.source == delivery.SOURCE_HOOK:
         return []
