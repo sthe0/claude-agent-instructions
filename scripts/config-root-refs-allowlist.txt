@@ -11,90 +11,90 @@
 # Categories mirror docs/migrations/config-root-tails-worklist.tsv.
 # Code scope (*.py/*.sh) is governed by S2's enumerator — never listed here.
 
-CLAUDE.md:150  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-README.md:5  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-README.md:37  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-README.md:116  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-docs/migrations/2026-05-collapse-manager-memory.md:5  # keep:migration-doc — migration doc — describes the legacy layout by nature
-docs/migrations/2026-05-collapse-manager-memory.md:13  # keep:migration-doc — migration doc — describes the legacy layout by nature
-docs/migrations/2026-05-collapse-manager-memory.md:14  # keep:migration-doc — migration doc — describes the legacy layout by nature
-docs/migrations/2026-05-collapse-manager-memory.md:21  # keep:migration-doc — migration doc — describes the legacy layout by nature
-docs/migrations/2026-05-collapse-manager-memory.md:27  # keep:migration-doc — migration doc — describes the legacy layout by nature
-docs/migrations/2026-05-collapse-manager-memory.md:28  # keep:migration-doc — migration doc — describes the legacy layout by nature
-docs/migrations/2026-05-collapse-manager-memory.md:29  # keep:migration-doc — migration doc — describes the legacy layout by nature
-docs/migrations/2026-05-collapse-manager-memory.md:30  # keep:migration-doc — migration doc — describes the legacy layout by nature
-docs/migrations/2026-05-collapse-manager-memory.md:45  # keep:migration-doc — migration doc — describes the legacy layout by nature
-docs/migrations/2026-05-collapse-manager-memory.md:47  # keep:migration-doc — migration doc — describes the legacy layout by nature
-docs/migrations/2026-05-collapse-manager-memory.md:49  # keep:migration-doc — migration doc — describes the legacy layout by nature
-docs/migrations/2026-05-collapse-manager-memory.md:55  # keep:migration-doc — migration doc — describes the legacy layout by nature
-docs/migrations/2026-05-collapse-manager-memory.md:69  # keep:migration-doc — migration doc — describes the legacy layout by nature
-docs/migrations/2026-05-collapse-manager-memory.md:70  # keep:migration-doc — migration doc — describes the legacy layout by nature
-docs/migrations/2026-05-collapse-manager-memory.md:81  # keep:migration-doc — migration doc — describes the legacy layout by nature
-docs/migrations/2026-05-collapse-manager-memory.md:82  # keep:migration-doc — migration doc — describes the legacy layout by nature
-docs/migrations/2026-05-collapse-manager-memory.md:83  # keep:migration-doc — migration doc — describes the legacy layout by nature
-docs/migrations/2026-05-collapse-manager-memory.md:96  # keep:migration-doc — migration doc — describes the legacy layout by nature
-docs/migrations/2026-05-collapse-manager-memory.md:98  # keep:migration-doc — migration doc — describes the legacy layout by nature
-docs/migrations/2026-05-cursor-namespace.md:14  # keep:migration-doc — migration doc — describes the legacy layout by nature
-docs/migrations/2026-05-cursor-namespace.md:101  # keep:migration-doc — migration doc — describes the legacy layout by nature
-docs/migrations/README.md:3  # keep:migration-doc — migration doc — describes the legacy layout by nature
-docs/migrations/README.md:5  # keep:migration-doc — migration doc — describes the legacy layout by nature
-docs/operations/git-workflow.md:13  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-docs/operations/org-portability.md:55  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-docs/operations/org-portability.md:113  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-docs/operations/org-portability.md:117  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-docs/operations/setup.md:35  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-docs/operations/setup.md:37  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-docs/operations/setup.md:40  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-docs/operations/setup.md:45  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-docs/operations/setup.md:55  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-benchmark-profile/REMOVED-VS-RETAINED.md:17  # keep:harness-owned — describes the personal ~/.claude/settings.json where the hook family is registered
-memory-global/MEMORY.md:66  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
-memory-global/leaves/claude-code-settings-env-precedence.md:35  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
-memory-global/leaves/coordinator-pitfalls.md:29  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
-memory-global/leaves/experience/2026-05-24-silent-architectural-decision-config-as-file.md:23  # keep:historical-experience — historical quote inside a resolved-task experience leaf
-memory-global/leaves/experience/2026-06-04-org-specific-vs-global-placement.md:23  # keep:historical-experience — historical quote inside a resolved-task experience leaf
-memory-global/leaves/experience/2026-06-11-project-memory-migrate-existing-native.md:3  # keep:historical-experience — historical quote inside a resolved-task experience leaf
-memory-global/leaves/experience/2026-06-11-project-memory-migrate-existing-native.md:25  # keep:historical-experience — historical quote inside a resolved-task experience leaf
-memory-global/leaves/experience/2026-06-24-gate-exemption-is-category-error-for-result-images.md:15  # keep:historical-experience — historical quote inside a resolved-task experience leaf
-memory-global/leaves/experience/2026-06-27-stub-mechanism-not-deployable-until-caller-cli-onboarding.md:19  # keep:historical-experience — historical quote inside a resolved-task experience leaf
+CLAUDE.md:150:2f675ab4  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+README.md:5:e9d981de  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+README.md:37:2e3c2a5c  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+README.md:116:f77bb07e  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+docs/migrations/2026-05-collapse-manager-memory.md:5:f98bdeff  # keep:migration-doc — migration doc — describes the legacy layout by nature
+docs/migrations/2026-05-collapse-manager-memory.md:13:260dbbd4  # keep:migration-doc — migration doc — describes the legacy layout by nature
+docs/migrations/2026-05-collapse-manager-memory.md:14:ea5ec3a7  # keep:migration-doc — migration doc — describes the legacy layout by nature
+docs/migrations/2026-05-collapse-manager-memory.md:21:c496453d  # keep:migration-doc — migration doc — describes the legacy layout by nature
+docs/migrations/2026-05-collapse-manager-memory.md:27:97344a61  # keep:migration-doc — migration doc — describes the legacy layout by nature
+docs/migrations/2026-05-collapse-manager-memory.md:28:cbdcdcb7  # keep:migration-doc — migration doc — describes the legacy layout by nature
+docs/migrations/2026-05-collapse-manager-memory.md:29:894ab277  # keep:migration-doc — migration doc — describes the legacy layout by nature
+docs/migrations/2026-05-collapse-manager-memory.md:30:51f90bff  # keep:migration-doc — migration doc — describes the legacy layout by nature
+docs/migrations/2026-05-collapse-manager-memory.md:45:15aa42ce  # keep:migration-doc — migration doc — describes the legacy layout by nature
+docs/migrations/2026-05-collapse-manager-memory.md:47:bfa0a34a  # keep:migration-doc — migration doc — describes the legacy layout by nature
+docs/migrations/2026-05-collapse-manager-memory.md:49:f50dc655  # keep:migration-doc — migration doc — describes the legacy layout by nature
+docs/migrations/2026-05-collapse-manager-memory.md:55:add689fd  # keep:migration-doc — migration doc — describes the legacy layout by nature
+docs/migrations/2026-05-collapse-manager-memory.md:69:9e8e6847  # keep:migration-doc — migration doc — describes the legacy layout by nature
+docs/migrations/2026-05-collapse-manager-memory.md:70:8fa5bcde  # keep:migration-doc — migration doc — describes the legacy layout by nature
+docs/migrations/2026-05-collapse-manager-memory.md:81:6f84f769  # keep:migration-doc — migration doc — describes the legacy layout by nature
+docs/migrations/2026-05-collapse-manager-memory.md:82:f534cd1f  # keep:migration-doc — migration doc — describes the legacy layout by nature
+docs/migrations/2026-05-collapse-manager-memory.md:83:9ff10577  # keep:migration-doc — migration doc — describes the legacy layout by nature
+docs/migrations/2026-05-collapse-manager-memory.md:96:fba360ca  # keep:migration-doc — migration doc — describes the legacy layout by nature
+docs/migrations/2026-05-collapse-manager-memory.md:98:6e409f57  # keep:migration-doc — migration doc — describes the legacy layout by nature
+docs/migrations/2026-05-cursor-namespace.md:14:ddd3e5ee  # keep:migration-doc — migration doc — describes the legacy layout by nature
+docs/migrations/2026-05-cursor-namespace.md:101:4d066d1b  # keep:migration-doc — migration doc — describes the legacy layout by nature
+docs/migrations/README.md:3:4876ebe4  # keep:migration-doc — migration doc — describes the legacy layout by nature
+docs/migrations/README.md:5:0bb66eb4  # keep:migration-doc — migration doc — describes the legacy layout by nature
+docs/operations/git-workflow.md:13:b818580c  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+docs/operations/org-portability.md:55:dbc8f06c  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+docs/operations/org-portability.md:113:778b5e38  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+docs/operations/org-portability.md:117:e59f45ea  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+docs/operations/setup.md:35:51d29686  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+docs/operations/setup.md:37:c199d833  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+docs/operations/setup.md:40:4937bdeb  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+docs/operations/setup.md:45:4750ec88  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+docs/operations/setup.md:55:0ffb98bc  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+benchmark-profile/REMOVED-VS-RETAINED.md:17:edb18bff  # keep:harness-owned — describes the personal ~/.claude/settings.json where the hook family is registered
+memory-global/MEMORY.md:66:12cee453  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
+memory-global/leaves/claude-code-settings-env-precedence.md:35:3f736904  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
+memory-global/leaves/coordinator-pitfalls.md:29:af7a029f  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
+memory-global/leaves/experience/2026-05-24-silent-architectural-decision-config-as-file.md:23:99aa1ea4  # keep:historical-experience — historical quote inside a resolved-task experience leaf
+memory-global/leaves/experience/2026-06-04-org-specific-vs-global-placement.md:23:2474afd5  # keep:historical-experience — historical quote inside a resolved-task experience leaf
+memory-global/leaves/experience/2026-06-11-project-memory-migrate-existing-native.md:3:d3c6bbab  # keep:historical-experience — historical quote inside a resolved-task experience leaf
+memory-global/leaves/experience/2026-06-11-project-memory-migrate-existing-native.md:25:de66b288  # keep:historical-experience — historical quote inside a resolved-task experience leaf
+memory-global/leaves/experience/2026-06-24-gate-exemption-is-category-error-for-result-images.md:15:98de73a1  # keep:historical-experience — historical quote inside a resolved-task experience leaf
+memory-global/leaves/experience/2026-06-27-stub-mechanism-not-deployable-until-caller-cli-onboarding.md:19:85baed99  # keep:historical-experience — historical quote inside a resolved-task experience leaf
 memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md  # keep:historical-experience — whole-file: append-only resolved-task experience leaf; instance-17 lesson quotes ~/.claude verbatim to teach the ~/.claude vs ~/.claude-agent settings-file distinction, and every new instance appended shifts the line number of every quoted reference
-memory-global/leaves/experience/2026-06-29-resume-paused-task-isolated-worktree-pinned-sha.md:27  # keep:historical-experience — historical quote inside a resolved-task experience leaf
-memory-global/leaves/experience/2026-06-29-resume-paused-task-isolated-worktree-pinned-sha.md:34  # keep:historical-experience — historical quote inside a resolved-task experience leaf
-memory-global/leaves/experience/2026-06-30-mechanize-subdifficulty-extraction-and-audit.md:33  # keep:historical-experience — historical quote inside a resolved-task experience leaf
-memory-global/leaves/experience/2026-07-01-2026-07-01-engine-spawn-proc-tree-macos-and-rm-empty-var.md:3  # keep:historical-experience — historical quote inside a resolved-task experience leaf
-memory-global/leaves/experience/2026-07-01-2026-07-01-engine-spawn-proc-tree-macos-and-rm-empty-var.md:13  # keep:historical-experience — historical quote inside a resolved-task experience leaf
-memory-global/leaves/experience/2026-07-01-additive-settings-merge-cannot-prune-install-time-invariant.md:21  # keep:historical-experience — historical quote inside a resolved-task experience leaf
-memory-global/leaves/experience/2026-07-01-additive-settings-merge-cannot-prune-install-time-invariant.md:27  # keep:historical-experience — historical quote inside a resolved-task experience leaf
-memory-global/leaves/experience/2026-07-01-additive-settings-merge-cannot-prune-install-time-invariant.md:32  # keep:historical-experience — historical quote inside a resolved-task experience leaf
-memory-global/leaves/experience/2026-07-01-isolate-tool-config-root-per-root-auth.md:3  # keep:historical-experience — historical quote inside a resolved-task experience leaf
-memory-global/leaves/experience/2026-07-01-isolate-tool-config-root-per-root-auth.md:21  # keep:historical-experience — historical quote inside a resolved-task experience leaf
-memory-global/leaves/experience/2026-07-01-isolate-tool-config-root-per-root-auth.md:25  # keep:historical-experience — historical quote inside a resolved-task experience leaf
-memory-global/leaves/experience/2026-07-01-isolate-tool-config-root-per-root-auth.md:40  # keep:historical-experience — historical quote inside a resolved-task experience leaf
-memory-global/leaves/experience/2026-07-02-dead-spawn-scope-file-blocks-next-writer.md:3  # keep:historical-experience — historical quote inside a resolved-task experience leaf
-memory-global/leaves/experience/2026-07-02-dead-spawn-scope-file-blocks-next-writer.md:26  # keep:historical-experience — historical quote inside a resolved-task experience leaf
-memory-global/leaves/experience/2026-07-02-dead-spawn-scope-file-blocks-next-writer.md:27  # keep:historical-experience — historical quote inside a resolved-task experience leaf
-memory-global/leaves/experience/2026-07-02-dead-spawn-scope-file-blocks-next-writer.md:31  # keep:historical-experience — historical quote inside a resolved-task experience leaf
-memory-global/leaves/experience/2026-07-02-spawn-sandbox-excludes-declared-stage-material.md:8  # keep:historical-experience — historical quote inside a resolved-task experience leaf
-memory-global/leaves/experience/2026-07-02-spawn-sandbox-excludes-declared-stage-material.md:26  # keep:historical-experience — historical quote inside a resolved-task experience leaf
+memory-global/leaves/experience/2026-06-29-resume-paused-task-isolated-worktree-pinned-sha.md:27:8c201578  # keep:historical-experience — historical quote inside a resolved-task experience leaf
+memory-global/leaves/experience/2026-06-29-resume-paused-task-isolated-worktree-pinned-sha.md:34:0d18c4ef  # keep:historical-experience — historical quote inside a resolved-task experience leaf
+memory-global/leaves/experience/2026-06-30-mechanize-subdifficulty-extraction-and-audit.md:33:8d78a0a6  # keep:historical-experience — historical quote inside a resolved-task experience leaf
+memory-global/leaves/experience/2026-07-01-2026-07-01-engine-spawn-proc-tree-macos-and-rm-empty-var.md:3:fdd29e74  # keep:historical-experience — historical quote inside a resolved-task experience leaf
+memory-global/leaves/experience/2026-07-01-2026-07-01-engine-spawn-proc-tree-macos-and-rm-empty-var.md:13:fef5874f  # keep:historical-experience — historical quote inside a resolved-task experience leaf
+memory-global/leaves/experience/2026-07-01-additive-settings-merge-cannot-prune-install-time-invariant.md:21:111bb8d9  # keep:historical-experience — historical quote inside a resolved-task experience leaf
+memory-global/leaves/experience/2026-07-01-additive-settings-merge-cannot-prune-install-time-invariant.md:27:dbacf6e9  # keep:historical-experience — historical quote inside a resolved-task experience leaf
+memory-global/leaves/experience/2026-07-01-additive-settings-merge-cannot-prune-install-time-invariant.md:32:6095ee36  # keep:historical-experience — historical quote inside a resolved-task experience leaf
+memory-global/leaves/experience/2026-07-01-isolate-tool-config-root-per-root-auth.md:3:68aaabd0  # keep:historical-experience — historical quote inside a resolved-task experience leaf
+memory-global/leaves/experience/2026-07-01-isolate-tool-config-root-per-root-auth.md:21:bdb7d7df  # keep:historical-experience — historical quote inside a resolved-task experience leaf
+memory-global/leaves/experience/2026-07-01-isolate-tool-config-root-per-root-auth.md:25:376593b5  # keep:historical-experience — historical quote inside a resolved-task experience leaf
+memory-global/leaves/experience/2026-07-01-isolate-tool-config-root-per-root-auth.md:40:2855a29d  # keep:historical-experience — historical quote inside a resolved-task experience leaf
+memory-global/leaves/experience/2026-07-02-dead-spawn-scope-file-blocks-next-writer.md:3:01988f5d  # keep:historical-experience — historical quote inside a resolved-task experience leaf
+memory-global/leaves/experience/2026-07-02-dead-spawn-scope-file-blocks-next-writer.md:26:09cd8488  # keep:historical-experience — historical quote inside a resolved-task experience leaf
+memory-global/leaves/experience/2026-07-02-dead-spawn-scope-file-blocks-next-writer.md:27:788c4d4e  # keep:historical-experience — historical quote inside a resolved-task experience leaf
+memory-global/leaves/experience/2026-07-02-dead-spawn-scope-file-blocks-next-writer.md:31:198c01f3  # keep:historical-experience — historical quote inside a resolved-task experience leaf
+memory-global/leaves/experience/2026-07-02-spawn-sandbox-excludes-declared-stage-material.md:8:8985b39c  # keep:historical-experience — historical quote inside a resolved-task experience leaf
+memory-global/leaves/experience/2026-07-02-spawn-sandbox-excludes-declared-stage-material.md:26:45db49fd  # keep:historical-experience — historical quote inside a resolved-task experience leaf
 memory-global/leaves/experience/MEMORY.md  # keep:historical-experience — whole-file: append-only index generated by record-experience.py; its quotes are copied verbatim from leaf front-matter, and every new leaf is prepended, shifting the line number of every quote below it
-memory-global/leaves/spawning-specialists.md:56  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
-memory-global/leaves/specialization-skill-usage-tracking.md:34  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
-memory-global/leaves/specialization-skill-usage-tracking.md:65  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
-memory-global/leaves/subagent-resume-and-transcripts.md:28  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
-memory-global/leaves/system-knowledge/cross-session-scope-isolation.md:24  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-memory-global/leaves/system-knowledge/harness-read-dedup.md:26  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
-memory-global/leaves/system-knowledge/harness-read-dedup.md:45  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
-memory-global/leaves/system-knowledge/instructions-repo-layout.md:106  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
-memory-global/leaves/token-economy-plan.md:30  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
-memory-global/leaves/token-economy-plan.md:66  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
-scripts/README.md:38  # keep:protected-path — hook-guard-destructive-rm.py row lists ~/.claude among the protected paths it guards
-scripts/README.md:86  # keep:legacy-fallback — migrate-to-isolated.sh relocates the in-place/legacy ~/.claude system install
-scripts/README.md:122  # keep:enumerator-self-ref — verify-config-root-refs.py documents this enumerator; quotes the very pattern it searches
-skills/overcome-difficulty/SKILL.md:57  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
-skills/overcome-difficulty/policy.md:57  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
-skills/self-improvement/SKILL.md:76  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
-memory-global/leaves/system-knowledge/subagent-failure-rate-w29-w30.md:216  # keep:legacy-fallback — names the legacy ~/.claude/projects transcript root precisely to warn that it yields essentially zero rows for W29–W30; the generic form would erase the live-vs-legacy distinction the line exists to draw
-docs/operations/guards.md:48  # keep:legacy-fallback — names the personal ~/.claude/settings.json precisely: the prune-only second file is defined by being the user's personal root, distinct from $CLAUDE_AGENT_HOME; the generic form would erase the two-file distinction the section exists to draw
-docs/operations/guards.md:50  # keep:legacy-fallback — same two-file distinction: the recurrence evidence is that the reconciler could not reach the personal ~/.claude/settings.json
-memory-global/leaves/autocompact-threshold-policy.md:60  # keep:legacy-fallback — contrasts $CLAUDE_AGENT_HOME/settings.json with the prune-only personal ~/.claude/settings.json; the generic form would collapse both into one
-scripts/README.md:72  # keep:legacy-fallback — the install-reminder-hooks.sh row names the personal ~/.claude/settings.json as the prune-only file class, distinct from the agent-home file it also wires
+memory-global/leaves/spawning-specialists.md:56:2d1f90bc  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
+memory-global/leaves/specialization-skill-usage-tracking.md:34:bb97b0e7  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
+memory-global/leaves/specialization-skill-usage-tracking.md:65:29d47b2e  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
+memory-global/leaves/subagent-resume-and-transcripts.md:28:a6e6c393  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
+memory-global/leaves/system-knowledge/cross-session-scope-isolation.md:24:97b89c09  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+memory-global/leaves/system-knowledge/harness-read-dedup.md:26:6a58668a  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
+memory-global/leaves/system-knowledge/harness-read-dedup.md:45:f4985350  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
+memory-global/leaves/system-knowledge/instructions-repo-layout.md:106:66a3e851  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
+memory-global/leaves/token-economy-plan.md:30:bfc84cba  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
+memory-global/leaves/token-economy-plan.md:66:84c7ad27  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
+scripts/README.md:38:ed324f81  # keep:protected-path — hook-guard-destructive-rm.py row lists ~/.claude among the protected paths it guards
+scripts/README.md:86:20e9417b  # keep:legacy-fallback — migrate-to-isolated.sh relocates the in-place/legacy ~/.claude system install
+scripts/README.md:122:f5f6d7e6  # keep:enumerator-self-ref — verify-config-root-refs.py documents this enumerator; quotes the very pattern it searches
+skills/overcome-difficulty/SKILL.md:57:3f3d6be5  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
+skills/overcome-difficulty/policy.md:57:6880def2  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
+skills/self-improvement/SKILL.md:76:037b0dbc  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
+memory-global/leaves/system-knowledge/subagent-failure-rate-w29-w30.md:216:3fd04314  # keep:legacy-fallback — names the legacy ~/.claude/projects transcript root precisely to warn that it yields essentially zero rows for W29–W30; the generic form would erase the live-vs-legacy distinction the line exists to draw
+docs/operations/guards.md:48:a657922a  # keep:legacy-fallback — names the personal ~/.claude/settings.json precisely: the prune-only second file is defined by being the user's personal root, distinct from $CLAUDE_AGENT_HOME; the generic form would erase the two-file distinction the section exists to draw
+docs/operations/guards.md:50:ead5e889  # keep:legacy-fallback — same two-file distinction: the recurrence evidence is that the reconciler could not reach the personal ~/.claude/settings.json
+memory-global/leaves/autocompact-threshold-policy.md:60:0a742cea  # keep:legacy-fallback — contrasts $CLAUDE_AGENT_HOME/settings.json with the prune-only personal ~/.claude/settings.json; the generic form would collapse both into one
+scripts/README.md:72:a5f3990f  # keep:legacy-fallback — the install-reminder-hooks.sh row names the personal ~/.claude/settings.json as the prune-only file class, distinct from the agent-home file it also wires

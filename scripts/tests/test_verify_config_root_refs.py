@@ -265,6 +265,79 @@ def test_unanchored_pin_behaves_as_before(tmp_path):
     assert vcr.scan(tmp_path, allowlist) == 0
 
 
+# ── the migrated allowlist: the difficulty itself, end to end ─────────────────
+
+_DOC = (
+    "intro line\n"
+    "See ~/.claude for config.\n"
+    "prose\n"
+    "Legacy note about ~/.claude here.\n"
+)
+_ALLOWLIST = (
+    "# Allowlist header — kept verbatim by --repin.\n"
+    "# Second header line.\n"
+    "\n"
+    "docs/note.md:2  # keep:legacy-fallback — описание старого расположения\n"
+    "docs/note.md:4    # keep:migration-doc — migration doc quotes the legacy path\n"
+)
+
+
+def _repinned_fixture(tmp_path):
+    _write(tmp_path, "docs/note.md", _DOC)
+    allowlist = _write(tmp_path, "allow.txt", _ALLOWLIST)
+    assert vcr.repin(tmp_path, allowlist) == 0
+    assert vcr.scan(tmp_path, allowlist) == 0
+    return allowlist
+
+
+def test_pure_line_shift_stays_green_and_relocates(tmp_path, capsys):
+    """The regression this whole change exists for: inserting a line ABOVE the
+    references leaves every reference untouched, so the check must stay green
+    and say where each pin travelled — not redden with nothing to re-read."""
+    allowlist = _repinned_fixture(tmp_path)
+    _write(tmp_path, "docs/note.md", "brand new first line\n" + _DOC)
+    capsys.readouterr()
+
+    assert vcr.scan(tmp_path, allowlist) == 0
+
+    out = capsys.readouterr().out
+    assert "docs/note.md:2 -> :3" in out
+    assert "docs/note.md:4 -> :5" in out
+
+
+def test_edited_pinned_line_still_fails(tmp_path):
+    """The other half: rewriting the pinned line's own text must still fail,
+    so a changed reference reaches a human. A bare pin would stay green here —
+    that is the silent hole the anchors close, not a regression they cause."""
+    allowlist = _repinned_fixture(tmp_path)
+    _write(tmp_path, "docs/note.md", _DOC.replace(
+        "See ~/.claude for config.", "See ~/.claude for the NEW config."))
+    assert vcr.scan(tmp_path, allowlist) == 1
+
+
+def test_repin_preserves_reasons_and_header(tmp_path):
+    """--repin is a diff of line numbers and anchors and nothing else: comment
+    lines, blank lines, per-entry spacing and reason text all survive byte for
+    byte, so a whole-allowlist migration stays reviewable."""
+    allowlist = _repinned_fixture(tmp_path)
+    before = _ALLOWLIST.splitlines()
+    after = allowlist.read_text(encoding="utf-8").splitlines()
+
+    assert len(after) == len(before)
+    for b, a in zip(before, after):
+        assert b.partition("#")[2] == a.partition("#")[2]
+    assert [line for line in after if not line.strip() or line.startswith("#")] == [
+        line for line in before if not line.strip() or line.startswith("#")
+    ]
+
+    entries = vcr.parse_allowlist(allowlist)
+    assert [e["anchor"] for e in entries] == [
+        vcr.anchor_of("See ~/.claude for config."),
+        vcr.anchor_of("Legacy note about ~/.claude here."),
+    ]
+    assert [e["line"] for e in entries] == [2, 4]
+
+
 # ── domain must be the git index, not the working tree (verifier-reproducibility) ──
 
 def test_iter_repo_files_skips_untracked(tmp_path):
