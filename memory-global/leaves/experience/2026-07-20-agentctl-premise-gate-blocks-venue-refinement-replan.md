@@ -55,6 +55,10 @@ Passable recipe: (1) nudge the gate-exempt state.plan_path to the corrected plan
 ### 2026-07-28 — the chicken-and-egg is CLOSED in the engine: question-enumerate --plan
 - Where it arose: agentctl session 188d655c · plan harm-now-guard-parse-and-replan-carry.toml · worktree cai-wt-harm-fixes · landed on main at 234ae7e
 - Working plan: /home/the0/.claude-agent/plans/harm-now-guard-parse-and-replan-carry.toml
+
+### 2026-07-29 — agentctl-venue-propagation — the ROOT CAUSE of this whole family, FIXED (commit `7b3a624`)
+- Where it arose: Service sub-plan pushed mid-execution from parent task prune-dangling-hook-references-v7, whose stage 2 dispatched a developer into the READ-ONLY canonical checkout. Isolated worktree /Users/the0/claude-agent-instructions-venue-sync off origin/main 7d0b9e0.
+- Working plan: /Users/the0/.claude-agent/plans/agentctl-venue-propagation-v1.toml (3 stages; 4 paid thinker plan-review rounds, then a code-review pass)
 ## Common core & variations
 **Common:** Same recipe as the 2026-07-20 head context: a refinement replan that touches a stage verify_command re-stales BOTH the premise digest (re-run question-enumerate) AND the plan-review (fresh thinker review bound to the NEW sha256). replan_coverage then requires every critique.invariants_to_preserve item to substring-land (casefold+collapsed-ws) in a stage conditions/invariants field. After replan: next-stage -> EXECUTING -> record-result, engine re-runs the check itself (exit 0). The 2026-07-23 spawn-cwd/pytest occurrence confirms the recipe holds verbatim even when the replan TARGET is a genuinely separate plan file (v2->v3 full file swap), not an in-place venue edit — re-point the gate-exempt state.plan_path to the target file via the store API, re-enumerate to stamp the new digest, and rely on plan_snapshot_path protecting the coverage baseline.
 
