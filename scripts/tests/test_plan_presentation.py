@@ -24,6 +24,7 @@ from agentctl.state import (
     SHOW_FULL_PLAN_MARKER,
 )
 from agentctl.store import FileStateStore
+from lib import hook_wiring
 
 _DELIVERY_GATE_HOOK = Path(__file__).resolve().parent.parent / "hook-plan-delivery-gate.py"
 
@@ -481,12 +482,132 @@ def _bound_state(store, sid, plan) -> tuple[SessionState, PlanPresentation]:
     return s, receipt
 
 
+def _probe(status, root="/probed/root"):
+    """A wiring-probe double. Injected rather than ambient: without the seam
+    these assertions would consult whatever config root the test machine runs
+    under and mean different things on different machines."""
+    def probe(_basename):
+        return hook_wiring.Wiring(
+            basename=_basename, root=Path(root), status=status)
+    return probe
+
+
+def _explode(_basename):
+    raise RuntimeError("settings are odd on this machine")
+
+
 def test_delivery_missing_stamp_blocks(gate_on, home_store, tmp_path):
     plan = tmp_path / "plan.toml"
     s, _ = _bound_state(home_store, "d1", plan)
-    blockers = gates.plan_presentation_blockers(s, str(plan))
+    blockers = gates.plan_presentation_blockers(
+        s, str(plan), probe=_probe(hook_wiring.WIRED))
     assert blockers and "no delivery proof recorded" in blockers[0]
     assert "confirm-delivery" in blockers[0]
+
+
+# --- the no-stamp refusal diagnoses itself (message only, never the verdict) --
+
+# Today's wording, pinned as a literal rather than read from gates: the point of
+# these tests is that the three non-ABSENT answers leave it untouched, and an
+# assertion against the constant the code returns could not detect a rewrite.
+_GENERIC_NO_STAMP = (
+    "no delivery proof recorded — the plan was presented but nothing "
+    "confirms it reached the user; either let the delivery hook verify "
+    "the turn's transcript, or run confirm-delivery --by <you> "
+    "--note <reason> as the escape"
+)
+
+
+def test_no_stamp_absent_hook_names_hook_root_and_both_remedies(
+        gate_on, home_store, tmp_path):
+    """The whole point of the stage: when the producer of the proof is provably
+    not wired into the root this session loads from, say so — and offer the two
+    remedies that actually exist, not the one that cannot work."""
+    plan = tmp_path / "plan.toml"
+    s, _ = _bound_state(home_store, "d1a", plan)
+    blockers = gates.plan_presentation_blockers(
+        s, str(plan), probe=_probe(hook_wiring.ABSENT, root="/probed/root"))
+    assert len(blockers) == 1
+    msg = blockers[0]
+    assert msg.startswith("no delivery proof recorded — ")
+    assert gates.DELIVERY_HOOK_BASENAME in msg
+    assert "/probed/root" in msg
+    # Scoped, never a bare "not registered" — same discipline as hook_wiring.
+    assert "any user-level settings member" in msg
+    # Both remedies, and NOT the unreachable one.
+    assert "claude-task" in msg and "claude-agent" in msg
+    assert "confirm-delivery --by <you> --note <reason>" in msg
+    assert "let the delivery hook verify" not in msg
+
+
+def test_no_stamp_wired_hook_keeps_todays_wording(gate_on, home_store, tmp_path):
+    """A wired hook that simply has not stamped yet: the generic refusal is the
+    honest one, and it must survive byte-for-byte."""
+    plan = tmp_path / "plan.toml"
+    s, _ = _bound_state(home_store, "d1b", plan)
+    blockers = gates.plan_presentation_blockers(
+        s, str(plan), probe=_probe(hook_wiring.WIRED))
+    assert blockers == [_GENERIC_NO_STAMP]
+
+
+def test_no_stamp_unknown_wiring_keeps_todays_wording(gate_on, home_store, tmp_path):
+    """UNKNOWN is not evidence of absence. Emitting the diagnosis here would be
+    a confident causal claim from evidence that does not support it."""
+    plan = tmp_path / "plan.toml"
+    s, _ = _bound_state(home_store, "d1c", plan)
+    blockers = gates.plan_presentation_blockers(
+        s, str(plan), probe=_probe(hook_wiring.UNKNOWN))
+    assert blockers == [_GENERIC_NO_STAMP]
+
+
+def test_no_stamp_probe_failure_degrades_to_todays_wording(
+        gate_on, home_store, tmp_path):
+    """A gate that raised because a settings file is odd would be a worse
+    failure than the message it was improving."""
+    plan = tmp_path / "plan.toml"
+    s, _ = _bound_state(home_store, "d1d", plan)
+    blockers = gates.plan_presentation_blockers(s, str(plan), probe=_explode)
+    assert blockers == [_GENERIC_NO_STAMP]
+
+
+def test_no_stamp_verdict_is_identical_across_every_probe_answer(
+        gate_on, home_store, tmp_path):
+    """FAIL-CLOSED IS PRESERVED. The diagnosis changes what the gate SAYS and
+    nothing else — a missing hook must never become a reason to let approval
+    through."""
+    plan = tmp_path / "plan.toml"
+    s, _ = _bound_state(home_store, "d1e", plan)
+    probes = [
+        _probe(hook_wiring.ABSENT), _probe(hook_wiring.WIRED),
+        _probe(hook_wiring.UNKNOWN), _explode,
+    ]
+    results = [gates.plan_presentation_blockers(s, str(plan), probe=p) for p in probes]
+    assert all(len(r) == 1 for r in results), results
+    # The lead phrase is a pinned interface now, not incidental prose: the
+    # diagnosis is appended to it, never substituted for it.
+    assert all(r[0].startswith("no delivery proof recorded — ") for r in results)
+    # Exactly one message differs, and it is the ABSENT one.
+    assert results[1] == results[2] == results[3] == [_GENERIC_NO_STAMP]
+    assert results[0] != results[1]
+
+
+def test_probe_is_not_consulted_when_a_valid_stamp_exists(
+        gate_on, home_store, tmp_path):
+    """Off the hot path by construction: a passing approval must not pay for a
+    settings-chain read. The double fails the test if it is ever called."""
+    plan = tmp_path / "plan.toml"
+    s, receipt = _bound_state(home_store, "d1f", plan)
+    stamp = DeliveryStamp(
+        plan_path=receipt.plan_path, plan_sha256=receipt.plan_sha256,
+        rendering_sha256=receipt.rendering_sha256, verified_ts=2.0,
+        source=delivery.SOURCE_HOOK,
+    )
+    delivery.write_stamp(home_store.path("d1f"), stamp)
+
+    def probe(_basename):
+        raise AssertionError("the wiring probe was consulted on the passing path")
+
+    assert gates.plan_presentation_blockers(s, str(plan), probe=probe) == []
 
 
 def test_delivery_hook_stamp_matching_clears(gate_on, home_store, tmp_path):
@@ -533,7 +654,8 @@ def test_delivery_corrupt_sidecar_blocks_not_fail_open(gate_on, home_store, tmp_
     state_file = home_store.path("d5")
     sidecar = delivery.stamp_path_for(state_file)
     sidecar.write_text("{not valid json", encoding="utf-8")
-    blockers = gates.plan_presentation_blockers(s, str(plan))
+    blockers = gates.plan_presentation_blockers(
+        s, str(plan), probe=_probe(hook_wiring.WIRED))
     assert blockers and "no delivery proof recorded" in blockers[0]
 
 

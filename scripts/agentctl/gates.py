@@ -37,6 +37,7 @@ import os
 from pathlib import Path
 
 from lib import config_root
+from lib import hook_wiring
 
 from . import delivery
 from .state import Node, SessionState, StageStatus, WeightClass
@@ -319,7 +320,56 @@ def _plan_presentation_for(state: SessionState, kind: str):
     return match[-1] if match else None
 
 
-def plan_presentation_blockers(state: SessionState, target_plan: str | None) -> list[str]:
+DELIVERY_HOOK_BASENAME = "hook-plan-delivery-gate.py"
+
+_NO_STAMP_GENERIC = (
+    "no delivery proof recorded — the plan was presented but nothing "
+    "confirms it reached the user; either let the delivery hook verify "
+    "the turn's transcript, or run confirm-delivery --by <you> "
+    "--note <reason> as the escape"
+)
+
+
+def _no_stamp_blocker(probe) -> str:
+    """The no-delivery-proof refusal, diagnosed when the diagnosis is certain.
+
+    The generic text above offers a first remedy — "let the delivery hook verify
+    the turn's transcript" — that is unreachable in precisely the situation that
+    most often triggers this branch: the hook is not registered in the root this
+    session loads from, so it never ran and never could. A gate demanding proof
+    whose only producer is absent, while suggesting you wait for that producer,
+    is why this whole task exists.
+
+    So on this branch only, ask whether the hook is wired. WIRED or UNKNOWN keep
+    today's wording byte-for-byte — then the generic refusal is the honest one,
+    and an UNKNOWN dressed up as a diagnosis would be a confident claim from
+    evidence that does not support it. Any exception degrades to the same
+    wording: a gate that raised because a settings file is odd would be a worse
+    failure than the message it was improving.
+
+    The VERDICT never changes here. This function decides what the gate SAYS.
+    """
+    try:
+        wiring = probe(DELIVERY_HOOK_BASENAME)
+    except Exception:
+        return _NO_STAMP_GENERIC
+    if getattr(wiring, "status", None) != hook_wiring.ABSENT:
+        return _NO_STAMP_GENERIC
+    return (
+        "no delivery proof recorded — " + DELIVERY_HOOK_BASENAME + " is not "
+        f"registered in any user-level settings member of {wiring.root}, so no "
+        "automated proof can come from that evidence domain; either run this "
+        "task under claude-task / claude-agent, where the hook IS wired, or run "
+        "confirm-delivery --by <you> --note <reason> as the escape"
+    )
+
+
+def plan_presentation_blockers(
+    state: SessionState,
+    target_plan: str | None,
+    *,
+    probe=None,
+) -> list[str]:
     """Precondition guardian for `approve`: the plan must have been PRESENTED to
     the user (a receipt exists, bound to the exact plan version) AND that
     presentation must be PROVEN DELIVERED (a delivery stamp exists, bound to the
@@ -360,7 +410,15 @@ def plan_presentation_blockers(state: SessionState, target_plan: str | None) -> 
     must avoid. A missing, stale, superseded, or UNREADABLE stamp all block
     identically (delivery.read_stamp already collapses every unreadable/corrupt
     case to None) — this gate never distinguishes "corrupt sidecar" from
-    "never verified", because both mean the same thing here: no usable proof."""
+    "never verified", because both mean the same thing here: no usable proof.
+
+    `probe` is a seam, defaulting to hook_wiring.probe: on the no-stamp branch
+    the refusal is diagnosed against the ACTIVE harness root (see
+    _no_stamp_blocker). It is injectable so a test can pin which answer it gets
+    — without that, the two pre-existing assertions on this branch would consult
+    whatever root the test machine happens to run under and mean different
+    things on different machines. It is consulted ONLY on the branch already
+    about to block, so the added filesystem read is off every passing path."""
     if not plan_presentation_active(state):
         return []
     receipt = _plan_presentation_for(state, _PLAN_PRESENTATION_KIND_ESSENCE)
@@ -389,12 +447,7 @@ def plan_presentation_blockers(state: SessionState, target_plan: str | None) -> 
     state_file = config_root.resolve_agentctl_state_file(state.session_id)
     stamp = delivery.read_stamp(state_file) if state_file is not None else None
     if stamp is None:
-        return [
-            "no delivery proof recorded — the plan was presented but nothing "
-            "confirms it reached the user; either let the delivery hook verify "
-            "the turn's transcript, or run confirm-delivery --by <you> "
-            "--note <reason> as the escape"
-        ]
+        return [_no_stamp_blocker(probe if probe is not None else hook_wiring.probe)]
     if stamp.plan_sha256 != receipt.plan_sha256 or stamp.rendering_sha256 != receipt.rendering_sha256:
         return [
             "delivery proof is stale — it verified a different plan/rendering "
