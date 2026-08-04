@@ -198,8 +198,21 @@ def run_check(inv, root: Path, registry_path: Path) -> int:
         print(f"  ... and {len(reverted) - 20} more")
 
     ok = not (missing or stale or reverted)
-    print("verify-semantic-gates: OK" if ok else "verify-semantic-gates: FAIL")
-    return 0 if ok else 1
+    if ok:
+        print("verify-semantic-gates: OK")
+        return 0
+
+    print("verify-semantic-gates: FAIL")
+    print(
+        "\nConditions (a) and (b) are bookkeeping: the registry is generated, "
+        "so regenerate it with `python3 scripts/gen_crutch_registry.py` and "
+        "then disposition the entries that appear — never hand-edit "
+        f"{registry_path.name}. Condition (c) is NOT bookkeeping: a reverted "
+        "judge guard means a site that used to route a semantic decision "
+        "through a model judge now decides it structurally again. Restore the "
+        "guard; regenerating the registry would only record the regression."
+    )
+    return 1
 
 
 def main(argv: list[str] | None = None) -> int:

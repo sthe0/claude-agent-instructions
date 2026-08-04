@@ -322,3 +322,27 @@ def test_main_exits_zero_on_clean_fixture(tmp_path):
 
     rc = vsg.main(["--root", str(tmp_path), "--registry", str(registry_path), "--staged"])
     assert rc == 0
+
+
+def test_fail_output_names_the_generator(tmp_path, capsys):
+    """A failure has to say what to DO. Conditions (a)/(b) are bookkeeping on
+    a generated file, so the output must name the generator; condition (c) is
+    a real regression, so it must say the guard is restored, not regenerated.
+    The OK path stays quiet — remediation advice on a green run is noise."""
+    (tmp_path / "hard_site.py").write_text(_HARD_SINK_FIXTURE, encoding="utf-8")
+    registry_path = tmp_path / "registry.toml"
+    _write_registry(registry_path, [])
+
+    assert vsg.run_check(inv, tmp_path, registry_path) == 1
+    fail_out = capsys.readouterr().out
+    assert "gen_crutch_registry.py" in fail_out
+    assert "Restore the guard" in fail_out
+
+    decide_site = next(s for s in inv.enumerate_code_sites(tmp_path) if s.scope == "decide")
+    rollup = inv.enumerate_code_file_rollups(tmp_path)[0]
+    _write_registry(registry_path, [
+        _registry_entry_for(decide_site, "structural"),
+        _registry_entry_for(rollup, "structural"),
+    ])
+    assert vsg.run_check(inv, tmp_path, registry_path) == 0
+    assert "gen_crutch_registry.py" not in capsys.readouterr().out
