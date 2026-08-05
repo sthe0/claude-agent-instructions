@@ -4,7 +4,7 @@ description: The 8-element activity-structure ontology a plan must cover, mapped
 type: reference
 schema: leaf/v1
 created: 2026-06-25
-last_verified: 2026-07-22
+last_verified: 2026-08-06
 ---
 
 # Plan activity ontology (the 8 elements a plan must cover)
@@ -31,10 +31,10 @@ A plan has a `[meta]` head and one or more `[[stage]]` blocks; each stage is a f
 | 3 | **Control criterion** — how conformance of result to order is checked | `stage.criterion.criterion_type` (measurable \| acceptance_review) + `stage.criterion.done_criterion` |
 | 4 | **Means** — what is used to carry the material from initial state to result; **immutable during the transformation** | `stage.means.means` |
 | 4'| **Method** — how the means is used | `stage.means.method` |
-| 5 | **Conditions + preserved invariants** — under what conditions the transformation runs, and which properties of the material must remain unchanged | `stage.conditions` + `stage.subject.invariants` |
+| 5 | **Conditions + preserved invariants** — under what conditions the transformation runs, and which properties of the material must remain unchanged | `stage.conditions` + `stage.subject.invariants`. **The preconditions of STARTING are a place of their own** — `stage.preconditions`, required of a substantive stage at the submission seam, which also refuses a `conditions` exhausted by restating `depends_on`. One field asked for both loads answers the cheaper: the conditions of the transformation were being displaced by an ordering the graph already records |
 | 6 | **Actor + capability** — who performs the transformation, with which capability to wield the means in the method | `stage.actor.executor` (`in_thread` \| `spawn:<specialization>`) + `stage.actor.capability_required` |
 | 7 | **Principle** — the inference behind choosing this material/method: a pattern of which the chosen transformation is an instance, with a known source, a stated confidence, treated as refutable; **always a норма** (должное), never typed знание-vs-норма a-priori | `stage.principle` = `Principle`(`statement` + `source` + `confidence` (high\|medium\|low, a `Confidence` enum) + `refutation`) |
-| 8 | **Multi-stage as an acyclic graph** — a plan may be a sequence or DAG of elementary plans, each bearing all the attributes above | `[[stage]]` blocks + typed `Supply`(on/element/artifact) in `stage.supplies` (the SOLE edge source); `stage.depends_on` is a derived projection; `stage.outcome` records each stage's result |
+| 8 | **Multi-stage as an acyclic graph** — a plan may be a sequence or DAG of elementary plans, each bearing all the attributes above | `[[stage]]` blocks + typed `Supply`(on/element/artifact) in `stage.supplies` (the SOLE edge source); `stage.depends_on` is a derived projection; `stage.outcome` records each stage's result. Of a substantive plan the submission seam **requires** every edge to name an `element` from `text_shape.ELEMENT_NAMES` — an edge that names none states an ordering the graph already carries and says nothing about what flows along it |
 
 <!-- Language exception: the user's source ontology is in Russian; the original terms are preserved once for traceability. -->
 > Original terms (user's ontology): заказ = order; материал = material; средство = means; способ = method; деятель = actor.
@@ -97,7 +97,7 @@ Element 8 is **not an independent eighth thing**; it is the *consequence* of one
 A composite / multi-stage plan is therefore the **acyclic closure of this recursion**, not a flat list declared up front. In the typed model:
 
 - A typed `Supply(on, element, artifact)` in the **consumer's** `stage.supplies` encodes the **producer → consumer** edge: `on` = the producing stage, `element` = which missing element it supplies, `artifact` = the named result. `supplies` is the **SOLE** edge source; `stage.depends_on` is a derived projection (`sorted({s.on for s in supplies})`) — ordering *is* the projection of provision, never a parallel hand-maintained list.
-- `Supply.element` / `Supply.artifact` **names the element supplied** (a produced material, a built means, an established condition, a spawned actor). `_validate_graph` rejects a `Supply.on` that points to no stage, a substantive `Supply.element` that is not a known element name, and any cycle in the derived graph.
+- `Supply.element` / `Supply.artifact` **names the element supplied** (a produced material, a built means, an established condition, a spawned actor). `_validate_graph` rejects a `Supply.on` that points to no stage, a substantive `Supply.element` that is not a known element name, and any cycle in the derived graph. The loader checks the name only **when one is present**; that an edge names an element **at all** is required at the submission seam, per the two-grade split above — so a plan accepted before the requirement existed keeps loading, and only a plan offered as a new norm is refused. The vocabulary itself (`text_shape.ELEMENT_NAMES`) is deliberately not a complete taxonomy of the 8 elements: a name is added when a stage can be shown to **supply** that place, because a validator can tell a name is legal but never that it is the right one, and every unusable name only makes a plausible-wrong pick likelier.
 - "Capability acquirable as a separate service subtask" (element 6) is just **one instance** of this general rule; so is `executor = "spawn:developer"` (establishing the actor), and "material produced by an earlier stage".
 
 When planning: if any element of a stage is not already a given, do **not** hand-wave it inside the stage — split it out as a service stage and add a `Supply` edge naming the element it provides.
