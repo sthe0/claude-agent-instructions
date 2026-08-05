@@ -524,12 +524,13 @@ def merge_actuals(parent: dict, child: dict) -> dict:
     }
 
 
-def record_fire(state: SessionState, div: Divergence, *, now: float | None = None) -> dict:
+def record_fire(state: SessionState, div: Divergence, *, now: float) -> dict:
     """Record a firing and re-arm: REBASE the baseline onto the current actual vector
     (RE-ARM belt 1, module docstring; belt 2 is enforced by `divergence()` reading the
     appended record). MANDATORY after any caller acts on a `Divergence` — see
-    `divergence()`'s CALLER OBLIGATION. `now` is supplied by the caller — this module
-    reads no clock."""
+    `divergence()`'s CALLER OBLIGATION. `now` is REQUIRED and supplied by the caller —
+    this module reads no clock, and a default would let a future call site silently
+    ship an unstamped `ts` straight onto the durable quality-ledger row."""
     state.effort_baseline = actual(state)
     record = {
         "scale": div.scale,

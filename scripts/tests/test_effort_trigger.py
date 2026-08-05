@@ -223,6 +223,91 @@ def test_verify_final_failures_attach_a_live_divergence(store, tmp_path):
     assert len(state.effort_fires) == 1  # divergence()'s CALLER OBLIGATION honored
 
 
+def test_verify_final_venue_refusal_attaches_a_live_divergence(store, tmp_path):
+    """_diagnose_venue_refusal's `div is not None` branch — dead in the suite
+    otherwise, since every other verify-final call reaches it with div=None (no
+    delivery_worktree declared, so no venue ever refuses). A refusing
+    [[final_check]] must attach a live effort divergence exactly like a failing
+    final_check does (test_verify_final_failures_attach_a_live_divergence
+    above) — not silently drop it just because the venue-refusal early return
+    sits ahead of fire site 2's own end-of-function check."""
+    sid = "vf-refuse-div"
+    worktree = tmp_path / "never-created"  # declared but never created on disk
+    plan = tmp_path / "plan_refusing_venue.toml"
+    plan.write_text(
+        '[meta]\n'
+        'task_id = "demo-refusing-venue"\n'
+        'goal = "Pin verify-final attaching a live divergence on a refusing venue"\n'
+        'done_criterion = "both stages PASSED and final_check green"\n'
+        'criterion_type = "measurable"\n'
+        f'delivery_worktree = "{worktree}"\n'
+        '\n'
+        '[[final_check]]\n'
+        'label = "all green"\n'
+        'command = "true"\n'
+        'expected_exit = 0\n'
+        '\n'
+        '[[stage]]\n'
+        'index = 1\n'
+        'title = "Scaffold module"\n'
+        'executor = "spawn:developer"\n'
+        'expected_result_image = "module file exists"\n'
+        'criterion_type = "measurable"\n'
+        'done_criterion = "mod.py exists"\n'
+        'depends_on = []\n'
+        'output_artifacts = ["mod.py"]\n'
+        '\n'
+        '[[stage]]\n'
+        'index = 2\n'
+        'title = "Add tests"\n'
+        'executor = "spawn:developer"\n'
+        'expected_result_image = "tests exist"\n'
+        'criterion_type = "measurable"\n'
+        'done_criterion = "tests/test_mod.py exists"\n'
+        'depends_on = [1]\n'
+        'output_artifacts = ["tests/test_mod.py"]\n',
+        encoding="utf-8",
+    )
+
+    cli.cmd_start(ns(session=sid, task="demo-refusing-venue", goal="", done_criterion="",
+                     criterion_type="measurable", recursion_depth=0), store=store)
+    cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
+                        wall_clock_min=60, tracker_key=None, architectural=True,
+                        external_effect=False, new_dependency=False,
+                        public_api_change=False), store=store)
+    cli.cmd_plan(ns(session=sid), store=store)
+    cli.cmd_submit_plan(ns(session=sid, plan=str(plan)), store=store)
+    cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
+                         m3_severe=False, m4_severe=False), store=store)
+
+    cost_log = tmp_path / "costs.jsonl"
+    _write_cost_log(cost_log, [])
+    for _ in range(2):
+        cli.cmd_next_stage(ns(session=sid), store=store)
+        cli.cmd_record_result(
+            ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
+               observation="", cost_log=str(cost_log)),
+            store=store,
+        )
+
+    # A late, large cost row lands before verify-final — well past budget by the
+    # time the refusing final_check venue is (re-)evaluated. The worktree is
+    # never created, so the venue refuses before the harmless "true" ever runs.
+    _write_cost_log(cost_log, [{"plan_path": str(plan), "cost_usd": 100.0}])
+    assert not worktree.exists()
+
+    d = cli.cmd_verify_final(ns(session=sid, cost_log=str(cost_log)), store=store)
+    assert d.ok is False
+    assert d.node == Node.DIAGNOSING.value
+    assert d.marker == "OVERCOME-DIFFICULTY"
+    assert d.data["effort_divergence"]["scale"] == effort.SCALE_SPEND
+
+    state = store.load(sid)
+    assert state.node == Node.DIAGNOSING.value
+    assert len(state.effort_fires) == 1  # divergence()'s CALLER OBLIGATION honored
+
+
 def test_failed_record_result_attaches_divergence_without_a_second_difficulty(store, fixtures_dir, tmp_path):
     """A stage that FAILS while also past its effort budget enters DIAGNOSING exactly
     as an ordinary failure would (one Difficulty, the failure message) — the
@@ -295,6 +380,7 @@ def test_repeat_digest_escalate_does_not_spend_the_fire(store, fixtures_dir, tmp
     state = store.load(sid)
     assert state.effort_fires == []  # never spent — ESCALATE precedes the diagnose transition
     assert state.effort_actuals[effort.ACTUAL_SPEND_KEY] == pytest.approx(100.0)  # accounting kept
+    assert effort.divergence(state) is not None  # live and unspent — the guard didn't erase it
 
 
 def test_kill_switch_suppresses_the_transition_but_not_the_accounting(store, fixtures_dir, tmp_path, monkeypatch):

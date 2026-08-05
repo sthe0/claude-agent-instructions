@@ -458,7 +458,7 @@ def _resolve_final_or_refuse(state: SessionState, criterion: Criterion) -> tuple
 
 def _diagnose_venue_refusal(
     state: SessionState, store: StateStore, message: str,
-    div: "effort.Divergence | None" = None,
+    div: effort.Divergence | None,
 ) -> Directive:
     """Route a verify-final venue refusal into the ordinary DIAGNOSING cycle
     instead of stranding the session at VERIFYING — from VERIFYING, declare/
@@ -483,7 +483,7 @@ def _diagnose_venue_refusal(
     state.difficulty = Difficulty()
     data = {}
     if div is not None and gates.effort_active(state):
-        now = dt.datetime.now(dt.timezone.utc).timestamp()
+        now = _utcnow()
         data["effort_divergence"] = effort.record_fire(state, div, now=now)
     store.save(state)
     return Directive(
@@ -2450,6 +2450,12 @@ def _cost_rows(args) -> list[dict]:
     return cost.read_rows(Path(log) if log else cost.COST_LOG)
 
 
+def _utcnow() -> float:
+    """The one clock read behind every `effort.record_fire(..., now=...)` call site —
+    collapses five copy-pasted `dt.datetime.now(dt.timezone.utc).timestamp()` calls."""
+    return dt.datetime.now(dt.timezone.utc).timestamp()
+
+
 def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     stage = state.active_stage()
@@ -2650,7 +2656,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
         state.current_stage = None
         state.log("record_result", stage=stage.index, status="passed")
         if div is not None and gates.effort_active(state):
-            now = dt.datetime.now(dt.timezone.utc).timestamp()
+            now = _utcnow()
             fire = effort.record_fire(state, div, now=now)
             return _diagnose_effort_divergence(state, store, div, fire)
         store.save(state)
@@ -2691,7 +2697,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
         # Already entering DIAGNOSING for the stage failure — attach the divergence
         # instead of re-transitioning or opening a second Difficulty, but still honor
         # divergence()'s CALLER OBLIGATION (record the fire so it doesn't re-trip).
-        now = dt.datetime.now(dt.timezone.utc).timestamp()
+        now = _utcnow()
         data["effort_divergence"] = effort.record_fire(state, div, now=now)
     store.save(state)
     return Directive(
@@ -2823,7 +2829,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
             # instead of re-transitioning or opening a second Difficulty, mirroring
             # record_result's failed branch (still honoring divergence()'s CALLER
             # OBLIGATION: record the fire so it doesn't re-trip).
-            now = dt.datetime.now(dt.timezone.utc).timestamp()
+            now = _utcnow()
             data["effort_divergence"] = effort.record_fire(state, div, now=now)
         store.save(state)
         return Directive(
@@ -2837,7 +2843,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     # is still a legal transition (a contracted plan can reach here with no further
     # record-result to fire from).
     if div is not None and gates.effort_active(state):
-        now = dt.datetime.now(dt.timezone.utc).timestamp()
+        now = _utcnow()
         fire = effort.record_fire(state, div, now=now)
         return _diagnose_effort_divergence(state, store, div, fire)
 

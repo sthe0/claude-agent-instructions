@@ -161,7 +161,9 @@ def test_opted_in_stage_survives_delivery_venue_removal(store, tmp_path):
     shutil.rmtree(worktree)
 
     cap2 = _CaptureAll()
-    d2 = cli.cmd_verify_final(ns(session="a1"), store=store, runner=cap2)
+    d2 = cli.cmd_verify_final(
+        ns(session="a1", cost_log=str(tmp_path / "costs.jsonl")), store=store, runner=cap2,
+    )
     assert d2.ok is True, d2.detail
     assert d2.action == "await_user_confirmation"
     assert cap2.calls == [["bash", "-c", f"cd {shlex.quote(str(repo_root))} && pytest -q"]]
@@ -182,7 +184,9 @@ def test_bare_delivery_venue_still_refuses_when_worktree_gone(store, tmp_path):
     shutil.rmtree(worktree)
 
     cap = _CaptureAll()
-    d = cli.cmd_verify_final(ns(session="b1"), store=store, runner=cap)
+    d = cli.cmd_verify_final(
+        ns(session="b1", cost_log=str(tmp_path / "costs.jsonl")), store=store, runner=cap,
+    )
     assert d.ok is False
     assert d.action == "declare"
     assert cap.calls == []  # refusal short-circuits before the check ever runs
@@ -202,7 +206,9 @@ def test_stage_shell_refusal_reaches_diagnosing_and_declare_is_accepted(store, t
     store.save(s)
     shutil.rmtree(worktree)
 
-    d = cli.cmd_verify_final(ns(session="c1"), store=store, runner=_CaptureAll())
+    d = cli.cmd_verify_final(
+        ns(session="c1", cost_log=str(tmp_path / "costs.jsonl")), store=store, runner=_CaptureAll(),
+    )
     assert d.ok is False
     assert d.node == Node.DIAGNOSING.value
     assert d.action == "declare"
@@ -234,7 +240,9 @@ def test_final_check_shell_refusal_reaches_diagnosing_and_declare_is_accepted(st
     store.save(s)
     shutil.rmtree(worktree)
 
-    d = cli.cmd_verify_final(ns(session="c2"), store=store, runner=_CaptureAll())
+    d = cli.cmd_verify_final(
+        ns(session="c2", cost_log=str(tmp_path / "costs.jsonl")), store=store, runner=_CaptureAll(),
+    )
     assert d.ok is False
     assert d.node == Node.DIAGNOSING.value
     assert d.action == "declare"
@@ -253,7 +261,7 @@ def test_final_check_shell_refusal_reaches_diagnosing_and_declare_is_accepted(st
     assert d2.action == "investigate"
 
 
-def test_landed_check_refusal_reaches_diagnosing_and_declare_is_accepted(store):
+def test_landed_check_refusal_reaches_diagnosing_and_declare_is_accepted(store, tmp_path):
     # render_landed_command's simplest refusal trigger: no repo_root at all —
     # nothing to resolve the target/remote refs against. Pure-Python, no git.
     stage = _stage(
@@ -264,7 +272,9 @@ def test_landed_check_refusal_reaches_diagnosing_and_declare_is_accepted(store):
     s = _verifying("c3", [stage], repo_root=None)
     store.save(s)
 
-    d = cli.cmd_verify_final(ns(session="c3"), store=store, runner=_CaptureAll())
+    d = cli.cmd_verify_final(
+        ns(session="c3", cost_log=str(tmp_path / "costs.jsonl")), store=store, runner=_CaptureAll(),
+    )
     assert d.ok is False
     assert d.node == Node.DIAGNOSING.value
     assert d.action == "declare"
@@ -296,7 +306,9 @@ def test_absent_verify_venue_at_final_is_byte_identical_to_pre_change(store, tmp
     store.save(s)
 
     cap = _CaptureAll()
-    d = cli.cmd_verify_final(ns(session="d1"), store=store, runner=cap)
+    d = cli.cmd_verify_final(
+        ns(session="d1", cost_log=str(tmp_path / "costs.jsonl")), store=store, runner=cap,
+    )
     assert d.ok is True
     assert d.action == "await_user_confirmation"
     # Same tree cmd_dispatch/cmd_record_result would have used — the venue never
@@ -322,11 +334,12 @@ def test_reinvoke_verify_final_from_diagnosing_venue_restored_does_not_crash(sto
     store.save(s)
     shutil.rmtree(worktree)
 
-    d1 = cli.cmd_verify_final(ns(session="e1"), store=store, runner=_CaptureAll())
+    cost_log = str(tmp_path / "costs.jsonl")
+    d1 = cli.cmd_verify_final(ns(session="e1", cost_log=cost_log), store=store, runner=_CaptureAll())
     assert d1.node == Node.DIAGNOSING.value
 
     worktree.mkdir(parents=True)  # venue "fixed", re-run
-    d2 = cli.cmd_verify_final(ns(session="e1"), store=store, runner=_CaptureAll())
+    d2 = cli.cmd_verify_final(ns(session="e1", cost_log=cost_log), store=store, runner=_CaptureAll())
     assert d2.ok is False
     assert d2.node == Node.DIAGNOSING.value
     assert d2.action == "declare"
@@ -344,10 +357,11 @@ def test_reinvoke_verify_final_from_diagnosing_venue_still_missing_does_not_cras
     store.save(s)
     shutil.rmtree(worktree)
 
-    d1 = cli.cmd_verify_final(ns(session="e2"), store=store, runner=_CaptureAll())
+    cost_log = str(tmp_path / "costs.jsonl")
+    d1 = cli.cmd_verify_final(ns(session="e2", cost_log=cost_log), store=store, runner=_CaptureAll())
     assert d1.node == Node.DIAGNOSING.value
 
-    d2 = cli.cmd_verify_final(ns(session="e2"), store=store, runner=_CaptureAll())  # still gone
+    d2 = cli.cmd_verify_final(ns(session="e2", cost_log=cost_log), store=store, runner=_CaptureAll())  # still gone
     assert d2.ok is False
     assert d2.node == Node.DIAGNOSING.value
     assert d2.action == "declare"
@@ -365,11 +379,12 @@ def test_reinvoke_verify_final_from_resolution_is_idempotent(store, tmp_path):
     s = _verifying("e3", [stage], repo_root=str(repo_root))
     store.save(s)
 
-    d1 = cli.cmd_verify_final(ns(session="e3"), store=store, runner=_CaptureAll())
+    cost_log = str(tmp_path / "costs.jsonl")
+    d1 = cli.cmd_verify_final(ns(session="e3", cost_log=cost_log), store=store, runner=_CaptureAll())
     assert d1.ok is True
     assert d1.node == Node.RESOLUTION.value
 
-    d2 = cli.cmd_verify_final(ns(session="e3"), store=store, runner=_CaptureAll())
+    d2 = cli.cmd_verify_final(ns(session="e3", cost_log=cost_log), store=store, runner=_CaptureAll())
     assert d2.ok is True
     assert d2.node == Node.RESOLUTION.value
     assert d2.action == "resolve"

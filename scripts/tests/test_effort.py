@@ -448,6 +448,7 @@ def test_record_fire_rebases_the_baseline_onto_the_actual():
     assert state.effort_baseline[effort.SCALE_SPEND] == pytest.approx(90.0)
     assert effort.deltas(state)[effort.SCALE_SPEND] == 0.0
     assert state.effort_fires[-1]["scale"] == effort.SCALE_SPEND
+    assert state.effort_fires[-1]["ts"] == 123.0  # caller-supplied `now`, never unstamped
 
 
 def test_a_replan_is_required_before_the_trigger_can_fire_again():
