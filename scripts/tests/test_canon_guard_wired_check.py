@@ -8,13 +8,23 @@ and Bash) and point at a script that exists. Every other gate-bearing hook is
 checked for presence anywhere in the root's settings chain.
 
 Hermetic: the hook reads live settings from $CLAUDE_CANON_GUARD_SETTINGS (test
-seam); each test writes a crafted settings.json there and asserts on stderr.
+seam); each test writes a crafted settings.json there and asserts on stdout.
 The seam designates the chain's PRIMARY member and the rest of the chain is
 derived from its parent directory, so a fixture in a tmp dir has no siblings
 and the chain collapses to the one file — except for the machine-wide managed
 policy member, whose contribution is asserted neutral by
 `test_managed_policy_member_is_neutral_here` so that a red elsewhere in this
 module cannot be blamed on it.
+
+Every fixture here pins $CLAUDE_CONFIG_DIR, which collapses the two config-root
+accessors onto one directory and so puts the hook on its AGENT-ROOT branch —
+the branch this module is about. Without the pin the branch would be decided by
+the developer's machine and the cwd pytest happens to run from, and the wiring
+report these tests assert on is not reachable at all on the other branch.
+
+The wiring report is asserted by the BANNER rather than by "stdout is empty":
+the hook now opens every non-silent path with an unconditional `[config-root]`
+status line, so emptiness stopped being the observable for "no problems found".
 
 Non-blocking and fail-open: the hook always exits 0 and only ever warns.
 """
@@ -35,20 +45,41 @@ HOOK_SCRIPT = SCRIPTS_DIR / "hook-canon-guard-wired-check.py"
 GUARD_PATH = str(SCRIPTS_DIR / "hook-guard-canon-readonly.py")
 GUARD_BASENAME = "hook-guard-canon-readonly.py"
 OTHER_GATE_HOOKS = [n for n, _ in hook_wiring.GATE_BEARING_HOOKS if n != GUARD_BASENAME]
+BANNER = "GATE-BEARING HOOKS ARE NOT FULLY WIRED"
 
 
 def _group(matcher: str, command: str) -> dict:
     return {"matcher": matcher, "hooks": [{"type": "command", "command": command}]}
 
 
+def _env(settings_path: Path, root: Path) -> dict:
+    return {
+        **os.environ,
+        "CLAUDE_CANON_GUARD_SETTINGS": str(settings_path),
+        "CLAUDE_CONFIG_DIR": str(root),
+    }
+
+
 def _run(tmp_path: Path, settings: dict) -> subprocess.CompletedProcess:
     sp = tmp_path / "settings.json"
     sp.write_text(json.dumps(settings), encoding="utf-8")
-    env = {**os.environ, "CLAUDE_CANON_GUARD_SETTINGS": str(sp)}
     return subprocess.run(
         [sys.executable, str(HOOK_SCRIPT)],
-        env=env, capture_output=True, text=True,
+        env=_env(sp, tmp_path), capture_output=True, text=True,
     )
+
+
+def _assert_no_problem(proc: subprocess.CompletedProcess) -> None:
+    """The agent-root branch found nothing to report.
+
+    Three claims, not one. Exit 0 and an empty stderr are the fail-open and
+    channel halves; BANNER-absence is the wiring verdict. Asserting only the
+    third would pass just as happily if the hook had crashed before reaching
+    the check, which is the failure this detector exists to not have."""
+    assert proc.returncode == 0
+    assert proc.stderr == "", proc.stderr
+    assert BANNER not in proc.stdout, proc.stdout
+    assert proc.stdout.startswith("[config-root] harness="), proc.stdout
 
 
 def _registry_groups(names=None) -> list:
@@ -85,10 +116,8 @@ def test_managed_policy_member_is_neutral_here():
         f"{managed} declares hooks; this module's fixtures assume it does not")
 
 
-def test_silent_when_wired_in_both_chains(tmp_path):
-    proc = _run(tmp_path, _wired_both(GUARD_PATH, GUARD_PATH))
-    assert proc.returncode == 0
-    assert proc.stderr.strip() == "", proc.stderr
+def test_no_problem_when_wired_in_both_chains(tmp_path):
+    _assert_no_problem(_run(tmp_path, _wired_both(GUARD_PATH, GUARD_PATH)))
 
 
 def test_warns_when_absent_from_edit_chain(tmp_path):
@@ -97,7 +126,7 @@ def test_warns_when_absent_from_edit_chain(tmp_path):
     ]}}
     proc = _run(tmp_path, settings)
     assert proc.returncode == 0
-    assert "Edit|Write chain" in proc.stderr
+    assert "Edit|Write chain" in proc.stdout
 
 
 def test_warns_when_absent_from_bash_chain(tmp_path):
@@ -106,7 +135,7 @@ def test_warns_when_absent_from_bash_chain(tmp_path):
     ]}}
     proc = _run(tmp_path, settings)
     assert proc.returncode == 0
-    assert "Bash chain" in proc.stderr
+    assert "Bash chain" in proc.stdout
 
 
 def test_warns_when_absent_from_both_chains(tmp_path):
@@ -115,46 +144,69 @@ def test_warns_when_absent_from_both_chains(tmp_path):
     ]}}
     proc = _run(tmp_path, settings)
     assert proc.returncode == 0
-    assert "Edit|Write chain" in proc.stderr
-    assert "Bash chain" in proc.stderr
+    assert "Edit|Write chain" in proc.stdout
+    assert "Bash chain" in proc.stdout
+
+
+def test_the_warning_never_goes_to_stderr(tmp_path):
+    """The channel IS the delivery. A SessionStart hook's stdout is attached to
+    the session as context; its stderr reaches only the human's terminal, where
+    the one reader who can act on "the gates are off" — the agent about to write
+    to a gated file — never sees it. A report on the wrong channel is a report
+    nobody acts on, so this pins the whole block, not merely one line of it."""
+    proc = _run(tmp_path, {"hooks": {"PreToolUse": [
+        _group("Edit|Write", "/some/other/hook.py"),
+    ]}})
+    assert BANNER in proc.stdout
+    assert proc.stderr == "", proc.stderr
 
 
 def test_warns_when_wired_path_missing(tmp_path):
     missing = "/nonexistent/dir/hook-guard-canon-readonly.py"
     proc = _run(tmp_path, _wired_both(missing, missing))
     assert proc.returncode == 0
-    assert "missing script path" in proc.stderr
+    assert "missing script path" in proc.stdout
 
 
-def test_wired_command_with_args_path_exists_is_silent(tmp_path):
+def test_wired_command_with_args_path_exists_is_no_problem(tmp_path):
     """The script path is the first token; trailing args must not break the
     exists() check."""
     cmd = f"{GUARD_PATH} --some-arg"
-    proc = _run(tmp_path, _wired_both(cmd, cmd))
-    assert proc.returncode == 0
-    assert proc.stderr.strip() == "", proc.stderr
+    _assert_no_problem(_run(tmp_path, _wired_both(cmd, cmd)))
 
 
 def test_missing_settings_file_fails_open(tmp_path):
-    env = {**os.environ, "CLAUDE_CANON_GUARD_SETTINGS": str(tmp_path / "nope.json")}
     proc = subprocess.run(
         [sys.executable, str(HOOK_SCRIPT)],
-        env=env, capture_output=True, text=True,
+        env=_env(tmp_path / "nope.json", tmp_path),
+        capture_output=True, text=True,
     )
     assert proc.returncode == 0
-    assert proc.stderr.strip() == ""
+    assert proc.stderr == ""
+    assert BANNER not in proc.stdout, proc.stdout
+
+
+def test_the_status_line_survives_a_missing_settings_file(tmp_path):
+    """Which root is live does not depend on that root's settings.json parsing,
+    so the read failing must cost the wiring REPORT and not the status line."""
+    proc = subprocess.run(
+        [sys.executable, str(HOOK_SCRIPT)],
+        env=_env(tmp_path / "nope.json", tmp_path),
+        capture_output=True, text=True,
+    )
+    assert proc.stdout.strip() == f"[config-root] harness={tmp_path} (= agent home)"
 
 
 def test_malformed_settings_fails_open(tmp_path):
     sp = tmp_path / "settings.json"
     sp.write_text("not json", encoding="utf-8")
-    env = {**os.environ, "CLAUDE_CANON_GUARD_SETTINGS": str(sp)}
     proc = subprocess.run(
         [sys.executable, str(HOOK_SCRIPT)],
-        env=env, capture_output=True, text=True,
+        env=_env(sp, tmp_path), capture_output=True, text=True,
     )
     assert proc.returncode == 0
-    assert proc.stderr.strip() == ""
+    assert proc.stderr == ""
+    assert BANNER not in proc.stdout, proc.stdout
 
 
 # ── The widened half: every gate-bearing hook, not just the canon guard ──────
@@ -166,8 +218,8 @@ def test_names_every_missing_registry_hook(tmp_path):
         _group("Edit|Write", GUARD_PATH), _group("Bash", GUARD_PATH)]}})
     assert proc.returncode == 0
     for name in OTHER_GATE_HOOKS:
-        assert name in proc.stderr, f"{name} not named in the warning"
-    assert "NOT registered" in proc.stderr
+        assert name in proc.stdout, f"{name} not named in the warning"
+    assert "NOT registered" in proc.stdout
 
 
 def test_warning_names_the_root_it_probed(tmp_path):
@@ -175,10 +227,10 @@ def test_warning_names_the_root_it_probed(tmp_path):
     report from an unnamed root is what made the old check misleading."""
     proc = _run(tmp_path, {"hooks": {"PreToolUse": [
         _group("Edit|Write", GUARD_PATH), _group("Bash", GUARD_PATH)]}})
-    assert str(tmp_path) in proc.stderr
+    assert str(tmp_path) in proc.stdout
 
 
-def test_silent_when_registry_hook_wired_in_local_member(tmp_path):
+def test_no_problem_when_registry_hook_wired_in_local_member(tmp_path):
     """No false alarm: a hook wired only in the chain's .local member is wired.
     A single-file read would name it as missing."""
     (tmp_path / "settings.local.json").write_text(
@@ -186,10 +238,8 @@ def test_silent_when_registry_hook_wired_in_local_member(tmp_path):
             {"hooks": [{"type": "command", "command": str(SCRIPTS_DIR / n)}]}
             for n in OTHER_GATE_HOOKS]}}),
         encoding="utf-8")
-    proc = _run(tmp_path, {"hooks": {"PreToolUse": [
-        _group("Edit|Write", GUARD_PATH), _group("Bash", GUARD_PATH)]}})
-    assert proc.returncode == 0
-    assert proc.stderr.strip() == "", proc.stderr
+    _assert_no_problem(_run(tmp_path, {"hooks": {"PreToolUse": [
+        _group("Edit|Write", GUARD_PATH), _group("Bash", GUARD_PATH)]}}))
 
 
 def test_unknown_is_never_reported(tmp_path):
@@ -203,16 +253,12 @@ def test_unknown_is_never_reported(tmp_path):
     criterion was after (UNKNOWN is never reported) in the form the design
     admits."""
     (tmp_path / "settings.local.json").write_text("{not json", encoding="utf-8")
-    proc = _run(tmp_path, {"hooks": {"PreToolUse": [
-        _group("Edit|Write", GUARD_PATH), _group("Bash", GUARD_PATH)]}})
-    assert proc.returncode == 0
-    assert proc.stderr.strip() == "", proc.stderr
+    _assert_no_problem(_run(tmp_path, {"hooks": {"PreToolUse": [
+        _group("Edit|Write", GUARD_PATH), _group("Bash", GUARD_PATH)]}}))
 
 
-def test_silent_when_everything_is_wired(tmp_path):
-    proc = _run(tmp_path, _wired_both(GUARD_PATH, GUARD_PATH))
-    assert proc.returncode == 0
-    assert proc.stderr.strip() == "", proc.stderr
+def test_no_problem_when_everything_is_wired(tmp_path):
+    _assert_no_problem(_run(tmp_path, _wired_both(GUARD_PATH, GUARD_PATH)))
 
 
 def test_advisory_hooks_are_never_reported(tmp_path):
@@ -223,4 +269,4 @@ def test_advisory_hooks_are_never_reported(tmp_path):
         _group("Edit|Write", GUARD_PATH), _group("Bash", GUARD_PATH)]}})
     for advisory in ("hook-self-diagnose-due.py", "hook-skill-first.py",
                      "hook-resolution-reminder.py"):
-        assert advisory not in proc.stderr
+        assert advisory not in proc.stdout

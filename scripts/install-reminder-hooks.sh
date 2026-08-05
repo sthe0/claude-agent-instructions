@@ -11,11 +11,21 @@ set -euo pipefail
 REPO="${CLAUDE_INSTRUCTIONS_REPO:-$HOME/claude-agent-instructions}"
 source "$REPO/scripts/lib/config-root.sh"
 SETTINGS="$CLAUDE_AGENT_HOME/settings.json"
-# Files that get PRUNE-ONLY treatment: a dangling entry this installer owns
-# is removed from them, but no DESIRED entry is ever added, and a missing or
-# unparseable file is skipped rather than created or truncated. $CLAUDE_AGENT_HOME
-# above is the only file the ADD pass ever writes to.
+# Files that get PRUNE-ONLY treatment: a dangling entry this installer owns is
+# removed from them, and a missing or unparseable file is skipped rather than
+# created or truncated. Of the DESIRED rows below, only the ones named in
+# PRUNE_ONLY_ALSO_ADD are ever added here; everything else reaches
+# $CLAUDE_AGENT_HOME alone.
 PRUNE_ONLY_SETTINGS=("$HOME/.claude/settings.json")
+# The single exemption, and why it is not the rule it appears to break: keeping
+# ENFORCEMENT out of the personal root is the design, but a DETECTOR is not
+# enforcement — it denies nothing and cannot. Registered only in the agent root,
+# hook-canon-guard-wired-check.py can never observe the personal root, which is
+# the one root where the gap it reports is real; a check present exclusively in
+# the root it never needs to check is the sharpest form of the defect it exists
+# to catch. Adding any gate-bearing hook here instead would import enforcement
+# into personal sessions, which is deliberately out of scope.
+PRUNE_ONLY_ALSO_ADD=("hook-canon-guard-wired-check.py")
 command -v python3 >/dev/null || { echo "install-reminder-hooks: python3 required" >&2; exit 1; }
 
 # Ledger-stamp resolution: THIS script's own location, not the canonical $REPO
@@ -25,7 +35,9 @@ STAMP_REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
 [[ -f "$SETTINGS" ]] || echo '{}' > "$SETTINGS"
 
-SCRIPTS_DIR="$REPO/scripts" STAMP_SCRIPTS_DIR="$STAMP_REPO/scripts" python3 - "$SETTINGS" "${PRUNE_ONLY_SETTINGS[@]+"${PRUNE_ONLY_SETTINGS[@]}"}" <<'PY'
+SCRIPTS_DIR="$REPO/scripts" STAMP_SCRIPTS_DIR="$STAMP_REPO/scripts" \
+PRUNE_ONLY_ALSO_ADD="${PRUNE_ONLY_ALSO_ADD[*]+${PRUNE_ONLY_ALSO_ADD[*]}}" \
+python3 - "$SETTINGS" "${PRUNE_ONLY_SETTINGS[@]+"${PRUNE_ONLY_SETTINGS[@]}"}" <<'PY'
 import importlib.util
 import json, os, shutil, sys
 from pathlib import Path
@@ -129,10 +141,13 @@ DESIRED = [
     # file near its ceiling) and surface any worklist to stderr. Self-throttled,
     # fail-open — never blocks or slows session start.
     ("SessionStart",     None,    "hook-self-diagnose-due.py",   5),
-    # Fail-loud detector: the canon read-only guard is present in the repo but
-    # NOT wired into BOTH live PreToolUse chains (Edit|Write + Bash), or is wired
-    # to a missing script path — i.e. canon may silently be writable. Non-blocking,
-    # fail-open; names the install-reminder-hooks.sh remediation.
+    # Fail-loud detector: the gate-bearing hooks are present in the repo but NOT
+    # wired into the root THIS session loads from — i.e. canon may silently be
+    # writable and the spine's gates silently off. Reports on stdout, so the
+    # agent reads it and not only the terminal; states the live root on every
+    # path, so its silence stops being the only signal. Non-blocking, fail-open.
+    # The one row PRUNE_ONLY_ALSO_ADD also installs into the personal root — see
+    # the comment there for why a detector is not the enforcement it sits beside.
     ("SessionStart",     None,    "hook-canon-guard-wired-check.py", 5),
     # Phase-3 forcing trigger: throttled (7d), speaks only when
     # rule-salience-report.py's phase3_readiness predicate says the deferred
@@ -190,20 +205,35 @@ def group_for(event_groups, matcher):
     return g
 
 
-changed = []
-for event, matcher, script, timeout in DESIRED:
-    parts = script.split()
-    script_base = os.path.basename(parts[0])
-    cmd = os.path.join(scripts, parts[0])
-    if len(parts) > 1:
-        cmd += " " + " ".join(parts[1:])
-    groups = hooks.setdefault(event, [])
-    grp = group_for(groups, matcher)
-    grp.setdefault("hooks", [])
-    if any(basename_of(h.get("command", "")) == script_base for h in grp["hooks"]):
-        continue
-    grp["hooks"].append({"type": "command", "command": cmd, "timeout": timeout})
-    changed.append(f"{event}/{matcher or '*'}: {script}")
+def add_rows(hooks, rows):
+    """Register `rows` (DESIRED tuples) in `hooks`, skipping any whose script
+    basename is already in the target group. Shared by the full ADD pass and the
+    prune-only roots' single-row exemption, so the two cannot drift."""
+    added = []
+    for event, matcher, script, timeout in rows:
+        parts = script.split()
+        script_base = os.path.basename(parts[0])
+        cmd = os.path.join(scripts, parts[0])
+        if len(parts) > 1:
+            cmd += " " + " ".join(parts[1:])
+        groups = hooks.setdefault(event, [])
+        grp = group_for(groups, matcher)
+        grp.setdefault("hooks", [])
+        if any(basename_of(h.get("command", "")) == script_base for h in grp["hooks"]):
+            continue
+        grp["hooks"].append({"type": "command", "command": cmd, "timeout": timeout})
+        added.append(f"{event}/{matcher or '*'}: {script}")
+    return added
+
+
+also_add_names = set(os.environ.get("PRUNE_ONLY_ALSO_ADD", "").split())
+ALSO_ADD_ROWS = [r for r in DESIRED if os.path.basename(r[2].split()[0]) in also_add_names]
+missing_exemptions = also_add_names - {os.path.basename(r[2].split()[0]) for r in ALSO_ADD_ROWS}
+if missing_exemptions:
+    # A name that matches no DESIRED row would silently add nothing at all.
+    sys.exit(f"install-reminder-hooks: PRUNE_ONLY_ALSO_ADD names no DESIRED hook: {sorted(missing_exemptions)}")
+
+changed = add_rows(hooks, DESIRED)
 
 
 def prune_dangling_managed_hooks(hooks, managed_dir):
@@ -262,8 +292,9 @@ else:
 
 
 # Prune-only pass: same ownership predicate (prune_dangling_managed_hooks),
-# reused rather than reimplemented. Never adds a DESIRED entry to these files;
-# a missing or unparseable one is skipped, never created or truncated.
+# reused rather than reimplemented. Adds only the ALSO_ADD_ROWS exemption (see
+# PRUNE_ONLY_ALSO_ADD above), never the rest of DESIRED; a missing or
+# unparseable file is skipped, never created or truncated.
 for path_str in prune_only_paths:
     path = Path(path_str)
     if not path.is_file():
@@ -279,16 +310,30 @@ for path_str in prune_only_paths:
         print(f"install-reminder-hooks: {path} is not a JSON object, skipping prune-only pass", file=sys.stderr)
         continue
     other_hooks = other_data.get("hooks")
+    # A settings.json with no `hooks` key at all is a COMMON state for a
+    # personal root, not an exotic one, and skipping it would leave exactly
+    # those roots without the detector forever. The file-level protections are
+    # what prune-only promises and they are untouched above: a missing file, an
+    # unparseable one and a non-object one are all still skipped. Creating a key
+    # inside a file that exists and parses as an object is not creating a file.
+    if other_hooks is None and ALSO_ADD_ROWS:
+        other_hooks = other_data.setdefault("hooks", {})
     if not isinstance(other_hooks, dict):
         continue
     other_pruned = prune_dangling_managed_hooks(other_hooks, scripts)
-    if other_pruned:
+    other_added = add_rows(other_hooks, ALSO_ADD_ROWS)
+    if other_pruned or other_added:
         shutil.copy2(path, str(path) + ".bak")
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(other_data, fh, indent=2, ensure_ascii=False)
             fh.write("\n")
         edit_ledger.stamp(str(path), "script:install-reminder-hooks")
-        print(f"install-reminder-hooks: pruned {len(other_pruned)} dangling hook registration(s) in {path}:")
-        for p in other_pruned:
-            print("  - " + p)
+        if other_pruned:
+            print(f"install-reminder-hooks: pruned {len(other_pruned)} dangling hook registration(s) in {path}:")
+            for p in other_pruned:
+                print("  - " + p)
+        if other_added:
+            print(f"install-reminder-hooks: wired {len(other_added)} detector hook(s) in {path}:")
+            for a in other_added:
+                print("  + " + a)
 PY

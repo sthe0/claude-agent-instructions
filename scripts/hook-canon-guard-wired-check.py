@@ -27,21 +27,44 @@ config-root-refs allowlist, for zero functional gain.
 
 REPORT, NEVER REPAIR. The divergence between the two roots is by design, and
 this check must not "fix" it. install-reminder-hooks.sh is the in-repo evidence
-for that reading rather than a preference of this file's:
-``PRUNE_ONLY_SETTINGS=("$HOME/.claude/settings.json")`` — the installer's ADD
-pass never writes to the personal root; it only ever prunes stale entries from
-it. Reporting the gap is therefore what the installer's own intent asks for.
+for that reading rather than a preference of this file's, and the reading is
+narrower than it used to be: the installer's ADD pass writes every ENFORCEMENT
+hook to the agent root only and gives ``$HOME/.claude/settings.json`` prune-only
+treatment — with exactly one exemption, this detector, which it does add there
+(``PRUNE_ONLY_ALSO_ADD``). Enforcement never, detection always. A detector
+denies nothing and cannot; registered only in the root that is always correctly
+wired, it could never observe the one root where the gap is real. Reporting the
+gap is what the installer's own intent asks for; repairing it is not.
+
+WHICH BRANCH. What this check says depends on which root the harness loaded:
+
+- harness root IS the agent root — the full report, unchanged. Absence there is
+  a real defect and the alarm is correct.
+- harness root is the PERSONAL root — the gate-bearing hooks are absent BY
+  DESIGN and nobody will ever "fix" it, so the banner would fire every session
+  on a deliberate divergence, which is precisely what § Scope below rejects.
+  Instead: one quiet line, and only when the session is doing SYSTEM work
+  (``in_system_work_venue()``). A personal session in a personal root has no
+  defect to hear about, and gets absolute silence on both channels.
 
 Scope of the warning: gate-bearing hooks only. Warning about the advisory
 ``*-due`` reminders missing from a personal root would fire every session on a
-deliberate divergence and train the reader to ignore the whole block.
+deliberate divergence and train the reader to ignore the whole block. The
+unconditional ``[config-root]`` status line is not such a warning and this
+paragraph does not argue against it: it carries no remediation and nothing to
+fix, so it is a datum the reader consults rather than an alert the reader obeys,
+and being tuned out costs a datum nothing. It is also scoped BY the branch split
+above rather than bolted outside it, so the silence that split buys is not spent.
 
 Non-blocking and fail-open by construction: this is a SessionStart hook, which
 cannot hard-block, and any error (missing/unreadable settings, malformed JSON)
 returns quietly — a detector that wedges session start would be worse than the
-gap it reports. It only ever writes to stderr; it never denies. UNKNOWN is
-never reported for the same reason: only a positively established ABSENT is
-worth the reader's attention.
+gap it reports. It writes to STDOUT and never denies. The channel is the point:
+a SessionStart hook's stdout is attached to the session as context, stderr
+reaches only the human's terminal, and the one reader who can act on "the gates
+are not wired in this root" is the agent about to write to a gated file.
+UNKNOWN is never reported, for the same reason the scope is narrow: only a
+positively established ABSENT is worth the reader's attention.
 
 Settings source: the chain of the harness root, overridable via
 ``$CLAUDE_CANON_GUARD_SETTINGS`` (test seam). The override designates the
@@ -61,6 +84,36 @@ from lib import config_root  # noqa: E402
 from lib import hook_wiring  # noqa: E402
 
 GUARD_BASENAME = "hook-guard-canon-readonly.py"
+
+# Marks a checkout of the instruction repo — the canonical one and every linked
+# worktree of it alike.
+SYSTEM_WORK_SENTINEL = Path("scripts") / "agentctl" / "machine.py"
+
+
+def in_system_work_venue(cwd=None) -> bool:
+    """Is this session working on the agent system itself?
+
+    The signal is STRUCTURAL — a tree carrying ``scripts/agentctl/machine.py``
+    at or above the cwd — rather than a prefix test against a literal checkout
+    path. A prefix test would go permanently silent in a delivery WORKTREE,
+    which is where this fleet does most of its system work, and silence is the
+    one failure this branch exists to end.
+    """
+    try:
+        start = (Path(cwd) if cwd is not None else Path.cwd()).resolve()
+    except OSError:
+        return False
+    for candidate in (start, *start.parents):
+        if (candidate / SYSTEM_WORK_SENTINEL).is_file():
+            return True
+    return False
+
+
+def _resolved(path: Path) -> Path:
+    try:
+        return path.resolve()
+    except OSError:  # pragma: no cover - unresolvable path, compare the raw one
+        return path
 
 
 def _primary_settings_path() -> Path:
@@ -161,6 +214,29 @@ def check_registry(root: Path) -> "list[str]":
 
 def main() -> int:
     try:
+        harness = config_root.harness_config_root()
+        home = config_root.agent_home()
+        personal = _resolved(harness) != _resolved(home)
+        # The branch decision precedes the first print, or the personal-root
+        # non-system-work path loses the byte-silence it is owed to the very
+        # line being added.
+        if personal and not in_system_work_venue():
+            return 0
+        # Above the settings read on purpose: which root is live does not depend
+        # on that file parsing, so an unreadable settings.json makes the wiring
+        # REPORT unknown but never the ROOT. `harness`, not `primary.parent` —
+        # the two diverge under the $CLAUDE_CANON_GUARD_SETTINGS seam, and a
+        # status line naming the wrong root is worse than none.
+        suffix = f"!= agent home {home}" if personal else "= agent home"
+        print(f"[config-root] harness={harness} ({suffix})")
+        if personal:
+            print(
+                "  The agent's gate-bearing hooks are not wired in this root. That is\n"
+                "  EXPECTED here — the system installs into its own root by design.\n"
+                "  For system work use `claude-agent` (or `claude-task`), not a bare `claude`."
+            )
+            return 0
+
         primary = _primary_settings_path()
         if _load(primary) is None:
             return 0
@@ -177,19 +253,17 @@ def main() -> int:
             "================================================================\n"
             "  GATE-BEARING HOOKS ARE NOT FULLY WIRED — enforcement is OFF\n"
             f"  harness config root: {root}\n"
-            "================================================================",
-            file=sys.stderr,
+            "================================================================"
         )
         for p in problems:
-            print(f"  - {p}", file=sys.stderr)
+            print(f"  - {p}")
         print(
             "  This root is the one THIS session loads hooks from. It may differ\n"
             "  from the root the system installs into, and that divergence is by\n"
             "  design — so this is a report, not something to auto-repair.\n"
             "  If this root is meant to carry the system's hooks, install them:\n"
             "    bash ~/claude-agent-instructions/scripts/install-reminder-hooks.sh\n"
-            "================================================================",
-            file=sys.stderr,
+            "================================================================"
         )
     return 0
 
