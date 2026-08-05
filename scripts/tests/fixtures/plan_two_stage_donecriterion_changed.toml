@@ -1,4 +1,5 @@
 [meta]
+weight_class = "small_change"
 task_id = "demo-two-stage"
 goal = "Demonstrate the full two-stage coordination cycle"
 done_criterion = "both stages PASSED, resolution confirmed, and the delivery announced"

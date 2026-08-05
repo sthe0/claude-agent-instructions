@@ -37,7 +37,7 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cli, text_shape
+from agentctl import cli, plugins, text_shape
 from agentctl.plan import (
     PlanError,
     diff_plans,
@@ -111,10 +111,14 @@ _FULL_KNOWLEDGE_BLOCK = (
 )
 
 
-def _write_plan(path: Path, *, knowledge_block=_FULL_KNOWLEDGE_BLOCK, title="s1") -> str:
-    path.write_text(
-        _PLAN.format(knowledge_block=knowledge_block, title=title), encoding="utf-8"
-    )
+def _write_plan(path: Path, *, knowledge_block=_FULL_KNOWLEDGE_BLOCK, title="s1",
+                suffix="", material="m", declare_weight_class=True) -> str:
+    text = _PLAN.format(knowledge_block=knowledge_block, title=title)
+    if material != "m":
+        text = text.replace('material = "m"\n', f'material = "{material}"\n')
+    if not declare_weight_class:
+        text = text.replace('weight_class = "substantive"\n', "")
+    path.write_text(text + suffix, encoding="utf-8")
     return str(path)
 
 
@@ -334,7 +338,7 @@ def _digest(path) -> str:
 def test_plan_digest_is_stamped_at_submit_plan(tmp_path, store):
     plan = _write_plan(tmp_path / "plan.toml")
     _to_plan_ready(store, "dig-a", plan)
-    assert store.load("dig-a").plan_digest == _digest(plan)
+    assert store.load("dig-a").accepted_plan_digest == _digest(plan)
 
 
 def test_plan_digest_is_not_stamped_when_submission_refuses(tmp_path, store):
@@ -342,7 +346,7 @@ def test_plan_digest_is_not_stamped_when_submission_refuses(tmp_path, store):
     make the digest attest to something the session never took on."""
     plan = _write_plan(tmp_path / "plan.toml", knowledge_block="")
     _to_plan_ready(store, "dig-x", plan)
-    assert store.load("dig-x").plan_digest is None
+    assert store.load("dig-x").accepted_plan_digest is None
 
 
 def test_plan_digest_follows_an_in_place_edit_through_approve(tmp_path, store):
@@ -351,11 +355,11 @@ def test_plan_digest_follows_an_in_place_edit_through_approve(tmp_path, store):
     plan_path = tmp_path / "plan.toml"
     _write_plan(plan_path)
     _to_plan_ready(store, "dig-c", str(plan_path))
-    before = store.load("dig-c").plan_digest
+    before = store.load("dig-c").accepted_plan_digest
 
     _write_plan(plan_path, title="edited at PLAN_READY")
     cli.cmd_approve(ns(session="dig-c", by="user"), store=store)
-    after = store.load("dig-c").plan_digest
+    after = store.load("dig-c").accepted_plan_digest
     assert after != before
     assert after == _digest(plan_path)
 
@@ -650,7 +654,7 @@ def test_plan_digest_follows_the_new_bytes_through_replan(tmp_path, store):
     _to_normalize_ready(store, sid, plan)
     cli.cmd_normalize(ns(session=sid, factor="f", level="note", destination="знание"),
                       store=store)
-    assert store.load(sid).plan_digest == _digest(plan)
+    assert store.load(sid).accepted_plan_digest == _digest(plan)
 
     corrected = _write_plan(
         tmp_path / "corrected.toml",
@@ -661,7 +665,7 @@ def test_plan_digest_follows_the_new_bytes_through_replan(tmp_path, store):
         ),
     )
     cli.cmd_replan(ns(session=sid, plan=corrected), store=store)
-    assert store.load(sid).plan_digest == _digest(corrected)
+    assert store.load(sid).accepted_plan_digest == _digest(corrected)
 
 
 @pytest.mark.parametrize("destination", NORMALIZATION_DESTINATIONS)
@@ -710,3 +714,202 @@ def test_destination_may_be_omitted(tmp_path, store):
     d = cli.cmd_normalize(ns(session="dest-none", factor="f", level="note"), store=store)
     assert d.ok is True
     assert store.load("dest-none").difficulty.normalization.destination is None
+
+
+# --- the seams' own invariants, review round 4 --------------------------------
+
+
+def test_a_refused_replan_leaves_the_accepted_digest_unchanged(tmp_path, store,
+                                                               monkeypatch):
+    """`accepted_plan_digest` names bytes the session TOOK. Seam (b) stamped before the
+    critique-coverage gate, so a replan the engine went on to refuse had already moved the
+    digest onto the rejected file — a wrong answer to "which plan is this session running",
+    and one that could never surface as a crash.
+
+    The persisted assertion alone does NOT discriminate: the coverage refusal returns
+    without `store.save`, so today the premature stamp is discarded on the way out. That is
+    precisely the reviewer's point — the invariant rested on the ABSENCE of a save between
+    the stamp and the refusal, which no test guarded and the next edit would have broken
+    silently. So the control reads the live session AT the coverage gate, where the engine
+    has not yet decided to accept anything."""
+    sid = "dig-refused"
+    plan = _write_plan(tmp_path / "plan.toml")
+    _to_normalize_ready(store, sid, plan)
+    cli.cmd_normalize(ns(session=sid, factor="f", level="note", destination="знание"),
+                      store=store)
+    # a similarity the corrected plan does not carry -> the coverage gate refuses
+    cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
+                        failure_address="нормативное",
+                        invariants_to_preserve=["the seam never tightens the loader"],
+                        differences_to_remove=[]), store=store)
+
+    seen = {}
+    real = cli._log_gate
+
+    def spy(state, gate, blockers, *, passed):
+        seen.setdefault(gate, state.accepted_plan_digest)
+        return real(state, gate, blockers, passed=passed)
+
+    monkeypatch.setattr(cli, "_log_gate", spy)
+
+    corrected = _write_plan(tmp_path / "corrected.toml", title="a different title")
+    d = cli.cmd_replan(ns(session=sid, plan=corrected), store=store)
+
+    assert d.ok is False
+    assert d.data.get("coverage_blockers")
+    assert seen["replan_coverage"] == _digest(plan)
+    assert store.load(sid).accepted_plan_digest == _digest(plan)
+
+
+def test_a_no_change_replan_moves_plan_path_to_the_new_file(tmp_path, store):
+    """"no_change" names the DIFF, not the file. The branch re-materializes every live
+    stage, final_check and the venue from `args.plan`, so plan_path must follow those bytes
+    too — otherwise the session runs one file's content while every later fresh load (the
+    premise gate, the next replan's baseline) reads another, and the digest stamped on
+    `args.plan` names bytes plan_path does not point at."""
+    sid = "no-change-path"
+    plan = _write_plan(tmp_path / "plan.toml")
+    _to_normalize_ready(store, sid, plan)
+    cli.cmd_normalize(ns(session=sid, factor="f", level="note", destination="знание"),
+                      store=store)
+
+    # same parsed content, different bytes and a different path: comment-only, so
+    # diff_plans sees no_change while the two files are genuinely distinguishable
+    corrected = _write_plan(tmp_path / "corrected.toml",
+                            suffix="\n# a comment tomllib never surfaces as a field\n")
+    d = cli.cmd_replan(ns(session=sid, plan=corrected), store=store)
+
+    assert d.ok is True
+    after = store.load(sid)
+    assert after.plan_path == corrected
+    assert after.accepted_plan_digest == _digest(corrected) != _digest(plan)
+
+
+@pytest.fixture
+def refresh_probe_plugin():
+    """A plan_approval gate whose verdict depends on state REFRESHED at approve time.
+    No production plugin reads refreshed state today (premise re-loads the file itself),
+    so the widened ordering could only be asserted with a probe."""
+    name = "kp_refresh_probe"
+    plugins.register(plugins.Plugin(
+        name=name,
+        gates={"plan_approval": lambda state, bag: (
+            [] if state.stage(1).title == "REFRESHED" else ["stage 1 is not REFRESHED"]
+        )},
+    ))
+    yield name
+    plugins.REGISTRY.pop(name, None)
+
+
+def test_plan_approval_blockers_see_the_refreshed_state(tmp_path, store,
+                                                        refresh_probe_plugin):
+    """The contract widened at seam (c): not just the submission REFUSAL but the whole
+    cache refresh precedes `_log_gate`, so every plan_approval blocker — core, plugin,
+    review, presentation — judges the post-refresh session. That is the intent (the gate
+    must judge the bytes it is about to attest to, not the pre-edit cache), and it is
+    asserted here rather than left as an accident of statement order."""
+    sid = "approve-refresh-order"
+    plan_path = tmp_path / "plan.toml"
+    _write_plan(plan_path)
+    _to_plan_ready(store, sid, str(plan_path))
+    state = store.load(sid)
+    plugins.activate(state, refresh_probe_plugin)
+    store.save(state)
+
+    before = cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    assert any("not REFRESHED" in b for b in before.data.get("blockers", []))
+
+    _write_plan(plan_path, title="REFRESHED")
+    after = cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    assert not any("not REFRESHED" in b for b in after.data.get("blockers", []))
+
+
+def test_a_substantive_session_refuses_a_plan_that_declares_no_weight_class(tmp_path,
+                                                                            store):
+    """The grade was author-opt-in: `weight_class` is optional free text, so a plan that
+    simply omits it escaped the submission requirements entirely — while the gate right
+    beside seam (a) (verify_command_reachability) armed on the SESSION's class. Silence is
+    what the two disagreed about, so silence is what is refused."""
+    plan = _write_plan(tmp_path / "plan.toml", knowledge_block="",
+                       declare_weight_class=False)
+    # the loader is untouched by this: it still accepts the same bytes
+    assert load_plan(plan).meta.weight_class is None
+
+    d = _to_plan_ready(store, "wc-omitted", plan)
+    assert d.ok is False
+    assert any("weight_class is not declared" in p for p in d.data.get("problems", []))
+    assert store.load("wc-omitted").node == Node.PLANNING.value
+
+
+def test_a_declared_non_substantive_plan_is_not_held_to_the_substantive_grade(tmp_path,
+                                                                             store):
+    """The other half of the contract, and the reason the seam is NOT widened to arm on
+    the session: the grade itself stays keyed on the plan, in agreement with
+    `plan._validate_substantive_stage`. A plan that says what it is has said enough."""
+    text = Path(_write_plan(tmp_path / "plan.toml", knowledge_block="",
+                            declare_weight_class=False)).read_text(encoding="utf-8")
+    plan = tmp_path / "small.toml"
+    plan.write_text(text.replace("[meta]\n", '[meta]\nweight_class = "small_change"\n'),
+                    encoding="utf-8")
+    d = _to_plan_ready(store, "wc-small", str(plan))
+    assert d.ok is True
+    assert store.load("wc-small").node == Node.PLAN_READY.value
+
+
+def test_the_seam_stays_a_pure_function_of_its_arguments(tmp_path, store):
+    """The session's class is threaded in as a VALUE, not a SessionState: with no session
+    supplied the seam reduces EXACTLY to the plan-declared behaviour, so every caller that
+    has no session (tooling, tests, validate_submission on a bare doc) is unchanged."""
+    doc = load_plan(_write_plan(tmp_path / "plan.toml", knowledge_block="",
+                                declare_weight_class=False))
+    assert submission_violations(doc) == []
+    assert submission_violations(doc, session_weight_class="SMALL_CHANGE") == []
+    problems = submission_violations(doc, session_weight_class="SUBSTANTIVE")
+    assert len(problems) == 1
+    assert "weight_class is not declared" in problems[0]
+
+
+def test_an_empty_refs_list_is_reported_as_the_empty_case(tmp_path, store):
+    """`material_refs = []` is falsy, so it is refused like an absent key — correct, but
+    the author reading "missing 'material_refs'" over a key they can see in their own file
+    has no way to tell which. The reason names the empty case explicitly."""
+    doc = load_plan(_write_plan(
+        tmp_path / "plan.toml",
+        knowledge_block=('material_refs = []\n'
+                         'knowledge_refs = ["scripts/agentctl/submission.py"]\n'
+                         'knowledge = "k"\n'),
+    ))
+    problems = submission_violations(doc)
+    assert len(problems) == 1
+    assert "material_refs" in problems[0]
+    assert "empty list" in problems[0]
+
+
+def test_the_approve_refresh_carries_material(tmp_path, store):
+    """`subject.material` is read by no change-decision function, so the refresh could
+    leave it pinned to the pre-edit bytes while every sibling prose field tracked the file
+    — a discrepancy in what `status` renders with no reason behind it."""
+    sid = "refresh-material"
+    plan_path = tmp_path / "plan.toml"
+    _write_plan(plan_path)
+    _to_plan_ready(store, sid, str(plan_path))
+    assert store.load(sid).stage(1).subject.material == "m"
+
+    _write_plan(plan_path, material="REWRITTEN at PLAN_READY")
+    cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    assert store.load(sid).stage(1).subject.material == "REWRITTEN at PLAN_READY"
+
+
+def test_the_session_digest_and_the_reviewer_attested_digest_stay_distinct():
+    """Two unrelated things were spelled `plan_digest`: the session's own record of the
+    bytes it accepted, and the digest a REVIEWER attests to at plan-review. The session
+    field is renamed; the user-facing flag is deliberately NOT."""
+    from agentctl.state import SessionState
+
+    assert "accepted_plan_digest" in SessionState.__dataclass_fields__
+    assert "plan_digest" not in SessionState.__dataclass_fields__
+    args = cli.build_parser().parse_args(
+        ["plan-review", "--session", "s", "--verdict", "pass", "--reviewer", "thinker",
+         "--plan-digest", "abc"]
+    )
+    assert args.plan_digest == "abc"

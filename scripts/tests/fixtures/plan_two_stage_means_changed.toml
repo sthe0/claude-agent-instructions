@@ -1,4 +1,5 @@
 [meta]
+weight_class = "small_change"
 task_id = "demo-two-stage"
 goal = "Demonstrate a means-only refinement"
 done_criterion = "both stages PASSED and resolution confirmed"

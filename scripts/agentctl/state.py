@@ -1016,7 +1016,11 @@ class SessionState:
     # one asking "which bytes was the replan measured against" reads that. None until the
     # first submission; legacy states load with None (absent key -> dataclass default via
     # from_dict's cls(**data)).
-    plan_digest: str | None = None
+    #
+    # Named `accepted_` and not `plan_digest` because `--plan-digest` / `args.plan_digest`
+    # is an unrelated pre-existing thing: the digest a REVIEWER attests to at plan-review.
+    # Two fields spelled the same, one session-owned and one caller-supplied, read as one.
+    accepted_plan_digest: str | None = None
     # The tracker key classify detected (#11): persisted so the tracker plugin's
     # auto_activate predicate can read it without re-deriving it from task_id.
     # None on legacy states and on sessions with no tracker-key-shaped task id

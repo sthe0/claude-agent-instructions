@@ -217,7 +217,7 @@ def test_next_stage_in_thread_detail_unchanged(store, tmp_path):
     sid = "word2"
     plan = tmp_path / "inthread.toml"
     plan.write_text(
-        '[meta]\ntask_id = "t"\n'
+        '[meta]\ntask_id = "t"\nweight_class = "small_change"\n'
         '[[stage]]\nindex = 1\ntitle = "x"\nexecutor = "in_thread"\n'
         'expected_result_image = "i"\ndone_criterion = "c"\n',
         encoding="utf-8",

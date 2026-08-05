@@ -65,11 +65,14 @@ _WHY = {
     ),
     "material_refs": (
         "the symbols this stage TRANSFORMS — the structural projection of `material`, so "
-        "the plan states what it changes rather than only describing it"
+        "the plan states what it changes rather than only describing it (an empty list "
+        "reads the same as an absent key here: a substantive stage that transforms "
+        "nothing is not a case this grade admits)"
     ),
     "knowledge_refs": (
         "the symbols this stage RELIES ON and leaves alone — read to be understood, not "
-        "rewritten"
+        "rewritten (an empty list reads the same as an absent key here: a substantive "
+        "stage that relies on nothing is not a case this grade admits)"
     ),
 }
 
@@ -80,22 +83,61 @@ def _attr(obj, dotted: str):
     return obj
 
 
+_UNDECLARED = (
+    "[meta] weight_class is not declared, but this session was classified SUBSTANTIVE. "
+    "The substantive plan grade is keyed on the PLAN's declaration (here and in "
+    "plan._validate_substantive_stage alike), so an undeclared plan silently escapes both "
+    "— declare weight_class = \"substantive\" and meet the grade, or declare the class "
+    "this plan really is"
+)
+
+
 def _is_substantive(doc) -> bool:
     """Keyed on the PLAN's own [meta] weight_class, not the session's, so this function
     stays pure and session-free — and so it agrees with `plan._validate_substantive_stage`,
     the sibling enumerator of substantive-stage requirements, which keys the same way. A
     plan that does not declare itself substantive is not held to the substantive grade by
-    either of them."""
+    either of them.
+
+    Deliberately NOT widened to "or the session is substantive". That reading closes the
+    same escape `_undeclared_weight_class` closes below, but it splits the substantive
+    grade in half: this seam would arm on the session while
+    `plan._validate_substantive_stage` — which cannot move, because it lives on the loader
+    path this module exists to keep lenient — would still arm on the plan. One grade, two
+    arming conditions, is a worse disagreement than the one being removed, so the plan
+    stays the single key and the session's only power is to force it to speak."""
     wc = doc.meta.weight_class
     return wc is not None and wc.lower() == "substantive"
 
 
-def submission_violations(doc) -> list[str]:
+def _undeclared_weight_class(doc, session_weight_class: str | None) -> bool:
+    """A SUBSTANTIVE session whose plan declares no weight_class at all.
+
+    This is the escape that made the whole grade author-opt-in: `weight_class` is optional,
+    so a plan omitting it met neither this seam's requirements nor
+    `plan._validate_substantive_stage`'s, while the gate right beside seam (a)
+    (`verify_command_reachability_blockers`) armed on the SESSION regardless. Silence is
+    what the two adjacent gates disagreed about, so silence is what is refused — a plan
+    that declares a non-substantive class is making a claim an author can be held to, and
+    `git grep weight_class` finds it.
+
+    The session's class arrives as a VALUE, not a SessionState, so the seam stays a pure
+    function of its arguments; `None` — every caller that has no session — is a no-op."""
+    return (
+        doc.meta.weight_class is None
+        and session_weight_class is not None
+        and session_weight_class.lower() == "substantive"
+    )
+
+
+def submission_violations(doc, *, session_weight_class: str | None = None) -> list[str]:
     """Every submission-grade violation in `doc`, as author-readable strings. [] == clean.
 
     Returns rather than raises: the approve seam must answer with a Directive (see the
     module docstring), and returning the full list lets one round trip show everything.
     """
+    if _undeclared_weight_class(doc, session_weight_class):
+        return [_UNDECLARED]
     if not _is_substantive(doc):
         return []
     out: list[str] = []
@@ -117,12 +159,12 @@ def submission_violations(doc) -> list[str]:
     return out
 
 
-def validate_submission(doc) -> None:
+def validate_submission(doc, *, session_weight_class: str | None = None) -> None:
     """Raise PlanError on the first submission-grade violation. The fail-fast wrapper for
     callers that have no Directive to answer with; the approve seam uses
     `submission_violations` instead, and must keep doing so."""
     from .plan import PlanError
 
-    problems = submission_violations(doc)
+    problems = submission_violations(doc, session_weight_class=session_weight_class)
     if problems:
         raise PlanError(problems[0])

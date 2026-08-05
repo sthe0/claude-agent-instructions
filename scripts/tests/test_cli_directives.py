@@ -400,7 +400,7 @@ def test_final_check_carried_to_state_at_submit(store, tmp_path):
     plan = tmp_path / "plan_with_fc.toml"
     plan.write_text(
         '[meta]\ntask_id = "fc-test"\ngoal = "g"\ndone_criterion = "dc"\n'
-        'criterion_type = "measurable"\n\n'
+        'criterion_type = "measurable"\nweight_class = "small_change"\n\n'
         '[[stage]]\nindex = 1\ntitle = "s"\nexecutor = "in_thread"\n'
         'expected_result_image = "img"\ndone_criterion = "dc"\n\n'
         '[[final_check]]\ncommand = "pytest -q"\nexpected_exit = 0\nlabel = "suite"\n',
@@ -662,6 +662,7 @@ def _to_verifying_all_passed_failing_finalcheck(store, sid, tmp_path):
         'goal = "Pin verify-final routing a failing final_check into DIAGNOSING"\n'
         'done_criterion = "both stages PASSED and final_check green"\n'
         'criterion_type = "measurable"\n'
+        'weight_class = "small_change"\n'
         '\n'
         '[[final_check]]\n'
         'label = "all green"\n'
@@ -757,6 +758,7 @@ def _two_stage_plan_text(final_check_cmd="true", stage2_verify_cmd="true"):
         'goal = "Pin approve/no_change refreshing final_check/stage caches"\n'
         'done_criterion = "both stages PASSED and final_check green"\n'
         'criterion_type = "measurable"\n'
+        'weight_class = "small_change"\n'
         '\n'
         '[[final_check]]\n'
         'label = "all green"\n'

@@ -206,7 +206,11 @@ def _apply_refined_stage_fields(cur, refined) -> None:
     the live stage stale against the plan bytes and re-arms a stage whose plan text
     never changed. `test_refresh_covers_every_carry_key_field` pins the relation, so
     a field added to the key but not here fails there rather than as an unexplained
-    re-arm later.
+    re-arm later. COVER is a lower bound, not an equality: `subject.material` is
+    copied although no key reads it, because the live stage is also what `status`
+    and every stage-reading report render — leaving one prose field pinned to the
+    pre-edit bytes while its siblings track the file is a discrepancy with no
+    reason behind it.
 
     Some of the copied fields (executor, supplies, done_criterion, criterion_type)
     are `_structural_signature`'s per-stage tuple, so a change to one classifies the
@@ -214,6 +218,7 @@ def _apply_refined_stage_fields(cur, refined) -> None:
     load-bearing only for the approve-time refresh, which absorbs an in-place edit
     made at plan-mutable PLAN_READY."""
     cur.title = refined.title
+    cur.subject.material = refined.subject.material
     cur.subject.result = refined.subject.result
     cur.means.means = refined.means.means
     cur.means.method = refined.means.method
@@ -282,15 +287,15 @@ def _restore_current_stage(state: SessionState) -> None:
     state.current_stage = active[0].index if len(active) == 1 else None
 
 
-def _stamp_plan_digest(state: SessionState, plan_path: str) -> None:
+def _stamp_accepted_plan_digest(state: SessionState, plan_path: str) -> None:
     """Record the sha256 of the ACCEPTED plan bytes on the session.
 
-    Called from the three submission seams and nowhere else, so state.plan_digest always
-    names bytes that passed `submission_violations`. Best-effort like its neighbours: an
-    unreadable file leaves the previous digest in place rather than raising out of a
-    command that has already decided to accept."""
+    Called from the three submission seams and nowhere else, and only PAST each seam's
+    refusal paths, so state.accepted_plan_digest always names bytes the session actually
+    took. Best-effort like its neighbours: an unreadable file leaves the previous digest
+    in place rather than raising out of a command that has already decided to accept."""
     try:
-        state.plan_digest = hashlib.sha256(Path(plan_path).read_bytes()).hexdigest()
+        state.accepted_plan_digest = hashlib.sha256(Path(plan_path).read_bytes()).hexdigest()
     except OSError:
         return
 
@@ -340,7 +345,7 @@ def _refresh_caches_from_plan_path(state: SessionState) -> list[str]:
         refreshed = _load(state.plan_path)
     except (OSError, PlanError) as exc:
         return [f"cannot load the plan at {state.plan_path!r}: {exc}"]
-    violations = submission_violations(refreshed)
+    violations = submission_violations(refreshed, session_weight_class=state.weight_class)
     if violations:
         return violations
     for rs in refreshed.stages:
@@ -354,7 +359,7 @@ def _refresh_caches_from_plan_path(state: SessionState) -> list[str]:
             cur.outcome.status = StageStatus.PENDING.value
     state.final_check = refreshed.meta.final_check
     _sync_venue_from_plan(state, refreshed)
-    _stamp_plan_digest(state, state.plan_path)
+    _stamp_accepted_plan_digest(state, state.plan_path)
     return []
 
 
@@ -1447,10 +1452,12 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     if not state.overall_done_criterion:
         state.overall_done_criterion = doc.meta.done_criterion
     state.plan_verified = True
-    # Submission seam (a): the first entry of these bytes into the session. Keyed on the
-    # PLAN's own [meta] weight_class inside submission_violations, not on the session's,
-    # so it agrees with plan._validate_substantive_stage.
-    problems: list[str] = submission_violations(doc)
+    # Submission seam (a): the first entry of these bytes into the session. The session's
+    # weight class is passed in so this seam and the reachability gate immediately below
+    # arm on the same condition — before, the seam keyed on the plan's own [meta] and the
+    # gate on the session's, so a substantive session submitting a plan that simply omits
+    # `weight_class` cleared the seam and not the gate.
+    problems: list[str] = submission_violations(doc, session_weight_class=state.weight_class)
     if state.weight_class == WeightClass.SUBSTANTIVE.value:
         # Two-directional control: the scope lint (advisory, below) keeps a
         # control from being false-RED; this BLOCKS a control that can never
@@ -1476,8 +1483,8 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
         return Directive(False, state.node, "fix_plan", "plan failed verification", data={"problems": problems})
 
     # Past the refusal, so these bytes were ACCEPTED — which is the only thing
-    # plan_digest ever records.
-    _stamp_plan_digest(state, plan_path)
+    # accepted_plan_digest ever records.
+    _stamp_accepted_plan_digest(state, plan_path)
     state.node = transition(state.node, "revise_plan" if resubmitting else "submit_plan")
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
     if resubmitting:
@@ -1958,6 +1965,14 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # never a raised PlanError — keeps the gate row out of the log entirely rather than
     # writing a failed plan_approval for a plan that was never really put to the gate; the
     # coordinator fixes the file and re-runs approve from the same node.
+    #
+    # The whole REFRESH, not only its refusal, now precedes the gate, and that widening is
+    # the contract rather than an accident of placement: every plan_approval blocker below
+    # — core, plugin, review, presentation — is evaluated against the POST-refresh session,
+    # so an in-place PLAN_READY edit can flip a blocker's verdict within a single approve
+    # call. That is the intent (the gate must judge the bytes it is about to attest to, not
+    # the pre-edit cache); a blocker that must instead see the cache as submitted has no
+    # place on this gate. `test_plan_approval_blockers_see_the_refreshed_state` asserts it.
     submission = _refresh_caches_from_plan_path(state)
     if submission:
         return Directive(False, state.node, "fix_plan",
@@ -3136,13 +3151,12 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # diff outcomes are covered by one check — a no_change replan re-materializes live
     # stages from these bytes just as a refinement does, so "unchanged" is no reason to
     # let an unvalidated plan in.
-    submission = submission_violations(new)
+    submission = submission_violations(new, session_weight_class=state.weight_class)
     if submission:
         return Directive(False, state.node, "fix_plan",
                          "replan blocked: the corrected plan does not meet submission "
                          "requirements",
                          data={"problems": submission})
-    _stamp_plan_digest(state, args.plan)
 
     # coverage gate: inside the difficulty flow, the corrected plan must CARRY the
     # critique's similarities into conditions/invariants and CHANGE a means/method
@@ -3165,6 +3179,14 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             _log_gate(state, "replan_coverage_waiver", cov, passed=True)
 
     kind = diff_plans(old, new)
+    # Stamped HERE and not up at the seam: every refusal path of this command — the
+    # submission check, the critique-coverage gate, and diff_plans' own raise — is now
+    # behind us, so like seam (a) the digest only ever names bytes the session ACCEPTED.
+    # Stamping at the seam was correct on today's control flow only because nothing saves
+    # between there and the coverage refusal; it made the invariant depend on the absence
+    # of a `store.save` rather than on placement, and the leak would be a silently wrong
+    # digest, not a crash.
+    _stamp_accepted_plan_digest(state, args.plan)
 
     # if we are exiting the DIAGNOSING cycle (difficulty complete), the failed
     # stage is re-armed and we leave the cycle back to VERIFYING so next_stage can
@@ -3189,6 +3211,14 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         # FILE changed relative to what was cached at submit-plan/last replan.
         state.final_check = new.meta.final_check
         _sync_venue_from_plan(state, new)
+        # …and plan_path follows the bytes too, as it does on the refinement and
+        # substantive branches. "no_change" names the DIFF, not the file: the stages,
+        # final_check and venue above were all just re-materialized from `args.plan`, so
+        # leaving plan_path on the previous file would leave the session executing one
+        # path's content while every later fresh load (the premise gate, verify-final,
+        # the next replan's baseline) reads a different path — and accepted_plan_digest,
+        # stamped on `args.plan`, would name bytes plan_path does not point at.
+        state.plan_path = args.plan
         # Backfill a snapshot for a legacy (pre-snapshot) session so the NEXT replan
         # diffs against real approved bytes instead of self-diffing plan_path.
         if not (state.plan_snapshot_path and Path(state.plan_snapshot_path).exists()):
