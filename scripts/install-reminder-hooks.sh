@@ -317,7 +317,8 @@ for path_str in prune_only_paths:
     # unparseable one and a non-object one are all still skipped. Creating a key
     # inside a file that exists and parses as an object is not creating a file.
     if other_hooks is None and ALSO_ADD_ROWS:
-        other_hooks = other_data.setdefault("hooks", {})
+        other_data["hooks"] = {}
+        other_hooks = other_data["hooks"]
     if not isinstance(other_hooks, dict):
         continue
     other_pruned = prune_dangling_managed_hooks(other_hooks, scripts)

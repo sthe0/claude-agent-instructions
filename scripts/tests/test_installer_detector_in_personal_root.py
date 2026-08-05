@@ -139,6 +139,21 @@ def test_installer_creates_a_hooks_block_in_a_hooks_less_personal_root(tmp_path)
     assert DETECTOR_BASENAME in " ".join(_wired_basenames(data))
 
 
+def test_installer_creates_a_hooks_block_when_hooks_is_null_in_personal_root(tmp_path):
+    """A personal settings.json with ``"hooks": null`` (key present, JSON null)
+    should also be fixed so the detector can be wired. The setdefault call alone
+    would not work because it only acts when the key is missing."""
+    env = _shell_env(tmp_path)
+    settings = _personal_settings(env, {"hooks": None, "model": "opus"})
+
+    proc = _run_installer(env)
+    assert proc.returncode == 0, proc.stderr
+
+    data = json.loads(settings.read_text(encoding="utf-8"))
+    assert data["model"] == "opus", "unrelated keys must survive"
+    assert DETECTOR_BASENAME in " ".join(_wired_basenames(data))
+
+
 def test_installer_does_not_create_a_missing_personal_settings_file(tmp_path):
     env = _shell_env(tmp_path)
     path = Path(env["HOME"]) / ".claude" / "settings.json"

@@ -72,10 +72,11 @@ def _run(tmp_path: Path, settings: dict) -> subprocess.CompletedProcess:
 def _assert_no_problem(proc: subprocess.CompletedProcess) -> None:
     """The agent-root branch found nothing to report.
 
-    Three claims, not one. Exit 0 and an empty stderr are the fail-open and
-    channel halves; BANNER-absence is the wiring verdict. Asserting only the
-    third would pass just as happily if the hook had crashed before reaching
-    the check, which is the failure this detector exists to not have."""
+    Four claims, not one. Exit 0 and an empty stderr are the fail-open and
+    channel halves; BANNER-absence is the wiring verdict; and the status line
+    must be present. Asserting only BANNER-absence would pass just as happily
+    if the hook had crashed before reaching the check, which is the failure
+    this detector exists to not have."""
     assert proc.returncode == 0
     assert proc.stderr == "", proc.stderr
     assert BANNER not in proc.stdout, proc.stdout
