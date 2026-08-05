@@ -23,6 +23,18 @@ the ground truth it is scored against:
   a label edited after the fact is a score edited after the fact;
 * the labels must have been committed BEFORE the prefilter existed, read from
   this repository's own history rather than taken on anyone's word.
+
+Honest limits of the recall number, stated here because the repo states them
+everywhere else it prints a score (verify-semantic-gates.py's own "Honest
+limits" block). The measured 11 echoes are NOT 11 independent instances: the
+labels file records that they come from 2 plan lineages across 4 files, nine of
+them being three revisions of one plan, and that every one of them opens with a
+backticked command. So the floor is a floor check on ONE of the prefilter's
+three conditions over roughly two independent instances. It is evidence that
+the net does not miss the shape the corpus actually contains; it is NOT evidence
+that the quoted-command and verdict-saturation conditions carry recall, and it
+cannot be. The false-positive rate, measured over 189 genuine images, is the
+better-supported of the two numbers.
 """
 from __future__ import annotations
 
@@ -59,7 +71,14 @@ def _git(*args: str) -> str:
 def _adding_commit(repo_path: str) -> str:
     """The commit that ADDED ``repo_path`` (the oldest one, if it was ever re-added)."""
     out = _git("log", "--diff-filter=A", "--format=%H", "--", repo_path).split()
-    assert out, f"no commit in this history adds {repo_path}"
+    if not out:
+        # A shallow clone or a squash-merged history simply does not CONTAIN the
+        # adding commit, which says nothing about the ordering this test asserts.
+        # Skip rather than fail, so a red here always means "the labels were not
+        # committed first" instead of "the checkout depth was 1".
+        if _git("rev-parse", "--is-shallow-repository").strip() == "true":
+            pytest.skip(f"shallow clone: no adding commit for {repo_path} in this history")
+        pytest.fail(f"no commit in this history adds {repo_path}")
     return out[-1]
 
 

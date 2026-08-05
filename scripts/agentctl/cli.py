@@ -465,12 +465,22 @@ def _submission_advice(doc, runner: Runner | None, weight_class: str | None) -> 
     absent; substituting it here would put a real `claude -p` behind every substantive
     session's plan submission. Injecting it is an ENTRY-POINT decision (the shape
     hook-turn-end-gate.py and hook-escalation-diagnosis-gate.py use at their `__main__`),
-    not one to take inside a helper."""
-    return submission_advice(
-        doc,
-        judge_runner=runner,
-        judge_enabled=advisor.resolve_enabled(weight_class),
-    )
+    not one to take inside a helper.
+
+    Fail-open at the HELPER boundary, not only inside `judge_echo`. `resolve_enabled`
+    builds `Thresholds()` -> `parse_config_md()` -> `read_text()`, and that read sits
+    outside its own `except KeyError`: an unreadable config.md would otherwise raise out
+    of `cmd_approve`, a path that never called `resolve_enabled` before this seam existed,
+    and strand the session at PLAN_READY with no edge back. A warn-only channel must never
+    be able to refuse a command by exception."""
+    try:
+        return submission_advice(
+            doc,
+            judge_runner=runner,
+            judge_enabled=advisor.resolve_enabled(weight_class),
+        )
+    except Exception:
+        return []
 
 
 def _run_check(command: str, expected_exit: int, runner: Runner | None, cwd: str | None = None):
@@ -1570,6 +1580,11 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     # used at the other advisor call sites): production's cmd_submit_plan is always invoked
     # with runner=None, so without this the judge is unreachable outside tests regardless of
     # advisor.resolve_enabled — which stays the actual kill switch, unaffected by this line.
+    # The `plan_completeness` advisory above is DELIBERATELY left on the raw `runner`, i.e.
+    # inert in production, so the two adjacent advisor call sites in this function behave
+    # oppositely on purpose: giving it the same fallback would add a second live `claude -p`
+    # to every submit, which no stage has sized or measured. Read "is the advisor reachable?"
+    # per call site, not by generalizing from either one.
     run = runner if runner is not None else advisor.subprocess_runner
     d.data.setdefault("advisories", []).extend(
         _submission_advice(doc, run, state.weight_class)
@@ -3226,13 +3241,6 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
                          "replan blocked: the corrected plan does not meet submission "
                          "requirements",
                          data={"problems": submission})
-    # Seam (b)'s advice channel. Computed once here, next to the refusal it is deliberately
-    # NOT part of, and attached to whichever of this command's several success Directives is
-    # returned — an echo never changes which one that is.
-    # Entry-point fallback — see cmd_submit_plan's identical comment.
-    run = runner if runner is not None else advisor.subprocess_runner
-    echo_advice = _submission_advice(new, run, state.weight_class)
-
     # coverage gate: inside the difficulty flow, the corrected plan must CARRY the
     # critique's similarities into conditions/invariants and CHANGE a means/method
     # for the declared differences. Empty split -> [] -> behaves exactly as before.
@@ -3266,6 +3274,17 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # of a `store.save` rather than on placement, and the leak would be a silently wrong
     # digest, not a crash.
     _stamp_accepted_plan_digest(state, args.plan)
+
+    # Seam (b)'s advice channel, attached to whichever of this command's several success
+    # Directives is returned — an echo never changes which one that is. Computed HERE, on
+    # the same "every refusal is behind us" property the digest stamp just above relies on,
+    # and not up at the seam it belongs to: the judge costs live `claude -p` calls per
+    # flagged stage, so a replan blocked by submission or by critique coverage must not pay
+    # for advice that is then discarded. Placement is about cost only — the advice is
+    # warn-only and cannot influence any decision above it either way.
+    # Entry-point fallback — see cmd_submit_plan's identical comment.
+    run = runner if runner is not None else advisor.subprocess_runner
+    echo_advice = _submission_advice(new, run, state.weight_class)
 
     # if we are exiting the DIAGNOSING cycle (difficulty complete), the failed
     # stage is re-armed and we leave the cycle back to VERIFYING so next_stage can

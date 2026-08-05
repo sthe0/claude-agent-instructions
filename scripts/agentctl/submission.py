@@ -280,7 +280,14 @@ def validate_submission(
     The fail-fast wrapper for callers that have no Directive to answer with; the approve
     seam uses `submission_violations` instead, and must keep doing so. The return value is
     the advice channel (`submission_advice`) — a caller that ignores it, and any call that
-    passes no judge, behaves exactly as before: [] is the default answer."""
+    passes no judge, behaves exactly as before: [] is the default answer.
+
+    `judge_runner`/`judge_enabled` are a DELIBERATE API completion with no production
+    caller today: all three engine seams reach `submission_advice` directly (via
+    cli._submission_advice) because they hold the Directive this wrapper is defined not to
+    have. They exist so this wrapper cannot become the one entry point that silently drops
+    the advice channel, and the tests are their only exercise. Delete them if a caller
+    never appears, rather than growing a second convention around them."""
     from .plan import PlanError
 
     problems = submission_violations(doc, session_weight_class=session_weight_class)

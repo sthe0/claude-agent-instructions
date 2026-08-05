@@ -77,6 +77,23 @@ CODE_PARTITIONS = [
         "controlled inputs (including deliberately adversarial ones) but are not "
         "themselves gates guarding production behaviour.",
     ),
+    # Mechanics of this row, kept OUT of the emitted ground (which wants the
+    # classification reason, not the generator's implementation):
+    #   * It is a partition row, not a CODE_ID_OVERRIDES entry, because the override
+    #     table is keyed by scope and is skipped for the file-rollup
+    #     (`_code_disposition` consults it only when scope_or_none is not None) — an
+    #     override would leave the rollup carrying the structural ground below.
+    #   * First matching predicate wins, so it must precede `scripts/agentctl/**`.
+    #   * What this row does NOT buy: verify-semantic-gates.py condition (c) skips
+    #     these sites regardless of class, because it only examines entries whose
+    #     `outcome_class` is in its `_HARD_SINK_CLASSES` and every site in this file
+    #     classifies `none`. Worse, the guard lives ONE FILE AWAY: `judge_guarded` is
+    #     set by a CALL to a `judge_*` name, and `judge_echo` is defined here but
+    #     called from submission.py, which the enumerator cannot see. So the day this
+    #     file gains a hard-sink-named function, `semantic-guarded` would make (c)
+    #     report JUDGE-GUARD-REVERTED against a guard that does exist. This row's
+    #     actual and only value is correcting a ground that asserts the opposite of
+    #     what the file is.
     (
         "scripts/agentctl/result_image.py (judge-guarded)",
         lambda f: f == "scripts/agentctl/result_image.py",
@@ -89,12 +106,7 @@ CODE_PARTITIONS = [
         "before anything is said — the prefilter alone produces no output at all. So "
         "the `scripts/agentctl/**` row below, which grounds its structural verdict on "
         "the engine's regexes reading the engine's own syntax rather than free-text "
-        "meaning, states the opposite of what is true here, and this row must precede "
-        "it. Placed as a partition row rather than a CODE_ID_OVERRIDES entry because "
-        "the override table is keyed by scope and is skipped for the file-rollup "
-        "(`_code_disposition` consults it only when scope_or_none is not None), which "
-        "would leave the rollup carrying the structural ground this row exists to "
-        "correct.",
+        "meaning, states the opposite of what is true here.",
     ),
     (
         "scripts/agentctl/**",

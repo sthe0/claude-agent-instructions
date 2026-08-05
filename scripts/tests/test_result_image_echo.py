@@ -243,7 +243,9 @@ def test_no_runner_reaches_the_judge_via_the_production_fallback(store, tmp_path
 def test_advisor_off_reaches_no_runner_and_spawns_nothing(store, tmp_path, monkeypatch):
     """The production fallback makes the runner non-None, but `advisor.resolve_enabled`
     stays the real kill switch: with the advisor off, an echo image submits silently and
-    `advisor.subprocess_runner` is never even looked at, let alone called."""
+    `advisor.subprocess_runner` is never CALLED. (The fallback expression does still
+    evaluate the attribute — `judge_enabled` is what stops short of using it — so this
+    poisons the runner rather than asserting the name goes untouched.)"""
     monkeypatch.setenv("AGENTCTL_ADVISOR", "0")
 
     def forbidden(argv, *, timeout=None):
@@ -256,6 +258,83 @@ def test_advisor_off_reaches_no_runner_and_spawns_nothing(store, tmp_path, monke
 
     assert d.ok is True
     assert _echo_warnings(d) == []
+
+
+def test_approve_carries_the_warning_on_both_of_its_directives(store, tmp_path, monkeypatch):
+    """Seam (c). `approve` re-reads plan_path (the coordinator may have edited it in place
+    at plan-mutable PLAN_READY), so its advice is threaded out of
+    `_refresh_caches_from_plan_path` rather than computed inline — and it must reach BOTH
+    of that function's exits, the success Directive and the one the plan_approval gate
+    blocks with. Without this, dropping `_with_advisories` from the blocked return leaves
+    the suite green."""
+    image = _corpus_image(ECHO_KEYS[0])
+    plan = _write_plan(tmp_path / "p.toml", image)
+    _submit(store, plan, _judge("ECHO"))
+
+    monkeypatch.setattr(advisor, "subprocess_runner", _judge("ECHO"))
+
+    # The blocked exit first (an empty approver is a plan_approval blocker), so the
+    # session is still at PLAN_READY afterwards and the success exit follows on the
+    # same plan.
+    blocked = cli.cmd_approve(ns(session="ri", by=""), store=store, runner=None)
+    assert blocked.ok is False
+    assert store.load("ri").node == Node.PLAN_READY.value
+    assert len(_echo_warnings(blocked)) == 1
+
+    d = cli.cmd_approve(ns(session="ri", by="user"), store=store, runner=None)
+    assert d.ok is True, "an echo must not block approval"
+    assert store.load("ri").node == Node.APPROVED.value
+    assert len(_echo_warnings(d)) == 1
+
+
+def test_replan_carries_the_warning_and_pays_for_it_only_past_the_refusals(
+    store, tmp_path, monkeypatch
+):
+    """Seam (b). The refinement branch is one of six success Directives `cmd_replan` can
+    return; each attaches the same advice. The judge is resolved BELOW every refusal in
+    that command, so a replan that is going to be turned away never pays for a live
+    `claude -p` — asserted here by counting the judge's calls across a blocked replan and
+    an accepted one."""
+    image = _corpus_image(ECHO_KEYS[0])
+    plan = _write_plan(tmp_path / "p.toml", image)
+    _submit(store, plan, _judge("ECHO"))
+    cli.cmd_approve(ns(session="ri", by="user"), store=store, runner=None)
+    cli.cmd_partition(ns(session="ri", m1=False, m2=False, m3=False, m4=False,
+                         m3_severe=False, m4_severe=False), store=store)
+    cli.cmd_next_stage(ns(session="ri"), store=store)
+
+    calls: list[list[str]] = []
+
+    def counting_judge(argv, *, timeout=None):
+        calls.append(argv)
+        return RunResult(0, "ECHO\n", "")
+
+    monkeypatch.setattr(advisor, "subprocess_runner", counting_judge)
+
+    # A plan that PARSES but fails submission validation (a substantive stage with no
+    # `knowledge`): refused inside cmd_replan above the judge, so it costs nothing.
+    broken = tmp_path / "broken.toml"
+    broken.write_text(
+        _PLAN.format(image=json.dumps(image)).replace(
+            'knowledge = "how the submission seam differs from the loader"', ""),
+        encoding="utf-8",
+    )
+    refused = cli.cmd_replan(ns(session="ri", plan=str(broken)), store=store, runner=None)
+    assert refused.ok is False
+    assert calls == [], "a replan refused at the seam must not pay for a judge call"
+
+    # A refinement of the same plan: accepted, and the warning rides the Directive out.
+    refined = _write_plan(tmp_path / "refined.toml", image)
+    Path(refined).write_text(
+        Path(refined).read_text(encoding="utf-8").replace(
+            "the stage under test", "the stage under test, retitled"),
+        encoding="utf-8",
+    )
+    d = cli.cmd_replan(ns(session="ri", plan=refined), store=store, runner=None)
+
+    assert d.ok is True
+    assert calls, "the accepted replan never reached advisor.subprocess_runner"
+    assert len(_echo_warnings(d)) == 1
 
 
 def test_validate_submission_returns_advice_without_raising(tmp_path):

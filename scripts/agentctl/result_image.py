@@ -64,7 +64,12 @@ _VERDICT_MARKER = re.compile(
     r"|succeed(?:s|ed)?"
     r"|green|red"
     r"|assert(?:s|ed|ing|ion|ions)?"
-    r"|cover(?:s|ed)?"
+    # "cover" was here and was removed: "the README covers all four scales" is a
+    # state-of-the-world clause, i.e. exactly the genuine-image shape this marker
+    # is supposed to distinguish itself FROM. Dropping it moved neither number on
+    # the labelled corpus (recall 1.00, false positives 11/189, both unchanged),
+    # so it bought nothing there while widening the false-positive surface for
+    # images outside it.
     r"|returncode"
     r")\b",
     re.IGNORECASE,
@@ -76,6 +81,12 @@ _VERDICT_MARKER = re.compile(
 # allowlist of interpreter names -- an allowlist would only recognise the tools
 # this repository happens to use today, and the property being tested ("the image
 # opens by naming a command to run") is not about which command.
+#
+# Read _ARGUMENT_TOKEN for what it IS, not for how selective it sounds: its
+# second alternative matches any bare word, so in practice `_is_invocation`
+# tests "a code span of two or more shell-shaped tokens, the first of which is
+# not punctuation". That is the intended weakness -- this is one condition of a
+# high-recall prefilter, and a judge decides after it.
 _PROGRAM_TOKEN = re.compile(r"^[\w.\-/]+$")
 _ARGUMENT_TOKEN = re.compile(r"^(?:-{1,2}[\w-]+|[\w.\-/]+)$")
 
