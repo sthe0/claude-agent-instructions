@@ -91,6 +91,31 @@ def _code_review_gate_off_by_default(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _advisor_off_by_default(monkeypatch):
+    """Default the advisory judge OFF for the suite at large, the same accommodation as
+    `_plan_review_gate_off_by_default` above and for the same reason.
+
+    `advisor.resolve_enabled` falls back to config.md's `advisor-mode` (this repo's is
+    `substantive`) whenever AGENTCTL_ADVISOR is unset, so any SUBSTANTIVE-weight-class
+    session resolves the advisor live. That fallback is what `cmd_submit_plan`,
+    `cmd_approve` and `cmd_replan` now resolve a runner through (the
+    `run = runner if runner is not None else advisor.subprocess_runner` idiom, matching
+    the pre-existing ledger/question/acceptance-review call sites) so the echo-warning
+    judge is reachable in production — but those three commands are the ones the
+    overwhelming majority of substantive-flow tests drive, almost none of them about the
+    advisor. AGENTCTL_ADVISOR=0 is the documented force-off knob — byte-identical to the
+    advisor being absent.
+
+    The advisor's real enabled/fail-open/warning behaviour is proven end-to-end by
+    test_advisor.py, test_result_image_echo.py and the other files that already set this
+    var explicitly (test_acceptance_review_gate.py, test_code_review.py,
+    test_plan_review_gate.py, test_confirm_delivery.py), which override this default —
+    their own `monkeypatch.setenv`/`delenv` calls run after this fixture's within the same
+    test and win."""
+    monkeypatch.setenv("AGENTCTL_ADVISOR", "0")
+
+
+@pytest.fixture(autouse=True)
 def _isolate_self_diagnose_store(tmp_path, monkeypatch):
     """Redirect the self-diagnose findings store to tmp for the suite at large.
 

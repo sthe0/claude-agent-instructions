@@ -27,6 +27,11 @@ therefore the primary entry point and returns a LIST — every violation at once
 round trip shows the author everything to fix. `validate_submission` is the raising wrapper
 for callers that want fail-fast.
 
+The seam also has a second, non-refusing channel: `submission_advice` returns what it has
+to SAY about a plan it is letting through. Not every submission-time finding is worth a
+refusal — see that function for why the echo check in particular is one of them — and a
+seam that could only raise would have had to either block on such a finding or drop it.
+
 WHAT IS NOT CHECKED HERE, DELIBERATELY. `Subject.material_refs` and `Subject.knowledge_refs`
 divide the symbols a stage touches into what it TRANSFORMS and what it RELIES ON and leaves
 alone. A symbol in both is a smell the plan must justify in prose — and it stays prose, not
@@ -42,6 +47,7 @@ third, one-off rule with no home.
 """
 from __future__ import annotations
 
+from .result_image import echo_prefilter, judge_echo
 from .state import WeightClass
 from .text_shape import normalize_string as _normalize_string
 
@@ -223,12 +229,61 @@ def submission_violations(doc, *, session_weight_class: str | None = None) -> li
     return out
 
 
-def validate_submission(doc, *, session_weight_class: str | None = None) -> None:
-    """Raise PlanError on the first submission-grade violation. The fail-fast wrapper for
-    callers that have no Directive to answer with; the approve seam uses
-    `submission_violations` instead, and must keep doing so."""
+def submission_advice(doc, *, judge_runner=None, judge_enabled: bool = True) -> list[str]:
+    """Everything this seam has to SAY about `doc` without refusing it. [] == nothing.
+
+    Advice is a strictly separate channel from `submission_violations`, because the two
+    have opposite failure directions. A violation is a claim the engine can make from the
+    plan's own bytes, so it refuses. An echo verdict — a stage whose expected_result_image
+    merely restates the check that judges it — rests on a model's reading of what a
+    sentence MEANS, and the corpus this was calibrated against says the defect is rare (11
+    images in 200). Refusing a submission on a judgement that shaky would spend an author's
+    round trip on a coin flip, so an echo NEVER refuses: it names the stage, says what its
+    image restates, and the submission proceeds.
+
+    Fail-open throughout: no runner, a disabled judge, or a judge that errors yields no
+    advice at all. Silence here is indistinguishable from the feature being absent.
+    """
+    if not judge_enabled or judge_runner is None:
+        return []
+    out: list[str] = []
+    for stage in doc.stages:
+        image = (stage.subject.result if stage.subject else "") or ""
+        command = (stage.criterion.verify_command or "") if stage.criterion else ""
+        reasons = echo_prefilter(image, verify_command=command)
+        if not reasons:
+            continue
+        if not judge_echo(
+            image,
+            judge_runner,
+            verify_command=command,
+            done_criterion=(stage.criterion.done_criterion if stage.criterion else ""),
+        ):
+            continue
+        out.append(
+            f"stage {stage.index} ({stage.title!r}): expected_result_image restates the "
+            f"stage's own check — {'; '.join(reasons)}. Say what the stage's result IS, "
+            f"so a reader who has not run the check learns what now exists"
+        )
+    return out
+
+
+def validate_submission(
+    doc,
+    *,
+    session_weight_class: str | None = None,
+    judge_runner=None,
+    judge_enabled: bool = True,
+) -> list[str]:
+    """Raise PlanError on the first submission-grade violation; otherwise RETURN the advice.
+
+    The fail-fast wrapper for callers that have no Directive to answer with; the approve
+    seam uses `submission_violations` instead, and must keep doing so. The return value is
+    the advice channel (`submission_advice`) — a caller that ignores it, and any call that
+    passes no judge, behaves exactly as before: [] is the default answer."""
     from .plan import PlanError
 
     problems = submission_violations(doc, session_weight_class=session_weight_class)
     if problems:
         raise PlanError(problems[0])
+    return submission_advice(doc, judge_runner=judge_runner, judge_enabled=judge_enabled)

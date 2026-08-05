@@ -41,7 +41,7 @@ from .plan import (
     verify_command_scope_warnings,
 )
 from .render import cmd_plan_render
-from .submission import submission_violations
+from .submission import submission_advice, submission_violations
 from .state import (
     _EXECUTION_NODES,
     _MAX_PLAN_STACK,
@@ -302,10 +302,20 @@ def _stamp_accepted_plan_digest(state: SessionState, plan_path: str) -> None:
         return
 
 
-def _refresh_caches_from_plan_path(state: SessionState) -> list[str]:
+def _refresh_caches_from_plan_path(
+    state: SessionState,
+    *,
+    runner: Runner | None = None,
+    advice: list[str] | None = None,
+) -> list[str]:
     """SUBMISSION SEAM (c). Re-load state.plan_path, validate it at submission grade, and
     — only if it is clean — refresh state.final_check plus each live stage's
     prose/criterion fields from those bytes. Returns the violation list; [] == refreshed.
+
+    The seam's non-refusing channel is an OUT-PARAMETER rather than a second return value:
+    the violation list is what this function's caller branches on, and advice must never
+    become part of that decision. Pass a list to collect it; pass nothing (every caller
+    that has no Directive to hang it on) and the seam behaves exactly as before.
 
     The seam is here rather than in `cmd_approve` directly because this is already the one
     place that re-reads plan_path at approve time, and a second read would let the two
@@ -350,6 +360,8 @@ def _refresh_caches_from_plan_path(state: SessionState) -> list[str]:
     violations = submission_violations(refreshed, session_weight_class=state.weight_class)
     if violations:
         return violations
+    if advice is not None:
+        advice.extend(_submission_advice(refreshed, runner, state.weight_class))
     for rs in refreshed.stages:
         try:
             cur = state.stage(rs.index)
@@ -429,6 +441,36 @@ def _attach_advisories(d: Directive, kind: str, payload: dict, runner: Runner | 
     advisories = advisor.judge(kind, payload, runner, enabled=enabled)
     if advisories:
         d.data.setdefault("advisories", []).extend(advisories)
+
+
+def _with_advisories(d: Directive, advisories: list[str]) -> Directive:
+    """Attach warn-only strings to a Directive on its way out. Never touches d.ok/d.node."""
+    if advisories:
+        d.data.setdefault("advisories", []).extend(advisories)
+    return d
+
+
+def _submission_advice(doc, runner: Runner | None, weight_class: str | None) -> list[str]:
+    """The submission seam's non-refusing channel, resolved the same way advisories are.
+
+    Warn-only by construction — `submission_advice` never refuses — so every seam attaches
+    these to d.data['advisories'] and leaves d.ok alone. Same enabled rule and same runner
+    handling as `_attach_advisories`: `advisor.resolve_enabled` decides, and the caller's
+    runner is passed STRAIGHT THROUGH.
+
+    Pass-through matters more here than at the other advisory sites, because these seams
+    are `submit_plan`, `approve` and `replan` — the commands most of this engine's tests
+    drive. `advisor.subprocess_runner`'s own docstring reserves itself for "a caller that
+    wants a live advisor", precisely so `runner=None` stays byte-identical to advisor-
+    absent; substituting it here would put a real `claude -p` behind every substantive
+    session's plan submission. Injecting it is an ENTRY-POINT decision (the shape
+    hook-turn-end-gate.py and hook-escalation-diagnosis-gate.py use at their `__main__`),
+    not one to take inside a helper."""
+    return submission_advice(
+        doc,
+        judge_runner=runner,
+        judge_enabled=advisor.resolve_enabled(weight_class),
+    )
 
 
 def _run_check(command: str, expected_exit: int, runner: Runner | None, cwd: str | None = None):
@@ -1522,6 +1564,16 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     d.data.setdefault("advisories", []).extend(
         check_venue_warnings(doc.stages, doc.meta.final_check, doc.meta.repo_root, doc.meta.delivery_worktree)
     )
+    # Submission seam (a)'s advice channel: a stage whose expected_result_image merely
+    # restates its own check. Warn-only at all three seams — see submission.submission_advice.
+    # Entry-point fallback (the run=runner-if-not-None-else-advisor.subprocess_runner idiom
+    # used at the other advisor call sites): production's cmd_submit_plan is always invoked
+    # with runner=None, so without this the judge is unreachable outside tests regardless of
+    # advisor.resolve_enabled — which stays the actual kill switch, unaffected by this line.
+    run = runner if runner is not None else advisor.subprocess_runner
+    d.data.setdefault("advisories", []).extend(
+        _submission_advice(doc, run, state.weight_class)
+    )
     if gates.plan_presentation_active(state):
         # A NUDGE, not the enforcement — the hash-bound gate in gates.
         # plan_presentation_blockers (checked at `approve`) is what actually
@@ -1978,7 +2030,12 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # call. That is the intent (the gate must judge the bytes it is about to attest to, not
     # the pre-edit cache); a blocker that must instead see the cache as submitted has no
     # place on this gate. `test_plan_approval_blockers_see_the_refreshed_state` asserts it.
-    submission = _refresh_caches_from_plan_path(state)
+    echo_advice: list[str] = []
+    # Entry-point fallback — see cmd_submit_plan's identical comment. cmd_approve is the
+    # entry point (_refresh_caches_from_plan_path is a private single-caller helper), so
+    # the runner is resolved here and threaded down.
+    run = runner if runner is not None else advisor.subprocess_runner
+    submission = _refresh_caches_from_plan_path(state, runner=run, advice=echo_advice)
     if submission:
         return Directive(False, state.node, "fix_plan",
                          "cannot approve: the plan at plan_path does not meet submission "
@@ -1994,7 +2051,9 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         blockers = blockers + ["empty approver: --by must name who approved"]
     _log_gate(state, "plan_approval", blockers, passed=not blockers)
     if blockers:
-        return Directive(False, state.node, "fix_plan", "cannot approve", data={"blockers": blockers})
+        return _with_advisories(
+            Directive(False, state.node, "fix_plan", "cannot approve", data={"blockers": blockers}),
+            echo_advice)
     # Seam (c)'s stamp, past BOTH of this command's refusals — the submission check above and
     # the plan_approval gate. The refresh helper that owns the seam cannot stamp it: it runs
     # before the gate by contract, so a blocked approve would leave the session carrying a
@@ -2007,10 +2066,10 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         state.plan_snapshot_path, state.plan_snapshot_hash = snap
     state.log("approve", by=args.by)
     store.save(state)
-    return Directive(
+    return _with_advisories(Directive(
         True, state.node, "partition",
         "approved; assess partition (M1–M4) before execution",
-    )
+    ), echo_advice)
 
 
 def _parse_partition_units(
@@ -3167,6 +3226,12 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
                          "replan blocked: the corrected plan does not meet submission "
                          "requirements",
                          data={"problems": submission})
+    # Seam (b)'s advice channel. Computed once here, next to the refusal it is deliberately
+    # NOT part of, and attached to whichever of this command's several success Directives is
+    # returned — an echo never changes which one that is.
+    # Entry-point fallback — see cmd_submit_plan's identical comment.
+    run = runner if runner is not None else advisor.subprocess_runner
+    echo_advice = _submission_advice(new, run, state.weight_class)
 
     # coverage gate: inside the difficulty flow, the corrected plan must CARRY the
     # critique's similarities into conditions/invariants and CHANGE a means/method
@@ -3248,11 +3313,14 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             state.log("replan", kind="no_change", exited_diagnosing=True)
             store.save(state)
             if state.ready_stages():
-                return Directive(True, state.node, "next_stage",
-                                 "difficulty worked through; plan unchanged — retry the re-armed stage")
-            return Directive(True, state.node, "continue", "difficulty worked through; resume execution")
+                return _with_advisories(Directive(
+                    True, state.node, "next_stage",
+                    "difficulty worked through; plan unchanged — retry the re-armed stage"), echo_advice)
+            return _with_advisories(Directive(
+                True, state.node, "continue", "difficulty worked through; resume execution"), echo_advice)
         store.save(state)
-        return Directive(True, state.node, "continue", "replan is a no-op; plan unchanged")
+        return _with_advisories(Directive(
+            True, state.node, "continue", "replan is a no-op; plan unchanged"), echo_advice)
 
     if kind == "refinement":
         # apply prose refinements and re-arm any FAILED stage for another attempt
@@ -3276,8 +3344,10 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         state.log("replan", kind="refinement", exited_diagnosing=diagnosing)
         store.save(state)
         if state.node == Node.VERIFYING.value and state.ready_stages():
-            return Directive(True, state.node, "next_stage", "refinement applied; retry the ready stage")
-        return Directive(True, state.node, "continue", "refinement applied; resume execution")
+            return _with_advisories(Directive(
+                True, state.node, "next_stage", "refinement applied; retry the ready stage"), echo_advice)
+        return _with_advisories(Directive(
+            True, state.node, "continue", "refinement applied; resume execution"), echo_advice)
 
     # substantive: re-arm the plan-approval gate, reload stages, return to PLAN_READY.
     # #12: carry PASSED status forward for any stage whose FULL definition is
@@ -3304,11 +3374,11 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     state.node = Node.PLAN_READY.value
     state.log("replan", kind="substantive")
     store.save(state)
-    return Directive(
+    return _with_advisories(Directive(
         True, state.node, "await_user_approval",
         "substantive replan; HARD GATE — re-approval required",
         marker="PLAN-READY",
-    )
+    ), echo_advice)
 
 
 def cmd_block(args, *, store: StateStore, runner: Runner | None = None) -> Directive:

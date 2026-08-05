@@ -8,6 +8,7 @@
 # partition                                                  | domain | default class
 # -----------------------------------------------------------|--------|----------------
 # scripts/tests/**                                           | code   | not-a-gate
+# scripts/agentctl/result_image.py (judge-guarded)           | code   | semantic-guarded
 # scripts/agentctl/**                                        | code   | structural
 # scripts/hook-escalation-diagnosis-gate.py (judge-guarded)  | code   | semantic-guarded
 # scripts/hook-*.py (other guardian hooks)                   | code   | structural
@@ -469,6 +470,30 @@ file = "scripts/agentctl/premise.py"
 class = "structural"
 disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "b12ac44c2f0b14b4"
+domain = "code"
+file = "scripts/agentctl/result_image.py"
+class = "semantic-guarded"
+disposition = "keep"
+ground = "The one file in the engine whose subject IS free-text meaning: it decides whether a stage's expected_result_image restates the check that judges it. Its regexes are `echo_prefilter`, a high-recall structural PREFILTER whose every consumer (`submission.submission_advice`) gates it behind `judge_echo` before anything is said — the prefilter alone produces no output at all. So the `scripts/agentctl/**` row below, which grounds its structural verdict on the engine's regexes reading the engine's own syntax rather than free-text meaning, states the opposite of what is true here, and this row must precede it. Placed as a partition row rather than a CODE_ID_OVERRIDES entry because the override table is keyed by scope and is skipped for the file-rollup (`_code_disposition` consults it only when scope_or_none is not None), which would leave the rollup carrying the structural ground this row exists to correct."
+
+[[entry]]
+id = "45a32522671048f8"
+domain = "code"
+file = "scripts/agentctl/result_image.py"
+class = "semantic-guarded"
+disposition = "keep"
+ground = "The one file in the engine whose subject IS free-text meaning: it decides whether a stage's expected_result_image restates the check that judges it. Its regexes are `echo_prefilter`, a high-recall structural PREFILTER whose every consumer (`submission.submission_advice`) gates it behind `judge_echo` before anything is said — the prefilter alone produces no output at all. So the `scripts/agentctl/**` row below, which grounds its structural verdict on the engine's regexes reading the engine's own syntax rather than free-text meaning, states the opposite of what is true here, and this row must precede it. Placed as a partition row rather than a CODE_ID_OVERRIDES entry because the override table is keyed by scope and is skipped for the file-rollup (`_code_disposition` consults it only when scope_or_none is not None), which would leave the rollup carrying the structural ground this row exists to correct."
+
+[[entry]]
+id = "c59d57834e900309"
+domain = "code"
+file = "scripts/agentctl/result_image.py"
+class = "semantic-guarded"
+disposition = "keep"
+ground = "The one file in the engine whose subject IS free-text meaning: it decides whether a stage's expected_result_image restates the check that judges it. Its regexes are `echo_prefilter`, a high-recall structural PREFILTER whose every consumer (`submission.submission_advice`) gates it behind `judge_echo` before anything is said — the prefilter alone produces no output at all. So the `scripts/agentctl/**` row below, which grounds its structural verdict on the engine's regexes reading the engine's own syntax rather than free-text meaning, states the opposite of what is true here, and this row must precede it. Placed as a partition row rather than a CODE_ID_OVERRIDES entry because the override table is keyed by scope and is skipped for the file-rollup (`_code_disposition` consults it only when scope_or_none is not None), which would leave the rollup carrying the structural ground this row exists to correct."
 
 [[entry]]
 id = "2115d7fb919a4671"
@@ -6261,6 +6286,14 @@ file = "scripts/agentctl/premise.py"
 class = "structural"
 disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "eefa7194de80a430"
+domain = "code_file_rollup"
+file = "scripts/agentctl/result_image.py"
+class = "semantic-guarded"
+disposition = "keep"
+ground = "The one file in the engine whose subject IS free-text meaning: it decides whether a stage's expected_result_image restates the check that judges it. Its regexes are `echo_prefilter`, a high-recall structural PREFILTER whose every consumer (`submission.submission_advice`) gates it behind `judge_echo` before anything is said — the prefilter alone produces no output at all. So the `scripts/agentctl/**` row below, which grounds its structural verdict on the engine's regexes reading the engine's own syntax rather than free-text meaning, states the opposite of what is true here, and this row must precede it. Placed as a partition row rather than a CODE_ID_OVERRIDES entry because the override table is keyed by scope and is skipped for the file-rollup (`_code_disposition` consults it only when scope_or_none is not None), which would leave the rollup carrying the structural ground this row exists to correct. (file-level rollup of the file's scopes.)"
 
 [[entry]]
 id = "1dd077dca93648cf"

@@ -78,6 +78,25 @@ CODE_PARTITIONS = [
         "themselves gates guarding production behaviour.",
     ),
     (
+        "scripts/agentctl/result_image.py (judge-guarded)",
+        lambda f: f == "scripts/agentctl/result_image.py",
+        "semantic-guarded",
+        "keep",
+        "The one file in the engine whose subject IS free-text meaning: it decides "
+        "whether a stage's expected_result_image restates the check that judges it. "
+        "Its regexes are `echo_prefilter`, a high-recall structural PREFILTER whose "
+        "every consumer (`submission.submission_advice`) gates it behind `judge_echo` "
+        "before anything is said — the prefilter alone produces no output at all. So "
+        "the `scripts/agentctl/**` row below, which grounds its structural verdict on "
+        "the engine's regexes reading the engine's own syntax rather than free-text "
+        "meaning, states the opposite of what is true here, and this row must precede "
+        "it. Placed as a partition row rather than a CODE_ID_OVERRIDES entry because "
+        "the override table is keyed by scope and is skipped for the file-rollup "
+        "(`_code_disposition` consults it only when scope_or_none is not None), which "
+        "would leave the rollup carrying the structural ground this row exists to "
+        "correct.",
+    ),
+    (
         "scripts/agentctl/**",
         lambda f: f.startswith("scripts/agentctl/"),
         "structural",
