@@ -12,21 +12,18 @@ headless child under the inherited acceptEdits mode — that is the live probe
 run separately (plan stage 2, method step 5) and is not repeatable in a
 hermetic test.
 
-The rule spelling here is not incidental: probes A-D (run live against the
-CLI on 2026-08-05, see the stage-2 continuation) found that a single leading
-"/" in an absolute-path rule is read as project-relative and matches
-nothing, that `Write(path)` rules are never matched by file permission
-checks at all, and that a non-developer spawn inherits acceptEdits (no
---permission-mode flag), so the read kinds need an explicit `Edit(...)` deny
-or --add-dir alone makes the directory writable regardless of the allow
-list. Assertions below are written against the corrected `//` + Edit-only +
-deny-bearing form; the earlier single-slash/Write-bearing/allow-only form
-passed unit tests while granting nothing (write) and denying nothing (read).
+Rule-spelling details (absolute-path / Write vs Edit / deny-bearing form)
+are documented in spawn-specialist.py's comment block before PLANS_WRITE_KINDS.
+Assertions below are written against the corrected form; the earlier form
+passed unit tests while granting nothing (write) and denying nothing (read),
+which is the regression-guard this test exercises.
 """
 from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+
+import pytest
 
 SCRIPT = Path(__file__).resolve().parent.parent / "spawn-specialist.py"
 
@@ -92,6 +89,13 @@ def test_planner_gets_no_read_rule_or_digest_bash(tmp_path):
     allow, _deny = MOD.plans_permission_rules("planner", tmp_path)
     assert not any(r.startswith("Read(") for r in allow)
     assert "Bash(shasum -a 256:*)" not in allow
+
+
+def test_relative_path_raises_valueerror():
+    """Relative paths produce inert rules (leading / interpreted as project-relative).
+    Fail loudly rather than silently grant nothing."""
+    with pytest.raises(ValueError, match="must be absolute"):
+        MOD.plans_permission_rules("planner", Path("relative/path"))
 
 
 def test_ungranted_kind_gets_no_plans_rules(tmp_path):

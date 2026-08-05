@@ -446,7 +446,13 @@ PLANS_READ_KINDS = ("thinker", "code-reviewer")
 def plans_permission_rules(kind: str, plans_directory: Path) -> tuple[list[str], list[str]]:
     """(allow, deny) permission rules granting `kind` access to
     `plans_directory`, in the direction that kind needs. Empty pair for a
-    kind granted neither."""
+    kind granted neither. A read kind's allow additionally carries the
+    `Bash(shasum -a 256:*)` prefix, which is NOT confined to
+    `plans_directory` — it hashes any file the child can already reach.
+
+    Raises ValueError if `plans_directory` is not absolute."""
+    if not plans_directory.is_absolute():
+        raise ValueError(f"plans_directory must be absolute, got: {plans_directory}")
     base = f"/{plans_directory}/**"
     if kind in PLANS_WRITE_KINDS:
         return [f"Edit({base})"], []
@@ -462,8 +468,7 @@ def plans_add_dir_args(kind: str, plans_directory: Path) -> list[str]:
     child's cwd into its workspace — --add-dir is required too, or the child
     still prompts for a decision it cannot answer headlessly (see the plan's
     stage-2 material: instance 17's empty-output-file symptom)."""
-    allow, deny = plans_permission_rules(kind, plans_directory)
-    if allow or deny:
+    if kind in PLANS_WRITE_KINDS or kind in PLANS_READ_KINDS:
         return ["--add-dir", str(plans_directory)]
     return []
 
