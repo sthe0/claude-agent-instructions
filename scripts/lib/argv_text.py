@@ -54,10 +54,24 @@ from pathlib import Path
 # scripts/tests/test_spawn_specialist_stdin_prompt.py.
 MAX_ARG_STRLEN = 131072
 
-# Long enough that a REAL path is named in full in the error (a pytest tmp_path
-# already runs past 80 chars), short enough that a 120 KB inline payload
-# mistaken for a reference does not become a 120 KB error message.
-_REF_SNIPPET_CHARS = 200
+# TWO bounds, because abbreviate() renders two quantities with different natural
+# scales. One constant standing in for both is what truncated real macOS paths at
+# 200 chars: it had been sized against an observed pytest tmp_path, and macOS's
+# /private/var/folders/<hash>/T prefix is 52 chars where Linux's /tmp is 4.
+#
+# A value that COULD be a path is shown in FULL -- naming the thing the caller has
+# to fix is the whole point of the diagnostic. The ceiling is PATH_MAX, the limit
+# the kernel itself enforces, taken at the LARGER of the two platforms (Linux's
+# 4096; macOS's 1024 is thereby already covered). Taking the smaller would push
+# the same defect out to Linux rather than remove it. Derived from the quantity's
+# ceiling, never from a sample of it -- do NOT re-tune this from a measured path.
+_PATH_MAX_CHARS = 4096
+
+# Longer than PATH_MAX, so it cannot be a path: it is prose or a payload mistaken
+# for one, and the reader only needs enough of its head to recognise which. Small
+# on purpose -- this is what keeps a 120 KB payload from becoming a 120 KB error
+# message, and keeps the diagnostic to one readable terminal line.
+_PAYLOAD_SNIPPET_CHARS = 200
 
 
 def classify_arg_text(value: str) -> tuple[str, str]:
@@ -176,9 +190,9 @@ def abbreviate(value: object) -> str:
     message — unreadable in a terminal and in the refusal log alike.
     """
     text = str(value)
-    if len(text) <= _REF_SNIPPET_CHARS:
+    if len(text) <= _PATH_MAX_CHARS:
         return text
-    return f"{text[:_REF_SNIPPET_CHARS]}... ({len(text)} chars)"
+    return f"{text[:_PAYLOAD_SNIPPET_CHARS]}... ({len(text)} chars)"
 
 
 def _read_file_or_none(path: str | Path | None) -> str | None:

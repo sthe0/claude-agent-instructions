@@ -54,6 +54,35 @@ def test_a_realistically_long_path_is_named_in_full(tmp_path):
     assert str(deep) in str(exc.value)
 
 
+def test_a_path_at_the_largest_platform_path_max_is_named_in_full():
+    # Calibrated to the LONGEST platform ceiling (Linux PATH_MAX = 4096), not to
+    # the machine running the test. The tmp_path case above is what let a macOS
+    # truncation through: /private/var/folders/<hash>/T is a 52-char prefix where
+    # Linux's /tmp is 4, so the same test built a 208-char path there and a
+    # ~130-char one on Linux, and only the long one crossed the old 200 bound.
+    deep = "/" + "d" * 4094 + "x"
+    assert len(deep) == 4096
+    with pytest.raises(SystemExit) as exc:
+        argv_text.read_arg_text(f"@{deep}")
+    assert deep in str(exc.value)
+
+
+def test_a_payload_far_above_path_max_is_still_truncated():
+    # The other half of the bound's contract: it exists so a large inline payload
+    # mistaken for a reference does not become a large error message.
+    message = argv_text.abbreviate("z" * 120_000)
+    assert message.endswith("... (120000 chars)")
+    assert len(message) < argv_text.MAX_ARG_STRLEN // 16
+
+
+def test_the_two_bounds_are_separate_and_derived():
+    # Pins the derivation, so a later "it looks too big" re-tune has to argue with
+    # the reason rather than silently reintroduce the defect. The two must stay
+    # distinct: collapsing them is exactly what truncated real macOS paths.
+    assert argv_text._PATH_MAX_CHARS == 4096, "the larger platform PATH_MAX"
+    assert argv_text._PAYLOAD_SNIPPET_CHARS < argv_text._PATH_MAX_CHARS
+
+
 def test_bare_at_raises():
     with pytest.raises(SystemExit):
         argv_text.read_arg_text("@")
