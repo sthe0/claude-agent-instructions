@@ -282,6 +282,7 @@ method = "mt"
 invariants = "inv"
 capability_required = "c"
 conditions = "co"
+preconditions = "p"
 {artifacts}verify_command = "pytest -q"
 
 [stage.principle]

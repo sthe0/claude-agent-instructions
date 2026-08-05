@@ -93,6 +93,7 @@ material = "m"
 means = "bash"
 method = "run"
 conditions = "c"
+preconditions = "p"
 invariants = "n"
 capability_required = "cap"
 {knowledge_block}
@@ -249,6 +250,7 @@ knowledge_refs = ["scripts/agentctl/state.py"]
 means = "bash"
 method = "run"
 conditions = "c"
+preconditions = "p"
 invariants = "n"
 capability_required = "cap"
 

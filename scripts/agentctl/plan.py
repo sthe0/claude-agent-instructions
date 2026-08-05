@@ -973,6 +973,13 @@ def parse_plan(
                 ),
                 principle=principle,
                 conditions=str(s["conditions"]) if s.get("conditions") else None,
+                # Same permissive parse, same reason as `knowledge` below: the requirement
+                # that a substantive stage declare its starting preconditions — and the
+                # refusal of a `conditions` that only restates depends_on, which is the
+                # other half of the same defect — both live at the submission seam.
+                preconditions=(
+                    str(s["preconditions"]) if s.get("preconditions") else None
+                ),
                 # Parsed permissively on BOTH load modes — the знание requirement lives at
                 # the submission seam (submission.py), never in an `if strict:` branch
                 # here, because load_plan is re-read in-session from seven call sites and a
@@ -1060,6 +1067,27 @@ def knowledge_place(stage) -> tuple:
     return () if place == _KNOWLEDGE_PLACE_ABSENT else (place,)
 
 
+def preconditions_place(stage) -> tuple:
+    """The stage's preconditions — what must hold before it may START — as a contribution
+    to a change-decision key: a ONE-element tuple holding the value WRAPPED in a tuple of
+    its own, or the EMPTY tuple when the stage declares none.
+
+    Shared by all three key functions for the same reason `knowledge_place` is: a field
+    that enters one key and not the others is exactly how a correction gets silently
+    dropped.
+
+    Two properties carry over from `knowledge_place`, both load-bearing. Undeclared
+    contributes NOTHING, so a plan predating this field keeps the exact key it had —
+    stage_question_key is persisted in Question.disposed_at_key and compared across
+    processes, so an unconditional contribution (or a `... or ""` default) would flip every
+    disposed question of every live session to a spurious staleness blocker. And the value
+    is NESTED rather than spliced flat, because it is now the second independently
+    conditional splice in each key: a preconditions text reading "delivery" would otherwise
+    flatten to the same key element as a verify_venue_at_final of "delivery" on a stage
+    that declares the other field and not this one."""
+    return () if not stage.preconditions else ((stage.preconditions,),)
+
+
 def stage_carry_key(stage) -> tuple:
     """Full-fidelity per-stage identity for PASSED carry-forward across a
     substantive replan (#12): a stage keeps its PASSED status only if NOTHING about
@@ -1095,6 +1123,7 @@ def stage_carry_key(stage) -> tuple:
         *((_normalize_string(stage.criterion.verify_venue_at_final),)
           if stage.criterion.verify_venue_at_final else ()),
         *knowledge_place(stage),
+        *preconditions_place(stage),
     )
 
 
@@ -1161,6 +1190,10 @@ def stage_question_key(stage) -> str:
         # material_refs is material's structural projection — a question answered
         # against the old material must be invalidated when the refs are redrawn.
         *knowledge_place(stage),
+        # `preconditions` is the other half of the `conditions` place, which IS a legal
+        # Question.target: a question answered against conditions that carried the
+        # starting requirements must be invalidated when they move to their own field.
+        *preconditions_place(stage),
     ))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -1197,7 +1230,11 @@ def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
              # Without this a knowledge-only correction — the exact edit an
              # overcome-difficulty replan makes when the fault addressed знание —
              # diffs to 'no_change' and is silently dropped.
-             *knowledge_place(s))
+             *knowledge_place(s),
+             # Same argument one field over: moving a stage's starting requirements out of
+             # `conditions` and into `preconditions` is a real correction, and without this
+             # the two edits cancel in the diff and the replan reads as 'no_change'.
+             *preconditions_place(s))
             for s in doc.stages
         ]
     def _fc(doc: PlanDoc):

@@ -9,6 +9,7 @@
 # -----------------------------------------------------------|--------|----------------
 # scripts/tests/**                                           | code   | not-a-gate
 # scripts/agentctl/result_image.py (judge-guarded)           | code   | semantic-guarded
+# scripts/agentctl/conditions.py (judge-guarded)             | code   | semantic-guarded
 # scripts/agentctl/**                                        | code   | structural
 # scripts/hook-escalation-diagnosis-gate.py (judge-guarded)  | code   | semantic-guarded
 # scripts/hook-*.py (other guardian hooks)                   | code   | structural
@@ -198,6 +199,22 @@ file = "scripts/agentctl/cli.py"
 class = "structural"
 disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "64699300df569a83"
+domain = "code"
+file = "scripts/agentctl/conditions.py"
+class = "semantic-guarded"
+disposition = "keep"
+ground = "The second file in the engine whose subject IS free-text meaning: it decides whether a stage's `conditions` are exhausted by restating `depends_on`. Its regexes are `restatement_prefilter`, a high-recall structural PREFILTER whose only consumer (`submission._conditions_restatement`) gates it behind `judge_restatement` before any violation is emitted — the prefilter alone refuses nothing. Same correction as the result_image.py row above, and a stronger case for it: here the guarded decision drives a REFUSAL, not a warning, so a `structural` ground would misdescribe the one site in the engine where a model's reading of free text can block a plan."
+
+[[entry]]
+id = "1581aaebc9138cdc"
+domain = "code"
+file = "scripts/agentctl/conditions.py"
+class = "semantic-guarded"
+disposition = "keep"
+ground = "The second file in the engine whose subject IS free-text meaning: it decides whether a stage's `conditions` are exhausted by restating `depends_on`. Its regexes are `restatement_prefilter`, a high-recall structural PREFILTER whose only consumer (`submission._conditions_restatement`) gates it behind `judge_restatement` before any violation is emitted — the prefilter alone refuses nothing. Same correction as the result_image.py row above, and a stronger case for it: here the guarded decision drives a REFUSAL, not a warning, so a `structural` ground would misdescribe the one site in the engine where a model's reading of free text can block a plan."
 
 [[entry]]
 id = "9f0af2a052923049"
@@ -5040,6 +5057,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "d50148f8c7a72002"
+domain = "code"
+file = "scripts/tests/test_preconditions.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "02547efa67c84cc6"
 domain = "code"
 file = "scripts/tests/test_premise.py"
@@ -6264,6 +6289,14 @@ disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "cd4e72272549411b"
+domain = "code_file_rollup"
+file = "scripts/agentctl/conditions.py"
+class = "semantic-guarded"
+disposition = "keep"
+ground = "The second file in the engine whose subject IS free-text meaning: it decides whether a stage's `conditions` are exhausted by restating `depends_on`. Its regexes are `restatement_prefilter`, a high-recall structural PREFILTER whose only consumer (`submission._conditions_restatement`) gates it behind `judge_restatement` before any violation is emitted — the prefilter alone refuses nothing. Same correction as the result_image.py row above, and a stronger case for it: here the guarded decision drives a REFUSAL, not a warning, so a `structural` ground would misdescribe the one site in the engine where a model's reading of free text can block a plan. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "fb33e59231afed4f"
 domain = "code_file_rollup"
 file = "scripts/agentctl/config.py"
@@ -7291,6 +7324,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "68fd4bdcf5b7fd37"
 domain = "code_file_rollup"
 file = "scripts/tests/test_policy_scorecard_model_buckets.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "21750628c49a3f8f"
+domain = "code_file_rollup"
+file = "scripts/tests/test_preconditions.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"

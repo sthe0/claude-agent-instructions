@@ -802,6 +802,19 @@ class Stage:
     criterion: Criterion
     principle: Principle | None = None
     conditions: str | None = None
+    # What must already be true before this stage may START — as opposed to `conditions`,
+    # which is what must hold OF THE WORLD for the stage's own transformation to go
+    # through. Two different questions about two different moments: the first is inherited
+    # from outside the stage (an earlier stage finished, an access granted, a tree clean),
+    # the second is a property of the situation the transformation runs in. With only one
+    # field for both, `conditions` silently degenerates into "the stage before me is done"
+    # — which `depends_on` already records structurally — and the plan then declares no
+    # transformation conditions at all while appearing to. Optional at load so every
+    # already-authored plan loads unchanged; required of a SUBSTANTIVE stage at the
+    # submission seam (submission.py), which is also where the degenerate `conditions` is
+    # refused — the two arrive together on purpose, so an author told to move a sentence
+    # out of `conditions` always has this place to move it into.
+    preconditions: str | None = None
     # The знание the stage acts FROM: what must already be known for the declared method
     # over the declared means to reach the result image. A functional place of its own,
     # upstream of both the norm (element 7, what the stage rests on) and the selection of
@@ -862,6 +875,7 @@ class Stage:
                 criterion=Criterion.from_dict(d["criterion"]),
                 principle=Principle.from_dict(d["principle"]) if d.get("principle") else None,
                 conditions=d.get("conditions"),
+                preconditions=d.get("preconditions"),
                 knowledge=d.get("knowledge"),
                 supplies=[Supply(**s) for s in d.get("supplies", [])],
                 output_artifacts=list(d.get("output_artifacts", [])),
@@ -893,6 +907,7 @@ class Stage:
             ),
             principle=None,  # flat states predate the principle element
             conditions=d.get("conditions"),
+            preconditions=d.get("preconditions"),
             knowledge=d.get("knowledge"),
             supplies=[Supply(on=int(x)) for x in d.get("depends_on", [])],
             output_artifacts=list(d.get("output_artifacts", [])),

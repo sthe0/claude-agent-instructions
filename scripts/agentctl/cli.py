@@ -227,6 +227,7 @@ def _apply_refined_stage_fields(cur, refined) -> None:
     cur.subject.knowledge_refs = list(refined.subject.knowledge_refs)
     cur.knowledge = refined.knowledge
     cur.conditions = refined.conditions
+    cur.preconditions = refined.preconditions
     cur.criterion.verify_command = refined.criterion.verify_command
     cur.criterion.expected_exit = refined.criterion.expected_exit
     cur.criterion.done_criterion = refined.criterion.done_criterion
@@ -357,7 +358,7 @@ def _refresh_caches_from_plan_path(
         refreshed = _load(state.plan_path)
     except (OSError, PlanError) as exc:
         return [f"cannot load the plan at {state.plan_path!r}: {exc}"]
-    violations = submission_violations(refreshed, session_weight_class=state.weight_class)
+    violations = _submission_problems(refreshed, runner, state.weight_class)
     if violations:
         return violations
     if advice is not None:
@@ -481,6 +482,30 @@ def _submission_advice(doc, runner: Runner | None, weight_class: str | None) -> 
         )
     except Exception:
         return []
+
+
+def _submission_problems(doc, runner: Runner | None, weight_class: str | None) -> list[str]:
+    """The submission seam's REFUSING channel, with its judge resolved the way the advice
+    channel's is — one place per channel, so no seam re-derives the enabled rule.
+
+    Unlike `_submission_advice` this may NOT swallow its result: these strings refuse a
+    plan, and dropping them on an unrelated error would pass bytes nobody validated. Only
+    the ENABLED resolution is caught, and only because `advisor.resolve_enabled` reaches
+    config.md through `parse_config_md` -> `read_text` outside its own `except KeyError` —
+    an unreadable config.md must not raise out of `cmd_approve` and strand the session at
+    PLAN_READY with an armed gate and no edge back. Falling back to enabled=False keeps
+    every violation the plan's own bytes support and drops only the one that needed a
+    judge, which is the direction that judge already fails in."""
+    try:
+        enabled = advisor.resolve_enabled(weight_class)
+    except Exception:
+        enabled = False
+    return submission_violations(
+        doc,
+        session_weight_class=weight_class,
+        judge_runner=runner,
+        judge_enabled=enabled,
+    )
 
 
 def _run_check(command: str, expected_exit: int, runner: Runner | None, cwd: str | None = None):
@@ -1514,7 +1539,16 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     # arm on the same condition — before, the seam keyed on the plan's own [meta] and the
     # gate on the session's, so a substantive session submitting a plan that simply omits
     # `weight_class` cleared the seam and not the gate.
-    problems: list[str] = submission_violations(doc, session_weight_class=state.weight_class)
+    # Entry-point fallback (the run=runner-if-not-None-else-advisor.subprocess_runner idiom
+    # used at the other advisor call sites): production's cmd_submit_plan is always invoked
+    # with runner=None, so without this the judge is unreachable outside tests regardless of
+    # advisor.resolve_enabled — which stays the actual kill switch, unaffected by this line.
+    # Resolved HERE rather than beside the advice channel below because the seam's own
+    # judged refusal (a `conditions` that merely restates depends_on) is part of `problems`,
+    # and a refusal cannot be computed after the return that acts on it. The binding itself
+    # costs nothing; only a prefilter hit spends a judge call.
+    run = runner if runner is not None else advisor.subprocess_runner
+    problems: list[str] = _submission_problems(doc, run, state.weight_class)
     if state.weight_class == WeightClass.SUBSTANTIVE.value:
         # Two-directional control: the scope lint (advisory, below) keeps a
         # control from being false-RED; this BLOCKS a control that can never
@@ -1576,16 +1610,12 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     )
     # Submission seam (a)'s advice channel: a stage whose expected_result_image merely
     # restates its own check. Warn-only at all three seams — see submission.submission_advice.
-    # Entry-point fallback (the run=runner-if-not-None-else-advisor.subprocess_runner idiom
-    # used at the other advisor call sites): production's cmd_submit_plan is always invoked
-    # with runner=None, so without this the judge is unreachable outside tests regardless of
-    # advisor.resolve_enabled — which stays the actual kill switch, unaffected by this line.
-    # The `plan_completeness` advisory above is DELIBERATELY left on the raw `runner`, i.e.
-    # inert in production, so the two adjacent advisor call sites in this function behave
-    # oppositely on purpose: giving it the same fallback would add a second live `claude -p`
-    # to every submit, which no stage has sized or measured. Read "is the advisor reachable?"
-    # per call site, not by generalizing from either one.
-    run = runner if runner is not None else advisor.subprocess_runner
+    # Rides the same `run` resolved at the seam above (see its comment for why the fallback
+    # exists at all). The `plan_completeness` advisory above is DELIBERATELY left on the raw
+    # `runner`, i.e. inert in production, so the two adjacent advisor call sites in this
+    # function behave oppositely on purpose: giving it the same fallback would add a second
+    # live `claude -p` to every submit, which no stage has sized or measured. Read "is the
+    # advisor reachable?" per call site, not by generalizing from either one.
     d.data.setdefault("advisories", []).extend(
         _submission_advice(doc, run, state.weight_class)
     )
@@ -3235,7 +3265,11 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # diff outcomes are covered by one check — a no_change replan re-materializes live
     # stages from these bytes just as a refinement does, so "unchanged" is no reason to
     # let an unvalidated plan in.
-    submission = submission_violations(new, session_weight_class=state.weight_class)
+    # Entry-point fallback — see cmd_submit_plan's identical comment. Bound here rather
+    # than below the refusals because this seam's own judged refusal needs it; binding a
+    # callable spends nothing, and the judge is reached only on a prefilter hit.
+    run = runner if runner is not None else advisor.subprocess_runner
+    submission = _submission_problems(new, run, state.weight_class)
     if submission:
         return Directive(False, state.node, "fix_plan",
                          "replan blocked: the corrected plan does not meet submission "
@@ -3281,9 +3315,8 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # and not up at the seam it belongs to: the judge costs live `claude -p` calls per
     # flagged stage, so a replan blocked by submission or by critique coverage must not pay
     # for advice that is then discarded. Placement is about cost only — the advice is
-    # warn-only and cannot influence any decision above it either way.
-    # Entry-point fallback — see cmd_submit_plan's identical comment.
-    run = runner if runner is not None else advisor.subprocess_runner
+    # warn-only and cannot influence any decision above it either way. (`run` is bound at
+    # the seam above; only this CALL is deferred, which is where the cost is.)
     echo_advice = _submission_advice(new, run, state.weight_class)
 
     # if we are exiting the DIAGNOSING cycle (difficulty complete), the failed

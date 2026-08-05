@@ -92,6 +92,7 @@ material = "m"
 means = "bash"
 method = "run"
 conditions = "c"
+preconditions = "p"
 invariants = "n"
 capability_required = "cap"
 material_refs = ["scripts/agentctl/result_image.py"]

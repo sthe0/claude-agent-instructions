@@ -77,8 +77,8 @@ CODE_PARTITIONS = [
         "controlled inputs (including deliberately adversarial ones) but are not "
         "themselves gates guarding production behaviour.",
     ),
-    # Mechanics of this row, kept OUT of the emitted ground (which wants the
-    # classification reason, not the generator's implementation):
+    # Mechanics of the two judge-guarded rows below, kept OUT of the emitted ground
+    # (which wants the classification reason, not the generator's implementation):
     #   * It is a partition row, not a CODE_ID_OVERRIDES entry, because the override
     #     table is keyed by scope and is skipped for the file-rollup
     #     (`_code_disposition` consults it only when scope_or_none is not None) — an
@@ -107,6 +107,21 @@ CODE_PARTITIONS = [
         "the `scripts/agentctl/**` row below, which grounds its structural verdict on "
         "the engine's regexes reading the engine's own syntax rather than free-text "
         "meaning, states the opposite of what is true here.",
+    ),
+    (
+        "scripts/agentctl/conditions.py (judge-guarded)",
+        lambda f: f == "scripts/agentctl/conditions.py",
+        "semantic-guarded",
+        "keep",
+        "The second file in the engine whose subject IS free-text meaning: it decides "
+        "whether a stage's `conditions` are exhausted by restating `depends_on`. Its "
+        "regexes are `restatement_prefilter`, a high-recall structural PREFILTER whose "
+        "only consumer (`submission._conditions_restatement`) gates it behind "
+        "`judge_restatement` before any violation is emitted — the prefilter alone "
+        "refuses nothing. Same correction as the result_image.py row above, and a "
+        "stronger case for it: here the guarded decision drives a REFUSAL, not a "
+        "warning, so a `structural` ground would misdescribe the one site in the engine "
+        "where a model's reading of free text can block a plan.",
     ),
     (
         "scripts/agentctl/**",

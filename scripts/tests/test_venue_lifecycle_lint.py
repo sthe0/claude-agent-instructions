@@ -176,6 +176,7 @@ knowledge = "kn"
 means = "bash"
 method = "run"
 conditions = "c"
+preconditions = "p"
 invariants = "n"
 capability_required = "cap"
 

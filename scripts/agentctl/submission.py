@@ -32,6 +32,13 @@ to SAY about a plan it is letting through. Not every submission-time finding is 
 refusal — see that function for why the echo check in particular is one of them — and a
 seam that could only raise would have had to either block on such a finding or drop it.
 
+Both channels can ask a MODEL, and neither depends on getting an answer. The two differ
+only in what a verdict buys: an echo warns (`submission_advice`), a `conditions` that
+merely restates `depends_on` refuses (`_conditions_restatement`). Every path where the
+judge is absent, disabled, slow or unreadable yields the same thing in both — nothing —
+so an engine running without a reachable advisor validates plans exactly as it did before
+either check existed.
+
 WHAT IS NOT CHECKED HERE, DELIBERATELY. `Subject.material_refs` and `Subject.knowledge_refs`
 divide the symbols a stage touches into what it TRANSFORMS and what it RELIES ON and leaves
 alone. A symbol in both is a smell the plan must justify in prose — and it stays prose, not
@@ -47,6 +54,7 @@ third, one-off rule with no home.
 """
 from __future__ import annotations
 
+from .conditions import judge_restatement, restatement_prefilter
 from .result_image import echo_prefilter, judge_echo
 from .state import WeightClass
 from .text_shape import normalize_string as _normalize_string
@@ -68,6 +76,7 @@ _SUBSTANTIVE_SUBMISSION_FIELDS = (
     ("knowledge", "knowledge", "knowledge"),
     ("subject.material_refs", "material_refs", None),
     ("subject.knowledge_refs", "knowledge_refs", None),
+    ("preconditions", "preconditions", None),
 )
 
 _WHY = {
@@ -87,6 +96,13 @@ _WHY = {
         "the symbols this stage RELIES ON and leaves alone — read to be understood, not "
         "rewritten (an empty list reads the same as an absent key here: a substantive "
         "stage that relies on nothing is not a case this grade admits)"
+    ),
+    "preconditions": (
+        "what must already be true before this stage may START — an access, a clean tree, "
+        "an earlier stage's artifact in place. A separate place from `conditions`, which "
+        "is what must hold of the WORLD for this stage's own transformation to go "
+        "through; with one field for both, `conditions` degenerates into \"the stage "
+        "before me is done\", which `depends_on` already records"
     ),
 }
 
@@ -190,11 +206,57 @@ def _undeclared_weight_class(doc, session_weight_class: str | None) -> bool:
     )
 
 
-def submission_violations(doc, *, session_weight_class: str | None = None) -> list[str]:
+def _conditions_restatement(stage, judge_runner, judge_enabled: bool) -> str | None:
+    """The violation for a `conditions` exhausted by restating `depends_on`, or None.
+
+    The one refusal on this side that does NOT rest on the plan's own bytes alone: a
+    structural prefilter proposes and a model disposes (conditions.py), so a genuine
+    condition that happens to name an earlier stage is not refused for its wording. Both
+    halves fail towards None — no runner, a disabled judge, a judge that errors or answers
+    unusably, and this returns nothing at all, leaving the submission byte-identical to
+    what it was before the check existed.
+
+    Reached only from inside the substantive branch below, and that placement is the
+    safety property, not an optimization: the same branch is what requires
+    `preconditions`, so the field this message tells the author to move the sentence into
+    is one this very submission is demanding they declare. A refusal that fired where
+    `preconditions` were not required would be telling an author to move text into a place
+    the grade does not give them."""
+    reasons = restatement_prefilter(stage.conditions or "", stage.depends_on)
+    if not reasons:
+        return None
+    if not judge_restatement(
+        stage.conditions or "",
+        judge_runner,
+        depends_on=stage.depends_on,
+        enabled=judge_enabled,
+    ):
+        return None
+    return (
+        f"stage {stage.index} ({stage.title!r}): `conditions` only restates the stages "
+        f"this one depends on — {'; '.join(reasons)}. `conditions` is what must hold of "
+        f"the world for this stage's transformation to go through; that an earlier stage "
+        f"is finished belongs in `preconditions` (and `depends_on` already records it "
+        f"structurally)"
+    )
+
+
+def submission_violations(
+    doc,
+    *,
+    session_weight_class: str | None = None,
+    judge_runner=None,
+    judge_enabled: bool = True,
+) -> list[str]:
     """Every submission-grade violation in `doc`, as author-readable strings. [] == clean.
 
     Returns rather than raises: the approve seam must answer with a Directive (see the
     module docstring), and returning the full list lets one round trip show everything.
+
+    `judge_runner`/`judge_enabled` reach the ONE violation here that a model decides (see
+    `_conditions_restatement`). Their defaults make that violation unreachable, so every
+    caller that passes no judge — including every pre-existing one — gets exactly the
+    list it got before: the judged check can only ever ADD a refusal, never remove one.
     """
     out: list[str] = []
     malformed = _malformed_weight_class(doc)
@@ -226,6 +288,9 @@ def submission_violations(doc, *, session_weight_class: str | None = None) -> li
                 f"stage {stage.index} missing {label!r} (required for substantive plans): "
                 f"{_WHY[label]}"
             )
+        restatement = _conditions_restatement(stage, judge_runner, judge_enabled)
+        if restatement:
+            out.append(restatement)
     return out
 
 
@@ -287,10 +352,19 @@ def validate_submission(
     cli._submission_advice) because they hold the Directive this wrapper is defined not to
     have. They exist so this wrapper cannot become the one entry point that silently drops
     the advice channel, and the tests are their only exercise. Delete them if a caller
-    never appears, rather than growing a second convention around them."""
+    never appears, rather than growing a second convention around them.
+
+    The same pair is threaded into `submission_violations` as well, where a judge decides
+    one refusal rather than one warning — so a caller that supplies a judge to this
+    wrapper gets both channels judged, and a caller that supplies none gets neither."""
     from .plan import PlanError
 
-    problems = submission_violations(doc, session_weight_class=session_weight_class)
+    problems = submission_violations(
+        doc,
+        session_weight_class=session_weight_class,
+        judge_runner=judge_runner,
+        judge_enabled=judge_enabled,
+    )
     if problems:
         raise PlanError(problems[0])
     return submission_advice(doc, judge_runner=judge_runner, judge_enabled=judge_enabled)
