@@ -68,9 +68,18 @@ git log -n 5    # whether the spawn committed on-scope work before drifting
 
 (same idea on any VCS — check status before log.) A spawn killed for off-scope behavior may still have committed legitimate on-scope work before drifting — `status` is clean, but `log` shows the commit. Skipping `log` has cost a redundant verification spawn in one observed case.
 
-## `bypassPermissions` for `developer`
+## Permission mode: `acceptEdits` for `developer`, nothing extra for the rest
 
-The wrapper defaults `kind=developer` to `--permission-mode bypassPermissions` so the child can perform unattended Read / Grep / Write on the assigned mount. The harness no longer prompts on individual writes — that safety is replaced by **prompt-level discipline**:
+The wrapper defaults `kind=developer` to `--permission-mode acceptEdits` — the narrowest mode granting the unattended Read / Grep / Write the child needs on the assigned mount. Every other kind gets no mode flag at all and runs on harness defaults; a read-only reviewer or thinker needs no elevation, and passing one "just in case" is over-broad by construction.
+
+**Do not reach for `bypassPermissions`, and do not pass it by hand.** Two independent reasons:
+
+- **Wider than the need.** It waives *every* permission class, not just file writes. A capability beyond writes — running a test command, hashing a file — belongs in an explicit grant (`DEVELOPER_SETTINGS_ALLOW` in `spawn-specialist.py`, or `settings/base.json` when genuinely side-effect-free), where it is reviewable.
+- **It is inert on this fleet, which is worse than merely wide.** `/Library/Application Support/ClaudeCode/managed-settings.json` sets `permissions.disableBypassPermissionsMode: "disable"`, and the managed layer outranks CLI args (Managed > CLI > Local > Project > User). The request is silently dropped and the child falls back to the settings `defaultMode` — so a spawn that *looked* unattended in fact ran under prompts nobody was there to answer. On 2026-08-04 this cost six spawns, ~$4.2 and ~40 min: the flag being inert is exactly what misdirected the diagnosis away from the managed layer. Check that file before theorizing about permission behaviour.
+
+**A gate may not demand an attestation the spawn cannot produce.** The same incident's root cause was structural: `gates.plan_review_blockers` requires a reviewer-computed `plan_sha256`, while no spawn kind held any hashing capability. Both `shasum` and `sha256sum` are now in `classify.READONLY_BASH` and `settings/base.json`, and `scripts/tests/test_review_attestation_capability.py` binds the requirement to the grant so the pair cannot drift apart again. When adding a gate that requires a spawn to *prove* something, grant the means in the same change.
+
+Elevation of any kind is not a substitute for **prompt-level discipline**:
 
 - The `--constraints` / dossier **must** contain an explicit hard-deny list — no `cd` / no Write / no Edit / no VCS commit outside `<assigned-mount>`, no internal package-build / `docker push` / smoke tests of other tickets — plus a self-check at session start (`pwd` ⊆ expected mount; if not, return `CLARIFY:`).
 - Without this discipline the child treats sibling mounts (referenced as "analogs") as fair game for "understanding through execution".

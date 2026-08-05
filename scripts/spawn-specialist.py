@@ -494,16 +494,29 @@ def deregister_child_scope(
 def resolve_permission_mode(args: argparse.Namespace) -> str | None:
     """Pick the permission mode passed to `claude -p`.
 
-    Default policy: developer specialization needs unattended Read/Grep/Write in
-    a trusted local mount, so use bypassPermissions; other specializations stay
-    on harness defaults (interactive prompts) since they are mostly read-only.
+    Default policy: the developer specialization needs unattended Read/Grep/Write
+    in a trusted local mount, so use `acceptEdits` — the narrowest mode granting
+    exactly that. Other specializations stay on harness defaults (interactive
+    prompts) since they are mostly read-only.
+
+    NOT bypassPermissions, for two independent reasons. It is far wider than the
+    need: it waives EVERY permission class, not only file writes. And on a fleet
+    whose managed layer sets `permissions.disableBypassPermissionsMode`, asking for
+    it is silently ignored and the child falls back to the settings `defaultMode` —
+    so a spawn that LOOKED unattended in fact ran under prompts nobody could answer.
+    That pair cost a ~40-minute six-spawn deadlock on 2026-08-04, and the flag being
+    inert is precisely why it misdirected the diagnosis. `acceptEdits` is narrower
+    AND actually takes effect.
+
+    Any capability beyond file writes belongs in an explicit, reviewable grant
+    (`DEVELOPER_SETTINGS_ALLOW`), never in a blanket waiver.
 
     User-supplied `--permission-mode` always wins.
     """
     if args.permission_mode is not None:
         return args.permission_mode
     if args.kind == "developer":
-        return "bypassPermissions"
+        return "acceptEdits"
     return None
 
 
