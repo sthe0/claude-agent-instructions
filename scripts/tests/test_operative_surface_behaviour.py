@@ -112,13 +112,25 @@ def test_knowledge_prose_change_is_not_a_change():
     assert blockers and "operative surface" in blockers[0]
 
 
-def test_refs_rephrasing_is_not_a_change():
-    """Every string component is normalized, so a ref differing only in case or spacing
-    names the same referent and is a rephrasing — unlike a landed payload's git refs,
-    which are compared raw because ref names are genuinely case-sensitive."""
+def test_surrounding_whitespace_on_a_ref_is_not_a_change():
+    """Leading/trailing whitespace is an authoring artifact of a TOML list entry, not a
+    re-selection, so it is stripped before the ref enters the surface. A future change
+    that compares refs byte-raw would make re-indenting a list satisfy the CHANGE half."""
     old = _doc([_stage(material_refs=["scripts/agentctl/gates.py"])])
-    new = _doc([_stage(material_refs=["  Scripts/AgentCtl/Gates.py  "])])
+    new = _doc([_stage(material_refs=["  scripts/agentctl/gates.py  "])])
     assert gates._operative_surface(old) == gates._operative_surface(new)
+
+
+def test_a_case_distinct_ref_is_a_different_referent():
+    """Refs are structural identifiers, so they are NOT casefolded — the one departure
+    from the surface's every-string-normalized rule. `Stage` and `stage` are two symbols
+    and a tree tracks `Gates.py` and `gates.py` as two files, so re-selecting between them
+    is a genuine re-selection. A future tidying that routes refs through
+    `text_shape.normalize_string` for consistency would make that re-selection invisible
+    and block the very replan this component exists to admit."""
+    old = _doc([_stage(material_refs=["scripts/agentctl/gates.py:Stage"])])
+    new = _doc([_stage(material_refs=["scripts/agentctl/gates.py:stage"])])
+    assert gates._operative_surface(old) != gates._operative_surface(new)
 
 
 def test_reordering_refs_is_not_a_change():

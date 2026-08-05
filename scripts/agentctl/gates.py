@@ -647,16 +647,27 @@ def _refs_projection(subject) -> tuple:
     conditional component must likewise be a string.
 
     Each list is SORTED: re-ordering the same refs is not a re-selection, so a shuffle
-    must not satisfy the CHANGE half. Entries pass through `_normalize_string` like every
-    other string component — unlike a landed payload's git refs, a ref differing only in
-    case or spacing names the same referent, so it is a rephrasing, not a change."""
+    must not satisfy the CHANGE half.
+
+    Entries are STRIPPED but NOT passed through `_normalize_string`, which is the one
+    place this component departs from every other string component in the surface. A ref
+    is a structural identifier — a path, or a `path:Symbol` — not prose, and it belongs
+    with the landed payload's `target`/`remote` rather than with `material`: `Stage` and
+    `stage` are two symbols, and a tree tracks `Gates.py` and `gates.py` as two files
+    whatever the host filesystem folds. Casefolding them would make a genuine re-selection
+    between two case-distinct referents invisible to the CHANGE half, blocking the replan
+    that stage 4 exists to admit. Surrounding whitespace is the only authoring artifact of
+    a TOML list entry, so it is the only thing normalized away; interior whitespace is left
+    alone, since a ref has no legitimate reason to carry it and collapsing it would silently
+    equate two identifiers that differ. This also matches how `plan.py::stage_carry_key`
+    already compares the same two lists (raw, at :1057) — one field, one identity rule."""
     if not (subject.material_refs or subject.knowledge_refs):
         return ()
     return (
         repr(
             (
-                tuple(sorted(_normalize_string(r) for r in subject.material_refs)),
-                tuple(sorted(_normalize_string(r) for r in subject.knowledge_refs)),
+                tuple(sorted(r.strip() for r in subject.material_refs)),
+                tuple(sorted(r.strip() for r in subject.knowledge_refs)),
             )
         ),
     )
