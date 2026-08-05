@@ -113,6 +113,28 @@ GATE_BEARING_HOOKS: "tuple[tuple[str, str], ...]" = (
      "(self-improvement engagement, resolution) is ever blocked on"),
 )
 
+# The TIMEOUT axis: how long a registration must be allowed to run.
+#
+# Presence is not enough for a hook that calls a `claude -p` judge. The harness
+# kills a hook at its registered timeout, so a hook registered at 5s whose judge
+# needs 10.5-47s (measured) is wired, green to every presence probe, and dead on
+# every single call — the verdict is computed and thrown away. The minimum here
+# is the hook's OWN whole-invocation judge budget; the registration must be at
+# least that, and in practice carries interpreter-start headroom on top.
+#
+# Scope: this table is NOT a subset of GATE_BEARING_HOOKS and must not be
+# derived from it. The two answer different questions — "does absence disable
+# enforcement" versus "does this registration have to allow for a slow judge" —
+# and a hook can be in either without the other.
+TIMEOUT_REQUIREMENTS: "tuple[tuple[str, int, str], ...]" = (
+    ("hook-escalation-diagnosis-gate.py", 20,
+     "one outage-escalation judge under a 20s whole-invocation budget"),
+    ("hook-deferring-disposition-gate.py", 20,
+     "one deferring-disposition judge per menu under a 20s whole-invocation budget"),
+    ("hook-turn-end-gate.py", 30,
+     "up to three judges in one invocation under a 30s whole-invocation budget"),
+)
+
 
 def managed_settings_path() -> Path:
     """The managed-policy settings file for this platform.
@@ -141,6 +163,25 @@ def settings_chain(root: Path | None = None) -> "list[Path]":
     return [base / "settings.json", base / "settings.local.json", managed_settings_path()]
 
 
+@dataclass(frozen=True)
+class Registration:
+    """One live entry wiring a hook: where it sits and how long it may run.
+
+    ``timeout`` is None when the entry carries no explicit ``timeout`` key. That
+    is UNKNOWN on the timeout axis, never "fine" — the harness's own default is
+    a client-side constant this module deliberately does not read (it changes
+    between releases, and every entry this system installs carries an explicit
+    number anyway), so an absent key is a question mark and callers that must
+    fail closed treat it as one.
+    """
+
+    event: str
+    matcher: "str | None"
+    command: str
+    timeout: "int | None"
+    member: Path
+
+
 @dataclass
 class Wiring:
     """The probe's answer for one hook basename against one config root."""
@@ -149,6 +190,7 @@ class Wiring:
     root: Path
     status: str
     events: "dict[str, list[str]]" = field(default_factory=dict)
+    registrations: "list[Registration]" = field(default_factory=list)
     missing_script_paths: "list[str]" = field(default_factory=list)
     members_read: "list[Path]" = field(default_factory=list)
     members_unreadable: "list[Path]" = field(default_factory=list)
@@ -181,14 +223,29 @@ class Wiring:
         )
 
 
-def _scan_settings(settings: dict, basename: str) -> "tuple[dict[str, list[str]], bool]":
+def _timeout_of(hook: dict) -> "int | None":
+    """The entry's declared timeout, or None when it carries none or one this
+    module cannot read as a number of seconds. A non-numeric value degrades to
+    None rather than raising: on the timeout axis "unreadable" and "absent" are
+    the same answer — UNKNOWN."""
+    value = hook.get("timeout")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return int(value)
+
+
+def _scan_settings(
+    settings: dict, basename: str, member: Path
+) -> "tuple[dict[str, list[str]], list[Registration], bool]":
     """Every hook command mentioning `basename`, keyed by event name.
 
-    Scans ALL event sections, not just PreToolUse. Returns (events, modelled):
-    `modelled` is False when the settings carry a shape this function does not
-    understand, which the caller must treat as UNKNOWN rather than ABSENT.
+    Scans ALL event sections, not just PreToolUse. Returns (events,
+    registrations, modelled): `modelled` is False when the settings carry a
+    shape this function does not understand, which the caller must treat as
+    UNKNOWN rather than ABSENT.
     """
     events: "dict[str, list[str]]" = {}
+    registrations: "list[Registration]" = []
     modelled = True
     hooks = settings.get("hooks")
     if hooks is None:
@@ -219,7 +276,15 @@ def _scan_settings(settings: dict, basename: str) -> "tuple[dict[str, list[str]]
                     continue
                 if basename in cmd:
                     events.setdefault(str(event), []).append(cmd)
-    return events, modelled
+                    matcher = grp.get("matcher")
+                    registrations.append(Registration(
+                        event=str(event),
+                        matcher=matcher if isinstance(matcher, str) else None,
+                        command=cmd,
+                        timeout=_timeout_of(hook),
+                        member=member,
+                    ))
+    return events, registrations, modelled
 
 
 _INTERPRETERS = frozenset({"python3", "python", "bash", "sh", "zsh", "node", "uv"})
@@ -267,8 +332,9 @@ def probe(basename: str, root: Path | None = None) -> Wiring:
             modelled = False
             continue
         result.members_read.append(member)
-        found, member_modelled = _scan_settings(data, basename)
+        found, registrations, member_modelled = _scan_settings(data, basename, member)
         modelled = modelled and member_modelled
+        result.registrations.extend(registrations)
         for event, cmds in found.items():
             result.events.setdefault(event, []).extend(cmds)
 
@@ -282,3 +348,74 @@ def probe(basename: str, root: Path | None = None) -> Wiring:
         return result
     result.status = ABSENT if modelled else UNKNOWN
     return result
+
+
+def timeout_shortfalls(wiring: Wiring, minimum: int) -> "list[str]":
+    """Registrations whose timeout is ESTABLISHED below `minimum` seconds.
+
+    Per-registration, not a single verdict over the hook: the rule is that every
+    live registration must allow the hook's whole budget. That is stricter than
+    the harness strictly needs (it deduplicates entries by command string, so
+    identical commands collapse), and the strictness points fail-closed — an
+    extra slow-judge registration pinned at 5s is reported instead of hidden
+    behind a correct sibling.
+    """
+    out: "list[str]" = []
+    for reg in wiring.registrations:
+        if reg.timeout is not None and reg.timeout < minimum:
+            out.append(
+                f"{wiring.basename} registered with timeout {reg.timeout}s in "
+                f"{reg.member} ({reg.event}) — below its own {minimum}s judge "
+                f"budget, so the harness kills it mid-judge on every call"
+            )
+    return out
+
+
+def timeout_unknowns(wiring: Wiring) -> "list[str]":
+    """Registrations carrying no readable timeout — the UNKNOWN half of the
+    axis, kept apart from `timeout_shortfalls` because the two have opposite
+    reporting rules: a shortfall is established and worth saying out loud in an
+    advisory channel, an unknown is only actionable where the caller must fail
+    closed."""
+    return [
+        f"{wiring.basename} registered in {reg.member} ({reg.event}) with no "
+        f"explicit timeout — its effective limit cannot be established"
+        for reg in wiring.registrations
+        if reg.timeout is None
+    ]
+
+
+def duplicate_registration_note(wiring: Wiring) -> "str | None":
+    """A line worth a look when one hook has more than one live registration.
+
+    Deliberately not phrased as "it runs twice". Read from the client bundle:
+    command hooks are deduplicated on `pluginRoot ∥ shell ∥ command ∥ args ∥
+    if`, with matcher and timeout OUTSIDE that key — so duplicates whose command
+    strings match collapse to one, and only DISTINCT commands genuinely run more
+    than once. Both cases are worth surfacing (a second entry is at minimum a
+    timeout the reconciler has to keep in step), but only the second is a double
+    execution, and saying so of the first would be a fabricated finding.
+    """
+    if len(wiring.registrations) < 2:
+        return None
+    commands = {reg.command for reg in wiring.registrations}
+    tail = (
+        f"their commands differ ({len(commands)} distinct), so the harness runs "
+        "the hook more than once per event"
+        if len(commands) > 1
+        else "their commands are identical, which the harness deduplicates"
+    )
+    return (
+        f"{wiring.basename} has {len(wiring.registrations)} live registrations — "
+        + tail
+    )
+
+
+def runs_more_than_once(wiring: Wiring) -> bool:
+    """True only when the duplicate registrations genuinely double-execute, i.e.
+    their command strings differ. Kept apart from
+    ``duplicate_registration_note`` because the two callers need the DISTINCTION
+    the note only words: an advisory channel that raises its alarm on a pair the
+    harness silently deduplicates spends the reader's attention on a non-problem
+    and teaches them to skip the block."""
+    return len({reg.command for reg in wiring.registrations}) > 1

@@ -87,7 +87,10 @@ DESIRED = [
     # service failure to the user WITHOUT a recorded diagnosis (present-tense outage
     # cue + user-facing ask, and neither overcome-difficulty invoked nor a declared
     # difficulty). Reproduce with the real client + enumerate hypotheses first.
-    ("PreToolUse",       "AskUserQuestion", "hook-escalation-diagnosis-gate.py", 5),
+    # 25 = the hook's own _JUDGE_BUDGET_S=20 plus interpreter-start headroom, the
+    # same shape as the deferring gate below; at 5 the harness killed the hook
+    # mid-judge on every single call (measured judge latency 10.5-47s).
+    ("PreToolUse",       "AskUserQuestion", "hook-escalation-diagnosis-gate.py", 25),
     # Hard gate: deny an AskUserQuestion whose EVERY option defers or refuses work
     # the agent holds the rights and the diagnosis to do now (ticket / backlog /
     # "leave as is"), with no branch that does it and no stated reason it cannot.
@@ -170,7 +173,10 @@ DESIRED = [
     # engaged this turn). Loop-guarded (stop_hook_active + a durable per-message
     # marker under state/turn-gate/) and blockers from every guardian aggregate
     # into one block, so the worst case is exactly one extra model turn.
-    ("Stop",             None,    "hook-turn-end-gate.py",   5),
+    # 35 = the hook's own _TURN_JUDGE_BUDGET_S=30 plus interpreter-start headroom.
+    # It runs up to THREE judges in one invocation, so its whole-invocation budget
+    # is larger than the single-judge gates'; at 5 every one of them was killed.
+    ("Stop",             None,    "hook-turn-end-gate.py",   35),
     # Advisory (not a gate): nudge when a launched run/graph URL appeared in
     # this session's tool output but was never surfaced to the user in a chat
     # message — the structural guard for CLAUDE.md long-running-jobs /
@@ -213,11 +219,29 @@ def group_for(event_groups, matcher):
     return g
 
 
-def add_rows(hooks, rows):
-    """Register `rows` (DESIRED tuples) in `hooks`, skipping any whose script
+def add_rows(hooks, rows, reconcile=False):
+    """Register `rows` (DESIRED tuples) in `hooks`, never adding a script whose
     basename is already in the target group. Shared by the full ADD pass and the
-    prune-only roots' single-row exemption, so the two cannot drift."""
+    prune-only roots' single-row exemption, so the two cannot drift.
+
+    `reconcile` decides what happens to an entry that IS already there. Without
+    it the row is skipped outright, which made this script insert-only: a
+    corrected DESIRED timeout could never reach a root that already carried the
+    hook, so the fix stayed in the repo and the live registration kept its old
+    number forever. With it, an existing entry's `timeout` is brought to the
+    DESIRED value.
+
+    Two boundaries, both deliberate. Only `timeout` is reconciled — never
+    `command`: an entry with the same basename under a different directory is a
+    machine-local choice about WHAT runs, and silently retargeting it is
+    qualitatively worse than leaving it slow (the wiring probe reports it as a
+    divergence instead). And reconciliation is OFF by default because this
+    function also serves the prune-only roots, where touching an entry the
+    installer did not put there is exactly what "prune-only" promises not to do;
+    the agent-root caller opts in explicitly.
+    """
     added = []
+    reconciled = []
     for event, matcher, script, timeout in rows:
         parts = script.split()
         script_base = os.path.basename(parts[0])
@@ -227,11 +251,19 @@ def add_rows(hooks, rows):
         groups = hooks.setdefault(event, [])
         grp = group_for(groups, matcher)
         grp.setdefault("hooks", [])
-        if any(basename_of(h.get("command", "")) == script_base for h in grp["hooks"]):
+        present = [h for h in grp["hooks"] if basename_of(h.get("command", "")) == script_base]
+        if present:
+            if reconcile:
+                for hook in present:
+                    if hook.get("timeout") != timeout:
+                        was = hook.get("timeout")
+                        hook["timeout"] = timeout
+                        reconciled.append(
+                            f"{event}/{matcher or '*'}: {script} timeout {was} -> {timeout}")
             continue
         grp["hooks"].append({"type": "command", "command": cmd, "timeout": timeout})
         added.append(f"{event}/{matcher or '*'}: {script}")
-    return added
+    return added, reconciled
 
 
 also_add_names = set(os.environ.get("PRUNE_ONLY_ALSO_ADD", "").split())
@@ -241,7 +273,7 @@ if missing_exemptions:
     # A name that matches no DESIRED row would silently add nothing at all.
     sys.exit(f"install-reminder-hooks: PRUNE_ONLY_ALSO_ADD names no DESIRED hook: {sorted(missing_exemptions)}")
 
-changed = add_rows(hooks, DESIRED)
+changed, reconciled = add_rows(hooks, DESIRED, reconcile=True)
 
 
 def prune_dangling_managed_hooks(hooks, managed_dir):
@@ -281,7 +313,7 @@ def prune_dangling_managed_hooks(hooks, managed_dir):
 
 pruned = prune_dangling_managed_hooks(hooks, scripts)
 
-if changed or pruned:
+if changed or reconciled or pruned:
     shutil.copy2(settings_path, settings_path + ".bak")
     with open(settings_path, "w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=2, ensure_ascii=False)
@@ -291,6 +323,10 @@ if changed or pruned:
         print("install-reminder-hooks: wired " + str(len(changed)) + " hook(s):")
         for c in changed:
             print("  + " + c)
+    if reconciled:
+        print("install-reminder-hooks: reconciled " + str(len(reconciled)) + " hook timeout(s):")
+        for r in reconciled:
+            print("  ~ " + r)
     if pruned:
         print("install-reminder-hooks: pruned " + str(len(pruned)) + " dangling hook registration(s):")
         for p in pruned:
@@ -302,7 +338,9 @@ else:
 # Prune-only pass: same ownership predicate (prune_dangling_managed_hooks),
 # reused rather than reimplemented. Adds only the ALSO_ADD_ROWS exemption (see
 # PRUNE_ONLY_ALSO_ADD above), never the rest of DESIRED; a missing or
-# unparseable file is skipped, never created or truncated.
+# unparseable file is skipped, never created or truncated. It also does NOT
+# reconcile timeouts (add_rows' default): an entry already present here is one
+# this pass must leave exactly as it found it.
 for path_str in prune_only_paths:
     path = Path(path_str)
     if not path.is_file():
@@ -330,7 +368,7 @@ for path_str in prune_only_paths:
     if not isinstance(other_hooks, dict):
         continue
     other_pruned = prune_dangling_managed_hooks(other_hooks, scripts)
-    other_added = add_rows(other_hooks, ALSO_ADD_ROWS)
+    other_added, _ = add_rows(other_hooks, ALSO_ADD_ROWS)
     if other_pruned or other_added:
         shutil.copy2(path, str(path) + ".bak")
         with open(path, "w", encoding="utf-8") as fh:

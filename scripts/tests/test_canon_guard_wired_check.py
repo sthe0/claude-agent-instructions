@@ -271,3 +271,196 @@ def test_advisory_hooks_are_never_reported(tmp_path):
     for advisory in ("hook-self-diagnose-due.py", "hook-skill-first.py",
                      "hook-resolution-reminder.py"):
         assert advisory not in proc.stdout
+
+
+# --- the second axis: timeouts, and the OPPOSITE polarity --------------------
+#
+# One file, two callers that want opposite things. The SessionStart hook is
+# advisory and must never wedge a session, so it reports what it positively
+# established and still exits 0. The one-shot --check-timeouts is a CHECK: a
+# problem, an unreadable timeout, and a crash inside the check itself all have
+# to exit non-zero, because a check that cannot read certifies nothing.
+
+import importlib.util  # noqa: E402
+
+import pytest  # noqa: E402
+
+TIMEOUT_HOOKS = [
+    (name, minimum) for name, minimum, _why in hook_wiring.TIMEOUT_REQUIREMENTS
+]
+
+
+def _load_check_module():
+    spec = importlib.util.spec_from_file_location("_canon_guard_check", HOOK_SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_check = _load_check_module()
+
+
+def _timeout_group(command: str, timeout) -> dict:
+    hook: dict = {"type": "command", "command": command}
+    if timeout is not None:
+        hook["timeout"] = timeout
+    return {"hooks": [hook]}
+
+
+def _timeout_settings(overrides: "dict | None" = None) -> dict:
+    """Every timeout-requirement hook wired at exactly its required timeout,
+    with `overrides` replacing individual ones (None -> no timeout key)."""
+    overrides = overrides or {}
+    groups = []
+    for name, minimum in TIMEOUT_HOOKS:
+        timeout = overrides[name] if name in overrides else minimum
+        groups.append(_timeout_group(str(SCRIPTS_DIR / name), timeout))
+    return {"hooks": {"Stop": groups}}
+
+
+@pytest.fixture
+def timeout_root(tmp_path, monkeypatch):
+    """Pin the settings seam and neutralise the machine-wide managed member, so
+    the one-shot check reads exactly the fixture this module wrote."""
+    monkeypatch.setenv("CLAUDE_CANON_GUARD_SETTINGS", str(tmp_path / "settings.json"))
+    monkeypatch.setattr(
+        hook_wiring, "managed_settings_path", lambda: tmp_path / "managed.json")
+    monkeypatch.setattr(
+        _check.hook_wiring, "managed_settings_path", lambda: tmp_path / "managed.json")
+
+    def write(settings: dict) -> Path:
+        (tmp_path / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
+        return tmp_path
+
+    return write
+
+
+def test_one_shot_passes_when_every_timeout_allows_its_budget(timeout_root, capsys):
+    timeout_root(_timeout_settings())
+    assert _check.check_timeouts_main() == 0
+    assert "OK" in capsys.readouterr().out
+
+
+def test_one_shot_fails_on_a_timeout_below_the_budget(timeout_root, capsys):
+    name, minimum = TIMEOUT_HOOKS[0]
+    timeout_root(_timeout_settings({name: minimum - 1}))
+
+    assert _check.check_timeouts_main() == 1
+    out = capsys.readouterr().out
+    assert "FAIL" in out and name in out
+
+
+def test_one_shot_fails_on_an_unreadable_timeout(timeout_root, capsys):
+    """"No timeout key" is not "fine": the effective limit cannot be established,
+    and this caller's whole job is to refuse to certify what it could not read.
+    The advisory caller makes the opposite call on the same input."""
+    name, _ = TIMEOUT_HOOKS[0]
+    timeout_root(_timeout_settings({name: None}))
+
+    assert _check.check_timeouts_main() == 1
+    assert "cannot be established" in capsys.readouterr().out
+
+
+def test_one_shot_fails_when_the_check_itself_raises(timeout_root, monkeypatch, capsys):
+    """The failure mode a fail-open `return 0` would hide entirely: the check
+    never ran. It exits 2 — distinct from 1 — so a caller can tell "found a
+    problem" from "could not look"."""
+    timeout_root(_timeout_settings())
+    monkeypatch.setattr(_check, "check_timeout_axis", _raise_boom)
+
+    assert _check.check_timeouts_main() == 2
+    assert "the check itself failed" in capsys.readouterr().out
+
+
+def _raise_boom(*_args, **_kwargs):
+    raise RuntimeError("boom")
+
+
+def test_hook_mode_stays_silent_and_zero_on_the_same_inputs(tmp_path):
+    """The polarity split, pinned on inputs the one-shot check fails on: a
+    below-budget timeout and an unreadable one. SessionStart still exits 0 — a
+    detector that could wedge a session is worse than the divergence it reports."""
+    name, minimum = TIMEOUT_HOOKS[0]
+    settings = _wired_both(GUARD_PATH, GUARD_PATH)
+    settings["hooks"]["Stop"] = [
+        _timeout_group(str(SCRIPTS_DIR / name), minimum - 1),
+        _timeout_group(str(SCRIPTS_DIR / TIMEOUT_HOOKS[1][0]), None),
+    ]
+    proc = _run(tmp_path, settings)
+
+    assert proc.returncode == 0
+    assert proc.stderr == "", proc.stderr
+
+
+def test_hook_mode_prints_the_timeout_divergence(tmp_path):
+    """The advisory half still has to SAY it. Before this, a hook registered at
+    5s while calling a 12s judge was reported as perfectly healthy: presence was
+    the only axis probed, and the harness killed it mid-judge every call."""
+    name, minimum = TIMEOUT_HOOKS[0]
+    settings = _wired_both(GUARD_PATH, GUARD_PATH)
+    settings["hooks"]["Stop"] = [
+        _timeout_group(str(SCRIPTS_DIR / name), minimum - 1),
+    ]
+    proc = _run(tmp_path, settings)
+
+    assert name in proc.stdout, proc.stdout
+    assert f"{minimum - 1}s" in proc.stdout, proc.stdout
+
+
+def test_hook_mode_says_nothing_about_an_unreadable_timeout(tmp_path):
+    """The advisory caller's other half: an UNKNOWN is not reported here. A
+    warning printed every session on something merely unestablished trains the
+    reader to skip the block that carries the established ones."""
+    name, _ = TIMEOUT_HOOKS[0]
+    settings = _wired_both(GUARD_PATH, GUARD_PATH)
+    settings["hooks"]["Stop"] = [_timeout_group(str(SCRIPTS_DIR / name), None)]
+    proc = _run(tmp_path, settings)
+
+    assert "cannot be established" not in proc.stdout, proc.stdout
+
+
+def test_hook_mode_is_silent_about_a_deduplicated_duplicate(timeout_root, capsys):
+    """The false alarm this module's scope discipline forbids: two registrations
+    whose command strings are IDENTICAL collapse to one in the harness, so
+    reporting them as "enforcement is OFF" every session is noise that trains the
+    reader to skip the block carrying the real findings. The strict caller still
+    wants them — a second entry is a second timeout to keep in step."""
+    name, minimum = TIMEOUT_HOOKS[0]
+    command = str(SCRIPTS_DIR / name)
+    root = timeout_root(_timeout_settings())
+    (root / "settings.local.json").write_text(json.dumps({"hooks": {
+        "Stop": [_timeout_group(command, minimum)],
+    }}), encoding="utf-8")
+
+    assert _check.check_timeout_axis(root, strict=False) == []
+    assert any("live registrations" in p
+               for p in _check.check_timeout_axis(root, strict=True))
+
+
+def test_both_callers_report_a_genuinely_double_running_hook(timeout_root):
+    """The other side of the same switch: DISTINCT commands do run twice, and
+    that is a finding for the advisory caller too."""
+    name, minimum = TIMEOUT_HOOKS[0]
+    root = timeout_root(_timeout_settings())
+    (root / "settings.local.json").write_text(json.dumps({"hooks": {
+        "Stop": [_timeout_group(f"python3 {SCRIPTS_DIR / name}", minimum)],
+    }}), encoding="utf-8")
+
+    assert any("more than once per event" in p
+               for p in _check.check_timeout_axis(root, strict=False))
+
+
+def test_check_timeouts_is_reachable_through_argv(tmp_path):
+    """The in-process tests above call check_timeouts_main() directly; this one
+    pins that `--check-timeouts` actually routes there, and that the one-shot
+    exit code survives main()'s otherwise always-zero contract."""
+    sp = tmp_path / "settings.json"
+    sp.write_text(json.dumps(_timeout_settings(
+        {TIMEOUT_HOOKS[0][0]: TIMEOUT_HOOKS[0][1] - 1})), encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(HOOK_SCRIPT), "--check-timeouts"],
+        env=_env(sp, tmp_path), capture_output=True, text=True,
+    )
+
+    assert proc.returncode == 1, proc.stdout
+    assert "[check-timeouts] FAIL" in proc.stdout

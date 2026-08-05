@@ -275,3 +275,48 @@ def test_killswitch_disabled_never_forces_deny(monkeypatch):
     # used to force a deny, only to suppress one.
     monkeypatch.setenv(_mod._OUTAGE_ESCALATION_KILLSWITCH_ENV, "0")
     assert _mod.decide(_ask_payload(ESC_BODY), runner=_fake_runner("YES")) is None
+
+
+# --- the judge call carries an explicit, budget-derived timeout --------------
+
+def _timeout_recording_runner(text: str = "YES"):
+    from agentctl.dispatch import RunResult
+
+    def run(argv, **kwargs):
+        run.timeouts.append(kwargs.get("timeout"))
+        return RunResult(0, text, "")
+
+    run.timeouts = []
+    return run
+
+
+def test_judge_call_does_not_use_the_advisor_default_timeout():
+    """The defect this gate could never survive: the judge was called with
+    advisor's _BINARY_ASK_TIMEOUT_S = 8, under the judge's FASTEST measured run
+    (10.5s), so the subprocess was killed before answering -- a permanent, silent
+    NO indistinguishable from a genuine one. Drop the explicit `timeout=` at the
+    call site and this goes red."""
+    from agentctl import advisor
+
+    runner = _timeout_recording_runner()
+    assert _mod.decide(_ask_payload(ESC_BODY), runner=runner) == _mod._DENY_REASON
+
+    assert len(runner.timeouts) == 1
+    timeout = runner.timeouts[0]
+    assert timeout is not None, "the judge was called without an explicit timeout"
+    assert timeout != advisor._BINARY_ASK_TIMEOUT_S
+    assert _mod._JUDGE_MIN_CALL_S <= timeout <= _mod._JUDGE_BUDGET_S
+
+
+def test_an_exhausted_budget_fails_open_without_calling_the_judge(monkeypatch):
+    """When the whole-invocation budget cannot fit a call, the gate allows rather
+    than starting a call it knows will be killed: an unrun judge must never deny."""
+    runner = _timeout_recording_runner()
+    real = _mod.judge_budget.JudgeBudget
+    monkeypatch.setattr(
+        _mod.judge_budget, "JudgeBudget",
+        lambda total_s, min_call_s, **kw: real(0, min_call_s, clock=lambda: 0.0),
+    )
+
+    assert _mod.decide(_ask_payload(ESC_BODY), runner=runner) is None
+    assert runner.timeouts == []

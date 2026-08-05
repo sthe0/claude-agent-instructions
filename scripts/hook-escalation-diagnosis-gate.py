@@ -37,6 +37,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -44,6 +45,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from outage_escalation_detect import detect as _detect_outage  # noqa: E402
 from agentctl import advisor  # noqa: E402
 from lib import ask_text  # noqa: E402
+from lib import judge_budget  # noqa: E402
+
+# Whole-invocation deadline for the judge call, and the registration that must
+# accommodate it (install-reminder-hooks.sh: 25s = this budget plus interpreter-
+# start headroom, the same shape the deferring-disposition gate already uses).
+# Before this existed the hook was registered at 5s and called the judge with
+# advisor's 8s default, while the judge's MEASURED latency over 8 untimed runs
+# was 10.5 / 11.5 / 12.2 / 12.6 / 13.7 / 14.2 / 15.4 / 47.0s — so the harness
+# killed the hook before any verdict could come back, on every call.
+_JUDGE_BUDGET_S = 20
+# Below this the remaining budget cannot plausibly fit a call (the fastest run
+# measured is 10.5s), so spending the wait on a guaranteed timeout buys nothing:
+# stop and fail open, the same posture as every other unreachable-judge path.
+_JUDGE_MIN_CALL_S = 12
 
 # Kill-switch for the semantic outage-escalation judge: set to "0" to force it
 # off without a code change. Safe-by-default: unset/unrecognised leaves the
@@ -157,17 +172,29 @@ def decide(payload: dict, *, runner: Callable | None = None) -> str | None:
     (None -> that judge fails open to False, never denies) — the same contract
     build_context follows in hook-turn-end-gate.py. The prefilter
     (outage_escalation_detect.detect) runs first and short-circuits to None
-    (allow) without ever invoking the judge when it doesn't fire."""
+    (allow) without ever invoking the judge when it doesn't fire.
+
+    A _JUDGE_BUDGET_S deadline bounds the whole invocation. With a single judge
+    call that degenerates into a per-call ceiling, which is the point: the call
+    gets an EXPLICIT timeout drawn from the budget instead of advisor's 8s
+    default, a number smaller than the judge's fastest measured run."""
     if payload.get("tool_name") != "AskUserQuestion":
         return None
     tool_input = payload.get("tool_input") or {}
     text = _ask_text(tool_input)
     if not _detect_outage(text):
         return None  # cheap common path: nothing to gate
+    budget = judge_budget.JudgeBudget(
+        _JUDGE_BUDGET_S, _JUDGE_MIN_CALL_S, clock=time.monotonic
+    )
+    call_timeout = budget.next_call_timeout(_JUDGE_BUDGET_S)
+    if call_timeout is None:
+        return None  # budget exhausted — fail open, as on every unreachable judge
     fires = advisor.judge_outage_escalation(
         text,
         runner,
         enabled=os.environ.get(_OUTAGE_ESCALATION_KILLSWITCH_ENV) != "0",
+        timeout=call_timeout,
     )
     if not fires:
         return None

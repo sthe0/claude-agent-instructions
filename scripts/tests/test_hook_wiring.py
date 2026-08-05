@@ -216,3 +216,94 @@ def test_registry_is_a_subset_of_installer_intent():
         "registry entries absent from install-reminder-hooks.sh's DESIRED block: "
         f"{missing}"
     )
+
+
+# --- the timeout axis: a registration is not only present, it has a limit -----
+#
+# A hook can be perfectly WIRED and still never finish: the harness kills it at
+# its registered `timeout`. Probing presence alone reported those hooks as
+# healthy while the harness was killing them mid-judge on every call.
+
+def _timed_group(command: str, timeout, matcher: str | None = None) -> dict:
+    hook: dict = {"type": "command", "command": command}
+    if timeout is not None:
+        hook["timeout"] = timeout
+    grp: dict = {"hooks": [hook]}
+    if matcher is not None:
+        grp["matcher"] = matcher
+    return grp
+
+
+def test_registration_carries_its_timeout(root):
+    _write(root / "settings.json", {
+        "PreToolUse": [_timed_group(str(SCRIPTS / HOOK), 25, "AskUserQuestion")],
+    })
+    w = hook_wiring.probe(HOOK, root)
+    assert [(r.event, r.timeout) for r in w.registrations] == [("PreToolUse", 25)]
+
+
+def test_a_registration_without_a_timeout_key_reads_as_unknown_not_zero(root):
+    """No key means "the harness default", which this module cannot see — so the
+    honest value is None. Reading it as 0 would manufacture a shortfall; reading
+    it as generous would hide one."""
+    _write(root / "settings.json", {"Stop": [_group(str(SCRIPTS / HOOK))]})
+    w = hook_wiring.probe(HOOK, root)
+
+    assert [r.timeout for r in w.registrations] == [None]
+    assert hook_wiring.timeout_shortfalls(w, 30) == []
+    assert len(hook_wiring.timeout_unknowns(w)) == 1
+
+
+def test_two_registrations_of_one_hook_with_different_timeouts(root):
+    """The case a per-hook verdict would swallow: one entry allows the budget and
+    a second, in another member, is pinned at 5s. Reporting per REGISTRATION
+    points fail-closed — the slow one is named instead of hidden behind its
+    correct sibling."""
+    _write(root / "settings.json", {
+        "Stop": [_timed_group(str(SCRIPTS / HOOK), 35)],
+    })
+    _write(root / "settings.local.json", {
+        "Stop": [_timed_group(f"python3 {SCRIPTS / HOOK}", 5)],
+    })
+    w = hook_wiring.probe(HOOK, root)
+
+    assert sorted(r.timeout for r in w.registrations) == [5, 35]
+    shortfalls = hook_wiring.timeout_shortfalls(w, 30)
+    assert len(shortfalls) == 1 and "5s" in shortfalls[0]
+    assert "settings.local.json" in shortfalls[0]
+
+
+def test_duplicate_note_distinguishes_deduplicated_from_double_running(root):
+    """Two registrations are always worth a look, but only DISTINCT command
+    strings actually run twice: the harness deduplicates on the command, with
+    matcher and timeout outside that key. Claiming "runs twice" of an identical
+    pair would be a fabricated finding."""
+    identical = str(SCRIPTS / HOOK)
+    _write(root / "settings.json", {"Stop": [_timed_group(identical, 35)]})
+    _write(root / "settings.local.json", {"Stop": [_timed_group(identical, 5)]})
+    note = hook_wiring.duplicate_registration_note(hook_wiring.probe(HOOK, root))
+    assert note is not None and "deduplicates" in note
+
+    _write(root / "settings.local.json", {
+        "Stop": [_timed_group(f"python3 {SCRIPTS / HOOK}", 5)],
+    })
+    note = hook_wiring.duplicate_registration_note(hook_wiring.probe(HOOK, root))
+    assert note is not None and "more than once per event" in note
+
+
+def test_a_single_registration_draws_no_duplicate_note(root):
+    _write(root / "settings.json", {"Stop": [_timed_group(str(SCRIPTS / HOOK), 35)]})
+    assert hook_wiring.duplicate_registration_note(
+        hook_wiring.probe(HOOK, root)) is None
+
+
+def test_timeout_requirements_are_not_derived_from_the_registry():
+    """The checked set is broader than GATE_BEARING_HOOKS on purpose: a hook can
+    need a long timeout without bearing a gate. Deriving one list from the other
+    would silently drop such a hook from the check the moment it is added."""
+    required = {name for name, _minimum, _why in hook_wiring.TIMEOUT_REQUIREMENTS}
+    assert required, "the timeout requirements table must not be empty"
+    for name, minimum, why in hook_wiring.TIMEOUT_REQUIREMENTS:
+        assert (SCRIPTS / name).exists(), f"requirement names a missing hook: {name}"
+        assert isinstance(minimum, int) and minimum > 0
+        assert why.strip(), f"{name}'s requirement carries no rationale"

@@ -280,6 +280,22 @@ _BINARY_ASK_PROMPT = (
 )
 
 
+def binary_ask_prefilter(final_text: str) -> bool:
+    """The deterministic half of judge_binary_ask: does the message END in a
+    question mark once a trailing run of formatting decoration is stripped?
+
+    Public because a caller that budgets its judge calls has to know whether a
+    call is going to happen BEFORE it spends budget deciding — asking the judge
+    function itself would mean the prefilter's verdict is only observable after
+    the (possibly skipped) call. judge_binary_ask still applies it itself, so
+    the two cannot disagree.
+    """
+    if not isinstance(final_text, str) or not final_text:
+        return False
+    stripped = final_text.rstrip(_BINARY_ASK_TRAILING_DECORATION)
+    return bool(stripped) and stripped[-1] in _BINARY_ASK_QUESTION_MARKS
+
+
 def judge_binary_ask(
     final_text: str, runner, *, enabled: bool = True, timeout: int = _BINARY_ASK_TIMEOUT_S
 ) -> bool:
@@ -299,10 +315,7 @@ def judge_binary_ask(
     non-zero exit, an empty/unparseable answer, or any exception all return False
     -- the guardian this feeds is a Stop-gate BLOCKER, so a confident False (never
     a fabricated True) is the safe failure direction."""
-    if not enabled or not isinstance(final_text, str) or not final_text:
-        return False
-    stripped = final_text.rstrip(_BINARY_ASK_TRAILING_DECORATION)
-    if not stripped or stripped[-1] not in _BINARY_ASK_QUESTION_MARKS:
+    if not enabled or not binary_ask_prefilter(final_text):
         return False
     if runner is None:
         return False

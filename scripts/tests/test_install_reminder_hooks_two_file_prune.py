@@ -219,3 +219,43 @@ def test_dot_claude_settings_untouched_when_nothing_left_to_reconcile(tmp_path):
     assert not Path(str(settings) + ".bak").exists()
     data = json.loads(settings.read_text(encoding="utf-8"))
     assert data == original
+
+
+def test_reconciliation_does_not_reach_into_the_prune_only_root(tmp_path):
+    """The timeout reconciler is scoped to the root the installer OWNS.
+
+    Reconciliation had to be added because the script was insert-only: a
+    corrected DESIRED timeout could never reach an already-registered hook. But
+    "prune-only" is a promise about this file specifically, and rewriting a
+    timeout here is an ADD-direction edit — the very direction the scope forbids.
+
+    Every entry is seeded at a timeout the DESIRED table disagrees with,
+    including the ONE ADD exemption (the detector, whose DESIRED timeout is 5).
+    The exemption buys the detector an insertion when absent, not an edit when
+    present: if reconciliation were run over this root unscoped, the exemption
+    is precisely the entry that would silently change under it."""
+    env = _shell_env(tmp_path)
+    real = str(SCRIPTS_DIR / "hook-context-growth-reminder.py")
+    detector = str(SCRIPTS_DIR / "hook-canon-guard-wired-check.py")
+    slow_judge = str(SCRIPTS_DIR / "hook-escalation-diagnosis-gate.py")
+    original = {"hooks": {
+        "UserPromptSubmit": [_group_at(None, [real], 99)],
+        "SessionStart": [_group_at(None, [detector], 99)],
+        "PreToolUse": [_group_at("AskUserQuestion", [slow_judge], 99)],
+    }}
+    settings = _dot_claude_settings(env)
+    settings.write_text(json.dumps(original), encoding="utf-8")
+
+    proc = _run(env)
+    assert proc.returncode == 0, proc.stderr
+
+    data = json.loads(settings.read_text(encoding="utf-8"))
+    assert data == original, "reconciliation edited a prune-only root"
+
+
+def _group_at(matcher, commands, timeout):
+    g = {} if matcher is None else {"matcher": matcher}
+    g["hooks"] = [
+        {"type": "command", "command": c, "timeout": timeout} for c in commands
+    ]
+    return g

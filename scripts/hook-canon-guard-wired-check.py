@@ -21,6 +21,15 @@ hooks were being loaded from ``~/.claude``, where none of them are. A green
 report from a root that is not the one enforcing anything is worse than no
 report.
 
+TWO AXES, TWO POLARITIES. Presence is one axis; the registered TIMEOUT is the
+other, and it was invisible until a hook whose judge needs 10.5-47s was found
+registered at 5s — wired, green to every presence probe, and killed mid-judge on
+every call. The SessionStart path reports both (fail-open, established problems
+only). The one-shot ``--check-timeouts`` mode answers the same timeout question
+FAIL-CLOSED: a problem, an UNKNOWN, or an exception inside the check all exit
+non-zero. A check that shares this file's "return 0 on every path" posture would
+certify exactly the silence it exists to break.
+
 The name is narrower than the job. It is kept deliberately: renaming ripples
 into install-reminder-hooks.sh, into live settings on two roots, and into the
 config-root-refs allowlist, for zero functional gain.
@@ -212,7 +221,80 @@ def check_registry(root: Path) -> "list[str]":
     return problems
 
 
+def check_timeout_axis(root: Path, *, strict: bool) -> "list[str]":
+    """Problems on the TIMEOUT axis for every hook in
+    ``hook_wiring.TIMEOUT_REQUIREMENTS``: a registration below the hook's own
+    judge budget, and — under `strict` — a registration with no readable
+    timeout or a hook that is not positively WIRED at all.
+
+    `strict` is the polarity switch, and the two callers want opposite things.
+    The SessionStart path is advisory and fail-open: it reports only what is
+    positively established, because a false alarm every session trains the
+    reader to skip the block that carries the real ones. The one-shot
+    ``--check-timeouts`` path is a CHECK: there, "cannot be established" is a
+    failure, since the whole point is to refuse to certify what it could not
+    read.
+
+    The checked set is TIMEOUT_REQUIREMENTS, not GATE_BEARING_HOOKS: a hook
+    needs a generous registration because it calls a slow judge, which is a
+    different property from being gate-bearing.
+    """
+    problems: "list[str]" = []
+    for basename, minimum, why in hook_wiring.TIMEOUT_REQUIREMENTS:
+        wiring = hook_wiring.probe(basename, root)
+        if wiring.status != hook_wiring.WIRED:
+            if strict:
+                problems.append(f"{wiring.describe()} — needs {minimum}s: {why}")
+            continue
+        problems += hook_wiring.timeout_shortfalls(wiring, minimum)
+        if strict:
+            problems += hook_wiring.timeout_unknowns(wiring)
+        note = hook_wiring.duplicate_registration_note(wiring)
+        # Advisorily, only a pair that genuinely double-executes is worth the
+        # banner; a pair the harness deduplicates is a look-at-this for the
+        # reconciler, not enforcement being off. The strict caller wants both,
+        # since a second entry is a second timeout to keep in step.
+        if note and (strict or hook_wiring.runs_more_than_once(wiring)):
+            problems.append(note)
+    return problems
+
+
+def check_timeouts_main() -> int:
+    """One-shot ``--check-timeouts``: is every judge-calling hook wired with a
+    timeout that actually allows its judge to finish?
+
+    FAIL-CLOSED, the exact opposite of the SessionStart path below, and
+    deliberately so: they share this file and would otherwise share main()'s
+    "return 0 on every path", which is right for a hook that must never wedge
+    session start and catastrophic for a check whose only job is to say no. A
+    problem, an UNKNOWN, and an exception inside the check all exit non-zero.
+    """
+    try:
+        root = _primary_settings_path().parent
+        problems = check_timeout_axis(root, strict=True)
+    except Exception as exc:  # fail-CLOSED: an unrunnable check certifies nothing
+        print(f"[check-timeouts] the check itself failed: {exc!r}")
+        return 2
+    if problems:
+        print(f"[check-timeouts] FAIL — harness config root: {root}")
+        for p in problems:
+            print(f"  - {p}")
+        print(
+            "  Install to reconcile the registered timeouts:\n"
+            "    bash ~/claude-agent-instructions/scripts/install-reminder-hooks.sh\n"
+            "  Then RELOAD the config (open /hooks, or restart) — the harness\n"
+            "  captures its hook set once at session start."
+        )
+        return 1
+    print(f"[check-timeouts] OK — harness config root: {root}")
+    for basename, minimum, _ in hook_wiring.TIMEOUT_REQUIREMENTS:
+        print(f"  - {basename}: every registration >= {minimum}s")
+    return 0
+
+
 def main() -> int:
+    if "--check-timeouts" in sys.argv[1:]:
+        return check_timeouts_main()
     try:
         harness = config_root.harness_config_root()
         home = config_root.agent_home()
@@ -244,6 +326,7 @@ def main() -> int:
         chain = hook_wiring.settings_chain(root)
         problems = check_guard_chains(_pretooluse_groups(chain))
         problems += check_registry(root)
+        problems += check_timeout_axis(root, strict=False)
     except Exception:
         return 0
 

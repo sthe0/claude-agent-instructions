@@ -1060,3 +1060,159 @@ def test_prose_binary_ask_silent_on_open_wh_question(tmp_path, isolated_state):
         _assistant_text_line("Куда записать вывод?"),
     ])
     assert _mod.decide({"transcript_path": str(t), "stop_hook_active": False}) is None
+
+
+# --- the judge budget: order, tail-drop, and explicit per-call timeouts -------
+#
+# This hook makes up to THREE `claude -p` judge calls in one invocation. They
+# used to be three eager arguments to the TurnContext constructor, each called
+# with advisor's 8s default, while the judge's measured latency was 10.5-47s and
+# the hook itself was registered at 5s. None of that was observable: a hook the
+# harness killed and a hook whose judges all said NO produce the same silence.
+
+_JUDGE_MARKERS = {
+    "feedback_signal": "AGENT-BEHAVIOR FEEDBACK",
+    "binary_ask": "BINARY or ONE-OF-N CONFIRM",
+    "outage_escalation": "ESCALATES a live, un-diagnosed",
+}
+
+
+def _judge_name_of(argv) -> str:
+    prompt = argv[-1]
+    for name, marker in _JUDGE_MARKERS.items():
+        if marker in prompt:
+            return name
+    raise AssertionError(f"unrecognised judge prompt: {prompt[:120]!r}")
+
+
+class _FakeClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+
+def _recording_runner(text="NO", code=0, elapsed=0.0, clock=None):
+    """Records the judge NAME and the `timeout` kwarg of every call, and (given a
+    clock) advances that clock by `elapsed` per call, so a test can spend the
+    invocation's judge budget without waiting in real time."""
+    def runner(argv, **kwargs):
+        runner.calls.append((_judge_name_of(argv), kwargs.get("timeout")))
+        if clock is not None:
+            clock.now += elapsed
+        return RunResult(code, stdout=text, stderr="")
+    runner.calls = []
+    return runner
+
+
+def _pin_budget_clock(monkeypatch, clock):
+    """Make every JudgeBudget this hook opens read `clock` instead of the wall
+    clock. Patched at the constructor rather than on the `time` module, so the
+    substitution cannot leak into pytest's own timing."""
+    real = _mod.judge_budget.JudgeBudget
+
+    def factory(total_s, min_call_s, **_kwargs):
+        return real(total_s, min_call_s, clock=clock)
+
+    monkeypatch.setattr(_mod.judge_budget, "JudgeBudget", factory)
+
+
+def _all_three_prefilters(tmp_path) -> Path:
+    """A turn that trips all three judge prefilters at once: the user message
+    carries a feedback signal, and the assistant's text both reports a live
+    outage and ends in a question mark."""
+    return _write_transcript(tmp_path, [
+        _user_line(FEEDBACK),
+        _assistant_text_line(ESCALATION_TEXT),
+    ])
+
+
+def test_judges_run_in_priority_order(tmp_path, isolated_state, monkeypatch):
+    clock = _FakeClock()
+    _pin_budget_clock(monkeypatch, clock)
+    runner = _recording_runner(elapsed=1.0, clock=clock)
+
+    _mod.build_context(
+        {"transcript_path": str(_all_three_prefilters(tmp_path))}, runner=runner
+    )
+
+    assert [name for name, _ in runner.calls] == [
+        "feedback_signal", "binary_ask", "outage_escalation",
+    ]
+
+
+def test_budget_drops_the_tail_and_records_the_skip(
+    tmp_path, isolated_state, monkeypatch, capsys
+):
+    """Two slow judges exhaust the invocation budget; the third is dropped rather
+    than started on a remainder too small to finish in. The drop is RECORDED — as
+    a TurnContext field and on stderr — because a judge that silently never ran
+    is indistinguishable from one that returned NO, which is the exact blindness
+    this change exists to remove."""
+    clock = _FakeClock()
+    _pin_budget_clock(monkeypatch, clock)
+    runner = _recording_runner(elapsed=13.0, clock=clock)
+
+    ctx = _mod.build_context(
+        {"transcript_path": str(_all_three_prefilters(tmp_path))}, runner=runner
+    )
+
+    assert [name for name, _ in runner.calls] == ["feedback_signal", "binary_ask"]
+    assert ctx.judges_skipped == ("outage_escalation",)
+    assert "outage_escalation" in capsys.readouterr().err
+
+
+def test_a_dropped_judge_fails_open(tmp_path, isolated_state, monkeypatch):
+    """The dropped judge's verdict is False, never a fabricated True: each of
+    these judges feeds a Stop-gate BLOCKER, so an unrun judge must not block."""
+    clock = _FakeClock()
+    _pin_budget_clock(monkeypatch, clock)
+    runner = _recording_runner(text="YES", elapsed=13.0, clock=clock)
+
+    ctx = _mod.build_context(
+        {"transcript_path": str(_all_three_prefilters(tmp_path))}, runner=runner
+    )
+
+    assert ctx.judges_skipped == ("outage_escalation",)
+    assert ctx.outage_escalation_sought is False
+
+
+def test_no_judge_call_uses_the_advisor_default_timeout(
+    tmp_path, isolated_state, monkeypatch
+):
+    """The defect that made all of this invisible: every judge was called with
+    advisor's _BINARY_ASK_TIMEOUT_S = 8, below the judge's FASTEST measured run
+    (10.5s), so the subprocess was killed before it could answer — a permanent,
+    silent NO. Drop the explicit `timeout=` from any call site and this goes red."""
+    clock = _FakeClock()
+    _pin_budget_clock(monkeypatch, clock)
+    runner = _recording_runner(elapsed=1.0, clock=clock)
+
+    _mod.build_context(
+        {"transcript_path": str(_all_three_prefilters(tmp_path))}, runner=runner
+    )
+
+    assert len(runner.calls) == 3
+    for name, timeout in runner.calls:
+        assert timeout is not None, f"{name} was called without an explicit timeout"
+        assert timeout != _mod.advisor._BINARY_ASK_TIMEOUT_S, f"{name} got the default"
+        assert _mod._TURN_JUDGE_MIN_CALL_S <= timeout <= _mod._TURN_JUDGE_CALL_CAP_S
+
+
+def test_a_judge_whose_prefilter_is_silent_costs_no_budget(
+    tmp_path, isolated_state, monkeypatch
+):
+    """The budget is spent on CALLS, not on candidates: an ordinary turn trips no
+    prefilter, so the three judges cost nothing and the turn is not slowed."""
+    clock = _FakeClock()
+    _pin_budget_clock(monkeypatch, clock)
+    runner = _recording_runner(elapsed=13.0, clock=clock)
+
+    ctx = _mod.build_context({"transcript_path": str(_write_transcript(tmp_path, [
+        _user_line("add a parser for the config file"),
+        _assistant_text_line("Готово, парсер добавлен."),
+    ]))}, runner=runner)
+
+    assert runner.calls == []
+    assert ctx.judges_skipped == ()
