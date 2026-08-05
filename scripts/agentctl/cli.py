@@ -3189,9 +3189,11 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             _log_gate(state, "replan_coverage_waiver", cov, passed=True)
 
     kind = diff_plans(old, new)
-    # Stamped HERE and not up at the seam: every refusal path of this command — the
-    # plan_approval-plugin gate, the submission check and the critique-coverage gate — is
-    # now behind us, so like seam (a) the digest only ever names bytes the session ACCEPTED.
+    # Stamped HERE and not up at the seam: every refusal path of this command is now behind
+    # us — the last of them being the critique-coverage gate just above — so like seam (a)
+    # the digest only ever names bytes the session ACCEPTED. (Not an enumeration: this
+    # command refuses in eight or so places, and a new one added below this line would
+    # break the property no matter how the list above it reads.)
     # (The load of args.plan can also raise out of the command, but it raises UPSTREAM of
     # the seam, so no placement inside this range answers for it.)
     # Stamping at the seam was correct on today's control flow only because nothing saves

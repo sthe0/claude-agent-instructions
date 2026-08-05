@@ -113,7 +113,13 @@ def _is_substantive(doc) -> bool:
     `plan._validate_substantive_stage` — which cannot move, because it lives on the loader
     path this module exists to keep lenient — would still arm on the plan. One grade, two
     arming conditions, is a worse disagreement than the one being removed, so the plan
-    stays the single key and the session's only power is to force it to speak."""
+    stays the single key and the session's only power is to force it to speak.
+
+    Normalized rather than `.lower()`-ed on purpose, and that choice is load-bearing in
+    BOTH directions: it is what makes `"substantive "` substantive here but not at the
+    loader-side enumerator, and the values that would make the two disagree are therefore
+    refused outright by `_malformed_weight_class` below. Simplifying this back to
+    `.lower()`, or dropping that refusal, re-opens the split — they are one decision."""
     wc = doc.meta.weight_class
     return wc is not None and _normalize_string(wc) == "substantive"
 

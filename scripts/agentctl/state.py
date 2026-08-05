@@ -1200,7 +1200,10 @@ class SessionState:
         # dropping it would silently answer "which bytes is this session running" with None.
         # No SCHEMA_VERSION bump goes with it — the migration is keyed on the key's presence,
         # and states written by the renaming commit already claim the current version, so a
-        # bump could not discriminate them anyway.
+        # bump could not discriminate them anyway. `setdefault` and not a truthiness test:
+        # no writer produces a payload carrying both keys (the rename was atomic), and for
+        # the shape that cannot occur the deliberate reading is that a present new key wins
+        # even when null — the legacy value is the older claim of the two.
         legacy_digest = data.pop("plan_digest", None)
         if legacy_digest is not None:
             data.setdefault("accepted_plan_digest", legacy_digest)
