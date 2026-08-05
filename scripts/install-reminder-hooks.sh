@@ -88,6 +88,14 @@ DESIRED = [
     # cue + user-facing ask, and neither overcome-difficulty invoked nor a declared
     # difficulty). Reproduce with the real client + enumerate hypotheses first.
     ("PreToolUse",       "AskUserQuestion", "hook-escalation-diagnosis-gate.py", 5),
+    # Hard gate: deny an AskUserQuestion whose EVERY option defers or refuses work
+    # the agent holds the rights and the diagnosis to do now (ticket / backlog /
+    # "leave as is"), with no branch that does it and no stated reason it cannot.
+    # 25 = hook-deferring-disposition-gate.py's own _ASK_JUDGE_BUDGET_S=20 plus
+    # interpreter-start headroom; a live judge call measured at 11.6-13.5s (see
+    # advisor.py's own comment) blows straight through a 5s harness timeout, so
+    # the harness cap must not bind below the hook's own decide() deadline.
+    ("PreToolUse",       "AskUserQuestion", "hook-deferring-disposition-gate.py", 25),
     # session_scope: deny/warn on a LIVE cross-session filesystem-scope overlap
     # (Component B wiring). Runs AFTER the plan-approval gate above; blocks only a
     # gated path already held by another live session, otherwise warns — silent

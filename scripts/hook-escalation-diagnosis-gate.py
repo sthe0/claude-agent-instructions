@@ -43,6 +43,7 @@ from typing import Callable
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from outage_escalation_detect import detect as _detect_outage  # noqa: E402
 from agentctl import advisor  # noqa: E402
+from lib import ask_text  # noqa: E402
 
 # Kill-switch for the semantic outage-escalation judge: set to "0" to force it
 # off without a code change. Safe-by-default: unset/unrecognised leaves the
@@ -58,33 +59,10 @@ _DENY_REASON = (
 )
 
 
-def _ask_text(tool_input: dict) -> str:
-    """Concatenate every user-facing string in an AskUserQuestion payload: each
-    question's text/header plus every option's label and description. Tolerant of
-    missing keys and schema drift — an absent field contributes nothing."""
-    if not isinstance(tool_input, dict):
-        return ""
-    parts: list[str] = []
-    questions = tool_input.get("questions")
-    if not isinstance(questions, list):
-        return ""
-    for q in questions:
-        if not isinstance(q, dict):
-            continue
-        for key in ("question", "header"):
-            val = q.get(key)
-            if isinstance(val, str):
-                parts.append(val)
-        options = q.get("options")
-        if isinstance(options, list):
-            for opt in options:
-                if not isinstance(opt, dict):
-                    continue
-                for key in ("label", "description"):
-                    val = opt.get(key)
-                    if isinstance(val, str):
-                        parts.append(val)
-    return "\n".join(parts)
+# Byte-identical alias to lib.ask_text.flat_text — kept under this name so the
+# existing unit tests (_mod._ask_text) need no change; shared with
+# hook-deferring-disposition-gate.py (lib/ask_text.py).
+_ask_text = ask_text.flat_text
 
 
 def _overcome_difficulty_invoked(transcript_path: str | None) -> bool:

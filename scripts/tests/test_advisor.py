@@ -4,6 +4,7 @@ Core invariant: directive.ok and directive.node are byte-identical whether the a
 returns a loud verdict or [] (disabled / errored). Advisories live in directive.data
 only and are never persisted into gate decisions or SessionState.
 """
+import subprocess
 from argparse import Namespace
 
 import pytest
@@ -545,4 +546,71 @@ class TestJudgeOutageEscalation:
             return RunResult(0, stdout="NO", stderr="")
 
         advisor.judge_outage_escalation("some text", recording_runner)
+        assert seen["argv"][:4] == ["claude", "-p", "--model", "haiku"]
+
+
+class TestJudgeDeferringDisposition:
+    _ASK = "Что делать с дефектом?\nЗавести отдельной задачей\nНе трогать"
+
+    def test_yes(self):
+        assert advisor.judge_deferring_disposition(self._ASK, _fake_runner("YES")) is True
+
+    def test_no(self):
+        assert advisor.judge_deferring_disposition(self._ASK, _fake_runner("NO")) is False
+
+    def test_disabled(self):
+        assert advisor.judge_deferring_disposition(self._ASK, _fake_runner("YES"), enabled=False) is False
+
+    def test_no_runner(self):
+        assert advisor.judge_deferring_disposition(self._ASK, None) is False
+
+    def test_empty_text_skips_runner(self):
+        assert advisor.judge_deferring_disposition("", _raising_runner) is False
+
+    def test_non_string_text_skips_runner(self):
+        assert advisor.judge_deferring_disposition(None, _raising_runner) is False
+
+    def test_non_zero_exit_fails_open(self):
+        assert advisor.judge_deferring_disposition(self._ASK, _fake_runner("YES", code=1)) is False
+
+    def test_empty_stdout_fails_open(self):
+        assert advisor.judge_deferring_disposition(self._ASK, _fake_runner("  \n  ")) is False
+
+    def test_unparseable_answer_fails_open(self):
+        assert advisor.judge_deferring_disposition(self._ASK, _fake_runner("unclear")) is False
+
+    def test_raising_runner_fails_open(self):
+        assert advisor.judge_deferring_disposition(self._ASK, _raising_runner) is False
+
+    def test_timeout_expired_fails_open(self):
+        """The dominant real failure mode, not just a generic exception: haiku
+        was measured at 13.9 +/- 2.4s (4 samples, min 12.1, max 17.5) against
+        the OLD 8s budget this judge used to inherit from _BINARY_ASK_TIMEOUT_S,
+        which timed out on every call. A runner that raises
+        subprocess.TimeoutExpired must fail open exactly like any other raising
+        runner — see test_default_timeout_is_own_constant for the fix itself."""
+        def timing_out_runner(argv, **kwargs):
+            raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout", 0))
+
+        assert advisor.judge_deferring_disposition(self._ASK, timing_out_runner) is False
+
+    def test_default_timeout_is_own_constant(self):
+        seen = {}
+
+        def recording_runner(argv, **kwargs):
+            seen["timeout"] = kwargs.get("timeout")
+            return RunResult(0, stdout="NO", stderr="")
+
+        advisor.judge_deferring_disposition(self._ASK, recording_runner)
+        assert seen["timeout"] == advisor._DEFERRING_DISPOSITION_TIMEOUT_S
+        assert seen["timeout"] != advisor._BINARY_ASK_TIMEOUT_S
+
+    def test_argv_carries_judge_model(self):
+        seen = {}
+
+        def recording_runner(argv, **kwargs):
+            seen["argv"] = argv
+            return RunResult(0, stdout="NO", stderr="")
+
+        advisor.judge_deferring_disposition("some text", recording_runner)
         assert seen["argv"][:4] == ["claude", "-p", "--model", "haiku"]

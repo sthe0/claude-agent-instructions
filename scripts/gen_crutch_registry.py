@@ -101,6 +101,19 @@ CODE_PARTITIONS = [
         "File-rollup judge_guarded=True corroborates.",
     ),
     (
+        "scripts/hook-deferring-disposition-gate.py (judge-guarded)",
+        lambda f: f == "scripts/hook-deferring-disposition-gate.py",
+        "semantic-guarded",
+        "keep",
+        "Built judge-guarded by construction: `decide()` runs the high-recall "
+        "`_DEFER_CUE_RE` prefilter AND `agentctl.advisor.judge_deferring_disposition` "
+        "(fail-open semantic judge) before it builds the deny payload, and the payload "
+        "is built in that same scope, so the guard is visible at scope granularity "
+        "without an allowlist ground. The regex only widens recall over deferral "
+        "vocabulary; whether the options actually leave the work undone is the "
+        "judge's call.",
+    ),
+    (
         "scripts/hook-*.py (other guardian hooks)",
         lambda f: Path(f).name.startswith("hook-"),
         "structural",

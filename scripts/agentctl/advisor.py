@@ -352,6 +352,34 @@ _OUTAGE_ESCALATION_JUDGE_PROMPT = (
 )
 
 
+# Measured 2026-08-05 on this machine: `claude -p --model haiku` answers in
+# 13.9 +/- 2.4 s (4 samples, min 12.1, max 17.5), so the neighbours' 8 s budget
+# times out on every call and fails the gate open. 30 s leaves ~2 sigma of head-
+# room; the cost of the wider budget is bounded by the caller's option-text
+# prefilter (hook-deferring-disposition-gate.py's _prefilter, run per question).
+_DEFERRING_DISPOSITION_TIMEOUT_S = 30
+
+_DEFERRING_DISPOSITION_JUDGE_PROMPT = (
+    "You are given the question and every option of a menu an AI assistant is "
+    "about to show its user, written in any language. Decide whether EVERY "
+    "option DEFERS or REFUSES a piece of work the assistant could carry out "
+    "right now -- filing a ticket, parking it in a backlog, \"later\", \"as a "
+    "separate task\", \"leave as is\", \"don't touch\" -- so that the menu "
+    "offers no branch that does the work now.\n\n"
+    "Answer YES only when ALL of these hold: the menu is about a concrete piece "
+    "of work the assistant has already identified; not one option does that "
+    "work now; and nothing in the menu names a reason the work is beyond the "
+    "assistant.\n\n"
+    "Answer NO when: at least one option does the work now; or the menu names "
+    "any stated reason it cannot be done now (missing rights, another owner, a "
+    "required waiting period, a pending external result); or the menu is not "
+    "about doing work at all (a preference, a language, a wording or scope "
+    "choice).\n\n"
+    "Answer on the FIRST line with exactly YES or NO, nothing else.\n\n"
+    "MENU:\n{text}"
+)
+
+
 def judge_feedback_signal(
     user_text: str, runner, *, enabled: bool = True, timeout: int = _BINARY_ASK_TIMEOUT_S
 ) -> bool:
@@ -419,6 +447,44 @@ def judge_outage_escalation(
         return False
     try:
         prompt = _OUTAGE_ESCALATION_JUDGE_PROMPT.format(text=assistant_text)
+        result = runner(["claude", "-p", "--model", _JUDGE_MODEL, prompt], timeout=timeout)
+        if result.returncode != 0:
+            return False
+        lines = [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
+        if not lines:
+            return False
+        return lines[0].upper().startswith("YES")
+    except Exception:
+        return False
+
+
+def judge_deferring_disposition(
+    ask_text: str, runner, *, enabled: bool = True, timeout: int = _DEFERRING_DISPOSITION_TIMEOUT_S
+) -> bool:
+    """Semantic judge behind the deferring-disposition regex prefilter: does this
+    AskUserQuestion menu offer the user nothing but branches that postpone or
+    refuse work the assistant itself could do now?
+
+    The distinction the model carries is the one no regex can: a menu of
+    ticket/backlog/"leave as is" options is DEFECTIVE when the assistant holds
+    the rights and the diagnosis, and LEGITIMATE when the work belongs to
+    someone else -- the same option vocabulary in both cases.
+
+    Like judge_feedback_signal / judge_outage_escalation this is a PURE model
+    call with no inline prefilter: the caller (the hook) runs its regex
+    prefilter outside the agentctl package and calls this judge only when it
+    fires; advisor.py imports only within .config/.dispatch.
+
+    Fail-open, mirroring judge_binary_ask: disabled, no text, no runner, a
+    non-zero exit, an empty/unparseable answer, or any exception all return
+    False -- the consumer is a PreToolUse deny, so a confident False (never a
+    fabricated True) is the safe failure direction."""
+    if not enabled or not isinstance(ask_text, str) or not ask_text:
+        return False
+    if runner is None:
+        return False
+    try:
+        prompt = _DEFERRING_DISPOSITION_JUDGE_PROMPT.format(text=ask_text)
         result = runner(["claude", "-p", "--model", _JUDGE_MODEL, prompt], timeout=timeout)
         if result.returncode != 0:
             return False

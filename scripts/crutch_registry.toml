@@ -10,6 +10,7 @@
 # scripts/tests/**                                           | code   | not-a-gate
 # scripts/agentctl/**                                        | code   | structural
 # scripts/hook-escalation-diagnosis-gate.py (judge-guarded)  | code   | semantic-guarded
+# scripts/hook-deferring-disposition-gate.py (judge-guarded) | code   | semantic-guarded
 # scripts/hook-*.py (other guardian hooks)                   | code   | structural
 # scripts/lib/** (incl. term_ruleset.py)                     | code   | structural
 # scripts/crutch-inventory.py (self)                         | code   | not-a-gate
@@ -669,6 +670,30 @@ file = "scripts/gen_crutch_registry.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "This generator's own `_ALREADY_MECHANIZED_RE` is a one-time authoring aid for the stage-2 perception pass (see module docstring), not a runtime gate; it reaches no hard-outcome sink."
+
+[[entry]]
+id = "14e441f0266b3bf3"
+domain = "code"
+file = "scripts/hook-deferring-disposition-gate.py"
+class = "semantic-guarded"
+disposition = "keep"
+ground = "Built judge-guarded by construction: `decide()` runs the high-recall `_DEFER_CUE_RE` prefilter AND `agentctl.advisor.judge_deferring_disposition` (fail-open semantic judge) before it builds the deny payload, and the payload is built in that same scope, so the guard is visible at scope granularity without an allowlist ground. The regex only widens recall over deferral vocabulary; whether the options actually leave the work undone is the judge's call."
+
+[[entry]]
+id = "a0bcdb297732d617"
+domain = "code"
+file = "scripts/hook-deferring-disposition-gate.py"
+class = "semantic-guarded"
+disposition = "keep"
+ground = "Built judge-guarded by construction: `decide()` runs the high-recall `_DEFER_CUE_RE` prefilter AND `agentctl.advisor.judge_deferring_disposition` (fail-open semantic judge) before it builds the deny payload, and the payload is built in that same scope, so the guard is visible at scope granularity without an allowlist ground. The regex only widens recall over deferral vocabulary; whether the options actually leave the work undone is the judge's call."
+
+[[entry]]
+id = "a40aa502dae1fa86"
+domain = "code"
+file = "scripts/hook-deferring-disposition-gate.py"
+class = "semantic-guarded"
+disposition = "keep"
+ground = "Built judge-guarded by construction: `decide()` runs the high-recall `_DEFER_CUE_RE` prefilter AND `agentctl.advisor.judge_deferring_disposition` (fail-open semantic judge) before it builds the deny payload, and the payload is built in that same scope, so the guard is visible at scope granularity without an allowlist ground. The regex only widens recall over deferral vocabulary; whether the options actually leave the work undone is the judge's call."
 
 [[entry]]
 id = "c9f52dd541c2fe1b"
@@ -2474,6 +2499,22 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "4149e35e0c180fcf"
 domain = "code"
 file = "scripts/tests/test_cost.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "cacc93c4d125cf0e"
+domain = "code"
+file = "scripts/tests/test_deferring_disposition_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "22bf7e4eec7385d5"
+domain = "code"
+file = "scripts/tests/test_deferring_disposition_gate.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
@@ -6767,6 +6808,14 @@ disposition = "keep"
 ground = "This generator's own `_ALREADY_MECHANIZED_RE` is a one-time authoring aid for the stage-2 perception pass (see module docstring), not a runtime gate; it reaches no hard-outcome sink. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "c87c6eff5ae51086"
+domain = "code_file_rollup"
+file = "scripts/hook-deferring-disposition-gate.py"
+class = "semantic-guarded"
+disposition = "keep"
+ground = "Built judge-guarded by construction: `decide()` runs the high-recall `_DEFER_CUE_RE` prefilter AND `agentctl.advisor.judge_deferring_disposition` (fail-open semantic judge) before it builds the deny payload, and the payload is built in that same scope, so the guard is visible at scope granularity without an allowlist ground. The regex only widens recall over deferral vocabulary; whether the options actually leave the work undone is the judge's call. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "cc33852e6049935c"
 domain = "code_file_rollup"
 file = "scripts/hook-engine-start.py"
@@ -7274,6 +7323,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "50f951f6fe69e1b8"
 domain = "code_file_rollup"
 file = "scripts/tests/test_cost.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "58da0d83b7018fcd"
+domain = "code_file_rollup"
+file = "scripts/tests/test_deferring_disposition_gate.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"

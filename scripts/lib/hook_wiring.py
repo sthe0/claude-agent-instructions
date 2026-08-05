@@ -103,6 +103,9 @@ GATE_BEARING_HOOKS: "tuple[tuple[str, str], ...]" = (
     ("hook-escalation-diagnosis-gate.py",
      "denies escalating an external-service failure to the user with no "
      "recorded diagnosis"),
+    ("hook-deferring-disposition-gate.py",
+     "denies an ask whose every option defers or refuses work the agent could "
+     "do itself right now"),
     ("hook-multi-mount-search-guard.py",
      "denies a search that would fan out across every mount"),
     ("hook-turn-end-gate.py",
