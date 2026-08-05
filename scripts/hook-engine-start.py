@@ -14,11 +14,13 @@ user prompt and keeps the engine the default control path:
                            next-step hint, so the coordinator stays on the deterministic spine.
 
 Besides auto-start (idempotent `start --if-absent`; never classify — weight is a cognitive
-call the gate still enforces), this hook stamps `last_user_prompt_ts` (time.time()) into the
-live session's state file on every prompt — a raw JSON patch, not a dataclass round-trip, so
-a stray/legacy state file can never fail to load here. That timestamp backs the plan-delivery
-gate (hook-plan-delivery-gate.py): compared against `plan_submitted_ts` at node PLAN_READY, it
-tells whether the plan was submitted THIS turn (the user cannot have seen it yet).
+call the gate still enforces), this hook stamps three keys into the live session's state file
+on every prompt — a raw JSON patch, not a dataclass round-trip, so a stray/legacy state file
+can never fail to load here: `last_user_prompt_ts` (time.time()), which backs the
+plan-delivery gate (hook-plan-delivery-gate.py) — compared against `plan_submitted_ts` at node
+PLAN_READY, it tells whether the plan was submitted THIS turn (the user cannot have seen it
+yet) — plus `user_prompt_count` and `effort_actuals['active_minutes']`, the two
+hook-stamped effort-divergence actuals (see `_stamp_prompt_ts`).
 
 Both mutations are best-effort: any failure is swallowed so a hook crash can never wedge the
 workflow. Corrupt/unreadable state behaves like "no state". Always exits 0.
@@ -120,7 +122,9 @@ def _stamp_prompt_ts(session_id: str, now: float) -> None:
         data["last_user_prompt_ts"] = now
 
         count = data.get("user_prompt_count")
-        data["user_prompt_count"] = (count if isinstance(count, int) else 0) + 1
+        data["user_prompt_count"] = (
+            int(count) if isinstance(count, (int, float)) else 0
+        ) + 1
 
         if isinstance(previous, (int, float)) and now > previous:
             elapsed = min((now - previous) / 60.0, _active_minutes_cap())

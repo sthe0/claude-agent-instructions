@@ -965,30 +965,17 @@ class SessionState:
     # --deliverable-kind (absent key -> dataclass default via from_dict's cls(**data)).
     deliverable_kind: str = ""
     # Effort-divergence trigger (schema 25) — effort.py owns every read and write of
-    # these; nothing else interprets them. All six load as their zero value on legacy
-    # states (absent key -> dataclass default via from_dict's cls(**data)), and the two
-    # None sentinels are what makes the trigger ARMED-ONLY: divergence() refuses to fire
-    # unless BOTH effort_estimate and effort_baseline are set, and only cmd_approve's
-    # effort.arm() sets them — so a session that never passes approval (execute_small
-    # takes ROUTED -> EXECUTING directly) is inert by construction rather than by a
-    # weight_class test a future route could forget.
-    #   effort_estimate  the CURRENT plan's declared cost per ratio scale, re-derived at
-    #                    arming and on every replan (effort.rederive is its only writer).
-    #   effort_baseline  the actual vector snapshotted AT ARMING, so every comparison is
-    #                    over the window the estimate describes (actual - baseline);
-    #                    rebased at each firing so a corrected plan cannot re-fire.
-    #   effort_actuals   the monotone accumulators ('spend_usd' from the cost ledger,
-    #                    'active_minutes' from hook-engine-start's prompt stamp). Never a
-    #                    fold over `stages`: a replan drops stages and would erase its own
-    #                    evidence at exactly the moment the divergence is largest.
-    #   effort_fires     one record per firing (scale, multiple, history_len) — the audit
-    #                    trail and the observable behind the "a replan must be logged
-    #                    since the last firing" re-arm belt.
-    #   effort_spend_seen  plan_path -> ledger total already booked. Keyed BY PATH, not a
-    #                    single high-water scalar, because cmd_replan rewrites plan_path
-    #                    and the new path's ledger sums from its own 0.
-    #   user_prompt_count  interactions actual, incremented by hook-engine-start.py in the
-    #                    same read-modify-write as last_user_prompt_ts.
+    # these; nothing else interprets them, and effort.py's module docstring is the
+    # canonical statement of the mechanism (ARMED-ONLY, THE WINDOW, ARM-ONCE, RE-ARM,
+    # SUB-PLAN CUSTODY). All six load as their zero value on legacy states (absent key
+    # -> dataclass default via from_dict's cls(**data)).
+    #   effort_estimate    the CURRENT plan's declared cost per ratio scale (effort.rederive).
+    #   effort_baseline    the actual vector snapshotted at arming (effort.arm); None until
+    #                      then is the ARMED-ONLY sentinel — see effort.py.
+    #   effort_actuals     the monotone accumulators ('spend_usd', 'active_minutes').
+    #   effort_fires       one record per firing (scale, multiple, history_len).
+    #   effort_spend_seen  plan_path -> ledger total already booked, keyed BY PATH.
+    #   user_prompt_count  interactions actual, stamped by hook-engine-start.py.
     effort_estimate: dict | None = None
     effort_baseline: dict | None = None
     effort_actuals: dict = field(default_factory=dict)

@@ -49,6 +49,26 @@ firing (so a plan that contracts below the accumulated actual cannot re-fire on 
 command), AND a further fire requires at least one `replan` event logged since the last
 one (the "silent until a replan sets a new estimate" rule, read literally).
 
+SUB-PLAN CUSTODY. `cmd_push_subplan` resets `state.stages` and re-runs the full
+classify -> ... -> approve spine for a service sub-plan, so a naive second `arm()` would
+compare the PARENT's whole accumulated actual against the CHILD's tiny estimate — a
+spurious fire on the sub-plan's first command. The fix lives at three call-site seams
+OUTSIDE this module (`cmd_push_subplan`'s reset list, the `PlanFrame` dataclass, and
+`SessionState.from_dict`'s `PlanFrame` rebuild in state.py), not here: push snapshots all
+five effort fields into the frame and resets them (estimate and baseline to `None`, fires
+to `[]`, `effort_spend_seen` to `{}`, `effort_actuals` to a fresh zero vector); pop
+restores the parent's five fields and ADDS the child's `effort_actuals` into the restored
+parent's, because push zeroed it so the child's vector is pure child consumption — effort
+spent inside a service sub-plan is effort spent on the parent's task. `user_prompt_count`
+lives outside `effort_actuals` and is deliberately not zeroed by push.
+
+THE SENTINEL THAT CUSTODY DEPENDS ON: `effort_baseline` is `None` when unarmed and a dict
+when armed (ARMED-ONLY above) — a ZEROED dict, which is what push resets it to, still
+reads as armed, and `arm()`'s "snapshot only if unset" check must not re-snapshot it. A
+future edit that treats an all-zero baseline as equivalent to unset would silently re-open
+the window for a freshly-pushed child and skip its snapshot. `None` is the unarmed value
+everywhere — fresh session, after push, after reset — never a zeroed dict.
+
 Purity: this module reads only the state object it is handed plus config.md's constants.
 It never shells out, opens a socket, or reads a clock — the cost-ledger read belongs to
 the CALLER (cli.py) and arrives as data, and the wall-clock accumulation happens in
@@ -145,28 +165,58 @@ def _stage_tier(stage) -> str:
     return _DEFAULT_TIER_SPAWN if stage.is_spawn() else _DEFAULT_TIER_IN_THREAD
 
 
-def _mandated_reviews(state: SessionState) -> int:
-    """Count of engine-mandated review spawns derivable from the plan.
+def _replans_since_arming(state: SessionState) -> int:
+    """Replan events logged since the window opened — mirrors `deltas()`'s
+    SCALE_REPLANS delta, read directly here because `estimate()` runs before there is
+    anything for `deltas()` to compare against. `effort_baseline` is `None` until
+    `arm()` sets it (ARMED-ONLY), so a session mid-arm or never armed has no window
+    yet and counts 0 — matching the flat `1` this replaced for a freshly-approved
+    plan's first estimate.
 
-    One thinker plan review for the plan itself, plus one code review per
-    spawn:developer stage. Both gates are SUBSTANTIVE-only, so a non-substantive
-    session mandates none — which is what lets a plan with no spawn stages estimate
-    0 and leave the spend scale inapplicable."""
+    An approximation, not an exact spawn count: a replan retried against
+    byte-identical, already-reviewed bytes needs no new spawn (over-counts here); a
+    reviewer round that returns `revise` before a passing verdict costs more than one
+    spawn per replan (under-counts here). Both are rare corners; what this preserves
+    is the WINDOW match with the actual side, which is what a divergence comparison
+    needs — exact review-dollar accounting is the ledger's job, not this module's."""
+    if state.effort_baseline is None:
+        return 0
+    base = float(state.effort_baseline.get(SCALE_REPLANS) or 0.0)
+    return max(0, replan_count(state) - int(base))
+
+
+def _mandated_reviews(state: SessionState) -> int:
+    """Count of engine-mandated review spawns derivable from the plan and its history.
+
+    One thinker plan review for the plan as currently approved, plus one code review
+    per spawn:developer stage, plus one FURTHER thinker review per replan logged
+    since arming — `gates.plan_review_blockers` requires a review bound to the exact
+    plan bytes at EVERY replan, not only at the first approval, and the actual side
+    (`refresh_spend`) sums every one of those spawns by `plan_path` with no
+    stage_index filter. Counting only the flat initial review would silently inflate
+    the spend ratio on every replan, biasing exactly the sessions already closest to
+    the multiple (finding: a replan's mandated review must be counted in the SAME
+    window the actual side is compared over). Both gates are SUBSTANTIVE-only, so a
+    non-substantive session mandates none — which is what lets a plan with no spawn
+    stages estimate 0 and leave the spend scale inapplicable."""
     if state.weight_class != WeightClass.SUBSTANTIVE.value:
         return 0
     developers = sum(
         1 for s in state.stages if s.is_spawn() and s.spawn_kind() == _DEVELOPER_KIND
     )
-    return 1 + developers
+    return 1 + developers + _replans_since_arming(state)
 
 
 def estimate(state: SessionState, thr: Thresholds | None = None) -> dict:
     """The CURRENT plan's declared cost, per ratio scale.
 
-    Pure derivation over `state.stages`. `rederive()` is the only writer that stores it;
-    `divergence()` never calls this, so a session that has not been armed has nothing to
-    be compared against. The absolute scales appear nowhere here — they have no estimate
-    by construction (see ABSOLUTE_SCALES).
+    Derived over `state.stages`, plus — for the mandated-review count alone —
+    `state.effort_baseline` and the replan events in `state.history` (see
+    `_replans_since_arming`); never `state.effort_estimate` itself, so `rederive()`
+    calling this to overwrite that very field is not circular. `rederive()` is the
+    only writer that stores the result; `divergence()` never calls this, so a session
+    that has not been armed has nothing to be compared against. The absolute scales
+    appear nowhere here — they have no estimate by construction (see ABSOLUTE_SCALES).
 
     in_thread stages contribute nothing to SPEND (cost.py attributes no cost to them, so
     counting them on the estimate side alone would systematically deflate the ratio) but
@@ -200,8 +250,12 @@ def actual(state: SessionState) -> dict:
     Two entries are read from monotone accumulators written elsewhere (`effort_actuals`,
     fed by refresh_spend and by hook-engine-start's prompt stamp); two are derived on
     read. Never a fold over `state.stages`: a substantive replan drops stages, so a fold
-    would erase its own evidence at exactly the moment the true divergence is largest."""
-    actuals = state.effort_actuals or {}
+    would erase its own evidence at exactly the moment the true divergence is largest.
+
+    `state.effort_actuals` is typed `dict` (default_factory, never Optional) unlike
+    `effort_estimate`/`effort_baseline`, so it is read directly with no `or {}` guard —
+    `refresh_spend`, its only writer, makes the same assumption."""
+    actuals = state.effort_actuals
     return {
         SCALE_SPEND: float(actuals.get(ACTUAL_SPEND_KEY) or 0.0),
         SCALE_WALL_CLOCK: float(actuals.get(ACTUAL_MINUTES_KEY) or 0.0),
@@ -211,14 +265,21 @@ def actual(state: SessionState) -> dict:
 
 
 def deltas(state: SessionState) -> dict:
-    """The arming-relative actual: `actual - baseline`, per scale, clamped at 0.
+    """The arming-relative actual: `actual - baseline`, per scale.
+
+    Never negative, by construction and with no clamp: every accumulator this
+    module's writers touch is monotone (spend and minutes only grow; replans and
+    interactions only increase), and the baseline is always a PAST snapshot of the
+    same vector, so `actual >= baseline` always holds. A future writer that broke
+    monotonicity should surface here as a negative delta, not be silently floored
+    into looking like zero divergence.
 
     An unarmed session has no baseline; its deltas are then the raw actuals, which is
     reporting-only — `divergence()` refuses to fire without a baseline."""
     acts = actual(state)
     base = state.effort_baseline or {}
     return {
-        scale: max(0.0, acts[scale] - float(base.get(scale) or 0.0))
+        scale: acts[scale] - float(base.get(scale) or 0.0)
         for scale in SCALE_ORDER
     }
 
@@ -292,6 +353,17 @@ def divergence(state: SessionState, thr: Thresholds | None = None) -> Divergence
 
     When several scales fire, the one with the largest multiple is returned (ties break
     on SCALE_ORDER), because that is the divergence a diagnosis should be framed around.
+
+    CALLER OBLIGATION: a caller that ACTS on a returned Divergence — enters
+    declare -> investigate -> critique — MUST call `record_fire()` afterward. Both
+    re-arm belts above read only what `record_fire` writes (the rebased baseline, the
+    appended `effort_fires` entry); a caller that diagnoses but never records leaves
+    the same divergence eligible to fire on every subsequent command, turning a
+    one-time diagnosis into a loop that spends exactly the user attention this module
+    exists to save. This module cannot enforce the call — `divergence()` only reads
+    state, `record_fire` is the only writer — so the obligation is stated here
+    because `divergence()`, not `record_fire()`, is the entry point a fire site
+    actually calls.
     """
     if not armed(state):
         return None
@@ -349,11 +421,8 @@ def rederive(state: SessionState, thr: Thresholds | None = None) -> dict:
 
 def arm(state: SessionState, thr: Thresholds | None = None) -> dict:
     """Open the measurement window: re-derive the estimate, and snapshot the baseline
-    ONLY IF it is unset.
-
-    Idempotent on the baseline by design — cmd_approve runs a second time after a
-    substantive replan re-arms the approval gate, and re-snapshotting there would zero
-    every ratio at exactly the moment the accumulated actual matters most."""
+    ONLY IF it is unset (ARM-ONCE / SUB-PLAN CUSTODY's sentinel note, module
+    docstring — "unset" means `is None`, never a zeroed dict)."""
     rederive(state, thr)
     if state.effort_baseline is None:
         state.effort_baseline = actual(state)
@@ -373,7 +442,10 @@ def refresh_spend(state: SessionState, rows: list[dict], path: str | None) -> fl
     `effort_spend_seen` is keyed BY PATH rather than being one high-water scalar,
     because a replan rewrites plan_path and the new path sums from its own 0 — a single
     scalar would freeze the accumulator until the new path out-grew the old total. The
-    max() clamp then guards only against rows disappearing from the ledger."""
+    per-path entry is itself a high-water mark (`max(total, seen)`, never lowered): a
+    row disappearing from the ledger, or a transient regression in a re-read total,
+    must not lower the watermark, or the delta would be double-booked once the ledger
+    recovers to its prior total."""
     if not path:
         return 0.0
     key = str(path)
@@ -384,21 +456,21 @@ def refresh_spend(state: SessionState, rows: list[dict], path: str | None) -> fl
         value = row.get("cost_usd")
         if isinstance(value, (int, float)):
             total += float(value)
-    delta = max(0.0, total - float(state.effort_spend_seen.get(key) or 0.0))
+    seen = float(state.effort_spend_seen.get(key) or 0.0)
+    delta = max(0.0, total - seen)
     state.effort_actuals[ACTUAL_SPEND_KEY] = (
         float(state.effort_actuals.get(ACTUAL_SPEND_KEY) or 0.0) + delta
     )
-    state.effort_spend_seen[key] = total
+    state.effort_spend_seen[key] = max(total, seen)
     return delta
 
 
 def record_fire(state: SessionState, div: Divergence, *, now: float | None = None) -> dict:
-    """Record a firing and re-arm: REBASE the baseline onto the current actual vector.
-
-    Belt 1 of the re-arm rule (belt 2, "a replan must be logged since", is enforced by
-    `divergence()` reading the appended record). Without the rebase, a corrected plan
-    smaller than the already-accumulated actual would re-fire on the very next command.
-    `now` is supplied by the caller — this module reads no clock."""
+    """Record a firing and re-arm: REBASE the baseline onto the current actual vector
+    (RE-ARM belt 1, module docstring; belt 2 is enforced by `divergence()` reading the
+    appended record). MANDATORY after any caller acts on a `Divergence` — see
+    `divergence()`'s CALLER OBLIGATION. `now` is supplied by the caller — this module
+    reads no clock."""
     state.effort_baseline = actual(state)
     record = {
         "scale": div.scale,

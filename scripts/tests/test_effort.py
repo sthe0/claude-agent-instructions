@@ -1,18 +1,11 @@
 """Effort-divergence trigger: the pure estimate / actual / divergence layer.
 
 The invariants under test are the ones that decide whether the trigger fires on WORK
-rather than on the shape of the session:
-
-  * ARMED-ONLY — a session that never passes cmd_approve can never fire. Driven through
-    the REAL SMALL_CHANGE route (cmd_classify -> execute_small), not by asserting on a
-    weight_class field, because the property is a claim about machine.py's transitions.
-  * THE WINDOW — every comparison is `actual - baseline`, so effort spent before approval
-    (a long clarification exchange, a research spawn) cannot fire the trigger.
-  * ARM-ONCE — a substantive replan re-runs cmd_approve; re-snapshotting the baseline
-    there would zero every ratio at exactly the moment the divergence is largest.
-  * MONOTONE ACTUALS — accumulators survive a stage being dropped, retried, or the
-    plan_path being rewritten by a replan.
-  * RE-ARM — both belts (baseline rebase at the firing, AND a replan logged since).
+rather than on the shape of the session — ARMED-ONLY, THE WINDOW, ARM-ONCE, MONOTONE
+ACTUALS, RE-ARM (both belts), and SUB-PLAN CUSTODY's baseline sentinel; see effort.py's
+module docstring for what each means and why. ARMED-ONLY alone is driven through the
+REAL SMALL_CHANGE route (cmd_classify -> execute_small), not by asserting on a
+weight_class field, because the property is a claim about machine.py's transitions.
 
 Every test drives the module's own writers rather than assigning the state fields
 directly, so a writer that stops honouring an invariant fails here rather than silently
@@ -130,6 +123,37 @@ def test_absolute_scales_carry_no_estimate():
     assert set(est) == set(effort.RATIO_SCALES)
 
 
+def test_mandated_reviews_grow_with_each_replan_since_arming():
+    """gates.plan_review_blockers requires a thinker review bound to the exact plan
+    bytes at EVERY replan, not only the first approval, and the actual side
+    (refresh_spend) sums every one of those review-round spawns by plan_path. A flat
+    `1` would silently inflate the spend ratio on every replan — this pins that the
+    mandated-review count tracks replans SINCE ARMING, matching the window the actual
+    side is compared over."""
+    state = substantive([stage(0, "spawn:developer")])
+    effort.arm(state, THR)
+    assert state.effort_estimate[effort.SCALE_SPEND] == pytest.approx(9.0)  # 1 review
+
+    state.log("replan", kind="substantive")
+    state.log("replan", kind="substantive")
+    est = effort.rederive(state, THR)  # what a stage-4 replan branch calls
+    # 3.00 spawn + (1 initial + 1 developer + 2 replans) reviews x 3.00 = 3 + 12 = 15.
+    assert est[effort.SCALE_SPEND] == pytest.approx(15.0)
+
+
+def test_replans_logged_before_arming_do_not_inflate_the_review_estimate():
+    """A pre-approval correction (a PLAN_READY revise loop) is outside the window
+    arm() opens; only replans logged AFTER the baseline snapshot count."""
+    state = substantive([stage(0, "spawn:developer")])
+    state.log("replan", kind="refinement")
+    effort.arm(state, THR)
+    assert state.effort_estimate[effort.SCALE_SPEND] == pytest.approx(9.0)  # unchanged
+
+    state.log("replan", kind="substantive")
+    est = effort.rederive(state, THR)
+    assert est[effort.SCALE_SPEND] == pytest.approx(12.0)  # only the post-arming one counts
+
+
 # --- ARMED-ONLY ---------------------------------------------------------------
 
 def test_unarmed_session_never_fires_however_large_the_actual():
@@ -223,6 +247,24 @@ def test_arm_is_idempotent_on_the_baseline_but_always_re_derives():
     assert effort.deltas(state)[effort.SCALE_SPEND] == pytest.approx(100.0)
 
 
+def test_arm_snapshots_only_a_none_baseline_never_a_zeroed_one():
+    """The sentinel SUB-PLAN CUSTODY (cli.py's push/pop, stage 4) depends on: `None`
+    means unarmed and gets a fresh snapshot; a zeroed-but-PRESENT dict — what push
+    resets a child frame to — already reads as armed and must be left untouched, or a
+    freshly-pushed child would silently skip its own snapshot."""
+    state = substantive([stage(0, "spawn:developer")])
+    state.effort_actuals[effort.ACTUAL_SPEND_KEY] = 40.0
+    effort.arm(state, THR)
+    assert state.effort_baseline[effort.SCALE_SPEND] == pytest.approx(40.0)
+
+    zeroed = substantive([stage(0, "spawn:developer")])
+    zeroed.effort_baseline = {scale: 0.0 for scale in effort.SCALE_ORDER}
+    zeroed.effort_actuals[effort.ACTUAL_SPEND_KEY] = 999.0
+    effort.arm(zeroed, THR)
+    assert zeroed.effort_baseline[effort.SCALE_SPEND] == 0.0  # untouched, not re-snapshotted
+    assert effort.armed(zeroed) is True
+
+
 # --- the actuals: monotone, replan-proof --------------------------------------
 
 def rows(*pairs) -> list[dict]:
@@ -263,6 +305,20 @@ def test_spend_accumulator_survives_a_plan_path_rewrite():
 
     effort.refresh_spend(state, rows(("/p/old.toml", 25.0)), "/p/old.toml")
     assert effort.actual(state)[effort.SCALE_SPEND] == pytest.approx(28.0)
+
+
+def test_refresh_spend_watermark_never_regresses():
+    """A row disappearing from the ledger (or a transient re-read reporting a lower
+    total) must not lower the per-path high-water mark — else the delta is
+    double-booked once the ledger recovers to its prior total."""
+    state = substantive()
+    effort.refresh_spend(state, rows(("/p/plan.toml", 10.0)), "/p/plan.toml")
+    assert effort.refresh_spend(state, rows(("/p/plan.toml", 4.0)), "/p/plan.toml") == 0.0
+    assert effort.actual(state)[effort.SCALE_SPEND] == pytest.approx(10.0)
+
+    # ledger recovers to its old total: must not re-book the already-counted delta.
+    assert effort.refresh_spend(state, rows(("/p/plan.toml", 10.0)), "/p/plan.toml") == 0.0
+    assert effort.actual(state)[effort.SCALE_SPEND] == pytest.approx(10.0)
 
 
 def test_actuals_survive_stages_being_dropped_or_retried():
