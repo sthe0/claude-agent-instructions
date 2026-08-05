@@ -67,14 +67,46 @@ def _load_state(session_id: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def _stamp_prompt_ts(session_id: str, now: float) -> None:
-    """Best-effort: record `now` as last_user_prompt_ts in the session's state file.
+#: Fallback for the per-turn active-minutes cap when config.md is unreadable. Keeping a
+#: literal here (key: substantive-wall-clock-min) is what lets the cap live inside its own
+#: try/except: a config failure must never cost the last_user_prompt_ts stamp beside it.
+_IDLE_CAP_MIN_FALLBACK = 30
 
-    A raw JSON patch (read dict, set one key, write back) — mirrors _load_state's
-    raw-dict style rather than a SessionState round-trip, so a legacy/partial state
-    file still gets the stamp instead of failing to load. Silent on any error: a
-    missed stamp only means the plan-delivery gate fails open (allow) this turn,
-    never a hard failure."""
+
+def _active_minutes_cap() -> float:
+    """Longest interval between two prompts still counted as ACTIVE work.
+
+    A prompt gap is the only wall-clock observable available here, and an unbounded one
+    would book an overnight pause as effort — firing the divergence trigger on idleness
+    rather than on work. Capped at substantive-wall-clock-min: that is precisely the
+    engine's own boundary for "long enough to be its own task", so a gap past it is not
+    one continuous stretch of work in any case."""
+    try:
+        from agentctl.config import Thresholds  # noqa: PLC0415 — hook survives its absence
+
+        return float(Thresholds().substantive_wall_clock_min)
+    except Exception:
+        return float(_IDLE_CAP_MIN_FALLBACK)
+
+
+def _stamp_prompt_ts(session_id: str, now: float) -> None:
+    """Best-effort: stamp this turn's boundary and accumulate the two prompt-derived
+    effort actuals in the session's state file.
+
+    A raw JSON patch (read dict, set keys, write back) — mirrors _load_state's raw-dict
+    style rather than a SessionState round-trip, so a legacy/partial state file still gets
+    the stamp instead of failing to load. Silent on any error: a missed stamp only means
+    the plan-delivery gate fails open (allow) this turn, never a hard failure.
+
+    Three keys, one write, because they share one observable — the prompt boundary:
+      * `last_user_prompt_ts` backs the plan-delivery gate (unchanged);
+      * `user_prompt_count` is the interactions actual;
+      * `effort_actuals['active_minutes']` accumulates the CAPPED gap since the previous
+        prompt. The previous value of last_user_prompt_ts, read here before it is
+        overwritten, IS that boundary — no second timestamp field is needed. A first
+        prompt (no prior stamp) contributes 0 rather than a guess.
+    All three accumulate on RAW dict values with defensive coercion: effort.py's typed
+    view is not importable from a hook that must survive a broken checkout."""
     if not session_id:
         return
     p = config_root.resolve_agentctl_state_file(session_id)
@@ -84,7 +116,23 @@ def _stamp_prompt_ts(session_id: str, now: float) -> None:
         data = json.loads(p.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             return
+        previous = data.get("last_user_prompt_ts")
         data["last_user_prompt_ts"] = now
+
+        count = data.get("user_prompt_count")
+        data["user_prompt_count"] = (count if isinstance(count, int) else 0) + 1
+
+        if isinstance(previous, (int, float)) and now > previous:
+            elapsed = min((now - previous) / 60.0, _active_minutes_cap())
+            actuals = data.get("effort_actuals")
+            if not isinstance(actuals, dict):
+                actuals = {}
+            booked = actuals.get("active_minutes")
+            actuals["active_minutes"] = (
+                float(booked) if isinstance(booked, (int, float)) else 0.0
+            ) + elapsed
+            data["effort_actuals"] = actuals
+
         p.write_text(json.dumps(data), encoding="utf-8")
     except Exception:
         pass
