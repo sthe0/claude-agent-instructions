@@ -387,6 +387,24 @@ def test_the_largest_multiple_wins_when_several_scales_diverge():
     assert fired.multiple == pytest.approx(20.0)
 
 
+def test_ranking_uses_distance_past_own_trigger_not_raw_multiple():
+    """A ratio scale trips its raw `multiple` field at ~5.0 (effort-divergence-multiple)
+    while an absolute scale's is already normalized by ratios() to trip at 1.0 — so
+    ranking on the raw field (the pre-stage-4 bug) always favors a ratio scale barely
+    past its own line over an absolute scale far past its own. Spend here is only 1.01x
+    past its own trigger (raw multiple 5.05, just over the 5.0 line); replans is 4x past
+    its own (12 replans against a threshold of 3). The fixed ranking must pick replans."""
+    state = substantive([stage(0, "spawn:developer")])  # spend estimate: 9.00
+    effort.arm(state, THR)
+    state.effort_actuals[effort.ACTUAL_SPEND_KEY] = 9.0 * 5.05  # raw multiple 5.05
+    for _ in range(12):
+        state.log("replan", kind="substantive")  # 12 vs threshold 3 -> normalized 4.0x
+    fired = effort.divergence(state, THR)
+    assert fired is not None
+    assert fired.scale == effort.SCALE_REPLANS
+    assert fired.multiple == pytest.approx(4.0)
+
+
 def test_framing_points_at_the_norm_not_at_the_estimate():
     state = substantive([stage(0, "spawn:developer")])
     effort.arm(state, THR)

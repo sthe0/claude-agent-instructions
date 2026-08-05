@@ -491,6 +491,25 @@ def stage_review_active(state: SessionState) -> bool:
     return state.weight_class == WeightClass.SUBSTANTIVE.value
 
 
+def effort_active(state: SessionState) -> bool:
+    """Whether a firing `effort.divergence()` may ACT (transition the session into
+    DIAGNOSING) — never whether effort.py accounts. arm/rederive/refresh_spend run
+    unconditionally at their call sites regardless of this flag; only the fire sites in
+    cli.py read it, exactly like stage_review_active gates its judge, not the
+    accumulation it reads. AGENTCTL_EFFORT overrides in both directions ("1" forces on,
+    "0" forces off); the weight_class fallback mirrors the sibling gates above for
+    convention only — a session that never called cmd_approve never armed (effort.py's
+    ARMED-ONLY), so this fallback is moot in practice but kept for the same reason the
+    others have it: an explicit escape hatch that doesn't depend on inferring intent
+    from the absence of a var."""
+    env = os.environ.get("AGENTCTL_EFFORT")
+    if env == "1":
+        return True
+    if env == "0":
+        return False
+    return state.weight_class == WeightClass.SUBSTANTIVE.value
+
+
 def _stage_review_for(state: SessionState, stage_index: int):
     """The most-recently-recorded StageReview for `stage_index`, or None. Last-wins so
     a manual override recorded after a judge verdict supersedes it."""

@@ -725,6 +725,13 @@ class PlanFrame:
     stages: list["Stage"]
     current_stage: int | None
     originating_stage: int
+    # Effort-divergence custody (schema 25) — see effort.py's SUB-PLAN CUSTODY. Snapshotted
+    # by cmd_push_subplan, restored by cmd_pop_subplan; effort.py never reads a PlanFrame.
+    effort_estimate: dict | None
+    effort_baseline: dict | None
+    effort_actuals: dict
+    effort_fires: list[dict]
+    effort_spend_seen: dict
 
 
 @dataclass
@@ -1185,6 +1192,11 @@ class SessionState:
                 stages=[Stage.from_dict(s) for s in f.get("stages", [])],
                 current_stage=f.get("current_stage"),
                 originating_stage=int(f["originating_stage"]),
+                effort_estimate=f.get("effort_estimate"),
+                effort_baseline=f.get("effort_baseline"),
+                effort_actuals=f.get("effort_actuals") or {},
+                effort_fires=f.get("effort_fires") or [],
+                effort_spend_seen=f.get("effort_spend_seen") or {},
             )
             for f in data.get("plan_stack", [])
         ]

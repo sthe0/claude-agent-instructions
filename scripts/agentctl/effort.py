@@ -60,11 +60,18 @@ writer-by-writer argument, and what a future writer breaking it should look like
 SUB-PLAN CUSTODY. `cmd_push_subplan` resets `state.stages` and re-runs the full
 classify -> ... -> approve spine for a service sub-plan, so a naive second `arm()` would
 compare the PARENT's whole accumulated actual against the CHILD's tiny estimate — a
-spurious fire on the sub-plan's first command. The fix lives at FOUR call-site seams
-OUTSIDE this module, every one of them an EXPLICIT field-by-field list that a new field
-silently falls out of: `cmd_push_subplan`'s reset list, the `PlanFrame` dataclass,
-`SessionState.from_dict`'s `PlanFrame` rebuild in state.py, and `cmd_pop_subplan`'s
-restore list. Push snapshots all five effort fields into the frame and resets them
+spurious fire on the sub-plan's first command. The fix lives at FIVE call-site seams
+OUTSIDE this module: `cmd_push_subplan`'s reset list, the `PlanFrame` dataclass,
+`SessionState.from_dict`'s `PlanFrame` rebuild in state.py, `cmd_push_subplan`'s
+`PlanFrame(...)` construction (the snapshot itself), and `cmd_pop_subplan`'s restore
+list. They do NOT all fail the same way. `PlanFrame` declares no field defaults, so a
+field missing from the dataclass, from `cmd_push_subplan`'s construction, or from
+`from_dict`'s rebuild raises `TypeError` at construction time — LOUD, and therefore
+hard to ship. The two LIST-shaped seams fail the opposite way: `cmd_push_subplan`'s
+reset list and `cmd_pop_subplan`'s restore list are ordinary statements, not
+constructor arguments, so a field missing from either one simply keeps whatever value
+was already there — SILENT, and the one failure mode this docstring warns loudest
+about. Push snapshots all five effort fields into the frame and resets them
 (estimate and baseline to `None`, fires to `[]`, `effort_spend_seen` to `{}`,
 `effort_actuals` to a fresh zero vector); pop restores the parent's five fields and ADDS
 the child's `effort_actuals` into the restored parent's, because push zeroed it so the
@@ -377,8 +384,15 @@ def divergence(state: SessionState, thr: Thresholds | None = None) -> Divergence
       * every scale is inapplicable (zero estimate / accounting-only threshold) or below
         the multiple.
 
-    When several scales fire, the one with the largest multiple is returned (ties break
-    on SCALE_ORDER), because that is the divergence a diagnosis should be framed around.
+    When several scales fire, the one furthest past its OWN trigger is returned (ties
+    break on SCALE_ORDER) — NOT the one with the largest raw `multiple`. A ratio scale's
+    `multiple` trips at `effort-divergence-multiple` (e.g. 5.0) while an absolute scale's
+    is already normalized by `ratios()` to trip at 1.0, so ranking on the raw field would
+    always favor a ratio scale barely past its own trigger over an absolute scale far
+    past its own. Dividing a ratio scale's `multiple` by the configured multiple puts
+    both kinds back on the same "how far past its own line" footing; this only changes
+    WHICH fired scale is reported, never WHETHER one fires (that decision already ran,
+    above).
 
     CALLER OBLIGATION: a caller that ACTS on a returned Divergence — enters
     declare -> investigate -> critique — MUST call `record_fire()` afterward. Both
@@ -429,7 +443,11 @@ def divergence(state: SessionState, thr: Thresholds | None = None) -> Divergence
 
     if not candidates:
         return None
-    return max(candidates, key=lambda d: (d.multiple, -SCALE_ORDER.index(d.scale)))
+
+    def _past_own_trigger(d: Divergence) -> float:
+        return d.multiple / multiple if d.kind == "ratio" else d.multiple
+
+    return max(candidates, key=lambda d: (_past_own_trigger(d), -SCALE_ORDER.index(d.scale)))
 
 
 # --- the writers --------------------------------------------------------------
@@ -489,6 +507,19 @@ def refresh_spend(state: SessionState, rows: list[dict], path: str | None) -> fl
     )
     state.effort_spend_seen[key] = max(total, seen)
     return delta
+
+
+def merge_actuals(parent: dict, child: dict) -> dict:
+    """Add a popped sub-plan's accumulated actuals onto the restored parent's (SUB-PLAN
+    CUSTODY, module docstring). Used ONLY by `cmd_pop_subplan`: push zeroed the child's
+    `effort_actuals` to a fresh vector, so everything the child accumulated is pure child
+    consumption, and effort spent inside a service sub-plan is effort spent on the
+    parent's task. The other four custody fields are restored straight from the frame —
+    this is the one field pop adds instead of overwriting."""
+    return {
+        ACTUAL_SPEND_KEY: float(parent.get(ACTUAL_SPEND_KEY) or 0.0) + float(child.get(ACTUAL_SPEND_KEY) or 0.0),
+        ACTUAL_MINUTES_KEY: float(parent.get(ACTUAL_MINUTES_KEY) or 0.0) + float(child.get(ACTUAL_MINUTES_KEY) or 0.0),
+    }
 
 
 def record_fire(state: SessionState, div: Divergence, *, now: float | None = None) -> dict:
