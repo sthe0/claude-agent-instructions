@@ -147,10 +147,30 @@ def _skill_description_total() -> tuple[int, int]:
     return sum(len(desc) for _, desc in descriptions), len(descriptions)
 
 
+def _load_config_root():
+    """Import lib/config_root.py lazily, and tolerate its absence.
+
+    This script is deliberately COPYABLE on its own: hook-instruction-grooming-
+    due.py runs `<repo>/scripts/lint-prose-length.py` out of whatever tree
+    CLAUDE_INSTRUCTIONS_REPO names, and that tree need not carry a `lib/`
+    sibling. A module-level `from lib import config_root` therefore turns a
+    missing sibling into an import error for EVERY governed-file check, not just
+    the one dynamic scan that needs it.
+    """
+    path = Path(__file__).resolve().parent / "lib" / "config_root.py"
+    if not path.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("lint_prose_length_config_root", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def _load_cost_report():
     """Import scripts/cost-report.py by path (repo idiom: self-diagnose.py's
-    own _load_lint_prose_length) — reuses its transcript iterator and
-    projects-root resolution instead of re-deriving them here."""
+    own _load_lint_prose_length) — reuses its JSONL iterator instead of
+    re-deriving it here. The transcript ROOTS come from lib/config_root, not
+    from this module."""
     path = REPO_ROOT / "scripts" / "cost-report.py"
     if not path.is_file():
         return None
@@ -167,13 +187,11 @@ def scan_dynamic_injection(max_sessions: int = 20) -> dict[str, int] | None:
     machine / no history); a dict with n_events == 0 if sessions were
     scanned but none carried a UserPromptSubmit injection."""
     cost_report = _load_cost_report()
-    if cost_report is None:
-        return None
-    projects_dir = cost_report.PROJECTS_DIR
-    if not projects_dir.is_dir():
+    config_root = _load_config_root()
+    if cost_report is None or config_root is None:
         return None
     files = sorted(
-        projects_dir.glob("*/*.jsonl"),
+        config_root.iter_transcripts(),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )[:max_sessions]

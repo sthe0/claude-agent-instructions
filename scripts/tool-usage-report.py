@@ -2,8 +2,10 @@
 """Per-task report of specialization spawns and skill / subagent invocations.
 
 Source data:
-  - `~/.claude/projects/<cwd-hash>/*.jsonl` — session transcripts written by the
-    Claude Code harness. Each line is a JSON message. Assistant `tool_use`
+  - `<config root>/projects/<cwd-hash>/*.jsonl` — session transcripts written by
+    the Claude Code harness, read across BOTH config roots (see
+    lib/config_root.projects_roots), since a bare `claude` and the `claude-agent`
+    launcher write under different ones. Each line is a JSON message. Assistant `tool_use`
     entries with `name in {Skill, Agent, Task}` give us inline skill and
     subagent invocations along with their inputs.
   - `~/.local/log/claude-spawn-costs.jsonl` — written by
@@ -33,10 +35,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import transcript_read  # noqa: E402
-from lib.config_root import agent_home
+from lib.config_root import projects_roots
 
 COST_LOG = Path.home() / ".local" / "log" / "claude-spawn-costs.jsonl"
-PROJECTS_ROOT = agent_home() / "projects"  # system root (isolated or legacy)
 
 # Tool names whose tool_use entries are counted as inline invocations.
 SKILL_TOOL = "Skill"
@@ -196,14 +197,15 @@ def resolve_transcripts(args) -> list[Path]:
     if args.transcript:
         return [Path(args.transcript).expanduser().resolve()]
     cwd = Path(args.cwd).expanduser().resolve() if args.cwd else Path(os.getcwd()).resolve()
-    proj_dir = PROJECTS_ROOT / sanitize_cwd(str(cwd))
-    if not proj_dir.is_dir():
+    name = sanitize_cwd(str(cwd))
+    proj_dirs = [d for d in (root / name for root in projects_roots()) if d.is_dir()]
+    if not proj_dirs:
         print(
-            f"warning: no transcripts dir for cwd={cwd}: {proj_dir} does not exist",
+            f"warning: no transcripts dir for cwd={cwd}: no config root holds projects/{name}",
             file=sys.stderr,
         )
         return []
-    return sorted(proj_dir.glob("*.jsonl"))
+    return sorted(t for d in proj_dirs for t in d.glob("*.jsonl"))
 
 
 def resolve_since(args) -> tuple[dt.datetime | None, str]:

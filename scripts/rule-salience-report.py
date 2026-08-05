@@ -72,12 +72,11 @@ except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
     import tomli as tomllib  # type: ignore
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib.config_root import agent_home
+from lib.config_root import iter_transcripts
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REGISTRY_PATH = REPO_ROOT / "scripts" / "rule-registry.toml"
 CLAUDE_MD_PATH = REPO_ROOT / "CLAUDE.md"
-PROJECTS_ROOT = agent_home() / "projects"
 POLICY_LEDGER_PATH = Path.home() / ".local" / "log" / "claude-policy-ledger.jsonl"
 QUALITY_LEDGER_PATH = Path.home() / ".local" / "log" / "claude-task-quality.jsonl"
 
@@ -450,9 +449,7 @@ def scan_session_for_markers(
 
 
 def find_transcripts() -> list[Path]:
-    if not PROJECTS_ROOT.exists():
-        return []
-    return sorted(PROJECTS_ROOT.glob("*/*.jsonl"))
+    return iter_transcripts()
 
 
 def marker_origin_map(rules: list[dict]) -> dict[str, frozenset[str]]:

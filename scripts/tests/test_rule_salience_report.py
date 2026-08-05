@@ -628,9 +628,7 @@ def test_main_default_mode_exits_zero_with_no_transcripts(tmp_path, monkeypatch)
     _write_toml(registry, base_rules())
     claude_md = tmp_path / "CLAUDE.md"
     claude_md.write_text(CLAUDE_MD_TEXT)
-    empty_projects_root = tmp_path / "empty-projects"
-    empty_projects_root.mkdir()
-    monkeypatch.setattr(rsr, "PROJECTS_ROOT", empty_projects_root)
+    monkeypatch.setattr(rsr, "iter_transcripts", lambda: [])
     monkeypatch.setattr(rsr, "POLICY_LEDGER_PATH", tmp_path / "no-policy.jsonl")
     monkeypatch.setattr(rsr, "QUALITY_LEDGER_PATH", tmp_path / "no-quality.jsonl")
 

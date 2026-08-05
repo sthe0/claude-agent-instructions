@@ -8,8 +8,10 @@ effectiveness (proxies for task-resolution quality) — so that
 of a hand-computed one-off `jq` audit. See
 memory-global/leaves/policy-effectiveness-tracking.md.
 
-Data sources, per session:
-  - main transcript  ~/.claude/projects/<project>/<session>.jsonl
+Data sources, per session (transcript roots come from
+lib/config_root.projects_roots — BOTH config roots, since a bare `claude` and the
+`claude-agent` launcher write under different ones):
+  - main transcript  <config root>/projects/<project>/<session>.jsonl
   - sub-agent transcripts  <project>/<session>/subagents/*.jsonl
   - spawn-cost ledger  ~/.local/log/claude-spawn-costs.jsonl (the process-failure
     axis; read through agentctl.cost.read_rows, never re-parsed here)
@@ -98,13 +100,12 @@ free_text_questions = hook_si_freetext_answer.free_text_questions
 
 # System root (resolved via config_root) for transcripts
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib.config_root import agent_home, agentctl_gate_log, legacy_home
+from lib.config_root import agentctl_gate_log, legacy_home, projects_roots
 # The store that gives a fired flag closure state, and the spawn ledger's reader.
 # Both are reused as-is: a second store schema or a second ledger parser would be
 # two places to keep in step, and the ledger's attribution is already solved.
 import self_diagnose_store as findings_store
 from agentctl.cost import COST_LOG as SPAWN_LEDGER, read_rows as read_spawn_rows
-PROJECTS_DIR = agent_home() / "projects"
 LEDGER = Path.home() / ".local" / "log" / "claude-policy-ledger.jsonl"
 # Per-task quality ledger written by `agentctl resolve --quality` (agentctl/cli.py
 # TASK_QUALITY_LOG) -- same path, independent constant so this reader has no
@@ -709,9 +710,9 @@ def reprice(dry_run: bool = False) -> str:
 
 def in_window_files(days: int, project: str | None) -> list[Path]:
     cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
-    proj_dirs = ([PROJECTS_DIR / project] if project
-                 else [p for p in PROJECTS_DIR.iterdir() if p.is_dir()]
-                 if PROJECTS_DIR.is_dir() else [])
+    roots = projects_roots()
+    proj_dirs = ([root / project for root in roots] if project
+                 else [p for root in roots for p in root.iterdir() if p.is_dir()])
     files: list[Path] = []
     for pd in proj_dirs:
         if not pd.is_dir():
@@ -1913,7 +1914,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--days", type=int, default=7, help="window size in days (default 7)")
-    p.add_argument("--project", help="restrict to one project dir under ~/.claude/projects")
+    p.add_argument("--project", help="restrict to one project dir name, looked up under every config root's projects/ (both are unioned)")
     p.add_argument("--ledger-only", action="store_true", help="upsert without printing (for the hook)")
     p.add_argument("--ledger", type=Path,
                    help="override the ledger path (default: the real ~/.local/log ledger) — "

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Audit: which user-invocable skills are actually being used.
 
-Scans recent session transcripts (under `<config root>/projects/<hash>/*.jsonl`)
-and counts:
+Scans recent session transcripts (under `<config root>/projects/<hash>/*.jsonl`,
+across BOTH config roots — see lib/config_root.projects_roots) and counts:
   - Skills explicitly invoked via the `Skill` tool.
   - Skills mentioned by name in any `tool_use.input` (catches Bash invocations
     of scripts/CLIs whose binaries match a skill slug, e.g. `tracker-cli.sh`).
@@ -17,8 +17,8 @@ the audit window. The actual removal decision stays with the user — this
 script is informational, see `skill-catalog-curation.md`.
 
 Default window: last 30 days. Override with `--days N` or `--since YYYY-MM-DD`.
-Default scope: every project under `<config root>/projects/`. Override with
-`--cwd <abs-path>` to limit to one project.
+Default scope: every project under every config root's `projects/`. Override
+with `--cwd <abs-path>` to limit to one project (still unioned across roots).
 """
 from __future__ import annotations
 
@@ -31,9 +31,8 @@ from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib.config_root import agent_home
+from lib.config_root import iter_transcripts, projects_roots
 
-PROJECTS_ROOT = agent_home() / "projects"  # system root (isolated or legacy)
 # Two layouts seen in jsonl transcripts:
 #   1. attachment of type "skill_listing" carrying the bullet list as a string.
 #   2. Inline system-reminder text starting with "The following skills are available...".
@@ -142,9 +141,9 @@ def scan_session(jsonl: Path, cutoff: dt.datetime | None):
 def find_transcripts(cwd: str | None) -> list[Path]:
     if cwd:
         sanitized = cwd.replace("/", "-")
-        base = PROJECTS_ROOT / sanitized
-        return sorted(base.glob("*.jsonl"))
-    return sorted(PROJECTS_ROOT.glob("*/*.jsonl"))
+        return sorted(t for root in projects_roots()
+                      for t in (root / sanitized).glob("*.jsonl"))
+    return iter_transcripts()
 
 
 def main() -> int:

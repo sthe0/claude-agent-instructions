@@ -37,7 +37,7 @@ from pathlib import Path
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
 from lib import argv_text  # one place decides how an argv value names its text
 from lib import marker_extract  # unconditional second-pass marker extraction (model is the primary classifier)
-from lib.config_root import skills_dir  # config-root resolver (isolated system root)
+from lib.config_root import iter_transcripts, skills_dir  # config-root resolver (isolated system root)
 from lib.planner_plan_check import (  # single shared home for return-marker + plan checks
     MARKER_RE,
     PLAN_PATH_RE,
@@ -428,39 +428,34 @@ def build_child_settings(kind: str) -> dict:
 
 
 def _snapshot_transcripts() -> set[Path]:
-    """Set of `<system-root>/projects/**/*.jsonl` that exist right now (isolated or legacy)."""
-    from lib.config_root import agent_home as _agent_home
-    root = _agent_home() / "projects"
-    if not root.is_dir():
-        return set()
-    return set(root.rglob("*.jsonl"))
+    """Set of `<config root>/projects/**/*.jsonl` that exist right now, across both
+    roots — a child spawned by a bare-`claude` manager writes under the HARNESS
+    root, so reading only the agent root made the diff below always empty."""
+    return set(iter_transcripts("**/*.jsonl"))
 
 
 def _discover_transcript_path(known_before: set[Path], timeout: float = 10.0) -> Path | None:
-    """Find a new `<system-root>/projects/**/*.jsonl` that didn't exist before the
+    """Find a new `<config root>/projects/**/*.jsonl` that didn't exist before the
     spawn. Polls every 0.5s up to `timeout` seconds.
 
     Filtering by "not in known_before" avoids picking the parent manager's own
     live transcript (which is being touched concurrently and would otherwise
     win on mtime). Returns the freshest new jsonl, or None on timeout.
     """
-    from lib.config_root import agent_home as _agent_home
-    root = _agent_home() / "projects"
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if root.is_dir():
-            candidates: list[tuple[float, Path]] = []
-            for p in root.rglob("*.jsonl"):
-                if p in known_before:
-                    continue
-                try:
-                    mtime = p.stat().st_mtime
-                except OSError:
-                    continue
-                candidates.append((mtime, p))
-            if candidates:
-                candidates.sort(reverse=True)
-                return candidates[0][1]
+        candidates: list[tuple[float, Path]] = []
+        for p in iter_transcripts("**/*.jsonl"):
+            if p in known_before:
+                continue
+            try:
+                mtime = p.stat().st_mtime
+            except OSError:
+                continue
+            candidates.append((mtime, p))
+        if candidates:
+            candidates.sort(reverse=True)
+            return candidates[0][1]
         time.sleep(0.5)
     return None
 

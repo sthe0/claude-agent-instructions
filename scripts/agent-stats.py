@@ -14,10 +14,11 @@ machinery and prints one summary — no new central store:
     `session_id`) -> spawns, cost.
 
 Project scope is resolved the same way tool-usage-report.py / policy-
-scorecard.py do it: a project is a directory under the transcripts root
-(`~/.claude/projects/<project>` by default), and a ledger row belongs to a
-project if its session id is one of that directory's transcript filenames
-(policy-ledger rows carry their own `project` field directly).
+scorecard.py do it: a project is a directory under a transcripts root
+(`<config root>/projects/<project>` — BOTH roots by default, unioned, see
+lib/config_root.projects_roots), and a ledger row belongs to a project if its
+session id is one of that directory's transcript filenames (policy-ledger rows
+carry their own `project` field directly).
 
 Modes:
   agent-stats.py [--days N] [--project P]   report for one project
@@ -47,12 +48,11 @@ _iter_jsonl = cost_report._iter_jsonl
 filter_by_time = cost_report.filter_by_time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib.config_root import agent_home
+from lib.config_root import projects_roots
 
 TASK_QUALITY_LOG = Path.home() / ".local" / "log" / "claude-task-quality.jsonl"
 POLICY_LEDGER = Path.home() / ".local" / "log" / "claude-policy-ledger.jsonl"
 SPAWN_COST_LOG = Path.home() / ".local" / "log" / "claude-spawn-costs.jsonl"
-PROJECTS_DIR = agent_home() / "projects"
 
 DEFAULT_DAYS = 30
 
@@ -156,7 +156,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--task-log", type=Path, default=TASK_QUALITY_LOG, help=f"task-quality ledger (default: {TASK_QUALITY_LOG})")
     p.add_argument("--policy-log", type=Path, default=POLICY_LEDGER, help=f"policy ledger (default: {POLICY_LEDGER})")
     p.add_argument("--spawn-log", type=Path, default=SPAWN_COST_LOG, help=f"spawn cost log (default: {SPAWN_COST_LOG})")
-    p.add_argument("--projects-dir", type=Path, default=PROJECTS_DIR, help=f"transcripts root (default: {PROJECTS_DIR})")
+    p.add_argument("--projects-dir", type=Path, default=None,
+                   help="a single transcripts root (default: every config root's projects/, unioned)")
     p.add_argument("--json", action="store_true", help="emit a JSON dict instead of markdown")
     p.add_argument("--cross-machine", action="store_true",
                    help="print the cross-installation rollup (delegates to usage-digest.py pull)")
@@ -186,7 +187,10 @@ def main(argv: list[str] | None = None) -> int:
         scope_label = "global (all projects)"
     else:
         project = args.project or sanitize_cwd(str(Path(os.getcwd()).resolve()))
-        sessions = project_sessions(args.projects_dir, project)
+        roots = [args.projects_dir] if args.projects_dir else projects_roots()
+        sessions: set[str] = set()
+        for root in roots:
+            sessions |= project_sessions(root, project)
         scope_label = f"project={project}"
 
     task_rows, policy_rows, spawn_rows = scope_rows(

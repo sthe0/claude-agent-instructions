@@ -80,6 +80,72 @@ def harness_config_root() -> Path:
     return Path.home() / ".claude"
 
 
+def projects_roots() -> list[Path]:
+    """Every existing ``<root>/projects`` directory, deduplicated, agent root first.
+
+    Answers *"where have sessions written"*. That is a THIRD question, distinct
+    from both accessors above: ``agent_home()`` says where the system is
+    installed and ``harness_config_root()`` says where the running harness loads
+    settings from, and neither answers where transcripts and per-project memory
+    actually landed. They coincided on an unmigrated machine, which is how a
+    dozen call sites came to ask ``agent_home()`` and stay plausibly green.
+
+    Both roots are read because both get written to: `claude-agent` /
+    `claude-task` sessions write under the isolated root while a bare `claude`
+    writes under ``~/.claude``, and on a machine using both, a report that picks
+    either single root is wrong for the sessions that used the other one — and
+    wrong SILENTLY, printing a smaller number rather than an error.
+
+    Deliberately NEUTRAL about what lives inside: transcripts and per-project
+    ``memory/`` directories are different domains sharing one location, so this
+    returns the locations and lets each caller keep its own selection. See
+    ``iter_transcripts()`` for the transcript view layered on top; a caller that
+    wants ``*/memory`` globs these roots itself.
+
+    Dedup is by ``Path.resolve()`` — the launchers export
+    ``CLAUDE_CONFIG_DIR=$CLAUDE_AGENT_HOME``, so on most machines the two roots
+    are the same directory and must yield ONE entry, and a half-migrated machine
+    can reach one through a symlink to the other. Dedup is by root, never by
+    project: the same cwd-hash under two roots is two distinct session sets.
+
+    A root with no ``projects/`` yet is skipped, not an error — a fresh machine
+    or a root that has simply never hosted a session is a normal state.
+    """
+    seen: set[Path] = set()
+    out: list[Path] = []
+    for root in (agent_home(), harness_config_root()):
+        candidate = root / "projects"
+        if not candidate.is_dir():
+            continue
+        try:
+            key = candidate.resolve()
+        except OSError:  # pragma: no cover - unresolvable path, keep the raw one
+            key = candidate
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(candidate)
+    return out
+
+
+def iter_transcripts(pattern: str = "*/*.jsonl") -> list[Path]:
+    """Session transcripts across every root from ``projects_roots()``, sorted.
+
+    ``pattern`` is glob-relative to each root and defaults to the main-session
+    layout ``<project>/<session>.jsonl``. Pass ``"**/*.jsonl"`` to include the
+    per-session ``<session>/subagents/*.jsonl`` transcripts as well.
+
+    The two selections are NOT interchangeable — the default counts sessions, the
+    recursive one counts every transcript file — so each caller keeps the one it
+    already had. Changing a caller's pattern changes WHAT it reports, not merely
+    where it looks.
+    """
+    out: list[Path] = []
+    for root in projects_roots():
+        out.extend(root.glob(pattern))
+    return sorted(out)
+
+
 def harness_settings_file() -> Path:
     """The harness's live ``settings.json`` (``<harness root>/settings.json``) —
     the file whose ``hooks`` block decides which hooks actually fire."""
