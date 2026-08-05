@@ -1314,13 +1314,25 @@ def cmd_question_candidate_dispose(args, *, store: StateStore, runner: Runner | 
 
 def _apply_enumeration_result(
     bag: dict, doc: PlanDoc, plan_path, pairs: list[tuple[str, str]], runner_ok: bool | None,
+    *, preserve_disposition: bool = False,
 ) -> list[str]:
     """Upsert `pairs` as 'raised' QuestionCandidates (last-wins by deterministic
     qenum-N id) and stamp the bag's enumerated/enumerated_at/enumerated_plan/
     enumerated_runner_ok/enumerated_count fields from ONE enumeration pass's result.
     Shared by the synchronous cmd_question_enumerate path and the detached-worker
     sidecar fold (cmd_approve/cmd_replan) so both apply identical upsert semantics
-    to the SAME bag shape regardless of which path produced the pairs."""
+    to the SAME bag shape regardless of which path produced the pairs.
+
+    `preserve_disposition` is what separates the two callers. A human running
+    `question-enumerate` ASKED for a fresh pass, so re-raising a candidate they had
+    already dismissed is the point (False, the default — behaviour unchanged). The
+    fold is INVOLUNTARY: it happens inside cmd_approve/cmd_replan, and resetting a
+    recorded `dismissed`+reason or `recorded`+question link there would discard the
+    user's own disposition and refuse the approve that disposition existed to
+    unblock. Preservation is keyed on the statement being IDENTICAL, not on the id
+    alone: `qenum-3` of a later pass is a different question than `qenum-3` of an
+    earlier one unless its text says otherwise, and inheriting a disposition across
+    a changed statement would silently discharge a question nobody read."""
     candidates = bag.setdefault("candidates", [])
     raised: list[str] = []
     for i, (target, question) in enumerate(pairs):
@@ -1329,6 +1341,10 @@ def _apply_enumeration_result(
                  "reason": "", "question": ""}
         for j, c in enumerate(candidates):
             if c.get("id") == cid:
+                if (preserve_disposition
+                        and c.get("statement") == entry["statement"]
+                        and c.get("disposition") != "raised"):
+                    entry = c
                 candidates[j] = entry
                 break
         else:
@@ -1603,7 +1619,7 @@ def _launch_enumeration(state: SessionState, bag: dict, doc: PlanDoc, plan_path)
         pass
 
 
-def _fold_enumeration_sidecar(state: SessionState, doc: PlanDoc, plan_path) -> None:
+def _fold_enumeration_sidecar(state: SessionState, doc: PlanDoc, plan_path) -> bool:
     """Fold a landed background-enumeration sidecar into the premise bag, if one is
     waiting for `doc`'s exact content digest — called from cmd_approve (before its
     blockers computation) and cmd_replan (inside the swapped-plan_path block,
@@ -1613,17 +1629,30 @@ def _fold_enumeration_sidecar(state: SessionState, doc: PlanDoc, plan_path) -> N
     matches the proposed digest makes cmd_replan's relaunch check a no-op instead
     of firing a redundant second worker for content already enumerated.
 
-    Never calls store.save() itself — the caller's own existing save persists the
-    fold, matching every other bag mutation in this module."""
+    Returns True when the bag was actually mutated, which the caller MUST persist:
+    the fold's own candidates are what the gate then refuses on, so a fold left
+    unsaved names ids that exist nowhere on disk and `question-candidate-dispose`
+    cannot address them.
+
+    A no-op when the bag ALREADY records an enumeration for this exact digest: that
+    result is on record (typically from a synchronous `question-enumerate` the
+    coordinator ran by hand, whose candidates they have since dispositioned), and
+    re-folding a sidecar carrying the same pass would cost a spurious refusal on
+    every approve cycle. The sidecar is not even read in that case — it stays for
+    session-end cleanup."""
     bag = state.plugins.get("premise")
     if bag is None:
-        return
+        return False
     digest = plugins_premise._plan_content_digest(doc)
-    payload = enumerate_sidecar.read_and_discard(state.session_id, digest)
+    if bag.get("enumerated") is True and bag.get("enumerated_at") == digest:
+        return False
+    payload = enumerate_sidecar.read_discarding_superseded(state.session_id, digest)
     if payload is None:
-        return
+        return False
     pairs = [tuple(p) for p in payload.get("pairs", [])]
-    _apply_enumeration_result(bag, doc, plan_path, pairs, payload.get("runner_ok"))
+    _apply_enumeration_result(bag, doc, plan_path, pairs, payload.get("runner_ok"),
+                             preserve_disposition=True)
+    return True
 
 
 def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -2183,8 +2212,14 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             _approved_doc = load_plan(state.plan_path)
         except (OSError, PlanError):
             _approved_doc = None
-        if _approved_doc is not None:
-            _fold_enumeration_sidecar(state, _approved_doc, state.plan_path)
+        if _approved_doc is not None and _fold_enumeration_sidecar(
+                state, _approved_doc, state.plan_path):
+            # Persist BEFORE the gate is evaluated, not after: the blockers below
+            # are computed from the folded bag and name its `qenum-N` candidates,
+            # and this function returns on any blocker WITHOUT reaching its own
+            # store.save() — so a fold left in memory would refuse the approve
+            # while `question-candidate-dispose --id qenum-1` had nothing to find.
+            store.save(state)
     blockers = (
         gates.blockers(state, "plan_approval")
         + plugins.plugin_gate_blockers(state, "plan_approval")
@@ -3413,19 +3448,30 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         # alone here -- it fails the same way it always did, at the strict `_load(args.plan)`
         # below, caught by main()'s outer handler.
         bag = state.plugins.get("premise")
+        enumeration_bag_dirty = False
         if bag is not None:
             try:
                 proposed = _load(args.plan)
             except (OSError, PlanError):
                 proposed = None
             if proposed is not None:
-                _fold_enumeration_sidecar(state, proposed, args.plan)
+                enumeration_bag_dirty = _fold_enumeration_sidecar(state, proposed, args.plan)
                 proposed_digest = plugins_premise._plan_content_digest(proposed)
                 if proposed_digest != bag.get("enumerated_at"):
                     _launch_enumeration(state, bag, proposed, args.plan)
+                    enumeration_bag_dirty = True
         pblock = plugins.plugin_gate_blockers(state, "plan_approval")
     finally:
         state.plan_path = _saved_plan_path
+    if enumeration_bag_dirty:
+        # AFTER the finally restored plan_path — a save inside the swapped block
+        # would persist the PROPOSED plan as the session's current one. Before the
+        # pblock return below, because this path refuses without reaching any of
+        # cmd_replan's own save sites: unsaved, the deadline stamp Stage 5's escape
+        # reads would never exist on disk, and the not-run clear would leave the
+        # bag pinned to the superseded digest — i.e. the inescapable
+        # _ENUMERATE_STALE, the exact routing the clear exists to prevent.
+        store.save(state)
     _log_gate(state, "plan_approval_plugin", pblock, passed=not pblock)
     if pblock:
         return Directive(False, state.node, "close_questions",

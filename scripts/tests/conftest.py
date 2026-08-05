@@ -104,7 +104,19 @@ def _no_real_enumeration_launch_by_default(monkeypatch):
 
     A test that means to exercise the REAL launch mechanics (deadline stamping,
     sidecar landing, argv recording) re-patches `cli._spawn_enumeration_worker`
-    itself — see test_enumerate_detach.py's behavioral launch tests."""
+    itself — see test_enumerate_detach.py's behavioral launch tests.
+
+    KNOWN COVERAGE GAP, the price of this fixture: no test anywhere runs an
+    unstubbed launch originating from `cmd_submit_plan`/`cmd_replan`. Those tests
+    re-patch the same seam with a recorder, so they pin the argv and the bag
+    mutations but never the leaf spawn; the real `proc_tree.launch_supervised`
+    contract (detached session, DEVNULL stdio, never reaped) is covered only by
+    test_proc_tree.py, which calls it directly and knows nothing about
+    enumeration. A regression that breaks the wiring BETWEEN the two — a launch
+    that spawns but whose child never reaches the worker entry point — would pass
+    the whole suite. Closing it needs an integration test that lets one real
+    child run with a stub `claude` on PATH, deliberately not written yet: it
+    trades this gap for a subprocess-timing dependency in the unit suite."""
     from agentctl import cli
     monkeypatch.setattr(cli, "_spawn_enumeration_worker", lambda *a, **kw: None)
 

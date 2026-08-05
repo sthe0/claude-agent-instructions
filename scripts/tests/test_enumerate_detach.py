@@ -20,7 +20,15 @@ Covers:
   - `_launch_enumeration` (the launch site inside `cmd_submit_plan`/`cmd_replan`)
     returns in well under a second while the detached worker is still
     outstanding, and its sidecar lands even after the launching process exits;
-  - a sidecar keyed to a stale digest is discarded by `read_and_discard`;
+  - `read_discarding_superseded` discards a sidecar keyed to a stale digest,
+    leaves the MATCHING one in place (so the fold is idempotent) and never
+    touches a concurrent worker's `.tmp-*.json`;
+  - the fold end to end through `cmd_approve` and against `store.load()`, not
+    an in-memory bag: a landed sidecar is folded, PERSISTED, and refuses the
+    approve on its own `qenum-N` candidates -- which are then dispositionable,
+    the whole point of persisting before the gate is evaluated -- plus its two
+    dispositions-are-not-resurrected halves (a no-op at an already-enumerated
+    digest; a statement-keyed re-raise when the plan moved on);
   - `cmd_submit_plan` and `cmd_replan`, driven end to end through ordinary CLI
     verbs against REAL premise bags, stamp `enumerate_deadline` at launch
     instant + `ENUMERATE_TIMEOUT_S`;
@@ -80,6 +88,21 @@ def _raise_if_called(*_a, **_kw):
     raise AssertionError("this runner must not be invoked")
 
 
+class _PinnedClock:
+    """`cli.time` with `time()` frozen and everything else delegated to the real
+    module — patched onto `cli` alone rather than onto the shared stdlib module, so
+    no other importer (or pytest's own timing) sees a frozen clock."""
+
+    def __init__(self, at: float):
+        self._at = at
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+    def time(self) -> float:
+        return self._at
+
+
 def _silent_advisor(argv, **kw):
     return SimpleNamespace(returncode=0, stdout="", stderr="")
 
@@ -114,6 +137,36 @@ def _to_executing_stage1_with_premise(store, sid, plan):
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
     cli.cmd_next_stage(ns(session=sid), store=store)
+
+
+def _to_plan_ready_with_premise(store, sid, plan):
+    """Same as `_to_executing_stage1_with_premise` up to PLAN_READY, but WITHOUT the
+    synchronous `question-enumerate` — the enumeration is left to the detached
+    worker's sidecar, which is the state the fold exists for."""
+    cli.cmd_start(ns(session=sid, task="demo-two-stage", goal="", done_criterion="",
+                     criterion_type="measurable", recursion_depth=0), store=store)
+    cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
+                        wall_clock_min=60, tracker_key=None, architectural=True,
+                        external_effect=False, new_dependency=False,
+                        public_api_change=False), store=store)
+    cli.cmd_plan(ns(session=sid), store=store)
+    cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
+    assert "premise" in store.load(sid).plugins
+    _cover_the_order(store, sid)
+
+
+def _land_sidecar(store, sid, plan, pairs, *, runner_ok=True, root=None):
+    """Write the sidecar a detached worker would have landed for `plan`'s current
+    content digest. Returns that digest."""
+    digest = plugins_premise._plan_content_digest(load_plan(plan))
+    enumerate_sidecar.write(sid, digest, {
+        "runner_ok": runner_ok,
+        "pairs": [list(p) for p in pairs],
+        "stderr": "",
+        "content_digest": digest,
+        "plan_path": str(plan),
+    }, root=root)
+    return digest
 
 
 def _make_acceptance_session(store, sid):
@@ -236,7 +289,8 @@ class TestCliDefaultsToEnumerateRunner:
         )
         assert d.ok is True
         assert calls
-        payload = enumerate_sidecar.read_and_discard("worker-default", digest, root=sidecar_root)
+        payload = enumerate_sidecar.read_discarding_superseded(
+            "worker-default", digest, root=sidecar_root)
         assert payload is not None
         assert payload["content_digest"] == digest
 
@@ -327,21 +381,33 @@ class TestDeadlineStamping:
 
     def test_replan_restamps_enumerate_deadline_on_digest_change(
             self, store, fixtures_dir, monkeypatch):
+        """Asserts against the PERSISTED bag and against a PINNED clock, both
+        deliberately. The prior version read, within a ±2 s slack, the deadline
+        `cmd_submit_plan` had already stamped inside the helper: it passed with the
+        replan-side stamp deleted outright (vacuous) and flaked on a loaded machine.
+        Pinning cli's clock makes the expected value exact, and the pin differing
+        from the submit-time instant is what makes a missing restamp fail."""
         monkeypatch.delenv("AGENTCTL_PREMISE", raising=False)
         sid = "deadline-replan"
         base = str(fixtures_dir / "plan_two_stage.toml")
         corrected = str(fixtures_dir / "plan_two_stage_substantive.toml")
 
         _to_executing_stage1_with_premise(store, sid, base)
+        submit_deadline = store.load(sid).plugins["premise"]["enumerate_deadline"]
 
-        before = time.time()
+        pinned = time.time() + 3.0
+        monkeypatch.setattr(cli, "time", _PinnedClock(pinned))
         cli.cmd_replan(ns(session=sid, plan=corrected), store=store)
-        after = time.time()
 
         bag = store.load(sid).plugins["premise"]
-        assert bag["enumerate_deadline"] is not None
-        assert before + advisor.ENUMERATE_TIMEOUT_S - 2 <= bag["enumerate_deadline"]
-        assert bag["enumerate_deadline"] <= after + advisor.ENUMERATE_TIMEOUT_S + 2
+        assert bag["enumerate_deadline"] == pinned + advisor.ENUMERATE_TIMEOUT_S
+        assert bag["enumerate_deadline"] != submit_deadline
+        # the not-run clear is persisted too, not merely mutated in memory: on disk
+        # a still-True `enumerated` pinned to the superseded digest yields the
+        # INESCAPABLE _ENUMERATE_STALE on the next load (plugins_premise.py's
+        # if/elif), which is the routing the clear exists to prevent.
+        assert bag["enumerated"] is False
+        assert bag["enumerated_at"] == ""
 
 
 # --- the two crux cases: digest-changing vs digest-unchanged replan ------------
@@ -430,20 +496,209 @@ class TestDetachedRelaunchOnReplan:
         assert launches == []
 
 
+# --- the fold itself, end to end through cmd_approve ---------------------------
+
+class TestFoldThroughApprove:
+    """`_fold_enumeration_sidecar` is where a landed background result becomes the
+    bag the gate reads, and every assertion here is made against `store.load(sid)`
+    rather than the in-memory state: the three defects this class covers (a
+    destructive read, an unpersisted fold, a disposition reset) are all invisible to
+    a test that inspects the object the command mutated."""
+
+    def _sidecar_root(self, tmp_path, monkeypatch):
+        root = tmp_path / "sidecars"
+        monkeypatch.setattr(enumerate_sidecar, "DEFAULT_ROOT", root)
+        return root
+
+    def test_approve_folds_persists_and_can_then_be_unblocked(
+            self, store, fixtures_dir, tmp_path, monkeypatch):
+        """The ordinary happy path of detaching: the worker lands pairs, `approve`
+        folds them, refuses naming them, and the coordinator disposes them and
+        approves. Every step of that is on disk — the refusing `approve` returns
+        before its own store.save(), so an unpersisted fold would name `qenum-N`
+        ids `question-candidate-dispose` could not find, and a destructive read
+        would leave no sidecar to re-fold and no launch site on the approve path:
+        `_ENUMERATE_NOT_RUN` forever, escapable only by the 480 s synchronous
+        `question-enumerate` this whole change exists to avoid."""
+        monkeypatch.delenv("AGENTCTL_PREMISE", raising=False)
+        root = self._sidecar_root(tmp_path, monkeypatch)
+        sid = "fold-approve"
+        plan = str(fixtures_dir / "plan_two_stage.toml")
+
+        _to_plan_ready_with_premise(store, sid, plan)
+        digest = _land_sidecar(store, sid, plan,
+                               [("goal", "which failure mode is out of scope?"),
+                                ("stage 1", "what makes the check go red?")])
+
+        blocked = cli.cmd_approve(ns(session=sid, by="user"), store=store)
+        assert blocked.ok is False
+        assert any("qenum-1" in b for b in blocked.data["blockers"])
+
+        bag = store.load(sid).plugins["premise"]
+        assert bag["enumerated"] is True
+        assert bag["enumerated_at"] == digest
+        assert bag["enumerated_runner_ok"] is True
+        assert [c["id"] for c in bag["candidates"]] == ["qenum-1", "qenum-2"]
+        assert all(c["disposition"] == "raised" for c in bag["candidates"])
+        # idempotent: the matching sidecar survives the refusing fold
+        assert enumerate_sidecar.sidecar_path(sid, digest, root=root).exists()
+
+        for cid in ("qenum-1", "qenum-2"):
+            d = cli.cmd_question_candidate_dispose(
+                ns(session=sid, id=cid, as_="dismissed", reason="answered in the goal",
+                   question=None), store=store)
+            assert d.ok is True, d.detail
+
+        assert cli.cmd_approve(ns(session=sid, by="user"), store=store).ok is True
+
+    def test_fold_preserves_dispositions_already_recorded_at_the_same_digest(
+            self, store, fixtures_dir, tmp_path, monkeypatch):
+        """The flow the coordinator actually uses: `submit-plan` (which launches a
+        worker) → synchronous `question-enumerate` → dispose every candidate →
+        `approve`. The worker's sidecar carries the SAME digest, so an unguarded
+        fold re-raised every candidate the user had just dispositioned and refused
+        the approve — one spurious refusal plus a full re-disposition per cycle."""
+        monkeypatch.delenv("AGENTCTL_PREMISE", raising=False)
+        self._sidecar_root(tmp_path, monkeypatch)
+        sid = "fold-preserve"
+        plan = str(fixtures_dir / "plan_two_stage.toml")
+        pairs = [("goal", "which failure mode is out of scope?")]
+
+        _to_plan_ready_with_premise(store, sid, plan)
+        cli.cmd_question_enumerate(
+            ns(session=sid, plan=None), store=store,
+            runner=lambda argv: RunResult(0, "\n".join(f"{t}\t{q}" for t, q in pairs), ""),
+        )
+        assert cli.cmd_question_candidate_dispose(
+            ns(session=sid, id="qenum-1", as_="dismissed", reason="answered in the goal",
+               question=None), store=store).ok is True
+
+        _land_sidecar(store, sid, plan, pairs)
+
+        d = cli.cmd_approve(ns(session=sid, by="user"), store=store)
+
+        assert d.ok is True, d.data.get("blockers")
+        bag = store.load(sid).plugins["premise"]
+        assert [c["disposition"] for c in bag["candidates"]] == ["dismissed"]
+        assert bag["candidates"][0]["reason"] == "answered in the goal"
+
+    def test_fold_is_a_noop_when_the_same_digest_is_already_enumerated(
+            self, store, fixtures_dir, tmp_path, monkeypatch):
+        """Same flow as above, but the worker's independent pass over the same plan
+        asks DIFFERENT questions than the synchronous one the coordinator ran — the
+        usual case, since two model calls rarely phrase a question identically. The
+        result for this digest is already on record, so the sidecar is not read at
+        all; folding it would raise fresh candidates and refuse an approve whose
+        cross-check has demonstrably run."""
+        monkeypatch.delenv("AGENTCTL_PREMISE", raising=False)
+        root = self._sidecar_root(tmp_path, monkeypatch)
+        sid = "fold-noop"
+        plan = str(fixtures_dir / "plan_two_stage.toml")
+
+        _to_plan_ready_with_premise(store, sid, plan)
+        cli.cmd_question_enumerate(
+            ns(session=sid, plan=None), store=store,
+            runner=lambda argv: RunResult(0, "goal\tthe question the coordinator saw", ""),
+        )
+        assert cli.cmd_question_candidate_dispose(
+            ns(session=sid, id="qenum-1", as_="dismissed", reason="answered", question=None),
+            store=store).ok is True
+        digest = _land_sidecar(store, sid, plan,
+                               [("stage 2", "a question the worker asked instead")])
+
+        d = cli.cmd_approve(ns(session=sid, by="user"), store=store)
+
+        assert d.ok is True, d.data.get("blockers")
+        bag = store.load(sid).plugins["premise"]
+        assert len(bag["candidates"]) == 1
+        assert bag["candidates"][0]["disposition"] == "dismissed"
+        assert "the question the coordinator saw" in bag["candidates"][0]["statement"]
+        # not read, so not discarded either — session-end cleanup collects it
+        assert enumerate_sidecar.sidecar_path(sid, digest, root=root).exists()
+
+    def test_fold_re_raises_a_candidate_whose_statement_changed(
+            self, store, fixtures_dir, tmp_path, monkeypatch):
+        """Preservation is keyed on the statement, not the id: `qenum-1` of a pass
+        over corrected plan content is a DIFFERENT question, and inheriting the old
+        disposition would discharge a question nobody read. Here the bag's prior
+        enumeration is stale (a digest-changing replan cleared it), so the fold runs
+        and must re-raise."""
+        monkeypatch.delenv("AGENTCTL_PREMISE", raising=False)
+        self._sidecar_root(tmp_path, monkeypatch)
+        sid = "fold-restatement"
+        plan = str(fixtures_dir / "plan_two_stage.toml")
+
+        _to_plan_ready_with_premise(store, sid, plan)
+        cli.cmd_question_enumerate(
+            ns(session=sid, plan=None), store=store,
+            runner=lambda argv: RunResult(0, "goal\tthe OLD question", ""),
+        )
+        assert cli.cmd_question_candidate_dispose(
+            ns(session=sid, id="qenum-1", as_="dismissed", reason="answered", question=None),
+            store=store).ok is True
+        # simulate the not-run clear a digest-changing relaunch leaves behind, so the
+        # fold is not short-circuited by the same-digest no-op
+        state = store.load(sid)
+        state.plugins["premise"]["enumerated"] = False
+        state.plugins["premise"]["enumerated_at"] = ""
+        store.save(state)
+
+        _land_sidecar(store, sid, plan, [("goal", "a DIFFERENT question")])
+
+        blocked = cli.cmd_approve(ns(session=sid, by="user"), store=store)
+
+        assert blocked.ok is False
+        assert any("qenum-1" in b for b in blocked.data["blockers"])
+        cand = store.load(sid).plugins["premise"]["candidates"][0]
+        assert cand["disposition"] == "raised"
+        assert "a DIFFERENT question" in cand["statement"]
+
+
 # --- sidecar digest-mismatch discard --------------------------------------------
 
 class TestSidecarDigestMismatchDiscard:
-    def test_read_and_discard_ignores_a_sidecar_written_for_a_different_digest(
+    def test_read_ignores_and_discards_a_sidecar_written_for_a_different_digest(
             self, tmp_path):
         root = tmp_path / "sidecars"
         enumerate_sidecar.write("sess", "digest-a", {"pairs": [], "content_digest": "digest-a"},
                                 root=root)
 
-        result = enumerate_sidecar.read_and_discard("sess", "digest-b", root=root)
+        result = enumerate_sidecar.read_discarding_superseded("sess", "digest-b", root=root)
 
         assert result is None
-        # discard_all_for_session is unconditional -- the stale sidecar is gone too
+        # a result computed against superseded plan content is dead weight
         assert not enumerate_sidecar.sidecar_path("sess", "digest-a", root=root).exists()
+
+    def test_read_is_idempotent_for_the_matching_digest(self, tmp_path):
+        """The MATCHING sidecar survives its own read. cmd_approve folds it and then
+        refuses on the very candidates the fold raised, without persisting anything;
+        an unlink-on-read left that session with no sidecar to re-fold and no launch
+        site on the approve path, i.e. _ENUMERATE_NOT_RUN forever."""
+        root = tmp_path / "sidecars"
+        enumerate_sidecar.write("sess", "digest-a",
+                                {"pairs": [["stage 1", "why?"]], "content_digest": "digest-a"},
+                                root=root)
+
+        first = enumerate_sidecar.read_discarding_superseded("sess", "digest-a", root=root)
+        second = enumerate_sidecar.read_discarding_superseded("sess", "digest-a", root=root)
+
+        assert first == second
+        assert first["pairs"] == [["stage 1", "why?"]]
+        assert enumerate_sidecar.sidecar_path("sess", "digest-a", root=root).exists()
+
+    def test_read_leaves_a_concurrent_workers_tempfile_alone(self, tmp_path):
+        """A worker's `.tmp-*.json` is mid-write: unlinking it makes its os.replace
+        raise, losing a payload that was about to land."""
+        root = tmp_path / "sidecars"
+        enumerate_sidecar.write("sess", "digest-a", {"pairs": [], "content_digest": "digest-a"},
+                                root=root)
+        session_dir = enumerate_sidecar.sidecar_path("sess", "digest-a", root=root).parent
+        tmp_file = session_dir / ".tmp-x.json"
+        tmp_file.write_text("{}", encoding="utf-8")
+
+        enumerate_sidecar.read_discarding_superseded("sess", "digest-b", root=root)
+
+        assert tmp_file.exists()
 
 
 # --- the launch call itself: fast return + survives the launcher's own exit ----
@@ -527,6 +782,7 @@ class TestLaunchSurvivesLauncherExit:
             time.sleep(0.1)
 
         assert sidecar_file.exists(), "detached worker never wrote its sidecar"
-        payload = enumerate_sidecar.read_and_discard(session_id, digest, root=sidecar_root)
+        payload = enumerate_sidecar.read_discarding_superseded(
+            session_id, digest, root=sidecar_root)
         assert payload is not None
         assert payload["content_digest"] == digest
