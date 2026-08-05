@@ -87,6 +87,8 @@ Use the **overcome-difficulty** skill (see `~/.claude-agent/skills/overcome-diff
 
 The engine drives the *shell*: a FAILED stage routes to `DIAGNOSING`, where it enforces `declare → investigate → critique` and **blocks `replan` until the difficulty record is complete** (`gates.difficulty_blockers`). The skill supplies each phase's *cognition* and the **replanning task** you (still as root) apply to fix the plan and resume the original user task on the new plan.
 
+**A third entry — effort divergence — needs no human to notice it.** When actual effort runs past the *current* plan's re-derived estimate by the configured multiple — spend, active wall-clock or replan count, measured from plan approval — the engine routes even a **passing** result into `DIAGNOSING` itself, pre-framed, asking nothing: the chosen norm is visibly missing something essential about the real situation. An ordinary difficulty, not an engine fault. Scales, window, limits: [effort-divergence-trigger.md](memory-global/leaves/effort-divergence-trigger.md).
+
 ### When the user corrects agent behavior
 
 Use the **self-improvement** skill (see `~/.claude-agent/skills/self-improvement/`) — the **normative special case of overcome-difficulty**: an agent-norm divergence closed by a re-norming edit. Triggers: user corrects/rejects/clarifies, states a principle, evaluates agent quality, proposes changes to instructions/skills/memory, or reminds you it should have run.
