@@ -42,6 +42,14 @@ third, one-off rule with no home.
 """
 from __future__ import annotations
 
+from .state import WeightClass
+from .text_shape import normalize_string as _normalize_string
+
+# The closed vocabulary a plan's [meta] weight_class may name, spelled as an author writes
+# it in TOML. Derived from the session-side enum rather than restated, so the plan's
+# declaration and the session's classification cannot drift into two vocabularies.
+_WEIGHT_CLASSES = tuple(wc.value.lower() for wc in WeightClass)
+
 # Required of a SUBSTANTIVE stage at submission. Kept as a table rather than inline `if`s so
 # a later stage extending the submission grade adds a row, and so a test can enumerate the
 # requirement set from the code instead of restating it.
@@ -107,7 +115,47 @@ def _is_substantive(doc) -> bool:
     arming conditions, is a worse disagreement than the one being removed, so the plan
     stays the single key and the session's only power is to force it to speak."""
     wc = doc.meta.weight_class
-    return wc is not None and wc.lower() == "substantive"
+    return wc is not None and _normalize_string(wc) == "substantive"
+
+
+def _malformed_weight_class(doc) -> str | None:
+    """A DECLARED weight_class this seam cannot read as the closed vocabulary's member.
+
+    The declaration is the sole load-bearing key of the whole substantive grade, so a value
+    outside the vocabulary is not a non-substantive plan — it is a plan whose class nobody
+    stated, and a typo is nobody's claim. `_undeclared_weight_class` cannot catch it: the
+    key is present.
+
+    Two shapes are refused, and the second one is refused for a reason that is entirely
+    about the OTHER enumerator. `plan._validate_substantive_stage` arms on the same key
+    through a bare `.lower()` (`parse_plan`'s `is_substantive` local), and it cannot move —
+    it lives on the loader path this module exists to keep lenient. So the set they arm on
+    is kept identical by refusing here exactly what they would disagree about: `.lower()`
+    absorbs case, so `"SUBSTANTIVE"` is left alone; it does not absorb whitespace, so
+    `"substantive "` — which this seam would grade and the loader would not — is refused
+    rather than silently splitting one grade into two arming conditions.
+
+    Returns the author-readable violation, or None when the value is fine (or absent, which
+    is `_undeclared_weight_class`'s case, not this one)."""
+    raw = doc.meta.weight_class
+    if raw is None:
+        return None
+    norm = _normalize_string(raw)
+    if norm not in _WEIGHT_CLASSES:
+        return (
+            f"[meta] weight_class = {raw!r} is not one of "
+            f"{'/'.join(repr(w) for w in _WEIGHT_CLASSES)}. The substantive plan grade is "
+            "keyed on this declaration, so an unreadable value escapes the grade exactly "
+            "as silence would — declare the class this plan really is"
+        )
+    if raw.lower() != norm:
+        return (
+            f"[meta] weight_class = {raw!r} carries whitespace. This seam normalizes it "
+            f"and plan._validate_substantive_stage — which compares the raw string and "
+            f"cannot move off the lenient loader path — does not, so the two halves of "
+            f"one grade would arm on different plans: write it as {norm!r}"
+        )
+    return None
 
 
 def _undeclared_weight_class(doc, session_weight_class: str | None) -> bool:
@@ -136,11 +184,21 @@ def submission_violations(doc, *, session_weight_class: str | None = None) -> li
     Returns rather than raises: the approve seam must answer with a Directive (see the
     module docstring), and returning the full list lets one round trip show everything.
     """
-    if _undeclared_weight_class(doc, session_weight_class):
-        return [_UNDECLARED]
-    if not _is_substantive(doc):
-        return []
     out: list[str] = []
+    malformed = _malformed_weight_class(doc)
+    if malformed:
+        out.append(malformed)
+    undeclared = _undeclared_weight_class(doc, session_weight_class)
+    if undeclared:
+        out.append(_UNDECLARED)
+    # The field loop also runs for the UNDECLARED case, where the plan itself never claimed
+    # to be substantive. That is not the seam arming on the session — the refusal is still
+    # the missing declaration, and a plan that answers it with a non-substantive class keeps
+    # every field violation below moot. It is the module's one-round-trip contract: the
+    # author whose plan the session will hold to the substantive grade sees the declaration
+    # AND the places it will require in one answer, instead of one round trip per layer.
+    if not (_is_substantive(doc) or undeclared):
+        return out
     for stage in doc.stages:
         # Supplies are already built by the time a PlanDoc exists, so the "supplied by an
         # earlier stage" alternative is decidable here — evaluating the knowledge

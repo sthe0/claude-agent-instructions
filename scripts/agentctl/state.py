@@ -1192,6 +1192,18 @@ class SessionState:
         data["approval"] = GateRecord(**data["approval"])
         data["resolution"] = GateRecord(**data["resolution"])
         data.pop("self_improvement", None)  # legacy field (schema <=4); self-improvement now runs on the standard spine
+        # `plan_digest` was renamed to `accepted_plan_digest` (same meaning). from_dict ends
+        # in cls(**data) and filters nothing, so without this a state.json written before the
+        # rename dies on load with an unexpected-keyword TypeError and no recovery edge. The
+        # value CARRIES OVER rather than being dropped: it is not recomputable from anything
+        # else on the state (the accepted bytes may already have been edited in place), and
+        # dropping it would silently answer "which bytes is this session running" with None.
+        # No SCHEMA_VERSION bump goes with it — the migration is keyed on the key's presence,
+        # and states written by the renaming commit already claim the current version, so a
+        # bump could not discriminate them anyway.
+        legacy_digest = data.pop("plan_digest", None)
+        if legacy_digest is not None:
+            data.setdefault("accepted_plan_digest", legacy_digest)
         data.setdefault("plugins", {})            # migration: schema <=5 has no plugin layer
         data.setdefault("plugins_archive", {})
         data["final_check"] = [FinalCheck.from_dict(fc) for fc in data.get("final_check", [])]

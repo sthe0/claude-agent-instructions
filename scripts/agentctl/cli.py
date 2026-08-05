@@ -290,10 +290,12 @@ def _restore_current_stage(state: SessionState) -> None:
 def _stamp_accepted_plan_digest(state: SessionState, plan_path: str) -> None:
     """Record the sha256 of the ACCEPTED plan bytes on the session.
 
-    Called from the three submission seams and nowhere else, and only PAST each seam's
-    refusal paths, so state.accepted_plan_digest always names bytes the session actually
-    took. Best-effort like its neighbours: an unreadable file leaves the previous digest
-    in place rather than raising out of a command that has already decided to accept."""
+    Called from the three submission seams' commands and nowhere else, and only past every
+    refusal path of the command that stamps — at approve that includes the plan_approval
+    gate itself, which sits BELOW the seam — so state.accepted_plan_digest always names
+    bytes the session actually took. Best-effort like its neighbours: an unreadable file
+    leaves the previous digest in place rather than raising out of a command that has
+    already decided to accept."""
     try:
         state.accepted_plan_digest = hashlib.sha256(Path(plan_path).read_bytes()).hexdigest()
     except OSError:
@@ -359,7 +361,10 @@ def _refresh_caches_from_plan_path(state: SessionState) -> list[str]:
             cur.outcome.status = StageStatus.PENDING.value
     state.final_check = refreshed.meta.final_check
     _sync_venue_from_plan(state, refreshed)
-    _stamp_accepted_plan_digest(state, state.plan_path)
+    # The digest is NOT stamped here. A clean submission is not yet an accepted plan at this
+    # seam: `cmd_approve` still has the plan_approval gate to compose, and a blocked approve
+    # must not leave the session naming bytes it refused. The stamp is the caller's, placed
+    # past that refusal.
     return []
 
 
@@ -1990,6 +1995,11 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     _log_gate(state, "plan_approval", blockers, passed=not blockers)
     if blockers:
         return Directive(False, state.node, "fix_plan", "cannot approve", data={"blockers": blockers})
+    # Seam (c)'s stamp, past BOTH of this command's refusals — the submission check above and
+    # the plan_approval gate. The refresh helper that owns the seam cannot stamp it: it runs
+    # before the gate by contract, so a blocked approve would leave the session carrying a
+    # digest for bytes it did not approve.
+    _stamp_accepted_plan_digest(state, state.plan_path)
     state.approval = GateRecord("plan_approval", armed=True, passed=True, by=args.by)
     state.node = transition(state.node, "approve")
     snap = _snapshot_approved_plan(store, state)
@@ -3180,8 +3190,10 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
 
     kind = diff_plans(old, new)
     # Stamped HERE and not up at the seam: every refusal path of this command — the
-    # submission check, the critique-coverage gate, and diff_plans' own raise — is now
-    # behind us, so like seam (a) the digest only ever names bytes the session ACCEPTED.
+    # plan_approval-plugin gate, the submission check and the critique-coverage gate — is
+    # now behind us, so like seam (a) the digest only ever names bytes the session ACCEPTED.
+    # (The load of args.plan can also raise out of the command, but it raises UPSTREAM of
+    # the seam, so no placement inside this range answers for it.)
     # Stamping at the seam was correct on today's control flow only because nothing saves
     # between there and the coverage refusal; it made the invariant depend on the absence
     # of a `store.save` rather than on placement, and the leak would be a silently wrong
