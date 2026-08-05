@@ -56,7 +56,27 @@ def _args(tmp_path, **overrides):
 
 def test_developer_child_settings_carry_pytest_allow():
     settings = MOD.build_child_settings("developer")
-    assert settings["permissions"]["allow"] == ["Bash(python3 -m pytest:*)"]
+    assert "Bash(python3 -m pytest:*)" in settings["permissions"]["allow"]
+
+
+def test_developer_child_settings_grant_every_mandated_verb():
+    """The grant must cover what a developer brief REQUIRES, not just pytest.
+
+    `acceptEdits` auto-grants file writes and nothing else — it does not carry
+    `defaultMode: auto`'s side-effect-free classifier — so a brief saying "run the
+    verifiers, commit when green" against a pytest-only grant leaves a stage's work
+    green but uncommitted, which is what happened on 2026-08-05.
+    """
+    allow = MOD.build_child_settings("developer")["permissions"]["allow"]
+    for entry in ("Bash(python3 scripts/verify-all.py:*)", "Bash(git add:*)",
+                  "Bash(git commit:*)", "Bash(git status:*)", "Bash(grep:*)"):
+        assert entry in allow, entry
+
+
+def test_developer_child_settings_never_grant_push():
+    """Landing is the coordinator's gate; a spawn records, it does not publish."""
+    allow = MOD.build_child_settings("developer")["permissions"]["allow"]
+    assert not any(e.startswith("Bash(git push") for e in allow)
 
 
 def test_non_developer_child_settings_omit_permissions_key():

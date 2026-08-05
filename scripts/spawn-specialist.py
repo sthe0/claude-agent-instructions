@@ -383,15 +383,41 @@ SPAWN_AUTOCOMPACT_WINDOW_TOKENS = (
 # child's --settings payload rather than settings/base.json (which is merged
 # fleet-wide on `git pull` without a prompt and must stay read-only-only per
 # lint-settings-base.py). See memory-global leaf settings-permission-tiers.md.
-DEVELOPER_SETTINGS_ALLOW = ["Bash(python3 -m pytest:*)"]
+#
+# EVERY VERB A DEVELOPER IS REQUIRED TO RUN MUST BE HERE. `acceptEdits` auto-grants
+# file writes and NOTHING else — unlike `defaultMode: auto`, it does not
+# auto-approve even side-effect-free Bash — so a brief that says "run the suite,
+# run the verifiers, commit when green" and a grant that stops at pytest together
+# reproduce the defect this whole file's permission handling exists to remove: a
+# requirement whose means are withheld. Observed 2026-08-05, when a stage's whole
+# implementation landed green but uncommitted because `git add` and
+# `python3 scripts/verify-all.py` were both refused.
+#
+# The list stays narrow and enumerated rather than becoming a mode: read-only
+# inspection, the repo's own verifiers, and the git verbs that record work on the
+# assigned branch. `git push` is deliberately ABSENT — landing is the coordinator's
+# gate, not a spawn's.
+DEVELOPER_SETTINGS_ALLOW = [
+    # verification the brief mandates
+    "Bash(python3 -m pytest:*)",
+    "Bash(python3 scripts/verify-all.py:*)",
+    "Bash(python3 scripts/verify-agentctl.py:*)",
+    "Bash(python3 scripts/gen_crutch_registry.py:*)",
+    # read-only inspection (acceptEdits does not imply defaultMode auto's classifier)
+    "Bash(ls:*)", "Bash(cat:*)", "Bash(head:*)", "Bash(tail:*)", "Bash(wc:*)",
+    "Bash(grep:*)", "Bash(rg:*)", "Bash(find:*)", "Bash(stat:*)", "Bash(pwd)",
+    "Bash(shasum:*)", "Bash(sha256sum:*)",
+    # recording work on the assigned branch — never `git push`
+    "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)",
+    "Bash(git add:*)", "Bash(git commit:*)",
+]
 
 
 def build_child_settings(kind: str) -> dict:
     """Child `--settings` payload: the auto-compaction window pin for every kind
     (both forms, mirroring settings/base.json — the env key wins in the client's
-    window resolution, the top-level key is the settings-path fallback), plus a
-    developer-scoped exec allow (pytest) so a spawned developer can run the suite
-    without an approval prompt."""
+    window resolution, the top-level key is the settings-path fallback), plus the
+    developer-scoped grant of exactly the verbs a developer brief requires."""
     settings: dict = {
         "env": {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(SPAWN_AUTOCOMPACT_WINDOW_TOKENS)},
         "autoCompactWindow": SPAWN_AUTOCOMPACT_WINDOW_TOKENS,
