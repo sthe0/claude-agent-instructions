@@ -194,14 +194,26 @@ def test_the_enumerating_judge_may_target_every_place_in_the_vocabulary():
     whatever the vocabulary was when the copy was last edited. It had, by six names.
 
     Pinned rather than left to the derivation, because the prompt is prose to every reader
-    and nothing else in the suite reads it."""
+    and nothing else in the suite reads it.
+
+    The menu is parsed out and compared as a SET, not searched for as substrings. A bare
+    `name in prompt` passes vacuously for any name contained in another — `criterion` inside
+    `done_criterion`, `conditions` inside `preconditions` — so a prose list naming only the
+    longer member would satisfy it for the shorter one, in exactly the regression this test
+    exists to catch. Set equality also fails in the other direction, on a name offered to the
+    judge that the vocabulary does not have."""
     from agentctl import advisor
 
-    missing = sorted(n for n in text_shape.ELEMENT_NAMES
-                     if n not in advisor._ENUMERATE_QUESTIONS_PROMPT)
+    menu_line = next(
+        line for line in advisor._ENUMERATE_QUESTIONS_PROMPT.splitlines()
+        if "is one of:" in line
+    )
+    offered = {n.strip() for n in menu_line.split("is one of:", 1)[1].split(",")}
 
-    assert missing == [], (
-        f"places the enumerating judge is not allowed to raise a question against: {missing}"
+    assert offered == set(text_shape.ELEMENT_NAMES), (
+        "places the enumerating judge is not allowed to raise a question against: "
+        f"{sorted(set(text_shape.ELEMENT_NAMES) - offered)}; "
+        f"names offered that are not in the vocabulary: {sorted(offered - set(text_shape.ELEMENT_NAMES))}"
     )
 
 
