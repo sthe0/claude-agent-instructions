@@ -948,6 +948,8 @@ def parse_plan(
                     material=str(s.get("material", "")),
                     result=str(s["expected_result_image"]),
                     invariants=str(s["invariants"]) if s.get("invariants") else None,
+                    material_refs=[str(r) for r in s.get("material_refs", [])],
+                    knowledge_refs=[str(r) for r in s.get("knowledge_refs", [])],
                 ),
                 means=Means(
                     means=str(s.get("means", "")),
@@ -971,6 +973,11 @@ def parse_plan(
                 ),
                 principle=principle,
                 conditions=str(s["conditions"]) if s.get("conditions") else None,
+                # Parsed permissively on BOTH load modes — the знание requirement lives at
+                # the submission seam (submission.py), never in an `if strict:` branch
+                # here, because load_plan is re-read in-session from seven call sites and a
+                # loader-side requirement is retroactive over plans already accepted.
+                knowledge=str(s["knowledge"]) if s.get("knowledge") else None,
                 supplies=_build_supplies(s, index),
                 output_artifacts=[str(p) for p in s.get("output_artifacts", [])],
                 outcome=Outcome(status=StageStatus.PENDING.value),
@@ -1021,6 +1028,38 @@ def _structural_signature(doc: PlanDoc) -> dict:
     }
 
 
+# The absent form of the знание place: no local knowledge, no refs on either projection.
+_KNOWLEDGE_PLACE_ABSENT = (None, (), ())
+
+
+def knowledge_place(stage) -> tuple:
+    """The stage's знание place — `knowledge` plus its two ref projections — as a
+    contribution to a change-decision key: a ONE-element tuple holding the group, or the
+    EMPTY tuple when the stage declares none of the three.
+
+    Shared by all three key functions (stage_carry_key, stage_question_key, diff_plans'
+    _prose) so the three cannot drift on which fields the place consists of — the coupling
+    is the point, since a field entering one key and not the others is exactly how a
+    correction gets silently dropped.
+
+    Grouped rather than spliced field-by-field for a reason the single pre-existing
+    conditional field (verify_venue_at_final) never had to face: three independently
+    conditional splices collide — (knowledge='x', refs empty) and (knowledge=None,
+    material_refs=['x']) would both flatten to ('x',). Nesting the whole place under one
+    conditional keeps every combination distinct while preserving the identity that
+    matters: a stage declaring NONE of the three contributes nothing at all, so its key is
+    byte-identical to the schema-23 key it had before this place existed. That identity is
+    load-bearing — stage_question_key is persisted in Question.disposed_at_key and compared
+    across processes, so an unconditional contribution (or a `... or ""` default) would
+    flip every disposed question of every live session to a spurious staleness blocker."""
+    place = (
+        stage.knowledge,
+        tuple(stage.subject.material_refs),
+        tuple(stage.subject.knowledge_refs),
+    )
+    return () if place == _KNOWLEDGE_PLACE_ABSENT else (place,)
+
+
 def stage_carry_key(stage) -> tuple:
     """Full-fidelity per-stage identity for PASSED carry-forward across a
     substantive replan (#12): a stage keeps its PASSED status only if NOTHING about
@@ -1055,6 +1094,7 @@ def stage_carry_key(stage) -> tuple:
         # stage_question_key where this identity is load-bearing across processes.
         *((_normalize_string(stage.criterion.verify_venue_at_final),)
           if stage.criterion.verify_venue_at_final else ()),
+        *knowledge_place(stage),
     )
 
 
@@ -1117,6 +1157,10 @@ def stage_question_key(stage) -> str:
         # live session to a spurious "stage definition changed" blocker).
         *((_normalize_string(stage.criterion.verify_venue_at_final),)
           if stage.criterion.verify_venue_at_final else ()),
+        # `knowledge` is a legal Question.target (it is in ELEMENT_NAMES), and
+        # material_refs is material's structural projection — a question answered
+        # against the old material must be invalidated when the refs are redrawn.
+        *knowledge_place(stage),
     ))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -1149,7 +1193,11 @@ def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
              _normalize_string(s.criterion.verify_kind),
              s.criterion.landed,
              *((_normalize_string(s.criterion.verify_venue_at_final),)
-               if s.criterion.verify_venue_at_final else ()))
+               if s.criterion.verify_venue_at_final else ()),
+             # Without this a knowledge-only correction — the exact edit an
+             # overcome-difficulty replan makes when the fault addressed знание —
+             # diffs to 'no_change' and is silently dropped.
+             *knowledge_place(s))
             for s in doc.stages
         ]
     def _fc(doc: PlanDoc):

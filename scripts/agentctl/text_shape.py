@@ -25,6 +25,7 @@ PLACEHOLDER_SET = frozenset({
 ELEMENT_NAMES = frozenset(
     {
         "material", "result", "invariants",   # subject cluster
+        "knowledge",                          # knowledge cluster
         "means", "method",                    # means cluster
         "executor", "capability",             # actor cluster
         "criterion", "done_criterion",        # criterion cluster

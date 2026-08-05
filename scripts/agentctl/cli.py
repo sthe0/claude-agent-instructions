@@ -41,6 +41,7 @@ from .plan import (
     verify_command_scope_warnings,
 )
 from .render import cmd_plan_render
+from .submission import submission_violations
 from .state import (
     _EXECUTION_NODES,
     _MAX_PLAN_STACK,
@@ -65,6 +66,7 @@ from .state import (
     Means,
     Node,
     Normalization,
+    NORMALIZATION_DESTINATIONS,
     NORMALIZATION_LEVELS,
     PermissionRequest,
     PLAN_PRESENTATION_KIND_ESSENCE,
@@ -216,6 +218,9 @@ def _apply_refined_stage_fields(cur, refined) -> None:
     cur.means.means = refined.means.means
     cur.means.method = refined.means.method
     cur.subject.invariants = refined.subject.invariants
+    cur.subject.material_refs = list(refined.subject.material_refs)
+    cur.subject.knowledge_refs = list(refined.subject.knowledge_refs)
+    cur.knowledge = refined.knowledge
     cur.conditions = refined.conditions
     cur.criterion.verify_command = refined.criterion.verify_command
     cur.criterion.expected_exit = refined.criterion.expected_exit
@@ -277,9 +282,31 @@ def _restore_current_stage(state: SessionState) -> None:
     state.current_stage = active[0].index if len(active) == 1 else None
 
 
-def _refresh_caches_from_plan_path(state: SessionState) -> None:
-    """Re-load state.plan_path and refresh state.final_check plus each live
-    stage's prose/criterion fields from those bytes.
+def _stamp_plan_digest(state: SessionState, plan_path: str) -> None:
+    """Record the sha256 of the ACCEPTED plan bytes on the session.
+
+    Called from the three submission seams and nowhere else, so state.plan_digest always
+    names bytes that passed `submission_violations`. Best-effort like its neighbours: an
+    unreadable file leaves the previous digest in place rather than raising out of a
+    command that has already decided to accept."""
+    try:
+        state.plan_digest = hashlib.sha256(Path(plan_path).read_bytes()).hexdigest()
+    except OSError:
+        return
+
+
+def _refresh_caches_from_plan_path(state: SessionState) -> list[str]:
+    """SUBMISSION SEAM (c). Re-load state.plan_path, validate it at submission grade, and
+    — only if it is clean — refresh state.final_check plus each live stage's
+    prose/criterion fields from those bytes. Returns the violation list; [] == refreshed.
+
+    The seam is here rather than in `cmd_approve` directly because this is already the one
+    place that re-reads plan_path at approve time, and a second read would let the two
+    disagree. Nothing is mutated when the plan is dirty: the caller refuses with a
+    Directive and the session keeps the state it had, so a rejected approve is not also a
+    half-applied edit. The refusal must NOT be a raised PlanError — approve is where the
+    plan_approval gate is armed, and an exception escaping there strands the session at
+    PLAN_READY with no edge back.
 
     Approve snapshots and hashes plan_path, but the plan-review cycle answers a
     REVISE verdict by editing plan_path IN PLACE at PLAN_READY (deliberately
@@ -299,16 +326,23 @@ def _refresh_caches_from_plan_path(state: SessionState) -> None:
     `cur` against itself post-copy, which always matches and would let a
     genuinely stale PASSED outcome survive unnoticed.
 
-    Best-effort like `_snapshot_approved_plan`: an absent plan_path or a plan
-    file that fails to load leaves the existing cache untouched rather than
-    raising out of approve."""
+    An absent plan_path still returns [] — "there is nothing to refresh" is not a
+    submission violation, and the plan_approval gate already refuses a session with no
+    plan artifact. A plan_path that is set but no longer LOADS is different: it is a
+    session whose approve is about to attest to bytes nobody can read, so it is reported
+    as a violation rather than swallowed. The old silent return let approve pass on the
+    stale pre-edit cache — the very "attests to a plan it never actually executes" failure
+    this function's own docstring names."""
     if not state.plan_path:
-        return
+        return []
     from .plan import PlanError, load_plan as _load, stage_carry_key
     try:
         refreshed = _load(state.plan_path)
-    except (OSError, PlanError):
-        return
+    except (OSError, PlanError) as exc:
+        return [f"cannot load the plan at {state.plan_path!r}: {exc}"]
+    violations = submission_violations(refreshed)
+    if violations:
+        return violations
     for rs in refreshed.stages:
         try:
             cur = state.stage(rs.index)
@@ -320,6 +354,8 @@ def _refresh_caches_from_plan_path(state: SessionState) -> None:
             cur.outcome.status = StageStatus.PENDING.value
     state.final_check = refreshed.meta.final_check
     _sync_venue_from_plan(state, refreshed)
+    _stamp_plan_digest(state, state.plan_path)
+    return []
 
 
 def _log_gate(state: SessionState, gate: str, blockers: list[str], *, passed: bool) -> None:
@@ -1411,7 +1447,10 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     if not state.overall_done_criterion:
         state.overall_done_criterion = doc.meta.done_criterion
     state.plan_verified = True
-    problems: list[str] = []
+    # Submission seam (a): the first entry of these bytes into the session. Keyed on the
+    # PLAN's own [meta] weight_class inside submission_violations, not on the session's,
+    # so it agrees with plan._validate_substantive_stage.
+    problems: list[str] = submission_violations(doc)
     if state.weight_class == WeightClass.SUBSTANTIVE.value:
         # Two-directional control: the scope lint (advisory, below) keeps a
         # control from being false-RED; this BLOCKS a control that can never
@@ -1422,11 +1461,10 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
                 doc.stages, doc.meta.final_check, doc.meta.repo_root
             )
         )
-        if problems:
-            state.plan_verified = False
+    if problems:
+        state.plan_verified = False
 
     state.plan_path = plan_path
-
     if not state.plan_verified:
         # Stay at PLANNING — do NOT transition or arm the gate. Advancing to
         # PLAN_READY on a failed structure check strands the session there with
@@ -1437,6 +1475,9 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
         store.save(state)
         return Directive(False, state.node, "fix_plan", "plan failed verification", data={"problems": problems})
 
+    # Past the refusal, so these bytes were ACCEPTED — which is the only thing
+    # plan_digest ever records.
+    _stamp_plan_digest(state, plan_path)
     state.node = transition(state.node, "revise_plan" if resubmitting else "submit_plan")
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
     if resubmitting:
@@ -1911,6 +1952,18 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # because confirm-delivery is a reachable, audit-logged escape (gates.py's
     # plan_presentation_blockers docstring has the full justification).
     state = _require(store, args.session)
+    # Submission seam (c), BEFORE _log_gate: the coordinator may have edited plan_path in
+    # place at plan-mutable PLAN_READY, so the bytes approve is about to attest to have
+    # never been through submission validation. Refusing here — as a fix_plan Directive,
+    # never a raised PlanError — keeps the gate row out of the log entirely rather than
+    # writing a failed plan_approval for a plan that was never really put to the gate; the
+    # coordinator fixes the file and re-runs approve from the same node.
+    submission = _refresh_caches_from_plan_path(state)
+    if submission:
+        return Directive(False, state.node, "fix_plan",
+                         "cannot approve: the plan at plan_path does not meet submission "
+                         "requirements (edit it and re-run approve)",
+                         data={"problems": submission})
     blockers = (
         gates.blockers(state, "plan_approval")
         + plugins.plugin_gate_blockers(state, "plan_approval")
@@ -1922,7 +1975,6 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     _log_gate(state, "plan_approval", blockers, passed=not blockers)
     if blockers:
         return Directive(False, state.node, "fix_plan", "cannot approve", data={"blockers": blockers})
-    _refresh_caches_from_plan_path(state)
     state.approval = GateRecord("plan_approval", armed=True, passed=True, by=args.by)
     state.node = transition(state.node, "approve")
     snap = _snapshot_approved_plan(store, state)
@@ -2944,7 +2996,10 @@ def cmd_normalize(args, *, store: StateStore, runner: Runner | None = None) -> D
     a reproducible factor left un-normed re-fails, so replan is blocked (see
     gates.normalization_blockers) until this records the factor, or the user takes the
     explicit --normalization-waiver escape for a genuinely one-off factor. The LEVEL
-    (note/leaf/principle) is payoff-gated and may be omitted."""
+    (note/leaf/principle) is payoff-gated and may be omitted, and so may the DESTINATION —
+    the functional place the act lands on. The two are ORTHOGONAL: `--level` says how
+    generally the record is written down, `--destination` says what is being repaired, and
+    every destination is recordable at every level."""
     state = _require(store, args.session)
     bad = _require_diagnosing(state)
     if bad:
@@ -2964,8 +3019,14 @@ def cmd_normalize(args, *, store: StateStore, runner: Runner | None = None) -> D
         return Directive(False, state.node, "normalize",
                          f"normalize --level must be one of {list(NORMALIZATION_LEVELS)} or "
                          f"omitted (payoff-gated by rediscovery-threshold-min), got {level!r}")
-    d.normalization = Normalization(factor=factor, level=level)
-    state.log("normalize", factor=factor, level=level)
+    destination = getattr(args, "destination", None)
+    if destination is not None and destination not in NORMALIZATION_DESTINATIONS:
+        return Directive(False, state.node, "normalize",
+                         f"normalize --destination must be one of "
+                         f"{list(NORMALIZATION_DESTINATIONS)} or omitted (the functional "
+                         f"place the renorming lands on), got {destination!r}")
+    d.normalization = Normalization(factor=factor, level=level, destination=destination)
+    state.log("normalize", factor=factor, level=level, destination=destination)
     store.save(state)
     return Directive(True, state.node, "replan",
                      "renorming recorded; replan is now unblocked")
@@ -3071,6 +3132,17 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # check. Only the NEW side (and submit-plan) is strict.
     old = _load(old_path, strict=False)
     new = _load(args.plan)
+    # Submission seam (b): the single NEW-side load, placed BEFORE diff_plans so all three
+    # diff outcomes are covered by one check — a no_change replan re-materializes live
+    # stages from these bytes just as a refinement does, so "unchanged" is no reason to
+    # let an unvalidated plan in.
+    submission = submission_violations(new)
+    if submission:
+        return Directive(False, state.node, "fix_plan",
+                         "replan blocked: the corrected plan does not meet submission "
+                         "requirements",
+                         data={"problems": submission})
+    _stamp_plan_digest(state, args.plan)
 
     # coverage gate: inside the difficulty flow, the corrected plan must CARRY the
     # critique's similarities into conditions/invariants and CHANGE a means/method
@@ -4086,6 +4158,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--level", dest="level", default=None, choices=list(NORMALIZATION_LEVELS),
                     help="recording level (payoff-gated by rediscovery-threshold-min); omit "
                          "for an in-head note below the leaf threshold")
+    sp.add_argument("--destination", dest="destination", default=None,
+                    choices=list(NORMALIZATION_DESTINATIONS),
+                    help="the functional place the renorming lands on — материал | средство "
+                         "| норма | способ | знание; ORTHOGONAL to --level (any destination "
+                         "at any level), omit when the place is not being recorded")
     sp = add("verify-final"); sp.add_argument("--session", required=True)
     sp = add("resolve"); sp.add_argument("--session", required=True); sp.add_argument("--by", required=True)
     sp.add_argument("--quality", type=int, choices=list(_VALID_QUALITY_RATINGS), default=None,

@@ -152,6 +152,15 @@ class Confidence(str, Enum):
 # `not_applicable` is the one legal sentinel for an EXPLICIT opt-out (the critique states the
 # routing does not apply), kept distinct from a bare None omission so the gate can
 # discriminate the two.
+#
+# «Both reduce reflexively to знание» is a statement about the ADDRESS, not about the
+# REPAIR. Знание is a functional place of its own — upstream of both обеспечения, since it
+# is what a норма is selected against and what a ресурс is judged adequate by — so the act
+# that closes the difficulty may land on знание directly rather than on the ресурс or the
+# норма that merely carried the fault. That landing place is recorded on its own axis,
+# NORMALIZATION_DESTINATIONS, and is orthogonal to this two-valued address: the address
+# says which обеспечение failed, the destination says which functional place the re-norming
+# repairs. A single value cannot carry both without collapsing the distinction.
 FAILURE_ADDRESS_VALUES = ("ресурсное", "нормативное", "not_applicable")
 
 
@@ -301,6 +310,22 @@ class Critique:
 # coordinator's cognition, so `level` may be None (a note below the leaf threshold).
 NORMALIZATION_LEVELS = ("note", "leaf", "principle")
 
+# The functional PLACE a renorming act lands on — a CLOSED vocabulary and its own axis,
+# orthogonal to NORMALIZATION_LEVELS. The two answer different questions and must share no
+# member: `level` asks how generally the record is written down (a payoff question about the
+# artifact), `destination` asks which place in the activity the act actually repairs (a
+# structural question about the деятельность). Conflating them is what made "principle"
+# read as both the most general recording level AND the thing being changed, which quietly
+# denied that знание is a place a renorming can land on at all.
+#
+# The members are the functional places обеспечение деятельности decomposes into (see the
+# FAILURE_ADDRESS_VALUES comment above for the same decomposition on the fault-address
+# axis): ресурсное обеспечение splits into материал and средство, нормативное обеспечение
+# into норма and способ, and знание stands upstream of both as the place a норма is
+# selected against and a ресурс judged adequate by. Closed because an open destination is
+# not a place — it is free text, and the axis then records nothing checkable.
+NORMALIZATION_DESTINATIONS = ("материал", "средство", "норма", "способ", "знание")
+
 
 @dataclass
 class Normalization:
@@ -309,11 +334,15 @@ class Normalization:
     reproduction, a REPRODUCIBLE factor left un-normed simply re-fails — so closing a
     difficulty REQUIRES re-norming that factor (the ACT is mandatory-if-reproducible).
     `factor` names the reproducible cause; `level` (note/leaf/principle) is the payoff-
-    gated recording level and may be None. Recorded by cmd_normalize; gates cmd_replan
-    (see gates.normalization_blockers). A one-off (non-reproducible) factor takes the
+    gated recording level and may be None; `destination` (a NORMALIZATION_DESTINATIONS
+    member) names the functional place the act lands on and is INDEPENDENT of `level` —
+    any destination is recordable at any level. Both default to None so a pre-field
+    record loads unchanged. Recorded by cmd_normalize; gates cmd_replan (see
+    gates.normalization_blockers). A one-off (non-reproducible) factor takes the
     explicit --normalization-waiver escape instead of a record."""
     factor: str
     level: str | None = None
+    destination: str | None = None
 
 
 @dataclass
@@ -552,10 +581,19 @@ class JudgeBypass:
 # criterion/principle/conditions) from the mutable execution RECORD (outcome).
 @dataclass
 class Subject:
-    """The material worked on and the result image it should become."""
+    """The material worked on and the result image it should become.
+
+    `material_refs` and `knowledge_refs` are the two structural projections of the
+    material prose, and their contract is a DIVISION, not a check: `material_refs` names
+    what the stage TRANSFORMS, `knowledge_refs` names what it RELIES ON and leaves alone.
+    A symbol appearing in both is a smell — the stage is rewriting the very thing it
+    reasons from — and the plan must justify it in prose; it is deliberately NOT a
+    submission refusal (see submission.py's module docstring for the three reasons)."""
     material: str
     result: str
     invariants: str | None = None
+    material_refs: list[str] = field(default_factory=list)
+    knowledge_refs: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -629,12 +667,17 @@ class Criterion:
 class Principle:
     """The refutable principle the stage rests on (confidence is a Confidence value).
 
-    Element 7 is ALWAYS a норма (должное) — the most general member of the norm-series
-    (цель→план→программа→метод→подход→принцип) — and a norm is never checked for truth.
-    So there is NO a-priori `statement_kind` tag on the principle (ADR-0004 dropped it
-    as a category error): the сущее-vs-должное character of a fault is a POST-HOC product
-    of критика at difficulty closure, living in the two refutation MODES and R2's routing,
-    not on the norm itself."""
+    Element 7 is used AS a норма (должное) — the stage rests on it, and what a stage rests
+    on is not checked for truth in the course of resting on it. That is a statement about
+    the FUNCTIONAL PLACE the principle occupies here, not about what the principle IS: the
+    same statement can be знание elsewhere (it has a source, a derivation, and a refutation
+    condition — the three marks of a claim about how things are), and `refutation` only
+    means anything because it can be. What ADR-0004 dropped is the a-priori `statement_kind`
+    TAG, a per-statement typing that tried to settle знание-vs-норма once and for all on the
+    statement itself; the сущее-vs-должное character of a fault stays a POST-HOC product of
+    критика at difficulty closure, living in the two refutation MODES and R2's routing.
+    Nothing here denies the principle a знание reading — the stage's own знание place is
+    `Stage.knowledge`, and a principle may well be where that knowledge came from."""
     statement: str
     source: str
     # `derivation` sits adjacent to `source` because the pair is one checkable unit:
@@ -759,6 +802,15 @@ class Stage:
     criterion: Criterion
     principle: Principle | None = None
     conditions: str | None = None
+    # The знание the stage acts FROM: what must already be known for the declared method
+    # over the declared means to reach the result image. A functional place of its own,
+    # upstream of both the norm (element 7, what the stage rests on) and the selection of
+    # means — not a restatement of either. Optional at load so every already-authored plan
+    # loads unchanged; required of a SUBSTANTIVE stage at the submission seam
+    # (submission.py), where an incoming `knowledge` supply edge is an accepted alternative
+    # to declaring it locally — a stage supplied its knowledge by an earlier stage has the
+    # place filled, just not by itself.
+    knowledge: str | None = None
     supplies: list[Supply] = field(default_factory=list)
     # Paths this stage produces (green-reachability targets for verify-command lint).
     # Optional and tolerant: a plan omitting it loads unchanged.
@@ -810,6 +862,7 @@ class Stage:
                 criterion=Criterion.from_dict(d["criterion"]),
                 principle=Principle.from_dict(d["principle"]) if d.get("principle") else None,
                 conditions=d.get("conditions"),
+                knowledge=d.get("knowledge"),
                 supplies=[Supply(**s) for s in d.get("supplies", [])],
                 output_artifacts=list(d.get("output_artifacts", [])),
                 outcome=Outcome(**d["outcome"]) if d.get("outcome") else Outcome(),
@@ -823,6 +876,8 @@ class Stage:
                 material=d.get("material", ""),
                 result=d.get("expected_result_image", ""),
                 invariants=d.get("invariants"),
+                material_refs=list(d.get("material_refs", [])),
+                knowledge_refs=list(d.get("knowledge_refs", [])),
             ),
             means=Means(means=d.get("means", ""), method=d.get("method", "")),
             actor=Actor(
@@ -838,6 +893,7 @@ class Stage:
             ),
             principle=None,  # flat states predate the principle element
             conditions=d.get("conditions"),
+            knowledge=d.get("knowledge"),
             supplies=[Supply(on=int(x)) for x in d.get("depends_on", [])],
             output_artifacts=list(d.get("output_artifacts", [])),
             outcome=Outcome(
@@ -948,6 +1004,19 @@ class SessionState:
     # plan_path (the prior behaviour) and old state.json loads byte-compatibly.
     plan_snapshot_path: str | None = None
     plan_snapshot_hash: str | None = None
+    # The sha256 of the plan bytes this session has ACCEPTED — stamped at each of the
+    # three submission seams (submit-plan, replan's new side, approve's refresh) and
+    # nowhere else, so it always names bytes that passed submission validation.
+    #
+    # Distinct from plan_snapshot_hash, which is not a synonym: that one hashes the bytes
+    # frozen AT APPROVE as the replan diff baseline, and stays pinned to that approval
+    # while the coordinator edits plan_path. This one moves with every accepted entry,
+    # including the two (submit-plan, replan) that never write a snapshot at all — so a
+    # later reader asking "which bytes is this session actually running" reads this, and
+    # one asking "which bytes was the replan measured against" reads that. None until the
+    # first submission; legacy states load with None (absent key -> dataclass default via
+    # from_dict's cls(**data)).
+    plan_digest: str | None = None
     # The tracker key classify detected (#11): persisted so the tracker plugin's
     # auto_activate predicate can read it without re-deriving it from task_id.
     # None on legacy states and on sessions with no tracker-key-shaped task id
