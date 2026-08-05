@@ -456,7 +456,10 @@ def _resolve_final_or_refuse(state: SessionState, criterion: Criterion) -> tuple
     return cwd, _refuse_missing_cwd(state, cwd)
 
 
-def _diagnose_venue_refusal(state: SessionState, store: StateStore, message: str) -> Directive:
+def _diagnose_venue_refusal(
+    state: SessionState, store: StateStore, message: str,
+    div: "effort.Divergence | None" = None,
+) -> Directive:
     """Route a verify-final venue refusal into the ordinary DIAGNOSING cycle
     instead of stranding the session at VERIFYING — from VERIFYING, declare/
     investigate/critique all refuse ("difficulty commands run only in the
@@ -471,13 +474,22 @@ def _diagnose_venue_refusal(state: SessionState, store: StateStore, message: str
     is marked FAILED — `_resolve_or_refuse`'s refusal/failure split is preserved;
     only the destination node changes. Only ever reached from VERIFYING
     (cmd_verify_final's entry guard returns before here for any other node), so
-    the `diagnose` transition is always legal."""
+    the `diagnose` transition is always legal. `div` is the divergence already
+    computed by the caller (fire site 2's hoisted refresh_spend/divergence call) —
+    attached here exactly like record_result's failed branch, so a venue refusal
+    doesn't silently drop a live effort divergence just because it returns before
+    the plan's own end-of-function fire check."""
     state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
     state.difficulty = Difficulty()
+    data = {}
+    if div is not None and gates.effort_active(state):
+        now = dt.datetime.now(dt.timezone.utc).timestamp()
+        data["effort_divergence"] = effort.record_fire(state, div, now=now)
     store.save(state)
     return Directive(
         False, state.node, "declare", message,
         marker="OVERCOME-DIFFICULTY",
+        data=data,
     )
 
 
@@ -2430,6 +2442,14 @@ def cmd_resolve_permission(args, *, store: StateStore, runner: Runner | None = N
     )
 
 
+def _cost_rows(args) -> list[dict]:
+    """Read the cost log rows for this command, honoring the ``--cost-log`` test
+    override (default: cost.COST_LOG) — the shared read behind every fire site's
+    and cmd_resolve's cost-log lookup."""
+    log = getattr(args, "cost_log", None)
+    return cost.read_rows(Path(log) if log else cost.COST_LOG)
+
+
 def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     stage = state.active_stage()
@@ -2606,9 +2626,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
     # effort.refresh_spend (below) sums by plan_path alone and needs to see the
     # engine-mandated review spawns too, which attribute_stage's stage_index filter
     # would otherwise hide from this read.
-    _cost_log = getattr(args, "cost_log", None)
-    _log_path = Path(_cost_log) if _cost_log else cost.COST_LOG
-    _rows = cost.read_rows(_log_path)
+    _rows = _cost_rows(args)
     # Attribute cost for spawn stages from the cost log. In-thread stages leave
     # None — cost splitting per in-thread stage is out of scope for this attribution.
     if stage.is_spawn():
@@ -2632,7 +2650,8 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
         state.current_stage = None
         state.log("record_result", stage=stage.index, status="passed")
         if div is not None and gates.effort_active(state):
-            fire = effort.record_fire(state, div)
+            now = dt.datetime.now(dt.timezone.utc).timestamp()
+            fire = effort.record_fire(state, div, now=now)
             return _diagnose_effort_divergence(state, store, div, fire)
         store.save(state)
         if state.all_stages_passed():
@@ -2672,7 +2691,8 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
         # Already entering DIAGNOSING for the stage failure — attach the divergence
         # instead of re-transitioning or opening a second Difficulty, but still honor
         # divergence()'s CALLER OBLIGATION (record the fire so it doesn't re-trip).
-        data["effort_divergence"] = effort.record_fire(state, div)
+        now = dt.datetime.now(dt.timezone.utc).timestamp()
+        data["effort_divergence"] = effort.record_fire(state, div, now=now)
     store.save(state)
     return Directive(
         False, state.node, "declare",
@@ -2717,6 +2737,17 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     _log_gate(state, "resolution", blockers, passed=not blockers)
     if blockers:
         return Directive(False, state.node, "fix_stages", "not ready for resolution", data={"blockers": blockers})
+    # Effort-divergence spend refresh (call site 2) + divergence computation — fire
+    # site 2. Hoisted here, ahead of the stage-verification loop below, so a venue
+    # refusal or a failing final_check can attach this SAME live divergence via
+    # _diagnose_venue_refusal / the failures branch, instead of only the clean-pass
+    # path reaching it — mirrors record_result's failed branch, which attaches
+    # divergence data at its own failure point rather than solely on success. A
+    # separate cost-log read from the rollup below: refresh_spend needs every row by
+    # plan_path (including engine-mandated review spawns no stage attributes), the
+    # rollup needs only what record-result already stamped onto each Outcome.
+    effort.refresh_spend(state, _cost_rows(args), state.plan_path)
+    div = effort.divergence(state)
     # Final-gate execution (defense in depth): re-run every measurable stage's
     # verify_command — a later stage may have regressed an earlier one. Any
     # non-match refuses RESOLUTION rather than trusting the recorded PASSED flags.
@@ -2729,7 +2760,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
             ok, refusal, result = _landed_check_result(state, crit.landed, runner)
             if refusal:
                 return _diagnose_venue_refusal(
-                    state, store, f"stage {stage.index} landed check refused: {refusal}",
+                    state, store, f"stage {stage.index} landed check refused: {refusal}", div,
                 )
             if not ok:
                 failures.append(
@@ -2743,7 +2774,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
             cwd, refusal = _resolve_final_or_refuse(state, crit)
             if refusal:
                 return _diagnose_venue_refusal(
-                    state, store, f"stage {stage.index} verify_command refused: {refusal}",
+                    state, store, f"stage {stage.index} verify_command refused: {refusal}", div,
                 )
         ok, result = _verify_command_result(stage, runner, cwd=cwd)
         if not ok:
@@ -2756,7 +2787,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
             ok, refusal, result = _landed_check_result(state, fc.landed, runner)
             if refusal:
                 return _diagnose_venue_refusal(
-                    state, store, f"final_check '{fc.label or fc.landed.target}' refused: {refusal}",
+                    state, store, f"final_check '{fc.label or fc.landed.target}' refused: {refusal}", div,
                 )
             if not ok:
                 label = fc.label or fc.landed.target
@@ -2769,7 +2800,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
         cwd, refusal = _resolve_or_refuse(state, fc.venue)
         if refusal:
             return _diagnose_venue_refusal(
-                state, store, f"final_check '{fc.label or fc.command}' refused: {refusal}",
+                state, store, f"final_check '{fc.label or fc.command}' refused: {refusal}", div,
             )
         ok, result = _run_check(fc.command, fc.expected_exit, runner, cwd=cwd)
         if not ok:
@@ -2786,26 +2817,28 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
         # run only in the DIAGNOSING cycle"), and only `reset --force` escaped.
         state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
         state.difficulty = Difficulty()
+        data = {"failures": failures}
+        if div is not None and gates.effort_active(state):
+            # Already entering DIAGNOSING for the failure — attach the divergence
+            # instead of re-transitioning or opening a second Difficulty, mirroring
+            # record_result's failed branch (still honoring divergence()'s CALLER
+            # OBLIGATION: record the fire so it doesn't re-trip).
+            now = dt.datetime.now(dt.timezone.utc).timestamp()
+            data["effort_divergence"] = effort.record_fire(state, div, now=now)
         store.save(state)
         return Directive(
             False, state.node, "declare",
             "final verification command(s) failed; run overcome-difficulty — declare "
             "the divergence, then investigate, then critique; replan is blocked until "
             "the cycle is complete",
-            data={"failures": failures},
+            data=data,
         )
-    # Effort-divergence spend refresh (call site 2) + fire check — fire site 2, and the
-    # last point at which `diagnose` is still a legal transition (a contracted plan can
-    # reach here with no further record-result to fire from). A separate cost-log read
-    # from the rollup below: refresh_spend needs every row by plan_path (including
-    # engine-mandated review spawns no stage attributes), the rollup needs only what
-    # record-result already stamped onto each Outcome.
-    _cost_log = getattr(args, "cost_log", None)
-    _log_path = Path(_cost_log) if _cost_log else cost.COST_LOG
-    effort.refresh_spend(state, cost.read_rows(_log_path), state.plan_path)
-    div = effort.divergence(state)
+    # Fire check on a clean pass (fire site 2) — the last point at which `diagnose`
+    # is still a legal transition (a contracted plan can reach here with no further
+    # record-result to fire from).
     if div is not None and gates.effort_active(state):
-        fire = effort.record_fire(state, div)
+        now = dt.datetime.now(dt.timezone.utc).timestamp()
+        fire = effort.record_fire(state, div, now=now)
         return _diagnose_effort_divergence(state, store, div, fire)
 
     # Compute whole-plan cost rollup from already-attributed stage outcomes.
@@ -2885,11 +2918,9 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # semantics (the SPAWNING session's CLAUDE_CODE_SESSION_ID) are not guaranteed
     # to equal state.session_id. [] when no spawn ever ran (in-thread task) or
     # plan_path is unset; a spawn row with a missing/null tier is skipped.
-    _cost_log = getattr(args, "cost_log", None)
-    _cost_log_path = Path(_cost_log) if _cost_log else cost.COST_LOG
-    _cost_rows = cost.read_rows(_cost_log_path)
+    _rows = _cost_rows(args)
     budget_tiers = sorted({
-        r["budget_tier"] for r in _cost_rows
+        r["budget_tier"] for r in _rows
         if r.get("plan_path") == state.plan_path and r.get("budget_tier")
     })
     # Effort-divergence surface (the plan's named mitigation for the self-set-estimate
@@ -3277,9 +3308,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # update. A cost row a just-spawned plan review wrote against the NEW path (args.plan)
     # is not lost by refreshing against the old path here — it is simply picked up by
     # the NEXT refresh against the new path, once a branch below rewrites plan_path.
-    _cost_log = getattr(args, "cost_log", None)
-    _log_path = Path(_cost_log) if _cost_log else cost.COST_LOG
-    effort.refresh_spend(state, cost.read_rows(_log_path), state.plan_path)
+    effort.refresh_spend(state, _cost_rows(args), state.plan_path)
 
     if kind == "no_change":
         # A legacy session with no approved-plan snapshot (plan_snapshot_path=None)
@@ -3299,7 +3328,6 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         # FILE changed relative to what was cached at submit-plan/last replan.
         state.final_check = new.meta.final_check
         _sync_venue_from_plan(state, new)
-        effort.rederive(state)  # re-derive the estimate from the (possibly refined) stages
         # Backfill a snapshot for a legacy (pre-snapshot) session so the NEXT replan
         # diffs against real approved bytes instead of self-diffing plan_path.
         if not (state.plan_snapshot_path and Path(state.plan_snapshot_path).exists()):
@@ -3313,11 +3341,13 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             state.difficulty = None
             state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
             state.log("replan", kind="no_change", exited_diagnosing=True)
+            effort.rederive(state)  # re-derive AFTER logging so this in-flight replan is counted
             store.save(state)
             if state.ready_stages():
                 return Directive(True, state.node, "next_stage",
                                  "difficulty worked through; plan unchanged — retry the re-armed stage")
             return Directive(True, state.node, "continue", "difficulty worked through; resume execution")
+        effort.rederive(state)  # re-derive the estimate from the (possibly refined) stages
         store.save(state)
         return Directive(True, state.node, "continue", "replan is a no-op; plan unchanged")
 
@@ -3337,11 +3367,11 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         state.plan_path = args.plan
         _sync_venue_from_plan(state, new)
         state.final_check = new.meta.final_check
-        effort.rederive(state)  # re-derive the estimate from the refined stages
         if diagnosing:
             state.difficulty = None
             state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
         state.log("replan", kind="refinement", exited_diagnosing=diagnosing)
+        effort.rederive(state)  # re-derive AFTER logging so this replan is counted
         store.save(state)
         if state.node == Node.VERIFYING.value and state.ready_stages():
             return Directive(True, state.node, "next_stage", "refinement applied; retry the ready stage")
@@ -3361,7 +3391,6 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
                 and stage_carry_key(prev) == stage_carry_key(ns)):
             ns.outcome = prev.outcome
     state.stages = new.stages
-    effort.rederive(state)  # re-derive the estimate from the new stage list
     _sync_venue_from_plan(state, new)
     state.final_check = new.meta.final_check
     state.plan_path = args.plan
@@ -3372,6 +3401,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
     state.node = Node.PLAN_READY.value
     state.log("replan", kind="substantive")
+    effort.rederive(state)  # re-derive AFTER logging so this replan is counted
     store.save(state)
     return Directive(
         True, state.node, "await_user_approval",
@@ -3980,7 +4010,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("unit", ("partition", "partition-units"), "'|'-delimited partition-unit record"),
     ("budget", ("dispatch",), "budget tier name"),
     ("complexity", ("dispatch",), "complexity tier name"),
-    ("cost_log", ("record-result", "resolve"), "cost log file path (test override)"),
+    ("cost_log", ("record-result", "resolve", "verify-final", "replan"), "cost log file path (test override)"),
     ("quality_by", ("resolve", "close"), "how the quality rating was obtained — a fixed token"),
     ("confirmed_by", ("close",), "who confirmed — a name, not a narrative"),
     ("approved_by", ("drive",), "who approved — a name, not a narrative"),
@@ -4325,6 +4355,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="recording level (payoff-gated by rediscovery-threshold-min); omit "
                          "for an in-head note below the leaf threshold")
     sp = add("verify-final"); sp.add_argument("--session", required=True)
+    sp.add_argument("--cost-log", dest="cost_log", default=None,
+                    help="override cost log path for tests (defaults to cost.COST_LOG)")
     sp = add("resolve"); sp.add_argument("--session", required=True); sp.add_argument("--by", required=True)
     sp.add_argument("--quality", type=int, choices=list(_VALID_QUALITY_RATINGS), default=None,
                     help="1-5 rating, agent-proposed and user-confirmed/adjusted in the "
@@ -4350,6 +4382,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--normalization-waiver", dest="normalization_waiver", default=None,
                     help="close a difficulty WITHOUT a re-norming record when the exposed factor "
                          "is genuinely one-off; a recorded reason (refused if empty)")
+    sp.add_argument("--cost-log", dest="cost_log", default=None,
+                    help="override cost log path for tests (defaults to cost.COST_LOG)")
     sp = add("check-coverage"); sp.add_argument("--session", required=True)
     sp.add_argument("--new", required=True,
                     help="corrected plan file to check against the active critique, "

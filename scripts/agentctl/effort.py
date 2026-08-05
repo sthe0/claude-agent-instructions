@@ -445,7 +445,9 @@ def divergence(state: SessionState, thr: Thresholds | None = None) -> Divergence
         return None
 
     def _past_own_trigger(d: Divergence) -> float:
-        return d.multiple / multiple if d.kind == "ratio" else d.multiple
+        if d.kind == "ratio" and multiple > 0:
+            return d.multiple / multiple
+        return d.multiple
 
     return max(candidates, key=lambda d: (_past_own_trigger(d), -SCALE_ORDER.index(d.scale)))
 

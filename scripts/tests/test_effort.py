@@ -405,6 +405,22 @@ def test_ranking_uses_distance_past_own_trigger_not_raw_multiple():
     assert fired.multiple == pytest.approx(4.0)
 
 
+def test_ranking_ratio_far_past_beats_absolute_barely_past_its_own():
+    """Complementary direction: a ratio scale far past its own trigger must outrank
+    an absolute scale only barely past its own — the prior test only pinned
+    absolute-beats-ratio, leaving the opposite direction unpinned (a broken
+    normalization could still coincidentally pass that one test alone)."""
+    state = substantive([stage(0, "spawn:developer")])  # spend estimate: 9.00
+    effort.arm(state, THR)
+    state.effort_actuals[effort.ACTUAL_SPEND_KEY] = 9.0 * 5.0 * 10  # raw multiple 50 -> 10x past its own line
+    for _ in range(4):
+        state.log("replan", kind="substantive")  # 4 vs threshold 3 -> normalized ~1.33x
+    fired = effort.divergence(state, THR)
+    assert fired is not None
+    assert fired.scale == effort.SCALE_SPEND
+    assert fired.multiple == pytest.approx(50.0)
+
+
 def test_framing_points_at_the_norm_not_at_the_estimate():
     state = substantive([stage(0, "spawn:developer")])
     effort.arm(state, THR)
