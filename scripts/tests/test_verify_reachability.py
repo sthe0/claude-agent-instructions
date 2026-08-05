@@ -23,6 +23,8 @@ from agentctl.plan import (
 from agentctl.state import Stage
 from agentctl.store import FileStateStore
 
+from conftest import SUBSTANTIVE_ORDER
+
 
 def ns(**kw):
     return Namespace(**kw)
@@ -265,7 +267,7 @@ criterion_type = "measurable"
 weight_class = "substantive"
 external_research = "n/a"
 repo_root = "{root}"
-
+""" + SUBSTANTIVE_ORDER + """
 [[stage]]
 index = 1
 title = "Produce a file"

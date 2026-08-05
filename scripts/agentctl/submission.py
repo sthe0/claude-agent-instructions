@@ -99,6 +99,19 @@ _WHY = {
         "rewritten (an empty list reads the same as an absent key here: a substantive "
         "stage that relies on nothing is not a case this grade admits)"
     ),
+    "goal": (
+        "what this plan is for, in one sentence. The engine caches it as the session's "
+        "goal and every observation of a result is compared against it"
+    ),
+    "done_criterion": (
+        "the plan-level result image — what will be true when this plan is finished. "
+        "Without it the resolution gate has nothing to hold the delivery to"
+    ),
+    "final_check": (
+        "at least one [[final_check]] table. A plan whose only controls are per-stage "
+        "asserts that each step went as declared and nothing about the whole; the "
+        "end-to-end checks are what verify-final re-runs against the assembled product"
+    ),
     "preconditions": (
         "what must already be true before this stage may START — an access, a clean tree, "
         "an earlier stage's artifact in place. A separate place from `conditions`, which "
@@ -107,6 +120,61 @@ _WHY = {
         "before me is done\", which `depends_on` already records"
     ),
 }
+
+
+# Required of a SUBSTANTIVE plan's [meta] table itself — the plan-level sibling of
+# `_SUBSTANTIVE_SUBMISSION_FIELDS` above, and a separate table because these range over
+# `doc.meta` once rather than over every stage. Falsiness is the test throughout, so an
+# empty string and an empty [[final_check]] list read the same as an absent key.
+#
+#   attribute — dotted path from PlanMeta
+#   label     — the TOML key an author writes (and the `_WHY` key)
+_SUBSTANTIVE_META_FIELDS = (
+    ("goal", "goal"),
+    ("done_criterion", "done_criterion"),
+    ("final_check", "final_check"),
+)
+
+# The parts of `[meta.order]` a substantive plan must fill, each paired with why. Every
+# field of `state.Order` is either a row here or `coverage`, whose requirement is a
+# relation rather than a presence and is checked separately below — and that totality is
+# not left to whoever edits this tuple: test_meta_order.py parametrizes its refusal cases
+# over `dataclasses.fields(Order)` itself, so a part added to the type and not covered
+# here turns red rather than shipping unrequired.
+_ORDER_PARTS = (
+    (
+        "customer_id",
+        "the machine-comparable identifier of the position the order came from. The "
+        "identifier half of the customer pair, because an acceptance author is checked "
+        "against it — comparing an author against a paragraph is either vacuous or absurd",
+    ),
+    (
+        "customer",
+        "the position that identifier names, in prose. The other half of the pair: "
+        "customer_id is what a machine compares, this is what a reader needs to know "
+        "whose requirements these are",
+    ),
+    (
+        "functional_place",
+        "the place this plan's product fills, and in what respect its current filling is "
+        "inadequate — a need is a functional place stripped of adequate filling, which is "
+        "why the two are one field and not two",
+    ),
+    (
+        "requirements",
+        "the requirements on the product, as { id = \"R1\", text = \"...\" } PAIRS. The id "
+        "is the key the coverage map and every acceptance verdict range over; a list of "
+        "bare sentences leaves the load-bearing key as prose someone has to parse back out",
+    ),
+)
+
+_ORDER_ABSENT = (
+    "[meta] missing the 'order' table (required for substantive plans): a plan is an "
+    "answer to an order, and with the order unstated there is nothing for the product to "
+    "be accepted against. Declare [meta.order] with customer_id, customer, "
+    "functional_place, requirements as { id, text } pairs, and a [meta.order.coverage] "
+    "table mapping each requirement id to the controls that decide it"
+)
 
 
 def _attr(obj, dotted: str):
@@ -206,6 +274,56 @@ def _undeclared_weight_class(doc, session_weight_class: str | None) -> bool:
         and session_weight_class is not None
         and session_weight_class.lower() == "substantive"
     )
+
+
+def _order_violations(meta) -> list[str]:
+    """Every way `[meta.order]` fails the substantive grade. [] == clean.
+
+    Three shapes, and the third is the only one that is not a presence check:
+
+      * no order table at all — the plan states no requirements to be accepted against;
+      * a missing PART of the order (`_ORDER_PARTS`), including both halves of the
+        customer pair, since the identifier and the position it names do different jobs;
+      * a requirement the coverage map says nothing about. Totality is the whole claim
+        here and it is deliberately the weaker of the two things a reader might expect:
+        the resolver checks that every declared id HAS an entry, never that the control
+        the entry names actually decides the requirement. Sufficiency is review — an
+        entry can be wrong, and nothing mechanical will say so.
+
+    An id-less requirement is refused separately from an uncovered one because it is a
+    strictly worse case: an entry with no id is not merely uncovered, it is uncoverABLE —
+    the coverage map, the acceptance verdicts and this check all key on the id, so a
+    requirement without one cannot be named by any of them.
+
+    Pure over `doc.meta`, like every other enumerator in this module, and it never reads
+    the ORDER's own truth: whether these are the right requirements is the customer's
+    question, not the engine's."""
+    order = meta.order
+    if order is None:
+        return [_ORDER_ABSENT]
+    out: list[str] = []
+    for name, why in _ORDER_PARTS:
+        if not getattr(order, name):
+            out.append(
+                f"[meta.order] missing {name!r} (required for substantive plans): {why}"
+            )
+    unnamed = [i for i, r in enumerate(order.requirements, start=1) if not r.id]
+    if unnamed:
+        out.append(
+            f"[meta.order] requirement(s) at position {', '.join(str(i) for i in unnamed)} "
+            f"carry no 'id'. Write each as {{ id = \"R1\", text = \"...\" }} — the coverage "
+            f"map and every acceptance verdict key on the id, so an id-less requirement "
+            f"cannot be covered or accepted at all"
+        )
+    uncovered = [r.id for r in order.requirements if r.id and not order.coverage.get(r.id)]
+    if uncovered:
+        out.append(
+            f"[meta.order.coverage] says nothing about {', '.join(uncovered)}. Every "
+            f"declared requirement needs an entry naming the control that decides it "
+            f"(a stage's verify_command, a final_check); an uncovered requirement is one "
+            f"the plan asks to be accepted on without saying what would establish it"
+        )
+    return out
 
 
 def _conditions_restatement(stage, judge_runner, judge_enabled: bool) -> str | None:
@@ -328,6 +446,14 @@ def submission_violations(
     # AND the places it will require in one answer, instead of one round trip per layer.
     if not (_is_substantive(doc) or undeclared):
         return out
+    # Plan-level first, then per-stage: an author reading one round trip meets the whole
+    # of what the plan owes before the list turns into stage numbers.
+    for dotted, label in _SUBSTANTIVE_META_FIELDS:
+        if not _attr(doc.meta, dotted):
+            out.append(
+                f"[meta] missing {label!r} (required for substantive plans): {_WHY[label]}"
+            )
+    out.extend(_order_violations(doc.meta))
     for stage in doc.stages:
         # Supplies are already built by the time a PlanDoc exists, so the "supplied by an
         # earlier stage" alternative is decidable here — evaluating the knowledge

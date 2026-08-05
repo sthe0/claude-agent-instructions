@@ -59,6 +59,8 @@ from agentctl.state import (
 )
 from agentctl.submission import submission_violations, validate_submission
 
+from conftest import SUBSTANTIVE_FINAL_CHECK, SUBSTANTIVE_ORDER
+
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 CORPUS_DIR = FIXTURES / "plan_corpus"
 NO_KNOWLEDGE_PLAN = FIXTURES / "submission" / "stage_without_knowledge.toml"
@@ -80,7 +82,7 @@ done_criterion = "dc"
 criterion_type = "measurable"
 weight_class = "substantive"
 external_research = "checked the engine's own call sites; no prior art applies"
-
+""" + SUBSTANTIVE_ORDER + """
 [[stage]]
 index = 1
 title = "{title}"
@@ -103,7 +105,7 @@ source = "src"
 derivation = "der"
 confidence = "high"
 refutation = "r"
-"""
+""" + SUBSTANTIVE_FINAL_CHECK
 
 _FULL_KNOWLEDGE_BLOCK = (
     'material_refs = ["scripts/agentctl/plan.py"]\n'

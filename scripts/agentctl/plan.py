@@ -42,6 +42,34 @@ also carry a plan-level external-research decision:
                                          # internet/intranet research found, or
                                          # why it is not warranted.
 
+a non-empty goal and done_criterion, at least one [[final_check]], and the typed
+order the plan serves:
+
+    [meta.order]
+    customer_id = "user"                 # machine-comparable identifier of the
+                                         # position the order came from
+    customer = "the user, as the position that posed the task"
+                                         # the prose that identifier names —
+                                         # a PAIR, because an acceptance author
+                                         # is compared against the identifier
+    functional_place = "the norm that governs an act of activity here"
+                                         # the place this plan's product fills,
+                                         # need being that place stripped of an
+                                         # adequate filling
+    requirements = [                     # id/text PAIRS, not sentences: the id
+      { id = "R1", text = "..." },       # is the key the coverage map and the
+      { id = "R2", text = "..." },       # acceptance verdicts range over
+    ]
+
+    [meta.order.coverage]                # requirement id -> the controls that
+    R1 = ["stage 2 verify_command"]      # decide it; every declared id needs an
+    R2 = ["final_check 1"]               # entry (totality is machine-checked,
+                                         # sufficiency is review)
+
+Those five are SUBMISSION-seam requirements (submission.py), not loader ones: the
+loader parses [meta.order] and can never refuse it, so a plan approved before the
+table existed still re-reads cleanly inside its own live session.
+
 and every stage must also carry the 8-element activity-structure fields:
 
     material = "..."
@@ -85,6 +113,7 @@ from .state import (
     LandedSpec,
     LANDED_GIT_ERROR_EXIT,
     Means,
+    Order,
     Outcome,
     Principle,
     Stage,
@@ -120,6 +149,11 @@ class PlanMeta:
     # Optional typed end-to-end checks run by verify-final after per-stage re-runs.
     # Absent => [] (back-compat). Parsed from top-level [[final_check]] tables.
     final_check: list[FinalCheck] = field(default_factory=list)
+    # The order this plan serves, typed (state.Order), parsed from [meta.order].
+    # None (the default) is every plan authored before the table existed, and the
+    # parse can never refuse: requiredness is a submission-seam grade
+    # (submission._order_violations), so the loader stays exactly as permissive.
+    order: "Order | None" = None
 
 
 @dataclass
@@ -828,6 +862,13 @@ def parse_plan(
             )
         )
 
+    # Additive and unconditionally lenient — no `if strict:` branch, and `Order.from_dict`
+    # degrades every malformation to the empty form rather than raising. A table this
+    # loader could refuse would be retroactive over every plan a live session re-reads,
+    # which is the whole reason submission.py exists.
+    raw_order = m.get("order")
+    order = Order.from_dict(raw_order) if isinstance(raw_order, dict) else None
+
     meta = PlanMeta(
         task_id=str(m["task_id"]),
         goal=str(m.get("goal", "")),
@@ -838,6 +879,7 @@ def parse_plan(
         repo_root=str(m["repo_root"]) if m.get("repo_root") else None,
         delivery_worktree=str(m["delivery_worktree"]) if m.get("delivery_worktree") else None,
         final_check=final_checks,
+        order=order,
     )
 
     is_substantive = meta.weight_class is not None and meta.weight_class.lower() == "substantive"
@@ -1017,12 +1059,57 @@ def load_plan(
     return parse_plan(data, strict=strict, strict_executor=strict_executor)
 
 
+def order_scope(meta) -> tuple:
+    """The SCOPE-bearing half of the order, as a contribution to a change-decision key:
+    a one-element tuple holding the requirement ids and the coverage map's keys, or the
+    EMPTY tuple when the plan declares no order.
+
+    The split between this and `order_place` below is the meta-level answer to the same
+    question `_structural_signature` answers per stage — which edits need re-approval.
+    ADDING or REMOVING a requirement changes what the plan is for, so it re-arms the
+    plan-approval gate; re-wording an existing requirement, the customer prose or the
+    functional place does not, any more than re-wording a stage's `material` does.
+    Coverage KEYS ride here rather than in the prose half because a key set that no
+    longer covers the requirement ids is a scope claim, not a wording one.
+
+    Empty for an order-less plan, so every plan authored before [meta.order] existed
+    classifies exactly as it did before this field — the same contribute-only-when-
+    declared identity `knowledge_place` and `preconditions_place` keep."""
+    order = meta.order
+    if order is None:
+        return ()
+    return ((tuple(r.id for r in order.requirements), tuple(sorted(order.coverage))),)
+
+
+def order_place(meta) -> tuple:
+    """The WHOLE order as a contribution to a change-decision key, or the empty tuple
+    when none is declared — the refinement-tier companion to `order_scope`.
+
+    Deliberately a superset rather than the complement: `diff_plans` reads `order_scope`
+    first and returns 'substantive' before this is consulted, so overlap costs nothing,
+    while a complement would leave a newly added Order field belonging to NEITHER key if
+    whoever added it forgot the split. Everything the order holds is therefore covered
+    here by construction, and the scope half is the only thing anyone has to remember to
+    extend."""
+    order = meta.order
+    if order is None:
+        return ()
+    return ((
+        order.customer_id,
+        order.customer,
+        order.functional_place,
+        tuple((r.id, r.text) for r in order.requirements),
+        tuple(sorted((k, tuple(v)) for k, v in order.coverage.items())),
+    ),)
+
+
 def _structural_signature(doc: PlanDoc) -> dict:
     """The fields whose change makes a replan substantive."""
     return {
         "done_criterion": doc.meta.done_criterion,
         "criterion_type": doc.meta.criterion_type,
         "weight_class": doc.meta.weight_class,
+        "order_scope": order_scope(doc.meta),
         "stages": {
             s.index: (
                 s.actor.executor,
@@ -1250,8 +1337,14 @@ def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
              _normalize_string(fc.venue), _normalize_string(fc.kind), fc.landed)
             for fc in doc.meta.final_check
         ]
+    # `order_place` is the meta-level sibling of the `knowledge_place`/`preconditions_place`
+    # splices above, and it is here for the identical reason: without it a re-worded
+    # requirement, a corrected functional place or a coverage entry pointed at a different
+    # control would diff as 'no_change' and be silently dropped. Its scope half is already
+    # in `_structural_signature`, so what reaches this line is only the wording.
     if (_prose(old) != _prose(new) or old.meta.goal != new.meta.goal
             or old.meta.repo_root != new.meta.repo_root
-            or _fc(old) != _fc(new)):
+            or _fc(old) != _fc(new)
+            or order_place(old.meta) != order_place(new.meta)):
         return "refinement"
     return "no_change"

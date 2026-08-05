@@ -37,6 +37,8 @@ from agentctl.result_image import echo_prefilter, judge_echo
 from agentctl.state import Node
 from agentctl.submission import submission_advice, validate_submission
 
+from conftest import SUBSTANTIVE_FINAL_CHECK, SUBSTANTIVE_ORDER
+
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 CORPUS_DIR = FIXTURES / "plan_corpus"
 
@@ -79,7 +81,7 @@ done_criterion = "dc"
 criterion_type = "measurable"
 weight_class = "substantive"
 external_research = "none applies"
-
+""" + SUBSTANTIVE_ORDER + """
 [[stage]]
 index = 1
 title = "the stage under test"
@@ -104,7 +106,7 @@ source = "src"
 derivation = "der"
 confidence = "high"
 refutation = "r"
-"""
+""" + SUBSTANTIVE_FINAL_CHECK
 
 
 def _write_plan(path: Path, image: str) -> str:

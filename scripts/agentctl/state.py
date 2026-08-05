@@ -740,6 +740,78 @@ class FinalCheck:
 
 
 @dataclass
+class Requirement:
+    """One requirement of the order, as an id/text PAIR rather than a sentence.
+
+    The `id` is load-bearing, not decoration: the coverage map keys on it, the
+    submission-time totality check ranges over it, and the acceptance record binds a
+    verdict to it. Leaving it as the first token of a prose sentence would commit the
+    very defect the typed order removes one level down — the order would be typed while
+    its only machine-readable key stayed prose someone has to parse back out."""
+    id: str
+    text: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Requirement":
+        return cls(id=str(d.get("id", "")), text=str(d.get("text", "")))
+
+
+@dataclass
+class Order:
+    """The order a plan serves, typed: the customer it came from, the functional place
+    it fills, the requirements on the product, and the map from each requirement to the
+    control that decides it.
+
+    `customer` is a PAIR. `customer_id` is the machine-comparable identifier an
+    acceptance author is checked against; `customer` is the prose naming the position
+    that identifier stands for. Comparing an author against a paragraph is either
+    vacuous or absurd, so the two are separate fields rather than one.
+
+    Every field defaults to its empty form and nothing here validates: this object is
+    built on the LENIENT loader path, where it must be incapable of refusing a plan (see
+    plan.parse_plan). Requiredness is a submission-seam grade — submission.py's
+    `_order_violations` — for the same reason every other new requirement binds there.
+
+    NOT persisted in SessionState. The engine holds no cached copy of the order, so
+    there is no meta-level analogue of `_apply_refined_stage_fields` to keep in step; a
+    consumer that needs the order reads it from the plan."""
+    customer_id: str = ""
+    customer: str = ""
+    functional_place: str = ""
+    requirements: list[Requirement] = field(default_factory=list)
+    # requirement id -> the controls that decide it. Values are lists of prose
+    # references (a stage's verify_command, a final_check) — a machine reads the KEYS
+    # for totality; whether an entry's named control really decides the requirement is
+    # review, not something this type can settle.
+    coverage: dict[str, list[str]] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Order":
+        """Rebuild an Order from a raw TOML/JSON table, TOTALLY: every malformation
+        degrades to the empty form rather than raising. That totality is the property
+        the loader path depends on — a plan whose [meta.order] is nonsense must still
+        load, and be refused at the seam where refusals belong."""
+        raw_reqs = d.get("requirements")
+        reqs = [
+            Requirement.from_dict(r)
+            for r in (raw_reqs if isinstance(raw_reqs, list) else [])
+            if isinstance(r, dict)
+        ]
+        raw_cov = d.get("coverage")
+        cov = {
+            str(k): [str(x) for x in (v if isinstance(v, list) else [v])]
+            for k, v in (raw_cov if isinstance(raw_cov, dict) else {}).items()
+        }
+        return cls(
+            customer_id=str(d.get("customer_id", "")),
+            customer=str(d.get("customer", "")),
+            functional_place=str(d.get("functional_place", "")),
+            requirements=reqs,
+            coverage=cov,
+        )
+
+
+@dataclass
 class PlanFrame:
     """A snapshot of the parent execution context pushed onto plan_stack when a
     service sub-plan starts. Restored in full on pop so the parent resumes exactly

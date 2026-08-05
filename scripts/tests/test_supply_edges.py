@@ -38,6 +38,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import SUBSTANTIVE_FINAL_CHECK, SUBSTANTIVE_ORDER
+
 from agentctl import cli, plan as plan_mod, submission as submission_mod, text_shape
 from agentctl.plan import PlanError, load_plan
 from agentctl.state import Node
@@ -66,7 +68,7 @@ goal = "g"
 done_criterion = "dc"
 criterion_type = "measurable"
 {weight_class}external_research = "read the corpus audit; no prior art applies"
-
+""" + SUBSTANTIVE_ORDER + """
 [[stage]]
 index = 1
 title = "the stage that goes first"
@@ -116,7 +118,7 @@ source = "src"
 derivation = "der"
 confidence = "high"
 refutation = "r"
-"""
+""" + SUBSTANTIVE_FINAL_CHECK
 
 
 def ns(**kw):

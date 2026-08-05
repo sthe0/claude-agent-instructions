@@ -12,6 +12,43 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from agentctl.store import FileStateStore  # noqa: E402
 
+# The plan-level places a SUBSTANTIVE plan owes the submission seam, as TOML an author
+# would write. Every fixture plan in the suite that expects to SUBMIT CLEAN splices these
+# in; a fixture testing a plan-level refusal writes its own defective form instead.
+#
+# Shared rather than copied into each test module because the substantive grade keeps
+# growing — `external_research`, then `knowledge`/`preconditions`, now the order — and a
+# grade whose fixture is duplicated eight times is a grade nobody can extend without
+# finding all eight. `_SUBSTANTIVE_META_FIELDS`/`_ORDER_PARTS` in submission.py are the
+# requirement; this is the one compliant answer the suite writes against.
+#
+# `requirements` is spelled as [[meta.order.requirements]] array-of-tables rather than the
+# inline `{ id = "...", text = "..." }` form the real plans use — the two parse identically,
+# and the inline form's braces would be read as fields by the `.format()` calls several of
+# these templates make.
+SUBSTANTIVE_ORDER = """
+[meta.order]
+customer_id = "user"
+customer = "the position that posed this fixture's task"
+functional_place = "the norm governing an act of activity, in a test"
+
+[[meta.order.requirements]]
+id = "R1"
+text = "the fixture plan meets the substantive grade"
+
+[meta.order.coverage]
+R1 = ["stage 1 verify_command"]
+"""
+
+# A plan-level end-to-end check, likewise required of a substantive plan. Written to be
+# spliced at the END of a plan (a top-level array-of-tables closes any table context), and
+# deliberately trivial: fixtures that care what a final_check DOES declare their own.
+SUBSTANTIVE_FINAL_CHECK = """
+[[final_check]]
+command = "true"
+expected_exit = 0
+"""
+
 
 @pytest.fixture(autouse=True)
 def _isolate_task_quality_ledger(tmp_path, monkeypatch):

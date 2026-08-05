@@ -22,6 +22,8 @@ from agentctl.state import (
 )
 from agentctl.store import FileStateStore
 
+from conftest import SUBSTANTIVE_ORDER
+
 
 def ns(**kw):
     return Namespace(**kw)
@@ -160,6 +162,7 @@ weight_class = "substantive"
 external_research = "checked wiki; none applies"
 repo_root = "{repo_root}"
 delivery_worktree = "{worktree}"
+{SUBSTANTIVE_ORDER}
 
 [[stage]]
 index = 1

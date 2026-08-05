@@ -59,6 +59,8 @@ from agentctl.state import (
 )
 from agentctl.submission import submission_violations
 
+from conftest import SUBSTANTIVE_FINAL_CHECK, SUBSTANTIVE_ORDER
+
 # A restatement: everything it says, `depends_on = [1]` already said.
 RESTATEMENT = "Stage 1 is complete and its output has landed."
 # A genuine transformation condition: nothing in it is a fact about an earlier stage.
@@ -72,7 +74,7 @@ done_criterion = "dc"
 criterion_type = "measurable"
 weight_class = "substantive"
 external_research = "none applies"
-
+""" + SUBSTANTIVE_ORDER + """
 [[stage]]
 index = 1
 title = "the stage that goes first"
@@ -128,7 +130,7 @@ source = "src"
 derivation = "der"
 confidence = "high"
 refutation = "r"
-"""
+""" + SUBSTANTIVE_FINAL_CHECK
 
 
 def ns(**kw):
