@@ -5,12 +5,14 @@ Difficulty removed: hook-deferring-disposition-gate.py opened a
 ``time.monotonic()`` deadline itself, computed the per-call timeout as
 ``min(remaining, per_call_cap)`` and compared the remainder against a
 "can a call still plausibly finish" floor — logic that has nothing to do with
-deferring-disposition specifically. The two other judge-calling hooks
-(hook-escalation-diagnosis-gate.py, hook-turn-end-gate.py) need the exact same
-three questions answered (how much is left, is it enough for a meaningful
-call, what timeout does the next call get) with different numbers: each hook
-picks its own whole-budget and per-call-floor, so those stay constructor
-inputs here, never constants baked into this module.
+deferring-disposition specifically. The driver for extracting it is
+hook-turn-end-gate.py, which will make three judge calls in one invocation and
+today bounds none of them; hook-escalation-diagnosis-gate.py will make a single
+call, where a whole-invocation deadline degenerates into a per-call ceiling but
+still answers the same three questions (how much is left, is it enough for a
+meaningful call, what timeout does the next call get). Each hook picks its own
+whole-budget and per-call floor, so those stay constructor inputs here, never
+constants baked into this module.
 """
 from __future__ import annotations
 
@@ -42,7 +44,8 @@ class JudgeBudget:
 
     def remaining(self) -> float:
         """Seconds left until the deadline (one clock read); goes negative
-        once exhausted."""
+        once exhausted. Public for the execution ledger, which records the
+        remainder at entry without issuing a call."""
         return self._deadline - self._clock()
 
     def next_call_timeout(self, cap_s: float) -> float | None:

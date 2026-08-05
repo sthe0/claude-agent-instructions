@@ -79,6 +79,17 @@ def test_exactly_at_the_floor_is_still_enough_budget():
     assert budget.next_call_timeout(30) == 12.0
 
 
+def test_one_deadline_spans_successive_calls_rather_than_resetting():
+    # The property the class is named for: successive calls draw down ONE
+    # deadline. A per-call budget would answer 30/30/30 here; a whole-
+    # invocation budget runs out on the third.
+    clock = _FakeClock([0.0, 0.0, 10.0, 30.0])
+    budget = _mod.JudgeBudget(40, 12, clock=clock)
+    assert budget.next_call_timeout(30) == 30
+    assert budget.next_call_timeout(30) == 30
+    assert budget.next_call_timeout(30) is None
+
+
 def test_next_call_timeout_reads_the_clock_exactly_once():
     # A caller decides go/no-go AND the timeout from a single reading -- two
     # reads per call would let the two decisions see different remaining
