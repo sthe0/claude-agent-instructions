@@ -55,6 +55,7 @@ from typing import Callable
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agentctl import advisor  # noqa: E402
 from lib import ask_text  # noqa: E402
+from lib import judge_budget  # noqa: E402
 
 # Whole-ask budget for the judge, distinct from advisor._DEFERRING_DISPOSITION_
 # TIMEOUT_S=30 (the per-CALL ceiling). Measured 2026-08-05: a live judge call
@@ -196,14 +197,13 @@ def decide(payload: dict, *, runner: Callable | None = None) -> dict | None:
     full_texts = ask_text.question_texts(tool_input)
     opt_texts = ask_text.option_texts(tool_input)
     stems = ask_text.question_stems(tool_input)
-    deadline = time.monotonic() + _ASK_JUDGE_BUDGET_S
+    budget = judge_budget.JudgeBudget(_ASK_JUDGE_BUDGET_S, _ASK_JUDGE_MIN_CALL_S, clock=time.monotonic)
     for index, (full_text, opt_text, stem) in enumerate(zip(full_texts, opt_texts, stems), start=1):
         if not _prefilter(opt_text):
             continue  # cheap common path: this menu's options defer nothing
-        remaining = deadline - time.monotonic()
-        if remaining < _ASK_JUDGE_MIN_CALL_S:
+        call_timeout = budget.next_call_timeout(advisor._DEFERRING_DISPOSITION_TIMEOUT_S)
+        if call_timeout is None:
             break  # budget exhausted — fail open, same as every other unreachable-judge path
-        call_timeout = min(remaining, advisor._DEFERRING_DISPOSITION_TIMEOUT_S)
         fires = advisor.judge_deferring_disposition(
             full_text, runner, enabled=enabled, timeout=call_timeout
         )
