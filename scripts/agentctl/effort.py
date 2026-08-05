@@ -47,20 +47,30 @@ what makes (a) hold, since an unapproved session has no stored estimate to compa
 RE-ARM, two belts, both required: the baseline is REBASED to the actual vector at each
 firing (so a plan that contracts below the accumulated actual cannot re-fire on the next
 command), AND a further fire requires at least one `replan` event logged since the last
-one (the "silent until a replan sets a new estimate" rule, read literally).
+one (the "silent until a replan sets a new estimate" rule, read literally). Belt 2 reads
+`effort_fires`, whose other and independent purpose is the AUDIT TRAIL — one record per
+firing, carried into the quality ledger so the thresholds can be recalibrated against
+what they actually caught.
+
+MONOTONE ACTUALS. Every accumulator here only grows and the baseline is always a PAST
+snapshot of the same vector, so `actual >= baseline` holds with no clamp. The
+writer-by-writer argument, and what a future writer breaking it should look like, is on
+`deltas()`.
 
 SUB-PLAN CUSTODY. `cmd_push_subplan` resets `state.stages` and re-runs the full
 classify -> ... -> approve spine for a service sub-plan, so a naive second `arm()` would
 compare the PARENT's whole accumulated actual against the CHILD's tiny estimate — a
-spurious fire on the sub-plan's first command. The fix lives at three call-site seams
-OUTSIDE this module (`cmd_push_subplan`'s reset list, the `PlanFrame` dataclass, and
-`SessionState.from_dict`'s `PlanFrame` rebuild in state.py), not here: push snapshots all
-five effort fields into the frame and resets them (estimate and baseline to `None`, fires
-to `[]`, `effort_spend_seen` to `{}`, `effort_actuals` to a fresh zero vector); pop
-restores the parent's five fields and ADDS the child's `effort_actuals` into the restored
-parent's, because push zeroed it so the child's vector is pure child consumption — effort
-spent inside a service sub-plan is effort spent on the parent's task. `user_prompt_count`
-lives outside `effort_actuals` and is deliberately not zeroed by push.
+spurious fire on the sub-plan's first command. The fix lives at FOUR call-site seams
+OUTSIDE this module, every one of them an EXPLICIT field-by-field list that a new field
+silently falls out of: `cmd_push_subplan`'s reset list, the `PlanFrame` dataclass,
+`SessionState.from_dict`'s `PlanFrame` rebuild in state.py, and `cmd_pop_subplan`'s
+restore list. Push snapshots all five effort fields into the frame and resets them
+(estimate and baseline to `None`, fires to `[]`, `effort_spend_seen` to `{}`,
+`effort_actuals` to a fresh zero vector); pop restores the parent's five fields and ADDS
+the child's `effort_actuals` into the restored parent's, because push zeroed it so the
+child's vector is pure child consumption — effort spent inside a service sub-plan is
+effort spent on the parent's task. `user_prompt_count` lives outside `effort_actuals` and
+is deliberately not zeroed by push.
 
 THE SENTINEL THAT CUSTODY DEPENDS ON: `effort_baseline` is `None` when unarmed and a dict
 when armed (ARMED-ONLY above) — a ZEROED dict, which is what push resets it to, still
@@ -165,13 +175,19 @@ def _stage_tier(stage) -> str:
     return _DEFAULT_TIER_SPAWN if stage.is_spawn() else _DEFAULT_TIER_IN_THREAD
 
 
-def _replans_since_arming(state: SessionState) -> int:
+def _replans_since_baseline(state: SessionState) -> int:
     """Replan events logged since the window opened — mirrors `deltas()`'s
     SCALE_REPLANS delta, read directly here because `estimate()` runs before there is
     anything for `deltas()` to compare against. `effort_baseline` is `None` until
     `arm()` sets it (ARMED-ONLY), so a session mid-arm or never armed has no window
     yet and counts 0 — matching the flat `1` this replaced for a freshly-approved
-    plan's first estimate.
+    plan's first estimate. Named for the BASELINE, not for arming: `record_fire`
+    rebases the baseline at every firing, so after one the count restarts there.
+
+    The `max(0, …)` floor is deliberate where `deltas()` refuses one: a negative
+    review COUNT is not a diagnosable signal, it is nonsense that would silently
+    shrink the comparand, whereas a negative DELTA is exactly the broken-monotonicity
+    evidence `deltas()` wants to surface.
 
     An approximation, not an exact spawn count: a replan retried against
     byte-identical, already-reviewed bytes needs no new spawn (over-counts here); a
@@ -198,13 +214,23 @@ def _mandated_reviews(state: SessionState) -> int:
     the multiple (finding: a replan's mandated review must be counted in the SAME
     window the actual side is compared over). Both gates are SUBSTANTIVE-only, so a
     non-substantive session mandates none — which is what lets a plan with no spawn
-    stages estimate 0 and leave the spend scale inapplicable."""
+    stages estimate 0 and leave the spend scale inapplicable.
+
+    THE FLAT `1` IS WINDOW-RELATIVE TOO, BUT ONLY BECAUSE OF AN ORDERING cli.py OWNS.
+    The initial thinker review is spawned BEFORE `cmd_approve`, so its ledger rows
+    exist by arming time — yet they fall INSIDE the window, because no `refresh_spend`
+    call site runs at `cmd_approve`: the baseline is snapshotted from an accumulator
+    those rows have not been booked into, and the first post-arming refresh books them
+    into the delta. So estimate and actual both carry that review. If a future edit
+    adds a `refresh_spend` call to `cmd_approve` — or moves one before `arm()` — the
+    review's cost lands in the baseline instead, the flat `1` becomes a pure
+    over-charge, and this term must drop to `developers + _replans_since_baseline`."""
     if state.weight_class != WeightClass.SUBSTANTIVE.value:
         return 0
     developers = sum(
         1 for s in state.stages if s.is_spawn() and s.spawn_kind() == _DEVELOPER_KIND
     )
-    return 1 + developers + _replans_since_arming(state)
+    return 1 + developers + _replans_since_baseline(state)
 
 
 def estimate(state: SessionState, thr: Thresholds | None = None) -> dict:
@@ -212,7 +238,7 @@ def estimate(state: SessionState, thr: Thresholds | None = None) -> dict:
 
     Derived over `state.stages`, plus — for the mandated-review count alone —
     `state.effort_baseline` and the replan events in `state.history` (see
-    `_replans_since_arming`); never `state.effort_estimate` itself, so `rederive()`
+    `_replans_since_baseline`); never `state.effort_estimate` itself, so `rederive()`
     calling this to overwrite that very field is not circular. `rederive()` is the
     only writer that stores the result; `divergence()` never calls this, so a session
     that has not been armed has nothing to be compared against. The absolute scales
@@ -421,7 +447,7 @@ def rederive(state: SessionState, thr: Thresholds | None = None) -> dict:
 
 def arm(state: SessionState, thr: Thresholds | None = None) -> dict:
     """Open the measurement window: re-derive the estimate, and snapshot the baseline
-    ONLY IF it is unset (ARM-ONCE / SUB-PLAN CUSTODY's sentinel note, module
+    ONLY IF it is unset (ARMED AT MOST ONCE / SUB-PLAN CUSTODY's sentinel note, module
     docstring — "unset" means `is None`, never a zeroed dict)."""
     rederive(state, thr)
     if state.effort_baseline is None:

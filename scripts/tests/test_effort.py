@@ -1,9 +1,9 @@
 """Effort-divergence trigger: the pure estimate / actual / divergence layer.
 
 The invariants under test are the ones that decide whether the trigger fires on WORK
-rather than on the shape of the session — ARMED-ONLY, THE WINDOW, ARM-ONCE, MONOTONE
-ACTUALS, RE-ARM (both belts), and SUB-PLAN CUSTODY's baseline sentinel; see effort.py's
-module docstring for what each means and why. ARMED-ONLY alone is driven through the
+rather than on the shape of the session — THE WINDOW; ARMED-ONLY, AND ARMED AT MOST ONCE;
+MONOTONE ACTUALS; RE-ARM (both belts); and SUB-PLAN CUSTODY's baseline sentinel, each a
+literal heading in effort.py's module docstring, which says what it means and why. ARMED-ONLY alone is driven through the
 REAL SMALL_CHANGE route (cmd_classify -> execute_small), not by asserting on a
 weight_class field, because the property is a claim about machine.py's transitions.
 
@@ -123,13 +123,13 @@ def test_absolute_scales_carry_no_estimate():
     assert set(est) == set(effort.RATIO_SCALES)
 
 
-def test_mandated_reviews_grow_with_each_replan_since_arming():
+def test_mandated_reviews_grow_with_each_replan_since_the_baseline():
     """gates.plan_review_blockers requires a thinker review bound to the exact plan
     bytes at EVERY replan, not only the first approval, and the actual side
     (refresh_spend) sums every one of those review-round spawns by plan_path. A flat
     `1` would silently inflate the spend ratio on every replan — this pins that the
-    mandated-review count tracks replans SINCE ARMING, matching the window the actual
-    side is compared over."""
+    mandated-review count tracks replans SINCE THE BASELINE, matching the window the
+    actual side is compared over."""
     state = substantive([stage(0, "spawn:developer")])
     effort.arm(state, THR)
     assert state.effort_estimate[effort.SCALE_SPEND] == pytest.approx(9.0)  # 1 review

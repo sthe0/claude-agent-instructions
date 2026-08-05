@@ -966,8 +966,9 @@ class SessionState:
     deliverable_kind: str = ""
     # Effort-divergence trigger (schema 25) — effort.py owns every read and write of
     # these; nothing else interprets them, and effort.py's module docstring is the
-    # canonical statement of the mechanism (ARMED-ONLY, THE WINDOW, ARM-ONCE, RE-ARM,
-    # SUB-PLAN CUSTODY). All six load as their zero value on legacy states (absent key
+    # canonical statement of the mechanism (THE WINDOW; ARMED-ONLY, AND ARMED AT MOST
+    # ONCE; RE-ARM; MONOTONE ACTUALS; SUB-PLAN CUSTODY — each a literal heading in that
+    # docstring). All six load as their zero value on legacy states (absent key
     # -> dataclass default via from_dict's cls(**data)).
     #   effort_estimate    the CURRENT plan's declared cost per ratio scale (effort.rederive).
     #   effort_baseline    the actual vector snapshotted at arming (effort.arm); None until
