@@ -133,12 +133,19 @@ def test_build_child_settings_thinker_carries_allow_and_deny(tmp_path):
 
 def test_build_child_settings_developer_pytest_allow_survives_alongside_plans_grant(tmp_path):
     """Regression guard named in the stage's invariants: adding the plans
-    grant must not eat the developer's existing pytest allow. Developer is
-    not itself a plans-granted kind, so passing a plans_directory must be a
-    no-op for it, and the pytest allow must be exactly what it was before."""
+    grant must not eat the developer's existing allow. Developer is not itself
+    a plans-granted kind, so passing a plans_directory must be a no-op for it,
+    and the allow must be exactly what DEVELOPER_SETTINGS_ALLOW declares.
+
+    Bound to the constant, not to a snapshot of its contents: the list is owned
+    by the developer-brief grant and grows independently of this stage, so a
+    literal copy here would go red on every unrelated verb added to it. The
+    non-empty assertion keeps the equality from passing vacuously."""
     settings = MOD.build_child_settings("developer", tmp_path)
     allow = settings["permissions"]["allow"]
-    assert allow == ["Bash(python3 -m pytest:*)"]
+    assert MOD.DEVELOPER_SETTINGS_ALLOW
+    assert allow == list(MOD.DEVELOPER_SETTINGS_ALLOW)
+    assert "Bash(python3 -m pytest:*)" in allow
     assert "deny" not in settings["permissions"]
 
 
