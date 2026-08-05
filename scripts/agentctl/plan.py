@@ -1140,11 +1140,13 @@ def stage_question_key(stage) -> str:
     "answer different questions and must evolve independently"), it is a new
     function rather than an extension of `stage_carry_key`.
 
-    Unlike `stage_carry_key`, this covers every field a Question.target can
-    legally name (text_shape.ELEMENT_NAMES: material, result, invariants, means,
-    method, executor, capability, criterion, done_criterion, principle,
-    conditions) — including `principle` and `supplies`, which `stage_carry_key`
-    omits because carry-forward never needed them. A question targeting
+    Unlike `stage_carry_key`, this covers every STAGE FIELD a Question.target can
+    legally name — including `principle` and `supplies`, which `stage_carry_key`
+    omits because carry-forward never needed them. The vocabulary is not restated
+    here (it is text_shape.ELEMENT_NAMES, and a copy of a list rots): read it there.
+    Some of its names — the ones a stage can only ever SUPPLY, never author locally
+    — have no stage field for this key to cover, so a question targeting one of
+    those binds to the rest of the stage's definition. A question targeting
     `stage:<n>.principle` must be invalidated when that principle is rewritten;
     `stage_carry_key` would not notice, so it cannot be reused for this purpose.
 

@@ -22,13 +22,28 @@ PLACEHOLDER_SET = frozenset({
 # or a raised question may target (premise.py). Lives here rather than in plan.py
 # so premise.py can reuse the vocabulary without importing plan's TOML parsing /
 # state machinery — the same reason PLACEHOLDER_SET lives here instead of gates.py.
+#
+# Every name here must be a place one stage can HAND ANOTHER, because that is what a
+# supply edge is. Several are not stage FIELDS — `order` and `requirements` live on the
+# plan's [meta.order], `control` is recorded on the session rather than authored in the
+# plan, `procedure` is a means-side field — and that asymmetry is deliberate: a stage
+# whose result IS the order, the control instrument or the procedure the next stage
+# works under has a name for what it provides, while `stage_question_key` has no field
+# of its own to cover for those names (see its docstring).
+#
+# The vocabulary stops here on purpose. It is the menu an author picks from when the
+# submission seam makes them name an edge, and a validator can tell that a name is legal
+# but never that it is the RIGHT one — so every name added without an edge that really
+# hands that place over makes a plausible-but-wrong pick likelier at no gain. Add a name
+# when a stage can be shown to supply it, not to complete a taxonomy.
 ELEMENT_NAMES = frozenset(
     {
-        "material", "result", "invariants",   # subject cluster
-        "knowledge",                          # knowledge cluster
-        "means", "method",                    # means cluster
-        "executor", "capability",             # actor cluster
-        "criterion", "done_criterion",        # criterion cluster
-        "principle", "conditions",
+        "material", "result", "invariants",         # subject cluster
+        "knowledge",                                # knowledge cluster
+        "means", "method", "procedure",             # means cluster
+        "executor", "capability",                   # actor cluster
+        "criterion", "done_criterion", "control",   # criterion cluster
+        "order", "requirements",                    # order cluster
+        "principle", "conditions", "preconditions",
     }
 )

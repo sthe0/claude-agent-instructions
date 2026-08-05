@@ -106,7 +106,6 @@ expected_result_image = "The seam refuses a plan that omits the place."
 criterion_type = "measurable"
 done_criterion = "d2"
 verify_command = "pytest -q"
-depends_on = [1]
 material = "m2"
 means = "bash"
 method = "run"
@@ -116,6 +115,13 @@ capability_required = "cap"
 material_refs = ["scripts/agentctl/submission.py"]
 knowledge_refs = ["scripts/agentctl/conditions.py"]
 knowledge = "where a submission requirement may bind"
+# The edge is element-bearing, and `depends_on = [1]` is what it replaces: the submission
+# grade now refuses an edge that states an ordering without stating a provision
+# (test_supply_edges.py). It derives the same `depends_on = [1]` the restatement prefilter
+# below reads, so what these tests pin is unchanged by the typing.
+[[stage.supplies]]
+on = 1
+element = "result"
 [stage.principle]
 statement = "s"
 source = "src"
@@ -244,6 +250,13 @@ def test_conditions_restatement_is_accepted_when_the_judge_is_unavailable(store,
     assert d.marker == "PLAN-READY"
     assert store.load("pc").node == Node.PLAN_READY.value
     assert not [p for p in _problems(d) if "only restates" in p]
+
+    # The same property one layer down, where it is a defaults question: a caller that
+    # passes no judge at all gets the list it got before this check existed. Every
+    # pre-existing caller of the seam is such a caller.
+    doc = plan_mod.load_plan(plan)
+    assert not [p for p in submission_violations(doc, session_weight_class="substantive")
+                if "only restates" in p]
 
 
 def test_genuine_conditions_never_reach_the_preconditions_refusal(store, tmp_path):

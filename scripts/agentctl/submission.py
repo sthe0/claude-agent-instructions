@@ -48,15 +48,17 @@ a set intersection over names written at whatever granularity the author found u
 (`cli.py`, `cli.cmd_approve`, `cmd_approve`), so it would fire on coincidental spellings and
 miss real overlaps — punishing the precise author and passing the vague one, the exact
 inversion of what a gate is for; (3) it is a relation BETWEEN the values of two fields,
-which is outside the domain of both enumerators that exist here — one asks whether a field
-is declared, the other whether a value is in a closed vocabulary — so it would have to be a
-third, one-off rule with no home.
+which is outside the domain of every enumerator here — one asks whether a field is declared,
+one whether an edge states what it provides, one whether a value is in a closed vocabulary
+— so it would have to be a one-off rule with no home. Reasons (1) and (2) are the
+load-bearing ones and neither weakens as enumerators are added.
 """
 from __future__ import annotations
 
 from .conditions import judge_restatement, restatement_prefilter
 from .result_image import echo_prefilter, judge_echo
 from .state import WeightClass
+from .text_shape import ELEMENT_NAMES
 from .text_shape import normalize_string as _normalize_string
 
 # The closed vocabulary a plan's [meta] weight_class may name, spelled as an author writes
@@ -241,6 +243,55 @@ def _conditions_restatement(stage, judge_runner, judge_enabled: bool) -> str | N
     )
 
 
+def _edge_violations(stage) -> list[str]:
+    """Every edge of `stage` that states an ordering without stating a provision. [] == clean.
+
+    A supply edge is one stage handing another a PLACE of its activity — the material to
+    transform, the criterion to be judged by, the means to work with. An edge that names no
+    element says only "stage N is done first", which the ordering already records; the plan
+    then shows a dependency graph while saying nothing about what actually flows along it.
+
+    Both authoring shapes of that defect arrive here as one, and deliberately so: a bare
+    `depends_on = [1]` is lifted by `plan._build_supplies` into exactly the element-less
+    edge that an explicit `[[stage.supplies]] on = 1` with no `element` produces. One
+    refusal covers both because after the lift there is nothing left to tell them apart.
+
+    A REFUSAL rather than advice. The engine already requires `external_research` of a
+    substantive plan outright, so demanding this much of a plan's own structure is within
+    what the grade plainly asks; and a warning would leave the untyped edge the cheapest
+    path an author can take, which IS the defect — 3 of 151 edges in the frozen corpus name
+    an element, and no warning was going to move the other 148.
+
+    The vocabulary half is not redundant with `plan._validate_graph`'s. That check arms on
+    the loader's raw `.lower()` reading of weight_class; this one runs under the seam's
+    normalized reading and also under the undeclared-weight_class branch, so it covers
+    exactly the plans where those two readings disagree — the ones the loader let past.
+
+    What this cannot check: whether a legal element name is the RIGHT one for the edge. A
+    validator sees the vocabulary, not the provision. Naming the element makes a wrong name
+    visible to a reader and to review; it does not stop one from being written."""
+    out: list[str] = []
+    for sup in stage.supplies:
+        # An empty string is the absent case, not a foreign name: `element = ""` states no
+        # provision, so it earns the message that says how to state one.
+        if not sup.element:
+            out.append(
+                f"stage {stage.index} ({stage.title!r}): the edge to stage {sup.on} names "
+                f"no element (required for substantive plans) — say WHAT stage {sup.on} "
+                f"hands this stage, as [[stage.supplies]] on = {sup.on}, element = "
+                f"\"<one of {', '.join(sorted(ELEMENT_NAMES))}>\". A bare `depends_on = "
+                f"[{sup.on}]` lifts into this same element-less edge: it records that the "
+                f"other stage goes first and nothing about what it provides"
+            )
+        elif sup.element not in ELEMENT_NAMES:
+            out.append(
+                f"stage {stage.index} ({stage.title!r}): the edge to stage {sup.on} names "
+                f"element {sup.element!r}, which is not an activity element — one of "
+                f"{', '.join(sorted(ELEMENT_NAMES))}"
+            )
+    return out
+
+
 def submission_violations(
     doc,
     *,
@@ -288,6 +339,7 @@ def submission_violations(
                 f"stage {stage.index} missing {label!r} (required for substantive plans): "
                 f"{_WHY[label]}"
             )
+        out.extend(_edge_violations(stage))
         restatement = _conditions_restatement(stage, judge_runner, judge_enabled)
         if restatement:
             out.append(restatement)
