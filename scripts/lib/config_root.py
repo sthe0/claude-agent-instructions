@@ -106,7 +106,13 @@ def projects_roots() -> list[Path]:
     ``CLAUDE_CONFIG_DIR=$CLAUDE_AGENT_HOME``, so on most machines the two roots
     are the same directory and must yield ONE entry, and a half-migrated machine
     can reach one through a symlink to the other. Dedup is by root, never by
-    project: the same cwd-hash under two roots is two distinct session sets.
+    project: the same cwd-hash under two roots is two distinct SESSION sets —
+    true of transcripts, which this accessor and ``iter_transcripts()`` cover.
+    It is NOT true of a project's per-project ``memory/`` directory once
+    ``setup-project-memory.sh`` has adopted it: that adoption symlinks the
+    directory across roots, so the same cwd-hash's two ``memory/`` spellings can
+    be one aliased directory rather than two distinct ones. See
+    ``project_memory_dirs()`` for the accessor that dedups at that level.
 
     A root with no ``projects/`` yet is skipped, not an error — a fresh machine
     or a root that has simply never hosted a session is a normal state.
@@ -144,6 +150,43 @@ def iter_transcripts(pattern: str = "*/*.jsonl") -> list[Path]:
     for root in projects_roots():
         out.extend(root.glob(pattern))
     return sorted(out)
+
+
+def project_memory_dirs() -> list[Path]:
+    """Every existing ``<root>/projects/*/memory`` directory across
+    ``projects_roots()``, deduplicated by resolved identity, agent root first.
+
+    Layered on ``projects_roots()`` exactly as ``iter_transcripts()`` is, but
+    the two views dedup at different levels. ``projects_roots()`` is right to
+    treat a cwd-hash under two roots as two distinct session sets — nothing
+    aliases a transcript across roots. A project's per-project ``memory/``
+    directory is different: ``setup-project-memory.sh``'s adopt-or-relink
+    SYMLINKS it across roots, so ``<agent-root>/projects/P/memory`` and
+    ``<harness-root>/projects/P/memory`` can be two spellings of ONE directory.
+    A caller that dedups only at the ``projects/`` level and then globs
+    ``*/memory`` itself double-counts every leaf under an adopted project — the
+    defect this accessor exists to remove once, rather than leave each of its
+    callers to hand-roll (and each get half-right).
+
+    A project directory with no ``memory/`` child is skipped, not an error —
+    most projects hold transcripts only.
+    """
+    seen: set[Path] = set()
+    out: list[Path] = []
+    for root in projects_roots():
+        for proj in sorted(root.iterdir()):
+            mem = proj / "memory"
+            if not mem.is_dir():
+                continue
+            try:
+                key = mem.resolve()
+            except OSError:  # pragma: no cover - unresolvable path, keep raw
+                key = mem
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(mem)
+    return out
 
 
 def harness_settings_file() -> Path:

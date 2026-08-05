@@ -113,6 +113,64 @@ def test_a_project_present_under_both_roots_yields_both_directories(monkeypatch,
 
 
 # ---------------------------------------------------------------------------
+# project_memory_dirs(): the per-project memory view, aliasing-aware
+# ---------------------------------------------------------------------------
+
+def test_project_memory_dirs_collapses_an_aliased_pair(monkeypatch, tmp_path):
+    """setup-project-memory.sh's adopt-or-relink symlinks a project's memory/
+    across roots, so the two projects_roots() trees stay distinct while their
+    `P/memory` spellings become one directory. project_memory_dirs() must dedup
+    at that level, or every leaf under an adopted project is reported twice."""
+    agent = tmp_path / "agent-root"
+    harness = tmp_path / "harness-root"
+    real_mem = harness / "projects" / "proj" / "memory"
+    real_mem.mkdir(parents=True)
+    (agent / "projects" / "proj").mkdir(parents=True)
+    (agent / "projects" / "proj" / "memory").symlink_to(real_mem)
+    _both(monkeypatch, agent, harness)
+
+    assert config_root.project_memory_dirs() == [agent / "projects" / "proj" / "memory"]
+
+
+def test_project_memory_dirs_keeps_genuinely_distinct_directories(monkeypatch, tmp_path):
+    """The dedup must not overreach: two roots each holding a real, unrelated
+    `P/memory` directory for the same project name still both surface — the
+    union property project_memory_dirs() shares with projects_roots() itself."""
+    agent = tmp_path / "agent-root"
+    harness = tmp_path / "harness-root"
+    (agent / "projects" / "proj" / "memory").mkdir(parents=True)
+    (harness / "projects" / "proj" / "memory").mkdir(parents=True)
+    _both(monkeypatch, agent, harness)
+
+    assert config_root.project_memory_dirs() == [
+        agent / "projects" / "proj" / "memory",
+        harness / "projects" / "proj" / "memory",
+    ]
+
+
+def test_project_memory_dirs_skips_a_project_with_no_memory_child(monkeypatch, tmp_path):
+    agent = tmp_path / "agent-root"
+    harness = tmp_path / "harness-root"
+    (agent / "projects" / "transcripts-only").mkdir(parents=True)
+    (harness / "projects" / "has-memory" / "memory").mkdir(parents=True)
+    _both(monkeypatch, agent, harness)
+
+    assert config_root.project_memory_dirs() == [
+        harness / "projects" / "has-memory" / "memory",
+    ]
+
+
+def test_project_memory_dirs_tolerates_a_missing_root(monkeypatch, tmp_path):
+    agent = tmp_path / "agent-root"
+    harness = tmp_path / "harness-root"
+    (agent / "projects" / "proj" / "memory").mkdir(parents=True)
+    harness.mkdir()  # exists, but has never held a session
+    _both(monkeypatch, agent, harness)
+
+    assert config_root.project_memory_dirs() == [agent / "projects" / "proj" / "memory"]
+
+
+# ---------------------------------------------------------------------------
 # iter_transcripts(): the transcript view layered on top
 # ---------------------------------------------------------------------------
 
@@ -273,11 +331,22 @@ def test_stamp_memory_dates_personal_scope_spans_both_roots(monkeypatch, tmp_pat
 
 def test_self_diagnose_memory_roots_span_both_roots(monkeypatch, tmp_path):
     """self-diagnose hardcoded `~/.claude-agent/projects`, so it ignored
-    $CLAUDE_CONFIG_DIR outright — the same defect one spelling further out."""
+    $CLAUDE_CONFIG_DIR outright — the same defect one spelling further out.
+
+    Also covers the aliased case: an adopted project's memory/ is symlinked
+    across roots and must surface ONCE in default_memory_roots(), not twice —
+    the false-positive generator project_memory_dirs() exists to remove.
+    """
     agent = tmp_path / "agent-root" / "projects"
     harness = tmp_path / "harness-root" / "projects"
+    # Genuinely distinct across roots — the union property must still hold.
     for root in (agent, harness):
         (root / "proj" / "memory").mkdir(parents=True)
+    # Adopted (aliased) project — one directory, two spellings.
+    real_mem = harness / "adopted" / "memory"
+    real_mem.mkdir(parents=True)
+    (agent / "adopted").mkdir(parents=True)
+    (agent / "adopted" / "memory").symlink_to(real_mem)
     monkeypatch.setattr(config_root, "agent_home", lambda: agent.parent)
     monkeypatch.setattr(config_root, "harness_config_root", lambda: harness.parent)
     monkeypatch.chdir(tmp_path)
@@ -286,6 +355,8 @@ def test_self_diagnose_memory_roots_span_both_roots(monkeypatch, tmp_path):
     roots = mod.default_memory_roots()
     assert agent / "proj" / "memory" in roots
     assert harness / "proj" / "memory" in roots
+    assert roots.count(agent / "adopted" / "memory") == 1
+    assert harness / "adopted" / "memory" not in roots
 
 
 def test_spawn_specialist_snapshots_transcripts_from_both_roots(monkeypatch, tmp_path):

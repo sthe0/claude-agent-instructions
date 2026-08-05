@@ -634,11 +634,7 @@ def default_memory_roots() -> "list[Path]":
     global_mem = config_root.agent_home() / "memory-global"
     if global_mem.is_dir():
         roots.append(global_mem)
-    for projects_dir in config_root.projects_roots():
-        for proj in sorted(projects_dir.iterdir()):
-            mem = proj / "memory"
-            if mem.is_dir():
-                roots.append(mem)
+    roots.extend(config_root.project_memory_dirs())
     cwd_mem = Path.cwd() / ".claude" / "agent-memory"
     if cwd_mem.is_dir():
         roots.append(cwd_mem)

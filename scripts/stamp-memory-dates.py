@@ -36,7 +36,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agentctl import edit_ledger
-from lib.config_root import projects_roots
+from lib.config_root import project_memory_dirs
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
@@ -148,9 +148,10 @@ def iter_leaves(scope: str, project_dir: str | None):
             roots.append(Path(project_dir) / ".claude" / "agent-memory")
     if scope in ("personal", "all"):
         # Both config roots: a bare `claude` and the `claude-agent` launcher each
-        # create per-project memory dirs under their own root.
-        for projects in projects_roots():
-            roots += sorted(projects.glob("*/memory"))
+        # create per-project memory dirs under their own root, and an adopted
+        # project's dir is symlinked across them — project_memory_dirs() dedups
+        # that aliasing so a stamped leaf is never counted twice.
+        roots += project_memory_dirs()
     for root in roots:
         if not root.is_dir():
             continue

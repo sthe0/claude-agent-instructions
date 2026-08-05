@@ -98,7 +98,7 @@ hook_si_freetext_answer = importlib.util.module_from_spec(_fta_spec)
 _fta_spec.loader.exec_module(hook_si_freetext_answer)
 free_text_questions = hook_si_freetext_answer.free_text_questions
 
-# System root (resolved via config_root) for transcripts
+# Transcripts span both config roots (resolved via config_root), not a single system root
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.config_root import agentctl_gate_log, legacy_home, projects_roots
 # The store that gives a fired flag closure state, and the spawn ledger's reader.
