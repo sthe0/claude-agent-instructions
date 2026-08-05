@@ -14,6 +14,7 @@ import subprocess
 
 from .config import Thresholds
 from .dispatch import RunResult
+from .text_shape import ELEMENT_NAMES
 
 # Cheap model + hard cap: the advisor auto-activates for every substantive session's
 # cognition points, so each call must stay bounded in cost and can never hang a
@@ -100,9 +101,15 @@ _ENUMERATE_QUESTIONS_PROMPT = (
     "one of:\n"
     "  plan.goal\n"
     "  plan.done_criterion\n"
+    # Derived, never restated. This prompt is what BOUNDS the independent enumerator's
+    # reach: a name absent here is a place it is told it may not raise a question
+    # against, so a restated copy does not merely rot — it silently narrows the premise
+    # gate to the vocabulary of whenever the copy was last edited. It had, and was six
+    # names short (knowledge, preconditions, control, order, requirements, procedure) —
+    # exactly the places the surrounding work had just introduced.
     "  stage:<n>.<element>   where <n> is a stage index and <element> is one of: "
-    "material, result, invariants, means, method, executor, capability, criterion, "
-    "done_criterion, principle, conditions\n"
+    + ", ".join(sorted(ELEMENT_NAMES))
+    + "\n"
     "No numbering, no bullets, no prose, no preamble. Return nothing if the plan raises "
     "no implicit questions.\n\n{payload}"
 )

@@ -36,6 +36,13 @@ PLACEHOLDER_SET = frozenset({
 # but never that it is the RIGHT one — so every name added without an edge that really
 # hands that place over makes a plausible-but-wrong pick likelier at no gain. Add a name
 # when a stage can be shown to supply it, not to complete a taxonomy.
+#
+# Weighed and declined, so a later reader knows they were considered: `customer` and
+# `functional_place` — nothing hands either over as a place, and the parts of the order a
+# stage CAN supply are already `order` / `requirements`; `coverage` — a property of a plan,
+# not a place of a stage's activity. `functional_place` is the arguable one: a stage that
+# problematizes and hands a design stage the place it must fill is a real shape in this
+# tradition. It stays out until such an edge exists to name, per the rule above.
 ELEMENT_NAMES = frozenset(
     {
         "material", "result", "invariants",         # subject cluster

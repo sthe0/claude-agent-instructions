@@ -51,6 +51,13 @@ BARE_DEPENDS_ON = "depends_on = [1]\n"
 UNTYPED_SUPPLY = "[[stage.supplies]]\non = 1\n"
 TYPED_SUPPLY = '[[stage.supplies]]\non = 1\nelement = "material"\n'
 FOREIGN_ELEMENT = '[[stage.supplies]]\non = 1\nelement = "vibes"\n'
+EMPTY_ELEMENT = '[[stage.supplies]]\non = 1\nelement = ""\n'
+
+# The label→element rule below is a derivation with ONE declared exception, not a wildcard.
+# A first-underscore-token prefix match would cover this single field and, silently, any
+# future `material_budget` / `means_window` too — marking a genuinely unnamed place covered
+# by a name that does not spell it, which is the failure the totality check exists to catch.
+_LABEL_ALIASES = {"capability_required": "capability"}
 
 _PLAN = """
 [meta]
@@ -156,8 +163,11 @@ def test_every_required_place_has_a_vocabulary_entry():
 
     The label-to-element rule is a derivation, not a lookup table, for the same reason: a
     field is covered if the vocabulary holds its label, its label minus a `_refs` projection
-    suffix, or its first underscore-separated token. A future field none of those three
-    reach turns this red rather than quietly shipping a place with no name."""
+    suffix, or the one alias declared in `_LABEL_ALIASES`. A future field none of those
+    reach turns this red rather than quietly shipping a place with no name — which is why
+    the third clause is a named exception and not a prefix match: a prefix match would cover
+    every future `<element>_<qualifier>` field automatically, and this check would go quiet
+    exactly where a new place needs a name."""
     labels = set(plan_mod._SUBSTANTIVE_STAGE_FIELDS) | {
         label for _dotted, label, _supply in submission_mod._SUBSTANTIVE_SUBMISSION_FIELDS
     }
@@ -165,7 +175,7 @@ def test_every_required_place_has_a_vocabulary_entry():
 
     uncovered = sorted(
         label for label in labels
-        if not ({label, label.removesuffix("_refs"), label.split("_")[0]}
+        if not ({label, label.removesuffix("_refs"), _LABEL_ALIASES.get(label, label)}
                 & set(text_shape.ELEMENT_NAMES))
     )
     assert uncovered == [], (
@@ -173,6 +183,25 @@ def test_every_required_place_has_a_vocabulary_entry():
     )
     assert "principle" in text_shape.ELEMENT_NAMES, (
         "the excluded principle subfields are parts of this place"
+    )
+
+
+def test_the_enumerating_judge_may_target_every_place_in_the_vocabulary():
+    """The vocabulary has a second, EXECUTABLE consumer: the prompt that bounds the premise
+    gate's independent question-enumerator (`advisor._ENUMERATE_QUESTIONS_PROMPT`). A name
+    absent from that prompt is a place the judge is told it may not raise a question
+    against, so a restated copy there does not merely rot — it silently narrows the gate to
+    whatever the vocabulary was when the copy was last edited. It had, by six names.
+
+    Pinned rather than left to the derivation, because the prompt is prose to every reader
+    and nothing else in the suite reads it."""
+    from agentctl import advisor
+
+    missing = sorted(n for n in text_shape.ELEMENT_NAMES
+                     if n not in advisor._ENUMERATE_QUESTIONS_PROMPT)
+
+    assert missing == [], (
+        f"places the enumerating judge is not allowed to raise a question against: {missing}"
     )
 
 
@@ -219,6 +248,27 @@ def test_an_explicit_supply_without_an_element_is_refused(store, tmp_path):
     assert any("edge to stage 1" in p and "names no element" in p for p in _problems(d)), (
         _problems(d)
     )
+
+
+def test_an_empty_element_is_the_absent_case_not_a_foreign_name(tmp_path):
+    """`element = ""` states no provision, so it earns the message that says how to state
+    one — not the one that says its name is not an activity element.
+
+    On the undeclared-weight_class path, and NOT by choice of convenience: for a plan that
+    declares substantive, `_validate_graph` refuses an empty element as an unknown NAME
+    before a PlanDoc exists, so the seam's absent-branch is reachable only where the
+    loader's raw `.lower()` reading and the seam's normalized one disagree — the same
+    sliver the foreign-element test above covers. Pinned because the routing lives in a
+    single falsiness test (`if not sup.element`) that a later tidy into `is None` would
+    silently reverse, handing the author whose edge says nothing a message about a
+    vocabulary they never misused."""
+    doc = load_plan(_write_plan(tmp_path / "empty.toml", edge=EMPTY_ELEMENT,
+                                weight_class=None))
+
+    problems = submission_violations(doc, session_weight_class="SUBSTANTIVE")
+
+    assert any("edge to stage 1" in p and "names no element" in p for p in problems), problems
+    assert not [p for p in problems if "not an activity element" in p], problems
 
 
 def test_an_element_bearing_edge_passes(store, tmp_path):

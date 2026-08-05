@@ -1144,9 +1144,14 @@ def stage_question_key(stage) -> str:
     legally name — including `principle` and `supplies`, which `stage_carry_key`
     omits because carry-forward never needed them. The vocabulary is not restated
     here (it is text_shape.ELEMENT_NAMES, and a copy of a list rots): read it there.
-    Some of its names — the ones a stage can only ever SUPPLY, never author locally
-    — have no stage field for this key to cover, so a question targeting one of
-    those binds to the rest of the stage's definition. A question targeting
+    Four of its names have no stage field for this key to cover, so a question
+    targeting one of those binds to the rest of the stage's definition: `order` and
+    `requirements` (both on `[meta.order]`), `control` (written only by
+    `record-result --control`, never parsed from plan TOML), and `procedure`, which
+    leaves this list the moment a `Means.procedure` field exists and must then be
+    covered here like any other. They are named rather than described as a class,
+    because a class with no extension is a standing licence not to cover the next
+    member. A question targeting
     `stage:<n>.principle` must be invalidated when that principle is rewritten;
     `stage_carry_key` would not notice, so it cannot be reused for this purpose.
 

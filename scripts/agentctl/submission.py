@@ -273,7 +273,11 @@ def _edge_violations(stage) -> list[str]:
     out: list[str] = []
     for sup in stage.supplies:
         # An empty string is the absent case, not a foreign name: `element = ""` states no
-        # provision, so it earns the message that says how to state one.
+        # provision, so it earns the message that says how to state one. Reachable only on
+        # the undeclared-weight_class path — for a plan that declares substantive,
+        # `_validate_graph` has already refused the empty string as an unknown NAME, which
+        # is the wrong reading but the loader's to keep (it is old enough that every plan a
+        # live session may re-read already passes it).
         if not sup.element:
             out.append(
                 f"stage {stage.index} ({stage.title!r}): the edge to stage {sup.on} names "
