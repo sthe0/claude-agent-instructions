@@ -22,9 +22,10 @@ import sys
 import time
 from pathlib import Path
 
+import proc_tree
 from lib import argv_text, config_root
 
-from . import advisor, continuations, cost, delivery, effort, gates, ledger, permissions, plugins, plugins_ledger, plugins_premise, premise, solved_marker
+from . import advisor, continuations, cost, delivery, effort, enumerate_sidecar, gates, ledger, permissions, plugins, plugins_ledger, plugins_premise, premise, solved_marker
 from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
 from .partition import render_section, render_units, verdict
@@ -912,7 +913,7 @@ def cmd_ledger_enumerate(args, *, store: StateStore, runner: Runner | None = Non
     except OSError as exc:
         return Directive(False, state.node, "noop",
                          f"cannot read artifact {args.artifact!r}: {exc}")
-    run = runner if runner is not None else advisor.subprocess_runner
+    run = runner if runner is not None else advisor.enumerate_subprocess_runner
     statements = advisor.enumerate_claims(text, run)
     candidates = bag.setdefault("candidates", [])
     raised: list[str] = []
@@ -1311,6 +1312,37 @@ def cmd_question_candidate_dispose(args, *, store: StateStore, runner: Runner | 
     )
 
 
+def _apply_enumeration_result(
+    bag: dict, doc: PlanDoc, plan_path, pairs: list[tuple[str, str]], runner_ok: bool | None,
+) -> list[str]:
+    """Upsert `pairs` as 'raised' QuestionCandidates (last-wins by deterministic
+    qenum-N id) and stamp the bag's enumerated/enumerated_at/enumerated_plan/
+    enumerated_runner_ok/enumerated_count fields from ONE enumeration pass's result.
+    Shared by the synchronous cmd_question_enumerate path and the detached-worker
+    sidecar fold (cmd_approve/cmd_replan) so both apply identical upsert semantics
+    to the SAME bag shape regardless of which path produced the pairs."""
+    candidates = bag.setdefault("candidates", [])
+    raised: list[str] = []
+    for i, (target, question) in enumerate(pairs):
+        cid = f"qenum-{i + 1}"
+        entry = {"id": cid, "statement": f"[{target}] {question}", "disposition": "raised",
+                 "reason": "", "question": ""}
+        for j, c in enumerate(candidates):
+            if c.get("id") == cid:
+                candidates[j] = entry
+                break
+        else:
+            candidates.append(entry)
+        raised.append(cid)
+
+    bag["enumerated"] = True
+    bag["enumerated_at"] = plugins_premise._plan_content_digest(doc)
+    bag["enumerated_plan"] = str(plan_path)
+    bag["enumerated_runner_ok"] = runner_ok
+    bag["enumerated_count"] = len(pairs)
+    return raised
+
+
 def cmd_question_enumerate(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Run the independent question-enumeration cross-check over the WHOLE plan: ONE
     bounded advisor pass (advisor.enumerate_questions_health, `claude -p --model sonnet`,
@@ -1381,29 +1413,11 @@ def cmd_question_enumerate(args, *, store: StateStore, runner: Runner | None = N
         return Directive(False, state.node, "noop",
                          f"cannot parse plan {plan_path!r}: {exc}")
 
-    run = runner if runner is not None else advisor.subprocess_runner
-    runner_ok, pairs = advisor.enumerate_questions_health(
+    run = runner if runner is not None else advisor.enumerate_subprocess_runner
+    runner_ok, pairs, _stderr = advisor.enumerate_questions_health(
         doc.meta.goal, doc.meta.done_criterion, plan_text, run)
 
-    candidates = bag.setdefault("candidates", [])
-    raised: list[str] = []
-    for i, (target, question) in enumerate(pairs):
-        cid = f"qenum-{i + 1}"
-        entry = {"id": cid, "statement": f"[{target}] {question}", "disposition": "raised",
-                 "reason": "", "question": ""}
-        for j, c in enumerate(candidates):
-            if c.get("id") == cid:
-                candidates[j] = entry
-                break
-        else:
-            candidates.append(entry)
-        raised.append(cid)
-
-    bag["enumerated"] = True
-    bag["enumerated_at"] = plugins_premise._plan_content_digest(doc)
-    bag["enumerated_plan"] = str(plan_path)
-    bag["enumerated_runner_ok"] = runner_ok
-    bag["enumerated_count"] = len(pairs)
+    raised = _apply_enumeration_result(bag, doc, plan_path, pairs, runner_ok)
     state.log("question_enumerate", raised=len(raised), runner_ok=runner_ok)
     store.save(state)
 
@@ -1423,6 +1437,47 @@ def cmd_question_enumerate(args, *, store: StateStore, runner: Runner | None = N
             "done_criterion + every stage by hand for smuggled premises before approving"
         )
     return d
+
+
+def cmd_question_enumerate_worker(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Detached-child entry point for background whole-plan enumeration.
+
+    Launched (never invoked by a human) via proc_tree.launch_supervised from
+    cmd_submit_plan / cmd_replan, and NEVER wired into plugins.EVENT_FOR_COMMAND —
+    so main()'s _fire_plugins returns before touching the state store. This
+    function mirrors that by construction: it takes `store` (every cmd_* does, by
+    the module's own calling convention) but never calls store.load() or
+    store.save() on it. The parent process is typically already gone by the time
+    this runs, so there is no session state to safely read or write — see
+    enumerate_sidecar.py's module docstring for why a sidecar file, not the
+    state store, is this process's only output.
+
+    --plan and --digest are supplied by the launcher rather than re-derived here:
+    the launcher already computed the digest to stamp bag['enumerate_deadline']
+    against, and handing it down verbatim means this process's sidecar write can
+    never disagree with the key the launcher promised to look for."""
+    try:
+        doc = load_plan(args.plan)
+    except PlanError as exc:
+        return Directive(False, "worker", "noop", f"cannot parse plan {args.plan!r}: {exc}")
+    try:
+        plan_text = Path(args.plan).read_text(encoding="utf-8")
+    except OSError as exc:
+        return Directive(False, "worker", "noop", f"cannot read plan {args.plan!r}: {exc}")
+
+    run = runner if runner is not None else advisor.enumerate_subprocess_runner
+    runner_ok, pairs, stderr_text = advisor.enumerate_questions_health(
+        doc.meta.goal, doc.meta.done_criterion, plan_text, run)
+
+    enumerate_sidecar.write(args.session, args.digest, {
+        "runner_ok": runner_ok,
+        "pairs": [list(pair) for pair in pairs],
+        "stderr": stderr_text,
+        "content_digest": args.digest,
+        "plan_path": str(args.plan),
+    })
+    return Directive(True, "worker", "noop",
+                      f"enumeration worker finished; {len(pairs)} pair(s) written to sidecar")
 
 
 def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -1496,6 +1551,81 @@ def cmd_plan(args, *, store: StateStore, runner: Runner | None = None) -> Direct
     return Directive(True, state.node, "await_plan", "planner working; submit-plan when ready")
 
 
+def _spawn_enumeration_worker(argv, **kwargs):
+    """The one seam between `_launch_enumeration` and `proc_tree.launch_supervised`.
+
+    Exists so a test can suppress the real detached spawn by patching a `cli`-owned
+    attribute instead of `proc_tree.launch_supervised` itself — `cli.proc_tree` is
+    the SAME module object `test_proc_tree.py`/`test_kill_tree_cli.py` import
+    directly, so patching the shared attribute (as a prior revision of the suite's
+    autouse fixture did) stubs those tests' own subject under test too. Patching
+    this wrapper instead leaves `proc_tree.launch_supervised` untouched for
+    everyone but `_launch_enumeration`'s caller."""
+    return proc_tree.launch_supervised(argv, **kwargs)
+
+
+def _launch_enumeration(state: SessionState, bag: dict, doc: PlanDoc, plan_path) -> None:
+    """Clear the premise bag's enumeration record back to not-run state, stamp
+    `enumerate_deadline` (launch instant + advisor.ENUMERATE_TIMEOUT_S), and launch
+    a detached background enumeration pass over `plan_path` — called from
+    cmd_submit_plan and cmd_replan, the two places a NEW plan content becomes the
+    one `approve` will gate-check.
+
+    The stamp happens unconditionally, even when the launch itself fails below: a
+    caller comparing premise_blockers against `time.time()` needs a real deadline
+    regardless of whether the child actually started — a silently-missing deadline
+    would look identical to "plenty of time left."
+
+    Clearing enumerated/enumerated_at back to not-run (rather than leaving a
+    still-True flag pinned to a now-superseded digest) routes the outstanding-child
+    window onto the escapable _ENUMERATE_NOT_RUN blocker instead of the inescapable
+    _ENUMERATE_STALE one — see plugins_premise.premise_blockers.
+
+    Fire-and-forget by design: launch_supervised's child is detached
+    (start_new_session=True, stdio to DEVNULL) and this process never reaps it —
+    proc_tree.py's own module docstring is the precedent this mirrors. A launch
+    failure (missing interpreter, fork failure, non-POSIX) is swallowed: the
+    deadline is already stamped, so the outstanding-child window simply expires
+    and Stage 5's escape takes over exactly as if the child had started and hung."""
+    digest = plugins_premise._plan_content_digest(doc)
+    bag["enumerated"] = False
+    bag["enumerated_at"] = ""
+    bag["enumerate_deadline"] = time.time() + advisor.ENUMERATE_TIMEOUT_S
+    scripts_dir = Path(__file__).resolve().parent.parent
+    try:
+        _spawn_enumeration_worker(
+            [sys.executable, "-m", "agentctl", "question-enumerate-worker",
+             "--session", state.session_id, "--plan", str(plan_path), "--digest", digest],
+            cwd=str(scripts_dir),
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
+
+
+def _fold_enumeration_sidecar(state: SessionState, doc: PlanDoc, plan_path) -> None:
+    """Fold a landed background-enumeration sidecar into the premise bag, if one is
+    waiting for `doc`'s exact content digest — called from cmd_approve (before its
+    blockers computation) and cmd_replan (inside the swapped-plan_path block,
+    before pblock and before the digest-gated relaunch decision) so a detached
+    worker's already-finished result is visible to the SAME gate evaluation that
+    would otherwise see only the pre-launch not-run state, and so a fold that
+    matches the proposed digest makes cmd_replan's relaunch check a no-op instead
+    of firing a redundant second worker for content already enumerated.
+
+    Never calls store.save() itself — the caller's own existing save persists the
+    fold, matching every other bag mutation in this module."""
+    bag = state.plugins.get("premise")
+    if bag is None:
+        return
+    digest = plugins_premise._plan_content_digest(doc)
+    payload = enumerate_sidecar.read_and_discard(state.session_id, digest)
+    if payload is None:
+        return
+    pairs = [tuple(p) for p in payload.get("pairs", [])]
+    _apply_enumeration_result(bag, doc, plan_path, pairs, payload.get("runner_ok"))
+
+
 def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     plan_path = args.plan
@@ -1556,6 +1686,9 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
         state.plan_review = None
     state.plan_submitted_ts = time.time()
     state.log("submit_plan", plan=plan_path, verified=True, revised=resubmitting)
+    bag = state.plugins.get("premise")
+    if bag is not None:
+        _launch_enumeration(state, bag, doc, plan_path)
     store.save(state)
     d = Directive(
         True, state.node, "await_user_approval",
@@ -2045,6 +2178,13 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # because confirm-delivery is a reachable, audit-logged escape (gates.py's
     # plan_presentation_blockers docstring has the full justification).
     state = _require(store, args.session)
+    if state.plan_path:
+        try:
+            _approved_doc = load_plan(state.plan_path)
+        except (OSError, PlanError):
+            _approved_doc = None
+        if _approved_doc is not None:
+            _fold_enumeration_sidecar(state, _approved_doc, state.plan_path)
     blockers = (
         gates.blockers(state, "plan_approval")
         + plugins.plugin_gate_blockers(state, "plan_approval")
@@ -2916,6 +3056,10 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     quality_note = getattr(args, "quality_note", None)
     state.log("resolve", by=args.by, quality=quality, quality_by=quality_by)
     store.save(state)
+    # Session-end cleanup: drop any sidecar a background enumeration wrote for this
+    # session, whether or not it was ever folded (e.g. an outstanding child from the
+    # LAST replan before resolve, whose result nobody will ever read now).
+    enumerate_sidecar.discard_all_for_session(state.session_id)
     tracker_key = getattr(state, "tracker_key", None)
     if not tracker_key and solved_marker.key_shape(state.task_id):
         tracker_key = state.task_id
@@ -3259,6 +3403,26 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     _saved_plan_path = state.plan_path
     try:
         state.plan_path = args.plan
+        # Detached re-enumeration for the CORRECTED plan, before pblock (which folds
+        # premise_blockers) evaluates it: gated on whether args.plan's content digest
+        # differs from the bag's last-enumerated digest, NOT on diff_plans' no_change/
+        # refinement/substantive kind below -- diff_plans also weighs means/method/
+        # conditions/invariants/verify_command, fields _plan_content_digest excludes, so
+        # a "refinement" can leave the digest unchanged (no relaunch needed) and in
+        # principle a same-kind edit could still move it. A malformed args.plan is left
+        # alone here -- it fails the same way it always did, at the strict `_load(args.plan)`
+        # below, caught by main()'s outer handler.
+        bag = state.plugins.get("premise")
+        if bag is not None:
+            try:
+                proposed = _load(args.plan)
+            except (OSError, PlanError):
+                proposed = None
+            if proposed is not None:
+                _fold_enumeration_sidecar(state, proposed, args.plan)
+                proposed_digest = plugins_premise._plan_content_digest(proposed)
+                if proposed_digest != bag.get("enumerated_at"):
+                    _launch_enumeration(state, bag, proposed, args.plan)
         pblock = plugins.plugin_gate_blockers(state, "plan_approval")
     finally:
         state.plan_path = _saved_plan_path
@@ -3869,6 +4033,7 @@ COMMANDS = {
     "question-list": cmd_question_list,
     "question-check": cmd_question_check,
     "question-enumerate": cmd_question_enumerate,
+    "question-enumerate-worker": cmd_question_enumerate_worker,
     "question-candidate-dispose": cmd_question_candidate_dispose,
     "order-raise": cmd_order_raise,
     "order-dispose": cmd_order_dispose,
@@ -3940,7 +4105,7 @@ _SESSION_COMMANDS = (
     "ledger-add", "ledger-check", "ledger-candidate", "ledger-dispose",
     "ledger-enumerate", "question-raise", "question-research", "question-dispose",
     "question-rebind", "question-retire", "question-list", "question-check",
-    "question-enumerate", "question-candidate-dispose",
+    "question-enumerate", "question-enumerate-worker", "question-candidate-dispose",
     "order-raise", "order-dispose", "order-list", "classify", "plan",
     "plan-render", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
     "stage-review", "code-review", "approve", "partition", "partition-units",
@@ -4004,7 +4169,11 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("artifact", ("ledger-enumerate",), "path to the deliverable being cross-checked"),
     ("target", ("question-raise", "plan-review"), "plan element address or plan file path"),
     ("plan", ("plan-render", "submit-plan", "replan", "drive", "push-subplan",
-              "question-enumerate", "question-dispose", "question-rebind"), "plan file path"),
+              "question-enumerate", "question-enumerate-worker", "question-dispose",
+              "question-rebind"), "plan file path"),
+    ("digest", ("question-enumerate-worker",),
+     "plan content digest the launcher computed — the sidecar's key, passed down "
+     "verbatim rather than a narrative"),
     ("new", ("check-coverage",), "corrected plan file path — the object under a coverage pre-check, not narrative"),
     ("rendering_file", ("present-plan",), "path to the rendered presentation"),
     ("by", ("confirm-delivery", "approve", "resolve"), "who acted — a name, not a narrative"),
@@ -4176,6 +4345,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--plan", default=None,
                     help="enumerate against this plan instead of the session's current "
                          "plan_path (use when preparing a CORRECTED plan for replan)")
+
+    sp = add("question-enumerate-worker"); sp.add_argument("--session", required=True)
+    sp.add_argument("--plan", required=True,
+                    help="plan file to enumerate — this detached worker never touches "
+                         "session state, so the launcher names it explicitly")
+    sp.add_argument("--digest", required=True,
+                    help="plan content digest the launcher computed (plugins_premise."
+                         "_plan_content_digest) — the sidecar write's key")
 
     sp = add("question-candidate-dispose"); sp.add_argument("--session", required=True)
     sp.add_argument("--id", required=True, help="candidate id (qenum-N) to disposition")

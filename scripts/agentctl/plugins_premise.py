@@ -225,6 +225,13 @@ register(
             "enumerated_at": "",
             "enumerated_runner_ok": None,
             "enumerated_count": None,
+            # Absolute epoch (launch instant + advisor.ENUMERATE_TIMEOUT_S), stamped by
+            # cli.py's _launch_enumeration on every detached-worker launch. None until
+            # the first launch — Stage 5 reads this to decide whether an outstanding
+            # _ENUMERATE_NOT_RUN blocker has aged past the deadline into its escape;
+            # this plugin's own premise_blockers does not consult it (Stage 4 only
+            # stamps the field, Stage 5 owns interpreting it).
+            "enumerate_deadline": None,
         },
     )
 )

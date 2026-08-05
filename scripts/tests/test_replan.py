@@ -795,10 +795,15 @@ def test_corrected_plan_is_enumerable_so_the_premise_gate_stops_deadlocking_repl
                          m3_severe=False, m4_severe=False), store=store)
     cli.cmd_next_stage(ns(session=sid), store=store)
 
-    # the deadlock itself: the enumeration on record is bound to the OLD plan
+    # the deadlock itself: the enumeration on record is bound to the OLD plan.
+    # Stage 4's detached-enumeration relaunch fires here too (the corrected
+    # plan's digest differs from the bag's enumerated_at), and it clears
+    # enumerated back to not-run rather than leaving it pinned stale — see
+    # _launch_enumeration's docstring — so the blocker below is the escapable
+    # _ENUMERATE_NOT_RUN, not _ENUMERATE_STALE.
     blocked = cli.cmd_replan(ns(session=sid, plan=corrected), store=store)
     assert blocked.ok is False
-    assert any(plugins_premise._ENUMERATE_STALE in b        # plugin gate prefixes "[premise] "
+    assert any(plugins_premise._ENUMERATE_NOT_RUN in b      # plugin gate prefixes "[premise] "
                for b in blocked.data.get("blockers", []))
     assert store.load(sid).node == Node.EXECUTING.value  # nothing moved
 

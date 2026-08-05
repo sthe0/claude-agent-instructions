@@ -74,7 +74,7 @@ def main():
         for s in samples:
             load1 = os.getloadavg()[0]
             t0 = time.monotonic()
-            ok, pairs = advisor.enumerate_questions_health(s["goal"], s["crit"], s["text"], runner)
+            ok, pairs, _stderr = advisor.enumerate_questions_health(s["goal"], s["crit"], s["text"], runner)
             elapsed = time.monotonic() - t0
             row = {
                 "plan_path": s["path"],

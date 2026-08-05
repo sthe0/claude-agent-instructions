@@ -24,6 +24,23 @@ from .dispatch import RunResult
 _ADVISOR_MODEL = "sonnet"
 _ADVISOR_TIMEOUT_S = 20
 
+# Whole-plan enumeration (enumerate_claims / enumerate_questions_health) is a
+# DIFFERENT cost class from a judge/advisor call: it re-reads an entire plan in one
+# shot, and calibration (docs/operations/advisor-timeout-calibration.md, 15 rows x
+# 5 sizes x 3 repeats) measured 15-170s of real latency against a 480s dataset
+# ceiling -- far past _ADVISOR_TIMEOUT_S=20, which would truncate nearly every
+# whole-plan call. 480 = ceil_to_minute(largest within-size max/min spread (4.173x,
+# the refutation check's own number -- size 23018, 96.513/23.127) * the min
+# elapsed_s at the largest sampled size (103.213s, size 203681)) =
+# ceil_to_minute(430.73) = 480. The literal below is that computed value, checked
+# by test against the raw committed dataset (advisor-calibration.jsonl) rather than
+# re-derived at runtime, so a calibration-note edit can never silently drift the
+# shipped timeout.
+_ENUMERATE_TIMEOUT_S_DEFAULT = 480
+ENUMERATE_TIMEOUT_S = int(
+    os.environ.get("AGENTCTL_ENUMERATE_TIMEOUT_S", _ENUMERATE_TIMEOUT_S_DEFAULT)
+)
+
 # The acceptance judge is a SEPARATE, cheaper tier than the warn-only advisor: it
 # gates a real transition (via the pure acceptance-review guardian), so it runs on the
 # cheapest model and is fail-open (a missing verdict blocks at the gate, never passes).
@@ -72,7 +89,33 @@ _ENUMERATE_PROMPT = (
 )
 
 
-def enumerate_claims(artifact_text: str, runner) -> list[str]:
+def enumerate_subprocess_runner(
+    argv: list[str], *, timeout: int = ENUMERATE_TIMEOUT_S
+) -> RunResult:
+    """subprocess_runner bound to ENUMERATE_TIMEOUT_S -- the default runner for the
+    two whole-plan enumeration entry points (enumerate_claims,
+    enumerate_questions_health), whose calls run far longer than a judge/advisor
+    call and would be truncated by subprocess_runner's own _ADVISOR_TIMEOUT_S=20
+    default. subprocess_runner itself stays untouched: every judge_* caller keeps
+    the original 20s bound.
+
+    The keyword-only `timeout` mirrors subprocess_runner's own signature so both
+    enumeration entry points can name their ceiling AT THE CALL SITE, which is the
+    norm trunk settled on. Baking the ceiling into the runner instead would make
+    the two call sites read as if they carried the 20s advisory bound, and a
+    call-site keyword would then raise TypeError into the bare `except Exception`
+    below -- reported as an unhealthy runner rather than as the signature mismatch
+    it is. `test_enumerate_runner_signature` pins this.
+
+    Defined here, ahead of enumerate_claims/enumerate_questions_health, only
+    because Python evaluates a default-argument value at `def` time -- this name
+    must already exist when their `runner=enumerate_subprocess_runner` defaults
+    are bound. The `subprocess_runner` call inside the body resolves at CALL time,
+    so it is free to reference the module-level function defined later below."""
+    return subprocess_runner(argv, timeout=timeout)
+
+
+def enumerate_claims(artifact_text: str, runner=enumerate_subprocess_runner) -> list[str]:
     """Independent semantic re-reading of an outgoing deliverable that RAISES the
     load-bearing decisions/judgments/claims it detects, one statement per line.
 
@@ -81,8 +124,9 @@ def enumerate_claims(artifact_text: str, runner) -> list[str]:
     deterministic disposition gate (ledger.validate_candidates) is what turns each
     raised item into a blocker; this call only supplies the candidates.
 
-    Cost-bounded exactly like the warn-only advisor: `claude -p --model sonnet`
-    with an explicit _ADVISOR_TIMEOUT_S at the call site. Fail-open:
+    Cost-bounded like the warn-only advisor, but with ENUMERATE_TIMEOUT_S named at
+    the call site rather than _ADVISOR_TIMEOUT_S: this is a whole-artifact read, not
+    a binary judge, and 20s truncated it. Fail-open:
     a None runner, a non-zero exit, or any exception returns [] — an empty
     enumeration is a valid (if unhelpful) result; the mandatory-cross-check blocker
     is discharged by the `enumerated` flag the caller sets, not by the count."""
@@ -93,7 +137,7 @@ def enumerate_claims(artifact_text: str, runner) -> list[str]:
         prompt = _ENUMERATE_PROMPT.format(payload=artifact_text)
         result = runner(
             ["claude", "-p", "--model", _ADVISOR_MODEL, prompt],
-            timeout=_ADVISOR_TIMEOUT_S,
+            timeout=ENUMERATE_TIMEOUT_S,
         )
         if result.returncode != 0:
             return []
@@ -124,11 +168,11 @@ _ENUMERATE_QUESTIONS_PROMPT = (
 
 
 def enumerate_questions_health(
-    goal: str, done_criterion: str, plan_text: str, runner
-) -> tuple[bool | None, list[tuple[str, str]]]:
+    goal: str, done_criterion: str, plan_text: str, runner=enumerate_subprocess_runner
+) -> tuple[bool | None, list[tuple[str, str]], str]:
     """Independent re-reading of a WHOLE plan that RAISES the questions its
     construction should have provoked, as (target, question) pairs, together with a
-    runner-health flag.
+    runner-health flag and the runner's captured stderr.
 
     ONE bounded `claude -p --model sonnet` call over the goal + done-criterion + full
     plan text — deliberately whole-plan, not one call per element: the questions worth
@@ -140,29 +184,31 @@ def enumerate_questions_health(
     runner produced a usable answer, so the caller can record runner health and attach a
     non-blocking advisory when the pass was vacuous — WITHOUT ever re-gating on it:
 
-      * runner is None        -> (None, [])   advisor absent (disabled/stubbed)
-      * non-zero exit          -> (False, [])  runner reachable but failed
-      * exception              -> (False, [])  timeout/crash swallowed
-      * success (0 exit)       -> (True, pairs) pairs may still be empty
+      * runner is None        -> (None, [], "")        advisor absent (disabled/stubbed)
+      * non-zero exit          -> (False, [], stderr)   runner reachable but failed
+      * exception              -> (False, [], "")       timeout/crash swallowed
+      * success (0 exit)       -> (True, pairs, stderr) pairs may still be empty
 
     The mandatory cross-check blocker is discharged by the `enumerated` flag the caller
     sets REGARDLESS of the pair count — never by the count itself. Gating discharge on a
-    non-empty result would let a single 20 s timeout (or a genuinely question-free plan)
+    non-empty result would let a single timeout (or a genuinely question-free plan)
     wedge approve permanently with no route out; fail-open buys that liveness, and the
     silent-discharge cost it incurs is paid back non-blockingly by the caller's advisory,
-    not by making approve un-passable on infra failure."""
+    not by making approve un-passable on infra failure. `stderr` is carried so a
+    background caller (the detached enumeration worker) can surface WHY a run failed
+    without the caller needing its own capture path."""
     if runner is None:
-        return None, []
+        return None, [], ""
     judge_ledger.begin_attributed_call("enumerate_questions_health")
     try:
         payload = f"GOAL:\n{goal}\n\nDONE CRITERION:\n{done_criterion}\n\nPLAN:\n{plan_text}"
         prompt = _ENUMERATE_QUESTIONS_PROMPT.format(payload=payload)
         result = runner(
             ["claude", "-p", "--model", _ADVISOR_MODEL, prompt],
-            timeout=_ADVISOR_TIMEOUT_S,
+            timeout=ENUMERATE_TIMEOUT_S,
         )
         if result.returncode != 0:
-            return False, []
+            return False, [], result.stderr or ""
         pairs: list[tuple[str, str]] = []
         for ln in (result.stdout or "").splitlines():
             if not ln.strip():
@@ -172,9 +218,9 @@ def enumerate_questions_health(
             if not sep or not target or not question:
                 continue
             pairs.append((target, question))
-        return True, pairs
+        return True, pairs, result.stderr or ""
     except Exception:
-        return False, []
+        return False, [], ""
     finally:
         judge_ledger.set_current_judge(None)
 
