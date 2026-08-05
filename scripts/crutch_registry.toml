@@ -4120,6 +4120,70 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "1d54d249e08de9c7"
+domain = "code"
+file = "scripts/tests/test_operative_surface_behaviour.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "c113872972957893"
+domain = "code"
+file = "scripts/tests/test_operative_surface_behaviour.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "0a9e932f0201e1e3"
+domain = "code"
+file = "scripts/tests/test_operative_surface_behaviour.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "913dd60382690eb3"
+domain = "code"
+file = "scripts/tests/test_operative_surface_behaviour.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "2af3abf4f6fdd7e4"
+domain = "code"
+file = "scripts/tests/test_operative_surface_behaviour.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "e08079859a24855d"
+domain = "code"
+file = "scripts/tests/test_operative_surface_behaviour.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "1abb9d1728501856"
+domain = "code"
+file = "scripts/tests/test_operative_surface_behaviour.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "3733f3942ed4d356"
+domain = "code"
+file = "scripts/tests/test_operative_surface_behaviour.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "ac646583fc835a60"
 domain = "code"
 file = "scripts/tests/test_permission_gate.py"
@@ -7139,6 +7203,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "20c66873793035b7"
 domain = "code_file_rollup"
 file = "scripts/tests/test_obligations.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "cea3aeb8a2465d84"
+domain = "code_file_rollup"
+file = "scripts/tests/test_operative_surface_behaviour.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"

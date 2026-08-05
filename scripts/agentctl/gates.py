@@ -630,15 +630,55 @@ def _landed_sort_key(landed) -> tuple:
     return (landed.target, landed.remote, landed.delivered_stage)
 
 
+def _refs_projection(subject) -> tuple:
+    """The subject's two structural ref projections (material_refs/knowledge_refs) as
+    ONE surface component — or the EMPTY tuple when the stage declares neither, so a
+    plan written before these fields existed reproduces its schema-23 surface exactly
+    (the declared-only rule the verify_venue_at_final component follows, for the same
+    reason: an absent field must be indistinguishable from a field that never existed).
+
+    Grouped rather than spliced as two components because two independently conditional
+    splices collide: (material_refs=["x"], knowledge_refs=[]) and (material_refs=[],
+    knowledge_refs=["x"]) would flatten to the same single component. Rendered as a
+    STRING rather than a nested tuple for a second reason, this one about the `sorted`
+    in `_operative_surface`: with two conditional components of DIFFERENT types, two
+    stages tying on every unconditional field — one declaring only verify_venue_at_final,
+    the other only refs — reach a str-vs-tuple comparison and raise TypeError. Any third
+    conditional component must likewise be a string.
+
+    Each list is SORTED: re-ordering the same refs is not a re-selection, so a shuffle
+    must not satisfy the CHANGE half. Entries pass through `_normalize_string` like every
+    other string component — unlike a landed payload's git refs, a ref differing only in
+    case or spacing names the same referent, so it is a rephrasing, not a change."""
+    if not (subject.material_refs or subject.knowledge_refs):
+        return ()
+    return (
+        repr(
+            (
+                tuple(sorted(_normalize_string(r) for r in subject.material_refs)),
+                tuple(sorted(_normalize_string(r) for r in subject.knowledge_refs)),
+            )
+        ),
+    )
+
+
 def _operative_surface(doc) -> tuple:
     """The plan's operative surface: what the engine executes or dispatches on,
     as opposed to its prose (title/goal/done_criterion/expected_result_image/
-    material/conditions/invariants/principle) — the latter is deliberately
-    excluded so no amount of narrative rewriting can satisfy the CHANGE half
-    below. Per stage: means, method, verify_command, expected_exit, the
-    declared check venue/kind and its landed payload, and the executor. Plan
-    level: repo_root, delivery_worktree and every final_check's (command,
-    expected_exit, venue, kind, landed payload).
+    material/knowledge/conditions/invariants/principle) — the latter is
+    deliberately excluded so no amount of narrative rewriting can satisfy the
+    CHANGE half below. That exclusion is why a re-SELECTED material enters here
+    only through its typed projection: `material_refs`/`knowledge_refs` cannot be
+    reworded, only re-declared, so admitting them makes a re-selection observable
+    without making the CHANGE half satisfiable by prose (defect 4). Admitting the
+    `material` prose itself would restore the blocker's appearance while destroying
+    the guarantee. The residual is that a projection is a DECLARATION: appending a
+    path satisfies the gate without any re-selection having happened, and the
+    projection is coarse enough that two different transformations of one file look
+    alike. Per stage: means, method, verify_command, expected_exit, the
+    declared check venue/kind and its landed payload, the executor, and the two ref
+    projections. Plan level: repo_root, delivery_worktree and every final_check's
+    (command, expected_exit, venue, kind, landed payload).
     Every string component passes through `_normalize_string` so a whitespace-
     or-case-only rephrasing does not register as a change; expected_exit stays
     a literal int comparison. `target`/`remote` inside a landed payload are
@@ -657,6 +697,7 @@ def _operative_surface(doc) -> tuple:
             # schema-23 operative surface exactly — uniform with the plan.py keys.
             *((_normalize_string(s.criterion.verify_venue_at_final),)
               if s.criterion.verify_venue_at_final else ()),
+            *_refs_projection(s.subject),
         )
         for s in doc.stages
     )
@@ -688,12 +729,13 @@ def replan_coverage_blockers(old_doc, new_doc, critique) -> list[str]:
         missing => a blocker naming the item.
       - CHANGE: if any difference is declared (critique.differences_to_remove is
         non-empty), the plan's operative surface (`_operative_surface`: per-stage
-        means/method/verify_command/expected_exit/verify_venue/executor, plus
-        [meta] repo_root/delivery_worktree/final_check) must differ from the old
-        plan's — proof something the engine executes or dispatches on was
-        re-selected to remove the difference; unchanged => one blocker. A means/
-        method-only diff is one member of that surface, not the whole of it: a
-        correction that instead lives entirely in verify_command, a final_check,
+        means/method/verify_command/expected_exit/verify_venue/executor and the
+        material_refs/knowledge_refs projections, plus [meta] repo_root/
+        delivery_worktree/final_check) must differ from the old plan's — proof
+        something the engine executes or dispatches on was re-selected to remove
+        the difference; unchanged => one blocker. A means/method-only diff is one
+        member of that surface, not the whole of it: a correction that instead
+        lives entirely in verify_command, a final_check, a re-selected material
         or [meta] also satisfies this half.
 
     Declared-item-scoped: empty lists pass vacuously, so a critique that records no
@@ -726,9 +768,10 @@ def replan_coverage_blockers(old_doc, new_doc, critique) -> list[str]:
             out.append(
                 "differences_to_remove is non-empty but the plan's operative surface "
                 "(means/method, verify_command/expected_exit/verify_venue, executor, "
-                "final_check, [meta] repo_root/delivery_worktree) did not change — a "
-                "difference cannot be removed without changing what the engine "
-                "executes or dispatches on"
+                "material_refs/knowledge_refs, final_check, [meta] repo_root/"
+                "delivery_worktree) did not change — a difference cannot be "
+                "removed without changing what the engine executes or "
+                "dispatches on"
             )
     return out
 
