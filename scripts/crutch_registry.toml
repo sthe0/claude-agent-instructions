@@ -5847,6 +5847,30 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "8576f30cd8f5f37a"
+domain = "code"
+file = "scripts/tests/test_spawn_plans_reachability.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "1541d340011cd3e3"
+domain = "code"
+file = "scripts/tests/test_spawn_plans_reachability.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "bbdbb5cf63b30964"
+domain = "code"
+file = "scripts/tests/test_spawn_plans_reachability.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "da0132ed57502d03"
 domain = "code"
 file = "scripts/tests/test_spawn_runaway_cap.py"
@@ -7746,6 +7770,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "c60787966765496d"
 domain = "code_file_rollup"
 file = "scripts/tests/test_si_feedback_detect.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "932401b548f57f8a"
+domain = "code_file_rollup"
+file = "scripts/tests/test_spawn_plans_reachability.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
@@ -16921,6 +16953,14 @@ file = "skills/specializations/planner/SKILL.md"
 class = "perception"
 disposition = "keep"
 ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
+
+[[entry]]
+id = "c649a3fc6a484a4d"
+domain = "prose"
+file = "skills/specializations/planner/SKILL.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
 
 [[entry]]
 id = "96a54d9533187dd9"

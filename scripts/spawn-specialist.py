@@ -37,7 +37,7 @@ from pathlib import Path
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
 from lib import argv_text  # one place decides how an argv value names its text
 from lib import marker_extract  # unconditional second-pass marker extraction (model is the primary classifier)
-from lib.config_root import iter_transcripts, skills_dir  # config-root resolver (isolated system root)
+from lib.config_root import iter_transcripts, plans_dir, skills_dir  # config-root resolver (isolated system root)
 from lib.planner_plan_check import (  # single shared home for return-marker + plan checks
     MARKER_RE,
     PLAN_PATH_RE,
@@ -412,18 +412,88 @@ DEVELOPER_SETTINGS_ALLOW = [
     "Bash(git add:*)", "Bash(git commit:*)",
 ]
 
+# The plan-artifact directory (lib.config_root.plans_dir()) is where a
+# planner's SKILL.md tells it to write its deliverable and where a reviewer's
+# SKILL.md tells it to read the plan under review — a contract naming a
+# directory neither kind was ever granted. planner writes; thinker and
+# code-reviewer only read, plus the one Bash prefix that lets a reviewer bind
+# its own verdict to the plan bytes via `agentctl plan-review --plan-digest`
+# (see the plan's stage-2 material). Rides the same --settings seam
+# DEVELOPER_SETTINGS_ALLOW uses, never settings/base.json.
+#
+# Three facts measured live against the CLI on 2026-08-05 (probes A-D in the
+# stage-2 continuation), none of them documented anywhere the plan's authors
+# could find beforehand:
+#   - An ABSOLUTE path in a permission rule needs a DOUBLE leading slash. A
+#     single leading "/" is read as relative to the project root, so
+#     "Edit(/Users/.../plans/**)" matches nothing; "Edit(//Users/.../plans/**)"
+#     matches. `plans_directory` already starts with "/", so the rule string
+#     below prepends exactly one more.
+#   - `Write(path)` rules are not matched by file permission checks at all —
+#     the CLI says so itself: only `Edit(path)` rules are, and Edit rules
+#     cover every file-editing tool. So the write grant is Edit-only.
+#   - Every non-developer kind gets no --permission-mode flag
+#     (resolve_permission_mode returns None), so it inherits whatever
+#     defaultMode the harness settings declare — acceptEdits on this fleet —
+#     under which --add-dir alone already makes a directory writable. An
+#     allow-only payload therefore cannot express "read but not write"; the
+#     read kinds need an explicit `Edit(...)` DENY alongside their `Read`
+#     allow, or the grant is directional in name only.
+PLANS_WRITE_KINDS = ("planner",)
+PLANS_READ_KINDS = ("thinker", "code-reviewer")
 
-def build_child_settings(kind: str) -> dict:
+
+def plans_permission_rules(kind: str, plans_directory: Path) -> tuple[list[str], list[str]]:
+    """(allow, deny) permission rules granting `kind` access to
+    `plans_directory`, in the direction that kind needs. Empty pair for a
+    kind granted neither."""
+    base = f"/{plans_directory}/**"
+    if kind in PLANS_WRITE_KINDS:
+        return [f"Edit({base})"], []
+    if kind in PLANS_READ_KINDS:
+        return [f"Read({base})", "Bash(shasum -a 256:*)"], [f"Edit({base})"]
+    return [], []
+
+
+def plans_add_dir_args(kind: str, plans_directory: Path) -> list[str]:
+    """`--add-dir` argv for `kind`, when it is granted access to `plans_directory`.
+
+    A permissions.allow rule alone does not put a directory outside the
+    child's cwd into its workspace — --add-dir is required too, or the child
+    still prompts for a decision it cannot answer headlessly (see the plan's
+    stage-2 material: instance 17's empty-output-file symptom)."""
+    allow, deny = plans_permission_rules(kind, plans_directory)
+    if allow or deny:
+        return ["--add-dir", str(plans_directory)]
+    return []
+
+
+def build_child_settings(kind: str, plans_directory: "Path | None" = None) -> dict:
     """Child `--settings` payload: the auto-compaction window pin for every kind
     (both forms, mirroring settings/base.json — the env key wins in the client's
     window resolution, the top-level key is the settings-path fallback), plus the
-    developer-scoped grant of exactly the verbs a developer brief requires."""
+    developer-scoped grant of exactly the verbs a developer brief requires, plus
+    the plans-directory grant for the kinds that need it (merged with the
+    developer allow, never replacing it)."""
     settings: dict = {
         "env": {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(SPAWN_AUTOCOMPACT_WINDOW_TOKENS)},
         "autoCompactWindow": SPAWN_AUTOCOMPACT_WINDOW_TOKENS,
     }
+    allow: list[str] = []
+    deny: list[str] = []
     if kind == "developer":
-        settings["permissions"] = {"allow": list(DEVELOPER_SETTINGS_ALLOW)}
+        allow.extend(DEVELOPER_SETTINGS_ALLOW)
+    if plans_directory is not None:
+        plans_allow, plans_deny = plans_permission_rules(kind, plans_directory)
+        allow.extend(plans_allow)
+        deny.extend(plans_deny)
+    permissions: dict = {}
+    if allow:
+        permissions["allow"] = allow
+    if deny:
+        permissions["deny"] = deny
+    if permissions:
+        settings["permissions"] = permissions
     return settings
 
 
@@ -597,6 +667,7 @@ def main(argv: list[str] | None = None) -> int:
     perms = permissions_digest(args.project_permissions)
     prompt = assemble_prompt(args, depth_next, perms)
     model = resolve_model(args)
+    plans_directory = plans_dir()
 
     cmd = [
         "claude",
@@ -613,8 +684,9 @@ def main(argv: list[str] | None = None) -> int:
         # work: settings.json env is applied after process start and wins (see
         # memory-global leaf claude-code-settings-env-precedence.md).
         "--settings",
-        json.dumps(build_child_settings(args.kind)),
+        json.dumps(build_child_settings(args.kind, plans_directory)),
     ]
+    cmd.extend(plans_add_dir_args(args.kind, plans_directory))
     permission_mode = resolve_permission_mode(args)
     if permission_mode is not None:
         cmd.extend(["--permission-mode", permission_mode])
