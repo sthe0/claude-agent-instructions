@@ -763,8 +763,7 @@ def decide(
 def main() -> int:
     # Opened first, before the stdin payload is even read, so the deadline
     # honestly covers transcript parsing too — not only the judge calls. Under
-    # its own try, matching every other step below: a hook must never wedge
-    # the session, construction included.
+    # its own try, matching every other step below.
     try:
         budget = judge_budget.JudgeBudget(
             _TURN_JUDGE_BUDGET_S, _TURN_JUDGE_MIN_CALL_S, clock=time.monotonic

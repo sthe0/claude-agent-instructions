@@ -312,12 +312,18 @@ def test_two_shortfalls_under_different_matchers_are_distinguishable(root):
     hook, wired under two different matchers, both below the minimum -- the two
     reported lines must not read identically, or a reader following the
     installer-vs-hand-removal advice cannot tell which one the installer would
-    actually reconcile."""
+    actually reconcile.
+
+    Both groups live in the SAME member on purpose. Split across two members,
+    the two lines differed on `reg.member` even before the matcher was printed,
+    so the inequality below would have passed against the very defect it is
+    meant to catch. One member is the only configuration where the matcher is
+    the sole distinguishing field."""
     _write(root / "settings.json", {
-        "Stop": [_timed_group(str(SCRIPTS / HOOK), 5, "Edit|Write")],
-    })
-    _write(root / "settings.local.json", {
-        "Stop": [_timed_group(f"python3 {SCRIPTS / HOOK}", 5)],
+        "Stop": [
+            _timed_group(str(SCRIPTS / HOOK), 5, "Edit|Write"),
+            _timed_group(str(SCRIPTS / HOOK), 5),
+        ],
     })
     shortfalls = hook_wiring.timeout_shortfalls(hook_wiring.probe(HOOK, root), 30)
     assert len(shortfalls) == 2
@@ -363,14 +369,23 @@ def test_timeout_requirements_are_not_derived_from_the_registry():
 
 
 def _hooks_that_construct_a_judge_budget() -> "set[str]":
-    """Every `scripts/hook-*.py` whose text constructs a
-    `judge_budget.JudgeBudget(` — the scope TIMEOUT_REQUIREMENTS claims to
-    cover, discovered mechanically rather than assumed to already equal the
-    table it is checked against."""
+    """Every `scripts/hook-*.py` whose text constructs a `JudgeBudget` — the
+    scope TIMEOUT_REQUIREMENTS claims to cover, discovered mechanically rather
+    than assumed to already equal the table it is checked against.
+
+    Matches the bare `JudgeBudget(`, not the dotted `judge_budget.JudgeBudget(`,
+    so BOTH import styles are recognised: the dotted one the three current hooks
+    use, and `from lib.judge_budget import JudgeBudget`, which is the prevailing
+    style elsewhere in this tree (`from lib.config_root import …` and a dozen
+    siblings). A detector blind to the more common style would leave the stage's
+    original symptom — wired, presence-green, killed mid-judge — reproducible on
+    exactly the likelier path. No false positives: `_hook_scripts()` is confined
+    to `scripts/hook-*.py`, and the annotation `judge_budget.JudgeBudget | None`
+    carries no parenthesis."""
     found = set()
     for p in _hook_scripts():
         text = p.read_text(encoding="utf-8", errors="replace")
-        if "judge_budget.JudgeBudget(" in text:
+        if "JudgeBudget(" in text:
             found.add(p.name)
     return found
 
