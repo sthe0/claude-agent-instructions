@@ -279,6 +279,14 @@ def agentctl_edit_log() -> Path:
     return agentctl_dir() / "edit-log.jsonl"
 
 
+def agentctl_judge_ledger_log() -> Path:
+    """Durable judge-call execution ledger (``<root>/agentctl/judge-usage-
+    ledger.jsonl`` — see lib/judge_ledger.py). Honors an
+    ``$AGENTCTL_JUDGE_LEDGER`` override at the call site (judge_ledger.py),
+    mirroring agentctl_edit_log()'s role for edit-log.jsonl."""
+    return agentctl_dir() / "judge-usage-ledger.jsonl"
+
+
 def plans_dir() -> Path:
     """Coordination plan artifacts directory (``<root>/plans``)."""
     return agent_home() / "plans"

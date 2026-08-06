@@ -94,6 +94,13 @@ class RunResult:
     returncode: int
     stdout: str = ""
     stderr: str = ""
+    # Set only by agentctl.advisor.subprocess_runner's own TimeoutExpired
+    # branch — the structural discriminator between a judge that timed out
+    # (outcome 5) and one that returned fast without a judgment (outcome 7).
+    # Never derived by matching subprocess_runner's own stderr literal
+    # ("advisor timed out after Ns") — self-referential string matching on a
+    # format your own code controls is fragile by construction.
+    timed_out: bool = False
 
 
 def subprocess_runner(argv: list[str], cwd: str | None = None) -> RunResult:

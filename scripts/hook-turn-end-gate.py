@@ -83,6 +83,7 @@ from timer_arm_detect import (  # noqa: E402
 from agentctl import advisor  # noqa: E402
 from agentctl.advisor import judge_binary_ask  # noqa: E402
 from lib import judge_budget  # noqa: E402
+from lib import judge_ledger  # noqa: E402
 
 # Whole-invocation deadline covering ALL judge calls this hook makes, and the
 # registration that must accommodate it (install-reminder-hooks.sh: 57s = this
@@ -641,7 +642,7 @@ def build_context(
     def _judged(
         name: str,
         prefilter_fires: bool,
-        call: Callable[[float], bool],
+        call: Callable[[float, float], bool],
         *,
         cap_s: int,
         min_call_s: int,
@@ -655,14 +656,25 @@ def build_context(
         so one shared pair would either cap the slow judge below its own ceiling
         or hold the budget open for the fast one long past the point where it
         could still have returned. The budget object stays shared — the whole
-        point is that the three calls draw down ONE deadline."""
+        point is that the three calls draw down ONE deadline.
+
+        ``call`` now takes ``(timeout, remaining)`` — the remaining budget at
+        entry is handed to the judge function alongside the timeout so its own
+        ``decided()`` ledger write carries the (remaining, threshold, ceiling)
+        triple this stage's plan requires on every call decision."""
+        judge_ledger.entered(name, prefilter_fired=prefilter_fires)
         if not prefilter_fires:
             return False
-        call_timeout = budget.next_call_timeout(cap_s, min_call_s=min_call_s)
+        remaining_before_call, call_timeout = budget.remaining_and_timeout(cap_s, min_call_s=min_call_s)
         if call_timeout is None:
+            judge_ledger.decided(
+                name, stage="budget", verdict=False,
+                reason="budget exhausted before call (fail-open)",
+                remaining=remaining_before_call, threshold=None, ceiling=cap_s,
+            )
             skipped.append(name)
             return False
-        return call(call_timeout)
+        return call(call_timeout, remaining_before_call)
 
     # Order is a priority order, since the budget drops from the tail. feedback
     # first: its guardian blocks the turn on an obligation the user just raised
@@ -673,36 +685,42 @@ def build_context(
     self_improvement_feedback = _judged(
         "feedback_signal",
         bool(find_signals(last_user_text)),
-        lambda t: advisor.judge_feedback_signal(
+        lambda t, rem: advisor.judge_feedback_signal(
             strip_injected_context(last_user_text),
             runner,
             enabled=os.environ.get(_SI_FEEDBACK_KILLSWITCH_ENV) != "0",
             timeout=t,
-        ),
+            remaining=rem,
+            ceiling=_TURN_FEEDBACK_CALL_CAP_S,
+        )[0],
         cap_s=_TURN_FEEDBACK_CALL_CAP_S,
         min_call_s=_TURN_FEEDBACK_MIN_CALL_S,
     )
     prose_binary_ask = _judged(
         "binary_ask",
         advisor.binary_ask_prefilter(assistant_text),
-        lambda t: judge_binary_ask(
+        lambda t, rem: judge_binary_ask(
             assistant_text,
             runner,
             enabled=os.environ.get(_BINARY_ASK_KILLSWITCH_ENV) != "0",
             timeout=t,
-        ),
+            remaining=rem,
+            ceiling=_TURN_BINARY_ASK_CALL_CAP_S,
+        )[0],
         cap_s=_TURN_BINARY_ASK_CALL_CAP_S,
         min_call_s=_TURN_BINARY_ASK_MIN_CALL_S,
     )
     outage_escalation_sought = _judged(
         "outage_escalation",
         bool(_detect_outage(assistant_text)),
-        lambda t: advisor.judge_outage_escalation(
+        lambda t, rem: advisor.judge_outage_escalation(
             assistant_text,
             runner,
             enabled=os.environ.get(_OUTAGE_ESCALATION_KILLSWITCH_ENV) != "0",
             timeout=t,
-        ),
+            remaining=rem,
+            ceiling=_TURN_OUTAGE_CALL_CAP_S,
+        )[0],
         cap_s=_TURN_OUTAGE_CALL_CAP_S,
         min_call_s=_TURN_OUTAGE_MIN_CALL_S,
     )
@@ -805,6 +823,7 @@ def decide(
 
 
 def main() -> int:
+    judge_ledger.hook_start("turn_end")
     # Opened first, before the stdin payload is even read, so the deadline
     # honestly covers transcript parsing too — not only the judge calls. Under
     # its own try, matching every other step below.
@@ -820,12 +839,21 @@ def main() -> int:
         return 0
     if not isinstance(payload, dict):
         return 0
+    judge_ledger.source_from_payload(payload)
     try:
         directive = decide(payload, runner=advisor.subprocess_runner, budget=budget)
-    except Exception:
+        has_directive = directive is not None
+        judge_ledger.final(has_directive=has_directive)
+        emit_ok = True
+        try:
+            if has_directive:
+                print(json.dumps(directive, ensure_ascii=True))
+        except Exception:
+            emit_ok = False
+        judge_ledger.emitted(ok=emit_ok, had_directive=has_directive)
+    except Exception as exc:
+        judge_ledger.discarded(reason=repr(exc))
         return 0  # fail-open — a hook must never wedge the session
-    if directive is not None:
-        print(json.dumps(directive, ensure_ascii=False))
     return 0
 
 

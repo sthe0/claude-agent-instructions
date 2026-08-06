@@ -62,21 +62,21 @@ def _run_main(payload: dict, monkeypatch, capsys) -> str:
 def test_escalation_no_declare_no_od_denies(monkeypatch, capsys):
     monkeypatch.setattr(_mod, "_overcome_difficulty_invoked", lambda p: False)
     monkeypatch.setattr(_mod, "_difficulty_declared", lambda s: False)
-    monkeypatch.setattr(_mod.advisor, "judge_outage_escalation", lambda *a, **kw: True)
+    monkeypatch.setattr(_mod.advisor, "judge_outage_escalation", lambda *a, **kw: (True, ""))
     assert _run_main(_ask_payload(ESC_BODY), monkeypatch, capsys) == "deny"
 
 
 def test_escalation_with_overcome_difficulty_allows(monkeypatch, capsys):
     # Judge stubbed True so the "allow" is driven by the OD check, not by an
     # accidental fail-open of a live (slow, non-deterministic) model call.
-    monkeypatch.setattr(_mod.advisor, "judge_outage_escalation", lambda *a, **kw: True)
+    monkeypatch.setattr(_mod.advisor, "judge_outage_escalation", lambda *a, **kw: (True, ""))
     monkeypatch.setattr(_mod, "_overcome_difficulty_invoked", lambda p: True)
     monkeypatch.setattr(_mod, "_difficulty_declared", lambda s: False)
     assert _run_main(_ask_payload(ESC_BODY), monkeypatch, capsys) == "allow"
 
 
 def test_escalation_with_declare_present_allows(monkeypatch, capsys):
-    monkeypatch.setattr(_mod.advisor, "judge_outage_escalation", lambda *a, **kw: True)
+    monkeypatch.setattr(_mod.advisor, "judge_outage_escalation", lambda *a, **kw: (True, ""))
     monkeypatch.setattr(_mod, "_overcome_difficulty_invoked", lambda p: False)
     monkeypatch.setattr(_mod, "_difficulty_declared", lambda s: True)
     assert _run_main(_ask_payload(ESC_BODY), monkeypatch, capsys) == "allow"
@@ -93,7 +93,7 @@ def test_option_text_drives_detection(monkeypatch, capsys):
     # The failure cue may live in an OPTION description, not the question stem.
     monkeypatch.setattr(_mod, "_overcome_difficulty_invoked", lambda p: False)
     monkeypatch.setattr(_mod, "_difficulty_declared", lambda s: False)
-    monkeypatch.setattr(_mod.advisor, "judge_outage_escalation", lambda *a, **kw: True)
+    monkeypatch.setattr(_mod.advisor, "judge_outage_escalation", lambda *a, **kw: (True, ""))
     payload = _ask_payload(
         "Что делать?",
         options=[{"label": "Retry", "description": "Сервис недоступен и не отвечает"}],
@@ -191,7 +191,7 @@ def test_deny_on_escalation_no_context_real_transcript_read(monkeypatch, capsys,
     # (see prose_binary_ask's tests, which never drive main() via a real
     # subprocess either) -- test_subprocess_allow_when_overcome_difficulty_in_transcript
     # below is what actually proves the real-subprocess, fail-open path.
-    monkeypatch.setattr(_mod.advisor, "judge_outage_escalation", lambda *a, **kw: True)
+    monkeypatch.setattr(_mod.advisor, "judge_outage_escalation", lambda *a, **kw: (True, ""))
     t = tmp_path / "t.jsonl"
     t.write_text(json.dumps({"message": {"role": "user", "content": "hi"}}) + "\n",
                  encoding="utf-8")

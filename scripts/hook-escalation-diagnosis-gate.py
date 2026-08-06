@@ -46,6 +46,7 @@ from outage_escalation_detect import detect as _detect_outage  # noqa: E402
 from agentctl import advisor  # noqa: E402
 from lib import ask_text  # noqa: E402
 from lib import judge_budget  # noqa: E402
+from lib import judge_ledger  # noqa: E402
 
 # Whole-invocation deadline for the judge call, and the registration that must
 # accommodate it (install-reminder-hooks.sh: 35s = this budget plus interpreter-
@@ -190,7 +191,9 @@ def decide(payload: dict, *, runner: Callable | None = None) -> str | None:
         return None
     tool_input = payload.get("tool_input") or {}
     text = _ask_text(tool_input)
-    if not _detect_outage(text):
+    prefilter_fired = _detect_outage(text)
+    judge_ledger.entered("outage_escalation", prefilter_fired=prefilter_fired)
+    if not prefilter_fired:
         return None  # cheap common path: nothing to gate
     # Opened here, after the payload's own parsing above — same reasoning as
     # hook-deferring-disposition-gate.py: no file I/O precedes this point, so
@@ -198,14 +201,21 @@ def decide(payload: dict, *, runner: Callable | None = None) -> str | None:
     budget = judge_budget.JudgeBudget(
         _JUDGE_BUDGET_S, _JUDGE_MIN_CALL_S, clock=time.monotonic
     )
-    call_timeout = budget.next_call_timeout(_JUDGE_BUDGET_S)
+    remaining_before_call, call_timeout = budget.remaining_and_timeout(_JUDGE_BUDGET_S)
     if call_timeout is None:
+        judge_ledger.decided(
+            "outage_escalation", stage="budget", verdict=False,
+            reason="budget exhausted before call (fail-open)",
+            remaining=remaining_before_call, threshold=None, ceiling=_JUDGE_BUDGET_S,
+        )
         return None  # budget exhausted — fail open, as on every unreachable judge
-    fires = advisor.judge_outage_escalation(
+    fires, _reason = advisor.judge_outage_escalation(
         text,
         runner,
         enabled=os.environ.get(_OUTAGE_ESCALATION_KILLSWITCH_ENV) != "0",
         timeout=call_timeout,
+        remaining=remaining_before_call,
+        ceiling=_JUDGE_BUDGET_S,
     )
     if not fires:
         return None
@@ -220,19 +230,29 @@ def decide(payload: dict, *, runner: Callable | None = None) -> str | None:
 
 
 def main() -> int:
+    judge_ledger.hook_start("escalation_diagnosis")
     try:
         payload = json.load(sys.stdin)
     except Exception:
         return 0
     if not isinstance(payload, dict):
         return 0
+    judge_ledger.source_from_payload(payload)
 
     try:
         reason = decide(payload, runner=advisor.subprocess_runner)
-    except Exception:
+        has_directive = reason is not None
+        judge_ledger.final(has_directive=has_directive)
+        emit_ok = True
+        try:
+            if has_directive:
+                deny_with(reason)
+        except Exception:
+            emit_ok = False
+        judge_ledger.emitted(ok=emit_ok, had_directive=has_directive)
+    except Exception as exc:
+        judge_ledger.discarded(reason=repr(exc))
         return 0  # fail-open — a hook must never wedge the ask
-    if reason is not None:
-        deny_with(reason)
     return 0
 
 

@@ -34,37 +34,37 @@
 # sentence changes without a human re-reading the reason attached to it.
 
 # --- scripts/hook-turn-end-gate.py -------------------------------------------
-scripts/hook-turn-end-gate.py:88:539d8834  # 57s registration = the 52s turn-end budget + interpreter-start headroom; both sides pinned by lib/hook_wiring.TIMEOUT_REQUIREMENTS
-scripts/hook-turn-end-gate.py:91:e5251162  # historical: the 5s registration and advisor's 8s default this hook used to run under — the defect record, not a current number
+scripts/hook-turn-end-gate.py:89:539d8834  # 57s registration = the 52s turn-end budget + interpreter-start headroom; both sides pinned by lib/hook_wiring.TIMEOUT_REQUIREMENTS
+scripts/hook-turn-end-gate.py:92:e5251162  # historical: the 5s registration and advisor's 8s default this hook used to run under — the defect record, not a current number
 
 # --- scripts/hook-deferring-disposition-gate.py ------------------------------
-scripts/hook-deferring-disposition-gate.py:62:d731ace3  # quotes the superseded n=4 note ("11.6-13.5s") verbatim, as the evidence base the old budget rested on
-scripts/hook-deferring-disposition-gate.py:63:0c2d6f02  # historical: the pre-change 20s budget and the ceiling it borrowed from a neighbour
-scripts/hook-deferring-disposition-gate.py:64:25e48252  # median 17.43 = judge_latency.MEASURED["deferring_disposition"].median_s over n=18
-scripts/hook-deferring-disposition-gate.py:65:0c8ffd5b  # p90 37.58 / max 39.99 = the same row's p90_s and max_s; the comparison against 20s is what makes the old budget a defect
-scripts/hook-deferring-disposition-gate.py:70:00a58931  # 41s = judge_latency.call_ceiling_s("deferring_disposition") = ceil(39.99) + 1
-scripts/hook-deferring-disposition-gate.py:77:4dca2024  # ~130s is a REJECTED alternative (a full-tail ceiling ahead of an interactive menu), deliberately not a constant anywhere
-scripts/hook-deferring-disposition-gate.py:80:a6174bee  # 45s = the approved whole-invocation budget; 0 of 18 runs exceeded it, stated with the rule-of-three bound rather than as "never"
-scripts/hook-deferring-disposition-gate.py:88:1cacd663  # floor 38 = judge_latency.call_floor_s("deferring_disposition") = ceil(p90 37.58) over n=18
-scripts/hook-deferring-disposition-gate.py:89:70c2fdb9  # 10.29s = the row's min_s — the fastest run, which is what makes a call started at the floor reachable
-scripts/hook-deferring-disposition-gate.py:189:deb2103a  # "under 7s" = budget 45 - floor 38, the remainder that still clears the floor for a second call
+scripts/hook-deferring-disposition-gate.py:63:d731ace3  # quotes the superseded n=4 note ("11.6-13.5s") verbatim, as the evidence base the old budget rested on
+scripts/hook-deferring-disposition-gate.py:64:0c2d6f02  # historical: the pre-change 20s budget and the ceiling it borrowed from a neighbour
+scripts/hook-deferring-disposition-gate.py:65:25e48252  # median 17.43 = judge_latency.MEASURED["deferring_disposition"].median_s over n=18
+scripts/hook-deferring-disposition-gate.py:66:0c8ffd5b  # p90 37.58 / max 39.99 = the same row's p90_s and max_s; the comparison against 20s is what makes the old budget a defect
+scripts/hook-deferring-disposition-gate.py:71:00a58931  # 41s = judge_latency.call_ceiling_s("deferring_disposition") = ceil(39.99) + 1
+scripts/hook-deferring-disposition-gate.py:78:4dca2024  # ~130s is a REJECTED alternative (a full-tail ceiling ahead of an interactive menu), deliberately not a constant anywhere
+scripts/hook-deferring-disposition-gate.py:81:a6174bee  # 45s = the approved whole-invocation budget; 0 of 18 runs exceeded it, stated with the rule-of-three bound rather than as "never"
+scripts/hook-deferring-disposition-gate.py:89:1cacd663  # floor 38 = judge_latency.call_floor_s("deferring_disposition") = ceil(p90 37.58) over n=18
+scripts/hook-deferring-disposition-gate.py:90:70c2fdb9  # 10.29s = the row's min_s — the fastest run, which is what makes a call started at the floor reachable
+scripts/hook-deferring-disposition-gate.py:190:deb2103a  # "under 7s" = budget 45 - floor 38, the remainder that still clears the floor for a second call
 
 # --- scripts/hook-escalation-diagnosis-gate.py -------------------------------
-scripts/hook-escalation-diagnosis-gate.py:51:9080a8d7  # 35s registration = the 30s outage budget + interpreter-start headroom; both sides pinned by lib/hook_wiring.TIMEOUT_REQUIREMENTS
-scripts/hook-escalation-diagnosis-gate.py:53:b8592671  # historical: the 5s registration this hook used to carry
-scripts/hook-escalation-diagnosis-gate.py:54:ef72bb50  # historical: advisor's 8s default, below this judge's measured min_s 7.19 — the defect record
-scripts/hook-escalation-diagnosis-gate.py:58:54dcd9b3  # 27s = judge_latency.call_ceiling_s("outage_escalation") = ceil(25.96) + 1 over n=16
-scripts/hook-escalation-diagnosis-gate.py:66:affc3cbd  # floor 20 = judge_latency.call_floor_s("outage_escalation") = ceil(p90 19.16) over n=16
-scripts/hook-escalation-diagnosis-gate.py:67:b040eeee  # 7.19s = the row's min_s, the fastest run the floor must leave reachable
+scripts/hook-escalation-diagnosis-gate.py:52:9080a8d7  # 35s registration = the 30s outage budget + interpreter-start headroom; both sides pinned by lib/hook_wiring.TIMEOUT_REQUIREMENTS
+scripts/hook-escalation-diagnosis-gate.py:54:b8592671  # historical: the 5s registration this hook used to carry
+scripts/hook-escalation-diagnosis-gate.py:55:ef72bb50  # historical: advisor's 8s default, below this judge's measured min_s 7.19 — the defect record
+scripts/hook-escalation-diagnosis-gate.py:59:54dcd9b3  # 27s = judge_latency.call_ceiling_s("outage_escalation") = ceil(25.96) + 1 over n=16
+scripts/hook-escalation-diagnosis-gate.py:67:affc3cbd  # floor 20 = judge_latency.call_floor_s("outage_escalation") = ceil(p90 19.16) over n=16
+scripts/hook-escalation-diagnosis-gate.py:68:b040eeee  # 7.19s = the row's min_s, the fastest run the floor must leave reachable
 
 # --- scripts/agentctl/advisor.py ---------------------------------------------
-scripts/agentctl/advisor.py:144:2bdd83a4  # 20s = _ADVISOR_TIMEOUT_S, the ADVISORY timeout the non-judge calls keep; explicitly out of this calibration's scope
-scripts/agentctl/advisor.py:293:3fd45617  # historical: the 8s runner default a judge inherited when it named no timeout
-scripts/agentctl/advisor.py:294:c1545f72  # 5.93s / 10.29s = the min_s of the binary_ask and deferring_disposition rows — what makes an 8s default a kill, not a cap
-scripts/agentctl/advisor.py:407:0844f6e5  # historical: the 8s neighbour default this signature used to carry
-scripts/agentctl/advisor.py:408:d539ad2f  # quotes the superseded n=4 note ("13.9 +/- 2.4 s, min 12.1, max 17.5") verbatim as the basis of the old 30s
-scripts/agentctl/advisor.py:409:1d9f44a3  # same superseded note; "missed the tail by more than 20 s" = max 39.99 - 17.5
-scripts/agentctl/advisor.py:410:011dc63b  # median 17.43 / p90 37.58 / max 39.99 over n=18 = judge_latency.MEASURED["deferring_disposition"]
+scripts/agentctl/advisor.py:147:2bdd83a4  # 20s = _ADVISOR_TIMEOUT_S, the ADVISORY timeout the non-judge calls keep; explicitly out of this calibration's scope
+scripts/agentctl/advisor.py:296:3fd45617  # historical: the 8s runner default a judge inherited when it named no timeout
+scripts/agentctl/advisor.py:297:c1545f72  # 5.93s / 10.29s = the min_s of the binary_ask and deferring_disposition rows — what makes an 8s default a kill, not a cap
+scripts/agentctl/advisor.py:465:0844f6e5  # historical: the 8s neighbour default this signature used to carry
+scripts/agentctl/advisor.py:466:d539ad2f  # quotes the superseded n=4 note ("13.9 +/- 2.4 s, min 12.1, max 17.5") verbatim as the basis of the old 30s
+scripts/agentctl/advisor.py:467:1d9f44a3  # same superseded note; "missed the tail by more than 20 s" = max 39.99 - 17.5
+scripts/agentctl/advisor.py:468:011dc63b  # median 17.43 / p90 37.58 / max 39.99 over n=18 = judge_latency.MEASURED["deferring_disposition"]
 
 # --- scripts/install-reminder-hooks.sh ---------------------------------------
 scripts/install-reminder-hooks.sh:93:6a8d39b3  # p90 19.16 over n=16 = judge_latency.MEASURED["outage_escalation"].p90_s

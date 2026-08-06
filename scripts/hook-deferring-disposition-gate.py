@@ -56,6 +56,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agentctl import advisor  # noqa: E402
 from lib import ask_text  # noqa: E402
 from lib import judge_budget  # noqa: E402
+from lib import judge_ledger  # noqa: E402
 
 # Whole-ask budget for the judge, and the ceiling handed to the one call it
 # funds. Two superseded numbers are worth naming, because both were set from the
@@ -212,13 +213,21 @@ def decide(payload: dict, *, runner: Callable | None = None) -> dict | None:
     # docking from the judge budget.
     budget = judge_budget.JudgeBudget(_ASK_JUDGE_BUDGET_S, _ASK_JUDGE_MIN_CALL_S, clock=time.monotonic)
     for index, (full_text, opt_text, stem) in enumerate(zip(full_texts, opt_texts, stems), start=1):
-        if not _prefilter(opt_text):
+        prefilter_fired = _prefilter(opt_text)
+        judge_ledger.entered("deferring_disposition", prefilter_fired=prefilter_fired)
+        if not prefilter_fired:
             continue  # cheap common path: this menu's options defer nothing
-        call_timeout = budget.next_call_timeout(_ASK_JUDGE_BUDGET_S)
+        remaining_before_call, call_timeout = budget.remaining_and_timeout(_ASK_JUDGE_BUDGET_S)
         if call_timeout is None:
+            judge_ledger.decided(
+                "deferring_disposition", stage="budget", verdict=False,
+                reason="budget exhausted before call (fail-open)",
+                remaining=remaining_before_call, threshold=None, ceiling=_ASK_JUDGE_BUDGET_S,
+            )
             break  # budget exhausted — fail open, same as every other unreachable-judge path
-        fires = advisor.judge_deferring_disposition(
-            full_text, runner, enabled=enabled, timeout=call_timeout
+        fires, _reason = advisor.judge_deferring_disposition(
+            full_text, runner, enabled=enabled, timeout=call_timeout,
+            remaining=remaining_before_call, ceiling=_ASK_JUDGE_BUDGET_S,
         )
         if fires:
             return {
@@ -232,19 +241,29 @@ def decide(payload: dict, *, runner: Callable | None = None) -> dict | None:
 
 
 def main() -> int:
+    judge_ledger.hook_start("deferring_disposition")
     try:
         payload = json.load(sys.stdin)
     except Exception:
         return 0
     if not isinstance(payload, dict):
         return 0
+    judge_ledger.source_from_payload(payload)
 
     try:
         decision = decide(payload, runner=advisor.subprocess_runner)
-    except Exception:
+        has_directive = decision is not None
+        judge_ledger.final(has_directive=has_directive)
+        emit_ok = True
+        try:
+            if has_directive:
+                print(json.dumps(decision))
+        except Exception:
+            emit_ok = False
+        judge_ledger.emitted(ok=emit_ok, had_directive=has_directive)
+    except Exception as exc:
+        judge_ledger.discarded(reason=repr(exc))
         return 0  # fail-open — a hook must never wedge the ask
-    if decision is not None:
-        print(json.dumps(decision))
     return 0
 
 

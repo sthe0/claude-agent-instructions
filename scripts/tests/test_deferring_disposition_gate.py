@@ -247,13 +247,18 @@ def test_the_per_call_ceiling_is_this_hooks_own_constant():
     next_call_timeout — a FOREIGN constant, owned by a module that knows nothing
     of this hook's registration, which merely happened to be numerically
     survivable. Read structurally, from the source: a value check cannot tell two
-    equal numbers apart, and under the family ceiling rule they can be equal."""
+    equal numbers apart, and under the family ceiling rule they can be equal.
+
+    decide() now draws timeout AND remaining from one combined read
+    (JudgeBudget.remaining_and_timeout) instead of two separate calls — see
+    that method's docstring — so the cap lives on that call now, not on
+    next_call_timeout directly."""
     tree = ast.parse(Path(_mod.__file__).read_text(encoding="utf-8"))
     caps = [
         node.args[0]
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
-        and getattr(node.func, "attr", None) == "next_call_timeout"
+        and getattr(node.func, "attr", None) in ("next_call_timeout", "remaining_and_timeout")
         and node.args
     ]
     assert caps, "decide() no longer draws its call timeout from a budget"

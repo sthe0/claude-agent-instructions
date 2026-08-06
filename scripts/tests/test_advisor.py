@@ -434,75 +434,75 @@ class TestRecordResultAcceptanceWiring:
 
 class TestJudgeBinaryAsk:
     def test_yes(self):
-        assert advisor.judge_binary_ask("Apply this change?", _fake_runner("YES")) is True
+        assert advisor.judge_binary_ask("Apply this change?", _fake_runner("YES"))[0] is True
 
     def test_no(self):
-        assert advisor.judge_binary_ask("Apply this change?", _fake_runner("NO")) is False
+        assert advisor.judge_binary_ask("Apply this change?", _fake_runner("NO"))[0] is False
 
     def test_raising_runner_fails_open(self):
-        assert advisor.judge_binary_ask("Apply this change?", _raising_runner) is False
+        assert advisor.judge_binary_ask("Apply this change?", _raising_runner)[0] is False
 
     def test_no_question_mark_skips_runner(self):
-        assert advisor.judge_binary_ask("Applied the change.", _raising_runner) is False
+        assert advisor.judge_binary_ask("Applied the change.", _raising_runner)[0] is False
 
     def test_fullwidth_question_mark(self):
-        assert advisor.judge_binary_ask("提交做吗？", _fake_runner("YES")) is True
+        assert advisor.judge_binary_ask("提交做吗？", _fake_runner("YES"))[0] is True
 
     def test_disabled(self):
-        assert advisor.judge_binary_ask("Apply this change?", _fake_runner("YES"), enabled=False) is False
+        assert advisor.judge_binary_ask("Apply this change?", _fake_runner("YES"), enabled=False)[0] is False
 
     def test_no_runner(self):
-        assert advisor.judge_binary_ask("Apply this change?", None) is False
+        assert advisor.judge_binary_ask("Apply this change?", None)[0] is False
 
     def test_bold_wrapped_question_reaches_runner(self):
         # The concrete miss: a confirm question wrapped in markdown bold ends in
         # '**', not '?'. The trailing-decoration rstrip must expose the '?' so the
         # judge is actually consulted (and here returns YES -> True).
-        assert advisor.judge_binary_ask("**Применить правку?**", _fake_runner("YES")) is True
+        assert advisor.judge_binary_ask("**Применить правку?**", _fake_runner("YES"))[0] is True
 
     def test_paren_close_after_question_reaches_runner(self):
-        assert advisor.judge_binary_ask("Применить правку?)", _fake_runner("YES")) is True
+        assert advisor.judge_binary_ask("Применить правку?)", _fake_runner("YES"))[0] is True
 
     def test_quote_close_after_question_reaches_runner(self):
-        assert advisor.judge_binary_ask('Land it?"', _fake_runner("YES")) is True
+        assert advisor.judge_binary_ask('Land it?"', _fake_runner("YES"))[0] is True
 
     def test_decoration_then_non_question_skips_runner(self):
         # A bolded NON-question must still skip the runner: stripping the trailing
         # '**' exposes '.', not a question mark, so the raising runner is never
         # called (no over-strip into word content, no false positive).
-        assert advisor.judge_binary_ask("**Готово.**", _raising_runner) is False
+        assert advisor.judge_binary_ask("**Готово.**", _raising_runner)[0] is False
 
 
 class TestJudgeFeedbackSignal:
     def test_yes(self):
-        assert advisor.judge_feedback_signal("you shouldn't have done that", _fake_runner("YES")) is True
+        assert advisor.judge_feedback_signal("you shouldn't have done that", _fake_runner("YES"))[0] is True
 
     def test_no(self):
-        assert advisor.judge_feedback_signal("please add a test for this", _fake_runner("NO")) is False
+        assert advisor.judge_feedback_signal("please add a test for this", _fake_runner("NO"))[0] is False
 
     def test_disabled(self):
-        assert advisor.judge_feedback_signal("ты не так сделал", _fake_runner("YES"), enabled=False) is False
+        assert advisor.judge_feedback_signal("ты не так сделал", _fake_runner("YES"), enabled=False)[0] is False
 
     def test_no_runner(self):
-        assert advisor.judge_feedback_signal("ты не так сделал", None) is False
+        assert advisor.judge_feedback_signal("ты не так сделал", None)[0] is False
 
     def test_empty_text_skips_runner(self):
-        assert advisor.judge_feedback_signal("", _raising_runner) is False
+        assert advisor.judge_feedback_signal("", _raising_runner)[0] is False
 
     def test_non_string_text_skips_runner(self):
-        assert advisor.judge_feedback_signal(None, _raising_runner) is False
+        assert advisor.judge_feedback_signal(None, _raising_runner)[0] is False
 
     def test_non_zero_exit_fails_open(self):
-        assert advisor.judge_feedback_signal("ты не так сделал", _fake_runner("YES", code=1)) is False
+        assert advisor.judge_feedback_signal("ты не так сделал", _fake_runner("YES", code=1))[0] is False
 
     def test_empty_stdout_fails_open(self):
-        assert advisor.judge_feedback_signal("ты не так сделал", _fake_runner("   \n  ")) is False
+        assert advisor.judge_feedback_signal("ты не так сделал", _fake_runner("   \n  "))[0] is False
 
     def test_unparseable_answer_fails_open(self):
-        assert advisor.judge_feedback_signal("ты не так сделал", _fake_runner("maybe")) is False
+        assert advisor.judge_feedback_signal("ты не так сделал", _fake_runner("maybe"))[0] is False
 
     def test_raising_runner_fails_open(self):
-        assert advisor.judge_feedback_signal("ты не так сделал", _raising_runner) is False
+        assert advisor.judge_feedback_signal("ты не так сделал", _raising_runner)[0] is False
 
     def test_argv_carries_judge_model(self):
         seen = {}
@@ -517,34 +517,34 @@ class TestJudgeFeedbackSignal:
 
 class TestJudgeOutageEscalation:
     def test_yes(self):
-        assert advisor.judge_outage_escalation("The deploy is failing, how should I proceed?", _fake_runner("YES")) is True
+        assert advisor.judge_outage_escalation("The deploy is failing, how should I proceed?", _fake_runner("YES"))[0] is True
 
     def test_no(self):
-        assert advisor.judge_outage_escalation("This hook detects outage escalations via regex.", _fake_runner("NO")) is False
+        assert advisor.judge_outage_escalation("This hook detects outage escalations via regex.", _fake_runner("NO"))[0] is False
 
     def test_disabled(self):
-        assert advisor.judge_outage_escalation("the service is down, what now?", _fake_runner("YES"), enabled=False) is False
+        assert advisor.judge_outage_escalation("the service is down, what now?", _fake_runner("YES"), enabled=False)[0] is False
 
     def test_no_runner(self):
-        assert advisor.judge_outage_escalation("the service is down, what now?", None) is False
+        assert advisor.judge_outage_escalation("the service is down, what now?", None)[0] is False
 
     def test_empty_text_skips_runner(self):
-        assert advisor.judge_outage_escalation("", _raising_runner) is False
+        assert advisor.judge_outage_escalation("", _raising_runner)[0] is False
 
     def test_non_string_text_skips_runner(self):
-        assert advisor.judge_outage_escalation(None, _raising_runner) is False
+        assert advisor.judge_outage_escalation(None, _raising_runner)[0] is False
 
     def test_non_zero_exit_fails_open(self):
-        assert advisor.judge_outage_escalation("the service is down, what now?", _fake_runner("YES", code=1)) is False
+        assert advisor.judge_outage_escalation("the service is down, what now?", _fake_runner("YES", code=1))[0] is False
 
     def test_empty_stdout_fails_open(self):
-        assert advisor.judge_outage_escalation("the service is down, what now?", _fake_runner("  \n  ")) is False
+        assert advisor.judge_outage_escalation("the service is down, what now?", _fake_runner("  \n  "))[0] is False
 
     def test_unparseable_answer_fails_open(self):
-        assert advisor.judge_outage_escalation("the service is down, what now?", _fake_runner("unclear")) is False
+        assert advisor.judge_outage_escalation("the service is down, what now?", _fake_runner("unclear"))[0] is False
 
     def test_raising_runner_fails_open(self):
-        assert advisor.judge_outage_escalation("the service is down, what now?", _raising_runner) is False
+        assert advisor.judge_outage_escalation("the service is down, what now?", _raising_runner)[0] is False
 
     def test_argv_carries_judge_model(self):
         seen = {}
@@ -561,34 +561,34 @@ class TestJudgeDeferringDisposition:
     _ASK = "Что делать с дефектом?\nЗавести отдельной задачей\nНе трогать"
 
     def test_yes(self):
-        assert advisor.judge_deferring_disposition(self._ASK, _fake_runner("YES")) is True
+        assert advisor.judge_deferring_disposition(self._ASK, _fake_runner("YES"))[0] is True
 
     def test_no(self):
-        assert advisor.judge_deferring_disposition(self._ASK, _fake_runner("NO")) is False
+        assert advisor.judge_deferring_disposition(self._ASK, _fake_runner("NO"))[0] is False
 
     def test_disabled(self):
-        assert advisor.judge_deferring_disposition(self._ASK, _fake_runner("YES"), enabled=False) is False
+        assert advisor.judge_deferring_disposition(self._ASK, _fake_runner("YES"), enabled=False)[0] is False
 
     def test_no_runner(self):
-        assert advisor.judge_deferring_disposition(self._ASK, None) is False
+        assert advisor.judge_deferring_disposition(self._ASK, None)[0] is False
 
     def test_empty_text_skips_runner(self):
-        assert advisor.judge_deferring_disposition("", _raising_runner) is False
+        assert advisor.judge_deferring_disposition("", _raising_runner)[0] is False
 
     def test_non_string_text_skips_runner(self):
-        assert advisor.judge_deferring_disposition(None, _raising_runner) is False
+        assert advisor.judge_deferring_disposition(None, _raising_runner)[0] is False
 
     def test_non_zero_exit_fails_open(self):
-        assert advisor.judge_deferring_disposition(self._ASK, _fake_runner("YES", code=1)) is False
+        assert advisor.judge_deferring_disposition(self._ASK, _fake_runner("YES", code=1))[0] is False
 
     def test_empty_stdout_fails_open(self):
-        assert advisor.judge_deferring_disposition(self._ASK, _fake_runner("  \n  ")) is False
+        assert advisor.judge_deferring_disposition(self._ASK, _fake_runner("  \n  "))[0] is False
 
     def test_unparseable_answer_fails_open(self):
-        assert advisor.judge_deferring_disposition(self._ASK, _fake_runner("unclear")) is False
+        assert advisor.judge_deferring_disposition(self._ASK, _fake_runner("unclear"))[0] is False
 
     def test_raising_runner_fails_open(self):
-        assert advisor.judge_deferring_disposition(self._ASK, _raising_runner) is False
+        assert advisor.judge_deferring_disposition(self._ASK, _raising_runner)[0] is False
 
     def test_timeout_expired_fails_open(self):
         """The dominant real failure mode, not just a generic exception. Over
@@ -602,7 +602,7 @@ class TestJudgeDeferringDisposition:
         def timing_out_runner(argv, **kwargs):
             raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout", 0))
 
-        assert advisor.judge_deferring_disposition(self._ASK, timing_out_runner) is False
+        assert advisor.judge_deferring_disposition(self._ASK, timing_out_runner)[0] is False
 
     def test_argv_carries_judge_model(self):
         seen = {}

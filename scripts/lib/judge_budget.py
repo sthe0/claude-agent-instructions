@@ -70,3 +70,18 @@ class JudgeBudget:
         if remaining < floor:
             return None
         return min(remaining, cap_s)
+
+    def remaining_and_timeout(
+        self, cap_s: float, *, min_call_s: float | None = None
+    ) -> tuple[float, float | None]:
+        """Same go/no-go decision as ``next_call_timeout``, plus the raw
+        ``remaining`` reading, from a single clock read. Exists for callers
+        that must record the pre-call remainder (e.g. an execution ledger)
+        without a second read straddling real elapsed time — calling
+        ``remaining()`` and ``next_call_timeout()`` back to back would read
+        the clock twice for what is conceptually one decision."""
+        floor = self._min_call_s if min_call_s is None else min_call_s
+        remaining = self.remaining()
+        if remaining < floor:
+            return remaining, None
+        return remaining, min(remaining, cap_s)
