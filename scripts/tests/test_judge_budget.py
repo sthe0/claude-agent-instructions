@@ -90,30 +90,12 @@ def test_one_deadline_spans_successive_calls_rather_than_resetting():
     assert budget.remaining_and_timeout(30)[1] is None
 
 
-def test_remaining_and_timeout_reads_the_clock_only_once_per_call():
-    # A caller decides go/no-go AND the timeout from a single reading -- two
-    # reads per call would let the two decisions see different remaining
-    # values on a real (non-fake) clock. Counting starts AFTER construction
-    # (which itself takes one reading to open the deadline).
-    calls = []
-    clock = _FakeClock([0.0, 5.0])
-
-    def counting_clock():
-        value = clock()
-        calls.append(value)
-        return value
-
-    budget = _mod.JudgeBudget(20, 12, clock=counting_clock)
-    calls.clear()
-    budget.remaining_and_timeout(30)
-    assert len(calls) == 1
-
-
 def test_remaining_and_timeout_reads_the_clock_exactly_once():
-    # The same guarantee for the pair-returning entry point, which is what all
-    # three hooks actually call: the recorded remainder and the timeout derived
-    # from it must come from one reading, or the ledger records a remainder the
-    # go/no-go decision was not made on.
+    # A caller decides go/no-go AND the timeout from a single reading: the
+    # recorded remainder and the timeout derived from it must come from one
+    # reading, or the ledger records a remainder the go/no-go decision was not
+    # made on. Counting starts AFTER construction (which itself takes one
+    # reading to open the deadline).
     calls = []
     clock = _FakeClock([0.0, 5.0])
 

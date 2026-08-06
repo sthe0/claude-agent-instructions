@@ -117,15 +117,22 @@ def current_hook() -> str | None:
         return _state["hook"]
 
 
-def begin_attributed_call(name: str) -> None:
-    """Claim the next ``runner(...)`` call for ``name``, minting a fresh
-    invocation_id for it ONLY outside a hook. Inside a hook the call belongs to
-    that hook's own invocation (set by hook_start()), and re-minting here would
-    orphan every line the hook writes afterwards — the hook's own hook_start
-    would have no matching terminal line, and the terminal line would belong to
-    an invocation that never started: one hook invocation read as two."""
+def reset_invocation_outside_hook() -> None:
+    """Give the call about to be made its own invocation_id, but ONLY outside a
+    hook. Inside a hook the call belongs to that hook's own invocation (set by
+    hook_start()), and re-minting here would orphan every line the hook writes
+    afterwards — the hook's hook_start would have no matching terminal line, and
+    the terminal line would belong to an invocation that never started: one hook
+    invocation read as two. Both callers that mint an id for an individual call
+    go through here, so what "inside a hook" means is defined once."""
     if current_hook() is None:
         reset_invocation()
+
+
+def begin_attributed_call(name: str) -> None:
+    """Claim the next ``runner(...)`` call for ``name``, on its own
+    invocation_id where that is correct (see reset_invocation_outside_hook)."""
+    reset_invocation_outside_hook()
     set_current_judge(name)
 
 

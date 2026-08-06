@@ -334,7 +334,8 @@ _BINARY_ASK_PROMPT = (
 
 _MISSING = object()
 
-_UNAVAILABLE_REASON = "judge disabled or no runner (fail-open)"
+_KILLSWITCH_REASON = "judge disabled (fail-open)"
+_NO_RUNNER_REASON = "judge given no runner (fail-open)"
 _NO_TEXT_REASON = "judge given no text (fail-open)"
 
 _UNATTRIBUTED_JUDGE = "unattributed"
@@ -479,14 +480,14 @@ def judge_binary_ask(
     budget before calling in."""
     if not enabled:
         return _judge_unavailable(
-            "binary_ask", _UNAVAILABLE_REASON, stage="killswitch",
+            "binary_ask", _KILLSWITCH_REASON, stage="killswitch",
             timeout=timeout, remaining=remaining, ceiling=ceiling,
         )
     if not binary_ask_prefilter(final_text):
         return False, ""
     if runner is None:
         return _judge_unavailable(
-            "binary_ask", _UNAVAILABLE_REASON, stage="no_runner",
+            "binary_ask", _NO_RUNNER_REASON, stage="no_runner",
             timeout=timeout, remaining=remaining, ceiling=ceiling,
         )
     judge_ledger.set_current_judge("binary_ask")
@@ -610,7 +611,7 @@ def judge_feedback_signal(
     active threshold."""
     if not enabled:
         return _judge_unavailable(
-            "feedback_signal", _UNAVAILABLE_REASON, stage="killswitch",
+            "feedback_signal", _KILLSWITCH_REASON, stage="killswitch",
             timeout=timeout, remaining=remaining, ceiling=ceiling,
         )
     if not isinstance(user_text, str) or not user_text:
@@ -620,7 +621,7 @@ def judge_feedback_signal(
         )
     if runner is None:
         return _judge_unavailable(
-            "feedback_signal", _UNAVAILABLE_REASON, stage="no_runner",
+            "feedback_signal", _NO_RUNNER_REASON, stage="no_runner",
             timeout=timeout, remaining=remaining, ceiling=ceiling,
         )
     judge_ledger.set_current_judge("feedback_signal")
@@ -671,7 +672,7 @@ def judge_outage_escalation(
     threshold."""
     if not enabled:
         return _judge_unavailable(
-            "outage_escalation", _UNAVAILABLE_REASON, stage="killswitch",
+            "outage_escalation", _KILLSWITCH_REASON, stage="killswitch",
             timeout=timeout, remaining=remaining, ceiling=ceiling,
         )
     if not isinstance(assistant_text, str) or not assistant_text:
@@ -681,7 +682,7 @@ def judge_outage_escalation(
         )
     if runner is None:
         return _judge_unavailable(
-            "outage_escalation", _UNAVAILABLE_REASON, stage="no_runner",
+            "outage_escalation", _NO_RUNNER_REASON, stage="no_runner",
             timeout=timeout, remaining=remaining, ceiling=ceiling,
         )
     judge_ledger.set_current_judge("outage_escalation")
@@ -733,7 +734,7 @@ def judge_deferring_disposition(
     to the ledger only, alongside ``timeout`` as the active threshold."""
     if not enabled:
         return _judge_unavailable(
-            "deferring_disposition", _UNAVAILABLE_REASON, stage="killswitch",
+            "deferring_disposition", _KILLSWITCH_REASON, stage="killswitch",
             timeout=timeout, remaining=remaining, ceiling=ceiling,
         )
     if not isinstance(ask_text, str) or not ask_text:
@@ -743,7 +744,7 @@ def judge_deferring_disposition(
         )
     if runner is None:
         return _judge_unavailable(
-            "deferring_disposition", _UNAVAILABLE_REASON, stage="no_runner",
+            "deferring_disposition", _NO_RUNNER_REASON, stage="no_runner",
             timeout=timeout, remaining=remaining, ceiling=ceiling,
         )
     judge_ledger.set_current_judge("deferring_disposition")
@@ -818,14 +819,9 @@ def subprocess_runner(argv: list[str], *, timeout: int = _ADVISOR_TIMEOUT_S) -> 
         # the runner directly without going through any of them — a genuinely
         # unattributed call. It gets its own invocation id so that N such
         # calls in one CLI process do not collapse into one, and the name
-        # records that attribution is absent rather than guessing a judge —
-        # but ONLY outside any hook. Inside a hook, minting a fresh id here
-        # would orphan the hook's OWN invocation_id (set by hook_start()) for
-        # every line this call and everything after it writes, which is
-        # strictly worse than sharing that id with an unattributed name.
+        # records that attribution is absent rather than guessing a judge.
         judge_name = _UNATTRIBUTED_JUDGE
-        if judge_ledger.current_hook() is None:
-            judge_ledger.reset_invocation()
+        judge_ledger.reset_invocation_outside_hook()
     judge_ledger.started(judge_name)
     start = time.monotonic()
     try:
