@@ -718,6 +718,139 @@ class TestManualEnumerationDonePrecondition:
             premise.ESCAPE_MANUAL_ENUMERATION_DONE]
 
 
+# --- the escape counters, on both surfaces --------------------------------------
+
+class TestEscapeCountsAreVisible:
+    """This stage's own refutation is the escape RATE: "refuted if the escape is taken
+    so routinely that it degrades into a click-through". An escape mechanism whose rate
+    nobody can see is the fail-open it replaced, one level up — so the two surfaces are
+    the deliverable, and each is tested against the payload a caller actually reads.
+
+    Two axes, deliberately not merged. `this_plan` is what means something AT THE GATE;
+    `session` resets with `agentctl reset`, which is why it cannot be the only place a
+    rising rate would show. And within each axis, runner-failure and not-landed escapes
+    are counted apart: collapsing them hides whichever is rarer."""
+
+    def _escaped_both_ways(self, store, plan_path, sid="counts"):
+        """A bag in the state a relaunch leaves behind — `enumerated` cleared back to
+        not-run while the SUPERSEDED pass's `enumerated_runner_ok` stays False — which
+        is the one real state in which both escape families are admissible at once."""
+        state, _ = _bag_state(plan_path, enumerated=False, enumerated_at="",
+                              enumerated_runner_ok=False, enumerated_runner_stderr="boom",
+                              enumerate_deadline=time.time() - 1)
+        state.session_id = sid
+        store.save(state)
+        for reason in (premise.ESCAPE_ADVISOR_ERROR, premise.ESCAPE_ENUMERATION_NOT_LANDED):
+            assert cli.cmd_question_enumerate_escape(
+                _escape_ns(sid, reason, note=f"escaping via {reason}"), store=store).ok is True
+        return sid
+
+    def test_status_reports_both_axes_with_the_two_families_apart(self, store, fixtures_dir):
+        """Merge the families and this reads `2` twice, which is the same number a
+        session that timed out twice would show — and the two call for opposite fixes
+        (raise the bound vs. chase a worker that never lands)."""
+        sid = self._escaped_both_ways(store, str(fixtures_dir / "plan_two_stage.toml"))
+
+        counts = cli.cmd_status(ns(session=sid), store=store).data["enumeration_escapes"]
+
+        assert counts["this_plan"] == {"runner_failure": 1, "not_landed": 1}
+        assert counts["session"] == {"runner_failure": 1, "not_landed": 1}
+
+    def test_an_escape_against_superseded_plan_content_leaves_only_the_session_count(
+            self, store, fixtures_dir, tmp_path):
+        """The reason both axes exist. Report only `this_plan` and a plan edited after
+        each escape shows a permanent zero however often the gate was escaped; report
+        only `session` and the number at the gate is about a plan version that no
+        longer exists."""
+        plan_path = tmp_path / "plan.toml"
+        plan_path.write_text((fixtures_dir / "plan_two_stage.toml").read_text(encoding="utf-8"),
+                             encoding="utf-8")
+        sid = self._escaped_both_ways(store, str(plan_path), sid="superseded")
+        plan_path.write_text(
+            (fixtures_dir / "plan_two_stage_substantive.toml").read_text(encoding="utf-8"),
+            encoding="utf-8")
+
+        counts = cli.cmd_status(ns(session=sid), store=store).data["enumeration_escapes"]
+
+        assert counts["this_plan"] == {"runner_failure": 0, "not_landed": 0}
+        assert counts["session"] == {"runner_failure": 1, "not_landed": 1}
+
+    def test_no_premise_bag_reports_not_applicable_rather_than_zero(self, store):
+        """Most sessions never arm the premise plugin. A zero there would read as
+        'this gate was never escaped' when the truth is 'this gate does not apply',
+        and an escape rate computed over both is meaningless."""
+        state = SessionState(session_id="nobag", task_id="t")
+        store.save(state)
+
+        assert cli.cmd_status(ns(session="nobag"), store=store).data[
+            "enumeration_escapes"] is None
+
+    def test_a_bag_with_no_plan_yet_reports_a_null_per_plan_axis_and_a_real_session_zero(
+            self, store):
+        """The distinction one level down, and the state cmd_status must not raise in:
+        the bag exists, so the session axis is a MEASURED zero, but there is no plan
+        version for a per-version count to be about. The bag also carries none of this
+        half's keys, as one minted before it existed would not."""
+        state = SessionState(session_id="noplan", task_id="t",
+                             weight_class=WeightClass.SUBSTANTIVE.value)
+        plugins.activate(state, "premise")
+        state.plugins["premise"].pop("escapes", None)
+        store.save(state)
+
+        counts = cli.cmd_status(ns(session="noplan"), store=store).data["enumeration_escapes"]
+
+        assert counts["this_plan"] is None
+        assert counts["session"] == {"runner_failure": 0, "not_landed": 0}
+
+    def test_an_unloadable_plan_path_does_not_break_status(self, store, tmp_path):
+        """`state.plan_path` set to something that no longer parses is not a state a
+        read-only status command may raise in — it is exactly the state someone runs
+        `status` to understand."""
+        state = SessionState(session_id="badplan", task_id="t",
+                             plan_path=str(tmp_path / "gone.toml"),
+                             weight_class=WeightClass.SUBSTANTIVE.value)
+        plugins.activate(state, "premise")
+        store.save(state)
+
+        counts = cli.cmd_status(ns(session="badplan"), store=store).data["enumeration_escapes"]
+
+        assert counts["this_plan"] is None
+        assert counts["session"] == {"runner_failure": 0, "not_landed": 0}
+
+    def test_the_approve_refusal_payload_carries_the_counts(self, store, fixtures_dir):
+        """The surface that matters most: the coordinator reading a refusal is the one
+        person who can both see the number and is about to decide whether to add to
+        it. Both readings are asserted — zero before any escape, one after — because a
+        payload that only ever reported zero would look identical to a hard-coded one.
+        """
+        sid = "refusal-counts"
+        plan = str(fixtures_dir / "plan_two_stage.toml")
+        _to_plan_ready_with_premise(store, sid, plan)
+        cli.cmd_question_enumerate(ns(session=sid, plan=None), store=store,
+                                   runner=_failing_runner("advisor timed out after 480s"))
+
+        first = cli.cmd_approve(ns(session=sid, by="user"), store=store)
+        assert first.ok is False
+        assert first.data["enumeration_escapes"]["this_plan"] == {
+            "runner_failure": 0, "not_landed": 0}
+
+        assert cli.cmd_question_enumerate_escape(
+            _escape_ns(sid, premise.ESCAPE_ADVISOR_TIMEOUT,
+                       note="480s bound hit"), store=store).ok is True
+        # a fresh OPEN question keeps approve refusing, so there is still a payload to
+        # read — and shows the counts ride every refusal, not just the enumeration one
+        cli.cmd_question_raise(ns(session=sid, id="Q9", target="goal",
+                                  question="still open"), store=store)
+
+        second = cli.cmd_approve(ns(session=sid, by="user"), store=store)
+
+        assert second.ok is False
+        assert not any(plugins_premise._ENUMERATE_RUNNER_FAILED in b
+                       for b in second.data["blockers"])
+        assert second.data["enumeration_escapes"]["this_plan"] == {
+            "runner_failure": 1, "not_landed": 0}
+
+
 # --- the post-pass advisory's three arms ----------------------------------------
 
 class TestEnumerateAdvisoryArms:

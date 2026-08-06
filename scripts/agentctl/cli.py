@@ -947,6 +947,33 @@ def _question_bag(store: StateStore, session_id: str):
     return state, state.plugins.get("premise")
 
 
+def _enumeration_escape_counts(state, doc: "PlanDoc | None" = None) -> dict | None:
+    """plugins_premise.escape_counts for `state`, tolerant of the two states every
+    surface reporting them must survive: NO PREMISE BAG (the plugin is not armed —
+    most sessions) and NO LOADABLE PLAN (nothing submitted yet, or a path that no
+    longer parses). Neither raises, and neither produces a zero: the not-applicable
+    None propagates, at the whole-surface level for the first and at `this_plan` for
+    the second, so a reader can tell 'no escapes were taken' from 'this axis does not
+    apply here'.
+
+    `doc` is an already-loaded PlanDoc when the caller has one (cmd_approve does), so
+    the digest is derived from the same bytes that caller's other checks used."""
+    bag = state.plugins.get("premise") if state is not None else None
+    if bag is None:
+        return None
+    digest = None
+    plan_path = getattr(state, "plan_path", None)
+    if plan_path:
+        if doc is None:
+            try:
+                doc = load_plan(plan_path)
+            except (OSError, PlanError):
+                doc = None
+        if doc is not None:
+            digest = plugins_premise._plan_content_digest(doc)
+    return plugins_premise.escape_counts(bag, digest)
+
+
 def _bound_stage_key(state, question: "premise.Question", plan_path: str | None = None) -> str:
     """The current stage_question_key of the stage a Question is bound to — the
     value dispose/rebind stamp into `disposed_at_key`. Returns "" for
@@ -2422,6 +2449,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # because confirm-delivery is a reachable, audit-logged escape (gates.py's
     # plan_presentation_blockers docstring has the full justification).
     state = _require(store, args.session)
+    _approved_doc = None
     if state.plan_path:
         try:
             _approved_doc = load_plan(state.plan_path)
@@ -2445,7 +2473,14 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         blockers = blockers + ["empty approver: --by must name who approved"]
     _log_gate(state, "plan_approval", blockers, passed=not blockers)
     if blockers:
-        return Directive(False, state.node, "fix_plan", "cannot approve", data={"blockers": blockers})
+        # The escape counts ride the REFUSAL specifically: the coordinator reading it
+        # is the one person who both can see the number and is about to decide what to
+        # do about it — and if the blocker below is the enumeration one, the decision
+        # is literally whether to add to that count.
+        return Directive(False, state.node, "fix_plan", "cannot approve", data={
+            "blockers": blockers,
+            "enumeration_escapes": _enumeration_escape_counts(state, _approved_doc),
+        })
     _refresh_caches_from_plan_path(state)
     effort.arm(state)  # opens the effort-divergence window — see effort.py's ARMED-ONLY
     state.approval = GateRecord("plan_approval", armed=True, passed=True, by=args.by)
@@ -3902,6 +3937,10 @@ def cmd_status(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             "stages": [{"index": s.index, "status": s.outcome.status, "title": s.title} for s in state.stages],
             "approval_passed": state.approval.passed,
             "resolution_passed": state.resolution.passed,
+            # None when the premise plugin is not armed; `this_plan` None when no
+            # plan is submitted — see _enumeration_escape_counts on why neither is
+            # reported as a zero.
+            "enumeration_escapes": _enumeration_escape_counts(state),
         },
     )
 

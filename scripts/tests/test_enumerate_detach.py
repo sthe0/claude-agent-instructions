@@ -771,6 +771,24 @@ class TestSidecarDigestMismatchDiscard:
         assert result is None
         assert not match.exists()
 
+    def test_read_discards_a_matching_sidecar_of_non_utf8_bytes(self, tmp_path):
+        """The third failure cause, and the one neither `except` names by accident:
+        `read_text(encoding='utf-8')` on corrupt bytes raises UnicodeDecodeError, a
+        ValueError SIBLING of JSONDecodeError rather than a subclass. Catch only the
+        latter and this propagates out of read_discarding_superseded, through
+        _fold_enumeration_sidecar, into cmd_approve / cmd_replan -- a traceback where
+        the by-cause split promised a discard. Byte-corruption is squarely the
+        permanent class that split decided to throw away."""
+        root = tmp_path / "sidecars"
+        match = enumerate_sidecar.sidecar_path("sess", "digest-a", root=root)
+        match.parent.mkdir(parents=True, exist_ok=True)
+        match.write_bytes(b'{"pairs": "\xff\xfe not utf-8"}')
+
+        result = enumerate_sidecar.read_discarding_superseded("sess", "digest-a", root=root)
+
+        assert result is None
+        assert not match.exists()
+
     def test_read_retains_a_matching_sidecar_on_transient_os_error(self, tmp_path, monkeypatch):
         """An OSError reading the matching sidecar may not recur -- unlike a
         decode failure, discarding it here could lose a payload that is still
@@ -797,9 +815,11 @@ class TestSidecarDigestMismatchDiscard:
     def test_discard_all_for_session_sweeps_an_orphaned_tempfile(self, tmp_path):
         """A worker killed between mkstemp and os.replace leaves a `.tmp-*.json`
         orphan behind. The read path must leave it alone for a concurrent worker's
-        sake, but session-end cleanup has no worker left to race against, so the
-        orphan (and the session directory it pins open) should not survive
-        `cmd_resolve` forever."""
+        sake; session-end cleanup sweeps it -- not because no worker can still be
+        alive at resolve (one can: a hand-run `question-enumerate` discharges the
+        gate while the detached child for the same digest is still inside its bound),
+        but because no CONSUMER is left for whatever it writes. So the orphan, and
+        the session directory it pins open, should not survive `cmd_resolve`."""
         root = tmp_path / "sidecars"
         enumerate_sidecar.write("sess", "digest-a", {"pairs": [], "content_digest": "digest-a"},
                                 root=root)

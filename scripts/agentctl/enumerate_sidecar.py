@@ -75,13 +75,18 @@ def read_discarding_superseded(
     A concurrent worker's `.tmp-*.json` is skipped -- unlinking one mid-write makes
     its `os.replace` raise.
 
-    A MATCHING sidecar that fails to parse is handled by cause: a JSONDecodeError
+    A MATCHING sidecar that fails to parse is handled BY CAUSE. A JSONDecodeError
     is permanent for a given byte sequence -- keeping it buys nothing, since a
     re-read the next time this runs would fail identically -- so it is discarded
-    like any other superseded sidecar. An OSError (e.g. a transient permission or
-    I/O failure) is left alone: unlike a decode failure it may not recur, and
-    discarding on an OSError could delete a payload that is still perfectly
-    readable moments later."""
+    like any other superseded sidecar. A UnicodeDecodeError (non-UTF-8 bytes on
+    the `read_text` before json ever sees them) is permanent in exactly the same
+    way and takes the same branch; it is named separately because it is NOT a
+    JSONDecodeError subclass -- both descend from ValueError, and catching only
+    the latter would let a byte-corrupt payload propagate out of the fold into
+    cmd_approve / cmd_replan, which is the one failure this by-cause split exists
+    to rule out. An OSError (e.g. a transient permission or I/O failure) is left
+    alone: unlike a decode failure it may not recur, and discarding on an OSError
+    could delete a payload that is still perfectly readable moments later."""
     r = root if root is not None else DEFAULT_ROOT
     match = sidecar_path(session_id, content_digest, root=r)
     result = None
@@ -89,7 +94,7 @@ def read_discarding_superseded(
     if match.exists():
         try:
             result = json.loads(match.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             result = None
             keep_match = False
         except OSError:
@@ -102,12 +107,19 @@ def discard_all_for_session(session_id: str, *, root: Path | None = None) -> Non
     """Remove every sidecar (any digest) for `session_id`, INCLUDING an orphaned
     `.tmp-*.json` left by a worker killed between mkstemp and os.replace --
     session-end cleanup, called from cmd_resolve whether or not a sidecar was
-    ever read. Unlike the read path (which must leave a CONCURRENT worker's
-    tempfile alone so its pending os.replace does not raise), a resolved session
-    has no worker left to race against, so an orphan tempfile only ever means a
-    dead one -- leaving it (and the session directory it pins open) behind sweeps
-    nothing. The read path keeps its own matching sidecar and so calls
-    _discard_for_session directly."""
+    ever read.
+
+    Why sweeping tempfiles is safe HERE and not on the read path: not because no
+    worker can still be alive -- one can. `cmd_question_enumerate` discharges the
+    gate by HAVING RUN, so a coordinator who runs it by hand while the detached
+    worker for that same digest is still inside its bound can approve, execute and
+    resolve with that child very much alive. What is true at resolve is that no
+    CONSUMER is left: whatever such a worker is about to write, nobody will ever
+    read it, so breaking its pending os.replace costs nothing. The read path has
+    the opposite property -- its caller is about to read exactly that result --
+    which is why it keeps `skip_tmp=True` and why this argument does not
+    generalize to it. The read path also keeps its own matching sidecar, so it
+    calls _discard_for_session directly."""
     _discard_for_session(session_id, root=root, skip_tmp=False)
 
 

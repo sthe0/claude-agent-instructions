@@ -93,6 +93,53 @@ def escape_recorded(bag, content_digest, reasons) -> bool:
     return False
 
 
+def _tally(records) -> dict:
+    """Runner-failure escapes and not-landed escapes, counted SEPARATELY. 'The pass
+    failed' and 'the pass never landed' are different facts about the fleet — one is
+    an advisor-reliability work item, the other a detachment-liveness one — and a
+    single total would hide whichever is rarer, which is the one worth knowing
+    about."""
+    reasons = [r.get("reason") for r in records]
+    return {
+        "runner_failure": sum(
+            1 for reason in reasons if reason in premise.ENUMERATION_RUNNER_FAILURE_REASONS),
+        "not_landed": sum(
+            1 for reason in reasons if reason == premise.ESCAPE_ENUMERATION_NOT_LANDED),
+    }
+
+
+def escape_counts(bag, content_digest) -> dict | None:
+    """How often this gate has been escaped, on two axes — the single derivation both
+    surfaces (`agentctl status` and the plan_approval directive) read, so neither can
+    drift into its own idea of what an escape is.
+
+    This stage's own refutation is the escape rate itself: an escape nobody can count
+    is the fail-open it replaced, one level up. So the numbers are the deliverable.
+
+    `this_plan` is the number that means something AT THE GATE — a plan on its fourth
+    escape is a different object from one on its first. `session` is informational and
+    resets with `agentctl reset`, which is exactly why the per-digest count exists
+    beside it rather than instead of it.
+
+    None is 'not applicable', never 'measured zero', at BOTH levels: no bag (the
+    premise plugin is not armed — most sessions) returns None outright, and a bag with
+    no plan submitted leaves `this_plan` None, since there is no plan version for a
+    per-version count to be about. Its `session` half is a real zero and says so.
+
+    `.get` with defaults throughout: a bag minted before `escapes` existed reads as
+    zero, never KeyError."""
+    if bag is None:
+        return None
+    records = bag.get("escapes", []) or []
+    return {
+        "this_plan": (
+            _tally([r for r in records if r.get("content_digest") == content_digest])
+            if content_digest else None
+        ),
+        "session": _tally(records),
+    }
+
+
 def _plan_content_digest(doc: "plan.PlanDoc") -> str:
     """A digest of the plan's PARSED content (post-tomllib), so a TOML comment-only
     edit — which tomllib never surfaces as a field — is already a no-op here
