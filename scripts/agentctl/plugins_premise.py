@@ -1,7 +1,11 @@
 """The question-provenance plugin: binds every question raised during substantive
 plan construction to the content element that produced it, and blocks approval
-while any raised question is still open or the independent enumeration
-cross-check has not run against the CURRENT plan content.
+while any raised question is still open, the independent enumeration cross-check
+has not run against the CURRENT plan content, or it HAS run against that content
+and its runner FAILED. The third condition is the one that used to discharge
+itself: the flag flipped because the pass ran, whatever it returned. Its route out
+is `agentctl question-enumerate-escape --reason <closed-set value>`, one countable
+row naming why — never silence.
 
 Gap-2 arming fix: `plugins_ledger`'s claim-provenance discipline arms only when
 `deliverable_kind` is 'reasoning'/'mixed' (state.py defaults it to '' at classify),
@@ -37,9 +41,10 @@ def _auto_activate(state) -> bool:
     condition (the gap-2 fix). AGENTCTL_PREMISE is a test-seam that overrides in both
     directions ("1" forces on, "0" forces off), mirroring gates.plan_review_active's
     AGENTCTL_PLAN_REVIEW knob: it lets the suite at large default the gate off (the
-    premise gate fail-closes `approve` and its discharge verbs land in a later stage,
-    so every substantive-cycle e2e test would otherwise wedge at approve). Env-unset
-    — every real session — resolves to the plain weight_class predicate."""
+    premise gate fail-closes `approve`, so every substantive-cycle e2e test would
+    otherwise have to drive the discharge verbs — question-dispose, order-dispose,
+    question-enumerate — to reach approve at all). Env-unset — every real session —
+    resolves to the plain weight_class predicate."""
     env = os.environ.get("AGENTCTL_PREMISE")
     if env == "1":
         return True
@@ -94,15 +99,26 @@ def escape_recorded(bag, content_digest, reasons) -> bool:
 
 
 def _tally(records) -> dict:
-    """Runner-failure escapes and not-landed escapes, counted SEPARATELY. 'The pass
-    failed' and 'the pass never landed' are different facts about the fleet — one is
-    an advisor-reliability work item, the other a detachment-liveness one — and a
-    single total would hide whichever is rarer, which is the one worth knowing
-    about."""
+    """Three buckets, counted SEPARATELY, because they are three different facts about
+    the fleet and each calls for a different fix. `runner_failure` — the pass landed and
+    its runner broke — is an advisor-reliability work item. `not_landed` — no pass ever
+    arrived — is a detachment-liveness one. `manual` — the pass failed AND a coordinator
+    re-read the plan by hand — is neither: it is the gate working as designed, at cost.
+
+    The last split is the one this stage's own refutation turns on ("refuted if the
+    escape degrades into a click-through"): a fleet escaping via `manual` did the work
+    the enumeration exists to do, a fleet escaping via `advisor_timeout` did not, and a
+    single runner-failure total reports them as the same number. `manual` stays inside
+    premise.ENUMERATION_RUNNER_FAILURE_REASONS — admissibility is unchanged, since it
+    too speaks only for a run that actually failed; only the counting splits."""
     reasons = [r.get("reason") for r in records]
     return {
         "runner_failure": sum(
-            1 for reason in reasons if reason in premise.ENUMERATION_RUNNER_FAILURE_REASONS),
+            1 for reason in reasons
+            if reason in premise.ENUMERATION_RUNNER_FAILURE_REASONS
+            and reason != premise.ESCAPE_MANUAL_ENUMERATION_DONE),
+        "manual": sum(
+            1 for reason in reasons if reason == premise.ESCAPE_MANUAL_ENUMERATION_DONE),
         "not_landed": sum(
             1 for reason in reasons if reason == premise.ESCAPE_ENUMERATION_NOT_LANDED),
     }
@@ -121,15 +137,14 @@ def escape_counts(bag, content_digest) -> dict | None:
     resets with `agentctl reset`, which is exactly why the per-digest count exists
     beside it rather than instead of it.
 
-    None is 'not applicable', never 'measured zero', at BOTH levels: no bag (the
-    premise plugin is not armed — most sessions) returns None outright, and a bag with
-    no plan submitted leaves `this_plan` None, since there is no plan version for a
-    per-version count to be about. Its `session` half is a real zero and says so.
+    Takes a real bag: whether the premise plugin is armed at all is decided by
+    cli._enumeration_escape_counts, the only caller, which returns its own None before
+    reaching here. `this_plan` is still None — 'not applicable', never 'measured zero'
+    — when no plan is submitted, since there is no plan version for a per-version count
+    to be about; its `session` half is a real zero and says so.
 
     `.get` with defaults throughout: a bag minted before `escapes` existed reads as
     zero, never KeyError."""
-    if bag is None:
-        return None
     records = bag.get("escapes", []) or []
     return {
         "this_plan": (

@@ -950,11 +950,12 @@ def _question_bag(store: StateStore, session_id: str):
 def _enumeration_escape_counts(state, doc: "PlanDoc | None" = None) -> dict | None:
     """plugins_premise.escape_counts for `state`, tolerant of the two states every
     surface reporting them must survive: NO PREMISE BAG (the plugin is not armed —
-    most sessions) and NO LOADABLE PLAN (nothing submitted yet, or a path that no
-    longer parses). Neither raises, and neither produces a zero: the not-applicable
-    None propagates, at the whole-surface level for the first and at `this_plan` for
-    the second, so a reader can tell 'no escapes were taken' from 'this axis does not
-    apply here'.
+    most sessions, and the whole-surface not-applicable this function owns) and NO
+    LOADABLE PLAN (nothing submitted yet, or a path that no longer parses — the
+    per-plan-axis one escape_counts owns). Neither raises, and neither produces a
+    zero: the not-applicable None propagates, at the whole-surface level for the
+    first and at `this_plan` for the second, so a reader can tell 'no escapes were
+    taken' from 'this axis does not apply here'.
 
     `doc` is an already-loaded PlanDoc when the caller has one (cmd_approve does), so
     the digest is derived from the same bytes that caller's other checks used."""
@@ -1600,10 +1601,11 @@ def cmd_question_enumerate_escape(args, *, store: StateStore, runner: Runner | N
 
     Admissibility is checked against the bag rather than trusted from the operator:
     a runner-failure reason offered while the last pass reports healthy (or absent —
-    `None`, the advisor-not-there value) is refused, and `enumeration_not_landed`
-    offered while the child still has time on its deadline is refused WITH the time
-    remaining, because "wait" is the correct action there and the operator needs to
-    know how long.
+    `None`, the advisor-not-there value) is refused, so is one offered while the
+    failure on record was computed against OTHER plan content than the escape binds
+    to, and `enumeration_not_landed` offered while the child still has time on its
+    deadline is refused WITH the time remaining, because "wait" is the correct action
+    there and the operator needs to know how long.
 
     `manual_enumeration_done` is the one reason asserting that WORK WAS DONE rather
     than that infrastructure failed, so it alone carries a second condition on top of
@@ -1654,6 +1656,7 @@ def cmd_question_enumerate_escape(args, *, store: StateStore, runner: Runner | N
     except PlanError as exc:
         return Directive(False, state.node, "noop", f"cannot load plan {plan_path!r}: {exc}")
 
+    digest = plugins_premise._plan_content_digest(doc)
     runner_ok = bag.get("enumerated_runner_ok")
     if reason in premise.ENUMERATION_RUNNER_FAILURE_REASONS:
         if runner_ok is not False:
@@ -1663,6 +1666,26 @@ def cmd_question_enumerate_escape(args, *, store: StateStore, runner: Runner | N
                 f"--reason {reason} escapes a FAILED enumeration run, but this session's "
                 f"premise bag {healthy} (enumerated_runner_ok={runner_ok!r}) — nothing to "
                 "escape from")
+        # ...and the failure on record must be the one for the bytes being escaped. The
+        # escape binds PER DIGEST while `enumerated_runner_ok` is session-global, so
+        # without this a `False` left by a SUPERSEDED pass would admit an escape bound
+        # to plan content whose own pass has not run yet — and when that pass later
+        # lands and fails, escape_recorded finds the pre-recorded row and clears the
+        # blocker. The failure would never be surfaced to anyone: the fail-open this
+        # gate exists to close, one level in. premise_blockers already honours the same
+        # rule (its failure branch is an elif behind the staleness check); this is the
+        # escape side of it.
+        enumerated_at = bag.get("enumerated_at") or ""
+        if enumerated_at != digest:
+            speaks_for = (
+                f"a pass against different plan content (enumerated_at={enumerated_at[:12]}…)"
+                if enumerated_at else "no landed pass at all")
+            return Directive(
+                False, state.node, "noop",
+                f"--reason {reason} escapes the failed enumeration for the plan content at "
+                f"{digest[:12]}…, but this session's premise bag speaks for {speaks_for} — "
+                "wait for the pass against THESE bytes to land (or run `agentctl "
+                "question-enumerate` to run it now) and escape the failure it reports")
         if reason == premise.ESCAPE_MANUAL_ENUMERATION_DONE:
             raised_since = _question_raised_since_the_failed_enumeration(state.history)
             if raised_since is None:
@@ -1702,8 +1725,13 @@ def cmd_question_enumerate_escape(args, *, store: StateStore, runner: Runner | N
                 "remaining; wait for it to land (or run `agentctl question-enumerate` "
                 "synchronously) rather than escaping a check that may yet arrive")
 
-    digest = plugins_premise._plan_content_digest(doc)
     escapes = bag.setdefault("escapes", [])
+    # A second escape with the same (digest, reason) is RECORDED, not deduped: an
+    # escape is an act, its note may differ, and dropping the row would put a hole in
+    # the audit trail the whole mechanism exists to keep. What it must not do is read
+    # as the thing that unblocked the gate — the blocker was already clear — so the
+    # directive says so and the operator can tell an addition from a discharge.
+    already = plugins_premise.escape_recorded(bag, digest, (reason,))
     escapes.append({
         "reason": reason,
         "note": note,
@@ -1713,12 +1741,19 @@ def cmd_question_enumerate_escape(args, *, store: StateStore, runner: Runner | N
     })
     state.log("question_enumerate_escape", reason=reason, plan=str(plan_path))
     store.save(state)
-    return Directive(
-        True, state.node, "continue",
+    detail = (
         f"enumeration escape recorded ({reason}) against the current plan content — the "
         "enumeration blocker is discharged for THESE plan bytes only; any edit to the plan "
-        "re-blocks approve until the cross-check runs or is escaped again",
-        data={"reason": reason, "content_digest": digest, "escapes": len(escapes)},
+        "re-blocks approve until the cross-check runs or is escaped again")
+    if already:
+        detail += (
+            " — note that an escape with this reason was ALREADY on record for these plan "
+            "bytes, so the blocker was clear before this row: it adds to the count rather "
+            "than unblocking anything")
+    return Directive(
+        True, state.node, "continue", detail,
+        data={"reason": reason, "content_digest": digest, "escapes": len(escapes),
+              "already_recorded": already},
     )
 
 
@@ -3699,6 +3734,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         # below, caught by main()'s outer handler.
         bag = state.plugins.get("premise")
         enumeration_bag_dirty = False
+        proposed = None
         if bag is not None:
             try:
                 proposed = _load(args.plan)
@@ -3724,11 +3760,21 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         store.save(state)
     _log_gate(state, "plan_approval_plugin", pblock, passed=not pblock)
     if pblock:
+        # The escape counts ride THIS refusal for cmd_approve's reason — the coordinator
+        # reading it is about to decide whether to add to them — and with more force
+        # here: `question-enumerate-escape --plan` exists FOR the replan path, so the
+        # person most likely to record an escape is the one reading this payload.
+        # Against the PROPOSED plan's digest, not state.plan_path's, since that is the
+        # plan version the blocker above speaks for; `proposed` is None when there is no
+        # bag (the whole surface is then None anyway) or when args.plan does not load,
+        # which _enumeration_escape_counts absorbs without raising.
         return Directive(False, state.node, "close_questions",
                          "replan blocked: the corrected plan carries unresolved "
                          "plan_approval premises (dispose open questions / rebind "
                          "stale per-stage bindings against the new plan)",
-                         data={"blockers": pblock})
+                         data={"blockers": pblock,
+                               "enumeration_escapes": _enumeration_escape_counts(
+                                   state, proposed)})
     # #8: diff against the plan AS APPROVED (the immutable snapshot), not plan_path —
     # which the coordinator may have edited in place. Absent a snapshot (legacy
     # session, or an approve that predates the field) fall back to plan_path.

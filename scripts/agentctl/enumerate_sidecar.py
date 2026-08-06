@@ -110,16 +110,18 @@ def discard_all_for_session(session_id: str, *, root: Path | None = None) -> Non
     ever read.
 
     Why sweeping tempfiles is safe HERE and not on the read path: not because no
-    worker can still be alive -- one can. `cmd_question_enumerate` discharges the
-    gate by HAVING RUN, so a coordinator who runs it by hand while the detached
-    worker for that same digest is still inside its bound can approve, execute and
-    resolve with that child very much alive. What is true at resolve is that no
-    CONSUMER is left: whatever such a worker is about to write, nobody will ever
-    read it, so breaking its pending os.replace costs nothing. The read path has
-    the opposite property -- its caller is about to read exactly that result --
-    which is why it keeps `skip_tmp=True` and why this argument does not
-    generalize to it. The read path also keeps its own matching sidecar, so it
-    calls _discard_for_session directly."""
+    worker can still be alive -- one can. A hand-run `cmd_question_enumerate` that
+    SUCCEEDS discharges the gate, so a coordinator who runs it by hand while the
+    detached worker for that same digest is still inside its bound can approve,
+    execute and resolve with that child very much alive. (A hand-run whose runner
+    FAILS discharges nothing -- it blocks, pending a typed escape -- but that path
+    reaches resolve with a live child just the same, via the escape.) What is true
+    at resolve is that no CONSUMER is left: whatever such a worker is about to
+    write, nobody will ever read it, so breaking its pending os.replace costs
+    nothing. The read path has the opposite property -- its caller is about to
+    read exactly that result -- which is why it keeps `skip_tmp=True` and why this
+    argument does not generalize to it. The read path also keeps its own matching
+    sidecar, so it calls _discard_for_session directly."""
     _discard_for_session(session_id, root=root, skip_tmp=False)
 
 

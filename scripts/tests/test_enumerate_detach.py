@@ -816,8 +816,9 @@ class TestSidecarDigestMismatchDiscard:
         """A worker killed between mkstemp and os.replace leaves a `.tmp-*.json`
         orphan behind. The read path must leave it alone for a concurrent worker's
         sake; session-end cleanup sweeps it -- not because no worker can still be
-        alive at resolve (one can: a hand-run `question-enumerate` discharges the
-        gate while the detached child for the same digest is still inside its bound),
+        alive at resolve (one can: a hand-run `question-enumerate` that SUCCEEDS
+        discharges the gate while the detached child for the same digest is still
+        inside its bound),
         but because no CONSUMER is left for whatever it writes. So the orphan, and
         the session directory it pins open, should not survive `cmd_resolve`."""
         root = tmp_path / "sidecars"
