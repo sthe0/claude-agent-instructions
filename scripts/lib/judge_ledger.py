@@ -11,13 +11,13 @@ outcomes with the same net effect (allow) and radically different meanings
 for whether the gate is doing anything at all.
 
 Every ledger line is one JSON object, newline-terminated, written with
-O_APPEND + flush + fsync so a line that lands is durable across a hook
-process being killed immediately after (the harness's own registration-
-timeout kill is exactly this case). Lines never carry free-text payload or
-turn content — only outcome metadata — both to keep every line comfortably
-under PIPE_BUF (so a concurrent writer's line can never interleave with an
-in-flight one) and because the ledger's job is counting outcomes, not
-reproducing what was asked.
+O_APPEND + fsync so a line that lands is durable across a hook process being
+killed immediately after (the harness's own registration-timeout kill is
+exactly this case). What keeps two concurrent hook processes from interleaving
+is O_APPEND itself — the kernel picks the write offset and appends under the
+inode lock, so one write() lands whole at the end of the file. Lines never
+carry free-text payload or turn content — only outcome metadata — because the
+ledger's job is counting outcomes, not reproducing what was asked.
 
 Ambient state (invocation_id / source / current judge) exists because the
 five production ``runner(...)`` call sites inside the four judge functions
@@ -25,7 +25,8 @@ and hook-turn-end-gate.py's ``_judged()`` helper are frozen by a concurrent
 change and cannot grow a ledger-context parameter — so each judge function
 sets ``set_current_judge(name)`` on the one line immediately before its
 existing (untouched) ``runner(...)`` call, and ``subprocess_runner`` reads it
-back rather than receiving it as an argument.
+back with ``take_current_judge()`` — consume-once, so the carrier attributes
+one call and never leaks a stale name onto the next.
 """
 from __future__ import annotations
 
@@ -38,10 +39,11 @@ from pathlib import Path
 
 from lib import config_root
 
-# PIPE_BUF on Linux — the ceiling that keeps a single line's write atomic even
-# under concurrent writers to the same fd. No field here ever holds free text
-# long enough to approach this, but a line that somehow would is truncated
-# rather than risking a torn write.
+# Ceiling on one ledger line. NOT an atomicity mechanism — O_APPEND is what
+# keeps concurrent writers from interleaving, and PIPE_BUF (4096) governs pipes,
+# not this regular file. The cap exists to bound the one field with unbounded
+# length (`reason`, which carries a judge's own answer text) so a runaway line
+# cannot make the ledger costlier to read than the outcomes it records.
 _MAX_LINE_BYTES = 2048
 
 _lock = threading.Lock()
@@ -103,6 +105,18 @@ def current_judge() -> str | None:
         return _state["judge"]
 
 
+def take_current_judge() -> str | None:
+    """Read the ambient judge name AND clear it, so the carrier attributes
+    exactly one call. Consume-once matters because the carrier is process-wide:
+    a second ``runner(...)`` call made later in the same process without a judge
+    function in front of it (an engine-path advisory call from cli.py) would
+    otherwise be filed under whichever judge ran last."""
+    with _lock:
+        name = _state["judge"]
+        _state["judge"] = None
+    return name
+
+
 def _source_from_payload(payload) -> str:
     if isinstance(payload, dict):
         session_id = payload.get("session_id")
@@ -112,39 +126,62 @@ def _source_from_payload(payload) -> str:
 
 
 def _write(kind: str, **fields) -> None:
-    record = {
-        "ts": time.time(),
-        "kind": kind,
-        "invocation_id": current_invocation_id(),
-        "hook": _state.get("hook"),
-        "source": current_source(),
-    }
-    record.update(fields)
-    line = json.dumps(record, ensure_ascii=True, sort_keys=True)
+    # EVERYTHING is inside the try, serialization and path resolution included:
+    # a ledger write must never be the reason a hook fails open in a NEW way —
+    # the hooks this module instruments already fail open on their own account,
+    # and losing one ledger line is strictly better than adding a second failure
+    # mode on top of the one being observed. hook_start() in particular runs
+    # BEFORE each hook's own try, so an exception escaping here would take the
+    # whole hook down before it has any handler of its own.
+    try:
+        record = {
+            "ts": time.time(),
+            "kind": kind,
+            "invocation_id": current_invocation_id(),
+            "hook": _state.get("hook"),
+            "source": current_source(),
+        }
+        record.update(fields)
+        encoded = _encode(record)
+        path = _ledger_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        try:
+            _write_all(fd, encoded)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except Exception:
+        pass
+
+
+def _encode(record: dict) -> bytes:
+    line = json.dumps(record, ensure_ascii=True, sort_keys=True, default=repr)
     encoded = (line + "\n").encode("utf-8")
     if len(encoded) > _MAX_LINE_BYTES:
         # Drop the reason text first — it is the only field with unbounded
         # length — before giving up on the write entirely.
         record.pop("reason", None)
-        line = json.dumps(record, ensure_ascii=True, sort_keys=True)
+        line = json.dumps(record, ensure_ascii=True, sort_keys=True, default=repr)
         encoded = (line + "\n").encode("utf-8")
     if len(encoded) > _MAX_LINE_BYTES:
         encoded = encoded[: _MAX_LINE_BYTES - 1] + b"\n"
-    path = _ledger_path()
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-        try:
-            os.write(fd, encoded)
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-    except OSError:
-        # A ledger write must never be the reason a hook fails open in a NEW
-        # way — the hooks this module instruments already fail open on their
-        # own account; losing one ledger line is strictly better than adding
-        # a second failure mode on top of the one being observed.
-        pass
+    return encoded
+
+
+def _write_all(fd: int, encoded: bytes) -> None:
+    """Write every byte, since os.write may write fewer than asked (a signal
+    arriving mid-write, a filesystem returning short). A resumed write appends
+    at the file's new end, so a line torn this way stays torn — but it lands as
+    ONE malformed line read_records() skips, which is what ignoring the return
+    value could not guarantee: a silently dropped tail merges the next record
+    into this one and corrupts a well-formed line too."""
+    written = 0
+    while written < len(encoded):
+        count = os.write(fd, encoded[written:])
+        if count <= 0:
+            break
+        written += count
 
 
 def hook_start(hook: str) -> str:
@@ -182,8 +219,9 @@ def decided(
     stage: str,
     verdict,
     reason: str = "",
-    timed_out: bool = False,
+    timed_out: bool | None = False,
     malformed: bool = False,
+    runner_legacy: bool = False,
     remaining=None,
     threshold=None,
     ceiling=None,
@@ -192,8 +230,22 @@ def decided(
     """One judge decision point's terminal outcome.
 
     ``stage`` names where the decision stopped: "prefilter" (outcome 2),
-    "budget" (outcome 3), "disabled" (outcome 7c), or "call" (outcomes 4, 5,
-    7, 7a, 7b — disambiguated by ``timed_out``/``malformed``/``reason``).
+    "budget" (outcome 3), "disabled" (outcome 7c and its siblings — no runner
+    injected, or no text to judge, each named by its own ``reason``), or "call"
+    (outcomes 4, 5, 7, 7a, 7b — disambiguated by
+    ``timed_out``/``malformed``/``reason``).
+
+    ``timed_out`` is three-valued: True/False when the runner reported it, and
+    None when the runner carried no such field at all — a runner predating the
+    flag cannot tell a timeout from a fast failure, and writing False there
+    would record an unknown as a fact. ``runner_legacy`` marks that case, so a
+    reader can separate "no timeout" from "no answer about timeouts".
+
+    ``malformed`` is narrow ON PURPOSE: the call returned, and its answer could
+    not be parsed into a verdict (outcome 7a). A timeout (5), a non-zero exit
+    (7) and an exception (7b) each produced no answer to be malformed about and
+    are named by ``timed_out``/``reason`` instead — marking them malformed too
+    would count one fail-open outcome under two headings.
 
     ``remaining``/``threshold``/``ceiling`` are the triple this stage's plan
     requires on every call decision: the budget remainder at entry, the
@@ -206,8 +258,9 @@ def decided(
         stage=stage,
         verdict=verdict,
         reason=reason,
-        timed_out=bool(timed_out),
+        timed_out=None if timed_out is None else bool(timed_out),
         malformed=bool(malformed),
+        runner_legacy=bool(runner_legacy),
         remaining=remaining,
         threshold=threshold,
         ceiling=ceiling,
@@ -269,12 +322,22 @@ def read_records(path: Path | None = None) -> list[dict]:
     """Read every well-formed record from the ledger, in file order. A
     malformed line (partial write, corruption) is skipped rather than
     raising — the ledger is a best-effort observability aid, not a
-    transactional store, and one bad line must never hide every other."""
+    transactional store, and one bad line must never hide every other.
+
+    Decoding is byte-level with ``errors="replace"`` for the same reason: a
+    torn multi-byte sequence must cost its own line, not the whole file, which
+    is what read_text(encoding="utf-8") did by raising UnicodeDecodeError past
+    the OSError guard.
+
+    The whole file is read at once. That is adequate while nothing rotates it
+    and no reader ships — the bound on ledger growth is stage 6's decision (see
+    scripts/README.md § Judge execution ledger), deliberately not made here."""
     target = path if path is not None else _ledger_path()
     try:
-        text = target.read_text(encoding="utf-8")
+        raw = target.read_bytes()
     except OSError:
         return []
+    text = raw.decode("utf-8", errors="replace")
     records = []
     for line in text.splitlines():
         line = line.strip()

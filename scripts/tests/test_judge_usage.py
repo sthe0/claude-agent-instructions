@@ -32,13 +32,17 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from lib import judge_ledger  # noqa: E402
+from lib import config_root, judge_ledger  # noqa: E402
+from agentctl import advisor  # noqa: E402
 from agentctl.dispatch import RunResult  # noqa: E402
 
 ESCALATION_HOOK = SCRIPTS_DIR / "hook-escalation-diagnosis-gate.py"
@@ -178,7 +182,7 @@ def test_write_drops_reason_before_hard_truncating_an_oversized_line(monkeypatch
     )
     records = judge_ledger.read_records(path)
     decided = [r for r in records if r["kind"] == "decided"][0]
-    assert "reason" not in decided or decided["reason"] != huge_reason
+    assert "reason" not in decided
     with open(path, "rb") as fh:
         lines = fh.read().splitlines()
     assert all(len(line) <= judge_ledger._MAX_LINE_BYTES for line in lines)
@@ -307,7 +311,9 @@ def test_outcome_7_nonzero_returncode(monkeypatch, tmp_path):
     assert result is None
     decided = [r for r in judge_ledger.read_records(path) if r["kind"] == "decided"][0]
     assert decided["stage"] == "call"
-    assert decided["malformed"] is True
+    # A process that exited non-zero produced no answer to be malformed about:
+    # the outcome is named by the reason, and `malformed` stays reserved for 7a.
+    assert decided["malformed"] is False
     assert decided["timed_out"] is False
     assert "non-zero" in decided["reason"]
 
@@ -339,7 +345,7 @@ def test_outcome_7b_judge_raises(monkeypatch, tmp_path):
     assert result is None
     decided = [r for r in judge_ledger.read_records(path) if r["kind"] == "decided"][0]
     assert decided["stage"] == "call"
-    assert decided["malformed"] is True
+    assert decided["malformed"] is False  # an exception yields no answer at all
     assert decided["timed_out"] is False
     assert "raised" in decided["reason"]
 
@@ -412,9 +418,9 @@ def test_outcome_11_exited_before_any_judge_call(monkeypatch, tmp_path):
     assert _kinds(records) == ["hook_start"]
 
 
-# --- two interleaved invocations: outcomes 8 and 9 stay attributable --------
+# --- two successive invocations: outcomes 8 and 9 stay attributable ---------
 
-def test_outcomes_8_and_9_stay_separated_across_interleaved_invocations(monkeypatch, tmp_path):
+def test_outcomes_8_and_9_stay_separated_across_successive_invocations(monkeypatch, tmp_path):
     path = _use_ledger(monkeypatch, tmp_path)
 
     def _raise(*a, **k):
@@ -447,3 +453,152 @@ def test_outcomes_8_and_9_stay_separated_across_interleaved_invocations(monkeypa
         ["hook_start", "discarded"],
         ["hook_start", "entered", "decided", "final", "emitted"],
     ])
+
+
+# --- the suite must never reach the production ledger ------------------------
+
+def test_suite_cannot_reach_the_production_ledger():
+    # Pins conftest's autouse `_isolate_judge_ledger`, not this module's own
+    # _use_ledger(): every test in the suite writes ledger lines the moment it
+    # drives a hook, and the real ledger is what a reader will count judge
+    # executions from, so a suite line in it is wrong data, not clutter.
+    resolved = judge_ledger._ledger_path()
+    assert resolved != config_root.agentctl_judge_ledger_log()
+    judge_ledger.hook_start("escalation_diagnosis")
+    assert _kinds(judge_ledger.read_records(resolved)) == ["hook_start"]
+
+
+# --- subprocess_runner: the only real setter of timed_out -------------------
+
+def test_subprocess_runner_sets_timed_out_on_a_real_timeout(monkeypatch, tmp_path):
+    path = _use_ledger(monkeypatch, tmp_path)
+    judge_ledger.set_current_judge("outage_escalation")
+    result = advisor.subprocess_runner(
+        [sys.executable, "-c", "import time; time.sleep(30)"], timeout=1
+    )
+    # The discriminator every hook branches on, produced by the production
+    # TimeoutExpired path rather than by a test double asserting its own input.
+    assert result.timed_out is True
+    assert result.returncode == 1
+    call = [r for r in judge_ledger.read_records(path) if r["kind"] == "call"][0]
+    assert call["timed_out"] is True
+    assert call["judge"] == "outage_escalation"
+    assert call["returncode"] is None
+
+
+def test_subprocess_runner_writes_started_before_the_subprocess_call(monkeypatch, tmp_path):
+    path = _use_ledger(monkeypatch, tmp_path)
+    seen: list[str] = []
+
+    def _observing_run(argv, **kwargs):
+        seen.extend(_kinds(judge_ledger.read_records(path)))
+        return SimpleNamespace(returncode=0, stdout="YES", stderr="")
+
+    monkeypatch.setattr(advisor.subprocess, "run", _observing_run)
+    judge_ledger.set_current_judge("outage_escalation")
+    advisor.subprocess_runner(["claude", "-p", "irrelevant"], timeout=5)
+    # `started` is the ONLY trace a kill during the call leaves behind, so it
+    # has to be on disk before the call, not merely before the `call` line.
+    assert seen == ["started"]
+    assert _kinds(judge_ledger.read_records(path)) == ["started", "call"]
+
+
+def test_subprocess_runner_consumes_the_judge_name_once(monkeypatch, tmp_path):
+    path = _use_ledger(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        advisor.subprocess, "run",
+        lambda argv, **kwargs: SimpleNamespace(returncode=0, stdout="YES", stderr=""),
+    )
+    judge_ledger.set_current_judge("feedback_signal")
+    advisor.subprocess_runner(["claude", "-p", "irrelevant"], timeout=5)
+    assert judge_ledger.current_judge() is None
+    # A second call with no judge in front of it (an engine-path advisory call)
+    # must not inherit the first one's name, and must not land in its invocation.
+    advisor.subprocess_runner(["claude", "-p", "irrelevant"], timeout=5)
+    calls = [r for r in judge_ledger.read_records(path) if r["kind"] == "call"]
+    assert [r["judge"] for r in calls] == ["feedback_signal", advisor._UNATTRIBUTED_JUDGE]
+    assert calls[0]["invocation_id"] != calls[1]["invocation_id"]
+
+
+# --- a runner predating the timed_out flag ----------------------------------
+
+def test_legacy_runner_without_timed_out_records_an_unknown_not_a_false(monkeypatch, tmp_path):
+    path = _use_ledger(monkeypatch, tmp_path)
+    judge_ledger.hook_start("escalation_diagnosis")
+
+    def _legacy_runner(argv, **kwargs):
+        return SimpleNamespace(returncode=1, stdout="", stderr="")
+
+    assert _esc.decide(ESCALATION_PAYLOAD, runner=_legacy_runner) is None
+    decided = [r for r in judge_ledger.read_records(path) if r["kind"] == "decided"][0]
+    assert decided["timed_out"] is None
+    assert decided["runner_legacy"] is True
+
+
+# --- the ledger write must never become a new failure mode ------------------
+
+def test_write_survives_a_failure_resolving_the_ledger_path(monkeypatch, tmp_path):
+    _use_ledger(monkeypatch, tmp_path)
+
+    def _boom():
+        raise RuntimeError("no config root")
+
+    monkeypatch.setattr(judge_ledger, "_ledger_path", _boom)
+    judge_ledger.hook_start("escalation_diagnosis")  # must not raise
+
+
+def test_write_survives_a_failure_encoding_the_record(monkeypatch, tmp_path):
+    path = _use_ledger(monkeypatch, tmp_path)
+
+    def _boom(record):
+        raise TypeError("unserializable")
+
+    monkeypatch.setattr(judge_ledger, "_encode", _boom)
+    judge_ledger.entered("outage_escalation", prefilter_fired=True)  # must not raise
+    assert judge_ledger.read_records(path) == []
+
+
+def test_read_records_survives_invalid_utf8(tmp_path):
+    path = tmp_path / "torn.jsonl"
+    path.write_bytes(
+        json.dumps({"kind": "hook_start"}).encode() + b"\n"
+        + b'{"kind": "decided", "reason": "\xff\xfe"}\n'
+        + json.dumps({"kind": "final"}).encode() + b"\n"
+    )
+    # A torn multi-byte sequence costs its own line, never the whole file.
+    assert _kinds(judge_ledger.read_records(path)) == ["hook_start", "decided", "final"]
+
+
+# --- concurrent writers: O_APPEND, not luck ---------------------------------
+
+_CONCURRENT_WRITER = """
+import os, sys
+sys.path.insert(0, sys.argv[1])
+from lib import judge_ledger
+judge_ledger.hook_start(sys.argv[2])
+for _ in range(80):
+    judge_ledger.decided(
+        sys.argv[2], stage="call", verdict=False, reason="r" * 400,
+        remaining=1.0, threshold=2.0, ceiling=3.0, duration=0.1,
+    )
+"""
+
+
+def test_concurrent_processes_append_whole_lines(tmp_path):
+    path = tmp_path / "concurrent.jsonl"
+    writer = tmp_path / "writer.py"
+    writer.write_text(_CONCURRENT_WRITER)
+    env = dict(os.environ, AGENTCTL_JUDGE_LEDGER=str(path))
+    procs = [
+        subprocess.Popen([sys.executable, str(writer), str(SCRIPTS_DIR), hook], env=env)
+        for hook in ("escalation_diagnosis", "deferring_disposition")
+    ]
+    for proc in procs:
+        assert proc.wait(timeout=120) == 0
+    lines = [ln for ln in path.read_text().splitlines() if ln.strip()]
+    # Two real processes, interleaved in time: every line must still parse, which
+    # is the property O_APPEND buys and a read-modify-write would lose.
+    assert len(lines) == 2 * 81
+    assert all(isinstance(json.loads(ln), dict) for ln in lines)
+    hooks = {json.loads(ln)["hook"] for ln in lines}
+    assert hooks == {"escalation_diagnosis", "deferring_disposition"}

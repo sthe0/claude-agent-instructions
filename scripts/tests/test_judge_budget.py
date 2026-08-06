@@ -107,3 +107,24 @@ def test_next_call_timeout_reads_the_clock_exactly_once():
     calls.clear()
     budget.next_call_timeout(30)
     assert len(calls) == 1
+
+
+def test_remaining_and_timeout_reads_the_clock_exactly_once():
+    # The same guarantee for the pair-returning entry point, which is what all
+    # three hooks actually call: the recorded remainder and the timeout derived
+    # from it must come from one reading, or the ledger records a remainder the
+    # go/no-go decision was not made on.
+    calls = []
+    clock = _FakeClock([0.0, 5.0])
+
+    def counting_clock():
+        value = clock()
+        calls.append(value)
+        return value
+
+    budget = _mod.JudgeBudget(20, 12, clock=counting_clock)
+    calls.clear()
+    remaining, timeout = budget.remaining_and_timeout(30)
+    assert len(calls) == 1
+    assert remaining == 15
+    assert timeout == 15

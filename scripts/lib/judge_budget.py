@@ -65,11 +65,7 @@ class JudgeBudget:
         Reads the clock exactly once, so the go/no-go decision and the
         returned timeout are computed from the same reading instead of two
         readings that could straddle real elapsed time."""
-        floor = self._min_call_s if min_call_s is None else min_call_s
-        remaining = self.remaining()
-        if remaining < floor:
-            return None
-        return min(remaining, cap_s)
+        return self.remaining_and_timeout(cap_s, min_call_s=min_call_s)[1]
 
     def remaining_and_timeout(
         self, cap_s: float, *, min_call_s: float | None = None

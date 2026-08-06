@@ -105,6 +105,18 @@ def _isolate_self_diagnose_store(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_judge_ledger(tmp_path, monkeypatch):
+    """Redirect the judge execution ledger to tmp for the suite at large.
+
+    lib/judge_ledger.py writes on every hook_start(), so any test that drives one
+    of the three judge-calling hooks appends to the live ledger unless the env
+    override is set — and that ledger is what a future reader will count real
+    judge executions from, so suite lines in it are not clutter but wrong data.
+    Same accommodation as `_isolate_self_diagnose_store`."""
+    monkeypatch.setenv("AGENTCTL_JUDGE_LEDGER", str(tmp_path / "judge-usage-ledger.jsonl"))
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_recursion_depth(monkeypatch):
     """Drop the ambient AGENT_RECURSION_DEPTH for the suite at large.
 
