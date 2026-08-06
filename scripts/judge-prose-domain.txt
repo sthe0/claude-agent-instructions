@@ -34,3 +34,7 @@ scripts/lib/hook_wiring.py
 # The raw samples' own write-up: every number in it is a measurement or a
 # feasibility statement about a budget.
 samples/judge-latency/README.md
+
+# The live-run evidence: the densest judge-latency prose in the repo — every
+# number in it is either a measured run or a statistic recomputed from a sample.
+live-run-evidence.md

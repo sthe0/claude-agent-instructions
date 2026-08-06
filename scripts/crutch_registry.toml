@@ -6464,6 +6464,22 @@ disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
 
 [[entry]]
+id = "a23ad1bf8a107218"
+domain = "code"
+file = "scripts/verify-judge-prose-numbers.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
+id = "a9a20b0937b9cd7b"
+domain = "code"
+file = "scripts/verify-judge-prose-numbers.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
 id = "9af48e483ebef657"
 domain = "code"
 file = "scripts/verify-language.py"
@@ -8019,6 +8035,14 @@ ground = "Regexes found are markdown/frontmatter/command-syntax parsing (heading
 id = "825d445f3e39b124"
 domain = "code_file_rollup"
 file = "scripts/verify-experience-leaf.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "14b79c9fd5811ae3"
+domain = "code_file_rollup"
+file = "scripts/verify-judge-prose-numbers.py"
 class = "structural"
 disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification. (file-level rollup of the file's scopes.)"
@@ -12799,6 +12823,38 @@ ground = "Experience leaves (difficulty/v1) are historical narrative records of 
 id = "0b3548ca59ed38af"
 domain = "prose"
 file = "memory-global/leaves/experience/2026-08-04-no-circuit-breaker-on-verification-effort.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "13d992104118ab3f"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-08-05-deferring-ask-gate-and-the-binding-timeout-layer.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "02eac7c48248995e"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-08-05-deferring-ask-gate-and-the-binding-timeout-layer.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "0fcd87efb7e672e6"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-08-05-deferring-ask-gate-and-the-binding-timeout-layer.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "9ab185dbfe51c9ed"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-08-05-deferring-ask-gate-and-the-binding-timeout-layer.md"
 class = "not-normative"
 disposition = "keep"
 ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."

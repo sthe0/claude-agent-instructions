@@ -77,8 +77,11 @@ Against the approved budget of 52 s:
 So all three judges complete even on the slowest run yet observed, and only the
 sum of the per-call ceilings — each of which is already one second above its own
 observed maximum — does not fit. The plan deferred exactly this inequality to this
-measurement ("выполнимость неравенства о размере бюджета проверяется ПОСЛЕ
-предусловия"); the height is the user's call, and 52 s is what was approved.
+measurement: the budget-size inequality is checked AFTER the precondition, in the
+approved plan's own words —
+<!-- Language exception: verbatim quote of the approved plan's condition; translating a citation stops it being one. -->
+"выполнимость неравенства о размере бюджета проверяется ПОСЛЕ
+предусловия". The height is the user's call, and 52 s is what was approved.
 
 ## Supporting samples (not part of the four rows)
 

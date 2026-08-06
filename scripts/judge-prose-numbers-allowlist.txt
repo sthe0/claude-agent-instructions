@@ -89,6 +89,18 @@ samples/judge-latency/README.md:62:26defe90  # the measured cost of excluding to
 samples/judge-latency/README.md:69:3c1d709f  # 52s = the approved turn-end budget this feasibility table is evaluated against
 samples/judge-latency/README.md:73:8e952622  # 43.56 = the sum of the three turn-end p90s (13.34 + 11.06 + 19.16); the 8.44s headroom is 52 - 43.56
 samples/judge-latency/README.md:74:0384f6fb  # 51.53 = the sum of the three observed maxima (14.05 + 11.52 + 25.96); the 0.47s headroom is 52 - 51.53
-samples/judge-latency/README.md:81:b63af131  # 52s again, in the sentence that names it the APPROVED height rather than a derived one
-samples/judge-latency/README.md:86:e7a33457  # max 71.96 belongs to lean-sample.json, a SUPPORTING sample excluded from every row — cited to show the lean prompt's worse tail
-samples/judge-latency/README.md:87:ba28e247  # historical: the original 5s registration the haiku baseline made look survivable
+samples/judge-latency/README.md:84:af842d45  # 52s again, in the sentence that names it the APPROVED height rather than a derived one
+samples/judge-latency/README.md:89:e7a33457  # max 71.96 belongs to lean-sample.json, a SUPPORTING sample excluded from every row — cited to show the lean prompt's worse tail
+samples/judge-latency/README.md:90:ba28e247  # historical: the original 5s registration the haiku baseline made look survivable
+
+# live-run-evidence.md — the stage-4 write-up. Every number here is either one of
+# the three recorded live runs or a statistic the checker recomputes from the
+# samples, so each reason names which of the two it is.
+live-run-evidence.md:64:b874c9db  # 43.09 = the recorded deferring live run; 10.29-39.99 (n=18) is that judge's sampled range, recomputed by check-live-run-evidence.py from latency-sample.json:defer + ab-sample.json:defer_std
+live-run-evidence.md:65:95087853  # 4.96 = the recorded escalation live run; 7.19-25.96 (n=16) is that judge's sampled range from latency-sample.json:outage + ab-sample.json:outage_std
+live-run-evidence.md:68:3ec0fa34  # 0.08s = measured process overhead (3 trials of the deferring hook on a non-firing payload, no judge call); establishes that a live wall-clock is the judge call almost exactly
+live-run-evidence.md:80:5f4f6e6d  # 45s = _ASK_JUDGE_BUDGET_S in hook-deferring-disposition-gate.py, read out of the source by check-live-run-evidence.py rather than quoted
+live-run-evidence.md:81:0de45831  # 39.99 = max of the sampled deferring pool; 43.09 = the live run that exceeded it — the pair IS the claim that a sample max is not a bound
+live-run-evidence.md:82:ab2a9d29  # 5s = 45 - 39.99 rounded, the headroom the ceiling holds over the observed maximum; called thin because the live run consumed most of it
+live-run-evidence.md:93:f45cde0c  # 29.94/32.23/37.58/37.82 = the four standard estimators on the n=18 deferring sample; quoted to justify pinning nearest-rank, which is what lib/judge_latency.p90 implements
+live-run-evidence.md:143:e17da07e  # 71.96 = defer_yes max in lean-sample.json, the rejected lean prompt's tail; a SUPPORTING sample that feeds no row
