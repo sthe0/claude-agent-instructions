@@ -1287,7 +1287,10 @@ def cmd_question_check(args, *, store: StateStore, runner: Runner | None = None)
     plugins_premise.premise_blockers the plan_approval gate uses, so check and gate
     never diverge (the ledger-check precedent). Green (ok=True) iff every raised
     question is closed, every enumeration candidate dispositioned, and the
-    enumeration cross-check has run against the current plan. Does not mutate."""
+    enumeration cross-check has run against the CURRENT plan content and either its
+    runner did NOT fail or a typed escape is on record for the failure (`agentctl
+    question-enumerate-escape --reason <closed-set value>`) — a run that ran but
+    FAILED, unescaped, is red here exactly as it is at the gate. Does not mutate."""
     state, bag = _question_bag(store, args.session)
     if bag is None:
         return Directive(False, state.node, "noop", "plugin 'premise' is not active")
@@ -1726,12 +1729,21 @@ def cmd_question_enumerate_escape(args, *, store: StateStore, runner: Runner | N
                 "synchronously) rather than escaping a check that may yet arrive")
 
     escapes = bag.setdefault("escapes", [])
-    # A second escape with the same (digest, reason) is RECORDED, not deduped: an
-    # escape is an act, its note may differ, and dropping the row would put a hole in
-    # the audit trail the whole mechanism exists to keep. What it must not do is read
-    # as the thing that unblocked the gate — the blocker was already clear — so the
-    # directive says so and the operator can tell an addition from a discharge.
-    already = plugins_premise.escape_recorded(bag, digest, (reason,))
+    # A second escape at the same digest is RECORDED, not deduped: an escape is an
+    # act, its note may differ, and dropping the row would put a hole in the audit
+    # trail the whole mechanism exists to keep. What it must not do is read as the
+    # thing that unblocked the gate when the gate was already clear — and "already
+    # clear" is a question about the FAMILY premise_blockers discharges on, not
+    # about this one reason token: premise_blockers clears the runner-failure branch
+    # on ANY of ENUMERATION_RUNNER_FAILURE_REASONS, so escaping `advisor_timeout` at
+    # a digest already carrying an `advisor_error` escape unblocks nothing either,
+    # and must say so. `already` is therefore computed over the same family
+    # premise_blockers consults for this branch, not over `(reason,)` alone.
+    family = (
+        premise.ENUMERATION_RUNNER_FAILURE_REASONS if reason in premise.ENUMERATION_RUNNER_FAILURE_REASONS
+        else (premise.ESCAPE_ENUMERATION_NOT_LANDED,)
+    )
+    already = plugins_premise.escape_recorded(bag, digest, family)
     escapes.append({
         "reason": reason,
         "note": note,
@@ -1747,9 +1759,9 @@ def cmd_question_enumerate_escape(args, *, store: StateStore, runner: Runner | N
         "re-blocks approve until the cross-check runs or is escaped again")
     if already:
         detail += (
-            " — note that an escape with this reason was ALREADY on record for these plan "
-            "bytes, so the blocker was clear before this row: it adds to the count rather "
-            "than unblocking anything")
+            " — note that the blocker for these plan bytes was ALREADY discharged before "
+            "this row (by this reason or another in the same family), so it adds to the "
+            "count rather than unblocking anything")
     return Directive(
         True, state.node, "continue", detail,
         data={"reason": reason, "content_digest": digest, "escapes": len(escapes),
@@ -3765,9 +3777,17 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         # here: `question-enumerate-escape --plan` exists FOR the replan path, so the
         # person most likely to record an escape is the one reading this payload.
         # Against the PROPOSED plan's digest, not state.plan_path's, since that is the
-        # plan version the blocker above speaks for; `proposed` is None when there is no
-        # bag (the whole surface is then None anyway) or when args.plan does not load,
-        # which _enumeration_escape_counts absorbs without raising.
+        # plan version the blocker above speaks for. `proposed` is None here only when
+        # `bag is None` — and then _enumeration_escape_counts returns None outright on
+        # its own bag-None check, before ever looking at `doc`, so the fallback to
+        # `state.plan_path` inside that function is never reached from THIS call site.
+        # The other way `proposed` could be None — `_load(args.plan)` raising above —
+        # cannot reach this line at all: with `bag is not None`, `plugin_gate_blockers`
+        # (via `premise_blockers`) calls `plan.load_plan(state.plan_path)` — state.plan_path
+        # having been set to args.plan a few lines up — with no try/except around it, so
+        # the SAME load failure raises out of `pblock = plugins.plugin_gate_blockers(...)`
+        # above and this `if pblock:` block is never entered. Verified against the code,
+        # not assumed — see the stage-5-dispatch report for the trace.
         return Directive(False, state.node, "close_questions",
                          "replan blocked: the corrected plan carries unresolved "
                          "plan_approval premises (dispose open questions / rebind "

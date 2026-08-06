@@ -110,13 +110,20 @@ def _tally(records) -> dict:
     the enumeration exists to do, a fleet escaping via `advisor_timeout` did not, and a
     single runner-failure total reports them as the same number. `manual` stays inside
     premise.ENUMERATION_RUNNER_FAILURE_REASONS — admissibility is unchanged, since it
-    too speaks only for a run that actually failed; only the counting splits."""
+    too speaks only for a run that actually failed; only the counting splits.
+
+    The infra/work-was-done distinction is read off `premise.ENUMERATION_INFRA_FAILURE_
+    REASONS` — the closed set that NAMES the infra subset — rather than re-derived here
+    as "in the wider family and not manual". A two-clause condition tracks the CURRENT
+    membership of the family by exclusion; a future infra reason added only to the wider
+    tuple would land in this bucket correctly under either form, but a future WORK-WAS-
+    DONE reason (a second `manual`-shaped token) would silently fall into `runner_failure`
+    under the exclusion form and nowhere under this one — it would need its own bucket,
+    which is the failure this split exists to avoid."""
     reasons = [r.get("reason") for r in records]
     return {
         "runner_failure": sum(
-            1 for reason in reasons
-            if reason in premise.ENUMERATION_RUNNER_FAILURE_REASONS
-            and reason != premise.ESCAPE_MANUAL_ENUMERATION_DONE),
+            1 for reason in reasons if reason in premise.ENUMERATION_INFRA_FAILURE_REASONS),
         "manual": sum(
             1 for reason in reasons if reason == premise.ESCAPE_MANUAL_ENUMERATION_DONE),
         "not_landed": sum(
@@ -124,10 +131,11 @@ def _tally(records) -> dict:
     }
 
 
-def escape_counts(bag, content_digest) -> dict | None:
+def escape_counts(bag, content_digest) -> dict:
     """How often this gate has been escaped, on two axes — the single derivation both
     surfaces (`agentctl status` and the plan_approval directive) read, so neither can
-    drift into its own idea of what an escape is.
+    drift into its own idea of what an escape is. Always returns a dict — never None;
+    only its `this_plan` entry can be (see below).
 
     This stage's own refutation is the escape rate itself: an escape nobody can count
     is the fail-open it replaced, one level up. So the numbers are the deliverable.

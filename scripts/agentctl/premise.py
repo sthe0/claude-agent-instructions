@@ -75,15 +75,24 @@ ESCAPE_ADVISOR_ERROR = "advisor_error"
 ESCAPE_MANUAL_ENUMERATION_DONE = "manual_enumeration_done"
 ESCAPE_ENUMERATION_NOT_LANDED = "enumeration_not_landed"
 
+# The three INFRASTRUCTURE reasons — the pass landed and its runner broke, nobody
+# did the work by hand. Named as its own tuple (rather than left implicit as
+# "ENUMERATION_RUNNER_FAILURE_REASONS minus manual") so a caller that needs the
+# infra/work-was-done distinction — plugins_premise._tally's runner_failure bucket —
+# reads it off the closed set instead of re-deriving it with a second condition that
+# a new reason could silently fall through.
+ENUMERATION_INFRA_FAILURE_REASONS = (
+    ESCAPE_ADVISOR_UNAVAILABLE,
+    ESCAPE_ADVISOR_TIMEOUT,
+    ESCAPE_ADVISOR_ERROR,
+)
+
 # Admissible only against a run that actually FAILED (enumerated_runner_ok is False).
 # advisor_unavailable is in the set but is never the reason the blocker pre-selects:
 # it names the injected-stub / advisor-absent path, which a live session reaches as
 # advisor_error, and only a caller who KNOWS the advisor was not there should choose
 # it. classify_runner_failure therefore returns the other two only.
-ENUMERATION_RUNNER_FAILURE_REASONS = (
-    ESCAPE_ADVISOR_UNAVAILABLE,
-    ESCAPE_ADVISOR_TIMEOUT,
-    ESCAPE_ADVISOR_ERROR,
+ENUMERATION_RUNNER_FAILURE_REASONS = ENUMERATION_INFRA_FAILURE_REASONS + (
     ESCAPE_MANUAL_ENUMERATION_DONE,
 )
 

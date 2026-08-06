@@ -204,12 +204,44 @@ class TestEscapeDischargesOnlyThesePlanBytes:
         second = cli.cmd_question_enumerate_escape(args, store=store)
 
         assert first.ok is True and first.data["already_recorded"] is False
-        assert "ALREADY on record" not in first.detail
+        assert "ALREADY discharged" not in first.detail
         assert second.ok is True, second.detail
         assert second.data["already_recorded"] is True
-        assert "ALREADY on record" in second.detail
+        assert "ALREADY discharged" in second.detail
         assert [r["reason"] for r in store.load("s").plugins["premise"]["escapes"]] == [
             premise.ESCAPE_ADVISOR_ERROR, premise.ESCAPE_ADVISOR_ERROR]
+
+    def test_a_cross_reason_repeat_is_also_already_discharged(self, store, fixtures_dir):
+        """`premise_blockers` clears the runner-failure branch on ANY reason in
+        `ENUMERATION_RUNNER_FAILURE_REASONS` (see plugins_premise.premise_blockers's
+        elif chain) — not on the one reason the first escape happened to name. So
+        escaping `advisor_timeout` against a digest that already carries an
+        `advisor_error` escape must report `already_recorded` too: the blocker for
+        these bytes was already clear before this second, DIFFERENT-reason row
+        landed. Computing `already` from `(reason,)` alone (the pre-fix code) would
+        report this as a fresh discharge — asserted on RELOADED state, per the
+        codebase's persisted-state convention, so a fix that only patches the
+        in-memory Directive would still fail here."""
+        plan_path = str(fixtures_dir / "plan_two_stage.toml")
+        state, _ = _bag_state(plan_path, enumerated_runner_ok=False,
+                              enumerated_runner_stderr="boom")
+        store.save(state)
+
+        first = cli.cmd_question_enumerate_escape(
+            _escape_ns("s", premise.ESCAPE_ADVISOR_ERROR, note="the advisor blew up"),
+            store=store)
+        second = cli.cmd_question_enumerate_escape(
+            _escape_ns("s", premise.ESCAPE_ADVISOR_TIMEOUT, note="it also timed out once"),
+            store=store)
+
+        assert first.ok is True and first.data["already_recorded"] is False
+        assert second.ok is True, second.detail
+        assert second.data["already_recorded"] is True
+        assert "ALREADY discharged" in second.detail
+        reloaded = store.load("s")
+        assert [r["reason"] for r in reloaded.plugins["premise"]["escapes"]] == [
+            premise.ESCAPE_ADVISOR_ERROR, premise.ESCAPE_ADVISOR_TIMEOUT]
+        assert plugins.plugin_gate_blockers(reloaded, "plan_approval") == []
 
 
 class TestEscapeAdmissibility:
@@ -799,6 +831,22 @@ class TestEscapeCountsAreVisible:
     rising rate would show. And within each axis the three escape families — a failed
     runner, a hand re-reading, a pass that never landed — are counted apart: collapsing
     any two hides whichever is rarer, and calls for the wrong fix."""
+
+    def test_advisor_unavailable_tallies_as_runner_failure(self):
+        """`_tally` reads the infra/work-was-done split off
+        `premise.ENUMERATION_INFRA_FAILURE_REASONS` — the closed set naming the THREE
+        infra reasons — rather than re-deriving it as "in the wider family and not
+        manual". `advisor_unavailable` is the one member of that set no end-to-end
+        test above ever produces (the blocker never pre-selects it; only an operator
+        who knows the advisor was stubbed out reaches for it), so nothing else in
+        this file would catch a future edit that dropped it from the infra tuple, or
+        a `_tally` rewrite that went back to deriving the bucket by exclusion and
+        missed it. Calls `plugins_premise._tally` directly, the same pure function
+        `escape_counts` (and so both `agentctl status` and the refusal payload)
+        delegates to."""
+        counts = plugins_premise._tally([{"reason": premise.ESCAPE_ADVISOR_UNAVAILABLE}])
+
+        assert counts == {"runner_failure": 1, "manual": 0, "not_landed": 0}
 
     def _escaped_both_ways(self, store, plan_path, sid="counts"):
         """One session, both families, across the TWO bag states in which each is
