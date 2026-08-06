@@ -48,34 +48,23 @@ class JudgeBudget:
         remainder at entry without issuing a call."""
         return self._deadline - self._clock()
 
-    def next_call_timeout(
+    def remaining_and_timeout(
         self, cap_s: float, *, min_call_s: float | None = None
-    ) -> float | None:
+    ) -> tuple[float, float | None]:
         """The timeout to pass to the next judge call, capped at ``cap_s``
         (that judge's own per-call ceiling), or ``None`` when too little
-        budget remains for a call to plausibly finish — the caller must then
-        stop and fail open rather than attempt a doomed call.
+        budget remains for a call to plausibly finish, paired with the raw
+        ``remaining`` reading — both from a single clock read. Exists for
+        callers that must record the pre-call remainder (e.g. an execution
+        ledger) without a second read straddling real elapsed time — calling
+        ``remaining()`` and then deriving the timeout separately would read
+        the clock twice for what is conceptually one decision.
 
         ``min_call_s`` overrides the constructor's floor for THIS call, falling
         back to it when omitted. A hook calling several different judges on one
         budget has a different floor per judge — each judge's own measured p90 —
         so the floor cannot be a property of the budget alone; a hook calling
-        one judge keeps naming its floor once, at construction.
-
-        Reads the clock exactly once, so the go/no-go decision and the
-        returned timeout are computed from the same reading instead of two
-        readings that could straddle real elapsed time."""
-        return self.remaining_and_timeout(cap_s, min_call_s=min_call_s)[1]
-
-    def remaining_and_timeout(
-        self, cap_s: float, *, min_call_s: float | None = None
-    ) -> tuple[float, float | None]:
-        """Same go/no-go decision as ``next_call_timeout``, plus the raw
-        ``remaining`` reading, from a single clock read. Exists for callers
-        that must record the pre-call remainder (e.g. an execution ledger)
-        without a second read straddling real elapsed time — calling
-        ``remaining()`` and ``next_call_timeout()`` back to back would read
-        the clock twice for what is conceptually one decision."""
+        one judge keeps naming its floor once, at construction."""
         floor = self._min_call_s if min_call_s is None else min_call_s
         remaining = self.remaining()
         if remaining < floor:

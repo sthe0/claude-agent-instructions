@@ -11,6 +11,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from agentctl.store import FileStateStore  # noqa: E402
+from lib import judge_ledger  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -114,6 +115,9 @@ def _isolate_judge_ledger(tmp_path, monkeypatch):
     judge executions from, so suite lines in it are not clutter but wrong data.
     Same accommodation as `_isolate_self_diagnose_store`."""
     monkeypatch.setenv("AGENTCTL_JUDGE_LEDGER", str(tmp_path / "judge-usage-ledger.jsonl"))
+    judge_ledger._state.update(
+        {"invocation_id": None, "source": None, "hook": None, "judge": None}
+    )
 
 
 @pytest.fixture(autouse=True)

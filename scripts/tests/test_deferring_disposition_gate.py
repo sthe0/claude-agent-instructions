@@ -258,7 +258,7 @@ def test_the_per_call_ceiling_is_this_hooks_own_constant():
         node.args[0]
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
-        and getattr(node.func, "attr", None) in ("next_call_timeout", "remaining_and_timeout")
+        and getattr(node.func, "attr", None) == "remaining_and_timeout"
         and node.args
     ]
     assert caps, "decide() no longer draws its call timeout from a budget"

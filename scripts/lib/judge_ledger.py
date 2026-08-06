@@ -14,10 +14,13 @@ Every ledger line is one JSON object, newline-terminated, written with
 O_APPEND + fsync so a line that lands is durable across a hook process being
 killed immediately after (the harness's own registration-timeout kill is
 exactly this case). What keeps two concurrent hook processes from interleaving
-is O_APPEND itself — the kernel picks the write offset and appends under the
-inode lock, so one write() lands whole at the end of the file. Lines never
-carry free-text payload or turn content — only outcome metadata — because the
-ledger's job is counting outcomes, not reproducing what was asked.
+is O_APPEND itself — the kernel picks the write offset under the inode lock,
+so no two writers' bytes ever land at the same offset. That guarantees
+offset ordering, NOT that one write() call lands whole in one piece — a short
+write is still possible and is handled by _write_all() below, not by
+O_APPEND. Lines never carry free-text payload or turn content — only outcome
+metadata — because the ledger's job is counting outcomes, not reproducing
+what was asked.
 
 Ambient state (invocation_id / source / current judge) exists because the
 five production ``runner(...)`` call sites inside the four judge functions
@@ -105,6 +108,27 @@ def current_judge() -> str | None:
         return _state["judge"]
 
 
+def current_hook() -> str | None:
+    """The hook name set by hook_start(), or None outside any hook (an
+    engine-path call from cli.py). Lets a caller tell "no judge claimed this
+    call because nothing has, ever" apart from "no judge claimed this call,
+    but we are still inside a hook's own invocation"."""
+    with _lock:
+        return _state["hook"]
+
+
+def begin_attributed_call(name: str) -> None:
+    """Claim the next ``runner(...)`` call for ``name``, minting a fresh
+    invocation_id for it ONLY outside a hook. Inside a hook the call belongs to
+    that hook's own invocation (set by hook_start()), and re-minting here would
+    orphan every line the hook writes afterwards — the hook's own hook_start
+    would have no matching terminal line, and the terminal line would belong to
+    an invocation that never started: one hook invocation read as two."""
+    if current_hook() is None:
+        reset_invocation()
+    set_current_judge(name)
+
+
 def take_current_judge() -> str | None:
     """Read the ambient judge name AND clear it, so the carrier attributes
     exactly one call. Consume-once matters because the carrier is process-wide:
@@ -156,6 +180,7 @@ def _write(kind: str, **fields) -> None:
 
 
 def _encode(record: dict) -> bytes:
+    record = dict(record)
     line = json.dumps(record, ensure_ascii=True, sort_keys=True, default=repr)
     encoded = (line + "\n").encode("utf-8")
     if len(encoded) > _MAX_LINE_BYTES:
@@ -229,11 +254,15 @@ def decided(
 ) -> None:
     """One judge decision point's terminal outcome.
 
-    ``stage`` names where the decision stopped: "prefilter" (outcome 2),
-    "budget" (outcome 3), "disabled" (outcome 7c and its siblings — no runner
-    injected, or no text to judge, each named by its own ``reason``), or "call"
-    (outcomes 4, 5, 7, 7a, 7b — disambiguated by
-    ``timed_out``/``malformed``/``reason``).
+    ``stage`` names where the decision stopped: "budget" (outcome 3),
+    "killswitch" (outcome 7c — disabled by the hook's own kill switch),
+    "no_text" (no text was given to judge), "no_runner" (enabled, text
+    present, but no runner injected), or "call" (outcomes 4, 5, 7, 7a, 7b —
+    disambiguated by ``timed_out``/``malformed``/``reason``). Outcome 2
+    (the prefilter declining to call the judge at all) is NOT a ``stage``
+    here — it never reaches a decision point, so it is recorded on
+    ``entered(prefilter_fired=False)`` instead, with no ``decided`` line
+    following it.
 
     ``timed_out`` is three-valued: True/False when the runner reported it, and
     None when the runner carried no such field at all — a runner predating the

@@ -88,6 +88,7 @@ def enumerate_claims(artifact_text: str, runner) -> list[str]:
     is discharged by the `enumerated` flag the caller sets, not by the count."""
     if runner is None:
         return []
+    judge_ledger.begin_attributed_call("enumerate_claims")
     try:
         prompt = _ENUMERATE_PROMPT.format(payload=artifact_text)
         result = runner(
@@ -99,6 +100,8 @@ def enumerate_claims(artifact_text: str, runner) -> list[str]:
         return [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
     except Exception:
         return []
+    finally:
+        judge_ledger.set_current_judge(None)
 
 
 _ENUMERATE_QUESTIONS_PROMPT = (
@@ -150,6 +153,7 @@ def enumerate_questions_health(
     not by making approve un-passable on infra failure."""
     if runner is None:
         return None, []
+    judge_ledger.begin_attributed_call("enumerate_questions_health")
     try:
         payload = f"GOAL:\n{goal}\n\nDONE CRITERION:\n{done_criterion}\n\nPLAN:\n{plan_text}"
         prompt = _ENUMERATE_QUESTIONS_PROMPT.format(payload=payload)
@@ -171,6 +175,8 @@ def enumerate_questions_health(
         return True, pairs
     except Exception:
         return False, []
+    finally:
+        judge_ledger.set_current_judge(None)
 
 
 def enumerate_questions(
@@ -192,6 +198,7 @@ def judge(kind: str, payload: dict, runner, *, enabled: bool | None = None) -> l
         enabled = os.environ.get("AGENTCTL_ADVISOR") == "1"
     if not enabled or runner is None:
         return []
+    judge_ledger.begin_attributed_call("judge")
     try:
         template = _PROMPTS.get(kind)
         if not template:
@@ -206,6 +213,8 @@ def judge(kind: str, payload: dict, runner, *, enabled: bool | None = None) -> l
         return [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
     except Exception:
         return []
+    finally:
+        judge_ledger.set_current_judge(None)
 
 
 def acceptance_judge(
@@ -235,6 +244,7 @@ def acceptance_judge(
     so the default is the last-resort ceiling rather than a per-judge one."""
     if not enabled or runner is None:
         return None, "judge disabled or no runner (fail-open)"
+    judge_ledger.begin_attributed_call("acceptance_judge")
     try:
         criterion = _PROMPTS["acceptance_observation"].format(
             payload={"expected": expected, "observation": observation}
@@ -262,6 +272,8 @@ def acceptance_judge(
         return None, f"judge answer unparseable: {lines[0]!r} (fail-open)"
     except Exception:
         return None, "judge raised (fail-open)"
+    finally:
+        judge_ledger.set_current_judge(None)
 
 
 # Language-independent question-mark set for the pre-model prefilter: the ASCII
@@ -329,13 +341,24 @@ _UNATTRIBUTED_JUDGE = "unattributed"
 
 
 def _judge_unavailable(
-    name: str, reason: str, *, timeout, remaining, ceiling
+    name: str, reason: str, *, stage: str, timeout, remaining, ceiling
 ) -> tuple[bool, str]:
-    """Terminal outcome for a decision point reached with no call possible:
-    disabled by killswitch, no runner injected, or nothing to judge. Shared by
-    all four judge functions, which differ here only in their own name."""
+    """Terminal outcome for a decision point reached with no call possible.
+    Shared by all four judge functions, which differ here only in their own
+    name and which of the three no-call reasons applies:
+
+    ``stage="killswitch"`` — disabled by the hook's own kill switch env var.
+    ``stage="no_text"``    — no text was given to judge (before the runner
+                              check, since a missing runner is moot if there
+                              is nothing to send it).
+    ``stage="no_runner"``  — enabled, text present, but no runner injected.
+
+    Kept distinct rather than one shared "disabled" stage so a reader of the
+    ledger can tell "the operator turned this off" apart from "the caller
+    forgot to give it text" apart from "the runner was never wired up" —
+    three different fixes, one indistinguishable free-text reason before."""
     judge_ledger.decided(
-        name, stage="disabled", verdict=False, reason=reason,
+        name, stage=stage, verdict=False, reason=reason,
         remaining=remaining, threshold=timeout, ceiling=ceiling,
     )
     return False, reason
@@ -349,7 +372,14 @@ def _classify(result) -> tuple[bool, str, bool, bool | None]:
 
     ``timed_out`` is None when the result object has no such field: a runner
     predating the flag cannot distinguish a timeout from a fast failure, and
-    fabricating False would put an unknown into the ledger as a fact.
+    fabricating False would put an unknown into the ledger as a fact. Every
+    ``runner`` actually wired in production is this module's own
+    ``subprocess_runner``, which always sets the field (see its own
+    docstring) — so this branch is unreachable from any real call site
+    today. It stays because ``runner`` is an injected parameter, not a fixed
+    call: a test double, or a future runner this module does not control,
+    can still omit the field, and recording a fabricated ``False`` for it
+    would be the exact ledger-fidelity bug this module exists to avoid.
 
     ``malformed`` is set ONLY where the call returned an answer that could not
     be parsed (outcome 7a) — not on a timeout, a non-zero exit or an exception,
@@ -388,7 +418,7 @@ def _record_raised(
     reason = "judge raised (fail-open)"
     judge_ledger.decided(
         name, stage="call", verdict=False, reason=reason,
-        timed_out=False, malformed=False,
+        timed_out=None, malformed=False,
         remaining=remaining, threshold=timeout, ceiling=ceiling, duration=duration,
     )
     return False, reason
@@ -449,14 +479,14 @@ def judge_binary_ask(
     budget before calling in."""
     if not enabled:
         return _judge_unavailable(
-            "binary_ask", _UNAVAILABLE_REASON,
+            "binary_ask", _UNAVAILABLE_REASON, stage="killswitch",
             timeout=timeout, remaining=remaining, ceiling=ceiling,
         )
     if not binary_ask_prefilter(final_text):
         return False, ""
     if runner is None:
         return _judge_unavailable(
-            "binary_ask", _UNAVAILABLE_REASON,
+            "binary_ask", _UNAVAILABLE_REASON, stage="no_runner",
             timeout=timeout, remaining=remaining, ceiling=ceiling,
         )
     judge_ledger.set_current_judge("binary_ask")
@@ -580,17 +610,17 @@ def judge_feedback_signal(
     active threshold."""
     if not enabled:
         return _judge_unavailable(
-            "feedback_signal", _UNAVAILABLE_REASON,
+            "feedback_signal", _UNAVAILABLE_REASON, stage="killswitch",
             timeout=timeout, remaining=remaining, ceiling=ceiling,
         )
     if not isinstance(user_text, str) or not user_text:
         return _judge_unavailable(
-            "feedback_signal", _NO_TEXT_REASON,
+            "feedback_signal", _NO_TEXT_REASON, stage="no_text",
             timeout=timeout, remaining=remaining, ceiling=ceiling,
         )
     if runner is None:
         return _judge_unavailable(
-            "feedback_signal", _UNAVAILABLE_REASON,
+            "feedback_signal", _UNAVAILABLE_REASON, stage="no_runner",
             timeout=timeout, remaining=remaining, ceiling=ceiling,
         )
     judge_ledger.set_current_judge("feedback_signal")
@@ -641,17 +671,17 @@ def judge_outage_escalation(
     threshold."""
     if not enabled:
         return _judge_unavailable(
-            "outage_escalation", _UNAVAILABLE_REASON,
+            "outage_escalation", _UNAVAILABLE_REASON, stage="killswitch",
             timeout=timeout, remaining=remaining, ceiling=ceiling,
         )
     if not isinstance(assistant_text, str) or not assistant_text:
         return _judge_unavailable(
-            "outage_escalation", _NO_TEXT_REASON,
+            "outage_escalation", _NO_TEXT_REASON, stage="no_text",
             timeout=timeout, remaining=remaining, ceiling=ceiling,
         )
     if runner is None:
         return _judge_unavailable(
-            "outage_escalation", _UNAVAILABLE_REASON,
+            "outage_escalation", _UNAVAILABLE_REASON, stage="no_runner",
             timeout=timeout, remaining=remaining, ceiling=ceiling,
         )
     judge_ledger.set_current_judge("outage_escalation")
@@ -703,17 +733,17 @@ def judge_deferring_disposition(
     to the ledger only, alongside ``timeout`` as the active threshold."""
     if not enabled:
         return _judge_unavailable(
-            "deferring_disposition", _UNAVAILABLE_REASON,
+            "deferring_disposition", _UNAVAILABLE_REASON, stage="killswitch",
             timeout=timeout, remaining=remaining, ceiling=ceiling,
         )
     if not isinstance(ask_text, str) or not ask_text:
         return _judge_unavailable(
-            "deferring_disposition", _NO_TEXT_REASON,
+            "deferring_disposition", _NO_TEXT_REASON, stage="no_text",
             timeout=timeout, remaining=remaining, ceiling=ceiling,
         )
     if runner is None:
         return _judge_unavailable(
-            "deferring_disposition", _UNAVAILABLE_REASON,
+            "deferring_disposition", _UNAVAILABLE_REASON, stage="no_runner",
             timeout=timeout, remaining=remaining, ceiling=ceiling,
         )
     judge_ledger.set_current_judge("deferring_disposition")
@@ -781,12 +811,21 @@ def subprocess_runner(argv: list[str], *, timeout: int = _ADVISOR_TIMEOUT_S) -> 
     function's own signature is frozen and cannot grow a judge-name parameter."""
     judge_name = judge_ledger.take_current_judge()
     if judge_name is None:
-        # No judge function claimed this call: an engine-path advisory call from
-        # cli.py, not one of the hooks' judges. It gets its own invocation id so
-        # that N such calls in one CLI process do not collapse into one, and the
-        # name records that attribution is absent rather than guessing a judge.
+        # Every caller in this module now self-identifies before invoking the
+        # injected runner (the four hook judges, and enumerate_claims/
+        # enumerate_questions_health/judge/acceptance_judge on the engine
+        # path), so reaching here means a caller OUTSIDE this module invoked
+        # the runner directly without going through any of them — a genuinely
+        # unattributed call. It gets its own invocation id so that N such
+        # calls in one CLI process do not collapse into one, and the name
+        # records that attribution is absent rather than guessing a judge —
+        # but ONLY outside any hook. Inside a hook, minting a fresh id here
+        # would orphan the hook's OWN invocation_id (set by hook_start()) for
+        # every line this call and everything after it writes, which is
+        # strictly worse than sharing that id with an unattributed name.
         judge_name = _UNATTRIBUTED_JUDGE
-        judge_ledger.reset_invocation()
+        if judge_ledger.current_hook() is None:
+            judge_ledger.reset_invocation()
     judge_ledger.started(judge_name)
     start = time.monotonic()
     try:

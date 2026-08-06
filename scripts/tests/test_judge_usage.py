@@ -346,7 +346,7 @@ def test_outcome_7b_judge_raises(monkeypatch, tmp_path):
     decided = [r for r in judge_ledger.read_records(path) if r["kind"] == "decided"][0]
     assert decided["stage"] == "call"
     assert decided["malformed"] is False  # an exception yields no answer at all
-    assert decided["timed_out"] is False
+    assert decided["timed_out"] is None  # unknown, not "no timeout" -- no runner reported it
     assert "raised" in decided["reason"]
 
 
@@ -357,7 +357,7 @@ def test_outcome_7c_judge_disabled(monkeypatch, tmp_path):
     result = _esc.decide(ESCALATION_PAYLOAD, runner=_fake_runner(stdout="YES"))
     assert result is None
     decided = [r for r in judge_ledger.read_records(path) if r["kind"] == "decided"][0]
-    assert decided["stage"] == "disabled"
+    assert decided["stage"] == "killswitch"
     assert decided["verdict"] is False
 
 
@@ -520,6 +520,25 @@ def test_subprocess_runner_consumes_the_judge_name_once(monkeypatch, tmp_path):
     assert calls[0]["invocation_id"] != calls[1]["invocation_id"]
 
 
+def test_unattributed_call_inside_a_hook_shares_the_hooks_own_invocation_id(monkeypatch, tmp_path):
+    path = _use_ledger(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        advisor.subprocess, "run",
+        lambda argv, **kwargs: SimpleNamespace(returncode=0, stdout="YES", stderr=""),
+    )
+    hook_invocation_id = judge_ledger.hook_start("escalation_diagnosis")
+    # No set_current_judge() call in front of this one, unlike every judge
+    # function's own call site -- an unattributed call made while a hook is
+    # mid-invocation, not the "outside any hook" case the sibling test above
+    # covers.
+    advisor.subprocess_runner(["claude", "-p", "irrelevant"], timeout=5)
+    calls = [r for r in judge_ledger.read_records(path) if r["kind"] == "call"]
+    assert calls[0]["judge"] == advisor._UNATTRIBUTED_JUDGE
+    # Minting a fresh id here would orphan the hook's own invocation_id for
+    # this call and everything after it -- sharing it is strictly better.
+    assert calls[0]["invocation_id"] == hook_invocation_id
+
+
 # --- a runner predating the timed_out flag ----------------------------------
 
 def test_legacy_runner_without_timed_out_records_an_unknown_not_a_false(monkeypatch, tmp_path):
@@ -533,6 +552,49 @@ def test_legacy_runner_without_timed_out_records_an_unknown_not_a_false(monkeypa
     decided = [r for r in judge_ledger.read_records(path) if r["kind"] == "decided"][0]
     assert decided["timed_out"] is None
     assert decided["runner_legacy"] is True
+
+
+# --- the four engine-path functions self-attribute, each its own name -------
+
+def test_engine_path_functions_attribute_their_own_name_not_unattributed(monkeypatch, tmp_path):
+    path = _use_ledger(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        advisor.subprocess, "run",
+        lambda argv, **kwargs: SimpleNamespace(returncode=0, stdout="YES\nfine", stderr=""),
+    )
+    advisor.enumerate_claims("some text", advisor.subprocess_runner)
+    advisor.enumerate_questions_health("goal", "done", "plan text", advisor.subprocess_runner)
+    advisor.judge("weight_classification", {}, advisor.subprocess_runner, enabled=True)
+    advisor.acceptance_judge(
+        "observation", "expected", advisor.subprocess_runner, enabled=True
+    )
+    calls = [r for r in judge_ledger.read_records(path) if r["kind"] == "call"]
+    assert [c["judge"] for c in calls] == [
+        "enumerate_claims",
+        "enumerate_questions_health",
+        "judge",
+        "acceptance_judge",
+    ]
+    # begin_attributed_call() runs at the top of each function, so outside any
+    # hook each of the four lands under its own fresh invocation_id.
+    assert len({c["invocation_id"] for c in calls}) == 4
+
+
+def test_engine_path_judge_called_inside_a_hook_keeps_the_hooks_invocation_id(
+    monkeypatch, tmp_path
+):
+    path = _use_ledger(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        advisor.subprocess, "run",
+        lambda argv, **kwargs: SimpleNamespace(returncode=0, stdout="YES\nfine", stderr=""),
+    )
+    hook_invocation = judge_ledger.hook_start("turn_end")
+    advisor.acceptance_judge(
+        "observation", "expected", advisor.subprocess_runner, enabled=True
+    )
+    calls = [r for r in judge_ledger.read_records(path) if r["kind"] == "call"]
+    assert [c["judge"] for c in calls] == ["acceptance_judge"]
+    assert calls[0]["invocation_id"] == hook_invocation
 
 
 # --- the ledger write must never become a new failure mode ------------------
@@ -593,8 +655,14 @@ def test_concurrent_processes_append_whole_lines(tmp_path):
         subprocess.Popen([sys.executable, str(writer), str(SCRIPTS_DIR), hook], env=env)
         for hook in ("escalation_diagnosis", "deferring_disposition")
     ]
-    for proc in procs:
-        assert proc.wait(timeout=120) == 0
+    try:
+        for proc in procs:
+            assert proc.wait(timeout=120) == 0
+    finally:
+        for proc in procs:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
     lines = [ln for ln in path.read_text().splitlines() if ln.strip()]
     # Two real processes, interleaved in time: every line must still parse, which
     # is the property O_APPEND buys and a read-modify-write would lose.

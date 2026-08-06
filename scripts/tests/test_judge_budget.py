@@ -51,24 +51,24 @@ def test_default_clock_is_real_time_monotonic():
     assert 4.5 <= budget.remaining() <= 5.0
 
 
-def test_next_call_timeout_is_capped_remaining_when_above_the_floor():
+def test_remaining_and_timeout_is_capped_remaining_when_above_the_floor():
     clock = _FakeClock([0.0, 5.0])
     budget = _mod.JudgeBudget(20, 12, clock=clock)
-    assert budget.next_call_timeout(30) == 15.0
+    assert budget.remaining_and_timeout(30)[1] == 15.0
 
 
-def test_next_call_timeout_caps_at_the_call_ceiling_not_the_remaining_budget():
+def test_remaining_and_timeout_caps_at_the_call_ceiling_not_the_remaining_budget():
     clock = _FakeClock([0.0, 2.0])
     budget = _mod.JudgeBudget(20, 12, clock=clock)
     # remaining = 18.0, well above the floor, but the per-call ceiling (10)
     # is tighter -- the cap must win.
-    assert budget.next_call_timeout(10) == 10
+    assert budget.remaining_and_timeout(10)[1] == 10
 
 
-def test_next_call_timeout_is_none_when_remaining_is_below_the_floor():
+def test_remaining_and_timeout_is_none_when_remaining_is_below_the_floor():
     clock = _FakeClock([0.0, 18.0])
     budget = _mod.JudgeBudget(20, 12, clock=clock)
-    assert budget.next_call_timeout(30) is None
+    assert budget.remaining_and_timeout(30)[1] is None
 
 
 def test_exactly_at_the_floor_is_still_enough_budget():
@@ -76,7 +76,7 @@ def test_exactly_at_the_floor_is_still_enough_budget():
     # sufficient -- pin the boundary the original hook relied on.
     clock = _FakeClock([0.0, 8.0])
     budget = _mod.JudgeBudget(20, 12, clock=clock)
-    assert budget.next_call_timeout(30) == 12.0
+    assert budget.remaining_and_timeout(30)[1] == 12.0
 
 
 def test_one_deadline_spans_successive_calls_rather_than_resetting():
@@ -85,12 +85,12 @@ def test_one_deadline_spans_successive_calls_rather_than_resetting():
     # invocation budget runs out on the third.
     clock = _FakeClock([0.0, 0.0, 10.0, 30.0])
     budget = _mod.JudgeBudget(40, 12, clock=clock)
-    assert budget.next_call_timeout(30) == 30
-    assert budget.next_call_timeout(30) == 30
-    assert budget.next_call_timeout(30) is None
+    assert budget.remaining_and_timeout(30)[1] == 30
+    assert budget.remaining_and_timeout(30)[1] == 30
+    assert budget.remaining_and_timeout(30)[1] is None
 
 
-def test_next_call_timeout_reads_the_clock_exactly_once():
+def test_remaining_and_timeout_reads_the_clock_only_once_per_call():
     # A caller decides go/no-go AND the timeout from a single reading -- two
     # reads per call would let the two decisions see different remaining
     # values on a real (non-fake) clock. Counting starts AFTER construction
@@ -105,7 +105,7 @@ def test_next_call_timeout_reads_the_clock_exactly_once():
 
     budget = _mod.JudgeBudget(20, 12, clock=counting_clock)
     calls.clear()
-    budget.next_call_timeout(30)
+    budget.remaining_and_timeout(30)
     assert len(calls) == 1
 
 

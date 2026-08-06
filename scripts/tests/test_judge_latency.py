@@ -308,13 +308,13 @@ def test_the_non_judge_advisory_calls_carry_the_advisory_timeout(name):
 
 # --- the per-call floor is a per-call parameter -------------------------------
 
-def test_next_call_timeout_takes_a_per_call_floor_and_falls_back_to_the_budgets():
+def test_remaining_and_timeout_takes_a_per_call_floor_and_falls_back_to_the_budgets():
     """The signature change stage 3 rests on: a hook calling three different
     judges on one budget needs a floor per judge, but the two hooks calling one
     judge must keep naming their floor once, at construction."""
     clock = iter([0.0, 0.0, 0.0, 0.0])
     budget = judge_budget.JudgeBudget(52, 12, clock=lambda: next(clock))
     # Named floor wins over the constructor's.
-    assert budget.next_call_timeout(16, min_call_s=14) == 16
+    assert budget.remaining_and_timeout(16, min_call_s=14)[1] == 16
     # Omitted -> the constructor's floor, and the cap still applies.
-    assert budget.next_call_timeout(13) == 13
+    assert budget.remaining_and_timeout(13)[1] == 13
