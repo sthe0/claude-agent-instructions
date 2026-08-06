@@ -35,11 +35,15 @@ _TIMEOUT_STDERR_PREFIX = "advisor timed out after"
 # shot, and calibration (docs/operations/advisor-timeout-calibration.md, 15 rows x
 # 5 sizes x 3 repeats) measured 15-170s of real latency against a 480s dataset
 # ceiling -- far past _ADVISOR_TIMEOUT_S=20, which would truncate nearly every
-# whole-plan call. 480 = ceil_to_minute(largest within-size max/min spread (4.173x,
-# the refutation check's own number -- size 23018, 96.513/23.127) * the min
+# whole-plan call. 480 = ceil_to_minute(largest within-size max/min spread (size
+# 23018, 96.513/23.127 = 4.173174x, the refutation check's own number) * the min
 # elapsed_s at the largest sampled size (103.213s, size 203681)) =
-# ceil_to_minute(430.73) = 480. The literal below is that computed value, checked
-# by test against the raw committed dataset (advisor-calibration.jsonl) rather than
+# ceil_to_minute(430.726) = 480. The spread is quoted here to six figures, not as
+# the 4.173x it is displayed as elsewhere, because the product of the ROUNDED
+# factors is 430.708 -- close enough to be indistinguishable after ceiling, far
+# enough that recomputing from the printed digits reads as an arithmetic error.
+# The literal below is that computed value, checked by test against the raw
+# committed dataset (advisor-calibration.jsonl) at full precision rather than
 # re-derived at runtime, so a calibration-note edit can never silently drift the
 # shipped timeout.
 _ENUMERATE_TIMEOUT_S_DEFAULT = 480

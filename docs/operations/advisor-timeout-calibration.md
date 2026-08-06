@@ -60,9 +60,11 @@ Stage 3 originally derived a **size-dependent** timeout from the fits above. App
 
 What ships is therefore one scalar, `advisor._ENUMERATE_TIMEOUT_S_DEFAULT = 480`, env-overridable via `AGENTCTL_ENUMERATE_TIMEOUT_S`. Its provenance is the **`max/min`** figure, not the `max/median` one above:
 
-`ceil_to_minute(4.173 × 103.213) = ceil_to_minute(430.73) = 480`
+`ceil_to_minute((96.513 / 23.127) × 103.213) = ceil_to_minute(4.173174 × 103.213) = ceil_to_minute(430.726) = 480`
 
-— the largest within-size `max/min` spread (size 23018, 96.513/23.127) times the **minimum** elapsed at the largest sampled size (103.213 s, size 203681). `advisor.py` carries that derivation at the literal, and a test recomputes it from the raw committed dataset rather than at runtime, so an edit to this note can never silently drift the shipped timeout.
+— the largest within-size `max/min` spread (size 23018, 96.513/23.127) times the **minimum** elapsed at the largest sampled size (103.213 s, size 203681). The quotient is written out here to six figures on purpose: elsewhere the same spread is displayed as **4.17×** / **4.173×**, and recomputing the product from those rounded digits lands at 430.708 — a reader who does so concludes the note contradicts itself, which a reviewer of this very section did. Rounding for display is fine; printing an equation whose own digits do not reproduce its own result is not, in a note whose only job is to be re-checkable.
+
+`advisor.py` carries the same derivation at the literal, and a test recomputes it from the raw committed dataset — at full precision, from `advisor-calibration.jsonl`, not from any figure displayed here — rather than at runtime, so an edit to this note can never silently drift the shipped timeout.
 
 ## Sampling rule and its two recorded deviations
 
