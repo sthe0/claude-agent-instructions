@@ -15,6 +15,8 @@ about a hook the system never meant to wire).
 """
 from __future__ import annotations
 
+import ast
+import importlib.util
 import json
 import re
 import sys
@@ -307,3 +309,80 @@ def test_timeout_requirements_are_not_derived_from_the_registry():
         assert (SCRIPTS / name).exists(), f"requirement names a missing hook: {name}"
         assert isinstance(minimum, int) and minimum > 0
         assert why.strip(), f"{name}'s requirement carries no rationale"
+
+
+# --- the timeout NUMBER is not one fact, it is three copies of one fact -------
+#
+# `hook-turn-end-gate.py` (and its two siblings) carry their whole-invocation
+# judge budget in THREE untied places: the hook module's own constant, this
+# table's `minimum`, and install-reminder-hooks.sh's DESIRED row `timeout`. Each
+# test below closes one direction between two of the three; together they are
+# the only thing standing between "the number is 30 everywhere" and a silent
+# regression in any single copy.
+
+def _desired_rows() -> "list[tuple]":
+    """Every 4-tuple in install-reminder-hooks.sh's DESIRED block, parsed as
+    data (`ast.literal_eval`) rather than grepped as text — so a row's timeout
+    is read as the number it actually is, not inferred from a substring match."""
+    text = (SCRIPTS / "install-reminder-hooks.sh").read_text(encoding="utf-8")
+    block = text.split("DESIRED = [", 1)[1].split("\n]", 1)[0]
+    return ast.literal_eval("[" + block + "\n]")
+
+
+def _load_hook_module(name: str):
+    """Load a hook-*.py script as a module by its own file, the established
+    idiom for these hyphenated filenames (mirrors test_hook_turn_end_gate.py's
+    `_load_module`). A name distinct from any other test file's registration
+    avoids reusing a sibling test's possibly-monkeypatched module object."""
+    module_name = "wiring_check_" + name[:-3].replace("-", "_")
+    spec = importlib.util.spec_from_file_location(module_name, SCRIPTS / name)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_timeout_requirement_own_constant_covers_every_requirement():
+    """Bidirectional coverage: every TIMEOUT_REQUIREMENTS row has a matching
+    entry in TIMEOUT_REQUIREMENT_OWN_CONSTANT (so the machine-link test below
+    actually runs for it), and no entry there names a hook the requirements
+    table no longer lists."""
+    required = {name for name, _minimum, _why in hook_wiring.TIMEOUT_REQUIREMENTS}
+    linked = set(hook_wiring.TIMEOUT_REQUIREMENT_OWN_CONSTANT)
+    assert required == linked
+
+
+def test_timeout_requirement_minimum_matches_the_hooks_own_budget_constant():
+    """should-fix #1b: TIMEOUT_REQUIREMENTS' minimum for each hook must equal
+    that hook's own whole-invocation judge-budget constant — read by IMPORTING
+    the hook module and reading the constant, a genuine machine link rather than
+    two literals that happen to agree today. Catches the requirements table
+    itself drifting out of step with the hook it describes (reviewer's
+    mutation M8: minimum 30->5 for hook-turn-end-gate.py with the hook's own
+    _TURN_JUDGE_BUDGET_S left at 30)."""
+    for name, minimum, _why in hook_wiring.TIMEOUT_REQUIREMENTS:
+        const_name = hook_wiring.TIMEOUT_REQUIREMENT_OWN_CONSTANT[name]
+        module = _load_hook_module(name)
+        actual = getattr(module, const_name)
+        assert actual == minimum, (
+            f"{name}.{const_name} is {actual}, but TIMEOUT_REQUIREMENTS says "
+            f"{minimum} — the two must be the same number"
+        )
+
+
+def test_desired_registrations_meet_their_own_hooks_timeout_requirement():
+    """should-fix #1a: every DESIRED row in install-reminder-hooks.sh for a hook
+    listed in TIMEOUT_REQUIREMENTS must register it at or above that hook's
+    minimum — read from the SAME rows the installer will actually write, not a
+    second hand-copied literal. Covers every row of TIMEOUT_REQUIREMENTS, not
+    just one (reviewer's mutation M6: DESIRED timeout 35->5 for
+    hook-turn-end-gate.py, whose requirement minimum is 30)."""
+    rows = _desired_rows()
+    for name, minimum, _why in hook_wiring.TIMEOUT_REQUIREMENTS:
+        matches = [row for row in rows if row[2].split()[0] == name]
+        assert matches, f"{name} has a timeout requirement but no DESIRED row"
+        for event, matcher, script, timeout in matches:
+            assert timeout >= minimum, (
+                f"{name} is desired at {timeout}s under ({event}, {matcher}) — "
+                f"below its own {minimum}s requirement"
+            )

@@ -418,7 +418,16 @@ What the engine can and cannot do about it:
   deliberate choice of the user's. The report is the whole intervention:
   `hook-canon-guard-wired-check.py` runs at SessionStart and names every gate-bearing hook
   (`lib/hook_wiring.GATE_BEARING_HOOKS`) that is absent from the loading root, together with the
-  enforcement each absence disables;
+  enforcement each absence disables. Presence is not the whole story: a hook can be WIRED and
+  still never finish, because the harness kills it at its registered `timeout`. The same file
+  checks a second, independent axis for that — every hook in `lib/hook_wiring.TIMEOUT_REQUIREMENTS`
+  registered with a timeout below its own whole-invocation judge budget. The SessionStart path
+  reports both axes fail-open (established problems only, never blocks). `--check-timeouts` is a
+  separate one-shot entry point over the timeout axis alone, and its polarity is the opposite:
+  FAIL-CLOSED — a shortfall, an UNKNOWN, or an exception inside the check itself all exit non-zero,
+  because a check whose only job is to refuse must not default to "fine". It has no caller yet; a
+  later stage is expected to wire it as a gate of its own (e.g. into `install-reminder-hooks.sh`'s
+  own final check), not to run it as a hook;
 - it **must not** change the verdict on wiring. A missing prover changes what a gate *says*, never
   whether it blocks. Letting approval through because the hook is missing would convert every
   un-onboarded machine into an ungated one.

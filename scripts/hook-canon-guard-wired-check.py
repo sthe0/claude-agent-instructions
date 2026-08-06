@@ -283,7 +283,12 @@ def check_timeouts_main() -> int:
             "  Install to reconcile the registered timeouts:\n"
             "    bash ~/claude-agent-instructions/scripts/install-reminder-hooks.sh\n"
             "  Then RELOAD the config (open /hooks, or restart) — the harness\n"
-            "  captures its hook set once at session start."
+            "  captures its hook set once at session start.\n"
+            "  This reconciles a registration ONLY under the (event, matcher)\n"
+            "  group install-reminder-hooks.sh's DESIRED table wires that hook to.\n"
+            "  A registration listed above under a DIFFERENT matcher is a group\n"
+            "  the installer never touches (add_rows()'s own boundary) — remove it\n"
+            "  by hand instead."
         )
         return 1
     print(f"[check-timeouts] OK — harness config root: {root}")

@@ -184,6 +184,39 @@ def test_reconciliation_never_rewrites_a_command(tmp_path):
     assert foreign in after and other in after
 
 
+def test_a_foreign_matcher_entry_is_left_stale_and_a_correct_entry_is_added(tmp_path):
+    """The third boundary, distinct from `test_a_foreign_dirname_entry_is_not_
+    retargeted` above: same basename, same event, but a DIFFERENT matcher than
+    DESIRED's row declares. group_for() keys strictly on matcher, so this
+    registration lives in a group the DESIRED row's own group_for() lookup never
+    finds — `present` for that lookup comes back empty, and the row is inserted
+    as a second, correctly matchered entry. The stale entry survives forever;
+    only a manual edit removes it (add_rows()'s docstring names this boundary
+    alongside the command one)."""
+    env = _shell_env(tmp_path)
+    stale = str(SCRIPTS_DIR / SLOW_HOOK)
+    foreign_matcher = "Edit|Write"
+    settings = _write(env, {SLOW_EVENT: [_group(foreign_matcher, [stale], 5)]})
+
+    proc = _run(env)
+    assert proc.returncode == 0, proc.stderr
+
+    data = json.loads(settings.read_text(encoding="utf-8"))
+    groups = data["hooks"][SLOW_EVENT]
+
+    foreign_group = next(g for g in groups if (g.get("matcher") or None) == foreign_matcher)
+    foreign_entries = [h for h in foreign_group["hooks"] if h["command"].endswith(SLOW_HOOK)]
+    assert len(foreign_entries) == 1, "the foreign-matcher entry was duplicated or removed"
+    assert foreign_entries[0]["timeout"] == 5, (
+        "the foreign-matcher entry was reconciled, which this boundary forbids"
+    )
+
+    desired_group = next(g for g in groups if (g.get("matcher") or None) == SLOW_MATCHER)
+    desired_entries = [h for h in desired_group["hooks"] if h["command"].endswith(SLOW_HOOK)]
+    assert len(desired_entries) == 1, "no correctly matchered entry was added alongside it"
+    assert desired_entries[0]["timeout"] >= _required_timeout(SLOW_HOOK)
+
+
 def test_a_hook_absent_from_the_root_is_still_added(tmp_path):
     """Reconciliation is added ALONGSIDE the insert pass, not in place of it: an
     empty root must still come out fully wired."""

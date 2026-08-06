@@ -135,6 +135,19 @@ TIMEOUT_REQUIREMENTS: "tuple[tuple[str, int, str], ...]" = (
      "up to three judges in one invocation under a 30s whole-invocation budget"),
 )
 
+# Each TIMEOUT_REQUIREMENTS minimum, above, is a copy of a number the hook
+# module itself already owns as a constant — the whole-invocation budget it
+# passes to `judge_budget.JudgeBudget`. This is the machine link back to that
+# owning constant, so a test can assert the two stay equal by IMPORT rather
+# than by two literals that happen to match today. Keyed separately from
+# TIMEOUT_REQUIREMENTS (instead of widening its tuple) so the existing 3-tuple
+# unpack at every current call site does not have to change.
+TIMEOUT_REQUIREMENT_OWN_CONSTANT: "dict[str, str]" = {
+    "hook-escalation-diagnosis-gate.py": "_JUDGE_BUDGET_S",
+    "hook-deferring-disposition-gate.py": "_ASK_JUDGE_BUDGET_S",
+    "hook-turn-end-gate.py": "_TURN_JUDGE_BUDGET_S",
+}
+
 
 def managed_settings_path() -> Path:
     """The managed-policy settings file for this platform.

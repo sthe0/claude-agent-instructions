@@ -554,13 +554,24 @@ def _load_agentctl_state(session_id: str | None):
         return None
 
 
-def build_context(payload: dict, *, runner: Callable | None = None) -> TurnContext | None:
+def build_context(
+    payload: dict, *, runner: Callable | None = None, budget: "judge_budget.JudgeBudget | None" = None
+) -> TurnContext | None:
     """Freeze this turn's facts, or None when the turn cannot be read (fail-open).
 
     ``runner`` is injected straight into the agentctl.advisor judges (None ->
     each judge fails open to False, exactly like advisor absent). The real
     invocation point (main()) passes advisor.subprocess_runner; tests inject a
     fake runner or omit it entirely to keep the suite free of live model calls.
+
+    ``budget`` defaults to a fresh whole-invocation JudgeBudget opened right
+    here, at the top, BEFORE the transcript is read — not after, as it used to
+    be. The registered timeout (35s) already covers interpreter start, transcript
+    parsing and the guardian run on top of the judge budget itself (30s), and a
+    deadline that opens only after parsing is done quietly spends part of that
+    5s headroom without the budget ever knowing. main() passes its own budget
+    through instead of relying on this default, so the deadline covers the same
+    span the harness actually times.
 
     The three judges are evaluated SEQUENTIALLY against one _TURN_JUDGE_BUDGET_S
     deadline, not as three eager arguments to the TurnContext constructor. As
@@ -571,6 +582,11 @@ def build_context(payload: dict, *, runner: Callable | None = None) -> TurnConte
     instead — and the drop is RECORDED (`judges_skipped`) rather than swallowed,
     because a judge that silently never ran is exactly the invisible failure
     this whole change is about."""
+    if budget is None:
+        budget = judge_budget.JudgeBudget(
+            _TURN_JUDGE_BUDGET_S, _TURN_JUDGE_MIN_CALL_S, clock=time.monotonic
+        )
+
     transcript_path = payload.get("transcript_path")
     if not isinstance(transcript_path, str) or not transcript_path:
         return None
@@ -596,9 +612,6 @@ def build_context(payload: dict, *, runner: Callable | None = None) -> TurnConte
     agentctl_state = _load_agentctl_state(session_id)
     assistant_text = _assistant_text_of(turn_entries)
 
-    budget = judge_budget.JudgeBudget(
-        _TURN_JUDGE_BUDGET_S, _TURN_JUDGE_MIN_CALL_S, clock=time.monotonic
-    )
     skipped: list[str] = []
 
     def _judged(name: str, prefilter_fires: bool, call: Callable[[float], bool]) -> bool:
@@ -688,11 +701,13 @@ def _marker_path(session_key: str, user_text: str) -> Path:
     return _state_dir() / digest
 
 
-def decide(payload: dict, *, runner: Callable | None = None) -> dict | None:
+def decide(
+    payload: dict, *, runner: Callable | None = None, budget: "judge_budget.JudgeBudget | None" = None
+) -> dict | None:
     """Core decision. Returns a block-directive dict, or None to allow.
 
-    ``runner`` is threaded straight through to build_context() for the semantic
-    prose_binary_ask judge; see build_context's docstring."""
+    ``runner`` and ``budget`` are threaded straight through to build_context();
+    see its docstring for what each means and defaults to."""
     if payload.get("stop_hook_active"):
         return None
 
@@ -707,7 +722,7 @@ def decide(payload: dict, *, runner: Callable | None = None) -> dict | None:
     except ValueError:
         pass
 
-    ctx = build_context(payload, runner=runner)
+    ctx = build_context(payload, runner=runner, budget=budget)
     if ctx is None:
         return None
 
@@ -746,6 +761,11 @@ def decide(payload: dict, *, runner: Callable | None = None) -> dict | None:
 
 
 def main() -> int:
+    # Opened first, before the stdin payload is even read, so the deadline
+    # honestly covers transcript parsing too — not only the judge calls.
+    budget = judge_budget.JudgeBudget(
+        _TURN_JUDGE_BUDGET_S, _TURN_JUDGE_MIN_CALL_S, clock=time.monotonic
+    )
     try:
         payload = json.load(sys.stdin)
     except Exception:
@@ -753,7 +773,7 @@ def main() -> int:
     if not isinstance(payload, dict):
         return 0
     try:
-        directive = decide(payload, runner=advisor.subprocess_runner)
+        directive = decide(payload, runner=advisor.subprocess_runner, budget=budget)
     except Exception:
         return 0  # fail-open — a hook must never wedge the session
     if directive is not None:

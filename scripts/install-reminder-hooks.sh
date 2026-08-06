@@ -231,14 +231,22 @@ def add_rows(hooks, rows, reconcile=False):
     number forever. With it, an existing entry's `timeout` is brought to the
     DESIRED value.
 
-    Two boundaries, both deliberate. Only `timeout` is reconciled — never
+    Three boundaries, all deliberate. Only `timeout` is reconciled — never
     `command`: an entry with the same basename under a different directory is a
     machine-local choice about WHAT runs, and silently retargeting it is
     qualitatively worse than leaving it slow (the wiring probe reports it as a
-    divergence instead). And reconciliation is OFF by default because this
-    function also serves the prune-only roots, where touching an entry the
-    installer did not put there is exactly what "prune-only" promises not to do;
-    the agent-root caller opts in explicitly.
+    divergence instead). Reconciliation is OFF by default because this function
+    also serves the prune-only roots, where touching an entry the installer did
+    not put there is exactly what "prune-only" promises not to do; the
+    agent-root caller opts in explicitly. And the group a row's basename is
+    looked up in is chosen by `group_for(groups, matcher)` keyed on the ROW's
+    own matcher — so an existing registration of the same basename under a
+    DIFFERENT matcher is a different group entirely, `present` for THIS row's
+    group comes back empty, and the row is inserted as a second, correctly
+    matchered entry rather than reconciling the first. The stale entry is left
+    exactly as it was, forever, on every run: nothing here re-keys a live
+    registration onto a new matcher, on the same "never silently retarget"
+    reasoning as the command boundary above. Removing it is a manual edit.
     """
     added = []
     reconciled = []
