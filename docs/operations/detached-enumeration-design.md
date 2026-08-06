@@ -161,10 +161,35 @@ the complete new one, never a partial. The parent folds it in.
 guardian would mutate a throwaway dict, and no gate-evaluation path calls `store.save()`
 afterwards. The fold belongs in the mutating commands, immediately before they evaluate the
 gate: `cmd_approve` (before `cli.py:2048`) and `cmd_replan` (inside the swapped block, before
-`cli.py:3261`), each persisting via the `store.save()` they already perform. `cmd_status` may
-fold read-only for display. A fold lost on a refusing `cmd_approve` (which returns at
-`cli.py:2058` without saving) costs nothing: the sidecar file persists and the fold is
-idempotent, so the next call re-folds.
+`cli.py:3261`). `cmd_status` may fold read-only for display.
+
+**Implementation note (stage 6, correcting the two claims above against the shipped code):**
+the "costs nothing" / "already perform" framing above did not survive contact with the actual
+save sites, on both counts:
+
+- **A fold lost on a refusing `cmd_approve` does NOT cost nothing.** Shipped `cmd_approve`
+  (`cli.py:2505-2512`) calls `store.save(state)` immediately after a mutating fold and
+  **before** `plan_approval`'s blockers are computed — i.e. before the refusal path that
+  returns without reaching the function's own success-path save. The governing comment names
+  the cost directly: *"Persist BEFORE the gate is evaluated, not after: the blockers below are
+  computed from the folded bag and name its `qenum-N` candidates, and this function returns on
+  any blocker WITHOUT reaching its own `store.save()` — so a fold left in memory would refuse
+  the approve while `question-candidate-dispose --id qenum-1` had nothing to find"*
+  (`cli.py:2507-2511`). A lost fold would have left exactly that dangling reference; the extra
+  save exists because it is not free, not because it is unnecessary.
+- **`cmd_replan` does NOT persist the fold via a save it already performs.** The fold sits
+  inside the swapped-`plan_path` `try` block, and `cmd_replan`'s ordinary save sites are
+  unreached on the refusal path this fold shares. Shipped `cmd_replan` (`cli.py:3747,
+  3755-3759, 3763-3771`) instead threads a dedicated `enumeration_bag_dirty` flag — set when
+  either the fold mutates the bag or a fresh enumeration is launched — and saves on it
+  explicitly, once the swapped `plan_path` is restored: *"AFTER the finally restored
+  `plan_path` — a save inside the swapped block would persist the PROPOSED plan as the
+  session's current one. Before the `pblock` return below, because this path refuses without
+  reaching any of `cmd_replan`'s own save sites: unsaved, the deadline stamp Stage 5's escape
+  reads would never exist on disk, and the not-run clear would leave the bag pinned to the
+  superseded digest — i.e. the inescapable `_ENUMERATE_STALE`, the exact routing the clear
+  exists to prevent"* (`cli.py:3763-3771`). This is a new save site the design above did not
+  anticipate, not a reuse of an existing one.
 
 **Why the digest key makes the fold safe.** A sidecar computed against different plan content
 is discarded by the same rule the gate already applies at `plugins_premise.py:172` — the
@@ -235,7 +260,12 @@ retroactive deadline. Already surfaced to the user in the plan essence; not a bl
 the mandatory check (`cli.py:1402`, unconditional on the pair count; the rationale is in
 `advisor.py:133-138`). Detaching does not touch this hole and stage 5's escape does not close
 it, because `runner_ok` is `True`. *Consequence:* stage 6 must document it explicitly rather
-than let the delivery read as if the check were now sound.
+than let the delivery read as if the check were now sound. **Addressed at stage 6:** documented
+in [`memory-global/leaves/question-provenance-gate.md`](../../memory-global/leaves/question-provenance-gate.md)
+§ Honest ceiling's rewritten F3b bullet, which names the zero-pair successful run explicitly as
+a residual that still discharges silently by design and is **not** escapable (nothing failed,
+so there is nothing to attach a typed escape reason to) — distinct from the runner-failure case
+stage 5 closed. This item now points there rather than standing alone.
 
 ## Principle
 

@@ -36,7 +36,7 @@ Per-size residuals (median − fit), seconds:
 ## Plateau — DIAGNOSTIC ONLY, never shipped
 
 Best three-parameter plateau `t = a + b*min(chars, knee)`: knee = 39499 chars, a = 3.664, b = 0.00234977, SSE = 1779.96 (against 2077.40 for the winning two-parameter fit).
-It is reported and not shipped because stage 3's constant block represents exactly `a + b*g(n)`, and a third free parameter could not be provenance-checked by `--assert-matches-module`. If the plateau's SSE is far below the winner's, the two-parameter approximation is carrying a real interior knee as residual — which is what the escalation check below exists to catch.
+It was reported and not shipped because stage 3 **as originally planned** shipped a size-dependent constant block of exactly the form `a + b*g(n)`, which a third free parameter would not fit. That plan was replanned away in full (see § What stage 3 actually shipped), so nothing size-dependent ships and the objection is moot on its own terms. The diagnostic is kept because it still answers a live question: if the plateau's SSE is far below the winner's, the two-parameter approximation is carrying a real interior knee as residual — which is what the escalation check below exists to catch.
 
 ## Escalation check (shape mis-specification)
 
@@ -48,9 +48,21 @@ Within-size spread (max/min per size): 2853: 1.22×, 23018: 4.17×, 29849: 4.06�
 Between-size drift (median at max size / median at min size): **5.96×**.
 Refutation does not fire: between-size drift dominates the within-size spread, so a size-dependent function is justified.
 
-## Input to stage 3's SAFETY_FACTOR
+## Max/median spread — a diagnostic nothing consumes
 
-Largest within-size `max/median` ratio: **3.558**; floored at 1.5 → **3.558**.
+Largest within-size `max/median` ratio: **3.558**; floored at 1.5 → **3.558**. **Nothing shipped reads this number.** The heading above previously read `## Input to stage 3's SAFETY_FACTOR`, which was wrong twice over: the spread the safety rule called for was `max`/**`min`**, whose value (**4.17×**) already appears in § Refutation check; and no `SAFETY_FACTOR` exists in the tree at all, because stage 3 was replanned (below). The figure is kept as a diagnostic companion to the `max/min` one — the two measure different spreads and are numerically distinct — and is now labelled as what it is.
+
+This is a **label correction only**: no measurement, fit, or derived figure in this note has moved. The dataset (`advisor-calibration.jsonl`) is untouched.
+
+## What stage 3 actually shipped
+
+Stage 3 originally derived a **size-dependent** timeout from the fits above. Applying that rule to this dataset put the worst-case **synchronous** wait on `agentctl approve` at 449 s today and 512 s at the ceiling, against the 1.5–4 min the user had approved. Presented with that number the user replanned in full: the wait had to leave the blocking path at any level. So the enumeration was **detached** (`docs/operations/detached-enumeration-design.md`), the synchronous cost on `approve` became 0 s, and with no one waiting on it the size-dependence lost its ground — a single constant replaced the function.
+
+What ships is therefore one scalar, `advisor._ENUMERATE_TIMEOUT_S_DEFAULT = 480`, env-overridable via `AGENTCTL_ENUMERATE_TIMEOUT_S`. Its provenance is the **`max/min`** figure, not the `max/median` one above:
+
+`ceil_to_minute(4.173 × 103.213) = ceil_to_minute(430.73) = 480`
+
+— the largest within-size `max/min` spread (size 23018, 96.513/23.127) times the **minimum** elapsed at the largest sampled size (103.213 s, size 203681). `advisor.py` carries that derivation at the literal, and a test recomputes it from the raw committed dataset rather than at runtime, so an edit to this note can never silently drift the shipped timeout.
 
 ## Sampling rule and its two recorded deviations
 
