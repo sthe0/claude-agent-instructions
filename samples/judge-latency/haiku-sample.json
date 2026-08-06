@@ -1,0 +1,178 @@
+{
+  "baseline_haiku": [
+    {
+      "ans": [
+        "YES"
+      ],
+      "latency_s": 6.01
+    },
+    {
+      "ans": [
+        "YES"
+      ],
+      "latency_s": 5.41
+    },
+    {
+      "ans": [
+        "YES"
+      ],
+      "latency_s": 5.08
+    },
+    {
+      "ans": [
+        "YES"
+      ],
+      "latency_s": 4.88
+    }
+  ],
+  "baseline_sonnet": [
+    {
+      "ans": [
+        "YES"
+      ],
+      "latency_s": 7.51
+    },
+    {
+      "ans": [
+        "YES"
+      ],
+      "latency_s": 4.65
+    },
+    {
+      "ans": [
+        "YES"
+      ],
+      "latency_s": 5.83
+    },
+    {
+      "ans": [
+        "YES"
+      ],
+      "latency_s": 5.37
+    }
+  ],
+  "defer_haiku": [
+    {
+      "ans": [
+        "NO"
+      ],
+      "latency_s": 19.26
+    },
+    {
+      "ans": [
+        "YES"
+      ],
+      "latency_s": 30.52
+    },
+    {
+      "ans": [
+        "NO"
+      ],
+      "latency_s": 48.66
+    },
+    {
+      "ans": [
+        "YES"
+      ],
+      "latency_s": 17.21
+    },
+    {
+      "ans": [
+        "YES"
+      ],
+      "latency_s": 22.57
+    },
+    {
+      "ans": [
+        "YES"
+      ],
+      "latency_s": 16.75
+    },
+    {
+      "ans": [
+        "YES"
+      ],
+      "latency_s": 13.89
+    },
+    {
+      "ans": [
+        "YES"
+      ],
+      "latency_s": 12.57
+    },
+    {
+      "ans": [
+        "YES"
+      ],
+      "latency_s": 14.25
+    },
+    {
+      "ans": [
+        "YES"
+      ],
+      "latency_s": 15.68
+    }
+  ],
+  "outage_haiku": [
+    {
+      "ans": [
+        "YES"
+      ],
+      "latency_s": 7.17
+    },
+    {
+      "ans": [
+        "YES"
+      ],
+      "latency_s": 15.51
+    },
+    {
+      "ans": [
+        "YES"
+      ],
+      "latency_s": 8.12
+    },
+    {
+      "ans": [
+        "YES"
+      ],
+      "latency_s": 8.77
+    },
+    {
+      "ans": [
+        "YES"
+      ],
+      "latency_s": 7.75
+    },
+    {
+      "ans": [
+        "YES"
+      ],
+      "latency_s": 8.27
+    },
+    {
+      "ans": [
+        "YES"
+      ],
+      "latency_s": 8.75
+    },
+    {
+      "ans": [
+        "YES"
+      ],
+      "latency_s": 21.31
+    },
+    {
+      "ans": [
+        "YES"
+      ],
+      "latency_s": 11.54
+    },
+    {
+      "ans": [
+        "YES"
+      ],
+      "latency_s": 8.17
+    }
+  ]
+}

@@ -1,0 +1,204 @@
+{
+  "defer_yes": [
+    {
+      "i": 0,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 11.31
+    },
+    {
+      "i": 1,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 71.96
+    },
+    {
+      "i": 2,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 15.91
+    },
+    {
+      "i": 3,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 20.57
+    },
+    {
+      "i": 4,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 26.37
+    },
+    {
+      "i": 5,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 18.55
+    },
+    {
+      "i": 6,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 17.57
+    },
+    {
+      "i": 7,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 34.38
+    },
+    {
+      "i": 8,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 23.18
+    },
+    {
+      "i": 9,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 40.55
+    }
+  ],
+  "defer_no": [
+    {
+      "i": 0,
+      "verdict": false,
+      "ok": true,
+      "latency_s": 10.13
+    },
+    {
+      "i": 1,
+      "verdict": false,
+      "ok": true,
+      "latency_s": 9.11
+    },
+    {
+      "i": 2,
+      "verdict": false,
+      "ok": true,
+      "latency_s": 6.96
+    },
+    {
+      "i": 3,
+      "verdict": false,
+      "ok": true,
+      "latency_s": 8.42
+    }
+  ],
+  "outage_yes": [
+    {
+      "i": 0,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 13.48
+    },
+    {
+      "i": 1,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 10.84
+    },
+    {
+      "i": 2,
+      "verdict": false,
+      "ok": false,
+      "latency_s": 25.71
+    },
+    {
+      "i": 3,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 14.86
+    },
+    {
+      "i": 4,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 13.14
+    },
+    {
+      "i": 5,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 7.63
+    },
+    {
+      "i": 6,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 10.41
+    },
+    {
+      "i": 7,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 8.25
+    }
+  ],
+  "outage_no": [
+    {
+      "i": 0,
+      "verdict": false,
+      "ok": true,
+      "latency_s": 7.78
+    },
+    {
+      "i": 1,
+      "verdict": false,
+      "ok": true,
+      "latency_s": 6.93
+    },
+    {
+      "i": 2,
+      "verdict": false,
+      "ok": true,
+      "latency_s": 7.97
+    },
+    {
+      "i": 3,
+      "verdict": false,
+      "ok": true,
+      "latency_s": 8.23
+    }
+  ],
+  "feedback_yes": [
+    {
+      "i": 0,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 5.71
+    },
+    {
+      "i": 1,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 6.07
+    },
+    {
+      "i": 2,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 6.13
+    },
+    {
+      "i": 3,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 6.36
+    },
+    {
+      "i": 4,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 6.93
+    },
+    {
+      "i": 5,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 6.98
+    }
+  ]
+}
