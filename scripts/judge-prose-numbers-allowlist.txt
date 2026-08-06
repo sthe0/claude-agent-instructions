@@ -1,0 +1,94 @@
+# judge-prose-numbers-allowlist.txt — one entry per judge-latency number written
+# in the prose of a `judge-prose-domain.txt` file, each carrying the reason a
+# human re-read it against the current calibration.
+#
+# Grammar:  <repo-relative path>:<line>:<sha8>  # <reason>
+#
+# The sha8 is `sha256(line.strip())[:8]` — a CONTENT anchor, so the entry
+# survives an unrelated insertion above it and dies the moment the governed
+# sentence itself is reworded. The reason is MANDATORY: a bare path only records
+# that somebody once saw a number, which is the state this check exists to end.
+# Say where the number comes from — a rule in lib/judge_latency.py, an approved
+# budget, or a superseded measurement quoted as the defect it documents.
+#
+# Four-way resolution (verify-judge-prose-numbers.py::resolve_entries):
+#   * anchor matches at the pinned line         -> covered;
+#   * anchor matches exactly one other line     -> relocated, still covered, and
+#                                                  the move is reported;
+#   * anchor matches nowhere                    -> STALE: the sentence was
+#                                                  rewritten, so the reason was
+#                                                  written about text that no
+#                                                  longer exists. Re-read it;
+#   * anchor matches several lines              -> ambiguous, hard failure.
+# Two entries resolving onto ONE occurrence is also a failure: one of them
+# silently double-covers while the occurrence it named resurfaces as unallowed.
+#
+# `verify-judge-prose-numbers.py --repin` rewrites line numbers and anchors for
+# every cleanly-resolved entry, preserving each reason byte for byte, and refuses
+# to touch a stale or ambiguous row — a repin must never invent a reason.
+#
+# Accepted limits: the prefilter is lexical, so a number spelled as neither a
+# duration nor a named statistic ("well under half a minute") is not governed at
+# all; and a reason can be written carelessly, which no check can detect. What
+# the mechanism guarantees is narrower and still worth having: no governed
+# sentence changes without a human re-reading the reason attached to it.
+
+# --- scripts/hook-turn-end-gate.py -------------------------------------------
+scripts/hook-turn-end-gate.py:88:539d8834  # 57s registration = the 52s turn-end budget + interpreter-start headroom; both sides pinned by lib/hook_wiring.TIMEOUT_REQUIREMENTS
+scripts/hook-turn-end-gate.py:91:e5251162  # historical: the 5s registration and advisor's 8s default this hook used to run under — the defect record, not a current number
+
+# --- scripts/hook-deferring-disposition-gate.py ------------------------------
+scripts/hook-deferring-disposition-gate.py:62:d731ace3  # quotes the superseded n=4 note ("11.6-13.5s") verbatim, as the evidence base the old budget rested on
+scripts/hook-deferring-disposition-gate.py:63:0c2d6f02  # historical: the pre-change 20s budget and the ceiling it borrowed from a neighbour
+scripts/hook-deferring-disposition-gate.py:64:25e48252  # median 17.43 = judge_latency.MEASURED["deferring_disposition"].median_s over n=18
+scripts/hook-deferring-disposition-gate.py:65:0c8ffd5b  # p90 37.58 / max 39.99 = the same row's p90_s and max_s; the comparison against 20s is what makes the old budget a defect
+scripts/hook-deferring-disposition-gate.py:70:00a58931  # 41s = judge_latency.call_ceiling_s("deferring_disposition") = ceil(39.99) + 1
+scripts/hook-deferring-disposition-gate.py:77:4dca2024  # ~130s is a REJECTED alternative (a full-tail ceiling ahead of an interactive menu), deliberately not a constant anywhere
+scripts/hook-deferring-disposition-gate.py:80:a6174bee  # 45s = the approved whole-invocation budget; 0 of 18 runs exceeded it, stated with the rule-of-three bound rather than as "never"
+scripts/hook-deferring-disposition-gate.py:88:1cacd663  # floor 38 = judge_latency.call_floor_s("deferring_disposition") = ceil(p90 37.58) over n=18
+scripts/hook-deferring-disposition-gate.py:89:70c2fdb9  # 10.29s = the row's min_s — the fastest run, which is what makes a call started at the floor reachable
+scripts/hook-deferring-disposition-gate.py:189:deb2103a  # "under 7s" = budget 45 - floor 38, the remainder that still clears the floor for a second call
+
+# --- scripts/hook-escalation-diagnosis-gate.py -------------------------------
+scripts/hook-escalation-diagnosis-gate.py:51:9080a8d7  # 35s registration = the 30s outage budget + interpreter-start headroom; both sides pinned by lib/hook_wiring.TIMEOUT_REQUIREMENTS
+scripts/hook-escalation-diagnosis-gate.py:53:b8592671  # historical: the 5s registration this hook used to carry
+scripts/hook-escalation-diagnosis-gate.py:54:ef72bb50  # historical: advisor's 8s default, below this judge's measured min_s 7.19 — the defect record
+scripts/hook-escalation-diagnosis-gate.py:58:54dcd9b3  # 27s = judge_latency.call_ceiling_s("outage_escalation") = ceil(25.96) + 1 over n=16
+scripts/hook-escalation-diagnosis-gate.py:66:affc3cbd  # floor 20 = judge_latency.call_floor_s("outage_escalation") = ceil(p90 19.16) over n=16
+scripts/hook-escalation-diagnosis-gate.py:67:b040eeee  # 7.19s = the row's min_s, the fastest run the floor must leave reachable
+
+# --- scripts/agentctl/advisor.py ---------------------------------------------
+scripts/agentctl/advisor.py:144:2bdd83a4  # 20s = _ADVISOR_TIMEOUT_S, the ADVISORY timeout the non-judge calls keep; explicitly out of this calibration's scope
+scripts/agentctl/advisor.py:293:3fd45617  # historical: the 8s runner default a judge inherited when it named no timeout
+scripts/agentctl/advisor.py:294:c1545f72  # 5.93s / 10.29s = the min_s of the binary_ask and deferring_disposition rows — what makes an 8s default a kill, not a cap
+scripts/agentctl/advisor.py:407:0844f6e5  # historical: the 8s neighbour default this signature used to carry
+scripts/agentctl/advisor.py:408:d539ad2f  # quotes the superseded n=4 note ("13.9 +/- 2.4 s, min 12.1, max 17.5") verbatim as the basis of the old 30s
+scripts/agentctl/advisor.py:409:1d9f44a3  # same superseded note; "missed the tail by more than 20 s" = max 39.99 - 17.5
+scripts/agentctl/advisor.py:410:011dc63b  # median 17.43 / p90 37.58 / max 39.99 over n=18 = judge_latency.MEASURED["deferring_disposition"]
+
+# --- scripts/install-reminder-hooks.sh ---------------------------------------
+scripts/install-reminder-hooks.sh:93:6a8d39b3  # p90 19.16 over n=16 = judge_latency.MEASURED["outage_escalation"].p90_s
+scripts/install-reminder-hooks.sh:101:2d2694e5  # quotes the superseded n=4 note ("11.6-13.5s") against the current deferring row (median 17.43, p90 37.58)
+
+# --- scripts/lib/hook_wiring.py ----------------------------------------------
+scripts/lib/hook_wiring.py:119:171f9b60  # historical: a 5s registration, the wiring defect this axis exists to catch
+scripts/lib/hook_wiring.py:120:29507b25  # 5.9-40.0s = the family-wide measured span (binary_ask min_s 5.93 to deferring max_s 39.99) in lib/judge_latency.py
+scripts/lib/hook_wiring.py:132:0bb1075e  # 30s = the approved whole-invocation budget of hook-escalation-diagnosis-gate.py, the value this row requires
+scripts/lib/hook_wiring.py:134:b6c91e80  # 45s = the approved whole-invocation budget of hook-deferring-disposition-gate.py
+scripts/lib/hook_wiring.py:137:12d5e5bc  # 52s = the approved whole-invocation budget of hook-turn-end-gate.py, the three-judge hook
+scripts/lib/hook_wiring.py:159:13ce4bee  # K = 1 is the declared call count of the two single-judge hooks; at K=1 judge_latency.required_budget_s has no preceding call to pay for
+scripts/lib/hook_wiring.py:397:56471431  # historical: the 5s registration used as the example of a slow-judge hook the report must surface
+
+# --- samples/judge-latency/README.md -----------------------------------------
+samples/judge-latency/README.md:13:eecb96d2  # K = 1 as declared in lib/hook_wiring.TIMEOUT_REQUIREMENT_CALLS; the identity budget == per-call ceiling is what the single-call test asserts
+samples/judge-latency/README.md:31:a008f585  # provenance and n of the deferring row, mirroring judge_latency.MEASURED's provenance pairs (10 + 8 = 18)
+samples/judge-latency/README.md:32:8b3fc2d5  # provenance and n of the outage row (10 + 6 = 16)
+samples/judge-latency/README.md:33:dcb31d7a  # provenance and n of the feedback row (10 + 16 = 26)
+samples/judge-latency/README.md:34:f159378b  # provenance and n of the binary_ask row (16)
+samples/judge-latency/README.md:62:26defe90  # the measured cost of excluding topup-sample.json: binary_ask p90 16.70 -> 11.06 and its floor 17 -> 12; recorded so the exclusion is auditable
+samples/judge-latency/README.md:69:3c1d709f  # 52s = the approved turn-end budget this feasibility table is evaluated against
+samples/judge-latency/README.md:73:8e952622  # 43.56 = the sum of the three turn-end p90s (13.34 + 11.06 + 19.16); the 8.44s headroom is 52 - 43.56
+samples/judge-latency/README.md:74:0384f6fb  # 51.53 = the sum of the three observed maxima (14.05 + 11.52 + 25.96); the 0.47s headroom is 52 - 51.53
+samples/judge-latency/README.md:81:b63af131  # 52s again, in the sentence that names it the APPROVED height rather than a derived one
+samples/judge-latency/README.md:86:e7a33457  # max 71.96 belongs to lean-sample.json, a SUPPORTING sample excluded from every row — cited to show the lean prompt's worse tail
+samples/judge-latency/README.md:87:ba28e247  # historical: the original 5s registration the haiku baseline made look survivable

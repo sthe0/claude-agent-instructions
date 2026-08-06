@@ -32,6 +32,7 @@ CHECKS: list[str] = [
     "verify-onboarding-entrypoint",
     "verify-no-conflict-markers",
     "verify-config-root-refs",
+    "verify-judge-prose-numbers",
     "rule-salience-report",
     "verify-terms",
     "verify-semantic-gates",

@@ -66,17 +66,19 @@ The exclusion moves numbers materially — `binary_ask` p90 16.70 -> 11.06, thre
 
 `hook-turn-end-gate.py` runs three judges **sequentially on one budget**:
 `judge_feedback_signal`, then `judge_binary_ask`, then `judge_outage_escalation`.
-Against the approved budget of 45 s:
+Against the approved budget of 52 s:
 
-| basis | sum | fits 45? |
+| basis | sum | fits 52? |
 |---|---:|---|
-| p90 of the three | 43.56 | yes, by 1.44 s |
-| observed maxima | 51.53 | no |
+| p90 of the three | 43.56 | yes, by 8.44 s |
+| observed maxima | 51.53 | yes, by 0.47 s |
 | per-call ceilings (16 + 13 + 27) | 56 | no |
 
-So the third judge completes at typical latency and is cut off on the tail. The plan
-deferred exactly this inequality to this measurement ("выполнимость неравенства о
-размере бюджета проверяется ПОСЛЕ предусловия"); the height is the user's call.
+So all three judges complete even on the slowest run yet observed, and only the
+sum of the per-call ceilings — each of which is already one second above its own
+observed maximum — does not fit. The plan deferred exactly this inequality to this
+measurement ("выполнимость неравенства о размере бюджета проверяется ПОСЛЕ
+предусловия"); the height is the user's call, and 52 s is what was approved.
 
 ## Supporting samples (not part of the four rows)
 

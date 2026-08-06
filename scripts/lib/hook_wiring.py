@@ -117,7 +117,8 @@ GATE_BEARING_HOOKS: "tuple[tuple[str, str], ...]" = (
 #
 # Presence is not enough for a hook that calls a `claude -p` judge. The harness
 # kills a hook at its registered timeout, so a hook registered at 5s whose judge
-# needs 10.5-47s (measured) is wired, green to every presence probe, and dead on
+# needs 5.9-40.0s (measured, lib/judge_latency.py) is wired, green to every
+# presence probe, and dead on
 # every single call — the verdict is computed and thrown away. The minimum here
 # is the hook's OWN whole-invocation judge budget; the registration must be at
 # least that, and in practice carries interpreter-start headroom on top.
