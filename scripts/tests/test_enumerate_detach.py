@@ -449,13 +449,12 @@ class TestDetachedRelaunchOnReplan:
         assert not any(plugins_premise._ENUMERATE_STALE in b
                       for b in blocked.data.get("blockers", []))
 
-        # cmd_replan does not persist state on this refusing path (by design --
-        # see docs/operations/detached-enumeration-design.md Q2: "a fold lost on
-        # a refusing cmd_approve costs nothing... the next call re-folds", and
-        # cmd_replan's own store.save() sites are all past this early return) --
-        # so store.load here would still show the pre-replan bag. The relaunch
-        # itself is the observable: exactly one new detached worker, over the
-        # CORRECTED plan.
+        # the not-run clear IS persisted on this refusing path -- cli.py's
+        # enumeration_bag_dirty branch saves before the pblock return -- so a
+        # still-True `enumerated` pinned to the OLD digest never survives to
+        # the next load, which is exactly what routes the outstanding-child
+        # window onto the escapable _ENUMERATE_NOT_RUN above.
+        assert store.load(sid).plugins["premise"]["enumerated"] is False
         assert len(launches) == 1
         assert corrected in launches[0]
 
@@ -494,6 +493,64 @@ class TestDetachedRelaunchOnReplan:
         assert bag_after["enumerated_at"] == bag_before["enumerated_at"]
         assert bag_after["enumerate_deadline"] == bag_before["enumerate_deadline"]
         assert launches == []
+
+    def test_replan_persists_folded_sidecar_to_disk(
+            self, store, fixtures_dir, tmp_path, monkeypatch):
+        """The fold-persistence half of the replan path: a sidecar that lands for
+        the CORRECTED plan's digest before a retried `replan` runs must be folded
+        AND PERSISTED, not merely mutated on the in-memory `state` object --
+        cmd_replan's own store.save() sites are all past the early return this
+        refusing path takes. An unpersisted fold would name qenum-N candidates
+        that exist nowhere on disk, and `question-candidate-dispose` could not
+        address them -- the central case for detaching on the replan side: replan
+        against a corrected plan, launch, _ENUMERATE_NOT_RUN, wait, retry replan
+        once the pass has landed.
+
+        Mutation-proof: replacing `enumeration_bag_dirty =
+        _fold_enumeration_sidecar(state, proposed, args.plan)` with a bare
+        `_fold_enumeration_sidecar(state, proposed, args.plan)` call (dropping the
+        assignment) at cli.py's replan site leaves the rest of the suite green but
+        turns this test red, because `store.save(state)` is then never reached on
+        this path and `store.load(sid)` below still shows the pre-fold bag."""
+        monkeypatch.delenv("AGENTCTL_PREMISE", raising=False)
+        root = tmp_path / "sidecars"
+        monkeypatch.setattr(enumerate_sidecar, "DEFAULT_ROOT", root)
+        sid = "replan-fold-persist"
+        base = str(fixtures_dir / "plan_two_stage.toml")
+        corrected = str(fixtures_dir / "plan_two_stage_substantive.toml")
+
+        launches = []
+        monkeypatch.setattr(
+            cli, "_spawn_enumeration_worker",
+            lambda cmd, **kw: launches.append(cmd),
+        )
+
+        _to_executing_stage1_with_premise(store, sid, base)
+        # simulate an earlier digest-changing replan attempt that already cleared
+        # the bag back to not-run and launched a worker over `corrected`
+        state = store.load(sid)
+        state.plugins["premise"]["enumerated"] = False
+        state.plugins["premise"]["enumerated_at"] = ""
+        store.save(state)
+        digest = _land_sidecar(
+            store, sid, corrected,
+            [("goal", "which failure mode is out of scope?"),
+             ("stage 1", "what makes the check go red?")],
+        )
+        launches.clear()
+
+        blocked = cli.cmd_replan(ns(session=sid, plan=corrected), store=store)
+
+        assert blocked.ok is False
+        assert any("qenum-1" in b for b in blocked.data.get("blockers", []))
+        # a matching sidecar folds in place of a redundant relaunch
+        assert launches == []
+
+        bag = store.load(sid).plugins["premise"]
+        assert bag["enumerated"] is True
+        assert bag["enumerated_at"] == digest
+        assert [c["id"] for c in bag["candidates"]] == ["qenum-1", "qenum-2"]
+        assert all(c["disposition"] == "raised" for c in bag["candidates"])
 
 
 # --- the fold itself, end to end through cmd_approve ---------------------------
@@ -699,6 +756,61 @@ class TestSidecarDigestMismatchDiscard:
         enumerate_sidecar.read_discarding_superseded("sess", "digest-b", root=root)
 
         assert tmp_file.exists()
+
+    def test_read_discards_a_matching_sidecar_that_fails_to_parse(self, tmp_path):
+        """A JSONDecodeError is permanent for a given byte sequence -- keeping the
+        corrupt matching sidecar around buys nothing, since re-reading it next
+        time fails the same way. Discard it rather than retaining it forever."""
+        root = tmp_path / "sidecars"
+        match = enumerate_sidecar.sidecar_path("sess", "digest-a", root=root)
+        match.parent.mkdir(parents=True, exist_ok=True)
+        match.write_text("not json", encoding="utf-8")
+
+        result = enumerate_sidecar.read_discarding_superseded("sess", "digest-a", root=root)
+
+        assert result is None
+        assert not match.exists()
+
+    def test_read_retains_a_matching_sidecar_on_transient_os_error(self, tmp_path, monkeypatch):
+        """An OSError reading the matching sidecar may not recur -- unlike a
+        decode failure, discarding it here could lose a payload that is still
+        perfectly readable moments later."""
+        root = tmp_path / "sidecars"
+        enumerate_sidecar.write("sess", "digest-a", {"pairs": [], "content_digest": "digest-a"},
+                                root=root)
+        match = enumerate_sidecar.sidecar_path("sess", "digest-a", root=root)
+
+        real_read_text = Path.read_text
+
+        def _flaky_read_text(self, *a, **kw):
+            if self == match:
+                raise OSError("transient failure")
+            return real_read_text(self, *a, **kw)
+
+        monkeypatch.setattr(Path, "read_text", _flaky_read_text)
+
+        result = enumerate_sidecar.read_discarding_superseded("sess", "digest-a", root=root)
+
+        assert result is None
+        assert match.exists()
+
+    def test_discard_all_for_session_sweeps_an_orphaned_tempfile(self, tmp_path):
+        """A worker killed between mkstemp and os.replace leaves a `.tmp-*.json`
+        orphan behind. The read path must leave it alone for a concurrent worker's
+        sake, but session-end cleanup has no worker left to race against, so the
+        orphan (and the session directory it pins open) should not survive
+        `cmd_resolve` forever."""
+        root = tmp_path / "sidecars"
+        enumerate_sidecar.write("sess", "digest-a", {"pairs": [], "content_digest": "digest-a"},
+                                root=root)
+        session_dir = enumerate_sidecar.sidecar_path("sess", "digest-a", root=root).parent
+        tmp_file = session_dir / ".tmp-x.json"
+        tmp_file.write_text("{}", encoding="utf-8")
+
+        enumerate_sidecar.discard_all_for_session("sess", root=root)
+
+        assert not tmp_file.exists()
+        assert not session_dir.exists()
 
 
 # --- the launch call itself: fast return + survives the launcher's own exit ----

@@ -73,35 +73,56 @@ def read_discarding_superseded(
     plan (a replan that changed the content before the child finished) is dead
     weight, and leaving it would let it resurface if that digest came back around.
     A concurrent worker's `.tmp-*.json` is skipped -- unlinking one mid-write makes
-    its `os.replace` raise."""
+    its `os.replace` raise.
+
+    A MATCHING sidecar that fails to parse is handled by cause: a JSONDecodeError
+    is permanent for a given byte sequence -- keeping it buys nothing, since a
+    re-read the next time this runs would fail identically -- so it is discarded
+    like any other superseded sidecar. An OSError (e.g. a transient permission or
+    I/O failure) is left alone: unlike a decode failure it may not recur, and
+    discarding on an OSError could delete a payload that is still perfectly
+    readable moments later."""
     r = root if root is not None else DEFAULT_ROOT
     match = sidecar_path(session_id, content_digest, root=r)
     result = None
+    keep_match = True
     if match.exists():
         try:
             result = json.loads(match.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except json.JSONDecodeError:
             result = None
-    _discard_for_session(session_id, root=r, keep=match.name)
+            keep_match = False
+        except OSError:
+            result = None
+    _discard_for_session(session_id, root=r, keep=match.name if keep_match else None)
     return result
 
 
 def discard_all_for_session(session_id: str, *, root: Path | None = None) -> None:
-    """Remove every sidecar (any digest) for `session_id` -- session-end cleanup,
-    called from cmd_resolve whether or not a sidecar was ever read. The read path
-    keeps its own matching sidecar and so calls _discard_for_session directly."""
-    _discard_for_session(session_id, root=root)
+    """Remove every sidecar (any digest) for `session_id`, INCLUDING an orphaned
+    `.tmp-*.json` left by a worker killed between mkstemp and os.replace --
+    session-end cleanup, called from cmd_resolve whether or not a sidecar was
+    ever read. Unlike the read path (which must leave a CONCURRENT worker's
+    tempfile alone so its pending os.replace does not raise), a resolved session
+    has no worker left to race against, so an orphan tempfile only ever means a
+    dead one -- leaving it (and the session directory it pins open) behind sweeps
+    nothing. The read path keeps its own matching sidecar and so calls
+    _discard_for_session directly."""
+    _discard_for_session(session_id, root=root, skip_tmp=False)
 
 
 def _discard_for_session(
-    session_id: str, *, root: Path | None = None, keep: str | None = None
+    session_id: str, *, root: Path | None = None, keep: str | None = None,
+    skip_tmp: bool = True,
 ) -> None:
     r = root if root is not None else DEFAULT_ROOT
     session_dir = _session_dir(r, session_id)
     if not session_dir.is_dir():
         return
     for f in session_dir.glob("*.json"):
-        if f.name.startswith(".tmp-") or f.name == keep:
+        if f.name == keep:
+            continue
+        if skip_tmp and f.name.startswith(".tmp-"):
             continue
         try:
             f.unlink()
