@@ -1314,11 +1314,15 @@ def cmd_question_candidate_dispose(args, *, store: StateStore, runner: Runner | 
 
 def _apply_enumeration_result(
     bag: dict, doc: PlanDoc, plan_path, pairs: list[tuple[str, str]], runner_ok: bool | None,
-    *, preserve_disposition: bool = False,
+    *, preserve_disposition: bool = False, stderr: str = "",
 ) -> list[str]:
     """Upsert `pairs` as 'raised' QuestionCandidates (last-wins by deterministic
     qenum-N id) and stamp the bag's enumerated/enumerated_at/enumerated_plan/
-    enumerated_runner_ok/enumerated_count fields from ONE enumeration pass's result.
+    enumerated_runner_ok/enumerated_runner_stderr/enumerated_count fields from ONE
+    enumeration pass's result. `stderr` is the failed pass's own diagnostic: the
+    runner-failure blocker reads it back to pre-select an escape reason, so it must
+    travel with the runner_ok it explains and not be re-derived later from a run
+    nobody kept.
     Shared by the synchronous cmd_question_enumerate path and the detached-worker
     sidecar fold (cmd_approve/cmd_replan) so both apply identical upsert semantics
     to the SAME bag shape regardless of which path produced the pairs.
@@ -1355,6 +1359,7 @@ def _apply_enumeration_result(
     bag["enumerated_at"] = plugins_premise._plan_content_digest(doc)
     bag["enumerated_plan"] = str(plan_path)
     bag["enumerated_runner_ok"] = runner_ok
+    bag["enumerated_runner_stderr"] = stderr
     bag["enumerated_count"] = len(pairs)
     return raised
 
@@ -1430,10 +1435,10 @@ def cmd_question_enumerate(args, *, store: StateStore, runner: Runner | None = N
                          f"cannot parse plan {plan_path!r}: {exc}")
 
     run = runner if runner is not None else advisor.enumerate_subprocess_runner
-    runner_ok, pairs, _stderr = advisor.enumerate_questions_health(
+    runner_ok, pairs, stderr = advisor.enumerate_questions_health(
         doc.meta.goal, doc.meta.done_criterion, plan_text, run)
 
-    raised = _apply_enumeration_result(bag, doc, plan_path, pairs, runner_ok)
+    raised = _apply_enumeration_result(bag, doc, plan_path, pairs, runner_ok, stderr=stderr)
     state.log("question_enumerate", raised=len(raised), runner_ok=runner_ok)
     store.save(state)
 
@@ -1494,6 +1499,125 @@ def cmd_question_enumerate_worker(args, *, store: StateStore, runner: Runner | N
     })
     return Directive(True, "worker", "noop",
                       f"enumeration worker finished; {len(pairs)} pair(s) written to sidecar")
+
+
+def cmd_question_enumerate_escape(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Record a TYPED escape from an enumeration blocker, against the plan content
+    the blocker is refusing on.
+
+    The mandatory cross-check used to discharge itself the moment the pass RAN,
+    whatever it returned — so an advisor timeout bought approve for free and left no
+    trace anyone could count. The blocker now stands until an escape is on record;
+    this is the only way past it, and every use is one countable row naming WHY.
+
+    Liveness is the constraint that shapes the admissibility rules below: for every
+    state in which approve is refused on the enumeration axis there must be some
+    admissible reason, or the gate is a wedge rather than a gate. The two refusing
+    branches are (a) a landed pass whose runner FAILED — escaped by the four
+    runner-failure reasons — and (b) an enumeration that has not landed at all,
+    escaped by `enumeration_not_landed` once the launch deadline has passed. A
+    stale enumeration is deliberately not escapable and needs no escape: re-running
+    the check clears it, always.
+
+    Admissibility is checked against the bag rather than trusted from the operator:
+    a runner-failure reason offered while the last pass reports healthy (or absent —
+    `None`, the advisor-not-there value) is refused, and `enumeration_not_landed`
+    offered while the child still has time on its deadline is refused WITH the time
+    remaining, because "wait" is the correct action there and the operator needs to
+    know how long.
+
+    `advisor_unavailable` is in the closed set but the blocker never pre-selects it:
+    a live session whose advisor is missing surfaces as an ordinary error, so only a
+    caller who KNOWS the runner was stubbed out or absent should reach for it.
+
+    --plan mirrors cmd_question_enumerate's flag for the same reason: cmd_replan
+    evaluates the gate against the CORRECTED plan, which is not state.plan_path
+    until that replan succeeds, so an escape that could only ever bind to
+    state.plan_path could never unblock the replan it exists for."""
+    state, bag = _question_bag(store, args.session)
+    if bag is None:
+        return Directive(False, state.node, "noop", "plugin 'premise' is not active")
+
+    # Also enforced by argparse `choices=`. Kept here because cmd_* functions are
+    # called directly with a hand-built Namespace (by the suite, and by cmd_drive's
+    # composition), and a closed set enforced only at the parser is not closed for
+    # those callers.
+    reason = getattr(args, "reason", None) or ""
+    if reason not in premise.ENUMERATION_ESCAPE_REASONS:
+        return Directive(False, state.node, "noop",
+                         f"--reason must be one of "
+                         f"{', '.join(premise.ENUMERATION_ESCAPE_REASONS)}; got {reason!r}")
+    note = (getattr(args, "note", None) or "").strip()
+    if not note:
+        return Directive(False, state.node, "noop",
+                         "--note is required and must not be empty — the reason token is what "
+                         "aggregates, the note is what makes one row diagnosable")
+
+    named_plan = getattr(args, "plan", None)
+    if named_plan is not None and not str(named_plan).strip():
+        return Directive(False, state.node, "noop",
+                         "--plan was given an empty path; omit the flag to escape against the "
+                         "session's own plan, or name a real one")
+    plan_path = named_plan or getattr(state, "plan_path", None)
+    if not plan_path:
+        return Directive(False, state.node, "noop",
+                         "no plan submitted yet — there is no enumeration blocker to escape")
+    try:
+        doc = load_plan(plan_path)
+    except OSError as exc:
+        return Directive(False, state.node, "noop", f"cannot read plan {plan_path!r}: {exc}")
+    except PlanError as exc:
+        return Directive(False, state.node, "noop", f"cannot load plan {plan_path!r}: {exc}")
+
+    runner_ok = bag.get("enumerated_runner_ok")
+    if reason in premise.ENUMERATION_RUNNER_FAILURE_REASONS:
+        if runner_ok is not False:
+            healthy = "reports a HEALTHY run" if runner_ok is True else "records no run at all"
+            return Directive(
+                False, state.node, "noop",
+                f"--reason {reason} escapes a FAILED enumeration run, but this session's "
+                f"premise bag {healthy} (enumerated_runner_ok={runner_ok!r}) — nothing to "
+                "escape from")
+    else:
+        if bag.get("enumerated"):
+            return Directive(
+                False, state.node, "noop",
+                f"--reason {premise.ESCAPE_ENUMERATION_NOT_LANDED} escapes an enumeration that "
+                "never landed, but this session has one on record — re-run "
+                "`agentctl question-enumerate` if it is stale")
+        deadline = bag.get("enumerate_deadline")
+        if deadline is None:
+            return Directive(
+                False, state.node, "noop",
+                f"--reason {premise.ESCAPE_ENUMERATION_NOT_LANDED} names a background "
+                "enumeration that missed its deadline, but none has ever been launched for "
+                "this session — run `agentctl question-enumerate` instead")
+        remaining = float(deadline) - time.time()
+        if remaining > 0:
+            return Directive(
+                False, state.node, "noop",
+                f"the background enumeration is still within its deadline — {remaining:.0f}s "
+                "remaining; wait for it to land (or run `agentctl question-enumerate` "
+                "synchronously) rather than escaping a check that may yet arrive")
+
+    digest = plugins_premise._plan_content_digest(doc)
+    escapes = bag.setdefault("escapes", [])
+    escapes.append({
+        "reason": reason,
+        "note": note,
+        "content_digest": digest,
+        "runner_ok": runner_ok,
+        "plan": str(plan_path),
+    })
+    state.log("question_enumerate_escape", reason=reason, plan=str(plan_path))
+    store.save(state)
+    return Directive(
+        True, state.node, "continue",
+        f"enumeration escape recorded ({reason}) against the current plan content — the "
+        "enumeration blocker is discharged for THESE plan bytes only; any edit to the plan "
+        "re-blocks approve until the cross-check runs or is escaped again",
+        data={"reason": reason, "content_digest": digest, "escapes": len(escapes)},
+    )
 
 
 def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -1651,7 +1775,7 @@ def _fold_enumeration_sidecar(state: SessionState, doc: PlanDoc, plan_path) -> b
         return False
     pairs = [tuple(p) for p in payload.get("pairs", [])]
     _apply_enumeration_result(bag, doc, plan_path, pairs, payload.get("runner_ok"),
-                             preserve_disposition=True)
+                             preserve_disposition=True, stderr=payload.get("stderr", ""))
     return True
 
 
@@ -4080,6 +4204,7 @@ COMMANDS = {
     "question-check": cmd_question_check,
     "question-enumerate": cmd_question_enumerate,
     "question-enumerate-worker": cmd_question_enumerate_worker,
+    "question-enumerate-escape": cmd_question_enumerate_escape,
     "question-candidate-dispose": cmd_question_candidate_dispose,
     "order-raise": cmd_order_raise,
     "order-dispose": cmd_order_dispose,
@@ -4151,7 +4276,8 @@ _SESSION_COMMANDS = (
     "ledger-add", "ledger-check", "ledger-candidate", "ledger-dispose",
     "ledger-enumerate", "question-raise", "question-research", "question-dispose",
     "question-rebind", "question-retire", "question-list", "question-check",
-    "question-enumerate", "question-enumerate-worker", "question-candidate-dispose",
+    "question-enumerate", "question-enumerate-worker", "question-enumerate-escape",
+    "question-candidate-dispose",
     "order-raise", "order-dispose", "order-list", "classify", "plan",
     "plan-render", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
     "stage-review", "code-review", "approve", "partition", "partition-units",
@@ -4165,7 +4291,8 @@ _SESSION_COMMANDS = (
 _RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("goal", ("start", "reset")),
     ("done_criterion", ("start", "reset")),
-    ("note", ("plugin-record", "confirm-delivery", "plan-review", "stage-review", "code-review")),
+    ("note", ("plugin-record", "confirm-delivery", "plan-review", "stage-review", "code-review",
+              "question-enumerate-escape")),
     ("statement", ("ledger-add", "ledger-candidate")),
     ("source", ("ledger-add", "question-dispose")),
     ("premises", ("ledger-add",)),
@@ -4215,7 +4342,8 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("artifact", ("ledger-enumerate",), "path to the deliverable being cross-checked"),
     ("target", ("question-raise", "plan-review"), "plan element address or plan file path"),
     ("plan", ("plan-render", "submit-plan", "replan", "drive", "push-subplan",
-              "question-enumerate", "question-enumerate-worker", "question-dispose",
+              "question-enumerate", "question-enumerate-worker",
+              "question-enumerate-escape", "question-dispose",
               "question-rebind"), "plan file path"),
     ("digest", ("question-enumerate-worker",),
      "plan content digest the launcher computed — the sidecar's key, passed down "
@@ -4390,6 +4518,17 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("question-enumerate"); sp.add_argument("--session", required=True)
     sp.add_argument("--plan", default=None,
                     help="enumerate against this plan instead of the session's current "
+                         "plan_path (use when preparing a CORRECTED plan for replan)")
+
+    sp = add("question-enumerate-escape"); sp.add_argument("--session", required=True)
+    sp.add_argument("--reason", required=True, choices=list(premise.ENUMERATION_ESCAPE_REASONS),
+                    help="why the mandatory enumeration cross-check is being discharged "
+                         "without a healthy run — a closed set, so the escapes aggregate")
+    sp.add_argument("--note", required=True,
+                    help="what actually happened, for the reader of one row (the reason "
+                         "token is what counts across rows)")
+    sp.add_argument("--plan", default=None,
+                    help="escape against this plan instead of the session's current "
                          "plan_path (use when preparing a CORRECTED plan for replan)")
 
     sp = add("question-enumerate-worker"); sp.add_argument("--session", required=True)

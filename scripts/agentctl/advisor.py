@@ -15,6 +15,7 @@ import time
 
 from lib import judge_ledger
 
+from . import premise
 from .config import Thresholds
 from .dispatch import RunResult
 
@@ -23,6 +24,11 @@ from .dispatch import RunResult
 # coordination step.
 _ADVISOR_MODEL = "sonnet"
 _ADVISOR_TIMEOUT_S = 20
+
+# The one literal for "the runner hit its timeout": emitted by subprocess_runner and
+# read back by classify_runner_failure. Shared rather than restated at each end so the
+# classifier cannot drift into silently classifying every timeout as advisor_error.
+_TIMEOUT_STDERR_PREFIX = "advisor timed out after"
 
 # Whole-plan enumeration (enumerate_claims / enumerate_questions_health) is a
 # DIFFERENT cost class from a judge/advisor call: it re-reads an entire plan in one
@@ -878,8 +884,26 @@ def subprocess_runner(argv: list[str], *, timeout: int = _ADVISOR_TIMEOUT_S) -> 
     except subprocess.TimeoutExpired:
         duration = time.monotonic() - start
         judge_ledger.call(judge_name, timed_out=True, duration=duration, returncode=None)
-        return RunResult(1, "", f"advisor timed out after {timeout}s", timed_out=True)
+        return RunResult(1, "", f"{_TIMEOUT_STDERR_PREFIX} {timeout}s", timed_out=True)
     except Exception as exc:
         duration = time.monotonic() - start
         judge_ledger.call(judge_name, timed_out=False, duration=duration, returncode=None, raised=repr(exc))
         raise
+
+
+def classify_runner_failure(stderr: str) -> str:
+    """Map a failed enumeration run's stderr onto the escape reason the ENGINE
+    pre-selects, so the human confirms a value rather than typing one the engine
+    already knows.
+
+    Two-valued on purpose. A timeout is the one failure whose stderr this process
+    itself wrote (subprocess_runner's TimeoutExpired arm), so it is the one this
+    function can recognise with certainty; everything else — a non-zero exit, an
+    unparseable reply, an OSError, an absent advisor binary, no stderr at all — is a
+    heterogeneous tail whose members would each need a fragile substring rule for no
+    gain, since the escape they take is the same. So advisor_error is a deliberate
+    catch-all, including for empty stderr, and the operator's --note carries the
+    detail the reason token deliberately does not."""
+    if _TIMEOUT_STDERR_PREFIX in (stderr or ""):
+        return premise.ESCAPE_ADVISOR_TIMEOUT
+    return premise.ESCAPE_ADVISOR_ERROR
