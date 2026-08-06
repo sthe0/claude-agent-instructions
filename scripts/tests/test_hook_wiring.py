@@ -275,6 +275,57 @@ def test_two_registrations_of_one_hook_with_different_timeouts(root):
     assert "settings.local.json" in shortfalls[0]
 
 
+def test_timeout_shortfall_message_names_the_matcher(root):
+    """should-fix #1: the check-timeouts remediation text tells a reader to
+    diff a listed registration's matcher against install-reminder-hooks.sh's
+    DESIRED table and remove by hand anything wired under a different one --
+    but the message itself used to drop `reg.matcher` on the floor, so two
+    registrations under two different matchers printed identically and the
+    reader had no way to follow that advice."""
+    _write(root / "settings.json", {
+        "Stop": [_timed_group(str(SCRIPTS / HOOK), 5, "Edit|Write")],
+    })
+    shortfalls = hook_wiring.timeout_shortfalls(hook_wiring.probe(HOOK, root), 30)
+    assert len(shortfalls) == 1
+    assert "Edit|Write" in shortfalls[0]
+
+
+def test_timeout_shortfall_message_uses_star_when_matcher_is_absent(root):
+    """A registration with no `matcher` key (matches every tool) must print as
+    `*`, not the Python-internal `matcher None`."""
+    _write(root / "settings.json", {"Stop": [_timed_group(str(SCRIPTS / HOOK), 5)]})
+    shortfalls = hook_wiring.timeout_shortfalls(hook_wiring.probe(HOOK, root), 30)
+    assert len(shortfalls) == 1
+    assert "matcher *" in shortfalls[0]
+    assert "None" not in shortfalls[0]
+
+
+def test_timeout_unknown_message_names_the_matcher(root):
+    _write(root / "settings.json", {"Stop": [_group(str(SCRIPTS / HOOK), "Bash")]})
+    unknowns = hook_wiring.timeout_unknowns(hook_wiring.probe(HOOK, root))
+    assert len(unknowns) == 1
+    assert "Bash" in unknowns[0]
+
+
+def test_two_shortfalls_under_different_matchers_are_distinguishable(root):
+    """The reviewer's exact reproduction: two live registrations of the same
+    hook, wired under two different matchers, both below the minimum -- the two
+    reported lines must not read identically, or a reader following the
+    installer-vs-hand-removal advice cannot tell which one the installer would
+    actually reconcile."""
+    _write(root / "settings.json", {
+        "Stop": [_timed_group(str(SCRIPTS / HOOK), 5, "Edit|Write")],
+    })
+    _write(root / "settings.local.json", {
+        "Stop": [_timed_group(f"python3 {SCRIPTS / HOOK}", 5)],
+    })
+    shortfalls = hook_wiring.timeout_shortfalls(hook_wiring.probe(HOOK, root), 30)
+    assert len(shortfalls) == 2
+    assert shortfalls[0] != shortfalls[1]
+    assert any("Edit|Write" in s for s in shortfalls)
+    assert any("matcher *" in s for s in shortfalls)
+
+
 def test_duplicate_note_distinguishes_deduplicated_from_double_running(root):
     """Two registrations are always worth a look, but only DISTINCT command
     strings actually run twice: the harness deduplicates on the command, with
@@ -309,6 +360,41 @@ def test_timeout_requirements_are_not_derived_from_the_registry():
         assert (SCRIPTS / name).exists(), f"requirement names a missing hook: {name}"
         assert isinstance(minimum, int) and minimum > 0
         assert why.strip(), f"{name}'s requirement carries no rationale"
+
+
+def _hooks_that_construct_a_judge_budget() -> "set[str]":
+    """Every `scripts/hook-*.py` whose text constructs a
+    `judge_budget.JudgeBudget(` — the scope TIMEOUT_REQUIREMENTS claims to
+    cover, discovered mechanically rather than assumed to already equal the
+    table it is checked against."""
+    found = set()
+    for p in _hook_scripts():
+        text = p.read_text(encoding="utf-8", errors="replace")
+        if "judge_budget.JudgeBudget(" in text:
+            found.add(p.name)
+    return found
+
+
+def test_timeout_requirements_scope_matches_every_judge_budget_caller():
+    """should-fix #3: nothing tied TIMEOUT_REQUIREMENTS' membership to its own
+    stated scope -- 'every hook that calls a slow judge'. The set happens to
+    equal the table today (three hooks, three rows), so a hook constructing a
+    JudgeBudget with no row would reproduce the stage's original symptom
+    (wired, presence-green, killed mid-judge) and nothing would catch it.
+    Checked both directions: a caller absent from the table, and a table row
+    naming a hook that no longer constructs one."""
+    callers = _hooks_that_construct_a_judge_budget()
+    required = {name for name, _minimum, _why in hook_wiring.TIMEOUT_REQUIREMENTS}
+    missing_rows = sorted(callers - required)
+    assert not missing_rows, (
+        "hooks that construct a judge_budget.JudgeBudget but carry no "
+        f"TIMEOUT_REQUIREMENTS row: {missing_rows}"
+    )
+    stale_rows = sorted(required - callers)
+    assert not stale_rows, (
+        "TIMEOUT_REQUIREMENTS rows for hooks that no longer construct a "
+        f"judge_budget.JudgeBudget: {stale_rows}"
+    )
 
 
 # --- the timeout NUMBER is not one fact, it is three copies of one fact -------
@@ -361,7 +447,11 @@ def test_timeout_requirement_minimum_matches_the_hooks_own_budget_constant():
     mutation M8: minimum 30->5 for hook-turn-end-gate.py with the hook's own
     _TURN_JUDGE_BUDGET_S left at 30)."""
     for name, minimum, _why in hook_wiring.TIMEOUT_REQUIREMENTS:
-        const_name = hook_wiring.TIMEOUT_REQUIREMENT_OWN_CONSTANT[name]
+        const_name = hook_wiring.TIMEOUT_REQUIREMENT_OWN_CONSTANT.get(name)
+        assert const_name, (
+            f"{name} has no TIMEOUT_REQUIREMENT_OWN_CONSTANT entry — see "
+            "test_timeout_requirement_own_constant_covers_every_requirement"
+        )
         module = _load_hook_module(name)
         actual = getattr(module, const_name)
         assert actual == minimum, (

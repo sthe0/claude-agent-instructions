@@ -1216,3 +1216,49 @@ def test_a_judge_whose_prefilter_is_silent_costs_no_budget(
 
     assert runner.calls == []
     assert ctx.judges_skipped == ()
+
+
+def test_main_opens_the_budget_before_stdin_json_parsing(
+    tmp_path, isolated_state, monkeypatch
+):
+    """should-fix #2: main() opens its JudgeBudget BEFORE `json.load(stdin)`, not
+    after -- the registered timeout covers stdin parsing too, and a deadline that
+    opens only once build_context is entered quietly hands back the time already
+    spent getting there. Deleting the constructor from main() makes decide()
+    receive budget=None; build_context's own default then opens the deadline
+    AFTER main()'s json.load has already run, so the first judge would get the
+    full per-call cap instead of a budget already docked for the parsing time --
+    the exact "silently reverts to the old (wrong) scope" regression a fully
+    green suite must not let through."""
+    clock = _FakeClock()
+    _pin_budget_clock(monkeypatch, clock)
+
+    real_json_load = json.load
+
+    def slow_json_load(fp, *a, **kw):
+        # 15s of stdin-JSON-parsing cost, spent BEFORE main() ever reaches
+        # build_context.
+        clock.now += 15.0
+        return real_json_load(fp, *a, **kw)
+
+    monkeypatch.setattr(json, "load", slow_json_load)
+
+    runner = _recording_runner()
+    monkeypatch.setattr(_mod.advisor, "subprocess_runner", runner)
+
+    t = _all_three_prefilters(tmp_path)
+    stdin_payload = json.dumps({"transcript_path": str(t), "stop_hook_active": False})
+    monkeypatch.setattr(sys, "stdin", io.StringIO(stdin_payload))
+
+    _mod.main()
+
+    assert runner.calls, "expected the feedback_signal judge to be called"
+    first_name, first_timeout = runner.calls[0]
+    assert first_name == "feedback_signal"
+    # 30s whole-invocation budget - 15s already spent in json.load == 15s left,
+    # below the 20s per-call cap -- the deadline must already reflect that cost.
+    assert first_timeout == 15.0, (
+        f"first judge got timeout={first_timeout}s, expected 15.0s (30s budget "
+        "minus the 15s spent in json.load before build_context was ever "
+        "entered) -- main() is not opening the budget before stdin parsing"
+    )

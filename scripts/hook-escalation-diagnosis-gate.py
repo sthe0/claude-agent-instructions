@@ -184,6 +184,9 @@ def decide(payload: dict, *, runner: Callable | None = None) -> str | None:
     text = _ask_text(tool_input)
     if not _detect_outage(text):
         return None  # cheap common path: nothing to gate
+    # Opened here, after the payload's own parsing above — same reasoning as
+    # hook-deferring-disposition-gate.py: no file I/O precedes this point, so
+    # nothing above is worth docking from the judge budget.
     budget = judge_budget.JudgeBudget(
         _JUDGE_BUDGET_S, _JUDGE_MIN_CALL_S, clock=time.monotonic
     )

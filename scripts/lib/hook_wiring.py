@@ -378,8 +378,9 @@ def timeout_shortfalls(wiring: Wiring, minimum: int) -> "list[str]":
         if reg.timeout is not None and reg.timeout < minimum:
             out.append(
                 f"{wiring.basename} registered with timeout {reg.timeout}s in "
-                f"{reg.member} ({reg.event}) — below its own {minimum}s judge "
-                f"budget, so the harness kills it mid-judge on every call"
+                f"{reg.member} ({reg.event}, matcher {reg.matcher or '*'}) — "
+                f"below its own {minimum}s judge budget, so the harness kills "
+                f"it mid-judge on every call"
             )
     return out
 
@@ -391,8 +392,9 @@ def timeout_unknowns(wiring: Wiring) -> "list[str]":
     advisory channel, an unknown is only actionable where the caller must fail
     closed."""
     return [
-        f"{wiring.basename} registered in {reg.member} ({reg.event}) with no "
-        f"explicit timeout — its effective limit cannot be established"
+        f"{wiring.basename} registered in {reg.member} "
+        f"({reg.event}, matcher {reg.matcher or '*'}) with no explicit timeout "
+        f"— its effective limit cannot be established"
         for reg in wiring.registrations
         if reg.timeout is None
     ]

@@ -197,6 +197,10 @@ def decide(payload: dict, *, runner: Callable | None = None) -> dict | None:
     full_texts = ask_text.question_texts(tool_input)
     opt_texts = ask_text.option_texts(tool_input)
     stems = ask_text.question_stems(tool_input)
+    # Opened here, after the payload's own parsing above — unlike
+    # hook-turn-end-gate.py's transcript read, extracting ask_text from an
+    # already-parsed tool_input is no file I/O, so nothing above is worth
+    # docking from the judge budget.
     budget = judge_budget.JudgeBudget(_ASK_JUDGE_BUDGET_S, _ASK_JUDGE_MIN_CALL_S, clock=time.monotonic)
     for index, (full_text, opt_text, stem) in enumerate(zip(full_texts, opt_texts, stems), start=1):
         if not _prefilter(opt_text):
