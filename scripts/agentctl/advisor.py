@@ -195,14 +195,20 @@ def enumerate_questions_health(
       * exception              -> (False, [], "")       timeout/crash swallowed
       * success (0 exit)       -> (True, pairs, stderr) pairs may still be empty
 
-    The mandatory cross-check blocker is discharged by the `enumerated` flag the caller
-    sets REGARDLESS of the pair count — never by the count itself. Gating discharge on a
-    non-empty result would let a single timeout (or a genuinely question-free plan)
-    wedge approve permanently with no route out; fail-open buys that liveness, and the
-    silent-discharge cost it incurs is paid back non-blockingly by the caller's advisory,
-    not by making approve un-passable on infra failure. `stderr` is carried so a
-    background caller (the detached enumeration worker) can surface WHY a run failed
-    without the caller needing its own capture path."""
+    Fail-open here means this function RETURNS on a failed run instead of raising — it
+    does not mean the failure is forgiven. Those are two different layers and they are
+    deliberately split: the mandatory obligation lives in the GATE, so that is where
+    refusing belongs. plugins_premise.premise_blockers now blocks approve whenever the
+    recorded `enumerated_runner_ok` is False, discharged only by a typed escape
+    (`agentctl question-enumerate-escape`) counted against the plan's content digest.
+    Two things survive that change unaltered. The pair COUNT still never gates
+    discharge: a genuinely question-free plan is a healthy run, and gating on the count
+    would wedge approve on a pass that worked. And `None` — the advisor absent — still
+    discharges on the flag alone with a non-blocking advisory, since blocking a fleet
+    that never had an advisor would refuse approve for a check it cannot run. `stderr`
+    is carried so a background caller (the detached enumeration worker) can surface WHY
+    a run failed without the caller needing its own capture path — and so the blocker
+    can pre-select the escape reason from it."""
     if runner is None:
         return None, [], ""
     judge_ledger.begin_attributed_call("enumerate_questions_health")

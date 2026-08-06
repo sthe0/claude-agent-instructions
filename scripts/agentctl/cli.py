@@ -1377,17 +1377,19 @@ def cmd_question_enumerate(args, *, store: StateStore, runner: Runner | None = N
     overwhelmingly cross-element, and per-element fan-out would multiply cost by the
     element count for no recall gain (argued in enumerate_questions_health).
 
-    Fail-open, and the flag is flipped REGARDLESS of the pair count — never gated on a
-    non-empty result. A count-gate is the tempting inversion and it is WRONG: it would
-    let a single 20 s advisor timeout (or a genuinely question-free plan) leave
-    `enumerated` False forever, wedging approve with no route out. So the mandatory
-    cross-check is discharged by the pass HAVING RUN, and the silent-discharge cost that
-    buys is paid back NON-BLOCKINGLY: when the pass produced nothing (zero candidates) or
-    the runner did not report healthy, a non-blocking advisory (F3b) tells the
-    coordinator to do the second reading by hand. The advisory never sets ok=False and
-    never adds a blocker — approve stays passable on infra failure. Fires no plugin
-    event; records runner health (enumerated_runner_ok) and the pair count
-    (enumerated_count) for observability."""
+    The flag is flipped REGARDLESS of the pair count — never gated on a non-empty
+    result. A count-gate is the tempting inversion and it is WRONG: a genuinely
+    question-free plan is a HEALTHY pass, and gating on the count would leave
+    `enumerated` False forever, wedging approve with no route out.
+
+    Runner health is a different matter, and no longer discharges silently. A pass
+    whose runner FAILED (enumerated_runner_ok False) is recorded as such and BLOCKS
+    approve in plugins_premise.premise_blockers until a typed escape is on record —
+    this command reports that in its advisory rather than pretending the cross-check
+    was met. An ABSENT advisor (None) still discharges on the flag with the older
+    non-blocking advisory (F3b), because refusing a check the fleet cannot run would
+    be a wedge, not a gate. Fires no plugin event; records runner health
+    (enumerated_runner_ok), its stderr and the pair count (enumerated_count)."""
     state, bag = _question_bag(store, args.session)
     if bag is None:
         return Directive(False, state.node, "noop", "plugin 'premise' is not active")
@@ -1439,7 +1441,7 @@ def cmd_question_enumerate(args, *, store: StateStore, runner: Runner | None = N
         doc.meta.goal, doc.meta.done_criterion, plan_text, run)
 
     raised = _apply_enumeration_result(bag, doc, plan_path, pairs, runner_ok, stderr=stderr)
-    state.log("question_enumerate", raised=len(raised), runner_ok=runner_ok)
+    state.log("question_enumerate", raised=len(raised), runner_ok=runner_ok, via="command")
     store.save(state)
 
     d = Directive(
@@ -1449,9 +1451,26 @@ def cmd_question_enumerate(args, *, store: StateStore, runner: Runner | None = N
         "--as recorded --question <qid> | --as dismissed --reason <text>`",
         data={"raised": raised, "enumerated": True, "runner_ok": runner_ok},
     )
-    if not pairs or runner_ok is not True:
-        why = ("the advisor runner was unavailable or failed"
-               if runner_ok is not True else "the pass raised no questions")
+    # THREE arms, because runner_ok is three-valued and the three states now have
+    # three different truths. `False` no longer discharges anything — the gate
+    # blocks on it — so the old discharge wording became FALSE for that arm the
+    # moment the blocker landed. `None` (advisor absent) still discharges, because
+    # the gate deliberately does not block on it. Folding None into either
+    # neighbour would print "blocked" at a session that is not blocked, or
+    # "discharged" at one that is; nothing in the suite reads advisory text, so
+    # such an error ships green — hence the arms are spelled out and each is tested.
+    if runner_ok is False:
+        pre_selected = advisor.classify_runner_failure(stderr)
+        d.data.setdefault("advisories", []).append(
+            "question enumeration RAN but its runner FAILED — the mandatory cross-check is "
+            "now BLOCKED pending a typed escape, not discharged: either re-run this command "
+            "once the advisor is healthy, or record "
+            f"`agentctl question-enumerate-escape --reason {pre_selected} --note <text>` "
+            "(the reason is pre-selected from this run's own stderr)"
+        )
+    elif runner_ok is None or not pairs:
+        why = ("the advisor runner was unavailable"
+               if runner_ok is None else "the pass raised no questions")
         d.data.setdefault("advisories", []).append(
             f"question enumeration discharged the mandatory cross-check on the flag alone "
             f"({why}) — the enumeration added no candidates, so re-read goal + "
@@ -1501,6 +1520,39 @@ def cmd_question_enumerate_worker(args, *, store: StateStore, runner: Runner | N
                       f"enumeration worker finished; {len(pairs)} pair(s) written to sidecar")
 
 
+def _question_raised_since_the_failed_enumeration(history: list[dict]) -> bool | None:
+    """Whether a `question_raise` appears AFTER the last failed `question_enumerate`.
+
+    The admissibility check behind `manual_enumeration_done`, and the only closed-set
+    reason that asserts work was DONE rather than naming a failure the engine can see
+    for itself. Without a precondition it is an unconditional click-through wearing a
+    reason token.
+
+    The obvious phrasing — "a question raised against the current plan digest" — is
+    NOT expressible: premise.Question carries neither a content digest nor a
+    timestamp, and `disposed_at_key` is a stage question key. What IS derivable is
+    ordering over state.history, which is append-ordered, so "after" is index order.
+    Existence alone would be worthless: every substantive plan has questions in its
+    bag already, so an existence check passes for free on exactly the sessions this
+    governs.
+
+    Returns None when the history holds no failed `question_enumerate` at all — a
+    distinct answer from False, because there is then nothing to order against
+    rather than an ordering that came out wrong, and the caller says so.
+
+    Honest about its own limit: a question raised SOLELY to satisfy this passes. The
+    precondition raises the cost of a click-through from zero to non-zero and leaves
+    a trace in the question log; it does not make gaming impossible."""
+    last_failed = None
+    for i, entry in enumerate(history or []):
+        if entry.get("event") == "question_enumerate" and entry.get("runner_ok") is False:
+            last_failed = i
+    if last_failed is None:
+        return None
+    return any(entry.get("event") == "question_raise"
+               for entry in history[last_failed + 1:])
+
+
 def cmd_question_enumerate_escape(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Record a TYPED escape from an enumeration blocker, against the plan content
     the blocker is refusing on.
@@ -1525,6 +1577,12 @@ def cmd_question_enumerate_escape(args, *, store: StateStore, runner: Runner | N
     offered while the child still has time on its deadline is refused WITH the time
     remaining, because "wait" is the correct action there and the operator needs to
     know how long.
+
+    `manual_enumeration_done` is the one reason asserting that WORK WAS DONE rather
+    than that infrastructure failed, so it alone carries a second condition on top of
+    the failed-run one: a `question_raise` must appear in state.history after the last
+    failed `question_enumerate` (see _question_raised_since_the_failed_enumeration,
+    including what that check cannot promise).
 
     `advisor_unavailable` is in the closed set but the blocker never pre-selects it:
     a live session whose advisor is missing surfaces as an ordinary error, so only a
@@ -1578,6 +1636,23 @@ def cmd_question_enumerate_escape(args, *, store: StateStore, runner: Runner | N
                 f"--reason {reason} escapes a FAILED enumeration run, but this session's "
                 f"premise bag {healthy} (enumerated_runner_ok={runner_ok!r}) — nothing to "
                 "escape from")
+        if reason == premise.ESCAPE_MANUAL_ENUMERATION_DONE:
+            raised_since = _question_raised_since_the_failed_enumeration(state.history)
+            if raised_since is None:
+                return Directive(
+                    False, state.node, "noop",
+                    f"--reason {reason} asserts the cross-check was done BY HAND, but this "
+                    "session's history records no failed `question_enumerate` to have done "
+                    "it after — the claim has nothing to be ordered against, so it cannot "
+                    "be checked; use the reason that names the failure you actually saw")
+            if not raised_since:
+                return Directive(
+                    False, state.node, "noop",
+                    f"--reason {reason} asserts the cross-check was done BY HAND, but every "
+                    "`question_raise` in this session PREDATES the failed enumeration — so "
+                    "nothing was raised in its place; run `agentctl question-raise` for what "
+                    "the hand re-reading found (or dispose of the pass with the reason that "
+                    "names the failure)")
     else:
         if bag.get("enumerated"):
             return Directive(
@@ -1763,7 +1838,17 @@ def _fold_enumeration_sidecar(state: SessionState, doc: PlanDoc, plan_path) -> b
     coordinator ran by hand, whose candidates they have since dispositioned), and
     re-folding a sidecar carrying the same pass would cost a spurious refusal on
     every approve cycle. The sidecar is not even read in that case — it stays for
-    session-end cleanup."""
+    session-end cleanup.
+
+    A successful fold LOGS `question_enumerate` exactly as the synchronous command
+    does, carrying the same `runner_ok`. That entry is not bookkeeping: since the
+    detachment this is the path most enumerations actually arrive on, and
+    `manual_enumeration_done`'s admissibility is an ORDERING over state.history
+    (a `question_raise` after the last failed `question_enumerate`). A fold that
+    logged nothing would leave that precondition with no anchor to order against on
+    the very sessions it governs — silently admitting or silently refusing, either
+    way for the wrong reason. The no-op returns above log nothing, so the history
+    records passes, not attempts."""
     bag = state.plugins.get("premise")
     if bag is None:
         return False
@@ -1774,8 +1859,14 @@ def _fold_enumeration_sidecar(state: SessionState, doc: PlanDoc, plan_path) -> b
     if payload is None:
         return False
     pairs = [tuple(p) for p in payload.get("pairs", [])]
-    _apply_enumeration_result(bag, doc, plan_path, pairs, payload.get("runner_ok"),
-                             preserve_disposition=True, stderr=payload.get("stderr", ""))
+    runner_ok = payload.get("runner_ok")
+    raised = _apply_enumeration_result(bag, doc, plan_path, pairs, runner_ok,
+                                       preserve_disposition=True,
+                                       stderr=payload.get("stderr", ""))
+    # `via` is stated on BOTH producers rather than encoded as this one's presence:
+    # a distinction carried by an absent field reads as a forgotten field to the
+    # next person grepping the history, and these rows now have three readers.
+    state.log("question_enumerate", raised=len(raised), runner_ok=runner_ok, via="fold")
     return True
 
 

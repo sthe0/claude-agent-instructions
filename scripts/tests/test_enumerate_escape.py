@@ -504,3 +504,273 @@ class TestRelaunchRoutesOntoTheEscapableBlocker:
                        note="the detached worker never landed a sidecar"),
             store=store).ok is True
         assert cli.cmd_approve(ns(session=sid, by="user"), store=store).ok is True
+
+
+# --- the fold's own history entry ----------------------------------------------
+
+class TestTheFoldRecordsItsPass:
+    """`manual_enumeration_done`'s precondition is an ORDERING over state.history, and
+    since the detachment the fold is the path most enumerations arrive on. A fold that
+    logged nothing would leave that precondition with no anchor on exactly the sessions
+    it governs."""
+
+    def _sidecar(self, sid, digest, plan, **payload):
+        enumerate_sidecar.write(sid, digest, {
+            "runner_ok": False, "pairs": [], "stderr": "advisor timed out after 480s",
+            "content_digest": digest, "plan_path": plan, **payload})
+
+    def test_a_landed_fold_logs_question_enumerate_with_its_runner_health(
+            self, store, fixtures_dir, tmp_path, monkeypatch):
+        """Remove the fold's `state.log` and this reads zero entries — and every
+        `manual_enumeration_done` on a detached session becomes unevaluable, since the
+        check would find nothing to order a later question_raise against."""
+        monkeypatch.setenv("CLAUDE_AGENT_HOME", str(tmp_path / "agent-home"))
+        sid = "fold-logs"
+        plan = str(fixtures_dir / "plan_two_stage.toml")
+        _to_plan_ready_with_premise(store, sid, plan)
+        self._sidecar(sid, plugins_premise._plan_content_digest(load_plan(plan)), plan)
+
+        cli.cmd_approve(ns(session=sid, by="user"), store=store)
+
+        entries = [e for e in store.load(sid).history if e["event"] == "question_enumerate"]
+        assert len(entries) == 1, entries
+        assert entries[0]["runner_ok"] is False
+        assert entries[0]["via"] == "fold"
+
+    def test_the_synchronous_command_names_its_producer_too(self, store, fixtures_dir):
+        """`via` is stated on BOTH producers rather than encoded as one's absence: a
+        distinction carried by a missing field reads as a forgotten field."""
+        sid = "sync-via"
+        plan = str(fixtures_dir / "plan_two_stage.toml")
+        _to_plan_ready_with_premise(store, sid, plan)
+        cli.cmd_question_enumerate(ns(session=sid, plan=None), store=store,
+                                   runner=lambda argv: RunResult(0, "", ""))
+
+        entries = [e for e in store.load(sid).history if e["event"] == "question_enumerate"]
+        assert [e["via"] for e in entries] == ["command"]
+
+    def test_a_fold_that_does_not_fire_logs_nothing(self, store, fixtures_dir, tmp_path,
+                                                    monkeypatch):
+        """The history records passes, not attempts. Log on the no-op returns too and
+        every gate evaluation would append a phantom `question_enumerate`, moving the
+        ordering anchor past a hand re-reading that really did happen."""
+        monkeypatch.setenv("CLAUDE_AGENT_HOME", str(tmp_path / "agent-home"))
+        sid = "fold-noop"
+        plan = str(fixtures_dir / "plan_two_stage.toml")
+        _to_plan_ready_with_premise(store, sid, plan)
+        # a pass already on record for this exact digest: the sidecar is not even read
+        cli.cmd_question_enumerate(ns(session=sid, plan=None), store=store,
+                                   runner=lambda argv: RunResult(0, "", ""))
+        self._sidecar(sid, plugins_premise._plan_content_digest(load_plan(plan)), plan)
+
+        # through the gate that calls it, then directly and repeatedly: approve is a
+        # one-shot transition, so the repetition the phantom entry would come from is
+        # only reachable at the fold itself
+        cli.cmd_approve(ns(session=sid, by="user"), store=store)
+        state = store.load(sid)
+        doc = load_plan(plan)
+        for _ in range(3):
+            assert cli._fold_enumeration_sidecar(state, doc, plan) is False
+        store.save(state)
+
+        entries = [e for e in store.load(sid).history if e["event"] == "question_enumerate"]
+        assert [e["via"] for e in entries] == ["command"]
+
+
+# --- manual_enumeration_done's precondition ------------------------------------
+
+class TestManualEnumerationDonePrecondition:
+    """The one reason in the closed set that asserts WORK WAS DONE rather than naming a
+    failure the engine can see for itself — so it is the one that would otherwise be an
+    unconditional click-through wearing a reason token."""
+
+    def _state_with_history(self, plan_path, history):
+        state, bag = _bag_state(plan_path, enumerated_runner_ok=False,
+                                enumerated_runner_stderr="boom")
+        state.history = history
+        return state, bag
+
+    def test_refused_when_every_question_raise_predates_the_failed_pass(
+            self, store, fixtures_dir):
+        """The central test, and the one that fails a DEGENERATE implementation: the
+        bag holds a question here (as every substantive plan's does), so an existence
+        check would pass. Only the ORDERING refuses."""
+        state, bag = self._state_with_history(str(fixtures_dir / "plan_two_stage.toml"), [
+            {"event": "question_raise", "question": "Q1", "target": "goal"},
+            {"event": "question_enumerate", "raised": 0, "runner_ok": False, "via": "command"},
+        ])
+        bag["questions"] = [{"id": "Q1", "target": "goal", "question": "why?",
+                             "disposition": "open", "reason": "", "research": ""}]
+        store.save(state)
+
+        d = cli.cmd_question_enumerate_escape(
+            _escape_ns("s", premise.ESCAPE_MANUAL_ENUMERATION_DONE,
+                       note="re-read the plan by hand"), store=store)
+
+        assert d.ok is False, d.detail
+        assert "PREDATES" in d.detail
+        assert store.load("s").plugins["premise"]["escapes"] == []
+
+    def test_accepted_when_a_question_raise_follows_the_failed_pass(
+            self, store, fixtures_dir):
+        """The other direction — without it the precondition would be a wedge rather
+        than a condition, and the reason could never be used at all."""
+        state, _ = self._state_with_history(str(fixtures_dir / "plan_two_stage.toml"), [
+            {"event": "question_enumerate", "raised": 0, "runner_ok": False, "via": "fold"},
+            {"event": "question_raise", "question": "Q2", "target": "stage 2"},
+        ])
+        store.save(state)
+
+        d = cli.cmd_question_enumerate_escape(
+            _escape_ns("s", premise.ESCAPE_MANUAL_ENUMERATION_DONE,
+                       note="hand re-reading raised Q2"), store=store)
+
+        assert d.ok is True, d.detail
+        assert [r["reason"] for r in store.load("s").plugins["premise"]["escapes"]] == [
+            premise.ESCAPE_MANUAL_ENUMERATION_DONE]
+
+    def test_only_the_last_failed_pass_anchors_the_ordering(self, store, fixtures_dir):
+        """A question raised after an EARLIER failure says nothing about the pass now
+        being escaped. Anchor on the first failed entry instead and one old question
+        would discharge every later failure for the rest of the session."""
+        state, _ = self._state_with_history(str(fixtures_dir / "plan_two_stage.toml"), [
+            {"event": "question_enumerate", "raised": 0, "runner_ok": False, "via": "command"},
+            {"event": "question_raise", "question": "Q1", "target": "goal"},
+            {"event": "question_enumerate", "raised": 0, "runner_ok": False, "via": "fold"},
+        ])
+        store.save(state)
+
+        d = cli.cmd_question_enumerate_escape(
+            _escape_ns("s", premise.ESCAPE_MANUAL_ENUMERATION_DONE, note="n"), store=store)
+
+        assert d.ok is False, d.detail
+        assert "PREDATES" in d.detail
+
+    def test_a_healthy_pass_in_between_does_not_anchor_it(self, store, fixtures_dir):
+        """`runner_ok is False`, not merely `event == question_enumerate`: a healthy
+        pass is not a failure to have re-read after, and treating it as one would
+        refuse a hand re-reading that really did follow the failure."""
+        state, _ = self._state_with_history(str(fixtures_dir / "plan_two_stage.toml"), [
+            {"event": "question_enumerate", "raised": 0, "runner_ok": False, "via": "command"},
+            {"event": "question_raise", "question": "Q1", "target": "goal"},
+            {"event": "question_enumerate", "raised": 3, "runner_ok": True, "via": "command"},
+        ])
+        store.save(state)
+
+        assert cli.cmd_question_enumerate_escape(
+            _escape_ns("s", premise.ESCAPE_MANUAL_ENUMERATION_DONE, note="n"),
+            store=store).ok is True
+
+    def test_refused_when_no_failed_pass_is_on_record_at_all(self, store, fixtures_dir):
+        """A bag saying `runner_ok is False` with no matching history entry — a
+        hand-mutated bag, or a session predating the fold's own logging. Refusing is
+        the safe answer: the claim has nothing to be ordered against, so it cannot be
+        checked, and an unverifiable assertion is exactly what this reason must not
+        become. Not a wedge — the other four reasons stay admissible in that state,
+        which the second half asserts."""
+        state, _ = self._state_with_history(str(fixtures_dir / "plan_two_stage.toml"), [
+            {"event": "question_raise", "question": "Q1", "target": "goal"},
+        ])
+        store.save(state)
+
+        d = cli.cmd_question_enumerate_escape(
+            _escape_ns("s", premise.ESCAPE_MANUAL_ENUMERATION_DONE, note="n"), store=store)
+
+        assert d.ok is False, d.detail
+        assert "nothing to be ordered against" in d.detail
+
+        assert cli.cmd_question_enumerate_escape(
+            _escape_ns("s", premise.ESCAPE_ADVISOR_ERROR, note="n"), store=store).ok is True
+
+    def test_the_other_reasons_carry_no_ordering_condition(self, store, fixtures_dir):
+        """Only `manual_enumeration_done` asserts work; the rest name a failure the
+        engine already sees. Extend the condition to them and a session whose advisor
+        is simply down could never escape."""
+        state, _ = self._state_with_history(str(fixtures_dir / "plan_two_stage.toml"), [
+            {"event": "question_enumerate", "raised": 0, "runner_ok": False, "via": "fold"},
+        ])
+        store.save(state)
+
+        assert cli.cmd_question_enumerate_escape(
+            _escape_ns("s", premise.ESCAPE_ADVISOR_TIMEOUT, note="n"), store=store).ok is True
+
+    def test_end_to_end_through_the_real_verbs(self, store, fixtures_dir):
+        """Hand-built histories can only prove the predicate; this proves the entries
+        it reads are the ones production actually writes — with a question raised
+        BEFORE the failure, so an existence check would pass here too."""
+        sid = "manual-e2e"
+        plan = str(fixtures_dir / "plan_two_stage.toml")
+        _to_plan_ready_with_premise(store, sid, plan)
+        cli.cmd_question_raise(ns(session=sid, id="Q1", target="goal",
+                                  question="does the goal hold?"), store=store)
+        cli.cmd_question_enumerate(ns(session=sid, plan=None), store=store,
+                                   runner=_failing_runner("boom"))
+
+        escape = _escape_ns(sid, premise.ESCAPE_MANUAL_ENUMERATION_DONE,
+                            note="re-read every stage by hand")
+        assert cli.cmd_question_enumerate_escape(escape, store=store).ok is False
+
+        cli.cmd_question_raise(ns(session=sid, id="Q2", target="stage 2",
+                                  question="what the hand re-reading found"), store=store)
+
+        assert cli.cmd_question_enumerate_escape(escape, store=store).ok is True
+        assert [r["reason"] for r in store.load(sid).plugins["premise"]["escapes"]] == [
+            premise.ESCAPE_MANUAL_ENUMERATION_DONE]
+
+
+# --- the post-pass advisory's three arms ----------------------------------------
+
+class TestEnumerateAdvisoryArms:
+    """`runner_ok` is three-valued and the three states now have three different
+    truths. Nothing else in the suite reads advisory text, so a wrong arm would ship
+    green — which is why each is asserted on the actual string."""
+
+    def _advisories(self, store, sid, fixtures_dir, runner):
+        plan = str(fixtures_dir / "plan_two_stage.toml")
+        _to_plan_ready_with_premise(store, sid, plan)
+        d = cli.cmd_question_enumerate(ns(session=sid, plan=None), store=store, runner=runner)
+        return d.data.get("advisories", [])
+
+    def test_a_failed_runner_says_blocked_and_names_the_pre_selected_reason(
+            self, store, fixtures_dir):
+        """The arm whose old text became FALSE the moment the blocker landed: this
+        pass discharges nothing. Leave the old wording and the command tells the
+        coordinator to proceed at the exact moment the gate refuses to."""
+        adv = self._advisories(store, "arm-false", fixtures_dir,
+                               _failing_runner("advisor timed out after 480s"))
+
+        assert len(adv) == 1, adv
+        assert "BLOCKED" in adv[0]
+        assert "discharged the mandatory cross-check on the flag alone" not in adv[0]
+        assert f"--reason {premise.ESCAPE_ADVISOR_TIMEOUT}" in adv[0]
+
+    def test_an_absent_advisor_keeps_the_discharge_wording(self, store, fixtures_dir,
+                                                           monkeypatch):
+        """None is not a failure — the gate does not block on it. Fold it into the
+        failure arm and every advisor-less session is told it is blocked when it is
+        not, and sent to an escape the engine would refuse."""
+        monkeypatch.setattr(advisor, "enumerate_subprocess_runner", None)
+        adv = self._advisories(store, "arm-none", fixtures_dir, None)
+
+        assert len(adv) == 1, adv
+        assert "discharged the mandatory cross-check on the flag alone" in adv[0]
+        assert "unavailable" in adv[0]
+        assert "BLOCKED" not in adv[0]
+
+    def test_a_healthy_pass_with_zero_pairs_keeps_the_zero_pair_wording(
+            self, store, fixtures_dir):
+        """A question-free plan is a HEALTHY pass; the advisory asks for the second
+        reading without implying anything failed."""
+        adv = self._advisories(store, "arm-empty", fixtures_dir,
+                               lambda argv: RunResult(0, "", ""))
+
+        assert len(adv) == 1, adv
+        assert "the pass raised no questions" in adv[0]
+        assert "BLOCKED" not in adv[0]
+
+    def test_a_healthy_pass_with_pairs_attaches_no_advisory_at_all(
+            self, store, fixtures_dir):
+        adv = self._advisories(store, "arm-ok", fixtures_dir,
+                               lambda argv: RunResult(0, "stage 1\tdoes the bound hold?\n", ""))
+
+        assert adv == []
