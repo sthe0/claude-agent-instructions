@@ -1118,6 +1118,17 @@ def _pin_budget_clock(monkeypatch, clock):
     monkeypatch.setattr(_mod.judge_budget, "JudgeBudget", factory)
 
 
+# judge -> (its own floor, its own cap) as the hook declares them. Per-judge, not
+# one shared band: the three have measurably different distributions
+# (lib/judge_latency.py), so one band wide enough for the slowest would tell us
+# nothing about the fastest.
+_PER_JUDGE_BOUNDS = {
+    "feedback_signal": (_mod._TURN_FEEDBACK_MIN_CALL_S, _mod._TURN_FEEDBACK_CALL_CAP_S),
+    "binary_ask": (_mod._TURN_BINARY_ASK_MIN_CALL_S, _mod._TURN_BINARY_ASK_CALL_CAP_S),
+    "outage_escalation": (_mod._TURN_OUTAGE_MIN_CALL_S, _mod._TURN_OUTAGE_CALL_CAP_S),
+}
+
+
 def _all_three_prefilters(tmp_path) -> Path:
     """A turn that trips all three judge prefilters at once: the user message
     carries a feedback signal, and the assistant's text both reports a live
@@ -1152,7 +1163,11 @@ def test_budget_drops_the_tail_and_records_the_skip(
     this change exists to remove."""
     clock = _FakeClock()
     _pin_budget_clock(monkeypatch, clock)
-    runner = _recording_runner(elapsed=13.0, clock=clock)
+    # 17s per call: two of them leave 18s of the 52s budget, under the outage
+    # judge's own 20s floor (lib/judge_latency.py, ceil(p90) over n=16) — while
+    # still leaving the SECOND call startable, so what this pins is a tail drop
+    # and not a budget that dies on its first judge.
+    runner = _recording_runner(elapsed=17.0, clock=clock)
 
     ctx = _mod.build_context(
         {"transcript_path": str(_all_three_prefilters(tmp_path))}, runner=runner
@@ -1168,7 +1183,7 @@ def test_a_dropped_judge_fails_open(tmp_path, isolated_state, monkeypatch):
     these judges feeds a Stop-gate BLOCKER, so an unrun judge must not block."""
     clock = _FakeClock()
     _pin_budget_clock(monkeypatch, clock)
-    runner = _recording_runner(text="YES", elapsed=13.0, clock=clock)
+    runner = _recording_runner(text="YES", elapsed=17.0, clock=clock)
 
     ctx = _mod.build_context(
         {"transcript_path": str(_all_three_prefilters(tmp_path))}, runner=runner
@@ -1195,9 +1210,14 @@ def test_no_judge_call_uses_the_advisor_default_timeout(
 
     assert len(runner.calls) == 3
     for name, timeout in runner.calls:
+        floor, cap = _PER_JUDGE_BOUNDS[name]
         assert timeout is not None, f"{name} was called without an explicit timeout"
         assert timeout != _mod.advisor._BINARY_ASK_TIMEOUT_S, f"{name} got the default"
-        assert _mod._TURN_JUDGE_MIN_CALL_S <= timeout <= _mod._TURN_JUDGE_CALL_CAP_S
+        assert floor <= timeout <= cap, (
+            f"{name} got timeout={timeout}s, outside its OWN [{floor}, {cap}] "
+            "band — a shared band would let a judge run under a bound measured "
+            "for a different judge"
+        )
 
 
 def test_a_judge_whose_prefilter_is_silent_costs_no_budget(
@@ -1236,9 +1256,12 @@ def test_main_opens_the_budget_before_stdin_json_parsing(
     real_json_load = json.load
 
     def slow_json_load(fp, *a, **kw):
-        # 15s of stdin-JSON-parsing cost, spent BEFORE main() ever reaches
-        # build_context.
-        clock.now += 15.0
+        # 37s of stdin-JSON-parsing cost, spent BEFORE main() ever reaches
+        # build_context. Chosen so the remainder (15s) falls INSIDE the first
+        # judge's [floor, cap] band: a smaller cost would leave more than the
+        # 16s cap and the first timeout would read 16 either way, making the test
+        # blind to the very mutation it exists for.
+        clock.now += 37.0
         return real_json_load(fp, *a, **kw)
 
     monkeypatch.setattr(json, "load", slow_json_load)
@@ -1255,10 +1278,12 @@ def test_main_opens_the_budget_before_stdin_json_parsing(
     assert runner.calls, "expected the feedback_signal judge to be called"
     first_name, first_timeout = runner.calls[0]
     assert first_name == "feedback_signal"
-    # 30s whole-invocation budget - 15s already spent in json.load == 15s left,
-    # below the 20s per-call cap -- the deadline must already reflect that cost.
+    # 52s whole-invocation budget - 37s already spent in json.load == 15s left,
+    # below the feedback judge's 16s per-call cap -- the deadline must already
+    # reflect that cost.
     assert first_timeout == 15.0, (
-        f"first judge got timeout={first_timeout}s, expected 15.0s (30s budget "
-        "minus the 15s spent in json.load before build_context was ever "
-        "entered) -- main() is not opening the budget before stdin parsing"
+        f"first judge got timeout={first_timeout}s, expected 15.0s "
+        f"({_mod._TURN_JUDGE_BUDGET_S}s budget minus the 37s spent in json.load "
+        "before build_context was ever entered) -- main() is not opening the "
+        "budget before stdin parsing"
     )

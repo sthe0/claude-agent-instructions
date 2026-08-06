@@ -57,36 +57,38 @@ from agentctl import advisor  # noqa: E402
 from lib import ask_text  # noqa: E402
 from lib import judge_budget  # noqa: E402
 
-# Whole-ask budget for the judge, distinct from advisor._DEFERRING_DISPOSITION_
-# TIMEOUT_S=30 (the per-CALL ceiling). Measured 2026-08-05: a live judge call
-# takes 11.6-13.5s, so a multi-question ask that reaches a second/third fired
-# menu at 30s-per-call could stall the interactive ask well past this hook's
-# own harness timeout (install-reminder-hooks.sh, 25s). 20s keeps the WHOLE
-# decide() call inside that harness timeout with headroom for the interpreter
-# start; individual calls get whatever of the 20s remains (see decide()).
+# Whole-ask budget for the judge, and the ceiling handed to the one call it
+# funds. Two superseded numbers are worth naming, because both were set from the
+# same four-sample note ("a live judge call takes 11.6-13.5s"): the budget was
+# 20s and the ceiling was borrowed from advisor._DEFERRING_DISPOSITION_TIMEOUT_S.
+# The real distribution over n=18 (lib/judge_latency.py) is median 17.43, p90
+# 37.58, max 39.99 — so 20s was BELOW this judge's own p90 and the gate was
+# failing open on most asks it fired on, silently.
 #
-# Cost of this design, named rather than hidden: at a 20s budget and an
-# 11.6-13.5s call, an ask with ONE fired menu is always judged; a multi-
-# question ask is only reliably judged on its FIRST fired menu — later fired
-# menus may be skipped on budget exhaustion (allowed, not denied). The
-# alternative (full multi-question recall) needs a ~130s hook ceiling ahead of
-# an interactive menu, which is not an acceptable UX trade.
+# The height is a judgement (how long a gate may hold an interactive menu); what
+# is machine-checked against lib/judge_latency.py is that it clears this judge's
+# per-call ceiling `ceil(max) + 1` = 41s, so the budget can never be what
+# truncates the call. This hook makes exactly ONE judged call per invocation, so
+# this number is also that call's ceiling — see decide() for why the second fired
+# menu is not judged.
 #
-# The latency distribution has a HEAVY TAIL, so this budget also drops a share
-# of SINGLE-menu asks: 8 calls on the founding ask, measured 2026-08-05 with no
-# timeout, came in at 10.5 / 11.5 / 12.2 / 12.6 / 13.7 / 14.2 / 15.4 / 47.0s —
-# seven inside the budget, one far outside. That outlier fails OPEN, so the
-# gate's real recall is about 7/8, not 1. Raising the budget does not recover
-# it: no ceiling a user tolerates ahead of an interactive menu covers a 47s
-# call, and the extra seconds would be paid on exactly the runs that are
-# already pathological. Losing that one is the deliberate trade.
-_ASK_JUDGE_BUDGET_S = 20
+# Cost of this design, named rather than hidden. (1) A multi-question ask is
+# judged on its FIRST fired menu only; the alternative (full multi-question
+# recall) needs a ~130s ceiling ahead of an interactive menu, which is not an
+# acceptable UX trade. (2) Even a single-menu ask is dropped on the tail: the
+# budget covers this judge's p90, not its maximum, and every drop fails OPEN.
+# No run in the n=18 sample exceeded 45s, which by the rule of three bounds the
+# exceedance rate at roughly 3/18 (~17%) with 95% confidence — NOT at zero, and
+# the plan's own final check refuses a claim that reads it as zero.
+_ASK_JUDGE_BUDGET_S = 45
 
-# Below this remaining budget a judge call cannot plausibly finish (measured
-# latency 11.6-13.5s) and would only spend the wait on a guaranteed timeout;
-# stop judging and fail open instead, exactly like every other unreachable-
-# judge path in this hook.
-_ASK_JUDGE_MIN_CALL_S = 12
+# Below this remaining budget a judge call cannot plausibly finish and would only
+# spend the wait on a guaranteed timeout; stop judging and fail open instead,
+# exactly like every other unreachable-judge path in this hook. This is
+# lib/judge_latency.py's floor rule, `ceil(p90)` over n=18 — comfortably above
+# the fastest run observed (10.29s), which is what makes a call started with
+# exactly the floor left reachable rather than doomed.
+_ASK_JUDGE_MIN_CALL_S = 38
 
 # Upper bound on a question stem embedded in the deny reason (_truncate_stem)
 # — long enough to identify the offending menu, short enough not to reproduce
@@ -173,13 +175,20 @@ def decide(payload: dict, *, runner: Callable | None = None) -> dict | None:
     prefilter fires AND whose judge call returns True denies the whole ask;
     remaining questions are only reached if none has fired yet.
 
-    A single _ASK_JUDGE_BUDGET_S deadline bounds the WHOLE call (not each
-    judge call individually): each judge call gets whatever of the budget
-    remains, capped at advisor._DEFERRING_DISPOSITION_TIMEOUT_S (that ceiling
-    stays as the single-call cap; the deadline is what makes it non-binding in
-    practice, since the budget is smaller). Once the remainder can no longer
-    fit a meaningful call (_ASK_JUDGE_MIN_CALL_S), judging stops and the ask
-    is allowed — fail-open, same posture as every other unreachable-judge path.
+    A single _ASK_JUDGE_BUDGET_S deadline bounds the WHOLE call (not each judge
+    call individually): each judge call gets whatever of the budget remains,
+    capped at _ASK_JUDGE_BUDGET_S — this hook's OWN ceiling, not
+    advisor._DEFERRING_DISPOSITION_TIMEOUT_S, which is the last-resort default for
+    a caller with no budget at all and is therefore not a bound this hook can
+    honour. Once the remainder can no longer fit a meaningful call
+    (_ASK_JUDGE_MIN_CALL_S), judging stops and the ask is allowed — fail-open,
+    same posture as every other unreachable-judge path.
+
+    That floor is what makes the loop single-call in practice, and the limit is
+    declared rather than discovered: a second fired menu is reached only if the
+    first call returned with _ASK_JUDGE_MIN_CALL_S still left, i.e. in under 7s —
+    faster than the fastest run ever measured for this judge. So a multi-menu ask
+    is judged on its first fired menu and allowed on the rest.
 
     ``runner`` is injected straight into advisor.judge_deferring_disposition
     (None -> that judge fails open to False, never denies).
@@ -205,7 +214,7 @@ def decide(payload: dict, *, runner: Callable | None = None) -> dict | None:
     for index, (full_text, opt_text, stem) in enumerate(zip(full_texts, opt_texts, stems), start=1):
         if not _prefilter(opt_text):
             continue  # cheap common path: this menu's options defer nothing
-        call_timeout = budget.next_call_timeout(advisor._DEFERRING_DISPOSITION_TIMEOUT_S)
+        call_timeout = budget.next_call_timeout(_ASK_JUDGE_BUDGET_S)
         if call_timeout is None:
             break  # budget exhausted — fail open, same as every other unreachable-judge path
         fires = advisor.judge_deferring_disposition(

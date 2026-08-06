@@ -4,8 +4,10 @@ Core invariant: directive.ok and directive.node are byte-identical whether the a
 returns a loud verdict or [] (disabled / errored). Advisories live in directive.data
 only and are never persisted into gate decisions or SessionState.
 """
+import ast
 import subprocess
 from argparse import Namespace
+from pathlib import Path
 
 import pytest
 
@@ -101,12 +103,18 @@ class TestJudgeUnit:
     def test_argv_carries_explicit_cheap_model(self):
         seen = {}
 
-        def recording_runner(argv):
+        def recording_runner(argv, **kwargs):
             seen["argv"] = argv
+            seen["timeout"] = kwargs.get("timeout")
             return RunResult(0, stdout="ok")
 
         advisor.judge("weight_classification", {}, recording_runner, enabled=True)
         assert seen["argv"][:4] == ["claude", "-p", "--model", "sonnet"]
+        # An EXPLICIT timeout, not the runner's own default: subprocess_runner's
+        # default is sized for the judge family (41s), and letting an advisory
+        # call inherit it would hold the coordinator for twice this advisor's
+        # own 20s deadline before failing open.
+        assert seen["timeout"] == advisor._ADVISOR_TIMEOUT_S
 
 
 # ── resolve_enabled: env override + config-mode/weight-class layering ────────
@@ -583,27 +591,18 @@ class TestJudgeDeferringDisposition:
         assert advisor.judge_deferring_disposition(self._ASK, _raising_runner) is False
 
     def test_timeout_expired_fails_open(self):
-        """The dominant real failure mode, not just a generic exception: haiku
-        was measured at 13.9 +/- 2.4s (4 samples, min 12.1, max 17.5) against
-        the OLD 8s budget this judge used to inherit from _BINARY_ASK_TIMEOUT_S,
-        which timed out on every call. A runner that raises
-        subprocess.TimeoutExpired must fail open exactly like any other raising
-        runner — see test_default_timeout_is_own_constant for the fix itself."""
+        """The dominant real failure mode, not just a generic exception. Over
+        n=18 (lib/judge_latency.py) this judge runs at median 17.43s, p90 37.58s,
+        max 39.99s — against the 8s budget it once inherited from
+        _BINARY_ASK_TIMEOUT_S it timed out on every single call, and the four-run
+        note that budget was set from ("13.9 +/- 2.4s") had seen none of the tail.
+        A runner that raises subprocess.TimeoutExpired must fail open exactly
+        like any other raising runner; test_every_judges_default_timeout_names_
+        its_own_constant covers the sizing fix itself."""
         def timing_out_runner(argv, **kwargs):
             raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout", 0))
 
         assert advisor.judge_deferring_disposition(self._ASK, timing_out_runner) is False
-
-    def test_default_timeout_is_own_constant(self):
-        seen = {}
-
-        def recording_runner(argv, **kwargs):
-            seen["timeout"] = kwargs.get("timeout")
-            return RunResult(0, stdout="NO", stderr="")
-
-        advisor.judge_deferring_disposition(self._ASK, recording_runner)
-        assert seen["timeout"] == advisor._DEFERRING_DISPOSITION_TIMEOUT_S
-        assert seen["timeout"] != advisor._BINARY_ASK_TIMEOUT_S
 
     def test_argv_carries_judge_model(self):
         seen = {}
@@ -614,3 +613,93 @@ class TestJudgeDeferringDisposition:
 
         advisor.judge_deferring_disposition("some text", recording_runner)
         assert seen["argv"][:4] == ["claude", "-p", "--model", "haiku"]
+
+
+# ── each judge's default timeout names ITS OWN constant (structural) ──────────
+
+# judge function -> the module constant its `timeout` default must NAME.
+#
+# Every value in this table is now 41: all three last-resort defaults come from
+# the same rule (lib/judge_latency.last_resort_ceiling_s — ceil of the largest
+# observation anywhere in the measured family, plus 1) and that rule returns one
+# number for the whole family. Which is exactly WHY this test reads the AST
+# instead of calling each judge and comparing values: equal numbers cannot
+# distinguish "this judge defaults to its own constant" from "this judge borrows
+# a neighbour's". The predecessor test asserted the two constants DIFFERED, so it
+# had to be deleted rather than updated — its whole mechanism was an accident of
+# their values, and the defect it was written for (a hook passing a foreign
+# hook's constant) is a NAMING defect, visible in the source and nowhere else.
+_JUDGE_TIMEOUT_CONSTANTS = {
+    "judge_binary_ask": "_BINARY_ASK_TIMEOUT_S",
+    "judge_feedback_signal": "_BINARY_ASK_TIMEOUT_S",
+    "judge_outage_escalation": "_BINARY_ASK_TIMEOUT_S",
+    "judge_deferring_disposition": "_DEFERRING_DISPOSITION_TIMEOUT_S",
+    "acceptance_judge": "_ACCEPTANCE_JUDGE_TIMEOUT_S",
+}
+
+
+def _timeout_default_expression(func_name: str) -> "ast.expr":
+    """The `timeout` parameter's default expression in advisor.py's definition of
+    `func_name`, as an AST node — never evaluated, so what is under test is the
+    NAME the source writes, not the number it happens to resolve to."""
+    tree = ast.parse(Path(advisor.__file__).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name != func_name:
+            continue
+        args = node.args
+        for arg, default in zip(
+            args.kwonlyargs, args.kw_defaults
+        ):
+            if arg.arg == "timeout":
+                assert default is not None, (
+                    f"{func_name}'s timeout is keyword-only with no default"
+                )
+                return default
+        positional = args.posonlyargs + args.args
+        offset = len(positional) - len(args.defaults)
+        for index, arg in enumerate(positional):
+            if arg.arg == "timeout":
+                assert index >= offset, f"{func_name}'s timeout has no default"
+                return args.defaults[index - offset]
+        raise AssertionError(f"{func_name} has no timeout parameter")
+    raise AssertionError(f"advisor.py defines no {func_name}")
+
+
+@pytest.mark.parametrize("func_name", sorted(_JUDGE_TIMEOUT_CONSTANTS))
+def test_every_judges_default_timeout_names_its_own_constant(func_name):
+    """Each judge's `timeout` default must be a bare reference to the constant
+    this family assigns it — not a literal, not an arithmetic expression, and not
+    another judge's constant.
+
+    The defect this pins is real and was live in this tree:
+    hook-deferring-disposition-gate.py passed
+    advisor._DEFERRING_DISPOSITION_TIMEOUT_S as its own hook's per-call ceiling,
+    a foreign constant that merely happened to be numerically survivable. A
+    value-based check cannot see that; the source can."""
+    expected = _JUDGE_TIMEOUT_CONSTANTS[func_name]
+    default = _timeout_default_expression(func_name)
+    assert isinstance(default, ast.Name), (
+        f"{func_name}'s timeout default is {ast.dump(default)}, not a bare "
+        f"reference to {expected} — a literal or expression here detaches the "
+        "default from the rule that sets it"
+    )
+    assert default.id == expected, (
+        f"{func_name}'s timeout defaults to {default.id}, but its own constant "
+        f"is {expected}"
+    )
+    assert hasattr(advisor, expected), f"advisor has no {expected}"
+
+
+def test_the_last_resort_defaults_are_computed_from_the_measurements():
+    """Every last-resort default is the calibration module's family ceiling, not
+    a hand-typed number that agrees with it today. This is the other half of the
+    structural test above: that one fixes WHICH name each judge uses, this one
+    fixes what those names are worth."""
+    from lib import judge_latency
+
+    ceiling = judge_latency.last_resort_ceiling_s()
+    for const_name in sorted(set(_JUDGE_TIMEOUT_CONSTANTS.values())):
+        assert getattr(advisor, const_name) == ceiling, (
+            f"advisor.{const_name} is {getattr(advisor, const_name)}, but the "
+            f"measured family ceiling is {ceiling}"
+        )

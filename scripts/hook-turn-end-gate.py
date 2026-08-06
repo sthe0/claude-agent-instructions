@@ -85,21 +85,45 @@ from agentctl.advisor import judge_binary_ask  # noqa: E402
 from lib import judge_budget  # noqa: E402
 
 # Whole-invocation deadline covering ALL judge calls this hook makes, and the
-# registration that must accommodate it (install-reminder-hooks.sh: 35s = this
+# registration that must accommodate it (install-reminder-hooks.sh: 57s = this
 # budget plus interpreter-start headroom). Larger than the single-judge gates'
-# 20s because this one invocation runs up to THREE judges; before it existed the
-# hook was registered at 5s and called every judge with advisor's 8s default,
-# against a MEASURED judge latency of 10.5 / 11.5 / 12.2 / 12.6 / 13.7 / 14.2 /
-# 15.4 / 47.0s — so every verdict was computed after the hook was already dead,
-# or never computed at all.
-_TURN_JUDGE_BUDGET_S = 30
-# Below this the remainder cannot plausibly fit a call (fastest measured run:
-# 10.5s), so the tail is skipped rather than spent on a guaranteed timeout.
-_TURN_JUDGE_MIN_CALL_S = 12
-# Ceiling on any ONE call, so a single slow judge (the 47s outlier) cannot eat
-# the whole budget and starve the two behind it. Comfortably above the ~12.9s
-# median, so it binds only on the tail.
-_TURN_JUDGE_CALL_CAP_S = 20
+# because this one invocation runs up to THREE judges; before it existed the hook
+# was registered at 5s and called every judge with advisor's 8s default, under
+# every one of these judges' own fastest measured runs — so every verdict was
+# computed after the hook was already dead, or never computed at all.
+#
+# The height is a judgement (how long a Stop hook may hold the turn boundary);
+# what is machine-checked against lib/judge_latency.py is the size inequality
+# `required_budget_s("hook-turn-end-gate.py")` — the two earlier judges at their
+# medians plus the last judge's floor plus one second of non-judge head-room —
+# so the third judge is structurally REACHABLE on a typical turn rather than
+# starved by the two ahead of it. It is deliberately NOT the sum of the three
+# per-call ceilings (16 + 13 + 27 = 56 before head-room): a budget covering three
+# simultaneous worst cases would hold the turn boundary for a minute to buy a
+# co-occurrence never observed.
+_TURN_JUDGE_BUDGET_S = 52
+
+# Per-judge ceiling and floor, one pair per call site. They are NOT one shared
+# pair: these three judges answer different prompts and their measured latencies
+# differ by 3x (lib/judge_latency.py), so a shared ceiling would either truncate
+# the slow judge or let the fast one hold budget it cannot use, and a shared floor
+# would skip a call the remainder could in fact have carried. Ceiling is that
+# judge's `ceil(max) + 1`, floor its `ceil(p90)` — both computed per row, and the
+# test-suite asserts each constant still equals what the rule computes.
+_TURN_FEEDBACK_CALL_CAP_S = 16
+_TURN_FEEDBACK_MIN_CALL_S = 14
+_TURN_BINARY_ASK_CALL_CAP_S = 13
+_TURN_BINARY_ASK_MIN_CALL_S = 12
+_TURN_OUTAGE_CALL_CAP_S = 27
+_TURN_OUTAGE_MIN_CALL_S = 20
+
+# The budget object's OWN floor, a fallback only: every call site below names its
+# judge's floor, so this is reached solely by a future call site that forgets to.
+# It is the smallest of the three deliberately — the least restrictive value. A
+# fallback that skipped a call the remainder could in fact have carried would be
+# an invisible recall loss, while one that admits a slightly-too-small call is
+# still bounded by that call's own timeout.
+_TURN_JUDGE_MIN_CALL_S = _TURN_BINARY_ASK_MIN_CALL_S
 
 try:
     from lib import config_root  # noqa: E402
@@ -566,12 +590,12 @@ def build_context(
 
     ``budget`` defaults to a fresh whole-invocation JudgeBudget opened right
     here, at the top, BEFORE the transcript is read — not after, as it used to
-    be. The registered timeout (35s) already covers interpreter start, transcript
-    parsing and the guardian run on top of the judge budget itself (30s), and a
-    deadline that opens only after parsing is done quietly spends part of that
-    5s headroom without the budget ever knowing. main() passes its own budget
-    through instead of relying on this default, so the deadline covers the same
-    span the harness actually times.
+    be. The registration (install-reminder-hooks.sh) covers interpreter start,
+    transcript parsing and the guardian run on top of the judge budget itself
+    (_TURN_JUDGE_BUDGET_S), and a deadline that opens only after parsing is done
+    quietly spends part of that headroom without the budget ever knowing. main()
+    passes its own budget through instead of relying on this default, so the
+    deadline covers the same span the harness actually times.
 
     The three judges are evaluated SEQUENTIALLY against one _TURN_JUDGE_BUDGET_S
     deadline, not as three eager arguments to the TurnContext constructor. As
@@ -614,13 +638,27 @@ def build_context(
 
     skipped: list[str] = []
 
-    def _judged(name: str, prefilter_fires: bool, call: Callable[[float], bool]) -> bool:
+    def _judged(
+        name: str,
+        prefilter_fires: bool,
+        call: Callable[[float], bool],
+        *,
+        cap_s: int,
+        min_call_s: int,
+    ) -> bool:
         """One budgeted judge call. Returns the verdict, or False (fail open,
         the direction every judge here already fails in) when the prefilter did
-        not fire or the budget can no longer fit a call."""
+        not fire or the budget can no longer fit a call.
+
+        ``cap_s`` and ``min_call_s`` are per-CALL, not per-hook: the three judges
+        have measurably different latency distributions (lib/judge_latency.py),
+        so one shared pair would either cap the slow judge below its own ceiling
+        or hold the budget open for the fast one long past the point where it
+        could still have returned. The budget object stays shared — the whole
+        point is that the three calls draw down ONE deadline."""
         if not prefilter_fires:
             return False
-        call_timeout = budget.next_call_timeout(_TURN_JUDGE_CALL_CAP_S)
+        call_timeout = budget.next_call_timeout(cap_s, min_call_s=min_call_s)
         if call_timeout is None:
             skipped.append(name)
             return False
@@ -641,6 +679,8 @@ def build_context(
             enabled=os.environ.get(_SI_FEEDBACK_KILLSWITCH_ENV) != "0",
             timeout=t,
         ),
+        cap_s=_TURN_FEEDBACK_CALL_CAP_S,
+        min_call_s=_TURN_FEEDBACK_MIN_CALL_S,
     )
     prose_binary_ask = _judged(
         "binary_ask",
@@ -651,6 +691,8 @@ def build_context(
             enabled=os.environ.get(_BINARY_ASK_KILLSWITCH_ENV) != "0",
             timeout=t,
         ),
+        cap_s=_TURN_BINARY_ASK_CALL_CAP_S,
+        min_call_s=_TURN_BINARY_ASK_MIN_CALL_S,
     )
     outage_escalation_sought = _judged(
         "outage_escalation",
@@ -661,6 +703,8 @@ def build_context(
             enabled=os.environ.get(_OUTAGE_ESCALATION_KILLSWITCH_ENV) != "0",
             timeout=t,
         ),
+        cap_s=_TURN_OUTAGE_CALL_CAP_S,
+        min_call_s=_TURN_OUTAGE_MIN_CALL_S,
     )
 
     if skipped:

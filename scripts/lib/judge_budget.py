@@ -48,16 +48,25 @@ class JudgeBudget:
         remainder at entry without issuing a call."""
         return self._deadline - self._clock()
 
-    def next_call_timeout(self, cap_s: float) -> float | None:
+    def next_call_timeout(
+        self, cap_s: float, *, min_call_s: float | None = None
+    ) -> float | None:
         """The timeout to pass to the next judge call, capped at ``cap_s``
         (that judge's own per-call ceiling), or ``None`` when too little
         budget remains for a call to plausibly finish — the caller must then
         stop and fail open rather than attempt a doomed call.
 
+        ``min_call_s`` overrides the constructor's floor for THIS call, falling
+        back to it when omitted. A hook calling several different judges on one
+        budget has a different floor per judge — each judge's own measured p90 —
+        so the floor cannot be a property of the budget alone; a hook calling
+        one judge keeps naming its floor once, at construction.
+
         Reads the clock exactly once, so the go/no-go decision and the
         returned timeout are computed from the same reading instead of two
         readings that could straddle real elapsed time."""
+        floor = self._min_call_s if min_call_s is None else min_call_s
         remaining = self.remaining()
-        if remaining < self._min_call_s:
+        if remaining < floor:
             return None
         return min(remaining, cap_s)

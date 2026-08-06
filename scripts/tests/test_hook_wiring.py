@@ -368,47 +368,76 @@ def test_timeout_requirements_are_not_derived_from_the_registry():
         assert why.strip(), f"{name}'s requirement carries no rationale"
 
 
-def _hooks_that_construct_a_judge_budget() -> "set[str]":
-    """Every `scripts/hook-*.py` whose text constructs a `JudgeBudget` — the
-    scope TIMEOUT_REQUIREMENTS claims to cover, discovered mechanically rather
-    than assumed to already equal the table it is checked against.
+def _hooks_that_call_a_judge() -> "set[str]":
+    """Every `scripts/hook-*.py` that CALLS A JUDGE — the scope
+    TIMEOUT_REQUIREMENTS claims to cover, discovered mechanically rather than
+    assumed to already equal the table it is checked against.
 
-    Matches the bare `JudgeBudget(`, not the dotted `judge_budget.JudgeBudget(`,
-    so BOTH import styles are recognised: the dotted one the three current hooks
-    use, and `from lib.judge_budget import JudgeBudget`, which is the prevailing
-    style elsewhere in this tree (`from lib.config_root import …` and a dozen
-    siblings). A detector blind to the more common style would leave the stage's
-    original symptom — wired, presence-green, killed mid-judge — reproducible on
-    exactly the likelier path. No false positives: `_hook_scripts()` is confined
-    to `scripts/hook-*.py`, and the annotation `judge_budget.JudgeBudget | None`
-    carries no parenthesis."""
+    The predicate is the conjunction "imports `agentctl.advisor` AND calls an
+    identifier named `judge_*`", read from the module's AST. It replaces a
+    `"JudgeBudget(" in text` substring match, which keyed the scope on the
+    REMEDY rather than the hazard: a hook that calls a judge and forgets the
+    budget entirely — precisely the regression this table exists to catch — was
+    invisible to it, while a hook that opened a budget for something else would
+    have been demanded a row it does not need. What makes a registration need a
+    long timeout is the model call, not the accounting object wrapped around it.
+
+    Structural, not textual, in both halves. The import half accepts either
+    style (`from agentctl import advisor`, `import agentctl.advisor`). The call
+    half looks at the identifier actually being CALLED (`ast.Call` func's `attr`
+    or `id`), which is what excludes `judge_budget.JudgeBudget(...)` — the called
+    name there is `JudgeBudget` — without a special case, and which ignores every
+    mention of a judge inside a docstring or comment. `_hook_scripts()` confines
+    the sweep to `scripts/hook-*.py`."""
     found = set()
     for p in _hook_scripts():
-        text = p.read_text(encoding="utf-8", errors="replace")
-        if "JudgeBudget(" in text:
+        try:
+            tree = ast.parse(p.read_text(encoding="utf-8", errors="replace"))
+        except SyntaxError:  # pragma: no cover - a hook that will not parse
+            continue
+        imports_advisor = False
+        calls_judge = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                if node.module == "agentctl" and any(
+                    a.name == "advisor" for a in node.names
+                ):
+                    imports_advisor = True
+            elif isinstance(node, ast.Import):
+                if any(
+                    a.name in ("agentctl.advisor", "agentctl")
+                    for a in node.names
+                ):
+                    imports_advisor = True
+            elif isinstance(node, ast.Call):
+                func = node.func
+                name = getattr(func, "attr", None) or getattr(func, "id", None)
+                if isinstance(name, str) and name.startswith("judge_"):
+                    calls_judge = True
+        if imports_advisor and calls_judge:
             found.add(p.name)
     return found
 
 
-def test_timeout_requirements_scope_matches_every_judge_budget_caller():
+def test_timeout_requirements_scope_matches_every_judge_caller():
     """should-fix #3: nothing tied TIMEOUT_REQUIREMENTS' membership to its own
     stated scope -- 'every hook that calls a slow judge'. The set happens to
-    equal the table today (three hooks, three rows), so a hook constructing a
-    JudgeBudget with no row would reproduce the stage's original symptom
-    (wired, presence-green, killed mid-judge) and nothing would catch it.
-    Checked both directions: a caller absent from the table, and a table row
-    naming a hook that no longer constructs one."""
-    callers = _hooks_that_construct_a_judge_budget()
+    equal the table today (three hooks, three rows), so a hook calling a judge
+    with no row would reproduce the stage's original symptom (wired,
+    presence-green, killed mid-judge) and nothing would catch it. Checked both
+    directions: a caller absent from the table, and a table row naming a hook
+    that no longer calls a judge."""
+    callers = _hooks_that_call_a_judge()
     required = {name for name, _minimum, _why in hook_wiring.TIMEOUT_REQUIREMENTS}
     missing_rows = sorted(callers - required)
     assert not missing_rows, (
-        "hooks that construct a judge_budget.JudgeBudget but carry no "
+        "hooks that call an agentctl.advisor judge_* but carry no "
         f"TIMEOUT_REQUIREMENTS row: {missing_rows}"
     )
     stale_rows = sorted(required - callers)
     assert not stale_rows, (
-        "TIMEOUT_REQUIREMENTS rows for hooks that no longer construct a "
-        f"judge_budget.JudgeBudget: {stale_rows}"
+        "TIMEOUT_REQUIREMENTS rows for hooks that no longer call an "
+        f"agentctl.advisor judge_*: {stale_rows}"
     )
 
 
@@ -491,3 +520,58 @@ def test_desired_registrations_meet_their_own_hooks_timeout_requirement():
                 f"{name} is desired at {timeout}s under ({event}, {matcher}) — "
                 f"below its own {minimum}s requirement"
             )
+
+
+def test_calls_per_hook_agrees_with_the_calibrations_call_sequence():
+    """K lives in two places by necessity — this table (a number, next to the
+    budget it justifies) and lib/judge_latency.HOOK_CALL_SEQUENCE (which judges,
+    in order, since the sizing rule needs their individual medians). Same fact,
+    two shapes, so the count must agree with the length. Covers every row in both
+    directions: a hook with a sequence but no K would silently escape the size
+    inequality below."""
+    from lib import judge_latency
+
+    assert set(hook_wiring.TIMEOUT_REQUIREMENT_CALLS) == set(
+        judge_latency.HOOK_CALL_SEQUENCE
+    )
+    for name, k in hook_wiring.TIMEOUT_REQUIREMENT_CALLS.items():
+        sequence = judge_latency.HOOK_CALL_SEQUENCE[name]
+        assert k == len(sequence), (
+            f"{name} declares K={k} but HOOK_CALL_SEQUENCE names {len(sequence)} "
+            f"judges: {sequence}"
+        )
+
+
+def test_every_timeout_requirement_declares_its_call_count():
+    """Bidirectional coverage, the same shape as
+    test_timeout_requirement_own_constant_covers_every_requirement: a budget
+    without a declared K cannot be checked against the sizing rule at all."""
+    required = {name for name, _minimum, _why in hook_wiring.TIMEOUT_REQUIREMENTS}
+    assert required == set(hook_wiring.TIMEOUT_REQUIREMENT_CALLS)
+    for name, k in hook_wiring.TIMEOUT_REQUIREMENT_CALLS.items():
+        assert isinstance(k, int) and k >= 1, f"{name} declares a nonsense K: {k}"
+
+
+def test_each_hooks_budget_covers_the_calls_it_declares():
+    """The size inequality, for EVERY hook making more than one call: the budget
+    must cover the medians of the calls that precede the last one, plus a floor
+    for the last, plus a named headroom (lib/judge_latency.required_budget_s).
+
+    Without it a multi-judge budget is only plausible: 30s looked ample for
+    three judges right up to the point where their measured medians (11.86 +
+    7.46) left less than the outage judge's own 20s floor, so the third judge
+    was dropped on every turn that reached it — recorded in `judges_skipped`, but
+    the budget itself never said it was too small. K = 1 hooks are checked too;
+    there the rule degenerates to one floor plus headroom."""
+    from lib import judge_latency
+
+    for name, minimum, _why in hook_wiring.TIMEOUT_REQUIREMENTS:
+        needed = judge_latency.required_budget_s(name)
+        assert minimum >= needed, (
+            f"{name}'s {minimum}s budget cannot fund the "
+            f"{hook_wiring.TIMEOUT_REQUIREMENT_CALLS[name]} calls it declares — "
+            f"it needs at least {needed}s "
+            f"(medians of {judge_latency.HOOK_CALL_SEQUENCE[name][:-1]} + the "
+            f"floor of {judge_latency.HOOK_CALL_SEQUENCE[name][-1]} + "
+            f"{judge_latency.SIZE_HEADROOM_S}s headroom)"
+        )

@@ -26,6 +26,12 @@ _ADVISOR_TIMEOUT_S = 20
 # cheapest model and is fail-open (a missing verdict blocks at the gate, never passes).
 _JUDGE_MODEL = "haiku"
 JUDGE_REVIEWER = "judge:haiku"
+# Last-resort ceiling for a judge call made outside any hook budget, by the rule
+# in lib/judge_latency.py::last_resort_ceiling_s — one second past the slowest
+# run this model has been seen to make on ANY judge prompt. Its row in that
+# module is UNMEASURED, so this default is the only number available to it; the
+# test-suite asserts the literal still equals what that rule computes.
+_ACCEPTANCE_JUDGE_TIMEOUT_S = 41
 _JUDGE_PASS = "pass"
 _JUDGE_REVISE = "revise"
 
@@ -73,7 +79,7 @@ def enumerate_claims(artifact_text: str, runner) -> list[str]:
     raised item into a blocker; this call only supplies the candidates.
 
     Cost-bounded exactly like the warn-only advisor: `claude -p --model sonnet`
-    with the timeout carried by the runner (advisor.subprocess_runner). Fail-open:
+    with an explicit _ADVISOR_TIMEOUT_S at the call site. Fail-open:
     a None runner, a non-zero exit, or any exception returns [] — an empty
     enumeration is a valid (if unhelpful) result; the mandatory-cross-check blocker
     is discharged by the `enumerated` flag the caller sets, not by the count."""
@@ -81,7 +87,10 @@ def enumerate_claims(artifact_text: str, runner) -> list[str]:
         return []
     try:
         prompt = _ENUMERATE_PROMPT.format(payload=artifact_text)
-        result = runner(["claude", "-p", "--model", _ADVISOR_MODEL, prompt])
+        result = runner(
+            ["claude", "-p", "--model", _ADVISOR_MODEL, prompt],
+            timeout=_ADVISOR_TIMEOUT_S,
+        )
         if result.returncode != 0:
             return []
         return [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
@@ -141,7 +150,10 @@ def enumerate_questions_health(
     try:
         payload = f"GOAL:\n{goal}\n\nDONE CRITERION:\n{done_criterion}\n\nPLAN:\n{plan_text}"
         prompt = _ENUMERATE_QUESTIONS_PROMPT.format(payload=payload)
-        result = runner(["claude", "-p", "--model", _ADVISOR_MODEL, prompt])
+        result = runner(
+            ["claude", "-p", "--model", _ADVISOR_MODEL, prompt],
+            timeout=_ADVISOR_TIMEOUT_S,
+        )
         if result.returncode != 0:
             return False, []
         pairs: list[tuple[str, str]] = []
@@ -182,7 +194,10 @@ def judge(kind: str, payload: dict, runner, *, enabled: bool | None = None) -> l
         if not template:
             return []
         prompt = template.format(payload=payload)
-        result = runner(["claude", "-p", "--model", _ADVISOR_MODEL, prompt])
+        result = runner(
+            ["claude", "-p", "--model", _ADVISOR_MODEL, prompt],
+            timeout=_ADVISOR_TIMEOUT_S,
+        )
         if result.returncode != 0:
             return []
         return [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
@@ -190,7 +205,14 @@ def judge(kind: str, payload: dict, runner, *, enabled: bool | None = None) -> l
         return []
 
 
-def acceptance_judge(observation: str, expected: str, runner, *, enabled: bool) -> tuple[str | None, str]:
+def acceptance_judge(
+    observation: str,
+    expected: str,
+    runner,
+    *,
+    enabled: bool,
+    timeout: int = _ACCEPTANCE_JUDGE_TIMEOUT_S,
+) -> tuple[str | None, str]:
     """Cheap external judge for an acceptance observation, backing the acceptance-review
     gate. Returns (verdict, reason) where verdict is 'pass' | 'revise' | None.
 
@@ -202,7 +224,12 @@ def acceptance_judge(observation: str, expected: str, runner, *, enabled: bool) 
     The prompt is lifted from _PROMPTS['acceptance_observation'] (the same criterion the
     warn-only advisor applies) and wrapped with a strict YES/NO + one-line-reason
     protocol so the deterministic gate has a machine-decidable verdict rather than a
-    free-text concern list."""
+    free-text concern list.
+
+    ``timeout`` is explicit at the call site because this judge runs inside the
+    engine, not inside a hook: nothing above it kills a hung call, so the number
+    cannot be left to the runner's own default. Its latency row is UNMEASURED,
+    so the default is the last-resort ceiling rather than a per-judge one."""
     if not enabled or runner is None:
         return None, "judge disabled or no runner (fail-open)"
     try:
@@ -215,7 +242,9 @@ def acceptance_judge(observation: str, expected: str, runner, *, enabled: bool) 
             "and adequate) or NO (it is vague, generic, or a rephrase of the expected). "
             "On the SECOND line give a one-line reason."
         )
-        result = runner(["claude", "-p", "--model", _JUDGE_MODEL, prompt])
+        result = runner(
+            ["claude", "-p", "--model", _JUDGE_MODEL, prompt], timeout=timeout
+        )
         if result.returncode != 0:
             return None, "judge exited non-zero (fail-open)"
         lines = [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
@@ -258,9 +287,17 @@ _BINARY_ASK_QUESTION_MARKS = frozenset({
 # chars argument is given.
 _BINARY_ASK_TRAILING_DECORATION = "*_`~)]}>\"'»”’ \t\r\n"
 
-# Interactive end-of-turn call: bounded well under _ADVISOR_TIMEOUT_S=20 so a
-# fail-open timeout tail stays short on an ordinary turn.
-_BINARY_ASK_TIMEOUT_S = 8
+# LAST-RESORT default for the three judges below, used only when a caller names
+# no timeout of its own. Not "bounded well under _ADVISOR_TIMEOUT_S" any more:
+# that reading treated the cheap advisory model's cap as an upper bound for a
+# call it does not make, and produced 8 s -- under the FASTEST run any of these
+# judges has been measured to make (5.93 s for binary_ask, 10.29 s for
+# deferring), so an unbudgeted caller was killed before every verdict.
+# By lib/judge_latency.py::last_resort_ceiling_s: one second past the slowest run
+# this model has made on ANY judge prompt. A caller inside a hook budget passes
+# its own, narrower, per-judge ceiling and never reaches this number; the
+# test-suite asserts the literal still equals what that rule computes.
+_BINARY_ASK_TIMEOUT_S = 41
 
 _BINARY_ASK_PROMPT = (
     "You are given the FINAL message of an AI assistant's turn, written in any "
@@ -365,12 +402,18 @@ _OUTAGE_ESCALATION_JUDGE_PROMPT = (
 )
 
 
-# Measured 2026-08-05 on this machine: `claude -p --model haiku` answers in
-# 13.9 +/- 2.4 s (4 samples, min 12.1, max 17.5), so the neighbours' 8 s budget
-# times out on every call and fails the gate open. 30 s leaves ~2 sigma of head-
-# room; the cost of the wider budget is bounded by the caller's option-text
-# prefilter (hook-deferring-disposition-gate.py's _prefilter, run per question).
-_DEFERRING_DISPOSITION_TIMEOUT_S = 30
+# LAST-RESORT default for the deferring-disposition judge, used only when a
+# caller names no timeout of its own. Superseded numbers, kept as the reason this
+# is now computed: 8 s (the neighbours', below the fastest measured run) and then
+# 30 s, set from a four-sample note that read "13.9 +/- 2.4 s, min 12.1, max
+# 17.5" -- an n of 4 that missed this judge's real tail by more than 20 s
+# (n=18: median 17.43, p90 37.58, max 39.99).
+# By lib/judge_latency.py::last_resort_ceiling_s, the same rule and the same
+# number as _BINARY_ASK_TIMEOUT_S: outside a hook budget the ceiling covers the
+# whole model family, not one prompt. The two constants stay SEPARATE names
+# because each judge's in-hook ceiling is derived per row, and a shared name here
+# would invite a caller to reuse whichever it imported first.
+_DEFERRING_DISPOSITION_TIMEOUT_S = 41
 
 _DEFERRING_DISPOSITION_JUDGE_PROMPT = (
     "You are given the question and every option of a menu an AI assistant is "
@@ -535,7 +578,15 @@ def resolve_enabled(weight_class: str | None, *, thresholds: Thresholds | None =
 def subprocess_runner(argv: list[str], *, timeout: int = _ADVISOR_TIMEOUT_S) -> RunResult:
     """Real `claude -p` runner with a hard timeout. Not judge()'s default (a caller
     that wants a live advisor pass this explicitly) — kept separate so the fail-open
-    `runner=None -> []` contract in judge() stays byte-identical to advisor-absent."""
+    `runner=None -> []` contract in judge() stays byte-identical to advisor-absent.
+
+    ``timeout`` still carries a default, and that is the remaining hole: this
+    signature is the last place where forgetting to pass a ceiling is silently
+    survivable, and the default is the CHEAP ADVISORY model's cap, which fits no
+    judge. Every caller in this module now passes one explicitly; making the
+    parameter mandatory in the contract is filed as OOSEVENREPORT-5 and is out of
+    this change's scope, because the signature is public and third-party runners
+    mirror it."""
     try:
         proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
         return RunResult(proc.returncode, proc.stdout, proc.stderr)

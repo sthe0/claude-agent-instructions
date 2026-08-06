@@ -87,18 +87,21 @@ DESIRED = [
     # service failure to the user WITHOUT a recorded diagnosis (present-tense outage
     # cue + user-facing ask, and neither overcome-difficulty invoked nor a declared
     # difficulty). Reproduce with the real client + enumerate hypotheses first.
-    # 25 = the hook's own _JUDGE_BUDGET_S=20 plus interpreter-start headroom, the
+    # 35 = the hook's own _JUDGE_BUDGET_S=30 plus interpreter-start headroom, the
     # same shape as the deferring gate below; at 5 the harness killed the hook
-    # mid-judge on every single call (measured judge latency 10.5-47s).
-    ("PreToolUse",       "AskUserQuestion", "hook-escalation-diagnosis-gate.py", 25),
+    # mid-judge on every single call, and the superseded 25 still sat below this
+    # judge's own p90 (19.16s over n=16, lib/judge_latency.py) once the hook's
+    # budget was raised to cover it.
+    ("PreToolUse",       "AskUserQuestion", "hook-escalation-diagnosis-gate.py", 35),
     # Hard gate: deny an AskUserQuestion whose EVERY option defers or refuses work
     # the agent holds the rights and the diagnosis to do now (ticket / backlog /
     # "leave as is"), with no branch that does it and no stated reason it cannot.
-    # 25 = hook-deferring-disposition-gate.py's own _ASK_JUDGE_BUDGET_S=20 plus
-    # interpreter-start headroom; a live judge call measured at 11.6-13.5s (see
-    # advisor.py's own comment) blows straight through a 5s harness timeout, so
-    # the harness cap must not bind below the hook's own decide() deadline.
-    ("PreToolUse",       "AskUserQuestion", "hook-deferring-disposition-gate.py", 25),
+    # 50 = hook-deferring-disposition-gate.py's own _ASK_JUDGE_BUDGET_S=45 plus
+    # interpreter-start headroom. The superseded 25 came from a four-run note
+    # ("11.6-13.5s"); over n=18 this judge's median is 17.43s and its p90 37.58s
+    # (lib/judge_latency.py), so the harness cap was binding below the hook's own
+    # decide() deadline and killing the call before any verdict came back.
+    ("PreToolUse",       "AskUserQuestion", "hook-deferring-disposition-gate.py", 50),
     # session_scope: deny/warn on a LIVE cross-session filesystem-scope overlap
     # (Component B wiring). Runs AFTER the plan-approval gate above; blocks only a
     # gated path already held by another live session, otherwise warns — silent
@@ -173,10 +176,13 @@ DESIRED = [
     # engaged this turn). Loop-guarded (stop_hook_active + a durable per-message
     # marker under state/turn-gate/) and blockers from every guardian aggregate
     # into one block, so the worst case is exactly one extra model turn.
-    # 35 = the hook's own _TURN_JUDGE_BUDGET_S=30 plus interpreter-start headroom.
+    # 57 = the hook's own _TURN_JUDGE_BUDGET_S=52 plus interpreter-start headroom.
     # It runs up to THREE judges in one invocation, so its whole-invocation budget
-    # is larger than the single-judge gates'; at 5 every one of them was killed.
-    ("Stop",             None,    "hook-turn-end-gate.py",   35),
+    # is larger than the single-judge gates'; at 5 every one of them was killed,
+    # and the superseded 30/35 pair covered barely two of the three medians
+    # (11.86 + 7.46 + 10.89, lib/judge_latency.py) before the outage judge's own
+    # floor was reached.
+    ("Stop",             None,    "hook-turn-end-gate.py",   57),
     # Advisory (not a gate): nudge when a launched run/graph URL appeared in
     # this session's tool output but was never surfaced to the user in a chat
     # message — the structural guard for CLAUDE.md long-running-jobs /

@@ -127,12 +127,13 @@ GATE_BEARING_HOOKS: "tuple[tuple[str, str], ...]" = (
 # enforcement" versus "does this registration have to allow for a slow judge" —
 # and a hook can be in either without the other.
 TIMEOUT_REQUIREMENTS: "tuple[tuple[str, int, str], ...]" = (
-    ("hook-escalation-diagnosis-gate.py", 20,
-     "one outage-escalation judge under a 20s whole-invocation budget"),
-    ("hook-deferring-disposition-gate.py", 20,
-     "one deferring-disposition judge per menu under a 20s whole-invocation budget"),
-    ("hook-turn-end-gate.py", 30,
-     "up to three judges in one invocation under a 30s whole-invocation budget"),
+    ("hook-escalation-diagnosis-gate.py", 30,
+     "one outage-escalation judge under a 30s whole-invocation budget"),
+    ("hook-deferring-disposition-gate.py", 45,
+     "one deferring-disposition judge, on the first fired menu, under a 45s "
+     "whole-invocation budget"),
+    ("hook-turn-end-gate.py", 52,
+     "up to three judges in one invocation under a 52s whole-invocation budget"),
 )
 
 # Each TIMEOUT_REQUIREMENTS minimum, above, is a copy of a number the hook
@@ -146,6 +147,28 @@ TIMEOUT_REQUIREMENT_OWN_CONSTANT: "dict[str, str]" = {
     "hook-escalation-diagnosis-gate.py": "_JUDGE_BUDGET_S",
     "hook-deferring-disposition-gate.py": "_ASK_JUDGE_BUDGET_S",
     "hook-turn-end-gate.py": "_TURN_JUDGE_BUDGET_S",
+}
+
+# K: how many judge calls one invocation of each hook may make. Keyed as a
+# SIBLING dict for the same reason TIMEOUT_REQUIREMENT_OWN_CONSTANT is one —
+# widening the 3-tuple above would force every existing unpack of it to change.
+#
+# K is what makes the budget above checkable rather than merely plausible: a
+# budget must cover the medians of the calls that precede the last one plus a
+# floor for the last (lib/judge_latency.required_budget_s). At K = 1 that reduces
+# to one floor, and the hook's per-call ceiling equals its whole budget — capping
+# the only call lower would forfeit budget for nothing.
+#
+# These are DECLARED limits, not measurements of what a run happens to do: both
+# single-call hooks can encounter a second candidate (a second fired menu, a
+# second escalating turn) and deliberately do not judge it, because the floor
+# left after the first call cannot fit another. lib/judge_latency.
+# HOOK_CALL_SEQUENCE names WHICH judges those calls are, in order; a test asserts
+# the two agree.
+TIMEOUT_REQUIREMENT_CALLS: "dict[str, int]" = {
+    "hook-escalation-diagnosis-gate.py": 1,
+    "hook-deferring-disposition-gate.py": 1,
+    "hook-turn-end-gate.py": 3,
 }
 
 
@@ -262,9 +285,9 @@ def _scan_settings(
     modelled = True
     hooks = settings.get("hooks")
     if hooks is None:
-        return events, True
+        return events, registrations, True
     if not isinstance(hooks, dict):
-        return events, False
+        return events, registrations, False
     for event, groups in hooks.items():
         if not isinstance(groups, list):
             modelled = False

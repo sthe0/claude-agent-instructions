@@ -48,17 +48,24 @@ from lib import ask_text  # noqa: E402
 from lib import judge_budget  # noqa: E402
 
 # Whole-invocation deadline for the judge call, and the registration that must
-# accommodate it (install-reminder-hooks.sh: 25s = this budget plus interpreter-
+# accommodate it (install-reminder-hooks.sh: 35s = this budget plus interpreter-
 # start headroom, the same shape the deferring-disposition gate already uses).
 # Before this existed the hook was registered at 5s and called the judge with
-# advisor's 8s default, while the judge's MEASURED latency over 8 untimed runs
-# was 10.5 / 11.5 / 12.2 / 12.6 / 13.7 / 14.2 / 15.4 / 47.0s — so the harness
-# killed the hook before any verdict could come back, on every call.
-_JUDGE_BUDGET_S = 20
-# Below this the remaining budget cannot plausibly fit a call (the fastest run
-# measured is 10.5s), so spending the wait on a guaranteed timeout buys nothing:
-# stop and fail open, the same posture as every other unreachable-judge path.
-_JUDGE_MIN_CALL_S = 12
+# advisor's 8s default, both under the outage judge's own FASTEST measured run —
+# so the harness killed the hook before any verdict could come back, on every
+# call. The height itself is a judgement (how much of a turn may a gate spend);
+# what is machine-checked against lib/judge_latency.py is that it clears this
+# judge's per-call ceiling `ceil(max) + 1` = 27s over n=16, so the budget can
+# never be what truncates the call. With exactly one call there is no later call
+# to protect, so this number is ALSO the ceiling handed to it: capping the only
+# call lower would forfeit budget for nothing.
+_JUDGE_BUDGET_S = 30
+# Below this the remaining budget cannot plausibly fit a call, so spending the
+# wait on a guaranteed timeout buys nothing: stop and fail open, the same posture
+# as every other unreachable-judge path. lib/judge_latency.py's floor rule for
+# this judge, `ceil(p90)` over n=16 (p90 19.16) — well above the fastest run
+# observed (7.19s), which is what makes a call started at the floor reachable.
+_JUDGE_MIN_CALL_S = 20
 
 # Kill-switch for the semantic outage-escalation judge: set to "0" to force it
 # off without a code change. Safe-by-default: unset/unrecognised leaves the
@@ -176,8 +183,9 @@ def decide(payload: dict, *, runner: Callable | None = None) -> str | None:
 
     A _JUDGE_BUDGET_S deadline bounds the whole invocation. With a single judge
     call that degenerates into a per-call ceiling, which is the point: the call
-    gets an EXPLICIT timeout drawn from the budget instead of advisor's 8s
-    default, a number smaller than the judge's fastest measured run."""
+    gets an EXPLICIT timeout drawn from the budget instead of advisor's
+    last-resort default, which is sized for a call with no harness timeout above
+    it and so is wider than this hook's registration allows."""
     if payload.get("tool_name") != "AskUserQuestion":
         return None
     tool_input = payload.get("tool_input") or {}

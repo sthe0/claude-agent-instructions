@@ -2540,7 +2540,8 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
         if gates.stage_review_active(state):
             judge_runner = runner if runner is not None else advisor.subprocess_runner
             verdict, reason = advisor.acceptance_judge(
-                observation, stage.subject.result, judge_runner, enabled=True)
+                observation, stage.subject.result, judge_runner, enabled=True,
+                timeout=advisor._ACCEPTANCE_JUDGE_TIMEOUT_S)
             if verdict is not None:
                 _record_stage_review(
                     state,
