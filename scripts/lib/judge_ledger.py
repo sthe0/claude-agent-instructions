@@ -52,8 +52,28 @@ _MAX_LINE_BYTES = 2048
 _lock = threading.Lock()
 _state: dict = {"invocation_id": None, "source": None, "hook": None, "judge": None}
 
+# The ``hook`` field carries the SHORT name each hook passes to hook_start(),
+# while every other table that reasons about these same three hooks
+# (lib/judge_latency.HOOK_CALL_SEQUENCE, lib/hook_wiring.TIMEOUT_REQUIREMENTS)
+# is keyed by script basename. A reader that has to cross from one keying to
+# the other needs the translation, and this module owns the ``hook``
+# vocabulary, so the translation lives here once instead of as an inline copy
+# inside each reader. tests/test_dispatch_witness.py asserts the key set still
+# equals HOOK_CALL_SEQUENCE's, so a fourth judge-calling hook cannot be added
+# to one table and forgotten in the other.
+HOOK_NAME_BY_BASENAME: "dict[str, str]" = {
+    "hook-escalation-diagnosis-gate.py": "escalation_diagnosis",
+    "hook-deferring-disposition-gate.py": "deferring_disposition",
+    "hook-turn-end-gate.py": "turn_end",
+}
 
-def _ledger_path() -> Path:
+
+def ledger_path() -> Path:
+    """Where the ledger lives. PUBLIC, unlike agentctl/edit_ledger.py's
+    equivalent, because a reader that reports on the ledger has to name the
+    file it read — judge-usage-report.py prints the path and its size, and a
+    reader reaching into a private to do so would make this module's default
+    resolution look like an internal detail two shipped scripts depend on."""
     override = os.environ.get("AGENTCTL_JUDGE_LEDGER")
     if override:
         return Path(override).expanduser()
@@ -174,7 +194,7 @@ def _write(kind: str, **fields) -> None:
         }
         record.update(fields)
         encoded = _encode(record)
-        path = _ledger_path()
+        path = ledger_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         try:
@@ -220,8 +240,12 @@ def hook_start(hook: str) -> str:
     """First statement of a hook's main(), before stdin is even parsed: mint
     a fresh invocation_id, record the hook name, and write the hook_start
     line. An invocation killed between this call and its first `decided` (or
-    `final`) line is exactly outcome 6 (registration-timeout kill) — visible
-    only as an unpaired hook_start, never written by this function itself."""
+    `final`) line is outcome 11 (killed before any verdict, outside a call) —
+    visible only as an unpaired hook_start, never written by this function
+    itself. Outcome 6 is the neighbouring but distinct shape: killed DURING a
+    judge call, which leaves an unpaired `started` too (see `started`). The
+    two stay apart because only 6 says a judge was actually running when the
+    registration timeout fired."""
     invocation_id = reset_invocation()
     with _lock:
         _state["hook"] = hook
@@ -307,8 +331,8 @@ def decided(
 def started(judge: str) -> None:
     """Written by subprocess_runner immediately before the actual subprocess
     call, so a kill DURING the call (as opposed to during hook setup, which
-    hook_start already covers) still leaves a trace: an unpaired `started`
-    with no following `call` line is a call-site instance of outcome 6."""
+    lands as outcome 11 — see `hook_start`) still leaves a trace: an unpaired
+    `started` with no following `call` line is exactly outcome 6."""
     _write("started", judge=judge)
 
 
@@ -365,10 +389,12 @@ def read_records(path: Path | None = None) -> list[dict]:
     is what read_text(encoding="utf-8") did by raising UnicodeDecodeError past
     the OSError guard.
 
-    The whole file is read at once. That is adequate while nothing rotates it
-    and no reader ships — the bound on ledger growth is stage 6's decision (see
-    scripts/README.md § Judge execution ledger), deliberately not made here."""
-    target = path if path is not None else _ledger_path()
+    The whole file is read at once, and nothing rotates it: growth is bounded
+    by neither rotation nor a read-side window, on purpose, because rotation
+    here would add a second failure mode to the one write path that must not
+    have one. The reasoning and the size tripwire that keeps that choice honest
+    are in scripts/README.md § Judge execution ledger."""
+    target = path if path is not None else ledger_path()
     try:
         raw = target.read_bytes()
     except OSError:

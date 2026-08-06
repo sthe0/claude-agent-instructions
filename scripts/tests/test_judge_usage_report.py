@@ -1,0 +1,331 @@
+"""judge-usage-report.py — the counting side of the judge execution ledger.
+
+What these tests pin is not "the report prints something" but the three ways
+it could lie quietly:
+
+  * under-reporting the fail-open surface, by letting the printed count drift
+    away from the declared taxonomy;
+  * flattering the latency table, by admitting durations that belong to calls
+    which produced no judgement (or by counting one call twice);
+  * mis-binding a line to the wrong invitation, which is what happens the
+    moment anything reads the ledger by line order instead of invocation_id —
+    two hooks running concurrently interleave their lines in the file.
+"""
+import importlib.util
+import json
+import sys
+import tempfile
+from pathlib import Path
+
+SCRIPTS = Path(__file__).resolve().parents[1]
+
+_SPEC = importlib.util.spec_from_file_location(
+    "judge_usage_report", SCRIPTS / "judge-usage-report.py"
+)
+mod = importlib.util.module_from_spec(_SPEC)
+sys.modules["judge_usage_report"] = mod  # dataclass string-annotation resolution needs this
+_SPEC.loader.exec_module(mod)
+
+from lib import judge_latency  # noqa: E402
+
+SESSION = "sess-under-test"
+
+
+def _record(kind, invocation_id, *, hook="turn_end", ts=1000.0, **fields):
+    record = {
+        "ts": ts,
+        "kind": kind,
+        "invocation_id": invocation_id,
+        "hook": hook,
+        "source": SESSION,
+    }
+    record.update(fields)
+    return record
+
+
+def _decided(invocation_id, *, judge="feedback_signal", stage="call", **overrides):
+    """A `decided` line with every field lib/judge_ledger.decided() writes, so
+    a fixture cannot accidentally pass by omitting the field a branch reads."""
+    fields = {
+        "judge": judge,
+        "stage": stage,
+        "verdict": False,
+        "reason": "",
+        "timed_out": False,
+        "malformed": False,
+        "runner_legacy": False,
+        "remaining": None,
+        "threshold": None,
+        "ceiling": None,
+        "duration": None,
+    }
+    hook = overrides.pop("hook", "turn_end")
+    fields.update(overrides)
+    return _record("decided", invocation_id, hook=hook, **fields)
+
+
+def _write_ledger(tmp_path, records) -> Path:
+    path = tmp_path / "judge-usage-ledger.jsonl"
+    path.write_text(
+        "".join(json.dumps(r, sort_keys=True) + "\n" for r in records), encoding="utf-8"
+    )
+    return path
+
+
+def _tally(tmp_path, records):
+    path = _write_ledger(tmp_path, records)
+    from lib import judge_ledger
+
+    return mod.tally(judge_ledger.read_records(path), path)
+
+
+# One minimal fixture per OBSERVABLE outcome. Outcome 1 is deliberately absent:
+# a hook that never entered writes no line, so no fixture can produce it — that
+# is what the dispatch witness is for, not this report.
+OUTCOME_FIXTURES = {
+    "2": [_record("entered", "i2", judge="binary_ask", prefilter_fired=False)],
+    "3": [_decided("i3", stage="budget", reason="budget exhausted before call (fail-open)")],
+    "4": [_decided("i4", reason="", duration=3.0)],
+    "5": [_decided("i5", timed_out=True, reason="judge timed out (fail-open)", duration=27.0)],
+    "6": [_record("started", "i6", judge="feedback_signal")],
+    "7": [_decided("i7", reason="judge exited non-zero (fail-open)", duration=0.05)],
+    "7a": [_decided("i7a", malformed=True, reason="judge returned no output (fail-open)")],
+    "7b": [_decided("i7b", timed_out=None, reason="judge raised (fail-open)", duration=0.04)],
+    "7c": [_decided("i7c", stage="killswitch", reason="judge disabled (fail-open)")],
+    "8": [_record("hook_start", "i8", hook="turn_end"), _record("discarded", "i8", reason="boom")],
+    "9": [
+        _record("hook_start", "i9"),
+        _record("emitted", "i9", ok=False, had_directive=True),
+    ],
+    "10": [_record("hook_start", "i10"), _record("final", "i10", has_directive=True)],
+    "11": [_record("hook_start", "i11")],
+}
+
+
+def test_declared_taxonomy_and_fail_open_subset_agree():
+    """The two independent statements of "which outcomes fail open" — the
+    per-row flag and NOT_FAIL_OPEN_IDS — must not drift apart, and the printed
+    fail-open count must be their difference rather than a typed-in number."""
+    all_ids = {o.id for o in mod.OUTCOMES}
+    assert len(all_ids) == len(mod.OUTCOMES), "duplicate outcome id"
+    assert mod.NOT_FAIL_OPEN_IDS <= all_ids
+    # Exactly three outcomes leave the gate having done its job: never entered,
+    # prefiltered, judged. Everything else allowed a turn through unjudged.
+    assert len(mod.NOT_FAIL_OPEN_IDS) == 3
+    assert len(mod.FAIL_OPEN_OUTCOMES) == len(mod.OUTCOMES) - len(mod.NOT_FAIL_OPEN_IDS)
+    assert {o.id for o in mod.OUTCOMES if o.fail_open} == all_ids - mod.NOT_FAIL_OPEN_IDS
+
+
+def test_dead_taxonomy_counts_are_not_written_into_the_source():
+    """Earlier drafts of this taxonomy had four fail-open reasons, then nine.
+    Both numbers outlived the taxonomies that justified them, which is exactly
+    how a report ends up under-reporting while looking authoritative."""
+    text = (SCRIPTS / "judge-usage-report.py").read_text(encoding="utf-8").lower()
+    assert "four" not in text
+    assert "nine" not in text
+
+
+def test_every_observable_outcome_is_reachable_and_no_other():
+    """Drives one fixture per declared observable outcome. A fifteenth outcome
+    added to OUTCOMES with no fixture — or a classifier branch that stops
+    producing an id — breaks this loudly instead of quietly reporting a zero."""
+    observable = {o.id for o in mod.OUTCOMES if o.observable}
+    assert set(OUTCOME_FIXTURES) == observable
+
+    for outcome_id, records in OUTCOME_FIXTURES.items():
+        with tempfile.TemporaryDirectory() as tmp:
+            result = _tally(Path(tmp), records)
+            counts = result.counts_by_outcome()
+            produced = {oid for oid, count in counts.items() if count}
+            assert produced == {outcome_id}, f"fixture for {outcome_id} produced {produced}"
+            assert not result.complaints
+
+
+def test_a_judge_that_only_ever_fails_fast_is_not_reported_as_healthy():
+    """The reverse side of the report: every call returns in a tenth of a
+    second with a non-zero exit — a judge binary that dies on startup. That
+    shape must never read as working, and the honest-verdict row must read 0."""
+    records = []
+    for index in range(6):
+        invocation = f"fast{index}"
+        records.append(_record("hook_start", invocation))
+        records.append(
+            _decided(
+                invocation,
+                reason="judge exited non-zero (fail-open)",
+                duration=0.1,
+            )
+        )
+        records.append(_record("final", invocation, has_directive=False))
+        records.append(_record("emitted", invocation, ok=True, had_directive=False))
+    with tempfile.TemporaryDirectory() as tmp:
+        result = _tally(Path(tmp), records)
+    text = "\n".join(mod.format_report(result))
+    assert "healthy" not in text.lower()
+    assert "NOT RUNNING" in text
+    assert result.counts_by_outcome()["4"] == 0
+    assert result.counts_by_outcome()["7"] == 6
+
+
+def test_duration_population_is_pinned_to_the_completed_and_timed_out_calls(tmp_path):
+    """Outcomes 4 and 5 carry a real measured call. The fast-failure outcomes
+    carry a duration an order of magnitude smaller, and admitting them makes a
+    deader judge look faster — so the statistics must be identical to those of
+    a ledger containing only the 4/5 lines."""
+    population = [1.0, 2.0, 9.0, 30.0]
+    records = [
+        _decided("d1", reason="", duration=1.0),
+        _decided("d2", reason="", duration=2.0),
+        _decided("d3", reason="", duration=9.0),
+        _decided("d4", timed_out=True, reason="judge timed out (fail-open)", duration=30.0),
+        # Eight other outcomes, three of them carrying a duration of their own.
+        _record("entered", "d5", judge="feedback_signal", prefilter_fired=False),
+        _decided("d6", stage="budget", reason="budget exhausted before call (fail-open)"),
+        _record("started", "d7", judge="feedback_signal"),
+        _decided("d8", reason="judge exited non-zero (fail-open)", duration=0.05),
+        _decided("d9", malformed=True, reason="unparseable (fail-open)", duration=0.06),
+        _decided("d10", timed_out=None, reason="judge raised (fail-open)", duration=0.04),
+        _decided("d11", stage="no_runner", reason="no runner (fail-open)"),
+        _record("hook_start", "d12"),
+        _record("discarded", "d12", reason="boom"),
+    ]
+    result = _tally(tmp_path, records)
+    assert sorted(result.durations()) == population
+    assert judge_latency.median(result.durations()) == judge_latency.median(population)
+    assert judge_latency.p90(result.durations()) == judge_latency.p90(population)
+    assert max(result.durations()) == max(population)
+
+    # And the exclusion is load-bearing: the same numbers computed over every
+    # duration in the ledger disagree, so a widened population would be visible
+    # as a different median rather than as a rounding difference.
+    everything = population + [0.05, 0.06, 0.04]
+    assert judge_latency.median(everything) != judge_latency.median(population)
+
+
+def test_an_invitation_level_outcome_does_not_double_count_its_own_calls(tmp_path):
+    """One invocation judged three times and then threw its verdicts away. The
+    discard is one invocation-level outcome over three judge-level ones — it
+    has no duration of its own, and the calls beneath it are already counted."""
+    records = [
+        _record("hook_start", "multi"),
+        _decided("multi", judge="feedback_signal", reason="", duration=2.0),
+        _decided("multi", judge="binary_ask", reason="", duration=2.0),
+        _decided("multi", judge="outage_escalation", reason="", duration=2.0),
+        _record("discarded", "multi", reason="RuntimeError()"),
+    ]
+    result = _tally(tmp_path, records)
+    assert len(result.durations()) == 3
+    counts = result.counts_by_outcome()
+    assert counts["4"] == 3
+    assert counts["8"] == 1
+    assert result.invocation_count == 1
+
+
+def test_interleaved_invocations_are_bound_by_id_not_by_line_order(tmp_path):
+    """Two hooks running at once write into one file, so the lines of one
+    invitation are not contiguous. Binding by position would attribute the
+    timeout to the wrong hook and the honest call to the wrong judge."""
+    records = [
+        _record("hook_start", "A", hook="escalation_diagnosis"),
+        _record("hook_start", "B", hook="turn_end"),
+        _decided("B", hook="turn_end", judge="feedback_signal", timed_out=True,
+                 reason="judge timed out (fail-open)", duration=30.0),
+        _decided("A", hook="escalation_diagnosis", judge="outage_escalation",
+                 reason="", duration=5.0),
+        _record("final", "B", hook="turn_end", has_directive=False),
+        _record("final", "A", hook="escalation_diagnosis", has_directive=True),
+        _record("emitted", "A", hook="escalation_diagnosis", ok=True, had_directive=True),
+        _record("emitted", "B", hook="turn_end", ok=True, had_directive=False),
+    ]
+    result = _tally(tmp_path, records)
+    by_key = {(p.hook, p.judge): p for p in result.judge_points}
+    assert by_key[("escalation_diagnosis", "outage_escalation")].outcome_id == "4"
+    assert by_key[("escalation_diagnosis", "outage_escalation")].duration == 5.0
+    assert by_key[("turn_end", "feedback_signal")].outcome_id == "5"
+    assert by_key[("turn_end", "feedback_signal")].duration == 30.0
+    assert result.invocation_count == 2
+
+
+def test_an_unpaired_started_is_attributed_to_the_invocation_that_died(tmp_path):
+    """The sharpest form of the same defect: two invocations open a call on the
+    SAME judge, one dies mid-call, the other completes. Pairing `started` with
+    the next `call` in the file blames the wrong hook."""
+    records = [
+        # The completed pair comes FIRST, so a reader that pairs `started` with
+        # the next `call` in the file leaves the LIVE invocation's line dangling
+        # and blames the wrong hook for the kill.
+        _record("hook_start", "live", hook="turn_end"),
+        _record("started", "live", hook="turn_end", judge="outage_escalation"),
+        _record("call", "live", hook="turn_end", judge="outage_escalation",
+                timed_out=False, duration=6.0, returncode=0, raised=None),
+        _record("hook_start", "dead", hook="escalation_diagnosis"),
+        _record("started", "dead", hook="escalation_diagnosis", judge="outage_escalation"),
+    ]
+    result = _tally(tmp_path, records)
+    killed = [p for p in result.judge_points if p.outcome_id == "6"]
+    assert len(killed) == 1
+    assert killed[0].hook == "escalation_diagnosis"
+    assert not result.complaints
+
+
+def test_the_report_prints_a_zero_row_for_every_declared_outcome(tmp_path):
+    """A silent judge is visible only if the taxonomy rows print at zero. An
+    empty ledger must still list every outcome — otherwise "no honest verdict
+    ever" renders as an absent line nobody notices."""
+    result = _tally(tmp_path, [])
+    text = "\n".join(mod.format_report(result))
+    for outcome in mod.OUTCOMES:
+        assert f"({outcome.id})" in text
+        assert outcome.label in text
+    assert "NO DATA" in text
+
+
+def test_the_no_call_stages_are_folded_into_one_row_but_broken_out(tmp_path):
+    """advisor writes three distinct no-call stages while the taxonomy names a
+    single outcome for them. Folding them silently would hide "no text to
+    judge" behind a row labelled as a kill switch."""
+    records = [
+        _decided("n1", stage="killswitch", reason="disabled (fail-open)"),
+        _decided("n2", stage="no_text", reason="nothing to judge (fail-open)"),
+        _decided("n3", stage="no_runner", reason="no runner (fail-open)"),
+    ]
+    result = _tally(tmp_path, records)
+    assert result.counts_by_outcome()["7c"] == 3
+    text = "\n".join(mod.format_report(result))
+    for label in mod.NO_CALL_STAGES.values():
+        assert label in text
+
+
+def test_main_renders_the_whole_report_through_the_cli(tmp_path, capsys):
+    """The other tests call tally()/format_report() directly, which leaves the
+    argparse wiring and the print path — the only part an operator actually
+    touches — unexercised. Drives the real entry point instead."""
+    records = [
+        _record("hook_start", "c1", hook="turn_end"),
+        _decided("c1", reason="", duration=3.0),
+        _record("final", "c1", has_directive=False),
+        _record("emitted", "c1", ok=True, had_directive=False),
+    ]
+    path = _write_ledger(tmp_path, records)
+    assert mod.main(["--ledger", str(path)]) == 0
+    out = capsys.readouterr().out
+    assert str(path) in out
+    for outcome in mod.OUTCOMES:
+        assert f"({outcome.id})" in out
+    assert "turn_end / feedback_signal" in out
+    assert "Verdict: HEALTHY" in out
+
+
+def test_an_unclassifiable_line_is_reported_rather_than_dropped(tmp_path):
+    """A `decided` line whose reason was truncated away by the ledger's line
+    cap cannot be told from a parsed verdict, so it must not be guessed at —
+    and must not vanish either, which would silently shrink every total."""
+    truncated = _decided("u1", reason="x")
+    del truncated["reason"]
+    result = _tally(tmp_path, [truncated, _record("call", "u2", judge="binary_ask",
+                                                  timed_out=False, duration=1.0,
+                                                  returncode=0, raised=None)])
+    assert sum(result.counts_by_outcome().values()) == 0
+    assert len(result.complaints) == 2
+    text = "\n".join(mod.format_report(result))
+    assert "Unclassified ledger lines (2)" in text

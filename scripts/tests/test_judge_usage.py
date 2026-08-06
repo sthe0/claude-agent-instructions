@@ -462,7 +462,7 @@ def test_suite_cannot_reach_the_production_ledger():
     # _use_ledger(): every test in the suite writes ledger lines the moment it
     # drives a hook, and the real ledger is what a reader will count judge
     # executions from, so a suite line in it is wrong data, not clutter.
-    resolved = judge_ledger._ledger_path()
+    resolved = judge_ledger.ledger_path()
     assert resolved != config_root.agentctl_judge_ledger_log()
     judge_ledger.hook_start("escalation_diagnosis")
     assert _kinds(judge_ledger.read_records(resolved)) == ["hook_start"]
@@ -605,7 +605,7 @@ def test_write_survives_a_failure_resolving_the_ledger_path(monkeypatch, tmp_pat
     def _boom():
         raise RuntimeError("no config root")
 
-    monkeypatch.setattr(judge_ledger, "_ledger_path", _boom)
+    monkeypatch.setattr(judge_ledger, "ledger_path", _boom)
     judge_ledger.hook_start("escalation_diagnosis")  # must not raise
 
 
