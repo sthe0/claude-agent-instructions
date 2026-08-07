@@ -42,6 +42,14 @@ Once the user has approved a plan (planner returned `PLAN-READY:` and the user s
 
 The boundary is the plan's **declared** scope. Action on a file or system the plan didn't mention → **not** covered; either replan (see § 5) or `PERMISSION-REQUEST:` for the one-off.
 
+**Never the agent's own permission surface — no plan can declare it.** To achieve *a permission gate that still means something after a plan is approved*, treat a permission-layer denial as a **stop-and-ask** and never as an obstacle to route around: do not edit `~/.claude-agent/settings*.json`, a project `.claude/settings*.json`, or any `permissions.allow` list in order to make the denied action succeed. This holds even when the denied action is itself squarely inside the approved plan — approval sanctions *the action*, never *a widening of the rules that judge the action*.
+
+*Difficulty removed:* a denial is the one signal in the whole system that says **no human sanctioned this specific action**. An agent that answers it by granting itself the missing permission converts every gate into a formality, and does so invisibly — the widened `allow` entry outlives the task, so the next session inherits a surface nobody reviewed. The move is especially tempting mid-plan, because the plan genuinely *did* declare the action, which makes the denial read as configuration lag rather than as a decision.
+
+The legitimate responses, in order: (a) re-read the denial — it often names a supported path (an isolated worktree instead of canon, a different tool); (b) do the declared action by a route the current permissions already allow; (c) `AskUserQuestion` presenting the denial and the narrowest widening that would clear it, and let the **user** make the change or approve it as a task of its own. A permission change is a task with its own approval gate, never a side effect of another task.
+
+Mechanizable half: "an `Edit`/`Write` to a `settings*.json` that adds entries to `permissions.allow`" is decidable from observable inputs, so it belongs in a `hook-guard-*` PreToolUse gate rather than in prose alone (template: `scripts/hook-guard-canon-readonly.py`). Until that hook exists, this paragraph is the only thing standing there.
+
 ### 3. Unknown tool — budget the side-effect estimation
 
 When you face a tool whose side-effect class is not obvious from its name / surrounding context (e.g. a new MCP, a CLI you haven't used in this project, a `mcp__*__*` tool just surfaced by `ToolSearch`):
