@@ -28,13 +28,14 @@ A record counts as evidence only if all three filters pass:
 
 Then, per hook, judged against THAT hook's own old limit from the snapshot:
 
-  * old registration ABSENT and the snapshot states that absence was
-    established over the FULL settings scope — the hook was not registered at
-    all before, so any in-window line of its own is already new evidence;
-  * old registration ABSENT but the absence is QUALIFIED (the usual case: the
-    probe could not read project-level settings) — fail closed, because "not
-    registered in the members we could read" does not license the conclusion
-    "any execution is new";
+  * the snapshot says the probe did not reach the full settings scope — fail
+    closed whatever the status, because the missing scope defeats each one:
+    "not registered in the members we could read" does not license "any
+    execution is new", and a timeout that is the largest among those members
+    is a lower bound rather than the limit a call had to beat;
+  * old registration ABSENT over the FULL settings scope — the hook was not
+    registered at all before, so any in-window line of its own is already new
+    evidence;
   * old registration WIRED with a numeric timeout — a call must be recorded
     lasting LONGER than that timeout, since the old harness would have killed
     the process first;
@@ -149,6 +150,42 @@ def longest_call(records: "list[dict]") -> "float | None":
     return max(durations) if durations else None
 
 
+def qualified_scope_verdict(basename: str, entry: dict, status: str) -> HookVerdict:
+    """The refusal for an entry whose probe did not reach the whole settings
+    scope. Both statuses take it, for reasons that differ only in which claim
+    the unread members defeat.
+
+    The qualification is a property of the PROBE, not of the answer it happened
+    to produce, so it is one field checked once rather than a per-status one:
+    an absence and a timeout read off the same partial view are equally partial.
+
+    The message names the members that WERE read rather than the ones that were
+    not. The snapshot records the former as evidence; the latter would be a
+    cause this file cannot see — an entry carries no reason for its
+    qualification, and naming one (the old text said project-level settings)
+    guesses at it.
+    """
+    members = entry.get("members_read") or []
+    listed = ", ".join(str(member) for member in members) or "no settings member"
+    if status == hook_wiring.ABSENT:
+        defeated = (
+            "'was never wired' is not established, so no line of its own can be "
+            "called new evidence"
+        )
+    else:
+        defeated = (
+            f"the recorded {entry.get('timeout')}s limit is the largest among "
+            f"those members only — a lower bound on the old limit, and beating a "
+            f"lower bound proves nothing about the real one"
+        )
+    noun = "member" if len(members) == 1 else "members"
+    return HookVerdict(
+        basename, False, True,
+        f"the capture step read {len(members)} settings {noun} ({listed}) and "
+        f"did not establish the full settings scope; {defeated}",
+    )
+
+
 def judge_hook(
     basename: str, entry, records: "list[dict]", cutoff: float, session_id: str
 ) -> HookVerdict:
@@ -180,19 +217,14 @@ def judge_hook(
             basename, False, True, f"unrecognised snapshot status {status!r}"
         )
 
+    # Before either status is read: a partial view of the settings is partial
+    # for both of them, so the check belongs above the split, not inside one arm.
+    if entry.get("scope_qualified"):
+        return qualified_scope_verdict(basename, entry, status)
+
     evidence = evidence_for(records, hook_name, cutoff, session_id)
 
     if status == hook_wiring.ABSENT:
-        if entry.get("scope_qualified"):
-            members = entry.get("members_read")
-            read = len(members) if isinstance(members, list) else 0
-            return HookVerdict(
-                basename, False, True,
-                f"the old registration was absent only from the {read} settings "
-                f"members the capture step could read — project-level settings "
-                f"were not among them, so 'was never wired' is not established "
-                f"and no line of its own can be called new evidence",
-            )
         if evidence:
             return HookVerdict(
                 basename, True, False,
@@ -332,7 +364,12 @@ def main(argv: "list[str] | None" = None) -> int:
     # closed either way, but "no hook produced a witness" and "the ledger could
     # not be read" call for different next steps.
     read = judge_ledger.read_ledger(args.ledger)
-    if read.error and not read.missing:
+    if read.missing:
+        lines.append(
+            "  no ledger file exists at that path — no hook has ever written to "
+            "it, so nothing can witness anything"
+        )
+    elif read.error:
         lines.append(f"  ledger could not be read: {read.error}")
     if read.dropped_lines:
         lines.append(

@@ -356,9 +356,12 @@ def _no_stamp_blocker(probe) -> str:
         return _NO_STAMP_GENERIC
     if getattr(wiring, "status", None) != hook_wiring.ABSENT:
         return _NO_STAMP_GENERIC
+    # The scope comes from the probe, not from this sentence: how far an ABSENT
+    # reaches depends on whether the project member was read, which only the
+    # probe knows.
     return (
         "no delivery proof recorded — " + DELIVERY_HOOK_BASENAME + " is not "
-        f"registered in any user-level settings member of {wiring.root}, so no "
+        f"registered in {wiring.absence_scope()}, so no "
         "automated proof can come from that evidence domain; either run this "
         "task under claude-task / claude-agent, where the hook IS wired, or run "
         "confirm-delivery --by <you> --note <why> --escape-reason " +

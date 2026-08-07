@@ -242,8 +242,13 @@ def test_a_verdict_rendered_and_never_emitted_is_not_reported_as_delivered(tmp_p
     assert "Verdict: DEGRADED" in text
     assert "HEALTHY" not in text
     # The judge level is untouched by the invocation-level loss, and the two
-    # are reported apart rather than as one total.
+    # are reported apart rather than as one total. The 3 on the right of the
+    # invocation pair is the population of INVOCATIONS, which here happens to
+    # coincide with the count of declared outcomes because all three failed
+    # open; test_the_two_ways_to_count_an_invocation_population_agree drives a
+    # ledger where the two differ.
     assert result.level_totals(mod.LEVEL_JUDGE) == (3, 0)
+    assert result.invocation_count == 3
     assert result.level_totals(mod.LEVEL_INVOCATION) == (3, 3)
 
 
@@ -316,12 +321,100 @@ def test_an_invitation_level_outcome_does_not_double_count_its_own_calls(tmp_pat
     # has to be visible: summing them prints "2 fail-open" for a single allowed
     # turn that failed open once, counted once per level.
     assert result.level_totals(mod.LEVEL_JUDGE) == (3, 1)
+    assert result.invocation_count == 1
     assert result.level_totals(mod.LEVEL_INVOCATION) == (1, 1)
     verdict = "\n".join(mod.format_verdict(result))
     assert verdict == (
         "Verdict: DEGRADED — 2 honest verdicts alongside 1 fail-open judge "
         "decision point and 1 fail-open hook invocation."
     )
+
+
+def test_the_two_ways_to_count_an_invocation_population_agree(tmp_path):
+    """The invocation level's denominator cannot be the sum of its declared
+    rows, because every declared invocation-level row is fail-open: a healthy
+    process is filed under INVOCATION_COMPLETED, which no row names. Summing
+    the rows therefore made numerator and denominator the same set, and the
+    report printed "N of N fail-open" over a ledger that was three-quarters
+    healthy.
+
+    Four invocations, one of each kind, so the two figures genuinely differ —
+    and the population is checked against the buckets it is assembled from, so
+    invocation_count stays derived rather than becoming a second number."""
+    records = [
+        # Healthy: judged, returned, delivered. No declared invocation outcome.
+        _record("hook_start", "ok", hook="turn_end"),
+        _decided("ok", reason="", duration=3.0),
+        _record("final", "ok", has_directive=False),
+        _record("emitted", "ok", ok=True, had_directive=False),
+        # Threw its verdict away — outcome 8.
+        _record("hook_start", "lost", hook="turn_end"),
+        _record("discarded", "lost", reason="boom"),
+        # Died before doing anything at all — outcome 11.
+        _record("hook_start", "silent", hook="turn_end"),
+        # Died inside the call — not a declared invocation outcome either.
+        _record("hook_start", "killed", hook="turn_end"),
+        _record("started", "killed", judge="feedback_signal"),
+    ]
+    result = _tally(tmp_path, records)
+
+    recorded, fail_open = result.level_totals(mod.LEVEL_INVOCATION)
+    assert (recorded, fail_open) == (4, 2)
+    # The defect this pins: the old denominator was the declared rows alone.
+    declared = sum(
+        result.counts_by_outcome()[o.id]
+        for o in mod.OUTCOMES
+        if o.level == mod.LEVEL_INVOCATION
+    )
+    assert declared == 2 and declared != recorded
+
+    # And the population is the sum of the buckets the same walk filled, so a
+    # bucket added later cannot quietly fall out of the denominator.
+    assert recorded == (
+        len(result.invocation_outcomes)
+        + sum(result.completed.values())
+        + sum(result.killed_in_call.values())
+        + sum(result.residual.values())
+    )
+    assert "hook invocations:      2 fail-open of 4 recorded" in "\n".join(
+        mod.format_report(result)
+    )
+
+
+def test_a_stop_taken_before_the_call_is_not_a_verdict_killed_after_it(tmp_path):
+    """Outcome 10 means a verdict was rendered and the process died before
+    delivering it. A `decided` line whose stage is `budget` or one of the
+    NO_CALL_STAGES reports the opposite — the judge was never called, so there
+    was no verdict for a kill to come after. Gating outcome 10 on any `decided`
+    at all filed every budget-exhausted and kill-switched invocation as a lost
+    verdict, inflating the one row the operator is meant to act on."""
+    for stage, reason in (
+        ("budget", "budget exhausted before call (fail-open)"),
+        ("killswitch", "judge disabled (fail-open)"),
+        ("no_runner", "no runner (fail-open)"),
+        ("no_text", "nothing to judge (fail-open)"),
+    ):
+        records = [
+            _record("hook_start", "s", hook="escalation_ask"),
+            _decided("s", stage=stage, reason=reason),
+        ]
+        result = _tally(tmp_path, records)
+        counts = result.counts_by_outcome()
+        assert counts["10"] == 0, stage
+        # It is still counted — as the no-call outcome it actually is, once, at
+        # the judge level — and the invocation itself is the residual 11.
+        assert counts["3" if stage == "budget" else "7c"] == 1, stage
+        assert counts["11"] == 1, stage
+        assert not result.complaints, stage
+
+    # The contrast case, so the gate is not simply switched off: a `decided`
+    # from a real call with no `emitted` behind it is still outcome 10.
+    records = [
+        _record("hook_start", "c", hook="escalation_ask"),
+        _decided("c", reason="", duration=2.0),
+    ]
+    result = _tally(tmp_path, records)
+    assert result.counts_by_outcome()["10"] == 1
 
 
 def test_interleaved_invocations_are_bound_by_id_not_by_line_order(tmp_path):
@@ -469,6 +562,81 @@ def test_an_unreadable_ledger_does_not_print_as_an_empty_one(tmp_path):
     )))
     assert "Verdict: NO DATA" in empty_text
     assert "UNKNOWN" not in empty_text
+
+
+def _torn_verdict(tmp_path, name, records, torn_lines):
+    """The verdict for a ledger holding `records` plus `torn_lines` unparseable
+    lines, written in that order."""
+    from lib import judge_ledger
+
+    path = tmp_path / name
+    path.write_text(
+        "".join(json.dumps(r, sort_keys=True) + "\n" for r in records)
+        + "".join(torn_lines),
+        encoding="utf-8",
+    )
+    return "\n".join(mod.format_verdict(mod.tally(judge_ledger.read_ledger(path), path)))
+
+
+def test_a_torn_ledger_does_not_license_a_verdict_that_denies_something(tmp_path):
+    """Three of the four verdicts assert a universal negative — nothing was
+    written, nothing was judged, nothing failed open — and a line the reader
+    could not parse is exactly the counter-example that would refute one. The
+    "N malformed lines skipped" paragraph above the verdict qualifies the
+    TABLES; it does not qualify a sentence claiming a thing never happened, and
+    a reader who acts on the verdict alone was being told the file was clean.
+
+    The wholly-torn case is the sharpest: every line unreadable printed as "the
+    ledger is empty; no hook has written to it", which is a statement about the
+    judges made from a file that says nothing about them."""
+    torn = ['{"kind": "decid\n', '{"kind\n', "[]\n"]
+
+    wholly = _torn_verdict(tmp_path, "wholly.jsonl", [], torn)
+    assert "Verdict: UNKNOWN" in wholly
+    assert "3 skipped" in wholly
+    assert "NO DATA" not in wholly
+
+    # Partially torn with no honest verdict among the survivors: "NOT RUNNING"
+    # says every gate ran unjudged, which the unread lines may refute.
+    partial = _torn_verdict(
+        tmp_path, "partial.jsonl", [_record("hook_start", "p1")], torn[:2]
+    )
+    assert "Verdict: UNKNOWN" in partial
+    assert "2 lines could not be read" in partial
+    assert "NOT RUNNING" not in partial
+
+    # Partially torn with honest verdicts and no fail-open outcome: "no
+    # fail-open outcome" is the same shape of claim, so it is qualified too.
+    healthy_records = [
+        _record("hook_start", "h1"),
+        _decided("h1", reason="", duration=3.0),
+        _record("final", "h1", has_directive=False),
+        _record("emitted", "h1", ok=True, had_directive=False),
+    ]
+    qualified = _torn_verdict(tmp_path, "healthy-torn.jsonl", healthy_records, torn[:1])
+    assert "Verdict: HEALTHY (QUALIFIED)" in qualified
+    assert "1 line could not be read" in qualified
+
+    # …and the same ledger with nothing torn is the unqualified sentence, so
+    # the caveat tracks the torn lines rather than being printed always.
+    clean = _torn_verdict(tmp_path, "healthy-clean.jsonl", healthy_records, [])
+    assert clean == "Verdict: HEALTHY — 1 honest verdicts, no fail-open outcome."
+
+    # DEGRADED is left alone: its claim is existential and already bad news, so
+    # an unread line could only add to it.
+    degraded = _torn_verdict(
+        tmp_path,
+        "degraded.jsonl",
+        healthy_records
+        + [
+            _record("hook_start", "h2"),
+            _decided("h2", timed_out=True, reason="judge timed out (fail-open)",
+                     duration=30.0),
+        ],
+        torn[:1],
+    )
+    assert degraded.startswith("Verdict: DEGRADED")
+    assert "QUALIFIED" not in degraded
 
 
 def test_an_unclassifiable_line_is_reported_rather_than_dropped(tmp_path):

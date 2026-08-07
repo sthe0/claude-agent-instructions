@@ -482,13 +482,18 @@ def _bound_state(store, sid, plan) -> tuple[SessionState, PlanPresentation]:
     return s, receipt
 
 
-def _probe(status, root="/probed/root"):
+def _probe(status, root="/probed/root", *, project_scope_covered=False):
     """A wiring-probe double. Injected rather than ambient: without the seam
     these assertions would consult whatever config root the test machine runs
-    under and mean different things on different machines."""
+    under and mean different things on different machines.
+
+    ``project_scope_covered`` is the probe's record of whether it reached the
+    project-level settings member; the absence sentence quotes it, so a double
+    that could not vary it could not tell a derived sentence from a constant."""
     def probe(_basename):
         return hook_wiring.Wiring(
-            basename=_basename, root=Path(root), status=status)
+            basename=_basename, root=Path(root), status=status,
+            project_scope_covered=project_scope_covered)
     return probe
 
 
@@ -533,8 +538,14 @@ def test_no_stamp_absent_hook_names_hook_root_and_both_remedies(
     assert msg.startswith("no delivery proof recorded — ")
     assert gates.DELIVERY_HOOK_BASENAME in msg
     assert "/probed/root" in msg
-    # Scoped, never a bare "not registered" — same discipline as hook_wiring.
+    # Scoped, never a bare "not registered" — same discipline as hook_wiring,
+    # and the scope is the one the probe reached rather than a constant: a
+    # probe that also read the project member says a wider sentence here.
     assert "any user-level settings member" in msg
+    wider = gates.plan_presentation_blockers(
+        s, str(plan),
+        probe=_probe(hook_wiring.ABSENT, project_scope_covered=True))
+    assert "project-level included" in wider[0]
     # Both remedies, and NOT the unreachable one.
     assert "claude-task" in msg and "claude-agent" in msg
     assert "confirm-delivery --by <you> --note <why> --escape-reason " \

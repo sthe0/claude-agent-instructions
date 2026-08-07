@@ -12,8 +12,8 @@ exactly one event pair. This module is that logic in its general form.
 
 Prior art, not rediscovered: ``self-diagnose.py::default_settings_paths``
 already enumerates six settings homes, using ``$CLAUDE_PROJECT_DIR`` else cwd
-for the project ones. That asymmetry is why this probe does NOT model the
-project member — see § Chain membership.
+for the project ones. This probe reuses the variable and drops the cwd
+fallback — see § Chain membership.
 
 The harness's rule, confirmed
 -----------------------------
@@ -33,27 +33,38 @@ So the harness merges *several* members. A probe that read one file would call
 a hook ABSENT whenever it happens to be wired in another — a diagnosis worse
 than the generic refusal it replaces.
 
-Chain membership — a decision, not an omission
-----------------------------------------------
+Chain membership — three members always, five when the harness says where
+-------------------------------------------------------------------------
 
-Modelled: ``<root>/settings.json``, ``<root>/settings.local.json``, and the
-managed-policy file. Those are the user-level members plus policy: every caller
-can locate them identically from the root alone.
+Always modelled: ``<root>/settings.json``, ``<root>/settings.local.json``, and
+the managed-policy file. Those are the user-level members plus policy: every
+caller can locate them identically from the root alone.
 
-Deliberately EXCLUDED: the project-level ``.claude/settings.json`` and
-``.claude/settings.local.json``. Neither caller can locate them honestly. The
-engine runs as ``cd <repo>/scripts && python3 -m agentctl``, so a cwd-relative
-lookup resolves to ``<repo>/scripts/.claude`` and misses the real one; a
-SessionStart hook runs with the session's own cwd — a third value again. Only
-the hook caller receives ``$CLAUDE_PROJECT_DIR`` from the harness (the engine's
-environment has it unset), so the two callers could not answer alike. Guessing
-that root is precisely how a false ABSENT is manufactured. When a project-wired
-gate-bearing hook actually appears, extend ``settings_chain`` with the project
-member for callers that can prove the project root — that is the documented
-extension point.
+Modelled WHEN AND ONLY WHEN ``$CLAUDE_PROJECT_DIR`` is set: the project-level
+``.claude/settings.json`` and ``.claude/settings.local.json``, under the root
+that variable names. There is no cwd fallback, and the absence of one is the
+whole discipline — the engine runs as ``cd <repo>/scripts && python3 -m
+agentctl``, so a cwd-relative lookup resolves to ``<repo>/scripts/.claude`` and
+misses the real one, while a SessionStart hook runs with the session's own cwd,
+a third value again. Guessing that root is precisely how a false ABSENT is
+manufactured, so an unset variable means the project member is not read at all
+rather than read from a guess. (``self-diagnose.py`` does fall back to cwd; it
+enumerates candidate homes for a human-facing report, where a spurious path
+costs a line of output rather than a wrong causal claim.)
 
-Consequently ABSENT is always reported QUALIFIED — "not registered in any
-user-level settings member of <root>" — never as a bare "not registered".
+Which of the two happened is not left to prose. ``Wiring.project_scope_covered``
+records it per probe: True when the variable named a root AND every project
+member was accounted for — parsed, or provably not on disk — and False when the
+variable is unset or a project member exists but could not be read. Callers
+that must not over-claim read that field instead of assuming; see
+``dispatch_witness_snapshot.entry_for``, which derives the snapshot's
+``scope_qualified`` from it, and ``Wiring.absence_scope``, which words an ABSENT
+answer to the scope it was actually established over.
+
+Consequently ABSENT is never a bare "not registered": it is either "not
+registered in any user-level settings member of <root>" or, once the project
+member has been read, "not registered in any settings member of <root>,
+project-level included".
 
 UNKNOWN is a first-class outcome, and the only safe answer under partial
 information: any member that is unreadable, or a settings shape this module
@@ -173,6 +184,11 @@ TIMEOUT_REQUIREMENT_CALLS: "dict[str, int]" = {
 }
 
 
+# The harness exports the project root to hook processes under this name, and
+# it is the only thing this module will locate the project members from.
+PROJECT_DIR_ENV = "CLAUDE_PROJECT_DIR"
+
+
 def managed_settings_path() -> Path:
     """The managed-policy settings file for this platform.
 
@@ -188,16 +204,36 @@ def managed_settings_path() -> Path:
     return Path("/etc/claude-code/managed-settings.json")
 
 
+def project_settings_chain() -> "list[Path]":
+    """The project-level members, or [] when the harness named no project root.
+
+    An empty list means "not looked at", never "nothing there" — the two are
+    different answers and ``probe`` keeps them apart on
+    ``Wiring.project_scope_covered``. See § Chain membership for why there is
+    no cwd fallback.
+    """
+    named = os.environ.get(PROJECT_DIR_ENV, "").strip()
+    if not named:
+        return []
+    base = Path(named).expanduser()
+    return [base / ".claude" / "settings.json", base / ".claude" / "settings.local.json"]
+
+
 def settings_chain(root: Path | None = None) -> "list[Path]":
     """The settings members this probe reads, for a given config root.
 
-    See § Chain membership for what is in, what is out and why. Returns paths
-    whether or not they exist — a member that is simply absent is not evidence
-    of anything, while one that exists but cannot be parsed is (it degrades the
-    answer to UNKNOWN).
+    See § Chain membership for what is in, what is conditional and why. Returns
+    paths whether or not they exist — a member that is simply absent is not
+    evidence of anything, while one that exists but cannot be parsed is (it
+    degrades the answer to UNKNOWN).
     """
     base = root if root is not None else config_root.harness_config_root()
-    return [base / "settings.json", base / "settings.local.json", managed_settings_path()]
+    return [
+        base / "settings.json",
+        base / "settings.local.json",
+        managed_settings_path(),
+        *project_settings_chain(),
+    ]
 
 
 @dataclass(frozen=True)
@@ -231,10 +267,26 @@ class Wiring:
     missing_script_paths: "list[str]" = field(default_factory=list)
     members_read: "list[Path]" = field(default_factory=list)
     members_unreadable: "list[Path]" = field(default_factory=list)
+    # Did this probe reach the project-level members? Set by probe() from what
+    # it actually read; the default is the honest one for a Wiring built by
+    # hand, which reached nothing. See § Chain membership.
+    project_scope_covered: bool = False
 
     @property
     def wired(self) -> bool:
         return self.status == WIRED
+
+    def absence_scope(self) -> str:
+        """How far this answer reaches — the qualification every caller quoting
+        an ABSENT must quote with it.
+
+        Derived from what the probe read, never asserted by the caller: a scope
+        claimed rather than reached is exactly the over-claim that turns "not in
+        the members we could see" into "was never wired".
+        """
+        if self.project_scope_covered:
+            return f"any settings member of {self.root}, project-level included"
+        return f"any user-level settings member of {self.root}"
 
     def describe(self) -> str:
         """One line a gate can quote verbatim. ABSENT is always qualified with
@@ -249,10 +301,7 @@ class Wiring:
                 )
             return line
         if self.status == ABSENT:
-            return (
-                f"{self.basename} is not registered in any user-level settings "
-                f"member of {self.root}"
-            )
+            return f"{self.basename} is not registered in {self.absence_scope()}"
         why = ", ".join(str(p) for p in self.members_unreadable) or "unmodelled settings shape"
         return (
             f"whether {self.basename} is registered in {self.root} cannot be "
@@ -351,8 +400,16 @@ def probe(basename: str, root: Path | None = None) -> Wiring:
     WIRED as soon as any member registers it (a later member cannot un-wire it).
     ABSENT only when every member was read successfully, all were modelled, and
     none mentioned it. Anything else is UNKNOWN.
+
+    Orthogonal to that verdict, the answer records how far it reached on
+    ``project_scope_covered``. Two different things can make a probe miss the
+    project members — the harness never named a project root, or it named one
+    whose settings file could not be parsed — and both leave the answer
+    qualified, so the field is computed from what the read actually achieved
+    rather than from whether the chain contained the paths.
     """
     base = root if root is not None else config_root.harness_config_root()
+    project_members = project_settings_chain()
     result = Wiring(basename=basename, root=base, status=UNKNOWN)
     modelled = True
     for member in settings_chain(base):
@@ -374,6 +431,12 @@ def probe(basename: str, root: Path | None = None) -> Wiring:
         result.registrations.extend(registrations)
         for event, cmds in found.items():
             result.events.setdefault(event, []).extend(cmds)
+
+    # A project member that is not on disk WAS accounted for — there is nothing
+    # there to register the hook — while one that could not be parsed was not.
+    result.project_scope_covered = bool(project_members) and not any(
+        member in result.members_unreadable for member in project_members
+    )
 
     if result.events:
         result.status = WIRED

@@ -34,11 +34,16 @@ HOOK = "hook-plan-delivery-gate.py"
 @pytest.fixture
 def root(tmp_path, monkeypatch):
     """A config root whose whole chain lives under tmp — including the managed
-    policy member, so a real one on the host machine cannot colour a result."""
+    policy member and the project members, so neither a real managed policy nor
+    the project the test runner happens to sit in can colour a result. The env
+    var is deleted rather than pointed at tmp: these tests are about the
+    user-level chain, and a project root left set would silently qualify (or
+    un-qualify) every answer below."""
     r = tmp_path / "root"
     r.mkdir()
     monkeypatch.setattr(
         hook_wiring, "managed_settings_path", lambda: tmp_path / "managed-settings.json")
+    monkeypatch.delenv(hook_wiring.PROJECT_DIR_ENV, raising=False)
     return r
 
 
@@ -146,13 +151,106 @@ def test_probe_is_read_only(root):
     assert not (root / "settings.local.json").exists()
 
 
-def test_settings_chain_excludes_project_member(root):
-    """The project member is excluded by decision (no caller can locate it
-    honestly) — pinned so re-adding it is a deliberate act with a test to fix."""
-    chain = hook_wiring.settings_chain(root)
-    assert [p.name for p in chain[:2]] == ["settings.json", "settings.local.json"]
-    assert all(p.parent == root for p in chain[:2])
-    assert not any(".claude" in p.parts[:-1] for p in chain[:2])
+def test_the_settings_chain_carries_the_project_member_only_when_it_is_locatable(
+    root, monkeypatch, tmp_path
+):
+    """The chain was three user-level members and nothing else, and an ABSENT
+    read off it was spent as "not registered" — a claim the harness can refute
+    from a project settings file the probe never opened. The project members are
+    in the chain now, but only when the harness has said WHERE the project is:
+    guessing from the cwd would make the answer depend on which directory a
+    verification command happened to run in."""
+    unset = hook_wiring.settings_chain(root)
+    assert [p.name for p in unset] == [
+        "settings.json", "settings.local.json", "managed-settings.json"
+    ]
+
+    project = tmp_path / "proj"
+    monkeypatch.setenv(hook_wiring.PROJECT_DIR_ENV, str(project))
+    named = hook_wiring.settings_chain(root)
+    assert named[3:] == [
+        project / ".claude" / "settings.json",
+        project / ".claude" / "settings.local.json",
+    ]
+    # The user-level head is unchanged: the project members are appended, so a
+    # registration found in them cannot displace one found above.
+    assert named[:3] == unset
+
+
+def test_a_project_level_registration_is_no_longer_a_false_absent(root, monkeypatch, tmp_path):
+    """The defect the widened chain removes, driven end to end: the hook is
+    wired in the project's own settings and nowhere else. The old chain read
+    three user-level members, found nothing, and answered ABSENT."""
+    _write(root / "settings.json", {"PreToolUse": [_group("python3 /x/other.py")]})
+    project = tmp_path / "proj"
+    (project / ".claude").mkdir(parents=True)
+    _write(project / ".claude" / "settings.json",
+           {"Stop": [_group(f"python3 {SCRIPTS / HOOK}")]})
+    monkeypatch.setenv(hook_wiring.PROJECT_DIR_ENV, str(project))
+
+    w = hook_wiring.probe(HOOK, root)
+    assert w.status == hook_wiring.WIRED
+    assert list(w.events) == ["Stop"]
+
+
+def test_a_project_level_timeout_is_no_longer_invisible(root, monkeypatch, tmp_path):
+    """The WIRED half of the same hole. old_timeout() takes the max over the
+    registrations the probe found, so a project-level entry the probe never read
+    made the recorded limit a lower bound presented as the limit — and a witness
+    beating a lower bound proves nothing."""
+    _write(root / "settings.json", {"Stop": [_timed_group(str(SCRIPTS / HOOK), 5)]})
+    project = tmp_path / "proj"
+    (project / ".claude").mkdir(parents=True)
+    _write(project / ".claude" / "settings.local.json",
+           {"Stop": [_timed_group(f"python3 {SCRIPTS / HOOK}", 45)]})
+    monkeypatch.setenv(hook_wiring.PROJECT_DIR_ENV, str(project))
+
+    w = hook_wiring.probe(HOOK, root)
+    assert sorted(r.timeout for r in w.registrations) == [5, 45]
+
+
+def test_scope_coverage_is_read_off_what_the_probe_reached(root, monkeypatch, tmp_path):
+    """`project_scope_covered` is evidence, not an assertion: it says the probe
+    accounted for the project members, and a member that is simply not on disk
+    IS accounted for — there is nothing there to register anything. The two ways
+    to miss them are an unnamed project root and a project file that would not
+    parse, and both must leave the answer qualified."""
+    _write(root / "settings.json", {"PreToolUse": [_group("python3 /x/other.py")]})
+
+    # No project root named: the probe cannot know whether one exists.
+    assert not hook_wiring.probe(HOOK, root).project_scope_covered
+
+    # Named, and the members are absent from disk — accounted for.
+    project = tmp_path / "proj"
+    project.mkdir()
+    monkeypatch.setenv(hook_wiring.PROJECT_DIR_ENV, str(project))
+    w = hook_wiring.probe(HOOK, root)
+    assert w.project_scope_covered
+    assert w.status == hook_wiring.ABSENT
+    assert "project-level included" in w.describe()
+
+    # Named, present, and unparseable — NOT accounted for, and the status
+    # degrades to UNKNOWN for the same reason any unreadable member does.
+    (project / ".claude").mkdir()
+    (project / ".claude" / "settings.json").write_text("{not json", encoding="utf-8")
+    w = hook_wiring.probe(HOOK, root)
+    assert not w.project_scope_covered
+    assert w.status == hook_wiring.UNKNOWN
+
+
+def test_the_absence_sentence_names_the_scope_it_actually_reached(root, monkeypatch, tmp_path):
+    """A gate quotes this sentence at the user. "Not registered in any settings
+    member" would be a claim the probe cannot make from a user-level-only read,
+    so the wording tracks the coverage rather than being fixed prose."""
+    _write(root / "settings.json", {"PreToolUse": [_group("python3 /x/other.py")]})
+    assert "any user-level settings member" in hook_wiring.probe(HOOK, root).describe()
+
+    project = tmp_path / "proj"
+    project.mkdir()
+    monkeypatch.setenv(hook_wiring.PROJECT_DIR_ENV, str(project))
+    described = hook_wiring.probe(HOOK, root).describe()
+    assert "project-level included" in described
+    assert "user-level" not in described
 
 
 # ── The gate-bearing registry, checked in three directions ───────────────────

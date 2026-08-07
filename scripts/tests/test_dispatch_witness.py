@@ -71,19 +71,42 @@ def _stamp(tmp_path) -> Path:
     return path
 
 
-def _entry(status, timeout=None, *, scope_qualified=False, members_read=()):
-    """One snapshot entry in the schema the writer emits.
+_MEMBER = Path("/root/settings.json")
 
-    ``scope_qualified`` defaults to False — an absence established over the
-    FULL settings scope — so that a test about timeouts, sessions or stamps
-    exercises the permissive absent branch it is actually about. The tests
-    that are ABOUT the qualification pass it explicitly."""
-    return {
-        "status": status,
-        "timeout": timeout,
-        "scope_qualified": scope_qualified,
-        "members_read": [str(member) for member in members_read],
-    }
+
+def _wiring(status, timeout=None, *, scope_qualified=False, members_read=(_MEMBER,)):
+    """A probe answer with the shape a test needs. ``scope_qualified`` is the
+    reader's word for it; on this side of the seam it is the probe's own
+    ``project_scope_covered``, and the two are each other's negation."""
+    wiring = hook_wiring.Wiring(
+        basename="fixture",
+        root=Path("/root"),
+        status=status,
+        members_read=[Path(member) for member in members_read],
+        project_scope_covered=not scope_qualified,
+    )
+    if status == hook_wiring.WIRED:
+        wiring.events = {"Stop": ["python3 /root/hook.py"]}
+        wiring.registrations = [
+            hook_wiring.Registration("Stop", None, "python3 /root/hook.py", timeout,
+                                     _MEMBER)
+        ]
+    return wiring
+
+
+def _entry(status, timeout=None, **kwargs):
+    """One snapshot entry, built by running a probe answer through the WRITER's
+    own entry_for(). Hand-writing the dict let every fixture below stand for a
+    document write_snapshot() would never emit — the old default paired
+    ``scope_qualified: false`` with a members_read holding nothing but
+    user-level files, which is self-contradictory now that the field is derived
+    rather than declared.
+
+    ``scope_qualified`` still defaults to False — an absence established over
+    the FULL settings scope — so that a test about timeouts, sessions or stamps
+    exercises the permissive absent branch it is actually about. It now costs a
+    probe that reached the project members to say so."""
+    return dispatch_witness_snapshot.entry_for(_wiring(status, timeout, **kwargs))
 
 
 def _snapshot(tmp_path, **overrides) -> Path:
@@ -297,11 +320,13 @@ def test_the_session_id_must_come_from_exactly_one_of_the_two_routes(tmp_path):
 
 def test_a_qualified_absence_blocks_rather_than_licensing_any_line(tmp_path):
     """The permissive absent branch spends "it was never wired" as a fact, and
-    that is exactly what lib/hook_wiring cannot establish: it deliberately does
-    not read project-level settings, so its ABSENT means "not in the members I
-    could read". A snapshot that says so must not buy the permissive branch —
-    a hook wired at project level with a small timeout would otherwise be
-    witnessed by any line at all, including one the old limit could produce."""
+    a probe that did not reach the project-level member cannot establish it:
+    its ABSENT means "not in the members I could read". lib/hook_wiring reads
+    that member whenever the harness names a project root, but when it names
+    none there is nothing to read and the gap stays. A snapshot that says so
+    must not buy the permissive branch — a hook wired at project level with a
+    small timeout would otherwise be witnessed by any line at all, including
+    one the old limit could produce."""
     snapshot = _snapshot(tmp_path, **{
         DEFERRING: _entry(hook_wiring.ABSENT, scope_qualified=True,
                           members_read=["/root/settings.json"]),
@@ -309,6 +334,25 @@ def test_a_qualified_absence_blocks_rather_than_licensing_any_line(tmp_path):
     records = [_record("entered", "a", hook="deferring_disposition",
                        judge="deferring_disposition", prefilter_fired=True)]
     assert _run(tmp_path, records, snapshot=snapshot) == 1
+
+
+def test_a_qualified_wired_timeout_blocks_because_it_is_only_a_lower_bound(
+    tmp_path, capsys
+):
+    """The WIRED branch has the identical hole and it is the more dangerous
+    half: old_timeout() takes the maximum over the registrations the probe
+    FOUND, so a project-level registration at 30s is invisible and 5s gets
+    recorded as the limit. A 6s call then reads as new evidence while the old
+    wiring could have produced it comfortably — the witness would certify a
+    change that never happened. Beating a lower bound proves nothing, so a
+    qualified WIRED entry blocks exactly as a qualified absence does."""
+    snapshot = _snapshot(tmp_path, **{
+        ESCALATION: _entry(hook_wiring.WIRED, 5, scope_qualified=True),
+    })
+    records = [_call("a", hook="escalation_diagnosis", duration=6.0)]
+    assert _run(tmp_path, records, snapshot=snapshot) == 1
+    out = capsys.readouterr().out
+    assert "lower bound" in out and str(_MEMBER) in out
 
 
 def test_the_stage_8_configuration_is_witnessed(tmp_path, capsys):
@@ -352,11 +396,14 @@ def test_the_stage_8_configuration_fails_when_one_wired_hook_stays_silent(tmp_pa
     assert _run(tmp_path, records, snapshot=snapshot, extra=["--require-all"]) == 1
 
 
-def test_the_snapshot_the_writer_produces_is_the_one_the_witness_reads(tmp_path):
+def test_the_snapshot_the_writer_produces_is_the_one_the_witness_reads(
+    tmp_path, monkeypatch
+):
     """The contract between the capture step and this script is a file format,
     and nothing but prose held its two ends together. Round-trip a real probe
     result through the writer into the witness: a shape either end invented on
     its own would fail here rather than in stage 8."""
+    monkeypatch.delenv(hook_wiring.PROJECT_DIR_ENV, raising=False)
     root = tmp_path / "config-root"
     root.mkdir()
     (root / "settings.json").write_text(json.dumps({
@@ -383,22 +430,27 @@ def test_the_snapshot_the_writer_produces_is_the_one_the_witness_reads(tmp_path)
     hooks, error = mod.load_snapshot(snapshot)
     assert error == "" and set(hooks) == set(mod.WITNESSED_BASENAMES)
 
-    # The witness reads the file end to end: the escalation hook's own 6s call
-    # outlives the 5s the writer recorded from the settings member...
+    # With no project root named, every entry the probe can honestly write is
+    # QUALIFIED — the absent two and the wired one alike — so the run refuses
+    # wholesale, including the escalation hook whose own 6s call outlives the
+    # 5s recorded for it.
     records = [_call("a", hook="escalation_diagnosis", duration=6.0)]
     assert _run(tmp_path, records, snapshot=snapshot) == 1
-    hooks_line = mod.judge_hook(
-        ESCALATION, hooks[ESCALATION], records, CUTOFF, SESSION
-    )
-    assert hooks_line.witnessed and not hooks_line.blocking
-    # ...and the run still refuses overall, because the two hooks the probe
-    # found absent are QUALIFIED absences — what probe() can honestly report —
-    # and those block in either mode.
+    assert all(entry["scope_qualified"] for entry in hooks.values())
 
-    # The seam for a caller that HAS established full scope produces a file the
-    # same witness accepts, which is the only difference between the two.
+    # Name a project root and the probe reaches the last member: here it is
+    # provably absent from disk, which settles the scope just as reading a
+    # present file would. The SAME writer then emits unqualified entries and
+    # the SAME witness accepts them. No seam was needed for this and none
+    # exists — the difference between the two files is what the probe reached.
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setenv(hook_wiring.PROJECT_DIR_ENV, str(project))
+    covered = [hook_wiring.probe(basename, root) for basename in mod.WITNESSED_BASENAMES]
     unqualified = tmp_path / "unqualified-old-wiring.json"
-    dispatch_witness_snapshot.write_snapshot(unqualified, wirings, unqualified=True)
+    dispatch_witness_snapshot.write_snapshot(unqualified, covered)
+    reread, error = mod.load_snapshot(unqualified)
+    assert error == "" and not any(entry["scope_qualified"] for entry in reread.values())
     assert _run(tmp_path, records, snapshot=unqualified) == 0
 
 

@@ -123,6 +123,12 @@ NO_CALL_STAGES = {
     "no_text": "no text to judge",
 }
 
+# The one `decided` stage that reports how an actual judge CALL ended, and so
+# the only one that can leave a verdict behind to lose. Every other stage —
+# budget above, the three NO_CALL_STAGES — is a stop taken before the call, and
+# maps to outcome 3 or 7c rather than to a verdict.
+CALL_STAGE = "call"
+
 # Three invocation shapes that are not declared outcomes. They are NOT one
 # bucket, because only the first of them is good news, and a single permissive
 # label over all three is how an invocation killed mid-flight printed as
@@ -136,12 +142,15 @@ INVOCATION_KILLED_IN_CALL = "killed_in_call"
 INVOCATION_UNCLASSIFIED = "unclassified"
 
 COMPLETED_LABEL = "completed and delivered"
-# Already counted at the judge level, so this line names the invocation
-# WITHOUT adding a second count: outcome 6 is the kill, and it is recorded
-# against the judge whose call was running when the harness fired.
+# This line names the invocation WITHOUT adding a declared outcome to it. The
+# rule is not "outcome 6 already counted it" — an invocation can hold both a
+# finished call and an unfinished one, and then it counts outcome 6 at the judge
+# level AND outcome 10 here. The rule is that a call still running when the
+# harness fired never produced a verdict, so nothing was lost at the invocation
+# level; the loss is the killed call, and outcome 6 records it where it happened.
 KILLED_IN_CALL_LABEL = (
-    "killed during a judge call — counted as outcome 6 at the judge level, "
-    "not again here"
+    "killed during a judge call — no verdict had been rendered, so nothing was "
+    "lost at the invocation level (the killed call is outcome 6)"
 )
 UNCLASSIFIED_LABEL = "shape the taxonomy does not cover — unclassifiable"
 
@@ -217,7 +226,7 @@ def classify_decided(record: dict) -> "str | None":
         return "3"
     if stage in NO_CALL_STAGES:
         return "7c"
-    if stage != "call":
+    if stage != CALL_STAGE:
         return None
     if record.get("timed_out") is True:
         return "5"
@@ -301,13 +310,18 @@ def classify_invocation(records: "list[dict]") -> "str | None":
     invocation lands in exactly one bucket: an invocation that both discarded
     and failed to emit is counted once, under the earlier cause.
 
-    The discriminator for outcome 10 is an unpaired `decided` — a verdict was
-    rendered and no `emitted` line followed it. `final(has_directive=True)`
-    refines that (a hook can produce a directive with no judge decision point
-    behind it) but cannot be the sole gate: `final` is written after decide()
-    RETURNS, so an invocation killed between its last `decided` and that
-    return has no `final` at all, and gating on one filed the whole shape as
-    the healthy case."""
+    The discriminator for outcome 10 is an unpaired `decided` FROM A CALL — a
+    verdict was rendered and no `emitted` line followed it. The stage matters:
+    a `decided` whose stage is `budget` or one of the NO_CALL_STAGES reports a
+    stop taken before the judge was called, so it is outcome 3 or 7c and there
+    was never a verdict for the kill to come after. Gating on any `decided` at
+    all filed those invocations under "killed after the verdict".
+
+    `final(has_directive=True)` refines the discriminator (a hook can produce a
+    directive with no judge decision point behind it) but cannot be the sole
+    gate: `final` is written after decide() RETURNS, so an invocation killed
+    between its last `decided` and that return has no `final` at all, and gating
+    on one filed the whole shape as the healthy case."""
     kinds = [record.get("kind") for record in records]
     if "hook_start" not in kinds:
         return None
@@ -324,7 +338,11 @@ def classify_invocation(records: "list[dict]") -> "str | None":
         # about whether it worked, which is not a claim of completion.
         return INVOCATION_UNCLASSIFIED
     finals = [r for r in records if r.get("kind") == "final"]
-    if "decided" in kinds or any(r.get("has_directive") is True for r in finals):
+    decided_a_call = any(
+        record.get("kind") == "decided" and record.get("stage") == CALL_STAGE
+        for record in records
+    )
+    if decided_a_call or any(r.get("has_directive") is True for r in finals):
         return "10"
     if unpaired_started(records)[0]:
         return INVOCATION_KILLED_IN_CALL
@@ -364,10 +382,23 @@ class Tally:
         The two levels are never summed. One hook invocation can hold several
         judge decision points, so a combined total counts the same allowed turn
         once per judge and once more for the process that wrapped them — a
-        number that overstates the surface and belongs to no population."""
+        number that overstates the surface and belongs to no population.
+
+        They reach their DENOMINATORS differently, because their outcome tables
+        differ in a way that is easy to miss. At the judge level every decision
+        point lands on a declared row, so summing the rows is the population. At
+        the invocation level every declared row is fail-open — a healthy process
+        is filed under INVOCATION_COMPLETED, which no row names — so summing the
+        rows would make the denominator equal the numerator and print "N of N"
+        no matter how healthy the machine was. The population there is every
+        invocation the same walk classified; test_the_two_ways_to_count_an_
+        invocation_population_agree pins it against the buckets it is made of,
+        so it stays a derived figure rather than a second number to maintain."""
         counts = self.counts_by_outcome()
-        recorded = sum(counts[o.id] for o in OUTCOMES if o.level == level)
         fail_open = sum(counts[o.id] for o in FAIL_OPEN_OUTCOMES if o.level == level)
+        if level == LEVEL_INVOCATION:
+            return self.invocation_count, fail_open
+        recorded = sum(counts[o.id] for o in OUTCOMES if o.level == level)
         return recorded, fail_open
 
     def durations_by_judge(self) -> "dict[str, list[float]]":
@@ -475,7 +506,7 @@ def format_fail_open(result: Tally) -> "list[str]":
         f"{inv_recorded} recorded",
         "  The two are reported separately and never added: one invocation holds "
         "several judge decision points, so a sum counts the same allowed turn twice.",
-        f"  {seen} distinct fail-open reasons appear here.",
+        f"  {seen} distinct fail-open {_plural(seen, 'reason')} recorded here.",
     ]
 
 
@@ -583,14 +614,41 @@ def format_verdict(result: Tally) -> "list[str]":
     honest = counts["4"]
     _judge_recorded, judge_fail_open = result.level_totals(LEVEL_JUDGE)
     _inv_recorded, inv_fail_open = result.level_totals(LEVEL_INVOCATION)
+    # Three of the four verdicts below assert a UNIVERSAL NEGATIVE — nothing was
+    # written, nothing was judged, nothing failed open — and a torn line is
+    # exactly the counter-example that would refute one. The "N malformed lines
+    # were skipped" paragraph printed above qualifies the tables; it does not
+    # qualify a sentence that says a thing never happened, so each of the three
+    # answers for the surviving lines only when the file has torn lines in it.
+    # DEGRADED needs no such branch: its claim is existential and already bad
+    # news, and a skipped line could only make it worse.
+    torn = result.dropped_lines
     if not result.record_count:
+        if torn:
+            return [
+                f"Verdict: UNKNOWN — every line in this ledger was unreadable "
+                f"({torn} skipped); nothing below speaks for what the judges did."
+            ]
         return ["Verdict: NO DATA — the ledger is empty; no hook has written to it."]
     if honest == 0:
+        if torn:
+            return [
+                f"Verdict: UNKNOWN — no surviving line records an honest verdict, "
+                f"but {torn} {_plural(torn, 'line')} could not be read and any of "
+                f"them may have been one; 'not running' is not established."
+            ]
         return [
             "Verdict: NOT RUNNING — no judge call in this ledger reached an honest "
             "verdict. Every gate that consulted a judge allowed its turn unjudged."
         ]
     if judge_fail_open == 0 and inv_fail_open == 0:
+        if torn:
+            return [
+                f"Verdict: HEALTHY (QUALIFIED) — {honest} honest verdicts and no "
+                f"fail-open outcome among the surviving lines, but {torn} "
+                f"{_plural(torn, 'line')} could not be read and a fail-open "
+                f"outcome may be among them."
+            ]
         return [f"Verdict: HEALTHY — {honest} honest verdicts, no fail-open outcome."]
     return [
         f"Verdict: DEGRADED — {honest} honest verdicts alongside {judge_fail_open} "
