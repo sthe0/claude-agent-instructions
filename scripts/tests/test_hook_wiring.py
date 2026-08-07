@@ -328,6 +328,116 @@ def test_the_chain_does_not_list_one_member_twice(tmp_path, monkeypatch):
     assert w.project_scope_covered
 
 
+def test_an_unmodelled_user_level_member_qualifies_the_entry_too(
+    root, monkeypatch, tmp_path
+):
+    """The same hole one scope over, and the reason the snapshot reads
+    `scope_fully_covered` rather than `project_scope_covered`.
+
+    The project members here are provably absent from disk, so the chain reached
+    as wide as it can and `project_scope_covered` is rightly True. But a
+    USER-LEVEL member parsed and then carried a shape the scanner does not
+    model, hiding a 60s registration. A predicate about the project scope calls
+    that a fact; check-dispatch-witness.py then skips `qualified_scope_verdict()`
+    and certifies a 6s call against the 5s it could see."""
+    _write(root / "settings.json", {"Stop": [_timed_group(str(SCRIPTS / HOOK), 5)]})
+    # Valid JSON, and "Stop" is a dict where a list of groups belongs.
+    (root / "settings.local.json").write_text(
+        json.dumps({
+            "hooks": {"Stop": {"0": _timed_group(f"python3 {SCRIPTS / HOOK}", 60)}}
+        }),
+        encoding="utf-8")
+    project = tmp_path / "proj"
+    project.mkdir()
+    monkeypatch.setenv(hook_wiring.PROJECT_DIR_ENV, str(project))
+
+    w = hook_wiring.probe(HOOK, root)
+
+    assert w.status == hook_wiring.WIRED
+    assert root / "settings.local.json" in w.members_unmodelled
+    # The two fields disagree here, which is the whole point of having both.
+    assert w.project_scope_covered
+    assert not w.scope_fully_covered
+
+    entry = dispatch_witness_snapshot.entry_for(w)
+    assert entry["scope_qualified"]
+    # The 60s registration was skipped, so the recorded limit is the 5s one.
+    assert entry["timeout"] == 5
+
+
+def test_an_unreadable_user_level_member_qualifies_the_entry_too(
+    root, monkeypatch, tmp_path
+):
+    """The other clause of the same predicate, on the same scope. Dropping
+    `members_unreadable` from `scope_fully_covered` survives every other test
+    here, because everywhere else an unreadable member is a PROJECT one and
+    `project_scope_covered` is already False — the clause only earns its place on
+    a user-level file."""
+    (root / "settings.json").write_text("{not json", encoding="utf-8")
+    project = tmp_path / "proj"
+    project.mkdir()
+    monkeypatch.setenv(hook_wiring.PROJECT_DIR_ENV, str(project))
+
+    w = hook_wiring.probe(HOOK, root)
+
+    assert w.members_unreadable == [root / "settings.json"]
+    assert w.project_scope_covered
+    assert not w.scope_fully_covered
+    assert dispatch_witness_snapshot.entry_for(w)["scope_qualified"]
+
+
+def test_a_looping_symlink_does_not_take_the_whole_chain_down(root, monkeypatch, tmp_path):
+    """`$CLAUDE_PROJECT_DIR` is externally supplied, and `Path.resolve()` on a
+    symlink loop raises RuntimeError rather than OSError. Every caller of this
+    module sits under a catch-all that goes quiet, so an escaping RuntimeError
+    would suppress the enforcement-is-OFF banner outright — one looping symlink,
+    every session, no trace."""
+    loop = tmp_path / "loop"
+    loop.mkdir()
+    (loop / "a").symlink_to(loop / "b")
+    (loop / "b").symlink_to(loop / "a")
+    monkeypatch.setenv(hook_wiring.PROJECT_DIR_ENV, str(loop / "a"))
+    _write(root / "settings.json", {"PreToolUse": [_group("python3 /x/other.py")]})
+
+    chain = hook_wiring.settings_chain(root)
+    assert loop / "a" / ".claude" / "settings.json" in chain
+    # And through the probe, which is what the callers actually run: an
+    # unresolvable member is not on disk, so it is silence rather than evidence.
+    assert hook_wiring.probe(HOOK, root).status == hook_wiring.ABSENT
+
+
+def test_a_symlinked_project_root_keeps_the_config_root_spelling(tmp_path, monkeypatch):
+    """Dedup is observable only when one file is reached under two spellings,
+    and then WHICH survivor is kept decides which path every report names —
+    `members_read`, `Registration.member`, `describe()`'s UNKNOWN reasons. The
+    caller asked about the config root; a report naming a root it never
+    mentioned sends the reader looking in the wrong tree.
+
+    Third assertion pins the coverage predicate's resolved comparison, which
+    only becomes load-bearing once the survivor is the config-root spelling: the
+    shared unreadable file is then recorded under one spelling while
+    `project_settings_chain()` holds the other, so a raw membership test would
+    read the project scope as covered."""
+    monkeypatch.setattr(
+        hook_wiring, "managed_settings_path", lambda: tmp_path / "managed-settings.json")
+    home = tmp_path / "home"
+    config = home / ".claude"
+    config.mkdir(parents=True)
+    link = tmp_path / "proj-link"
+    link.symlink_to(home)
+    monkeypatch.setenv(hook_wiring.PROJECT_DIR_ENV, str(link))
+
+    chain = hook_wiring.settings_chain(config)
+    assert len(chain) == 3
+    assert chain[:2] == [config / "settings.json", config / "settings.local.json"]
+
+    (config / "settings.json").write_text("{not json", encoding="utf-8")
+    w = hook_wiring.probe(HOOK, config)
+    assert w.members_unreadable == [config / "settings.json"]
+    assert not w.project_scope_covered
+    assert w.status == hook_wiring.UNKNOWN
+
+
 def test_the_absence_sentence_names_the_scope_it_actually_reached(root, monkeypatch, tmp_path):
     """A gate quotes this sentence at the user. "Not registered in any settings
     member" would be a claim the probe cannot make from a user-level-only read,

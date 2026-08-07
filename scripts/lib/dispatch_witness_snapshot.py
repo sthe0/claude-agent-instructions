@@ -33,21 +33,25 @@ cannot tell "was never registered" (so any execution is new evidence) apart
 from "could not be determined" (so nothing may be concluded).
 
 ``scope_qualified`` is the field v1 lacked, and the reason for the version
-bump. hook_wiring.probe() reads the project-level ``.claude/settings.json``
-only when the harness named a project root in ``$CLAUDE_PROJECT_DIR``; without
-it, ABSENT means "not registered in any USER-LEVEL member of this root", not
-"not registered", and WIRED's timeout is the largest among the members it could
-see rather than the largest that exists. A reader that spends either as the
+bump. A probe can fall short of the whole settings chain in several ways: the
+harness named no project root in ``$CLAUDE_PROJECT_DIR``, or a member — at
+EITHER level — would not parse, or it parsed and then carried a settings shape
+``hook_wiring`` does not model, so its entries were skipped unread. Under any
+of them ABSENT means "not registered in the members this probe could account
+for", not "not registered", and WIRED's timeout is the largest among those
+members rather than the largest that exists. A reader that spends either as the
 unqualified fact reasons from a probe that never looked everywhere. Carrying
 the qualification lets the reader fail closed on BOTH statuses;
 ``members_read`` records which files the claim actually rests on, so the
 failure can name them.
 
 The field is DERIVED, not declared. ``entry_for`` reads
-``Wiring.project_scope_covered`` — the probe's own record of what it reached —
-so the field cannot disagree with what the probe actually did. The earlier
-shape took the answer from a caller keyword, which no reader could cross-check
-and no writer had grounds to set.
+``Wiring.scope_fully_covered`` — the probe's own record of whether it accounted
+for every member — so the field cannot disagree with what the probe actually
+did. The earlier shape took the answer from a caller keyword, which no reader
+could cross-check and no writer had grounds to set. It reads that field rather
+than the narrower ``project_scope_covered``, which answers a different question
+(how wide the chain reached, the thing an ABSENT sentence has to word).
 
 What that does NOT license is cross-checking ``scope_qualified`` against
 ``members_read``. The two answer different questions, and an unqualified entry
@@ -105,10 +109,10 @@ def entry_for(wiring: hook_wiring.Wiring) -> dict:
     return {
         "status": wiring.status,
         "timeout": old_timeout(wiring) if wiring.wired else None,
-        # Read off the probe's own record of how far it reached — not inferred
-        # from members_read, which an accounted-for-but-absent project member
-        # never appears in. See the module docstring.
-        "scope_qualified": not wiring.project_scope_covered,
+        # Read off the probe's own record of what it accounted for — not
+        # inferred from members_read, which an accounted-for-but-absent project
+        # member never appears in. See the module docstring.
+        "scope_qualified": not wiring.scope_fully_covered,
         "members_read": [str(member) for member in wiring.members_read],
     }
 

@@ -110,19 +110,12 @@ def in_system_work_venue(cwd=None) -> bool:
     """
     try:
         start = (Path(cwd) if cwd is not None else Path.cwd()).resolve()
-    except OSError:
+    except (OSError, RuntimeError):
         return False
     for candidate in (start, *start.parents):
         if (candidate / SYSTEM_WORK_SENTINEL).is_file():
             return True
     return False
-
-
-def _resolved(path: Path) -> Path:
-    try:
-        return path.resolve()
-    except OSError:  # pragma: no cover - unresolvable path, compare the raw one
-        return path
 
 
 def _primary_settings_path() -> Path:
@@ -310,7 +303,7 @@ def main() -> int:
     try:
         harness = config_root.harness_config_root()
         home = config_root.agent_home()
-        personal = _resolved(harness) != _resolved(home)
+        personal = hook_wiring.resolved(harness) != hook_wiring.resolved(home)
         # The branch decision precedes the first print, or the personal-root
         # non-system-work path loses the byte-silence it is owed to the very
         # line being added.

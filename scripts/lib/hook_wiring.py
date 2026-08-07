@@ -62,10 +62,16 @@ model, whose entries are skipped unread. The third is the quiet one, and the
 reason the predicate is written over ``members_unmodelled`` as well as
 ``members_unreadable``: that member IS opened, so a predicate asking only "did
 every project member parse" answers yes and certifies a scope the probe never
-reached. Callers that must not over-claim read that field instead of assuming; see
+reached. ``Wiring.absence_scope`` reads that field, because an ABSENT sentence
+is about how wide the chain reached.
+
+Whether the ANSWER is a fact or a qualified one is a second question, and
+``Wiring.scope_fully_covered`` is the field for it: a member the probe opened
+and could not turn into entries leaves a partial view whatever scope it sits
+in, and a user-level member hides a registration exactly as well as a project
+one. Callers that must not over-claim read that field instead of assuming; see
 ``dispatch_witness_snapshot.entry_for``, which derives the snapshot's
-``scope_qualified`` from it, and ``Wiring.absence_scope``, which words an ABSENT
-answer to the scope it was actually established over.
+``scope_qualified`` from it.
 
 Consequently ABSENT is never a bare "not registered": it is either "not
 registered in any user-level settings member of <root>" or, once the project
@@ -235,14 +241,21 @@ def project_settings_chain() -> "list[Path]":
     return [base / ".claude" / "settings.json", base / ".claude" / "settings.local.json"]
 
 
-def _resolved(path: Path) -> Path:
+def resolved(path: Path) -> Path:
     """`path` with symlinks and `..` collapsed, or `path` unchanged when the
     filesystem will not say. A comparison KEY only: every path this module
     reports is the one the settings chain actually names, so a reader can find
-    it in the environment they configured."""
+    it in the environment they configured.
+
+    The loop case raises ``RuntimeError``, not ``OSError``, and the path it is
+    raised for can come from ``$CLAUDE_PROJECT_DIR`` — an externally supplied
+    value. Every caller of this module is wrapped in a catch-all that goes
+    quiet, so catching only ``OSError`` would let one looping symlink turn the
+    enforcement-is-OFF banner off, silently, every session.
+    """
     try:
         return path.resolve()
-    except OSError:  # pragma: no cover - unresolvable path, compare the raw one
+    except (OSError, RuntimeError):
         return path
 
 
@@ -254,10 +267,17 @@ def settings_chain(root: Path | None = None) -> "list[Path]":
     evidence of anything, while one that exists but cannot be parsed is (it
     degrades the answer to UNKNOWN).
 
-    Deduplicated on the RESOLVED path, first spelling kept. The user-level and
-    project-level members are distinct files only while the two roots differ,
-    and on a ``~/.claude`` machine whose session project root is ``$HOME`` they
-    are the same two files named twice. A chain that lists them twice reads
+    Deduplicated on the RESOLVED path, first spelling kept. First, because the
+    head of the chain is spelled from the caller's own `root` while the tail is
+    spelled from ``$CLAUDE_PROJECT_DIR``, and every path this module reports —
+    ``members_read``, ``Registration.member``, ``describe()``'s UNKNOWN reasons
+    — has to be findable in the environment the caller configured rather than
+    under a root it never asked about.
+
+    Deduplicated at all, because the user-level and project-level members are
+    distinct files only while the two roots differ, and on a ``~/.claude``
+    machine whose session project root is ``$HOME`` they are the same two files
+    named twice. A chain that lists them twice reads
     every registration twice, and two copies of one entry are enough to make
     ``duplicate_registration_note`` and ``runs_more_than_once`` report a hook
     registered exactly once as wired more than once — a fabricated finding, on
@@ -270,7 +290,14 @@ def settings_chain(root: Path | None = None) -> "list[Path]":
         managed_settings_path(),
         *project_settings_chain(),
     ]
-    return list({_resolved(member): member for member in chain}.values())
+    seen: "set[Path]" = set()
+    out: "list[Path]" = []
+    for member in chain:
+        key = resolved(member)
+        if key not in seen:
+            seen.add(key)
+            out.append(member)
+    return out
 
 
 @dataclass(frozen=True)
@@ -322,6 +349,25 @@ class Wiring:
     @property
     def wired(self) -> bool:
         return self.status == WIRED
+
+    @property
+    def scope_fully_covered(self) -> bool:
+        """Was EVERY member of the chain accounted for — so this answer is a
+        fact rather than a qualified one?
+
+        Two public fields, two questions, and mixing them up is how a partial
+        view gets spent as a whole one. ``project_scope_covered`` is about how
+        wide the chain REACHED, which is what an ABSENT sentence has to word.
+        This is about whether the answer may be spent unqualified, which is
+        what a caller reasoning FROM the answer needs — and there a user-level
+        member the probe opened and could not model hides a registration, or a
+        larger timeout, exactly as well as a project one.
+        """
+        return (
+            self.project_scope_covered
+            and not self.members_unreadable
+            and not self.members_unmodelled
+        )
 
     def absence_scope(self) -> str:
         """How far this answer reaches — the qualification every caller quoting
@@ -463,12 +509,10 @@ def probe(basename: str, root: Path | None = None) -> Wiring:
     none mentioned it. Anything else is UNKNOWN.
 
     Orthogonal to that verdict, the answer records how far it reached on
-    ``project_scope_covered``. THREE different things can make a probe miss the
-    project members — the harness never named a project root, it named one
-    whose settings file could not be parsed, or that file parsed into a shape
-    this module does not model — and all three leave the answer qualified, so
-    the field is computed from what the read actually achieved rather than from
-    whether the chain contained the paths.
+    ``project_scope_covered``, computed from what the read actually achieved
+    rather than from whether the chain contained the paths. See § Chain
+    membership for the three ways a probe misses the project members, and for
+    which of the two coverage fields answers which question.
     """
     base = root if root is not None else config_root.harness_config_root()
     project_members = project_settings_chain()
@@ -505,11 +549,11 @@ def probe(basename: str, root: Path | None = None) -> Wiring:
     # here is worse than not reading the member at all: the unmodelled file
     # gets opened, skipped, and then certified as covered.
     missed = {
-        _resolved(member)
+        resolved(member)
         for member in (*result.members_unreadable, *result.members_unmodelled)
     }
     result.project_scope_covered = bool(project_members) and not any(
-        _resolved(member) in missed for member in project_members
+        resolved(member) in missed for member in project_members
     )
 
     if result.events:

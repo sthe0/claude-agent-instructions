@@ -313,7 +313,10 @@ def test_iv_the_problem_banner_also_lands_on_stdout(tmp_path):
     # The registry line, scoped — check_registry() quotes Wiring.describe()
     # rather than composing a bare "NOT registered" (test_canon_guard_wired_check
     # owns that wording; this test only needs the report to have reached it).
-    assert "is not registered in any" in proc.stdout
+    # Anchored on a hook BASENAME as well: the scope clause alone also matches
+    # the timeout-axis line, which is strict-gated off on this path today but
+    # would make the assertion pass without the registry line ever running.
+    assert "hook-state-gate.py is not registered in" in proc.stdout
 
 
 def test_v_personal_root_outside_a_system_work_venue_is_byte_silent(tmp_path):
@@ -341,6 +344,16 @@ def test_vi_the_predicate_is_true_in_this_test_files_own_directory():
 def test_vi_the_predicate_is_false_outside_any_such_tree(tmp_path):
     mod = _load_hook_module()
     assert mod.in_system_work_venue(tmp_path) is False
+
+
+def test_vi_a_looping_cwd_is_answered_rather_than_raised(tmp_path):
+    """``Path.resolve()`` raises RuntimeError, not OSError, on a symlink loop.
+    The hook's own catch-all would turn an escaping one into total silence — the
+    single failure this branch exists to end."""
+    (tmp_path / "a").symlink_to(tmp_path / "b")
+    (tmp_path / "b").symlink_to(tmp_path / "a")
+    mod = _load_hook_module()
+    assert mod.in_system_work_venue(tmp_path / "a") is False
 
 
 def test_the_status_line_survives_an_unreadable_settings_file(tmp_path):
