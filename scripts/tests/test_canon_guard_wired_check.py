@@ -220,7 +220,23 @@ def test_names_every_missing_registry_hook(tmp_path):
     assert proc.returncode == 0
     for name in OTHER_GATE_HOOKS:
         assert name in proc.stdout, f"{name} not named in the warning"
-    assert "NOT registered" in proc.stdout
+
+
+def test_the_registry_warning_carries_the_scope_of_its_absence(tmp_path):
+    """Never a bare "NOT registered". This is the one caller a human reads every
+    session, and how far an ABSENT reaches depends on which members the probe
+    got to: with no project root named, the claim covers the user-level chain
+    only. Printed unqualified, the same six words mean one thing on a machine
+    where the project member was read and a weaker thing where it was not, with
+    no way for the reader to tell the two runs apart."""
+    proc = _run(tmp_path, {"hooks": {"PreToolUse": [
+        _group("Edit|Write", GUARD_PATH), _group("Bash", GUARD_PATH)]}})
+    assert "NOT registered" not in proc.stdout, proc.stdout
+    for name in OTHER_GATE_HOOKS:
+        assert (
+            f"{name} is not registered in any user-level settings member "
+            f"of {tmp_path}"
+        ) in proc.stdout, proc.stdout
 
 
 def test_warning_names_the_root_it_probed(tmp_path):

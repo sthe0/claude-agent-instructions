@@ -210,6 +210,13 @@ def check_registry(root: Path) -> "list[str]":
     settings shape is not evidence of absence, and a false alarm here would
     train the reader to ignore the real ones. The canon guard is excluded — it
     gets the finer per-chain treatment above.
+
+    The line comes from ``Wiring.describe()`` rather than being composed here,
+    for the reason that method exists: how far an ABSENT reaches depends on
+    which members the probe got to, and this is the one caller a human reads
+    every session. A bare "NOT registered" means one thing on a machine where
+    the project member was read and a weaker thing where it was not, with no
+    way for the reader to tell the two runs apart.
     """
     problems: "list[str]" = []
     for basename, consequence in hook_wiring.GATE_BEARING_HOOKS:
@@ -217,7 +224,7 @@ def check_registry(root: Path) -> "list[str]":
             continue
         wiring = hook_wiring.probe(basename, root)
         if wiring.status == hook_wiring.ABSENT:
-            problems.append(f"{basename} NOT registered — {consequence}")
+            problems.append(f"{wiring.describe()} — {consequence}")
     return problems
 
 

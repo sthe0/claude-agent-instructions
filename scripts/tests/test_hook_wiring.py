@@ -26,6 +26,7 @@ import pytest
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
+from lib import dispatch_witness_snapshot  # noqa: E402
 from lib import hook_wiring  # noqa: E402
 
 HOOK = "hook-plan-delivery-gate.py"
@@ -207,14 +208,21 @@ def test_a_project_level_timeout_is_no_longer_invisible(root, monkeypatch, tmp_p
 
     w = hook_wiring.probe(HOOK, root)
     assert sorted(r.timeout for r in w.registrations) == [5, 45]
+    # And through the one function that spends the number: the recorded limit a
+    # witness must outlive is the project entry's 45s, not the 5s the old
+    # user-level-only chain would have handed it.
+    assert dispatch_witness_snapshot.old_timeout(w) == 45
 
 
 def test_scope_coverage_is_read_off_what_the_probe_reached(root, monkeypatch, tmp_path):
     """`project_scope_covered` is evidence, not an assertion: it says the probe
     accounted for the project members, and a member that is simply not on disk
-    IS accounted for — there is nothing there to register anything. The two ways
-    to miss them are an unnamed project root and a project file that would not
-    parse, and both must leave the answer qualified."""
+    IS accounted for — there is nothing there to register anything. There are
+    THREE ways to miss them, not two: an unnamed project root, a project file
+    that would not parse, and a project file that parses and then carries a
+    shape `_scan_settings` does not model — whose entries are skipped unread
+    even though the file opened fine. All three must leave the answer
+    qualified."""
     _write(root / "settings.json", {"PreToolUse": [_group("python3 /x/other.py")]})
 
     # No project root named: the probe cannot know whether one exists.
@@ -237,6 +245,88 @@ def test_scope_coverage_is_read_off_what_the_probe_reached(root, monkeypatch, tm
     assert not w.project_scope_covered
     assert w.status == hook_wiring.UNKNOWN
 
+    # Named, present, PARSES — and then carries a shape the scanner does not
+    # model (an event whose value is a dict where a list of groups belongs), so
+    # its entries were skipped unread. The quiet one: the file opened, so a
+    # predicate asking only "did every project member parse" answers yes and
+    # certifies a scope the probe never reached.
+    (project / ".claude" / "settings.json").write_text(
+        json.dumps({"hooks": {"Stop": {"0": _group(f"python3 {SCRIPTS / HOOK}")}}}),
+        encoding="utf-8")
+    w = hook_wiring.probe(HOOK, root)
+    assert project / ".claude" / "settings.json" in w.members_read
+    assert project / ".claude" / "settings.json" in w.members_unmodelled
+    assert not w.project_scope_covered
+    assert w.status == hook_wiring.UNKNOWN
+    assert "settings shape not modelled" in w.describe()
+
+
+def test_an_unmodelled_project_member_does_not_pass_for_covered_under_wired(
+    root, monkeypatch, tmp_path
+):
+    """The same hole on the branch that actually reaches a caller, and the reason
+    the case above is blocking rather than cosmetic.
+
+    A user-level registration makes the status WIRED, and `probe` records that
+    outcome from `result.events` without ever consulting the `modelled` flag — so
+    the UNKNOWN degradation the case above relies on is not available here.
+    Nothing but the coverage predicate stands between an unread project member
+    and a snapshot entry claiming full scope: `scope_qualified: false` makes
+    check-dispatch-witness.py skip `qualified_scope_verdict()` and certify a
+    recorded call against the 5s it could see, when the entry it skipped says
+    60s and a 6s call proves nothing at all."""
+    _write(root / "settings.json", {"Stop": [_timed_group(str(SCRIPTS / HOOK), 5)]})
+    project = tmp_path / "proj"
+    (project / ".claude").mkdir(parents=True)
+    # Valid JSON, and "Stop" is a dict where a list of groups belongs.
+    (project / ".claude" / "settings.json").write_text(
+        json.dumps({
+            "hooks": {"Stop": {"0": _timed_group(f"python3 {SCRIPTS / HOOK}", 60)}}
+        }),
+        encoding="utf-8")
+    monkeypatch.setenv(hook_wiring.PROJECT_DIR_ENV, str(project))
+
+    w = hook_wiring.probe(HOOK, root)
+
+    assert w.status == hook_wiring.WIRED
+    assert project / ".claude" / "settings.json" in w.members_unmodelled
+    assert not w.project_scope_covered
+    entry = dispatch_witness_snapshot.entry_for(w)
+    assert entry["scope_qualified"]
+    # The 60s registration was skipped, so the recorded limit is the 5s one —
+    # which is exactly why the entry must not be spent unqualified.
+    assert entry["timeout"] == 5
+
+
+def test_the_chain_does_not_list_one_member_twice(tmp_path, monkeypatch):
+    """A session whose project root is the config root's parent — the ordinary
+    shape of a `~/.claude` machine whose $CLAUDE_PROJECT_DIR is $HOME — names the
+    same two files at user level and at project level. Listed twice they are read
+    twice, every registration is extended twice, and `duplicate_registration_note`
+    reports a hook registered exactly once as wired more than once: a fabricated
+    finding, on the SessionStart banner."""
+    monkeypatch.setattr(
+        hook_wiring, "managed_settings_path", lambda: tmp_path / "managed-settings.json")
+    home = tmp_path / "home"
+    config = home / ".claude"
+    config.mkdir(parents=True)
+    monkeypatch.setenv(hook_wiring.PROJECT_DIR_ENV, str(home))
+
+    # The fabricated finding first, because it is the harm; the chain shape
+    # below is only the mechanism, and asserting it first would hide whether
+    # the harm is actually reached.
+    _write(config / "settings.json", {"Stop": [_timed_group(str(SCRIPTS / HOOK), 35)]})
+    w = hook_wiring.probe(HOOK, config)
+    assert len(w.registrations) == 1
+    assert hook_wiring.duplicate_registration_note(w) is None
+    assert not hook_wiring.runs_more_than_once(w)
+
+    chain = hook_wiring.settings_chain(config)
+    assert len(chain) == len(set(chain)) == 3
+    # Deduplication removes the second SPELLING, not the project scope: both
+    # project members are still accounted for by the read.
+    assert w.project_scope_covered
+
 
 def test_the_absence_sentence_names_the_scope_it_actually_reached(root, monkeypatch, tmp_path):
     """A gate quotes this sentence at the user. "Not registered in any settings
@@ -251,6 +341,10 @@ def test_the_absence_sentence_names_the_scope_it_actually_reached(root, monkeypa
     described = hook_wiring.probe(HOOK, root).describe()
     assert "project-level included" in described
     assert "user-level" not in described
+    # And it names BOTH roots: the project member is not under `root`, so a
+    # sentence attributing it there sends a reader looking in a directory that
+    # does not contain the file the claim rests on.
+    assert str(root) in described and str(project) in described
 
 
 # ── The gate-bearing registry, checked in three directions ───────────────────

@@ -132,6 +132,23 @@ def _no_ambient_recursion_depth(monkeypatch):
     monkeypatch.delenv("AGENT_RECURSION_DEPTH", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_project_dir(monkeypatch):
+    """Drop the ambient CLAUDE_PROJECT_DIR for the suite at large.
+
+    lib/hook_wiring.settings_chain() appends `$CLAUDE_PROJECT_DIR/.claude/
+    settings*.json` to every chain it builds, INCLUDING one built from an
+    explicit root. So a suite run under the harness takes two on-disk files
+    nobody wrote as input: a project settings file registering a judge hook
+    below its minimum, or one that will not parse, flips
+    test_canon_guard_wired_check's strict-mode expectations from a fixture the
+    test wrote to a file the machine happens to have. Same accommodation as
+    `_no_ambient_recursion_depth` above — the tests that own the predicate
+    (test_hook_wiring, test_dispatch_witness) set the variable themselves,
+    which overrides this."""
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+
+
 @pytest.fixture
 def store(tmp_path):
     return FileStateStore(tmp_path / "state")

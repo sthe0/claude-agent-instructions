@@ -381,6 +381,36 @@ def test_the_two_ways_to_count_an_invocation_population_agree(tmp_path):
     )
 
 
+def test_the_invocation_rate_says_when_part_of_its_denominator_is_unreadable(tmp_path):
+    """The same denominator, qualified. It includes the UNCLASSIFIED residual —
+    the invocations whose shape the taxonomy could not read, which is exactly
+    the set that MIGHT be fail-open and was not counted as such. Printed bare,
+    "1 fail-open of 3 recorded" reads as "the other two are healthy", when one
+    of them is a bucket that says nothing either way.
+
+    The unqualified spelling is not untested: the case above has an empty
+    residual and pins the line WITHOUT the clause, so the two together make the
+    clause conditional on there being something to qualify."""
+    records = [
+        # Healthy: delivered, and said so.
+        _record("hook_start", "ok"),
+        _record("emitted", "ok", ok=True, had_directive=False),
+        # Fail-open: threw its verdict away (outcome 8).
+        _record("hook_start", "lost"),
+        _record("discarded", "lost", reason="boom"),
+        # Residual: an `emitted` whose `ok` is neither True nor False. The
+        # delivery step was reached; whether it worked is unreadable.
+        _record("hook_start", "torn"),
+        _record("emitted", "torn", ok="yes", had_directive=False),
+    ]
+    result = _tally(tmp_path, records)
+    assert sum(result.residual.values()) == 1
+
+    line = next(l for l in mod.format_fail_open(result) if "hook invocations:" in l)
+    assert "1 fail-open of 3 recorded" in line
+    assert "of which 1 fell in the UNCLASSIFIED residual" in line
+
+
 def test_a_stop_taken_before_the_call_is_not_a_verdict_killed_after_it(tmp_path):
     """Outcome 10 means a verdict was rendered and the process died before
     delivering it. A `decided` line whose stage is `budget` or one of the

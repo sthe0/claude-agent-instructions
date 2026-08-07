@@ -497,13 +497,27 @@ def format_fail_open(result: Tally) -> "list[str]":
     seen = sum(1 for o in FAIL_OPEN_OUTCOMES if counts[o.id])
     judge_recorded, judge_fail_open = result.level_totals(LEVEL_JUDGE)
     inv_recorded, inv_fail_open = result.level_totals(LEVEL_INVOCATION)
+    # The invocation denominator is every invocation the walk classified, and
+    # that includes the UNCLASSIFIED residual — the invocations whose shape the
+    # taxonomy could not read, i.e. exactly the ones that MIGHT be fail-open and
+    # were not counted as such. An unqualified rate reads as "the rest are
+    # healthy", so the residual is said out loud whenever there is one.
+    residual = sum(result.residual.values())
+    invocation_line = (
+        f"  hook invocations:      {inv_fail_open} fail-open of "
+        f"{inv_recorded} recorded"
+    )
+    if residual:
+        invocation_line += (
+            f" — of which {residual} fell in the UNCLASSIFIED residual, whose "
+            f"fail-open status could not be read either way"
+        )
     return [
         f"Fail-open: {len(FAIL_OPEN_OUTCOMES)} of the {len(OUTCOMES)} declared outcomes "
         f"let a turn through with no judgement behind it.",
         f"  judge decision points: {judge_fail_open} fail-open of "
         f"{judge_recorded} recorded",
-        f"  hook invocations:      {inv_fail_open} fail-open of "
-        f"{inv_recorded} recorded",
+        invocation_line,
         "  The two are reported separately and never added: one invocation holds "
         "several judge decision points, so a sum counts the same allowed turn twice.",
         f"  {seen} distinct fail-open {_plural(seen, 'reason')} recorded here.",

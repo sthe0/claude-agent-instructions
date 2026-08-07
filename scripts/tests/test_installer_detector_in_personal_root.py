@@ -310,7 +310,10 @@ def test_iv_the_problem_banner_also_lands_on_stdout(tmp_path):
     assert proc.returncode == 0
     assert proc.stderr == "", proc.stderr
     assert BANNER in proc.stdout
-    assert "NOT registered" in proc.stdout
+    # The registry line, scoped — check_registry() quotes Wiring.describe()
+    # rather than composing a bare "NOT registered" (test_canon_guard_wired_check
+    # owns that wording; this test only needs the report to have reached it).
+    assert "is not registered in any" in proc.stdout
 
 
 def test_v_personal_root_outside_a_system_work_venue_is_byte_silent(tmp_path):

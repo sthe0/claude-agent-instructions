@@ -52,19 +52,26 @@ rather than read from a guess. (``self-diagnose.py`` does fall back to cwd; it
 enumerates candidate homes for a human-facing report, where a spurious path
 costs a line of output rather than a wrong causal claim.)
 
-Which of the two happened is not left to prose. ``Wiring.project_scope_covered``
+Which of these happened is not left to prose. ``Wiring.project_scope_covered``
 records it per probe: True when the variable named a root AND every project
-member was accounted for — parsed, or provably not on disk — and False when the
-variable is unset or a project member exists but could not be read. Callers
-that must not over-claim read that field instead of assuming; see
+member was accounted for — parsed into a shape this module models, or provably
+not on disk — and False otherwise. There are THREE ways to miss a project
+member, not two: the variable is unset, the member exists but will not parse,
+or it parses and then carries a settings shape ``_scan_settings`` does not
+model, whose entries are skipped unread. The third is the quiet one, and the
+reason the predicate is written over ``members_unmodelled`` as well as
+``members_unreadable``: that member IS opened, so a predicate asking only "did
+every project member parse" answers yes and certifies a scope the probe never
+reached. Callers that must not over-claim read that field instead of assuming; see
 ``dispatch_witness_snapshot.entry_for``, which derives the snapshot's
 ``scope_qualified`` from it, and ``Wiring.absence_scope``, which words an ABSENT
 answer to the scope it was actually established over.
 
 Consequently ABSENT is never a bare "not registered": it is either "not
 registered in any user-level settings member of <root>" or, once the project
-member has been read, "not registered in any settings member of <root>,
-project-level included".
+member has been read, "not registered in any settings member of <root> or of
+the project root <project root>, project-level included" — naming the second
+root because that is where the member the wider claim rests on actually lives.
 
 UNKNOWN is a first-class outcome, and the only safe answer under partial
 information: any member that is unreadable, or a settings shape this module
@@ -204,6 +211,16 @@ def managed_settings_path() -> Path:
     return Path("/etc/claude-code/managed-settings.json")
 
 
+def project_root() -> "Path | None":
+    """The root ``$CLAUDE_PROJECT_DIR`` names, or None when it named none.
+
+    None is what makes the project members unlocatable, and it is a different
+    answer from "there is no project settings file" — see § Chain membership.
+    """
+    named = os.environ.get(PROJECT_DIR_ENV, "").strip()
+    return Path(named).expanduser() if named else None
+
+
 def project_settings_chain() -> "list[Path]":
     """The project-level members, or [] when the harness named no project root.
 
@@ -212,11 +229,21 @@ def project_settings_chain() -> "list[Path]":
     ``Wiring.project_scope_covered``. See § Chain membership for why there is
     no cwd fallback.
     """
-    named = os.environ.get(PROJECT_DIR_ENV, "").strip()
-    if not named:
+    base = project_root()
+    if base is None:
         return []
-    base = Path(named).expanduser()
     return [base / ".claude" / "settings.json", base / ".claude" / "settings.local.json"]
+
+
+def _resolved(path: Path) -> Path:
+    """`path` with symlinks and `..` collapsed, or `path` unchanged when the
+    filesystem will not say. A comparison KEY only: every path this module
+    reports is the one the settings chain actually names, so a reader can find
+    it in the environment they configured."""
+    try:
+        return path.resolve()
+    except OSError:  # pragma: no cover - unresolvable path, compare the raw one
+        return path
 
 
 def settings_chain(root: Path | None = None) -> "list[Path]":
@@ -226,14 +253,24 @@ def settings_chain(root: Path | None = None) -> "list[Path]":
     paths whether or not they exist — a member that is simply absent is not
     evidence of anything, while one that exists but cannot be parsed is (it
     degrades the answer to UNKNOWN).
+
+    Deduplicated on the RESOLVED path, first spelling kept. The user-level and
+    project-level members are distinct files only while the two roots differ,
+    and on a ``~/.claude`` machine whose session project root is ``$HOME`` they
+    are the same two files named twice. A chain that lists them twice reads
+    every registration twice, and two copies of one entry are enough to make
+    ``duplicate_registration_note`` and ``runs_more_than_once`` report a hook
+    registered exactly once as wired more than once — a fabricated finding, on
+    the SessionStart banner.
     """
     base = root if root is not None else config_root.harness_config_root()
-    return [
+    chain = [
         base / "settings.json",
         base / "settings.local.json",
         managed_settings_path(),
         *project_settings_chain(),
     ]
+    return list({_resolved(member): member for member in chain}.values())
 
 
 @dataclass(frozen=True)
@@ -267,10 +304,20 @@ class Wiring:
     missing_script_paths: "list[str]" = field(default_factory=list)
     members_read: "list[Path]" = field(default_factory=list)
     members_unreadable: "list[Path]" = field(default_factory=list)
+    # Members that parsed as JSON objects and then carried a settings shape
+    # `_scan_settings` does not model. Kept apart from `members_unreadable`
+    # because the two look different to a human — this file opens fine — while
+    # meaning the same thing to every caller: its entries were skipped, so the
+    # member was not accounted for.
+    members_unmodelled: "list[Path]" = field(default_factory=list)
     # Did this probe reach the project-level members? Set by probe() from what
     # it actually read; the default is the honest one for a Wiring built by
     # hand, which reached nothing. See § Chain membership.
     project_scope_covered: bool = False
+    # The root $CLAUDE_PROJECT_DIR named at probe time, or None when it named
+    # none — so a covered answer can say WHERE the project members it reached
+    # live, which is not under `root`.
+    project_root: "Path | None" = None
 
     @property
     def wired(self) -> bool:
@@ -285,6 +332,17 @@ class Wiring:
         the members we could see" into "was never wired".
         """
         if self.project_scope_covered:
+            # Naming both roots, because the project member is NOT under
+            # `self.root` — it lives under whatever $CLAUDE_PROJECT_DIR named,
+            # and a sentence attributing it to the config root sends a reader
+            # looking for a file that is not there. (A hand-built Wiring can
+            # claim coverage without a root; it keeps the shorter sentence
+            # rather than printing "None".)
+            if self.project_root is not None:
+                return (
+                    f"any settings member of {self.root} or of the project root "
+                    f"{self.project_root}, project-level included"
+                )
             return f"any settings member of {self.root}, project-level included"
         return f"any user-level settings member of {self.root}"
 
@@ -302,7 +360,10 @@ class Wiring:
             return line
         if self.status == ABSENT:
             return f"{self.basename} is not registered in {self.absence_scope()}"
-        why = ", ".join(str(p) for p in self.members_unreadable) or "unmodelled settings shape"
+        why = ", ".join(
+            [f"could not be read: {p}" for p in self.members_unreadable]
+            + [f"settings shape not modelled: {p}" for p in self.members_unmodelled]
+        ) or "no settings member could be read and modelled"
         return (
             f"whether {self.basename} is registered in {self.root} cannot be "
             f"determined ({why})"
@@ -402,15 +463,18 @@ def probe(basename: str, root: Path | None = None) -> Wiring:
     none mentioned it. Anything else is UNKNOWN.
 
     Orthogonal to that verdict, the answer records how far it reached on
-    ``project_scope_covered``. Two different things can make a probe miss the
-    project members — the harness never named a project root, or it named one
-    whose settings file could not be parsed — and both leave the answer
-    qualified, so the field is computed from what the read actually achieved
-    rather than from whether the chain contained the paths.
+    ``project_scope_covered``. THREE different things can make a probe miss the
+    project members — the harness never named a project root, it named one
+    whose settings file could not be parsed, or that file parsed into a shape
+    this module does not model — and all three leave the answer qualified, so
+    the field is computed from what the read actually achieved rather than from
+    whether the chain contained the paths.
     """
     base = root if root is not None else config_root.harness_config_root()
     project_members = project_settings_chain()
-    result = Wiring(basename=basename, root=base, status=UNKNOWN)
+    result = Wiring(
+        basename=basename, root=base, status=UNKNOWN, project_root=project_root()
+    )
     modelled = True
     for member in settings_chain(base):
         if not member.is_file():
@@ -428,14 +492,24 @@ def probe(basename: str, root: Path | None = None) -> Wiring:
         result.members_read.append(member)
         found, registrations, member_modelled = _scan_settings(data, basename, member)
         modelled = modelled and member_modelled
+        if not member_modelled:
+            result.members_unmodelled.append(member)
         result.registrations.extend(registrations)
         for event, cmds in found.items():
             result.events.setdefault(event, []).extend(cmds)
 
     # A project member that is not on disk WAS accounted for — there is nothing
-    # there to register the hook — while one that could not be parsed was not.
+    # there to register the hook. Anything the probe opened and could not turn
+    # into entries was not, whether it failed at the JSON or at the shape, so
+    # BOTH miss-lists feed the predicate. Reading only `members_unreadable`
+    # here is worse than not reading the member at all: the unmodelled file
+    # gets opened, skipped, and then certified as covered.
+    missed = {
+        _resolved(member)
+        for member in (*result.members_unreadable, *result.members_unmodelled)
+    }
     result.project_scope_covered = bool(project_members) and not any(
-        member in result.members_unreadable for member in project_members
+        _resolved(member) in missed for member in project_members
     )
 
     if result.events:

@@ -45,10 +45,18 @@ failure can name them.
 
 The field is DERIVED, not declared. ``entry_for`` reads
 ``Wiring.project_scope_covered`` — the probe's own record of what it reached —
-so a document cannot carry ``scope_qualified: false`` beside a ``members_read``
-list holding nothing but user-level files. The earlier shape took the answer
-from a caller keyword, which no reader could cross-check and no writer had
-grounds to set.
+so the field cannot disagree with what the probe actually did. The earlier
+shape took the answer from a caller keyword, which no reader could cross-check
+and no writer had grounds to set.
+
+What that does NOT license is cross-checking ``scope_qualified`` against
+``members_read``. The two answer different questions, and an unqualified entry
+whose ``members_read`` names only user-level files is the ORDINARY case, not a
+corrupt one: a named project root whose ``.claude/settings.json`` is simply not
+on disk is fully accounted for — there is nothing there to register a hook —
+and appears nowhere in a list of files that were read. ``members_read`` is
+evidence of what the claim rests on, for naming the files in a refusal; it is
+not a proxy for how far the probe reached.
 
 There is no v1 compatibility path on purpose. A v1 file carries no scope
 information at all, so it cannot be upgraded — only guessed at — and the
@@ -97,8 +105,9 @@ def entry_for(wiring: hook_wiring.Wiring) -> dict:
     return {
         "status": wiring.status,
         "timeout": old_timeout(wiring) if wiring.wired else None,
-        # Read off the probe's own record of how far it reached, so the field
-        # cannot disagree with the members_read beside it.
+        # Read off the probe's own record of how far it reached — not inferred
+        # from members_read, which an accounted-for-but-absent project member
+        # never appears in. See the module docstring.
         "scope_qualified": not wiring.project_scope_covered,
         "members_read": [str(member) for member in wiring.members_read],
     }
