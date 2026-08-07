@@ -28,31 +28,22 @@ A record counts as evidence only if all three filters pass:
 
 Then, per hook, judged against THAT hook's own old limit from the snapshot:
 
-  * old registration ABSENT — the hook was not registered at all before, so
-    any in-window line of its own is already new evidence;
+  * old registration ABSENT and the snapshot states that absence was
+    established over the FULL settings scope — the hook was not registered at
+    all before, so any in-window line of its own is already new evidence;
+  * old registration ABSENT but the absence is QUALIFIED (the usual case: the
+    probe could not read project-level settings) — fail closed, because "not
+    registered in the members we could read" does not license the conclusion
+    "any execution is new";
   * old registration WIRED with a numeric timeout — a call must be recorded
     lasting LONGER than that timeout, since the old harness would have killed
     the process first;
   * anything else (unknown status, wired with no timeout key, hook missing
     from the snapshot, unrecognised status string) — fail closed.
 
-Snapshot schema, written by the wiring-capture step and read here
-(``dispatch-witness-old-wiring/v1``):
-
-    {
-      "schema": "dispatch-witness-old-wiring/v1",
-      "hooks": {
-        "hook-turn-end-gate.py":  {"status": "wired",   "timeout": 5},
-        "hook-...-gate.py":       {"status": "absent",  "timeout": null},
-        "hook-...-gate.py":       {"status": "unknown", "timeout": null}
-      }
-    }
-
-``timeout`` is a number or an explicit null; ``status`` carries one of
-lib/hook_wiring.py's three probe outcomes verbatim. Both fields are needed:
-a bare null cannot tell "was never registered" (so any execution is new)
-apart from "could not be determined" (so nothing may be concluded), and
-collapsing them would read every unknown as the permissive case.
+The snapshot is written and validated by lib/dispatch_witness_snapshot.py,
+which owns the schema so the capture step and this reader cannot drift apart;
+its module docstring carries the shape and the reason for each field.
 
 The live session id comes from exactly one of two places, and never from a
 default: --session-id names it outright, --session-from-env reads it from the
@@ -72,18 +63,19 @@ Exit status: 0 when the witness holds, 1 when it does not.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import dispatch_witness_snapshot  # noqa: E402
 from lib import hook_wiring  # noqa: E402
 from lib import judge_latency  # noqa: E402
 from lib import judge_ledger  # noqa: E402
 
-SNAPSHOT_SCHEMA = "dispatch-witness-old-wiring/v1"
+SNAPSHOT_SCHEMA = dispatch_witness_snapshot.SNAPSHOT_SCHEMA
+load_snapshot = dispatch_witness_snapshot.load_snapshot
 
 # The harness exports the live session id under this name, and only this one.
 # scripts/spawn-specialist.py, hooks/hook-scope-track.py and
@@ -114,31 +106,6 @@ class HookVerdict:
     witnessed: bool
     blocking: bool
     detail: str
-
-
-def load_snapshot(path: Path) -> "tuple[dict | None, str]":
-    """Return (hooks map, error). A missing, unreadable, malformed or
-    wrong-schema snapshot yields (None, reason) — never an empty map, which a
-    caller could mistake for "no hooks to check"."""
-    try:
-        raw = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
-        return None, f"old-wiring snapshot unreadable: {exc}"
-    try:
-        data = json.loads(raw)
-    except ValueError as exc:
-        return None, f"old-wiring snapshot is not valid JSON: {exc}"
-    if not isinstance(data, dict):
-        return None, "old-wiring snapshot is not a JSON object"
-    if data.get("schema") != SNAPSHOT_SCHEMA:
-        return None, (
-            f"old-wiring snapshot schema is {data.get('schema')!r}, "
-            f"expected {SNAPSHOT_SCHEMA!r}"
-        )
-    hooks = data.get("hooks")
-    if not isinstance(hooks, dict):
-        return None, "old-wiring snapshot has no 'hooks' object"
-    return hooks, ""
 
 
 def stamp_cutoff(path: Path) -> "tuple[float | None, str]":
@@ -185,6 +152,12 @@ def longest_call(records: "list[dict]") -> "float | None":
 def judge_hook(
     basename: str, entry, records: "list[dict]", cutoff: float, session_id: str
 ) -> HookVerdict:
+    # Unreachable while WITNESSED_BASENAMES and HOOK_NAME_BY_BASENAME are both
+    # derived from the same hook set — and kept anyway, because it is the only
+    # thing standing between a future fourth hook added to one table but not
+    # the other and a witness quietly filtering records on `hook == None`,
+    # which matches nothing and reads as "silent". Indexing the map directly
+    # instead would turn that drift into a KeyError crash mid-verification.
     hook_name = judge_ledger.HOOK_NAME_BY_BASENAME.get(basename)
     if hook_name is None:
         return HookVerdict(
@@ -210,11 +183,23 @@ def judge_hook(
     evidence = evidence_for(records, hook_name, cutoff, session_id)
 
     if status == hook_wiring.ABSENT:
+        if entry.get("scope_qualified"):
+            members = entry.get("members_read")
+            read = len(members) if isinstance(members, list) else 0
+            return HookVerdict(
+                basename, False, True,
+                f"the old registration was absent only from the {read} settings "
+                f"members the capture step could read — project-level settings "
+                f"were not among them, so 'was never wired' is not established "
+                f"and no line of its own can be called new evidence",
+            )
         if evidence:
             return HookVerdict(
                 basename, True, False,
-                f"was not registered before; {len(evidence)} in-window ledger "
-                f"records prove it runs now",
+                f"was not registered before, over the full settings scope; "
+                f"{len(evidence)} in-window ledger records show the harness "
+                f"dispatching it under the new wiring — dispatch only; nothing "
+                f"here shows it outlived its new limit",
             )
         return HookVerdict(
             basename, False, False, "was not registered before, and has not run yet"
@@ -261,7 +246,19 @@ def check(
     for verdict in verdicts:
         mark = "WITNESSED" if verdict.witnessed else ("UNKNOWN" if verdict.blocking else "silent")
         lines.append(f"  [{mark:>10}] {verdict.basename}: {verdict.detail}")
-    if any(v.blocking for v in verdicts):
+    # The writer emits exactly the hooks it was given, and the capture step is
+    # given WITNESSED_BASENAMES — so a name outside that set means the snapshot
+    # and this script disagree about which hooks are being witnessed. Ignoring
+    # it silently is how "3 of 3 witnessed" gets printed for a snapshot that
+    # describes a fourth hook nobody looked at.
+    unexpected = sorted(set(hooks) - set(WITNESSED_BASENAMES))
+    if unexpected:
+        lines.append(
+            f"  [{'UNKNOWN':>10}] snapshot describes hooks this script does not "
+            f"witness ({', '.join(unexpected)}) — the two disagree about the "
+            f"hook set, so neither can be trusted about coverage"
+        )
+    if unexpected or any(v.blocking for v in verdicts):
         lines.append("Result: FAILED — at least one hook could not be reasoned about.")
         return False, lines
     witnessed = [v for v in verdicts if v.witnessed]
@@ -329,11 +326,21 @@ def main(argv: "list[str] | None" = None) -> int:
         lines.append("Result: FAILED — the witness cannot be evaluated.")
         print("\n".join(lines))
         return 1
-    # read_records resolves None to the configured ledger itself, so the
-    # default needs no separate resolution here.
-    records = judge_ledger.read_records(args.ledger)
+    # read_ledger resolves None to the configured ledger itself, so the
+    # default needs no separate resolution here. Its error and dropped-line
+    # counts are reported rather than swallowed: the verdict below would fail
+    # closed either way, but "no hook produced a witness" and "the ledger could
+    # not be read" call for different next steps.
+    read = judge_ledger.read_ledger(args.ledger)
+    if read.error and not read.missing:
+        lines.append(f"  ledger could not be read: {read.error}")
+    if read.dropped_lines:
+        lines.append(
+            f"  {read.dropped_lines} malformed ledger lines were skipped; a "
+            f"witness may have been among them"
+        )
     ok, verdict_lines = check(
-        records, hooks, cutoff, session_id, require_all=args.require_all
+        read.records, hooks, cutoff, session_id, require_all=args.require_all
     )
     print("\n".join(lines + verdict_lines))
     return 0 if ok else 1

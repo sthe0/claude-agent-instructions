@@ -123,11 +123,27 @@ NO_CALL_STAGES = {
     "no_text": "no text to judge",
 }
 
-# A hook invocation that reached `emitted` normally is not one of the declared
-# outcomes — it is the healthy case. It also absorbs the benign shape of a `final`
-# carrying no directive with no `emitted` after it: the hook died having
-# decided there was nothing to deliver, which changed no outcome.
-RESIDUAL_LABEL = "completed and delivered"
+# Three invocation shapes that are not declared outcomes. They are NOT one
+# bucket, because only the first of them is good news, and a single permissive
+# label over all three is how an invocation killed mid-flight printed as
+# "completed and delivered" while the verdict read HEALTHY.
+#
+# The one shape that earns the word "delivered" is an `emitted` line saying the
+# delivery step ran and did not raise. Everything short of that is either a
+# declared outcome or one of the two labels below.
+INVOCATION_COMPLETED = "completed"
+INVOCATION_KILLED_IN_CALL = "killed_in_call"
+INVOCATION_UNCLASSIFIED = "unclassified"
+
+COMPLETED_LABEL = "completed and delivered"
+# Already counted at the judge level, so this line names the invocation
+# WITHOUT adding a second count: outcome 6 is the kill, and it is recorded
+# against the judge whose call was running when the harness fired.
+KILLED_IN_CALL_LABEL = (
+    "killed during a judge call — counted as outcome 6 at the judge level, "
+    "not again here"
+)
+UNCLASSIFIED_LABEL = "shape the taxonomy does not cover — unclassifiable"
 
 # Above this the whole-file read stops being free and the operator should
 # truncate or archive. See scripts/README.md § Judge execution ledger for why
@@ -221,16 +237,37 @@ def classify_decided(record: dict) -> "str | None":
     return None
 
 
+def unpaired_started(records: "list[dict]") -> "tuple[dict[str, int], list[str]]":
+    """Per judge, how many `started` lines this invocation never closed with a
+    `call`, plus the reverse complaint.
+
+    A `started` with no `call` after it is a process killed mid-subprocess:
+    subprocess_runner writes `started` immediately before the call and exactly
+    one `call` on each of its three exits, so the only way to lose the pair is
+    to die in between. Both the judge-level classifier (which turns each leftover
+    into outcome 6) and the invocation-level one (which must not call such an
+    invocation completed) need this answer, and they must agree on it — so it is
+    computed here once instead of twice."""
+    pending: "dict[str, int]" = defaultdict(int)
+    complaints: "list[str]" = []
+    for record in records:
+        kind = record.get("kind")
+        judge = _text(record.get("judge"), UNATTRIBUTED)
+        if kind == "started":
+            pending[judge] += 1
+        elif kind == "call":
+            if pending[judge] > 0:
+                pending[judge] -= 1
+            else:
+                complaints.append(f"call line with no preceding started: judge={judge}")
+    return {judge: count for judge, count in pending.items() if count > 0}, complaints
+
+
 def classify_judge_points(records: "list[dict]") -> "tuple[list[JudgePoint], list[str]]":
     """Every judge-level outcome inside one invocation's records."""
     hook = _hook_of(records)
     points: "list[JudgePoint]" = []
     complaints: "list[str]" = []
-    # A `started` with no `call` after it is a process killed mid-subprocess:
-    # subprocess_runner writes `started` immediately before the call and
-    # exactly one `call` on each of its three exits, so the only way to lose
-    # the pair is to die in between.
-    pending_started: "dict[str, int]" = defaultdict(int)
     for record in records:
         kind = record.get("kind")
         judge = _text(record.get("judge"), UNATTRIBUTED)
@@ -247,42 +284,51 @@ def classify_judge_points(records: "list[dict]") -> "tuple[list[JudgePoint], lis
                 continue
             duration = _number(record.get("duration"))
             points.append(JudgePoint(hook, judge, outcome_id, duration))
-        elif kind == "started":
-            pending_started[judge] += 1
-        elif kind == "call":
-            if pending_started[judge] > 0:
-                pending_started[judge] -= 1
-            else:
-                complaints.append(f"call line with no preceding started: judge={judge}")
-    for judge, count in pending_started.items():
+    pending, pairing_complaints = unpaired_started(records)
+    complaints.extend(pairing_complaints)
+    for judge, count in pending.items():
         for _ in range(count):
             points.append(JudgePoint(hook, judge, "6", None))
     return points, complaints
 
 
 def classify_invocation(records: "list[dict]") -> "str | None":
-    """The invocation-level outcome of one hook process, or None when the
-    records are not a hook invocation (an engine-path judge call has no
-    hook_start) or when it completed and delivered.
+    """How one hook process ended: a declared outcome id, one of the three
+    INVOCATION_* labels above, or None when these records are not a hook
+    invocation at all (an engine-path judge call writes no hook_start).
 
     The branches are a PRIORITY ladder, not independent tests, so every
     invocation lands in exactly one bucket: an invocation that both discarded
-    and failed to emit is counted once, under the earlier cause."""
+    and failed to emit is counted once, under the earlier cause.
+
+    The discriminator for outcome 10 is an unpaired `decided` — a verdict was
+    rendered and no `emitted` line followed it. `final(has_directive=True)`
+    refines that (a hook can produce a directive with no judge decision point
+    behind it) but cannot be the sole gate: `final` is written after decide()
+    RETURNS, so an invocation killed between its last `decided` and that
+    return has no `final` at all, and gating on one filed the whole shape as
+    the healthy case."""
     kinds = [record.get("kind") for record in records]
     if "hook_start" not in kinds:
         return None
     if "discarded" in kinds:
         return "8"
     emitted = [r for r in records if r.get("kind") == "emitted"]
-    if any(r.get("ok") is False for r in emitted):
-        return "9"
-    if not emitted:
-        finals = [r for r in records if r.get("kind") == "final"]
-        if any(r.get("has_directive") is True for r in finals):
-            return "10"
-        if not finals and "decided" not in kinds and "started" not in kinds:
-            return "11"
-    return None
+    if emitted:
+        if any(r.get("ok") is False for r in emitted):
+            return "9"
+        if all(r.get("ok") is True for r in emitted):
+            return INVOCATION_COMPLETED
+        # An `emitted` whose `ok` is neither True nor False — a truncated or
+        # hand-written line. It says the delivery step was reached and nothing
+        # about whether it worked, which is not a claim of completion.
+        return INVOCATION_UNCLASSIFIED
+    finals = [r for r in records if r.get("kind") == "final"]
+    if "decided" in kinds or any(r.get("has_directive") is True for r in finals):
+        return "10"
+    if unpaired_started(records)[0]:
+        return INVOCATION_KILLED_IN_CALL
+    return "11"
 
 
 @dataclass
@@ -295,9 +341,14 @@ class Tally:
     invocation_count: int = 0
     judge_points: "list[JudgePoint]" = field(default_factory=list)
     invocation_outcomes: "list[tuple[str, str]]" = field(default_factory=list)  # (hook, id)
+    completed: "dict[str, int]" = field(default_factory=lambda: defaultdict(int))
+    killed_in_call: "dict[str, int]" = field(default_factory=lambda: defaultdict(int))
     residual: "dict[str, int]" = field(default_factory=lambda: defaultdict(int))
     no_call_stages: "dict[str, int]" = field(default_factory=lambda: defaultdict(int))
     complaints: "list[str]" = field(default_factory=list)
+    dropped_lines: int = 0
+    read_error: str = ""
+    missing: bool = False
 
     def counts_by_outcome(self) -> "dict[str, int]":
         counts: "dict[str, int]" = {outcome.id: 0 for outcome in OUTCOMES}
@@ -306,6 +357,18 @@ class Tally:
         for _hook, outcome_id in self.invocation_outcomes:
             counts[outcome_id] += 1
         return counts
+
+    def level_totals(self, level: str) -> "tuple[int, int]":
+        """(recorded, fail-open) restricted to ONE granularity.
+
+        The two levels are never summed. One hook invocation can hold several
+        judge decision points, so a combined total counts the same allowed turn
+        once per judge and once more for the process that wrapped them — a
+        number that overstates the surface and belongs to no population."""
+        counts = self.counts_by_outcome()
+        recorded = sum(counts[o.id] for o in OUTCOMES if o.level == level)
+        fail_open = sum(counts[o.id] for o in FAIL_OPEN_OUTCOMES if o.level == level)
+        return recorded, fail_open
 
     def durations_by_judge(self) -> "dict[str, list[float]]":
         """The pinned population, split by judge. The single place the
@@ -325,9 +388,20 @@ class Tally:
         ]
 
 
-def tally(records: "list[dict]", ledger_path: Path) -> Tally:
+def tally(read: "judge_ledger.LedgerRead", ledger_path: Path) -> Tally:
+    """Count one READ of the ledger, not one list of records: whether the file
+    was readable at all, and how many of its lines the reader had to skip, are
+    part of what the report has to say — a shorter list is otherwise
+    indistinguishable from a quieter machine."""
+    records = read.records
     groups, unbound = group_by_invocation(records)
-    result = Tally(ledger_path=ledger_path, record_count=len(records))
+    result = Tally(
+        ledger_path=ledger_path,
+        record_count=len(records),
+        dropped_lines=read.dropped_lines,
+        read_error=read.error,
+        missing=read.missing,
+    )
     try:
         result.size_bytes = ledger_path.stat().st_size
     except OSError:
@@ -340,12 +414,16 @@ def tally(records: "list[dict]", ledger_path: Path) -> Tally:
         hook = _hook_of(invocation_records)
         outcome_id = classify_invocation(invocation_records)
         if outcome_id is None:
-            if any(r.get("kind") == "hook_start" for r in invocation_records):
-                result.invocation_count += 1
-                result.residual[hook] += 1
             continue
         result.invocation_count += 1
-        result.invocation_outcomes.append((hook, outcome_id))
+        if outcome_id == INVOCATION_COMPLETED:
+            result.completed[hook] += 1
+        elif outcome_id == INVOCATION_KILLED_IN_CALL:
+            result.killed_in_call[hook] += 1
+        elif outcome_id == INVOCATION_UNCLASSIFIED:
+            result.residual[hook] += 1
+        else:
+            result.invocation_outcomes.append((hook, outcome_id))
     for record in records:
         if record.get("kind") == "decided" and record.get("stage") in NO_CALL_STAGES:
             result.no_call_stages[record["stage"]] += 1
@@ -385,12 +463,19 @@ def format_taxonomy(result: Tally) -> "list[str]":
 
 def format_fail_open(result: Tally) -> "list[str]":
     counts = result.counts_by_outcome()
-    total = sum(counts[o.id] for o in FAIL_OPEN_OUTCOMES)
     seen = sum(1 for o in FAIL_OPEN_OUTCOMES if counts[o.id])
+    judge_recorded, judge_fail_open = result.level_totals(LEVEL_JUDGE)
+    inv_recorded, inv_fail_open = result.level_totals(LEVEL_INVOCATION)
     return [
         f"Fail-open: {len(FAIL_OPEN_OUTCOMES)} of the {len(OUTCOMES)} declared outcomes "
         f"let a turn through with no judgement behind it.",
-        f"  {total} such outcomes recorded here, across {seen} distinct reasons.",
+        f"  judge decision points: {judge_fail_open} fail-open of "
+        f"{judge_recorded} recorded",
+        f"  hook invocations:      {inv_fail_open} fail-open of "
+        f"{inv_recorded} recorded",
+        "  The two are reported separately and never added: one invocation holds "
+        "several judge decision points, so a sum counts the same allowed turn twice.",
+        f"  {seen} distinct fail-open reasons appear here.",
     ]
 
 
@@ -419,7 +504,10 @@ def format_by_invocation(result: Tally) -> "list[str]":
     grouped: "dict[str, dict[str, int]]" = defaultdict(lambda: defaultdict(int))
     for hook, outcome_id in result.invocation_outcomes:
         grouped[hook][outcome_id] += 1
-    hooks = sorted(set(grouped) | set(result.residual))
+    hooks = sorted(
+        set(grouped) | set(result.completed) | set(result.killed_in_call)
+        | set(result.residual)
+    )
     lines = ["Hook invocations, by hook:"]
     if not hooks:
         lines.append("  (none recorded)")
@@ -430,8 +518,13 @@ def format_by_invocation(result: Tally) -> "list[str]":
             count = grouped.get(hook, {}).get(outcome.id)
             if count:
                 lines.append(f"    ({outcome.id}) {outcome.label}: {count}")
-        if result.residual.get(hook):
-            lines.append(f"    {RESIDUAL_LABEL}: {result.residual[hook]}")
+        for bucket, label in (
+            (result.completed, COMPLETED_LABEL),
+            (result.killed_in_call, KILLED_IN_CALL_LABEL),
+            (result.residual, UNCLASSIFIED_LABEL),
+        ):
+            if bucket.get(hook):
+                lines.append(f"    {label}: {bucket[hook]}")
     return lines
 
 
@@ -461,15 +554,35 @@ def format_durations(result: Tally) -> "list[str]":
     return lines
 
 
+def _plural(count: int, noun: str) -> str:
+    """The verdict line is the one sentence an operator reads, and "1 fail-open
+    judge decision points" reads as a template rather than a finding."""
+    return noun if count == 1 else noun + "s"
+
+
 def format_verdict(result: Tally) -> "list[str]":
     """One line a reader can act on.
 
     There is no tolerance band between HEALTHY and DEGRADED on purpose: any
     "acceptable" fail-open share would be a number nobody has measured, and
     the breakdown above already says how bad it is."""
+    if result.missing:
+        return [
+            "Verdict: NO DATA — no ledger file exists at this path; no hook has "
+            "written to it."
+        ]
+    if result.read_error:
+        # NOT "empty". An unreadable ledger is the one state in which this
+        # report knows nothing, and printing it as a clean sheet would make a
+        # permissions or I/O fault read as a quiet machine.
+        return [
+            f"Verdict: UNKNOWN — the ledger could not be read ({result.read_error}); "
+            f"nothing below speaks for what the judges did."
+        ]
     counts = result.counts_by_outcome()
     honest = counts["4"]
-    fail_open = sum(counts[o.id] for o in FAIL_OPEN_OUTCOMES)
+    _judge_recorded, judge_fail_open = result.level_totals(LEVEL_JUDGE)
+    _inv_recorded, inv_fail_open = result.level_totals(LEVEL_INVOCATION)
     if not result.record_count:
         return ["Verdict: NO DATA — the ledger is empty; no hook has written to it."]
     if honest == 0:
@@ -477,11 +590,13 @@ def format_verdict(result: Tally) -> "list[str]":
             "Verdict: NOT RUNNING — no judge call in this ledger reached an honest "
             "verdict. Every gate that consulted a judge allowed its turn unjudged."
         ]
-    if fail_open == 0:
+    if judge_fail_open == 0 and inv_fail_open == 0:
         return [f"Verdict: HEALTHY — {honest} honest verdicts, no fail-open outcome."]
     return [
-        f"Verdict: DEGRADED — {honest} honest verdicts alongside {fail_open} "
-        f"fail-open outcomes."
+        f"Verdict: DEGRADED — {honest} honest verdicts alongside {judge_fail_open} "
+        f"fail-open judge decision {_plural(judge_fail_open, 'point')} and "
+        f"{inv_fail_open} fail-open hook "
+        f"{_plural(inv_fail_open, 'invocation')}."
     ]
 
 
@@ -515,6 +630,13 @@ def format_report(result: Tally) -> "list[str]":
         )
         for complaint in result.complaints:
             lines.append(f"  {complaint}")
+    if result.dropped_lines:
+        lines.append("")
+        lines.append(
+            f"Malformed ledger lines skipped by the reader ({result.dropped_lines}) — "
+            f"torn or non-JSON, so they never reached the counts above; every total "
+            f"here speaks for the surviving lines only."
+        )
     lines.append("")
     lines.extend(format_verdict(result))
     return lines
@@ -534,8 +656,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: "list[str] | None" = None) -> int:
     args = build_parser().parse_args(argv)
     path = args.ledger if args.ledger is not None else judge_ledger.ledger_path()
-    records = judge_ledger.read_records(path)
-    print("\n".join(format_report(tally(records, path))))
+    read = judge_ledger.read_ledger(path)
+    print("\n".join(format_report(tally(read, path))))
     return 0
 
 

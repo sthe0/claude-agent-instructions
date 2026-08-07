@@ -76,7 +76,7 @@ def _tally(tmp_path, records):
     path = _write_ledger(tmp_path, records)
     from lib import judge_ledger
 
-    return mod.tally(judge_ledger.read_records(path), path)
+    return mod.tally(judge_ledger.read_ledger(path), path)
 
 
 # One minimal fixture per OBSERVABLE outcome. Outcome 1 is deliberately absent:
@@ -116,13 +116,23 @@ def test_declared_taxonomy_and_fail_open_subset_agree():
     assert {o.id for o in mod.OUTCOMES if o.fail_open} == all_ids - mod.NOT_FAIL_OPEN_IDS
 
 
-def test_dead_taxonomy_counts_are_not_written_into_the_source():
-    """Earlier drafts of this taxonomy had four fail-open reasons, then nine.
-    Both numbers outlived the taxonomies that justified them, which is exactly
-    how a report ends up under-reporting while looking authoritative."""
-    text = (SCRIPTS / "judge-usage-report.py").read_text(encoding="utf-8").lower()
-    assert "four" not in text
-    assert "nine" not in text
+def test_the_printed_fail_open_headline_moves_with_the_taxonomy(monkeypatch, tmp_path):
+    """Earlier drafts of this taxonomy had two different fail-open counts spelt
+    out in the prose, and both outlived the taxonomy that justified them —
+    which is exactly how a report ends up under-reporting while looking
+    authoritative. Scanning the source for those two dead words only ever
+    caught the words; what has to hold is that the printed sentence is DERIVED,
+    so grow the taxonomy by one row and watch the headline follow."""
+    result = _tally(tmp_path, [])
+    before = "\n".join(mod.format_fail_open(result))
+    assert f"{len(mod.FAIL_OPEN_OUTCOMES)} of the {len(mod.OUTCOMES)}" in before
+
+    extra = mod.Outcome("12", "an outcome nobody has met yet", mod.LEVEL_JUDGE, True)
+    monkeypatch.setattr(mod, "OUTCOMES", mod.OUTCOMES + (extra,))
+    monkeypatch.setattr(mod, "FAIL_OPEN_OUTCOMES", mod.FAIL_OPEN_OUTCOMES + (extra,))
+    after = "\n".join(mod.format_fail_open(result))
+    assert f"{len(mod.FAIL_OPEN_OUTCOMES)} of the {len(mod.OUTCOMES)}" in after
+    assert after != before
 
 
 def test_every_observable_outcome_is_reachable_and_no_other():
@@ -202,6 +212,86 @@ def test_duration_population_is_pinned_to_the_completed_and_timed_out_calls(tmp_
     assert judge_latency.median(everything) != judge_latency.median(population)
 
 
+def test_a_verdict_rendered_and_never_emitted_is_not_reported_as_delivered(tmp_path):
+    """The shape the whole ledger exists to catch, driven end to end: the hook
+    judged, and the harness killed it before the answer left the process. Every
+    line of it looks healthy in isolation — an honest verdict, a completed
+    call — so the report is the only place the loss can show, and it must show
+    in the VERDICT, not merely in a bucket count.
+
+    Gating outcome 10 on a `final` line filed this shape as "completed and
+    delivered" and printed HEALTHY over it: `final` is written after decide()
+    returns, and this process never got there."""
+    records = []
+    for index in range(3):
+        invocation = f"killed{index}"
+        records.extend([
+            _record("hook_start", invocation),
+            _record("entered", invocation, judge="feedback_signal", prefilter_fired=True),
+            _record("started", invocation, judge="feedback_signal"),
+            _record("call", invocation, judge="feedback_signal", timed_out=False,
+                    duration=6.0, returncode=0, raised=None),
+            _decided(invocation, reason="", duration=6.0),
+        ])
+    result = _tally(tmp_path, records)
+    text = "\n".join(mod.format_report(result))
+
+    assert result.counts_by_outcome()["10"] == 3
+    assert not result.completed
+    assert mod.COMPLETED_LABEL not in text
+    assert "Verdict: DEGRADED" in text
+    assert "HEALTHY" not in text
+    # The judge level is untouched by the invocation-level loss, and the two
+    # are reported apart rather than as one total.
+    assert result.level_totals(mod.LEVEL_JUDGE) == (3, 0)
+    assert result.level_totals(mod.LEVEL_INVOCATION) == (3, 3)
+
+
+def test_only_a_successful_emission_is_reported_as_delivered(tmp_path):
+    """One invocation per rung of the invocation-level ladder, judged by what
+    the report PRINTS about each. Only the last of them may wear the word
+    "delivered"; the two that are not declared outcomes must say what they are
+    instead of borrowing the healthy label."""
+    def invocation(name, *tail):
+        return [_record("hook_start", name), *tail]
+
+    shapes = {
+        "8": invocation("v8", _record("discarded", "v8", reason="boom")),
+        "9": invocation("v9", _record("emitted", "v9", ok=False, had_directive=True)),
+        "10": invocation("v10", _decided("v10", reason="", duration=1.0)),
+        "11": invocation("v11"),
+    }
+    for outcome_id, records in shapes.items():
+        result = _tally(tmp_path, records)
+        assert result.counts_by_outcome()[outcome_id] == 1, outcome_id
+        assert not result.completed and not result.killed_in_call, outcome_id
+        assert result.invocation_count == 1, outcome_id
+
+    # Killed mid-call: an unpaired `started` with no verdict behind it. It is
+    # NOT an invocation-level outcome — the kill is already outcome 6, counted
+    # once, against the judge whose call was running.
+    killed = invocation("vk", _record("started", "vk", judge="feedback_signal"))
+    result = _tally(tmp_path, killed)
+    assert result.counts_by_outcome()["6"] == 1
+    assert sum(result.counts_by_outcome()[o.id] for o in mod.OUTCOMES
+               if o.level == mod.LEVEL_INVOCATION) == 0
+    assert dict(result.killed_in_call) == {"turn_end": 1}
+    text = "\n".join(mod.format_report(result))
+    assert mod.KILLED_IN_CALL_LABEL in text
+    assert mod.COMPLETED_LABEL not in text
+
+    # And the one shape that earns it.
+    delivered = invocation(
+        "vd",
+        _decided("vd", reason="", duration=1.0),
+        _record("final", "vd", has_directive=False),
+        _record("emitted", "vd", ok=True, had_directive=False),
+    )
+    result = _tally(tmp_path, delivered)
+    assert dict(result.completed) == {"turn_end": 1}
+    assert mod.COMPLETED_LABEL in "\n".join(mod.format_report(result))
+
+
 def test_an_invitation_level_outcome_does_not_double_count_its_own_calls(tmp_path):
     """One invocation judged three times and then threw its verdicts away. The
     discard is one invocation-level outcome over three judge-level ones — it
@@ -209,16 +299,29 @@ def test_an_invitation_level_outcome_does_not_double_count_its_own_calls(tmp_pat
     records = [
         _record("hook_start", "multi"),
         _decided("multi", judge="feedback_signal", reason="", duration=2.0),
-        _decided("multi", judge="binary_ask", reason="", duration=2.0),
+        _decided("multi", judge="binary_ask", timed_out=True,
+                 reason="judge timed out (fail-open)", duration=30.0),
         _decided("multi", judge="outage_escalation", reason="", duration=2.0),
         _record("discarded", "multi", reason="RuntimeError()"),
     ]
     result = _tally(tmp_path, records)
     assert len(result.durations()) == 3
     counts = result.counts_by_outcome()
-    assert counts["4"] == 3
+    assert counts["4"] == 2
+    assert counts["5"] == 1
     assert counts["8"] == 1
     assert result.invocation_count == 1
+
+    # The two granularities are reported apart, and the verdict is where that
+    # has to be visible: summing them prints "2 fail-open" for a single allowed
+    # turn that failed open once, counted once per level.
+    assert result.level_totals(mod.LEVEL_JUDGE) == (3, 1)
+    assert result.level_totals(mod.LEVEL_INVOCATION) == (1, 1)
+    verdict = "\n".join(mod.format_verdict(result))
+    assert verdict == (
+        "Verdict: DEGRADED — 2 honest verdicts alongside 1 fail-open judge "
+        "decision point and 1 fail-open hook invocation."
+    )
 
 
 def test_interleaved_invocations_are_bound_by_id_not_by_line_order(tmp_path):
@@ -314,6 +417,58 @@ def test_main_renders_the_whole_report_through_the_cli(tmp_path, capsys):
         assert f"({outcome.id})" in out
     assert "turn_end / feedback_signal" in out
     assert "Verdict: HEALTHY" in out
+
+
+def test_a_torn_line_is_counted_rather_than_silently_dropped(tmp_path):
+    """A partial write leaves one unparseable line. Skipping it is right — one
+    bad line must not hide every other — but skipping it SILENTLY makes
+    `record_count` the count of survivors while the report presents it as the
+    ledger. The reader has to say how much of the file it is speaking for."""
+    from lib import judge_ledger
+
+    path = tmp_path / "judge-usage-ledger.jsonl"
+    good = _record("hook_start", "t1")
+    path.write_text(
+        json.dumps(good, sort_keys=True) + "\n" + '{"kind": "decid\n' + "[]\n",
+        encoding="utf-8",
+    )
+    read = judge_ledger.read_ledger(path)
+    assert len(read.records) == 1
+    assert read.dropped_lines == 2
+
+    result = mod.tally(read, path)
+    assert result.dropped_lines == 2
+    text = "\n".join(mod.format_report(result))
+    assert "Malformed ledger lines skipped by the reader (2)" in text
+
+
+def test_an_unreadable_ledger_does_not_print_as_an_empty_one(tmp_path):
+    """"The ledger is empty" is a statement about the judges; "the ledger could
+    not be read" is a statement about this reader. Printing the second as the
+    first turns a permissions or I/O fault into a clean bill of health."""
+    from lib import judge_ledger
+
+    missing = tmp_path / "never-written.jsonl"
+    missing_text = "\n".join(mod.format_report(mod.tally(
+        judge_ledger.read_ledger(missing), missing
+    )))
+    assert "NO DATA" in missing_text
+
+    unreadable = tmp_path / "locked"
+    unreadable.mkdir()  # a directory: open() fails with an OSError that is not ENOENT
+    read = judge_ledger.read_ledger(unreadable)
+    assert read.error and not read.missing
+    text = "\n".join(mod.format_report(mod.tally(read, unreadable)))
+    assert "Verdict: UNKNOWN" in text
+    assert "NO DATA" not in text
+
+    empty = tmp_path / "empty.jsonl"
+    empty.write_text("", encoding="utf-8")
+    empty_text = "\n".join(mod.format_report(mod.tally(
+        judge_ledger.read_ledger(empty), empty
+    )))
+    assert "Verdict: NO DATA" in empty_text
+    assert "UNKNOWN" not in empty_text
 
 
 def test_an_unclassifiable_line_is_reported_rather_than_dropped(tmp_path):

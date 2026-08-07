@@ -38,6 +38,7 @@ import os
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 from lib import config_root
@@ -274,7 +275,7 @@ def decided(
     *,
     stage: str,
     verdict,
-    reason: str = "",
+    reason: str,
     timed_out: bool | None = False,
     malformed: bool = False,
     runner_legacy: bool = False,
@@ -294,6 +295,13 @@ def decided(
     here — it never reaches a decision point, so it is recorded on
     ``entered(prefilter_fired=False)`` instead, with no ``decided`` line
     following it.
+
+    ``reason`` has NO default on purpose. The empty string is not a neutral
+    placeholder here — judge-usage-report.py reads ``reason == ""`` as the
+    signature of outcome 4, an honest verdict — so a caller that simply forgot
+    the argument would have recorded the most flattering outcome in the
+    taxonomy. Every caller already passes it; requiring it keeps the one value
+    that means "the judge answered" reachable only deliberately.
 
     ``timed_out`` is three-valued: True/False when the runner reported it, and
     None when the runner carried no such field at all — a runner predating the
@@ -378,11 +386,31 @@ def discarded(reason: str) -> None:
     _write("discarded", reason=reason)
 
 
-def read_records(path: Path | None = None) -> list[dict]:
-    """Read every well-formed record from the ledger, in file order. A
-    malformed line (partial write, corruption) is skipped rather than
-    raising — the ledger is a best-effort observability aid, not a
-    transactional store, and one bad line must never hide every other.
+@dataclass(frozen=True)
+class LedgerRead:
+    """One read of the ledger, WITH what the read itself lost or could not do.
+
+    ``records`` alone cannot answer "is this everything?": a torn line and a
+    ledger that could not be opened both arrive as a shorter list, and a
+    reader counting outcomes off that list reports a total it has no grounds
+    to call complete. The three companion fields say so out loud —
+    ``dropped_lines`` counts the lines skipped as malformed, ``error`` carries
+    the OSError text when the file could not be read at all, and ``missing``
+    separates the ordinary "no hook has written yet" from that failure."""
+
+    records: "list[dict]"
+    dropped_lines: int = 0
+    error: str = ""
+    missing: bool = False
+
+
+def read_ledger(path: Path | None = None) -> LedgerRead:
+    """Read every well-formed record from the ledger, in file order, and
+    report what the read lost. A malformed line (partial write, corruption)
+    is skipped rather than raising — the ledger is a best-effort
+    observability aid, not a transactional store, and one bad line must never
+    hide every other — but it is COUNTED, so a reader can say how much of the
+    file it is speaking for.
 
     Decoding is byte-level with ``errors="replace"`` for the same reason: a
     torn multi-byte sequence must cost its own line, not the whole file, which
@@ -397,10 +425,13 @@ def read_records(path: Path | None = None) -> list[dict]:
     target = path if path is not None else ledger_path()
     try:
         raw = target.read_bytes()
-    except OSError:
-        return []
+    except FileNotFoundError as exc:
+        return LedgerRead([], error=str(exc), missing=True)
+    except OSError as exc:
+        return LedgerRead([], error=str(exc))
     text = raw.decode("utf-8", errors="replace")
     records = []
+    dropped = 0
     for line in text.splitlines():
         line = line.strip()
         if not line:
@@ -408,7 +439,20 @@ def read_records(path: Path | None = None) -> list[dict]:
         try:
             record = json.loads(line)
         except ValueError:
+            dropped += 1
             continue
         if isinstance(record, dict):
             records.append(record)
-    return records
+        else:
+            dropped += 1
+    return LedgerRead(records, dropped_lines=dropped)
+
+
+def read_records(path: Path | None = None) -> list[dict]:
+    """Just the well-formed records, for the callers that only ever wanted
+    the list. Kept as the plain shape because most of them — the test suite's
+    assertions on what a hook wrote — have nothing to say about a torn line;
+    a reader that REPORTS on the ledger calls read_ledger() instead, so that
+    "the file could not be read" cannot reach the page as "the file is
+    empty"."""
+    return read_ledger(path).records
