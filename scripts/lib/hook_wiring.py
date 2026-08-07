@@ -54,16 +54,17 @@ costs a line of output rather than a wrong causal claim.)
 
 Which of these happened is not left to prose. ``Wiring.project_scope_covered``
 records it per probe: True when the variable named a root AND every project
-member was accounted for — parsed into a shape this module models, or provably
-not on disk — and False otherwise. There are THREE ways to miss a project
-member, not two: the variable is unset, the member exists but will not parse,
-or it parses and then carries a settings shape ``_scan_settings`` does not
-model, whose entries are skipped unread. The third is the quiet one, and the
-reason the predicate is written over ``members_unmodelled`` as well as
-``members_unreadable``: that member IS opened, so a predicate asking only "did
-every project member parse" answers yes and certifies a scope the probe never
-reached. ``Wiring.absence_scope`` reads that field, because an ABSENT sentence
-is about how wide the chain reached.
+member was accounted for — parsed into a shape this module models, or answered
+not-a-file by the filesystem — and False otherwise. There are THREE ways to
+miss a project member, not two: the variable is unset; the member cannot be
+read, either because it will not parse or because the filesystem will not even
+say whether it is there; or it parses and then carries a settings shape
+``_scan_settings`` does not model, whose entries are skipped unread. The third
+is the quiet one, and the reason the predicate is written over
+``members_unmodelled`` as well as ``members_unreadable``: that member IS opened,
+so a predicate asking only "did every project member parse" answers yes and
+certifies a scope the probe never reached. ``Wiring.absence_scope`` reads that
+field, because an ABSENT sentence is about how wide the chain reached.
 
 Whether the ANSWER is a fact or a qualified one is a second question, and
 ``Wiring.scope_fully_covered`` is the field for it: a member the probe opened
@@ -252,6 +253,17 @@ def resolved(path: Path) -> Path:
     value. Every caller of this module is wrapped in a catch-all that goes
     quiet, so catching only ``OSError`` would let one looping symlink turn the
     enforcement-is-OFF banner off, silently, every session.
+
+    The fallback's safety is PER-USE, not intrinsic, so check your own
+    direction before adopting it. Here and in ``settings_chain`` the use is
+    dedup, where a failed comparison keeps both spellings — it over-reports,
+    which is the harmless polarity. ``hook-canon-guard-wired-check.py`` uses
+    the same helper for a boolean identity decision
+    (``resolved(harness) != resolved(home)``), where a failed comparison reads
+    as "different roots", takes the personal branch, and returns before the
+    registry checks — it UNDER-reports. Nothing reaches that direction today:
+    ``resolve()`` fails only on a loop, and a spelling containing one cannot
+    name a real config root. A future caller has to re-answer the question.
     """
     try:
         return path.resolve()
@@ -277,8 +289,8 @@ def settings_chain(root: Path | None = None) -> "list[Path]":
     Deduplicated at all, because the user-level and project-level members are
     distinct files only while the two roots differ, and on a ``~/.claude``
     machine whose session project root is ``$HOME`` they are the same two files
-    named twice. A chain that lists them twice reads
-    every registration twice, and two copies of one entry are enough to make
+    named twice. A chain that lists them twice reads every registration twice,
+    and two copies of one entry are enough to make
     ``duplicate_registration_note`` and ``runs_more_than_once`` report a hook
     registered exactly once as wired more than once — a fabricated finding, on
     the SessionStart banner.
@@ -521,7 +533,22 @@ def probe(basename: str, root: Path | None = None) -> Wiring:
     )
     modelled = True
     for member in settings_chain(base):
-        if not member.is_file():
+        # `Path.is_file()` swallows only ENOENT/ENOTDIR/EBADF/ELOOP
+        # (`pathlib._IGNORED_ERRNOS`); EACCES propagates, so a member under a
+        # directory this process cannot search raises PermissionError here —
+        # and every caller of this module sits under a catch-all that goes
+        # quiet, so the raise turns the enforcement-is-OFF banner off with no
+        # trace. The ordinary shape is not exotic: an enterprise-deployed
+        # /etc/claude-code owned by root and mode 700 is in every chain on the
+        # machine, for every normal user. A member whose existence cannot be
+        # determined is not absent, it is unaccounted for.
+        try:
+            on_disk = member.is_file()
+        except OSError:
+            result.members_unreadable.append(member)
+            modelled = False
+            continue
+        if not on_disk:
             continue
         try:
             data = json.loads(member.read_text(encoding="utf-8"))
@@ -542,12 +569,12 @@ def probe(basename: str, root: Path | None = None) -> Wiring:
         for event, cmds in found.items():
             result.events.setdefault(event, []).extend(cmds)
 
-    # A project member that is not on disk WAS accounted for — there is nothing
-    # there to register the hook. Anything the probe opened and could not turn
-    # into entries was not, whether it failed at the JSON or at the shape, so
-    # BOTH miss-lists feed the predicate. Reading only `members_unreadable`
-    # here is worse than not reading the member at all: the unmodelled file
-    # gets opened, skipped, and then certified as covered.
+    # A project member the filesystem answers not-a-file for WAS accounted for
+    # — there is nothing there to register the hook. Anything the probe could
+    # not turn into entries was not, whether it failed at the stat, at the JSON
+    # or at the shape, so BOTH miss-lists feed the predicate. Reading only
+    # `members_unreadable` here is worse than not reading the member at all:
+    # the unmodelled file gets opened, skipped, and then certified as covered.
     missed = {
         resolved(member)
         for member in (*result.members_unreadable, *result.members_unmodelled)

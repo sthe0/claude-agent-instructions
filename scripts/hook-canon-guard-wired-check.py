@@ -143,7 +143,12 @@ def _pretooluse_groups(chain: "list[Path]") -> list:
     """
     groups: list = []
     for member in chain:
-        data = _load(member) if member.is_file() else None
+        # `_load` is the total failure funnel — a member that is missing, a
+        # directory, unparseable or not an object all arrive as None. The
+        # `is_file()` pre-test that used to stand here added nothing and raised
+        # PermissionError for a member under an unsearchable directory, which
+        # main()'s catch-all then turned into the banner not printing at all.
+        data = _load(member)
         if data is None:
             continue
         hooks = data.get("hooks") or {}
@@ -221,11 +226,41 @@ def check_registry(root: Path) -> "list[str]":
     return problems
 
 
+def _unaccounted_scope_problems(wiring: "hook_wiring.Wiring") -> "list[str]":
+    """Why a WIRED hook's largest registered timeout is only a LOWER BOUND.
+
+    ``status`` goes WIRED as soon as any one member registers the hook, so it
+    says nothing about the members the probe could not account for — and one of
+    those can hold a SMALLER registration, which is the direction that kills a
+    judge. The fail-closed caller must not certify past that; the advisory one
+    must, since a member it could not read is not an established problem.
+    """
+    if wiring.scope_fully_covered:
+        return []
+    unaccounted = [
+        *wiring.members_unreadable,
+        *wiring.members_unmodelled,
+    ]
+    where = (
+        ", ".join(str(member) for member in unaccounted)
+        if unaccounted
+        else f"the project-level members, which ${hook_wiring.PROJECT_DIR_ENV} "
+             "named no root for"
+    )
+    return [
+        f"{wiring.basename} is wired, but the settings scope was not fully "
+        f"accounted for ({where}) — the largest timeout seen is a LOWER BOUND, "
+        "and an unaccounted member can hold a smaller registration, so this "
+        "check cannot certify the axis"
+    ]
+
+
 def check_timeout_axis(root: Path, *, strict: bool) -> "list[str]":
     """Problems on the TIMEOUT axis for every hook in
     ``hook_wiring.TIMEOUT_REQUIREMENTS``: a registration below the hook's own
     judge budget, and — under `strict` — a registration with no readable
-    timeout or a hook that is not positively WIRED at all.
+    timeout, a hook that is not positively WIRED at all, or a WIRED hook whose
+    settings scope the probe could not fully account for.
 
     `strict` is the polarity switch, and the two callers want opposite things.
     The SessionStart path is advisory and fail-open: it reports only what is
@@ -249,6 +284,7 @@ def check_timeout_axis(root: Path, *, strict: bool) -> "list[str]":
         problems += hook_wiring.timeout_shortfalls(wiring, minimum)
         if strict:
             problems += hook_wiring.timeout_unknowns(wiring)
+            problems += _unaccounted_scope_problems(wiring)
         note = hook_wiring.duplicate_registration_note(wiring)
         # Advisorily, only a pair that genuinely double-executes is worth the
         # banner; a pair the harness deduplicates is a look-at-this for the
@@ -279,6 +315,20 @@ def check_timeouts_main() -> int:
         print(f"[check-timeouts] FAIL — harness config root: {root}")
         for p in problems:
             print(f"  - {p}")
+        if hook_wiring.project_root() is None:
+            # The installer writes registrations, and no registration can make
+            # an unnamed project root nameable — so on this branch the install
+            # remedy below is advice that cannot work, and a reader who follows
+            # it re-runs the check and sees the identical lines. Keyed on the
+            # structural fact rather than on the rendered problem text: the
+            # sentence is prose someone will reword, the None is the cause.
+            print(
+                f"  ${hook_wiring.PROJECT_DIR_ENV} named no project root, so the project-level\n"
+                "  members were never read — and a run outside a session cannot guess which\n"
+                "  root a session would use. Name it:\n"
+                f"    {hook_wiring.PROJECT_DIR_ENV}=<project dir> \\\n"
+                "      python3 scripts/hook-canon-guard-wired-check.py --check-timeouts"
+            )
         print(
             "  Install to reconcile the registered timeouts:\n"
             "    bash ~/claude-agent-instructions/scripts/install-reminder-hooks.sh\n"

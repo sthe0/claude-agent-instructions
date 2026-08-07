@@ -76,8 +76,14 @@ _MEMBER = Path("/root/settings.json")
 
 def _wiring(status, timeout=None, *, scope_qualified=False, members_read=(_MEMBER,)):
     """A probe answer with the shape a test needs. ``scope_qualified`` is the
-    reader's word for it; on this side of the seam it is the probe's own
-    ``project_scope_covered``, and the two are each other's negation."""
+    reader's word for it; ``entry_for`` derives it from the probe's own
+    ``scope_fully_covered``, and the two are each other's negation.
+
+    This fixture sets ``project_scope_covered`` instead, which is a DIFFERENT
+    field — sufficient only because both miss-lists are left empty here, and
+    ``scope_fully_covered`` reduces to ``project_scope_covered`` when they are.
+    A caller passing ``members_unreadable`` or ``members_unmodelled`` has to
+    build the ``Wiring`` itself; this parameter will not express it."""
     wiring = hook_wiring.Wiring(
         basename="fixture",
         root=Path("/root"),

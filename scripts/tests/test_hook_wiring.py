@@ -386,6 +386,46 @@ def test_an_unreadable_user_level_member_qualifies_the_entry_too(
     assert dispatch_witness_snapshot.entry_for(w)["scope_qualified"]
 
 
+def test_an_unsearchable_chain_member_is_unaccounted_for_not_absent(
+    root, monkeypatch, tmp_path
+):
+    """`Path.is_file()` swallows only ENOENT/ENOTDIR/EBADF/ELOOP; EACCES
+    propagates (measured, python 3.12.3). So a member under a directory this
+    process cannot search used to raise PermissionError straight out of
+    `probe()`, into every caller's catch-all, and the enforcement-is-OFF banner
+    went silent with no trace. The shape is ordinary, not exotic: a root-owned
+    mode-700 /etc/claude-code is in every chain on the machine.
+
+    The member is the MANAGED one and the project root is set and empty, so
+    `project_scope_covered` stays True and the False on `scope_fully_covered`
+    can only come from the unreadable clause. An existence the filesystem will
+    not report is not a proven absence — it is unaccounted for, which is
+    UNKNOWN, not ABSENT."""
+    locked = tmp_path / "policy"
+    locked.mkdir()
+    managed = locked / "managed-settings.json"
+    managed.write_text(json.dumps({"hooks": {}}), encoding="utf-8")
+    monkeypatch.setattr(hook_wiring, "managed_settings_path", lambda: managed)
+    project = tmp_path / "proj"
+    project.mkdir()
+    monkeypatch.setenv(hook_wiring.PROJECT_DIR_ENV, str(project))
+    _write(root / "settings.json", {"PreToolUse": [_group("python3 /x/other.py")]})
+
+    locked.chmod(0o000)
+    try:
+        w = hook_wiring.probe(HOOK, root)
+    finally:
+        # Before any assertion: a leaked mode-000 directory survives the failure
+        # and breaks tmp_path teardown for every later test in the session.
+        locked.chmod(0o755)
+
+    assert w.members_unreadable == [managed]
+    assert w.status == hook_wiring.UNKNOWN
+    assert w.project_scope_covered
+    assert not w.scope_fully_covered
+    assert dispatch_witness_snapshot.entry_for(w)["scope_qualified"]
+
+
 def test_a_looping_symlink_does_not_take_the_whole_chain_down(root, monkeypatch, tmp_path):
     """`$CLAUDE_PROJECT_DIR` is externally supplied, and `Path.resolve()` on a
     symlink loop raises RuntimeError rather than OSError. Every caller of this
@@ -403,7 +443,16 @@ def test_a_looping_symlink_does_not_take_the_whole_chain_down(root, monkeypatch,
     assert loop / "a" / ".claude" / "settings.json" in chain
     # And through the probe, which is what the callers actually run: an
     # unresolvable member is not on disk, so it is silence rather than evidence.
-    assert hook_wiring.probe(HOOK, root).status == hook_wiring.ABSENT
+    w = hook_wiring.probe(HOOK, root)
+    assert w.status == hook_wiring.ABSENT
+    # Full coverage for a project root that could not be resolved AT ALL is
+    # correct, not fail-open: the harness resolves the same $CLAUDE_PROJECT_DIR
+    # and hits the same loop, so nothing can be registered under it and there
+    # is no hidden registration for the claim to miss. `is_file()` answers
+    # False for a loop rather than raising (measured, python 3.12.3), so the
+    # EACCES guard in probe() deliberately does not divert this case into
+    # members_unreadable. Anyone changing the miss-list logic re-decides this.
+    assert w.scope_fully_covered
 
 
 def test_a_symlinked_project_root_keeps_the_config_root_spelling(tmp_path, monkeypatch):

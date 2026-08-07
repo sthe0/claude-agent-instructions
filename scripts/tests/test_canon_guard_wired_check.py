@@ -278,6 +278,44 @@ def test_no_problem_when_everything_is_wired(tmp_path):
     _assert_no_problem(_run(tmp_path, _wired_both(GUARD_PATH, GUARD_PATH)))
 
 
+def test_an_unsearchable_chain_member_does_not_silence_the_banner(tmp_path):
+    """End to end, in a subprocess, on the whole hook — the level at which this
+    failure was actually invisible.
+
+    A chain member under a directory the process cannot search made
+    `Path.is_file()` raise PermissionError (EACCES is not in
+    `pathlib._IGNORED_ERRNOS`). Both this file's own `_pretooluse_groups` pass
+    and `hook_wiring.probe` touched the filesystem that way, and main()'s
+    catch-all turned either raise into `return 0` — so the enforcement-is-OFF
+    banner vanished for a reason no reader could see. The shape is ordinary: a
+    root-owned mode-700 managed-policy directory does this for every user on
+    the machine.
+
+    The canon guard is wired NOWHERE here, so the banner has something true to
+    say; the assertion is that it still gets to say it."""
+    project = tmp_path / "project"
+    locked = project / ".claude"
+    locked.mkdir(parents=True)
+    (locked / "settings.json").write_text("{}", encoding="utf-8")
+    sp = tmp_path / "settings.json"
+    sp.write_text(json.dumps({"hooks": {}}), encoding="utf-8")
+
+    locked.chmod(0o000)
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(HOOK_SCRIPT)],
+            env={**_env(sp, tmp_path), "CLAUDE_PROJECT_DIR": str(project)},
+            capture_output=True, text=True,
+        )
+    finally:
+        locked.chmod(0o755)
+
+    assert proc.returncode == 0
+    assert proc.stderr == "", proc.stderr
+    assert BANNER in proc.stdout, proc.stdout
+    assert "canon guard NOT wired in the PreToolUse Edit|Write chain" in proc.stdout
+
+
 def test_advisory_hooks_are_never_reported(tmp_path):
     """Scope discipline: the deliberate root divergence means advisory hooks are
     legitimately absent from a personal root. Naming them every session would
@@ -337,8 +375,18 @@ def _timeout_settings(overrides: "dict | None" = None) -> dict:
 @pytest.fixture
 def timeout_root(tmp_path, monkeypatch):
     """Pin the settings seam and neutralise the machine-wide managed member, so
-    the one-shot check reads exactly the fixture this module wrote."""
+    the one-shot check reads exactly the fixture this module wrote.
+
+    The project root is pinned too, at an empty directory. The strict caller
+    refuses to certify a scope it could not fully account for, and an UNSET
+    ``$CLAUDE_PROJECT_DIR`` is one of the three ways to fall short of it — so
+    leaving the variable ambient would make every test below pass or fail
+    depending on whether the shell running pytest happened to export it. Empty
+    rather than absent: a project member that is not on disk IS accounted for."""
     monkeypatch.setenv("CLAUDE_CANON_GUARD_SETTINGS", str(tmp_path / "settings.json"))
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setenv(hook_wiring.PROJECT_DIR_ENV, str(project))
     monkeypatch.setattr(
         hook_wiring, "managed_settings_path", lambda: tmp_path / "managed.json")
     monkeypatch.setattr(
@@ -375,6 +423,66 @@ def test_one_shot_fails_on_an_unreadable_timeout(timeout_root, capsys):
 
     assert _check.check_timeouts_main() == 1
     assert "cannot be established" in capsys.readouterr().out
+
+
+def test_one_shot_refuses_to_certify_a_scope_it_could_not_account_for(
+    timeout_root, capsys
+):
+    """`status` goes WIRED off the first member that registers the hook, so it
+    says nothing about the members the probe could not account for — and the
+    largest timeout it saw is therefore a LOWER BOUND. Reproduces the shape the
+    round-5 review measured: the root wires every hook correctly, and
+    `settings.local.json` is valid JSON whose "Stop" maps to a dict where a list
+    of groups belongs, hiding a below-budget registration from the scanner. The
+    advisory caller stays silent on it (nothing is established); the certifier
+    must not, or it certifies an axis it could not read."""
+    name, _ = TIMEOUT_HOOKS[0]
+    root = timeout_root(_timeout_settings())
+    unmodelled = root / "settings.local.json"
+    unmodelled.write_text(json.dumps({"hooks": {
+        "Stop": {"hooks": [{"command": str(SCRIPTS_DIR / name), "timeout": 3}]},
+    }}), encoding="utf-8")
+
+    assert _check.check_timeout_axis(root, strict=False) == []
+    assert _check.check_timeouts_main() == 1
+    out = capsys.readouterr().out
+    assert "LOWER BOUND" in out
+    assert str(unmodelled) in out
+
+
+def test_one_shot_refuses_when_the_project_members_were_never_located(
+    timeout_root, monkeypatch, capsys
+):
+    """The third way to fall short of the full scope, and the one with no member
+    to name: `$CLAUDE_PROJECT_DIR` names no root, so the project-level members
+    were not read at all and a `.claude/settings.local.json` registering the
+    hook at 3s would be invisible. Same refusal, different sentence."""
+    timeout_root(_timeout_settings())
+    monkeypatch.delenv(hook_wiring.PROJECT_DIR_ENV, raising=False)
+
+    assert _check.check_timeouts_main() == 1
+    out = capsys.readouterr().out
+    assert "LOWER BOUND" in out
+    assert hook_wiring.PROJECT_DIR_ENV in out
+
+
+def test_the_unnamed_root_branch_prints_a_remedy_that_can_actually_work(
+    timeout_root, monkeypatch, capsys
+):
+    """The refusal above is correct, but the only remedy the block printed was
+    "run install-reminder-hooks.sh" — and the installer writes registrations,
+    none of which can make an unnamed project root nameable. A reader who
+    follows it re-runs the check, sees the identical lines, and loops. So this
+    branch must name the variable as something to SET, not merely mention it
+    inside the problem sentence: the assignment form is what separates an
+    instruction from a description, and it is the assertion below."""
+    timeout_root(_timeout_settings())
+    monkeypatch.delenv(hook_wiring.PROJECT_DIR_ENV, raising=False)
+
+    assert _check.check_timeouts_main() == 1
+    out = capsys.readouterr().out
+    assert f"{hook_wiring.PROJECT_DIR_ENV}=<project dir>" in out
+    assert "--check-timeouts" in out
 
 
 def test_one_shot_fails_when_the_check_itself_raises(timeout_root, monkeypatch, capsys):
