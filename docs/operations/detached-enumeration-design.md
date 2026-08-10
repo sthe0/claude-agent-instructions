@@ -196,6 +196,32 @@ is discarded by the same rule the gate already applies at `plugins_premise.py:17
 comparison of `bag['enumerated_at']` against the live `content_digest`. A stale background
 result therefore cannot discharge anything.
 
+That rule only holds because the key is an assertion the *worker* makes, not one it inherits.
+The design as written had the launcher hand `--digest` down and the worker write under it
+verbatim, which bought key agreement at the price of content agreement: the plan can be edited
+during the child's flight, and a sidecar keyed by the launcher's promise while carrying an
+enumeration of other bytes would be folded as healthy — and the verb, which is in `COMMANDS`
+and the parser, would accept any `--digest` a hand-caller typed. Shipped
+`cmd_question_enumerate_worker` therefore recomputes `_plan_content_digest` from the doc it
+actually loaded and refuses to write on disagreement, so the deadline expires into its escape
+instead.
+
+**What the key still does not cover.** `_plan_content_digest` is a digest of *parsed* content:
+goal, done criterion, criterion type, weight class, repo root, and the per-stage question keys.
+The enumeration reads the whole file, so `meta.final_check`, `meta.external_research`,
+`meta.delivery_worktree` and comments can change without moving the key — an enumeration may
+have read a pre-edit version of those. This is deliberate on both halves. Comments are excluded
+by construction (tomllib never surfaces them). The three `meta` fields are excluded because the
+gate's notion of "the plan changed" is deliberately narrower than "the bytes changed": widening
+it would re-block approve — and, since the fold is digest-keyed, discard an in-flight
+enumeration — on a `final_check` refinement, which
+`test_digest_unchanged_replan_does_not_clear_or_relaunch` pins as a no-op on purpose. Carrying a
+raw-bytes `sha256` in the payload and comparing it at fold time was considered and rejected for
+the same reason: it would refuse folds for edits the gate itself treats as no-ops, so a comment
+fix mid-flight would cost a full `ENUMERATE_TIMEOUT_S` wait and an escape. The residual is that
+the *questions raised* may reflect a superseded `final_check`; the questions are advisory
+candidates an operator dispositions, and the gate's identity is unaffected.
+
 **Abandoned sidecars.** A sidecar left by a session that never returned is inert: it is keyed
 by session id, so no other session reads it, and within its own session a digest mismatch
 discards it. Stage 4 writes them under the state directory alongside the session JSON and

@@ -76,7 +76,8 @@ def _runner_failed_blocker(bag) -> str:
 
 
 def escape_recorded(bag, content_digest, reasons) -> bool:
-    """Whether an escape from `reasons` is on record against THIS plan content.
+    """Whether an escape from `reasons` is on record against THIS plan content, THIS
+    launch window and THIS pass count.
 
     Bound to the content digest for the same reason `enumerated_at` is: an escape
     is a statement about one plan's one failed pass, and letting it survive an edit
@@ -85,6 +86,25 @@ def escape_recorded(bag, content_digest, reasons) -> bool:
     `escapes` key at all (minted before this half existed) reads as no escape, not
     as a KeyError.
 
+    The digest alone implements one plan's EVERY pass, which is the same fail-open
+    one level in, so the row binds to two counters as well. `enumerate_launch` is
+    bumped by every `_launch_enumeration`, so a resubmit or a replan that opens a
+    NEW window over the same bytes no longer inherits the previous window's escape —
+    a window with no enumeration, no wait and no escape row would otherwise approve
+    for free. `enumerate_pass` is bumped by every applied enumeration result, so a
+    SECOND failed pass at the same digest re-blocks and is counted; without it
+    `escape_counts` — this work's own refutation instrument — undercounts, and a
+    counter that undercounts cannot refute anything.
+
+    An INTEGER counter, not `enumerate_deadline`: the deadline is restamped by every
+    launch and by nothing else, so it would serve as an identity right up until two
+    launches land in the same clock tick or the deadline becomes configurable. A row
+    carrying NEITHER counter (minted before they existed) does not match — fail
+    CLOSED, because this is a fail-open fix and ambiguity must not discharge. The
+    cost is one extra escape recording on a session carried across the change; the
+    cost of the other choice is the hole staying open for exactly the bags most
+    likely to have one.
+
     No digest (no plan submitted) means no escape is admissible — which is not the
     liveness hole it looks like: `approve` is only reachable from PLAN_READY, and
     reaching PLAN_READY runs the launch that clears the enumeration record back to
@@ -92,8 +112,13 @@ def escape_recorded(bag, content_digest, reasons) -> bool:
     to."""
     if not content_digest:
         return False
+    launch = int(bag.get("enumerate_launch") or 0)
+    passes = int(bag.get("enumerate_pass") or 0)
     for record in bag.get("escapes", []) or []:
-        if record.get("content_digest") == content_digest and record.get("reason") in reasons:
+        if (record.get("content_digest") == content_digest
+                and record.get("reason") in reasons
+                and record.get("enumerate_launch") == launch
+                and record.get("enumerate_pass") == passes):
             return True
     return False
 
@@ -356,8 +381,21 @@ register(
             "enumerated_runner_stderr": "",
             "enumerated_count": None,
             # Typed escapes from the enumeration blockers, each bound to the plan
-            # content digest it was recorded against (see escape_recorded).
+            # content digest, the launch window and the pass count it was recorded
+            # against (see escape_recorded).
             "escapes": [],
+            # Monotonic count of detached-worker launches, bumped by cli.py's
+            # _launch_enumeration, and the digest the latest one was launched for.
+            # Together they identify ONE launch window: the counter is what an escape
+            # binds to, the digest is what tells a retried `replan` that a window over
+            # these exact bytes is already outstanding and must not be reopened.
+            "enumerate_launch": 0,
+            "enumerate_launch_digest": "",
+            # Monotonic count of enumeration results APPLIED to this bag (both the
+            # synchronous command and the sidecar fold go through
+            # cli._apply_enumeration_result). An escape binds to it so a second failed
+            # pass at the same digest re-blocks instead of riding the first's escape.
+            "enumerate_pass": 0,
             # Absolute epoch (launch instant + advisor.ENUMERATE_TIMEOUT_S), stamped by
             # cli.py's _launch_enumeration on every detached-worker launch. None until
             # the first launch. Read by cmd_question_enumerate_escape to decide whether

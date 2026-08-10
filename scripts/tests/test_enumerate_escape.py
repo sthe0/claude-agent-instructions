@@ -606,6 +606,173 @@ class TestRelaunchRoutesOntoTheEscapableBlocker:
         assert cli.cmd_approve(ns(session=sid, by="user"), store=store).ok is True
 
 
+# --- an escape speaks for ONE window and ONE pass, not for the bytes forever ----
+
+class TestEscapeBindsToTheLaunchAndThePassItEscapes:
+    """The fix's own defect class, one level in. Binding an escape to the content
+    digest ALONE makes it a statement about one plan's EVERY pass — which is what the
+    `escape_recorded` docstring already said it must not be. Both holes below leave a
+    gate that is supposed to block reachable in a discharged state; the second also
+    silently disarms the counter this stage's refutation depends on."""
+
+    def test_a_relaunch_over_the_same_bytes_does_not_inherit_the_old_escape(
+            self, store, fixtures_dir):
+        """Variant A — discharged although it never ran. `cmd_submit_plan` calls
+        `_launch_enumeration` unconditionally, so a resubmission of byte-identical
+        plan content opens a NEW window: `enumerated` is cleared, the deadline is
+        restamped, and nothing has been enumerated for it. Matching on the digest
+        alone, `approve` then finds the PREVIOUS window's `enumeration_not_landed`
+        row and discharges instantly — the new window gets no enumeration, no wait,
+        and no new escape row.
+
+        Asserted through `store.load`, per this module's convention: the whole
+        question is what the next process sees."""
+        sid = "relaunch-not-inherited"
+        plan = str(fixtures_dir / "plan_two_stage.toml")
+        _to_plan_ready_with_premise(store, sid, plan)
+
+        # window 1: nothing lands, its deadline passes, the operator escapes
+        state = store.load(sid)
+        state.plugins["premise"]["enumerate_deadline"] = time.time() - 1
+        store.save(state)
+        assert cli.cmd_question_enumerate_escape(
+            _escape_ns(sid, premise.ESCAPE_ENUMERATION_NOT_LANDED,
+                       note="window 1's worker never landed a sidecar"),
+            store=store).ok is True
+        assert plugins.plugin_gate_blockers(store.load(sid), "plan_approval") == []
+
+        # window 2: the same bytes resubmitted — a fresh launch, a fresh deadline
+        cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
+        reloaded = store.load(sid)
+        assert reloaded.plugins["premise"]["enumerated"] is False
+        assert reloaded.plugins["premise"]["enumerate_launch"] == 2
+
+        blockers = plugins.plugin_gate_blockers(reloaded, "plan_approval")
+        assert any(plugins_premise._ENUMERATE_NOT_RUN in b for b in blockers), blockers
+        assert cli.cmd_approve(ns(session=sid, by="user"), store=store).ok is False
+
+        # ...and the route out is a SECOND escape, which the counter therefore sees
+        state = store.load(sid)
+        state.plugins["premise"]["enumerate_deadline"] = time.time() - 1
+        store.save(state)
+        assert cli.cmd_question_enumerate_escape(
+            _escape_ns(sid, premise.ESCAPE_ENUMERATION_NOT_LANDED,
+                       note="window 2's worker never landed either"),
+            store=store).ok is True
+        assert cli.cmd_approve(ns(session=sid, by="user"), store=store).ok is True
+        bag = store.load(sid).plugins["premise"]
+        assert len(bag["escapes"]) == 2
+        assert [r["enumerate_launch"] for r in bag["escapes"]] == [1, 2]
+        assert plugins_premise.escape_counts(
+            bag, bag["escapes"][-1]["content_digest"])["session"]["not_landed"] == 2
+
+    def test_a_second_failed_pass_at_the_same_digest_re_blocks_and_is_counted(
+            self, store, fixtures_dir):
+        """Variant B — the second failure is uncounted. After a runner-failure escape
+        at digest D, the operator re-runs `question-enumerate` hoping the advisor
+        recovered, and it fails again. On the digest alone that second failure is
+        discharged with no blocker and no new row, so `escape_counts` never sees it —
+        and a counter that undercounts cannot refute the claim ('refuted if the escape
+        degrades into a click-through') it exists to test."""
+        sid = "second-failure-counted"
+        plan = str(fixtures_dir / "plan_two_stage.toml")
+        _to_plan_ready_with_premise(store, sid, plan)
+        failing = _failing_runner("advisor timed out after 480s")
+
+        cli.cmd_question_enumerate(ns(session=sid, plan=None), store=store, runner=failing)
+        assert cli.cmd_approve(ns(session=sid, by="user"), store=store).ok is False
+        assert cli.cmd_question_enumerate_escape(
+            _escape_ns(sid, premise.ESCAPE_ADVISOR_TIMEOUT, note="pass 1 timed out"),
+            store=store).ok is True
+        assert plugins.plugin_gate_blockers(store.load(sid), "plan_approval") == []
+
+        # the operator retries the check on the SAME bytes; it fails again
+        cli.cmd_question_enumerate(ns(session=sid, plan=None), store=store, runner=failing)
+        reloaded = store.load(sid)
+        assert reloaded.plugins["premise"]["enumerate_pass"] == 2
+        assert any(plugins_premise._ENUMERATE_RUNNER_FAILED in b
+                   for b in plugins.plugin_gate_blockers(reloaded, "plan_approval"))
+        assert cli.cmd_approve(ns(session=sid, by="user"), store=store).ok is False
+
+        assert cli.cmd_question_enumerate_escape(
+            _escape_ns(sid, premise.ESCAPE_ADVISOR_TIMEOUT, note="pass 2 timed out too"),
+            store=store).ok is True
+        assert cli.cmd_approve(ns(session=sid, by="user"), store=store).ok is True
+        bag = store.load(sid).plugins["premise"]
+        assert [r["enumerate_pass"] for r in bag["escapes"]] == [1, 2]
+        assert plugins_premise.escape_counts(
+            bag, bag["enumerated_at"])["this_plan"]["runner_failure"] == 2
+
+    def test_the_within_window_flow_still_approves_with_one_escape(
+            self, store, fixtures_dir):
+        """The over-blocking check the two above must not cost. With no relaunch and
+        no new pass between the escape and the approve, ONE escape still discharges —
+        the counters are an identity for the window, not a per-command nonce."""
+        sid = "within-window"
+        plan = str(fixtures_dir / "plan_two_stage.toml")
+        _to_plan_ready_with_premise(store, sid, plan)
+        cli.cmd_question_enumerate(ns(session=sid, plan=None), store=store,
+                                   runner=_failing_runner("advisor timed out after 480s"))
+
+        assert cli.cmd_question_enumerate_escape(
+            _escape_ns(sid, premise.ESCAPE_ADVISOR_TIMEOUT, note="the one failure"),
+            store=store).ok is True
+        assert plugins.plugin_gate_blockers(store.load(sid), "plan_approval") == []
+        assert cli.cmd_approve(ns(session=sid, by="user"), store=store).ok is True
+        assert len(store.load(sid).plugins["premise"]["escapes"]) == 1
+
+    def test_a_legacy_escape_row_without_the_counters_fails_closed(self, fixtures_dir):
+        """The second design decision, stated as a test: a row minted before the
+        counters existed does NOT match. This is a fail-open fix, so the ambiguous
+        row must block; the cost is one extra escape on a session carried across the
+        change, against a hole that would otherwise stay open for exactly the bags
+        most likely to have one."""
+        plan_path = str(fixtures_dir / "plan_two_stage.toml")
+        state, bag = _bag_state(plan_path, enumerated_runner_ok=False,
+                                enumerated_runner_stderr="boom")
+        digest = plugins_premise._plan_content_digest(load_plan(plan_path))
+        bag["escapes"] = [{"reason": premise.ESCAPE_ADVISOR_TIMEOUT, "note": "n",
+                           "content_digest": digest, "runner_ok": False,
+                           "plan": plan_path}]
+
+        assert plugins_premise.escape_recorded(
+            bag, digest, premise.ENUMERATION_RUNNER_FAILURE_REASONS) is False
+        assert any(plugins_premise._ENUMERATE_RUNNER_FAILED in b
+                   for b in plugins.plugin_gate_blockers(state, "plan_approval"))
+
+    def test_a_retried_replan_inside_one_window_does_not_reopen_it(
+            self, store, fixtures_dir, monkeypatch):
+        """The liveness half of binding to the launch counter. `cmd_replan` relaunches
+        whenever the proposed digest differs from `enumerated_at` — which it always
+        does while a window is outstanding, since the launch clears that field. So a
+        replan retried after its escape would bump the counter past the row the
+        operator just recorded and re-block forever: a wedge, not a gate. A window
+        already outstanding for these exact bytes is therefore not reopened."""
+        monkeypatch.delenv("AGENTCTL_PREMISE", raising=False)
+        sid = "replan-retry"
+        base = str(fixtures_dir / "plan_two_stage.toml")
+        corrected = str(fixtures_dir / "plan_two_stage_substantive.toml")
+        _to_plan_ready_with_premise(store, sid, base)
+        cli.cmd_approve(ns(session=sid, by="user"), store=store)
+
+        # the corrected plan opens its own window, and nothing lands in it
+        assert cli.cmd_replan(ns(session=sid, plan=corrected), store=store).ok is False
+        launch = store.load(sid).plugins["premise"]["enumerate_launch"]
+        state = store.load(sid)
+        state.plugins["premise"]["enumerate_deadline"] = time.time() - 1
+        store.save(state)
+        assert cli.cmd_question_enumerate_escape(
+            _escape_ns(sid, premise.ESCAPE_ENUMERATION_NOT_LANDED, plan=corrected,
+                       note="the corrected plan's worker never landed"),
+            store=store).ok is True
+
+        retried = cli.cmd_replan(ns(session=sid, plan=corrected), store=store)
+
+        assert store.load(sid).plugins["premise"]["enumerate_launch"] == launch
+        assert not any(plugins_premise._ENUMERATE_NOT_RUN in b
+                       for b in retried.data.get("blockers", [])), retried.detail
+
+
 # --- the fold's own history entry ----------------------------------------------
 
 class TestTheFoldRecordsItsPass:

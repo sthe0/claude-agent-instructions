@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import time
 
 from lib import judge_ledger
@@ -47,9 +48,34 @@ _TIMEOUT_STDERR_PREFIX = "advisor timed out after"
 # re-derived at runtime, so a calibration-note edit can never silently drift the
 # shipped timeout.
 _ENUMERATE_TIMEOUT_S_DEFAULT = 480
-ENUMERATE_TIMEOUT_S = int(
-    os.environ.get("AGENTCTL_ENUMERATE_TIMEOUT_S", _ENUMERATE_TIMEOUT_S_DEFAULT)
-)
+_ENUMERATE_TIMEOUT_ENV = "AGENTCTL_ENUMERATE_TIMEOUT_S"
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    """Read an integer override off the environment, falling back to `default` on
+    anything unusable and saying so on stderr.
+
+    This runs at IMPORT time and `cli` imports this module at module scope, so a bare
+    `int(os.environ[...])` makes `AGENTCTL_ENUMERATE_TIMEOUT_S=8m` kill every agentctl
+    command with a ValueError traceback that names the variable nowhere. Non-positive
+    values are rejected too, in the other direction: `0` is fail-CLOSED (every
+    enumeration times out instantly) and so silently converts the fleet to permanent
+    escape-taking — a state nobody chose by typing a number."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = 0
+    if value <= 0:
+        print(f"agentctl: ignoring {name}={raw!r} — expected a positive integer "
+              f"number of seconds; using {default}", file=sys.stderr)
+        return default
+    return value
+
+
+ENUMERATE_TIMEOUT_S = _positive_int_env(_ENUMERATE_TIMEOUT_ENV, _ENUMERATE_TIMEOUT_S_DEFAULT)
 
 # The acceptance judge is a SEPARATE, cheaper tier than the warn-only advisor: it
 # gates a real transition (via the pure acceptance-review guardian), so it runs on the

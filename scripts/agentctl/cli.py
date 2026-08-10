@@ -1392,6 +1392,11 @@ def _apply_enumeration_result(
     bag["enumerated_runner_ok"] = runner_ok
     bag["enumerated_runner_stderr"] = stderr
     bag["enumerated_count"] = len(pairs)
+    # Bumped here, the ONE place both producers meet, so an escape recorded against
+    # pass N cannot discharge the blocker pass N+1 raises (plugins_premise.
+    # escape_recorded). Counting at the call sites instead would leave whichever
+    # producer a later change adds silently uncounted.
+    bag["enumerate_pass"] = int(bag.get("enumerate_pass") or 0) + 1
     return raised
 
 
@@ -1523,10 +1528,14 @@ def cmd_question_enumerate_worker(args, *, store: StateStore, runner: Runner | N
     enumerate_sidecar.py's module docstring for why a sidecar file, not the
     state store, is this process's only output.
 
-    --plan and --digest are supplied by the launcher rather than re-derived here:
-    the launcher already computed the digest to stamp bag['enumerate_deadline']
-    against, and handing it down verbatim means this process's sidecar write can
-    never disagree with the key the launcher promised to look for."""
+    --plan and --digest are supplied by the launcher, but --digest is VERIFIED here
+    rather than trusted: it is re-derived from the doc this process actually loaded,
+    and a disagreement refuses the write. Handing the key down verbatim bought key
+    agreement by giving up content agreement — the plan can be edited during the
+    child's flight (up to advisor.ENUMERATE_TIMEOUT_S of it), and a sidecar keyed by
+    the launcher's promise while carrying an enumeration of other bytes is folded as
+    healthy. It is also what made this verb, which is in COMMANDS and the parser,
+    a hand-callable way to write any sidecar the next `approve` would trust."""
     try:
         doc = load_plan(args.plan)
     except PlanError as exc:
@@ -1535,6 +1544,18 @@ def cmd_question_enumerate_worker(args, *, store: StateStore, runner: Runner | N
         plan_text = Path(args.plan).read_text(encoding="utf-8")
     except OSError as exc:
         return Directive(False, "worker", "noop", f"cannot read plan {args.plan!r}: {exc}")
+
+    # Refuse rather than re-key to the recomputed digest: the launcher stamped a
+    # deadline against the digest it promised, and a sidecar under a different key is
+    # a result for a plan version nobody is waiting on. Refusing lets that deadline
+    # expire into its escape, which is the designed route out.
+    recomputed = plugins_premise._plan_content_digest(doc)
+    if recomputed != getattr(args, "digest", None):
+        return Directive(
+            False, "worker", "noop",
+            f"refusing to write a sidecar: --digest {str(getattr(args, 'digest', None))[:12]}… "
+            f"does not match the content digest of {args.plan!r} ({recomputed[:12]}…) — the "
+            "plan changed after the launch, or this worker was invoked by hand")
 
     run = runner if runner is not None else advisor.enumerate_subprocess_runner
     runner_ok, pairs, stderr_text = advisor.enumerate_questions_health(
@@ -1725,8 +1746,9 @@ def cmd_question_enumerate_escape(args, *, store: StateStore, runner: Runner | N
             return Directive(
                 False, state.node, "noop",
                 f"the background enumeration is still within its deadline — {remaining:.0f}s "
-                "remaining; wait for it to land (or run `agentctl question-enumerate` "
-                "synchronously) rather than escaping a check that may yet arrive")
+                "remaining; wait for it to land (or run `agentctl question-enumerate`, "
+                f"which BLOCKS for up to {advisor.ENUMERATE_TIMEOUT_S}s) rather than "
+                "escaping a check that may yet arrive")
 
     escapes = bag.setdefault("escapes", [])
     # A second escape at the same digest is RECORDED, not deduped: an escape is an
@@ -1748,6 +1770,10 @@ def cmd_question_enumerate_escape(args, *, store: StateStore, runner: Runner | N
         "reason": reason,
         "note": note,
         "content_digest": digest,
+        # The window and the pass this escape speaks for — see plugins_premise.
+        # escape_recorded for why the digest alone is not an identity.
+        "enumerate_launch": int(bag.get("enumerate_launch") or 0),
+        "enumerate_pass": int(bag.get("enumerate_pass") or 0),
         "runner_ok": runner_ok,
         "plan": str(plan_path),
     })
@@ -1853,9 +1879,18 @@ def _spawn_enumeration_worker(argv, **kwargs):
     return proc_tree.launch_supervised(argv, **kwargs)
 
 
+# The child's own ENUMERATE_TIMEOUT_S bound starts only once it has paid interpreter
+# startup, imports and the plan load; the parent's deadline starts at the spawn call.
+# Without a margin `enumeration_not_landed` becomes admissible a second or two before
+# a healthy child's own bound expires — an escape recorded against a check that was
+# still legitimately running.
+_ENUMERATE_LAUNCH_MARGIN_S = 15
+
+
 def _launch_enumeration(state: SessionState, bag: dict, doc: PlanDoc, plan_path) -> None:
-    """Clear the premise bag's enumeration record back to not-run state, stamp
-    `enumerate_deadline` (launch instant + advisor.ENUMERATE_TIMEOUT_S), and launch
+    """Clear the premise bag's enumeration record back to not-run state, bump the
+    launch counter an escape binds to, stamp `enumerate_deadline` (launch instant +
+    advisor.ENUMERATE_TIMEOUT_S + _ENUMERATE_LAUNCH_MARGIN_S), and launch
     a detached background enumeration pass over `plan_path` — called from
     cmd_submit_plan and cmd_replan, the two places a NEW plan content becomes the
     one `approve` will gate-check.
@@ -1875,11 +1910,19 @@ def _launch_enumeration(state: SessionState, bag: dict, doc: PlanDoc, plan_path)
     proc_tree.py's own module docstring is the precedent this mirrors. A launch
     failure (missing interpreter, fork failure, non-POSIX) is swallowed: the
     deadline is already stamped, so the outstanding-child window simply expires
-    and Stage 5's escape takes over exactly as if the child had started and hung."""
+    and Stage 5's escape takes over exactly as if the child had started and hung.
+    Swallowed, but no longer silent: both outcomes are logged, so a wiring bug that
+    breaks the launch for everyone is readable as itself instead of only as a
+    fleet-wide rise in the `not_landed` escape bucket, and the success rows give that
+    bucket a denominator. The log runs before the caller's store.save(), which every
+    call site performs."""
     digest = plugins_premise._plan_content_digest(doc)
     bag["enumerated"] = False
     bag["enumerated_at"] = ""
-    bag["enumerate_deadline"] = time.time() + advisor.ENUMERATE_TIMEOUT_S
+    bag["enumerate_launch"] = int(bag.get("enumerate_launch") or 0) + 1
+    bag["enumerate_launch_digest"] = digest
+    bag["enumerate_deadline"] = (
+        time.time() + advisor.ENUMERATE_TIMEOUT_S + _ENUMERATE_LAUNCH_MARGIN_S)
     scripts_dir = Path(__file__).resolve().parent.parent
     try:
         _spawn_enumeration_worker(
@@ -1888,8 +1931,11 @@ def _launch_enumeration(state: SessionState, bag: dict, doc: PlanDoc, plan_path)
             cwd=str(scripts_dir),
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        state.log("enumerate_launch", ok=False, launch=bag["enumerate_launch"],
+                  error=repr(exc))
+    else:
+        state.log("enumerate_launch", ok=True, launch=bag["enumerate_launch"])
 
 
 def _fold_enumeration_sidecar(state: SessionState, doc: PlanDoc, plan_path) -> bool:
@@ -3755,7 +3801,17 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             if proposed is not None:
                 enumeration_bag_dirty = _fold_enumeration_sidecar(state, proposed, args.plan)
                 proposed_digest = plugins_premise._plan_content_digest(proposed)
-                if proposed_digest != bag.get("enumerated_at"):
+                # A window is still OUTSTANDING for these exact bytes when the last
+                # launch named this digest and nothing has landed since. A retried
+                # replan inside it must NOT open a second one: since an escape binds
+                # to the launch counter, a relaunch here would invalidate the escape
+                # the operator recorded a moment ago (and restamp the deadline they
+                # just waited out), so the route out of a child that never lands
+                # would never survive the replan it exists for. This refusing path
+                # is retried by design — see the fold-persistence note below.
+                outstanding = (not bag.get("enumerated")
+                               and bag.get("enumerate_launch_digest") == proposed_digest)
+                if proposed_digest != bag.get("enumerated_at") and not outstanding:
                     _launch_enumeration(state, bag, proposed, args.plan)
                     enumeration_bag_dirty = True
         pblock = plugins.plugin_gate_blockers(state, "plan_approval")

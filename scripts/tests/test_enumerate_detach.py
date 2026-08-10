@@ -51,6 +51,8 @@ from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from agentctl import advisor, cli, enumerate_sidecar, plugins, plugins_premise
 from agentctl.dispatch import RunResult
 from agentctl.plan import diff_plans, load_plan
@@ -294,6 +296,63 @@ class TestCliDefaultsToEnumerateRunner:
         assert payload is not None
         assert payload["content_digest"] == digest
 
+    def test_a_plan_edited_after_the_launch_writes_no_sidecar(
+            self, store, fixtures_dir, tmp_path, monkeypatch):
+        """The child can be in flight for up to ENUMERATE_TIMEOUT_S, so the plan it
+        loads need not be the plan the launcher keyed it to. Keying the sidecar by
+        the handed-down `--digest` made an enumeration of the NEW bytes fold as the
+        awaited result for the OLD ones -- a gate discharged by a pass it never had.
+        The runner assertion is load-bearing: the refusal must precede the advisor
+        call, or the mismatch costs a full enumeration before being thrown away."""
+        sidecar_root = tmp_path / "sidecars"
+        monkeypatch.setattr(enumerate_sidecar, "DEFAULT_ROOT", sidecar_root)
+        monkeypatch.setattr(advisor, "enumerate_subprocess_runner", _raise_if_called)
+
+        plan_path = tmp_path / "plan.toml"
+        plan_path.write_text(
+            (fixtures_dir / "plan_two_stage.toml").read_text(encoding="utf-8"),
+            encoding="utf-8")
+        launched_digest = plugins_premise._plan_content_digest(load_plan(str(plan_path)))
+
+        plan_path.write_text(
+            plan_path.read_text(encoding="utf-8").replace(
+                "Demonstrate the full two-stage coordination cycle",
+                "Demonstrate something else entirely"),
+            encoding="utf-8")
+
+        d = cli.cmd_question_enumerate_worker(
+            ns(session="worker-drift", plan=str(plan_path), digest=launched_digest),
+            store=store,
+        )
+        assert d.ok is False
+        assert "refusing to write a sidecar" in d.detail
+        assert enumerate_sidecar.read_discarding_superseded(
+            "worker-drift", launched_digest, root=sidecar_root) is None
+        # and it did not silently re-key to the digest it computed either
+        current = plugins_premise._plan_content_digest(load_plan(str(plan_path)))
+        assert enumerate_sidecar.read_discarding_superseded(
+            "worker-drift", current, root=sidecar_root) is None
+
+    def test_a_hand_invoked_worker_cannot_mint_a_sidecar_for_a_chosen_digest(
+            self, store, fixtures_dir, tmp_path, monkeypatch):
+        """This verb sits in COMMANDS and the parser with a `--digest` the caller
+        supplies, so it doubles as a way to write, by hand, the sidecar the next
+        `approve` would fold. Recomputation is what closes that: the digest can no
+        longer be chosen, only agreed with."""
+        sidecar_root = tmp_path / "sidecars"
+        monkeypatch.setattr(enumerate_sidecar, "DEFAULT_ROOT", sidecar_root)
+        monkeypatch.setattr(advisor, "enumerate_subprocess_runner", _raise_if_called)
+
+        chosen = "0" * 64
+        d = cli.cmd_question_enumerate_worker(
+            ns(session="worker-byhand",
+               plan=str(fixtures_dir / "plan_two_stage.toml"), digest=chosen),
+            store=store,
+        )
+        assert d.ok is False
+        assert enumerate_sidecar.read_discarding_superseded(
+            "worker-byhand", chosen, root=sidecar_root) is None
+
 
 # --- judge fallback stays on the plain (short-timeout) runner ------------------
 
@@ -351,7 +410,50 @@ class TestCalibrationConstant:
 
         assert expected == 480
         assert expected == advisor._ENUMERATE_TIMEOUT_S_DEFAULT
-        assert advisor.ENUMERATE_TIMEOUT_S == advisor._ENUMERATE_TIMEOUT_S_DEFAULT
+
+    def test_an_unset_environment_resolves_to_the_shipped_default(self, monkeypatch):
+        """Re-resolves rather than reading `advisor.ENUMERATE_TIMEOUT_S`: that
+        module-level value is bound at import, so asserting on it directly turns
+        anyone who exports the override knob into a red suite — a false report about
+        their shell, not about the constant this class exists to pin."""
+        monkeypatch.delenv(advisor._ENUMERATE_TIMEOUT_ENV, raising=False)
+        assert advisor._positive_int_env(
+            advisor._ENUMERATE_TIMEOUT_ENV,
+            advisor._ENUMERATE_TIMEOUT_S_DEFAULT) == advisor._ENUMERATE_TIMEOUT_S_DEFAULT
+
+
+class TestTimeoutOverrideParsing:
+    """`_positive_int_env` runs at IMPORT time and `cli` imports `advisor` at module
+    scope, so its failure mode is not a bad timeout -- it is every agentctl command
+    dying on a traceback before it can say which variable was at fault."""
+
+    def _read(self, monkeypatch, raw):
+        if raw is None:
+            monkeypatch.delenv(advisor._ENUMERATE_TIMEOUT_ENV, raising=False)
+        else:
+            monkeypatch.setenv(advisor._ENUMERATE_TIMEOUT_ENV, raw)
+        return advisor._positive_int_env(advisor._ENUMERATE_TIMEOUT_ENV, 480)
+
+    def test_a_positive_integer_is_honoured(self, monkeypatch):
+        assert self._read(monkeypatch, "900") == 900
+
+    @pytest.mark.parametrize("raw", ["8m", "", "480.0", "eight hundred"])
+    def test_unparseable_values_fall_back_and_name_themselves(
+            self, monkeypatch, capsys, raw):
+        assert self._read(monkeypatch, raw) == 480
+        err = capsys.readouterr().err
+        assert advisor._ENUMERATE_TIMEOUT_ENV in err
+        assert repr(raw) in err
+
+    @pytest.mark.parametrize("raw", ["0", "-30"])
+    def test_non_positive_values_are_rejected_rather_than_obeyed(
+            self, monkeypatch, capsys, raw):
+        """`0` parses fine and is the dangerous one: obeyed, it makes every
+        enumeration time out instantly, converting the gate to permanent
+        escape-taking -- fail-CLOSED in form, and in practice a fleet that always
+        escapes. Nobody chooses that by typing a number, so it is refused."""
+        assert self._read(monkeypatch, raw) == 480
+        assert advisor._ENUMERATE_TIMEOUT_ENV in capsys.readouterr().err
 
 
 # --- deadline stamping against REAL premise bags --------------------------------
@@ -375,9 +477,10 @@ class TestDeadlineStamping:
         after = time.time()
 
         bag = store.load(sid).plugins["premise"]
+        budget = advisor.ENUMERATE_TIMEOUT_S + cli._ENUMERATE_LAUNCH_MARGIN_S
         assert bag["enumerate_deadline"] is not None
-        assert before + advisor.ENUMERATE_TIMEOUT_S - 2 <= bag["enumerate_deadline"]
-        assert bag["enumerate_deadline"] <= after + advisor.ENUMERATE_TIMEOUT_S + 2
+        assert before + budget - 2 <= bag["enumerate_deadline"]
+        assert bag["enumerate_deadline"] <= after + budget + 2
 
     def test_replan_restamps_enumerate_deadline_on_digest_change(
             self, store, fixtures_dir, monkeypatch):
@@ -400,7 +503,8 @@ class TestDeadlineStamping:
         cli.cmd_replan(ns(session=sid, plan=corrected), store=store)
 
         bag = store.load(sid).plugins["premise"]
-        assert bag["enumerate_deadline"] == pinned + advisor.ENUMERATE_TIMEOUT_S
+        assert bag["enumerate_deadline"] == (
+            pinned + advisor.ENUMERATE_TIMEOUT_S + cli._ENUMERATE_LAUNCH_MARGIN_S)
         assert bag["enumerate_deadline"] != submit_deadline
         # the not-run clear is persisted too, not merely mutated in memory: on disk
         # a still-True `enumerated` pinned to the superseded digest yields the
@@ -408,6 +512,60 @@ class TestDeadlineStamping:
         # if/elif), which is the routing the clear exists to prevent.
         assert bag["enumerated"] is False
         assert bag["enumerated_at"] == ""
+
+
+# --- the launch leaves a trace either way ---------------------------------------
+
+class TestLaunchIsRecorded:
+    """The launch is the one step of the detached design nobody watches: it happens
+    inside `submit-plan`, its child is detached, and its failure mode is silence. A
+    swallowed spawn error used to be indistinguishable from a healthy launch whose
+    child is still thinking -- both present as `enumerated=False` with a deadline
+    ticking -- so the deadline had to expire before anyone learned there had never
+    been a child. Both outcomes are logged so the two states are tellable apart."""
+
+    def _submit(self, store, fixtures_dir, sid, spawn):
+        cli.cmd_start(ns(session=sid, task="demo-two-stage", goal="", done_criterion="",
+                         criterion_type="measurable", recursion_depth=0), store=store)
+        cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
+                            wall_clock_min=60, tracker_key=None, architectural=True,
+                            external_effect=False, new_dependency=False,
+                            public_api_change=False), store=store)
+        cli.cmd_plan(ns(session=sid), store=store)
+        cli.cmd_submit_plan(
+            ns(session=sid, plan=str(fixtures_dir / "plan_two_stage.toml")), store=store)
+        return [row for row in store.load(sid).history
+                if row.get("event") == "enumerate_launch"]
+
+    def test_a_successful_launch_is_logged_with_its_counter(
+            self, store, fixtures_dir, monkeypatch):
+        monkeypatch.delenv("AGENTCTL_PREMISE", raising=False)
+        monkeypatch.setattr(cli, "_spawn_enumeration_worker", lambda *a, **k: None)
+
+        rows = self._submit(store, fixtures_dir, "launch-log-ok", None)
+        assert len(rows) == 1
+        assert rows[0]["ok"] is True
+        assert rows[0]["launch"] == 1
+
+    def test_a_failed_launch_is_logged_with_its_error_and_still_stamps_a_deadline(
+            self, store, fixtures_dir, monkeypatch):
+        monkeypatch.delenv("AGENTCTL_PREMISE", raising=False)
+
+        def _boom(*args, **kwargs):
+            raise OSError("no such file or directory: python3")
+
+        monkeypatch.setattr(cli, "_spawn_enumeration_worker", _boom)
+
+        rows = self._submit(store, fixtures_dir, "launch-log-fail", None)
+        assert len(rows) == 1
+        assert rows[0]["ok"] is False
+        assert "no such file or directory" in rows[0]["error"]
+        # the failure is recorded, not raised: a spawn that cannot happen must not
+        # take `submit-plan` down with it, and the deadline it already stamped is
+        # what routes the session to the escape rather than to a hang.
+        bag = store.load("launch-log-fail").plugins["premise"]
+        assert bag["enumerate_deadline"] is not None
+        assert bag["enumerate_launch"] == 1
 
 
 # --- the two crux cases: digest-changing vs digest-unchanged replan ------------
