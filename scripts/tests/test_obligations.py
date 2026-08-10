@@ -228,6 +228,23 @@ def test_guardian_discharges_obligation_for_stage_no_longer_present():
     assert ob._resolution_guardian(state, bag) == []
 
 
+def test_guardian_discharges_obligation_whose_index_a_replan_reassigned():
+    """The ledger keys by stage INDEX, so a replan that REASSIGNS an index (rather
+    than dropping it) leaves the obligation pointing at a stage the minting rule
+    never covered. Observed live: an obligation minted against a plan's stage 3
+    while it was spawn:developer survived the replan that made index 3 an
+    in_thread stage, and blocked `resolve` with no route out — at RESOLUTION there
+    is no active stage, so cmd_code_review cannot record even an override."""
+    state = _active_state(stages=[_dev_stage(index=3)], current_stage=3)
+    ob.mint(state, [_code_review_pd(stage=3)])
+    bag = state.plugins["obligations"]
+    assert len(ob._resolution_guardian(state, bag)) == 1
+
+    state.stages[0].actor = Actor(executor="in_thread")
+    assert state.stages[0].needs_control() is False
+    assert ob._resolution_guardian(state, bag) == []
+
+
 # --- DEADLOCK REGRESSION -----------------------------------------------------
 
 def test_premise_and_experience_obligations_never_populate_ledger():
