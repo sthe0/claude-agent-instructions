@@ -4,7 +4,7 @@ description: The five-point shape of a report the user (or the next step) can ac
 type: feedback
 schema: leaf/v1
 created: 2026-07-02
-last_verified: 2026-07-02
+last_verified: 2026-08-10
 ---
 
 # Outcome format
@@ -28,6 +28,8 @@ A report the user (or the next step) can act on without re-asking:
 **(4)** next steps **only if not done** — when done and accepted, **stop** (no teeing up the next roadmap phase, no restating a pointer that already lives in its canonical place);
 
 **(5)** presentation — any user-facing report / tracker comment / message: order **main-first** (headline result → method → detail; reproducibility / SQL / paths last); give a numeric estimate as a **confidence interval** in compact `mean ± error` form (point value never the headline), and **apply the form silently** — write the number, don't narrate the presentation instruction into the text; **highlight** load-bearing figures with **bold** or a colored callout — not emoji (they hinder readability).
+
+**Explanatory deliverable** — when the report explains **how a designed thing works** rather than what was done, point (5)'s main-first is necessary but not sufficient: an inventory of mechanisms ordered by importance passes main-first and still leaves the reader unable to see the design. Order by **functional ground** instead — concept → the difficulty it removes → the mechanism as its consequence — and push implementation detail to an appendix. Full rule: `skills/specializations/tech-writer/SKILL.md` § What to say, and in what order, rule 8.
 
 ## See also
 

@@ -20,6 +20,18 @@ def ns(**kw):
     return Namespace(**kw)
 
 
+def _cover_the_order(store, sid, stage=1):
+    """Cover the order through the ordinary CLI verbs. With the premise gate LIVE its
+    order-coverage half fail-closes on an EMPTY order bag once a plan is submitted, so
+    the three #48(b) deadlock tests below — which are about the QUESTION channel —
+    must satisfy it to reach approve at all. That half's own two-directional proof
+    lives in test_order_coverage.py."""
+    cli.cmd_order_raise(ns(session=sid, id="O1", element="the order this plan answers"),
+                        store=store)
+    cli.cmd_order_dispose(ns(session=sid, id="O1", as_="covered", stage=stage, reason=""),
+                          store=store)
+
+
 def _read_gate_log(path):
     if not path.exists():
         return []
@@ -777,6 +789,7 @@ def test_corrected_plan_is_enumerable_so_the_premise_gate_stops_deadlocking_repl
 
     cli.cmd_question_enumerate(ns(session=sid, plan=None), store=store,
                                runner=_silent_advisor)
+    _cover_the_order(store, sid)
     assert cli.cmd_approve(ns(session=sid, by="user"), store=store).ok is True
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
@@ -847,6 +860,7 @@ def test_corrected_plan_is_rebindable_so_the_premise_gate_stops_deadlocking_repl
 
     cli.cmd_question_enumerate(ns(session=sid, plan=None), store=store,
                                runner=_silent_advisor)
+    _cover_the_order(store, sid)
     assert cli.cmd_approve(ns(session=sid, by="user"), store=store).ok is True
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
@@ -915,6 +929,7 @@ def test_corrected_plan_is_redisposable_so_the_premise_gate_stops_deadlocking_re
 
     cli.cmd_question_enumerate(ns(session=sid, plan=None), store=store,
                                runner=_silent_advisor)
+    _cover_the_order(store, sid)
     assert cli.cmd_approve(ns(session=sid, by="user"), store=store).ok is True
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)

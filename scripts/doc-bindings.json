@@ -38,6 +38,18 @@
       ]
     },
     {
+      "id": "effort-divergence",
+      "concept": "The effort-divergence trigger: four scales over an arming-relative window, routing a PASSING result into DIAGNOSING with no user question.",
+      "doc": {
+        "file": "scripts/agentctl/README.md",
+        "section": "Effort divergence"
+      },
+      "object_glob": "scripts/agentctl/effort.py",
+      "anchors": [
+        {"module": "agentctl.effort", "symbols": ["Divergence", "divergence", "estimate", "rederive", "arm", "record_fire"]}
+      ]
+    },
+    {
       "id": "subplan-stack",
       "concept": "The service sub-plan frame stack: push/pop for nested fractal service sub-plans.",
       "doc": {

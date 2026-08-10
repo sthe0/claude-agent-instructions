@@ -356,9 +356,12 @@ def _no_stamp_blocker(probe) -> str:
         return _NO_STAMP_GENERIC
     if getattr(wiring, "status", None) != hook_wiring.ABSENT:
         return _NO_STAMP_GENERIC
+    # The scope comes from the probe, not from this sentence: how far an ABSENT
+    # reaches depends on whether the project member was read, which only the
+    # probe knows.
     return (
         "no delivery proof recorded — " + DELIVERY_HOOK_BASENAME + " is not "
-        f"registered in any user-level settings member of {wiring.root}, so no "
+        f"registered in {wiring.absence_scope()}, so no "
         "automated proof can come from that evidence domain; either run this "
         "task under claude-task / claude-agent, where the hook IS wired, or run "
         "confirm-delivery --by <you> --note <why> --escape-reason " +
@@ -484,6 +487,25 @@ def stage_review_active(state: SessionState) -> bool:
     must not silently defeat a mandatory gate; the gate's only off switch is its own
     env var. Env-only reads, no file/subprocess I/O, so the gate stays pure."""
     env = os.environ.get("AGENTCTL_STAGE_REVIEW")
+    if env == "1":
+        return True
+    if env == "0":
+        return False
+    return state.weight_class == WeightClass.SUBSTANTIVE.value
+
+
+def effort_active(state: SessionState) -> bool:
+    """Whether a firing `effort.divergence()` may ACT (transition the session into
+    DIAGNOSING) — never whether effort.py accounts. arm/rederive/refresh_spend run
+    unconditionally at their call sites regardless of this flag; only the fire sites in
+    cli.py read it, exactly like stage_review_active gates its judge, not the
+    accumulation it reads. AGENTCTL_EFFORT overrides in both directions ("1" forces on,
+    "0" forces off); the weight_class fallback mirrors the sibling gates above for
+    convention only — a session that never called cmd_approve never armed (effort.py's
+    ARMED-ONLY), so this fallback is moot in practice but kept for the same reason the
+    others have it: an explicit escape hatch that doesn't depend on inferring intent
+    from the absence of a var."""
+    env = os.environ.get("AGENTCTL_EFFORT")
     if env == "1":
         return True
     if env == "0":

@@ -26,10 +26,9 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib.config_root import agent_home
+from lib.config_root import projects_roots
 
 COST_LOG = Path.home() / ".local" / "log" / "claude-spawn-costs.jsonl"
-PROJECTS_DIR = agent_home() / "projects"  # system root (isolated or legacy)
 
 # USD per 1M tokens. Rates change — refresh via the `claude-api` skill.
 # cache_write = 5-minute cache-creation rate (1.25x base input); cache_read = 0.1x base input.
@@ -323,13 +322,13 @@ def parse_transcripts(files: list[Path], classify: bool = False) -> dict:
 
 def resolve_project(project: str) -> list[Path]:
     p = Path(project).expanduser()
-    if not p.exists():
-        p = PROJECTS_DIR / project
     if p.is_dir():
         return sorted(f for f in p.glob("*.jsonl"))
     if p.is_file():
         return [p]
-    return []
+    # A bare cwd-hash: the same name can exist under both config roots and each
+    # holds a different set of sessions, so union rather than take the first hit.
+    return sorted(f for root in projects_roots() for f in (root / project).glob("*.jsonl"))
 
 
 def budget_report(tr: dict, spawn_cost: float, spawn_note: str) -> str:
@@ -365,7 +364,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--by", choices=("kind", "tier", "day"), default="kind", help="grouping for summary")
     p.add_argument("--detail", action="store_true", help="print one row per entry instead of summary")
     p.add_argument("--csv", action="store_true", help="emit CSV (with all fields)")
-    p.add_argument("--project", help="project dir or cwd-hash under ~/.claude/projects: full-budget interval + interaction cost from session transcripts")
+    p.add_argument("--project", help="project dir, or a cwd-hash looked up under every config root's projects/ (both are unioned): full-budget interval + interaction cost from session transcripts")
     p.add_argument("--session", help="a single session transcript .jsonl (instead of a whole project)")
     p.add_argument("--classify-corrections", action="store_true", help="heuristically flag likely correction prompts (approximate)")
     args = p.parse_args(argv)

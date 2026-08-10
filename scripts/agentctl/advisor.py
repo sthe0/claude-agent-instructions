@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
+
+from lib import judge_ledger
 
 from .config import Thresholds
 from .dispatch import RunResult
@@ -27,6 +30,12 @@ _ADVISOR_TIMEOUT_S = 20
 # cheapest model and is fail-open (a missing verdict blocks at the gate, never passes).
 _JUDGE_MODEL = "haiku"
 JUDGE_REVIEWER = "judge:haiku"
+# Last-resort ceiling for a judge call made outside any hook budget, by the rule
+# in lib/judge_latency.py::last_resort_ceiling_s — one second past the slowest
+# run this model has been seen to make on ANY judge prompt. Its row in that
+# module is UNMEASURED, so this default is the only number available to it; the
+# test-suite asserts the literal still equals what that rule computes.
+_ACCEPTANCE_JUDGE_TIMEOUT_S = 41
 _JUDGE_PASS = "pass"
 _JUDGE_REVISE = "revise"
 
@@ -74,20 +83,26 @@ def enumerate_claims(artifact_text: str, runner) -> list[str]:
     raised item into a blocker; this call only supplies the candidates.
 
     Cost-bounded exactly like the warn-only advisor: `claude -p --model sonnet`
-    with the timeout carried by the runner (advisor.subprocess_runner). Fail-open:
+    with an explicit _ADVISOR_TIMEOUT_S at the call site. Fail-open:
     a None runner, a non-zero exit, or any exception returns [] — an empty
     enumeration is a valid (if unhelpful) result; the mandatory-cross-check blocker
     is discharged by the `enumerated` flag the caller sets, not by the count."""
     if runner is None:
         return []
+    judge_ledger.begin_attributed_call("enumerate_claims")
     try:
         prompt = _ENUMERATE_PROMPT.format(payload=artifact_text)
-        result = runner(["claude", "-p", "--model", _ADVISOR_MODEL, prompt])
+        result = runner(
+            ["claude", "-p", "--model", _ADVISOR_MODEL, prompt],
+            timeout=_ADVISOR_TIMEOUT_S,
+        )
         if result.returncode != 0:
             return []
         return [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
     except Exception:
         return []
+    finally:
+        judge_ledger.set_current_judge(None)
 
 
 _ENUMERATE_QUESTIONS_PROMPT = (
@@ -145,10 +160,14 @@ def enumerate_questions_health(
     not by making approve un-passable on infra failure."""
     if runner is None:
         return None, []
+    judge_ledger.begin_attributed_call("enumerate_questions_health")
     try:
         payload = f"GOAL:\n{goal}\n\nDONE CRITERION:\n{done_criterion}\n\nPLAN:\n{plan_text}"
         prompt = _ENUMERATE_QUESTIONS_PROMPT.format(payload=payload)
-        result = runner(["claude", "-p", "--model", _ADVISOR_MODEL, prompt])
+        result = runner(
+            ["claude", "-p", "--model", _ADVISOR_MODEL, prompt],
+            timeout=_ADVISOR_TIMEOUT_S,
+        )
         if result.returncode != 0:
             return False, []
         pairs: list[tuple[str, str]] = []
@@ -163,6 +182,8 @@ def enumerate_questions_health(
         return True, pairs
     except Exception:
         return False, []
+    finally:
+        judge_ledger.set_current_judge(None)
 
 
 def enumerate_questions(
@@ -184,20 +205,33 @@ def judge(kind: str, payload: dict, runner, *, enabled: bool | None = None) -> l
         enabled = os.environ.get("AGENTCTL_ADVISOR") == "1"
     if not enabled or runner is None:
         return []
+    judge_ledger.begin_attributed_call("judge")
     try:
         template = _PROMPTS.get(kind)
         if not template:
             return []
         prompt = template.format(payload=payload)
-        result = runner(["claude", "-p", "--model", _ADVISOR_MODEL, prompt])
+        result = runner(
+            ["claude", "-p", "--model", _ADVISOR_MODEL, prompt],
+            timeout=_ADVISOR_TIMEOUT_S,
+        )
         if result.returncode != 0:
             return []
         return [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
     except Exception:
         return []
+    finally:
+        judge_ledger.set_current_judge(None)
 
 
-def acceptance_judge(observation: str, expected: str, runner, *, enabled: bool) -> tuple[str | None, str]:
+def acceptance_judge(
+    observation: str,
+    expected: str,
+    runner,
+    *,
+    enabled: bool,
+    timeout: int = _ACCEPTANCE_JUDGE_TIMEOUT_S,
+) -> tuple[str | None, str]:
     """Cheap external judge for an acceptance observation, backing the acceptance-review
     gate. Returns (verdict, reason) where verdict is 'pass' | 'revise' | None.
 
@@ -209,9 +243,15 @@ def acceptance_judge(observation: str, expected: str, runner, *, enabled: bool) 
     The prompt is lifted from _PROMPTS['acceptance_observation'] (the same criterion the
     warn-only advisor applies) and wrapped with a strict YES/NO + one-line-reason
     protocol so the deterministic gate has a machine-decidable verdict rather than a
-    free-text concern list."""
+    free-text concern list.
+
+    ``timeout`` is explicit at the call site because this judge runs inside the
+    engine, not inside a hook: nothing above it kills a hung call, so the number
+    cannot be left to the runner's own default. Its latency row is UNMEASURED,
+    so the default is the last-resort ceiling rather than a per-judge one."""
     if not enabled or runner is None:
         return None, "judge disabled or no runner (fail-open)"
+    judge_ledger.begin_attributed_call("acceptance_judge")
     try:
         criterion = _PROMPTS["acceptance_observation"].format(
             payload={"expected": expected, "observation": observation}
@@ -222,7 +262,9 @@ def acceptance_judge(observation: str, expected: str, runner, *, enabled: bool) 
             "and adequate) or NO (it is vague, generic, or a rephrase of the expected). "
             "On the SECOND line give a one-line reason."
         )
-        result = runner(["claude", "-p", "--model", _JUDGE_MODEL, prompt])
+        result = runner(
+            ["claude", "-p", "--model", _JUDGE_MODEL, prompt], timeout=timeout
+        )
         if result.returncode != 0:
             return None, "judge exited non-zero (fail-open)"
         lines = [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
@@ -237,6 +279,8 @@ def acceptance_judge(observation: str, expected: str, runner, *, enabled: bool) 
         return None, f"judge answer unparseable: {lines[0]!r} (fail-open)"
     except Exception:
         return None, "judge raised (fail-open)"
+    finally:
+        judge_ledger.set_current_judge(None)
 
 
 # Language-independent question-mark set for the pre-model prefilter: the ASCII
@@ -265,9 +309,17 @@ _BINARY_ASK_QUESTION_MARKS = frozenset({
 # chars argument is given.
 _BINARY_ASK_TRAILING_DECORATION = "*_`~)]}>\"'»”’ \t\r\n"
 
-# Interactive end-of-turn call: bounded well under _ADVISOR_TIMEOUT_S=20 so a
-# fail-open timeout tail stays short on an ordinary turn.
-_BINARY_ASK_TIMEOUT_S = 8
+# LAST-RESORT default for the three judges below, used only when a caller names
+# no timeout of its own. Not "bounded well under _ADVISOR_TIMEOUT_S" any more:
+# that reading treated the cheap advisory model's cap as an upper bound for a
+# call it does not make, and produced 8 s -- under the FASTEST run any of these
+# judges has been measured to make (5.93 s for binary_ask, 10.29 s for
+# deferring), so an unbudgeted caller was killed before every verdict.
+# By lib/judge_latency.py::last_resort_ceiling_s: one second past the slowest run
+# this model has made on ANY judge prompt. A caller inside a hook budget passes
+# its own, narrower, per-judge ceiling and never reaches this number; the
+# test-suite asserts the literal still equals what that rule computes.
+_BINARY_ASK_TIMEOUT_S = 41
 
 _BINARY_ASK_PROMPT = (
     "You are given the FINAL message of an AI assistant's turn, written in any "
@@ -287,9 +339,124 @@ _BINARY_ASK_PROMPT = (
 )
 
 
+_MISSING = object()
+
+_KILLSWITCH_REASON = "judge disabled (fail-open)"
+_NO_RUNNER_REASON = "judge given no runner (fail-open)"
+_NO_TEXT_REASON = "judge given no text (fail-open)"
+
+_UNATTRIBUTED_JUDGE = "unattributed"
+
+
+def _judge_unavailable(
+    name: str, reason: str, *, stage: str, timeout, remaining, ceiling
+) -> tuple[bool, str]:
+    """Terminal outcome for a decision point reached with no call possible.
+    Shared by all four judge functions, which differ here only in their own
+    name and which of the three no-call reasons applies:
+
+    ``stage="killswitch"`` — disabled by the hook's own kill switch env var.
+    ``stage="no_text"``    — no text was given to judge (before the runner
+                              check, since a missing runner is moot if there
+                              is nothing to send it).
+    ``stage="no_runner"``  — enabled, text present, but no runner injected.
+
+    Kept distinct rather than one shared "disabled" stage so a reader of the
+    ledger can tell "the operator turned this off" apart from "the caller
+    forgot to give it text" apart from "the runner was never wired up" —
+    three different fixes, one indistinguishable free-text reason before."""
+    judge_ledger.decided(
+        name, stage=stage, verdict=False, reason=reason,
+        remaining=remaining, threshold=timeout, ceiling=ceiling,
+    )
+    return False, reason
+
+
+def _classify(result) -> tuple[bool, str, bool, bool | None]:
+    """(verdict, reason, malformed, timed_out) from one runner result — the
+    single copy of the classification the four judge functions each held
+    verbatim. Their ``runner(...)`` call sites stay where they are (frozen by a
+    concurrent change); only what happens to the result is shared.
+
+    ``timed_out`` is None when the result object has no such field: a runner
+    predating the flag cannot distinguish a timeout from a fast failure, and
+    fabricating False would put an unknown into the ledger as a fact. Every
+    ``runner`` actually wired in production is this module's own
+    ``subprocess_runner``, which always sets the field (see its own
+    docstring) — so this branch is unreachable from any real call site
+    today. It stays because ``runner`` is an injected parameter, not a fixed
+    call: a test double, or a future runner this module does not control,
+    can still omit the field, and recording a fabricated ``False`` for it
+    would be the exact ledger-fidelity bug this module exists to avoid.
+
+    ``malformed`` is set ONLY where the call returned an answer that could not
+    be parsed (outcome 7a) — not on a timeout, a non-zero exit or an exception,
+    each of which produced no answer at all and is named by its own field."""
+    raw = getattr(result, "timed_out", _MISSING)
+    timed_out = None if raw is _MISSING else bool(raw)
+    if timed_out:
+        return False, "judge timed out (fail-open)", False, timed_out
+    if result.returncode != 0:
+        return False, "judge exited non-zero (fail-open)", False, timed_out
+    lines = [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
+    if not lines:
+        return False, "judge returned no output (fail-open)", True, timed_out
+    if lines[0].upper().startswith("YES"):
+        return True, "", False, timed_out
+    if lines[0].upper().startswith("NO"):
+        return False, "", False, timed_out
+    return False, f"judge answer unparseable: {lines[0]!r} (fail-open)", True, timed_out
+
+
+def _record_result(
+    name: str, result, *, timeout, remaining, ceiling, duration
+) -> tuple[bool, str]:
+    verdict, reason, malformed, timed_out = _classify(result)
+    judge_ledger.decided(
+        name, stage="call", verdict=verdict, reason=reason,
+        timed_out=timed_out, malformed=malformed, runner_legacy=timed_out is None,
+        remaining=remaining, threshold=timeout, ceiling=ceiling, duration=duration,
+    )
+    return verdict, reason
+
+
+def _record_raised(
+    name: str, *, timeout, remaining, ceiling, duration
+) -> tuple[bool, str]:
+    reason = "judge raised (fail-open)"
+    judge_ledger.decided(
+        name, stage="call", verdict=False, reason=reason,
+        timed_out=None, malformed=False,
+        remaining=remaining, threshold=timeout, ceiling=ceiling, duration=duration,
+    )
+    return False, reason
+
+
+def binary_ask_prefilter(final_text: str) -> bool:
+    """The deterministic half of judge_binary_ask: does the message END in a
+    question mark once a trailing run of formatting decoration is stripped?
+
+    Public because a caller that budgets its judge calls has to know whether a
+    call is going to happen BEFORE it spends budget deciding — asking the judge
+    function itself would mean the prefilter's verdict is only observable after
+    the (possibly skipped) call. judge_binary_ask still applies it itself, so
+    the two cannot disagree.
+    """
+    if not isinstance(final_text, str) or not final_text:
+        return False
+    stripped = final_text.rstrip(_BINARY_ASK_TRAILING_DECORATION)
+    return bool(stripped) and stripped[-1] in _BINARY_ASK_QUESTION_MARKS
+
+
 def judge_binary_ask(
-    final_text: str, runner, *, enabled: bool = True, timeout: int = _BINARY_ASK_TIMEOUT_S
-) -> bool:
+    final_text: str,
+    runner,
+    *,
+    enabled: bool = True,
+    timeout: int = _BINARY_ASK_TIMEOUT_S,
+    remaining: float | None = None,
+    ceiling: float | None = None,
+) -> tuple[bool, str]:
     """Language-independent semantic judge: does ``final_text`` end with a binary /
     confirm question that should have gone through an AskUserQuestion click-gate?
 
@@ -302,28 +469,50 @@ def judge_binary_ask(
     markdown emphasis, closing brackets/quotes, whitespace: _BINARY_ASK_TRAILING_
     DECORATION -- is stripped) that keeps the model off every non-question turn.
 
-    Fail-open, mirroring judge()/acceptance_judge(): disabled, no runner, a
-    non-zero exit, an empty/unparseable answer, or any exception all return False
-    -- the guardian this feeds is a Stop-gate BLOCKER, so a confident False (never
-    a fabricated True) is the safe failure direction."""
-    if not enabled or not isinstance(final_text, str) or not final_text:
-        return False
-    stripped = final_text.rstrip(_BINARY_ASK_TRAILING_DECORATION)
-    if not stripped or stripped[-1] not in _BINARY_ASK_QUESTION_MARKS:
-        return False
+    Three-valued fail-open contract mirroring acceptance_judge: returns
+    (verdict, reason) where ``reason`` is "" for a genuine model verdict (True
+    or False) and a non-empty "...(fail-open)" string on every path where the
+    False is FABRICATED rather than judged -- disabled/no runner, non-zero
+    exit, empty output, an unparseable answer, a timeout (``result.timed_out``
+    -- never derived by matching subprocess_runner's own stderr text), or an
+    unexpected exception. The guardian this feeds is a Stop-gate BLOCKER, so a
+    fabricated False is still the safe failure direction; the reason exists so
+    the execution ledger can tell "the judge said no" from "the judge never
+    ran".
+
+    ``remaining``/``ceiling`` are forwarded to the ledger only (the budget
+    remainder at entry and the caller's own per-call ceiling, alongside
+    ``timeout`` as the active threshold) -- this function never uses them to
+    decide anything; the caller already resolved ``timeout`` from its own
+    budget before calling in."""
+    if not enabled:
+        return _judge_unavailable(
+            "binary_ask", _KILLSWITCH_REASON, stage="killswitch",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    if not binary_ask_prefilter(final_text):
+        return False, ""
     if runner is None:
-        return False
+        return _judge_unavailable(
+            "binary_ask", _NO_RUNNER_REASON, stage="no_runner",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    judge_ledger.set_current_judge("binary_ask")
+    start = time.monotonic()
     try:
         prompt = _BINARY_ASK_PROMPT.format(text=final_text)
         result = runner(["claude", "-p", "--model", _JUDGE_MODEL, prompt], timeout=timeout)
-        if result.returncode != 0:
-            return False
-        lines = [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
-        if not lines:
-            return False
-        return lines[0].upper().startswith("YES")
+        return _record_result(
+            "binary_ask", result, duration=time.monotonic() - start,
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
     except Exception:
-        return False
+        return _record_raised(
+            "binary_ask", duration=time.monotonic() - start,
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    finally:
+        judge_ledger.set_current_judge(None)
 
 
 _FEEDBACK_JUDGE_PROMPT = (
@@ -359,9 +548,49 @@ _OUTAGE_ESCALATION_JUDGE_PROMPT = (
 )
 
 
+# LAST-RESORT default for the deferring-disposition judge, used only when a
+# caller names no timeout of its own. Superseded numbers, kept as the reason this
+# is now computed: 8 s (the neighbours', below the fastest measured run) and then
+# 30 s, set from a four-sample note that read "13.9 +/- 2.4 s, min 12.1, max
+# 17.5" -- an n of 4 that missed this judge's real tail by more than 20 s
+# (n=18: median 17.43, p90 37.58, max 39.99).
+# By lib/judge_latency.py::last_resort_ceiling_s, the same rule and the same
+# number as _BINARY_ASK_TIMEOUT_S: outside a hook budget the ceiling covers the
+# whole model family, not one prompt. The two constants stay SEPARATE names
+# because each judge's in-hook ceiling is derived per row, and a shared name here
+# would invite a caller to reuse whichever it imported first.
+_DEFERRING_DISPOSITION_TIMEOUT_S = 41
+
+_DEFERRING_DISPOSITION_JUDGE_PROMPT = (
+    "You are given the question and every option of a menu an AI assistant is "
+    "about to show its user, written in any language. Decide whether EVERY "
+    "option DEFERS or REFUSES a piece of work the assistant could carry out "
+    "right now -- filing a ticket, parking it in a backlog, \"later\", \"as a "
+    "separate task\", \"leave as is\", \"don't touch\" -- so that the menu "
+    "offers no branch that does the work now.\n\n"
+    "Answer YES only when ALL of these hold: the menu is about a concrete piece "
+    "of work the assistant has already identified; not one option does that "
+    "work now; and nothing in the menu names a reason the work is beyond the "
+    "assistant.\n\n"
+    "Answer NO when: at least one option does the work now; or the menu names "
+    "any stated reason it cannot be done now (missing rights, another owner, a "
+    "required waiting period, a pending external result); or the menu is not "
+    "about doing work at all (a preference, a language, a wording or scope "
+    "choice).\n\n"
+    "Answer on the FIRST line with exactly YES or NO, nothing else.\n\n"
+    "MENU:\n{text}"
+)
+
+
 def judge_feedback_signal(
-    user_text: str, runner, *, enabled: bool = True, timeout: int = _BINARY_ASK_TIMEOUT_S
-) -> bool:
+    user_text: str,
+    runner,
+    *,
+    enabled: bool = True,
+    timeout: int = _BINARY_ASK_TIMEOUT_S,
+    remaining: float | None = None,
+    ceiling: float | None = None,
+) -> tuple[bool, str]:
     """Semantic judge behind the self-improvement regex prefilter: does
     ``user_text`` carry genuine agent-behavior feedback (a correction, a stated
     principle, a "should have" evaluation), as opposed to a neutral instruction or
@@ -375,34 +604,60 @@ def judge_feedback_signal(
 
     This function is a PURE model call with no inline prefilter: unlike
     judge_binary_ask's self-contained punctuation check, the regex prefilter here
-    (si_feedback_detect.find_signals) lives outside the agentctl package, and
-    advisor.py imports only within .config/.dispatch -- the caller runs the
-    prefilter and calls this judge only when it fires.
+    (si_feedback_detect.find_signals) lives at the scripts/ root, outside the
+    agentctl package -- the caller runs the prefilter and calls this judge only
+    when it fires.
 
-    Fail-open, mirroring judge_binary_ask: disabled, no text, no runner, a
-    non-zero exit, an empty/unparseable answer, or any exception all return
-    False -- the guardian this feeds is a Stop-gate BLOCKER, so a confident False
-    (never a fabricated True) is the safe failure direction."""
-    if not enabled or not isinstance(user_text, str) or not user_text:
-        return False
+    Three-valued fail-open contract, mirroring judge_binary_ask: returns
+    (verdict, reason) with reason "" for a genuine verdict and a non-empty
+    "...(fail-open)" string for disabled/no-text/no-runner, non-zero exit,
+    empty/unparseable output, a timeout (``result.timed_out``), or an
+    exception -- the guardian this feeds is a Stop-gate BLOCKER, so a
+    fabricated False is still the safe failure direction; ``remaining``/
+    ``ceiling`` are forwarded to the ledger only, alongside ``timeout`` as the
+    active threshold."""
+    if not enabled:
+        return _judge_unavailable(
+            "feedback_signal", _KILLSWITCH_REASON, stage="killswitch",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    if not isinstance(user_text, str) or not user_text:
+        return _judge_unavailable(
+            "feedback_signal", _NO_TEXT_REASON, stage="no_text",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
     if runner is None:
-        return False
+        return _judge_unavailable(
+            "feedback_signal", _NO_RUNNER_REASON, stage="no_runner",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    judge_ledger.set_current_judge("feedback_signal")
+    start = time.monotonic()
     try:
         prompt = _FEEDBACK_JUDGE_PROMPT.format(text=user_text)
         result = runner(["claude", "-p", "--model", _JUDGE_MODEL, prompt], timeout=timeout)
-        if result.returncode != 0:
-            return False
-        lines = [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
-        if not lines:
-            return False
-        return lines[0].upper().startswith("YES")
+        return _record_result(
+            "feedback_signal", result, duration=time.monotonic() - start,
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
     except Exception:
-        return False
+        return _record_raised(
+            "feedback_signal", duration=time.monotonic() - start,
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    finally:
+        judge_ledger.set_current_judge(None)
 
 
 def judge_outage_escalation(
-    assistant_text: str, runner, *, enabled: bool = True, timeout: int = _BINARY_ASK_TIMEOUT_S
-) -> bool:
+    assistant_text: str,
+    runner,
+    *,
+    enabled: bool = True,
+    timeout: int = _BINARY_ASK_TIMEOUT_S,
+    remaining: float | None = None,
+    ceiling: float | None = None,
+) -> tuple[bool, str]:
     """Semantic judge behind the outage-escalation regex prefilter: does
     ``assistant_text`` escalate a live, un-diagnosed external-service failure to
     the user, as opposed to a meta-description of failure handling, a resolved
@@ -410,31 +665,111 @@ def judge_outage_escalation(
 
     This function is a PURE model call with no inline prefilter -- the caller
     (outage_escalation_detect.detect) runs the regex prefilter outside the
-    agentctl package and calls this judge only when it fires; advisor.py imports
-    only within .config/.dispatch, so it cannot import the scripts/-root
-    detector to prefilter internally the way judge_binary_ask does with its
-    self-contained punctuation check.
+    agentctl package and calls this judge only when it fires -- unlike
+    judge_binary_ask, whose punctuation check is self-contained and runs here.
 
-    Fail-open, mirroring judge_binary_ask: disabled, no text, no runner, a
-    non-zero exit, an empty/unparseable answer, or any exception all return
-    False -- both hard-block consumers of this judge (the Stop guardian and the
-    PreToolUse gate) treat False as "do not block", so a confident False is the
-    safe failure direction."""
-    if not enabled or not isinstance(assistant_text, str) or not assistant_text:
-        return False
+    Three-valued fail-open contract, mirroring judge_binary_ask: returns
+    (verdict, reason) with reason "" for a genuine verdict and a non-empty
+    "...(fail-open)" string for disabled/no-text/no-runner, non-zero exit,
+    empty/unparseable output, a timeout (``result.timed_out``), or an
+    exception -- both hard-block consumers of this judge (the Stop guardian and
+    the PreToolUse gate) treat a fabricated False the same as an honest one, so
+    it is still the safe failure direction; ``remaining``/``ceiling`` are
+    forwarded to the ledger only, alongside ``timeout`` as the active
+    threshold."""
+    if not enabled:
+        return _judge_unavailable(
+            "outage_escalation", _KILLSWITCH_REASON, stage="killswitch",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    if not isinstance(assistant_text, str) or not assistant_text:
+        return _judge_unavailable(
+            "outage_escalation", _NO_TEXT_REASON, stage="no_text",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
     if runner is None:
-        return False
+        return _judge_unavailable(
+            "outage_escalation", _NO_RUNNER_REASON, stage="no_runner",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    judge_ledger.set_current_judge("outage_escalation")
+    start = time.monotonic()
     try:
         prompt = _OUTAGE_ESCALATION_JUDGE_PROMPT.format(text=assistant_text)
         result = runner(["claude", "-p", "--model", _JUDGE_MODEL, prompt], timeout=timeout)
-        if result.returncode != 0:
-            return False
-        lines = [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
-        if not lines:
-            return False
-        return lines[0].upper().startswith("YES")
+        return _record_result(
+            "outage_escalation", result, duration=time.monotonic() - start,
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
     except Exception:
-        return False
+        return _record_raised(
+            "outage_escalation", duration=time.monotonic() - start,
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    finally:
+        judge_ledger.set_current_judge(None)
+
+
+def judge_deferring_disposition(
+    ask_text: str,
+    runner,
+    *,
+    enabled: bool = True,
+    timeout: int = _DEFERRING_DISPOSITION_TIMEOUT_S,
+    remaining: float | None = None,
+    ceiling: float | None = None,
+) -> tuple[bool, str]:
+    """Semantic judge behind the deferring-disposition regex prefilter: does this
+    AskUserQuestion menu offer the user nothing but branches that postpone or
+    refuse work the assistant itself could do now?
+
+    The distinction the model carries is the one no regex can: a menu of
+    ticket/backlog/"leave as is" options is DEFECTIVE when the assistant holds
+    the rights and the diagnosis, and LEGITIMATE when the work belongs to
+    someone else -- the same option vocabulary in both cases.
+
+    Like judge_feedback_signal / judge_outage_escalation this is a PURE model
+    call with no inline prefilter: the caller (the hook) runs its regex
+    prefilter and calls this judge only when it fires.
+
+    Three-valued fail-open contract, mirroring judge_binary_ask: returns
+    (verdict, reason) with reason "" for a genuine verdict and a non-empty
+    "...(fail-open)" string for disabled/no-text/no-runner, non-zero exit,
+    empty/unparseable output, a timeout (``result.timed_out``), or an
+    exception -- the consumer is a PreToolUse deny, so a fabricated False is
+    still the safe failure direction; ``remaining``/``ceiling`` are forwarded
+    to the ledger only, alongside ``timeout`` as the active threshold."""
+    if not enabled:
+        return _judge_unavailable(
+            "deferring_disposition", _KILLSWITCH_REASON, stage="killswitch",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    if not isinstance(ask_text, str) or not ask_text:
+        return _judge_unavailable(
+            "deferring_disposition", _NO_TEXT_REASON, stage="no_text",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    if runner is None:
+        return _judge_unavailable(
+            "deferring_disposition", _NO_RUNNER_REASON, stage="no_runner",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    judge_ledger.set_current_judge("deferring_disposition")
+    start = time.monotonic()
+    try:
+        prompt = _DEFERRING_DISPOSITION_JUDGE_PROMPT.format(text=ask_text)
+        result = runner(["claude", "-p", "--model", _JUDGE_MODEL, prompt], timeout=timeout)
+        return _record_result(
+            "deferring_disposition", result, duration=time.monotonic() - start,
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    except Exception:
+        return _record_raised(
+            "deferring_disposition", duration=time.monotonic() - start,
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    finally:
+        judge_ledger.set_current_judge(None)
 
 
 def resolve_enabled(weight_class: str | None, *, thresholds: Thresholds | None = None) -> bool:
@@ -463,9 +798,49 @@ def resolve_enabled(weight_class: str | None, *, thresholds: Thresholds | None =
 def subprocess_runner(argv: list[str], *, timeout: int = _ADVISOR_TIMEOUT_S) -> RunResult:
     """Real `claude -p` runner with a hard timeout. Not judge()'s default (a caller
     that wants a live advisor pass this explicitly) — kept separate so the fail-open
-    `runner=None -> []` contract in judge() stays byte-identical to advisor-absent."""
+    `runner=None -> []` contract in judge() stays byte-identical to advisor-absent.
+
+    ``timeout`` still carries a default, and that is the remaining hole: this
+    signature is the last place where forgetting to pass a ceiling is silently
+    survivable, and the default is the CHEAP ADVISORY model's cap, which fits no
+    judge. Every caller in this module now passes one explicitly; making the
+    parameter mandatory in the contract is filed as OOSEVENREPORT-5 and is out of
+    this change's scope, because the signature is public and third-party runners
+    mirror it.
+
+    Every call is mirrored to the judge execution ledger (lib/judge_ledger.py):
+    a `started` line before the subprocess call and a `call` line with the
+    mechanical facts (duration, timed_out, returncode, raised) after it — this
+    is the SOLE place ``RunResult.timed_out`` is ever set, from the actual
+    ``subprocess.TimeoutExpired`` branch, never derived by matching this
+    function's own stderr literal below. The judge name comes from the ambient
+    ``judge_ledger.take_current_judge()`` carrier (set by the calling judge
+    function immediately before invoking the injected ``runner``), because this
+    function's own signature is frozen and cannot grow a judge-name parameter."""
+    judge_name = judge_ledger.take_current_judge()
+    if judge_name is None:
+        # Every caller in this module now self-identifies before invoking the
+        # injected runner (the four hook judges, and enumerate_claims/
+        # enumerate_questions_health/judge/acceptance_judge on the engine
+        # path), so reaching here means a caller OUTSIDE this module invoked
+        # the runner directly without going through any of them — a genuinely
+        # unattributed call. It gets its own invocation id so that N such
+        # calls in one CLI process do not collapse into one, and the name
+        # records that attribution is absent rather than guessing a judge.
+        judge_name = _UNATTRIBUTED_JUDGE
+        judge_ledger.reset_invocation_outside_hook()
+    judge_ledger.started(judge_name)
+    start = time.monotonic()
     try:
         proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
-        return RunResult(proc.returncode, proc.stdout, proc.stderr)
+        duration = time.monotonic() - start
+        judge_ledger.call(judge_name, timed_out=False, duration=duration, returncode=proc.returncode)
+        return RunResult(proc.returncode, proc.stdout, proc.stderr, timed_out=False)
     except subprocess.TimeoutExpired:
-        return RunResult(1, "", f"advisor timed out after {timeout}s")
+        duration = time.monotonic() - start
+        judge_ledger.call(judge_name, timed_out=True, duration=duration, returncode=None)
+        return RunResult(1, "", f"advisor timed out after {timeout}s", timed_out=True)
+    except Exception as exc:
+        duration = time.monotonic() - start
+        judge_ledger.call(judge_name, timed_out=False, duration=duration, returncode=None, raised=repr(exc))
+        raise

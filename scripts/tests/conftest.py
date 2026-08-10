@@ -11,6 +11,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from agentctl.store import FileStateStore  # noqa: E402
+from lib import judge_ledger  # noqa: E402
 
 # The plan-level places a SUBSTANTIVE plan owes the submission seam, as TOML an author
 # would write. Every fixture plan in the suite that expects to SUBMIT CLEAN splices these
@@ -167,6 +168,21 @@ def _isolate_self_diagnose_store(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_judge_ledger(tmp_path, monkeypatch):
+    """Redirect the judge execution ledger to tmp for the suite at large.
+
+    lib/judge_ledger.py writes on every hook_start(), so any test that drives one
+    of the three judge-calling hooks appends to the live ledger unless the env
+    override is set — and that ledger is what a future reader will count real
+    judge executions from, so suite lines in it are not clutter but wrong data.
+    Same accommodation as `_isolate_self_diagnose_store`."""
+    monkeypatch.setenv("AGENTCTL_JUDGE_LEDGER", str(tmp_path / "judge-usage-ledger.jsonl"))
+    judge_ledger._state.update(
+        {"invocation_id": None, "source": None, "hook": None, "judge": None}
+    )
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_recursion_depth(monkeypatch):
     """Drop the ambient AGENT_RECURSION_DEPTH for the suite at large.
 
@@ -176,6 +192,23 @@ def _no_ambient_recursion_depth(monkeypatch):
     that asserts a block. The three tests that own that predicate set the var
     themselves, which overrides this."""
     monkeypatch.delenv("AGENT_RECURSION_DEPTH", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_project_dir(monkeypatch):
+    """Drop the ambient CLAUDE_PROJECT_DIR for the suite at large.
+
+    lib/hook_wiring.settings_chain() appends `$CLAUDE_PROJECT_DIR/.claude/
+    settings*.json` to every chain it builds, INCLUDING one built from an
+    explicit root. So a suite run under the harness takes two on-disk files
+    nobody wrote as input: a project settings file registering a judge hook
+    below its minimum, or one that will not parse, flips
+    test_canon_guard_wired_check's strict-mode expectations from a fixture the
+    test wrote to a file the machine happens to have. Same accommodation as
+    `_no_ambient_recursion_depth` above — the tests that own the predicate
+    (test_hook_wiring, test_dispatch_witness) set the variable themselves,
+    which overrides this."""
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
 
 
 @pytest.fixture

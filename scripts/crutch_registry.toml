@@ -12,6 +12,7 @@
 # scripts/agentctl/conditions.py (judge-guarded)             | code   | semantic-guarded
 # scripts/agentctl/**                                        | code   | structural
 # scripts/hook-escalation-diagnosis-gate.py (judge-guarded)  | code   | semantic-guarded
+# scripts/hook-deferring-disposition-gate.py (judge-guarded) | code   | semantic-guarded
 # scripts/hook-*.py (other guardian hooks)                   | code   | structural
 # scripts/lib/** (incl. term_ruleset.py)                     | code   | structural
 # scripts/crutch-inventory.py (self)                         | code   | not-a-gate
@@ -130,6 +131,14 @@ ground = "The deterministic engine. Its regexes parse the engine's own structure
 
 [[entry]]
 id = "7ba231e2503d6860"
+domain = "code"
+file = "scripts/agentctl/cli.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "b20578907d9fb742"
 domain = "code"
 file = "scripts/agentctl/cli.py"
 class = "structural"
@@ -260,6 +269,30 @@ ground = "The deterministic engine. Its regexes parse the engine's own structure
 id = "7283fe9be39f2326"
 domain = "code"
 file = "scripts/agentctl/dispatch.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "d43d714d815687a8"
+domain = "code"
+file = "scripts/agentctl/effort.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "4c9db7adc531899d"
+domain = "code"
+file = "scripts/agentctl/effort.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "562281f2457d4fef"
+domain = "code"
+file = "scripts/agentctl/effort.py"
 class = "structural"
 disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
@@ -449,6 +482,22 @@ disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
 
 [[entry]]
+id = "ec0061793b9ee999"
+domain = "code"
+file = "scripts/agentctl/plugins_premise.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "39eb1d8eb7b32437"
+domain = "code"
+file = "scripts/agentctl/plugins_premise.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
 id = "4b51fb86bc1555ca"
 domain = "code"
 file = "scripts/agentctl/plugins_premise.py"
@@ -511,6 +560,14 @@ file = "scripts/agentctl/result_image.py"
 class = "semantic-guarded"
 disposition = "keep"
 ground = "The one file in the engine whose subject IS free-text meaning: it decides whether a stage's expected_result_image restates the check that judges it. Its regexes are `echo_prefilter`, a high-recall structural PREFILTER whose every consumer (`submission.submission_advice`) gates it behind `judge_echo` before anything is said — the prefilter alone produces no output at all. So the `scripts/agentctl/**` row below, which grounds its structural verdict on the engine's regexes reading the engine's own syntax rather than free-text meaning, states the opposite of what is true here."
+
+[[entry]]
+id = "e8ae2379a7419d33"
+domain = "code"
+file = "scripts/agentctl/premise.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
 
 [[entry]]
 id = "2115d7fb919a4671"
@@ -655,6 +712,30 @@ file = "scripts/gen_crutch_registry.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "This generator's own `_ALREADY_MECHANIZED_RE` is a one-time authoring aid for the stage-2 perception pass (see module docstring), not a runtime gate; it reaches no hard-outcome sink."
+
+[[entry]]
+id = "14e441f0266b3bf3"
+domain = "code"
+file = "scripts/hook-deferring-disposition-gate.py"
+class = "semantic-guarded"
+disposition = "keep"
+ground = "Built judge-guarded by construction: `decide()` runs the high-recall `_DEFER_CUE_RE` prefilter AND `agentctl.advisor.judge_deferring_disposition` (fail-open semantic judge) before it builds the deny payload, and the payload is built in that same scope, so the guard is visible at scope granularity without an allowlist ground. The regex only widens recall over deferral vocabulary; whether the options actually leave the work undone is the judge's call."
+
+[[entry]]
+id = "a0bcdb297732d617"
+domain = "code"
+file = "scripts/hook-deferring-disposition-gate.py"
+class = "semantic-guarded"
+disposition = "keep"
+ground = "Built judge-guarded by construction: `decide()` runs the high-recall `_DEFER_CUE_RE` prefilter AND `agentctl.advisor.judge_deferring_disposition` (fail-open semantic judge) before it builds the deny payload, and the payload is built in that same scope, so the guard is visible at scope granularity without an allowlist ground. The regex only widens recall over deferral vocabulary; whether the options actually leave the work undone is the judge's call."
+
+[[entry]]
+id = "a40aa502dae1fa86"
+domain = "code"
+file = "scripts/hook-deferring-disposition-gate.py"
+class = "semantic-guarded"
+disposition = "keep"
+ground = "Built judge-guarded by construction: `decide()` runs the high-recall `_DEFER_CUE_RE` prefilter AND `agentctl.advisor.judge_deferring_disposition` (fail-open semantic judge) before it builds the deny payload, and the payload is built in that same scope, so the guard is visible at scope granularity without an allowlist ground. The regex only widens recall over deferral vocabulary; whether the options actually leave the work undone is the judge's call."
 
 [[entry]]
 id = "c9f52dd541c2fe1b"
@@ -2193,6 +2274,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "b3e301462ad257b4"
+domain = "code"
+file = "scripts/tests/test_check_live_run_evidence.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "3b1f164ac9c6683b"
 domain = "code"
 file = "scripts/tests/test_cli_directives.py"
@@ -2460,6 +2549,22 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "4149e35e0c180fcf"
 domain = "code"
 file = "scripts/tests/test_cost.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "cacc93c4d125cf0e"
+domain = "code"
+file = "scripts/tests/test_deferring_disposition_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "22bf7e4eec7385d5"
+domain = "code"
+file = "scripts/tests/test_deferring_disposition_gate.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
@@ -2940,6 +3045,110 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "93413bac4ac3aadc"
 domain = "code"
 file = "scripts/tests/test_drive_close.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "d4d20e2116792609"
+domain = "code"
+file = "scripts/tests/test_effort.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "2103f1d9d362d59c"
+domain = "code"
+file = "scripts/tests/test_effort.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "3bd9cee08b097822"
+domain = "code"
+file = "scripts/tests/test_effort.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "1f99b82ba5340890"
+domain = "code"
+file = "scripts/tests/test_effort_declaration.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "3271d0288b9b9556"
+domain = "code"
+file = "scripts/tests/test_effort_declaration.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "0dd51989a2c39e35"
+domain = "code"
+file = "scripts/tests/test_effort_declaration.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "ffe413736cdafd52"
+domain = "code"
+file = "scripts/tests/test_effort_declaration.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "2842192012b616ed"
+domain = "code"
+file = "scripts/tests/test_effort_declaration.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "a54327afd40509df"
+domain = "code"
+file = "scripts/tests/test_effort_declaration.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "9e04d34736907c97"
+domain = "code"
+file = "scripts/tests/test_effort_declaration.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "297c1f59bf7a30a7"
+domain = "code"
+file = "scripts/tests/test_effort_docs.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "cefe41a61ae03344"
+domain = "code"
+file = "scripts/tests/test_effort_docs.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "e2f8a6f562e46133"
+domain = "code"
+file = "scripts/tests/test_effort_docs.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
@@ -3753,6 +3962,22 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "e4cdfb300f3096eb"
+domain = "code"
+file = "scripts/tests/test_installer_detector_in_personal_root.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "f7b02970f650dac5"
+domain = "code"
+file = "scripts/tests/test_installer_detector_in_personal_root.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "8ef53432b296c41d"
 domain = "code"
 file = "scripts/tests/test_landed_check_migration.py"
@@ -4212,6 +4437,198 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "3733f3942ed4d356"
 domain = "code"
 file = "scripts/tests/test_operative_surface_behaviour.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "9bdd3208fd05cb71"
+domain = "code"
+file = "scripts/tests/test_order_coverage.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "e9ebf2c33a15f31d"
+domain = "code"
+file = "scripts/tests/test_order_coverage.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "faf7ed1f6191b753"
+domain = "code"
+file = "scripts/tests/test_order_coverage.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "d71ee3f0117a4d52"
+domain = "code"
+file = "scripts/tests/test_order_coverage.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "693f2f3520a9b2ae"
+domain = "code"
+file = "scripts/tests/test_order_coverage.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "b11b5ce5243a6b51"
+domain = "code"
+file = "scripts/tests/test_order_coverage.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "526b587d764d840c"
+domain = "code"
+file = "scripts/tests/test_order_coverage.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "836d54a64b224b2a"
+domain = "code"
+file = "scripts/tests/test_order_coverage.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "c12ef597263c648e"
+domain = "code"
+file = "scripts/tests/test_order_coverage.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "0f71f0fcae7f1f48"
+domain = "code"
+file = "scripts/tests/test_order_coverage_essence.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "f5814d64153f3ea0"
+domain = "code"
+file = "scripts/tests/test_order_coverage_essence.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "77a2876e82a20ffa"
+domain = "code"
+file = "scripts/tests/test_order_coverage_essence.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "3ffa1181ff80d7c2"
+domain = "code"
+file = "scripts/tests/test_order_coverage_essence.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "4bba537497c8a4d5"
+domain = "code"
+file = "scripts/tests/test_order_coverage_essence.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "bced8e935847e990"
+domain = "code"
+file = "scripts/tests/test_order_coverage_essence.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "3b0906192b809fbd"
+domain = "code"
+file = "scripts/tests/test_order_coverage_essence.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "ed7cdd3517087cab"
+domain = "code"
+file = "scripts/tests/test_order_coverage_essence.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "ce4c30575045a600"
+domain = "code"
+file = "scripts/tests/test_order_coverage_essence.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "ff0e7122b1f41bf2"
+domain = "code"
+file = "scripts/tests/test_order_coverage_essence.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "662749651aff20ec"
+domain = "code"
+file = "scripts/tests/test_order_coverage_essence.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "203771f3c07afd43"
+domain = "code"
+file = "scripts/tests/test_order_coverage_essence.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "8473df525800dbb2"
+domain = "code"
+file = "scripts/tests/test_order_coverage_essence.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "3c84aaa1a90528e4"
+domain = "code"
+file = "scripts/tests/test_order_coverage_essence.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "61d99456b5782607"
+domain = "code"
+file = "scripts/tests/test_order_coverage_essence.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
@@ -5145,6 +5562,22 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "f5f59ac7caad4f44"
+domain = "code"
+file = "scripts/tests/test_projects_roots.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "4fd4be22f555882a"
+domain = "code"
+file = "scripts/tests/test_projects_roots.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "57e2c81519a73b70"
 domain = "code"
 file = "scripts/tests/test_quality_row_task_type.py"
@@ -5332,6 +5765,38 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "f6b51a56d1194196"
 domain = "code"
 file = "scripts/tests/test_resolution_reminder_hook.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "7b8b85e34a1313c6"
+domain = "code"
+file = "scripts/tests/test_review_attestation_capability.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "b72521357f01a6a9"
+domain = "code"
+file = "scripts/tests/test_review_attestation_capability.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "2672c9a9174d114f"
+domain = "code"
+file = "scripts/tests/test_review_attestation_capability.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "461d50863cd0cedb"
+domain = "code"
+file = "scripts/tests/test_review_attestation_capability.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
@@ -5588,6 +6053,30 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "97ebed60d625a395"
 domain = "code"
 file = "scripts/tests/test_si_feedback_detect.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "8576f30cd8f5f37a"
+domain = "code"
+file = "scripts/tests/test_spawn_plans_reachability.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "1541d340011cd3e3"
+domain = "code"
+file = "scripts/tests/test_spawn_plans_reachability.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "bbdbb5cf63b30964"
+domain = "code"
+file = "scripts/tests/test_spawn_plans_reachability.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
@@ -6129,6 +6618,22 @@ disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
 
 [[entry]]
+id = "a23ad1bf8a107218"
+domain = "code"
+file = "scripts/verify-judge-prose-numbers.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
+id = "a9a20b0937b9cd7b"
+domain = "code"
+file = "scripts/verify-judge-prose-numbers.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
 id = "9af48e483ebef657"
 domain = "code"
 file = "scripts/verify-language.py"
@@ -6337,6 +6842,14 @@ disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "1366162b8a9550f2"
+domain = "code_file_rollup"
+file = "scripts/agentctl/effort.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "514a7c0625bebea1"
 domain = "code_file_rollup"
 file = "scripts/agentctl/exempt_paths.py"
@@ -6479,6 +6992,14 @@ file = "scripts/gen_crutch_registry.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "This generator's own `_ALREADY_MECHANIZED_RE` is a one-time authoring aid for the stage-2 perception pass (see module docstring), not a runtime gate; it reaches no hard-outcome sink. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "c87c6eff5ae51086"
+domain = "code_file_rollup"
+file = "scripts/hook-deferring-disposition-gate.py"
+class = "semantic-guarded"
+disposition = "keep"
+ground = "Built judge-guarded by construction: `decide()` runs the high-recall `_DEFER_CUE_RE` prefilter AND `agentctl.advisor.judge_deferring_disposition` (fail-open semantic judge) before it builds the deny payload, and the payload is built in that same scope, so the guard is visible at scope granularity without an allowlist ground. The regex only widens recall over deferral vocabulary; whether the options actually leave the work undone is the judge's call. (file-level rollup of the file's scopes.)"
 
 [[entry]]
 id = "cc33852e6049935c"
@@ -6945,6 +7466,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "c2da0a06e23d70d0"
+domain = "code_file_rollup"
+file = "scripts/tests/test_check_live_run_evidence.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "53b6ad3625626612"
 domain = "code_file_rollup"
 file = "scripts/tests/test_cli_directives.py"
@@ -6988,6 +7517,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "50f951f6fe69e1b8"
 domain = "code_file_rollup"
 file = "scripts/tests/test_cost.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "58da0d83b7018fcd"
+domain = "code_file_rollup"
+file = "scripts/tests/test_deferring_disposition_gate.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
@@ -7044,6 +7581,30 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "8a1a8ec174ff4e25"
 domain = "code_file_rollup"
 file = "scripts/tests/test_drive_close.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "9a472a6589940664"
+domain = "code_file_rollup"
+file = "scripts/tests/test_effort.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "a97becbae527e187"
+domain = "code_file_rollup"
+file = "scripts/tests/test_effort_declaration.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "076b1e1c1e6581de"
+domain = "code_file_rollup"
+file = "scripts/tests/test_effort_docs.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
@@ -7185,6 +7746,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "47fdaa421db9b50d"
+domain = "code_file_rollup"
+file = "scripts/tests/test_installer_detector_in_personal_root.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "e33667f2cf123ccf"
 domain = "code_file_rollup"
 file = "scripts/tests/test_landed_check_migration.py"
@@ -7276,6 +7845,22 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "cea3aeb8a2465d84"
 domain = "code_file_rollup"
 file = "scripts/tests/test_operative_surface_behaviour.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "e6749217e767f23c"
+domain = "code_file_rollup"
+file = "scripts/tests/test_order_coverage.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "37f33fb1f2899a0a"
+domain = "code_file_rollup"
+file = "scripts/tests/test_order_coverage_essence.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
@@ -7385,6 +7970,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "22682fddb27a4499"
+domain = "code_file_rollup"
+file = "scripts/tests/test_projects_roots.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "391703b3f0b2e515"
 domain = "code_file_rollup"
 file = "scripts/tests/test_quality_row_task_type.py"
@@ -7433,6 +8026,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "cd8841d72b513837"
+domain = "code_file_rollup"
+file = "scripts/tests/test_review_attestation_capability.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "ca1f3cc9c1a97532"
 domain = "code_file_rollup"
 file = "scripts/tests/test_review_control.py"
@@ -7476,6 +8077,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "c60787966765496d"
 domain = "code_file_rollup"
 file = "scripts/tests/test_si_feedback_detect.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "932401b548f57f8a"
+domain = "code_file_rollup"
+file = "scripts/tests/test_spawn_plans_reachability.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
@@ -7641,6 +8250,14 @@ disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "14b79c9fd5811ae3"
+domain = "code_file_rollup"
+file = "scripts/verify-judge-prose-numbers.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "f589f7b188a4f988"
 domain = "code_file_rollup"
 file = "scripts/verify-language.py"
@@ -7795,7 +8412,7 @@ disposition = "keep"
 ground = "CLAUDE.md's own § Coordination heading names this class explicitly: \"Cognition the engine does NOT replace (always yours)\" — escalation timing, task-weight judgment, verification-axis discipline, and outcome framing are judgment calls over conversational/task content, not predicates decidable from observable repo/engine state."
 
 [[entry]]
-id = "c60e156fb4ad9914"
+id = "a92deeedbda62122"
 domain = "prose"
 file = "CLAUDE.md"
 class = "perception"
@@ -7803,7 +8420,7 @@ disposition = "keep"
 ground = "CLAUDE.md's own § Coordination heading names this class explicitly: \"Cognition the engine does NOT replace (always yours)\" — escalation timing, task-weight judgment, verification-axis discipline, and outcome framing are judgment calls over conversational/task content, not predicates decidable from observable repo/engine state."
 
 [[entry]]
-id = "d5298b5a32a288e1"
+id = "c60e156fb4ad9914"
 domain = "prose"
 file = "CLAUDE.md"
 class = "perception"
@@ -9016,6 +9633,54 @@ ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's
 id = "9b17e56cd51f28d0"
 domain = "prose"
 file = "memory-global/leaves/doubt-own-snapshot.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "8f08a51226c2bfe9"
+domain = "prose"
+file = "memory-global/leaves/effort-divergence-trigger.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "6f05a612e473734e"
+domain = "prose"
+file = "memory-global/leaves/effort-divergence-trigger.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "59a75da08686fe62"
+domain = "prose"
+file = "memory-global/leaves/effort-divergence-trigger.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "6902f58a989a5976"
+domain = "prose"
+file = "memory-global/leaves/effort-divergence-trigger.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "00c617aa510e4696"
+domain = "prose"
+file = "memory-global/leaves/effort-divergence-trigger.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "31c7459c34476dee"
+domain = "prose"
+file = "memory-global/leaves/effort-divergence-trigger.md"
 class = "perception"
 disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
@@ -12333,6 +12998,118 @@ disposition = "keep"
 ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
 
 [[entry]]
+id = "4d2867c8d5463d92"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-08-04-no-circuit-breaker-on-verification-effort.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "8d1c889256c0ab42"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-08-04-no-circuit-breaker-on-verification-effort.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "33463bafffd3bdbd"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-08-04-no-circuit-breaker-on-verification-effort.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "2d5db474ac047830"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-08-04-no-circuit-breaker-on-verification-effort.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "0b3548ca59ed38af"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-08-04-no-circuit-breaker-on-verification-effort.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "13d992104118ab3f"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-08-05-deferring-ask-gate-and-the-binding-timeout-layer.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "02eac7c48248995e"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-08-05-deferring-ask-gate-and-the-binding-timeout-layer.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "0fcd87efb7e672e6"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-08-05-deferring-ask-gate-and-the-binding-timeout-layer.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "9ab185dbfe51c9ed"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-08-05-deferring-ask-gate-and-the-binding-timeout-layer.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "1e5a2cba41119749"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-08-05-scope-substitution-at-plan-authoring.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "78c8ca2a15a91d71"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-08-05-scope-substitution-at-plan-authoring.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "7c086194f0923372"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-08-05-scope-substitution-at-plan-authoring.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "ce62bab74cb20944"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-08-05-scope-substitution-at-plan-authoring.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "d8ac7b18e62425ca"
+domain = "prose"
+file = "memory-global/leaves/experience/MEMORY.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
 id = "bb7591dc3f40380f"
 domain = "prose"
 file = "memory-global/leaves/experience/MEMORY.md"
@@ -14149,6 +14926,38 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
+id = "2aeb317df8da85a1"
+domain = "prose"
+file = "memory-global/leaves/question-provenance-gate.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "d12b58a93f740ae6"
+domain = "prose"
+file = "memory-global/leaves/question-provenance-gate.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "43a515a112095efb"
+domain = "prose"
+file = "memory-global/leaves/question-provenance-gate.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "c511abe3bf0e41d0"
+domain = "prose"
+file = "memory-global/leaves/question-provenance-gate.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
 id = "751620f4e87fc876"
 domain = "prose"
 file = "memory-global/leaves/question-provenance-gate.md"
@@ -14181,7 +14990,23 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
+id = "cdcc03f287aa20c6"
+domain = "prose"
+file = "memory-global/leaves/question-provenance-gate.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
 id = "d4170c601c056263"
+domain = "prose"
+file = "memory-global/leaves/question-provenance-gate.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "50c014048dbeaa52"
 domain = "prose"
 file = "memory-global/leaves/question-provenance-gate.md"
 class = "perception"
@@ -14765,7 +15590,31 @@ disposition = "keep"
 ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
 
 [[entry]]
-id = "b9215157e0cefd61"
+id = "45107ac6b8831bcf"
+domain = "prose"
+file = "memory-global/leaves/spawning-specialists.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "1ec98addd3261733"
+domain = "prose"
+file = "memory-global/leaves/spawning-specialists.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "2a8ed65b4d19cc90"
+domain = "prose"
+file = "memory-global/leaves/spawning-specialists.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "72679e37734f2ce2"
 domain = "prose"
 file = "memory-global/leaves/spawning-specialists.md"
 class = "perception"
@@ -16157,6 +17006,14 @@ disposition = "keep"
 ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
 
 [[entry]]
+id = "b0c004f1785febff"
+domain = "prose"
+file = "skills/specializations/code-reviewer/SKILL.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
 id = "091bcb7a9edc43e9"
 domain = "prose"
 file = "skills/specializations/code-reviewer/SKILL.md"
@@ -16486,6 +17343,14 @@ ground = "The statement's own text names a concrete enforcing artifact (a script
 
 [[entry]]
 id = "dba8b9695be2d245"
+domain = "prose"
+file = "skills/specializations/planner/SKILL.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "22b0dd686bc8845a"
 domain = "prose"
 file = "skills/specializations/planner/SKILL.md"
 class = "already-mechanized"

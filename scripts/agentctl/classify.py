@@ -53,6 +53,12 @@ READONLY_BASH: set[str] = {
     "ls", "head", "tail", "cat", "less", "more", "find", "wc", "stat", "file",
     "tree", "du", "df", "grep", "rg", "awk", "sed", "echo", "printf", "jq",
     "realpath", "readlink", "which", "whoami", "date", "pwd", "env", "printenv",
+    # A digest over bytes already readable is as side-effect-free as `cat`, and the
+    # engine's own plan-review gate REQUIRES a reviewer-computed sha256 — without a
+    # hashing verb here (and the matching settings/base.json entry) that gate demands
+    # an attestation the spawn mechanism cannot produce. Both spellings: `shasum` on
+    # macOS, `sha256sum` from coreutils elsewhere.
+    "shasum", "sha256sum",
     "python3",  # classify_action returns "unknown" for python3; caller applies READONLY_PYTHON3
 }
 READONLY_GIT: set[str] = {

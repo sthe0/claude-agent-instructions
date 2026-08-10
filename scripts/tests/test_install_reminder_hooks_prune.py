@@ -189,6 +189,12 @@ def test_no_desired_entry_is_ever_removed(tmp_path):
 
     installer_text = INSTALLER.read_text(encoding="utf-8")
     desired_block = re.search(r"DESIRED = \[(.*?)\n\]", installer_text, re.S).group(1)
+    # Strip comments before scanning for quoted script names: a stray quote
+    # pair inside a comment (e.g. a "leave as is" aside) would otherwise shift
+    # the parser's notion of which quote opens/closes a string, and a later
+    # ".py" mention anywhere past that point would parse as a bogus DESIRED
+    # entry — this bit a past comment that quoted "leave as is" verbatim.
+    desired_block = re.sub(r"#[^\n]*", "", desired_block)
     desired_basenames = {
         tok.split()[0] for tok in re.findall(r'"([^"]*\.py[^"]*)"', desired_block)
     }

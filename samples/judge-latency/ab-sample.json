@@ -1,0 +1,178 @@
+{
+  "defer_std": [
+    {
+      "i": 0,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 23.63
+    },
+    {
+      "i": 1,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 11.65
+    },
+    {
+      "i": 2,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 28.4
+    },
+    {
+      "i": 3,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 17.69
+    },
+    {
+      "i": 4,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 11.15
+    },
+    {
+      "i": 5,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 17.64
+    },
+    {
+      "i": 6,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 21.13
+    },
+    {
+      "i": 7,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 10.29
+    }
+  ],
+  "defer_lean": [
+    {
+      "i": 0,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 12.64
+    },
+    {
+      "i": 1,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 32.11
+    },
+    {
+      "i": 2,
+      "verdict": false,
+      "ok": false,
+      "latency_s": 58.75
+    },
+    {
+      "i": 3,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 62.23
+    },
+    {
+      "i": 4,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 18.9
+    },
+    {
+      "i": 5,
+      "verdict": false,
+      "ok": false,
+      "latency_s": 31.02
+    },
+    {
+      "i": 6,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 16.63
+    },
+    {
+      "i": 7,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 13.59
+    }
+  ],
+  "outage_std": [
+    {
+      "i": 0,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 9.17
+    },
+    {
+      "i": 1,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 10.29
+    },
+    {
+      "i": 2,
+      "verdict": false,
+      "ok": false,
+      "latency_s": 19.16
+    },
+    {
+      "i": 3,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 7.19
+    },
+    {
+      "i": 4,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 11.67
+    },
+    {
+      "i": 5,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 10.64
+    }
+  ],
+  "outage_lean": [
+    {
+      "i": 0,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 16.14
+    },
+    {
+      "i": 1,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 11.94
+    },
+    {
+      "i": 2,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 9.99
+    },
+    {
+      "i": 3,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 8.94
+    },
+    {
+      "i": 4,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 12.05
+    },
+    {
+      "i": 5,
+      "verdict": true,
+      "ok": true,
+      "latency_s": 9.23
+    }
+  ]
+}

@@ -43,6 +43,11 @@ class Thresholds:
             raise KeyError(f"{key} not defined in config.md")
         return self._c[key]
 
+    def _float(self, key: str) -> float:
+        if key not in self._c:
+            raise KeyError(f"{key} not defined in config.md")
+        return float(self._c[key])
+
     @property
     def small_change_max_lines(self) -> int:
         return self._int("small-change-max-lines")
@@ -63,6 +68,33 @@ class Thresholds:
         """Expected-size telemetry LABEL for a tier — NOT the applied kill-cap.
         The cap passed to `claude -p --max-budget-usd` is runaway_ceiling_usd()."""
         return self._str(f"budget-{tier}-usd")
+
+    def budget_usd_float(self, tier: str) -> float:
+        """Same value as budget_usd, as a float — for arithmetic (e.g. summing an
+        estimate across tiers), where budget_usd's str would TypeError."""
+        return self._float(f"budget-{tier}-usd")
+
+    def effort_stage_minutes(self, tier: str) -> int:
+        """Expected active-wall-clock minutes for a cost tier — the wall-clock
+        companion to budget_usd's dollar label, used by the effort-divergence
+        trigger's wall-clock scale."""
+        return self._int(f"effort-stage-minutes-{tier}")
+
+    def effort_divergence_multiple(self) -> float:
+        """Ratio of accumulated actual effort to the re-derived estimate at/above
+        which the effort-divergence trigger fires."""
+        return self._float("effort-divergence-multiple")
+
+    def effort_replan_absolute(self) -> int:
+        """Replan count on the current plan at/above which the effort-divergence
+        trigger fires regardless of the multiple."""
+        return self._int("effort-replan-absolute")
+
+    def effort_absolute_interactions(self) -> int:
+        """Absolute threshold on user-interaction count for the interactions scale;
+        `0` means the scale is accounting-only / disabled (see config.md row for
+        the re-enabling contract)."""
+        return self._int("effort-absolute-interactions")
 
     def runaway_ceiling_usd(self) -> str:
         """The single global runaway backstop actually passed as --max-budget-usd

@@ -341,6 +341,11 @@ def test_plan_stack_frame_preserves_partition_units():
         stages=[_stage(1)],
         current_stage=1,
         originating_stage=1,
+        effort_estimate=None,
+        effort_baseline=None,
+        effort_actuals={},
+        effort_fires=[],
+        effort_spend_seen={},
     )
     s = SessionState(
         session_id="ps-rt", task_id="t",

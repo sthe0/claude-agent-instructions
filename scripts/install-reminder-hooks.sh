@@ -11,11 +11,21 @@ set -euo pipefail
 REPO="${CLAUDE_INSTRUCTIONS_REPO:-$HOME/claude-agent-instructions}"
 source "$REPO/scripts/lib/config-root.sh"
 SETTINGS="$CLAUDE_AGENT_HOME/settings.json"
-# Files that get PRUNE-ONLY treatment: a dangling entry this installer owns
-# is removed from them, but no DESIRED entry is ever added, and a missing or
-# unparseable file is skipped rather than created or truncated. $CLAUDE_AGENT_HOME
-# above is the only file the ADD pass ever writes to.
+# Files that get PRUNE-ONLY treatment: a dangling entry this installer owns is
+# removed from them, and a missing or unparseable file is skipped rather than
+# created or truncated. Of the DESIRED rows below, only the ones named in
+# PRUNE_ONLY_ALSO_ADD are ever added here; everything else reaches
+# $CLAUDE_AGENT_HOME alone.
 PRUNE_ONLY_SETTINGS=("$HOME/.claude/settings.json")
+# The single exemption, and why it is not the rule it appears to break: keeping
+# ENFORCEMENT out of the personal root is the design, but a DETECTOR is not
+# enforcement — it denies nothing and cannot. Registered only in the agent root,
+# hook-canon-guard-wired-check.py can never observe the personal root, which is
+# the one root where the gap it reports is real; a check present exclusively in
+# the root it never needs to check is the sharpest form of the defect it exists
+# to catch. Adding any gate-bearing hook here instead would import enforcement
+# into personal sessions, which is deliberately out of scope.
+PRUNE_ONLY_ALSO_ADD=("hook-canon-guard-wired-check.py")
 command -v python3 >/dev/null || { echo "install-reminder-hooks: python3 required" >&2; exit 1; }
 
 # Ledger-stamp resolution: THIS script's own location, not the canonical $REPO
@@ -25,7 +35,9 @@ STAMP_REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
 [[ -f "$SETTINGS" ]] || echo '{}' > "$SETTINGS"
 
-SCRIPTS_DIR="$REPO/scripts" STAMP_SCRIPTS_DIR="$STAMP_REPO/scripts" python3 - "$SETTINGS" "${PRUNE_ONLY_SETTINGS[@]+"${PRUNE_ONLY_SETTINGS[@]}"}" <<'PY'
+SCRIPTS_DIR="$REPO/scripts" STAMP_SCRIPTS_DIR="$STAMP_REPO/scripts" \
+PRUNE_ONLY_ALSO_ADD="${PRUNE_ONLY_ALSO_ADD[*]+${PRUNE_ONLY_ALSO_ADD[*]}}" \
+python3 - "$SETTINGS" "${PRUNE_ONLY_SETTINGS[@]+"${PRUNE_ONLY_SETTINGS[@]}"}" <<'PY'
 import importlib.util
 import json, os, shutil, sys
 from pathlib import Path
@@ -75,7 +87,21 @@ DESIRED = [
     # service failure to the user WITHOUT a recorded diagnosis (present-tense outage
     # cue + user-facing ask, and neither overcome-difficulty invoked nor a declared
     # difficulty). Reproduce with the real client + enumerate hypotheses first.
-    ("PreToolUse",       "AskUserQuestion", "hook-escalation-diagnosis-gate.py", 5),
+    # 35 = the hook's own _JUDGE_BUDGET_S=30 plus interpreter-start headroom, the
+    # same shape as the deferring gate below; at 5 the harness killed the hook
+    # mid-judge on every single call, and the superseded 25 still sat below this
+    # judge's own p90 (19.16s over n=16, lib/judge_latency.py) once the hook's
+    # budget was raised to cover it.
+    ("PreToolUse",       "AskUserQuestion", "hook-escalation-diagnosis-gate.py", 35),
+    # Hard gate: deny an AskUserQuestion whose EVERY option defers or refuses work
+    # the agent holds the rights and the diagnosis to do now (ticket / backlog /
+    # "leave as is"), with no branch that does it and no stated reason it cannot.
+    # 50 = hook-deferring-disposition-gate.py's own _ASK_JUDGE_BUDGET_S=45 plus
+    # interpreter-start headroom. The superseded 25 came from a four-run note
+    # ("11.6-13.5s"); over n=18 this judge's median is 17.43s and its p90 37.58s
+    # (lib/judge_latency.py), so the harness cap was binding below the hook's own
+    # decide() deadline and killing the call before any verdict came back.
+    ("PreToolUse",       "AskUserQuestion", "hook-deferring-disposition-gate.py", 50),
     # session_scope: deny/warn on a LIVE cross-session filesystem-scope overlap
     # (Component B wiring). Runs AFTER the plan-approval gate above; blocks only a
     # gated path already held by another live session, otherwise warns — silent
@@ -129,10 +155,13 @@ DESIRED = [
     # file near its ceiling) and surface any worklist to stderr. Self-throttled,
     # fail-open — never blocks or slows session start.
     ("SessionStart",     None,    "hook-self-diagnose-due.py",   5),
-    # Fail-loud detector: the canon read-only guard is present in the repo but
-    # NOT wired into BOTH live PreToolUse chains (Edit|Write + Bash), or is wired
-    # to a missing script path — i.e. canon may silently be writable. Non-blocking,
-    # fail-open; names the install-reminder-hooks.sh remediation.
+    # Fail-loud detector: the gate-bearing hooks are present in the repo but NOT
+    # wired into the root THIS session loads from — i.e. canon may silently be
+    # writable and the spine's gates silently off. Reports on stdout, so the
+    # agent reads it and not only the terminal; states the live root on every
+    # path, so its silence stops being the only signal. Non-blocking, fail-open.
+    # The one row PRUNE_ONLY_ALSO_ADD also installs into the personal root — see
+    # the comment there for why a detector is not the enforcement it sits beside.
     ("SessionStart",     None,    "hook-canon-guard-wired-check.py", 5),
     # Phase-3 forcing trigger: throttled (7d), speaks only when
     # rule-salience-report.py's phase3_readiness predicate says the deferred
@@ -147,7 +176,13 @@ DESIRED = [
     # engaged this turn). Loop-guarded (stop_hook_active + a durable per-message
     # marker under state/turn-gate/) and blockers from every guardian aggregate
     # into one block, so the worst case is exactly one extra model turn.
-    ("Stop",             None,    "hook-turn-end-gate.py",   5),
+    # 57 = the hook's own _TURN_JUDGE_BUDGET_S=52 plus interpreter-start headroom.
+    # It runs up to THREE judges in one invocation, so its whole-invocation budget
+    # is larger than the single-judge gates'; at 5 every one of them was killed,
+    # and the superseded 30/35 pair covered barely two of the three medians
+    # (11.86 + 7.46 + 10.89, lib/judge_latency.py) before the outage judge's own
+    # floor was reached.
+    ("Stop",             None,    "hook-turn-end-gate.py",   57),
     # Advisory (not a gate): nudge when a launched run/graph URL appeared in
     # this session's tool output but was never surfaced to the user in a chat
     # message — the structural guard for CLAUDE.md long-running-jobs /
@@ -190,20 +225,69 @@ def group_for(event_groups, matcher):
     return g
 
 
-changed = []
-for event, matcher, script, timeout in DESIRED:
-    parts = script.split()
-    script_base = os.path.basename(parts[0])
-    cmd = os.path.join(scripts, parts[0])
-    if len(parts) > 1:
-        cmd += " " + " ".join(parts[1:])
-    groups = hooks.setdefault(event, [])
-    grp = group_for(groups, matcher)
-    grp.setdefault("hooks", [])
-    if any(basename_of(h.get("command", "")) == script_base for h in grp["hooks"]):
-        continue
-    grp["hooks"].append({"type": "command", "command": cmd, "timeout": timeout})
-    changed.append(f"{event}/{matcher or '*'}: {script}")
+def add_rows(hooks, rows, reconcile=False):
+    """Register `rows` (DESIRED tuples) in `hooks`, never adding a script whose
+    basename is already in the target group. Shared by the full ADD pass and the
+    prune-only roots' single-row exemption, so the two cannot drift.
+
+    `reconcile` decides what happens to an entry that IS already there. Without
+    it the row is skipped outright, which made this script insert-only: a
+    corrected DESIRED timeout could never reach a root that already carried the
+    hook, so the fix stayed in the repo and the live registration kept its old
+    number forever. With it, an existing entry's `timeout` is brought to the
+    DESIRED value.
+
+    Three boundaries, all deliberate. Only `timeout` is reconciled — never
+    `command`: an entry with the same basename under a different directory is a
+    machine-local choice about WHAT runs, and silently retargeting it is
+    qualitatively worse than leaving it slow (the wiring probe reports it as a
+    divergence instead). Reconciliation is OFF by default because this function
+    also serves the prune-only roots, where touching an entry the installer did
+    not put there is exactly what "prune-only" promises not to do; the
+    agent-root caller opts in explicitly. And the group a row's basename is
+    looked up in is chosen by `group_for(groups, matcher)` keyed on the ROW's
+    own matcher — so an existing registration of the same basename under a
+    DIFFERENT matcher is a different group entirely, `present` for THIS row's
+    group comes back empty, and the row is inserted as a second, correctly
+    matchered entry rather than reconciling the first. The stale entry is left
+    exactly as it was, forever, on every run: nothing here re-keys a live
+    registration onto a new matcher, on the same "never silently retarget"
+    reasoning as the command boundary above. Removing it is a manual edit.
+    """
+    added = []
+    reconciled = []
+    for event, matcher, script, timeout in rows:
+        parts = script.split()
+        script_base = os.path.basename(parts[0])
+        cmd = os.path.join(scripts, parts[0])
+        if len(parts) > 1:
+            cmd += " " + " ".join(parts[1:])
+        groups = hooks.setdefault(event, [])
+        grp = group_for(groups, matcher)
+        grp.setdefault("hooks", [])
+        present = [h for h in grp["hooks"] if basename_of(h.get("command", "")) == script_base]
+        if present:
+            if reconcile:
+                for hook in present:
+                    if hook.get("timeout") != timeout:
+                        was = hook.get("timeout")
+                        hook["timeout"] = timeout
+                        reconciled.append(
+                            f"{event}/{matcher or '*'}: {script} timeout {was} -> {timeout}")
+            continue
+        grp["hooks"].append({"type": "command", "command": cmd, "timeout": timeout})
+        added.append(f"{event}/{matcher or '*'}: {script}")
+    return added, reconciled
+
+
+also_add_names = set(os.environ.get("PRUNE_ONLY_ALSO_ADD", "").split())
+ALSO_ADD_ROWS = [r for r in DESIRED if os.path.basename(r[2].split()[0]) in also_add_names]
+missing_exemptions = also_add_names - {os.path.basename(r[2].split()[0]) for r in ALSO_ADD_ROWS}
+if missing_exemptions:
+    # A name that matches no DESIRED row would silently add nothing at all.
+    sys.exit(f"install-reminder-hooks: PRUNE_ONLY_ALSO_ADD names no DESIRED hook: {sorted(missing_exemptions)}")
+
+changed, reconciled = add_rows(hooks, DESIRED, reconcile=True)
 
 
 def prune_dangling_managed_hooks(hooks, managed_dir):
@@ -243,7 +327,7 @@ def prune_dangling_managed_hooks(hooks, managed_dir):
 
 pruned = prune_dangling_managed_hooks(hooks, scripts)
 
-if changed or pruned:
+if changed or reconciled or pruned:
     shutil.copy2(settings_path, settings_path + ".bak")
     with open(settings_path, "w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=2, ensure_ascii=False)
@@ -253,6 +337,10 @@ if changed or pruned:
         print("install-reminder-hooks: wired " + str(len(changed)) + " hook(s):")
         for c in changed:
             print("  + " + c)
+    if reconciled:
+        print("install-reminder-hooks: reconciled " + str(len(reconciled)) + " hook timeout(s):")
+        for r in reconciled:
+            print("  ~ " + r)
     if pruned:
         print("install-reminder-hooks: pruned " + str(len(pruned)) + " dangling hook registration(s):")
         for p in pruned:
@@ -262,8 +350,11 @@ else:
 
 
 # Prune-only pass: same ownership predicate (prune_dangling_managed_hooks),
-# reused rather than reimplemented. Never adds a DESIRED entry to these files;
-# a missing or unparseable one is skipped, never created or truncated.
+# reused rather than reimplemented. Adds only the ALSO_ADD_ROWS exemption (see
+# PRUNE_ONLY_ALSO_ADD above), never the rest of DESIRED; a missing or
+# unparseable file is skipped, never created or truncated. It also does NOT
+# reconcile timeouts (add_rows' default): an entry already present here is one
+# this pass must leave exactly as it found it.
 for path_str in prune_only_paths:
     path = Path(path_str)
     if not path.is_file():
@@ -279,16 +370,31 @@ for path_str in prune_only_paths:
         print(f"install-reminder-hooks: {path} is not a JSON object, skipping prune-only pass", file=sys.stderr)
         continue
     other_hooks = other_data.get("hooks")
+    # A settings.json with no `hooks` key at all is a COMMON state for a
+    # personal root, not an exotic one, and skipping it would leave exactly
+    # those roots without the detector forever. The file-level protections are
+    # what prune-only promises and they are untouched above: a missing file, an
+    # unparseable one and a non-object one are all still skipped. Creating a key
+    # inside a file that exists and parses as an object is not creating a file.
+    if other_hooks is None and ALSO_ADD_ROWS:
+        other_data["hooks"] = {}
+        other_hooks = other_data["hooks"]
     if not isinstance(other_hooks, dict):
         continue
     other_pruned = prune_dangling_managed_hooks(other_hooks, scripts)
-    if other_pruned:
+    other_added, _ = add_rows(other_hooks, ALSO_ADD_ROWS)
+    if other_pruned or other_added:
         shutil.copy2(path, str(path) + ".bak")
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(other_data, fh, indent=2, ensure_ascii=False)
             fh.write("\n")
         edit_ledger.stamp(str(path), "script:install-reminder-hooks")
-        print(f"install-reminder-hooks: pruned {len(other_pruned)} dangling hook registration(s) in {path}:")
-        for p in other_pruned:
-            print("  - " + p)
+        if other_pruned:
+            print(f"install-reminder-hooks: pruned {len(other_pruned)} dangling hook registration(s) in {path}:")
+            for p in other_pruned:
+                print("  - " + p)
+        if other_added:
+            print(f"install-reminder-hooks: wired {len(other_added)} detector hook(s) in {path}:")
+            for a in other_added:
+                print("  + " + a)
 PY

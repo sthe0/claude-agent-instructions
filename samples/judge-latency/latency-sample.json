@@ -1,0 +1,158 @@
+{
+  "outage": [
+    {
+      "i": 0,
+      "verdict": true,
+      "latency_s": 10.1
+    },
+    {
+      "i": 1,
+      "verdict": true,
+      "latency_s": 10.93
+    },
+    {
+      "i": 2,
+      "verdict": true,
+      "latency_s": 11.09
+    },
+    {
+      "i": 3,
+      "verdict": true,
+      "latency_s": 18.58
+    },
+    {
+      "i": 4,
+      "verdict": true,
+      "latency_s": 14.11
+    },
+    {
+      "i": 5,
+      "verdict": true,
+      "latency_s": 10.0
+    },
+    {
+      "i": 6,
+      "verdict": true,
+      "latency_s": 18.46
+    },
+    {
+      "i": 7,
+      "verdict": true,
+      "latency_s": 9.4
+    },
+    {
+      "i": 8,
+      "verdict": true,
+      "latency_s": 25.96
+    },
+    {
+      "i": 9,
+      "verdict": true,
+      "latency_s": 10.86
+    }
+  ],
+  "defer": [
+    {
+      "i": 0,
+      "verdict": true,
+      "latency_s": 13.17
+    },
+    {
+      "i": 1,
+      "verdict": true,
+      "latency_s": 17.22
+    },
+    {
+      "i": 2,
+      "verdict": true,
+      "latency_s": 15.07
+    },
+    {
+      "i": 3,
+      "verdict": true,
+      "latency_s": 11.08
+    },
+    {
+      "i": 4,
+      "verdict": true,
+      "latency_s": 22.59
+    },
+    {
+      "i": 5,
+      "verdict": true,
+      "latency_s": 14.92
+    },
+    {
+      "i": 6,
+      "verdict": true,
+      "latency_s": 39.99
+    },
+    {
+      "i": 7,
+      "verdict": true,
+      "latency_s": 37.58
+    },
+    {
+      "i": 8,
+      "verdict": true,
+      "latency_s": 15.95
+    },
+    {
+      "i": 9,
+      "verdict": true,
+      "latency_s": 29.94
+    }
+  ],
+  "feedback": [
+    {
+      "i": 0,
+      "verdict": true,
+      "latency_s": 14.01
+    },
+    {
+      "i": 1,
+      "verdict": true,
+      "latency_s": 13.34
+    },
+    {
+      "i": 2,
+      "verdict": true,
+      "latency_s": 12.17
+    },
+    {
+      "i": 3,
+      "verdict": true,
+      "latency_s": 13.27
+    },
+    {
+      "i": 4,
+      "verdict": true,
+      "latency_s": 12.66
+    },
+    {
+      "i": 5,
+      "verdict": true,
+      "latency_s": 12.69
+    },
+    {
+      "i": 6,
+      "verdict": true,
+      "latency_s": 13.34
+    },
+    {
+      "i": 7,
+      "verdict": true,
+      "latency_s": 12.75
+    },
+    {
+      "i": 8,
+      "verdict": true,
+      "latency_s": 12.74
+    },
+    {
+      "i": 9,
+      "verdict": true,
+      "latency_s": 12.66
+    }
+  ]
+}

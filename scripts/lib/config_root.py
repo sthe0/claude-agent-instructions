@@ -80,6 +80,115 @@ def harness_config_root() -> Path:
     return Path.home() / ".claude"
 
 
+def projects_roots() -> list[Path]:
+    """Every existing ``<root>/projects`` directory, deduplicated, agent root first.
+
+    Answers *"where have sessions written"*. That is a THIRD question, distinct
+    from both accessors above: ``agent_home()`` says where the system is
+    installed and ``harness_config_root()`` says where the running harness loads
+    settings from, and neither answers where transcripts and per-project memory
+    actually landed. They coincided on an unmigrated machine, which is how a
+    dozen call sites came to ask ``agent_home()`` and stay plausibly green.
+
+    Both roots are read because both get written to: `claude-agent` /
+    `claude-task` sessions write under the isolated root while a bare `claude`
+    writes under ``~/.claude``, and on a machine using both, a report that picks
+    either single root is wrong for the sessions that used the other one — and
+    wrong SILENTLY, printing a smaller number rather than an error.
+
+    Deliberately NEUTRAL about what lives inside: transcripts and per-project
+    ``memory/`` directories are different domains sharing one location, so this
+    returns the locations and lets each caller keep its own selection. See
+    ``iter_transcripts()`` for the transcript view layered on top; a caller that
+    wants ``*/memory`` globs these roots itself.
+
+    Dedup is by ``Path.resolve()`` — the launchers export
+    ``CLAUDE_CONFIG_DIR=$CLAUDE_AGENT_HOME``, so on most machines the two roots
+    are the same directory and must yield ONE entry, and a half-migrated machine
+    can reach one through a symlink to the other. Dedup is by root, never by
+    project: the same cwd-hash under two roots is two distinct SESSION sets —
+    true of transcripts, which this accessor and ``iter_transcripts()`` cover.
+    It is NOT true of a project's per-project ``memory/`` directory once
+    ``setup-project-memory.sh`` has adopted it: that adoption symlinks the
+    directory across roots, so the same cwd-hash's two ``memory/`` spellings can
+    be one aliased directory rather than two distinct ones. See
+    ``project_memory_dirs()`` for the accessor that dedups at that level.
+
+    A root with no ``projects/`` yet is skipped, not an error — a fresh machine
+    or a root that has simply never hosted a session is a normal state.
+    """
+    seen: set[Path] = set()
+    out: list[Path] = []
+    for root in (agent_home(), harness_config_root()):
+        candidate = root / "projects"
+        if not candidate.is_dir():
+            continue
+        try:
+            key = candidate.resolve()
+        except OSError:  # pragma: no cover - unresolvable path, keep the raw one
+            key = candidate
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(candidate)
+    return out
+
+
+def iter_transcripts(pattern: str = "*/*.jsonl") -> list[Path]:
+    """Session transcripts across every root from ``projects_roots()``, sorted.
+
+    ``pattern`` is glob-relative to each root and defaults to the main-session
+    layout ``<project>/<session>.jsonl``. Pass ``"**/*.jsonl"`` to include the
+    per-session ``<session>/subagents/*.jsonl`` transcripts as well.
+
+    The two selections are NOT interchangeable — the default counts sessions, the
+    recursive one counts every transcript file — so each caller keeps the one it
+    already had. Changing a caller's pattern changes WHAT it reports, not merely
+    where it looks.
+    """
+    out: list[Path] = []
+    for root in projects_roots():
+        out.extend(root.glob(pattern))
+    return sorted(out)
+
+
+def project_memory_dirs() -> list[Path]:
+    """Every existing ``<root>/projects/*/memory`` directory across
+    ``projects_roots()``, deduplicated by resolved identity, agent root first.
+
+    Layered on ``projects_roots()`` exactly as ``iter_transcripts()`` is, but
+    the two views dedup at different levels. ``projects_roots()`` is right to
+    treat a cwd-hash under two roots as two distinct session sets — nothing
+    aliases a transcript across roots. A project's per-project ``memory/``
+    directory is different: ``setup-project-memory.sh``'s adopt-or-relink
+    SYMLINKS it across roots, so ``<agent-root>/projects/P/memory`` and
+    ``<harness-root>/projects/P/memory`` can be two spellings of ONE directory.
+    A caller that dedups only at the ``projects/`` level and then globs
+    ``*/memory`` itself double-counts every leaf under an adopted project — the
+    defect this accessor exists to remove once, rather than leave each of its
+    callers to hand-roll (and each get half-right).
+
+    A project directory with no ``memory/`` child is skipped, not an error —
+    most projects hold transcripts only.
+    """
+    seen: set[Path] = set()
+    out: list[Path] = []
+    for root in projects_roots():
+        for proj in sorted(root.iterdir()):
+            mem = proj / "memory"
+            if not mem.is_dir():
+                continue
+            try:
+                key = mem.resolve()
+            except OSError:  # pragma: no cover - unresolvable path, keep raw
+                key = mem
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(mem)
+    return out
+
+
 def harness_settings_file() -> Path:
     """The harness's live ``settings.json`` (``<harness root>/settings.json``) —
     the file whose ``hooks`` block decides which hooks actually fire."""
@@ -168,6 +277,14 @@ def agentctl_edit_log() -> Path:
     the call site (edit_ledger.py), mirroring agentctl_gate_log()'s role for
     gate-log.jsonl."""
     return agentctl_dir() / "edit-log.jsonl"
+
+
+def agentctl_judge_ledger_log() -> Path:
+    """Durable judge-call execution ledger (``<root>/agentctl/judge-usage-
+    ledger.jsonl`` — see lib/judge_ledger.py). Honors an
+    ``$AGENTCTL_JUDGE_LEDGER`` override at the call site (judge_ledger.py),
+    mirroring agentctl_edit_log()'s role for edit-log.jsonl."""
+    return agentctl_dir() / "judge-usage-ledger.jsonl"
 
 
 def plans_dir() -> Path:

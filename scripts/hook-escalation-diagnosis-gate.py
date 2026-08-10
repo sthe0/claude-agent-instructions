@@ -37,12 +37,36 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from outage_escalation_detect import detect as _detect_outage  # noqa: E402
 from agentctl import advisor  # noqa: E402
+from lib import ask_text  # noqa: E402
+from lib import judge_budget  # noqa: E402
+from lib import judge_ledger  # noqa: E402
+
+# Whole-invocation deadline for the judge call, and the registration that must
+# accommodate it (install-reminder-hooks.sh: 35s = this budget plus interpreter-
+# start headroom, the same shape the deferring-disposition gate already uses).
+# Before this existed the hook was registered at 5s and called the judge with
+# advisor's 8s default, both under the outage judge's own FASTEST measured run —
+# so the harness killed the hook before any verdict could come back, on every
+# call. The height itself is a judgement (how much of a turn may a gate spend);
+# what is machine-checked against lib/judge_latency.py is that it clears this
+# judge's per-call ceiling `ceil(max) + 1` = 27s over n=16, so the budget can
+# never be what truncates the call. With exactly one call there is no later call
+# to protect, so this number is ALSO the ceiling handed to it: capping the only
+# call lower would forfeit budget for nothing.
+_JUDGE_BUDGET_S = 30
+# Below this the remaining budget cannot plausibly fit a call, so spending the
+# wait on a guaranteed timeout buys nothing: stop and fail open, the same posture
+# as every other unreachable-judge path. lib/judge_latency.py's floor rule for
+# this judge, `ceil(p90)` over n=16 (p90 19.16) — well above the fastest run
+# observed (7.19s), which is what makes a call started at the floor reachable.
+_JUDGE_MIN_CALL_S = 20
 
 # Kill-switch for the semantic outage-escalation judge: set to "0" to force it
 # off without a code change. Safe-by-default: unset/unrecognised leaves the
@@ -58,33 +82,10 @@ _DENY_REASON = (
 )
 
 
-def _ask_text(tool_input: dict) -> str:
-    """Concatenate every user-facing string in an AskUserQuestion payload: each
-    question's text/header plus every option's label and description. Tolerant of
-    missing keys and schema drift — an absent field contributes nothing."""
-    if not isinstance(tool_input, dict):
-        return ""
-    parts: list[str] = []
-    questions = tool_input.get("questions")
-    if not isinstance(questions, list):
-        return ""
-    for q in questions:
-        if not isinstance(q, dict):
-            continue
-        for key in ("question", "header"):
-            val = q.get(key)
-            if isinstance(val, str):
-                parts.append(val)
-        options = q.get("options")
-        if isinstance(options, list):
-            for opt in options:
-                if not isinstance(opt, dict):
-                    continue
-                for key in ("label", "description"):
-                    val = opt.get(key)
-                    if isinstance(val, str):
-                        parts.append(val)
-    return "\n".join(parts)
+# Byte-identical alias to lib.ask_text.flat_text — kept under this name so the
+# existing unit tests (_mod._ask_text) need no change; shared with
+# hook-deferring-disposition-gate.py (lib/ask_text.py).
+_ask_text = ask_text.flat_text
 
 
 def _overcome_difficulty_invoked(transcript_path: str | None) -> bool:
@@ -179,17 +180,42 @@ def decide(payload: dict, *, runner: Callable | None = None) -> str | None:
     (None -> that judge fails open to False, never denies) — the same contract
     build_context follows in hook-turn-end-gate.py. The prefilter
     (outage_escalation_detect.detect) runs first and short-circuits to None
-    (allow) without ever invoking the judge when it doesn't fire."""
+    (allow) without ever invoking the judge when it doesn't fire.
+
+    A _JUDGE_BUDGET_S deadline bounds the whole invocation. With a single judge
+    call that degenerates into a per-call ceiling, which is the point: the call
+    gets an EXPLICIT timeout drawn from the budget instead of advisor's
+    last-resort default, which is sized for a call with no harness timeout above
+    it and so is wider than this hook's registration allows."""
     if payload.get("tool_name") != "AskUserQuestion":
         return None
     tool_input = payload.get("tool_input") or {}
     text = _ask_text(tool_input)
-    if not _detect_outage(text):
+    prefilter_fired = _detect_outage(text)
+    judge_ledger.entered("outage_escalation", prefilter_fired=prefilter_fired)
+    if not prefilter_fired:
         return None  # cheap common path: nothing to gate
-    fires = advisor.judge_outage_escalation(
+    # Opened here, after the payload's own parsing above — same reasoning as
+    # hook-deferring-disposition-gate.py: no file I/O precedes this point, so
+    # nothing above is worth docking from the judge budget.
+    budget = judge_budget.JudgeBudget(
+        _JUDGE_BUDGET_S, _JUDGE_MIN_CALL_S, clock=time.monotonic
+    )
+    remaining_before_call, call_timeout = budget.remaining_and_timeout(_JUDGE_BUDGET_S)
+    if call_timeout is None:
+        judge_ledger.decided(
+            "outage_escalation", stage="budget", verdict=False,
+            reason="budget exhausted before call (fail-open)",
+            remaining=remaining_before_call, threshold=None, ceiling=_JUDGE_BUDGET_S,
+        )
+        return None  # budget exhausted — fail open, as on every unreachable judge
+    fires, _reason = advisor.judge_outage_escalation(
         text,
         runner,
         enabled=os.environ.get(_OUTAGE_ESCALATION_KILLSWITCH_ENV) != "0",
+        timeout=call_timeout,
+        remaining=remaining_before_call,
+        ceiling=_JUDGE_BUDGET_S,
     )
     if not fires:
         return None
@@ -204,19 +230,29 @@ def decide(payload: dict, *, runner: Callable | None = None) -> str | None:
 
 
 def main() -> int:
+    judge_ledger.hook_start("escalation_diagnosis")
     try:
         payload = json.load(sys.stdin)
     except Exception:
         return 0
     if not isinstance(payload, dict):
         return 0
+    judge_ledger.source_from_payload(payload)
 
     try:
         reason = decide(payload, runner=advisor.subprocess_runner)
-    except Exception:
+        has_directive = reason is not None
+        judge_ledger.final(has_directive=has_directive)
+        emit_ok = True
+        try:
+            if has_directive:
+                deny_with(reason)
+        except Exception:
+            emit_ok = False
+        judge_ledger.emitted(ok=emit_ok, had_directive=has_directive)
+    except Exception as exc:
+        judge_ledger.discarded(reason=repr(exc))
         return 0  # fail-open — a hook must never wedge the ask
-    if reason is not None:
-        deny_with(reason)
     return 0
 
 

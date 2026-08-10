@@ -630,17 +630,11 @@ def scan_crutch_regressions(
 
 
 def default_memory_roots() -> "list[Path]":
-    home = Path.home()
     roots: "list[Path]" = []
-    global_mem = home / ".claude-agent" / "memory-global"
+    global_mem = config_root.agent_home() / "memory-global"
     if global_mem.is_dir():
         roots.append(global_mem)
-    projects_dir = home / ".claude-agent" / "projects"
-    if projects_dir.is_dir():
-        for proj in sorted(projects_dir.iterdir()):
-            mem = proj / "memory"
-            if mem.is_dir():
-                roots.append(mem)
+    roots.extend(config_root.project_memory_dirs())
     cwd_mem = Path.cwd() / ".claude" / "agent-memory"
     if cwd_mem.is_dir():
         roots.append(cwd_mem)

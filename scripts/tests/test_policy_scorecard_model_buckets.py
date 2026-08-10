@@ -49,7 +49,7 @@ def ps(monkeypatch, tmp_path):
     mod = _load_module()
     monkeypatch.setattr(mod, "LEDGER", tmp_path / "ledger.jsonl")
     monkeypatch.setattr(mod, "TASK_QUALITY_LEDGER", tmp_path / "task-quality.jsonl")
-    monkeypatch.setattr(mod, "PROJECTS_DIR", tmp_path / "projects")
+    monkeypatch.setattr(mod, "projects_roots", lambda: [tmp_path / "projects"])
     monkeypatch.setattr(mod, "GATE_LOGS", (tmp_path / "no-gate-log.jsonl",))
     monkeypatch.setattr(mod, "REPO_ROOT", tmp_path / "no-instrepo")
     monkeypatch.setattr(mod, "SPAWN_LEDGER", tmp_path / "no-spawn-ledger.jsonl")

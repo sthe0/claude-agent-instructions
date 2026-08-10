@@ -1,8 +1,16 @@
 """install-reminder-hooks.sh's PRUNE-ONLY scope: beyond $CLAUDE_AGENT_HOME/settings.json,
 the script also reconciles the files named in its PRUNE_ONLY_SETTINGS array
-(today: $HOME/.claude/settings.json) — but only in the delete direction. A
-DESIRED entry is never added there, and a missing or unparseable file is
-skipped rather than created or truncated.
+(today: $HOME/.claude/settings.json) — in the delete direction, plus exactly the
+one named ADD exemption. Every DESIRED entry other than PRUNE_ONLY_ALSO_ADD's
+is kept out, and a missing or unparseable file is skipped rather than created or
+truncated.
+
+"Prune-only" is thus a claim about ENFORCEMENT, not about bytes: a DETECTOR
+denies nothing, and registering it only in the root that is always correctly
+wired would leave the one root where the gap is real unable to report it. The
+positive half of that split — the detector IS added, no gate-bearing hook ever
+is — lives in test_installer_detector_in_personal_root.py; this module holds the
+prune-direction and file-safety guarantees the exemption must not erode.
 
 Each test drives the real script via subprocess against fixture settings
 files, mirroring test_install_reminder_hooks_prune.py's `_shell_env` pattern,
@@ -94,7 +102,7 @@ def test_unowned_dangling_entry_in_dot_claude_settings_is_kept(tmp_path):
     assert outside in _all_commands(data, "PreToolUse")
 
 
-def test_no_desired_entry_is_ever_added_to_dot_claude_settings(tmp_path):
+def test_an_unexempted_desired_entry_is_never_added_to_dot_claude_settings(tmp_path):
     env = _shell_env(tmp_path)
     settings = _dot_claude_settings(env)
     original = {"hooks": {"PreToolUse": [_group("ZZZ-fake-matcher", [])]}}
@@ -110,9 +118,8 @@ def test_no_desired_entry_is_ever_added_to_dot_claude_settings(tmp_path):
         for grp in grp_list
         for h in grp["hooks"]
     }
-    # None of the canonical reminder hooks (added to CLAUDE_AGENT_HOME only)
-    # should ever land in the prune-only file.
-    assert not any(name.startswith("hook-") and "context-growth" in name for name in wired_basenames)
+    # An advisory reminder is added to CLAUDE_AGENT_HOME only: it is neither the
+    # named exemption nor gate-bearing, so it stands for the ordinary DESIRED row.
     assert "hook-context-growth-reminder.py" not in wired_basenames
 
 
@@ -190,12 +197,20 @@ def test_unparseable_dot_claude_settings_is_skipped_not_truncated(tmp_path):
     assert settings.read_text(encoding="utf-8") == "{ not json"
 
 
-def test_dot_claude_settings_untouched_when_nothing_to_prune(tmp_path):
+def test_dot_claude_settings_untouched_when_nothing_left_to_reconcile(tmp_path):
+    """No gratuitous write. The fixture is already in the state the installer
+    wants — nothing dangling to prune AND the one ADD exemption already wired —
+    so a second run must not rewrite the file or leave a .bak behind. This is
+    also the exemption's idempotence: it adds by basename, once."""
     env = _shell_env(tmp_path)
     real = str(SCRIPTS_DIR / "hook-context-growth-reminder.py")
-    assert Path(real).exists()
+    detector = str(SCRIPTS_DIR / "hook-canon-guard-wired-check.py")
+    assert Path(real).exists() and Path(detector).exists()
     settings = _dot_claude_settings(env)
-    original = {"hooks": {"UserPromptSubmit": [_group(None, [real])]}}
+    original = {"hooks": {
+        "UserPromptSubmit": [_group(None, [real])],
+        "SessionStart": [_group(None, [detector])],
+    }}
     settings.write_text(json.dumps(original), encoding="utf-8")
 
     proc = _run(env)
@@ -204,3 +219,43 @@ def test_dot_claude_settings_untouched_when_nothing_to_prune(tmp_path):
     assert not Path(str(settings) + ".bak").exists()
     data = json.loads(settings.read_text(encoding="utf-8"))
     assert data == original
+
+
+def test_reconciliation_does_not_reach_into_the_prune_only_root(tmp_path):
+    """The timeout reconciler is scoped to the root the installer OWNS.
+
+    Reconciliation had to be added because the script was insert-only: a
+    corrected DESIRED timeout could never reach an already-registered hook. But
+    "prune-only" is a promise about this file specifically, and rewriting a
+    timeout here is an ADD-direction edit — the very direction the scope forbids.
+
+    Every entry is seeded at a timeout the DESIRED table disagrees with,
+    including the ONE ADD exemption (the detector, whose DESIRED timeout is 5).
+    The exemption buys the detector an insertion when absent, not an edit when
+    present: if reconciliation were run over this root unscoped, the exemption
+    is precisely the entry that would silently change under it."""
+    env = _shell_env(tmp_path)
+    real = str(SCRIPTS_DIR / "hook-context-growth-reminder.py")
+    detector = str(SCRIPTS_DIR / "hook-canon-guard-wired-check.py")
+    slow_judge = str(SCRIPTS_DIR / "hook-escalation-diagnosis-gate.py")
+    original = {"hooks": {
+        "UserPromptSubmit": [_group_at(None, [real], 99)],
+        "SessionStart": [_group_at(None, [detector], 99)],
+        "PreToolUse": [_group_at("AskUserQuestion", [slow_judge], 99)],
+    }}
+    settings = _dot_claude_settings(env)
+    settings.write_text(json.dumps(original), encoding="utf-8")
+
+    proc = _run(env)
+    assert proc.returncode == 0, proc.stderr
+
+    data = json.loads(settings.read_text(encoding="utf-8"))
+    assert data == original, "reconciliation edited a prune-only root"
+
+
+def _group_at(matcher, commands, timeout):
+    g = {} if matcher is None else {"matcher": matcher}
+    g["hooks"] = [
+        {"type": "command", "command": c, "timeout": timeout} for c in commands
+    ]
+    return g

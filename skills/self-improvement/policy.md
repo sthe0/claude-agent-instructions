@@ -191,10 +191,12 @@ All agent instructions — prompts in `agents/`, skill prompts in `skills/`, `CL
 *To achieve a reply the user can read without asking what a word means, write the reply IN their language rather than in a transliteration of English.* Twice a transliterated term cost a full turn to explain: «лендить» for *to land* (2026-06-30) and «интейк» for *intake* (2026-07-09).
 
 - An established equivalent exists → use it. Russian: «влить» / «выкатить» / «довести до trunk», never «лендить».
-- The term names one of our own artifacts (`intake`, `partition`, `spine`) → refer to the English identifier as code (`intake.py`), or define it once in the user's language on first use. Never coin a transliteration («интейк», «партишн»).
+- The term names one of our own artifacts — the coordination machinery counts (`intake`, `partition`, `spine`, an anchor mount, a write gate, a checkpoint) → name the thing **by its function** in the user's language first («главная рабочая копия», «проверка-ограничитель», «журнал состояния»), and give the English identifier as code (`intake.py`) only where the file or command name is itself what matters. Never coin a transliteration («интейк», «партишн»); «анкер-маунт» + «канон» + «гейт» + «чекпоинт» in a single ask cost a full turn (2026-08-05).
 - Names stay names: proper nouns, tool names, API identifiers, ticket keys are not vocabulary.
 
 Applies to every user-facing surface — prose, plan narratives, retrospectives, and the question + option-label text of every `AskUserQuestion`.
+
+*To achieve an ask the user can answer without reverse-engineering our own machinery, whenever a question or report rests on an internal constraint of that machinery, state in one plain sentence what blocks, who imposed it, and why.* Our constraints are invisible from outside: "the write gate refuses this path outside an execution step" is a fact about our engine, not about the user's world, and unexplained it reads as an arbitrary refusal the user must interrogate («Что и кто блокирует, и почему?», 2026-08-05). Name three things — the blocker (which check, in which file), its author (our own engine gate / the permission layer / the platform / the org), and the difficulty it removes — before asking the user to decide anything about it.
 
 ### When editing
 
@@ -292,11 +294,13 @@ If cron pull is enabled (opt-in, see below), it does **not** replace this reconc
 ### After editing (mandatory)
 
 ```bash
-cd ~/claude-agent-instructions
+cd <worktree>   # NEVER ~/claude-agent-instructions — § Where to author Core edits
 git add -A && git commit -m "…"
 # push only after explicit user confirmation (see below)
 ~/claude-agent-instructions/scripts/sync-instructions-repo.sh push
 ```
+
+*To achieve a recipe that does not itself produce the violation the next section forbids, the `cd` above names a worktree.* The primary checkout is denied by `hook-guard-canon-readonly.py`, so a plan authored from a recipe that opened with `cd ~/claude-agent-instructions` promised an impossible in-place edit — which is exactly what happened on 2026-08-10, costing a full difficulty cycle.
 
 **Editing this skill itself.** When the staged change touches any file under
 `skills/self-improvement/`, the `commit-msg` hook requires the literal marker
@@ -304,6 +308,8 @@ git add -A && git commit -m "…"
 deliberate acknowledgment: editing the skill that processes user feedback
 changes future invocations in the same conversation, so the change is
 explicitly reviewed before it lands.
+
+**A new or reworded `CLAUDE.md` rule unit obliges a `scripts/rule-registry.toml` entry.** `rule-salience-report.py --check-registry`, wired into the pre-commit `verify-all`, enumerates every heading / bold lead / imperative bullet in `CLAUDE.md` and **fails the commit** unless some entry's `locator_phrase` is found verbatim inside it. *Difficulty removed: a plan that lists only the prose file promises a two-file diff the commit gate refuses, so count the registry among the change's artifacts while planning, not after the rejection.*
 
 1. **Commit** locally after every edit batch (message explains the change).
 2. **Prepare for push:** `git status`, `git log -1`, run verifiers if layout changed; tell the user the commit is ready and what will go to `origin/main`.

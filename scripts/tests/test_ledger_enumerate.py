@@ -32,7 +32,7 @@ class FakeRunner:
         self._stdout = stdout
         self._returncode = returncode
 
-    def __call__(self, argv):
+    def __call__(self, argv, *, timeout=None):
         self.calls.append(argv)
         return RunResult(self._returncode, self._stdout, "")
 

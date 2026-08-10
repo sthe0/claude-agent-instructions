@@ -38,6 +38,12 @@ question on any unrelated stage edit. `plan.goal` / `plan.done_criterion`
 targets are exempt from this check (there is no per-goal key to compare against;
 the plan-level target does not repeat under a stage index).
 
+Order coverage (validate_order_elements) is the second bag this module holds: the
+elements of the ORDER the plan answers, each covered by a stage or cut with a
+reason. Same per-item closure form, opposite empty-set rule — an empty question bag
+is an honest silence, an empty order bag is 'nobody looked' (argued at
+validate_order_elements).
+
 Pure module: no filesystem, subprocess, or network access.
 """
 from __future__ import annotations
@@ -230,6 +236,139 @@ def validate_questions(questions: list[Question], *, stage_keys: dict[int, str])
             )
 
     return blockers
+
+
+VALID_ORDER_DISPOSITIONS = frozenset({"raised", "covered", "cut"})
+
+_ORDER_DISPOSE_HINT = (
+    "`agentctl order-dispose --id <id> --as covered --stage <n> | "
+    "--as cut --reason <text>`"
+)
+
+ORDER_BAG_EMPTY = (
+    "no element of the order is recorded, so nothing says the plan covers the order "
+    "it answers — enumerate the order's elements with `agentctl order-raise --id <id> "
+    f"--element <text>`, then dispose each with {_ORDER_DISPOSE_HINT}"
+)
+
+
+@dataclass
+class OrderElement:
+    """One element of the ORDER the plan answers — the user's ask, decomposed before
+    the plan exists. Its `disposition` says what the plan does with it: 'covered' by
+    a named stage, or 'cut' with a reason. 'raised' is the undispositioned state and
+    always blocks."""
+    id: str
+    element: str
+    disposition: str = "raised"
+    stage: int | None = None
+    reason: str = ""
+
+
+def order_elements_from_dicts(raw: list[dict]) -> list[OrderElement]:
+    return [
+        OrderElement(
+            id=d["id"],
+            element=d.get("element", ""),
+            disposition=d.get("disposition", "raised"),
+            stage=d.get("stage"),
+            reason=d.get("reason", ""),
+        )
+        for d in raw
+    ]
+
+
+def order_elements_to_dicts(elements: list[OrderElement]) -> list[dict]:
+    return [
+        {
+            "id": e.id,
+            "element": e.element,
+            "disposition": e.disposition,
+            "stage": e.stage,
+            "reason": e.reason,
+        }
+        for e in elements
+    ]
+
+
+def validate_order_elements(
+    elements: list[OrderElement], *, stage_indices: set[int], plan_present: bool
+) -> list[str]:
+    """Pure: an order bag + the current plan's stage indices -> blockers (empty iff
+    every element of the order is covered by a stage that exists or cut with a
+    reason).
+
+    Fail-closed on the EMPTY bag, the OPPOSITE of validate_questions: a stage that
+    asked nothing is not thereby suspect, so an empty question bag is an honest
+    silence — but every task HAS an order, so an empty order bag is not 'nothing to
+    say', it is 'nobody looked'. The blocker only fires once a plan exists
+    (`plan_present`): before submit-plan there is no plan to check coverage of, and a
+    blocker with nothing to answer it would fire from the session's first command.
+
+    `stage_indices` is skipped when empty (no plan submitted yet), exactly as
+    validate_questions skips its binding checks for the same case.
+    """
+    blockers: list[str] = []
+
+    if plan_present and not elements:
+        blockers.append(ORDER_BAG_EMPTY)
+
+    for e in elements:
+        if e.disposition not in VALID_ORDER_DISPOSITIONS:
+            blockers.append(
+                f"order element {e.id!r} has unknown disposition {e.disposition!r}"
+            )
+            continue
+
+        if e.disposition == "raised":
+            blockers.append(
+                f"order element {e.id!r} is raised (undispositioned) — dispose it "
+                f"with {_ORDER_DISPOSE_HINT}"
+            )
+            continue
+
+        if e.disposition == "covered":
+            if e.stage is None:
+                blockers.append(f"covered order element {e.id!r} names no stage")
+            elif stage_indices and e.stage not in stage_indices:
+                blockers.append(
+                    f"order element {e.id!r} is covered by stage {e.stage}, which the "
+                    f"current plan does not contain (dangling edge) — point it at a "
+                    f"stage that exists or cut it with a reason"
+                )
+            continue
+
+        if e.disposition == "cut":
+            if not e.reason:
+                blockers.append(f"cut order element {e.id!r} has no reason")
+            elif _normalize_string(e.reason) in _PLACEHOLDER_SET:
+                blockers.append(
+                    f"order element {e.id!r} field 'reason' is a placeholder value {e.reason!r}"
+                )
+
+    return blockers
+
+
+def render_coverage_block(elements: list[OrderElement], stage_count: int) -> str:
+    """The scope-coverage block: the plan's size and what it does with each element
+    of the order. Deterministic (covered lines in stage order, then cut lines in id
+    order; no timestamps) because it is a GATE input — the essence presented to the
+    user must contain it verbatim, so a second hand-written rendering would drift
+    against the check. This is the single generator; nothing else composes the text.
+    """
+    covered = sorted(
+        (e for e in elements if e.disposition == "covered"),
+        key=lambda e: (e.stage if e.stage is not None else -1, e.id),
+    )
+    cut = sorted((e for e in elements if e.disposition == "cut"), key=lambda e: e.id)
+
+    lines = [
+        f"[scope] plan has {stage_count} stage(s); order: {len(elements)} element(s) "
+        f"— {len(covered)} covered, {len(cut)} cut"
+    ]
+    lines += [f"- covered: {e.element} -> stage {e.stage}" for e in covered]
+    lines += [f"- cut: {e.element} — {e.reason}" for e in cut]
+    return "\n".join(lines)
 
 
 VALID_CANDIDATE_DISPOSITIONS = frozenset({"raised", "recorded", "dismissed"})

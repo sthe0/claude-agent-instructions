@@ -1,0 +1,75 @@
+---
+name: 2026-08-05-deferring-ask-gate-and-the-binding-timeout-layer
+description: The agent held the rights, the tools and a finished diagnosis of a defect and still handed the user a menu whose every option deferred the work (file a ticket / leave as is) — capability-before-offload was live in the snapshot and simply did not fire, so the repair had to be structural (a PreToolUse gate on AskUserQuestion, regex prefilter over OPTION text only + fail-open semantic judge) rather than another line of prose; building it surfaced a second, larger defect one layer up — every judge-calling hook in the fleet is registered at a 5 s harness timeout while a live judge call takes 11-15 s with a 47 s tail, so those gates are inert in production and, being fail-open, silent about it.
+type: reference
+schema: difficulty/v1
+generality: 0
+resolution_confirmed_by_user: "user"
+tier: 1
+refs: [memory-global/leaves/capability-before-offload.md, memory-global/leaves/regex-not-for-semantic-classification.md, memory-global/leaves/experience/2026-07-09-landed-not-deployed-checkout-parked-on-feature-branch.md]
+plan_file: /home/the0/.claude-agent/plans/gc-criterion-and-defer-gate.toml
+created: 2026-08-05
+last_verified: 2026-08-10
+---
+
+# A menu in which no option does the work, and the timeout layer that made its gate inert
+
+## Difficulty
+Asked to restore this machine's workspace mounts, the agent found a real defect in the mount-GC script it ran: the script's "is this branch landed?" criterion read *does the branch have an upstream*, which is systematically inverted — a closed task's branch loses its upstream **because** the review request merged and the remote branch was deleted. Having the rights, the tools and a finished diagnosis, the agent filed a ticket and presented an `AskUserQuestion` whose every branch deferred: *file it as a separate task (Recommended)* / *leave it alone*. The user's correction — "why did you file a ticket instead of offering to fix it right away, you have all the rights" — names the shape exactly: **deferral-offload through the composition of the options**, not through anything the agent said.
+
+<!-- Language exception: the user's correction is quoted in translation; the original is Russian and lives in the session transcript. -->
+
+`capability-before-offload.md` was loaded in that session's snapshot. It did not fire. A norm that is present and does not fire is not repaired by restating it — it needs a mechanism at the point of the act, and the point of the act here is the `AskUserQuestion` tool call itself.
+
+Building that mechanism then exposed a defect one layer above it: the hook's *own* registered harness timeout. Raising the judge's internal ceiling 8 s → 30 s fixed a **non-binding** limit; the binding one was `install-reminder-hooks.sh` registering the hook at `"timeout": 5` **seconds**, against a measured judge latency of 11–15 s. The gate would have been killed on the fifth second of every real invocation, printed nothing, and let the menu through — indistinguishable, from the outside, from a gate that decided to allow.
+
+## Order & criterion
+Two independent deliveries, one approved plan (6 stages):
+- **A — the defect the ticket was about:** replace the landed-criterion in the mount-GC script with *reachability of the branch's commits from trunk*, with exactly one lazy fetch when the local trunk ref is stale, and KEEP on fetch failure (offline must never forget a store).
+- **B — the norm that did not fire:** `hook-deferring-disposition-gate.py` on `PreToolUse`/`AskUserQuestion` + `advisor.judge_deferring_disposition`, patterned on the existing escalation gate: high-recall regex prefilter → fail-open model judge → deny via `permissionDecision`.
+
+**Acceptance check (measurable):** the GC script's `--selftest` exit 0 (8 cases); a live dry-run of it exit 0; `pytest tests/test_deferring_disposition_gate.py tests/test_advisor.py` exit 0 — plus, on the runtime axis, the gate actually denying its own founding ask with the real judge, not a mock.
+
+## Contexts
+
+### 2026-08-05 — Structural repair of a norm that did not fire
+- Where it arose: a machine-local workspace-mount GC script (org-side ticket + review request carry that half of the record) and Core `scripts/` (git worktree `~/cai-wt-defer-gate`, branch `defer-gate`, commit `c4fd32c`).
+- Working plan: 6 stages — ticket-side mount + branch; criterion replacement + selftest 4→8 cases; commit + review request; isolated Core worktree; judge + hook + tests (three code-review rounds); registration + full suite + commit.
+
+**The split that is load-bearing.** The *same* option vocabulary ("ticket", "later", "leave as is") is defective when the agent could act and legitimate when the work is genuinely someone else's. So the regex may only *widen recall*; the meaning is the model's call ([[regex-not-for-semantic-classification]]). Two scoping decisions came out of live runs, not from reasoning:
+- the prefilter must read **option text only, never the question stem** — a resolution gate ("shall we consider the task resolved?") carries the cue word in its own wording while every option is a plain confirm, and stem-scoped prefiltering burned a judge call on every such ask;
+- the decision is **per question**, not per payload — the predicate is a property of one menu, and the deny must name *which* menu, or the agent rewrites the wrong one and hits the same deny.
+
+**Each review round found the blocker one layer higher than the last.** Round 1: the registry/audit layer. Round 2: the judge's own timeout. Round 3: the harness registration timeout. The pattern is worth naming — a gate has a *stack* of ceilings (judge → hook budget → harness registration), and fixing any one of them proves nothing about the others. Only a **live end-to-end run with the real judge** distinguishes them; tests-green distinguishes none.
+
+**Latency was characterised, not assumed.** Eight calls on the founding ask with no timeout: 10.5 / 11.5 / 12.2 / 12.6 / 13.7 / 14.2 / 15.4 / **47.0** s. The distribution has a heavy tail, so the chosen budget (20 s hook-wide, 25 s registered) buys ~7/8 recall and drops the tail — documented in-file as a deliberate trade rather than left as an unstated one, because no ceiling a user tolerates ahead of an interactive menu covers 47 s.
+
+**Mechanical traps paid for here** (several are re-payments of known ones): `gen_crutch_registry.py` / `crutch-inventory.py` enumerate via `git ls-files`, so a new file needs `git add -N` **before** any index-dependent run; the spawn-specialist allow-list lets a developer run `python3 -m pytest` but **not** `bash <script>` nor `python3 <script>`, so registry regeneration and installer runs are the coordinator's job (two identical PERMISSION-REQUESTs before that sank in); `agentctl resolve-permission` has no `--note`; piping `agentctl dispatch` through `tail` **discards the specialist's report** — redirect full stdout to a file; driving agentctl against a non-canon tree needs `PYTHONPATH=<canon>/scripts python3 -P -m agentctl` so `-P` drops cwd from `sys.path` and canon's copy wins while cwd stays the worktree.
+
+**A foreign test's defect was named, not routed around.** A comment inside the `DESIRED` block of `install-reminder-hooks.sh` broke `test_no_desired_entry_is_ever_removed`, whose regex `"([^"]*\.py[^"]*)"` parses that block *including comments*, so a quoted aside (`"leave as is"`) shifts the pairing. The first fix reworded my own comment to avoid `.py` substrings — it worked, and left an invisible contract for the next author. The real fix is one line in the foreign test (`desired_block = re.sub(r"#[^\n]*", "", desired_block)`), after which the comment could carry literal filenames again.
+
+### 2026-08-10 — Paying the finding this leaf left open: the execution counter, and proving the counter itself runs
+- Where it arose: Core `scripts/` (git worktree `~/cai-wt-judge-budget`, branch `judge-budget`, one delivery landed on trunk); plan `judge-hook-timeouts-and-execution-counter-v8.toml`, 9 stages.
+- Working plan: extract the judge budget into a shared primitive; lift the four ceilings and teach the registration mechanism to see a timeout; calibrate five ceilings from live measurements; one live end-to-end run per hook; a two-phase execution ledger over 14 outcomes; a ledger report and a dispatch witness; one delivery + a snapshot of the old registrations + installer + a user-performed config reload; re-take that snapshot machine-readably; run the witness.
+
+**The finding above was correct and the fix was the counter — but the counter has the same defect it cures.** A ledger that records executions is itself only a *decision path* until something shows the harness dispatches the hook that writes it. So the real deliverable was not the ledger; it was a **witness** with three conjoined filters: rows after the config-reload stamp, rows carrying the *executing* session's id, and a **per-hook barrier drawn from the pre-install snapshot** — for a hook that used to be registered at 5 s, a judge call *longer than 5 s* is physically impossible under the old registration; for a hook that was never registered at all, the bare `entered` row is already proof. Without the barrier the witness would have gone green in exactly the failure it was built to detect: `entered` is flushed to disk *before* the judge, so a killed hook writes it too.
+
+**The snapshot of the pre-change state is irreproducible, and that shapes the plan.** Once the installer runs, the old wiring is gone; there is no second chance to measure the barrier. It had to be captured before, kept read-only, and — because a hand-typed JSON file passes every semantic check — the later machine-readable re-take was verified by **byte-identity against a fresh reconstruction through the same probe**, not by reading its contents. Confirmed on a deliberately forged file: it satisfied all five content assertions and failed only the byte one.
+
+**Two of the three events had to be produced deliberately, and that is not staging.** Only `deferring_disposition` fired on its own. For the other two the plan authorised the executor to submit inputs of the required shape **through the real harness path** — a genuine `AskUserQuestion` whose text trips the outage prefilter, and a closing turn text ending in a question mark — declaring it in the turn beforehand and recording the exact text, submission time and resulting ledger rows in an evidence file. What that proves is the **fact of dispatch under the new registration**, not the natural frequency of such inputs; the plan says so in its own words rather than leaving the reader to notice. Measured: `escalation_diagnosis` **21.42 s**, `turn_end`/`binary_ask` **13.04 s** — both over the old 5 s ceiling that had killed every prior call.
+
+**The costly error was a plan branch built on an unread claim about code.** Two consecutive revisions (v6, v7) rejected the "submit the missing events yourself" alternative on the ground that judge prefilters read the *user's* text and so are outside the executor's reach. The reviewer read the code: four of the five paths read the **executor's** text (`binary_ask_prefilter(assistant_text)`, `_detect_outage(assistant_text)`, the option text of an ask, the ask's own text). The false premise had already grown a whole second delivery — a patch to the witness — whose new defence was spoofable by any prior session's UUID. Cancelling it restored the criterion the user had originally approved. Re-norming: **before a claim about how code behaves becomes load-bearing for a plan decision, read that code and cite `file:line` in the plan itself; if reading is impossible, the claim is booked as an explicit assumption with its risk, not as a fact.**
+
+**The engine routed the session into diagnosis on its own.** After the third replan the effort-divergence trigger fired on the `replans` scale (absolute, threshold 3) even though the stage had *passed* — a passing result whose cost overran the plan's own estimate is still a signal that the norm missed something. It asked nothing and framed the difficulty itself; the resulting cycle is what produced the re-norming above.
+
+**Mechanical traps paid here:** `hook-plan-delivery-gate.py` resolves state by the **live harness** session id, so an engine session id that differs from it means the gate never stamps the delivery and `approve` reports a stale proof — cleared with `confirm-delivery --escape-reason hook_not_fired` after re-verifying delivery by the hook's own criterion by hand; `record-result --code-ref X` compares `_digest(X)` against a stored digest, so the original ref string is unrecoverable from the state file and passing the stored digest itself reads as stale — omit the flag and say so in `--control`; `record-result` takes no `--stage`; the coverage gate matches similarities as **normalized substrings** of a stage's `conditions`/`invariants`, so critique text must be quoted verbatim from the plan it will be checked against.
+
+## Cost
+**2026-08-10 context:** $27.88 of list-price telemetry over 2 spawns and 1 attributed stage (4115 s of engine time), plus an unmeasured main-session share across several context windows; 1 delivery landed on trunk, 9 stages, 3 replans (one engine-initiated), full suite 3981 passed / 3 skipped, `verify-all` 20/20, user-confirmed quality 3/5.
+
+**2026-08-05 context:** $22.63 attributed to 7 spawns over 2 dispatched stages (4818 s), plus an unmeasured main-session share across two context windows; 2 deliveries — 1 org-side review request (open) and 1 Core commit of 12 files, 989 insertions, 99 new/changed tests (full suite 3688 passed / 3 skipped).
+
+## Self-critique of the agent system
+The largest finding is one this task deliberately did **not** fix: all three judge-calling hooks (`hook-deferring-disposition-gate.py`, `hook-escalation-diagnosis-gate.py`, `hook-turn-end-gate.py`) were registered at 5 s. The two neighbours are therefore **inert in production today** — and because they are fail-open, they have been silent about it for their whole lifetime. That is the same family as [[2026-07-09-landed-not-deployed-checkout-parked-on-feature-branch]]: *committed ≠ running*, and a fail-open mechanism has no way to report its own non-execution. The generalisable rule: **a fail-open gate needs an execution counter, not just a decision path** — otherwise "never denied anything" and "never ran" are the same observation.
+
+Second: three review rounds on one stage is itself an effort signal. Each round was justified by a genuine blocker, but the first two would have been caught in one round by running the hook end-to-end with the real judge **before** the first review, instead of after the third. The runtime axis was checked last when it was the cheapest discriminator available.

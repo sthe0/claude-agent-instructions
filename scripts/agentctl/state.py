@@ -20,7 +20,7 @@ import shlex
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -608,6 +608,12 @@ class Actor:
     """Who executes the stage and what capability that demands."""
     executor: str  # "in_thread" | "spawn:<spec>"
     capability_required: str | None = None
+    # Declared dispatch-budget tier (schema 25): "small" | "medium" | "large",
+    # optional. Resolution order at dispatch is flag > this declaration > the
+    # "medium" default. Absent on legacy pre-schema-25 states (absent key ->
+    # dataclass default via Stage.from_dict's Actor(**d["actor"]) splat), so a
+    # stage that never declared a tier dispatches exactly as before.
+    cost_tier: str | None = None
 
 
 @dataclass
@@ -874,6 +880,13 @@ class PlanFrame:
     stages: list["Stage"]
     current_stage: int | None
     originating_stage: int
+    # Effort-divergence custody (schema 25) — see effort.py's SUB-PLAN CUSTODY. Snapshotted
+    # by cmd_push_subplan, restored by cmd_pop_subplan; effort.py never reads a PlanFrame.
+    effort_estimate: dict | None
+    effort_baseline: dict | None
+    effort_actuals: dict
+    effort_fires: list[dict]
+    effort_spend_seen: dict
 
 
 @dataclass
@@ -1158,6 +1171,25 @@ class SessionState:
     # '' on legacy states and on sessions where the coordinator did not pass
     # --deliverable-kind (absent key -> dataclass default via from_dict's cls(**data)).
     deliverable_kind: str = ""
+    # Effort-divergence trigger (schema 25) — effort.py owns every read and write of
+    # these; nothing else interprets them, and effort.py's module docstring is the
+    # canonical statement of the mechanism (THE WINDOW; ARMED-ONLY, AND ARMED AT MOST
+    # ONCE; RE-ARM; MONOTONE ACTUALS; SUB-PLAN CUSTODY — each a literal heading in that
+    # docstring). All six load as their zero value on legacy states (absent key
+    # -> dataclass default via from_dict's cls(**data)).
+    #   effort_estimate    the CURRENT plan's declared cost per ratio scale (effort.rederive).
+    #   effort_baseline    the actual vector snapshotted at arming (effort.arm); None until
+    #                      then is the ARMED-ONLY sentinel — see effort.py.
+    #   effort_actuals     the monotone accumulators ('spend_usd', 'active_minutes').
+    #   effort_fires       one record per firing (scale, multiple, history_len).
+    #   effort_spend_seen  plan_path -> ledger total already booked, keyed BY PATH.
+    #   user_prompt_count  interactions actual, stamped by hook-engine-start.py.
+    effort_estimate: dict | None = None
+    effort_baseline: dict | None = None
+    effort_actuals: dict = field(default_factory=dict)
+    effort_fires: list[dict] = field(default_factory=list)
+    effort_spend_seen: dict = field(default_factory=dict)
+    user_prompt_count: int = 0
     schema_version: int = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -1375,6 +1407,11 @@ class SessionState:
                 stages=[Stage.from_dict(s) for s in f.get("stages", [])],
                 current_stage=f.get("current_stage"),
                 originating_stage=int(f["originating_stage"]),
+                effort_estimate=f.get("effort_estimate"),
+                effort_baseline=f.get("effort_baseline"),
+                effort_actuals=f.get("effort_actuals") or {},
+                effort_fires=f.get("effort_fires") or [],
+                effort_spend_seen=f.get("effort_spend_seen") or {},
             )
             for f in data.get("plan_stack", [])
         ]

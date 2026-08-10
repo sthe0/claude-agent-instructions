@@ -22,7 +22,7 @@ run is a no-op. Dry-run by default; pass --apply to write.
 Scopes (all SUPPORTED; the operator picks which to EXECUTE):
   global    memory-global/leaves/**            (this repo)
   project   <project-dir>/.claude/agent-memory/**   (requires --project-dir)
-  personal  ~/.claude/projects/*/memory/**
+  personal  <config root>/projects/*/memory/**   (both roots, unioned)
   all       the union of the above
 """
 from __future__ import annotations
@@ -36,7 +36,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agentctl import edit_ledger
-from lib.config_root import agent_home
+from lib.config_root import project_memory_dirs
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
@@ -147,9 +147,11 @@ def iter_leaves(scope: str, project_dir: str | None):
         if project_dir:
             roots.append(Path(project_dir) / ".claude" / "agent-memory")
     if scope in ("personal", "all"):
-        projects = agent_home() / "projects"  # system root (isolated or legacy)
-        if projects.is_dir():
-            roots += sorted(projects.glob("*/memory"))
+        # Both config roots: a bare `claude` and the `claude-agent` launcher each
+        # create per-project memory dirs under their own root, and an adopted
+        # project's dir is symlinked across them — project_memory_dirs() dedups
+        # that aliasing so a stamped leaf is never counted twice.
+        roots += project_memory_dirs()
     for root in roots:
         if not root.is_dir():
             continue

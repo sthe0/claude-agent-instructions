@@ -12,7 +12,7 @@ import argparse
 
 import pytest
 
-from agentctl import cli
+from agentctl import cli, effort
 from agentctl.machine import transition
 from agentctl.state import (
     _MAX_PLAN_STACK,
@@ -210,6 +210,71 @@ def test_roundtrip_with_plan_stack(store):
     assert len(frame.final_check) == 1
 
 
+def test_subplan_custody_preserves_nondefault_effort_fields(store):
+    """The five effort-custody seams (effort.py's SUB-PLAN CUSTODY) round-trip a
+    NON-DEFAULT parent — unlike test_roundtrip_with_plan_stack's all-default parent,
+    a dropped seam here (e.g. a forgotten reset-list or restore-list line) fails an
+    equality assertion instead of silently passing because everything was already
+    None/{}/[] on both sides."""
+    parent = _executing_state(store, "custody")
+    effort.arm(parent)
+    parent.effort_actuals[effort.ACTUAL_SPEND_KEY] = 12.5
+    parent.effort_actuals[effort.ACTUAL_MINUTES_KEY] = 30.0
+    parent.effort_spend_seen["/tmp/parent.toml"] = 12.5
+    parent.effort_fires = [{
+        "scale": "spend", "kind": "ratio", "actual": 12.5, "estimate": 3.0,
+        "multiple": 4.17, "history_len": 0, "ts": 1.0,
+    }]
+    pre_estimate = dict(parent.effort_estimate)
+    pre_baseline = dict(parent.effort_baseline)
+    pre_actuals = dict(parent.effort_actuals)
+    pre_fires = list(parent.effort_fires)
+    pre_spend_seen = dict(parent.effort_spend_seen)
+    store.save(parent)
+
+    cli.cmd_push_subplan(
+        ns(session="custody", plan="/tmp/child.toml", task="child-task", originating_stage=1),
+        store=store,
+    )
+    state = store.load("custody")
+    frame = state.plan_stack[0]
+    # seams (b)/(e) — PlanFrame dataclass + cmd_push_subplan's construction: the frame
+    # snapshotted the parent's non-default values, not defaults.
+    assert frame.effort_estimate == pre_estimate
+    assert frame.effort_baseline == pre_baseline
+    assert frame.effort_actuals == pre_actuals
+    assert frame.effort_fires == pre_fires
+    assert frame.effort_spend_seen == pre_spend_seen
+    # seam (a) — cmd_push_subplan's reset list: the child starts a fresh, unarmed window.
+    assert state.effort_estimate is None
+    assert state.effort_baseline is None
+    assert state.effort_actuals == {}
+    assert state.effort_fires == []
+    assert state.effort_spend_seen == {}
+
+    # The child accumulates its own effort before resolving.
+    state.effort_actuals[effort.ACTUAL_SPEND_KEY] = 4.0
+    state.effort_actuals[effort.ACTUAL_MINUTES_KEY] = 6.0
+    store.save(state)
+    _resolve_child(store, "custody")
+
+    d = cli.cmd_pop_subplan(ns(session="custody"), store=store)
+    assert d.ok is True
+    restored = store.load("custody")
+    # seam (c)/(d) — SessionState.from_dict's rebuild + cmd_pop_subplan's restore list:
+    # the parent's own custody fields come back verbatim...
+    assert restored.effort_estimate == pre_estimate
+    assert restored.effort_baseline == pre_baseline
+    assert restored.effort_fires == pre_fires
+    assert restored.effort_spend_seen == pre_spend_seen
+    # ...except effort_actuals, which ADDS the child's consumption onto the parent's
+    # (effort.merge_actuals) rather than overwriting it.
+    assert restored.effort_actuals == {
+        effort.ACTUAL_SPEND_KEY: pytest.approx(12.5 + 4.0),
+        effort.ACTUAL_MINUTES_KEY: pytest.approx(30.0 + 6.0),
+    }
+
+
 # --- _MAX_PLAN_STACK enforcement -----------------------------------------------
 
 def _make_frame(i):
@@ -231,6 +296,11 @@ def _make_frame(i):
         stages=[_stage(1)],
         current_stage=1,
         originating_stage=1,
+        effort_estimate=None,
+        effort_baseline=None,
+        effort_actuals={},
+        effort_fires=[],
+        effort_spend_seen={},
     )
 
 

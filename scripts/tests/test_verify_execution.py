@@ -38,14 +38,14 @@ def ns(**kw):
 
 
 def runner_returning(code):
-    return lambda argv: RunResult(code, stdout="", stderr="")
+    return lambda argv, *, timeout=None: RunResult(code, stdout="", stderr="")
 
 
-def boom(argv):
+def boom(argv, *, timeout=None):
     raise AssertionError(f"runner must not be called (argv={argv})")
 
 
-def judge_yes(argv):
+def judge_yes(argv, *, timeout=None):
     # The only runner call an acceptance_review pass makes is the fail-open judge
     # (`claude -p --model haiku ...`); the verify_command is NEVER machine-run for
     # an acceptance stage. Asserting that argv shape proves both properties at once,

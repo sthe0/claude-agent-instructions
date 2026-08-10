@@ -63,6 +63,7 @@ import hashlib
 import json
 import os
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -81,6 +82,49 @@ from timer_arm_detect import (  # noqa: E402
 )
 from agentctl import advisor  # noqa: E402
 from agentctl.advisor import judge_binary_ask  # noqa: E402
+from lib import judge_budget  # noqa: E402
+from lib import judge_ledger  # noqa: E402
+
+# Whole-invocation deadline covering ALL judge calls this hook makes, and the
+# registration that must accommodate it (install-reminder-hooks.sh: 57s = this
+# budget plus interpreter-start headroom). Larger than the single-judge gates'
+# because this one invocation runs up to THREE judges; before it existed the hook
+# was registered at 5s and called every judge with advisor's 8s default, under
+# every one of these judges' own fastest measured runs — so every verdict was
+# computed after the hook was already dead, or never computed at all.
+#
+# The height is a judgement (how long a Stop hook may hold the turn boundary);
+# what is machine-checked against lib/judge_latency.py is the size inequality
+# `required_budget_s("hook-turn-end-gate.py")` — the two earlier judges at their
+# medians plus the last judge's floor plus one second of non-judge head-room —
+# so the third judge is structurally REACHABLE on a typical turn rather than
+# starved by the two ahead of it. It is deliberately NOT the sum of the three
+# per-call ceilings (16 + 13 + 27 = 56 before head-room): a budget covering three
+# simultaneous worst cases would hold the turn boundary for a minute to buy a
+# co-occurrence never observed.
+_TURN_JUDGE_BUDGET_S = 52
+
+# Per-judge ceiling and floor, one pair per call site. They are NOT one shared
+# pair: these three judges answer different prompts and their measured latencies
+# differ by 3x (lib/judge_latency.py), so a shared ceiling would either truncate
+# the slow judge or let the fast one hold budget it cannot use, and a shared floor
+# would skip a call the remainder could in fact have carried. Ceiling is that
+# judge's `ceil(max) + 1`, floor its `ceil(p90)` — both computed per row, and the
+# test-suite asserts each constant still equals what the rule computes.
+_TURN_FEEDBACK_CALL_CAP_S = 16
+_TURN_FEEDBACK_MIN_CALL_S = 14
+_TURN_BINARY_ASK_CALL_CAP_S = 13
+_TURN_BINARY_ASK_MIN_CALL_S = 12
+_TURN_OUTAGE_CALL_CAP_S = 27
+_TURN_OUTAGE_MIN_CALL_S = 20
+
+# The budget object's OWN floor, a fallback only: every call site below names its
+# judge's floor, so this is reached solely by a future call site that forgets to.
+# It is the smallest of the three deliberately — the least restrictive value. A
+# fallback that skipped a call the remainder could in fact have carried would be
+# an invisible recall loss, while one that admits a slightly-too-small call is
+# still bounded by that call's own timeout.
+_TURN_JUDGE_MIN_CALL_S = _TURN_BINARY_ASK_MIN_CALL_S
 
 try:
     from lib import config_root  # noqa: E402
@@ -155,6 +199,12 @@ class TurnContext:
                      or empty when this session has already been blocked on them.
                      The store read (and the per-session marker stat) happen in
                      the shell; the guardian only reads the frozen tuple.
+    judges_skipped : names of the judges whose prefilter FIRED but whose call
+                     was dropped because the invocation's shared judge budget
+                     could no longer fit one. No guardian reads it — it exists
+                     so that "the judge never ran" is a recorded fact rather
+                     than indistinguishable from "the judge said no", which is
+                     precisely the confusion this hook was found living in.
     """
 
     last_user_text: str
@@ -170,6 +220,7 @@ class TurnContext:
     self_improvement_feedback: bool = False
     prose_binary_ask: bool = False
     self_diagnose_findings: tuple[str, ...] = ()
+    judges_skipped: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -528,13 +579,39 @@ def _load_agentctl_state(session_id: str | None):
         return None
 
 
-def build_context(payload: dict, *, runner: Callable | None = None) -> TurnContext | None:
+def build_context(
+    payload: dict, *, runner: Callable | None = None, budget: "judge_budget.JudgeBudget | None" = None
+) -> TurnContext | None:
     """Freeze this turn's facts, or None when the turn cannot be read (fail-open).
 
     ``runner`` is injected straight into the agentctl.advisor judges (None ->
     each judge fails open to False, exactly like advisor absent). The real
     invocation point (main()) passes advisor.subprocess_runner; tests inject a
-    fake runner or omit it entirely to keep the suite free of live model calls."""
+    fake runner or omit it entirely to keep the suite free of live model calls.
+
+    ``budget`` defaults to a fresh whole-invocation JudgeBudget opened right
+    here, at the top, BEFORE the transcript is read — not after, as it used to
+    be. The registration (install-reminder-hooks.sh) covers interpreter start,
+    transcript parsing and the guardian run on top of the judge budget itself
+    (_TURN_JUDGE_BUDGET_S), and a deadline that opens only after parsing is done
+    quietly spends part of that headroom without the budget ever knowing. main()
+    passes its own budget through instead of relying on this default, so the
+    deadline covers the same span the harness actually times.
+
+    The three judges are evaluated SEQUENTIALLY against one _TURN_JUDGE_BUDGET_S
+    deadline, not as three eager arguments to the TurnContext constructor. As
+    constructor arguments they had no short circuit at all: Python evaluates
+    every one before the object exists, so three calls of unbounded length ran
+    on every turn that tripped their prefilters, and the harness killed the hook
+    somewhere in the middle. Sequential evaluation lets the budget drop the TAIL
+    instead — and the drop is RECORDED (`judges_skipped`) rather than swallowed,
+    because a judge that silently never ran is exactly the invisible failure
+    this whole change is about."""
+    if budget is None:
+        budget = judge_budget.JudgeBudget(
+            _TURN_JUDGE_BUDGET_S, _TURN_JUDGE_MIN_CALL_S, clock=time.monotonic
+        )
+
     transcript_path = payload.get("transcript_path")
     if not isinstance(transcript_path, str) or not transcript_path:
         return None
@@ -559,6 +636,106 @@ def build_context(payload: dict, *, runner: Callable | None = None) -> TurnConte
     session_key = session_id or transcript_path
     agentctl_state = _load_agentctl_state(session_id)
     assistant_text = _assistant_text_of(turn_entries)
+
+    skipped: list[str] = []
+
+    def _judged(
+        name: str,
+        prefilter_fires: bool,
+        call: Callable[[float, float], bool],
+        *,
+        cap_s: int,
+        min_call_s: int,
+    ) -> bool:
+        """One budgeted judge call. Returns the verdict, or False (fail open,
+        the direction every judge here already fails in) when the prefilter did
+        not fire or the budget can no longer fit a call.
+
+        ``cap_s`` and ``min_call_s`` are per-CALL, not per-hook: the three judges
+        have measurably different latency distributions (lib/judge_latency.py),
+        so one shared pair would either cap the slow judge below its own ceiling
+        or hold the budget open for the fast one long past the point where it
+        could still have returned. The budget object stays shared — the whole
+        point is that the three calls draw down ONE deadline.
+
+        ``call`` now takes ``(timeout, remaining)`` — the remaining budget at
+        entry is handed to the judge function alongside the timeout so its own
+        ``decided()`` ledger write carries the (remaining, threshold, ceiling)
+        triple this stage's plan requires on every call decision."""
+        judge_ledger.entered(name, prefilter_fired=prefilter_fires)
+        if not prefilter_fires:
+            return False
+        remaining_before_call, call_timeout = budget.remaining_and_timeout(cap_s, min_call_s=min_call_s)
+        if call_timeout is None:
+            judge_ledger.decided(
+                name, stage="budget", verdict=False,
+                reason="budget exhausted before call (fail-open)",
+                remaining=remaining_before_call, threshold=None, ceiling=cap_s,
+            )
+            skipped.append(name)
+            return False
+        return call(call_timeout, remaining_before_call)
+
+    # Order is a priority order, since the budget drops from the tail. feedback
+    # first: its guardian blocks the turn on an obligation the user just raised
+    # and nothing else re-raises it. binary_ask second. outage_escalation last —
+    # it is the only one of the three with a PreToolUse gate of its own
+    # (hook-escalation-diagnosis-gate.py), so losing it here costs a backstop
+    # rather than the sole guard.
+    self_improvement_feedback = _judged(
+        "feedback_signal",
+        bool(find_signals(last_user_text)),
+        lambda t, rem: advisor.judge_feedback_signal(
+            strip_injected_context(last_user_text),
+            runner,
+            enabled=os.environ.get(_SI_FEEDBACK_KILLSWITCH_ENV) != "0",
+            timeout=t,
+            remaining=rem,
+            ceiling=_TURN_FEEDBACK_CALL_CAP_S,
+        )[0],
+        cap_s=_TURN_FEEDBACK_CALL_CAP_S,
+        min_call_s=_TURN_FEEDBACK_MIN_CALL_S,
+    )
+    prose_binary_ask = _judged(
+        "binary_ask",
+        advisor.binary_ask_prefilter(assistant_text),
+        lambda t, rem: judge_binary_ask(
+            assistant_text,
+            runner,
+            enabled=os.environ.get(_BINARY_ASK_KILLSWITCH_ENV) != "0",
+            timeout=t,
+            remaining=rem,
+            ceiling=_TURN_BINARY_ASK_CALL_CAP_S,
+        )[0],
+        cap_s=_TURN_BINARY_ASK_CALL_CAP_S,
+        min_call_s=_TURN_BINARY_ASK_MIN_CALL_S,
+    )
+    outage_escalation_sought = _judged(
+        "outage_escalation",
+        bool(_detect_outage(assistant_text)),
+        lambda t, rem: advisor.judge_outage_escalation(
+            assistant_text,
+            runner,
+            enabled=os.environ.get(_OUTAGE_ESCALATION_KILLSWITCH_ENV) != "0",
+            timeout=t,
+            remaining=rem,
+            ceiling=_TURN_OUTAGE_CALL_CAP_S,
+        )[0],
+        cap_s=_TURN_OUTAGE_CALL_CAP_S,
+        min_call_s=_TURN_OUTAGE_MIN_CALL_S,
+    )
+
+    if skipped:
+        # stderr, not stdout: stdout carries this hook's JSON directive to the
+        # harness and a stray line there would corrupt the contract. stderr
+        # reaches the human's terminal, which is where an "enforcement quietly
+        # degraded this turn" note belongs.
+        print(
+            "hook-turn-end-gate: judge budget exhausted, skipped: "
+            + ", ".join(skipped),
+            file=sys.stderr,
+        )
+
     return TurnContext(
         last_user_text=last_user_text,
         invocations=frozenset(invocations),
@@ -570,29 +747,12 @@ def build_context(payload: dict, *, runner: Callable | None = None) -> TurnConte
             _detect_long_job(c) for c in _iter_bash_commands(turn_entries)
         ),
         autowake_armed=_waiter_armed(turn_entries),
-        outage_escalation_sought=(
-            bool(_detect_outage(assistant_text))
-            and advisor.judge_outage_escalation(
-                assistant_text,
-                runner,
-                enabled=os.environ.get(_OUTAGE_ESCALATION_KILLSWITCH_ENV) != "0",
-            )
-        ),
+        outage_escalation_sought=outage_escalation_sought,
         difficulty_declared=_difficulty_declared(agentctl_state),
-        self_improvement_feedback=(
-            bool(find_signals(last_user_text))
-            and advisor.judge_feedback_signal(
-                strip_injected_context(last_user_text),
-                runner,
-                enabled=os.environ.get(_SI_FEEDBACK_KILLSWITCH_ENV) != "0",
-            )
-        ),
-        prose_binary_ask=judge_binary_ask(
-            assistant_text,
-            runner,
-            enabled=os.environ.get(_BINARY_ASK_KILLSWITCH_ENV) != "0",
-        ),
+        self_improvement_feedback=self_improvement_feedback,
+        prose_binary_ask=prose_binary_ask,
         self_diagnose_findings=_open_self_diagnose_findings(session_key),
+        judges_skipped=tuple(skipped),
     )
 
 
@@ -603,11 +763,13 @@ def _marker_path(session_key: str, user_text: str) -> Path:
     return _state_dir() / digest
 
 
-def decide(payload: dict, *, runner: Callable | None = None) -> dict | None:
+def decide(
+    payload: dict, *, runner: Callable | None = None, budget: "judge_budget.JudgeBudget | None" = None
+) -> dict | None:
     """Core decision. Returns a block-directive dict, or None to allow.
 
-    ``runner`` is threaded straight through to build_context() for the semantic
-    prose_binary_ask judge; see build_context's docstring."""
+    ``runner`` and ``budget`` are threaded straight through to build_context();
+    see its docstring for what each means and defaults to."""
     if payload.get("stop_hook_active"):
         return None
 
@@ -622,7 +784,7 @@ def decide(payload: dict, *, runner: Callable | None = None) -> dict | None:
     except ValueError:
         pass
 
-    ctx = build_context(payload, runner=runner)
+    ctx = build_context(payload, runner=runner, budget=budget)
     if ctx is None:
         return None
 
@@ -661,18 +823,37 @@ def decide(payload: dict, *, runner: Callable | None = None) -> dict | None:
 
 
 def main() -> int:
+    judge_ledger.hook_start("turn_end")
+    # Opened first, before the stdin payload is even read, so the deadline
+    # honestly covers transcript parsing too — not only the judge calls. Under
+    # its own try, matching every other step below.
+    try:
+        budget = judge_budget.JudgeBudget(
+            _TURN_JUDGE_BUDGET_S, _TURN_JUDGE_MIN_CALL_S, clock=time.monotonic
+        )
+    except Exception:
+        return 0  # fail-open — a hook must never wedge the session
     try:
         payload = json.load(sys.stdin)
     except Exception:
         return 0
     if not isinstance(payload, dict):
         return 0
+    judge_ledger.source_from_payload(payload)
     try:
-        directive = decide(payload, runner=advisor.subprocess_runner)
-    except Exception:
+        directive = decide(payload, runner=advisor.subprocess_runner, budget=budget)
+        has_directive = directive is not None
+        judge_ledger.final(has_directive=has_directive)
+        emit_ok = True
+        try:
+            if has_directive:
+                print(json.dumps(directive, ensure_ascii=True))
+        except Exception:
+            emit_ok = False
+        judge_ledger.emitted(ok=emit_ok, had_directive=has_directive)
+    except Exception as exc:
+        judge_ledger.discarded(reason=repr(exc))
         return 0  # fail-open — a hook must never wedge the session
-    if directive is not None:
-        print(json.dumps(directive, ensure_ascii=False))
     return 0
 
 

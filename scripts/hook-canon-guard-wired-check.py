@@ -21,27 +21,59 @@ hooks were being loaded from ``~/.claude``, where none of them are. A green
 report from a root that is not the one enforcing anything is worse than no
 report.
 
+TWO AXES, TWO POLARITIES. Presence is one axis; the registered TIMEOUT is the
+other, and it was invisible until a hook whose judge needs 10.5-47s was found
+registered at 5s — wired, green to every presence probe, and killed mid-judge on
+every call. The SessionStart path reports both (fail-open, established problems
+only). The one-shot ``--check-timeouts`` mode answers the same timeout question
+FAIL-CLOSED: a problem, an UNKNOWN, or an exception inside the check all exit
+non-zero. A check that shares this file's "return 0 on every path" posture would
+certify exactly the silence it exists to break.
+
 The name is narrower than the job. It is kept deliberately: renaming ripples
 into install-reminder-hooks.sh, into live settings on two roots, and into the
 config-root-refs allowlist, for zero functional gain.
 
 REPORT, NEVER REPAIR. The divergence between the two roots is by design, and
 this check must not "fix" it. install-reminder-hooks.sh is the in-repo evidence
-for that reading rather than a preference of this file's:
-``PRUNE_ONLY_SETTINGS=("$HOME/.claude/settings.json")`` — the installer's ADD
-pass never writes to the personal root; it only ever prunes stale entries from
-it. Reporting the gap is therefore what the installer's own intent asks for.
+for that reading rather than a preference of this file's, and the reading is
+narrower than it used to be: the installer's ADD pass writes every ENFORCEMENT
+hook to the agent root only and gives ``$HOME/.claude/settings.json`` prune-only
+treatment — with exactly one exemption, this detector, which it does add there
+(``PRUNE_ONLY_ALSO_ADD``). Enforcement never, detection always. A detector
+denies nothing and cannot; registered only in the root that is always correctly
+wired, it could never observe the one root where the gap is real. Reporting the
+gap is what the installer's own intent asks for; repairing it is not.
+
+WHICH BRANCH. What this check says depends on which root the harness loaded:
+
+- harness root IS the agent root — the full report, unchanged. Absence there is
+  a real defect and the alarm is correct.
+- harness root is the PERSONAL root — the gate-bearing hooks are absent BY
+  DESIGN and nobody will ever "fix" it, so the banner would fire every session
+  on a deliberate divergence, which is precisely what § Scope below rejects.
+  Instead: one quiet line, and only when the session is doing SYSTEM work
+  (``in_system_work_venue()``). A personal session in a personal root has no
+  defect to hear about, and gets absolute silence on both channels.
 
 Scope of the warning: gate-bearing hooks only. Warning about the advisory
 ``*-due`` reminders missing from a personal root would fire every session on a
-deliberate divergence and train the reader to ignore the whole block.
+deliberate divergence and train the reader to ignore the whole block. The
+unconditional ``[config-root]`` status line is not such a warning and this
+paragraph does not argue against it: it carries no remediation and nothing to
+fix, so it is a datum the reader consults rather than an alert the reader obeys,
+and being tuned out costs a datum nothing. It is also scoped BY the branch split
+above rather than bolted outside it, so the silence that split buys is not spent.
 
 Non-blocking and fail-open by construction: this is a SessionStart hook, which
 cannot hard-block, and any error (missing/unreadable settings, malformed JSON)
 returns quietly — a detector that wedges session start would be worse than the
-gap it reports. It only ever writes to stderr; it never denies. UNKNOWN is
-never reported for the same reason: only a positively established ABSENT is
-worth the reader's attention.
+gap it reports. It writes to STDOUT and never denies. The channel is the point:
+a SessionStart hook's stdout is attached to the session as context, stderr
+reaches only the human's terminal, and the one reader who can act on "the gates
+are not wired in this root" is the agent about to write to a gated file.
+UNKNOWN is never reported, for the same reason the scope is narrow: only a
+positively established ABSENT is worth the reader's attention.
 
 Settings source: the chain of the harness root, overridable via
 ``$CLAUDE_CANON_GUARD_SETTINGS`` (test seam). The override designates the
@@ -61,6 +93,29 @@ from lib import config_root  # noqa: E402
 from lib import hook_wiring  # noqa: E402
 
 GUARD_BASENAME = "hook-guard-canon-readonly.py"
+
+# Marks a checkout of the instruction repo — the canonical one and every linked
+# worktree of it alike.
+SYSTEM_WORK_SENTINEL = Path("scripts") / "agentctl" / "machine.py"
+
+
+def in_system_work_venue(cwd=None) -> bool:
+    """Is this session working on the agent system itself?
+
+    The signal is STRUCTURAL — a tree carrying ``scripts/agentctl/machine.py``
+    at or above the cwd — rather than a prefix test against a literal checkout
+    path. A prefix test would go permanently silent in a delivery WORKTREE,
+    which is where this fleet does most of its system work, and silence is the
+    one failure this branch exists to end.
+    """
+    try:
+        start = (Path(cwd) if cwd is not None else Path.cwd()).resolve()
+    except (OSError, RuntimeError):
+        return False
+    for candidate in (start, *start.parents):
+        if (candidate / SYSTEM_WORK_SENTINEL).is_file():
+            return True
+    return False
 
 
 def _primary_settings_path() -> Path:
@@ -88,7 +143,12 @@ def _pretooluse_groups(chain: "list[Path]") -> list:
     """
     groups: list = []
     for member in chain:
-        data = _load(member) if member.is_file() else None
+        # `_load` is the total failure funnel — a member that is missing, a
+        # directory, unparseable or not an object all arrive as None. The
+        # `is_file()` pre-test that used to stand here added nothing and raised
+        # PermissionError for a member under an unsearchable directory, which
+        # main()'s catch-all then turned into the banner not printing at all.
+        data = _load(member)
         if data is None:
             continue
         hooks = data.get("hooks") or {}
@@ -148,6 +208,13 @@ def check_registry(root: Path) -> "list[str]":
     settings shape is not evidence of absence, and a false alarm here would
     train the reader to ignore the real ones. The canon guard is excluded — it
     gets the finer per-chain treatment above.
+
+    The line comes from ``Wiring.describe()`` rather than being composed here,
+    for the reason that method exists: how far an ABSENT reaches depends on
+    which members the probe got to, and this is the one caller a human reads
+    every session. A bare "NOT registered" means one thing on a machine where
+    the project member was read and a weaker thing where it was not, with no
+    way for the reader to tell the two runs apart.
     """
     problems: "list[str]" = []
     for basename, consequence in hook_wiring.GATE_BEARING_HOOKS:
@@ -155,12 +222,158 @@ def check_registry(root: Path) -> "list[str]":
             continue
         wiring = hook_wiring.probe(basename, root)
         if wiring.status == hook_wiring.ABSENT:
-            problems.append(f"{basename} NOT registered — {consequence}")
+            problems.append(f"{wiring.describe()} — {consequence}")
     return problems
 
 
-def main() -> int:
+def _unaccounted_scope_problems(wiring: "hook_wiring.Wiring") -> "list[str]":
+    """Why a WIRED hook's largest registered timeout is only a LOWER BOUND.
+
+    ``status`` goes WIRED as soon as any one member registers the hook, so it
+    says nothing about the members the probe could not account for — and one of
+    those can hold a SMALLER registration, which is the direction that kills a
+    judge. The fail-closed caller must not certify past that; the advisory one
+    must, since a member it could not read is not an established problem.
+    """
+    if wiring.scope_fully_covered:
+        return []
+    unaccounted = [
+        *wiring.members_unreadable,
+        *wiring.members_unmodelled,
+    ]
+    where = (
+        ", ".join(str(member) for member in unaccounted)
+        if unaccounted
+        else f"the project-level members, which ${hook_wiring.PROJECT_DIR_ENV} "
+             "named no root for"
+    )
+    return [
+        f"{wiring.basename} is wired, but the settings scope was not fully "
+        f"accounted for ({where}) — the largest timeout seen is a LOWER BOUND, "
+        "and an unaccounted member can hold a smaller registration, so this "
+        "check cannot certify the axis"
+    ]
+
+
+def check_timeout_axis(root: Path, *, strict: bool) -> "list[str]":
+    """Problems on the TIMEOUT axis for every hook in
+    ``hook_wiring.TIMEOUT_REQUIREMENTS``: a registration below the hook's own
+    judge budget, and — under `strict` — a registration with no readable
+    timeout, a hook that is not positively WIRED at all, or a WIRED hook whose
+    settings scope the probe could not fully account for.
+
+    `strict` is the polarity switch, and the two callers want opposite things.
+    The SessionStart path is advisory and fail-open: it reports only what is
+    positively established, because a false alarm every session trains the
+    reader to skip the block that carries the real ones. The one-shot
+    ``--check-timeouts`` path is a CHECK: there, "cannot be established" is a
+    failure, since the whole point is to refuse to certify what it could not
+    read.
+
+    The checked set is TIMEOUT_REQUIREMENTS, not GATE_BEARING_HOOKS: a hook
+    needs a generous registration because it calls a slow judge, which is a
+    different property from being gate-bearing.
+    """
+    problems: "list[str]" = []
+    for basename, minimum, why in hook_wiring.TIMEOUT_REQUIREMENTS:
+        wiring = hook_wiring.probe(basename, root)
+        if wiring.status != hook_wiring.WIRED:
+            if strict:
+                problems.append(f"{wiring.describe()} — needs {minimum}s: {why}")
+            continue
+        problems += hook_wiring.timeout_shortfalls(wiring, minimum)
+        if strict:
+            problems += hook_wiring.timeout_unknowns(wiring)
+            problems += _unaccounted_scope_problems(wiring)
+        note = hook_wiring.duplicate_registration_note(wiring)
+        # Advisorily, only a pair that genuinely double-executes is worth the
+        # banner; a pair the harness deduplicates is a look-at-this for the
+        # reconciler, not enforcement being off. The strict caller wants both,
+        # since a second entry is a second timeout to keep in step.
+        if note and (strict or hook_wiring.runs_more_than_once(wiring)):
+            problems.append(note)
+    return problems
+
+
+def check_timeouts_main() -> int:
+    """One-shot ``--check-timeouts``: is every judge-calling hook wired with a
+    timeout that actually allows its judge to finish?
+
+    FAIL-CLOSED, the exact opposite of the SessionStart path below, and
+    deliberately so: they share this file and would otherwise share main()'s
+    "return 0 on every path", which is right for a hook that must never wedge
+    session start and catastrophic for a check whose only job is to say no. A
+    problem, an UNKNOWN, and an exception inside the check all exit non-zero.
+    """
     try:
+        root = _primary_settings_path().parent
+        problems = check_timeout_axis(root, strict=True)
+    except Exception as exc:  # fail-CLOSED: an unrunnable check certifies nothing
+        print(f"[check-timeouts] the check itself failed: {exc!r}")
+        return 2
+    if problems:
+        print(f"[check-timeouts] FAIL — harness config root: {root}")
+        for p in problems:
+            print(f"  - {p}")
+        if hook_wiring.project_root() is None:
+            # The installer writes registrations, and no registration can make
+            # an unnamed project root nameable — so on this branch the install
+            # remedy below is advice that cannot work, and a reader who follows
+            # it re-runs the check and sees the identical lines. Keyed on the
+            # structural fact rather than on the rendered problem text: the
+            # sentence is prose someone will reword, the None is the cause.
+            print(
+                f"  ${hook_wiring.PROJECT_DIR_ENV} named no project root, so the project-level\n"
+                "  members were never read — and a run outside a session cannot guess which\n"
+                "  root a session would use. Name it:\n"
+                f"    {hook_wiring.PROJECT_DIR_ENV}=<project dir> \\\n"
+                "      python3 scripts/hook-canon-guard-wired-check.py --check-timeouts"
+            )
+        print(
+            "  Install to reconcile the registered timeouts:\n"
+            "    bash ~/claude-agent-instructions/scripts/install-reminder-hooks.sh\n"
+            "  Then RELOAD the config (open /hooks, or restart) — the harness\n"
+            "  captures its hook set once at session start.\n"
+            "  This reconciles a registration ONLY under the (event, matcher)\n"
+            "  group install-reminder-hooks.sh's DESIRED table wires that hook to.\n"
+            "  A registration listed above under a DIFFERENT matcher is a group\n"
+            "  the installer never touches (add_rows()'s own boundary) — remove it\n"
+            "  by hand instead."
+        )
+        return 1
+    print(f"[check-timeouts] OK — harness config root: {root}")
+    for basename, minimum, _ in hook_wiring.TIMEOUT_REQUIREMENTS:
+        print(f"  - {basename}: every registration >= {minimum}s")
+    return 0
+
+
+def main() -> int:
+    if "--check-timeouts" in sys.argv[1:]:
+        return check_timeouts_main()
+    try:
+        harness = config_root.harness_config_root()
+        home = config_root.agent_home()
+        personal = hook_wiring.resolved(harness) != hook_wiring.resolved(home)
+        # The branch decision precedes the first print, or the personal-root
+        # non-system-work path loses the byte-silence it is owed to the very
+        # line being added.
+        if personal and not in_system_work_venue():
+            return 0
+        # Above the settings read on purpose: which root is live does not depend
+        # on that file parsing, so an unreadable settings.json makes the wiring
+        # REPORT unknown but never the ROOT. `harness`, not `primary.parent` —
+        # the two diverge under the $CLAUDE_CANON_GUARD_SETTINGS seam, and a
+        # status line naming the wrong root is worse than none.
+        suffix = f"!= agent home {home}" if personal else "= agent home"
+        print(f"[config-root] harness={harness} ({suffix})")
+        if personal:
+            print(
+                "  The agent's gate-bearing hooks are not wired in this root. That is\n"
+                "  EXPECTED here — the system installs into its own root by design.\n"
+                "  For system work use `claude-agent` (or `claude-task`), not a bare `claude`."
+            )
+            return 0
+
         primary = _primary_settings_path()
         if _load(primary) is None:
             return 0
@@ -168,6 +381,7 @@ def main() -> int:
         chain = hook_wiring.settings_chain(root)
         problems = check_guard_chains(_pretooluse_groups(chain))
         problems += check_registry(root)
+        problems += check_timeout_axis(root, strict=False)
     except Exception:
         return 0
 
@@ -177,19 +391,17 @@ def main() -> int:
             "================================================================\n"
             "  GATE-BEARING HOOKS ARE NOT FULLY WIRED — enforcement is OFF\n"
             f"  harness config root: {root}\n"
-            "================================================================",
-            file=sys.stderr,
+            "================================================================"
         )
         for p in problems:
-            print(f"  - {p}", file=sys.stderr)
+            print(f"  - {p}")
         print(
             "  This root is the one THIS session loads hooks from. It may differ\n"
             "  from the root the system installs into, and that divergence is by\n"
             "  design — so this is a report, not something to auto-repair.\n"
             "  If this root is meant to carry the system's hooks, install them:\n"
             "    bash ~/claude-agent-instructions/scripts/install-reminder-hooks.sh\n"
-            "================================================================",
-            file=sys.stderr,
+            "================================================================"
         )
     return 0
 

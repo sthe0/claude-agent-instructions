@@ -892,6 +892,12 @@ def test_replan_composes_plan_approval_plugin_gate(store, tmp_path):
     bag["questions"] = [
         {"id": "q1", "target": "plan.goal", "question": "is the goal reachable?"},
     ]
+    # …and a covered order element, isolating this test from the gate's OTHER
+    # fail-closed-on-empty half (order coverage, proven in test_order_coverage.py).
+    bag["order_elements"] = [
+        {"id": "O1", "element": "the order this plan answers", "disposition": "covered",
+         "stage": 1, "reason": ""},
+    ]
     store.save(state)
 
     # A replan against the same approved plan is REFUSED: the open question is
