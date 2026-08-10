@@ -394,9 +394,10 @@ SPAWN_AUTOCOMPACT_WINDOW_TOKENS = (
 # `python3 scripts/verify-all.py` were both refused.
 #
 # The list stays narrow and enumerated rather than becoming a mode: read-only
-# inspection, the repo's own verifiers, and the git verbs that record work on the
-# assigned branch. `git push` is deliberately ABSENT — landing is the coordinator's
-# gate, not a spawn's.
+# inspection, the repo's own verifiers, the git verbs that record work on the
+# assigned branch, and the ones that integrate trunk into it. `git push` is
+# deliberately ABSENT — landing is the coordinator's gate, not a spawn's, and a
+# spawn that can merge trunk in still cannot publish anything out.
 DEVELOPER_SETTINGS_ALLOW = [
     # verification the brief mandates
     "Bash(python3 -m pytest:*)",
@@ -410,6 +411,15 @@ DEVELOPER_SETTINGS_ALLOW = [
     # recording work on the assigned branch — never `git push`
     "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)",
     "Bash(git add:*)", "Bash(git commit:*)",
+    # integrating trunk INTO the assigned branch — the same defect one step later.
+    # Observed 2026-08-10: a stage whose whole material was "merge origin/main into
+    # the delivery branch and resolve the conflicts" was dispatched with a grant that
+    # stopped at `git commit`, and every mutating verb it needed was refused across
+    # five command shapes. Reading trunk's own baseline needs the detached checkout;
+    # resolving a conflict needs checkout/restore on a path; ff-vs-true-merge needs
+    # merge-base and rev-list. Landing stays absent: `git push` is the coordinator's.
+    "Bash(git fetch:*)", "Bash(git merge:*)", "Bash(git merge-base:*)",
+    "Bash(git rev-list:*)", "Bash(git checkout:*)", "Bash(git restore:*)",
 ]
 
 # The plan-artifact directory (lib.config_root.plans_dir()) is where a
