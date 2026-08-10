@@ -375,6 +375,17 @@ a residual that still discharges silently by design and is **not** escapable (no
 so there is nothing to attach a typed escape reason to) — distinct from the runner-failure case
 stage 5 closed. This item now points there rather than standing alone.
 
+**OPEN-3 — the ledger enumeration was widened but not detached.** `cmd_ledger_enumerate`
+(`cli.py:916`) calls `advisor.enumerate_claims` through the same
+`enumerate_subprocess_runner`, so it inherited the 480 s ceiling **in the foreground**: a
+`ledger-enumerate` on a large artifact can now block its caller for up to eight minutes where
+the old 20 s cap would have cut it off. That is the correct bound for the call shape — the
+alternative is the truncation this whole delivery exists to remove — but unlike the premise
+path it was not moved off the blocking path, because nothing gates on it: it discharges an
+advisory ledger blocker the coordinator drives by hand, not `approve`. *Consequence:* if that
+wait proves unacceptable in practice, the fix is to reuse the sidecar machinery here, not to
+narrow the ceiling back.
+
 ## Principle
 
 When a difficulty is closed by changing *where* work runs rather than how long it may run, the

@@ -726,6 +726,8 @@ ENUMERATION_WRITERS = {
     ("_apply_enumeration_result", "enumerated"),
     ("_apply_enumeration_result", "enumerated_at"),
     ("_apply_enumeration_result", "enumerate_pass"),
+    ("_apply_enumeration_result", "enumerated_runner_ok"),
+    ("_apply_enumeration_result", "enumerated_runner_stderr"),
     ("_launch_enumeration", "enumerated"),
     ("_launch_enumeration", "enumerated_at"),
     ("_launch_enumeration", "enumerate_launch"),
@@ -733,7 +735,8 @@ ENUMERATION_WRITERS = {
     ("cmd_ledger_enumerate", "enumerated"),
 }
 
-ENUMERATION_KEYS = {"enumerated", "enumerated_at", "enumerate_pass", "enumerate_launch"}
+ENUMERATION_KEYS = {"enumerated", "enumerated_at", "enumerate_pass", "enumerate_launch",
+                    "enumerated_runner_ok", "enumerated_runner_stderr"}
 
 
 def enumeration_bag_writers(tree: ast.AST) -> set[tuple[str, str]]:
@@ -750,14 +753,41 @@ def enumeration_bag_writers(tree: ast.AST) -> set[tuple[str, str]]:
 
         visit_AsyncFunctionDef = visit_FunctionDef
 
+        def _record(self, target) -> None:
+            if (isinstance(target, ast.Subscript)
+                    and isinstance(target.slice, ast.Constant)
+                    and target.slice.value in ENUMERATION_KEYS):
+                found.add((self.scope[-1] if self.scope else "<module>",
+                           target.slice.value))
+
         def visit_Assign(self, node: ast.Assign) -> None:
             for target in node.targets:
-                if (isinstance(target, ast.Subscript)
-                        and isinstance(target.slice, ast.Constant)
-                        and target.slice.value in ENUMERATION_KEYS):
-                    found.add((self.scope[-1] if self.scope else "<module>",
-                               target.slice.value))
+                self._record(target)
             self.generic_visit(node)
+
+        def visit_AugAssign(self, node: ast.AugAssign) -> None:
+            self._record(node.target)
+            self.generic_visit(node)
+
+        def visit_Call(self, node: ast.Call) -> None:
+            if (isinstance(node.func, ast.Attribute)
+                    and node.func.attr in {"update", "setdefault"}):
+                for key in self._call_keys(node):
+                    if key in ENUMERATION_KEYS:
+                        found.add((self.scope[-1] if self.scope else "<module>", key))
+            self.generic_visit(node)
+
+        @staticmethod
+        def _call_keys(node: ast.Call) -> list:
+            if node.func.attr == "setdefault":
+                first = node.args[0] if node.args else None
+                return [first.value] if isinstance(first, ast.Constant) else []
+            keys = []
+            for arg in node.args:
+                if isinstance(arg, ast.Dict):
+                    keys += [k.value for k in arg.keys if isinstance(k, ast.Constant)]
+            keys += [kw.arg for kw in node.keywords if kw.arg]
+            return keys
 
     Walker().visit(tree)
     return found
@@ -770,8 +800,13 @@ def check_enumeration_writers() -> list[str]:
     `enumerate_pass`, so a producer that sets `enumerated` without going through
     `_apply_enumeration_result` leaves the counters behind and an escape from an
     earlier pass silently discharges the blocker the new pass raised — the
-    fail-open class this whole path exists to close. `cmd_ledger_enumerate` shows
-    the bypass shape already exists in the module (on a different, ungated bag).
+    fail-open class this whole path exists to close. `enumerated_runner_ok` is
+    pinned for the sharper version of the same class: it is the field the
+    runner-failure blocker reads, so a writer that flips it to True outside a real
+    pass discharges that blocker without one, and `enumerated_runner_stderr` is
+    what pre-selects the escape reason it would be discharged with.
+    `cmd_ledger_enumerate` shows the bypass shape already exists in the module (on
+    a different, ungated bag).
     """
     tree = ast.parse((AGENTCTL_ROOT / "cli.py").read_text(encoding="utf-8"))
     found = enumeration_bag_writers(tree)

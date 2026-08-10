@@ -33,10 +33,12 @@ _TIMEOUT_STDERR_PREFIX = "advisor timed out after"
 
 # Whole-plan enumeration (enumerate_claims / enumerate_questions_health) is a
 # DIFFERENT cost class from a judge/advisor call: it re-reads an entire plan in one
-# shot, and calibration (docs/operations/advisor-timeout-calibration.md, 15 rows x
-# 5 sizes x 3 repeats) measured 15-170s of real latency against a 480s dataset
-# ceiling -- far past _ADVISOR_TIMEOUT_S=20, which would truncate nearly every
-# whole-plan call. 480 = ceil_to_minute(largest within-size max/min spread (size
+# shot, and calibration (docs/operations/advisor-timeout-calibration.md, 15 rows =
+# 5 sizes x 3 repeats) measured 15-170s of real latency under a 600s measurement
+# cap, high enough that no row was truncated by the bound under measurement -- far
+# past _ADVISOR_TIMEOUT_S=20, which would truncate nearly every whole-plan call.
+# 480 is DERIVED from that dataset rather than being a property of it:
+# 480 = ceil_to_minute(largest within-size max/min spread (size
 # 23018, 96.513/23.127 = 4.173174x, the refutation check's own number) * the min
 # elapsed_s at the largest sampled size (103.213s, size 203681)) =
 # ceil_to_minute(430.726) = 480. The spread is quoted here to six figures, not as

@@ -385,7 +385,8 @@ class TestJudgeFallbackUnaffectedByEnumerateTimeout:
         )
         assert d.ok is True
         assert calls == [advisor._ACCEPTANCE_JUDGE_TIMEOUT_S]
-        assert calls != [advisor.ENUMERATE_TIMEOUT_S]
+        # Without this the assertion above stops discriminating the two ceilings.
+        assert advisor._ACCEPTANCE_JUDGE_TIMEOUT_S != advisor.ENUMERATE_TIMEOUT_S
 
 
 # --- the shipped default vs the committed calibration dataset ------------------

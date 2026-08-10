@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Stage 2 of advisor-timeout-f3b: measure advisor enumeration latency across the
-plan-size distribution. Drives the REAL advisor.enumerate_questions_health with an
-explicitly raised timeout so the 20 s cap cannot truncate a datapoint."""
+"""Re-fit advisor.ENUMERATE_TIMEOUT_S against this machine's plan-size distribution.
+
+Drives the REAL advisor.enumerate_questions_health under MEASURE_CAP, set far above
+the shipped ceiling so no datapoint is truncated by the bound being measured."""
 import functools
 import hashlib
 import json
@@ -12,15 +13,17 @@ import statistics
 import sys
 import time
 
-WORKTREE = pathlib.Path("/Users/the0/claude-agent-instructions-advisor-timeout")
-sys.path.insert(0, str(WORKTREE / "scripts"))
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from agentctl import advisor  # noqa: E402
 from agentctl.plan import load_plan  # noqa: E402
+from lib import config_root  # noqa: E402
 
-PARK = pathlib.Path("/Users/the0/.claude-agent/plans")
+PARK = config_root.plans_dir()
 OWN = "advisor-timeout-f3b.toml"
 SNAP = pathlib.Path("/tmp/adv-calib-snap")
-OUT = WORKTREE / "docs/operations/advisor-calibration.jsonl"
+OUT = REPO_ROOT / "docs/operations/advisor-calibration.jsonl"
+MEASURE_CAP = 600
 LOG = pathlib.Path("/tmp/adv-calib.log")
 REPEATS = 3
 
@@ -68,7 +71,7 @@ def main():
         samples.append(dict(chars=size, path=path, sha=digest, goal=goal, crit=crit, text=text))
         log(f"  sample {size:>7} chars  sha {digest[:12]}  {path}")
 
-    runner = functools.partial(advisor.subprocess_runner, timeout=600)
+    runner = functools.partial(advisor.subprocess_runner, timeout=MEASURE_CAP)
     rows = []
     for rep in range(1, REPEATS + 1):
         for s in samples:
