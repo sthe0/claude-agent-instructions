@@ -309,6 +309,16 @@ delivery_marker = ""
 delivery_note = ""
 
 [[rule]]
+id = "ask-names-its-own-machinery-constraint"
+tier = 0
+locator_heading = "### Escalation to the user"
+locator_phrase = "An ask resting on our own machinery names its constraint"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
 id = "unanswered-question-survives-turn"
 tier = 0
 locator_heading = "### Escalation to the user"
