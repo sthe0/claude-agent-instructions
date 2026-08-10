@@ -798,6 +798,14 @@ class Order:
     # 'requirements'" for a key plainly present, sending the author to write again what
     # is already there instead of to fix its shape. Only `from_dict` ever sets it.
     malformed: tuple[str, ...] = ()
+    # (dropped, total) entry counts for the PARTIAL case of a malformed `requirements`
+    # list — some entries were tables and survived, some were not and were dropped.
+    # None for every other case (no malformation, or the TOTAL case: not a list at all,
+    # or a list none of whose entries survived) — those are exhausted by `malformed`
+    # alone and have no count worth naming. Not an authored part any more than
+    # `malformed` is: it is the same malformation's own drop count, not a place of its
+    # own. Only `from_dict` ever sets it.
+    requirements_dropped: tuple[int, int] | None = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "Order":
@@ -807,12 +815,15 @@ class Order:
         load, and be refused at the seam where refusals belong. What was degraded is
         recorded in `malformed` so that seam can say WHICH defect it found."""
         malformed: list[str] = []
+        requirements_dropped: tuple[int, int] | None = None
 
         raw_reqs = d.get("requirements")
         if isinstance(raw_reqs, list):
             reqs = [Requirement.from_dict(r) for r in raw_reqs if isinstance(r, dict)]
             if len(reqs) != len(raw_reqs):  # a bare sentence among the tables
                 malformed.append("requirements")
+                if reqs:  # some entries survived — the PARTIAL case, not the total one
+                    requirements_dropped = (len(raw_reqs) - len(reqs), len(raw_reqs))
         else:
             reqs = []
             if raw_reqs is not None:  # a string, or [meta.order.requirements] as a table
@@ -836,6 +847,7 @@ class Order:
             requirements=reqs,
             coverage=cov,
             malformed=tuple(malformed),
+            requirements_dropped=requirements_dropped,
         )
 
 

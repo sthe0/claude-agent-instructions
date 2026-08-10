@@ -39,9 +39,9 @@ from pathlib import Path
 import pytest
 
 from agentctl import cli
-from agentctl.plan import PlanError, diff_plans, load_plan
+from agentctl.plan import PlanError, diff_plans, load_plan, order_place
 from agentctl.state import Node, Order
-from agentctl.submission import submission_violations, validate_submission
+from agentctl.submission import ORDER_REFUSAL_MARKERS, submission_violations, validate_submission
 
 CORPUS_DIR = Path(__file__).resolve().parent / "fixtures" / "plan_corpus"
 
@@ -54,6 +54,12 @@ _NOT_REQUIRED: dict[str, str] = {
         "not an AUTHORED part: it is what Order.from_dict records about the raw table it "
         "could not read, so there is no line for a plan to omit and nothing for an author "
         "to declare. Its own refusal cases are the malformed-shape tests below."
+    ),
+    "requirements_dropped": (
+        "not an AUTHORED part either, and not even a place of its own the way `malformed` "
+        "is one: it is `malformed`'s own drop count for the PARTIAL requirements case (some "
+        "entries were tables and survived, some were not), set only by Order.from_dict and "
+        "read only by the message that names how many entries were dropped."
     ),
 }
 
@@ -77,10 +83,12 @@ _REFUSAL_MATCH = {
     "coverage": r"\[meta\.order\.coverage\] says nothing about",
 }
 
-# How the submission seam spells an order refusal. Used to assert that a strict LOAD is not
-# raising about the order — the bare substring "order" would false-green on a refusal
-# phrased without the word and false-red on "reorder", "ordering", "border".
-_ORDER_REFUSAL_MARKERS = ("[meta.order]", "[meta.order.coverage]", "the 'order' table")
+# How the submission seam spells an order refusal — imported from `agentctl.submission`
+# rather than retyped, so this is a real binding to that module's message vocabulary and
+# not a second, hand-written copy a future rewording could silently drift from. Used to
+# assert that a strict LOAD is not raising about the order — the bare substring "order"
+# would false-green on a refusal phrased without the word and false-red on "reorder",
+# "ordering", "border".
 
 _ORDER_SCALARS = {
     "customer_id": 'customer_id = "user"',
@@ -206,22 +214,31 @@ def test_meta_order_refusal_cases_are_the_order_s_own_field_set():
     about the cases someone remembered.
 
     Read honestly, these assertions are not all the same kind of check, and saying so is
-    part of what the guard is for.
+    part of what the guard is for — enumerated by assertion below rather than by a count of
+    how many are "live", because at least one of them is live in one direction and a
+    tautology in the other, which a headcount cannot represent.
 
-    TWO ARE LIVE TODAY. An exemption with no written reason is indistinguishable from an
-    oversight, and `_NOT_REQUIRED` naming something that is not a part of the order at all
-    — a stale entry left behind by a rename — would silently un-require the field that
-    replaced it. Neither is decided by the derivation.
-
-    TWO ARE TAUTOLOGIES AGAINST THE DERIVATION, deliberately kept. `_ORDER_PARTS` is
-    `fields(Order) - _NOT_REQUIRED`, so it cannot contain an exempt name and cannot omit a
-    non-exempt one; those two assertions can only fail once someone replaces the derivation
-    with a hand-written list. That is precisely the substitution this module forbids, and
-    it is the one a reviewer is least likely to notice, so the assertions stay — as a trap
-    armed for that edit, not as checks that do work on any run today.
-
-    The `_REFUSAL_MATCH` totality is live for the same reason the reason-strings are: it is
-    a second hand-written map, and nothing derives it."""
+    1. `_ORDER_PARTS` is non-empty — LIVE: an empty parametrization would let every case
+       below vacuously pass, proving nothing about any part.
+    2. `declared == {f.name for f in dataclasses.fields(Order)}` — LIVE in the direction
+       that catches a STALE `_NOT_REQUIRED` entry (a name no longer a field of `Order`,
+       left behind by a rename, which would silently un-require whatever field replaced
+       it); TAUTOLOGICAL in the other direction, because `_ORDER_PARTS` is *derived* as
+       `fields(Order) - _NOT_REQUIRED` — a genuinely new field is automatically picked up
+       by that derivation and can never go missing from `declared`, so only a rewrite back
+       to a hand-written list could make that direction fail.
+    3. `not (set(_ORDER_PARTS) & set(_NOT_REQUIRED))` — pure TAUTOLOGY against the same
+       derivation: a name in `_NOT_REQUIRED` is by construction excluded from
+       `_ORDER_PARTS`. It can only fail once someone replaces the derivation with a
+       hand-written list — precisely the substitution this module forbids, and the one a
+       reviewer is least likely to notice — so it stays as a trap armed for that edit, not
+       as a check doing work on any run today.
+    4. `all(reason.strip() for reason in _NOT_REQUIRED.values())` — LIVE: an exemption with
+       no written reason is indistinguishable from an oversight.
+    5. `set(_REFUSAL_MATCH) == set(_ORDER_PARTS)` — LIVE in both directions: `_REFUSAL_MATCH`
+       is a second hand-written map that nothing derives, so it can fall out of step with
+       `_ORDER_PARTS` either by missing a part or by pinning a message for something that
+       is no longer required."""
     assert _ORDER_PARTS, "an empty parametrization proves nothing about any part"
 
     declared = set(_ORDER_PARTS) | set(_NOT_REQUIRED)
@@ -242,6 +259,39 @@ def test_meta_order_refusal_cases_are_the_order_s_own_field_set():
         f"{sorted(set(_ORDER_PARTS) - set(_REFUSAL_MATCH))}; "
         f"messages pinned for something that is not a required part: "
         f"{sorted(set(_REFUSAL_MATCH) - set(_ORDER_PARTS))}"
+    )
+
+
+def test_order_place_exhausts_the_order_s_field_set():
+    """THE SECOND GUARD, over `plan.order_place` — the same discipline this module states
+    for its parametrization, applied to the change-decision key.
+
+    `order_place`'s docstring claims it covers everything the order holds, so that a new
+    Order field belongs to a key even if whoever added it forgot the scope/place split.
+    But its membership is HAND-WRITTEN — each field needs its own normalization into a
+    hashable, order-stable form, so it cannot be derived over `dataclasses.fields(Order)`
+    the way `_ORDER_PARTS` is. A hand-written list is exactly what this module's own
+    docstring names as the substitution that costs a universal claim its universality: it
+    passes every case anyone wrote and goes quiet the day a field is added.
+
+    So the claim is not established by the code that makes it. This test is what makes it
+    true — an arity check, not a membership one, because the members are normalized and no
+    longer carry their field names. That is weaker than the derivation `_ORDER_PARTS` gets:
+    it catches an ADDED field left out, and it would not catch a field swapped for another
+    at equal count. It is the strongest check available without a normalization registry,
+    and it fires on the case that has actually occurred in this stage."""
+    fields = {f.name for f in dataclasses.fields(Order)}
+    place = order_place(
+        Namespace(order=Order(customer_id="u", customer="c", functional_place="p"))
+    )
+    assert len(place) == 1, "order_place contributes one element for a declared order"
+    assert len(place[0]) == len(fields), (
+        f"order_place carries {len(place[0])} member(s) for {len(fields)} Order field(s) "
+        f"({sorted(fields)}). A field added to Order and not listed in order_place belongs "
+        f"to NEITHER change-decision key: an edit to it moves no digest, so it re-arms "
+        f"neither plan approval nor the question enumeration. Add its normalized form to "
+        f"order_place — or, if it genuinely must not affect either key, say so in the "
+        f"docstring and pin the new count here with that reason"
     )
 
 
@@ -421,8 +471,12 @@ def test_order_parse_records_a_partially_dropped_requirement_list(tmp_path):
     presence check passes and — without `malformed` — the plan would submit CLEAN with a
     requirement the author wrote and the engine silently dropped.
 
-    This is the same defect as the one above, in its quietest form: there, the wrong message
-    was emitted; here, no message at all."""
+    The message is NOT the whole-table one above, and asserting that distinctly is the
+    point of this test: "is present but is not an array of tables" is false of a plan whose
+    `requirements` genuinely is such an array, missing only one entry — an author reading
+    that message would go looking for a wholly broken key that does not exist. The
+    partial case gets its own message naming exactly how many entries were dropped, backed
+    by the drop count `Order.from_dict` records in `requirements_dropped`."""
     path = tmp_path / "half_malformed.toml"
     _write_plan(path, omit=("requirements",))
     path.write_text(
@@ -437,8 +491,42 @@ def test_order_parse_records_a_partially_dropped_requirement_list(tmp_path):
 
     assert [r.id for r in order.requirements] == ["R1"]
     assert order.malformed == ("requirements",)
-    assert any("'requirements' is present but is not" in p
-               for p in submission_violations(load_plan(str(path)))), "silently dropped"
+    assert order.requirements_dropped == (1, 2)
+    problems = submission_violations(load_plan(str(path)))
+    assert any("1 of 2 entries under 'requirements'" in p for p in problems), problems
+    assert not any("'requirements' is present but is not" in p for p in problems), problems
+
+
+def test_meta_order_a_scalar_order_is_refused_as_malformed_not_absent(tmp_path):
+    """The natural migration mistake this stage's whole premise invites: an author moving a
+    prose order into the typed field writes `order = "..."` under `[meta]` directly, rather
+    than the `[meta.order]` table. The key is plainly PRESENT — reading it as absent would
+    be as false as the whole-table malformed case above reading 'missing' for a key that is
+    there — so it is recorded through the same `malformed` register `Order.from_dict` uses
+    for an unreadable PART, not through `_ORDER_ABSENT`.
+
+    Also covers `[[meta.order]]`, an array of tables: TOML gives that shape to Python as a
+    `list`, which is exactly as non-dict as a bare string, so `plan.parse_plan`'s guard
+    (`isinstance(raw_order, dict)`) refuses both the same way."""
+    path = tmp_path / "scalar_order.toml"
+    _write_plan(path, omit=("order",))
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            'external_research = "read the corpus audit; no prior art applies"\n',
+            'external_research = "read the corpus audit; no prior art applies"\n'
+            'order = "we need this by Friday"\n',
+        ),
+        encoding="utf-8",
+    )
+
+    doc = load_plan(str(path), strict=True)  # must not raise
+
+    assert doc.meta.order is not None
+    assert doc.meta.order.malformed == ("order",)
+    problems = submission_violations(doc)
+    assert any("'order' is present but is not" in p for p in problems), problems
+    assert not any("missing the 'order' table" in p for p in problems), problems
+    assert not any("missing 'customer_id'" in p for p in problems), problems
 
 
 def test_meta_order_a_duplicated_requirement_id_is_refused(tmp_path):
@@ -557,7 +645,7 @@ def test_meta_order_every_frozen_corpus_plan_loads_unaffected(tmp_path):
         try:
             doc = load_plan(str(p), strict=True)
         except PlanError as exc:
-            assert not any(m in str(exc) for m in _ORDER_REFUSAL_MARKERS), (
+            assert not any(m in str(exc) for m in ORDER_REFUSAL_MARKERS), (
                 f"{p.name} now raises about the order under strict: {exc}"
             )
             continue

@@ -169,10 +169,18 @@ _ORDER_PARTS = (
     ),
 )
 
-# What each malformable part must LOOK like. Only the two container parts appear: the
+# What each malformable part must LOOK like. Only the container parts appear: the
 # scalars are `str(...)`-coerced by Order.from_dict, so whatever was written survives in
-# some readable form and there is nothing to have dropped.
+# some readable form and there is nothing to have dropped. `order` itself (the raw
+# `[meta]` key, not a part of the order) rides here too — a present, non-dict `order`
+# degrades to `Order(malformed=("order",))` in plan.parse_plan, and is reported through
+# this same register rather than as a missing table.
 _ORDER_SHAPE_HINTS = {
+    "order": (
+        "a table — `[meta.order]` with customer_id, customer, functional_place, "
+        "requirements, and a [meta.order.coverage] table. A scalar value, or "
+        "`[[meta.order]]` written as an array of tables, reads as no order at all"
+    ),
     "requirements": (
         "an array of tables — `requirements = [ { id = \"R1\", text = \"...\" } ]`, or "
         "repeated [[meta.order.requirements]] sections. A list of bare sentences, a single "
@@ -184,15 +192,37 @@ _ORDER_SHAPE_HINTS = {
     ),
 }
 
+# `order` lives one level up from every other malformable name here: the raw key sits
+# directly under `[meta]`, not under `[meta.order]` (which, for a malformed `order`,
+# never existed as a table at all). Every other name is a PART of the order and lives
+# under `[meta.order]`.
+_ORDER_MALFORMED_LOCATION = {"order": "[meta]"}
 
-def _order_malformed(name: str) -> str:
+
+def _order_malformed(name: str, *, requirements_dropped: tuple[int, int] | None = None) -> str:
     """The message for a part the raw table CARRIED but `Order.from_dict` could not read.
 
     Separate from the missing-part message because it names a different defect and needs a
     different repair: the key is there, its shape is wrong, and telling that author to
-    'add requirements' sends them to write again what is already written."""
+    'add requirements' sends them to write again what is already written.
+
+    `requirements_dropped`, when given (only ever for name="requirements"), distinguishes
+    the PARTIAL case — some entries were tables and survived, some were not — from the
+    TOTAL case the shape-hint sentence below is true of: an author with four good
+    requirements and one bare sentence is told exactly which entries were dropped, not
+    that "the engine read nothing usable from it", which is false of their plan and sends
+    them looking for a wholly-broken key instead of the one bad element."""
+    if name == "requirements" and requirements_dropped is not None:
+        dropped, total = requirements_dropped
+        return (
+            f"[meta.order] {dropped} of {total} entries under 'requirements' are not "
+            f"tables and were dropped. Write each as {{ id = \"R1\", text = \"...\" }} — "
+            f"the coverage map and every acceptance verdict key on the id, so a bare "
+            f"sentence among the tables is silently lost rather than read"
+        )
+    location = _ORDER_MALFORMED_LOCATION.get(name, "[meta.order]")
     return (
-        f"[meta.order] {name!r} is present but is not {_ORDER_SHAPE_HINTS[name]}. The "
+        f"{location} {name!r} is present but is not {_ORDER_SHAPE_HINTS[name]}. The "
         f"engine read nothing usable from it, so the key is present and its content is "
         f"absent — fix the shape rather than adding the key again"
     )
@@ -205,6 +235,13 @@ _ORDER_ABSENT = (
     "functional_place, requirements as { id, text } pairs, and a [meta.order.coverage] "
     "table mapping each requirement id to the controls that decide it"
 )
+
+# The literal fragments an order-related refusal message can contain. Exported so a test
+# asserting "a strict LOAD never raises about the order" (order refusals live only here,
+# at the submission seam, never in plan.parse_plan) binds to this module's real message
+# vocabulary rather than to a second, hand-typed copy that could drift the day one of the
+# messages above is reworded.
+ORDER_REFUSAL_MARKERS = ("[meta.order]", "[meta.order.coverage]", "the 'order' table")
 
 
 def _attr(obj, dotted: str):
@@ -338,10 +375,20 @@ def _order_violations(meta) -> list[str]:
     order = meta.order
     if order is None:
         return [_ORDER_ABSENT]
+    if "order" in order.malformed:
+        # The raw `order` key itself was unreadable (a scalar, or an array of tables) —
+        # `Order.from_dict` never ran, so every other part is unpopulated by construction
+        # and would otherwise each report "missing" on top of this. One message, naming
+        # the actual defect, replaces what would else be one per _ORDER_PARTS entry.
+        return [_order_malformed("order")]
     out: list[str] = []
     for name, why in _ORDER_PARTS:
         if name in order.malformed:
-            out.append(_order_malformed(name))
+            out.append(
+                _order_malformed(name, requirements_dropped=order.requirements_dropped)
+                if name == "requirements"
+                else _order_malformed(name)
+            )
         elif not getattr(order, name):
             out.append(
                 f"[meta.order] missing {name!r} (required for substantive plans): {why}"
@@ -368,7 +415,7 @@ def _order_violations(meta) -> list[str]:
             f"coverage entry and a single verdict — the second is accepted without ever "
             f"having been decided"
         )
-    uncovered = [r.id for r in order.requirements if r.id and not order.coverage.get(r.id)]
+    uncovered = sorted({r.id for r in order.requirements if r.id and not order.coverage.get(r.id)})
     if uncovered:
         out.append(
             f"[meta.order.coverage] says nothing about {', '.join(uncovered)}. Every "

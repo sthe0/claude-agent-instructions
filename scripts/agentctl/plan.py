@@ -866,8 +866,21 @@ def parse_plan(
     # degrades every malformation to the empty form rather than raising. A table this
     # loader could refuse would be retroactive over every plan a live session re-reads,
     # which is the whole reason submission.py exists.
+    #
+    # A PRESENT, non-dict `order` (a scalar prose order — the natural migration mistake
+    # this stage's whole premise invites — or `[[meta.order]]` read as an array of
+    # tables) must not collapse to the same `None` an absent key produces: the submission
+    # seam reads `None` as "no order was declared" and says so, which is false of an
+    # author whose file plainly carries an `order` key. Recording it as `malformed`
+    # instead — the same register `Order.from_dict` uses for an unreadable PART — lets
+    # the seam name the shape rather than claim the table is missing.
     raw_order = m.get("order")
-    order = Order.from_dict(raw_order) if isinstance(raw_order, dict) else None
+    if isinstance(raw_order, dict):
+        order = Order.from_dict(raw_order)
+    elif raw_order is not None:
+        order = Order(malformed=("order",))
+    else:
+        order = None
 
     meta = PlanMeta(
         task_id=str(m["task_id"]),
@@ -1089,10 +1102,17 @@ def order_place(meta) -> tuple:
     first and returns 'substantive' before this is consulted, so overlap costs nothing,
     while a complement would leave a newly added Order field belonging to NEITHER key if
     whoever added it forgot the split. Everything the order holds is therefore covered
-    here by construction, and the scope half is the only thing anyone has to remember to
-    extend. `malformed` rides here for that reason and one of its own: it is the only
-    trace a dropped `requirements = ["a sentence"]` leaves, so an edit that turns a
-    readable order into an unreadable one would otherwise move no key at all."""
+    here, and the scope half is the only thing anyone has to remember to extend.
+    `malformed` and `requirements_dropped` ride here for that reason and one of their
+    own: between them they are the only trace a dropped `requirements = ["a sentence"]`
+    leaves, so an edit that turns a readable order into an unreadable one — or that
+    changes how much of it is unreadable — would otherwise move no key at all.
+
+    The membership below is a hand-written list, not a derivation over
+    `dataclasses.fields(Order)`, because each field needs its own normalization into a
+    hashable, order-stable form. So "everything the order holds" is a claim a reader
+    cannot check here; `test_order_place_exhausts_the_order_s_field_set` is what makes
+    it true, by going red the day a field is added and not listed."""
     order = meta.order
     if order is None:
         return ()
@@ -1103,6 +1123,7 @@ def order_place(meta) -> tuple:
         tuple((r.id, r.text) for r in order.requirements),
         tuple(sorted((k, tuple(v)) for k, v in order.coverage.items())),
         order.malformed,
+        order.requirements_dropped,
     ),)
 
 

@@ -341,4 +341,9 @@ def test_an_orderless_plan_s_digest_is_unchanged_by_the_order_field(tmp_path, fi
 
     assert orderless == (
         "16d4cb1479155b598093362b1a136cb773c378251f299374dbc8083f429277d3"
+    ), (
+        "before re-pinning this literal: confirm order_place(meta) is still () for an "
+        "order-less plan, and that the order is still spliced onto the payload tuple "
+        "rather than occupying a slot in it — re-pinning without checking both silently "
+        "converts this test into 'whatever the code currently does'"
     )
