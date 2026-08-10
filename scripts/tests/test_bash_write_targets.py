@@ -313,18 +313,90 @@ def test_bare_subshell_nested_inside_dollar_paren_is_an_accepted_residual(tmp_pa
     assert os.path.join(eff_cwd, "a") in targets
 
 
-def test_unterminated_quote_after_multiline_quoted_argument_still_returns_nothing(tmp_path):
-    """Accepted, irreducible residual: once a quote is genuinely unterminated
-    ANYWHERE in the command, there is no well-defined lexical reading of the
-    remainder, so no target is recoverable there either — this is a
-    documented fail-open boundary, not a bug to chase further. The
-    whole-stream attempt raises (the trailing quote never closes), and the
-    per-line fallback fares no better: physical splitting lands mid-quote on
-    every line this command has, so every line fails its own `shlex.split()`
-    in turn."""
+def test_unterminated_quote_after_multiline_quoted_argument_still_recovers_earlier_write(tmp_path):
+    """F5: a quote genuinely unterminated at the END of a command does not
+    destroy recovery of a well-formed logical unit that closed BEFORE it.
+    The whole-stream attempt still raises (the trailing quote never closes),
+    but `_split_logical_units` isolates the broken `echo 'unterminated` tail
+    into its OWN unit — the earlier `git commit ... && cp e.py /repo/x.py`
+    unit, itself containing a correctly-closed multi-line single-quoted
+    argument, parses fine on its own and is recovered by the units-harvest
+    half of the fallback's union. This narrows what an earlier, wrong
+    adjudication treated as an irreducible residual for the WHOLE command;
+    see test_unterminated_quote_on_the_same_unit_as_the_write_is_an_accepted_residual
+    for the genuinely irreducible case — the write on the SAME unit as the
+    bad quote."""
     eff_cwd = str(tmp_path)
     command = "git commit -m 'a\nb' && cp e.py /repo/x.py\necho 'unterminated"
 
     targets = command_write_targets(command, eff_cwd)
 
+    assert "/repo/x.py" in targets
+
+
+def test_unterminated_quote_on_the_same_unit_as_the_write_is_an_accepted_residual(tmp_path):
+    """Accepted, irreducible residual, narrowed from the over-broad claim the
+    test above replaces: when the write and the bad quote share the SAME
+    logical unit (here, one physical line joined by `&&`), there is no
+    well-defined lexical reading of that unit at all — the units-harvest
+    fails on it (whole unit is unparseable) and the splitlines-harvest fails
+    on it too (the physical line is identical to the unit here, so it is the
+    same unparseable text). Nothing recovers a write that never had a
+    closed reading in the first place."""
+    eff_cwd = str(tmp_path)
+    command = "echo 'unterminated && cp a.py /repo/onsame.py"
+
+    targets = command_write_targets(command, eff_cwd)
+
     assert targets == []
+
+
+def test_unterminated_quote_does_not_lose_a_write_on_a_later_physical_line(tmp_path):
+    """Round-6-direction regression control: a naive quote-aware-only
+    fallback (unit-by-unit, no splitlines union) REGRESSES relative to the
+    prior physical-line-only fallback here, because a genuinely unterminated
+    quote never closes, so `_split_logical_units` folds every subsequent
+    physical line into the SAME unparseable unit as the bad quote — the
+    units-harvest alone finds nothing. The splitlines-harvest half of the
+    union still recovers it, exactly as the prior physical-line fallback
+    did, because on its own physical line `cp a.py /repo/after.py` parses
+    fine independent of the previous line's bad quote."""
+    eff_cwd = str(tmp_path)
+    command = "echo 'unterminated\ncp a.py /repo/after.py"
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert "/repo/after.py" in targets
+
+
+def test_unterminated_quote_does_not_lose_multiple_later_writes(tmp_path):
+    """Round-6-direction regression control, multi-write variant: both
+    later physical lines' writes must survive the union fallback, not just
+    the first one found."""
+    eff_cwd = str(tmp_path)
+    command = "echo 'unterminated\ncp a.py /repo/l1.py\ncp b.py /repo/l2.py"
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert "/repo/l1.py" in targets
+    assert "/repo/l2.py" in targets
+
+
+def test_unterminated_quote_fallback_still_recovers_a_multiline_dollar_paren_write(tmp_path):
+    """F5, `$(...)`-substitution variant: the same fallback-engagement
+    failure as the multi-line-quoted-argument case above, but for an
+    UNQUOTED `$(...)` substitution spanning a newline instead. Before this
+    fix, engaging the (then quote-BLIND) per-line fallback split `$(ls` and
+    `dir)` onto separate physical lines exactly like the primary path's old
+    F4 bug, fabricating `<cwd>/$(ls` as `cp`'s only positional and losing
+    the real destination. The units-harvest half of the union keeps
+    `$(...)`-depth tracking active per unit, so `cp`'s real last positional
+    is still found; the raw splitlines-harvest independently contributes the
+    harmless fabricated fragment `$(ls` — over-reporting here is the safe
+    direction for a deny gate."""
+    eff_cwd = "/repo"
+    command = "cp $(ls\ndir) /repo/subst.py\necho 'unterminated"
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert "/repo/subst.py" in targets
