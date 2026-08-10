@@ -129,6 +129,41 @@ def _code_review_gate_off_by_default(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _stage_review_gate_off_by_default(monkeypatch):
+    """Default the per-stage judge-corroboration gate OFF for the suite at large,
+    the same accommodation as `_code_review_gate_off_by_default` above and for the
+    same reason: `gates.stage_review_active` falls back to weight_class ==
+    SUBSTANTIVE when AGENTCTL_STAGE_REVIEW is unset, and Defect 2 broadened the
+    record-result observation requirement from acceptance_review-only to every
+    stage of a SUBSTANTIVE session — so any substantive-flow test that now
+    supplies `--observation` on an ordinary measurable stage would otherwise also
+    invoke the cheap judge via this gate, on machinery it is not testing.
+    AGENTCTL_STAGE_REVIEW=0 is the documented force-off knob — byte-identical to
+    the gate being absent. Its real block/pass/stale/override/killswitch
+    behaviour is proven end-to-end by test_acceptance_review_gate.py and
+    test_acceptance_gate_rehearsal.py, which explicitly re-enable it."""
+    monkeypatch.setenv("AGENTCTL_STAGE_REVIEW", "0")
+
+
+@pytest.fixture(autouse=True)
+def _acceptance_gate_off_by_default(monkeypatch):
+    """Default the plan-level acceptance/resolution gate OFF for the suite at
+    large, the same accommodation as `_code_review_gate_off_by_default` above and
+    for the same reason: `gates.acceptance_active` falls back to weight_class ==
+    SUBSTANTIVE when AGENTCTL_ACCEPTANCE is unset, and `resolution_blockers`
+    folds in a requirement (Defect 2) that every SUBSTANTIVE session have a
+    complete, fresh, all-pass AcceptanceReview before verify-final/resolve —
+    but the overwhelming majority of substantive-flow tests (final_check, venue
+    lifecycle, tracker plugin, the stage-review rehearsal, …) drive a session to
+    VERIFYING/RESOLUTION to exercise unrelated machinery and never call
+    `agentctl accept`. AGENTCTL_ACCEPTANCE=0 is the documented force-off knob —
+    byte-identical to the gate being absent. Its real block/pass/stale/bypass
+    behaviour is proven end-to-end by test_acceptance_verdict.py, which
+    explicitly re-enables it."""
+    monkeypatch.setenv("AGENTCTL_ACCEPTANCE", "0")
+
+
+@pytest.fixture(autouse=True)
 def _advisor_off_by_default(monkeypatch):
     """Default the advisory judge OFF for the suite at large, the same accommodation as
     `_plan_review_gate_off_by_default` above and for the same reason.

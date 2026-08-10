@@ -245,11 +245,19 @@ def test_acceptance_pass_accepts_distinct_observation(store):
     assert after.stage(1).criterion.observation == obs
 
 
-def test_measurable_pass_does_not_require_observation(store):
-    """A measurable stage pass proceeds without --observation (unchanged behaviour)."""
+def test_measurable_pass_requires_observation_on_substantive_session(store):
+    """Defect 2: a measurable stage pass on a substantive session is refused with no
+    --observation, and proceeds once a genuine one is supplied."""
     store.save(_executing("ar5", _stage(1, verify_command=None)))
-    d = cli.cmd_record_result(
+    refused = cli.cmd_record_result(
         ns(session="ar5", status="passed", actual="ok", control=None),
+        store=store, runner=boom,
+    )
+    assert refused.ok is False
+    assert refused.action == "attest_observation"
+    d = cli.cmd_record_result(
+        ns(session="ar5", status="passed", actual="ok", control=None,
+           observation="ran it and the produced output matched"),
         store=store, runner=boom,
     )
     assert d.ok is True

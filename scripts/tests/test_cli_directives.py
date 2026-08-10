@@ -267,16 +267,25 @@ def test_critique_announces_replan_when_record_is_complete(store, fixtures_dir):
     assert d.detail == "difficulty cycle complete; replan is now unblocked"
 
 
-def test_measurable_record_result_unchanged_without_observation(store, fixtures_dir):
-    """Regression: measurable record-result passes without --observation (unchanged behaviour)."""
+def test_measurable_record_result_requires_observation_on_substantive_session(store, fixtures_dir):
+    """Defect 2: a substantive-session measurable pass is refused with no --observation,
+    and proceeds once a genuine one is supplied — control compares result with goal at
+    every stage, not just acceptance_review ones."""
     sid = "meas-obs"
     _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
     cli.cmd_next_stage(ns(session=sid), store=store)
-    d = cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
-                               control="reviewed: ok"), store=store)
+    refused = cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
+                                     control="reviewed: ok"), store=store)
+    assert refused.ok is False
+    assert refused.action == "attest_observation"
+    d = cli.cmd_record_result(
+        ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
+           observation="ran it and the produced output matched"),
+        store=store,
+    )
     assert d.ok is True
 
 
@@ -449,7 +458,7 @@ def test_record_result_spawn_stage_attributes_cost(store, fixtures_dir, tmp_path
 
     d = cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           cost_log=str(cost_log)),
+           observation="ran it and the produced output matched", cost_log=str(cost_log)),
         store=store,
     )
     assert d.ok is True
@@ -477,7 +486,7 @@ def test_record_result_spawn_stage_sums_multiple_log_rows(store, fixtures_dir, t
 
     d = cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           cost_log=str(cost_log)),
+           observation="ran it and the produced output matched", cost_log=str(cost_log)),
         store=store,
     )
     assert d.ok is True
@@ -497,7 +506,7 @@ def test_record_result_missing_cost_log_leaves_none(store, fixtures_dir, tmp_pat
 
     d = cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           cost_log=str(missing)),
+           observation="ran it and the produced output matched", cost_log=str(missing)),
         store=store,
     )
     assert d.ok is True

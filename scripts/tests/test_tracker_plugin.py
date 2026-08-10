@@ -363,7 +363,8 @@ def _drive_to_resolution(capsys, root, sid, plan, *, activate_tracker):
     _run(capsys, root, "partition", "--session", sid)
     for _ in range(2):
         _run(capsys, root, "next-stage", "--session", sid)
-        _run(capsys, root, "record-result", "--session", sid, "--status", "passed", "--actual", "ok", "--control", "reviewed: ok")
+        _run(capsys, root, "record-result", "--session", sid, "--status", "passed", "--actual", "ok",
+             "--control", "reviewed: ok", "--observation", "ran it and the produced output matched")
     _run(capsys, root, "verify-final", "--session", sid)
     # experience auto-activates for every substantive session; satisfy its gate so
     # these tests isolate the tracker plugin's own gating behavior

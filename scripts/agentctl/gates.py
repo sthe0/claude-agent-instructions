@@ -40,6 +40,7 @@ from lib import config_root
 from lib import hook_wiring
 
 from . import delivery
+from .plan import PlanError, load_plan
 from .state import Node, SessionState, StageStatus, WeightClass
 from .state import PLAN_PRESENTATION_KIND_ESSENCE as _PLAN_PRESENTATION_KIND_ESSENCE
 from .state import Stage as _Stage
@@ -87,7 +88,92 @@ def resolution_blockers(state: SessionState) -> list[str]:
     unpassed = [s.index for s in state.stages if s.outcome.status != StageStatus.PASSED.value]
     if unpassed:
         out.append(f"stages not PASSED: {unpassed}")
+    out.extend(_acceptance_review_resolution_blockers(state))
     return out
+
+
+def acceptance_active(state: SessionState) -> bool:
+    """Whether resolution requires a recorded plan-level AcceptanceReview.
+
+    Scoped exactly like stage_review_active/code_review_active: chat/small-change
+    sessions never pay this cost; SUBSTANTIVE sessions always do. AGENTCTL_ACCEPTANCE
+    overrides in both directions ("1" forces on, "0" forces off). Deliberately its OWN
+    env var rather than reusing AGENTCTL_STAGE_REVIEW — the per-stage judge gate and
+    the plan-level acceptance gate are two distinct Defect-2 halves (control, repeated
+    per stage; acceptance, once for the whole plan) and must be independently
+    killable. Env-only reads, no file/subprocess I/O, so the gate stays pure."""
+    env = os.environ.get("AGENTCTL_ACCEPTANCE")
+    if env == "1":
+        return True
+    if env == "0":
+        return False
+    return state.weight_class == WeightClass.SUBSTANTIVE.value
+
+
+def _acceptance_review_resolution_blockers(state: SessionState) -> list[str]:
+    """Precondition guardian folded into resolution_blockers: the order's customer
+    must have recorded a plan-level AcceptanceReview comparing the delivered PRODUCT
+    against every declared requirement — the acceptance half of Defect 2 (control
+    compares result with goal at every stage, repeatedly; acceptance compares product
+    with order once, and is recorded). PURE: file I/O only (re-reading the plan via
+    plan.load_plan, itself pure — see plan.py's own import list), never a
+    subprocess/socket/network reach.
+
+    Inactive (chat / small-change / AGENTCTL_ACCEPTANCE=0) => [] always. Active
+    checks, in order:
+      - a review must exist — else blocked (fail-CLOSED: an all-PASSED session with
+        no acceptance is not resolved, only controlled);
+      - review.plan_sha256 must equal state.accepted_plan_digest — a mismatch means
+        the plan was replaced (accept, then approve/replan on a new plan) since the
+        review was written, so the review is STALE and is treated as though absent
+        (same blocker as the missing-review case, not a distinct message — the
+        session's observable state is "no current acceptance" either way);
+      - every requirement id the CURRENT plan's [meta.order] declares must carry a
+        verdict — read fresh rather than trusted from write time, though a matched
+        digest above already implies the plan (and so the order) has not changed
+        since the review was written;
+      - every verdict must be 'pass' — a single 'fail' blocks resolution outright;
+        acceptance is the product-against-order check, and a failing requirement is
+        not the engine's to wave through.
+
+    Deliberately never reads state.acceptance_bypass: a bypass is a resolution
+    OUTCOME the engine surfaces (verify-final), never a resolution PRECONDITION the
+    engine evaluates — see AcceptanceBypass's docstring for why."""
+    if not acceptance_active(state):
+        return []
+    review = state.acceptance_review
+    if review is None:
+        return [
+            "no AcceptanceReview recorded — the order's customer must record "
+            "acceptance (agentctl accept) before resolution"
+        ]
+    if (review.plan_sha256 or "") != (state.accepted_plan_digest or ""):
+        return [
+            "no AcceptanceReview recorded — the recorded review is stale (it was "
+            "written against a different plan version than the one currently "
+            "accepted) and is treated as absent; re-run accept on the current plan"
+        ]
+    order = None
+    if state.plan_path:
+        try:
+            order = load_plan(state.plan_path, strict=False).meta.order
+        except (OSError, PlanError):
+            order = None
+    requirement_ids = [r.id for r in order.requirements] if order is not None else []
+    verdicted = {v.requirement_id: v.verdict for v in review.verdicts}
+    missing = [rid for rid in requirement_ids if rid not in verdicted]
+    if missing:
+        return [
+            f"AcceptanceReview omits declared requirement id(s) {missing} — every "
+            "order requirement needs a verdict before resolution"
+        ]
+    failing = [rid for rid, v in verdicted.items() if v != "pass"]
+    if failing:
+        return [
+            f"AcceptanceReview carries a non-pass verdict on requirement id(s) "
+            f"{sorted(failing)} — resolution is blocked until every requirement passes"
+        ]
+    return []
 
 
 def difficulty_blockers(state: SessionState) -> list[str]:

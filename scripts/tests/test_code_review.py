@@ -96,10 +96,10 @@ def _code_review(store, verdict, reviewer="code-reviewer", note="", concerns=Non
     )
 
 
-def _rr(store, status, actual="done", control=None, code_ref=None):
+def _rr(store, status, actual="done", control=None, code_ref=None, observation="ran it and the produced output matched"):
     return cli.cmd_record_result(
         Namespace(session="cr", status=status, actual=actual, control=control,
-                   observation="", code_ref=code_ref),
+                   observation=observation, code_ref=code_ref),
         store=store,
     )
 

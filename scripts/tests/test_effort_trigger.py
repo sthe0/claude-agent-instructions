@@ -75,7 +75,7 @@ def test_record_result_fires_on_overrun_with_no_stage_marked_failed(store, fixtu
 
     d = cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           observation="", cost_log=str(cost_log)),
+           observation="ran it and the produced output matched", cost_log=str(cost_log)),
         store=store,
     )
 

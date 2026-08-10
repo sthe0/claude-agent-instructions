@@ -115,7 +115,8 @@ def test_record_result_verifies_in_delivery_worktree(store, tmp_path):
                     delivery_worktree=str(worktree))
     store.save(s)
     cli.cmd_record_result(
-        ns(session="v1", status="passed", actual="ok", control=None),
+        ns(session="v1", status="passed", actual="ok", control=None,
+           observation="ran it and the produced output matched"),
         store=store, runner=cap,
     )
     assert cap.argv[:2] == ["bash", "-c"]

@@ -46,6 +46,8 @@ from .state import (
     _EXECUTION_NODES,
     _MAX_PLAN_STACK,
     Actor,
+    AcceptanceBypass,
+    AcceptanceReview,
     CheckKind,
     CheckVenue,
     CodeReview,
@@ -76,6 +78,7 @@ from .state import (
     PlanFrame,
     PlanPresentation,
     PlanReview,
+    RequirementVerdict,
     Route,
     SessionState,
     SHOW_FULL_PLAN_MARKER,
@@ -154,6 +157,18 @@ def _judge_bypassed_surface(state: SessionState) -> list[dict]:
         {"stage_index": b.stage_index, "kind": b.kind, "reviewer": b.reviewer, "note": b.note}
         for b in state.judge_bypassed
     ]
+
+
+def _acceptance_bypass_surface(state: SessionState) -> dict | None:
+    """The recorded plan-level acceptance bypass as a plain dict, for verify-final and
+    the resolution summary to surface verbatim (None when no bypass is in force).
+    Mirrors _judge_bypassed_surface's role but for the singular AcceptanceBypass —
+    see AcceptanceBypass's docstring for why resolution_blockers itself never reads
+    this field."""
+    b = state.acceptance_bypass
+    if b is None:
+        return None
+    return {"reason": b.reason, "reviewer": b.reviewer, "note": b.note}
 
 
 def _record_bypass(state: SessionState, bypass: JudgeBypass) -> None:
@@ -2187,6 +2202,131 @@ def cmd_code_review(args, *, store: StateStore, runner: Runner | None = None) ->
     )
 
 
+def _parse_verdicts(raw_verdicts: list[str]) -> tuple[list[RequirementVerdict], list[str]]:
+    """Parse repeatable ``--verdict '<requirement_id>|<pass|fail>[|<note>]'`` specs into
+    typed RequirementVerdict objects. Returns ``(verdicts, errors)`` — a non-empty
+    ``errors`` list means the caller must reject with a failing Directive and record
+    nothing. Mirrors ``_parse_partition_units``'s pipe-delimited shape and
+    ``(parsed, errors)`` return contract.
+
+    Deliberately does NOT cross-check requirement ids against the order here — that
+    check is completeness, not parse well-formedness, and belongs to
+    ``gates.resolution_blockers`` (which re-reads the order fresh at resolution time
+    rather than at write time; see AcceptanceReview's docstring)."""
+    verdicts: list[RequirementVerdict] = []
+    errors: list[str] = []
+    seen: dict[str, int] = {}  # requirement id -> owning position (1-based)
+    for pos, spec in enumerate(raw_verdicts, start=1):
+        parts = spec.split("|")
+        if len(parts) < 2:
+            errors.append(
+                f"verdict {pos}: expected '<requirement_id>|<pass|fail>[|<note>]', got {spec!r}"
+            )
+            continue
+        req_id = parts[0].strip()
+        verdict = parts[1].strip()
+        note = parts[2].strip() if len(parts) >= 3 and parts[2].strip() else ""
+        if not req_id:
+            errors.append(f"verdict {pos}: empty requirement id")
+        if verdict not in ("pass", "fail"):
+            errors.append(f"verdict {pos}: verdict must be 'pass' or 'fail', got {verdict!r}")
+        if req_id in seen:
+            errors.append(
+                f"verdict {pos}: requirement id {req_id!r} already verdicted at position "
+                f"{seen[req_id]} (one verdict per requirement)"
+            )
+        else:
+            seen[req_id] = pos
+        verdicts.append(RequirementVerdict(requirement_id=req_id, verdict=verdict, note=note))
+    return verdicts, errors
+
+
+def cmd_accept(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Record the plan-level AcceptanceReview: the ORDER's customer comparing the
+    delivered PRODUCT against every declared requirement, once — the acceptance half
+    of Defect 2 (control checks result-against-goal per stage, repeatedly;
+    acceptance checks product-against-order, once, and is recorded).
+
+    Author-matched at WRITE time against [meta.order].customer_id (a mismatch is
+    refused outright — this is not a gate to degrade past, it is a wrong-person
+    writing the record). Completeness (every declared requirement id covered) and
+    negative-verdict blocking are deferred to gates.resolution_blockers, which
+    re-reads the order fresh rather than trusting what was true at write time.
+
+    Corroboration mirrors the stage-level acceptance path: the cheap fail-open judge
+    (advisor.acceptance_judge) is consulted unless --bypass is given; an unreachable
+    judge refuses the write and directs the caller to --bypass --bypass-reason rather
+    than silently waving the review through. A --bypass is recorded as an
+    AcceptanceBypass alongside the AcceptanceReview (never standalone — see
+    AcceptanceBypass's docstring for why resolution_blockers never reads it)."""
+    state = _require(store, args.session)
+    doc = load_plan(state.plan_path, strict=False)
+    order = doc.meta.order
+    author = getattr(args, "author", "") or ""
+    if order is not None and order.customer_id and author != order.customer_id:
+        return Directive(
+            False, state.node, "noop",
+            f"acceptance author {author!r} does not match order customer_id "
+            f"{order.customer_id!r}; record it as the customer of record, or correct --author",
+        )
+    verdicts, verdict_errors = _parse_verdicts(getattr(args, "verdict", None) or [])
+    if verdict_errors:
+        return Directive(
+            False, state.node, "noop",
+            "invalid --verdict argument(s): " + "; ".join(verdict_errors),
+            data={"errors": verdict_errors},
+        )
+    bypass = bool(getattr(args, "bypass", False))
+    bypass_reason = getattr(args, "bypass_reason", "") or ""
+    note = getattr(args, "note", "") or ""
+    if bypass and not bypass_reason:
+        return Directive(
+            False, state.node, "noop",
+            "--bypass requires --bypass-reason (a bypass is a reasoned override, not a shrug)",
+        )
+    if bypass and not verdicts:
+        return Directive(
+            False, state.node, "noop",
+            "a bypass requires an accompanying AcceptanceReview: supply at least one --verdict",
+        )
+    judge_reason = "no judge attempted (--bypass)"
+    if not bypass:
+        expected_text = "; ".join(
+            f"{r.id}: {r.text}" if r.text else r.id for r in (order.requirements if order else [])
+        )
+        observed_text = note or "; ".join(
+            f"{v.requirement_id}:{v.verdict}" for v in verdicts
+        )
+        judge_runner = runner if runner is not None else advisor.subprocess_runner
+        verdict, judge_reason = advisor.acceptance_judge(
+            observed_text, expected_text, judge_runner, enabled=True,
+            timeout=advisor._ACCEPTANCE_JUDGE_TIMEOUT_S,
+        )
+        if verdict is None:
+            return Directive(
+                False, state.node, "noop",
+                f"acceptance judge unreachable ({judge_reason}); re-run with "
+                "--bypass --bypass-reason '<why this acceptance stands without judge "
+                "corroboration>'",
+                data={"reason": judge_reason},
+            )
+    state.acceptance_review = AcceptanceReview(
+        author=author, verdicts=verdicts, note=note,
+        plan_sha256=state.accepted_plan_digest or "",
+    )
+    if bypass:
+        state.acceptance_bypass = AcceptanceBypass(
+            reason=bypass_reason, reviewer=author, note=note,
+        )
+    state.log("accept", author=author, verdicts=len(verdicts), bypass=bypass)
+    store.save(state)
+    return Directive(
+        True, state.node, "continue",
+        f"acceptance review recorded ({len(verdicts)} verdict(s), bypass={bypass}); "
+        "resolution will re-check completeness, verdicts, and plan-digest freshness",
+    )
+
+
 def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     # plan_presentation_blockers is fail-open on the RECEIPT side (mirrors
     # plan_review_blockers) but fail-CLOSED on the DELIVERY side: approval — the
@@ -2686,25 +2826,41 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
                 data={"blockers": crb},
             )
 
-    # Acceptance-review observation gate: recording a PASSED acceptance stage requires
-    # a non-empty observation that differs (normalized) from the expected image.
-    # An echoed target ("I saw the expected result") is no observation at all.
+    # Observation gate: recording a PASSED stage requires a non-empty observation that
+    # differs (normalized) from the expected image — CONTROL comparing the actual RESULT
+    # against the stage's own goal, not just a program's exit code. Originally scoped to
+    # acceptance_review stages only; broadened (Defect 2) to every stage of a SUBSTANTIVE
+    # session, because "the result was checked against the goal" is a claim every stage
+    # makes, not a criterion-type-specific one — a measurable stage's exit-code check
+    # (further below) proves the PROGRAM ran clean, never that anyone looked at what it
+    # produced. Non-substantive sessions (chat/small-change) keep the pre-Defect-2
+    # behaviour: only acceptance_review stages pay this cost. An echoed target ("I saw
+    # the expected result") is no observation at all.
     observation = getattr(args, "observation", None) or ""
-    if passed and stage.criterion.criterion_type == CriterionType.ACCEPTANCE_REVIEW.value:
+    is_acceptance_review = stage.criterion.criterion_type == CriterionType.ACCEPTANCE_REVIEW.value
+    requires_observation = is_acceptance_review or (
+        state.weight_class == WeightClass.SUBSTANTIVE.value
+    )
+    if passed and requires_observation:
         norm_obs = gates._normalize_string(observation)
         norm_img = gates._normalize_string(stage.subject.result)
+        reason = (
+            "is acceptance_review" if is_acceptance_review
+            else "is a substantive-session stage (Defect 2: control compares result "
+                 "with goal at every stage)"
+        )
         if not norm_obs:
             return Directive(
                 False, state.node, "attest_observation",
-                f"stage {stage.index} is acceptance_review; acceptance pass requires "
-                "recording WHAT you observed, distinct from the expected image "
+                f"stage {stage.index} {reason}; pass requires recording WHAT you "
+                "observed, distinct from the expected image "
                 "(supply: record-result --observation '<what you observed>')",
             )
         if norm_obs == norm_img:
             return Directive(
                 False, state.node, "attest_observation",
-                f"stage {stage.index} is acceptance_review; acceptance pass requires "
-                "recording WHAT you observed, distinct from the expected image — "
+                f"stage {stage.index} {reason}; pass requires recording WHAT you "
+                "observed, distinct from the expected image — "
                 "echoing the target does not count "
                 "(supply: record-result --observation '<what you observed>')",
             )
@@ -3057,6 +3213,10 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     if bypasses:
         data["judge_bypassed"] = bypasses
         detail += f"; WARNING: {len(bypasses)} acceptance judge bypass(es) recorded (see judge_bypassed)"
+    acceptance_bypass = _acceptance_bypass_surface(state)
+    if acceptance_bypass is not None:
+        data["acceptance_bypass"] = acceptance_bypass
+        detail += "; WARNING: acceptance recorded via bypass, not judge corroboration (see acceptance_bypass)"
     return Directive(True, state.node, "await_user_confirmation", detail, data=data)
 
 
@@ -3165,6 +3325,10 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     if bypasses:
         data["judge_bypassed"] = bypasses
         detail += f" (with {len(bypasses)} acceptance judge bypass(es); see judge_bypassed)"
+    acceptance_bypass = _acceptance_bypass_surface(state)
+    if acceptance_bypass is not None:
+        data["acceptance_bypass"] = acceptance_bypass
+        detail += " (acceptance recorded via bypass; see acceptance_bypass)"
     return Directive(True, state.node, "done", detail, marker="COMPLETED", data=data)
 
 
@@ -4120,6 +4284,7 @@ COMMANDS = {
     "plan-review": cmd_plan_review,
     "stage-review": cmd_stage_review,
     "code-review": cmd_code_review,
+    "accept": cmd_accept,
     "approve": cmd_approve,
     "partition": cmd_partition,
     "partition-units": cmd_partition_units,
@@ -4181,7 +4346,7 @@ _SESSION_COMMANDS = (
     "question-enumerate", "question-candidate-dispose",
     "order-raise", "order-dispose", "order-list", "classify", "plan",
     "plan-render", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
-    "stage-review", "code-review", "approve", "partition", "partition-units",
+    "stage-review", "code-review", "accept", "approve", "partition", "partition-units",
     "next-stage", "dispatch", "resolve-permission", "record-result", "declare",
     "investigate", "critique", "normalize", "verify-final", "resolve", "reject",
     "replan", "check-coverage", "block", "unblock", "status", "drive", "close",
@@ -4192,7 +4357,8 @@ _SESSION_COMMANDS = (
 _RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("goal", ("start", "reset")),
     ("done_criterion", ("start", "reset")),
-    ("note", ("plugin-record", "confirm-delivery", "plan-review", "stage-review", "code-review")),
+    ("note", ("plugin-record", "confirm-delivery", "plan-review", "stage-review", "code-review",
+              "accept")),
     ("statement", ("ledger-add", "ledger-candidate")),
     ("source", ("ledger-add", "question-dispose")),
     ("premises", ("ledger-add",)),
@@ -4223,6 +4389,7 @@ _RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("quality_note", ("resolve", "close")),
     ("coverage_waiver", ("replan",)),
     ("normalization_waiver", ("replan",)),
+    ("bypass_reason", ("accept",)),
 )
 
 # (dest, subcommands that declare it, why '@' means nothing here)
@@ -4253,6 +4420,8 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("plan_digest", ("plan-review",), "sha256 the review binds to"),
     ("code_ref", ("code-review", "record-result"), "commit / PR reference the verdict binds to"),
     ("unit", ("partition", "partition-units"), "'|'-delimited partition-unit record"),
+    ("author", ("accept",), "acceptance author id — an identity token, not narrative"),
+    ("verdict", ("accept",), "'|'-delimited requirement-verdict record"),
     ("budget", ("dispatch",), "budget tier name"),
     ("complexity", ("dispatch",), "complexity tier name"),
     ("cost_log", ("record-result", "resolve", "verify-final", "replan"), "cost log file path (test override)"),
@@ -4528,6 +4697,21 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--code-ref", dest="code_ref", default=None,
                     help="the reviewed-code revision/digest the reviewer names; binds the "
                          "verdict so a later record-result with a different --code-ref is stale")
+    sp = add("accept"); sp.add_argument("--session", required=True)
+    sp.add_argument("--author", default="",
+                    help="acceptance author id; must match [meta.order].customer_id when set")
+    sp.add_argument("--verdict", dest="verdict", action="append", default=None,
+                    help="requirement verdict as '<requirement_id>|<pass|fail>[|<note>]'; "
+                         "repeatable, one per declared order requirement")
+    sp.add_argument("--note", default="",
+                    help="free-text note on the acceptance review as a whole")
+    sp.add_argument("--bypass", action="store_true",
+                    help="record an AcceptanceBypass alongside the review, for when the "
+                         "acceptance judge is unreachable; requires --bypass-reason and "
+                         "at least one --verdict")
+    sp.add_argument("--bypass-reason", dest="bypass_reason", default="",
+                    help="why this acceptance stands without judge corroboration "
+                         "(required with --bypass)")
     sp = add("approve"); sp.add_argument("--session", required=True); sp.add_argument("--by", required=True)
     _UNIT_HELP = ("delivery unit as '<mode>|<stages csv>|<title>[|<ref>]' "
                   "(mode: inline|spawn|subtask); repeatable")
@@ -4560,8 +4744,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="control-criterion attestation (required for spawn:developer stages "
                          "when recording passed; accepted on any stage)")
     sp.add_argument("--observation", default="",
-                    help="for acceptance_review stages: what you actually observed "
-                         "(required when recording passed; must differ from the expected image)")
+                    help="what you actually observed, distinct from the expected image "
+                         "(required when recording passed on an acceptance_review stage, "
+                         "or on any stage of a substantive session)")
     sp.add_argument("--code-ref", dest="code_ref", default=None,
                     help="for spawn:developer stages: the reviewed-code revision/digest, to "
                          "cross-check against the bound CodeReview's --code-ref (drift -> stale)")
@@ -4674,8 +4859,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--actual", default="")
     sp.add_argument("--control", default=None)
     sp.add_argument("--observation", default="",
-                    help="for acceptance_review stages: what you actually observed "
-                         "(threaded to record-result)")
+                    help="what you actually observed, distinct from the expected image "
+                         "(threaded to record-result; see record-result --observation)")
     sp.add_argument("--confirmed-by", dest="confirmed_by", default=None,
                     help="human token authorizing the wrapper to cross the resolution "
                          "gate; pass ONLY after explicit user confirmation")

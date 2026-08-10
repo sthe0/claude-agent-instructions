@@ -258,9 +258,10 @@ def check_control_precondition() -> list[str]:
     failed records are always allowed through. No new command must exist for this
     feature — the precondition rides the general record-result command.
 
-    Scoped to this one precondition: the orthogonal code-review gate (also keyed
-    on spawn:developer + SUBSTANTIVE) is force-disabled for the duration, the same
-    accommodation scripts/tests/conftest.py makes for the pytest suite at large.
+    Scoped to this one precondition: the orthogonal code-review and acceptance
+    judge-corroboration gates (also keyed on SUBSTANTIVE sessions) are
+    force-disabled for the duration, the same accommodation scripts/tests/conftest.py
+    makes for the pytest suite at large.
     """
     from argparse import Namespace
     from agentctl import cli
@@ -272,6 +273,8 @@ def check_control_precondition() -> list[str]:
     problems: list[str] = []
     prior_code_review_env = os.environ.get("AGENTCTL_CODE_REVIEW")
     os.environ["AGENTCTL_CODE_REVIEW"] = "0"
+    prior_stage_review_env = os.environ.get("AGENTCTL_STAGE_REVIEW")
+    os.environ["AGENTCTL_STAGE_REVIEW"] = "0"
 
     def _dev_stage(index=1, executor="spawn:developer") -> Stage:
         return Stage(
@@ -320,7 +323,8 @@ def check_control_precondition() -> list[str]:
     store2 = _Mem(_executing_state(_dev_stage()))
     d2 = cli.cmd_record_result(
         Namespace(session="ctrl-check", status="passed", actual="done",
-                  control="reviewed: self-review ok"),
+                  control="reviewed: self-review ok",
+                  observation="ran it and the produced output matched"),
         store=store2,
     )
     if not d2.ok:
@@ -347,7 +351,8 @@ def check_control_precondition() -> list[str]:
     # 4. in_thread + passed + no --control -> ALLOWED
     store4 = _Mem(_executing_state(_dev_stage(executor="in_thread")))
     d4 = cli.cmd_record_result(
-        Namespace(session="ctrl-check", status="passed", actual="done", control=None),
+        Namespace(session="ctrl-check", status="passed", actual="done", control=None,
+                  observation="ran it and the produced output matched"),
         store=store4,
     )
     if not d4.ok:
@@ -369,6 +374,10 @@ def check_control_precondition() -> list[str]:
         os.environ.pop("AGENTCTL_CODE_REVIEW", None)
     else:
         os.environ["AGENTCTL_CODE_REVIEW"] = prior_code_review_env
+    if prior_stage_review_env is None:
+        os.environ.pop("AGENTCTL_STAGE_REVIEW", None)
+    else:
+        os.environ["AGENTCTL_STAGE_REVIEW"] = prior_stage_review_env
     return problems
 
 
@@ -516,6 +525,8 @@ def check_code_review_precondition() -> list[str]:
     problems: list[str] = []
     prior_code_review_env = os.environ.get("AGENTCTL_CODE_REVIEW")
     os.environ.pop("AGENTCTL_CODE_REVIEW", None)
+    prior_stage_review_env = os.environ.get("AGENTCTL_STAGE_REVIEW")
+    os.environ["AGENTCTL_STAGE_REVIEW"] = "0"
 
     def _dev_stage(index=1) -> Stage:
         return Stage(
@@ -568,7 +579,8 @@ def check_code_review_precondition() -> list[str]:
         store2 = _Mem(state2)
         d2 = cli.cmd_record_result(
             Namespace(session="cr-check", status="passed", actual="done",
-                      control="reviewed: self-review ok", code_ref=None),
+                      control="reviewed: self-review ok", code_ref=None,
+                      observation="ran it and the produced output matched"),
             store=store2,
         )
         if not d2.ok:
@@ -600,7 +612,8 @@ def check_code_review_precondition() -> list[str]:
         store4 = _Mem(_executing_state(_dev_stage()))
         d4 = cli.cmd_record_result(
             Namespace(session="cr-check", status="passed", actual="done",
-                      control="reviewed: self-review ok", code_ref=None),
+                      control="reviewed: self-review ok", code_ref=None,
+                      observation="ran it and the produced output matched"),
             store=store4,
         )
         if not d4.ok:
@@ -613,6 +626,10 @@ def check_code_review_precondition() -> list[str]:
             os.environ.pop("AGENTCTL_CODE_REVIEW", None)
         else:
             os.environ["AGENTCTL_CODE_REVIEW"] = prior_code_review_env
+        if prior_stage_review_env is None:
+            os.environ.pop("AGENTCTL_STAGE_REVIEW", None)
+        else:
+            os.environ["AGENTCTL_STAGE_REVIEW"] = prior_stage_review_env
     return problems
 
 

@@ -20,7 +20,7 @@ import shlex
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 26
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -575,6 +575,62 @@ class JudgeBypass:
     note: str = ""
 
 
+@dataclass
+class RequirementVerdict:
+    requirement_id: str
+    verdict: str  # "pass" | "fail"
+    note: str = ""
+
+
+# Plan-level acceptance record (schema 26): the ORDER's customer accepts the delivered
+# PRODUCT against the declared requirements — once, at resolution — distinct from the
+# per-stage control comparisons (StageReview/CodeReview compare an in-progress RESULT
+# against that stage's own criterion, every stage, throughout execution). `author`
+# must match [meta.order].customer_id (cmd_accept refuses to write otherwise, since
+# only the customer who placed the order can accept its product). `verdicts` must
+# name every requirement id the order declares (cmd_accept refuses an incomplete
+# write; resolution_blockers rechecks defensively — see that function's docstring
+# for why the recheck is not redundant). `plan_sha256` is stamped from
+# state.accepted_plan_digest at write time, so a later replace-the-plan-through-
+# approve leaves this review pointing at superseded bytes; resolution_blockers
+# treats that mismatch as an absent review (fail-closed, not a stale pass).
+@dataclass
+class AcceptanceReview:
+    author: str
+    verdicts: list[RequirementVerdict] = field(default_factory=list)
+    note: str = ""
+    plan_sha256: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict | None) -> "AcceptanceReview | None":
+        if d is None:
+            return None
+        d = dict(d)
+        d["verdicts"] = [RequirementVerdict(**v) for v in d.get("verdicts", [])]
+        return cls(**d)
+
+
+# Bypass-visibility record (schema 26) for the plan-level acceptance gate — same role
+# as JudgeBypass, one level up: recorded when cmd_accept writes an AcceptanceReview
+# without judge corroboration (the corroborating judge was unreachable) and a human
+# supplies --bypass-reason. cmd_accept refuses to write a bypass with no accompanying
+# AcceptanceReview, so the two always arrive together. NEVER read by
+# resolution_blockers itself — the resolution gate has exactly one blocking
+# condition (a complete, all-passing, fresh AcceptanceReview); this is a permanent,
+# separately-surfaced visibility record for verify-final, not a second path to a pass.
+@dataclass
+class AcceptanceBypass:
+    reason: str
+    reviewer: str = ""
+    note: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict | None) -> "AcceptanceBypass | None":
+        if d is None:
+            return None
+        return cls(**d)
+
+
 # --- the 8 activity elements, grouped by the ontology's clusters -------------
 # Each cluster is a typed sub-structure of Stage; the grouping makes the model
 # self-documenting and splits the immutable DECLARATION (subject/means/actor/
@@ -1094,6 +1150,19 @@ class SessionState:
     # spawn:developer stage's PASSED record until a review is recorded
     # (fail-closed).
     code_reviews: list[CodeReview] = field(default_factory=list)
+    # Plan-level acceptance record backing the resolution gate's acceptance check
+    # (schema 26): the ORDER's customer accepting the delivered PRODUCT against the
+    # order's declared requirements, once, at resolution — distinct from every
+    # per-stage control comparison above, which compares an in-progress RESULT
+    # against that stage's own criterion throughout execution, not the product
+    # against the order. None until cmd_accept records one; legacy pre-schema-26
+    # states load with None (absent key -> dataclass default via from_dict), so a
+    # substantive session's resolution gate has no observable and blocks
+    # (fail-closed) until an AcceptanceReview is recorded. acceptance_bypass is the
+    # paired, permanent visibility record for a judge-unreachable bypass (see
+    # AcceptanceBypass's docstring for why resolution_blockers never reads it).
+    acceptance_review: "AcceptanceReview | None" = None
+    acceptance_bypass: "AcceptanceBypass | None" = None
     # Plan-presentation receipts backing the plan-presentation gate (schema 20):
     # one PlanPresentation per (plan_path, kind) currently in force — a fresh
     # cmd_present_plan call SUPERSEDES (never appends) the prior receipt for the
@@ -1383,6 +1452,8 @@ class SessionState:
         data["code_reviews"] = [
             r for r in (CodeReview.from_dict(x) for x in data.get("code_reviews", [])) if r is not None
         ]
+        data["acceptance_review"] = AcceptanceReview.from_dict(data.get("acceptance_review"))
+        data["acceptance_bypass"] = AcceptanceBypass.from_dict(data.get("acceptance_bypass"))
         data["plan_presentations"] = [
             PlanPresentation.from_dict(x) for x in data.get("plan_presentations", [])
         ]
