@@ -58,13 +58,17 @@ scripts/hook-escalation-diagnosis-gate.py:67:affc3cbd  # floor 20 = judge_latenc
 scripts/hook-escalation-diagnosis-gate.py:68:b040eeee  # 7.19s = the row's min_s, the fastest run the floor must leave reachable
 
 # --- scripts/agentctl/advisor.py ---------------------------------------------
-scripts/agentctl/advisor.py:147:2bdd83a4  # 20s = _ADVISOR_TIMEOUT_S, the ADVISORY timeout the non-judge calls keep; explicitly out of this calibration's scope
-scripts/agentctl/advisor.py:296:3fd45617  # historical: the 8s runner default a judge inherited when it named no timeout
-scripts/agentctl/advisor.py:297:c1545f72  # 5.93s / 10.29s = the min_s of the binary_ask and deferring_disposition rows — what makes an 8s default a kill, not a cap
-scripts/agentctl/advisor.py:465:0844f6e5  # historical: the 8s neighbour default this signature used to carry
-scripts/agentctl/advisor.py:466:d539ad2f  # quotes the superseded n=4 note ("13.9 +/- 2.4 s, min 12.1, max 17.5") verbatim as the basis of the old 30s
-scripts/agentctl/advisor.py:467:1d9f44a3  # same superseded note; "missed the tail by more than 20 s" = max 39.99 - 17.5
-scripts/agentctl/advisor.py:468:011dc63b  # median 17.43 / p90 37.58 / max 39.99 over n=18 = judge_latency.MEASURED["deferring_disposition"]
+scripts/agentctl/advisor.py:37:4c8c106a  # 15-170s / 480s = the ENUMERATION calibration (advisor-calibration.jsonl), a different call shape from every judge_latency row — sonnet on a whole plan, not haiku on one question; see docs/operations/detached-enumeration-design.md § Why 480 s is not a row in judge_latency.py
+scripts/agentctl/advisor.py:41:96329eb1  # 103.213s = the min elapsed_s at the largest sampled size in advisor-calibration.jsonl, a term of the 480 derivation; an enumeration measurement, not a judge one
+scripts/agentctl/advisor.py:136:025a1c6b  # 20s = _ADVISOR_TIMEOUT_S, the ADVISORY timeout the judge_* callers keep; explicitly out of this calibration's scope (successor to the sentence formerly pinned at :147)
+scripts/agentctl/advisor.py:141:46d10ddd  # same 20s advisory bound, named as what a runner-baked ceiling would make the two enumeration call sites read as
+scripts/agentctl/advisor.py:165:c2963687  # same 20s advisory bound, quoted as the truncation defect (F3b) it documents, not as a ceiling in force here
+scripts/agentctl/advisor.py:396:3fd45617  # historical: the 8s runner default a judge inherited when it named no timeout
+scripts/agentctl/advisor.py:397:c1545f72  # 5.93s / 10.29s = the min_s of the binary_ask and deferring_disposition rows — what makes an 8s default a kill, not a cap
+scripts/agentctl/advisor.py:634:0844f6e5  # historical: the 8s neighbour default this signature used to carry
+scripts/agentctl/advisor.py:635:d539ad2f  # quotes the superseded n=4 note ("13.9 +/- 2.4 s, min 12.1, max 17.5") verbatim as the basis of the old 30s
+scripts/agentctl/advisor.py:636:1d9f44a3  # same superseded note; "missed the tail by more than 20 s" = max 39.99 - 17.5
+scripts/agentctl/advisor.py:637:011dc63b  # median 17.43 / p90 37.58 / max 39.99 over n=18 = judge_latency.MEASURED["deferring_disposition"]
 
 # --- scripts/install-reminder-hooks.sh ---------------------------------------
 scripts/install-reminder-hooks.sh:93:6a8d39b3  # p90 19.16 over n=16 = judge_latency.MEASURED["outage_escalation"].p90_s

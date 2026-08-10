@@ -318,6 +318,44 @@ receipt and unrelated. A new bag field is warranted.
 
 The middle number is the honest cost of detaching; the third is the honest cost of a hang.
 
+## Why 480 s is not a row in `judge_latency.py`
+
+Trunk's `1195aff` introduced [`scripts/lib/judge_latency.py`](../../scripts/lib/judge_latency.py)
+as the single measured table every **judge** timeout is computed from: a ceiling that cannot be
+derived from a row there has no business being a judge timeout. `ENUMERATE_TIMEOUT_S = 480`
+(`advisor._ENUMERATE_TIMEOUT_S_DEFAULT`) is deliberately **not** such a row. It stays a separate
+constant with its own dataset,
+[`advisor-calibration.jsonl`](advisor-calibration.jsonl), fitted in
+[`advisor-timeout-calibration.md`](advisor-timeout-calibration.md). The decision is the user's,
+taken 2026-08-10, and it is recorded here rather than left for a reader to infer from two
+neighbouring calibrations.
+
+The reason is the **call shape**, not a preference about where numbers live:
+
+| | the four `judge_*` cognition points | the two enumeration entry points |
+|---|---|---|
+| model constant | `advisor._JUDGE_MODEL` (`haiku`) | `advisor._ADVISOR_MODEL` (`sonnet`) |
+| payload | one framed question, near-constant size | the whole plan — 3–100+ KB, spanning two orders of magnitude |
+| answer | a binary verdict | an enumeration whose length grows with the payload |
+| ceiling | `judge_latency.call_ceiling_s` / `last_resort_ceiling_s`, from measured rows | `ENUMERATE_TIMEOUT_S`, fitted `max/min` on the enumeration dataset |
+
+`judge_latency`'s own module docstring makes the boundary explicit: its table is **keyed by the
+model constant that reaches the judge's argv** (`advisor._JUDGE_MODEL`), and it says a row filed
+under the neighbouring `_ADVISOR_MODEL` — the constant the non-judge advisory calls use — would
+be "measured evidence for a call that never happens". The enumeration runs under exactly that
+neighbouring constant. Filing 480 s there would put a sonnet whole-plan latency into a haiku
+binary-verdict table, and every `last_resort_ceiling_s()` consumer — which takes the max over
+*every* measured row of the model — would inherit an eight-minute default from a call it never
+makes.
+
+The two calibrations are therefore siblings, not a duplication: same discipline (a shipped
+number derived from a committed dataset by a named rule, re-derived by a test rather than
+trusted from prose), applied to two call shapes that share neither model nor payload class.
+The seam to watch is that both re-derive from raw data, so neither can drift onto the other's
+evidence: `scripts/tests/test_judge_latency.py` re-derives the judge rows from
+`samples/judge-latency/`,
+and the enumeration constant is recomputed from `advisor-calibration.jsonl` at full precision.
+
 ## Open items
 
 **OPEN-1 — sessions predating this change.** A premise bag minted before `enumerate_deadline`
