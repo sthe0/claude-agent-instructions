@@ -862,18 +862,10 @@ def parse_plan(
             )
         )
 
-    # Additive and unconditionally lenient — no `if strict:` branch, and `Order.from_dict`
-    # degrades every malformation to the empty form rather than raising. A table this
-    # loader could refuse would be retroactive over every plan a live session re-reads,
-    # which is the whole reason submission.py exists.
-    #
-    # A PRESENT, non-dict `order` (a scalar prose order — the natural migration mistake
-    # this stage's whole premise invites — or `[[meta.order]]` read as an array of
-    # tables) must not collapse to the same `None` an absent key produces: the submission
-    # seam reads `None` as "no order was declared" and says so, which is false of an
-    # author whose file plainly carries an `order` key. Recording it as `malformed`
-    # instead — the same register `Order.from_dict` uses for an unreadable PART — lets
-    # the seam name the shape rather than claim the table is missing.
+    # Additive and unconditionally lenient, like `Order.from_dict`: a refusal here would
+    # be retroactive over every plan a live session re-reads, which is why refusals live
+    # in submission.py instead. A present, non-dict `order` is recorded as
+    # `malformed=("order",)` rather than left `None` — see `Order.malformed` for why.
     raw_order = m.get("order")
     if isinstance(raw_order, dict):
         order = Order.from_dict(raw_order)

@@ -212,15 +212,15 @@ def _order_malformed(name: str, *, requirements_dropped: tuple[int, int] | None 
     requirements and one bare sentence is told exactly which entries were dropped, not
     that "the engine read nothing usable from it", which is false of their plan and sends
     them looking for a wholly-broken key instead of the one bad element."""
+    location = _ORDER_MALFORMED_LOCATION.get(name, "[meta.order]")
     if name == "requirements" and requirements_dropped is not None:
         dropped, total = requirements_dropped
         return (
-            f"[meta.order] {dropped} of {total} entries under 'requirements' are not "
+            f"{location} {dropped} of {total} entries under 'requirements' are not "
             f"tables and were dropped. Write each as {{ id = \"R1\", text = \"...\" }} — "
             f"the coverage map and every acceptance verdict key on the id, so a bare "
             f"sentence among the tables is silently lost rather than read"
         )
-    location = _ORDER_MALFORMED_LOCATION.get(name, "[meta.order]")
     return (
         f"{location} {name!r} is present but is not {_ORDER_SHAPE_HINTS[name]}. The "
         f"engine read nothing usable from it, so the key is present and its content is "
@@ -238,10 +238,10 @@ _ORDER_ABSENT = (
 
 # The literal fragments an order-related refusal message can contain. Exported so a test
 # asserting "a strict LOAD never raises about the order" (order refusals live only here,
-# at the submission seam, never in plan.parse_plan) binds to this module's real message
-# vocabulary rather than to a second, hand-typed copy that could drift the day one of the
-# messages above is reworded.
-ORDER_REFUSAL_MARKERS = ("[meta.order]", "[meta.order.coverage]", "the 'order' table")
+# at the submission seam, never in plan.parse_plan) binds to this module's real messages
+# rather than to a second, hand-typed copy in the test file that could drift the day one
+# of the messages above is reworded.
+ORDER_REFUSAL_MARKERS = ("[meta.order]", "[meta] 'order'", "the 'order' table")
 
 
 def _attr(obj, dotted: str):
@@ -384,11 +384,7 @@ def _order_violations(meta) -> list[str]:
     out: list[str] = []
     for name, why in _ORDER_PARTS:
         if name in order.malformed:
-            out.append(
-                _order_malformed(name, requirements_dropped=order.requirements_dropped)
-                if name == "requirements"
-                else _order_malformed(name)
-            )
+            out.append(_order_malformed(name, requirements_dropped=order.requirements_dropped))
         elif not getattr(order, name):
             out.append(
                 f"[meta.order] missing {name!r} (required for substantive plans): {why}"
