@@ -63,7 +63,7 @@ def _escape_ns(sid, reason, note="the advisor never came back", plan=None):
 
 
 def _failing_runner(stderr):
-    return lambda argv: RunResult(1, "", stderr)
+    return lambda argv, **_kw: RunResult(1, "", stderr)
 
 
 # --- unit-level bags: the gate's own three-valued predicate ---------------------
@@ -572,7 +572,7 @@ class TestRelaunchRoutesOntoTheEscapableBlocker:
         revised = str(fixtures_dir / "plan_two_stage_substantive.toml")
         _to_plan_ready_with_premise(store, sid, base)
         cli.cmd_question_enumerate(ns(session=sid, plan=None), store=store,
-                                   runner=lambda argv: RunResult(0, "", ""))
+                                   runner=lambda argv, **_kw: RunResult(0, "", ""))
         assert store.load(sid).plugins["premise"]["enumerated"] is True
 
         cli.cmd_submit_plan(ns(session=sid, plan=revised), store=store)
@@ -963,7 +963,7 @@ class TestTheFoldRecordsItsPass:
         plan = str(fixtures_dir / "plan_two_stage.toml")
         _to_plan_ready_with_premise(store, sid, plan)
         cli.cmd_question_enumerate(ns(session=sid, plan=None), store=store,
-                                   runner=lambda argv: RunResult(0, "", ""))
+                                   runner=lambda argv, **_kw: RunResult(0, "", ""))
 
         entries = [e for e in store.load(sid).history if e["event"] == "question_enumerate"]
         assert [e["via"] for e in entries] == ["command"]
@@ -979,7 +979,7 @@ class TestTheFoldRecordsItsPass:
         _to_plan_ready_with_premise(store, sid, plan)
         # a pass already on record for this exact digest: the sidecar is not even read
         cli.cmd_question_enumerate(ns(session=sid, plan=None), store=store,
-                                   runner=lambda argv: RunResult(0, "", ""))
+                                   runner=lambda argv, **_kw: RunResult(0, "", ""))
         self._sidecar(sid, plugins_premise._plan_content_digest(load_plan(plan)), plan)
 
         # through the gate that calls it, then directly and repeatedly: approve is a
@@ -1413,7 +1413,7 @@ class TestEnumerateAdvisoryArms:
         """A question-free plan is a HEALTHY pass; the advisory asks for the second
         reading without implying anything failed."""
         adv = self._advisories(store, "arm-empty", fixtures_dir,
-                               lambda argv: RunResult(0, "", ""))
+                               lambda argv, **_kw: RunResult(0, "", ""))
 
         assert len(adv) == 1, adv
         assert "the pass raised no questions" in adv[0]
@@ -1422,6 +1422,6 @@ class TestEnumerateAdvisoryArms:
     def test_a_healthy_pass_with_pairs_attaches_no_advisory_at_all(
             self, store, fixtures_dir):
         adv = self._advisories(store, "arm-ok", fixtures_dir,
-                               lambda argv: RunResult(0, "stage 1\tdoes the bound hold?\n", ""))
+                               lambda argv, **_kw: RunResult(0, "stage 1\tdoes the bound hold?\n", ""))
 
         assert adv == []

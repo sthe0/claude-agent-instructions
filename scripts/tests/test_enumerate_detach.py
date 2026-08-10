@@ -237,7 +237,7 @@ class TestCliDefaultsToEnumerateRunner:
         calls = []
         monkeypatch.setattr(
             advisor, "enumerate_subprocess_runner",
-            lambda argv: calls.append(argv) or RunResult(0, "", ""),
+            lambda argv, **_kw: calls.append(argv) or RunResult(0, "", ""),
         )
         monkeypatch.setattr(advisor, "subprocess_runner", _raise_if_called)
 
@@ -260,7 +260,7 @@ class TestCliDefaultsToEnumerateRunner:
         calls = []
         monkeypatch.setattr(
             advisor, "enumerate_subprocess_runner",
-            lambda argv: calls.append(argv) or RunResult(0, "", ""),
+            lambda argv, **_kw: calls.append(argv) or RunResult(0, "", ""),
         )
         monkeypatch.setattr(advisor, "subprocess_runner", _raise_if_called)
 
@@ -278,7 +278,7 @@ class TestCliDefaultsToEnumerateRunner:
         calls = []
         monkeypatch.setattr(
             advisor, "enumerate_subprocess_runner",
-            lambda argv: calls.append(argv) or RunResult(0, "", ""),
+            lambda argv, **_kw: calls.append(argv) or RunResult(0, "", ""),
         )
         monkeypatch.setattr(advisor, "subprocess_runner", _raise_if_called)
 
@@ -359,12 +359,13 @@ class TestCliDefaultsToEnumerateRunner:
 class TestJudgeFallbackUnaffectedByEnumerateTimeout:
     def test_record_result_acceptance_judge_still_uses_plain_subprocess_runner(
             self, store, monkeypatch):
-        """acceptance_judge calls its runner with ONLY argv -- no explicit timeout
-        kwarg -- so the bound-in-effect timeout is whatever the runner's own
-        default parameter resolves to. Patch underneath `subprocess_runner` (its
-        real `subprocess.run` call) so the real default (`_ADVISOR_TIMEOUT_S`)
-        is what gets exercised, and confirm `enumerate_subprocess_runner` -- the
-        wider-timeout entry point -- is never touched on this path."""
+        """acceptance_judge names its own ceiling at the call site, and it is a
+        JUDGE ceiling: `_ACCEPTANCE_JUDGE_TIMEOUT_S`, computed by
+        `lib/judge_latency.py::last_resort_ceiling_s` from measured haiku rows.
+        Patch underneath `subprocess_runner` (its real `subprocess.run` call) so
+        the number that actually reaches the subprocess is what gets exercised,
+        and confirm `enumerate_subprocess_runner` -- the wider-timeout entry
+        point sized for a whole-plan payload -- is never touched on this path."""
         monkeypatch.setenv("AGENTCTL_STAGE_REVIEW", "1")
         _make_acceptance_session(store, "judge-1")
 
@@ -383,7 +384,8 @@ class TestJudgeFallbackUnaffectedByEnumerateTimeout:
             store=store, runner=None,
         )
         assert d.ok is True
-        assert calls == [advisor._ADVISOR_TIMEOUT_S]  # NOT ENUMERATE_TIMEOUT_S
+        assert calls == [advisor._ACCEPTANCE_JUDGE_TIMEOUT_S]
+        assert calls != [advisor.ENUMERATE_TIMEOUT_S]
 
 
 # --- the shipped default vs the committed calibration dataset ------------------
@@ -782,7 +784,7 @@ class TestFoldThroughApprove:
         _to_plan_ready_with_premise(store, sid, plan)
         cli.cmd_question_enumerate(
             ns(session=sid, plan=None), store=store,
-            runner=lambda argv: RunResult(0, "\n".join(f"{t}\t{q}" for t, q in pairs), ""),
+            runner=lambda argv, **_kw: RunResult(0, "\n".join(f"{t}\t{q}" for t, q in pairs), ""),
         )
         assert cli.cmd_question_candidate_dispose(
             ns(session=sid, id="qenum-1", as_="dismissed", reason="answered in the goal",
@@ -813,7 +815,7 @@ class TestFoldThroughApprove:
         _to_plan_ready_with_premise(store, sid, plan)
         cli.cmd_question_enumerate(
             ns(session=sid, plan=None), store=store,
-            runner=lambda argv: RunResult(0, "goal\tthe question the coordinator saw", ""),
+            runner=lambda argv, **_kw: RunResult(0, "goal\tthe question the coordinator saw", ""),
         )
         assert cli.cmd_question_candidate_dispose(
             ns(session=sid, id="qenum-1", as_="dismissed", reason="answered", question=None),
@@ -846,7 +848,7 @@ class TestFoldThroughApprove:
         _to_plan_ready_with_premise(store, sid, plan)
         cli.cmd_question_enumerate(
             ns(session=sid, plan=None), store=store,
-            runner=lambda argv: RunResult(0, "goal\tthe OLD question", ""),
+            runner=lambda argv, **_kw: RunResult(0, "goal\tthe OLD question", ""),
         )
         assert cli.cmd_question_candidate_dispose(
             ns(session=sid, id="qenum-1", as_="dismissed", reason="answered", question=None),
@@ -1077,3 +1079,45 @@ class TestLaunchSurvivesLauncherExit:
             session_id, digest, root=sidecar_root)
         assert payload is not None
         assert payload["content_digest"] == digest
+
+
+# --- the runner signature is pinned, not inferred from a stub ------------------
+
+@pytest.mark.parametrize(
+    "entry",
+    ["enumerate_claims", "enumerate_questions_health"],
+)
+def test_enumerate_runner_signature_matches_what_the_entry_points_pass(entry, monkeypatch):
+    """The two enumeration entry points call their DEFAULT runner, and the ceiling
+    that reaches `subprocess_runner` is ENUMERATE_TIMEOUT_S.
+
+    Every other test here supplies a stub runner, and a stub accepts any signature,
+    so none of them can see a mismatch between what the call sites pass and what
+    `enumerate_subprocess_runner` accepts. That mismatch is not hypothetical: it is
+    exactly what the trunk merge produced, and both entry points wrap their call in
+    a bare `except Exception`, so a surviving keyword would raise TypeError and be
+    reported as an UNHEALTHY RUNNER — the F3b symptom, reinstated, with every
+    stubbed test still green. Patching `advisor.subprocess_runner` rather than the
+    runner keeps the real `enumerate_subprocess_runner` in the path while launching
+    nothing."""
+    seen: dict = {}
+
+    def fake_subprocess_runner(argv, *, timeout=None):
+        seen["argv"] = argv
+        seen["timeout"] = timeout
+        return RunResult(0, "", "")
+
+    monkeypatch.setattr(advisor, "subprocess_runner", fake_subprocess_runner)
+
+    if entry == "enumerate_claims":
+        advisor.enumerate_claims("artifact text")
+    else:
+        advisor.enumerate_questions_health("goal", "done criterion", "plan text")
+
+    assert seen, (
+        f"{entry} never reached subprocess_runner — its call site and "
+        "enumerate_subprocess_runner disagree, and the TypeError was swallowed "
+        "into an unhealthy-runner verdict"
+    )
+    assert seen["timeout"] == advisor.ENUMERATE_TIMEOUT_S
+    assert seen["timeout"] != advisor._ADVISOR_TIMEOUT_S
