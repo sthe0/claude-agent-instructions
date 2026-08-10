@@ -62,3 +62,74 @@ def test_single_line_command_unaffected(tmp_path):
 
     assert os.path.join(eff_cwd, "foo.txt") in targets
     assert os.path.join(eff_cwd, "echo") not in targets
+
+
+def test_backslash_continued_command_finds_real_target(tmp_path):
+    """A single LOGICAL command wrapped across two PHYSICAL lines with a
+    trailing backslash — the shape agent-authored multi-line Bash produces
+    routinely. Before the fix, `command.splitlines()` cut the logical line
+    before the continuation resolved, `shlex.split()` on the orphaned
+    fragment `"sed -i 's/a/b/' \\"` raised (an unescaped trailing backslash
+    has no following character to escape), and the blanket `except
+    Exception: return []` around the whole comprehension discarded every
+    line's targets — a false negative on the gate's primary input shape."""
+    eff_cwd = str(tmp_path)
+    command = "sed -i 's/a/b/' \\\n  scripts/x.py"
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert os.path.join(eff_cwd, "scripts/x.py") in targets
+
+
+def test_poisoned_line_does_not_discard_other_lines_targets(tmp_path):
+    """One malformed physical line (an unterminated quote) must not blank
+    out every OTHER line's real targets. Splitting by line made per-line
+    recovery available; nothing used it until this fix — a single `try`
+    around the whole comprehension meant one bad line poisoned the batch."""
+    eff_cwd = str(tmp_path)
+    command = "cp foo.txt bar.txt\necho 'unterminated"
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert os.path.join(eff_cwd, "bar.txt") in targets
+
+
+def test_backslash_newline_inside_single_quotes_is_not_a_continuation():
+    """Inside single quotes, shell performs NO escape processing at all —
+    not even of a backslash — so `\\<newline>` there is two literal
+    characters, not a line continuation. A blind (quote-blind) join would
+    remove the newline from inside the quoted string, changing its content
+    and silently pulling a line that real shell keeps separate into the
+    same physical line as this one. Joining is elided while inside a
+    single-quoted span; only a `'` character ends that span."""
+    from lib.bash_write_targets import _join_backslash_continuations
+
+    joined = _join_backslash_continuations("echo 'literal\\\nbreak' arg")
+
+    assert joined == "echo 'literal\\\nbreak' arg"
+
+
+def test_backslash_newline_outside_quotes_is_still_joined():
+    """Control for the quote-tracking test above: outside any quoting, the
+    continuation is still elided exactly as the F1 fix requires."""
+    from lib.bash_write_targets import _join_backslash_continuations
+
+    joined = _join_backslash_continuations("sed -i 's/a/b/' \\\n  scripts/x.py")
+
+    assert joined == "sed -i 's/a/b/'   scripts/x.py"
+
+
+def test_single_quoted_embedded_backslash_newline_does_not_crash_or_fabricate(tmp_path):
+    """End-to-end control for the same case: a command whose FIRST line
+    opens a single-quoted string that itself contains a literal
+    backslash-newline (never joined, per the test above) must not crash the
+    whole batch and must not fabricate a bogus target from the split
+    quote — each malformed physical line is recovered independently
+    (per-line try/except) while a real target on a later, well-formed line
+    is still found."""
+    eff_cwd = str(tmp_path)
+    command = "echo 'literal\\\nbreak' arg\ncp src.txt dest.txt"
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert os.path.join(eff_cwd, "dest.txt") in targets
