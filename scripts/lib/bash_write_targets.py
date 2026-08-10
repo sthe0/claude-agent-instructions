@@ -145,108 +145,69 @@ def segment_write_target(seg: list[str], eff_cwd: str) -> list[str]:
     return candidates
 
 
-def _join_backslash_continuations(command: str) -> str:
-    """Resolve a shell line-continuation (`\\` immediately followed by a
-    newline) into one logical line, EXCEPT inside a single-quoted span,
-    where shell performs no escape processing at all and the pair stays two
-    literal characters. Elsewhere a backslash escapes whatever follows it —
-    including a quote character, so `\\'`/`\\"` outside single quotes does
-    not toggle quote tracking.
-
-    This is a best-effort re-implementation of shell quoting, not a full
-    parser: it tracks single- and double-quote spans only, which is exactly
-    the state the join decision depends on.
-
-    Retained as a standalone function solely because two tests bind to it
-    directly by name (`test_backslash_newline_inside_single_quotes_is_not_a_continuation`,
-    `test_backslash_newline_outside_quotes_is_still_joined`); `command_write_targets`
-    no longer calls it — `_split_logical_units` below tracks the same
-    backslash-escape state itself, alongside quote/`$(`-depth/backtick
-    state, in one pass, so this function's own drift (if any, from a future
-    edit) cannot silently change gate behavior — it sits outside the
-    scanning pipeline entirely."""
-    out: list[str] = []
-    in_single = False
-    in_double = False
-    i = 0
-    n = len(command)
-    while i < n:
-        ch = command[i]
-        if in_single:
-            if ch == "'":
-                in_single = False
-            out.append(ch)
-            i += 1
-            continue
-        if ch == "\\" and i + 1 < n:
-            nxt = command[i + 1]
-            if nxt == "\n":
-                i += 2
-                continue
-            out.append(ch)
-            out.append(nxt)
-            i += 2
-            continue
-        if ch == "'" and not in_double:
-            in_single = True
-        elif ch == '"':
-            in_double = not in_double
-        out.append(ch)
-        i += 1
-    return "".join(out)
-
-
 def _split_logical_units(command: str) -> list[str]:
     """Split `command` into logical units at every newline that is NOT
-    inside a quoted span, a `$(...)` substitution, or a backtick span — the
-    ONE quote/`$(`-depth/backtick/backslash-aware scanner `command_write_targets`
-    tokenizes against, on both its primary and its fallback reading.
-    `" ; ".join(_split_logical_units(command))` is what the primary path
-    tokenizes as one stream (`;` is already a member of `_BASH_SEPS`, so no
-    new separator token is needed downstream — this only supplies the token
-    `shlex.split()` never emits for a bare newline, which it treats exactly
-    like a space); each element of the returned list is what the fallback
-    tokenizes UNIT BY UNIT when the whole-stream reading raises.
+    inside a quoted span, a `$(...)` substitution, a `${...}` expansion, or a
+    backtick span — the ONE quote/depth/backtick/backslash-aware scanner
+    `command_write_targets` tokenizes against, on both its primary and its
+    fallback reading. `" ; ".join(_split_logical_units(command))` is what the
+    primary path tokenizes as one stream (`;` is already a member of
+    `_BASH_SEPS`, so no new separator token is needed downstream — this only
+    supplies the token `shlex.split()` never emits for a bare newline, which
+    it treats exactly like a space); each element of the returned list is
+    what the fallback tokenizes UNIT BY UNIT when the whole-stream reading
+    raises.
 
     Backslash-newline continuations are resolved first (elided), except
     inside a single-quoted span, where shell performs no escape processing
-    at all and the pair stays two literal characters — the same rule
-    `_join_backslash_continuations` implements, tracked here directly rather
-    than by calling it, because this scanner needs that same escape state
-    simultaneously with quote/depth/backtick state on one pass: a newline
-    decision needs to know whether it is inside a quote, a substitution, or
-    neither, and re-deriving that state with a second, separately-written
-    scanner is exactly the kind of drift a past fix in this file (F4) had to
-    close (a per-line split that stopped tracking quote state across a
-    physical-line boundary at all).
+    at all and the pair stays two literal characters — tracked here directly
+    alongside quote/depth/backtick state in the same one-pass scan, because a
+    newline decision needs to know whether it is inside a quote, a
+    substitution, or neither, and deriving that state with a second,
+    separately-written scanner risks exactly the kind of drift this module
+    exists to avoid (a per-line split that stops tracking quote state across
+    a physical-line boundary at all).
 
     A newline that survives inside a single- or double-quoted span (real
     shell performs no line-splitting inside a quoted string) is kept as a
     literal character in the current unit, preserving the quoted string as
-    one token exactly as `shlex.split()` itself would read it.
+    one token exactly as `shlex.split()` itself would read it. `$'...'`
+    (ANSI-C quoting) needs no separate handling here: it is keyed on the
+    same `'` delimiter as an ordinary single-quoted span, so an embedded
+    newline inside it is already covered by this same branch.
 
-    A newline inside an UNQUOTED `$(...)` command substitution or backtick
-    span is a second such case: the substitution's *result* is used as one
-    argument value of the containing command, so ending the unit there
-    splits the substitution in half at the shlex layer — the outer
-    command's real write target is lost and a fabricated fragment (the
-    substitution's own broken-off tail) is reported in its place. `$(` / `)`
-    are tracked with a depth counter (nesting, e.g. `$(echo $(ls))`, closes
-    correctly) and a backtick span with a toggle; while either is active the
-    newline becomes a plain space instead — the substitution stays one
-    shlex token, its internal words stay separate. Depth/toggle tracking is
-    skipped entirely while inside a quoted span (a `$(`/backtick that is
-    itself only quoted TEXT, e.g. inside a single-quoted argument, never
-    reaches this branch at all; and a `$(...)` embedded in a DOUBLE-quoted
-    argument already has its newlines preserved by the pre-existing
-    `not in_double` guard, so it needs no separate tracking of its own).
-    `$((...))` arithmetic expansion is covered by the same `$(` counter with
-    no special case: the inner `(` of the `((` digraph is not itself a
-    tracked opener, so it passes through untouched, and depth still reaches
-    back to 0 by the construct's own closing `)`s.
+    A newline inside an UNQUOTED `$(...)` command substitution, `${...}`
+    parameter expansion, or backtick span is a second such case: the
+    construct's *result* is used as one argument value of the containing
+    command, so ending the unit there splits it in half at the shlex layer —
+    the outer command's real write target is lost and a fabricated fragment
+    (the construct's own broken-off tail) is reported in its place. `$(`/`)`
+    and `${`/`}` are each tracked with their own depth counter (nesting on
+    either — e.g. `$(echo $(ls))`, `${x:-${y}}` — closes correctly, and the
+    two counters cannot cross-trigger each other since they key on disjoint
+    character pairs), and a backtick span with a toggle; while any of the
+    three is active the newline becomes a plain space instead — the
+    construct stays one shlex token, its internal words stay separate.
+    Depth/toggle tracking is skipped entirely while inside a quoted span (a
+    `$(`/`${`/backtick that is itself only quoted TEXT, e.g. inside a
+    single-quoted argument, never reaches this branch at all; and either
+    construct embedded in a DOUBLE-quoted argument already has its newlines
+    preserved by the pre-existing `not in_double` guard, so it needs no
+    separate tracking of its own). `$((...))` arithmetic expansion is
+    covered by the same `$(` counter with no special case: the inner `(` of
+    the `((` digraph is not itself a tracked opener, so it passes through
+    untouched, and depth still reaches back to 0 by the construct's own
+    closing `)`s. A bare, unmatched `}` (a brace GROUP's closer, e.g.
+    `{ cmd; }`, or a stray literal `}` in ordinary text) never decrements
+    `brace_depth` below zero — the guard is `brace_depth > 0`, so it falls
+    through as an ordinary character exactly as before this fix, and a bare
+    (non-`$`) brace group is never itself tracked as an opener (only the
+    two-character `${` sequence is), so it cannot corrupt a genuinely open
+    `${...}` span either.
 
-    Two related constructs are DELIBERATELY left unhandled, each pinned by
-    its own test documenting the (imperfect but non-crashing) behavior:
+    Left unhandled, each pinned by its own test documenting the (imperfect
+    but non-crashing) behavior, together with the reason a fix does not
+    belong in this scanner:
 
     - Process substitution `<(...)`/`>(...)`: recognizing it would need a
       second opener class keyed on `<(`/`>(` rather than `$(`, AND that
@@ -265,12 +226,37 @@ def _split_logical_units(command: str) -> list[str]:
       treated as a top-level unit break again. Fixing this needs full
       paren-matching (tracking bare `(` too, and distinguishing a grouping
       paren from stray literal parens in ordinary argument text) — a
-      materially bigger parser than the depth counter this scanner adds."""
+      materially bigger parser than the depth counter this scanner adds.
+    - A standalone `((...))` arithmetic command (not the `$((...))`
+      expansion form): its opening is a bare `((` with no `$`, so it is
+      never tracked as an opener at all and a newline inside one is read as
+      a top-level unit break. Distinguishing this construct's `((` from two
+      ordinary nested parens needs the same full paren-matching the bare-
+      subshell case above needs, for the same reason — out of scope for a
+      depth counter keyed on fixed two-character openers.
+    - Shell keyword-based compound commands that span physical lines by
+      grammar alone — `[[ ... ]]`, `if`/`fi`, `case`/`esac`, `for`/`done`,
+      `while`/`done` — are not openers this scanner tracks at all; a
+      newline inside one of these is read as a top-level unit break exactly
+      as an ordinary newline would be. Recognizing them needs keyword
+      parsing (reserved words, not a fixed character pair), a materially
+      different scanner than the depth-counter model this module uses. In
+      practice this does not cost a real write target: this module's
+      write-detecting verbs (redirects, `sed -i`, `tee`, `cp`/`mv`, `patch`,
+      `git apply`) are evaluated per-segment independently of any
+      surrounding keyword construct, so a write on its own segment is still
+      found even when the keyword construct around it is mis-split.
+    - Here-strings (`<<<`) are not an opener at all in this scanner's sense:
+      the operand is a single following word (or an already-quoted string,
+      whose own newline handling is covered by the ordinary quote-span
+      branch above), not a span that must stay open across a newline — so
+      no special-casing applies here."""
     units: list[str] = []
     current: list[str] = []
     in_single = False
     in_double = False
     subst_depth = 0
+    brace_depth = 0
     in_backtick = False
     i = 0
     n = len(command)
@@ -312,13 +298,23 @@ def _split_logical_units(command: str) -> list[str]:
                 current.append(ch)
                 i += 1
                 continue
+            if ch == "$" and i + 1 < n and command[i + 1] == "{":
+                brace_depth += 1
+                current.append("${")
+                i += 2
+                continue
+            if ch == "}" and brace_depth > 0:
+                brace_depth -= 1
+                current.append(ch)
+                i += 1
+                continue
             if ch == "`":
                 in_backtick = not in_backtick
                 current.append(ch)
                 i += 1
                 continue
             if ch == "\n":
-                if subst_depth == 0 and not in_backtick:
+                if subst_depth == 0 and brace_depth == 0 and not in_backtick:
                     units.append("".join(current))
                     current = []
                 else:
@@ -362,9 +358,8 @@ def command_write_targets(command: str, eff_cwd: str) -> list[str]:
     everything from the point it opens onward into ONE unit that carries the
     same unterminated quote and fails to tokenize on its own — a quote-aware
     reading alone would then recover NOTHING past that point, including a
-    well-formed write on a later, otherwise-unrelated physical line (this
-    was tried and measured to regress relative to the prior physical-line
-    fallback, which recovered exactly that later line). Neither reading
+    well-formed write on a later, otherwise-unrelated physical line that a
+    plain per-physical-line split recovers on its own. Neither reading
     subsumes the other — the logical-unit reading recovers a write that
     lies before/across a well-formed multi-line construct (a quoted
     argument, a `$(...)` substitution) even when some OTHER unit in the

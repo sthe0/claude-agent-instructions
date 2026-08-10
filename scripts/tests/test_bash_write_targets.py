@@ -23,11 +23,11 @@ from lib.bash_write_targets import command_write_targets  # noqa: E402
 
 def test_multiline_command_segments_at_the_newline(tmp_path):
     """First line: `sed -i` on `foo.txt`. Second line: a real redirect into
-    `existing.py`. Before the fix, tokenizing the whole command as one blob let
-    the second line's `echo` and `hi` ride along as spurious `sed` operands,
-    resolving to a phantom `<cwd>/echo` target. After the fix, each physical
-    line is its own segment: `sed -i`'s target is `foo.txt` only, and `echo`'s
-    real redirect target `existing.py` is found on its own line."""
+    `existing.py`. Tokenizing the whole command as one blob would let the
+    second line's `echo` and `hi` ride along as spurious `sed` operands,
+    resolving to a phantom `<cwd>/echo` target — the newline must segment
+    the command so `sed -i`'s target is `foo.txt` only, and `echo`'s real
+    redirect target `existing.py` is found on its own line."""
     eff_cwd = str(tmp_path)
     command = "sed -i 's/x/y/' foo.txt\necho hi > existing.py"
 
@@ -67,12 +67,13 @@ def test_single_line_command_unaffected(tmp_path):
 def test_backslash_continued_command_finds_real_target(tmp_path):
     """A single LOGICAL command wrapped across two PHYSICAL lines with a
     trailing backslash — the shape agent-authored multi-line Bash produces
-    routinely. Before the fix, `command.splitlines()` cut the logical line
-    before the continuation resolved, `shlex.split()` on the orphaned
-    fragment `"sed -i 's/a/b/' \\"` raised (an unescaped trailing backslash
-    has no following character to escape), and the blanket `except
-    Exception: return []` around the whole comprehension discarded every
-    line's targets — a false negative on the gate's primary input shape."""
+    routinely. Splitting on physical lines before resolving the
+    continuation would cut the logical line prematurely: `shlex.split()` on
+    the orphaned fragment `"sed -i 's/a/b/' \\"` raises (an unescaped
+    trailing backslash has no following character to escape), which is why
+    the continuation must be resolved before any per-line split happens —
+    otherwise a parse failure on one fragment can discard every line's
+    targets, a false negative on the gate's primary input shape."""
     eff_cwd = str(tmp_path)
     command = "sed -i 's/a/b/' \\\n  scripts/x.py"
 
@@ -97,26 +98,28 @@ def test_poisoned_line_does_not_discard_other_lines_targets(tmp_path):
 def test_backslash_newline_inside_single_quotes_is_not_a_continuation():
     """Inside single quotes, shell performs NO escape processing at all —
     not even of a backslash — so `\\<newline>` there is two literal
-    characters, not a line continuation. A blind (quote-blind) join would
-    remove the newline from inside the quoted string, changing its content
-    and silently pulling a line that real shell keeps separate into the
-    same physical line as this one. Joining is elided while inside a
-    single-quoted span; only a `'` character ends that span."""
-    from lib.bash_write_targets import _join_backslash_continuations
+    characters, not a line continuation. A quote-blind join would remove the
+    newline from inside the quoted string, changing its content and
+    silently pulling a line that real shell keeps separate into the same
+    physical line as this one. Eliding a backslash-newline pair is skipped
+    while inside a single-quoted span; only a `'` character ends that span,
+    so the unit comes back byte-for-byte unchanged."""
+    from lib.bash_write_targets import _split_logical_units
 
-    joined = _join_backslash_continuations("echo 'literal\\\nbreak' arg")
+    units = _split_logical_units("echo 'literal\\\nbreak' arg")
 
-    assert joined == "echo 'literal\\\nbreak' arg"
+    assert units == ["echo 'literal\\\nbreak' arg"]
 
 
 def test_backslash_newline_outside_quotes_is_still_joined():
-    """Control for the quote-tracking test above: outside any quoting, the
-    continuation is still elided exactly as the F1 fix requires."""
-    from lib.bash_write_targets import _join_backslash_continuations
+    """Control for the quote-tracking test above: outside any quoting, a
+    backslash-newline pair is still elided into nothing, so the newline
+    never reaches the unit-break decision at all."""
+    from lib.bash_write_targets import _split_logical_units
 
-    joined = _join_backslash_continuations("sed -i 's/a/b/' \\\n  scripts/x.py")
+    units = _split_logical_units("sed -i 's/a/b/' \\\n  scripts/x.py")
 
-    assert joined == "sed -i 's/a/b/'   scripts/x.py"
+    assert units == ["sed -i 's/a/b/'   scripts/x.py"]
 
 
 def test_single_quoted_embedded_backslash_newline_does_not_crash_or_fabricate(tmp_path):
@@ -136,13 +139,15 @@ def test_single_quoted_embedded_backslash_newline_does_not_crash_or_fabricate(tm
 
 
 def test_multiline_single_quoted_message_before_write_is_found(tmp_path):
-    """F3: a single-quoted argument that itself SPANS physical lines (a real
+    """A single-quoted argument that itself SPANS physical lines (a real
     newline embedded inside the quotes, e.g. a multi-line commit message)
     must not blank out a write target that comes later in the same command.
-    Per-line splitting (the F1/F2 fix) tokenizes each physical line on its
+    A naive per-physical-line split tokenizes each physical line on its
     own; the line that only CLOSES the quote has no opening quote of its
-    own and fails to tokenize, so the line carrying the real `cp` write was
-    silently dropped even though it never itself contained the bad quote."""
+    own and fails to tokenize, so the line carrying the real `cp` write
+    would be silently dropped even though it never itself contained the bad
+    quote — the quote-span-aware unit split keeps both lines as one unit
+    instead."""
     eff_cwd = str(tmp_path)
     command = "git commit -m 'first line\n\nbody text' && cp evil.py /repo/x.py"
 
@@ -152,7 +157,7 @@ def test_multiline_single_quoted_message_before_write_is_found(tmp_path):
 
 
 def test_multiline_double_quoted_message_before_write_is_found(tmp_path):
-    """F3, double-quoted variant of the case above."""
+    """Double-quoted variant of the case above."""
     eff_cwd = str(tmp_path)
     command = 'git commit -m "first\n\nbody" && cp evil.py /repo/x.py'
 
@@ -162,7 +167,7 @@ def test_multiline_double_quoted_message_before_write_is_found(tmp_path):
 
 
 def test_multiline_single_quoted_redirect_argument_is_found(tmp_path):
-    """F3, redirect variant: the write is a plain `>` redirect rather than a
+    """Redirect variant: the write is a plain `>` redirect rather than a
     `cp`, and the multi-line quoted argument precedes it on the same
     (single) logical/physical-after-substitution line."""
     eff_cwd = str(tmp_path)
@@ -174,16 +179,16 @@ def test_multiline_single_quoted_redirect_argument_is_found(tmp_path):
 
 
 def test_multiline_dollar_paren_substitution_is_found(tmp_path):
-    """F4: an UNQUOTED `$(...)` command substitution whose body spans a real
-    embedded newline. Before the fix, `_prepare_command_for_whole_stream`
-    turned that newline into a `; ` statement separator with no awareness of
-    the substitution around it, splitting `$(ls` and `dir)` into two
-    segments; `cp`'s destination scan then saw only the fragment `$(ls` as
-    its sole positional and reported the fabricated target
-    `<cwd>/$(ls`, while the command's REAL destination (`/repo/subst.py`)
-    was never reached. After the fix the embedded newline becomes a plain
-    space, the substitution stays one shlex token, and `cp`'s real last
-    positional is found."""
+    """An UNQUOTED `$(...)` command substitution whose body spans a real
+    embedded newline. A newline-blind split would turn that newline into a
+    `; ` statement separator with no awareness of the substitution around
+    it, splitting `$(ls` and `dir)` into two segments; `cp`'s destination
+    scan would then see only the fragment `$(ls` as its sole positional and
+    report the fabricated target `<cwd>/$(ls`, while the command's REAL
+    destination (`/repo/subst.py`) is never reached. With `$(`-depth
+    tracking, the embedded newline becomes a plain space instead, the
+    substitution stays one shlex token, and `cp`'s real last positional is
+    found."""
     eff_cwd = str(tmp_path)
     command = "cp $(ls\ndir) /repo/subst.py"
 
@@ -194,7 +199,7 @@ def test_multiline_dollar_paren_substitution_is_found(tmp_path):
 
 
 def test_multiline_backtick_substitution_is_found(tmp_path):
-    """F4, backtick variant of the case above: `` `...` `` spanning a real
+    """Backtick variant of the case above: `` `...` `` spanning a real
     embedded newline must not fabricate a target from its broken-off tail
     either."""
     eff_cwd = str(tmp_path)
@@ -207,7 +212,7 @@ def test_multiline_backtick_substitution_is_found(tmp_path):
 
 
 def test_multiline_nested_dollar_paren_substitution_is_found(tmp_path):
-    """F4, nested variant: a `$(...)` containing a second `$(...)`, with the
+    """Nested variant: a `$(...)` containing a second `$(...)`, with the
     embedded newline inside the innermost one. The depth counter must reach
     back to 0 only at the OUTER closing `)`, not the inner one, or the outer
     substitution reopens as ordinary text partway through."""
@@ -314,16 +319,16 @@ def test_bare_subshell_nested_inside_dollar_paren_is_an_accepted_residual(tmp_pa
 
 
 def test_unterminated_quote_after_multiline_quoted_argument_still_recovers_earlier_write(tmp_path):
-    """F5: a quote genuinely unterminated at the END of a command does not
+    """A quote genuinely unterminated at the END of a command does not
     destroy recovery of a well-formed logical unit that closed BEFORE it.
     The whole-stream attempt still raises (the trailing quote never closes),
     but `_split_logical_units` isolates the broken `echo 'unterminated` tail
     into its OWN unit — the earlier `git commit ... && cp e.py /repo/x.py`
     unit, itself containing a correctly-closed multi-line single-quoted
     argument, parses fine on its own and is recovered by the units-harvest
-    half of the fallback's union. This narrows what an earlier, wrong
-    adjudication treated as an irreducible residual for the WHOLE command;
-    see test_unterminated_quote_on_the_same_unit_as_the_write_is_an_accepted_residual
+    half of the fallback's union — only the unit that actually carries the
+    bad quote is unrecoverable, not the whole command; see
+    test_unterminated_quote_on_the_same_unit_as_the_write_is_an_accepted_residual
     for the genuinely irreducible case — the write on the SAME unit as the
     bad quote."""
     eff_cwd = str(tmp_path)
@@ -352,15 +357,14 @@ def test_unterminated_quote_on_the_same_unit_as_the_write_is_an_accepted_residua
 
 
 def test_unterminated_quote_does_not_lose_a_write_on_a_later_physical_line(tmp_path):
-    """Round-6-direction regression control: a naive quote-aware-only
-    fallback (unit-by-unit, no splitlines union) REGRESSES relative to the
-    prior physical-line-only fallback here, because a genuinely unterminated
-    quote never closes, so `_split_logical_units` folds every subsequent
-    physical line into the SAME unparseable unit as the bad quote — the
-    units-harvest alone finds nothing. The splitlines-harvest half of the
-    union still recovers it, exactly as the prior physical-line fallback
-    did, because on its own physical line `cp a.py /repo/after.py` parses
-    fine independent of the previous line's bad quote."""
+    """Regression control: a quote-aware-only fallback (unit-by-unit, no
+    splitlines union) would lose this write, because a genuinely
+    unterminated quote never closes, so `_split_logical_units` folds every
+    subsequent physical line into the SAME unparseable unit as the bad
+    quote — the units-harvest alone finds nothing. The splitlines-harvest
+    half of the union still recovers it, because on its own physical line
+    `cp a.py /repo/after.py` parses fine independent of the previous line's
+    bad quote."""
     eff_cwd = str(tmp_path)
     command = "echo 'unterminated\ncp a.py /repo/after.py"
 
@@ -370,9 +374,8 @@ def test_unterminated_quote_does_not_lose_a_write_on_a_later_physical_line(tmp_p
 
 
 def test_unterminated_quote_does_not_lose_multiple_later_writes(tmp_path):
-    """Round-6-direction regression control, multi-write variant: both
-    later physical lines' writes must survive the union fallback, not just
-    the first one found."""
+    """Regression control, multi-write variant: both later physical lines'
+    writes must survive the union fallback, not just the first one found."""
     eff_cwd = str(tmp_path)
     command = "echo 'unterminated\ncp a.py /repo/l1.py\ncp b.py /repo/l2.py"
 
@@ -382,18 +385,200 @@ def test_unterminated_quote_does_not_lose_multiple_later_writes(tmp_path):
     assert "/repo/l2.py" in targets
 
 
+def test_multiline_dollar_brace_expansion_is_found(tmp_path):
+    """An UNQUOTED `${...}` parameter expansion whose body spans a real
+    embedded newline — the primary whole-stream path. A newline-blind split
+    would turn the embedded newline into a `;` separator with no awareness of
+    the expansion around it, splitting `${x:-` and `y}` into two segments;
+    `cp`'s destination scan would then see only the fragment `${x:-` as its
+    sole positional and report a fabricated target, while the command's REAL
+    destination (`/repo/brace.py`) is never reached. With `${`-depth
+    tracking, the embedded newline becomes a plain space instead, the
+    expansion stays one shlex token, and `cp`'s real last positional is
+    found."""
+    eff_cwd = str(tmp_path)
+    command = "cp ${x:-\ny} /repo/brace.py"
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert "/repo/brace.py" in targets
+    assert os.path.join(eff_cwd, "${x:-") not in targets
+
+
+def test_multiline_dollar_brace_expansion_fallback_still_recovers_write(tmp_path):
+    """Same shape as the primary-path test above, but with a second,
+    genuinely unterminated quote on a later physical line forcing the
+    whole-stream `shlex.split()` to raise and the union fallback to engage.
+    The units-harvest half keeps `${`-depth tracking active per unit, so the
+    real destination is still found; the raw splitlines-harvest half
+    independently contributes the harmless fabricated fragment
+    `/repo/${x:-` (its `cp`-dest scan runs on the bare physical line, where
+    the leading `${x:-` reads as a plain positional) — over-reporting here is
+    the safe direction for a deny gate, so this extra fragment is accepted
+    rather than asserted against."""
+    eff_cwd = "/repo"
+    command = "cp ${x:-\ny} /repo/brace.py\necho 'unterminated"
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert "/repo/brace.py" in targets
+
+
+def test_single_line_dollar_brace_expansion_unaffected(tmp_path):
+    """Control: no newline inside the expansion at all — behavior is
+    unaffected by the new depth counter."""
+    eff_cwd = str(tmp_path)
+    command = "cp ${x:-y} /repo/ok.py"
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert "/repo/ok.py" in targets
+
+
+def test_multiline_dollar_brace_nested_inside_dollar_paren_is_found(tmp_path):
+    """A `${...}` expansion nested inside a `$(...)` substitution, with the
+    embedded newline inside the innermost `${...}`. `subst_depth` and
+    `brace_depth` are independent counters keyed on disjoint character pairs
+    (`$(`/`)` vs `${`/`}`), so a newline protected by one is unaffected by
+    the other reaching zero or not."""
+    eff_cwd = str(tmp_path)
+    command = "cp $(echo ${x:-\ny}) /repo/nested_brace.py"
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert "/repo/nested_brace.py" in targets
+
+
+def test_multiline_dollar_brace_inside_double_quotes_still_preserved(tmp_path):
+    """Regression control: a `${...}` embedded inside a DOUBLE-quoted
+    argument was already correctly handled before this fix (the pre-existing
+    `not in_double` guard preserves every newline for the whole quoted span
+    regardless of what is inside it) and must remain so — this fix must not
+    touch the in_double path at all."""
+    eff_cwd = str(tmp_path)
+    command = 'echo "${x:-\ny}" > /repo/dq_brace.py'
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert "/repo/dq_brace.py" in targets
+
+
+def test_multiline_nested_dollar_brace_expansion_is_found(tmp_path):
+    """Nested `${...}` inside `${...}` (a default-value expansion whose
+    default is itself a parameter expansion), with the embedded newline
+    inside the innermost one. `brace_depth` must reach back to 0 only at the
+    OUTER closing `}`, not the inner one, or the outer expansion reopens as
+    ordinary text partway through."""
+    eff_cwd = str(tmp_path)
+    command = "cp ${x:-${y:-\nz}} /repo/nested2.py"
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert "/repo/nested2.py" in targets
+
+
+def test_brace_group_does_not_corrupt_the_dollar_brace_depth_counter(tmp_path):
+    """A bare (non-`$`) brace GROUP (`{ cmd; }`) is never itself tracked as
+    an opener — only the two-character `${` sequence is — so its own closing
+    `}` must not be misread as closing an unrelated, already-closed `${...}`
+    span from earlier in the command. A real write target on a later,
+    unrelated line must still be found."""
+    eff_cwd = str(tmp_path)
+    command = "echo ${a:-b}\n{ echo grouped; }\ncp c.py /repo/aftergroup.py"
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert "/repo/aftergroup.py" in targets
+
+
+def test_stray_unmatched_closing_brace_does_not_corrupt_the_depth_counter(tmp_path):
+    """A stray literal `}` with no matching `${` earlier must not drive
+    `brace_depth` negative (the guard is `brace_depth > 0`, so it falls
+    through as an ordinary character), and must not corrupt tracking for the
+    rest of the command — a real write target afterward is still found."""
+    eff_cwd = str(tmp_path)
+    command = "echo }\ncp c.py /repo/afterstray.py"
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert "/repo/afterstray.py" in targets
+
+
+def test_ansi_c_quoted_string_spanning_newline_is_found(tmp_path):
+    """`$'...'` (ANSI-C quoting) needs no separate handling in this scanner:
+    it is keyed on the same `'` delimiter as an ordinary single-quoted span,
+    so an embedded newline inside it is already covered by the existing
+    single-quote branch (the newline is preserved as a literal character
+    inside the quoted string, exactly as `shlex.split()` itself reads a
+    plain single-quoted argument — the leading `$` is just an ordinary
+    character immediately before the quote)."""
+    eff_cwd = str(tmp_path)
+    command = "cp $'literal\ndata' /repo/ansic.py"
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert "/repo/ansic.py" in targets
+
+
+def test_double_bracket_test_construct_still_finds_a_later_real_write(tmp_path):
+    """`[[ ... ]]` is a shell keyword-based compound command this scanner
+    does not track as an opener at all — a newline inside one is read as a
+    top-level unit break like any other. This does not cost a real write
+    target in practice: the write-detecting verb on its own later, cleanly-
+    split segment is found independent of the (mis-split) test construct
+    around it."""
+    eff_cwd = str(tmp_path)
+    command = "[[ -f foo.txt &&\n -f bar.txt ]]\ncp c.py /repo/aftertest.py"
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert "/repo/aftertest.py" in targets
+
+
+def test_here_string_operand_unaffected_by_embedded_newline_handling(tmp_path):
+    """A here-string (`<<<`) operand is a single following word, not a span
+    that must stay open across a newline, so it needs no opener-style
+    tracking at all; ordinary behavior (a real write target on the same
+    single-line command) is unaffected."""
+    eff_cwd = str(tmp_path)
+    command = "cat <<< \"hello\" > /repo/herestr.py"
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert "/repo/herestr.py" in targets
+
+
+def test_standalone_bare_arithmetic_command_is_an_accepted_residual(tmp_path):
+    """Accepted, documented residual: a standalone `((...))` arithmetic
+    COMMAND (not the `$((...))` expansion form) opens with a bare `((`
+    carrying no `$`, so it is never tracked as an opener at all — a newline
+    inside one is read as a top-level unit break exactly as an ordinary
+    newline would be, splitting the construct and potentially fabricating a
+    fragment from its broken-off tail. Fixing this needs full paren-matching,
+    the same materially bigger parser the bare-subshell-nested-in-`$(...)`
+    residual needs, for the same reason — out of scope for a depth counter
+    keyed on fixed two-character openers. This pins the current, non-
+    crashing outcome; a real write target on a later, cleanly-split line is
+    still found."""
+    eff_cwd = str(tmp_path)
+    command = "((1 +\n2))\ncp c.py /repo/afterarith.py"
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert "/repo/afterarith.py" in targets
+
+
 def test_unterminated_quote_fallback_still_recovers_a_multiline_dollar_paren_write(tmp_path):
-    """F5, `$(...)`-substitution variant: the same fallback-engagement
-    failure as the multi-line-quoted-argument case above, but for an
-    UNQUOTED `$(...)` substitution spanning a newline instead. Before this
-    fix, engaging the (then quote-BLIND) per-line fallback split `$(ls` and
-    `dir)` onto separate physical lines exactly like the primary path's old
-    F4 bug, fabricating `<cwd>/$(ls` as `cp`'s only positional and losing
-    the real destination. The units-harvest half of the union keeps
-    `$(...)`-depth tracking active per unit, so `cp`'s real last positional
-    is still found; the raw splitlines-harvest independently contributes the
-    harmless fabricated fragment `$(ls` — over-reporting here is the safe
-    direction for a deny gate."""
+    """`$(...)`-substitution variant: the same fallback-engagement shape as
+    the multi-line-quoted-argument case above, but for an UNQUOTED `$(...)`
+    substitution spanning a newline instead. A quote-BLIND per-line fallback
+    would split `$(ls` and `dir)` onto separate physical lines, fabricating
+    `<cwd>/$(ls` as `cp`'s only positional and losing the real destination.
+    The units-harvest half of the union keeps `$(...)`-depth tracking active
+    per unit, so `cp`'s real last positional is still found; the raw
+    splitlines-harvest independently contributes the harmless fabricated
+    fragment `$(ls` — over-reporting here is the safe direction for a deny
+    gate."""
     eff_cwd = "/repo"
     command = "cp $(ls\ndir) /repo/subst.py\necho 'unterminated"
 
