@@ -100,19 +100,31 @@ def test_relative_path_raises_valueerror():
 
 def test_ungranted_kind_gets_no_plans_rules(tmp_path):
     assert MOD.plans_permission_rules("yandex-cloud-expert", tmp_path) == ([], [])
-    assert MOD.plans_permission_rules("developer", tmp_path) == ([], [])
     assert MOD.plans_permission_rules("tech-writer", tmp_path) == ([], [])
+
+
+def test_developer_reads_its_own_plan_and_is_denied_editing_it(tmp_path):
+    """An executor needs the plan for the same reason a reviewer does, and the
+    deny half is what keeps that from becoming a licence to rewrite the norm it
+    is measured against. Developer was excluded until a stage-8 spawn was
+    compacted mid-run, lost the plan text assemble_prompt had embedded, and had
+    no way back to it: delivery once is not availability."""
+    allow, deny = MOD.plans_permission_rules("developer", tmp_path)
+    assert f"Read(/{tmp_path}/**)" in allow
+    assert deny == [f"Edit(/{tmp_path}/**)"]
+    assert not any(r.startswith("Write(") or r.startswith("Edit(") for r in allow)
 
 
 def test_add_dir_present_for_granted_kinds(tmp_path):
     assert MOD.plans_add_dir_args("planner", tmp_path) == ["--add-dir", str(tmp_path)]
     assert MOD.plans_add_dir_args("thinker", tmp_path) == ["--add-dir", str(tmp_path)]
     assert MOD.plans_add_dir_args("code-reviewer", tmp_path) == ["--add-dir", str(tmp_path)]
+    assert MOD.plans_add_dir_args("developer", tmp_path) == ["--add-dir", str(tmp_path)]
 
 
 def test_add_dir_absent_for_ungranted_kinds(tmp_path):
-    assert MOD.plans_add_dir_args("developer", tmp_path) == []
     assert MOD.plans_add_dir_args("tech-writer", tmp_path) == []
+    assert MOD.plans_add_dir_args("yandex-cloud-expert", tmp_path) == []
 
 
 def test_build_child_settings_merges_planner_plans_rules(tmp_path):
@@ -133,20 +145,23 @@ def test_build_child_settings_thinker_carries_allow_and_deny(tmp_path):
 
 def test_build_child_settings_developer_pytest_allow_survives_alongside_plans_grant(tmp_path):
     """Regression guard named in the stage's invariants: adding the plans
-    grant must not eat the developer's existing allow. Developer is not itself
-    a plans-granted kind, so passing a plans_directory must be a no-op for it,
-    and the allow must be exactly what DEVELOPER_SETTINGS_ALLOW declares.
+    grant must not eat the developer's existing allow. Developer is now a
+    plans-READ kind too, so the allow is the brief grant PLUS the plans rules —
+    the guard is that every entry of the brief grant survives, in order, ahead
+    of them, not that the two lists are equal.
 
     Bound to the constant, not to a snapshot of its contents: the list is owned
     by the developer-brief grant and grows independently of this stage, so a
     literal copy here would go red on every unrelated verb added to it. The
-    non-empty assertion keeps the equality from passing vacuously."""
+    non-empty assertion keeps the prefix check from passing vacuously."""
     settings = MOD.build_child_settings("developer", tmp_path)
     allow = settings["permissions"]["allow"]
-    assert MOD.DEVELOPER_SETTINGS_ALLOW
-    assert allow == list(MOD.DEVELOPER_SETTINGS_ALLOW)
+    brief = list(MOD.DEVELOPER_SETTINGS_ALLOW)
+    assert brief
+    assert allow[: len(brief)] == brief
     assert "Bash(python3 -m pytest:*)" in allow
-    assert "deny" not in settings["permissions"]
+    assert f"Read(/{tmp_path}/**)" in allow
+    assert settings["permissions"]["deny"] == [f"Edit(/{tmp_path}/**)"]
 
 
 def test_build_child_settings_no_plans_directory_arg_still_works(tmp_path):
