@@ -173,6 +173,146 @@ def test_multiline_single_quoted_redirect_argument_is_found(tmp_path):
     assert "/repo/out.py" in targets
 
 
+def test_multiline_dollar_paren_substitution_is_found(tmp_path):
+    """F4: an UNQUOTED `$(...)` command substitution whose body spans a real
+    embedded newline. Before the fix, `_prepare_command_for_whole_stream`
+    turned that newline into a `; ` statement separator with no awareness of
+    the substitution around it, splitting `$(ls` and `dir)` into two
+    segments; `cp`'s destination scan then saw only the fragment `$(ls` as
+    its sole positional and reported the fabricated target
+    `<cwd>/$(ls`, while the command's REAL destination (`/repo/subst.py`)
+    was never reached. After the fix the embedded newline becomes a plain
+    space, the substitution stays one shlex token, and `cp`'s real last
+    positional is found."""
+    eff_cwd = str(tmp_path)
+    command = "cp $(ls\ndir) /repo/subst.py"
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert "/repo/subst.py" in targets
+    assert os.path.join(eff_cwd, "$(ls") not in targets
+
+
+def test_multiline_backtick_substitution_is_found(tmp_path):
+    """F4, backtick variant of the case above: `` `...` `` spanning a real
+    embedded newline must not fabricate a target from its broken-off tail
+    either."""
+    eff_cwd = str(tmp_path)
+    command = "cp `ls\ndir` /repo/tick.py"
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert "/repo/tick.py" in targets
+    assert os.path.join(eff_cwd, "`ls") not in targets
+
+
+def test_multiline_nested_dollar_paren_substitution_is_found(tmp_path):
+    """F4, nested variant: a `$(...)` containing a second `$(...)`, with the
+    embedded newline inside the innermost one. The depth counter must reach
+    back to 0 only at the OUTER closing `)`, not the inner one, or the outer
+    substitution reopens as ordinary text partway through."""
+    eff_cwd = str(tmp_path)
+    command = "cp $(echo $(ls\nd)) /repo/deep.py"
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert "/repo/deep.py" in targets
+    assert os.path.join(eff_cwd, "$(echo") not in targets
+
+
+def test_multiline_backtick_nested_inside_dollar_paren_is_found(tmp_path):
+    """Mixed nesting: a backtick span embedded inside a `$(...)`. Depth and
+    the backtick toggle are independent flags in the same pass — a newline
+    inside the backtick span must still be protected via `in_backtick` even
+    though `subst_depth` is simultaneously > 0 from the outer `$(`."""
+    eff_cwd = str(tmp_path)
+    command = "cp $(echo `ls\nd`) /repo/mixed.py"
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert "/repo/mixed.py" in targets
+
+
+def test_multiline_escaped_backtick_nested_inside_backtick_is_found(tmp_path):
+    """Legacy nested-backtick syntax: an inner backtick pair escaped with a
+    backslash (`` \\` ... \\` ``) so the OUTER backtick parsing does not end
+    at the first inner backtick. The pre-existing backslash-escape branch
+    (checked before the backtick toggle) already consumes an escaped
+    backtick as a literal pair without flipping `in_backtick`, so the outer
+    span stays open across the embedded newline with no extra code."""
+    eff_cwd = str(tmp_path)
+    command = "cp `echo \\`ls\\`\nd` /repo/nested_tick.py"
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert "/repo/nested_tick.py" in targets
+
+
+def test_multiline_arithmetic_expansion_is_unaffected(tmp_path):
+    """`$((...))` arithmetic expansion shares the same `$(` counter with no
+    special case: the digraph's inner `(` is not itself a tracked opener, so
+    it is appended as an ordinary character and the surrounding `$(`/`)`
+    pair still protects a newline inside the expression."""
+    eff_cwd = str(tmp_path)
+    command = "echo $(( 1 +\n 2 )) > /repo/arith.py"
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert "/repo/arith.py" in targets
+
+
+def test_multiline_double_quoted_command_substitution_still_preserved(tmp_path):
+    """Regression control: a `$(...)` embedded inside a DOUBLE-quoted
+    argument was already correctly handled before this fix (the pre-existing
+    `not in_double` guard preserves every newline for the whole quoted span
+    regardless of what is inside it) and must remain so — this fix must not
+    touch the in_double path at all."""
+    eff_cwd = str(tmp_path)
+    command = 'echo "$(ls\ndir)" > /repo/dq.py'
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert "/repo/dq.py" in targets
+
+
+def test_process_substitution_spanning_newline_is_an_accepted_residual(tmp_path):
+    """Accepted, documented residual: `<(...)`/`>(...)` process substitution
+    is NOT tracked by the `$(`/backtick depth counter (recognizing it would
+    collide with `segment_write_target`'s separate, pre-existing
+    `tok.startswith(">")` redirect heuristic — out of scope for this
+    newline-focused fix, see the `_prepare_command_for_whole_stream`
+    docstring). An embedded newline inside it is still read as a `;`
+    separator, which can split a verb's real destination away from its
+    write-target scan; this pins the current, non-fabricating-but-lossy
+    outcome (an empty result here, not a crash and not a wrong path) so a
+    future change to this area does not silently drop the documentation of
+    the gap."""
+    eff_cwd = str(tmp_path)
+    command = "cp <(sort\na.txt) /repo/out.py"
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert targets == []
+
+
+def test_bare_subshell_nested_inside_dollar_paren_is_an_accepted_residual(tmp_path):
+    """Accepted, documented residual: a bare (non-`$`) subshell/group nested
+    inside a `$(...)` closes the SAME depth counter as the outer
+    substitution at its own `)`, so depth reaches 0 one `)` early and a
+    newline after that point is wrongly read as a top-level `;` separator
+    again — fixed only by full paren-matching, materially more than the
+    depth counter this commit adds (see the docstring). This pins the
+    current fabricated-but-non-crashing outcome so the gap stays visible
+    rather than being silently "fixed" by a future incidental change."""
+    eff_cwd = str(tmp_path)
+    command = "cp $(echo a && (echo b)\nc) /repo/paren.py"
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert "/repo/paren.py" not in targets
+    assert os.path.join(eff_cwd, "a") in targets
+
+
 def test_unterminated_quote_after_multiline_quoted_argument_still_returns_nothing(tmp_path):
     """Accepted, irreducible residual: once a quote is genuinely unterminated
     ANYWHERE in the command, there is no well-defined lexical reading of the

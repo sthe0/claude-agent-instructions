@@ -217,10 +217,56 @@ def _prepare_command_for_whole_stream(command: str) -> str:
     A newline that survives inside a single- or double-quoted span (real
     shell performs no line-splitting inside a quoted string) is left
     untouched, keeping the quoted string one token exactly as `shlex.split()`
-    itself would read it."""
+    itself would read it.
+
+    A newline inside an UNQUOTED `$(...)` command substitution or backtick
+    span is a second such case: the substitution's *result* is used as one
+    argument value of the containing command, so turning that newline into a
+    `;` statement separator splits the substitution in half at the shlex
+    layer — the outer command's real write target is lost and a fabricated
+    fragment (the substitution's own broken-off tail) is reported in its
+    place. `$(` / `)` are tracked with a depth counter (nesting, e.g.
+    `$(echo $(ls))`, closes correctly) and a backtick span with a toggle;
+    while either is active the newline becomes a plain space instead — the
+    substitution stays one shlex token, its internal words stay separate.
+    Depth/toggle tracking is skipped entirely while inside a quoted span
+    (mirrors the quote-blindness of `_join_backslash_continuations` — a
+    `$(`/backtick that is itself only quoted TEXT, e.g. inside a
+    single-quoted argument, never reaches this branch at all; and a
+    `$(...)` embedded in a DOUBLE-quoted argument already has its newlines
+    preserved by the pre-existing `not in_double` guard, so it needs no
+    separate tracking of its own). `$((...))`  arithmetic expansion is
+    covered by the same `$(` counter with no special case: the inner `(` of
+    the `((` digraph is not itself a tracked opener, so it passes through
+    untouched, and depth still reaches back to 0 by the construct's own
+    closing `)`s.
+
+    Two related constructs are DELIBERATELY left unhandled, each pinned by
+    its own test documenting the (imperfect but non-crashing) behavior:
+
+    - Process substitution `<(...)`/`>(...)`: recognizing it would need a
+      second opener class keyed on `<(`/`>(` rather than `$(`, AND that
+      token shape already collides with `segment_write_target`'s pre-
+      existing (newline-unrelated) `tok.startswith(">")` redirect heuristic
+      — `>(cmd)` is misread as a bare `>`-redirect to a path `(cmd)` even on
+      a single physical line, today, independent of this fix. Extending
+      depth-tracking to `<(`/`>(` here would paper over a symptom of that
+      separate bug without fixing it, and risks new interactions for a
+      construct this hook family does not otherwise special-case.
+    - A bare (non-`$`) subshell/group nested *inside* a `$(...)` — e.g.
+      `$(cmd1 && (cmd2)\ncmd3)` — is invisible to a counter that only opens
+      on the two-character `$(` sequence: the inner group's own closing `)`
+      decrements the SAME counter as the outer substitution's, so depth
+      reaches 0 one `)` early and a newline after that point is (wrongly)
+      treated as a top-level separator again. Fixing this needs full
+      paren-matching (tracking bare `(` too, and distinguishing a grouping
+      paren from stray literal parens in ordinary argument text) — a
+      materially bigger parser than the depth counter this fix adds."""
     out: list[str] = []
     in_single = False
     in_double = False
+    subst_depth = 0
+    in_backtick = False
     i = 0
     n = len(command)
     while i < n:
@@ -250,10 +296,29 @@ def _prepare_command_for_whole_stream(command: str) -> str:
             out.append(ch)
             i += 1
             continue
-        if ch == "\n" and not in_double:
-            out.append(" ; ")
-            i += 1
-            continue
+        if not in_double:
+            if ch == "$" and i + 1 < n and command[i + 1] == "(":
+                subst_depth += 1
+                out.append("$(")
+                i += 2
+                continue
+            if ch == ")" and subst_depth > 0:
+                subst_depth -= 1
+                out.append(ch)
+                i += 1
+                continue
+            if ch == "`":
+                in_backtick = not in_backtick
+                out.append(ch)
+                i += 1
+                continue
+            if ch == "\n":
+                if subst_depth == 0 and not in_backtick:
+                    out.append(" ; ")
+                else:
+                    out.append(" ")
+                i += 1
+                continue
         out.append(ch)
         i += 1
     return "".join(out)
