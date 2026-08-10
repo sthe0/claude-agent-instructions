@@ -79,8 +79,9 @@ def main():
             t0 = time.monotonic()
             ok, pairs, _stderr = advisor.enumerate_questions_health(s["goal"], s["crit"], s["text"], runner)
             elapsed = time.monotonic() - t0
+            # No plan path: the dataset ships in a public repo, and plan_sha256 already
+            # identifies a row without naming anything.
             row = {
-                "plan_path": s["path"],
                 "plan_sha256": s["sha"],
                 "input_chars": s["chars"],
                 "elapsed_s": round(elapsed, 3),
