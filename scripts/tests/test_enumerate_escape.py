@@ -773,6 +773,158 @@ class TestEscapeBindsToTheLaunchAndThePassItEscapes:
                        for b in retried.data.get("blockers", [])), retried.detail
 
 
+# --- a window's child that comes back late, after its escape -------------------
+
+class TestALateSidecarLandingAfterAnEscape:
+    """A `not_landed` escape says the window's child never came back — but nothing
+    stops it coming back late, after the escape is on record. Both arms are load-
+    bearing and neither was exercised: a healthy late landing must not leave the gate
+    wedged behind counters that have moved past the escape, and a failing one must
+    re-block with a route out rather than a dead end."""
+
+    def _escaped_window(self, store, sid, plan):
+        _to_plan_ready_with_premise(store, sid, plan)
+        state = store.load(sid)
+        state.plugins["premise"]["enumerate_deadline"] = time.time() - 1
+        store.save(state)
+        assert cli.cmd_question_enumerate_escape(
+            _escape_ns(sid, premise.ESCAPE_ENUMERATION_NOT_LANDED,
+                       note="the worker had not landed by the deadline"),
+            store=store).ok is True
+        assert plugins.plugin_gate_blockers(store.load(sid), "plan_approval") == []
+
+    def test_a_healthy_late_landing_does_not_wedge_the_gate(
+            self, store, fixtures_dir, tmp_path, monkeypatch):
+        monkeypatch.setenv("CLAUDE_AGENT_HOME", str(tmp_path / "agent-home"))
+        sid = "late-fold-ok"
+        plan = str(fixtures_dir / "plan_two_stage.toml")
+        self._escaped_window(store, sid, plan)
+
+        digest = plugins_premise._plan_content_digest(load_plan(plan))
+        enumerate_sidecar.write(sid, digest, {
+            "runner_ok": True, "pairs": [], "stderr": "",
+            "content_digest": digest, "plan_path": plan,
+        })
+
+        assert cli.cmd_approve(ns(session=sid, by="user"), store=store).ok is True
+        bag = store.load(sid).plugins["premise"]
+        assert bag["enumerated"] is True
+        assert bag["enumerated_at"] == digest
+        assert bag["enumerated_runner_ok"] is True
+        assert len(bag["escapes"]) == 1
+
+    def test_a_failing_late_landing_re_blocks_and_keeps_a_route_out(
+            self, store, fixtures_dir, tmp_path, monkeypatch):
+        monkeypatch.setenv("CLAUDE_AGENT_HOME", str(tmp_path / "agent-home"))
+        sid = "late-fold-failed"
+        plan = str(fixtures_dir / "plan_two_stage.toml")
+        self._escaped_window(store, sid, plan)
+
+        digest = plugins_premise._plan_content_digest(load_plan(plan))
+        enumerate_sidecar.write(sid, digest, {
+            "runner_ok": False, "pairs": [], "stderr": "advisor timed out after 480s",
+            "content_digest": digest, "plan_path": plan,
+        })
+
+        blocked = cli.cmd_approve(ns(session=sid, by="user"), store=store)
+        assert blocked.ok is False
+        assert any(plugins_premise._ENUMERATE_RUNNER_FAILED in b
+                   for b in blocked.data.get("blockers", []))
+
+        assert cli.cmd_question_enumerate_escape(
+            _escape_ns(sid, premise.ESCAPE_ADVISOR_TIMEOUT,
+                       note="the late landing reported a timeout"), store=store).ok is True
+        assert cli.cmd_approve(ns(session=sid, by="user"), store=store).ok is True
+        assert [r["reason"] for r in store.load(sid).plugins["premise"]["escapes"]] == [
+            premise.ESCAPE_ENUMERATION_NOT_LANDED, premise.ESCAPE_ADVISOR_TIMEOUT]
+
+    def test_a_late_landing_onto_an_already_enumerated_digest_stays_a_no_op(
+            self, store, fixtures_dir, tmp_path, monkeypatch):
+        """Why the two arms above re-block on the REASON family and never on the pass
+        counter: the fold refuses to apply at all once the bag records an enumeration
+        for this digest, so a late sidecar cannot stack a second pass on top of a
+        synchronous one. `enumerate_pass` therefore distinguishes passes only on the
+        synchronous retry path — pinned here so the untested-looking gap is read as
+        unreachable rather than as missing coverage."""
+        monkeypatch.setenv("CLAUDE_AGENT_HOME", str(tmp_path / "agent-home"))
+        sid = "late-fold-noop"
+        plan = str(fixtures_dir / "plan_two_stage.toml")
+        _to_plan_ready_with_premise(store, sid, plan)
+        cli.cmd_question_enumerate(ns(session=sid, plan=None), store=store,
+                                   runner=_failing_runner("advisor timed out after 480s"))
+        assert cli.cmd_question_enumerate_escape(
+            _escape_ns(sid, premise.ESCAPE_ADVISOR_TIMEOUT, note="pass 1 timed out"),
+            store=store).ok is True
+
+        digest = plugins_premise._plan_content_digest(load_plan(plan))
+        enumerate_sidecar.write(sid, digest, {
+            "runner_ok": False, "pairs": [], "stderr": "a second timeout, landing late",
+            "content_digest": digest, "plan_path": plan,
+        })
+
+        assert cli.cmd_approve(ns(session=sid, by="user"), store=store).ok is True
+        bag = store.load(sid).plugins["premise"]
+        assert bag["enumerate_pass"] == 1
+        assert bag["enumerated_runner_stderr"] == "advisor timed out after 480s"
+
+
+# --- submit-plan reopens a window where replan suppresses one ------------------
+
+class TestSubmitPlanReopensAWindowUnconditionally:
+    def test_a_digest_preserving_resubmit_reopens_the_window_and_costs_a_second_escape(
+            self, store, fixtures_dir, tmp_path):
+        """`cmd_submit_plan` relaunches unconditionally where `cmd_replan` suppresses a
+        relaunch inside an outstanding window. The asymmetry is deliberate — a resubmit
+        is a deliberate act, and this whole path exists because a mandatory check never
+        ran, so giving it another chance to genuinely execute is the trade this task's
+        premise says to take — but it is NOT free, and this pins the price rather than
+        leaving it to be rediscovered.
+
+        `final_check` edits and comments sit outside `_plan_content_digest` by design,
+        so a resubmit touching only those changes no content and still opens a fresh
+        window: the escape recorded seconds earlier stops discharging, the waited-out
+        deadline is restamped, and a second `not_landed` row inflates `escape_counts` —
+        the instrument this stage's refutable principle turns on. An accepted cost, not
+        desirable behaviour."""
+        sid = "digest-preserving-resubmit"
+        plan = fixtures_dir / "plan_two_stage.toml"
+        _to_plan_ready_with_premise(store, sid, str(plan))
+
+        state = store.load(sid)
+        state.plugins["premise"]["enumerate_deadline"] = time.time() - 1
+        store.save(state)
+        assert cli.cmd_question_enumerate_escape(
+            _escape_ns(sid, premise.ESCAPE_ENUMERATION_NOT_LANDED,
+                       note="window 1 never landed"), store=store).ok is True
+        assert plugins.plugin_gate_blockers(store.load(sid), "plan_approval") == []
+
+        commented = tmp_path / "plan_two_stage.toml"
+        commented.write_text(plan.read_text(encoding="utf-8")
+                             + "\n# a comment, which the content digest ignores\n",
+                             encoding="utf-8")
+        assert (plugins_premise._plan_content_digest(load_plan(str(commented)))
+                == plugins_premise._plan_content_digest(load_plan(str(plan))))
+
+        cli.cmd_submit_plan(ns(session=sid, plan=str(commented)), store=store)
+
+        reloaded = store.load(sid)
+        assert reloaded.plugins["premise"]["enumerate_launch"] == 2
+        assert reloaded.plugins["premise"]["enumerate_deadline"] > time.time()
+        assert any(plugins_premise._ENUMERATE_NOT_RUN in b
+                   for b in plugins.plugin_gate_blockers(reloaded, "plan_approval"))
+
+        state = store.load(sid)
+        state.plugins["premise"]["enumerate_deadline"] = time.time() - 1
+        store.save(state)
+        assert cli.cmd_question_enumerate_escape(
+            _escape_ns(sid, premise.ESCAPE_ENUMERATION_NOT_LANDED,
+                       note="window 2 never landed either"), store=store).ok is True
+        bag = store.load(sid).plugins["premise"]
+        assert len(bag["escapes"]) == 2
+        assert plugins_premise.escape_counts(
+            bag, bag["escapes"][-1]["content_digest"])["session"]["not_landed"] == 2
+
+
 # --- the fold's own history entry ----------------------------------------------
 
 class TestTheFoldRecordsItsPass:

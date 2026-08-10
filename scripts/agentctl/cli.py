@@ -1392,10 +1392,6 @@ def _apply_enumeration_result(
     bag["enumerated_runner_ok"] = runner_ok
     bag["enumerated_runner_stderr"] = stderr
     bag["enumerated_count"] = len(pairs)
-    # Bumped here, the ONE place both producers meet, so an escape recorded against
-    # pass N cannot discharge the blocker pass N+1 raises (plugins_premise.
-    # escape_recorded). Counting at the call sites instead would leave whichever
-    # producer a later change adds silently uncounted.
     bag["enumerate_pass"] = int(bag.get("enumerate_pass") or 0) + 1
     return raised
 
@@ -3781,15 +3777,10 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     _saved_plan_path = state.plan_path
     try:
         state.plan_path = args.plan
-        # Detached re-enumeration for the CORRECTED plan, before pblock (which folds
-        # premise_blockers) evaluates it: gated on whether args.plan's content digest
-        # differs from the bag's last-enumerated digest, NOT on diff_plans' no_change/
-        # refinement/substantive kind below -- diff_plans also weighs means/method/
-        # conditions/invariants/verify_command, fields _plan_content_digest excludes, so
-        # a "refinement" can leave the digest unchanged (no relaunch needed) and in
-        # principle a same-kind edit could still move it. A malformed args.plan is left
-        # alone here -- it fails the same way it always did, at the strict `_load(args.plan)`
-        # below, caught by main()'s outer handler.
+        # Re-enumerate the CORRECTED plan before pblock folds premise_blockers over
+        # it. Gated on args.plan's content digest, not on diff_plans' kind below: a
+        # relaunch is owed exactly when the enumerated bytes moved, which is not what
+        # refinement-vs-substantive classifies.
         bag = state.plugins.get("premise")
         enumeration_bag_dirty = False
         proposed = None
@@ -3801,14 +3792,10 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             if proposed is not None:
                 enumeration_bag_dirty = _fold_enumeration_sidecar(state, proposed, args.plan)
                 proposed_digest = plugins_premise._plan_content_digest(proposed)
-                # A window is still OUTSTANDING for these exact bytes when the last
-                # launch named this digest and nothing has landed since. A retried
-                # replan inside it must NOT open a second one: since an escape binds
-                # to the launch counter, a relaunch here would invalidate the escape
-                # the operator recorded a moment ago (and restamp the deadline they
-                # just waited out), so the route out of a child that never lands
-                # would never survive the replan it exists for. This refusing path
-                # is retried by design — see the fold-persistence note below.
+                # Suppressed while a window for these exact bytes is still open: a
+                # relaunch would invalidate the escape just recorded against the launch
+                # counter. The trade this makes, including its deliberate lack of an
+                # expiry, is in docs/operations/detached-enumeration-design.md.
                 outstanding = (not bag.get("enumerated")
                                and bag.get("enumerate_launch_digest") == proposed_digest)
                 if proposed_digest != bag.get("enumerated_at") and not outstanding:

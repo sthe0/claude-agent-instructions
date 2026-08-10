@@ -192,8 +192,8 @@ save sites, on both counts:
   anticipate, not a reuse of an existing one.
 
 **Why the digest key makes the fold safe.** A sidecar computed against different plan content
-is discarded by the same rule the gate already applies at `plugins_premise.py:172` — the
-comparison of `bag['enumerated_at']` against the live `content_digest`. A stale background
+is discarded by the same rule the gate already applies in `plugins_premise.premise_blockers` —
+the comparison of `bag['enumerated_at']` against the live `content_digest`. A stale background
 result therefore cannot discharge anything.
 
 That rule only holds because the key is an assertion the *worker* makes, not one it inherits.
@@ -209,9 +209,14 @@ instead.
 **What the key still does not cover.** `_plan_content_digest` is a digest of *parsed* content:
 goal, done criterion, criterion type, weight class, repo root, and the per-stage question keys.
 The enumeration reads the whole file, so `meta.final_check`, `meta.external_research`,
-`meta.delivery_worktree` and comments can change without moving the key — an enumeration may
-have read a pre-edit version of those. This is deliberate on both halves. Comments are excluded
-by construction (tomllib never surfaces them). The three `meta` fields are excluded because the
+`meta.delivery_worktree`, `meta.task_id` and comments can change without moving the key — an
+enumeration may have read a pre-edit version of those. Two *stage*-authored fields are
+uncovered as well: `stage.output_artifacts`, which `stage_question_key` omits entirely, and
+`stage.actor.cost_tier`, of which the key takes only `executor` and `capability_required`.
+
+This is deliberate for the `meta` fields and for comments; it is **unexamined** for the two
+stage fields. Comments are excluded
+by construction (tomllib never surfaces them). The four `meta` fields are excluded because the
 gate's notion of "the plan changed" is deliberately narrower than "the bytes changed": widening
 it would re-block approve — and, since the fold is digest-keyed, discard an in-flight
 enumeration — on a `final_check` refinement, which
@@ -221,6 +226,45 @@ the same reason: it would refuse folds for edits the gate itself treats as no-op
 fix mid-flight would cost a full `ENUMERATE_TIMEOUT_S` wait and an escape. The residual is that
 the *questions raised* may reflect a superseded `final_check`; the questions are advisory
 candidates an operator dispositions, and the gate's identity is unaffected.
+
+The `meta` argument does **not** extend to `stage.output_artifacts` and `stage.actor.cost_tier`:
+those are stage-authored, the enumeration reads them, and editing one moves neither the digest
+nor therefore the gate. Whether they belong in `stage_question_key` was not examined here — the
+key predates this work and is compared across processes against every live session's
+`Question.disposed_at_key`, so widening it is a migration, not a one-line change. Recorded as a
+known gap rather than argued away.
+
+**The `outstanding` guard and its missing expiry.** Because an escape binds to the launch
+counter, `cmd_replan` suppresses a relaunch while a window for the proposed bytes is still open
+(`not bag['enumerated']` and `bag['enumerate_launch_digest'] == proposed_digest`) — otherwise a
+retried replan would bump the counter, invalidate the escape the operator recorded a moment
+earlier, and restamp the deadline they had just waited out, so the route out of a child that
+never lands would not survive the replan it exists for.
+
+The guard carries no deadline term, so once a child for digest D dies, every later
+`replan --plan <D>` in that session is suppressed. That narrowing is accepted rather than
+overlooked: a deadline term would re-admit the very invalidation the guard exists to prevent.
+Liveness holds by two other routes — the synchronous `agentctl question-enumerate`, and the
+typed escape.
+
+**Why `cmd_submit_plan` stays unguarded.** The asymmetry is deliberate, and not for the reason
+first given: what closes the fail-open is the *counter binding*, not the unconditional
+relaunch — under a symmetric guard a byte-identical resubmit would open no second window, and
+the existing escape would legitimately cover the one window there is. Nothing is discharged for
+free either way.
+
+It stays unguarded because this path exists at all only because a mandatory check never ran. A
+resubmit is a deliberate act, and letting it open a fresh window gives the enumeration another
+chance to genuinely execute; under a guard, a session that escaped once would never re-attempt
+the check for those bytes. In `cmd_replan` the relaunch is instead a side effect of retrying a
+*refusing* path, which is why suppressing it there protects rather than blinds.
+
+The accepted cost: a **digest-preserving** resubmit — editing `final_check` or a comment, fields
+the digest ignores by design — opens a fresh window over unchanged content, invalidates a
+just-recorded escape, restamps a waited-out deadline, and forces a second `not_landed` row that
+inflates `escape_counts`, the very instrument this work's refutable principle turns on.
+`test_a_digest_preserving_resubmit_reopens_the_window_and_costs_a_second_escape` pins both the
+behaviour and the cost.
 
 **Abandoned sidecars.** A sidecar left by a session that never returned is inert: it is keyed
 by session id, so no other session reads it, and within its own session a digest mismatch

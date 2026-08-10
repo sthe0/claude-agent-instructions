@@ -33,6 +33,7 @@ any problem.
 from __future__ import annotations
 
 import argparse
+import ast
 import os
 import re
 import sys
@@ -40,6 +41,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
+AGENTCTL_ROOT = SCRIPTS_DIR / "agentctl"
 INSTALL_SCRIPT = SCRIPTS_DIR / "install-reminder-hooks.sh"
 
 if str(SCRIPTS_DIR) not in sys.path:
@@ -720,6 +722,75 @@ def check_obligations() -> list[str]:
     return problems
 
 
+ENUMERATION_WRITERS = {
+    ("_apply_enumeration_result", "enumerated"),
+    ("_apply_enumeration_result", "enumerated_at"),
+    ("_apply_enumeration_result", "enumerate_pass"),
+    ("_launch_enumeration", "enumerated"),
+    ("_launch_enumeration", "enumerated_at"),
+    ("_launch_enumeration", "enumerate_launch"),
+    # The ledger's own bag, which carries no counters and gates nothing.
+    ("cmd_ledger_enumerate", "enumerated"),
+}
+
+ENUMERATION_KEYS = {"enumerated", "enumerated_at", "enumerate_pass", "enumerate_launch"}
+
+
+def enumeration_bag_writers(tree: ast.AST) -> set[tuple[str, str]]:
+    found: set[tuple[str, str]] = set()
+
+    class Walker(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.scope: list[str] = []
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            self.scope.append(node.name)
+            self.generic_visit(node)
+            self.scope.pop()
+
+        visit_AsyncFunctionDef = visit_FunctionDef
+
+        def visit_Assign(self, node: ast.Assign) -> None:
+            for target in node.targets:
+                if (isinstance(target, ast.Subscript)
+                        and isinstance(target.slice, ast.Constant)
+                        and target.slice.value in ENUMERATION_KEYS):
+                    found.add((self.scope[-1] if self.scope else "<module>",
+                               target.slice.value))
+            self.generic_visit(node)
+
+    Walker().visit(tree)
+    return found
+
+
+def check_enumeration_writers() -> list[str]:
+    """Pin who may write the premise bag's enumeration fields.
+
+    An escape recorded at the plan_approval gate binds to `enumerate_launch` and
+    `enumerate_pass`, so a producer that sets `enumerated` without going through
+    `_apply_enumeration_result` leaves the counters behind and an escape from an
+    earlier pass silently discharges the blocker the new pass raised — the
+    fail-open class this whole path exists to close. `cmd_ledger_enumerate` shows
+    the bypass shape already exists in the module (on a different, ungated bag).
+    """
+    tree = ast.parse((AGENTCTL_ROOT / "cli.py").read_text(encoding="utf-8"))
+    found = enumeration_bag_writers(tree)
+    problems: list[str] = []
+    for scope, key in sorted(found - ENUMERATION_WRITERS):
+        problems.append(
+            f"cli.py: {scope}() writes bag[{key!r}] outside _apply_enumeration_result/"
+            f"_launch_enumeration — an enumeration write that skips the pass counter "
+            f"lets a stale escape discharge a live blocker; route it through "
+            f"_apply_enumeration_result or add it to ENUMERATION_WRITERS deliberately"
+        )
+    for scope, key in sorted(ENUMERATION_WRITERS - found):
+        problems.append(
+            f"cli.py: pinned enumeration write {scope}() -> bag[{key!r}] has disappeared; "
+            f"update ENUMERATION_WRITERS if that is intended"
+        )
+    return problems
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--staged", action="store_true", help="ignored; accepted for verify-all uniformity")
@@ -753,6 +824,7 @@ def main(argv: list[str] | None = None) -> int:
     problems += check_review_dispatch()
     problems += check_code_review_precondition()
     problems += check_obligations()
+    problems += check_enumeration_writers()
 
     if problems:
         print("verify-agentctl: FAIL")
