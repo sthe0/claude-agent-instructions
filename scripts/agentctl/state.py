@@ -774,7 +774,14 @@ class Order:
 
     NOT persisted in SessionState. The engine holds no cached copy of the order, so
     there is no meta-level analogue of `_apply_refined_stage_fields` to keep in step; a
-    consumer that needs the order reads it from the plan."""
+    consumer that needs the order reads it from the plan.
+
+    That is a claim about RE-MATERIALIZATION alone, and it has already been read too
+    widely once. The order is still plan CONTENT, so every function deciding what counts as
+    a CHANGE to the plan does have to know about it: `plan.order_scope` (substantive tier),
+    `plan.order_place` (refinement tier), and `plugins_premise._plan_content_digest`, which
+    decides whether a discharged question enumeration survives a replan — the last was
+    missed on exactly this reasoning."""
     customer_id: str = ""
     customer: str = ""
     functional_place: str = ""
@@ -784,30 +791,51 @@ class Order:
     # for totality; whether an entry's named control really decides the requirement is
     # review, not something this type can settle.
     coverage: dict[str, list[str]] = field(default_factory=dict)
+    # Names of the [meta.order] keys the raw table CARRIED but `from_dict` could not read
+    # in the shape this type declares. Recorded, not authored: totality degrades a
+    # malformed key to its empty form, which at the submission seam is indistinguishable
+    # from an absent one — so without this record the seam reports "missing
+    # 'requirements'" for a key plainly present, sending the author to write again what
+    # is already there instead of to fix its shape. Only `from_dict` ever sets it.
+    malformed: tuple[str, ...] = ()
 
     @classmethod
     def from_dict(cls, d: dict) -> "Order":
         """Rebuild an Order from a raw TOML/JSON table, TOTALLY: every malformation
         degrades to the empty form rather than raising. That totality is the property
         the loader path depends on — a plan whose [meta.order] is nonsense must still
-        load, and be refused at the seam where refusals belong."""
+        load, and be refused at the seam where refusals belong. What was degraded is
+        recorded in `malformed` so that seam can say WHICH defect it found."""
+        malformed: list[str] = []
+
         raw_reqs = d.get("requirements")
-        reqs = [
-            Requirement.from_dict(r)
-            for r in (raw_reqs if isinstance(raw_reqs, list) else [])
-            if isinstance(r, dict)
-        ]
+        if isinstance(raw_reqs, list):
+            reqs = [Requirement.from_dict(r) for r in raw_reqs if isinstance(r, dict)]
+            if len(reqs) != len(raw_reqs):  # a bare sentence among the tables
+                malformed.append("requirements")
+        else:
+            reqs = []
+            if raw_reqs is not None:  # a string, or [meta.order.requirements] as a table
+                malformed.append("requirements")
+
         raw_cov = d.get("coverage")
-        cov = {
-            str(k): [str(x) for x in (v if isinstance(v, list) else [v])]
-            for k, v in (raw_cov if isinstance(raw_cov, dict) else {}).items()
-        }
+        if isinstance(raw_cov, dict):
+            cov = {
+                str(k): [str(x) for x in (v if isinstance(v, list) else [v])]
+                for k, v in raw_cov.items()
+            }
+        else:
+            cov = {}
+            if raw_cov is not None:
+                malformed.append("coverage")
+
         return cls(
             customer_id=str(d.get("customer_id", "")),
             customer=str(d.get("customer", "")),
             functional_place=str(d.get("functional_place", "")),
             requirements=reqs,
             coverage=cov,
+            malformed=tuple(malformed),
         )
 
 

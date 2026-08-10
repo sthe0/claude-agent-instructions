@@ -61,7 +61,19 @@ def _plan_content_digest(doc: "plan.PlanDoc") -> str:
     """A digest of the plan's PARSED content (post-tomllib), so a TOML comment-only
     edit — which tomllib never surfaces as a field — is already a no-op here
     without any extra comment-stripping logic. Reuses `stage_question_key` per
-    stage rather than re-deriving a parallel notion of 'stage bytes'."""
+    stage rather than re-deriving a parallel notion of 'stage bytes', and
+    `plan.order_place` for the order rather than re-deriving a notion of 'order
+    bytes': it is the wider of the two order keys, so a re-wording, an added or
+    renamed requirement id, and a coverage-key change all move the digest. A
+    question is raised against the statement of what the plan is FOR; an order
+    rewritten under a discharged enumeration is exactly the staleness this digest
+    exists to catch.
+
+    The order is SPLICED (`+ order_place(...)`) rather than occupying a slot in the
+    tuple: `order_place` is empty for an order-less plan, so such a plan's payload
+    stays byte-identical to the one this function produced before the order field
+    existed, and no live session's already-discharged enumeration is re-armed by
+    the field's arrival."""
     payload = repr((
         doc.meta.goal,
         doc.meta.done_criterion,
@@ -69,7 +81,7 @@ def _plan_content_digest(doc: "plan.PlanDoc") -> str:
         doc.meta.weight_class,
         doc.meta.repo_root,
         tuple(sorted((s.index, plan.stage_question_key(s)) for s in doc.stages)),
-    ))
+    ) + plan.order_place(doc.meta))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 

@@ -206,11 +206,19 @@ def test_the_enumerating_judge_may_target_every_place_in_the_vocabulary():
     judge that the vocabulary does not have."""
     from agentctl import advisor
 
-    menu_line = next(
+    # Exactly one menu line, asserted rather than taken: a bare `next(...)` raises
+    # StopIteration — a test ERROR with no message — the day the line is reworded away, and
+    # silently reads the first of two if the prompt ever grows a second menu, which is the
+    # case where the set below would be compared against the wrong half of the prompt.
+    menu_lines = [
         line for line in advisor._ENUMERATE_QUESTIONS_PROMPT.splitlines()
         if "is one of:" in line
+    ]
+    assert len(menu_lines) == 1, (
+        f"expected exactly one 'is one of:' menu line in _ENUMERATE_QUESTIONS_PROMPT, "
+        f"found {len(menu_lines)}: {menu_lines}"
     )
-    offered = {n.strip() for n in menu_line.split("is one of:", 1)[1].split(",")}
+    offered = {n.strip() for n in menu_lines[0].split("is one of:", 1)[1].split(",")}
 
     assert offered == set(text_shape.ELEMENT_NAMES), (
         "places the enumerating judge is not allowed to raise a question against: "

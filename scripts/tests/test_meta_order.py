@@ -46,16 +46,41 @@ from agentctl.submission import submission_violations, validate_submission
 CORPUS_DIR = Path(__file__).resolve().parent / "fixtures" / "plan_corpus"
 
 # Parts of `Order` exempt from the "one refusing case per part" rule, each with the reason
-# it is exempt. EMPTY today — every part of the order is required of a substantive plan.
-# It exists as a DECLARED seam so that a future exemption has to be written down and
-# justified here, rather than made by quietly leaving a field out of the case list (which
-# the guard below would not be able to tell from an oversight).
-_NOT_REQUIRED: dict[str, str] = {}
+# it is exempt. A DECLARED seam, so that an exemption has to be written down and justified
+# here rather than made by quietly leaving a field out of the case list (which the guard
+# below would not be able to tell from an oversight).
+_NOT_REQUIRED: dict[str, str] = {
+    "malformed": (
+        "not an AUTHORED part: it is what Order.from_dict records about the raw table it "
+        "could not read, so there is no line for a plan to omit and nothing for an author "
+        "to declare. Its own refusal cases are the malformed-shape tests below."
+    ),
+}
 
 # THE PARAMETRIZATION. Derived from the type, never typed out beside it.
 _ORDER_PARTS = tuple(
     f.name for f in dataclasses.fields(Order) if f.name not in _NOT_REQUIRED
 )
+
+# The message each parametrized case must be refused BY. Without it `pytest.raises` would
+# establish only "refused", not "refused for the part this case removed" — a fixture defect
+# that refused every case for one unrelated reason would pass the whole parametrization.
+# Keyed by part and guarded for totality against `_ORDER_PARTS`, so a new part arrives with
+# a red test rather than an unpinned one.
+_REFUSAL_MATCH = {
+    "customer_id": r"\[meta\.order\] missing 'customer_id'",
+    "customer": r"\[meta\.order\] missing 'customer'",
+    "functional_place": r"\[meta\.order\] missing 'functional_place'",
+    "requirements": r"\[meta\.order\] missing 'requirements'",
+    # coverage is graded as a RELATION, so its omission is reported by what it fails to
+    # cover rather than as a missing key — a different message, not a missing one.
+    "coverage": r"\[meta\.order\.coverage\] says nothing about",
+}
+
+# How the submission seam spells an order refusal. Used to assert that a strict LOAD is not
+# raising about the order — the bare substring "order" would false-green on a refusal
+# phrased without the word and false-red on "reorder", "ordering", "border".
+_ORDER_REFUSAL_MARKERS = ("[meta.order]", "[meta.order.coverage]", "the 'order' table")
 
 _ORDER_SCALARS = {
     "customer_id": 'customer_id = "user"',
@@ -180,12 +205,23 @@ def test_meta_order_refusal_cases_are_the_order_s_own_field_set():
     this is what makes "each missing part is refused" a claim about the TYPE rather than
     about the cases someone remembered.
 
-    Three assertions, each closing a different way the enumeration could go vacuous: a
-    parametrization that collapsed to nothing would make every case below pass by not
-    running; a case list that stopped tracking the type — the hand-written copy this test
-    exists to forbid — would leave a new part unrequired and silent; and an exemption made
-    by omission rather than by declaration is indistinguishable from an oversight, so an
-    entry in `_NOT_REQUIRED` has to carry the reason it is there."""
+    Read honestly, these assertions are not all the same kind of check, and saying so is
+    part of what the guard is for.
+
+    TWO ARE LIVE TODAY. An exemption with no written reason is indistinguishable from an
+    oversight, and `_NOT_REQUIRED` naming something that is not a part of the order at all
+    — a stale entry left behind by a rename — would silently un-require the field that
+    replaced it. Neither is decided by the derivation.
+
+    TWO ARE TAUTOLOGIES AGAINST THE DERIVATION, deliberately kept. `_ORDER_PARTS` is
+    `fields(Order) - _NOT_REQUIRED`, so it cannot contain an exempt name and cannot omit a
+    non-exempt one; those two assertions can only fail once someone replaces the derivation
+    with a hand-written list. That is precisely the substitution this module forbids, and
+    it is the one a reviewer is least likely to notice, so the assertions stay — as a trap
+    armed for that edit, not as checks that do work on any run today.
+
+    The `_REFUSAL_MATCH` totality is live for the same reason the reason-strings are: it is
+    a second hand-written map, and nothing derives it."""
     assert _ORDER_PARTS, "an empty parametrization proves nothing about any part"
 
     declared = set(_ORDER_PARTS) | set(_NOT_REQUIRED)
@@ -201,6 +237,12 @@ def test_meta_order_refusal_cases_are_the_order_s_own_field_set():
     assert all(reason.strip() for reason in _NOT_REQUIRED.values()), (
         "an exemption with no reason is an oversight wearing a declaration's clothes"
     )
+    assert set(_REFUSAL_MATCH) == set(_ORDER_PARTS), (
+        "parts with no pinned refusal message, so their case asserts only 'refused': "
+        f"{sorted(set(_ORDER_PARTS) - set(_REFUSAL_MATCH))}; "
+        f"messages pinned for something that is not a required part: "
+        f"{sorted(set(_REFUSAL_MATCH) - set(_ORDER_PARTS))}"
+    )
 
 
 # --- one refusing case per part of the order ---------------------------------
@@ -211,12 +253,16 @@ def test_meta_order_missing_a_part_is_refused_at_submission(part, tmp_path):
     """One case per part, generated from the type. The plan LOADS — strict — and is then
     refused by the seam, which is the hinge this whole change turns on: had the
     requirement gone into `parse_plan`, the load would raise here instead, and every
-    already-approved plan would start failing on its own re-read."""
+    already-approved plan would start failing on its own re-read.
+
+    Matched against the part's OWN message (`_REFUSAL_MATCH`): a bare `raises(PlanError)`
+    would be satisfied by a fixture that is refused for some other defect entirely, which
+    would make the whole parametrization pass while proving nothing about any part."""
     plan = _write_plan(tmp_path / f"no_{part}.toml", omit=(part,))
 
     doc = load_plan(plan, strict=True)  # must not raise
 
-    with pytest.raises(PlanError):
+    with pytest.raises(PlanError, match=_REFUSAL_MATCH[part]):
         validate_submission(doc)
 
 
@@ -340,7 +386,12 @@ def test_order_parse_survives_a_malformed_order_table(tmp_path):
     a convenience: a plan whose `[meta.order]` is nonsense must still LOAD — the loader
     refuses nothing here — and be refused where refusals belong. Without this, a
     malformed order in an already-approved plan would raise on the session's own re-read,
-    which is the retroactivity the seam exists to prevent."""
+    which is the retroactivity the seam exists to prevent.
+
+    Refused for the defect the author actually has. Both keys are PRESENT and unreadable,
+    so "missing 'requirements'" would name a defect the plan does not have and send the
+    author to write again what is already written; totality is kept by `Order.malformed`
+    recording what it dropped, not by the seam re-deriving it from the empty result."""
     path = tmp_path / "malformed.toml"
     _write_plan(path, omit=("requirements", "coverage"))
     path.write_text(
@@ -356,8 +407,79 @@ def test_order_parse_survives_a_malformed_order_table(tmp_path):
 
     assert order.requirements == []
     assert order.coverage == {}
-    assert any("missing 'requirements'" in p
-               for p in submission_violations(load_plan(str(path)))), "still refused"
+    assert order.malformed == ("requirements", "coverage")
+
+    problems = submission_violations(load_plan(str(path)))
+    assert any("'requirements' is present but is not" in p for p in problems), problems
+    assert any("'coverage' is present but is not" in p for p in problems), problems
+    assert not any("missing 'requirements'" in p for p in problems), problems
+
+
+def test_order_parse_records_a_partially_dropped_requirement_list(tmp_path):
+    """The half-malformed case, which the whole-table one above cannot reach: the list IS a
+    list, and one entry in it is a bare sentence. `requirements` ends up non-empty, so the
+    presence check passes and — without `malformed` — the plan would submit CLEAN with a
+    requirement the author wrote and the engine silently dropped.
+
+    This is the same defect as the one above, in its quietest form: there, the wrong message
+    was emitted; here, no message at all."""
+    path = tmp_path / "half_malformed.toml"
+    _write_plan(path, omit=("requirements",))
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "[meta.order]\n",
+            '[meta.order]\nrequirements = [ { id = "R1", text = "kept" }, "dropped" ]\n',
+        ),
+        encoding="utf-8",
+    )
+
+    order = load_plan(str(path), strict=True).meta.order  # must not raise
+
+    assert [r.id for r in order.requirements] == ["R1"]
+    assert order.malformed == ("requirements",)
+    assert any("'requirements' is present but is not" in p
+               for p in submission_violations(load_plan(str(path)))), "silently dropped"
+
+
+def test_meta_order_a_duplicated_requirement_id_is_refused(tmp_path):
+    """Two requirements under one id. Every presence check passes and the coverage lookup
+    SUCCEEDS for both — `coverage.get("R1")` cannot tell that two requirements are asking —
+    so the totality check reports a fully covered order. One coverage entry and, at stage 8,
+    one acceptance verdict then stand for two requirements, and the second is accepted
+    without ever having been decided.
+
+    Refused BY the duplicated id: 'ids must be unique' leaves the author to find which."""
+    path = tmp_path / "dup_id.toml"
+    _write_plan(path, omit=("requirements",))
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "[meta.order]\n",
+            '[meta.order]\nrequirements = [\n'
+            '  { id = "R1", text = "the first thing asked" },\n'
+            '  { id = "R1", text = "a different thing, under the same id" },\n'
+            '  { id = "R2", text = "the second thing asked" },\n'
+            ']\n',
+        ),
+        encoding="utf-8",
+    )
+
+    problems = submission_violations(load_plan(str(path)))
+
+    assert any("R1" in p and "declared more than once" in p for p in problems), problems
+    assert not any("R2" in p and "declared more than once" in p for p in problems), problems
+
+
+def test_meta_order_a_coverage_key_naming_no_requirement_is_refused(tmp_path):
+    """The other direction of the coverage totality. A key matching no declared id covers
+    nothing, and the shape it usually arrives in is a requirement id renamed on one side
+    only: the real requirement is then uncovered while the map still looks full. Refused by
+    the stray KEY, so the author is told which entry is pointing at nothing."""
+    plan = _write_plan(tmp_path / "stray_cov.toml",
+                       coverage={**_COVERAGE, "R7": ["stage 1 verify_command"]})
+
+    problems = submission_violations(load_plan(plan))
+
+    assert any("R7" in p and "no requirement" in p for p in problems), problems
 
 
 # --- the carve-outs: nothing already accepted is affected --------------------
@@ -414,15 +536,19 @@ def test_meta_order_every_frozen_corpus_plan_loads_unaffected(tmp_path):
     baseline; it is the second half of this stage's verify_command for exactly this
     reason. This test carries the half that is universal without a baseline.
 
-    Two guards keep the enumeration from going quiet. The count floor: `glob` returning
-    three files reads exactly like a passing test, and a domain that quietly shrank is how
-    an assertion over "the whole fixture" becomes an assertion over a sample with nobody
-    editing the assertion (50 is under the 55 frozen, so an ordinary addition or removal
-    does not trip it and a broken enumeration does). And the partition non-degeneracy: if
-    every plan raised under strict, the strict half would be vacuously satisfied by a
-    corpus that loads nothing at all."""
+    Two guards keep the enumeration from going quiet. The count is EXACT, not a floor: the
+    corpus is frozen and cannot grow, so a floor here would absorb the very drift it is
+    meant to report, and `glob` returning three files reads exactly like a passing test.
+    The partition non-degeneracy is a floor at 25 rather than an equality, because the
+    plan-by-plan pin on which plans load belongs to test_frozen_plan_compat.py and having
+    it twice would mean a legitimate baseline update turning two tests red in two places.
+    What is defended here is the WIDTH of the strict half — it is satisfied vacuously by
+    any plan that raises, so it proves only as much as the number that actually load."""
     plans = sorted(CORPUS_DIR.glob("*.toml"))
-    assert len(plans) >= 50, f"the corpus enumeration found only {len(plans)} plans"
+    assert len(plans) == 55, (
+        f"the corpus enumeration found {len(plans)} plans, not the 55 frozen ones — either "
+        f"the fixture changed (it is frozen; it should not have) or the enumeration broke"
+    )
 
     strict_ok = []
     for p in plans:
@@ -431,17 +557,26 @@ def test_meta_order_every_frozen_corpus_plan_loads_unaffected(tmp_path):
         try:
             doc = load_plan(str(p), strict=True)
         except PlanError as exc:
-            assert "order" not in str(exc), (
+            assert not any(m in str(exc) for m in _ORDER_REFUSAL_MARKERS), (
                 f"{p.name} now raises about the order under strict: {exc}"
             )
             continue
         assert doc.meta.order is None, f"{p.name} unexpectedly declares [meta.order]"
         strict_ok.append(p.name)
 
-    assert strict_ok, "no corpus plan loads strict at all — the strict half proves nothing"
+    assert len(strict_ok) >= 25, (
+        f"only {len(strict_ok)} of the 55 corpus plans load strict, against the 25 that did "
+        f"when this was written. The strict half of the claim is only as wide as this "
+        f"number, so a drop is a silent narrowing of the domain, not a passing test"
+    )
 
 
 # --- the meta-level change-decision obligation -------------------------------
+#
+# Two of the three functions deciding what counts as a change to the order are pinned here.
+# The third — `plugins_premise._plan_content_digest`, which decides whether a discharged
+# question enumeration survives an order edit — is pinned in test_plugins_premise.py,
+# beside the gate it arms.
 
 
 def test_meta_order_adding_a_requirement_is_a_substantive_replan(tmp_path):

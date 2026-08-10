@@ -136,10 +136,11 @@ _SUBSTANTIVE_META_FIELDS = (
 )
 
 # The parts of `[meta.order]` a substantive plan must fill, each paired with why. Every
-# field of `state.Order` is either a row here or `coverage`, whose requirement is a
-# relation rather than a presence and is checked separately below — and that totality is
-# not left to whoever edits this tuple: test_meta_order.py parametrizes its refusal cases
-# over `dataclasses.fields(Order)` itself, so a part added to the type and not covered
+# field of `state.Order` is either a row here, or `coverage` — whose requirement is a
+# relation rather than a presence and is checked separately below — or `malformed`, which
+# no plan author writes at all. That totality is not left to whoever edits this tuple:
+# test_meta_order.py parametrizes its refusal cases over `dataclasses.fields(Order)`
+# itself, against a declared exemption set, so a part added to the type and not covered
 # here turns red rather than shipping unrequired.
 _ORDER_PARTS = (
     (
@@ -167,6 +168,35 @@ _ORDER_PARTS = (
         "bare sentences leaves the load-bearing key as prose someone has to parse back out",
     ),
 )
+
+# What each malformable part must LOOK like. Only the two container parts appear: the
+# scalars are `str(...)`-coerced by Order.from_dict, so whatever was written survives in
+# some readable form and there is nothing to have dropped.
+_ORDER_SHAPE_HINTS = {
+    "requirements": (
+        "an array of tables — `requirements = [ { id = \"R1\", text = \"...\" } ]`, or "
+        "repeated [[meta.order.requirements]] sections. A list of bare sentences, a single "
+        "[meta.order.requirements] table, or a string all read as no requirement at all"
+    ),
+    "coverage": (
+        "a table of requirement id -> controls — a [meta.order.coverage] section carrying "
+        "one `R1 = [\"stage 1 verify_command\"]` line per declared requirement"
+    ),
+}
+
+
+def _order_malformed(name: str) -> str:
+    """The message for a part the raw table CARRIED but `Order.from_dict` could not read.
+
+    Separate from the missing-part message because it names a different defect and needs a
+    different repair: the key is there, its shape is wrong, and telling that author to
+    'add requirements' sends them to write again what is already written."""
+    return (
+        f"[meta.order] {name!r} is present but is not {_ORDER_SHAPE_HINTS[name]}. The "
+        f"engine read nothing usable from it, so the key is present and its content is "
+        f"absent — fix the shape rather than adding the key again"
+    )
+
 
 _ORDER_ABSENT = (
     "[meta] missing the 'order' table (required for substantive plans): a plan is an "
@@ -279,21 +309,28 @@ def _undeclared_weight_class(doc, session_weight_class: str | None) -> bool:
 def _order_violations(meta) -> list[str]:
     """Every way `[meta.order]` fails the substantive grade. [] == clean.
 
-    Three shapes, and the third is the only one that is not a presence check:
+    Presence checks first, then the four that are relations rather than presences:
 
       * no order table at all — the plan states no requirements to be accepted against;
       * a missing PART of the order (`_ORDER_PARTS`), including both halves of the
-        customer pair, since the identifier and the position it names do different jobs;
-      * a requirement the coverage map says nothing about. Totality is the whole claim
-        here and it is deliberately the weaker of the two things a reader might expect:
-        the resolver checks that every declared id HAS an entry, never that the control
-        the entry names actually decides the requirement. Sufficiency is review — an
-        entry can be wrong, and nothing mechanical will say so.
-
-    An id-less requirement is refused separately from an uncovered one because it is a
-    strictly worse case: an entry with no id is not merely uncovered, it is uncoverABLE —
-    the coverage map, the acceptance verdicts and this check all key on the id, so a
-    requirement without one cannot be named by any of them.
+        customer pair, since the identifier and the position it names do different jobs —
+        unless `Order.from_dict` recorded the part as MALFORMED, in which case the key is
+        present and only its shape is wrong, and saying 'missing' would name a defect the
+        author does not have;
+      * an id-less requirement, refused separately from an uncovered one because it is a
+        strictly worse case: an entry with no id is not merely uncovered, it is
+        uncoverABLE — the coverage map, the acceptance verdicts and this check all key on
+        the id, so a requirement without one cannot be named by any of them;
+      * a DUPLICATED requirement id, refused for the same reason one step on: the id is
+        the key, so two requirements sharing one collapse into a single coverage entry and
+        a single acceptance verdict, and the second rides in accepted without ever having
+        been decided;
+      * a requirement the coverage map says nothing about, and a coverage key naming no
+        declared requirement — the two directions of the same totality. It is deliberately
+        the weaker of the two things a reader might expect: the resolver checks that every
+        declared id HAS an entry, never that the control the entry names actually decides
+        the requirement. Sufficiency is review — an entry can be wrong, and nothing
+        mechanical will say so.
 
     Pure over `doc.meta`, like every other enumerator in this module, and it never reads
     the ORDER's own truth: whether these are the right requirements is the customer's
@@ -303,10 +340,16 @@ def _order_violations(meta) -> list[str]:
         return [_ORDER_ABSENT]
     out: list[str] = []
     for name, why in _ORDER_PARTS:
-        if not getattr(order, name):
+        if name in order.malformed:
+            out.append(_order_malformed(name))
+        elif not getattr(order, name):
             out.append(
                 f"[meta.order] missing {name!r} (required for substantive plans): {why}"
             )
+    if "coverage" in order.malformed:
+        # Not in _ORDER_PARTS — coverage is graded as a relation below, so its shape has
+        # no presence check to hang off and needs its own line here.
+        out.append(_order_malformed("coverage"))
     unnamed = [i for i, r in enumerate(order.requirements, start=1) if not r.id]
     if unnamed:
         out.append(
@@ -315,6 +358,16 @@ def _order_violations(meta) -> list[str]:
             f"map and every acceptance verdict key on the id, so an id-less requirement "
             f"cannot be covered or accepted at all"
         )
+    declared = [r.id for r in order.requirements if r.id]
+    duplicated = sorted({rid for rid in declared if declared.count(rid) > 1})
+    if duplicated:
+        out.append(
+            f"[meta.order] requirement id(s) {', '.join(duplicated)} are declared more "
+            f"than once. Ids must be unique: the coverage map and every acceptance verdict "
+            f"are keyed by id, so two requirements sharing one hide behind a single "
+            f"coverage entry and a single verdict — the second is accepted without ever "
+            f"having been decided"
+        )
     uncovered = [r.id for r in order.requirements if r.id and not order.coverage.get(r.id)]
     if uncovered:
         out.append(
@@ -322,6 +375,14 @@ def _order_violations(meta) -> list[str]:
             f"declared requirement needs an entry naming the control that decides it "
             f"(a stage's verify_command, a final_check); an uncovered requirement is one "
             f"the plan asks to be accepted on without saying what would establish it"
+        )
+    stray = sorted(set(order.coverage) - set(declared))
+    if stray:
+        out.append(
+            f"[meta.order.coverage] names {', '.join(stray)}, which no requirement "
+            f"declares. A key matching no id covers nothing — most often a requirement id "
+            f"renamed on one side only, which leaves the real requirement uncovered while "
+            f"the map still looks full"
         )
     return out
 

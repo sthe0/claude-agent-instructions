@@ -1090,7 +1090,9 @@ def order_place(meta) -> tuple:
     while a complement would leave a newly added Order field belonging to NEITHER key if
     whoever added it forgot the split. Everything the order holds is therefore covered
     here by construction, and the scope half is the only thing anyone has to remember to
-    extend."""
+    extend. `malformed` rides here for that reason and one of its own: it is the only
+    trace a dropped `requirements = ["a sentence"]` leaves, so an edit that turns a
+    readable order into an unreadable one would otherwise move no key at all."""
     order = meta.order
     if order is None:
         return ()
@@ -1100,6 +1102,7 @@ def order_place(meta) -> tuple:
         order.functional_place,
         tuple((r.id, r.text) for r in order.requirements),
         tuple(sorted((k, tuple(v)) for k, v in order.coverage.items())),
+        order.malformed,
     ),)
 
 

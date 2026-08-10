@@ -229,3 +229,116 @@ def test_comment_only_plan_edit_does_not_reblock_enumeration(tmp_path, fixtures_
     blockers = plugins.plugin_gate_blockers(state, "plan_approval")
     assert not any(pp._ENUMERATE_STALE in b for b in blockers)
     assert blockers == []
+
+
+# --- the order is plan content, so an order-only edit is a content change -------
+
+_ORDER = """
+[meta.order]
+customer_id = "user"
+customer = "the position that posed the critique task"
+functional_place = "the norm governing an act of activity in this engine"
+requirements = [
+  { id = "R1", text = "the order is a typed object, not one free-text string" },
+]
+
+[meta.order.coverage]
+R1 = ["stage 1 verify_command"]
+"""
+
+
+def _with_order(tmp_path, fixtures_dir, name, order_toml=_ORDER):
+    """The two-stage fixture with a [meta.order] appended. Appended rather than fixtured
+    because what these tests need is TWO plans differing in the order ALONE — a second
+    committed fixture would differ in whatever else drifted between them."""
+    path = tmp_path / name
+    src = (fixtures_dir / "plan_two_stage.toml").read_text(encoding="utf-8")
+    path.write_text(src + order_toml, encoding="utf-8")
+    return pp._plan_content_digest(plan.load_plan(str(path)))
+
+
+@pytest.mark.parametrize(
+    "edited, why",
+    [
+        (
+            _ORDER.replace(
+                "the norm governing an act of activity in this engine",
+                "the norm governing an act of activity, its filling defective",
+            ),
+            "a re-wording: the same requirements, a different statement of the place",
+        ),
+        (
+            _ORDER.replace("R1", "R2"),
+            "an id/coverage-key change: what the plan is for is stated under a new key",
+        ),
+        (
+            _ORDER.replace(
+                'not one free-text string" },\n',
+                'not one free-text string" },\n  "a requirement written as a sentence",\n',
+            ),
+            "an added requirement the parser DROPS: every readable field is identical, so "
+            "`Order.malformed` is the only thing that moves",
+        ),
+    ],
+    ids=["rewording", "id_and_coverage_key", "a_dropped_requirement"],
+)
+def test_an_order_only_edit_moves_the_content_digest(edited, why, tmp_path, fixtures_dir):
+    """A question is raised against the statement of what the plan is FOR, and the order is
+    now where that statement lives. So an edit confined to `[meta.order]` has to re-arm
+    `_ENUMERATE_STALE`, exactly as a goal or a stage edit does.
+
+    Three edit classes, each failing differently. A re-wording changes only prose the scope
+    key deliberately ignores, so a digest built from `order_scope` would miss it; an id or
+    coverage-key change is the scope edit a replan actually makes; and a requirement added
+    in a shape the parser DROPS leaves every readable field identical, so only
+    `Order.malformed` moves — the case that would otherwise let an order be edited with no
+    key in the family noticing at all. The digest reads `order_place`, the wider of the two
+    keys and the one that carries `malformed`, and catches all three.
+
+    Nothing in the suite caught this before: every corpus plan and every fixture has `order
+    is None`, where the contribution is empty whether or not the field is read at all."""
+    before = _with_order(tmp_path, fixtures_dir, "before.toml")
+    after = _with_order(tmp_path, fixtures_dir, "after.toml", edited)
+
+    assert before != after, f"an order-only edit left the digest unmoved — {why}"
+
+
+def test_an_order_only_edit_reblocks_a_discharged_enumeration(tmp_path, fixtures_dir):
+    """The digest difference above, carried through to the gate it exists to arm: an
+    enumeration discharged against the old order does not survive the new one."""
+    path = tmp_path / "plan.toml"
+    src = (fixtures_dir / "plan_two_stage.toml").read_text(encoding="utf-8")
+    path.write_text(src + _ORDER, encoding="utf-8")
+
+    state = _new_state(plan_path=str(path))
+    plugins.activate(state, "premise")
+    state.plugins["premise"]["enumerated"] = True
+    state.plugins["premise"]["enumerated_at"] = pp._plan_content_digest(
+        plan.load_plan(str(path))
+    )
+    assert plugins.plugin_gate_blockers(state, "plan_approval") == []
+
+    # the replan rewrites the order and nothing else — same goal, same stages
+    path.write_text(src + _ORDER.replace("R1", "R2"), encoding="utf-8")
+
+    assert plugins.plugin_gate_blockers(state, "plan_approval") == [
+        f"[premise] {pp._ENUMERATE_STALE}"
+    ]
+
+
+def test_an_orderless_plan_s_digest_is_unchanged_by_the_order_field(tmp_path, fixtures_dir):
+    """The identity that makes the change above safe to ship. `enumerated_at` is PERSISTED
+    and compared across processes, so a contribution made unconditionally would re-arm
+    `_ENUMERATE_STALE` for every live session the moment this field arrived — a plan
+    nobody edited would suddenly need a re-run of `question-enumerate`.
+
+    Pinned as a literal digest rather than as `order_place(...) == ()`: the property is
+    about the BYTES this function returns for an order-less plan, and a payload change that
+    kept the empty contribution but reshaped the tuple around it would still move them."""
+    orderless = pp._plan_content_digest(
+        plan.load_plan(str(fixtures_dir / "plan_two_stage.toml"))
+    )
+
+    assert orderless == (
+        "16d4cb1479155b598093362b1a136cb773c378251f299374dbc8083f429277d3"
+    )
