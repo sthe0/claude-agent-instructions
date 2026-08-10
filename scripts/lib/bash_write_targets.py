@@ -190,38 +190,126 @@ def _join_backslash_continuations(command: str) -> str:
     return "".join(out)
 
 
+def _prepare_command_for_whole_stream(command: str) -> str:
+    """Join backslash-newline continuations AND turn every remaining newline
+    that lies outside a quoted span into a statement separator (`" ; "`), in
+    ONE quote/backslash-aware pass. `;` is already a member of `_BASH_SEPS`,
+    so no new separator token is needed downstream — this only supplies the
+    token `shlex.split()` never emits for a bare newline (it treats one
+    exactly like a space).
+
+    This is `_join_backslash_continuations` with one added branch. The two
+    transformations share the exact same quote-tracking state (single vs.
+    double, backslash-escape handling): a newline decision needs to know
+    whether it is inside a quote, and that is precisely the state the
+    continuation-join already computes. A second, separately-written scanner
+    would have to re-derive that same state on its own token-by-token walk —
+    two independent implementations of one escaping rule, with no way to
+    keep them from drifting apart. That drift is exactly the bug class this
+    fix closes (a per-line split that stopped tracking quote state across a
+    physical-line boundary at all), so one pass is used here rather than two.
+    `_join_backslash_continuations` itself is kept unedited below — it is
+    unit-tested directly by name, and it is still the exact transform the
+    per-line FALLBACK below needs (continuation-joining without newline
+    substitution, so real statement newlines remain physical-line
+    boundaries for `str.splitlines()`).
+
+    A newline that survives inside a single- or double-quoted span (real
+    shell performs no line-splitting inside a quoted string) is left
+    untouched, keeping the quoted string one token exactly as `shlex.split()`
+    itself would read it."""
+    out: list[str] = []
+    in_single = False
+    in_double = False
+    i = 0
+    n = len(command)
+    while i < n:
+        ch = command[i]
+        if in_single:
+            if ch == "'":
+                in_single = False
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "\\" and i + 1 < n:
+            nxt = command[i + 1]
+            if nxt == "\n":
+                i += 2
+                continue
+            out.append(ch)
+            out.append(nxt)
+            i += 2
+            continue
+        if ch == "'" and not in_double:
+            in_single = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '"':
+            in_double = not in_double
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "\n" and not in_double:
+            out.append(" ; ")
+            i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def command_write_targets(command: str, eff_cwd: str) -> list[str]:
     """Every write-target candidate of `command` (all segments, in command
     order), as absolute paths resolved against `eff_cwd`. Strips heredoc/
     here-string bodies first (`lib/shell_tokens.py`) so a line of body text is
-    never read as command syntax, then resolves backslash-newline line
-    continuations (`_join_backslash_continuations`) BEFORE splitting into
-    physical lines, so a logical command wrapped across lines — the routine
-    shape of agent-authored multi-line Bash — is tokenized whole rather than
-    truncated at its own continuation.
+    never read as command syntax.
 
-    Tokenized ONE PHYSICAL LINE AT A TIME, never as one combined token stream:
-    `shlex.split()` treats a newline exactly like a space and emits no token
-    for it, so `_BASH_SEPS` — a set of literal separator TOKENS — has nothing
-    to match a newline against. Tokenizing the whole command at once therefore
-    merged two lines into one segment, letting a verb-based writer's operand
-    scan on line 1 sweep up line 2's command word as a spurious argument.
+    Primary path: tokenize the WHOLE command as one stream, after
+    `_prepare_command_for_whole_stream` has (a) resolved backslash-newline
+    continuations and (b) turned every newline that is NOT inside a quoted
+    span into a `;` statement separator. This is what a real shell does —
+    a bare newline and `;` are both plain statement separators — and it is
+    the only way to keep a value that itself spans physical lines (a
+    multi-line commit message, `git commit -m 'first line\\n\\nbody'`) as
+    ONE token: splitting by physical line first (the earlier fix here) made
+    the line that merely CLOSES such a quote untokenizable on its own,
+    silently dropping every target from that line onward even though
+    nothing on it was actually malformed.
 
-    Fail-open PER LINE, not per command: a line that does not tokenize (an
-    unterminated quote, a lone trailing backslash) is skipped on its own —
-    matching every other consumer's fail-open convention in this hook family
-    without letting one malformed line discard every other line's real
-    targets."""
+    Fallback path, entered only when the whole-stream `shlex.split()` raises
+    (a quote that is genuinely unterminated somewhere in the command, with
+    no well-defined lexical reading of what follows it): recover per
+    PHYSICAL LINE, exactly as before this fix — `_join_backslash_continuations`
+    then `str.splitlines()`, each line tokenized and skipped independently on
+    its own `shlex.split()` failure. This still fails open on the line
+    actually carrying the bad quote, and on any line whose own quoting
+    depended on a span opened before it (an accepted, irreducible residual —
+    see `test_unterminated_quote_after_multiline_quoted_argument_still_returns_nothing`);
+    it recovers everything else, matching every other consumer's fail-open
+    convention in this hook family."""
     command = shell_tokens.strip_heredoc_bodies(command)
-    command = _join_backslash_continuations(command)
+
+    prepared = _prepare_command_for_whole_stream(command)
+    try:
+        tokens = shlex.split(prepared)
+    except Exception:
+        tokens = None
+
     targets: list[str] = []
-    for line in command.splitlines():
+    if tokens is not None:
+        for seg in split_segments(tokens):
+            targets.extend(segment_write_target(seg, eff_cwd))
+        return targets
+
+    joined = _join_backslash_continuations(command)
+    for line in joined.splitlines():
         try:
-            tokens = shlex.split(line)
+            line_tokens = shlex.split(line)
         except Exception:
             continue
-        if not tokens:
+        if not line_tokens:
             continue
-        for seg in split_segments(tokens):
+        for seg in split_segments(line_tokens):
             targets.extend(segment_write_target(seg, eff_cwd))
     return targets

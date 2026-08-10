@@ -133,3 +133,58 @@ def test_single_quoted_embedded_backslash_newline_does_not_crash_or_fabricate(tm
     targets = command_write_targets(command, eff_cwd)
 
     assert os.path.join(eff_cwd, "dest.txt") in targets
+
+
+def test_multiline_single_quoted_message_before_write_is_found(tmp_path):
+    """F3: a single-quoted argument that itself SPANS physical lines (a real
+    newline embedded inside the quotes, e.g. a multi-line commit message)
+    must not blank out a write target that comes later in the same command.
+    Per-line splitting (the F1/F2 fix) tokenizes each physical line on its
+    own; the line that only CLOSES the quote has no opening quote of its
+    own and fails to tokenize, so the line carrying the real `cp` write was
+    silently dropped even though it never itself contained the bad quote."""
+    eff_cwd = str(tmp_path)
+    command = "git commit -m 'first line\n\nbody text' && cp evil.py /repo/x.py"
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert "/repo/x.py" in targets
+
+
+def test_multiline_double_quoted_message_before_write_is_found(tmp_path):
+    """F3, double-quoted variant of the case above."""
+    eff_cwd = str(tmp_path)
+    command = 'git commit -m "first\n\nbody" && cp evil.py /repo/x.py'
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert "/repo/x.py" in targets
+
+
+def test_multiline_single_quoted_redirect_argument_is_found(tmp_path):
+    """F3, redirect variant: the write is a plain `>` redirect rather than a
+    `cp`, and the multi-line quoted argument precedes it on the same
+    (single) logical/physical-after-substitution line."""
+    eff_cwd = str(tmp_path)
+    command = "echo 'lit\n' > /repo/out.py"
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert "/repo/out.py" in targets
+
+
+def test_unterminated_quote_after_multiline_quoted_argument_still_returns_nothing(tmp_path):
+    """Accepted, irreducible residual: once a quote is genuinely unterminated
+    ANYWHERE in the command, there is no well-defined lexical reading of the
+    remainder, so no target is recoverable there either — this is a
+    documented fail-open boundary, not a bug to chase further. The
+    whole-stream attempt raises (the trailing quote never closes), and the
+    per-line fallback fares no better: physical splitting lands mid-quote on
+    every line this command has, so every line fails its own `shlex.split()`
+    in turn."""
+    eff_cwd = str(tmp_path)
+    command = "git commit -m 'a\nb' && cp e.py /repo/x.py\necho 'unterminated"
+
+    targets = command_write_targets(command, eff_cwd)
+
+    assert targets == []
