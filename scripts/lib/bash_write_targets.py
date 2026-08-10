@@ -150,15 +150,23 @@ def command_write_targets(command: str, eff_cwd: str) -> list[str]:
     order), as absolute paths resolved against `eff_cwd`. Strips heredoc/
     here-string bodies first (`lib/shell_tokens.py`) so a line of body text is
     never read as command syntax. Fail-open (empty list) on any parse error —
-    matching every other consumer's convention in this hook family."""
+    matching every other consumer's convention in this hook family.
+
+    Tokenized ONE PHYSICAL LINE AT A TIME, never as one combined token stream:
+    `shlex.split()` treats a newline exactly like a space and emits no token
+    for it, so `_BASH_SEPS` — a set of literal separator TOKENS — has nothing
+    to match a newline against. Tokenizing the whole command at once therefore
+    merged two lines into one segment, letting a verb-based writer's operand
+    scan on line 1 sweep up line 2's command word as a spurious argument."""
     command = shell_tokens.strip_heredoc_bodies(command)
     try:
-        tokens = shlex.split(command)
+        line_tokens = [shlex.split(line) for line in command.splitlines()]
     except Exception:
         return []
-    if not tokens:
-        return []
     targets: list[str] = []
-    for seg in split_segments(tokens):
-        targets.extend(segment_write_target(seg, eff_cwd))
+    for tokens in line_tokens:
+        if not tokens:
+            continue
+        for seg in split_segments(tokens):
+            targets.extend(segment_write_target(seg, eff_cwd))
     return targets
