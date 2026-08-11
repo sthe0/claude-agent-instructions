@@ -20,11 +20,29 @@ Ten cases, each pinned to the exact wording of stage 8's done_criterion:
   10. a stale plan_sha256 (accept, then replace the plan through approve) treated as
       absent
 
-Cases 1-3 exercise cmd_record_result's observation gate directly on a throwaway
+Five more pin the boundaries of those ten — each the negative or the whole-path form
+the first ten leave to inference:
+
+  11. a NON-substantive measurable pass still needs no observation (the control half's
+      activation floor: defect 2 widened the gate within substantive sessions, it did
+      not widen which sessions pay for it)
+  12. the ordinary, judge-corroborated path end to end: accept with no --bypass lands a
+      review, records NO bypass, and clears resolution — cases 4-7 all end in a
+      blocker and case 8 only reaches resolution through a bypass, so without this one
+      nothing pins that acceptance can be satisfied at all
+  13. acceptance_active's scoping trio (small-change inactive, AGENTCTL_ACCEPTANCE=0
+      disables, =1 forces on), the same trio stage_review/code_review each carry
+  14. a verdictless accept refused on the ORDINARY path too, not just under --bypass:
+      resolution's completeness check cannot catch it, since a review omits nothing
+      when the order declares nothing
+  15. an unreadable plan blocks resolution instead of passing vacuously, and refuses at
+      write time rather than raising PlanError out of the CLI
+
+Cases 1-3 and 11 exercise cmd_record_result's observation gate directly on a throwaway
 in-memory EXECUTING session (no plan file needed — the gate reads only the stage and
-the session's weight_class). Cases 4-10 need a real order-bearing plan on disk, since
-gates.resolution_blockers re-reads [meta.order] fresh via load_plan rather than
-trusting anything cached at write time (see AcceptanceReview's docstring)."""
+the session's weight_class). Cases 4-10 and 12-15 need a real order-bearing plan on
+disk, since gates.resolution_blockers re-reads [meta.order] fresh via load_plan rather
+than trusting anything cached at write time (see AcceptanceReview's docstring)."""
 from __future__ import annotations
 
 from argparse import Namespace
@@ -79,11 +97,12 @@ def _measurable_stage() -> Stage:
     )
 
 
-def _exec_state(sid: str) -> SessionState:
+def _exec_state(sid: str, weight: str = WeightClass.SUBSTANTIVE.value) -> SessionState:
     stage = _measurable_stage()
     s = SessionState(
         session_id=sid, task_id="t",
-        weight_class=WeightClass.SUBSTANTIVE.value, route=Route.SPAWN.value,
+        weight_class=weight,
+        route=Route.SPAWN.value if weight == WeightClass.SUBSTANTIVE.value else Route.IN_THREAD.value,
         node=Node.EXECUTING.value,
         approval=GateRecord("plan_approval", armed=True, passed=True),
         partition=Partition(m1=True, verdict="recommended"),
@@ -350,3 +369,130 @@ def test_case10_stale_digest_after_plan_replaced_through_approve_is_absent(
     assert blockers
     assert "stale" in blockers[0]
     assert "treated as absent" in blockers[0]
+
+
+# --- cases 11-15: the boundaries of the ten above ----------------------------
+
+def test_case11_non_substantive_measurable_pass_needs_no_observation(store, monkeypatch):
+    """The control half's activation floor. Defect 2 widened the observation gate from
+    acceptance_review stages to EVERY stage OF A SUBSTANTIVE SESSION; it did not widen
+    which sessions pay for it. Case 1 is this test's mirror, and without the pair, a
+    later change scoping the gate on stage shape alone would pass case 1 unchanged."""
+    monkeypatch.delenv("AGENTCTL_STAGE_REVIEW", raising=False)
+    store.save(_exec_state("c11", weight=WeightClass.SMALL_CHANGE.value))
+    d = _record(store, "c11", "", runner=judge_yes)
+    assert d.ok is True
+    assert store.load("c11").stage(1).outcome.status == StageStatus.PASSED.value
+
+
+def test_case12_ordinary_judge_corroborated_accept_clears_resolution(
+    store, tmp_path, monkeypatch
+):
+    """The whole non-bypass path, end to end: a corroborated accept lands a review with
+    no bypass beside it, and the resolution gate the review was written for clears."""
+    monkeypatch.delenv("AGENTCTL_ACCEPTANCE", raising=False)
+    plan = _write_plan(tmp_path / "p12.toml")
+    store.save(_approved_state("c12", plan))
+
+    # Blocked before the accept — the same session, one command apart.
+    assert gates.resolution_blockers(store.load("c12"))
+
+    d = cli.cmd_accept(
+        ns(session="c12", author="user", verdict=["R1|pass", "R2|pass"],
+           note="compared the delivered engine against both requirements of the order",
+           bypass=False, bypass_reason=""),
+        store=store, runner=judge_yes,
+    )
+    assert d.ok is True, d.detail
+
+    after = store.load("c12")
+    assert after.acceptance_review is not None
+    assert after.acceptance_bypass is None  # the ordinary path records no bypass
+    assert after.acceptance_review.plan_sha256 == after.accepted_plan_digest
+    assert gates.resolution_blockers(after) == []
+
+
+def _no_review(sid: str, tmp_path: Path, *, weight=WeightClass.SUBSTANTIVE.value):
+    """An otherwise resolvable session (stage PASSED, plan fresh) whose ONLY outstanding
+    blocker could be the missing acceptance — so `resolution_blockers` reads as the
+    acceptance gate's consequence and nothing else's."""
+    s = _approved_state(sid, _write_plan(tmp_path / f"{sid}.toml"))
+    s.weight_class = weight
+    return s
+
+
+# Case 13 is the trio test_acceptance_review_gate.py and test_code_review.py each carry
+# for their own gate, written the same way: the predicate AND the consequence, since a
+# gate can read the env correctly and still not be wired to the predicate.
+
+def test_case13a_inactive_on_small_change_is_vacuous(tmp_path, monkeypatch):
+    monkeypatch.delenv("AGENTCTL_ACCEPTANCE", raising=False)
+    s = _no_review("c13a", tmp_path, weight=WeightClass.SMALL_CHANGE.value)
+    assert gates.acceptance_active(s) is False
+    assert gates.resolution_blockers(s) == []
+
+
+def test_case13b_force_off_env_makes_gate_vacuous(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTCTL_ACCEPTANCE", "0")
+    s = _no_review("c13b", tmp_path)  # substantive, no review recorded
+    assert gates.acceptance_active(s) is False
+    assert gates.resolution_blockers(s) == []
+
+
+def test_case13c_force_on_env_activates_small_change(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTCTL_ACCEPTANCE", "1")
+    s = _no_review("c13c", tmp_path, weight=WeightClass.SMALL_CHANGE.value)
+    assert gates.acceptance_active(s) is True
+    blockers = gates.resolution_blockers(s)
+    assert blockers and "no AcceptanceReview recorded" in blockers[0]
+
+
+def test_case14_verdictless_accept_refused_on_the_ordinary_path_too(
+    store, tmp_path, monkeypatch
+):
+    """Case 9's non-bypass twin. Resolution's completeness check cannot catch this one:
+    a review omits no declared id when the order declares none, so an empty review would
+    sail through a gate whose whole job is comparing the product with the order."""
+    monkeypatch.delenv("AGENTCTL_ACCEPTANCE", raising=False)
+    plan = _write_plan(tmp_path / "p14.toml")
+    store.save(_approved_state("c14", plan))
+    d = cli.cmd_accept(
+        ns(session="c14", author="user", verdict=[], note="looks good to me",
+           bypass=False, bypass_reason=""),
+        store=store, runner=judge_yes,
+    )
+    assert d.ok is False
+    assert "at least one --verdict" in d.detail
+    after = store.load("c14")
+    assert after.acceptance_review is None
+
+
+def test_case15_unreadable_plan_blocks_resolution_and_refuses_accept(
+    store, tmp_path, monkeypatch
+):
+    """The vacuous path: with the plan gone, [meta.order] declares nothing the gate can
+    see, so completeness and verdict checks would both pass over an empty list. The gate
+    refuses what it cannot check, and accept refuses to write against a plan it cannot
+    read — as a Directive, not a PlanError out of the CLI."""
+    monkeypatch.delenv("AGENTCTL_ACCEPTANCE", raising=False)
+    plan = _write_plan(tmp_path / "p15.toml")
+    s = _approved_state("c15", plan)
+    s.acceptance_review = AcceptanceReview(
+        author="user", plan_sha256=s.accepted_plan_digest,
+        verdicts=[RequirementVerdict("R1", "pass"), RequirementVerdict("R2", "pass")],
+    )
+    assert gates.resolution_blockers(s) == []  # complete and fresh, with the plan present
+
+    Path(plan).unlink()
+    blockers = gates.resolution_blockers(s)
+    assert blockers
+    assert "cannot be read" in blockers[0]
+
+    store.save(s)
+    d = cli.cmd_accept(
+        ns(session="c15", author="user", verdict=["R1|pass", "R2|pass"], note="",
+           bypass=False, bypass_reason=""),
+        store=store, runner=judge_yes,
+    )
+    assert d.ok is False
+    assert "cannot read the plan" in d.detail

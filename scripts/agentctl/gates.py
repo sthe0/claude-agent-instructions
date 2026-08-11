@@ -128,10 +128,20 @@ def _acceptance_review_resolution_blockers(state: SessionState) -> list[str]:
         review was written, so the review is STALE and is treated as though absent
         (same blocker as the missing-review case, not a distinct message — the
         session's observable state is "no current acceptance" either way);
+      - the CURRENT plan must be READABLE — an absent plan_path, or bytes that no
+        longer load, means the order this review claims to have satisfied cannot be
+        re-read, and the two checks below would then run against an empty requirement
+        list and pass vacuously. Blocked instead: the gate refuses what it cannot
+        check, rather than degrading into "an AcceptanceReview object exists";
       - every requirement id the CURRENT plan's [meta.order] declares must carry a
         verdict — read fresh rather than trusted from write time, though a matched
         digest above already implies the plan (and so the order) has not changed
-        since the review was written;
+        since the review was written. A plan that loads but declares no [meta.order]
+        contributes no ids, and this check is then genuinely empty rather than
+        degraded — an orderless plan has nothing to accept against, and only a
+        non-substantive session forced active by AGENTCTL_ACCEPTANCE=1 can be in
+        that position (the submission seam requires an order of every substantive
+        plan);
       - every verdict must be 'pass' — a single 'fail' blocks resolution outright;
         acceptance is the product-against-order check, and a failing requirement is
         not the engine's to wave through.
@@ -153,12 +163,20 @@ def _acceptance_review_resolution_blockers(state: SessionState) -> list[str]:
             "written against a different plan version than the one currently "
             "accepted) and is treated as absent; re-run accept on the current plan"
         ]
-    order = None
+    doc = None
     if state.plan_path:
         try:
-            order = load_plan(state.plan_path, strict=False).meta.order
+            doc = load_plan(state.plan_path, strict=False)
         except (OSError, PlanError):
-            order = None
+            doc = None
+    if doc is None:
+        return [
+            "the accepted plan cannot be read "
+            f"({state.plan_path or 'no plan_path on this session'}), so the order this "
+            "AcceptanceReview claims to satisfy cannot be re-read; restore the plan file "
+            "and re-run accept"
+        ]
+    order = doc.meta.order
     requirement_ids = [r.id for r in order.requirements] if order is not None else []
     verdicted = {v.requirement_id: v.verdict for v in review.verdicts}
     missing = [rid for rid in requirement_ids if rid not in verdicted]

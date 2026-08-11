@@ -2260,7 +2260,23 @@ def cmd_accept(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     AcceptanceBypass alongside the AcceptanceReview (never standalone — see
     AcceptanceBypass's docstring for why resolution_blockers never reads it)."""
     state = _require(store, args.session)
-    doc = load_plan(state.plan_path, strict=False)
+    # Guarded exactly like _refresh_venue_fields: an absent or unreadable plan_path is a
+    # refusal Directive, never a PlanError escaping the CLI. Acceptance IS the comparison
+    # against the order that plan declares, so with no plan there is nothing to record
+    # against — and gates.resolution_blockers refuses the same shape from the other side.
+    doc = None
+    if state.plan_path:
+        try:
+            doc = load_plan(state.plan_path, strict=False)
+        except (OSError, PlanError):
+            doc = None
+    if doc is None:
+        return Directive(
+            False, state.node, "noop",
+            "cannot read the plan to accept against "
+            f"({state.plan_path or 'no plan_path on this session'}); acceptance compares the "
+            "delivered product with the order that plan declares",
+        )
     order = doc.meta.order
     author = getattr(args, "author", "") or ""
     if order is not None and order.customer_id and author != order.customer_id:
@@ -2284,10 +2300,17 @@ def cmd_accept(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             False, state.node, "noop",
             "--bypass requires --bypass-reason (a bypass is a reasoned override, not a shrug)",
         )
-    if bypass and not verdicts:
+    if not verdicts:
+        # Not a bypass-only rule: a verdictless review on the ordinary path records that
+        # nothing was compared, and resolution's completeness check cannot catch it —
+        # `missing` is empty whenever the review omits nothing because the order declares
+        # nothing. Refuse at write time, where the emptiness is still visible.
         return Directive(
             False, state.node, "noop",
-            "a bypass requires an accompanying AcceptanceReview: supply at least one --verdict",
+            "a bypass requires an accompanying AcceptanceReview: supply at least one --verdict"
+            if bypass else
+            "acceptance requires at least one --verdict: a review with no verdicts compares "
+            "nothing against the order",
         )
     judge_reason = "no judge attempted (--bypass)"
     if not bypass:
