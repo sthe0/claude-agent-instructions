@@ -1,0 +1,2 @@
+{"type": "assistant", "uuid": "asst-u1", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_u1", "name": "Bash", "input": {"command": "echo hi"}}]}}
+{"type": "user", "uuid": "den-u1", "toolDenialKind": "automode-blocked", "sourceToolAssistantUUID": "asst-missing", "toolUseResult": "Error: blocked by auto-mode classifier"}

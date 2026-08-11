@@ -1,0 +1,2 @@
+{"type": "assistant", "uuid": "asst-n1", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_n1", "name": "Read", "input": {"file_path": "/srv/secrets/notes.md"}}]}}
+{"type": "user", "uuid": "res-n1", "toolUseResult": "notes.md contents"}

@@ -808,6 +808,30 @@ disposition = "keep"
 ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
 
 [[entry]]
+id = "abde97a2cc835ea6"
+domain = "code"
+file = "scripts/hook-guard-permission-self-grant.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+
+[[entry]]
+id = "eb7ada32c6b1272a"
+domain = "code"
+file = "scripts/hook-guard-permission-self-grant.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+
+[[entry]]
+id = "430a12f403fe287a"
+domain = "code"
+file = "scripts/hook-guard-permission-self-grant.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+
+[[entry]]
 id = "d5cba8a230511d69"
 domain = "code"
 file = "scripts/hook-instruction-grooming-due.py"
@@ -3699,6 +3723,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "87d7d78b97c68c1e"
 domain = "code"
 file = "scripts/tests/test_hook_guard_canon_readonly.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "0976291b34ab317e"
+domain = "code"
+file = "scripts/tests/test_hook_guard_permission_self_grant.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
@@ -7152,6 +7184,14 @@ disposition = "keep"
 ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "b66e843f860b3786"
+domain = "code_file_rollup"
+file = "scripts/hook-guard-permission-self-grant.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "6e667c8d1d40af7b"
 domain = "code_file_rollup"
 file = "scripts/hook-instruction-grooming-due.py"
@@ -7835,6 +7875,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "731609f9436619d1"
 domain = "code_file_rollup"
 file = "scripts/tests/test_hook_guard_canon_readonly.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "95570d3e4bca3abc"
+domain = "code_file_rollup"
+file = "scripts/tests/test_hook_guard_permission_self_grant.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
