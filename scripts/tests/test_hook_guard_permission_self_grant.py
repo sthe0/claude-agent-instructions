@@ -95,6 +95,20 @@ def add_entry_edit(path: Path, entry: str) -> dict:
     }
 
 
+def add_entry_edit_relative(name: str, entry: str) -> dict:
+    """`add_entry_edit` against a RELATIVE target, so the payload's `cwd` is load-bearing.
+
+    The gate consults `cwd` only to resolve a relative target; against an absolute one it
+    never reads the field at all. A test that varies `cwd` while passing an absolute path
+    therefore asserts something the code cannot violate -- it stays green under a mutation
+    that removes the very handling it was written to pin. Measured, not assumed: with the
+    type check dropped from `_str_field`, the absolute form of the rows below passed and the
+    relative form fails.
+    """
+    return {"file_path": name, "old_string": f'"{SEED}"',
+            "new_string": f'"{SEED}",\n      "{entry}"'}
+
+
 def replace_all_edit(path: Path, new_text: str) -> dict:
     return {"file_path": str(path), "old_string": path.read_text(), "new_string": new_text}
 
@@ -304,6 +318,19 @@ UNKNOWN_A_LABELS = (
     "target-path-carrying-a-nul-byte",
 )
 
+# Every string the gate reads out of the payload ITSELF, with a value of the wrong type.
+# These are not UNKNOWN-(a) shapes -- each must be absorbed by `_str_field` and behave
+# exactly as if the field were absent, so the call is judged on what remains. The class,
+# not the `transcript_path` instance a review named: a per-field fix leaves the next field
+# open, and a wrong-typed value reaches `main()`'s catch-all, which denies unconditionally.
+# Measured under the mutation that drops `_str_field`'s type check: the `cwd` and
+# `transcript_path` rows go red (both build a path from the value), the `tool_name` rows stay
+# green -- that field is only ever COMPARED, so a wrong-typed value already matches nothing,
+# exactly as an absent one does. Kept anyway, as the third instance of a class invariant the
+# review named on one field; honest about which two rows are the load-bearing ones.
+WRONG_TYPED_PAYLOAD_FIELDS = ("tool_name", "cwd", "transcript_path")
+WRONG_TYPES = (7, ["a"], {"a": 1}, True)
+
 
 def unknown_a_call(tmp_path: Path, label: str):
     """`(tool_name, tool_input)` for one UNKNOWN-(a) shape.
@@ -376,6 +403,32 @@ def test_an_edit_target_unreadable_by_mode_is_unknown_too(tmp_path):
         "file_path": str(blocked), "old_string": f'"{SEED}"', "new_string": f'"{SEED}", "x"'}
     assert hook.decide(payload("Edit", call, NO_DENIAL, tmp_path)) is None
     assert hook.decide(payload("Edit", call, ARMED_READ, tmp_path)) is not None
+
+
+@pytest.mark.parametrize("field", WRONG_TYPED_PAYLOAD_FIELDS)
+@pytest.mark.parametrize("value", WRONG_TYPES)
+def test_a_wrong_typed_payload_field_behaves_exactly_as_an_absent_one(tmp_path, field, value):
+    # The class invariant. `_str_field` absorbs a wrong-typed field, so the verdict is
+    # whatever the gate reaches on what remains -- never an exception escaping into
+    # `main()`'s catch-all, which denies unconditionally and so would answer a question
+    # about the payload's SHAPE with a verdict about the CALL.
+    write_settings(tmp_path)
+    # A relative target, so all three fields are load-bearing on this one call shape:
+    # `tool_name` picks the reader, `transcript_path` answers (b), `cwd` resolves the target.
+    base = payload("Edit", add_entry_edit_relative("settings.json", COVERING), ARMED_READ, tmp_path)
+    absent = {k: v for k, v in base.items() if k != field}
+    assert hook.decide({**base, field: value}) == hook.decide(absent)
+
+
+@pytest.mark.parametrize("value", WRONG_TYPES)
+def test_a_wrong_typed_cwd_does_not_deny_a_session_that_carries_no_denial(tmp_path, value):
+    # The property a review showed was violated, pinned directly rather than by proxy: a
+    # malformed payload field must not manufacture a deny in a session where a self-grant
+    # is impossible by construction. The call widens, so only (b) keeps it out.
+    write_settings(tmp_path)
+    call = payload(
+        "Edit", add_entry_edit_relative("settings.json", COVERING), NO_DENIAL, tmp_path)
+    assert hook.decide({**call, "cwd": value}) is None
 
 
 def test_a_definite_surface_among_bash_targets_outranks_an_unreadable_one(tmp_path):

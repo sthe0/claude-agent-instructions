@@ -46,9 +46,17 @@ WHAT THAT CHOICE RESTS ON, stated so it can be attacked rather than assumed. Rou
 UNKNOWN (a) through (b) TRANSFERS the burden onto (b): before, an unresolved (a) denied
 whatever (b) said; now a NOT_ARMED verdict is enough to allow. So the gate's soundness
 on this path is exactly `lib/denial_arming` never reporting NOT_ARMED for a session that
-does carry a real arming denial. `_ARMING_KINDS` is decompiled from the client rather
-than sampled from observed transcripts, which is why that holds today; a client that
-adds an arming denial kind silently narrows this gate, and it fails toward ALLOW.
+does carry a real arming denial. That condition has THREE routes to failure, not one, and
+vocabulary completeness answers only the first. `_ARMING_KINDS` is decompiled from the
+client rather than sampled from observed transcripts, so the gate holds AGAINST A CORRECT
+TRANSCRIPT; a client that adds an arming denial kind silently narrows it, failing toward
+ALLOW. The other two are the ways the transcript is not the session, and both are named in
+`lib/denial_arming`: R5, a denial not yet flushed to disk is not among the rows read, so
+the file is read cleanly end to end and comes back NOT_ARMED; and R3, arming is per-agent,
+so a parent's denial never arms a spawned agent reading its own transcript. Before this
+routing an unresolved (a) denied whatever (b) said — so R5 and R3 became load-bearing on
+this path for the first time HERE, which is why they are restated rather than left one
+file away.
 
 WHAT EACH TOOL PATH CAN SEE.
   Edit  — the target is read from disk, `old_string`→`new_string` is applied, and the
@@ -157,8 +165,13 @@ from lib.denial_arming import Verdict  # noqa: E402
 # (b) comes back as anything other than NOT_ARMED — see the docstring: `UNKNOWN AND
 # False` is False, and denying an unreadable payload in a session that carries no
 # permission denial at all would refuse calls that cannot be self-grants by
-# construction. Only a payload this hook cannot read AT ALL (stdin that is not a JSON
-# object, so there is not even a transcript path to consult) denies unconditionally.
+# construction. Two things still deny unconditionally, and both are meant to. Stdin that
+# is not a JSON object at all: there is not even a transcript path to consult. And any
+# exception that escapes `decide()` into `main()`'s catch-all — which is a BUG IN THE
+# GATE, not a shape of the call, because every string the gate reads out of the payload
+# comes through `_str_field` and every field inside `tool_input` is type-checked where it
+# is read. Keeping malformed payloads off that path is what lets the catch-all stay the
+# backstop it claims to be rather than a second, unmodelled deny route.
 _ON_ERROR = "deny"
 
 _FILE_TOOLS = ("Edit", "Write")
@@ -299,7 +312,7 @@ def _file_tool_widening(tool_name: str, tool_input: dict, cwd: str) -> _Widening
         return None  # nothing on disk to widen — a creation, not a widening
     if old_text is _Read.UNREADABLE:
         return _Unknown(
-            f"the file it would write, {path}, exists but could not be read, so whether "
+            f"the file it would write, {path}, could not be read, so whether "
             f"this call widens the permission surface already there is unknown rather than "
             f"known to be no"
         )
@@ -331,7 +344,7 @@ def _is_surface_on_disk(path: str) -> bool | _Unknown:
         return False
     if text is _Read.UNREADABLE:
         return _Unknown(
-            f"the file it would write, {path}, exists but could not be read, so whether "
+            f"the file it would write, {path}, could not be read, so whether "
             f"that file is a permission surface is unknown rather than known to be no"
         )
     return permission_surface.is_permission_surface(_load_json(text))
@@ -428,6 +441,24 @@ def _deny_msg(widening: _Widening, denial, matched: str | None, tool_name: str) 
     return msg
 
 
+def _str_field(payload: dict, key: str, default: str) -> str:
+    """A string field of the payload, or `default` if it is absent, empty, OR NOT A STRING.
+
+    The payload is untrusted input, and `payload.get(k) or default` — the idiom this
+    replaces — guards absent and empty but silently hands a wrong-typed value onward, where
+    it raises `TypeError` deep inside `pathlib` and reaches `main()`'s catch-all. That
+    catch-all denies UNCONDITIONALLY: a deny in a session with no permission denial at all,
+    which is the outcome routing UNKNOWN through (b) exists to prevent.
+
+    So the rule is uniform rather than per-field: EVERY string the gate reads out of the
+    payload comes through here. A crash inside the gate should mean a bug in the gate, not
+    a shape of the call — and once every field is modelled, `main()`'s catch-all is the
+    backstop for a real bug that it claims to be.
+    """
+    value = payload.get(key)
+    return value if isinstance(value, str) and value else default
+
+
 def decide(payload: dict) -> str | None:
     """Return a deny reason, or None to allow.
 
@@ -440,11 +471,11 @@ def decide(payload: dict) -> str | None:
     """
     # Tool dispatch FIRST, before any payload field is read: an unmodelled tool is not
     # this gate's business whatever shape its input has, and must never be judged.
-    tool_name = payload.get("tool_name") or ""
+    tool_name = _str_field(payload, "tool_name", "")
     if tool_name not in _MODELLED_TOOLS:
         return None
 
-    cwd = payload.get("cwd") or os.getcwd()
+    cwd = _str_field(payload, "cwd", os.getcwd())
 
     # (a) — cheapest, and the one that lets the vast majority of calls out before the
     # transcript is ever opened.
@@ -463,7 +494,10 @@ def decide(payload: dict) -> str | None:
         return None
 
     # (b)
-    arming = denial_arming.armed(payload.get("transcript_path") or "")
+    # A non-string transcript_path lands on "" and so on the already-modelled UNREADABLE
+    # verdict below — the honest answer, since a payload that names no readable transcript
+    # leaves (b) exactly as unknown as one whose transcript will not open.
+    arming = denial_arming.armed(_str_field(payload, "transcript_path", ""))
     if arming.verdict is Verdict.NOT_ARMED:
         # Whatever (a) came to, the conjunction is False: an UNKNOWN widening in a session
         # that carries no permission denial cannot be an answer to one.
