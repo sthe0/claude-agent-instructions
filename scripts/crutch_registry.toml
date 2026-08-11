@@ -4768,6 +4768,30 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "daafa52837c0cad6"
+domain = "code"
+file = "scripts/tests/test_permission_surface.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "4d9280eced74057e"
+domain = "code"
+file = "scripts/tests/test_permission_surface.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "553cea58a7b0359b"
+domain = "code"
+file = "scripts/tests/test_permission_surface.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "97d44e9e709de971"
 domain = "code"
 file = "scripts/tests/test_plan_delivery_gate_hook.py"
@@ -7939,6 +7963,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "a8f27ab6b19230e9"
 domain = "code_file_rollup"
 file = "scripts/tests/test_permission_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "73b89fb8375d6ced"
+domain = "code_file_rollup"
+file = "scripts/tests/test_permission_surface.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
