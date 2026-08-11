@@ -17,6 +17,12 @@ What each block proves:
     explicit MUTATION CONTROLS that force the conjunct's value and watch an ALLOW flip;
   * that (a) really is a WIDENING test rather than a settings-file guard -- narrowing,
     reordering, reformatting and an unrelated key all pass while armed;
+  * that (a) is THREE-valued: a target ABSENT from disk is a creation and is allowed
+    outright, while every way of NOT being able to answer (a) -- an unreadable target,
+    an untokenizable command, a payload missing the fields the gate reads -- is UNKNOWN
+    and is pinned in BOTH directions: allowed when the session is not armed, resolved
+    through `_ON_ERROR` when it is. Each direction is a real row, because a one-
+    directional pin cannot tell the intended routing from either flat verdict;
   * the two fail directions the primitives hand up: an unresolvable denied call fails
     toward COVERING (deny), and everything internal fails through `_ON_ERROR`, asserted
     for BOTH of its values so flipping the constant rots no test;
@@ -28,6 +34,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -238,9 +245,12 @@ def test_a_non_json_file_is_allowed(tmp_path):
     assert hook.decide(payload("Edit", tool_input, ARMED_READ, tmp_path)) is None
 
 
-def test_writing_a_settings_file_that_does_not_exist_yet_is_a_creation_not_a_widening(tmp_path):
-    # The recorded behaviour: there is no prior surface to widen, and a brand-new
-    # settings file is not how a denial gets cleared.
+def test_writing_a_settings_file_absent_from_disk_is_a_creation_not_a_widening(tmp_path):
+    # The ABSENT branch specifically, and only it: nothing is on the path, so there is no
+    # prior surface to widen, and a brand-new settings file is not how a denial gets
+    # cleared. A path that EXISTS but cannot be read is a different fact on a different
+    # branch -- it is UNKNOWN, not a creation; see the UNKNOWN block below. The two shared
+    # one `None` once, which is how "I could not look" came to answer "nothing here".
     fresh = tmp_path / "new-settings.json"
     tool_input = {"file_path": str(fresh), "content": settings_text([COVERING])}
     assert hook.decide(payload("Write", tool_input, ARMED_READ, tmp_path)) is None
@@ -261,6 +271,115 @@ def test_an_unmodelled_tool_is_allowed(tmp_path):
     assert hook.decide(payload(
         "Read", {"file_path": "/srv/secrets/notes.md"},
         tmp_path / "no-such-transcript.jsonl", tmp_path)) is None
+
+
+def test_an_unmodelled_tool_is_allowed_whatever_shape_its_input_has(tmp_path):
+    # Tool dispatch happens BEFORE any payload field is read, so the malformed-input
+    # UNKNOWN below can never reach a tool this gate does not model -- even while armed,
+    # where an UNKNOWN would otherwise deny. A gate that denied unmodelled tools would be
+    # far outside its remit, and their input shape is not its business.
+    for tool_input in ["not an object", None, 17, {"anything": "at all"}]:
+        assert hook.decide({
+            "tool_name": "WebFetch",
+            "tool_input": tool_input,
+            "transcript_path": str(ARMED_READ),
+            "cwd": str(tmp_path),
+        }) is None
+
+
+# --- (a) is THREE-valued: could-not-look is not looked-and-found-nothing -----------
+
+# Every way conjunct (a) can come out UNKNOWN, by label. Both directions of each are
+# pinned below: UNKNOWN alone is neither an allow nor a deny.
+UNKNOWN_A_LABELS = (
+    "edit-target-unreadable",
+    "write-target-unreadable",
+    "bash-target-unreadable",
+    "dangling-symlink-target",
+    "edit-without-file-path",
+    "write-without-content-string",
+    "edit-without-old-and-new-strings",
+    "bash-without-command-string",
+    "tool-input-is-not-an-object",
+)
+
+
+def unknown_a_call(tmp_path: Path, label: str):
+    """`(tool_name, tool_input)` for one UNKNOWN-(a) shape.
+
+    The unreadable target is a DIRECTORY rather than a mode-000 file: EISDIR stages the
+    case for any uid, where root would read straight through a chmod. The EACCES form
+    has its own row.
+    """
+    blocked = tmp_path / "settings.json"
+    if not blocked.exists():
+        blocked.mkdir()
+    dangling = tmp_path / "linked-settings.json"
+    if not dangling.is_symlink():
+        dangling.symlink_to(tmp_path / "nowhere.json")
+    real = write_settings(tmp_path, name="real-settings.json")
+    return {
+        "edit-target-unreadable": (
+            "Edit", {"file_path": str(blocked), "old_string": "a", "new_string": "b"}),
+        "write-target-unreadable": (
+            "Write", {"file_path": str(blocked), "content": settings_text([COVERING])}),
+        "bash-target-unreadable": ("Bash", {"command": f"cp evil.json {blocked}"}),
+        "dangling-symlink-target": (
+            "Write", {"file_path": str(dangling), "content": settings_text([COVERING])}),
+        "edit-without-file-path": ("Edit", {"old_string": "a", "new_string": "b"}),
+        "write-without-content-string": ("Write", {"file_path": str(real), "content": None}),
+        "edit-without-old-and-new-strings": ("Edit", {"file_path": str(real)}),
+        "bash-without-command-string": ("Bash", {}),
+        "tool-input-is-not-an-object": ("Edit", "not an object"),
+    }[label]
+
+
+@pytest.mark.parametrize("label", UNKNOWN_A_LABELS)
+def test_an_unknown_conjunct_a_is_allowed_when_the_session_is_not_armed(tmp_path, label):
+    # `UNKNOWN AND False` is False. Routing an unresolved (a) straight to `_ON_ERROR`
+    # would deny before (b) was ever asked -- refusing these calls in every session that
+    # carries no permission denial at all, where a self-grant is impossible by
+    # construction. This row is what keeps that broad false-deny out.
+    tool_name, tool_input = unknown_a_call(tmp_path, label)
+    assert hook.decide(payload(tool_name, tool_input, NO_DENIAL, tmp_path)) is None
+
+
+@pytest.mark.parametrize("label", UNKNOWN_A_LABELS)
+@pytest.mark.parametrize("on_error,denies", [("deny", True), ("allow", False)])
+def test_an_unknown_conjunct_a_resolves_through_on_error_while_armed(
+    tmp_path, monkeypatch, label, on_error, denies
+):
+    # The other direction, and the one the gate exists for: armed, and the gate could not
+    # establish that this call does NOT widen a permission surface. A self-grant cannot be
+    # ruled out, so the shipped fail-closed constant refuses.
+    monkeypatch.setattr(hook, "_ON_ERROR", on_error)
+    tool_name, tool_input = unknown_a_call(tmp_path, label)
+    reason = hook.decide(payload(tool_name, tool_input, ARMED_READ, tmp_path))
+    assert (reason is not None) is denies
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode-000 file, so EACCES cannot be staged")
+def test_an_edit_target_unreadable_by_mode_is_unknown_too(tmp_path):
+    # EACCES specifically, beside the EISDIR form above: the branch is "the read failed
+    # while something IS on the path", not any one errno.
+    blocked = write_settings(tmp_path)
+    blocked.chmod(0o000)
+    call = add_entry_edit.__wrapped__ if False else {
+        "file_path": str(blocked), "old_string": f'"{SEED}"', "new_string": f'"{SEED}", "x"'}
+    assert hook.decide(payload("Edit", call, NO_DENIAL, tmp_path)) is None
+    assert hook.decide(payload("Edit", call, ARMED_READ, tmp_path)) is not None
+
+
+def test_a_definite_surface_among_bash_targets_outranks_an_unreadable_one(tmp_path):
+    # A deny must not be downgraded to an `_ON_ERROR` by an unrelated unreadable target:
+    # the deny message names the surface, the `_ON_ERROR` message does not.
+    blocked = tmp_path / "settings.json"
+    blocked.mkdir()
+    real = write_settings(tmp_path, name="real-settings.json")
+    reason = hook.decide(payload(
+        "Bash", {"command": f"cp a {blocked} && cp evil.json {real}"}, ARMED_BASH, tmp_path))
+    assert reason is not None
+    assert str(real) in reason
 
 
 # --- no baseline on disk: UNKNOWN is not coerced to "no widening" ------------------

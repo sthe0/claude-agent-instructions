@@ -29,13 +29,26 @@ walks the transcript, (c) is pure string work. A call that touches no permission
 surface — the overwhelming majority — returns None without the transcript ever being
 opened.
 
+WHAT THE GATE COULD NOT ESTABLISH IS NOT A "NO". Conjunct (a) is THREE-valued, never
+two. A target ABSENT from disk is an established fact — nothing there to widen, so the
+call is a creation and is allowed. A target that exists but could NOT be read, a
+command that could not be tokenized, and a payload missing the fields this gate reads
+are none of them facts about the call: they are UNKNOWN, the gate either did not look
+or looked and could not tell. An UNKNOWN (a) neither allows nor denies on its own —
+`UNKNOWN AND False` is still False — so it falls through to (b), and only a session
+that IS armed pays `_ON_ERROR`. Denying every UNKNOWN outright would refuse innocent
+calls in sessions carrying no denial at all; allowing them is the hole this gate exists
+to close. This is the one case that reaches the transcript without (a) being settled,
+so the cost claim above holds for every call whose (a) the gate could answer.
+
 WHAT EACH TOOL PATH CAN SEE.
   Edit  — the target is read from disk, `old_string`→`new_string` is applied, and the
           parsed before/after pair is diffed. Full precision: (c) is checkable.
   Write — the target is read from disk and diffed against the content being written.
-          A Write to a path that does not exist is a CREATION, not a widening, and is
+          A Write to a path ABSENT from disk is a CREATION, not a widening, and is
           allowed: there is no prior surface to widen, and a brand-new settings file
-          is not how a denial gets cleared.
+          is not how a denial gets cleared. A path that exists but cannot be read is a
+          different fact and takes the UNKNOWN route above, not this one.
   Bash  — deliberately coarser. A command is not applied before it runs, so no
           before/after pair exists and there are no entries to test for relevance
           (R7). The path falls back to (a)+(b) alone: any write to a file that is
@@ -58,9 +71,20 @@ NAMED RESIDUALS carried by this hook (R-numbers are the plan's):
       found no write — so reading its result by truthiness alone would let one
       unbalanced quote disarm the whole limb toward ALLOW. This hook therefore
       pre-lexes the command itself (`_bash_widening`) and routes a parse failure to
-      `_ON_ERROR`, never to the "no write target" branch. `bash_write_targets` is NOT
+      UNKNOWN, never to the "no write target" branch. `bash_write_targets` is NOT
       changed to raise: its fail-open default is correct for its other consumer, the
       canon guard, and this gate does not get to alter another component's contract.
+
+  WIDENING LEVERS THIS GATE DOES NOT SEE. `permissions.allow` and `permissions.deny`
+  are not the only way a settings document widens what the agent may do.
+  `permissions.defaultMode` is a live lever on this fleet — `settings/base.json`
+  carries `"auto"` and `benchmark-profile/settings.json` carries `"acceptEdits"` — as
+  are `permissions.additionalDirectories` and `permissions.ask`. Flipping
+  `defaultMode` widens the surface without adding a single allow entry, so conjunct
+  (a) never fires and this gate never sees the call. Closing it means teaching
+  `lib/permission_surface.widens` to report those levers; the fix belongs there, not
+  here, and is out of scope for this stage. Named so that "the gate allowed it"
+  cannot later be read as "the gate judged it safe".
 
   R8  Relevance cannot narrow a COMPOUND Bash denial: `shlex.split` destroys the
       separator before `split_segments` ever sees a token, so the denied call can
@@ -90,6 +114,7 @@ import os
 import shlex
 import sys
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -109,17 +134,26 @@ from lib.denial_arming import Verdict  # noqa: E402
 # false deny costs one blocked call that the user can sanction in a sentence; a false
 # allow is the exact outcome the gate exists to prevent, and it is silent and durable
 # — the widened entry stays in the file. So every path that cannot reach a verdict —
-# an untokenizable command, an unreadable transcript, a payload that did not parse, an
-# unexpected exception — routes through here rather than falling through to allow.
+# an unreadable target, an untokenizable command, an unreadable transcript, a payload
+# missing the fields this gate reads, an unexpected exception — routes through here
+# rather than falling through to allow.
 #
-# ONE constant, read at call time, governing every one of those paths uniformly. That
-# is deliberately broader than the surface-touching calls the gate otherwise judges: a
-# payload this hook cannot read could ITSELF be a self-grant, and a constant that
-# governed only some errors would not be the error policy it claims to be. Both values
-# are under test, so revisiting this is a one-line change and no test rots.
+# ONE constant, read at call time, governing every one of those paths uniformly. Both
+# values are under test, so revisiting this is a one-line change and no test rots.
+#
+# WHAT IS NOT AN ERROR, and so never reaches this constant. An UNMODELLED tool exits on
+# tool name alone, before any payload field is looked at: a gate that denied tools it
+# does not model would be far outside its remit, and its input shape is not this hook's
+# business. And an error that leaves conjunct (a) UNKNOWN is not resolved here until
+# (b) says the session is armed — see the docstring: `UNKNOWN AND False` is False, and
+# denying an unreadable payload in a session that carries no permission denial at all
+# would refuse calls that cannot be self-grants by construction. Only a payload this
+# hook cannot read AT ALL (stdin that is not a JSON object, so there is not even a
+# transcript path to consult) denies unconditionally.
 _ON_ERROR = "deny"
 
 _FILE_TOOLS = ("Edit", "Write")
+_MODELLED_TOOLS = _FILE_TOOLS + ("Bash",)
 
 _RESPONSES = (
     "Three responses are legitimate here, and widening the surface yourself is not one of "
@@ -143,6 +177,30 @@ class _Widening:
     entries_known: bool
 
 
+@dataclass(frozen=True)
+class _Unknown:
+    """Conjunct (a) could not be evaluated — NOT the same value as "it is not a widening".
+
+    `detail` completes the sentence "the gate could not evaluate this call: ...". A
+    caller must route this through (b) first and only then to `_ON_ERROR`; see `decide`.
+    """
+    detail: str
+
+
+class _Read(Enum):
+    """Why `_read_text` returned no text. The two are never collapsed into one value.
+
+    They demand OPPOSITE behaviour from a deny-by-default gate. ABSENT is an established
+    fact about the path — nothing is there, so nothing can be widened, and the call is a
+    creation. UNREADABLE is the absence of any fact — the gate could not look. Returning
+    one `None` for both made "I could not look" answer "I looked and found nothing", on
+    the ALLOW side, which is precisely what this gate must not do. Same three-valued
+    shape, and same reason for it, as `lib/denial_arming.Verdict`.
+    """
+    ABSENT = "absent"
+    UNREADABLE = "unreadable"
+
+
 def _load_json(text: str):
     try:
         return json.loads(text)
@@ -150,11 +208,20 @@ def _load_json(text: str):
         return None
 
 
-def _read_text(path: str) -> str | None:
+def _read_text(path: str) -> str | _Read:
+    """The file's text, or WHICH of the two no-text cases happened.
+
+    ENOENT alone does not mean ABSENT: a dangling symlink and a path under a
+    non-directory both raise it while something IS on the path, so the lexical existence
+    check decides. Everything else an OS read can fail with — EACCES, EISDIR, EIO — is
+    UNREADABLE by construction.
+    """
     try:
         return Path(path).read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None
+    except OSError as exc:
+        if isinstance(exc, (FileNotFoundError, NotADirectoryError)) and not os.path.lexists(path):
+            return _Read.ABSENT
+        return _Read.UNREADABLE
 
 
 def _granted_allow(doc) -> list[str]:
@@ -166,11 +233,15 @@ def _granted_allow(doc) -> list[str]:
     return [e for e in allow if isinstance(e, str)]
 
 
-def _apply_edit(old_text: str, tool_input: dict) -> str | None:
+def _apply_edit(old_text: str, tool_input: dict) -> str | _Unknown:
     old_string = tool_input.get("old_string")
     new_string = tool_input.get("new_string")
     if not isinstance(old_string, str) or not isinstance(new_string, str):
-        return None
+        return _Unknown(
+            "this Edit call carries no old_string/new_string pair of strings, so the text it "
+            "would produce — and with it whether the call widens a permission surface — is "
+            "unknown rather than known to be no"
+        )
     if tool_input.get("replace_all"):
         return old_text.replace(old_string, new_string)
     return old_text.replace(old_string, new_string, 1)
@@ -196,58 +267,97 @@ def _widening_between(path: str, old_text: str, new_text: str) -> _Widening | No
     return _Widening(path, tuple(entries), True)
 
 
-def _file_tool_widening(tool_name: str, tool_input: dict, cwd: str) -> _Widening | None:
+def _file_tool_widening(tool_name: str, tool_input: dict, cwd: str) -> _Widening | _Unknown | None:
     file_path = tool_input.get("file_path")
     if not isinstance(file_path, str) or not file_path:
-        return None
+        return _Unknown(
+            f"this {tool_name} call carries no file_path string, so which file it would "
+            f"write — and with it whether that file is a permission surface — is unknown "
+            f"rather than known to be no"
+        )
     path = file_path if os.path.isabs(file_path) else os.path.join(cwd, file_path)
 
     old_text = _read_text(path)
-    if old_text is None:
+    if old_text is _Read.ABSENT:
         return None  # nothing on disk to widen — a creation, not a widening
+    if old_text is _Read.UNREADABLE:
+        return _Unknown(
+            f"the file it would write, {path}, exists but could not be read, so whether "
+            f"this call widens the permission surface already there is unknown rather than "
+            f"known to be no"
+        )
 
     if tool_name == "Write":
         new_text = tool_input.get("content")
         if not isinstance(new_text, str):
-            return None
+            return _Unknown(
+                "this Write call carries no content string, so the text it would produce — "
+                "and with it whether the call widens a permission surface — is unknown "
+                "rather than known to be no"
+            )
     else:
         new_text = _apply_edit(old_text, tool_input)
-        if new_text is None:
-            return None
+        if isinstance(new_text, _Unknown):
+            return new_text
 
     return _widening_between(path, old_text, new_text)
 
 
-def _is_surface_on_disk(path: str) -> bool:
+def _is_surface_on_disk(path: str) -> bool | _Unknown:
+    """Is `path` a permission surface TODAY — or could the gate not tell?
+
+    ABSENT answers the question (nothing on the path is not a permission surface);
+    UNREADABLE does not answer it, and must not be reported as a "no".
+    """
     text = _read_text(path)
-    if text is None:
+    if text is _Read.ABSENT:
         return False
+    if text is _Read.UNREADABLE:
+        return _Unknown(
+            f"the file it would write, {path}, exists but could not be read, so whether "
+            f"that file is a permission surface is unknown rather than known to be no"
+        )
     return permission_surface.is_permission_surface(_load_json(text))
 
 
-def _bash_widening(tool_input: dict, cwd: str) -> tuple[_Widening | None, bool]:
-    """`(widening, tokenized)` for a Bash call.
+def _bash_widening(tool_input: dict, cwd: str) -> _Widening | _Unknown | None:
+    """Conjunct (a) for a Bash call: a widening, UNKNOWN, or None for "writes no surface".
 
-    `tokenized` is False when the command text could not be lexed at all. That case
-    MUST stay distinguishable: `command_write_targets` reports it as an empty target
-    list, byte-identical to a clean parse that found no write, so a caller reading the
-    result by truthiness lets one unbalanced quote reach the allow branch (R7 axis 2).
-    The pre-lex below is over exactly the text the lexer sees — heredoc bodies stripped
-    first — so the two agree on what "could not parse" means.
+    An untokenizable command MUST stay distinguishable from a clean parse:
+    `command_write_targets` reports both as an empty target list, so a caller reading
+    the result by truthiness lets one unbalanced quote reach the allow branch (R7 axis
+    2). The pre-lex below is over exactly the text the lexer sees — heredoc bodies
+    stripped first — so the two agree on what "could not parse" means.
+
+    A definite surface among the targets outranks an unreadable one: the loop keeps
+    looking after an UNKNOWN target and only falls back to it if no target settles the
+    question, so one unreadable path cannot downgrade a deny into an `_ON_ERROR`.
     """
     command = tool_input.get("command")
-    if not isinstance(command, str) or not command.strip():
-        return None, True
+    if not isinstance(command, str):
+        return _Unknown(
+            "this Bash call carries no command string, so whether it writes a permission "
+            "surface is unknown rather than known to be no"
+        )
+    if not command.strip():
+        return None
 
     try:
         shlex.split(shell_tokens.strip_heredoc_bodies(command))
     except Exception:
-        return None, False
+        return _Unknown(
+            "its command text could not be tokenized, so whether it writes a permission "
+            "surface is unknown rather than known to be no"
+        )
 
+    unknown = None
     for target in bash_write_targets.command_write_targets(command, cwd):
-        if _is_surface_on_disk(target):
-            return _Widening(target, (), False), True
-    return None, True
+        is_surface = _is_surface_on_disk(target)
+        if isinstance(is_surface, _Unknown):
+            unknown = unknown or is_surface
+        elif is_surface:
+            return _Widening(target, (), False)
+    return unknown
 
 
 def _on_internal_error(detail: str) -> str | None:
@@ -307,38 +417,48 @@ def decide(payload: dict) -> str | None:
     The three conjuncts in cost order: (a) does this call widen a permission surface,
     (b) is the session armed by a denial that expressed a permission judgement, (c)
     would an entry being granted have covered one of those denied calls.
+
+    (a) is three-valued: an UNKNOWN does not short-circuit either way, it falls through
+    to (b), and pays `_ON_ERROR` only if the session turns out to be armed.
     """
+    # Tool dispatch FIRST, before any payload field is read: an unmodelled tool is not
+    # this gate's business whatever shape its input has, and must never be judged.
     tool_name = payload.get("tool_name") or ""
-    tool_input = payload.get("tool_input")
-    if not isinstance(tool_input, dict):
+    if tool_name not in _MODELLED_TOOLS:
         return None
+
     cwd = payload.get("cwd") or os.getcwd()
 
     # (a) — cheapest, and the one that lets the vast majority of calls out before the
     # transcript is ever opened.
-    if tool_name in _FILE_TOOLS:
-        widening = _file_tool_widening(tool_name, tool_input, cwd)
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        widening = _Unknown(
+            f"this {tool_name} call's tool_input is not an object, so nothing about what it "
+            f"would write can be read out of it and whether it widens a permission surface "
+            f"is unknown rather than known to be no"
+        )
     elif tool_name == "Bash":
-        widening, tokenized = _bash_widening(tool_input, cwd)
-        if not tokenized:
-            return _on_internal_error(
-                "its command text could not be tokenized, so whether it writes a permission "
-                "surface is unknown rather than known to be no"
-            )
+        widening = _bash_widening(tool_input, cwd)
     else:
-        return None
+        widening = _file_tool_widening(tool_name, tool_input, cwd)
     if widening is None:
         return None
 
     # (b)
     arming = denial_arming.armed(payload.get("transcript_path") or "")
     if arming.verdict is Verdict.NOT_ARMED:
+        # Whatever (a) came to, the conjunction is False: an UNKNOWN widening in a session
+        # that carries no permission denial cannot be an answer to one.
         return None
     if arming.verdict is Verdict.UNREADABLE:
         return _on_internal_error(
             "this session's transcript could not be read, so whether a permission denial "
             "preceded this widening is unknown rather than known to be no"
         )
+    if isinstance(widening, _Unknown):
+        # Armed, and (a) unresolved: a self-grant cannot be ruled out. Fail closed.
+        return _on_internal_error(widening.detail)
 
     # (c) — only the Edit/Write paths can ask it; see R7 in the module docstring.
     if not widening.entries_known:
