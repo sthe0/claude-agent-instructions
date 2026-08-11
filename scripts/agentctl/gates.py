@@ -968,15 +968,19 @@ def renormalization_blockers(old_doc, new_doc) -> list[str]:
 
     * NAMED refusals (`_RENORM_PROTECTED` plus the meta surface), so the message can
       tell the author which norm he touched and what it costs to move it properly.
-    * A RESIDUAL totality check, which is what makes this gate honest rather than a
-      list someone must remember to extend: the old stage is copied, ONLY its
-      `means.procedure` is set to the new value, and `plan.stage_question_key` of that
-      transplant must equal the new stage's. That key covers every field of a stage's
-      definition, so any edit the procedure alone does not account for — including one
-      to a field added years from now — fails here whether or not anyone listed it.
-      This is also the answer to whether the light path can re-select `material_refs`
-      or `knowledge_refs` and walk around the coverage gate stage 4 built: it cannot,
-      because those refs are inside that key (via `plan.knowledge_place`).
+    * Two RESIDUAL totality checks, one per side, which are what make this gate honest
+      rather than a list someone must remember to extend. Per stage: the old stage is
+      copied, ONLY its `means.procedure` is set to the new value, and
+      `_renorm_stage_residual` of that transplant must equal the new stage's. Per plan:
+      `_meta_place(old) == _meta_place(new)` over every field of `plan.PlanMeta`. Each
+      residual is pinned by a test that goes red when a field is added and not covered
+      (test_renormalization.py), because both are hand-written membership lists and a
+      universal claim no code establishes is exactly the substitution this engine's own
+      docstrings name as costing a claim its universality.
+      The stage residual is also the answer to whether the light path can re-select
+      `material_refs` or `knowledge_refs` and walk around the coverage gate stage 4
+      built: it cannot, because those refs are inside `plan.stage_question_key` (via
+      `plan.knowledge_place`), which the residual carries.
 
     Pure — dataclass reads and two digests, no I/O, in keeping with this module."""
     out: list[str] = []
@@ -1004,7 +1008,7 @@ def renormalization_blockers(old_doc, new_doc) -> list[str]:
                 )
         transplant = copy.deepcopy(old_stage)
         transplant.means.procedure = new_stage.means.procedure
-        if stage_question_key(transplant) != stage_question_key(new_stage):
+        if _renorm_stage_residual(transplant) != _renorm_stage_residual(new_stage):
             out.append(
                 f"stage {index}: something other than `means.procedure` changed — a "
                 f"renormalization is an edit the new sequence alone accounts for, and "
@@ -1032,7 +1036,76 @@ def renormalization_blockers(old_doc, new_doc) -> list[str]:
             "customer's, and nothing an executor does to his own sequence changes it. "
             "Replan without --renormalize"
         )
+    if _meta_place(old_doc.meta) != _meta_place(new_doc.meta):
+        out.append(
+            "[meta] something outside the sequence of operations changed in the plan's "
+            "[meta] table — a renormalization is an edit the new sequence alone accounts "
+            "for, and this one does not. Replan without --renormalize"
+        )
     return out
+
+
+def _renorm_stage_residual(stage) -> tuple:
+    """A stage's WHOLE definition as a comparable value — the per-stage residual.
+
+    `plan.stage_question_key` is most of it, and would have been all of it but for its
+    own scope: that key answers whether a disposed Question still targets the same
+    bytes, and a Question.target may only name a stage field the plan's author writes
+    as an activity element. Two engine-consumed fields fall outside that and are spliced
+    on here, because a renormalization is defined by what it does NOT touch:
+
+    * `actor.cost_tier` — the dispatch budget label and the effort-divergence estimate's
+      input. Re-tiering a stage from `small` to `large` under the light path would move
+      the norm the divergence trigger reads a stage's overrun against.
+    * `output_artifacts` — the paths the verify-command reachability lint reads as
+      produced-by-this-plan. Re-declaring them changes which green a check can reach.
+
+    Deliberately outside, and the only things outside: `index` (the key both sides are
+    matched ON, so a change there is an added/removed stage, refused above), and the
+    mutable execution RECORD `outcome` / `criterion.observation` / `control` — a plan doc
+    loaded from TOML carries the defaults for those, and the live state's copies are what
+    this path exists to leave alone.
+
+    Hand-written, like every membership list of this family, and pinned the same way:
+    `test_the_stage_residual_exhausts_the_stage_s_field_set` goes red when a field is
+    added to `Stage` and to neither the key nor the two splices above."""
+    return (
+        stage_question_key(stage),
+        stage.actor.cost_tier,
+        tuple(stage.output_artifacts),
+    )
+
+
+def _meta_place(meta) -> tuple:
+    """Every field of `plan.PlanMeta`, normalized into a comparable value — the plan-level
+    residual, and the reason the named [meta] refusals above may stay a short list.
+
+    Without it the meta side is a bare enumeration, and an enumeration is exactly what a
+    light path must not rest on: `weight_class` was outside the named four, so an offered
+    plan re-declaring a substantive session's plan as `small_change` — the grade the whole
+    approval spine keys on — passed as "a re-sequencing". So the totality claim is made
+    here and the named rows keep only the job they are good at, naming the norm.
+
+    Hand-written for the reason `plan.order_place` documents (each field needs its own
+    hashable, order-stable form, so it cannot be derived over `dataclasses.fields`), and
+    pinned the same way: `test_the_meta_residual_exhausts_plan_meta_s_field_set` goes red
+    the day a field is added to PlanMeta and not listed here.
+
+    `final_check` rides through `_final_check_surface`, so a label-only edit is caught by
+    neither this nor the named refusal above — labels are how a check is spoken about,
+    not what it checks, and the operative surface is deliberately what both compare."""
+    return (
+        meta.task_id,
+        meta.goal,
+        meta.done_criterion,
+        meta.criterion_type,
+        meta.weight_class,
+        meta.external_research,
+        meta.repo_root,
+        meta.delivery_worktree,
+        _final_check_surface(meta),
+        order_place(meta),
+    )
 
 
 def _final_check_surface(meta) -> tuple:

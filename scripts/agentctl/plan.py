@@ -81,8 +81,16 @@ and every stage must also carry the 8-element activity-structure fields:
 
     material = "..."
     means = "..."
-    method = "..."
-    conditions = "..."
+    method = "..."                       # the REQUIREMENT on the way of acting: what
+                                         # the transformation must be an instance of
+    procedure = "1. ... 2. ..."          # the SEQUENCE of operations proposed for
+                                         # meeting that requirement — the executor's
+                                         # own, replaceable via replan --renormalize
+    conditions = "..."                   # what must hold OF THE WORLD for the stage's
+                                         # transformation to go through
+    preconditions = "..."                # what must already be true before the stage
+                                         # may START (inherited from outside it)
+    knowledge = "..."                    # the знание the stage acts FROM
     invariants = "..."
     capability_required = "..."          # required for substantive
 
@@ -94,6 +102,10 @@ and every stage must also carry the 8-element activity-structure fields:
                                          # must differ from statement and source)
     confidence = "high"                  # high | medium | low
     refutation = "..."
+
+`procedure`, `preconditions` and `knowledge` are SUBMISSION-seam requirements too, for
+the same reason [meta.order] is: they were added after the corpus was frozen, so the
+loader parses them and can never refuse their absence.
 
 diff_plans classifies a replan as no_change / refinement / substantive, mirroring
 CLAUDE.md § Acting without asking: structural edits (stage set, dependencies,
@@ -1230,13 +1242,22 @@ def procedure_place(stage) -> tuple:
 
     TAGGED, which its two siblings are not, and the tag is what nesting alone turned out
     not to buy. Nesting stops a value flattening into the splices beside it; it does not
-    stop two INDEPENDENTLY-conditional nested splices from producing the same element.
-    This is the third such splice, so `preconditions = "delivery"` and `procedure =
-    "delivery"` both reduced to `(("delivery",),)` and a stage that MOVED one sentence
-    from the first place to the second carried its PASSED outcome forward as though
-    nothing had changed. Tagging only the new place fixes that without touching either
-    older encoding — the keys of every already-disposed question stay byte-identical,
-    which a retrofit of all three would not."""
+    stop two INDEPENDENTLY-conditional splices from producing the same element. This is
+    the third conditional splice of `stage_question_key` and `stage_carry_key`, so
+    `preconditions = "delivery"` and `procedure = "delivery"` both reduced to
+    `(("delivery",),)` and a stage that MOVED one sentence from the first place to the
+    second carried its PASSED outcome forward as though nothing had changed. Tagging
+    only the new place fixes that without touching either older encoding — the keys of
+    every already-disposed question stay byte-identical, which a retrofit of all three
+    would not.
+
+    `diff_plans._prose` splices five conditional components rather than three, and its
+    two extra ones (`verify_venue_at_final` and `cost_tier`) are BOTH bare strings, so
+    the same collision was reachable there between two fields neither of which is this
+    one. It is closed at that site instead of here, by tagging them in `_prose` only:
+    `_prose` is computed live between two documents and never persisted, so a tag costs
+    nothing there, while retagging `verify_venue_at_final` in the two KEYS would flip
+    every already-disposed question of every live session."""
     return () if not stage.means.procedure else (("procedure", stage.means.procedure),)
 
 
@@ -1397,9 +1418,16 @@ def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
              _normalize_string(s.criterion.verify_venue),
              _normalize_string(s.criterion.verify_kind),
              s.criterion.landed,
-             *((_normalize_string(s.criterion.verify_venue_at_final),)
+             # Both TAGGED, for the reason `procedure_place`'s docstring gives: they are
+             # two independently-conditional splices of the same type, so untagged a
+             # `cost_tier` and a `verify_venue_at_final` carrying the same word reduce to
+             # the same element and an edit MOVING between them diffs as `no_change`.
+             # Tagged here and not in the two persisted keys, where `cost_tier` does not
+             # appear at all and a retag would flip every disposed question's key.
+             *((("verify_venue_at_final",
+                 _normalize_string(s.criterion.verify_venue_at_final)),)
                if s.criterion.verify_venue_at_final else ()),
-             *((s.actor.cost_tier,) if s.actor.cost_tier else ()),
+             *((("cost_tier", s.actor.cost_tier),) if s.actor.cost_tier else ()),
              # Without this a knowledge-only correction — the exact edit an
              # overcome-difficulty replan makes when the fault addressed знание —
              # diffs to 'no_change' and is silently dropped.

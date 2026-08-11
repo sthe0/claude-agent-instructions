@@ -3597,6 +3597,17 @@ def _renormalize_replan(args, state, store: StateStore, runner: Runner | None) -
     recorded once every stage has already passed."""
     from .plan import load_plan as _load
 
+    # Backfill a snapshot for a legacy (pre-snapshot) session BEFORE this path rewrites
+    # plan_path, exactly as the no_change branch of cmd_replan does and for a sharper
+    # reason: without it `old_path` falls back to plan_path, which after one
+    # renormalization holds the RENORMALIZED bytes, and the walk-in-small-steps this
+    # branch claims to prevent would be open on precisely the sessions that have no
+    # snapshot. Best-effort (see _snapshot_approved_plan); a None leaves the prior
+    # fallback, so nothing here can refuse a renormalization.
+    if not (state.plan_snapshot_path and Path(state.plan_snapshot_path).exists()):
+        backfilled = _snapshot_approved_plan(store, state)
+        if backfilled:
+            state.plan_snapshot_path, state.plan_snapshot_hash = backfilled
     snap = state.plan_snapshot_path
     old_path = snap if (snap and Path(snap).exists()) else state.plan_path
     # Lenient OLD / strict NEW, for the reason cmd_replan's own loads document: the
@@ -3656,6 +3667,24 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         return Directive(False, state.node, "declare", "replan blocked by incomplete difficulty record",
                          data={"blockers": dblock})
 
+    if not state.plan_path:
+        return Directive(False, state.node, "submit_plan", "no current plan to replan against")
+
+    # The renormalization branch sits HERE deliberately: after difficulty_blockers (a
+    # renormalization offers a whole plan, and offering one while the difficulty record
+    # is still incomplete is how a difficulty gets re-plannned away rather than worked
+    # through) and after the no-plan check it needs a baseline from, but BEFORE the two
+    # CLOSURE preconditions below and the plan-review and plan_approval gates after them.
+    # The closure preconditions are conditions of LEAVING the DIAGNOSING cycle, and this
+    # path does not leave it: blocking a re-sequencing on them demanded a re-norming as
+    # the price of an act that closes nothing, and — worse — a `--normalization-waiver`
+    # passed with the flag would have been spent, and logged, on a call that never
+    # discharged the difficulty. The gates below govern the NORM, which is the very thing
+    # this path is refused for touching: making an executor re-arm a review to reorder his
+    # own operations is the cost the field split exists to remove.
+    if getattr(args, "renormalize", False):
+        return _renormalize_replan(args, state, store, runner)
+
     # closure precondition: a difficulty exposed a norm-failure; closing it (leaving the
     # DIAGNOSING cycle) REQUIRES re-norming the reproducible factor. Mandatory-if-
     # reproducible; the one-off escape is an explicit --normalization-waiver <reason>.
@@ -3693,18 +3722,6 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
                          "replan blocked: the fault must be routed to the inadequate "
                          "обеспечение (re-run critique with --failure-address)",
                          data={"blockers": fablock})
-
-    if not state.plan_path:
-        return Directive(False, state.node, "submit_plan", "no current plan to replan against")
-
-    # The renormalization branch sits HERE deliberately: after the difficulty-cycle
-    # preconditions above (leaving that cycle is an obligation of its own, and this path
-    # does not leave it) and after the no-plan check it needs a baseline from, but BEFORE
-    # the plan-review and plan_approval gates below — those govern the NORM, which is the
-    # very thing this path is refused for touching. Making an executor re-arm a review to
-    # reorder his own operations is the cost the field split exists to remove.
-    if getattr(args, "renormalize", False):
-        return _renormalize_replan(args, state, store, runner)
 
     # plan-review gate: the corrected plan (args.plan) must carry a thinker review
     # with a passing/overridden verdict BOUND to it before it may be applied. Gates

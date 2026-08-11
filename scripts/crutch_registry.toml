@@ -5747,6 +5747,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "422f62923b0d077e"
+domain = "code"
+file = "scripts/tests/test_renormalization.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "c8bf736a03583f23"
 domain = "code"
 file = "scripts/tests/test_replan.py"
@@ -8126,6 +8134,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "13a5925398922fbe"
 domain = "code_file_rollup"
 file = "scripts/tests/test_question_enumerate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "15a6b3dd2aab0e57"
+domain = "code_file_rollup"
+file = "scripts/tests/test_renormalization.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"

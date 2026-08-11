@@ -39,6 +39,7 @@ lists through `plan.knowledge_place`.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import tomllib
 from argparse import Namespace
@@ -50,6 +51,7 @@ import pytest
 from agentctl import cli, gates, plan as plan_mod
 from agentctl.dispatch import RunResult
 from agentctl.plan import (
+    PlanMeta,
     diff_plans,
     load_plan,
     procedure_place,
@@ -61,6 +63,7 @@ from agentctl.state import (
     Actor,
     Criterion,
     Means,
+    Principle,
     Stage,
     StageStatus,
     Subject,
@@ -81,6 +84,12 @@ PROCEDURE = "1. Read submission.py's per-stage loop. 2. Add the row to _SUBSTANT
 # The distinctive substring of procedure.py's judge prompt — asserted absent from the
 # argv of every call the seam makes when the two texts plainly differ.
 _ASKED_MARKER = "PROCEDURE is the SEQUENCE of operations"
+
+# The headroom procedure.py's CALIBRATION note claims between the measured worst honest
+# pair (0.30) and OVERLAP_THRESHOLD (0.50): their midpoint. Not a second threshold — the
+# prefilter never reads it — but the point at which "with room to spare" stops being true
+# of the corpus and the note has to be rewritten rather than quietly outgrown.
+_CLAIMED_HEADROOM_CEILING = 0.40
 
 _DEFAULTS = {
     "weight_class": 'weight_class = "substantive"\n',
@@ -355,7 +364,13 @@ def test_the_overlap_threshold_clears_the_corpus_null_case():
 
     A corpus pair reaching the threshold would mean the prefilter has started summoning
     a judge about honest prose; this turns red instead. It is a calibration, not a
-    guarantee: the recall direction stays unmeasured, exactly as procedure.py says."""
+    guarantee: the recall direction stays unmeasured, exactly as procedure.py says.
+
+    Two assertions, because the threshold's justification is not "no pair reaches 0.50"
+    but "the worst honest pair is 0.30, so 0.50 clears every measured one WITH ROOM TO
+    SPARE". A corpus that drifted to 0.49 would keep the first assertion green while
+    making that sentence false, and nothing would say so — so the headroom the comment
+    claims is pinned too, at the midpoint between the measured worst and the threshold."""
     worst = 0.0
     worst_at = ""
     pairs = 0
@@ -382,6 +397,13 @@ def test_the_overlap_threshold_clears_the_corpus_null_case():
         f"prefilter threshold {OVERLAP_THRESHOLD} — either the threshold is too low or "
         f"the corpus gained a stage whose method and {worst_at.split('.')[-1]} say the "
         f"same thing"
+    )
+    assert worst < _CLAIMED_HEADROOM_CEILING, (
+        f"the highest honest pair in the corpus ({worst:.2f} at {worst_at}) is past "
+        f"{_CLAIMED_HEADROOM_CEILING}, so the threshold {OVERLAP_THRESHOLD} no longer "
+        f"clears the measured null case 'with room to spare' as procedure.py's "
+        f"CALIBRATION note claims — re-measure and rewrite that note, or raise the "
+        f"threshold, before treating this corpus as a calibration"
     )
 
 
@@ -555,6 +577,285 @@ def test_the_residual_catches_a_field_no_named_refusal_lists(store, tmp_path):
 
     assert d.ok is False
     assert any("other than `means.procedure`" in b for b in d.data["blockers"])
+
+
+def test_the_prose_diff_distinguishes_its_two_bare_conditional_splices(tmp_path):
+    """The same collision `procedure_place`'s tag closed, at the one other site that has
+    it. `diff_plans._prose` splices FIVE conditional components, not the three the two
+    persisted keys do, and its two extra ones — `verify_venue_at_final` and `cost_tier` —
+    were both bare strings, so a plan that MOVED a value from one to the other diffed as
+    `no_change` and the correction was dropped.
+
+    Honest about its own reach: with both fields declared under a STRICT load the values
+    cannot collide, because the two vocabularies are disjoint (delivery/repo_root vs
+    small/medium/large) and `parse_plan` enforces both. What reaches this is a lenient
+    load — the replan and renormalization BASELINE, deliberately lenient so a snapshot
+    frozen under an older schema still reads. So this is a latent case closed at the cost
+    of a tag, not a bug anyone met; the values below are out of vocabulary for that
+    reason, and the tag is in `_prose` only because retagging the persisted keys would
+    flip every already-disposed question."""
+    old = load_plan(_write_plan(tmp_path / "old.toml"))
+    as_venue, as_tier = deepcopy(old), deepcopy(old)
+    as_venue.stages[1].criterion.verify_venue_at_final = "collide"
+    as_tier.stages[1].actor.cost_tier = "collide"
+
+    assert diff_plans(as_venue, as_tier) == "refinement"
+
+
+def _edited(src: str, dst: Path, old: str, new: str) -> str:
+    """The template renders one plan; a [meta] edit is a substring swap on its bytes.
+
+    `_write_plan` overrides stage 2's fields only, and every case below edits the plan
+    LEVEL — the half that had no residual until this stage's review found the gap."""
+    text = Path(src).read_text(encoding="utf-8")
+    assert old in text, f"the template no longer contains {old!r}"
+    dst.write_text(text.replace(old, new, 1), encoding="utf-8")
+    return str(dst)
+
+
+_STAGE_CLUSTERS = {
+    "subject": Subject, "means": Means, "actor": Actor,
+    "criterion": Criterion, "principle": Principle,
+}
+
+#: Every leaf field of a Stage's DEFINITION, and where the renormalization residual
+#: (`gates._renorm_stage_residual`) picks it up — or why it is deliberately outside.
+#: The clusters are expanded one level; `outcome` is left whole because it is excluded
+#: whole. Values are prose for whoever the test turns red on, never read by the assert.
+_STAGE_RESIDUAL_COVERAGE = {
+    "index": "outside: the key the two plans' stages are MATCHED on — a change here is "
+             "an added or removed stage, refused by its own message above",
+    "title": "stage_question_key",
+    "conditions": "stage_question_key",
+    "preconditions": "stage_question_key, via preconditions_place",
+    "knowledge": "stage_question_key, via knowledge_place",
+    "supplies": "stage_question_key (and depends_on, which projects from it)",
+    "output_artifacts": "the residual's own splice — outside stage_question_key because "
+                        "no Question.target names it, inside here because re-declaring "
+                        "what a stage produces moves which green a check can reach",
+    "outcome": "outside: the mutable execution RECORD, not the definition — a plan doc "
+               "loaded from TOML carries its defaults, and leaving the live copy alone "
+               "is what this whole path is for",
+    "control": "outside: the control attestation record-result stamps, same reason",
+    "subject.material": "stage_question_key",
+    "subject.result": "stage_question_key",
+    "subject.invariants": "stage_question_key",
+    "subject.material_refs": "stage_question_key, via knowledge_place",
+    "subject.knowledge_refs": "stage_question_key, via knowledge_place",
+    "means.means": "stage_question_key",
+    "means.method": "stage_question_key",
+    "means.procedure": "the one field the transplant sets — the residual's subject",
+    "actor.executor": "stage_question_key",
+    "actor.capability_required": "stage_question_key",
+    "actor.cost_tier": "the residual's own splice — outside stage_question_key because "
+                       "no Question.target names it, inside here because the dispatch "
+                       "budget and the effort estimate read it as a norm",
+    "criterion.criterion_type": "stage_question_key",
+    "criterion.done_criterion": "stage_question_key",
+    "criterion.verify_command": "stage_question_key",
+    "criterion.expected_exit": "stage_question_key",
+    "criterion.verify_venue": "stage_question_key",
+    "criterion.verify_kind": "stage_question_key",
+    "criterion.landed": "stage_question_key",
+    "criterion.verify_venue_at_final": "stage_question_key",
+    "criterion.observation": "outside: what a reviewer actually SAW — an execution "
+                             "record, and the one this path most exists to preserve",
+    "principle.statement": "stage_question_key",
+    "principle.source": "stage_question_key",
+    "principle.derivation": "stage_question_key",
+    "principle.confidence": "stage_question_key",
+    "principle.refutation": "stage_question_key",
+}
+
+
+def test_the_stage_residual_exhausts_the_stage_s_field_set():
+    """THE STAGE-SIDE TOTALITY CLAIM, made true. `renormalization_blockers` says its
+    residual covers every field of a stage's definition, so an edit a new sequence does
+    not account for is refused whether or not anyone listed it. That claim was FALSE as
+    first written: the residual was `stage_question_key` alone, whose scope is what a
+    `Question.target` may legally name, and two engine-consumed fields sit outside it —
+    `actor.cost_tier` (the dispatch budget and the effort-divergence estimate) and
+    `output_artifacts` (what the reachability lint reads as produced). Both passed the
+    light path.
+
+    The membership is hand-written, as `order_place`'s is and for the same reason, so
+    like `test_order_place_exhausts_the_order_s_field_set` this is what makes the claim
+    true rather than restating it: add a field to Stage or to one of its declaration
+    clusters and this goes red until someone decides, in writing, which side it is on."""
+    leaves = set()
+    for f in dataclasses.fields(Stage):
+        cluster = _STAGE_CLUSTERS.get(f.name)
+        leaves |= ({f"{f.name}.{g.name}" for g in dataclasses.fields(cluster)}
+                   if cluster else {f.name})
+
+    assert leaves == set(_STAGE_RESIDUAL_COVERAGE), (
+        f"a Stage field is in neither the renormalization residual nor its named "
+        f"exclusions: {sorted(leaves - set(_STAGE_RESIDUAL_COVERAGE))} unaccounted, "
+        f"{sorted(set(_STAGE_RESIDUAL_COVERAGE) - leaves)} listed but gone. Decide "
+        f"whether an edit to it is a re-sequencing (it is not, almost always), splice "
+        f"it into gates._renorm_stage_residual, and record the decision here"
+    )
+
+
+def test_the_meta_residual_exhausts_plan_meta_s_field_set():
+    """THE PLAN-SIDE TOTALITY CLAIM, in the shape `test_order_place_exhausts_the_order_s_
+    field_set` established — an arity check, because `_meta_place`'s members are
+    normalized and no longer carry their field names.
+
+    The stage half had a residual from the start; the meta half was four named rows plus
+    the final-check and order surfaces, and a bare enumeration is what a light path must
+    not rest on. `weight_class` was the field that showed it: the grade the whole
+    approval spine keys on, in no row, so an offered plan re-declaring a substantive
+    session's plan as `small_change` read as a re-sequencing."""
+    fields = {f.name for f in dataclasses.fields(PlanMeta)}
+    place = gates._meta_place(PlanMeta(task_id="t"))
+
+    assert len(place) == len(fields), (
+        f"_meta_place carries {len(place)} member(s) for {len(fields)} PlanMeta field(s) "
+        f"({sorted(fields)}). A field added to PlanMeta and not listed there is outside "
+        f"the renormalization residual: an executor can edit it under --renormalize and "
+        f"the engine will call it a re-sequencing. Add its normalized form to "
+        f"gates._meta_place and pin the new count here"
+    )
+
+
+@pytest.mark.parametrize("old,new,expected", [
+    # the named rows — each carries its own message, and this is what a revert of the
+    # [meta] block takes down (before these, deleting the whole block left the suite green)
+    ('goal = "g"', 'goal = "a different goal"', "`goal`"),
+    ('done_criterion = "dc"', 'done_criterion = "the reviewer likes it"',
+     "`done_criterion`"),
+    ('text = "the fixture plan meets the substantive grade"',
+     'text = "the fixture plan meets some other grade entirely"', "[meta.order]"),
+    ('command = "true"', 'command = "false"', "`final_check`"),
+    # the residual — fields no row names, and the reason the rows may stay a short list
+    ('weight_class = "substantive"', 'weight_class = "small_change"', "[meta] something"),
+    ('external_research = "none applies"',
+     'external_research = "searched the wiki; nothing applies"', "[meta] something"),
+])
+def test_renormalize_refuses_an_edit_to_the_plan_level(store, tmp_path, old, new,
+                                                       expected):
+    """The [meta] half of the refusal, pinned. Nothing here was covered by a test before
+    this stage's review: the whole block could be deleted from `renormalization_blockers`
+    and the suite stayed green, which for a gate is the same as not having it.
+
+    The last two rows are the residual's own, and `weight_class` is why the residual
+    exists. It is the plan's GRADE — what decides that this session needs an approval
+    gate at all — and it sat in no named row, so a plan offered with
+    `weight_class = "small_change"` and one re-sequenced stage passed as a
+    renormalization. An executor could downgrade the plan out of the spine under the one
+    branch built to be usable without asking anyone."""
+    plan = _write_plan(tmp_path / "p.toml")
+    _approved(store, plan)
+
+    d = _renormalize(store, _edited(plan, tmp_path / "q.toml", old, new))
+
+    assert d.ok is False, d.data
+    assert any(expected in b for b in d.data["blockers"]), d.data["blockers"]
+    assert store.load("rn").plan_path == plan
+
+
+def test_renormalize_refuses_a_stage_field_outside_the_question_key(store, tmp_path):
+    """`cost_tier` is the concrete case must-fix 1 was found on: engine-consumed (the
+    spawn budget, and the per-stage term of the effort-divergence estimate) but outside
+    `stage_question_key`, because no `Question.target` may name it. Re-tiering a stage
+    from small to large moves the norm a stage's overrun is measured against, and it is
+    not a sequence of operations by any reading."""
+    plan = _write_plan(tmp_path / "p.toml")
+    _approved(store, plan)
+
+    d = _renormalize(store, _edited(plan, tmp_path / "q.toml",
+                                    'capability_required = "cap"\nmaterial_refs',
+                                    'capability_required = "cap"\ncost_tier = "large"\n'
+                                    'material_refs'))
+
+    assert d.ok is False, d.data
+    assert any("other than `means.procedure`" in b for b in d.data["blockers"]), (
+        d.data["blockers"]
+    )
+
+
+def test_renormalize_refuses_a_plan_that_fails_submission(store, tmp_path):
+    """The early return the branch opens with, pinned: the offered plan is held to the
+    SAME submission grade as any other, so the light path cannot be the way a plan
+    missing a required place gets into a session. Here stage 2 offers no `procedure` at
+    all — under a branch whose entire subject is the procedure.
+
+    The refusal is `fix_plan`, not `replan`: nothing about a norm was touched, so telling
+    the author to re-arm a review would name the wrong repair."""
+    plan = _write_plan(tmp_path / "p.toml")
+    _approved(store, plan)
+
+    d = _renormalize(store, _write_plan(tmp_path / "q.toml", procedure=""))
+
+    assert d.ok is False
+    assert d.action == "fix_plan"
+    assert any("procedure" in p for p in _problems(d)), _problems(d)
+    assert store.load("rn").plan_path == plan
+
+
+def test_renormalize_is_not_blocked_by_the_closure_preconditions(store, tmp_path):
+    """WHERE the branch sits in `cmd_replan`, pinned. The normalization and
+    failure-address gates are preconditions of CLOSING a difficulty — of leaving the
+    DIAGNOSING cycle — and this path explicitly does not leave it. Behind them, an
+    executor inside an open difficulty had to buy a re-norming (or spend a
+    `--normalization-waiver`, which would then be logged against a call that discharged
+    nothing) before he could reorder his own operations: the exact toll the field split
+    exists to remove, reimposed at the one moment re-sequencing is most likely.
+
+    `difficulty_blockers` stays ABOVE the branch and is not the same case: it refuses to
+    let a whole plan be offered while the difficulty record is still incomplete, which is
+    how a difficulty gets replanned away instead of worked through."""
+    plan = _write_plan(tmp_path / "p.toml")
+    _approved(store, plan)
+    cli.cmd_partition(ns(session="rn", m1=False, m2=False, m3=False, m4=False,
+                         m3_severe=False, m4_severe=False), store=store)
+    cli.cmd_next_stage(ns(session="rn"), store=store)
+    cli.cmd_record_result(ns(session="rn", status="failed", actual="boom"), store=store)
+    cli.cmd_declare(ns(session="rn", expected="e", actual="a", mismatch="m"), store=store)
+    cli.cmd_investigate(ns(session="rn", localized_expectation="le", localized_actual="la",
+                           hypotheses=["h1", "h2"]), store=store)
+    cli.cmd_critique(ns(session="rn", functional_ground="fg", replanning_task="rt",
+                        failure_address="нормативное"), store=store)
+    assert gates.normalization_blockers(store.load("rn")), (
+        "the closure gate must be armed, or this test pins nothing"
+    )
+
+    d = _renormalize(store, _write_plan(
+        tmp_path / "q.toml",
+        procedure='procedure = "1. Read the seam. 2. Add the row. 3. Run pytest -q."\n'))
+
+    assert d.ok is True, d.data
+    state = store.load("rn")
+    assert state.node == "DIAGNOSING", "a renormalization does not leave the cycle"
+    assert "normalization_waived" not in [h.get("event") for h in state.history]
+
+
+def test_renormalize_backfills_a_legacy_session_s_approved_snapshot(store, tmp_path):
+    """Successive renormalizations are measured against the APPROVED bytes — that is what
+    stops a norm edit being walked to in small steps, each step passing because it is
+    small. On a session with no snapshot the baseline falls back to `plan_path`, which
+    this branch rewrites on every accepted call, so on exactly those sessions the walk
+    was open. The branch now backfills the snapshot before rewriting, as cmd_replan's
+    no_change branch already does."""
+    plan = _write_plan(tmp_path / "p.toml")
+    state = _approved(store, plan)
+    state.plan_snapshot_path = None
+    state.plan_snapshot_hash = None
+    store.save(state)
+
+    d = _renormalize(store, _write_plan(
+        tmp_path / "q.toml",
+        procedure='procedure = "1. Read the seam. 2. Add the row. 3. Run pytest -q."\n'))
+    assert d.ok is True, d.data
+    snap = store.load("rn").plan_snapshot_path
+    assert snap and Path(snap).read_text(encoding="utf-8") == Path(plan).read_text(
+        encoding="utf-8"), "the snapshot must hold the APPROVED bytes, not the new ones"
+
+    # …and the baseline is now those bytes: a second call may still only re-sequence.
+    d2 = _renormalize(store, _write_plan(tmp_path / "r.toml", title="a better name"))
+    assert d2.ok is False
+    assert any("other than `means.procedure`" in b for b in d2.data["blockers"])
 
 
 def test_renormalize_leaves_a_passed_stage_s_recorded_observation_alone(store, tmp_path):
