@@ -8,12 +8,15 @@ each control string an entry names actually resolves against the plan (a real
 stage's `verify_command`, a real `final_check` index, or a real landed-kind
 stage) — the gap `resolve_control`/`coverage_violations` closes.
 
-Fixture-domain only: this suite never touches the live smd-act-defects-8 plan.
-The one-shot check that THIS plan's own coverage map resolves is a separate CLI
-invocation of `check-order-coverage.py` against the committed snapshot
-(`fixtures/plan_snapshot_smd-act-defects-8.toml`), run directly as part of this
-stage's `verify_command`, not as a pytest case — a fixture plan and the one real
-plan under test are deliberately different failure surfaces.
+Fixture-domain only: every test above never touches the live smd-act-defects-8
+plan — a fixture plan and the one real plan under test are deliberately
+different failure surfaces. The check that THIS plan's own coverage map
+resolves runs in TWO places, not one: as a pytest case below
+(`test_main_resolves_against_the_committed_smd_act_defects_8_snapshot`, against
+the committed snapshot `fixtures/plan_snapshot_smd-act-defects-8.toml`) so it
+cannot silently rot, and also as a direct CLI invocation of
+`check-order-coverage.py` in this stage's `verify_command`, against the live
+plan file rather than the frozen snapshot.
 """
 import importlib.util
 import sys
