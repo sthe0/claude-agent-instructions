@@ -117,6 +117,21 @@ def _plan_file_sha256(target: str | None) -> str:
         return ""
 
 
+def _plan_file_bytes(target: str | None) -> int | None:
+    """Byte size of a plan file, or None when there is no readable file.
+
+    Mirrors _plan_file_sha256's best-effort contract. cmd_plan_review logs this on
+    the plan_review history event so a round's fix size is computable as a byte
+    delta between consecutive events of the same family, without re-reading the
+    plan archive after the fact."""
+    if not target:
+        return None
+    try:
+        return Path(target).stat().st_size
+    except OSError:
+        return None
+
+
 def _observation_sha256(observation: str) -> str:
     """sha256 of an acceptance observation's bytes — the binding key the acceptance
     gate recomputes over the observation being recorded. Mirrors _plan_file_sha256 but
@@ -2442,7 +2457,13 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
     blockers = gates.plan_review_blockers(state, target)
     _log_gate(state, "plan_review", blockers, passed=not blockers)
     state.log("plan_review", target=target, verdict=args.verdict,
-              reviewer=state.plan_review.reviewer)
+              reviewer=state.plan_review.reviewer,
+              plan_sha256=state.plan_review.plan_sha256,
+              plan_bytes=_plan_file_bytes(target),
+              concerns=state.plan_review.concerns,
+              note=state.plan_review.note,
+              findings_blocking=getattr(args, "findings_blocking", None),
+              findings_nonblocking=getattr(args, "findings_nonblocking", None))
     store.save(state)
     if blockers:
         return Directive(
@@ -4877,6 +4898,11 @@ def build_parser() -> argparse.ArgumentParser:
                          "plan; cross-checked against the live bytes and stored as the "
                          "attested plan_sha256. A passing verdict does NOT bind without "
                          "it — a reviewer that could not read the plan cannot attest.")
+    sp.add_argument("--findings-blocking", dest="findings_blocking", type=int, default=None,
+                    help="count of blocking findings this round produced (audit trail)")
+    sp.add_argument("--findings-nonblocking", dest="findings_nonblocking", type=int,
+                    default=None,
+                    help="count of non-blocking findings this round produced (audit trail)")
     sp = add("stage-review"); sp.add_argument("--session", required=True)
     sp.add_argument("--verdict", choices=list(gates.STAGE_REVIEW_VERDICTS), required=True,
                     help="pass = clears the acceptance gate; revise = blocks; override = "
