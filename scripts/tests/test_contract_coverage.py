@@ -27,6 +27,7 @@ re-decide it.
 from __future__ import annotations
 
 import copy
+import inspect
 import re
 from pathlib import Path
 
@@ -318,4 +319,19 @@ def test_change_decision_coverage_is_pinned_by_mutation(leaf, expected):
         f"{leaf}: mutating it is detected by {sorted(detected)}, but "
         f"_STAGE_LEAF_COVERAGE says {sorted(expected)} — either the coverage map is "
         f"stale or a change-decision function's behavior moved"
+    )
+
+
+def test_cd_names_exactly_the_four_labels_the_mutation_harness_detects():
+    """`_CD` is hand-written, unlike `_STAGE_LEAF_COVERAGE`'s per-leaf entries (derived
+    by the mutation run above). Mechanically cross-checked here against the literal
+    `detected.add("...")` calls inside `test_change_decision_coverage_is_pinned_by_
+    mutation`'s own source — the actual vocabulary the mutation harness reports —
+    so a future author who adds, removes, or renames a change-decision function
+    cannot leave `_CD` silently out of sync with what that function detects."""
+    source = inspect.getsource(test_change_decision_coverage_is_pinned_by_mutation)
+    labels = frozenset(re.findall(r'detected\.add\("([^"]+)"\)', source))
+    assert labels == frozenset(_CD), (
+        f"detected.add(...) calls name {sorted(labels)}, but _CD is {sorted(_CD)} — "
+        f"one was edited without the other"
     )
