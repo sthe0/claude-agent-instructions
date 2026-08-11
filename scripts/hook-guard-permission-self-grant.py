@@ -105,7 +105,7 @@ NAMED RESIDUALS carried by this hook (R-numbers are the plan's):
   R7  The Bash path has no not-relevant branch — see above. It is bounded on two
       axes. AXIS 1: THE LEXER'S VERB TABLE IS AN ENUMERATION, so what it does not
       model it does not report, and an unreported target is an ALLOW by a route that
-      never reached a verdict. Three known members, and they are different in kind.
+      never reached a verdict. Four known members, and they are different in kind.
       (i) A write routed through a script — `bash /tmp/grant.sh` — is not in the
       command text at all, and no verb table closes that. (ii) An unmodelled WRITE
       VERB: `tar -xf a.tar -C DIR` extracts over any path inside the archive and
@@ -117,7 +117,25 @@ NAMED RESIDUALS carried by this hook (R-numbers are the plan's):
       added, because its destination set lives inside the archive rather than on the
       command line and reading it means a second grammar (the same reasoning as the
       patch verbs below). (iii) The patch verbs, which DO report a target — the
-      working directory — and are their own paragraph below. AXIS 2: an
+      working directory — and are their own paragraph below. (iv) A MODELLED verb
+      whose target the lexer resolves to THE WRONG PATH, which is the worst of the
+      four because nothing about it looks like a gap: the verb is in the table, the
+      destination is one unambiguous token, the surface is named on the command line,
+      and the gate answers about a path the command will not write. The cause is that
+      `bash_write_targets` performs no shell expansion. `~` was in this class until
+      this round: `cp grant.json ~/.claude/settings.json` joined the literal `~` under
+      the cwd, and MEASURED at commit 067ea09, armed, with the real
+      `~/.claude/settings.json` a live surface, it ALLOWED. `_abs` now calls
+      `os.path.expanduser`, and the identical command DENIES. `$VAR` is NOT expanded
+      and stays in this class: `cp grant.json $HOME/.claude/settings.json` and the
+      `${HOME}` spelling both still ALLOW, measured after the fix. That is a choice,
+      not an oversight — THE HOOK'S ENVIRONMENT IS NOT THE COMMAND'S (a command can
+      supply its own, `HOME=/x cp …`, or name a variable exported in a shell this
+      process never saw), so expanding it would resolve the token confidently to a
+      path the command may never write, in either direction; `_abs` carries the full
+      argument. Closing it means an expansion model, which is a second grammar. Also
+      in this class, by the same no-expansion cause: a glob, a `$(…)`, and any
+      destination the command computes at runtime. AXIS 2: an
       untokenizable command. `bash_write_targets.command_write_targets` reports a
       parse failure as an EMPTY target list, byte-identical to a clean parse that
       found no write — so reading its result by truthiness alone would let one
@@ -142,22 +160,30 @@ NAMED RESIDUALS carried by this hook (R-numbers are the plan's):
   trade are stated here because only one of them is comfortable. `bash_write_targets`
   reports the working DIRECTORY as the write target of `patch` and `git apply` — those
   verbs write wherever their diff says, which is inside the patch body, not on the command
-  line. They are now the ONLY verbs that answer with a directory: `cp`/`mv`/`install`
-  resolve a directory destination to the files it means (`_copy_targets`), which is why
-  `cp grant.json ~/.claude/` denies as of this round while it used to allow by landing on
-  this same arm. Since round 6 a directory target is an ESTABLISHED negative (a directory
-  is not a JSON document), so `git apply grant.patch` reaches ALLOW even when the patch adds a
-  `permissions.allow` entry. What was there before is not better: the directory read as
-  UNREADABLE, hence UNKNOWN, hence `_ON_ERROR` — measured, EVERY `git apply`, `git apply
-  --check` and `patch -p1` in an armed session was denied, including the benign ones, which
-  is most of them. So the choice is between a certain cost on a common benign operation and
-  an uncertain cost on a rare hostile one. Closing it properly means parsing the patch body
-  to learn which files it touches and applying the diff in memory — a second parser, in a
-  hook, over an attacker-influenced format; the standing instruction for this task is not to
-  invent one. The bound that makes the residual tolerable is that this gate is a backstop
-  for the OBSERVED failure mode (the agent editing a settings file directly to clear its own
-  denial), not a general egress control: an agent routing a self-grant through a patch file
-  is a different, more deliberate act, and one a reviewer reading the diff can see.
+  line. They are the only verbs that answer with a directory AND NOTHING ELSE:
+  `cp`/`mv`/`install` also resolve a directory destination to the files it means
+  (`_copy_targets`), so `cp grant.json /home/u/.claude/` — MEASURED, armed, with
+  `/home/u/.claude/settings.json` a live surface — DENIES on the join, while under the
+  pre-round-7 shape of `_copy_targets` (destination only, re-applied as a mutation to
+  measure this rather than inferred from the commit) the identical command ALLOWED by
+  landing on this same directory arm. The ABSOLUTE spelling is the one that arm used to
+  absorb. A `~` spelling never reached it: `cp grant.json ~/.claude/` allowed at the start
+  of this round too, but through ABSENT, because the lexer joined the literal `~` under
+  the cwd and `<cwd>/~/.claude/` is a path nothing is on — a different hole, fixed
+  separately in `_abs` and named as axis-1 member (iv). Since round 6 a directory target is
+  an ESTABLISHED negative (a directory is not a JSON document), so `git apply grant.patch`
+  reaches ALLOW even when the patch adds a `permissions.allow` entry. What was there before
+  is not better: the directory read as an `_Unreadable`, hence UNKNOWN, hence `_ON_ERROR` —
+  measured, EVERY `git apply`, `git apply --check` and `patch -p1` in an armed session was
+  denied, including the benign ones, which is most of them. So the choice is between a
+  certain cost on a common benign operation and an uncertain cost on a rare hostile one.
+  Closing it properly means parsing the patch body to learn which files it touches and
+  applying the diff in memory — a second parser, in a hook, over an attacker-influenced
+  format; the standing instruction for this task is not to invent one. The bound that makes
+  the residual tolerable is that this gate is a backstop for the OBSERVED failure mode (the
+  agent editing a settings file directly to clear its own denial), not a general egress
+  control: an agent routing a self-grant through a patch file is a different, more
+  deliberate act, and one a reviewer reading the diff can see.
 
   R8  Relevance cannot narrow a COMPOUND Bash denial: `shlex.split` destroys the
       separator before `split_segments` ever sees a token, so the denied call can
@@ -305,10 +331,7 @@ class _Unknown:
 
 
 class _Read(Enum):
-    """Why `_read_text` returned no text. The three are never collapsed into one value.
-
-    They demand DIFFERENT behaviour from a deny-by-default gate, and two of the three are
-    ESTABLISHED FACTS about the path while only one is the absence of a fact.
+    """The two ESTABLISHED FACTS `_read_text` can report instead of text.
 
       ABSENT       nothing is on the path, so nothing can be widened and the call is a
                    creation. A fact — allowed.
@@ -316,21 +339,41 @@ class _Read(Enum):
                    JSON document: a directory, a FIFO, a socket, a device. Also a fact,
                    and also a definite "this call does not widen a permission surface" —
                    see `_read_text` for why that verdict is inside the evidence domain.
-      UNREADABLE   the gate could not look: a regular file that would not open or would
-                   not decode, or one whose SIZE put it past `_MAX_SURFACE_BYTES` so the
-                   gate declined to read it, or one that yielded more than it claimed. The
-                   absence of any fact. Size belongs here and not above: an over-cap file
-                   could be a permission document perfectly well, and answering otherwise
-                   made padding one past the cap a way to launder a widening.
 
-    Returning one `None` for ABSENT and UNREADABLE made "I could not look" answer "I
-    looked and found nothing", on the ALLOW side, which is precisely what this gate must
-    not do. Same three-valued shape, and same reason for it, as
-    `lib/denial_arming.Verdict`.
+    The THIRD no-text case — the gate could not look — is `_Unreadable`, a value rather
+    than a member, because it is the only one of the three that carries something a
+    caller needs to say out loud. Three values, never two: returning one `None` for
+    ABSENT and `_Unreadable` made "I could not look" answer "I looked and found nothing",
+    on the ALLOW side, which is precisely what this gate must not do. Same three-valued
+    shape, and same reason for it, as `lib/denial_arming.Verdict`.
     """
     ABSENT = "absent"
     NOT_A_SURFACE = "not-a-surface"
-    UNREADABLE = "unreadable"
+
+
+@dataclass(frozen=True)
+class _Unreadable:
+    """`_read_text` could not look — and WHY, in a clause the deny message can carry.
+
+    The reasons are one verdict and several sentences. To the DECISION they are one
+    thing: the absence of any fact, hence UNKNOWN, hence `_ON_ERROR` while armed. To the
+    person reading the refusal they are not, and collapsing them made the size cap's own
+    cost claim unpayable. That claim (see `_MAX_SURFACE_BYTES`) is that an over-cap
+    permissions document costs "one blocked call, which a user sanctions in a sentence" —
+    and nobody can write that sentence when the only thing they were told is "could not
+    be read". Measured before this round: a 1 048 577 B document under `tmp_path`, a
+    BENIGN rename onto it, armed → DENY whose whole account of itself was "could not be
+    read", with nothing anywhere in it pointing at a size limit.
+
+    SIZE also belongs here rather than among the facts above: an over-cap file could be a
+    permission document perfectly well, so the only thing established about it is that
+    this gate declined to read it. Answering NOT_A_SURFACE there — a definite negative
+    about content nobody looked at — made padding a real permissions document past the
+    cap a way to launder a widening.
+
+    `why` completes "the file it would write, PATH, ...".
+    """
+    why: str
 
 
 # The largest a file may be and still be read as a candidate permission document.
@@ -344,17 +387,15 @@ class _Read(Enum):
 # margin". But a generator SOURCE is not what a tool call writes to. The documents this
 # gate actually meets are the installed ones, and measured on this machine they are:
 # `~/.claude.json` 76 310 B, `~/.claude-agent/.claude.json` 32 966 B,
-# `~/.claude/settings.json` 14 398 B, `~/.claude-agent/settings.json` 12 060 B. The real
-# maximum is 76 310 B, so 1 MiB leaves ~13.7x, not ~547x. (Those four sizes are the
-# reviewer's measurement, restated: stat-ing them is refused to this agent, whose reads
-# are confined to its own working directory. Re-measure with `stat -c '%s %n'` from a
-# session that can see them.)
+# `~/.claude/settings.json` 14 398 B, `~/.claude-agent/settings.json` 12 060 B — all four
+# by `stat -c '%s %n'` on 2026-08-11. The real maximum is 76 310 B, so 1 MiB leaves
+# ~13.7x, not ~547x.
 #
 # WHAT AN OVER-CAP DOCUMENT COSTS IS NOW A FALSE DENY, WHICH IS WHY THE NUMBER NO LONGER
 # HAS TO BE EXACTLY RIGHT. It used to be a false ALLOW: over the cap `_read_text`
 # answered NOT_A_SURFACE, a definite negative, so padding a real permissions document
 # past 1 MiB with legitimate entries made the identical widening allowed — grow, then
-# grant. Since the direction was corrected the answer is UNREADABLE, i.e. UNKNOWN, and an
+# grant. Since the direction was corrected the answer is `_Unreadable`, i.e. UNKNOWN, and an
 # armed session pays `_ON_ERROR`: one blocked call on a legitimately enormous permissions
 # file, which a user sanctions in a sentence. A margin that is too small now errs toward
 # refusing; before, it erred toward the hole the gate exists to close.
@@ -368,7 +409,17 @@ def _load_json(text: str):
         return None
 
 
-def _read_text(path: str) -> str | _Read:
+def _cap_phrase() -> str:
+    """`_MAX_SURFACE_BYTES` for a deny message: the live byte figure, plus MiB when it is
+    a whole number of them. Computed rather than written out, because a hardcoded "1 MiB"
+    beside a live byte count is a claim that goes false the moment the constant moves —
+    and the tests move it (a row sets it to 20 to reach the branch cheaply)."""
+    mib, remainder = divmod(_MAX_SURFACE_BYTES, 1024 * 1024)
+    unit = f" ({mib} MiB)" if mib and not remainder else ""
+    return f"`_MAX_SURFACE_BYTES`, {_MAX_SURFACE_BYTES} B{unit}"
+
+
+def _read_text(path: str) -> str | _Read | _Unreadable:
     """The file's text, or WHICH of the three no-text cases happened.
 
     ESTABLISH WHAT THE PATH IS, THEN READ. The previous version opened whatever path it
@@ -394,8 +445,8 @@ def _read_text(path: str) -> str | _Read:
     it. Answering NOT_A_SURFACE there — a definite negative — published a verdict about
     content nobody looked at, and it was exploitable in one step: pad a real permissions
     document past the cap with legitimate entries and the identical widening allows. It is
-    UNREADABLE, exactly as `denial_arming._read_transcript` answers its own over-cap file,
-    and an armed session pays `_ON_ERROR` for it.
+    an `_Unreadable`, exactly as `denial_arming._read_transcript` answers its own over-cap
+    file, and an armed session pays `_ON_ERROR` for it.
 
     BOTH BOUNDS ARE LOAD-BEARING; the stat gate alone is not enough, and the second one is
     NOT justified here by a claim about any particular kind of file. `st_size` is what one
@@ -409,11 +460,11 @@ def _read_text(path: str) -> str | _Read:
     document must never be diffed as if it were whole. Dropping the tail drops entries, and
     a baseline missing entries makes the after-document appear to grant them — a widening
     reported where there was none, or the reverse when the tail is where the grant was.
-    Neither is a fact, so both are UNREADABLE.
+    Neither is a fact, so both are `_Unreadable`.
 
     ENOENT alone does not mean ABSENT: a dangling symlink and a path under a
     non-directory both raise it while something IS on the path, so the lexical existence
-    check decides. What is left on UNREADABLE is a regular file within the cap that
+    check decides. What is left for `_Unreadable` is a regular file within the cap that
     genuinely will not yield its bytes — EACCES, EIO — which is an honest "could not
     look".
 
@@ -423,27 +474,38 @@ def _read_text(path: str) -> str | _Read:
     catch-all, which denies unconditionally — turning an unreadable target into a deny in
     a session with no permission denial at all, the one outcome routing UNKNOWN through
     (b) exists to prevent. `os.path.lexists` returns False on such a path, so it lands on
-    UNREADABLE.
+    `_Unreadable`.
     """
     try:
         st = os.stat(path)
     except (OSError, ValueError) as exc:
         if isinstance(exc, (FileNotFoundError, NotADirectoryError)) and not os.path.lexists(path):
             return _Read.ABSENT
-        return _Read.UNREADABLE
+        return _Unreadable(f"could not be examined ({exc.__class__.__name__})")
 
     if not stat.S_ISREG(st.st_mode):
         return _Read.NOT_A_SURFACE
     if st.st_size > _MAX_SURFACE_BYTES:
-        return _Read.UNREADABLE  # too big to read is not the same fact as not a document
+        # Too big to read is not the same fact as not a document, and the refusal says so
+        # with the figures: without them the deny names no limit at all, so the user it
+        # asks for a sentence cannot tell a size cap from a broken gate.
+        return _Unreadable(
+            f"was not read: at {st.st_size} B it is past the cap this gate opens a "
+            f"candidate permission document under ({_cap_phrase()})"
+        )
 
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as handle:
             text = handle.read(_MAX_SURFACE_BYTES + 1)
-    except (OSError, ValueError):
-        return _Read.UNREADABLE
+    except (OSError, ValueError) as exc:
+        return _Unreadable(f"would not yield its bytes ({exc.__class__.__name__})")
     if len(text) > _MAX_SURFACE_BYTES:
-        return _Read.UNREADABLE  # `st_size` under-reported; a truncated document is not one
+        # `st_size` under-reported; a truncated document is not one.
+        return _Unreadable(
+            f"yielded more than the {st.st_size} B `stat` reported, so what could be read "
+            f"of it within the cap ({_cap_phrase()}) is a truncated document rather than "
+            f"the whole one"
+        )
     return text
 
 
@@ -534,7 +596,7 @@ def _located(path: str, what: str) -> str | _Unknown:
     Absolute is all this function establishes, and the name should not be read as more: it
     says nothing about whether anything is on the path, what kind of thing that is, or
     whether it can be read. Those are `_read_text`'s to answer, and it answers them
-    separately (ABSENT / NOT_A_SURFACE / UNREADABLE / bytes) precisely because they are
+    separately (ABSENT / NOT_A_SURFACE / `_Unreadable` / bytes) precisely because they are
     different facts. What this one rules out is a path whose MEANING is not yet fixed:
 
     A path that is still relative AFTER every join this gate can perform does not name a
@@ -605,9 +667,9 @@ def _file_tool_widening(tool_name: str, tool_input: dict, cwd: str) -> _Widening
         return None  # nothing on disk to widen — a creation, not a widening
     if old_text is _Read.NOT_A_SURFACE:
         return None  # identified, and not a JSON document — see `_read_text`
-    if old_text is _Read.UNREADABLE:
+    if isinstance(old_text, _Unreadable):
         return _Unknown(
-            f"the file it would write, {path}, could not be read, so whether "
+            f"the file it would write, {path}, {old_text.why}, so whether "
             f"this call widens the permission surface already there is unknown rather than "
             f"known to be no"
         )
@@ -652,25 +714,32 @@ def _is_surface_on_disk(path: str) -> bool | _Unknown:
     """Is `path` a permission surface TODAY — or could the gate not tell?
 
     ABSENT and NOT_A_SURFACE both ANSWER the question with a no (nothing on the path, and
-    a path that is not a JSON document, are neither of them permission surfaces);
-    UNREADABLE does not answer it, and must not be reported as a "no".
+    a path that is not a JSON document, are neither of them permission surfaces); an
+    `_Unreadable` does not answer it, and must not be reported as a "no".
 
     The NOT_A_SURFACE arm is what makes `patch` and `git apply` judgeable on this path at
     all: `bash_write_targets` reports the working DIRECTORY as their write target, which
-    is exactly a path identified and known not to be a JSON document. They are also the
-    only verbs that still reach it that way — `cp`/`mv`/`install` resolve a directory
-    destination to the files inside it, so the arm no longer absorbs an ordinary copy onto
-    a permission document. What it costs is stated with the patch residual in the module
-    docstring; it is not a general clearance for directory targets.
+    is exactly a path identified and known not to be a JSON document.
+
+    THE COPY VERBS STILL REACH THIS ARM TOO, and the earlier claim here that they no
+    longer do was simply false. A bare final token is ambiguous, so `cp s.json d` emits
+    `<cwd>/d` AND `<cwd>/d/s.json` — the directory reading among them — and a malformed
+    one-operand `cp DEST` emits that token alone. What `_copy_targets` changed is that the
+    directory reading is no longer the ONLY candidate: a spelling that SAYS directory
+    (`-t DIR`, a trailing separator) emits the joins alone, and an ambiguous one emits the
+    join alongside. Since `_bash_widening` tests every candidate and one definite surface
+    outranks the rest, this arm answering "no" about `<cwd>/d` no longer decides such a
+    call. What the arm costs is stated with the patch residual in the module docstring; it
+    is not a general clearance for directory targets.
     """
     text = _read_text(path)
     if text is _Read.ABSENT:
         return False
     if text is _Read.NOT_A_SURFACE:
         return False
-    if text is _Read.UNREADABLE:
+    if isinstance(text, _Unreadable):
         return _Unknown(
-            f"the file it would write, {path}, could not be read, so whether "
+            f"the file it would write, {path}, {text.why}, so whether "
             f"that file is a permission surface is unknown rather than known to be no"
         )
     return permission_surface.is_permission_surface(_load_json(text))
@@ -771,12 +840,15 @@ def _deny_msg(widening: _Widening, denial, matched: str | None, tool_name: str) 
         msg += (
             " This path is coarser than the Edit/Write paths by design: a command is not "
             "applied before it runs, so there is no before/after pair to diff and no way to "
-            "ask whether what it grants is RELEVANT to the denial — while armed, any write to "
-            "a permission surface is refused. One consequence worth knowing: a multi-line "
-            "command can carry a PHANTOM write target, because the lexer eats the newline and "
-            "`cp a.txt b.txt` followed by `jq . settings.json` becomes one segment whose last "
-            "positional is the settings file. Run the lines as separate calls and each is "
-            "judged on its own."
+            "ask whether what it grants is RELEVANT to the denial — while armed, a write is "
+            "refused whenever this gate's lexer RESOLVES a target that is a permission "
+            "surface on disk today. Not any write: the quantifier is over what the lexer "
+            "resolves, which is a much smaller set — an unmodelled verb, or a path the "
+            "command builds at runtime, is not covered. One consequence worth knowing: a "
+            "multi-line command can carry a PHANTOM write target, because the lexer eats the "
+            "newline and `cp a.txt b.txt` followed by `jq . settings.json` becomes one segment "
+            "whose last positional is the settings file. Run the lines as separate calls and "
+            "each is judged on its own."
         )
     return msg
 

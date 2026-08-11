@@ -394,7 +394,7 @@ def unknown_a_call(tmp_path: Path, label: str):
         "bash-without-command-string": ("Bash", {}),
         "tool-input-is-not-an-object": ("Edit", "not an object"),
         # A NUL in the path raises ValueError BEFORE the syscall, so it is not an OSError
-        # and only reaches _Read.UNREADABLE because _read_text catches it explicitly.
+        # and only reaches `_Unreadable` because _read_text catches it explicitly.
         # Uncaught it escapes to `main()`'s catch-all, which denies unconditionally -- this
         # row is the one that keeps that deny out of a session carrying no denial at all.
         "target-path-carrying-a-nul-byte": (
@@ -1031,7 +1031,18 @@ def test_a_permission_document_padded_past_the_cap_is_unknown_not_a_definite_no(
         return add_entry_edit(target, COVERING)
 
     assert hook.denial_arming.armed(ARMED_READ).verdict is Verdict.ARMED
-    assert hook.decide(payload(tool_name, call_for(padded), ARMED_READ, tmp_path)) is not None
+    reason = hook.decide(payload(tool_name, call_for(padded), ARMED_READ, tmp_path))
+    assert reason is not None
+
+    # AND THE REFUSAL NAMES THE CAP. This deny is the cost the cap's own comment promises a
+    # user will "sanction in a sentence" -- and measured before this round, the whole account
+    # it gave of itself was "could not be read", with nothing anywhere in it pointing at a
+    # size limit, so that sentence was unwritable. Pinned on the three figures a reader needs
+    # to write it: the file's real size, the cap in bytes, and the constant's name to grep.
+    assert str(padded.stat().st_size) in reason
+    assert str(hook._MAX_SURFACE_BYTES) in reason
+    assert "_MAX_SURFACE_BYTES" in reason
+
     assert hook.decide(payload(tool_name, call_for(small), ARMED_READ, tmp_path)) is not None
     assert hook.decide(payload(tool_name, call_for(padded), NO_DENIAL, tmp_path)) is None
 
@@ -1159,7 +1170,17 @@ def _copy_into_a_directory(tmp_path):
     "cp {src} {dir}/",                 # the spelling that SAYS directory
     "cp {src} {dir}",                  # the ambiguous bare token
     "mv {src} {dir}/",                 # the same verb family, moving rather than copying
-    "install -m 600 {src} {dir}",      # a write verb the table did not model at all
+    # WHAT THIS ROW ACTUALLY PINS, measured rather than reasoned: that `install` is in
+    # `_COPY_VERBS` at all. It does NOT pin `-m` being a value-taking option, and it does NOT
+    # pin the directory resolution -- both of those were mutated in place and all 146 rows here
+    # still passed. An earlier draft of this comment claimed either mutation alone flips the row
+    # to allow; that was false, and the reason is worth more than the claim was. Both mutations
+    # OVER-emit (a spurious `d/600`, a spurious `d/`) while still emitting the real
+    # `d/settings.json`, and `_bash_widening` stops at the first candidate that is a definite
+    # surface -- so a deny survives every over-emission and reports the same file. That is the
+    # verdict-vs-candidates gap this suite cannot see and `test_bash_write_targets.py` exists
+    # to close: those two mutations die there, in exact candidate lists, and only there.
+    "install -m 600 {src} {dir}",
     "cp {other} {src} {dir}/",         # multi-source: one target per source
     "cp -t {dir} {src}",               # the destination as an option value
 ])
@@ -1213,6 +1234,81 @@ def test_the_controls_the_directory_resolution_must_not_break(tmp_path):
     # ABSENT, which answers the question with a no rather than shrugging
     assert hook.decide(payload(
         "Bash", {"command": f"cp {staged}/other.json {config}/"}, ARMED_BASH, tmp_path)) is None
+
+
+@pytest.mark.parametrize("dest_template, denies", [
+    ("~/.claude/settings.json", True),    # the spelling every runbook and every human uses
+    ("~/.claude/", True),                 # and it composes with the directory resolution
+    ("$HOME/.claude/settings.json", False),   # the named residual, asserted as a residual
+    ("${HOME}/.claude/settings.json", False),
+])
+def test_a_home_relative_destination_is_resolved_and_a_variable_one_is_not(
+    tmp_path, monkeypatch, dest_template, denies
+):
+    # MEASURED AT 067ea09: `cp <widened> ~/.claude/settings.json`, armed, with the real
+    # `~/.claude/settings.json` a live permission surface, was ALLOWED. The lexer joined the
+    # literal `~` under the cwd, `<cwd>/~/.claude/settings.json` is a path nothing is on, so
+    # the gate read ABSENT -- "a creation, nothing to widen" -- about the single most likely
+    # spelling of the manoeuvre this whole hook exists to stop. `_abs` now expands it.
+    #
+    # THE TWO HALVES ARE ONE ROW ON PURPOSE. `$HOME` is NOT expanded and these rows pin that
+    # it stays allowed, because the asymmetry is a decision and an unpinned decision drifts:
+    # the hook's environment is not the command's (`HOME=/x cp ...`), so expanding `$VAR`
+    # would answer confidently about a path the command may never write. `~` carries no such
+    # ambiguity -- it means the invoking user's home and this process IS that user. Flipping
+    # the false rows to deny is not a regression to fix here; it needs an expansion model.
+    home = tmp_path / "fakehome"
+    (home / ".claude").mkdir(parents=True)
+    surface = write_settings(home / ".claude")
+    staged = tmp_path / "staged"
+    staged.mkdir()
+    (staged / "settings.json").write_text(settings_text([SEED, COVERING]), encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    command = f"cp {staged / 'settings.json'} {dest_template}"
+
+    assert hook.denial_arming.armed(ARMED_BASH).verdict is Verdict.ARMED
+    reason = hook.decide(payload("Bash", {"command": command}, ARMED_BASH, tmp_path))
+    if not denies:
+        assert reason is None
+        return
+    assert reason is not None
+    assert str(surface) in reason
+    # The conjunct control: the same command with no denial in the session allows, so what
+    # this pins is the gate rather than a blanket refusal of writes under `~`.
+    assert hook.decide(payload("Bash", {"command": command}, NO_DENIAL, tmp_path)) is None
+
+
+def test_the_controls_the_home_expansion_must_not_break(tmp_path, monkeypatch):
+    # Expanding `~` makes the lexer emit paths under a real home that it used to bury under
+    # the cwd, so every one of these was reachable-but-benign before and must stay allowed.
+    # An over-emitting lexer is only safe while a candidate that is not a permission document
+    # still allows, and `~` is where a session does most of its ordinary writing.
+    home = tmp_path / "fakehome"
+    (home / ".claude").mkdir(parents=True)
+    write_settings(home / ".claude")
+    (home / "notes").mkdir()
+    (home / "notes" / "a.txt").write_text("hello\n", encoding="utf-8")
+    (home / "notes" / "plain.json").write_text('{"colour": "blue"}\n', encoding="utf-8")
+    (home / "notes" / "p.patch").write_text("--- a\n+++ b\n", encoding="utf-8")
+    staged = tmp_path / "staged"
+    staged.mkdir()
+    (staged / "settings.json").write_text(settings_text([SEED, COVERING]), encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+
+    for command in (
+        f"cp {home}/notes/a.txt ~/notes/b.txt",        # an ordinary file, an ordinary copy
+        f"mv {home}/notes/a.txt ~/notes/c.txt",        # the same, moving
+        f"cp {home}/notes/plain.json ~/notes/",        # a JSON that is not a permission one
+        f"cp {home}/notes/plain.json ~/notes",         # and its ambiguous bare spelling
+        "echo hi > ~/notes/note.txt",                  # a redirect, the other `_abs` caller
+        "git apply ~/notes/p.patch",                   # the patch verbs, under a real home
+        # a REAL widened permission document, copied into a directory holding no document of
+        # that name: the joined candidate is ABSENT, which answers with a no rather than a
+        # shrug -- the row that would fail if expansion had been paired with a laxer arm
+        f"cp {staged}/settings.json ~/notes/",
+    ):
+        assert hook.decide(
+            payload("Bash", {"command": command}, ARMED_BASH, tmp_path)) is None, command
 
 
 # --- the transcript path is a payload field, and gets a payload field's discipline ---

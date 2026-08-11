@@ -9,12 +9,14 @@ either duplicating the lexer or dragging canon policy along. This module holds
 only the parsing; a caller supplies its own policy over the candidate paths it
 returns.
 
-Every returned candidate is an ABSOLUTE path, resolved relative to the
-`eff_cwd` the caller supplies — join-only, no existence check and no
-filesystem policy. That is why a `cp`/`mv`/`install` destination yields both
-readings of an ambiguous final token rather than one resolved by `isdir` (see
-`_copy_targets`): CANDIDATES, plural and possibly over-inclusive, are the
-contract. Heredoc/here-string bodies are stripped via
+Every returned candidate is an ABSOLUTE path: a leading `~` is expanded, and
+what is still relative is joined onto the `eff_cwd` the caller supplies —
+otherwise join-only, no existence check and no filesystem policy. A `$VAR` is
+NOT expanded and joins under the cwd like any other relative token; `_abs` says
+why the two are not one feature. That is why a `cp`/`mv`/`install` destination
+yields both readings of an ambiguous final token rather than one resolved by
+`isdir` (see `_copy_targets`): CANDIDATES, plural and possibly over-inclusive,
+are the contract. Heredoc/here-string bodies are stripped via
 `lib/shell_tokens.py` before tokenizing, so a Markdown blockquote line inside a
 body is never read as syntax.
 """
@@ -149,6 +151,25 @@ def _copy_targets(rest: list[str], eff_cwd: str) -> list[str]:
 
 
 def _abs(candidate: str, eff_cwd: str) -> str:
+    """`candidate` as an absolute path: a leading `~` expanded, then the cwd join.
+
+    EXPANDUSER, AND DELIBERATELY NOT EXPANDVARS — the asymmetry is this function's
+    whole content, because the two look like one feature and are not. `~` means the
+    invoking user's home, this process runs as that user in that session, so
+    expanding it names the path the command will really write; and it does so by two
+    independent routes rather than one, since with `HOME` unset `expanduser` does NOT
+    return the token unchanged (MEASURED, and the opposite is the natural assumption)
+    but falls back to the passwd entry for `os.getuid()` — still that same user's home.
+
+    A `$VAR` carries no such guarantee: THE HOOK'S ENVIRONMENT IS NOT THE COMMAND'S.
+    A command supplies its own (`HOME=/x cp …`), or names a variable exported in a
+    shell this process never saw, so substituting what this process happens to hold
+    would resolve the token to a path the command never writes — and a consumer would
+    then answer confidently about the wrong file, in either direction. A `$VAR`
+    therefore stays unexpanded, joins under `eff_cwd`, and is a named residual in each
+    consumer rather than a guess made here.
+    """
+    candidate = os.path.expanduser(candidate)
     return candidate if os.path.isabs(candidate) else os.path.join(eff_cwd, candidate)
 
 
