@@ -12,7 +12,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from lib.denial_arming import Verdict, armed  # noqa: E402
+from lib.denial_arming import (  # noqa: E402
+    _ALL_DENIAL_KINDS,
+    _ARMING_KINDS,
+    _NON_ARMING_KINDS,
+    Verdict,
+    armed,
+)
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "denial_arming"
 
@@ -87,6 +93,19 @@ def test_cancelled_denial_alone_does_not_arm():
     # would flip to ARMED and this assertion would go red.
     result = armed(FIXTURES / "cancelled_only.jsonl")
     assert result.verdict is Verdict.NOT_ARMED
+
+
+def test_the_exclusion_set_is_data_so_deleting_a_kind_from_it_goes_red():
+    # The mutation the stage names is "delete `cancelled` from the exclusion
+    # set". That is only expressible if the exclusion set EXISTS as data: while
+    # the four non-arming kinds lived in a comment, deleting one changed no
+    # behaviour and reddened no test, and the stage's completeness invariant --
+    # "an enumeration that lists only the positive cases cannot be audited" --
+    # held only in prose. These two rows are that audit.
+    assert _ARMING_KINDS | _NON_ARMING_KINDS == _ALL_DENIAL_KINDS
+    assert not (_ARMING_KINDS & _NON_ARMING_KINDS)
+    assert "cancelled" in _NON_ARMING_KINDS
+    assert "interrupted" in _NON_ARMING_KINDS
 
 
 # --- UNREADABLE: missing path, empty file, all-unparseable rows ------------

@@ -49,18 +49,37 @@ from typing import Any
 # Decompiled from the installed client bundle (PROVENANCE § 5 of
 # hook-permission-self-grant-provenance.md), not sampled: these three, and
 # only these three, express an actual permission judgement about the denied
-# call. The other four `toolDenialKind` values are named here, in comments,
-# rather than left to omission -- a future reader must see that they were
-# considered and excluded, not forgotten.
+# call.
 _ARMING_KINDS = frozenset({
     "permission-rule",   # a hard deny -- the harness allowlist or one of this repo's own hooks
     "user-rejected",     # the harness's interactive allow/deny prompt was answered "no"
     "automode-blocked",  # the auto-mode classifier judged the call unsafe and blocked it
-    # EXCLUDED: "cancelled" and "interrupted" are user/system ABORTS carrying no
-    # permission judgement at all -- arming on them would turn every Esc keypress
-    # into a lock on the settings surface.
-    # EXCLUDED: "automode-unavailable" and "automode-parsing-error" are classifier
-    # INFRASTRUCTURE failures, not judgements about the call.
+})
+
+# The four that do NOT arm, as DATA rather than as a comment. Both halves are
+# named so the enumeration can be audited for completeness: an exclusion
+# expressed only by omission cannot be tested, and cannot be distinguished from
+# an oversight by anyone reading later.
+_NON_ARMING_KINDS = frozenset({
+    "cancelled",              # user/system ABORT -- no permission judgement about the call.
+    "interrupted",            # ditto; arming on either would turn an Esc keypress into a
+                              # lock on the settings surface.
+    "automode-unavailable",   # classifier INFRASTRUCTURE failure, not a judgement.
+    "automode-parsing-error",  # ditto.
+})
+
+# Every value the client bundle can emit (PROVENANCE § 5, decompiled -- not
+# sampled). Kept as its own literal, so the completeness check in the tests is
+# a real comparison against the decompiled vocabulary rather than a tautology
+# restating the two sets above.
+#
+# The check lives in the tests, NOT in a module-level `assert`: this module is
+# imported by a PreToolUse hook on every tool call, an import-time assert would
+# take the hook down rather than report, and `assert` is stripped under -O
+# anyway. The test is where a broken enumeration should be caught.
+_ALL_DENIAL_KINDS = frozenset({
+    "permission-rule", "user-rejected", "automode-blocked", "automode-unavailable",
+    "automode-parsing-error", "cancelled", "interrupted",
 })
 
 # A per-line prefilter checked before json.loads: the overwhelming majority of
