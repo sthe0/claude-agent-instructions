@@ -55,6 +55,13 @@ Budgeting a round must not legitimize one that a cheaper discriminator would hav
 - **`preconditions`** — the starting requirements the stage's execution depends on (an approved upstream decision, a branch checked out, a fixture present), kept apart from `conditions` (properties the stage runs under / must preserve) because a precondition failing means the stage cannot even begin, where a condition violated mid-stage means the stage did the wrong thing.
 - **`means.method`** / **`means.procedure`** — see `SKILL.md` § Plan format's Means & method / Procedure bullets; both are submission-required once a stage is substantive.
 
+## Meta submission fields
+
+`submission._SUBSTANTIVE_META_FIELDS` requires three `[meta]`-level fields on every substantive plan:
+
+- **`goal`** / **`done_criterion`** — see `SKILL.md` § Plan format's Problem-and-done-criteria item: the plain-language end state and the definition-of-done, cached by the engine as the session's own comparison target.
+- **`final_check`** — the plan's end-to-end verification list (`## Final verification`, § Plan format item 6), run at resolution; each entry is a `[[final_check]]` table naming a `venue` and a check, the meta-level analogue of a stage's `verify_command`.
+
 ## Order
 
 For a substantive plan, `[meta.order]` states the order this plan answers — the customer, the need, and the requirements on the product — structurally rather than only in the free-text Context section, so a machine (not only a reviewer) can check the plan against it:

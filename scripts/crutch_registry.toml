@@ -2724,6 +2724,30 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "7a3cbbe26dbfbbdd"
+domain = "code"
+file = "scripts/tests/test_contract_coverage.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "264677771125e171"
+domain = "code"
+file = "scripts/tests/test_contract_coverage.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "d57d115495ae5343"
+domain = "code"
+file = "scripts/tests/test_contract_coverage.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "4c410aa00d5eabe3"
 domain = "code"
 file = "scripts/tests/test_cost.py"
@@ -7983,6 +8007,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "e31b61482c53312f"
 domain = "code_file_rollup"
 file = "scripts/tests/test_consensus_e2e.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "761d084da9ea312b"
+domain = "code_file_rollup"
+file = "scripts/tests/test_contract_coverage.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"

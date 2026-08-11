@@ -27,6 +27,7 @@ re-decide it.
 from __future__ import annotations
 
 import copy
+import re
 from pathlib import Path
 
 import pytest
@@ -55,9 +56,46 @@ def _contract_text() -> str:
     return skill + "\n" + policy
 
 
+#: A markdown list-item line — top-level `- `/`N. ` or an indented sub-bullet. Every
+#: genuine field explanation in SKILL.md/policy.md takes this shape (a glossary
+#: bullet or a numbered Plan-format item); a label mentioned only in running prose
+#: that is not itself a list item is exactly the coincidental case the review flagged
+#: (`method`/`goal`/`coverage`/... as ordinary English, or an unrelated identifier).
+_LIST_ITEM_RE = re.compile(r"^\s*(?:-\s+|\d+\.\s+)")
+
+#: Splits a bullet at its first em dash. Every field-glossary bullet in this contract
+#: is shaped `- **\`label\`** — description`: the label sits in the NAMING term
+#: before the dash, the rationale after it. A backticked identifier that shows up
+#: only in the elaboration — e.g. `method`/`procedure` used as an aside inside the
+#: pre-existing "Procedure:" bullet's prose, or `final_check` inside an *example*
+#: embedded in the Order-coverage bullet's elaboration — is a passing reference, not
+#: the bullet naming that field, and the dash split is what tells the two apart.
+_TERM_SPLIT_RE = re.compile(r"—")
+
+
+def _documenting_bullets(text: str) -> list[str]:
+    return [line for line in text.splitlines() if _LIST_ITEM_RE.match(line)]
+
+
+def _label_documented(label: str, text: str) -> bool:
+    """True when `label` is named — appears inside a backticked code span within the
+    naming term of a markdown list-item line — not merely somewhere across ~235
+    lines of prose. This is the tightened form of the old `label in _contract_text()`
+    bare substring test, which passed vacuously on any incidental appearance of an
+    ordinary English word (`method`, `goal`, `knowledge`, `coverage`, `requirements`,
+    ...) or an unrelated code identifier (e.g. `plan.goal` inside unrelated
+    premise-gate prose) anywhere in the concatenated SKILL.md + policy.md text."""
+    for bullet in _documenting_bullets(text):
+        term = _TERM_SPLIT_RE.split(bullet, maxsplit=1)[0]
+        for span in re.findall(r"`([^`]+)`", term):
+            if label in span:
+                return True
+    return False
+
+
 @pytest.mark.parametrize("label", tuple(l for _a, l, _s in _SUBSTANTIVE_SUBMISSION_FIELDS))
 def test_every_stage_submission_field_is_named_in_the_planner_contract(label):
-    assert label in _contract_text(), (
+    assert _label_documented(label, _contract_text()), (
         f"{label!r} is a substantive-stage submission requirement "
         f"(submission._SUBSTANTIVE_SUBMISSION_FIELDS) with no mention in the planner's "
         f"own authoring contract — an author following SKILL.md/policy.md alone would "
@@ -67,7 +105,7 @@ def test_every_stage_submission_field_is_named_in_the_planner_contract(label):
 
 @pytest.mark.parametrize("label", tuple(l for _a, l in _SUBSTANTIVE_META_FIELDS))
 def test_every_meta_submission_field_is_named_in_the_planner_contract(label):
-    assert label in _contract_text(), (
+    assert _label_documented(label, _contract_text()), (
         f"{label!r} is a substantive-plan [meta] submission requirement "
         f"(submission._SUBSTANTIVE_META_FIELDS) with no mention in the planner contract"
     )
@@ -75,14 +113,14 @@ def test_every_meta_submission_field_is_named_in_the_planner_contract(label):
 
 @pytest.mark.parametrize("name,_why", _ORDER_PARTS)
 def test_every_order_part_is_named_in_the_planner_contract(name, _why):
-    assert name in _contract_text(), (
+    assert _label_documented(name, _contract_text()), (
         f"[meta.order].{name} is a required order part (submission._ORDER_PARTS) with "
         f"no mention in the planner contract"
     )
 
 
 def test_the_coverage_map_is_named_in_the_planner_contract():
-    assert "coverage" in _contract_text()
+    assert _label_documented("coverage", _contract_text())
 
 
 def test_the_material_refs_knowledge_refs_overlap_smell_is_documented():
