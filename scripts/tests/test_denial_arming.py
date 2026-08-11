@@ -138,6 +138,29 @@ def test_corrupt_file_without_either_marker_is_unreadable_not_not_armed():
     assert result.verdict is Verdict.UNREADABLE
 
 
+def test_undecodable_bytes_inside_a_valid_row_do_not_make_the_file_unreadable(tmp_path):
+    # Every COMMITTED fixture is text: scripts/land-on-main.sh carries the
+    # staged patch through a shell variable, which cannot hold a NUL byte, so a
+    # binary blob under fixtures/ makes the change unlandable. This is the one
+    # case that genuinely needs raw bytes, so it writes them at test time.
+    #
+    # And it is the case worth having. A transcript can carry a byte sequence
+    # that is not valid UTF-8 -- a row cut mid-multibyte-character by a
+    # concurrent write is the plain way. `read_text(errors="replace")` is what
+    # keeps that from raising; under errors="strict" the read would raise, the
+    # bare except would catch it, and a transcript that is entirely readable
+    # apart from one bad byte would come back UNREADABLE. That is the same
+    # collapse as `test_corrupt_file_without_either_marker_...`, in the other
+    # direction: the third value claimed for evidence that was in fact legible.
+    path = tmp_path / "bad_bytes.jsonl"
+    path.write_bytes(
+        b'{"type":"assistant","uuid":"a1","message":{"content":['
+        b'{"type":"tool_use","name":"Bash","input":{"command":"echo \xff\xfe"}}]}}\n'
+    )
+    result = armed(path)
+    assert result.verdict is Verdict.NOT_ARMED
+
+
 def test_a_truncated_tail_among_readable_rows_is_still_read():
     # The control on the other side of the same check: a real transcript whose
     # last line was cut mid-write IS readable -- its earlier rows have the row
