@@ -118,7 +118,10 @@ class Verdict(Enum):
 class DeniedCall:
     """The call one arming denial denied. `tool_name`/`tool_input` are both
     `None` when `sourceToolAssistantUUID` did not resolve to exactly one
-    `tool_use` block -- the denial still arms; only the call is unknown."""
+    `tool_use` block, OR when the block it resolved to carried either field
+    with the wrong JSON type (see `_call_fields`) -- the denial still arms;
+    only the call is unknown. These annotations are ESTABLISHED by
+    `_call_fields`, not merely asserted here: consumers may rely on them."""
     kind: str
     tool_name: str | None
     tool_input: dict[str, Any] | None
@@ -146,6 +149,42 @@ def _tool_use_blocks(message: Any) -> list[dict]:
     return [b for b in content if isinstance(b, dict) and b.get("type") == "tool_use"]
 
 
+def _call_fields(block: dict) -> tuple[str | None, dict[str, Any] | None]:
+    """`(tool_name, tool_input)` of one `tool_use` block, WITH THE TYPES
+    `DeniedCall` DECLARES -- or the modelled "call unknown" state if either
+    field is not the type it claims to be.
+
+    A transcript is a file on disk written by another process, so its content
+    is untrusted input exactly as the hook payload is. `DeniedCall`'s
+    annotations (`str | None`, `dict | None`) used to be a claim nobody
+    established: both fields were stored straight off `json.loads`, so any JSON
+    type could reach them, and each consumer met a shape its own code did not
+    model. BOTH resulting defects were measured, and they fail in OPPOSITE
+    directions -- which is why the coercion belongs here, at the parse
+    boundary, rather than as a check at either use site:
+
+      * a non-dict `input` (`["x"]`, `"str"`, `7`, `True`) reached
+        `permission_entry_match.covers()`, whose `None`/`{}` rescue does not
+        catch a TRUTHY non-dict, and raised `AttributeError` out of the gate's
+        `decide()` into its catch-all -- an unconditional DENY of every call in
+        the session, over a transcript the gate merely failed to model;
+      * a non-str `name` (`7`, `["Read"]`, `{"a": 1}`, `True`) did not raise at
+        all. It compares unequal to every entry's tool, so a denial that the
+        added entry really would have covered read as "covered by nothing" and
+        the widening was ALLOWED. That one is a silent hole in the gate itself,
+        and no crash anywhere would have revealed it.
+
+    Collapsing to `(None, None)` puts both on the state this module already
+    models and documents -- the denial arms, the call it denied is unknown --
+    which the caller already fails toward covering. No consumer needs a new
+    branch, and a future field added to `DeniedCall` gets the same treatment by
+    being parsed here rather than by every reader remembering."""
+    name, tool_input = block.get("name"), block.get("input")
+    if not isinstance(name, str) or not isinstance(tool_input, dict):
+        return None, None
+    return name, tool_input
+
+
 def _resolve(calls_by_uuid: dict[str, tuple[Any, Any]], source_uuid: Any) -> tuple[Any, Any]:
     if not isinstance(source_uuid, str):
         return None, None
@@ -171,6 +210,19 @@ def armed(transcript_path: Path | str) -> Arming:
 
     lines = [line for line in text.splitlines() if line.strip()]
     if not lines:
+        # A ZERO-ROW FILE IS DELIBERATELY FUSED WITH "COULD NOT LOOK", and it is the one
+        # place where the two are mechanically indistinguishable -- the read SUCCEEDED, so
+        # by the letter of "I looked and found nothing" this would be NOT_ARMED. It is not,
+        # and the basis is not the read: a live session's transcript is never empty by the
+        # time any tool call fires, because the rows that carry the user's message and the
+        # agent's own turn are already on disk. So an empty file does not mean "this session
+        # had no denial"; it means the path we were handed is not the transcript we think it
+        # is -- a wrong path, or one truncated under us -- which is exactly the "could not
+        # look" state, reached by a route that happens not to raise.
+        #
+        # This does NOT contradict the not-yet-flushed paragraph in the module docstring,
+        # which is about a file WITH rows that is merely missing the newest one; there the
+        # read genuinely did see the session. Here it saw nothing of it at all.
         return UNREADABLE
     if not any(_looks_like_a_row(line) for line in lines):
         return UNREADABLE  # whole-file readability -- see `_looks_like_a_row`
@@ -205,7 +257,7 @@ def armed(transcript_path: Path | str) -> Arming:
             row_uuid = entry.get("uuid")
             blocks = _tool_use_blocks(entry.get("message"))
             if isinstance(row_uuid, str) and len(blocks) == 1:
-                calls_by_uuid[row_uuid] = (blocks[0].get("name"), blocks[0].get("input"))
+                calls_by_uuid[row_uuid] = _call_fields(blocks[0])
 
     if attempted and failed == attempted:
         return UNREADABLE

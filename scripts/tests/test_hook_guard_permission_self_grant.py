@@ -113,6 +113,29 @@ def replace_all_edit(path: Path, new_text: str) -> dict:
     return {"file_path": str(path), "old_string": path.read_text(), "new_string": new_text}
 
 
+def armed_transcript_with_call(tmp_path: Path, name, tool_input) -> Path:
+    """`ARMED_READ`, rebuilt with the denied `tool_use` block's fields under test control.
+
+    The static fixtures cover the shapes a healthy client writes. This builds the same two
+    rows -- an assistant `tool_use` and the `permission-rule` row whose
+    `sourceToolAssistantUUID` resolves to it -- with `name`/`input` set to anything, because
+    the transcript is a file written by ANOTHER process and its field types are as untrusted
+    as the payload's. Defaults reproduce the fixture exactly, so a row that varies one field
+    varies only that field.
+    """
+    path = tmp_path / "armed_custom.jsonl"
+    rows = [
+        {"type": "assistant", "uuid": "asst-c1", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "toolu_c1", "name": name, "input": tool_input}]}},
+        {"type": "user", "uuid": "den-c1", "toolDenialKind": "permission-rule",
+         "sourceToolAssistantUUID": "asst-c1",
+         "toolUseResult": "Error: Claude requested permissions to read from "
+                          "/srv/secrets/notes.md, but you haven't granted it yet."},
+    ]
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    return path
+
+
 def payload(tool_name: str, tool_input: dict, transcript: Path, cwd: Path) -> dict:
     return {
         "tool_name": tool_name,
@@ -330,6 +353,11 @@ UNKNOWN_A_LABELS = (
 # review named on one field; honest about which two rows are the load-bearing ones.
 WRONG_TYPED_PAYLOAD_FIELDS = ("tool_name", "cwd", "transcript_path")
 WRONG_TYPES = (7, ["a"], {"a": 1}, True)
+# For a field declared `dict`, `{"a": 1}` is the RIGHT type -- reusing `WRONG_TYPES` there
+# ships one param per row that asserts nothing, which is the inert-row defect in miniature
+# (measured: under a mutation trusting `input`, three of four params failed and the dict one
+# passed). A field's wrong-type set has to be derived from the type it declares.
+NON_DICT_TYPES = (7, ["a"], "str", True)
 
 
 def unknown_a_call(tmp_path: Path, label: str):
@@ -437,21 +465,138 @@ def test_a_wrong_typed_payload_field_behaves_exactly_as_an_absent_one(
 
 
 @pytest.mark.parametrize("value", WRONG_TYPES)
-@pytest.mark.parametrize("transcript", [NO_DENIAL, ARMED_READ], ids=["not-armed", "armed"])
-def test_a_wrong_typed_cwd_is_absorbed_rather_than_turned_into_a_deny(
-    tmp_path, hermetic_process_cwd, value, transcript
+@pytest.mark.parametrize("transcript,denies", [(NO_DENIAL, False), (ARMED_READ, True)],
+                         ids=["not-armed", "armed"])
+def test_a_wrong_typed_cwd_falls_back_without_changing_the_verdict(
+    tmp_path, monkeypatch, value, transcript, denies
 ):
-    # A malformed payload field must not manufacture a deny. It is worth being exact about
-    # WHY this allows, because a review found the obvious reading wrong: (b) is not what
-    # keeps it out. Suppressing `cwd` sends the relative target to the process cwd, where no
-    # `settings.json` exists, so (a) resolves to "does not widen" and short-circuits before
-    # the transcript is ever opened -- which is why both arming states are asserted together
-    # rather than only the not-armed one. A wrong-typed field makes the gate MORE permissive
-    # here, never less, and that direction is the safe one for a fail-closed guard.
+    # A malformed payload field must manufacture neither a deny nor an allow. THREE drafts
+    # were needed to assert that, and each earlier one was inert on a different axis -- worth
+    # recording, because the trap is not obvious and it caught the same author twice:
+    #
+    #   v1: wrong-typed `cwd` + an ABSOLUTE target. The gate never consults `cwd` for an
+    #       absolute path, so the `cwd` axis asserted nothing the code could violate.
+    #   v2: relative target, and both arming states -- but the fallback landed in an EMPTY
+    #       process directory, (a) came back "does not widen", and the transcript was never
+    #       opened. `armed_calls=0` on all eight params; the ARMING axis was now the dead one.
+    #   v3, below: relative target AND a process directory that really holds the surface, so
+    #       BOTH axes are load-bearing at once. The wrong-typed `cwd` must fall back to the
+    #       process directory (killed by dropping `_str_field`'s type check: the value reaches
+    #       `os.path.join` and raises into the catch-all, which denies the not-armed row), and
+    #       the verdict must still be decided by arming (killed by any mutation to (b)).
+    #
+    # The general lesson the third draft encodes: a row that varies one input must place every
+    # OTHER input so the varied one can actually change the outcome.
     write_settings(tmp_path)
+    monkeypatch.chdir(tmp_path)
     call = payload(
         "Edit", add_entry_edit_relative("settings.json", COVERING), transcript, tmp_path)
-    assert hook.decide({**call, "cwd": value}) is None
+    assert (hook.decide({**call, "cwd": value}) is not None) is denies
+
+
+@pytest.mark.parametrize("transcript,denies", [(NO_DENIAL, False), (ARMED_READ, True)],
+                         ids=["not-armed", "armed"])
+def test_a_relative_cwd_leaves_both_paths_unable_to_locate_the_target(
+    tmp_path, monkeypatch, transcript, denies
+):
+    # The two paths used to disagree, and that disagreement is the whole finding. The
+    # file-tool path tested the BASE before joining (`if not cwd`) while the Bash path tested
+    # the RESULT after (`os.path.isabs`). A relative but non-empty `cwd` -- "sub" -- passes
+    # "the base is non-empty" and still produces a relative join, so one and the same
+    # unresolvable target was answered `Bash` DENY, `Edit` ALLOW in one and the same session.
+    #
+    # Asserting the two TOGETHER is deliberate: either alone would have passed throughout the
+    # revision that had the bug. What is pinned is that they agree, and on which answer.
+    (tmp_path / "sub").mkdir()
+    write_settings(tmp_path / "sub")
+    doomed = tmp_path / "about-to-vanish"
+    doomed.mkdir()
+    monkeypatch.chdir(doomed)
+    doomed.rmdir()
+    edit = payload("Edit", add_entry_edit_relative("settings.json", COVERING),
+                   transcript, tmp_path)
+    bash = payload("Bash", {"command": "cp /tmp/evil.json settings.json"},
+                   transcript, tmp_path)
+    verdicts = [hook.decide({**edit, "cwd": "sub"}), hook.decide({**bash, "cwd": "sub"})]
+    assert [v is not None for v in verdicts] == [denies, denies]
+
+
+def test_a_relative_cwd_does_not_silently_resolve_against_the_process_directory(
+    tmp_path, monkeypatch
+):
+    # The same defect in its dangerous form. With the process directory ALIVE, a relative
+    # `cwd` joined into a path that resolved against it -- so the gate opened, diffed and
+    # ruled on a settings file that nothing in the payload named. It denied, which looks like
+    # the right answer and is not: the evidence was a different file's contents.
+    #
+    # The decoy is a surface the gate WOULD deny on if it read it, so an implementation that
+    # resolves against the process directory fails here rather than passing by luck.
+    (tmp_path / "sub").mkdir()
+    write_settings(tmp_path / "sub")          # the payload's own, and never reachable
+    live = tmp_path / "live"
+    (live / "sub").mkdir(parents=True)
+    write_settings(live / "sub")              # the decoy the ambient cwd would reach
+    monkeypatch.chdir(live)
+    call = payload("Edit", add_entry_edit_relative("settings.json", COVERING),
+                   ARMED_READ, tmp_path)
+    reason = hook.decide({**call, "cwd": "sub"})
+    assert reason is not None                  # unresolvable + armed -> fail closed
+    assert COVERING not in reason              # ... on `_ON_ERROR`, NOT on a widening it
+    assert str(live) not in reason             #     "read" out of the decoy
+
+
+@pytest.mark.parametrize("value", NON_DICT_TYPES)
+def test_a_wrong_typed_tool_use_input_in_the_transcript_still_denies(tmp_path, value):
+    # THE THIRD INPUT AXIS. Two reviews closed wrong-typed data on the payload and on ambient
+    # process state, and each time the prose claimed the enumeration was complete. It was not:
+    # the transcript is a file written by another process, and its `tool_use` blocks were
+    # stored straight off `json.loads`. `covers()` rescues `None` and `{}` but not a TRUTHY
+    # non-dict, so `["x"]`/`"str"`/`7`/`True` raised `AttributeError` out of `decide()` into
+    # the catch-all -- which denies every call in the session, over a transcript the gate
+    # merely failed to model.
+    #
+    # The assertion is DENY, and specifically the widening deny that names the entry: the
+    # denial still arms, the call it denied is merely unknown, and an unknown denied call is
+    # already modelled as covering. A row asserting only "does not raise" would pass on the
+    # catch-all's unconditional deny, i.e. on the bug.
+    settings = write_settings(tmp_path)
+    transcript = armed_transcript_with_call(tmp_path, "Read", value)
+    reason = hook.decide(payload("Edit", add_entry_edit(settings, COVERING),
+                                 transcript, tmp_path))
+    assert reason is not None
+    assert COVERING in reason
+
+
+@pytest.mark.parametrize("value", WRONG_TYPES)
+def test_a_wrong_typed_tool_use_name_in_the_transcript_does_not_open_a_hole(tmp_path, value):
+    # The sibling field, and the reason the fix belongs at the parse boundary rather than at
+    # either use site: this one fails in the OPPOSITE direction. A non-str `name` raises
+    # nothing at all -- it simply compares unequal to every entry's tool, so conjunct (c)
+    # concluded "covered by no entry" and the gate ALLOWED a widening that answers a real
+    # denial. Measured before the fix: `name=7` -> ALLOW where `name="Read"` -> DENY, with
+    # everything else identical. A silent hole, which no crash would ever have surfaced.
+    settings = write_settings(tmp_path)
+    transcript = armed_transcript_with_call(
+        tmp_path, value, {"file_path": "/srv/secrets/notes.md"})
+    assert hook.decide(payload("Edit", add_entry_edit(settings, COVERING),
+                               transcript, tmp_path)) is not None
+
+
+def test_the_custom_transcript_builder_reproduces_the_static_fixture(tmp_path):
+    # The two rows above rest entirely on this builder being a faithful stand-in for
+    # `ARMED_READ`. If a client-schema change made the builder's rows stop arming, both rows
+    # would keep passing for the wrong reason on the `name` one and start failing
+    # uninformatively on the `input` one. Pinned with the DEFAULTS, so the control is the
+    # fixture's own shape.
+    settings = write_settings(tmp_path)
+    faithful = armed_transcript_with_call(
+        tmp_path, "Read", {"file_path": "/srv/secrets/notes.md"})
+    call = add_entry_edit(settings, COVERING)
+    assert (hook.decide(payload("Edit", call, faithful, tmp_path))
+            == hook.decide(payload("Edit", call, ARMED_READ, tmp_path)))
+    # ... and it is the COVERING relationship that decides, not merely "armed".
+    assert hook.decide(payload(
+        "Edit", add_entry_edit(settings, OTHER_PREFIX), faithful, tmp_path)) is None
 
 
 def test_a_relative_target_resolves_against_the_payload_cwd(tmp_path):

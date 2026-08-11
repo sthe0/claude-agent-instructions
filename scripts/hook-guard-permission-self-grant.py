@@ -173,12 +173,24 @@ from lib.denial_arming import Verdict  # noqa: E402
 # is read. Keeping malformed payloads off that path is what lets the catch-all stay the
 # backstop it claims to be rather than a second, unmodelled deny route.
 #
-# That claim was FALSE for one revision of this file, and the counterexample was not a
-# payload at all: `os.getcwd()` sitting in a default argument, raising once the process's
-# own directory had been removed, denying every call in a session whose worktree another
-# session had landed. So the enumeration above covers payload shape, and payload shape is
-# not the whole input — AMBIENT PROCESS STATE is input too. `_base_dir` is where that one
-# is contained; a future reader adding another ambient read should assume the same.
+# That claim has now been FALSE twice, each time because the sentence above named the
+# payload as if it were the whole input. It is not. First `os.getcwd()` in a default
+# argument raised once the process's own directory had been removed, denying every call in
+# a session whose worktree another session had landed. The list was extended to say
+# "and ambient process state" — and the very next review found a THIRD source: the
+# transcript, a file written by another process, whose `tool_use` blocks were stored off
+# `json.loads` with no type check, so a non-dict `input` raised `AttributeError` out of
+# `decide()` here.
+#
+# A list of input sources is the wrong shape of claim; it is only ever as complete as the
+# last review. The invariant that actually holds is about BOUNDARIES: every external
+# source enters this gate through exactly one function that PARSES it — establishing the
+# declared types rather than trusting them — and downstream code may then rely on those
+# types. Three such boundaries exist today: `_str_field` (the payload), `_base_dir` plus
+# `_located` (ambient process state), and `denial_arming._call_fields` (transcript
+# content). The rule for a future reader is not "check this list" but "if you are reading
+# something this process did not compute, it needs a boundary of its own, and the catch-all
+# is not it".
 _ON_ERROR = "deny"
 
 _FILE_TOOLS = ("Edit", "Write")
@@ -304,22 +316,34 @@ def _widening_between(path: str, old_text: str, new_text: str) -> _Widening | No
     return _Widening(path, tuple(entries), True)
 
 
-def _unresolvable(what: str) -> _Unknown:
-    """A relative path with no directory to interpret it against is UNKNOWN, not ABSENT.
+def _located(path: str, what: str) -> str | _Unknown:
+    """`path` if it names one file on disk, else UNKNOWN — the ONE test both paths use.
 
-    Reached only when `_base_dir` came back empty — neither the payload nor the process
-    supplied a directory. Left to fall through, such a path stays relative, `_read_text`
-    gets ENOENT because the *base* is gone rather than because nothing is on the path, and
-    `os.path.lexists` agrees — so it lands on ABSENT, and ABSENT means "a creation, not a
-    widening", i.e. a definite ALLOW. That is the gate asserting a file is not a permission
-    surface when it could not even work out which file is meant: a verdict outside the
-    evidence domain it rests on. The honest answer is the third one the design already has.
-    """
+    A path that is still relative AFTER every join this gate can perform does not name a
+    file; it names a file *relative to a directory nobody supplied*. Left to fall through,
+    it reaches `_read_text` as written, gets ENOENT because the base is missing rather than
+    because nothing is on the path, `os.path.lexists` agrees, and it lands on ABSENT — and
+    ABSENT means "a creation, not a widening", i.e. a definite ALLOW. That is the gate
+    asserting a file is not a permission surface when it could not work out which file is
+    meant: a verdict outside the evidence domain it rests on. The honest answer is the third
+    one the design already has.
+
+    ONE FUNCTION, TAKING THE JOINED PATH, BECAUSE TWO DRIFTED. The predicate used to be
+    written separately at each call site, and the two spellings were not equivalent: the
+    file-tool site tested the BASE (`if not cwd`) BEFORE joining, the Bash site tested the
+    RESULT (`os.path.isabs(target)`) after. A relative but non-empty `cwd` — `"sub"` — passes
+    "the base is non-empty" and still yields a relative join, so the same session answered
+    the same unresolvable target two different ways: `Bash` DENY, `Edit` ALLOW. Worse, with a
+    live process directory the joined path silently resolved against THAT, so the gate read a
+    settings file nobody had named. Testing the joined path is what makes the two agree by
+    construction; there is no spelling of the base-side test that generalizes, because only
+    the join knows whether it produced an absolute path."""
+    if os.path.isabs(path):
+        return path
     return _Unknown(
-        f"{what} is relative, and no directory could be resolved to interpret it against — "
-        f"neither the payload's cwd nor the process's own — so which file it names, and with "
-        f"it whether this call widens a permission surface, is unknown rather than known to "
-        f"be no"
+        f"{what} did not resolve to an absolute path — the payload's cwd and the process's "
+        f"own were both unusable — so which file it names, and with it whether this call "
+        f"widens a permission surface, is unknown rather than known to be no"
     )
 
 
@@ -331,12 +355,13 @@ def _file_tool_widening(tool_name: str, tool_input: dict, cwd: str) -> _Widening
             f"write — and with it whether that file is a permission surface — is unknown "
             f"rather than known to be no"
         )
-    if not os.path.isabs(file_path):
-        if not cwd:
-            return _unresolvable(f"the file path this {tool_name} call carries, {file_path},")
-        path = os.path.join(cwd, file_path)
-    else:
-        path = file_path
+    located = _located(
+        file_path if os.path.isabs(file_path) else os.path.join(cwd, file_path),
+        f"the file path this {tool_name} call carries, {file_path},",
+    )
+    if isinstance(located, _Unknown):
+        return located
+    path = located
 
     old_text = _read_text(path)
     if old_text is _Read.ABSENT:
@@ -413,12 +438,14 @@ def _bash_widening(tool_input: dict, cwd: str) -> _Widening | _Unknown | None:
 
     unknown = None
     for target in bash_write_targets.command_write_targets(command, cwd):
-        if not os.path.isabs(target):
-            # Same hole on the Bash path: with no base directory the helper hands back the
-            # target as written, and an unresolved relative path must not read as "no surface".
-            unknown = unknown or _unresolvable(f"the write target {target}")
+        # The helper does its own join against `cwd`, so what comes back is already the
+        # joined path `_located` expects. A target still relative here is the same
+        # unresolvable case the file-tool path meets, answered by the same predicate.
+        located = _located(target, f"the write target {target or '(the working directory)'}")
+        if isinstance(located, _Unknown):
+            unknown = unknown or located
             continue
-        is_surface = _is_surface_on_disk(target)
+        is_surface = _is_surface_on_disk(located)
         if isinstance(is_surface, _Unknown):
             unknown = unknown or is_surface
         elif is_surface:
@@ -512,13 +539,21 @@ def _base_dir(payload: dict) -> str:
     rather than raising, so `main()`'s catch-all keeps meaning "a bug in the gate" rather than
     "a directory moved".
 
-    An empty result is a real condition callers must handle, NOT a benign default. Writing
-    this the first time, the docstring claimed "" makes a relative target fall through to
-    UNKNOWN on its own; a test written to pin that claim failed, and the measured behaviour
-    was ALLOW — `_read_text` gets ENOENT because the base is gone, `lexists` agrees, and the
-    path reads as ABSENT, which means "a creation, not a widening". So the two consumers of
-    this value check it explicitly and call `_unresolvable`; see that function for why a path
-    the gate cannot locate must not be answered with a definite no.
+    WHAT THIS RETURNS IS A CANDIDATE, NOT A DIRECTORY. It is whatever the payload said, or
+    whatever the process is sitting in, or "" — and the payload is untrusted, so a caller
+    gets no promise that the value is absolute, that it exists, or that it is non-empty. The
+    two earlier drafts of this docstring each promised more than the code delivered and each
+    was falsified by measurement: the first claimed "" makes a relative target fall through to
+    UNKNOWN by itself (measured ALLOW — the path reads as ABSENT, i.e. "a creation, not a
+    widening"), the second then described the callers as checking `not cwd`, which a RELATIVE
+    non-empty `cwd` like "sub" passes on its way to a still-relative join. Both were the same
+    error: reasoning about the base instead of about the joined result.
+
+    So no caller of this function judges the value it gets back. Every caller joins first and
+    hands the RESULT to `_located`, which is the single place the "did this name a file?"
+    question is answered — see it for why a path the gate cannot locate must never be given a
+    definite no. There is deliberately no consumer count here; a count is a fact about other
+    code that goes stale silently, and the previous one already had.
     """
     declared = _str_field(payload, "cwd", "")
     if declared:

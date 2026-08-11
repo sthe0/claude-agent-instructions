@@ -7,8 +7,11 @@ could never represent.
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -168,3 +171,55 @@ def test_a_truncated_tail_among_readable_rows_is_still_read():
     # the third value on ordinary sessions and destroy the distinction.
     result = armed(FIXTURES / "truncated_tail.jsonl")
     assert result.verdict is Verdict.NOT_ARMED
+
+
+# --- the parse boundary: field TYPES, not just field presence ------------------
+
+def _custom_call_transcript(tmp_path, name, tool_input):
+    """`mixed_kinds`' first denial, rebuilt with the `tool_use` fields under test control."""
+    path = tmp_path / "typed.jsonl"
+    rows = [
+        '{"type":"assistant","uuid":"a1","message":{"content":[{"type":"tool_use",'
+        f'"name":{json.dumps(name)},"input":{json.dumps(tool_input)}}}]}}}}',
+        '{"type":"user","toolDenialKind":"permission-rule","sourceToolAssistantUUID":"a1",'
+        '"toolUseResult":"Error: Claude requested permissions"}',
+    ]
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    return path
+
+
+def test_the_faithful_shape_of_the_typed_transcript_helper(tmp_path):
+    # The control for the two rows below: with well-typed fields the helper must produce a
+    # resolved ARMED denial, so a later assertion of `None` is evidence about the TYPE check
+    # and not about a helper that stopped arming.
+    result = armed(_custom_call_transcript(tmp_path, "Bash", {"command": "rm -rf /tmp/x"}))
+    assert result.verdict is Verdict.ARMED
+    assert (result.denials[0].tool_name, result.denials[0].tool_input) == (
+        "Bash", {"command": "rm -rf /tmp/x"})
+
+
+@pytest.mark.parametrize("name", [7, ["Bash"], {"a": 1}, True, None])
+def test_a_non_string_tool_name_collapses_to_the_unknown_call_state(tmp_path, name):
+    # `DeniedCall.tool_name` is annotated `str | None`, and that annotation used to be a
+    # claim nobody established -- the field was stored straight off `json.loads`. A caller
+    # that trusted it compared the value against an entry's tool name, got unequal for every
+    # entry, and concluded "this denial is covered by nothing": a SILENT hole, in a gate whose
+    # whole purpose is to notice that coverage. The denial must still arm; only the call is
+    # unknown, which is the state the module already models and callers already fail toward.
+    result = armed(_custom_call_transcript(tmp_path, name, {"command": "x"}))
+    assert result.verdict is Verdict.ARMED
+    assert result.denials[0].tool_name is None
+    assert result.denials[0].tool_input is None
+
+
+@pytest.mark.parametrize("tool_input", [7, ["x"], "str", True, None])
+def test_a_non_dict_tool_input_collapses_to_the_unknown_call_state(tmp_path, tool_input):
+    # The sibling field, failing the other way: a TRUTHY non-dict slipped past the
+    # `None`/`{}` rescue in `permission_entry_match.covers()` and raised `AttributeError` in
+    # the caller. Both fields are coerced together, so `tool_name` is asserted `None` here
+    # too -- a half-known call is a shape no consumer models, and inventing it would be a
+    # third state to test rather than the one that already exists.
+    result = armed(_custom_call_transcript(tmp_path, "Bash", tool_input))
+    assert result.verdict is Verdict.ARMED
+    assert result.denials[0].tool_name is None
+    assert result.denials[0].tool_input is None
