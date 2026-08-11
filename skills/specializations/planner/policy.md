@@ -57,10 +57,10 @@ Budgeting a round must not legitimize one that a cheaper discriminator would hav
 
 ## Meta submission fields
 
-`submission._SUBSTANTIVE_META_FIELDS` requires three `[meta]`-level fields on every substantive plan:
+`submission._SUBSTANTIVE_META_FIELDS` requires three `[meta]`-level fields on every substantive plan. **Falsiness is the test throughout** — an empty string, and an empty `[[final_check]]` list, read the same as an absent key, exactly as § Submission-seam fields states for `material_refs` / `knowledge_refs`; writing the key with nothing in it does not satisfy the seam.
 
 - **`goal`** / **`done_criterion`** — see `SKILL.md` § Plan format's Problem-and-done-criteria item: the plain-language end state and the definition-of-done, cached by the engine as the session's own comparison target.
-- **`final_check`** — the plan's end-to-end verification list (`## Final verification`, § Plan format item 6), run at resolution; each entry is a `[[final_check]]` table naming a `venue` and a check, the meta-level analogue of a stage's `verify_command`.
+- **`final_check`** — the plan's end-to-end verification list (`## Final verification`, § Plan format item 6), run at resolution; each entry is a `[[final_check]]` table naming a `venue` and a check, the meta-level analogue of a stage's `verify_command`. It is not a summary of the stage checks and is not satisfiable by them: a plan whose only controls are per-stage asserts that each step went as declared and nothing about the whole, and the assembled product is what `verify-final` re-runs these against.
 
 ## Order
 
