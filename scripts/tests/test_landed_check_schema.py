@@ -377,8 +377,13 @@ def _landed_session(sid="s1"):
     )
 
 
-def test_schema_version_is_25():
-    assert SCHEMA_VERSION == 25
+def test_schema_version_covers_the_landed_check():
+    """The landed check's fields arrived at schema 23 and were never withdrawn.
+
+    Asserted as a floor, not an equality: a later feature's bump is not this
+    file's business, and an equality pin makes every unrelated bump land here as
+    a spurious failure (this one silently drifted to a literal 25 that way)."""
+    assert SCHEMA_VERSION >= 23
 
 
 def test_landed_state_round_trips():
@@ -389,7 +394,7 @@ def test_landed_state_round_trips():
     assert reloaded.stages[0].outcome.delivered_head == "deadbeef"
     assert reloaded.final_check[0].kind == "landed"
     assert reloaded.final_check[0].landed == LandedSpec(target="main", remote="origin", delivered_stage=1)
-    assert reloaded.schema_version == 25
+    assert reloaded.schema_version == SCHEMA_VERSION
 
 
 def test_landed_final_check_empty_command_not_none_round_trips():

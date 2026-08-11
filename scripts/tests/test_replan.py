@@ -14,6 +14,7 @@ from agentctl.plan import diff_plans, load_plan
 from agentctl.state import (
     Actor, Criterion, LandedSpec, Means, Node, Stage, StageStatus, Subject, Supply,
 )
+from conftest import STAGE_OBSERVATIONS
 
 
 def ns(**kw):
@@ -529,12 +530,14 @@ def test_next_stage_finalizes_partitioned_when_replan_preserved_all_passed(store
     _to_executing_stage1(store, sid, plan)
 
     d = cli.cmd_record_result(ns(session=sid, status="passed", actual="mod scaffolded",
-                               control="reviewed: ok"), store=store)
+                               control="reviewed: ok",
+                               observation=STAGE_OBSERVATIONS[0]), store=store)
     assert d.action == "next_stage"
     d = cli.cmd_next_stage(ns(session=sid), store=store)
     assert d.node == Node.EXECUTING.value
     d = cli.cmd_record_result(ns(session=sid, status="passed", actual="tests added",
-                               control="reviewed: ok"), store=store)
+                               control="reviewed: ok",
+                               observation=STAGE_OBSERVATIONS[1]), store=store)
     assert d.action == "verify_final"
     state = store.load(sid)
     assert state.node == Node.VERIFYING.value
@@ -625,7 +628,8 @@ def _to_passed_stage1_via_dispatch(store, sid, plan_path):
                         dry_run=False, constraints=""), store=store,
                      runner=lambda argv, **kw: RunResult(0, stdout="COMPLETED: done\n"))
     cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
-                             control="reviewed: ok", observation=""), store=store)
+                             control="reviewed: ok",
+                             observation=STAGE_OBSERVATIONS[0]), store=store)
 
 
 def _submit_edit_approve(store, sid, plan_path, edited_text):

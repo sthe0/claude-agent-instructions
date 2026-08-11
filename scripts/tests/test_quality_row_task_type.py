@@ -12,6 +12,7 @@ import json
 from argparse import Namespace
 
 from agentctl import cli
+from conftest import STAGE_OBSERVATIONS
 
 
 def ns(**kw):
@@ -39,10 +40,10 @@ def _drive_to_resolved(store, sid, plan, *, deliverable_kind="", cost_log=None):
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
-    for _ in range(2):
+    for observation in STAGE_OBSERVATIONS[:2]:
         cli.cmd_next_stage(ns(session=sid), store=store)
         cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
-                                 control="reviewed: ok", observation="",
+                                 control="reviewed: ok", observation=observation,
                                  cost_log=str(cost_log) if cost_log else None), store=store)
     cli.cmd_verify_final(ns(session=sid), store=store)
     cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="searched",
