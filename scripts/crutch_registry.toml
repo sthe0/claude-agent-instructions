@@ -6280,6 +6280,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "06900b4d20db1b9c"
+domain = "code"
+file = "scripts/tests/test_sync_stash_pop_safety.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "bc6f32382784384f"
 domain = "code"
 file = "scripts/tests/test_term_ruleset.py"
@@ -8259,6 +8267,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "812528d7b305784c"
 domain = "code_file_rollup"
 file = "scripts/tests/test_state_roundtrip.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "7f09d20501e45250"
+domain = "code_file_rollup"
+file = "scripts/tests/test_sync_stash_pop_safety.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
@@ -17589,6 +17605,22 @@ ground = "Policy files elaborate the judgment procedure a specialization follows
 
 [[entry]]
 id = "5a5444be38d187ec"
+domain = "prose"
+file = "skills/self-improvement/policy.md"
+class = "perception"
+disposition = "keep"
+ground = "Policy files elaborate the judgment procedure a specialization follows at each step; distinguishing, statement-by-statement, which already point at an existing enforced gate is out of this partition-level pass's budget (stated as a scope limit, not silently sampled) — see the already-mechanized override below for the subset whose own text names a concrete enforcing artifact."
+
+[[entry]]
+id = "9fd417a4f7072ad4"
+domain = "prose"
+file = "skills/self-improvement/policy.md"
+class = "perception"
+disposition = "keep"
+ground = "Policy files elaborate the judgment procedure a specialization follows at each step; distinguishing, statement-by-statement, which already point at an existing enforced gate is out of this partition-level pass's budget (stated as a scope limit, not silently sampled) — see the already-mechanized override below for the subset whose own text names a concrete enforcing artifact."
+
+[[entry]]
+id = "a54e8f8e96193f56"
 domain = "prose"
 file = "skills/self-improvement/policy.md"
 class = "perception"
