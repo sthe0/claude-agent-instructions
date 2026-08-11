@@ -654,9 +654,34 @@ class Subject:
 
 @dataclass
 class Means:
-    """The fixed instruments (means) and the procedure over them (method)."""
+    """The instruments, and the two different things a plan has to say about their use.
+
+    `means` are the instruments themselves — the element the plan fixes and a stage may
+    not re-select mid-flight.
+
+    `method` is the REQUIREMENT on the way of acting: what the transformation must be an
+    instance of (the pattern to follow, the abstraction to extend, where the change
+    lands). It is the planner's and the customer's, and it moves only through the review
+    and approval a replan re-arms.
+
+    `procedure` is the SEQUENCE of operations proposed for meeting that requirement. It
+    is the executor's own: reading the code routinely shows a better order, and replacing
+    it costs no re-approval — `cli.cmd_replan --renormalize`, which the engine refuses
+    the moment the edit reaches the method, the criterion, the result image, or the goal
+    every stage's observation is compared against.
+
+    Until this field existed this docstring defined one as the other — "the fixed
+    instruments (means) and the procedure over them (method)" — so a plan had a single
+    place for a norm and a proposal, and the proposal, being the concrete one, took it.
+    An executor who then found a better order either followed a worse one or quietly
+    rewrote what he was held to, and neither is visible in the diff as what it is.
+
+    Optional on the TYPE and required of a substantive stage at the SUBMISSION seam
+    (submission.py), like every requirement added since the corpus was frozen: 55 stored
+    plans predate the field and must keep loading byte-for-byte."""
     means: str
     method: str
+    procedure: str = ""
 
 
 @dataclass

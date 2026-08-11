@@ -178,6 +178,7 @@ knowledge_refs = ["k"]
 knowledge = "kn"
 means = "bash"
 method = "run"
+procedure = "1. read the fixture. 2. apply the edit. 3. re-check the seam"
 conditions = "c"
 preconditions = "p"
 invariants = "n"

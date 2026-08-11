@@ -32,6 +32,7 @@ compose to: an unavailable judge stalls the pass safely instead of waving it thr
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import os
 from pathlib import Path
@@ -40,7 +41,7 @@ from lib import config_root
 from lib import hook_wiring
 
 from . import delivery
-from .plan import PlanError, load_plan
+from .plan import PlanError, load_plan, order_place, stage_question_key
 from .state import Node, SessionState, StageStatus, WeightClass
 from .state import PLAN_PRESENTATION_KIND_ESSENCE as _PLAN_PRESENTATION_KIND_ESSENCE
 from .state import Stage as _Stage
@@ -812,7 +813,7 @@ def _operative_surface(doc) -> tuple:
     the guarantee. The residual is that a projection is a DECLARATION: appending a
     path satisfies the gate without any re-selection having happened, and the
     projection is coarse enough that two different transformations of one file look
-    alike. Per stage: means, method, verify_command, expected_exit, the
+    alike. Per stage: means, method, procedure, verify_command, expected_exit, the
     declared check venue/kind and its landed payload, the executor, and the two ref
     projections. Plan level: repo_root, delivery_worktree and every final_check's
     (command, expected_exit, venue, kind, landed payload).
@@ -834,6 +835,16 @@ def _operative_surface(doc) -> tuple:
             # schema-23 operative surface exactly — uniform with the plan.py keys.
             *((_normalize_string(s.criterion.verify_venue_at_final),)
               if s.criterion.verify_venue_at_final else ()),
+            # The sequence of operations, beside the `means`/`method` cluster it belongs
+            # to and NOT with the excluded prose: it is the one field an executor may
+            # replace on his own authority, so a replan that removes a difficulty by
+            # re-sequencing has changed something real and must be able to say so here.
+            # A string, per the typing constraint `_refs_projection` documents above, and
+            # a TAGGED one for the reason `plan.procedure_place` records: two conditional
+            # components of the same type collide, so an untagged procedure would compare
+            # equal to a `verify_venue_at_final` carrying the same word.
+            *(("procedure:" + _normalize_string(s.means.procedure),)
+              if s.means.procedure else ()),
             *_refs_projection(s.subject),
         )
         for s in doc.stages
@@ -911,6 +922,129 @@ def replan_coverage_blockers(old_doc, new_doc, critique) -> list[str]:
                 "dispatches on"
             )
     return out
+
+
+#: The places a renormalization may not reach, as (dotted path on the stage, what the
+#: author is losing by editing it). Each is a NORM: the requirement on the way of acting,
+#: how the result is judged, the image it is judged against. Named individually rather
+#: than as "everything but the procedure" so the message can say WHICH norm was touched;
+#: the residual check below is what makes the list's incompleteness harmless.
+_RENORM_PROTECTED = (
+    ("means.method", "the requirement on the way of acting"),
+    ("means.means", "the instruments the plan fixed"),
+    ("subject.result", "the result image the stage is judged against"),
+    ("criterion.criterion_type", "how the result is judged"),
+    ("criterion.done_criterion", "the done criterion"),
+    ("criterion.verify_command", "the check that decides the stage"),
+    ("criterion.expected_exit", "the exit code the check is read against"),
+    ("criterion.verify_venue", "the tree the check observes"),
+    ("criterion.verify_kind", "the kind of check"),
+    ("criterion.verify_venue_at_final", "the tree the final check observes"),
+)
+
+
+def _dotted(obj, dotted: str):
+    for part in dotted.split("."):
+        obj = getattr(obj, part, None)
+        if obj is None:
+            return None
+    return obj
+
+
+def renormalization_blockers(old_doc, new_doc) -> list[str]:
+    """Why `new_doc` is not a renormalization of `old_doc`. [] == it is one.
+
+    A RENORMALIZATION is the executor exercising the authority `Means.procedure` gives
+    him: he replaces the SEQUENCE of operations proposed for meeting the stage's
+    requirement, on his own reading of the code, without the review and approval a
+    replan re-arms. What he may not do under that authority is edit the requirement
+    itself, the criterion that decides the stage, the image the result is compared
+    against, or the goal every stage-8 observation is compared to — those are the
+    customer's and the planner's, and reaching them under a light path would make the
+    approval a formality anyone could route around.
+
+    So the verdict is not "did anything change" but "is the procedure the ONLY thing
+    that changed". Two halves:
+
+    * NAMED refusals (`_RENORM_PROTECTED` plus the meta surface), so the message can
+      tell the author which norm he touched and what it costs to move it properly.
+    * A RESIDUAL totality check, which is what makes this gate honest rather than a
+      list someone must remember to extend: the old stage is copied, ONLY its
+      `means.procedure` is set to the new value, and `plan.stage_question_key` of that
+      transplant must equal the new stage's. That key covers every field of a stage's
+      definition, so any edit the procedure alone does not account for — including one
+      to a field added years from now — fails here whether or not anyone listed it.
+      This is also the answer to whether the light path can re-select `material_refs`
+      or `knowledge_refs` and walk around the coverage gate stage 4 built: it cannot,
+      because those refs are inside that key (via `plan.knowledge_place`).
+
+    Pure — dataclass reads and two digests, no I/O, in keeping with this module."""
+    out: list[str] = []
+    old_by_index = {s.index: s for s in old_doc.stages}
+    new_by_index = {s.index: s for s in new_doc.stages}
+    if set(old_by_index) != set(new_by_index):
+        # Adding or dropping a stage is a re-decomposition of the work, not a
+        # re-sequencing inside it — and with the stage sets unequal the per-stage
+        # comparison below has nothing to say, so this returns rather than accumulates.
+        return [
+            "a renormalization may not add or remove a stage: "
+            f"{sorted(old_by_index)} -> {sorted(new_by_index)}. Replacing the SEQUENCE "
+            "of operations inside a stage is the executor's; re-cutting the work into "
+            "stages is the plan's — replan without --renormalize"
+        ]
+    for index in sorted(new_by_index):
+        old_stage, new_stage = old_by_index[index], new_by_index[index]
+        for dotted, what in _RENORM_PROTECTED:
+            if _dotted(old_stage, dotted) != _dotted(new_stage, dotted):
+                out.append(
+                    f"stage {index}: a renormalization may not edit `{dotted}` — that is "
+                    f"{what}, not the sequence of operations proposed for meeting it. "
+                    f"Drop --renormalize and replan it through the review and approval "
+                    f"it is owed"
+                )
+        transplant = copy.deepcopy(old_stage)
+        transplant.means.procedure = new_stage.means.procedure
+        if stage_question_key(transplant) != stage_question_key(new_stage):
+            out.append(
+                f"stage {index}: something other than `means.procedure` changed — a "
+                f"renormalization is an edit the new sequence alone accounts for, and "
+                f"this one does not. Replan without --renormalize"
+            )
+    for dotted, what in (
+        ("goal", "the goal every stage's observation is compared against"),
+        ("done_criterion", "the plan's done criterion"),
+        ("repo_root", "the tree the plan is authored against"),
+        ("delivery_worktree", "the tree the work is delivered in"),
+    ):
+        if _dotted(old_doc.meta, dotted) != _dotted(new_doc.meta, dotted):
+            out.append(
+                f"[meta] a renormalization may not edit `{dotted}` — that is {what}. "
+                f"Replan without --renormalize"
+            )
+    if _final_check_surface(old_doc.meta) != _final_check_surface(new_doc.meta):
+        out.append(
+            "[meta] a renormalization may not edit `final_check` — that is how the whole "
+            "plan is judged. Replan without --renormalize"
+        )
+    if order_place(old_doc.meta) != order_place(new_doc.meta):
+        out.append(
+            "[meta] a renormalization may not edit `[meta.order]` — the order is the "
+            "customer's, and nothing an executor does to his own sequence changes it. "
+            "Replan without --renormalize"
+        )
+    return out
+
+
+def _final_check_surface(meta) -> tuple:
+    """Every final_check as a comparable tuple, in declaration order.
+
+    Order is kept (unlike `_operative_surface`, which sorts): there the question is
+    whether the SET of checks was re-selected, here it is whether the [meta] block was
+    edited at all, and re-ordering the plan's final checks is an edit."""
+    return tuple(
+        (fc.command, fc.expected_exit, fc.venue, fc.kind, _landed_sort_key(fc.landed))
+        for fc in meta.final_check
+    )
 
 
 # gate name -> guardian predicate

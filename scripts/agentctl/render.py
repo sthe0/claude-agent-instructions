@@ -49,6 +49,8 @@ def render_plan_md(doc: PlanDoc) -> str:
             lines.append(f"- **Means:** {s.means.means}")
         if s.means.method:
             lines.append(f"- **Method:** {s.means.method}")
+        if s.means.procedure:
+            lines.append(f"- **Procedure:** {s.means.procedure}")
         if s.conditions:
             lines.append(f"- **Conditions:** {s.conditions}")
         lines.append(f"- **Criterion type:** {s.criterion.criterion_type}")

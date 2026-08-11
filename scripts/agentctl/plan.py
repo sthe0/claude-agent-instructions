@@ -1018,6 +1018,7 @@ def parse_plan(
                 means=Means(
                     means=str(s.get("means", "")),
                     method=str(s.get("method", "")),
+                    procedure=str(s.get("procedure", "")),
                 ),
                 actor=Actor(
                     executor=str(s["executor"]),
@@ -1209,6 +1210,36 @@ def preconditions_place(stage) -> tuple:
     return () if not stage.preconditions else ((stage.preconditions,),)
 
 
+def procedure_place(stage) -> tuple:
+    """The stage's procedure — the SEQUENCE of operations proposed for meeting the
+    method's requirement — as a contribution to a change-decision key: a ONE-element
+    tuple holding the value TAGGED with this field's name inside a tuple of its own, or
+    the EMPTY tuple when the stage declares none.
+
+    Shared by all three key functions for the reason its two siblings are: a field that
+    enters one key and not the others is how a correction gets silently dropped. Here the
+    consequence is sharper than "dropped", because a whole branch depends on it —
+    `diff_plans` classifies an edit that touches only the procedure as `no_change` unless
+    this place is in `_prose`, and a `no_change` replan never reaches the renormalization
+    the field exists to admit.
+
+    Declared-only, for the reason `preconditions_place` documents: a plan predating the
+    field keeps the exact key it had (stage_question_key is persisted in
+    Question.disposed_at_key and compared across processes, so `... or ""` would flip
+    every disposed question of every live session to a spurious staleness blocker).
+
+    TAGGED, which its two siblings are not, and the tag is what nesting alone turned out
+    not to buy. Nesting stops a value flattening into the splices beside it; it does not
+    stop two INDEPENDENTLY-conditional nested splices from producing the same element.
+    This is the third such splice, so `preconditions = "delivery"` and `procedure =
+    "delivery"` both reduced to `(("delivery",),)` and a stage that MOVED one sentence
+    from the first place to the second carried its PASSED outcome forward as though
+    nothing had changed. Tagging only the new place fixes that without touching either
+    older encoding — the keys of every already-disposed question stay byte-identical,
+    which a retrofit of all three would not."""
+    return () if not stage.means.procedure else (("procedure", stage.means.procedure),)
+
+
 def stage_carry_key(stage) -> tuple:
     """Full-fidelity per-stage identity for PASSED carry-forward across a
     substantive replan (#12): a stage keeps its PASSED status only if NOTHING about
@@ -1245,6 +1276,7 @@ def stage_carry_key(stage) -> tuple:
           if stage.criterion.verify_venue_at_final else ()),
         *knowledge_place(stage),
         *preconditions_place(stage),
+        *procedure_place(stage),
     )
 
 
@@ -1265,14 +1297,14 @@ def stage_question_key(stage) -> str:
     legally name — including `principle` and `supplies`, which `stage_carry_key`
     omits because carry-forward never needed them. The vocabulary is not restated
     here (it is text_shape.ELEMENT_NAMES, and a copy of a list rots): read it there.
-    Four of its names have no stage field for this key to cover, so a question
+    Three of its names have no stage field for this key to cover, so a question
     targeting one of those binds to the rest of the stage's definition: `order` and
-    `requirements` (both on `[meta.order]`), `control` (written only by
-    `record-result --control`, never parsed from plan TOML), and `procedure`, which
-    leaves this list the moment a `Means.procedure` field exists and must then be
-    covered here like any other. They are named rather than described as a class,
-    because a class with no extension is a standing licence not to cover the next
-    member. A question targeting
+    `requirements` (both on `[meta.order]`) and `control` (written only by
+    `record-result --control`, never parsed from plan TOML). `procedure` was the
+    fourth and is one no longer: `Means.procedure` exists, so it is covered here like
+    any other field, through `procedure_place`. They are named rather than described
+    as a class, because a class with no extension is a standing licence not to cover
+    the next member. A question targeting
     `stage:<n>.principle` must be invalidated when that principle is rewritten;
     `stage_carry_key` would not notice, so it cannot be reused for this purpose.
 
@@ -1322,6 +1354,11 @@ def stage_question_key(stage) -> str:
         # Question.target: a question answered against conditions that carried the
         # starting requirements must be invalidated when they move to their own field.
         *preconditions_place(stage),
+        # `procedure` is a legal Question.target too, and the reason it must be covered
+        # is the sharper one: it is the field an executor may replace WITHOUT
+        # re-approval, so an answer given against the old sequence is exactly the kind
+        # that goes stale without anyone being asked.
+        *procedure_place(stage),
     ))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -1370,7 +1407,13 @@ def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
              # Same argument one field over: moving a stage's starting requirements out of
              # `conditions` and into `preconditions` is a real correction, and without this
              # the two edits cancel in the diff and the replan reads as 'no_change'.
-             *preconditions_place(s))
+             *preconditions_place(s),
+             # And one field further, where the omission would be self-defeating rather
+             # than merely lossy: replacing ONLY the sequence of operations is the edit
+             # the renormalization branch exists to admit, so without this place here
+             # that edit diffs as 'no_change' and the branch is unreachable by
+             # construction.
+             *procedure_place(s))
             for s in doc.stages
         ]
     def _fc(doc: PlanDoc):

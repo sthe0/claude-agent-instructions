@@ -237,6 +237,7 @@ def _apply_refined_stage_fields(cur, refined) -> None:
     cur.subject.result = refined.subject.result
     cur.means.means = refined.means.means
     cur.means.method = refined.means.method
+    cur.means.procedure = refined.means.procedure
     cur.subject.invariants = refined.subject.invariants
     cur.subject.material_refs = list(refined.subject.material_refs)
     cur.subject.knowledge_refs = list(refined.subject.knowledge_refs)
@@ -3558,6 +3559,90 @@ def cmd_normalize(args, *, store: StateStore, runner: Runner | None = None) -> D
                      "renorming recorded; replan is now unblocked")
 
 
+def _renormalize_replan(args, state, store: StateStore, runner: Runner | None) -> Directive:
+    """The light path: the executor replaces his own SEQUENCE of operations.
+
+    `Means.method` is the REQUIREMENT on the way of acting — the planner's and the
+    customer's, moved only through the review and approval a replan re-arms. `Means.
+    procedure` is the sequence proposed for meeting it, and it is the EXECUTOR's:
+    reading the code routinely shows a better order, and making him buy that order at
+    the price of a re-approval is what produces the two failures the field split exists
+    to remove — an executor who follows a worse sequence because it is written down, or
+    one who quietly rewrites what he is held to, neither visible in the diff as what it
+    is.
+
+    `--renormalize` is therefore a TYPED CLAIM, not a verdict of `diff_plans`: the
+    executor says "the procedure is the only thing I changed", and the engine checks it
+    (`gates.renormalization_blockers`) rather than inferring it. Keeping it off
+    `diff_plans` leaves that function's three-word vocabulary and every caller intact,
+    and makes the refusal message able to name the norm the claim turned out to touch.
+
+    Three things this path deliberately does NOT do, each because it is not a replan:
+
+    * It does not run `_apply_refined_stage_fields`. Only `means.procedure` is copied
+      onto the live stages, so the claim the engine just verified stays true of the live
+      state too — no recorded `criterion.observation`, no `outcome`, no status is
+      disturbed, and the comparison stage 8 requires of a passed stage keeps standing.
+    * It does not re-arm a FAILED stage or leave DIAGNOSING. Working a difficulty
+      through is a separate obligation with its own record; re-sequencing inside a
+      stage does not discharge it.
+    * It logs `renormalize`, not `replan`, so `effort.replan_count` — which fires the
+      divergence trigger at three — counts norm revisions and not an executor using the
+      authority the plan gave him.
+
+    It DOES re-stamp `accepted_plan_digest`: that field must name the bytes the session
+    is executing, and after this call those are `args.plan`'s. The one consequence is
+    that an AcceptanceReview recorded before a renormalization goes stale — the
+    fail-closed direction, and nearly unreachable in practice since an acceptance is
+    recorded once every stage has already passed."""
+    from .plan import load_plan as _load
+
+    snap = state.plan_snapshot_path
+    old_path = snap if (snap and Path(snap).exists()) else state.plan_path
+    # Lenient OLD / strict NEW, for the reason cmd_replan's own loads document: the
+    # comparison baseline may be a snapshot frozen before a newer trunk tightened the
+    # schema, and only the incoming plan is held to today's submission grade. Comparing
+    # against the SNAPSHOT (not plan_path) is also what makes successive renormalizations
+    # honest: each is measured against the bytes that were approved, so a norm edit
+    # cannot be walked to in small steps.
+    old = _load(old_path, strict=False)
+    new = _load(args.plan)
+    run = runner if runner is not None else advisor.subprocess_runner
+    submission = _submission_problems(new, run, state.weight_class)
+    if submission:
+        return Directive(False, state.node, "fix_plan",
+                         "renormalization blocked: the corrected plan does not meet "
+                         "submission requirements",
+                         data={"problems": submission})
+    refusals = gates.renormalization_blockers(old, new)
+    _log_gate(state, "renormalization", refusals, passed=not refusals)
+    if refusals:
+        return Directive(False, state.node, "replan",
+                         "not a renormalization: this edit reaches the norm, not just "
+                         "the sequence of operations — drop --renormalize and replan it "
+                         "through the review and approval it is owed",
+                         data={"blockers": refusals})
+    changed: list[int] = []
+    for ns in new.stages:
+        try:
+            cur = state.stage(ns.index)
+        except KeyError:
+            continue
+        if cur.means.procedure != ns.means.procedure:
+            changed.append(ns.index)
+        cur.means.procedure = ns.means.procedure
+    state.plan_path = args.plan
+    _stamp_accepted_plan_digest(state, args.plan)
+    state.log("renormalize", stages=changed, plan=args.plan)
+    store.save(state)
+    return Directive(
+        True, state.node, "continue",
+        "renormalized: the procedure of "
+        + (f"stage(s) {changed}" if changed else "no stage")
+        + " was replaced; every norm the plan sets is unchanged",
+        data={"stages": changed})
+
+
 def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     from .plan import diff_plans, load_plan as _load, stage_carry_key
@@ -3611,6 +3696,15 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
 
     if not state.plan_path:
         return Directive(False, state.node, "submit_plan", "no current plan to replan against")
+
+    # The renormalization branch sits HERE deliberately: after the difficulty-cycle
+    # preconditions above (leaving that cycle is an obligation of its own, and this path
+    # does not leave it) and after the no-plan check it needs a baseline from, but BEFORE
+    # the plan-review and plan_approval gates below — those govern the NORM, which is the
+    # very thing this path is refused for touching. Making an executor re-arm a review to
+    # reorder his own operations is the cost the field split exists to remove.
+    if getattr(args, "renormalize", False):
+        return _renormalize_replan(args, state, store, runner)
 
     # plan-review gate: the corrected plan (args.plan) must carry a thinker review
     # with a passing/overridden verdict BOUND to it before it may be applied. Gates
@@ -4840,6 +4934,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--normalization-waiver", dest="normalization_waiver", default=None,
                     help="close a difficulty WITHOUT a re-norming record when the exposed factor "
                          "is genuinely one-off; a recorded reason (refused if empty)")
+    sp.add_argument("--renormalize", action="store_true",
+                    help="claim the corrected plan changes only stage `procedure` — the "
+                         "SEQUENCE of operations, which is the executor's to replace; skips "
+                         "the plan-review and plan_approval gates and is REFUSED the moment "
+                         "the edit reaches a method, a criterion, a result image or the goal")
     sp.add_argument("--cost-log", dest="cost_log", default=None,
                     help="override cost log path for tests (defaults to cost.COST_LOG)")
     sp = add("check-coverage"); sp.add_argument("--session", required=True)

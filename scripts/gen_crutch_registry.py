@@ -124,6 +124,21 @@ CODE_PARTITIONS = [
         "where a model's reading of free text can block a plan.",
     ),
     (
+        "scripts/agentctl/procedure.py (judge-guarded)",
+        lambda f: f == "scripts/agentctl/procedure.py",
+        "semantic-guarded",
+        "keep",
+        "The third file in the engine whose subject IS free-text meaning: it decides "
+        "whether a stage's `procedure` says anything its `method` does not — whether "
+        "an author has written the requirement twice instead of writing a requirement "
+        "and a sequence. Its regexes and its token overlap are `collapse_prefilter`, a "
+        "high-recall structural PREFILTER whose only consumer "
+        "(`submission._procedure_collapse`) gates it behind `judge_collapse` before any "
+        "violation is emitted — the prefilter alone refuses nothing. Same correction as "
+        "the two rows above, and it stands with conditions.py on the stronger side of "
+        "them: the guarded decision drives a REFUSAL, not a warning.",
+    ),
+    (
         "scripts/agentctl/**",
         lambda f: f.startswith("scripts/agentctl/"),
         "structural",

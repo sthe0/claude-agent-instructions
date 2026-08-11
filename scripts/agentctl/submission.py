@@ -33,11 +33,12 @@ refusal — see that function for why the echo check in particular is one of the
 seam that could only raise would have had to either block on such a finding or drop it.
 
 Both channels can ask a MODEL, and neither depends on getting an answer. The two differ
-only in what a verdict buys: an echo warns (`submission_advice`), a `conditions` that
-merely restates `depends_on` refuses (`_conditions_restatement`). Every path where the
-judge is absent, disabled, slow or unreadable yields the same thing in both — nothing —
-so an engine running without a reachable advisor validates plans exactly as it did before
-either check existed.
+only in what a verdict buys: an echo warns (`submission_advice`), while a `conditions`
+that merely restates `depends_on` (`_conditions_restatement`) and a `procedure` that
+merely restates `method` (`_procedure_collapse`) refuse. Every path where the judge is
+absent, disabled, slow or unreadable yields the same thing in both — nothing — so an
+engine running without a reachable advisor validates plans exactly as it did before any
+of these checks existed.
 
 WHAT IS NOT CHECKED HERE, DELIBERATELY. `Subject.material_refs` and `Subject.knowledge_refs`
 divide the symbols a stage touches into what it TRANSFORMS and what it RELIES ON and leaves
@@ -56,6 +57,7 @@ load-bearing ones and neither weakens as enumerators are added.
 from __future__ import annotations
 
 from .conditions import judge_restatement, restatement_prefilter
+from .procedure import collapse_prefilter, judge_collapse
 from .result_image import echo_prefilter, judge_echo
 from .state import WeightClass
 from .text_shape import ELEMENT_NAMES
@@ -79,6 +81,8 @@ _SUBSTANTIVE_SUBMISSION_FIELDS = (
     ("subject.material_refs", "material_refs", None),
     ("subject.knowledge_refs", "knowledge_refs", None),
     ("preconditions", "preconditions", None),
+    ("means.method", "method", None),
+    ("means.procedure", "procedure", None),
 )
 
 _WHY = {
@@ -111,6 +115,21 @@ _WHY = {
         "at least one [[final_check]] table. A plan whose only controls are per-stage "
         "asserts that each step went as declared and nothing about the whole; the "
         "end-to-end checks are what verify-final re-runs against the assembled product"
+    ),
+    "method": (
+        "the REQUIREMENT on the way of acting — what this stage's transformation must be "
+        "an instance of (the pattern to follow, the abstraction to extend, where the "
+        "change lands). Already required by the loader for a plan that declares itself "
+        "substantive; required here too because this seam also grades the plan that "
+        "declares NO class while the session is substantive, and there the loader's "
+        "requirement never armed"
+    ),
+    "procedure": (
+        "the SEQUENCE of operations proposed for meeting that requirement — the ordered "
+        "sub-actions, each naming the file or symbol it touches. A place of its own "
+        "because it is the executor's to replace (agentctl replan --renormalize) while "
+        "`method` is not: with one field for both, whatever is written there is either a "
+        "norm anyone may quietly rewrite or a proposal the executor is held to"
     ),
     "preconditions": (
         "what must already be true before this stage may START — an access, a clean tree, "
@@ -465,6 +484,43 @@ def _conditions_restatement(stage, judge_runner, judge_enabled: bool) -> str | N
     )
 
 
+def _procedure_collapse(stage, judge_runner, judge_enabled: bool) -> str | None:
+    """The violation for a `procedure` that only restates `method`, or None.
+
+    The second refusal on this side that does not rest on the plan's own bytes alone,
+    and it is judged for a measured reason rather than by analogy: normalized string
+    equality — the comparison this check could have been — was run over the 200 stages of
+    the frozen corpus and caught 0 of them. An author writing one thought into two fields
+    does not write it in the same words, so a structural comparison here would be a gate
+    that cannot fire. A prefilter proposes on shared wording and a model disposes
+    (procedure.py); both halves fail towards None.
+
+    Reached only from inside the substantive branch below, on the same pairing argument
+    `_conditions_restatement` documents: that branch is what requires BOTH fields, so an
+    author told his sequence merely restates his requirement has both places to write
+    into. Refusing the collapse while requiring only one of the two would be a trap."""
+    reasons = collapse_prefilter(stage.means.method or "", stage.means.procedure or "")
+    if not reasons:
+        return None
+    if not judge_collapse(
+        stage.means.method or "",
+        stage.means.procedure or "",
+        judge_runner,
+        enabled=judge_enabled,
+    ):
+        return None
+    return (
+        f"stage {stage.index} ({stage.title!r}): `procedure` says nothing `method` does "
+        f"not — {'; '.join(reasons)}. `method` is the REQUIREMENT this stage's "
+        f"transformation must satisfy and only a re-approved plan may change it; "
+        f"`procedure` is the SEQUENCE of operations proposed for meeting it, which the "
+        f"executor may replace on his own authority (agentctl replan --renormalize). "
+        f"With one text in both, either the norm is silently editable or the proposal is "
+        f"binding — write the ordered sub-actions, each naming the file or symbol it "
+        f"touches, and leave the requirement in `method`"
+    )
+
+
 def _edge_violations(stage) -> list[str]:
     """Every edge of `stage` that states an ordering without stating a provision. [] == clean.
 
@@ -530,10 +586,11 @@ def submission_violations(
     Returns rather than raises: the approve seam must answer with a Directive (see the
     module docstring), and returning the full list lets one round trip show everything.
 
-    `judge_runner`/`judge_enabled` reach the ONE violation here that a model decides (see
-    `_conditions_restatement`). Their defaults make that violation unreachable, so every
-    caller that passes no judge — including every pre-existing one — gets exactly the
-    list it got before: the judged check can only ever ADD a refusal, never remove one.
+    `judge_runner`/`judge_enabled` reach the violations here that a model decides (see
+    `_conditions_restatement` and `_procedure_collapse`). Their defaults make those
+    violations unreachable, so every caller that passes no judge — including every
+    pre-existing one — gets exactly the list it got before: a judged check can only ever
+    ADD a refusal, never remove one.
     """
     out: list[str] = []
     malformed = _malformed_weight_class(doc)
@@ -577,6 +634,9 @@ def submission_violations(
         restatement = _conditions_restatement(stage, judge_runner, judge_enabled)
         if restatement:
             out.append(restatement)
+        collapse = _procedure_collapse(stage, judge_runner, judge_enabled)
+        if collapse:
+            out.append(collapse)
     return out
 
 
