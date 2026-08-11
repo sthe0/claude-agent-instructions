@@ -228,6 +228,22 @@ CODE_PARTITIONS = [
         "Channel adapter selection keyed on machine-local config identity, not "
         "free-text meaning.",
     ),
+    # Same purpose as the judge-guarded rows above: the catch-all's ground names
+    # the regexes IT inspected (markdown headings, frontmatter delimiters, shell
+    # command prefixes), so a file that parses something else inherits a ground
+    # that is false of it. This file's three regexes parse the fixed control-name
+    # grammar of `[meta.order.coverage]`, nothing else.
+    (
+        "scripts/check-order-coverage.py",
+        lambda f: f == "scripts/check-order-coverage.py",
+        "structural",
+        "keep",
+        "The three regexes match the closed control-name grammar this resolver "
+        "accepts (`stage <n> verify_command` / `final_check <n>` / `stage <n> "
+        "landed assertion`), by prefix, to look the named control up in the plan's "
+        "own stages — a lookup key, not a reading of what the control means; the "
+        "free-prose parenthetical an author may append is deliberately ignored.",
+    ),
     (
         "scripts/*.py (other top-level scripts)",
         lambda f: True,  # catch-all, must stay last

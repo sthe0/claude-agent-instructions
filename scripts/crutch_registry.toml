@@ -20,6 +20,7 @@
 # scripts/gen_crutch_registry.py (self)                      | code   | not-a-gate
 # scripts/project_entry/**                                   | code   | structural
 # scripts/difficulty_channel/**                              | code   | structural
+# scripts/check-order-coverage.py                            | code   | structural
 # scripts/*.py (other top-level scripts)                     | code   | structural
 # CLAUDE.md                                                  | prose  | perception
 # skills/**/SKILL.md                                         | prose  | perception
@@ -665,6 +666,22 @@ file = "scripts/agentctl/state.py"
 class = "structural"
 disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "51615cdc94aee287"
+domain = "code"
+file = "scripts/check-order-coverage.py"
+class = "structural"
+disposition = "keep"
+ground = "The three regexes match the closed control-name grammar this resolver accepts (`stage <n> verify_command` / `final_check <n>` / `stage <n> landed assertion`), by prefix, to look the named control up in the plan's own stages — a lookup key, not a reading of what the control means; the free-prose parenthetical an author may append is deliberately ignored."
+
+[[entry]]
+id = "97ca17b379c9fc81"
+domain = "code"
+file = "scripts/check-order-coverage.py"
+class = "structural"
+disposition = "keep"
+ground = "The three regexes match the closed control-name grammar this resolver accepts (`stage <n> verify_command` / `final_check <n>` / `stage <n> landed assertion`), by prefix, to look the named control up in the plan's own stages — a lookup key, not a reading of what the control means; the free-prose parenthetical an author may append is deliberately ignored."
 
 [[entry]]
 id = "43756d079618a9ef"
@@ -7361,6 +7378,14 @@ file = "scripts/agentctl/state.py"
 class = "structural"
 disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "f9cb936ec38550f6"
+domain = "code_file_rollup"
+file = "scripts/check-order-coverage.py"
+class = "structural"
+disposition = "keep"
+ground = "The three regexes match the closed control-name grammar this resolver accepts (`stage <n> verify_command` / `final_check <n>` / `stage <n> landed assertion`), by prefix, to look the named control up in the plan's own stages — a lookup key, not a reading of what the control means; the free-prose parenthetical an author may append is deliberately ignored. (file-level rollup of the file's scopes.)"
 
 [[entry]]
 id = "a9f7006666c6b725"
@@ -18615,7 +18640,15 @@ disposition = "keep"
 ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
 
 [[entry]]
-id = "0f3da71053aabbf5"
+id = "9e0ea1f3cb10127e"
+domain = "prose"
+file = "skills/specializations/planner/SKILL.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "b02d9f9cf401fc5b"
 domain = "prose"
 file = "skills/specializations/planner/SKILL.md"
 class = "already-mechanized"
@@ -18640,6 +18673,14 @@ ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the s
 
 [[entry]]
 id = "9a3ac03315fd22b0"
+domain = "prose"
+file = "skills/specializations/planner/SKILL.md"
+class = "perception"
+disposition = "keep"
+ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
+
+[[entry]]
+id = "8f9fff30763db387"
 domain = "prose"
 file = "skills/specializations/planner/SKILL.md"
 class = "perception"
@@ -18792,6 +18833,54 @@ ground = "Policy files elaborate the judgment procedure a specialization follows
 
 [[entry]]
 id = "00a9e61111b67930"
+domain = "prose"
+file = "skills/specializations/planner/policy.md"
+class = "perception"
+disposition = "keep"
+ground = "Policy files elaborate the judgment procedure a specialization follows at each step; distinguishing, statement-by-statement, which already point at an existing enforced gate is out of this partition-level pass's budget (stated as a scope limit, not silently sampled) — see the already-mechanized override below for the subset whose own text names a concrete enforcing artifact."
+
+[[entry]]
+id = "c52965bf3cc85772"
+domain = "prose"
+file = "skills/specializations/planner/policy.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "c5355e25783b0718"
+domain = "prose"
+file = "skills/specializations/planner/policy.md"
+class = "perception"
+disposition = "keep"
+ground = "Policy files elaborate the judgment procedure a specialization follows at each step; distinguishing, statement-by-statement, which already point at an existing enforced gate is out of this partition-level pass's budget (stated as a scope limit, not silently sampled) — see the already-mechanized override below for the subset whose own text names a concrete enforcing artifact."
+
+[[entry]]
+id = "d4103354c3327ae7"
+domain = "prose"
+file = "skills/specializations/planner/policy.md"
+class = "perception"
+disposition = "keep"
+ground = "Policy files elaborate the judgment procedure a specialization follows at each step; distinguishing, statement-by-statement, which already point at an existing enforced gate is out of this partition-level pass's budget (stated as a scope limit, not silently sampled) — see the already-mechanized override below for the subset whose own text names a concrete enforcing artifact."
+
+[[entry]]
+id = "df0c1eb02ba6e041"
+domain = "prose"
+file = "skills/specializations/planner/policy.md"
+class = "perception"
+disposition = "keep"
+ground = "Policy files elaborate the judgment procedure a specialization follows at each step; distinguishing, statement-by-statement, which already point at an existing enforced gate is out of this partition-level pass's budget (stated as a scope limit, not silently sampled) — see the already-mechanized override below for the subset whose own text names a concrete enforcing artifact."
+
+[[entry]]
+id = "cb0494bbed9176c4"
+domain = "prose"
+file = "skills/specializations/planner/policy.md"
+class = "perception"
+disposition = "keep"
+ground = "Policy files elaborate the judgment procedure a specialization follows at each step; distinguishing, statement-by-statement, which already point at an existing enforced gate is out of this partition-level pass's budget (stated as a scope limit, not silently sampled) — see the already-mechanized override below for the subset whose own text names a concrete enforcing artifact."
+
+[[entry]]
+id = "3cb5491355171f3d"
 domain = "prose"
 file = "skills/specializations/planner/policy.md"
 class = "perception"
