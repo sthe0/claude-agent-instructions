@@ -49,6 +49,9 @@ _SEP_PATTERN = re.compile(
     "|".join(sorted((re.escape(s) for s in _BASH_SEPS), key=len, reverse=True))
 )
 
+# `shlex.shlex(posix=True).whitespace`, minus the two that short-circuit below.
+_LEXER_WHITESPACE = " \t"
+
 
 def _parse_entry(entry: str) -> tuple[str, str | None] | None:
     """`(tool, spec)` for a `Tool(spec)` or bare `Tool` entry, else `None` if
@@ -69,19 +72,28 @@ def _has_unresolved_separator(command: str) -> bool:
     is left to real segment-wise matching; every other spelling is a case
     `shlex.split` is known to mis-segment silently.
 
-    The standalone-token carve-out applies to `_BASH_SEPS` ONLY. It rests on
-    the separator surviving lexing as its own token, which is true of all six
-    of those and false by construction of `\\n`/`\\r`: `shlex.split` eats a
-    newline as ordinary whitespace, so a whitespace-surrounded one would pass
-    the carve-out and then be mis-segmented anyway -- returning `False` on a
-    command the lexer got wrong, which is the one direction this module must
-    never fail in. Any newline therefore short-circuits before the scan."""
+    "Whitespace" here means THE LEXER'S whitespace (`_LEXER_WHITESPACE`), not
+    `str.isspace()`. The carve-out rests on the separator surviving lexing as
+    its own token, so the only surrounding characters that make it standalone
+    are the ones `shlex` actually splits on. Python calls 29 characters
+    whitespace; `shlex` splits on 4 of them. Testing with `str.isspace()`
+    admits the other 25 -- `\\x0b`, `\\x0c`, `\\x1c`-`\\x1f`, `\\x85`, `\\xa0`,
+    and the Unicode spaces -- each of which `shlex` glues to the separator,
+    so `"cd /repo \\x0b; git push"` lexes as `[... '/repo', '\\x0b;', 'git' ...]`
+    and `covers()` returns `False` on a command the lexer got wrong. That is
+    the one direction this module must never fail in.
+
+    `\\n`/`\\r` are IN the lexer's whitespace and still cannot use the
+    carve-out: `shlex` eats them, so a separator surrounded by newlines is
+    standalone while the newline itself is a lost separator. They therefore
+    short-circuit ahead of the scan, which leaves space and tab as the only
+    admissible surroundings."""
     if "\n" in command or "\r" in command:
         return True
     for m in _SEP_PATTERN.finditer(command):
         before = command[m.start() - 1] if m.start() > 0 else " "
         after = command[m.end()] if m.end() < len(command) else " "
-        if not before.isspace() or not after.isspace():
+        if before not in _LEXER_WHITESPACE or after not in _LEXER_WHITESPACE:
             return True
     return False
 

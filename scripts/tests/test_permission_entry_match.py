@@ -156,6 +156,22 @@ def test_whitespace_surrounded_newline_still_resolves_covering():
         assert covers("Bash(git:*)", "Bash", {"command": command}) is True, command
 
 
+# --- the same class again: whitespace by Python's definition, not the lexer's
+
+# `shlex` splits on 4 characters; `str.isspace()` calls 29 whitespace. Each of
+# the other 25 GLUES to a following separator under lexing -- `"cd /repo \x0b;
+# git push"` lexes as [..., '/repo', '\x0b;', 'git', ...] -- so a carve-out
+# testing `str.isspace()` admitted them and returned False on a mis-segmented
+# command. One representative per range; measured, not guessed.
+NON_LEXER_WHITESPACE = ["\x0b", "\x0c", "\x1c", "\x1f", "\x85", "\xa0", "\u2003", "\u3000"]
+
+
+def test_separator_glued_by_non_lexer_whitespace_still_resolves_covering():
+    for ws in NON_LEXER_WHITESPACE:
+        command = f"cd /repo {ws}; git push"
+        assert covers("Bash(git:*)", "Bash", {"command": command}) is True, repr(command)
+
+
 # --- two negative controls the raw-string rule must NOT break ---------------
 
 def test_well_formed_spaced_and_still_resolves_through_real_segmentation():
