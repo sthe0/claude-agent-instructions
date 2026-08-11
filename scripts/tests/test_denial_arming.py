@@ -104,3 +104,25 @@ def test_empty_file_is_unreadable():
 def test_all_attempted_rows_unparseable_is_unreadable():
     result = armed(FIXTURES / "all_malformed.jsonl")
     assert result.verdict is Verdict.UNREADABLE
+
+
+def test_corrupt_file_without_either_marker_is_unreadable_not_not_armed():
+    # The hole the prefilter opened, measured: `corrupt_no_markers.jsonl` is
+    # unreadable garbage, but none of its lines contains `"toolDenialKind"` or
+    # `"tool_use"`, so the prefilter attempts NOTHING, nothing fails to parse,
+    # and the verdict came back NOT_ARMED -- "I looked and found no denial"
+    # about a file that could not be read. Judging readability from only the
+    # prefiltered lines is what does it; `_looks_like_a_row` judges the whole
+    # file. Delete that check and this row goes red while every other stays
+    # green.
+    result = armed(FIXTURES / "corrupt_no_markers.jsonl")
+    assert result.verdict is Verdict.UNREADABLE
+
+
+def test_a_truncated_tail_among_readable_rows_is_still_read():
+    # The control on the other side of the same check: a real transcript whose
+    # last line was cut mid-write IS readable -- its earlier rows have the row
+    # shape and parse. A shape test that flipped this to UNREADABLE would fire
+    # the third value on ordinary sessions and destroy the distinction.
+    result = armed(FIXTURES / "truncated_tail.jsonl")
+    assert result.verdict is Verdict.NOT_ARMED

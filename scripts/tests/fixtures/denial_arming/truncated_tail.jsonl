@@ -1,0 +1,3 @@
+{"type": "user", "uuid": "u1", "message": {"content": "hello"}}
+{"type": "assistant", "uuid": "a1", "message": {"content": [{"type": "text", "text": "hi"}]}}
+{"type": "assist

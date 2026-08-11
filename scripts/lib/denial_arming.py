@@ -71,6 +71,23 @@ _DENIAL_MARKER = '"toolDenialKind"'
 _TOOL_USE_MARKER = '"tool_use"'
 
 
+def _looks_like_a_row(line: str) -> bool:
+    """A cheap structural shape test, no `json.loads`: does this line even
+    LOOK like one JSONL object?
+
+    Readability must be judged over the WHOLE file, but the prefilter above
+    parses only the ~0.1% of rows that could carry a denial or a call. Judging
+    readability from the prefiltered lines alone means a wholly-corrupt
+    transcript whose garbage happens to contain neither marker substring is
+    never attempted at all, so nothing "fails to parse" and the verdict comes
+    back NOT_ARMED -- "I looked and found nothing" for a file that could not be
+    read. That is the exact collapse this module's third value exists to
+    prevent, reintroduced by an optimization. This test restores the whole-file
+    judgement at O(n) string cost, without giving up the 0.29 s prefilter."""
+    stripped = line.strip()
+    return stripped.startswith("{") and stripped.endswith("}")
+
+
 class Verdict(Enum):
     """The three honest answers -- see the module docstring."""
     ARMED = "ARMED"
@@ -122,7 +139,8 @@ def armed(transcript_path: Path | str) -> Arming:
     One pass, per the stage's method: a per-line substring prefilter decides
     which lines are even attempted with `json.loads`; a per-line JSON error
     on an attempted line is tolerated and counted, but a missing file, an
-    empty file, or a file whose attempted rows NEVER parsed is UNREADABLE --
+    empty file, a file NO line of which even has the shape of a JSONL row, or
+    a file whose attempted rows NEVER parsed is UNREADABLE --
     the caller must be able to tell "no denial" from "could not look",
     because those two demand opposite fail behaviour. Never raises: any
     read/parse failure resolves to one of the three `Arming` values."""
@@ -135,6 +153,8 @@ def armed(transcript_path: Path | str) -> Arming:
     lines = [line for line in text.splitlines() if line.strip()]
     if not lines:
         return UNREADABLE
+    if not any(_looks_like_a_row(line) for line in lines):
+        return UNREADABLE  # whole-file readability -- see `_looks_like_a_row`
 
     # uuid of an assistant row -> (tool_name, tool_input) of its SOLE tool_use
     # block. A row with zero or with more than one tool_use block is not
