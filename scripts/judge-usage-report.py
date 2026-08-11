@@ -85,6 +85,7 @@ OUTCOMES: "tuple[Outcome, ...]" = (
     Outcome("9", "verdict rendered but not emitted", LEVEL_INVOCATION, True),
     Outcome("10", "killed after the verdict, before emission", LEVEL_INVOCATION, True),
     Outcome("11", "killed or returned early, before any verdict", LEVEL_INVOCATION, True),
+    Outcome("12", "died importing its own dependencies, before hook_start", LEVEL_INVOCATION, True),
 )
 
 # The three outcomes that leave the gate having actually done its job: the
@@ -321,10 +322,18 @@ def classify_invocation(records: "list[dict]") -> "str | None":
     directive with no judge decision point behind it) but cannot be the sole
     gate: `final` is written after decide() RETURNS, so an invocation killed
     between its last `decided` and that return has no `final` at all, and gating
-    on one filed the whole shape as the healthy case."""
+    on one filed the whole shape as the healthy case.
+
+    A process that died importing its own dependencies never reaches
+    hook_start() at all — its ONLY line is `import_failed`, written by the one
+    module (lib.judge_ledger) guaranteed to already be imported. That shape
+    used to be indistinguishable from the engine path's own no-hook_start
+    calls (outcome 1's neighbour, None); it is outcome 12 instead, checked
+    before the `hook_start` gate rather than folded into the ladder below it,
+    since nothing past this point assumes a `hook_start` line exists."""
     kinds = [record.get("kind") for record in records]
     if "hook_start" not in kinds:
-        return None
+        return "12" if "import_failed" in kinds else None
     if "discarded" in kinds:
         return "8"
     emitted = [r for r in records if r.get("kind") == "emitted"]

@@ -99,6 +99,7 @@ OUTCOME_FIXTURES = {
     ],
     "10": [_record("hook_start", "i10"), _record("final", "i10", has_directive=True)],
     "11": [_record("hook_start", "i11")],
+    "12": [_record("import_failed", "i12", reason="ModuleNotFoundError: x")],
 }
 
 
@@ -127,7 +128,7 @@ def test_the_printed_fail_open_headline_moves_with_the_taxonomy(monkeypatch, tmp
     before = "\n".join(mod.format_fail_open(result))
     assert f"{len(mod.FAIL_OPEN_OUTCOMES)} of the {len(mod.OUTCOMES)}" in before
 
-    extra = mod.Outcome("12", "an outcome nobody has met yet", mod.LEVEL_JUDGE, True)
+    extra = mod.Outcome("99", "an outcome nobody has met yet", mod.LEVEL_JUDGE, True)
     monkeypatch.setattr(mod, "OUTCOMES", mod.OUTCOMES + (extra,))
     monkeypatch.setattr(mod, "FAIL_OPEN_OUTCOMES", mod.FAIL_OPEN_OUTCOMES + (extra,))
     after = "\n".join(mod.format_fail_open(result))

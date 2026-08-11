@@ -30,6 +30,14 @@ sets ``set_current_judge(name)`` on the one line immediately before its
 existing (untouched) ``runner(...)`` call, and ``subprocess_runner`` reads it
 back with ``take_current_judge()`` — consume-once, so the carrier attributes
 one call and never leaks a stale name onto the next.
+
+This module imports the standard library and ``lib.config_root`` only, and
+config_root is itself stdlib-only. That is load-bearing, not incidental: each
+hook imports this module FIRST and wraps its every later import in a
+try/except reporting through ``import_failed()`` below, so these two modules
+are exactly the residue no hook can report on — a failure importing either
+leaves nothing able to write the line. Keep both dependency-free so that
+residue does not grow.
 """
 from __future__ import annotations
 
@@ -254,6 +262,19 @@ def hook_start(hook: str) -> str:
         _state["source"] = None
     _write("hook_start", hook=hook)
     return invocation_id
+
+
+def import_failed(hook: str, reason: str) -> None:
+    """The hook process died while importing one of its own dependencies —
+    before hook_start() could run, so this is the ONLY line this invocation
+    ever gets. The only public writer that names ``hook`` as an explicit
+    field rather than reading it from ambient state: ``_state["hook"]`` is
+    still None here, exactly as it is for a genuine engine-path call with no
+    hook_start at all — passing the name explicitly is what lets a reader
+    tell the two apart (outcome 12) instead of both collapsing into the same
+    unclassifiable None. ``reason`` is a short repr of the import exception,
+    not a stack trace."""
+    _write("import_failed", hook=hook, reason=reason)
 
 
 def source_from_payload(payload) -> None:
