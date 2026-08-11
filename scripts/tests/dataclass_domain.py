@@ -12,11 +12,13 @@ itself a dataclass. They differ in what they remember across that recursion, and
 difference is forced by what each yields: `dataclasses_reached` yields each TYPE once,
 so one accumulator shared by the whole walk is right; `leaf_paths` yields a PATH per
 branch, so it remembers only its own branch and both terminate on a cycle by their own
-means (see each function's docstring). Nothing here names a struct or a field: a dataclass added later
-to the walk, at any depth, is picked up without editing a caller — the exact
-property stage 10 of smd-act-defects-8 exists to establish, after an earlier draft
-substituted a hand-written five-name apposition for this traversal and silently
-dropped three of the eight structs actually reachable from `Stage`.
+means (see each function's docstring).
+
+Nothing here names a struct or a field: a dataclass added later to the walk, at any
+depth, is picked up without editing a caller — the exact property stage 10 of
+smd-act-defects-8 exists to establish, after an earlier draft substituted a
+hand-written five-name apposition for this traversal and silently dropped three of the
+eight structs actually reachable from `Stage`.
 """
 from __future__ import annotations
 
@@ -64,14 +66,14 @@ class CyclicDataclassError(ValueError):
     only that something did."""
 
 
-def leaf_paths(cls, *, prefix: str = "") -> tuple[str, ...]:
+def leaf_paths(cls) -> tuple[str, ...]:
     """Every leaf field reachable from `cls`, as dotted paths from the root, in
     field-declaration order, depth-first. A field whose unwrapped type is itself a
     dataclass is never a leaf: the traversal descends into it instead of yielding
     it, so `criterion.landed` contributes `criterion.landed.target` etc. rather
     than stopping at `criterion.landed` — the LandedSpec depth is REACHED, not
     named. Raises `CyclicDataclassError` on a cyclic type graph."""
-    return tuple(_leaf_paths_into(cls, prefix, (cls,)))
+    return tuple(_leaf_paths_into(cls, "", (cls,)))
 
 
 def _leaf_paths_into(cls, prefix: str, ancestors: tuple[type, ...]) -> list[str]:
