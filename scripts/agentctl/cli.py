@@ -4431,12 +4431,13 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # the digest only ever names bytes the session ACCEPTED. (Not an enumeration: this
     # command refuses in eight or so places, and a new one added below this line would
     # break the property no matter how the list above it reads.)
-    # (The load of args.plan can also raise out of the command, but it raises UPSTREAM of
-    # the seam, so no placement inside this range answers for it.)
+    # (The load of args.plan can also raise out of the command, but it raises AT seam (b)
+    # itself — the seam IS that load and the check it feeds — so no placement inside this
+    # range answers for it.)
     # Stamping at seam (b) itself is now positively WRONG, not merely fragile: the
     # enumeration block's `store.save` sits between that seam and the refusals above, so a
-    # digest stamped up there would be persisted for a plan the pblock or coverage gate
-    # then rejects. Placement, not the absence of an intervening save, is what carries the
+    # digest stamped up there can be persisted for a plan the pblock or coverage gate
+    # then rejects — whenever that save runs at all. Placement, not the absence of an intervening save, is what carries the
     # invariant — and the leak would be a silently wrong digest, not a crash.
     _stamp_accepted_plan_digest(state, args.plan)
 
