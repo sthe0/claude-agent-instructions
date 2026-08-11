@@ -172,6 +172,13 @@ from lib.denial_arming import Verdict  # noqa: E402
 # comes through `_str_field` and every field inside `tool_input` is type-checked where it
 # is read. Keeping malformed payloads off that path is what lets the catch-all stay the
 # backstop it claims to be rather than a second, unmodelled deny route.
+#
+# That claim was FALSE for one revision of this file, and the counterexample was not a
+# payload at all: `os.getcwd()` sitting in a default argument, raising once the process's
+# own directory had been removed, denying every call in a session whose worktree another
+# session had landed. So the enumeration above covers payload shape, and payload shape is
+# not the whole input — AMBIENT PROCESS STATE is input too. `_base_dir` is where that one
+# is contained; a future reader adding another ambient read should assume the same.
 _ON_ERROR = "deny"
 
 _FILE_TOOLS = ("Edit", "Write")
@@ -297,6 +304,25 @@ def _widening_between(path: str, old_text: str, new_text: str) -> _Widening | No
     return _Widening(path, tuple(entries), True)
 
 
+def _unresolvable(what: str) -> _Unknown:
+    """A relative path with no directory to interpret it against is UNKNOWN, not ABSENT.
+
+    Reached only when `_base_dir` came back empty — neither the payload nor the process
+    supplied a directory. Left to fall through, such a path stays relative, `_read_text`
+    gets ENOENT because the *base* is gone rather than because nothing is on the path, and
+    `os.path.lexists` agrees — so it lands on ABSENT, and ABSENT means "a creation, not a
+    widening", i.e. a definite ALLOW. That is the gate asserting a file is not a permission
+    surface when it could not even work out which file is meant: a verdict outside the
+    evidence domain it rests on. The honest answer is the third one the design already has.
+    """
+    return _Unknown(
+        f"{what} is relative, and no directory could be resolved to interpret it against — "
+        f"neither the payload's cwd nor the process's own — so which file it names, and with "
+        f"it whether this call widens a permission surface, is unknown rather than known to "
+        f"be no"
+    )
+
+
 def _file_tool_widening(tool_name: str, tool_input: dict, cwd: str) -> _Widening | _Unknown | None:
     file_path = tool_input.get("file_path")
     if not isinstance(file_path, str) or not file_path:
@@ -305,7 +331,12 @@ def _file_tool_widening(tool_name: str, tool_input: dict, cwd: str) -> _Widening
             f"write — and with it whether that file is a permission surface — is unknown "
             f"rather than known to be no"
         )
-    path = file_path if os.path.isabs(file_path) else os.path.join(cwd, file_path)
+    if not os.path.isabs(file_path):
+        if not cwd:
+            return _unresolvable(f"the file path this {tool_name} call carries, {file_path},")
+        path = os.path.join(cwd, file_path)
+    else:
+        path = file_path
 
     old_text = _read_text(path)
     if old_text is _Read.ABSENT:
@@ -382,6 +413,11 @@ def _bash_widening(tool_input: dict, cwd: str) -> _Widening | _Unknown | None:
 
     unknown = None
     for target in bash_write_targets.command_write_targets(command, cwd):
+        if not os.path.isabs(target):
+            # Same hole on the Bash path: with no base directory the helper hands back the
+            # target as written, and an unresolved relative path must not read as "no surface".
+            unknown = unknown or _unresolvable(f"the write target {target}")
+            continue
         is_surface = _is_surface_on_disk(target)
         if isinstance(is_surface, _Unknown):
             unknown = unknown or is_surface
@@ -459,6 +495,40 @@ def _str_field(payload: dict, key: str, default: str) -> str:
     return value if isinstance(value, str) and value else default
 
 
+def _base_dir(payload: dict) -> str:
+    """The directory a relative target resolves against — obtained LAZILY, and never raising.
+
+    Two defects live in the one line this replaces, `_str_field(payload, "cwd", os.getcwd())`,
+    and they are the same defect at two strengths. A default ARGUMENT is evaluated eagerly, so
+    `os.getcwd()` ran on every modelled call even when the payload carried a perfectly good
+    `cwd` — and `os.getcwd()` raises `FileNotFoundError` once the process's own directory has
+    been removed. In this fleet that is not hypothetical: landing a unit deletes its branch and
+    worktree, so a session still sitting in that worktree would have denied EVERY subsequent
+    Edit, Write and Bash for the rest of its life, through `main()`'s catch-all.
+
+    That is precisely the failure `_str_field` was introduced to remove, reintroduced by
+    `_str_field`'s own call site — so laziness alone is not the fix. Ambient process state is
+    as untrusted as the payload, and when neither source yields a directory this returns ""
+    rather than raising, so `main()`'s catch-all keeps meaning "a bug in the gate" rather than
+    "a directory moved".
+
+    An empty result is a real condition callers must handle, NOT a benign default. Writing
+    this the first time, the docstring claimed "" makes a relative target fall through to
+    UNKNOWN on its own; a test written to pin that claim failed, and the measured behaviour
+    was ALLOW — `_read_text` gets ENOENT because the base is gone, `lexists` agrees, and the
+    path reads as ABSENT, which means "a creation, not a widening". So the two consumers of
+    this value check it explicitly and call `_unresolvable`; see that function for why a path
+    the gate cannot locate must not be answered with a definite no.
+    """
+    declared = _str_field(payload, "cwd", "")
+    if declared:
+        return declared
+    try:
+        return os.getcwd()
+    except OSError:
+        return ""
+
+
 def decide(payload: dict) -> str | None:
     """Return a deny reason, or None to allow.
 
@@ -475,7 +545,7 @@ def decide(payload: dict) -> str | None:
     if tool_name not in _MODELLED_TOOLS:
         return None
 
-    cwd = _str_field(payload, "cwd", os.getcwd())
+    cwd = _base_dir(payload)
 
     # (a) — cheapest, and the one that lets the vast majority of calls out before the
     # transcript is ever opened.

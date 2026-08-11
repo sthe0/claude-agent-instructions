@@ -405,30 +405,137 @@ def test_an_edit_target_unreadable_by_mode_is_unknown_too(tmp_path):
     assert hook.decide(payload("Edit", call, ARMED_READ, tmp_path)) is not None
 
 
+@pytest.fixture
+def hermetic_process_cwd(tmp_path, monkeypatch):
+    """Park the PROCESS cwd in an empty directory for the duration of one test.
+
+    Rows that suppress the payload's `cwd` fall back to the process cwd, so without this
+    they read `<pytest invocation dir>/settings.json` -- outside `tmp_path`, against this
+    suite's hermeticity claim. Harmless in practice today (measured: green from a hostile cwd
+    holding both a widening `settings.json` and a directory of that name), but a test whose
+    inputs include the developer's shell state is one environment change from lying.
+    """
+    empty = tmp_path / "process-cwd-with-no-settings"
+    empty.mkdir()
+    monkeypatch.chdir(empty)
+    return empty
+
+
 @pytest.mark.parametrize("field", WRONG_TYPED_PAYLOAD_FIELDS)
 @pytest.mark.parametrize("value", WRONG_TYPES)
-def test_a_wrong_typed_payload_field_behaves_exactly_as_an_absent_one(tmp_path, field, value):
+def test_a_wrong_typed_payload_field_behaves_exactly_as_an_absent_one(
+    tmp_path, hermetic_process_cwd, field, value
+):
     # The class invariant. `_str_field` absorbs a wrong-typed field, so the verdict is
     # whatever the gate reaches on what remains -- never an exception escaping into
     # `main()`'s catch-all, which denies unconditionally and so would answer a question
     # about the payload's SHAPE with a verdict about the CALL.
     write_settings(tmp_path)
-    # A relative target, so all three fields are load-bearing on this one call shape:
-    # `tool_name` picks the reader, `transcript_path` answers (b), `cwd` resolves the target.
     base = payload("Edit", add_entry_edit_relative("settings.json", COVERING), ARMED_READ, tmp_path)
     absent = {k: v for k, v in base.items() if k != field}
     assert hook.decide({**base, field: value}) == hook.decide(absent)
 
 
 @pytest.mark.parametrize("value", WRONG_TYPES)
-def test_a_wrong_typed_cwd_does_not_deny_a_session_that_carries_no_denial(tmp_path, value):
-    # The property a review showed was violated, pinned directly rather than by proxy: a
-    # malformed payload field must not manufacture a deny in a session where a self-grant
-    # is impossible by construction. The call widens, so only (b) keeps it out.
+@pytest.mark.parametrize("transcript", [NO_DENIAL, ARMED_READ], ids=["not-armed", "armed"])
+def test_a_wrong_typed_cwd_is_absorbed_rather_than_turned_into_a_deny(
+    tmp_path, hermetic_process_cwd, value, transcript
+):
+    # A malformed payload field must not manufacture a deny. It is worth being exact about
+    # WHY this allows, because a review found the obvious reading wrong: (b) is not what
+    # keeps it out. Suppressing `cwd` sends the relative target to the process cwd, where no
+    # `settings.json` exists, so (a) resolves to "does not widen" and short-circuits before
+    # the transcript is ever opened -- which is why both arming states are asserted together
+    # rather than only the not-armed one. A wrong-typed field makes the gate MORE permissive
+    # here, never less, and that direction is the safe one for a fail-closed guard.
     write_settings(tmp_path)
     call = payload(
-        "Edit", add_entry_edit_relative("settings.json", COVERING), NO_DENIAL, tmp_path)
+        "Edit", add_entry_edit_relative("settings.json", COVERING), transcript, tmp_path)
     assert hook.decide({**call, "cwd": value}) is None
+
+
+def test_a_relative_target_resolves_against_the_payload_cwd(tmp_path):
+    # Nothing else pins this: a mutation that ignores `cwd` and treats a relative
+    # `file_path` as-is killed no row before this one existed. It is also what makes `cwd`
+    # a real input rather than decoration -- the same call is a self-grant or is nothing,
+    # depending only on the directory the payload names.
+    write_settings(tmp_path)
+    elsewhere = tmp_path / "no-settings-here"
+    elsewhere.mkdir()
+    call = add_entry_edit_relative("settings.json", COVERING)
+    assert hook.decide(payload("Edit", call, ARMED_READ, tmp_path)) is not None
+    assert hook.decide(payload("Edit", call, ARMED_READ, elsewhere)) is None
+
+
+@pytest.mark.parametrize("transcript,denies", [(NO_DENIAL, False), (ARMED_READ, True)],
+                         ids=["not-armed", "armed"])
+def test_the_gate_still_judges_correctly_when_its_own_directory_is_gone(
+    tmp_path, monkeypatch, transcript, denies
+):
+    # A regression this suite's own author introduced and a review caught. `os.getcwd()` as
+    # a default ARGUMENT is evaluated eagerly on every modelled call, and it raises once the
+    # process's directory has been removed -- so the gate crashed into `main()`'s catch-all
+    # and denied unconditionally, on a payload that was completely well-formed. Live in this
+    # fleet: landing a unit deletes its worktree under any session still sitting in it.
+    #
+    # The assertion is the correct VERDICT in both arming states, not merely "does not
+    # raise": a gate that survives by allowing everything would pass the weaker check.
+    settings = write_settings(tmp_path)
+    doomed = tmp_path / "about-to-vanish"
+    doomed.mkdir()
+    monkeypatch.chdir(doomed)
+    doomed.rmdir()
+    with pytest.raises(OSError):
+        os.getcwd()  # the ambient precondition, asserted rather than assumed
+    call = payload("Edit", add_entry_edit(settings, COVERING), transcript, tmp_path)
+    assert (hook.decide(call) is not None) is denies
+
+
+def test_no_resolvable_directory_at_all_makes_a_relative_target_an_unknown(tmp_path, monkeypatch):
+    # The other half of the same regression, and the one the fix's own prose claims: when
+    # NEITHER the payload nor the process supplies a directory, a relative target cannot be
+    # resolved, and an unresolvable target is an UNKNOWN (a) -- which routes to (b) instead
+    # of crashing. Pinning it matters because the `except OSError` that makes this reachable
+    # survived every other row in this file: an unpinned rescue clause is one refactor from
+    # being deleted as dead code.
+    settings = write_settings(tmp_path)
+    doomed = tmp_path / "about-to-vanish"
+    doomed.mkdir()
+    monkeypatch.chdir(doomed)
+    doomed.rmdir()
+    absolute = add_entry_edit(settings, COVERING)
+    relative = add_entry_edit_relative("settings.json", COVERING)
+
+    def decide_without_cwd(tool_input, transcript):
+        call = payload("Edit", tool_input, transcript, tmp_path)
+        return hook.decide({k: v for k, v in call.items() if k != "cwd"})
+
+    # An absolute target needs no directory, so the verdict is the ordinary one.
+    assert decide_without_cwd(absolute, NO_DENIAL) is None
+    assert decide_without_cwd(absolute, ARMED_READ) is not None
+    # A relative one is unresolvable, so (a) is UNKNOWN and (b) decides -- and the deny it
+    # produces is the `_ON_ERROR` message, which names no surface, NOT the widening message.
+    assert decide_without_cwd(relative, NO_DENIAL) is None
+    unknown_deny = decide_without_cwd(relative, ARMED_READ)
+    assert unknown_deny is not None
+    assert COVERING not in unknown_deny
+
+
+@pytest.mark.parametrize("transcript,denies", [(NO_DENIAL, False), (ARMED_READ, True)],
+                         ids=["not-armed", "armed"])
+def test_an_unresolvable_bash_write_target_is_an_unknown_too(tmp_path, monkeypatch,
+                                                             transcript, denies):
+    # The Bash path has the same hole and needed the same guard, so it needs its own row:
+    # the file-tool row above passes with the Bash guard removed. `command_write_targets`
+    # hands back a relative target unchanged when there is no directory to join it to, and a
+    # target the gate cannot locate must not read as "writes no permission surface".
+    write_settings(tmp_path)
+    doomed = tmp_path / "about-to-vanish"
+    doomed.mkdir()
+    monkeypatch.chdir(doomed)
+    doomed.rmdir()
+    call = payload("Bash", {"command": "cp /tmp/evil.json settings.json"}, transcript, tmp_path)
+    assert (hook.decide({k: v for k, v in call.items() if k != "cwd"}) is not None) is denies
 
 
 def test_a_definite_surface_among_bash_targets_outranks_an_unreadable_one(tmp_path):
