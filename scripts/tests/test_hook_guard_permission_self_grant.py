@@ -36,6 +36,7 @@ import importlib.util
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -332,7 +333,6 @@ UNKNOWN_A_LABELS = (
     "edit-target-unreadable",
     "write-target-unreadable",
     "bash-target-unreadable",
-    "dangling-symlink-target",
     "edit-without-file-path",
     "write-without-content-string",
     "edit-without-old-and-new-strings",
@@ -363,16 +363,21 @@ NON_DICT_TYPES = (7, ["a"], "str", True)
 def unknown_a_call(tmp_path: Path, label: str):
     """`(tool_name, tool_input)` for one UNKNOWN-(a) shape.
 
-    The unreadable target is a DIRECTORY rather than a mode-000 file: EISDIR stages the
-    case for any uid, where root would read straight through a chmod. The EACCES form
-    has its own row.
+    The unreadable target is a DANGLING SYMLINK, and the staging is load-bearing rather
+    than incidental. It used to be a DIRECTORY, on the reasoning that EISDIR stages an
+    unreadable target for any uid where root would read straight through a chmod. That
+    reasoning is now wrong: a directory is a target the gate IDENTIFIED and can say a
+    definite no about (`_Read.NOT_A_SURFACE` — a directory is not a JSON document), so
+    these three rows were pinning UNKNOWN on a shape that is an established negative, and
+    they went red the moment the gate started answering it. A dangling symlink is the
+    honest staging and is still uid-independent: `os.stat` raises ENOENT while
+    `os.path.lexists` is True, which is exactly "something IS on this path and the gate
+    could not read it". The EACCES form has its own row; the established-negative shapes
+    have theirs.
     """
     blocked = tmp_path / "settings.json"
-    if not blocked.exists():
-        blocked.mkdir()
-    dangling = tmp_path / "linked-settings.json"
-    if not dangling.is_symlink():
-        dangling.symlink_to(tmp_path / "nowhere.json")
+    if not blocked.is_symlink():
+        blocked.symlink_to(tmp_path / "nowhere.json")
     real = write_settings(tmp_path, name="real-settings.json")
     return {
         "edit-target-unreadable": (
@@ -380,8 +385,6 @@ def unknown_a_call(tmp_path: Path, label: str):
         "write-target-unreadable": (
             "Write", {"file_path": str(blocked), "content": settings_text([COVERING])}),
         "bash-target-unreadable": ("Bash", {"command": f"cp evil.json {blocked}"}),
-        "dangling-symlink-target": (
-            "Write", {"file_path": str(dangling), "content": settings_text([COVERING])}),
         "edit-without-file-path": ("Edit", {"old_string": "a", "new_string": "b"}),
         "write-without-content-string": ("Write", {"file_path": str(real), "content": None}),
         "edit-without-old-and-new-strings": ("Edit", {"file_path": str(real)}),
@@ -423,8 +426,9 @@ def test_an_unknown_conjunct_a_resolves_through_on_error_while_armed(
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode-000 file, so EACCES cannot be staged")
 def test_an_edit_target_unreadable_by_mode_is_unknown_too(tmp_path):
-    # EACCES specifically, beside the EISDIR form above: the branch is "the read failed
-    # while something IS on the path", not any one errno.
+    # EACCES specifically, beside the dangling-symlink ENOENT form above: the branch is
+    # "the read failed while something IS on the path", not any one errno. A regular file
+    # within the size cap, so it reaches the open() rather than being answered by `stat`.
     blocked = write_settings(tmp_path)
     blocked.chmod(0o000)
     call = {
@@ -575,11 +579,19 @@ def test_a_wrong_typed_tool_use_name_in_the_transcript_does_not_open_a_hole(tmp_
     # concluded "covered by no entry" and the gate ALLOWED a widening that answers a real
     # denial. Measured before the fix: `name=7` -> ALLOW where `name="Read"` -> DENY, with
     # everything else identical. A silent hole, which no crash would ever have surfaced.
+    #
+    # `reason is not None` alone was not enough here, and the sibling row's own comment says
+    # why: an unconditional `_ON_ERROR` deny satisfies it just as well as the intended
+    # verdict, so the row would have passed on a gate that denied for the wrong reason. The
+    # entry must appear in the message -- that is what says the widening was judged and found
+    # to cover the denied call, rather than the transcript merely having defeated the gate.
     settings = write_settings(tmp_path)
     transcript = armed_transcript_with_call(
         tmp_path, value, {"file_path": "/srv/secrets/notes.md"})
-    assert hook.decide(payload("Edit", add_entry_edit(settings, COVERING),
-                               transcript, tmp_path)) is not None
+    reason = hook.decide(payload("Edit", add_entry_edit(settings, COVERING),
+                                 transcript, tmp_path))
+    assert reason is not None
+    assert COVERING in reason
 
 
 def test_the_custom_transcript_builder_reproduces_the_static_fixture(tmp_path):
@@ -686,8 +698,15 @@ def test_an_unresolvable_bash_write_target_is_an_unknown_too(tmp_path, monkeypat
 def test_a_definite_surface_among_bash_targets_outranks_an_unreadable_one(tmp_path):
     # A deny must not be downgraded to an `_ON_ERROR` by an unrelated unreadable target:
     # the deny message names the surface, the `_ON_ERROR` message does not.
+    #
+    # The unreadable target is a dangling symlink for the reason `unknown_a_call`'s
+    # docstring gives: this row used to stage a DIRECTORY, which the gate now answers with
+    # a definite no. Observed: with that staging it stayed GREEN under the round-6 gate
+    # while no longer testing what it names — the ordering pinned would have been between a
+    # definite surface and a definite NON-surface, which is not the ordering at issue. A row
+    # that survives the change to the very behaviour it exercises is the inert-row defect.
     blocked = tmp_path / "settings.json"
-    blocked.mkdir()
+    blocked.symlink_to(tmp_path / "nowhere.json")
     real = write_settings(tmp_path, name="real-settings.json")
     reason = hook.decide(payload(
         "Bash", {"command": f"cp a {blocked} && cp evil.json {real}"}, ARMED_BASH, tmp_path))
@@ -805,3 +824,269 @@ def test_mutation_forcing_covers_true_reddens_an_allow_case(tmp_path, monkeypatc
 
     monkeypatch.setattr(hook.permission_entry_match, "covers", lambda *a, **k: True)
     assert hook.decide(call) is not None
+
+
+# --- a target the gate IDENTIFIED and can say a definite no about -------------------
+
+def _kind_target(tmp_path: Path, kind: str) -> str:
+    """A write target of one non-document kind, as an absolute path.
+
+    `/dev/zero` is the one target not under `tmp_path`, and it is deliberate: a character
+    device that yields bytes without end is the shape that OOM-killed the hook process, and
+    no `tmp_path` file reproduces it. Nothing here opens it -- the whole point of the rows
+    below is that `stat` answers before any open -- and it is read-only to this suite.
+    """
+    if kind == "directory":
+        target = tmp_path / "settings.json"
+        target.mkdir()
+        return str(target)
+    if kind == "fifo":
+        target = tmp_path / "fifo-settings.json"
+        os.mkfifo(target)
+        return str(target)
+    if kind == "char-device":
+        return "/dev/zero"
+    if kind == "oversize":
+        # A REAL permission document, padded past the cap WITH TRAILING WHITESPACE, so the
+        # whole file still parses as the very JSON the gate is looking for. This is the row
+        # that pins the size gate AS a size gate: nothing but `st_size` can be what keeps the
+        # gate from diffing it.
+        #
+        # The padding was NUL bytes first, and that was the inert-row defect in miniature:
+        # measured, disabling the entire kind-and-size gate left every `oversize` param still
+        # passing, because a document with NULs stapled to it no longer parses, so the gate
+        # reached ALLOW by a route that had nothing to do with the size at all. Whitespace is
+        # the one padding JSON tolerates, so with the gate disabled these params now DENY.
+        body = settings_text([SEED])
+        target = tmp_path / "huge-settings.json"
+        target.write_text(
+            body + " " * (hook._MAX_SURFACE_BYTES + 1 - len(body.encode("utf-8"))),
+            encoding="utf-8",
+        )
+        return str(target)
+    raise AssertionError(f"unknown kind {kind}")
+
+
+KINDS_THAT_ARE_NOT_DOCUMENTS = ("directory", "fifo", "char-device", "oversize")
+
+# The FILE-KIND subset, for the transcript route. `oversize` is deliberately NOT here: the
+# transcript cap is 512 MiB, no test writes that, and staging a 1 MiB file instead measured
+# as an inert row -- the padded permission document is pretty-printed over several lines, so
+# no single line both opens and closes a JSON object, and `_looks_like_a_row` answered
+# UNREADABLE for a reason that had nothing to do with the cap. Under the unbounded read the
+# row still passed. The cap gets its own row below, over a transcript that really would arm.
+KINDS_THAT_ARE_NOT_TRANSCRIPTS = ("directory", "fifo", "char-device")
+
+# 5 s is the PreToolUse budget the whole gate is sized against, so a verdict slower than
+# this has already failed in production whatever it returns. A ceiling, not an expectation:
+# the measured runs land in single-digit milliseconds.
+PROMPT_SECONDS = 5.0
+
+
+@pytest.mark.parametrize("kind", KINDS_THAT_ARE_NOT_DOCUMENTS)
+@pytest.mark.parametrize("tool_name", ("Edit", "Write", "MultiEdit", "NotebookEdit", "Bash"))
+def test_a_target_that_cannot_be_a_json_document_is_a_definite_no_not_an_unknown(
+    tmp_path, kind, tool_name
+):
+    # ARMED, and with the shipped fail-closed `_ON_ERROR`, so an UNKNOWN here would DENY:
+    # the assertion is that the gate ANSWERS instead. A directory, a FIFO, a device and a
+    # file far larger than any permission document are all targets the gate identified, and
+    # none of them can be a `permissions.allow` JSON document, so the honest verdict is
+    # "this call does not widen a permission surface" -- not a shrug resolved by policy.
+    #
+    # Both halves are asserted and both matter. The VERDICT, because "did not raise" is
+    # satisfied by the catch-all's unconditional deny, i.e. by the bug. And PROMPTNESS,
+    # because the two shapes that motivated this row do not fail by returning a wrong
+    # answer: `/dev/zero` read whole is a `MemoryError` under a memory limit and an OOM kill
+    # without one, and a FIFO blocks in `open()` until someone writes to it.
+    target = _kind_target(tmp_path, kind)
+    if tool_name == "Bash":
+        tool_input = {"command": f"cp evil.json {target}"}
+    elif tool_name == "Write":
+        tool_input = {"file_path": target, "content": settings_text([SEED, COVERING])}
+    elif tool_name == "MultiEdit":
+        tool_input = {"file_path": target,
+                      "edits": [{"old_string": f'"{SEED}"', "new_string": f'"{COVERING}"'}]}
+    elif tool_name == "NotebookEdit":
+        tool_input = {"notebook_path": target, "new_source": settings_text([COVERING])}
+    else:
+        tool_input = add_entry_edit(Path(target), COVERING)
+
+    started = time.monotonic()
+    reason = hook.decide(payload(tool_name, tool_input, ARMED_READ, tmp_path))
+    elapsed = time.monotonic() - started
+
+    assert reason is None
+    assert elapsed < PROMPT_SECONDS
+
+
+@pytest.mark.parametrize("kind", KINDS_THAT_ARE_NOT_TRANSCRIPTS)
+def test_a_transcript_of_a_kind_that_cannot_be_a_transcript_is_unreadable_not_a_hang(
+    tmp_path, kind, monkeypatch
+):
+    # THE SAME CLASS ONE ROUTE OVER, which is why this is a row and not a footnote: the gate
+    # bounded the read of the file it writes and left `transcript_path` -- a field out of the
+    # same untrusted payload -- being read whole by `denial_arming`. `/dev/zero` there is the
+    # identical OOM and a FIFO there is the identical block.
+    #
+    # The DIRECTION differs from the row above, and correctly so: a path that is not a
+    # session transcript does not answer "was this session armed", so it is UNREADABLE, which
+    # is fail-CLOSED. A self-grant carrying such a path must still DENY.
+    # AND NOTHING IS EVER OPENED, asserted directly rather than inferred from the verdict.
+    # That is the half the `stat` call actually buys, and for `/dev/zero` it is the ONLY half:
+    # measured, a device path answers UNREADABLE by several independent routes (the truncation
+    # check, then the row-shape check), so no mutation to the shipped code changes this row's
+    # verdict, and a verdict-only row would be inert for that kind. The bound the guard really
+    # establishes is that no unbounded read and no blocking `open()` happens at all -- so the
+    # spy records the path and refuses, which both fails the row and keeps the mutation that
+    # removes the guard from hanging this suite on a FIFO or eating memory on the device.
+    opened: list[str] = []
+
+    def refuse_to_open(path, *args, **kwargs):
+        opened.append(str(path))
+        raise AssertionError(f"the arming reader opened {path} instead of stat-ing it")
+
+    monkeypatch.setattr(hook.denial_arming, "open", refuse_to_open, raising=False)
+
+    settings = write_settings(tmp_path, name="real-settings.json")
+    transcript = _kind_target(tmp_path, kind)
+
+    started = time.monotonic()
+    verdict = hook.denial_arming.armed(transcript).verdict
+    reason = hook.decide(payload("Edit", add_entry_edit(settings, COVERING),
+                                 Path(transcript), tmp_path))
+    elapsed = time.monotonic() - started
+
+    assert opened == []
+    assert verdict is Verdict.UNREADABLE
+    assert reason is not None
+    assert elapsed < PROMPT_SECONDS
+
+
+def test_a_transcript_past_its_size_cap_is_unreadable_even_though_it_would_have_armed(
+    tmp_path, monkeypatch
+):
+    # THE CAP TESTED AS A CAP. The staged file is `ARMED_READ` itself -- byte for byte a
+    # transcript that arms, over a denial the entry below covers -- so the only thing that can
+    # make the answer UNREADABLE is its size. The cap is lowered instead of the file being
+    # grown because the shipped cap is 512 MiB: a real one would have to be written to disk on
+    # every run of this suite, and a 1 MiB stand-in was measured to pass for the wrong reason.
+    #
+    # The direction is the one that matters. A transcript too big to read must NOT come back
+    # NOT_ARMED -- that is a silent ALLOW of the self-grant -- and it must not come back
+    # truncated either, because a truncated read drops the file's NEWEST rows, which is
+    # precisely where the arming denial is.
+    # The copy is `ARMED_READ` plus ONE trailing newline -- content-identical once blank lines
+    # are stripped, one byte over the cap. The cap is the original's exact size, so the
+    # reference assertion below is a real control rather than a copy of the row: same content,
+    # same code, one byte apart, opposite verdicts.
+    settings = write_settings(tmp_path)
+    transcript = tmp_path / "huge-transcript.jsonl"
+    transcript.write_bytes(ARMED_READ.read_bytes() + b"\n")
+    monkeypatch.setattr(hook.denial_arming, "_MAX_TRANSCRIPT_BYTES", ARMED_READ.stat().st_size)
+
+    assert hook.denial_arming.armed(ARMED_READ).verdict is Verdict.ARMED  # the same bytes arm
+    assert hook.denial_arming.armed(transcript).verdict is Verdict.UNREADABLE
+    assert hook.decide(payload("Edit", add_entry_edit(settings, COVERING),
+                               transcript, tmp_path)) is not None
+
+
+# --- applying a patch is not writing a settings file --------------------------------
+
+@pytest.mark.parametrize("command", [
+    "git apply fix.patch",
+    "patch -p1 < fix.patch",
+    "git apply --check fix.patch",
+])
+def test_applying_a_patch_while_armed_is_allowed(tmp_path, command):
+    # THE COLLATERAL THIS GATE INFLICTED FOR FIVE REVIEW ROUNDS, pinned so it cannot come
+    # back. `command_write_targets` cannot know which files a patch body touches, so for
+    # `patch` and `git apply` it reports the WORKING DIRECTORY as the write target. A
+    # directory read as "a settings file I could not read" made every one of these commands
+    # UNKNOWN, hence -- while armed -- denied: measured, all three of these, including
+    # `--check`, which writes nothing at all. Applying a patch is most of what a developer
+    # does inside a session that has hit one permission denial.
+    #
+    # The control below is what keeps this row from being satisfied by a gate that has simply
+    # stopped judging Bash: the same session, the same transcript, a real self-grant, denied.
+    s = write_settings(tmp_path)
+    assert hook.decide(payload("Bash", {"command": command}, ARMED_BASH, tmp_path)) is None
+    assert hook.decide(payload(
+        "Bash", {"command": f"cp evil.json {s}"}, ARMED_BASH, tmp_path)) is not None
+
+
+@pytest.mark.parametrize("command", ["echo hi > note.txt", "sed -i s/a/b/ note.txt"])
+def test_an_ordinary_write_to_an_ordinary_file_while_armed_is_allowed(tmp_path, command):
+    # The other half of the same measurement, and the reason the fix above is not "stop
+    # judging Bash": these two name a REAL write target that is a real file, and they were
+    # allowed before the change and are allowed after it. If a future fix to the patch
+    # residual starts denying by command verb, these rows are what fails.
+    (tmp_path / "note.txt").write_text("a\n", encoding="utf-8")
+    assert hook.decide(payload("Bash", {"command": command}, ARMED_BASH, tmp_path)) is None
+
+
+# --- the transcript path is a payload field, and gets a payload field's discipline ---
+
+def test_a_relative_transcript_path_does_not_resolve_against_the_process_directory(
+    tmp_path, monkeypatch
+):
+    # THE DECOY FLIPS THE VERDICT, which is why this is not a tidiness row. `transcript_path`
+    # was read from disk without ever being located, so a RELATIVE one resolved against
+    # whatever directory the hook process happened to be in. Stage a not-armed transcript
+    # there under the same relative name and the gate concludes "this session had no denial"
+    # -- and a real self-grant, in a really armed session, is ALLOWED. A silent hole, in the
+    # direction this gate exists to prevent.
+    #
+    # Both files are real transcripts of OPPOSITE verdict, asserted as controls, so the row
+    # cannot pass by neither file being readable.
+    settings = write_settings(tmp_path)
+    (tmp_path / "session.jsonl").write_bytes(ARMED_READ.read_bytes())
+
+    decoy_dir = tmp_path / "elsewhere"
+    decoy_dir.mkdir()
+    (decoy_dir / "session.jsonl").write_bytes(NO_DENIAL.read_bytes())
+    monkeypatch.chdir(decoy_dir)
+
+    assert hook.denial_arming.armed(tmp_path / "session.jsonl").verdict is Verdict.ARMED
+    assert hook.denial_arming.armed(decoy_dir / "session.jsonl").verdict is Verdict.NOT_ARMED
+
+    call = payload("Edit", add_entry_edit(settings, COVERING), ARMED_READ, tmp_path)
+    reason = hook.decide({**call, "transcript_path": "session.jsonl"})
+    assert reason is not None
+    assert COVERING in reason          # denied on the widening, not on a shrug
+
+
+# --- every file tool the client actually has, not the two the gate started with -----
+
+def test_the_other_file_tools_deny_the_very_payload_edit_denies(tmp_path):
+    # MEASURED, on one identical self-grant: `Edit` denied while `MultiEdit` and
+    # `NotebookEdit` -- both real tools in this client, both able to write this file --
+    # allowed. A gate whose coverage depends on which of two equivalent tools the agent
+    # reaches for is not a gate; the modelled set has to be the set that exists.
+    s = write_settings(tmp_path)
+    multi = {"file_path": str(s),
+             "edits": [{"old_string": f'"{SEED}"', "new_string": f'"{SEED}", "{COVERING}"'}]}
+    notebook = {"notebook_path": str(s), "new_source": settings_text([SEED, COVERING])}
+
+    edit_reason = hook.decide(payload("Edit", add_entry_edit(s, COVERING), ARMED_READ, tmp_path))
+    multi_reason = hook.decide(payload("MultiEdit", multi, ARMED_READ, tmp_path))
+    notebook_reason = hook.decide(payload("NotebookEdit", notebook, ARMED_READ, tmp_path))
+
+    assert edit_reason is not None
+    assert multi_reason is not None
+    assert notebook_reason is not None
+    # `MultiEdit` applies its edits and diffs the result, so it names the entry it caught, as
+    # `Edit` does. `NotebookEdit` is judged coarsely -- the target already IS a permission
+    # surface and the call rewrites it -- so it is not required to name one.
+    assert COVERING in multi_reason
+
+
+def test_a_multi_edit_that_grants_something_unrelated_is_still_allowed(tmp_path):
+    # The control that keeps the row above off "MultiEdit denies everything while armed": the
+    # same tool, a real widening, an entry that does not cover the denied call -- allowed.
+    # This is also what proves the edits are really applied and diffed rather than the tool
+    # name alone deciding, since a coarse verdict here would deny.
+    s = write_settings(tmp_path)
+    multi = {"file_path": str(s),
+             "edits": [{"old_string": f'"{SEED}"', "new_string": f'"{SEED}", "{OTHER_PREFIX}"'}]}
+    assert hook.decide(payload("MultiEdit", multi, ARMED_READ, tmp_path)) is None

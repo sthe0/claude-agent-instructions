@@ -41,15 +41,55 @@ its own, separate transcript.
 from __future__ import annotations
 
 import json
+import os
+import stat
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
-# Decompiled from the installed client bundle (PROVENANCE § 5 of
-# hook-permission-self-grant-provenance.md), not sampled: these three, and
-# only these three, express an actual permission judgement about the denied
-# call.
+# The largest a file may be and still be read as a candidate transcript, and the
+# bound the read itself is given.
+#
+# MEASURED, not guessed, and deliberately three orders of magnitude above the
+# permission-document cap in the gate: transcripts are legitimately huge. The
+# largest in the local corpus is 60.1 MB / 23 598 rows (the same file the 0.29 s
+# prefilter measurement above was taken on), so 512 MiB leaves an ~8.9x margin.
+#
+# WHY THERE IS A BOUND AT ALL. `armed()` used to hand the path straight to
+# `Path.read_text`, which reads whatever it is given, whole. `transcript_path`
+# arrives in an untrusted hook payload, so `transcript_path=/dev/zero` was an
+# unbounded read: under a memory limit that is a `MemoryError` (caught below,
+# hence UNREADABLE, hence a deny), and with no limit the hook process is
+# OOM-killed outright and emits no verdict at all. The same shape was measured
+# on the GATE's target-file read and fixed there; this is the same class one
+# route over, and it is fixed the same way -- establish what the path is, then
+# read a bounded amount.
+_MAX_TRANSCRIPT_BYTES = 512 * 1024 * 1024
+
+# DECOMPILED FROM THE INSTALLED CLIENT BUNDLE, NOT SAMPLED FROM TRANSCRIPTS:
+# these three, and only these three, express an actual permission judgement
+# about the denied call. The vocabulary comes from the two functions that emit
+# `toolDenialKind`, and the mapping is restated here so the claim can be
+# re-derived without any document outside this repository:
+#
+#     the permission mapper:  behavior === "ask"              -> "user-rejected"
+#                             auto-mode classifier, reason A   -> "automode-unavailable"
+#                             auto-mode classifier, reason B   -> "automode-parsing-error"
+#                             auto-mode classifier, otherwise  -> "automode-blocked"
+#                             otherwise                        -> "permission-rule"
+#     the abort mapper:       abort/interrupt paths            -> "cancelled" | "interrupted"
+#
+# Seven values, four of them below. To re-verify against a newer client, find
+# the two mappers by the literal string "toolDenialKind" in the installed
+# bundle rather than by symbol name -- the minifier renames them between
+# builds. A client that ADDS an arming kind silently narrows this set, which
+# fails toward ALLOW; that is a named limit in the gate's module docstring.
+#
+# `permission-rule` being the OTHERWISE branch is also why the gate needs its
+# conjunct (c): every deny-capable PreToolUse hook in this repo lands in that
+# one bucket, and the field that would tell a harness-allowlist refusal from a
+# hook-origin deny is discarded before the transcript row is written.
 _ARMING_KINDS = frozenset({
     "permission-rule",   # a hard deny -- the harness allowlist or one of this repo's own hooks
     "user-rejected",     # the harness's interactive allow/deny prompt was answered "no"
@@ -68,10 +108,11 @@ _NON_ARMING_KINDS = frozenset({
     "automode-parsing-error",  # ditto.
 })
 
-# Every value the client bundle can emit (PROVENANCE § 5, decompiled -- not
-# sampled). Kept as its own literal, so the completeness check in the tests is
-# a real comparison against the decompiled vocabulary rather than a tautology
-# restating the two sets above.
+# Every value the client bundle can emit -- the seven from the two mappers
+# transcribed above, same decompiled source, not sampled. Kept as its own
+# literal, so the completeness check in the tests is a real comparison against
+# the decompiled vocabulary rather than a tautology restating the two sets
+# above.
 #
 # The check lives in the tests, NOT in a module-level `assert`: this module is
 # imported by a PreToolUse hook on every tool call, an import-time assert would
@@ -84,8 +125,10 @@ _ALL_DENIAL_KINDS = frozenset({
 
 # A per-line prefilter checked before json.loads: the overwhelming majority of
 # transcript rows are neither denials nor tool_use blocks, and this substring
-# check is what buys the measured 0.29 s worst case on a 23 598-row transcript
-# (PROVENANCE § 1) rather than parsing every row.
+# check is what buys the worst case MEASURED at 0.29 s for one full walk of the
+# largest transcript in the local corpus (60.1 MB, 23 598 rows), against the
+# 5 s PreToolUse budget -- rather than parsing every row. To re-measure: time
+# `armed()` over the largest file under `~/.claude-agent/projects/*/*.jsonl`.
 _DENIAL_MARKER = '"toolDenialKind"'
 _TOOL_USE_MARKER = '"tool_use"'
 
@@ -166,8 +209,14 @@ def _call_fields(block: dict) -> tuple[str | None, dict[str, Any] | None]:
       * a non-dict `input` (`["x"]`, `"str"`, `7`, `True`) reached
         `permission_entry_match.covers()`, whose `None`/`{}` rescue does not
         catch a TRUTHY non-dict, and raised `AttributeError` out of the gate's
-        `decide()` into its catch-all -- an unconditional DENY of every call in
-        the session, over a transcript the gate merely failed to model;
+        `decide()` into its catch-all -- a DENY over a transcript the gate merely
+        failed to model. The radius is narrower than an earlier draft of this
+        docstring claimed ("every call in the session"): measured, a benign
+        `Edit` and a benign `Bash` in the same session still ALLOW, because
+        `covers()` is only reached by a call the gate has already judged to widen
+        a permission surface. Every SELF-GRANT-SHAPED call in such a session
+        denies, benign ones included -- bad, and worth this boundary, but not the
+        session-wide lock;
       * a non-str `name` (`7`, `["Read"]`, `{"a": 1}`, `True`) did not raise at
         all. It compares unequal to every entry's tool, so a denial that the
         added entry really would have covered read as "covered by nothing" and
@@ -185,6 +234,47 @@ def _call_fields(block: dict) -> tuple[str | None, dict[str, Any] | None]:
     return name, tool_input
 
 
+def _read_transcript(transcript_path: Path | str) -> str | None:
+    """The transcript's text, or `None` for every way it could not be read.
+
+    ESTABLISH WHAT THE PATH IS, THEN READ IT -- the one parse boundary for this
+    module's only external input, and the reason the caller never sees an
+    unbounded read. Three findings all collapse to `None`, because this module's
+    caller needs only "could not look" out of them, and each is fail-CLOSED (the
+    gate's `_ON_ERROR`), never a quiet NOT_ARMED:
+
+      * not a REGULAR file. A directory, a socket, a device or a FIFO is not a
+        session transcript. This is also where the hang and the OOM live: a FIFO
+        blocks in `open()` until someone writes, and a character device yields
+        bytes without end. `stat` answers both without opening anything.
+      * larger than `_MAX_TRANSCRIPT_BYTES`, or yielding more than that many
+        characters despite what `stat` reported. The second bound is not
+        redundant with the first: a procfs file is `S_ISREG` and reports
+        `st_size` 0 while yielding content indefinitely, so the size gate alone
+        would pass it straight into an unbounded read. It also closes the window
+        between the `stat` and the `open`.
+      * anything else that raises -- ENOENT, EACCES, a NUL byte in the path
+        (`ValueError`, not an `OSError`), a decode failure the replace handler
+        somehow does not absorb.
+
+    A truncated read is deliberately NOT returned as text: dropping the tail of a
+    transcript drops its NEWEST rows, which is exactly where the denial that arms
+    the session is, so it would fail toward NOT_ARMED -- a silent ALLOW. Reading
+    one byte past the cap is how that case is told from a file that merely fits.
+    """
+    try:
+        st = os.stat(transcript_path)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > _MAX_TRANSCRIPT_BYTES:
+            return None
+        with open(transcript_path, "r", encoding="utf-8", errors="replace") as handle:
+            text = handle.read(_MAX_TRANSCRIPT_BYTES + 1)
+    except Exception:
+        return None
+    if len(text) > _MAX_TRANSCRIPT_BYTES:
+        return None
+    return text
+
+
 def _resolve(calls_by_uuid: dict[str, tuple[Any, Any]], source_uuid: Any) -> tuple[Any, Any]:
     if not isinstance(source_uuid, str):
         return None, None
@@ -198,14 +288,14 @@ def armed(transcript_path: Path | str) -> Arming:
     which lines are even attempted with `json.loads`; a per-line JSON error
     on an attempted line is tolerated and counted, but a missing file, an
     empty file, a file NO line of which even has the shape of a JSONL row, or
-    a file whose attempted rows NEVER parsed is UNREADABLE --
-    the caller must be able to tell "no denial" from "could not look",
-    because those two demand opposite fail behaviour. Never raises: any
-    read/parse failure resolves to one of the three `Arming` values."""
-    path = Path(transcript_path)
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except Exception:
+    a file whose attempted rows NEVER parsed, or anything `_read_transcript`
+    would not read at all (not a regular file, over its size cap) is
+    UNREADABLE -- the caller must be able to tell "no denial" from "could not
+    look", because those two demand opposite fail behaviour. Never raises, and
+    never blocks or reads without bound: the path is a payload field like any
+    other and goes through `_read_transcript` before a byte is read."""
+    text = _read_transcript(transcript_path)
+    if text is None:
         return UNREADABLE
 
     lines = [line for line in text.splitlines() if line.strip()]

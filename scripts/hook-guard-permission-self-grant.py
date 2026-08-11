@@ -30,11 +30,16 @@ surface — the overwhelming majority — returns None without the transcript ev
 opened.
 
 WHAT THE GATE COULD NOT ESTABLISH IS NOT A "NO". Conjunct (a) is THREE-valued, never
-two. A target ABSENT from disk is an established fact — nothing there to widen, so the
-call is a creation and is allowed. A target that exists but could NOT be read, a
-command that could not be tokenized, and a payload missing the fields this gate reads
-are none of them facts about the call: they are UNKNOWN, the gate either did not look
-or looked and could not tell. An UNKNOWN (a) neither allows nor denies on its own —
+two. Two different findings are established FACTS and answer it with a definite no. A
+target ABSENT from disk: nothing there to widen, so the call is a creation and is
+allowed. And a target the gate identified as something a `permissions.allow` JSON
+document cannot be — a directory, a FIFO, a socket, a device, or a regular file orders
+of magnitude larger than any permission document (`_read_text`). Neither is a shrug;
+both are answers, and treating the second as UNKNOWN instead is what denied every
+`git apply` in an armed session for five review rounds. A target that exists, is a
+plausible document, and still could NOT be read, a command that could not be tokenized,
+and a payload missing the fields this gate reads are none of them facts about the call:
+they are UNKNOWN, the gate either did not look or looked and could not tell. An UNKNOWN (a) neither allows nor denies on its own —
 `UNKNOWN AND False` is still False — so it falls through to (b), and a session whose
 (b) is anything other than NOT_ARMED (armed, or a transcript that could not be read)
 pays `_ON_ERROR`. Denying every UNKNOWN outright would refuse innocent calls in sessions
@@ -58,18 +63,27 @@ routing an unresolved (a) denied whatever (b) said — so R5 and R3 became load-
 this path for the first time HERE, which is why they are restated rather than left one
 file away.
 
-WHAT EACH TOOL PATH CAN SEE.
-  Edit  — the target is read from disk, `old_string`→`new_string` is applied, and the
-          parsed before/after pair is diffed. Full precision: (c) is checkable.
-  Write — the target is read from disk and diffed against the content being written.
-          A Write to a path ABSENT from disk is a CREATION, not a widening, and is
-          allowed: there is no prior surface to widen, and a brand-new settings file
-          is not how a denial gets cleared. A path that exists but cannot be read is a
-          different fact and takes the UNKNOWN route above, not this one.
-  Bash  — deliberately coarser. A command is not applied before it runs, so no
-          before/after pair exists and there are no entries to test for relevance
-          (R7). The path falls back to (a)+(b) alone: any write to a file that is
-          TODAY a permission surface, while armed, is refused.
+WHAT EACH TOOL PATH CAN SEE. The modelled set is `_MODELLED_TOOLS`; a tool name outside
+it is allowed without being judged, which is a named residual at `decide()`.
+  Edit      — the target is read from disk, `old_string`→`new_string` is applied, and the
+              parsed before/after pair is diffed. Full precision: (c) is checkable.
+  MultiEdit — the same, with every element of `edits` applied IN ORDER, each against the
+              previous result, which is what the tool itself does. Same precision as
+              Edit; until it was modelled it ALLOWED the very payload Edit denied.
+  Write     — the target is read from disk and diffed against the content being written.
+              A Write to a path ABSENT from disk is a CREATION, not a widening, and is
+              allowed: there is no prior surface to widen, and a brand-new settings file
+              is not how a denial gets cleared. A path that exists but cannot be read is
+              a different fact and takes the UNKNOWN route above, not this one.
+  NotebookEdit — coarse, for the Bash path's reason: `new_source` replaces one CELL's
+              source inside a notebook, so it is not the after-document and cannot be
+              made into one without this gate parsing the notebook format. The question
+              asked is therefore "is the target a permission surface TODAY", with no
+              entries to narrow (c) by.
+  Bash      — deliberately coarser. A command is not applied before it runs, so no
+              before/after pair exists and there are no entries to test for relevance
+              (R7). The path falls back to (a)+(b) alone: any write to a file that is
+              TODAY a permission surface, while armed, is refused.
 
 A relative path — a `file_path` on the Edit/Write paths, a write target on the Bash
 path — is resolved against the payload's own `cwd`, not against
@@ -103,6 +117,24 @@ NAMED RESIDUALS carried by this hook (R-numbers are the plan's):
   here, and is out of scope for this stage. Named so that "the gate allowed it"
   cannot later be read as "the gate judged it safe".
 
+  A PATCH THAT REWRITES A SETTINGS FILE IS ALLOWED, deliberately, and both halves of that
+  trade are stated here because only one of them is comfortable. `bash_write_targets`
+  reports the working DIRECTORY as the write target of `patch` and `git apply` — those
+  verbs write wherever their diff says, which is inside the patch body, not on the command
+  line. Since round 6 a directory target is an ESTABLISHED negative (a directory is not a
+  JSON document), so `git apply grant.patch` reaches ALLOW even when the patch adds a
+  `permissions.allow` entry. What was there before is not better: the directory read as
+  UNREADABLE, hence UNKNOWN, hence `_ON_ERROR` — measured, EVERY `git apply`, `git apply
+  --check` and `patch -p1` in an armed session was denied, including the benign ones, which
+  is most of them. So the choice is between a certain cost on a common benign operation and
+  an uncertain cost on a rare hostile one. Closing it properly means parsing the patch body
+  to learn which files it touches and applying the diff in memory — a second parser, in a
+  hook, over an attacker-influenced format; the standing instruction for this task is not to
+  invent one. The bound that makes the residual tolerable is that this gate is a backstop
+  for the OBSERVED failure mode (the agent editing a settings file directly to clear its own
+  denial), not a general egress control: an agent routing a self-grant through a patch file
+  is a different, more deliberate act, and one a reviewer reading the diff can see.
+
   R8  Relevance cannot narrow a COMPOUND Bash denial: `shlex.split` destroys the
       separator before `split_segments` ever sees a token, so the denied call can
       only be matched as a whole. Permanent at this layer; no lexer fix closes it.
@@ -129,6 +161,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import stat
 import sys
 from dataclasses import dataclass
 from enum import Enum
@@ -165,36 +198,46 @@ from lib.denial_arming import Verdict  # noqa: E402
 # (b) comes back as anything other than NOT_ARMED — see the docstring: `UNKNOWN AND
 # False` is False, and denying an unreadable payload in a session that carries no
 # permission denial at all would refuse calls that cannot be self-grants by
-# construction. Two things still deny unconditionally, and both are meant to. Stdin that
-# is not a JSON object at all: there is not even a transcript path to consult. And any
-# exception that escapes `decide()` into `main()`'s catch-all — which is a BUG IN THE
-# GATE, not a shape of the call, because every string the gate reads out of the payload
-# comes through `_str_field` and every field inside `tool_input` is type-checked where it
-# is read. Keeping malformed payloads off that path is what lets the catch-all stay the
-# backstop it claims to be rather than a second, unmodelled deny route.
+# construction. Stdin that is not a JSON object at all denies unconditionally, and is
+# meant to: there is not even a transcript path to consult.
 #
-# That claim has now been FALSE twice, each time because the sentence above named the
-# payload as if it were the whole input. It is not. First `os.getcwd()` in a default
-# argument raised once the process's own directory had been removed, denying every call in
-# a session whose worktree another session had landed. The list was extended to say
-# "and ambient process state" — and the very next review found a THIRD source: the
-# transcript, a file written by another process, whose `tool_use` blocks were stored off
-# `json.loads` with no type check, so a non-dict `input` raised `AttributeError` out of
-# `decide()` here.
+# THE CATCH-ALL IS NOT A CLASSIFIER, AND MUST NOT BE USED AS ONE. Each of the last three
+# reviews found a live input that reached `main()`'s catch-all — which denies every call it
+# sees, in any session, including sessions carrying no permission denial at all — and each
+# time the comment here had just been rewritten to claim the sources were now enumerated.
+# The three: `os.getcwd()` in a default argument, raising once the process's own directory
+# had been removed (in this fleet, landing a unit deletes the worktree under any session
+# still in it); the transcript's `tool_use` blocks, stored straight off `json.loads`, so a
+# non-dict `input` raised `AttributeError`; and the target's own BYTES, read whole from
+# whatever path arrived, so `Edit file_path=/dev/zero` raised `MemoryError` under a memory
+# limit and OOM-killed the hook process without one.
 #
-# A list of input sources is the wrong shape of claim; it is only ever as complete as the
-# last review. The invariant that actually holds is about BOUNDARIES: every external
-# source enters this gate through exactly one function that PARSES it — establishing the
-# declared types rather than trusting them — and downstream code may then rely on those
-# types. Three such boundaries exist today: `_str_field` (the payload), `_base_dir` plus
-# `_located` (ambient process state), and `denial_arming._call_fields` (transcript
-# content). The rule for a future reader is not "check this list" but "if you are reading
-# something this process did not compute, it needs a boundary of its own, and the catch-all
-# is not it".
+# So no list is written here. A list of input sources is the wrong SHAPE of claim — it is
+# only ever as complete as the last review, and stating it as complete is what made three
+# of these findings surprising instead of expected. What is claimed instead is a rule, and
+# it is a rule for the reader rather than an inventory: EVERY EXTERNAL SOURCE NEEDS EXACTLY
+# ONE FUNCTION THAT PARSES IT — establishing the declared types and bounds rather than
+# trusting them — and downstream code may then rely on what that function established. The
+# boundaries that exist so far are `_str_field` (payload fields), `_base_dir` plus
+# `_located` (ambient process state, and which file a path names), `_read_text` (the
+# target's kind, size and bytes) and `denial_arming._call_fields` (transcript content).
+# Anything this process did not itself compute needs a boundary of its own, and the
+# catch-all is not it.
 _ON_ERROR = "deny"
 
-_FILE_TOOLS = ("Edit", "Write")
+_FILE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 _MODELLED_TOOLS = _FILE_TOOLS + ("Bash",)
+
+# Which `tool_input` field carries the write target, per modelled file tool. A table
+# rather than a hardcoded "file_path" because `NotebookEdit` spells it differently, and a
+# tool whose target field the gate reads under the wrong name is a tool the gate silently
+# never judges — the D4 shape, reached through the payload instead of through the name.
+_TARGET_FIELD = {
+    "Edit": "file_path",
+    "Write": "file_path",
+    "MultiEdit": "file_path",
+    "NotebookEdit": "notebook_path",
+}
 
 _RESPONSES = (
     "Three responses are legitimate here, and widening the surface yourself is not one of "
@@ -229,17 +272,42 @@ class _Unknown:
 
 
 class _Read(Enum):
-    """Why `_read_text` returned no text. The two are never collapsed into one value.
+    """Why `_read_text` returned no text. The three are never collapsed into one value.
 
-    They demand OPPOSITE behaviour from a deny-by-default gate. ABSENT is an established
-    fact about the path — nothing is there, so nothing can be widened, and the call is a
-    creation. UNREADABLE is the absence of any fact — the gate could not look. Returning
-    one `None` for both made "I could not look" answer "I looked and found nothing", on
-    the ALLOW side, which is precisely what this gate must not do. Same three-valued
-    shape, and same reason for it, as `lib/denial_arming.Verdict`.
+    They demand DIFFERENT behaviour from a deny-by-default gate, and two of the three are
+    ESTABLISHED FACTS about the path while only one is the absence of a fact.
+
+      ABSENT       nothing is on the path, so nothing can be widened and the call is a
+                   creation. A fact — allowed.
+      NOT_A_SURFACE the path was identified and it cannot be a `permissions.allow` JSON
+                   document: a directory, a FIFO, a socket, a device, or a regular file
+                   far larger than any permission document is. Also a fact, and also a
+                   definite "this call does not widen a permission surface" — see
+                   `_read_text` for why that verdict is inside the evidence domain.
+      UNREADABLE   the gate could not look: a regular file within the cap that still
+                   would not open or would not decode. The absence of any fact.
+
+    Returning one `None` for ABSENT and UNREADABLE made "I could not look" answer "I
+    looked and found nothing", on the ALLOW side, which is precisely what this gate must
+    not do. Same three-valued shape, and same reason for it, as
+    `lib/denial_arming.Verdict`.
     """
     ABSENT = "absent"
+    NOT_A_SURFACE = "not-a-surface"
     UNREADABLE = "unreadable"
+
+
+# The largest a file may be and still be read as a candidate permission document.
+#
+# MEASURED, not guessed. Every permission-surface document in this repository, by shape
+# (`grep -rl --include=*.json '"permissions"'`, then `stat -c %s`): `settings/base.json`
+# 1916 B, `cursor/config/cli-base.json` 1899 B, `benchmark-profile-spawn/settings.json`
+# 869 B, `benchmark-profile/settings.json` 788 B, `permissions/global.json` 24 B. The
+# largest is 1916 B, and `settings/base.json` is the generator SOURCE for the live
+# `~/.claude/settings.json`, so it bounds the population this gate meets. 1 MiB leaves a
+# ~547x margin — far beyond any plausible growth of a hand-maintained allow list, while
+# still bounding the read to something a PreToolUse hook can do without being noticed.
+_MAX_SURFACE_BYTES = 1024 * 1024
 
 
 def _load_json(text: str):
@@ -250,12 +318,38 @@ def _load_json(text: str):
 
 
 def _read_text(path: str) -> str | _Read:
-    """The file's text, or WHICH of the two no-text cases happened.
+    """The file's text, or WHICH of the three no-text cases happened.
+
+    ESTABLISH WHAT THE PATH IS, THEN READ. The previous version opened whatever path it
+    was handed and read it whole, catching what came out — which is not a parse boundary,
+    and it failed in the worst way available to a PreToolUse hook. `Edit
+    file_path=/dev/zero` read without end: under an `RLIMIT_AS` the `MemoryError` escaped
+    into `main()`'s catch-all and denied, and with no limit the hook process was
+    OOM-KILLED — exit 137, nothing on stdout, and the machine memory-pressured while it
+    happened. A gate that dies this way is worse than one that answers wrongly. The same
+    unbounded open is what made a FIFO target a plausible non-return.
+
+    WHY "NOT A REGULAR FILE" IS A VERDICT AND NOT AN UNKNOWN — this is the whole reason
+    the branch is inside the evidence domain, so it is written here rather than assumed.
+    Conjunct (a) asks exactly one question: does this call widen a `permissions.allow`
+    JSON DOCUMENT. A directory, a FIFO, a socket and a character device are not JSON
+    documents and cannot become one by being written to, so "no" is an answer the evidence
+    supports — unlike a definite "no" about a file the gate could not identify, which is
+    the defect this whole artifact exists to avoid. A regular file orders of magnitude
+    larger than every permission document on this machine is the same kind of answer, by
+    measurement rather than by kind (`_MAX_SURFACE_BYTES`).
+
+    BOTH BOUNDS ARE LOAD-BEARING; the stat gate alone is not enough. A procfs file is
+    S_ISREG and reports `st_size` 0 while yielding content without end, so it passes the
+    size gate and would still read forever. `read(_MAX_SURFACE_BYTES + 1)` is what
+    actually bounds the memory, and it also closes the window between the stat and the
+    read in which the file could grow.
 
     ENOENT alone does not mean ABSENT: a dangling symlink and a path under a
     non-directory both raise it while something IS on the path, so the lexical existence
-    check decides. Everything else an OS read can fail with — EACCES, EISDIR, EIO — is
-    UNREADABLE by construction.
+    check decides. What is left on UNREADABLE is a regular file within the cap that
+    genuinely will not yield its bytes — EACCES, EIO — which is an honest "could not
+    look".
 
     `ValueError` is caught alongside `OSError` and is not an afterthought: a path
     carrying an embedded NUL raises it BEFORE the syscall, so it never was an `OSError`.
@@ -266,10 +360,21 @@ def _read_text(path: str) -> str | _Read:
     UNREADABLE.
     """
     try:
-        return Path(path).read_text(encoding="utf-8", errors="replace")
+        st = os.stat(path)
     except (OSError, ValueError) as exc:
         if isinstance(exc, (FileNotFoundError, NotADirectoryError)) and not os.path.lexists(path):
             return _Read.ABSENT
+        return _Read.UNREADABLE
+
+    if not stat.S_ISREG(st.st_mode):
+        return _Read.NOT_A_SURFACE
+    if st.st_size > _MAX_SURFACE_BYTES:
+        return _Read.NOT_A_SURFACE
+
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            return handle.read(_MAX_SURFACE_BYTES + 1)
+    except (OSError, ValueError):
         return _Read.UNREADABLE
 
 
@@ -282,18 +387,53 @@ def _granted_allow(doc) -> list[str]:
     return [e for e in allow if isinstance(e, str)]
 
 
-def _apply_edit(old_text: str, tool_input: dict) -> str | _Unknown:
-    old_string = tool_input.get("old_string")
-    new_string = tool_input.get("new_string")
+def _apply_edit(old_text: str, spec: dict, tool_name: str) -> str | _Unknown:
+    """`old_text` with one old->new replacement applied, or UNKNOWN.
+
+    `spec` is an `Edit`'s whole `tool_input` or ONE element of a `MultiEdit`'s `edits`
+    list: the two carry the same three keys, so the substitution is written once.
+    """
+    old_string = spec.get("old_string")
+    new_string = spec.get("new_string")
     if not isinstance(old_string, str) or not isinstance(new_string, str):
         return _Unknown(
-            "this Edit call carries no old_string/new_string pair of strings, so the text it "
-            "would produce — and with it whether the call widens a permission surface — is "
-            "unknown rather than known to be no"
+            f"this {tool_name} call carries no old_string/new_string pair of strings, so the "
+            f"text it would produce — and with it whether the call widens a permission "
+            f"surface — is unknown rather than known to be no"
         )
-    if tool_input.get("replace_all"):
+    if spec.get("replace_all"):
         return old_text.replace(old_string, new_string)
     return old_text.replace(old_string, new_string, 1)
+
+
+def _apply_multi_edit(old_text: str, tool_input: dict) -> str | _Unknown:
+    """`old_text` with every edit in a `MultiEdit`'s `edits` list applied IN ORDER.
+
+    Sequential application, each edit against the previous result, is what the tool
+    itself does — so the after-document this returns is the one the call would write, and
+    conjunct (c) keeps `Edit`-grade precision on this path rather than falling back to the
+    Bash path's coarse "writes a surface at all".
+    """
+    edits = tool_input.get("edits")
+    if not isinstance(edits, list) or not edits:
+        return _Unknown(
+            "this MultiEdit call carries no non-empty edits list, so the text it would "
+            "produce — and with it whether the call widens a permission surface — is "
+            "unknown rather than known to be no"
+        )
+    text = old_text
+    for spec in edits:
+        if not isinstance(spec, dict):
+            return _Unknown(
+                "this MultiEdit call carries an edits element that is not an object, so the "
+                "text it would produce — and with it whether the call widens a permission "
+                "surface — is unknown rather than known to be no"
+            )
+        applied = _apply_edit(text, spec, "MultiEdit")
+        if isinstance(applied, _Unknown):
+            return applied
+        text = applied
+    return text
 
 
 def _widening_between(path: str, old_text: str, new_text: str) -> _Widening | None:
@@ -317,7 +457,13 @@ def _widening_between(path: str, old_text: str, new_text: str) -> _Widening | No
 
 
 def _located(path: str, what: str) -> str | _Unknown:
-    """`path` if it names one file on disk, else UNKNOWN — the ONE test both paths use.
+    """`path` if it is ABSOLUTE, else UNKNOWN — the ONE test every path in this gate takes.
+
+    Absolute is all this function establishes, and the name should not be read as more: it
+    says nothing about whether anything is on the path, what kind of thing that is, or
+    whether it can be read. Those are `_read_text`'s to answer, and it answers them
+    separately (ABSENT / NOT_A_SURFACE / UNREADABLE / bytes) precisely because they are
+    different facts. What this one rules out is a path whose MEANING is not yet fixed:
 
     A path that is still relative AFTER every join this gate can perform does not name a
     file; it names a file *relative to a directory nobody supplied*. Left to fall through,
@@ -348,10 +494,11 @@ def _located(path: str, what: str) -> str | _Unknown:
 
 
 def _file_tool_widening(tool_name: str, tool_input: dict, cwd: str) -> _Widening | _Unknown | None:
-    file_path = tool_input.get("file_path")
+    target_field = _TARGET_FIELD[tool_name]
+    file_path = tool_input.get(target_field)
     if not isinstance(file_path, str) or not file_path:
         return _Unknown(
-            f"this {tool_name} call carries no file_path string, so which file it would "
+            f"this {tool_name} call carries no {target_field} string, so which file it would "
             f"write — and with it whether that file is a permission surface — is unknown "
             f"rather than known to be no"
         )
@@ -366,12 +513,30 @@ def _file_tool_widening(tool_name: str, tool_input: dict, cwd: str) -> _Widening
     old_text = _read_text(path)
     if old_text is _Read.ABSENT:
         return None  # nothing on disk to widen — a creation, not a widening
+    if old_text is _Read.NOT_A_SURFACE:
+        return None  # identified, and not a JSON document — see `_read_text`
     if old_text is _Read.UNREADABLE:
         return _Unknown(
             f"the file it would write, {path}, could not be read, so whether "
             f"this call widens the permission surface already there is unknown rather than "
             f"known to be no"
         )
+
+    if tool_name == "NotebookEdit":
+        # COARSER THAN THE OTHER FILE TOOLS, for the same reason the Bash path is: there is
+        # no before/after pair to diff. `NotebookEdit` replaces one CELL's source inside a
+        # JSON notebook, so `new_source` is not the after-document and cannot be turned into
+        # one without this gate parsing the notebook format — a parser this task is under
+        # standing instruction not to invent. So the question asked here is the Bash path's:
+        # is the target a permission surface TODAY. `entries_known=False` records that (c)
+        # has nothing to narrow with.
+        #
+        # The false-positive surface this leaves is `NotebookEdit` against a file that is
+        # already a `permissions.allow` document, while armed. A real `.ipynb` has no
+        # `permissions` object, so ordinary notebook editing never reaches here.
+        if permission_surface.is_permission_surface(_load_json(old_text)):
+            return _Widening(path, (), False)
+        return None
 
     if tool_name == "Write":
         new_text = tool_input.get("content")
@@ -381,8 +546,12 @@ def _file_tool_widening(tool_name: str, tool_input: dict, cwd: str) -> _Widening
                 "and with it whether the call widens a permission surface — is unknown "
                 "rather than known to be no"
             )
+    elif tool_name == "MultiEdit":
+        new_text = _apply_multi_edit(old_text, tool_input)
+        if isinstance(new_text, _Unknown):
+            return new_text
     else:
-        new_text = _apply_edit(old_text, tool_input)
+        new_text = _apply_edit(old_text, tool_input, tool_name)
         if isinstance(new_text, _Unknown):
             return new_text
 
@@ -392,11 +561,18 @@ def _file_tool_widening(tool_name: str, tool_input: dict, cwd: str) -> _Widening
 def _is_surface_on_disk(path: str) -> bool | _Unknown:
     """Is `path` a permission surface TODAY — or could the gate not tell?
 
-    ABSENT answers the question (nothing on the path is not a permission surface);
+    ABSENT and NOT_A_SURFACE both ANSWER the question with a no (nothing on the path, and
+    a path that is not a JSON document, are neither of them permission surfaces);
     UNREADABLE does not answer it, and must not be reported as a "no".
+
+    The NOT_A_SURFACE arm is what makes `patch` and `git apply` judgeable on this path at
+    all: `bash_write_targets` reports the working DIRECTORY as their write target, which
+    is exactly a path identified and known not to be a JSON document.
     """
     text = _read_text(path)
     if text is _Read.ABSENT:
+        return False
+    if text is _Read.NOT_A_SURFACE:
         return False
     if text is _Read.UNREADABLE:
         return _Unknown(
@@ -550,10 +726,12 @@ def _base_dir(payload: dict) -> str:
     error: reasoning about the base instead of about the joined result.
 
     So no caller of this function judges the value it gets back. Every caller joins first and
-    hands the RESULT to `_located`, which is the single place the "did this name a file?"
-    question is answered — see it for why a path the gate cannot locate must never be given a
-    definite no. There is deliberately no consumer count here; a count is a fact about other
-    code that goes stale silently, and the previous one already had.
+    hands the RESULT to `_located`, which answers exactly one question about it — is it
+    absolute — and hands what survives to `_read_text`, which answers what is actually there.
+    Two functions, because they establish two different facts; see `_located` for why a path
+    the gate cannot even locate must never be given a definite no. There is deliberately no
+    consumer count here; a count is a fact about other code that goes stale silently, and the
+    previous one already had.
     """
     declared = _str_field(payload, "cwd", "")
     if declared:
@@ -576,6 +754,17 @@ def decide(payload: dict) -> str | None:
     """
     # Tool dispatch FIRST, before any payload field is read: an unmodelled tool is not
     # this gate's business whatever shape its input has, and must never be judged.
+    #
+    # NAMED RESIDUAL — AN UNMODELLED TOOL NAME IS A DELIBERATE ALLOW, not a judgement.
+    # `_MODELLED_TOOLS` is the set whose input shape this gate knows how to read; a client
+    # tool that writes files under a name not in it exits here, silently, and the write is
+    # never examined. That is the right default (a gate that denied tools whose payloads it
+    # cannot read would refuse most of the client's surface on no evidence at all) but it is
+    # a HOLE, not a clearance, and it has already been paid once: `MultiEdit` and
+    # `NotebookEdit` both write files by name and both allowed the very payload `Edit`
+    # denied until they were added. Closing it for a new tool means adding the name here and
+    # its target field to `_TARGET_FIELD`; nothing detects the need automatically, so
+    # "the gate allowed it" must never be read as "the gate judged it safe".
     tool_name = _str_field(payload, "tool_name", "")
     if tool_name not in _MODELLED_TOOLS:
         return None
@@ -602,7 +791,24 @@ def decide(payload: dict) -> str | None:
     # A non-string transcript_path lands on "" and so on the already-modelled UNREADABLE
     # verdict below — the honest answer, since a payload that names no readable transcript
     # leaves (b) exactly as unknown as one whose transcript will not open.
-    arming = denial_arming.armed(_str_field(payload, "transcript_path", ""))
+    #
+    # THE TRANSCRIPT IS LOCATED BY THE SAME DISCIPLINE AS A WRITE TARGET, through the same
+    # function. It is a path out of the same untrusted payload, and it was read straight off
+    # the field: measured, a RELATIVE `transcript_path` resolved against whatever directory
+    # the process happened to sit in, so a decoy file there answered conjunct (b) and flipped
+    # a real self-grant to ALLOW. Locating write targets and not this one left the class open
+    # one route over — and this route fails toward ALLOW, which is the worse direction.
+    declared_transcript = _str_field(payload, "transcript_path", "")
+    located_transcript = _located(
+        declared_transcript if os.path.isabs(declared_transcript)
+        else os.path.join(cwd, declared_transcript),
+        f"the transcript path this call carries, {declared_transcript},",
+    )
+    if isinstance(located_transcript, _Unknown):
+        # Unlocatable, so (b) cannot be answered — the same state as a transcript that will
+        # not open, and already fail-closed below. No new branch.
+        located_transcript = ""
+    arming = denial_arming.armed(located_transcript)
     if arming.verdict is Verdict.NOT_ARMED:
         # Whatever (a) came to, the conjunction is False: an UNKNOWN widening in a session
         # that carries no permission denial cannot be an answer to one.
