@@ -5,7 +5,7 @@ them assert VERDICTS (deny / allow), which is one bit downstream of a list of pa
 lexer that reaches the right decision from the wrong candidate set passes them. That is not
 hypothetical, it is MEASURED: two mutations of this module — dropping `-m`/`-o`/`-g` from
 `_COPY_VALUE_OPTS`, and forcing `dest_is_dir = False` — leave all 146 self-grant rows and all
-34 canon rows passing, and die only here. Both mutations OVER-emit while still emitting the
+36 canon rows passing, and die only here. Both mutations OVER-emit while still emitting the
 real target, and a consumer that stops at its first definite hit cannot tell the difference.
 The candidate list is this module's whole contract (`command_write_targets` returns paths,
 over-inclusively and by design), and the defects this round fixed were wrong-candidate
@@ -177,11 +177,14 @@ def test_the_rest_of_the_lexer_contract(command, expected):
     assert command_write_targets(command, CWD) == expected
 
 
-# THE OTHER CONSUMER'S BEHAVIOUR CHANGED TOO, and it has no row of its own.
+# THE OTHER CONSUMER'S BEHAVIOUR CHANGED TOO, and it has rows of its own for it.
 # `hook-guard-canon-readonly.py` shares this lexer, so the expansion makes it STRICTER: a
 # `cp evil.md ~/canon-mirror/doc.md` aimed at a registered canon root was measured ALLOW
 # before the expansion and DENY after (subprocess, fake `HOME`, `CLAUDE_CANON_ROOTS_FILE`,
 # cwd outside canon), while `~/outside-of-canon.md` stayed ALLOW -- stricter in the right
-# direction, no over-denial. Its 34 rows do not notice either way: all 34 pass with the
-# expansion removed. That consumer needs a `~`-into-canon row of its own, and adding one is
-# outside this change's edit scope; it is reported as a recommendation instead.
+# direction, no over-denial. Its pre-existing rows did not notice either way, so
+# `test_hook_guard_canon_readonly.py` gained
+# `test_bash_tilde_spelled_write_into_canon_roots_file_denies` and its ALLOW control to pin
+# exactly that: MEASURED, removing `expanduser` from `_abs` fails the deny row alone --
+# 1 failed, 35 passed out of that suite's 36 -- and the ALLOW control legitimately survives
+# the mutation because it asserts ALLOW either way.

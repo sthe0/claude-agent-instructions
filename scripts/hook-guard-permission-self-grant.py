@@ -365,9 +365,13 @@ class _Unreadable:
     cost claim unpayable. That claim (see `_MAX_SURFACE_BYTES`) is that an over-cap
     permissions document costs "one blocked call, which a user sanctions in a sentence" —
     and nobody can write that sentence when the only thing they were told is "could not
-    be read". Measured before this round: a 1 048 577 B document under `tmp_path`, a
-    BENIGN rename onto it, armed → DENY whose whole account of itself was "could not be
-    read", with nothing anywhere in it pointing at a size limit.
+    be read". THE POPULATION PAYING THAT COST IS WIDER THAN "PERMISSIONS DOCUMENT": any
+    `~`- or absolutely-spelled write target this gate cannot examine lands here, whether
+    or not it is a candidate permission surface — an ordinary over-cap data file, a file
+    this process lacks permission to read, or a dangling symlink, each reachable under
+    `cp`/`mv`/a redirect. Measured before this round: a 1 048 577 B document under
+    `tmp_path`, a BENIGN rename onto it, armed → DENY whose whole account of itself was
+    "could not be read", with nothing anywhere in it pointing at a size limit.
 
     SIZE also belongs here rather than among the facts above: an over-cap file could be a
     permission document perfectly well, so the only thing established about it is that
@@ -401,9 +405,11 @@ class _Unreadable:
 # answered NOT_A_SURFACE, a definite negative, so padding a real permissions document
 # past 1 MiB with legitimate entries made the identical widening allowed — grow, then
 # grant. Since the direction was corrected the answer is `_Unreadable`, i.e. UNKNOWN, and an
-# armed session pays `_ON_ERROR`: one blocked call on a legitimately enormous permissions
-# file, which a user sanctions in a sentence. A margin that is too small now errs toward
-# refusing; before, it erred toward the hole the gate exists to close.
+# armed session pays `_ON_ERROR`: one blocked call, and not only on an enormous permissions
+# file — any `~`- or absolutely-spelled write target this gate cannot examine pays the same
+# cost (an ordinary over-cap data file, a file this process lacks permission to read, a
+# dangling symlink), which a user sanctions in a sentence either way. A margin that is too
+# small now errs toward refusing; before, it erred toward the hole the gate exists to close.
 _MAX_SURFACE_BYTES = 1024 * 1024
 
 
