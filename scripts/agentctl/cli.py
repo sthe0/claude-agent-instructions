@@ -26,6 +26,7 @@ import proc_tree
 from lib import argv_text, config_root
 
 from . import advisor, continuations, cost, delivery, effort, enumerate_sidecar, gates, ledger, permissions, plugins, plugins_ledger, plugins_premise, premise, solved_marker
+from .checkrun import format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
 from .partition import render_section, render_units, verdict
@@ -2072,6 +2073,17 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     d.data.setdefault("advisories", []).extend(
         check_venue_warnings(doc.stages, doc.meta.final_check, doc.meta.repo_root, doc.meta.delivery_worktree)
     )
+    # Predsubmit check-run observation (C.2) — actually RUNS each stage's
+    # verify_command in its declared venue, warn-only, same advisories channel.
+    # Substantive-only, mirroring the reachability-blocker gate above: a
+    # non-substantive plan carries no verify_command discipline through this
+    # cycle at all, so there is nothing here for it to observe.
+    if state.weight_class == WeightClass.SUBSTANTIVE.value:
+        d.data.setdefault("advisories", []).extend(
+            format_observations(
+                observe_stage_checks(doc.stages, state.resolve_check_venue, runner)
+            )
+        )
     if gates.plan_presentation_active(state):
         # A NUDGE, not the enforcement — the hash-bound gate in gates.
         # plan_presentation_blockers (checked at `approve`) is what actually
