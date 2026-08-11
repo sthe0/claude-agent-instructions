@@ -217,7 +217,13 @@ def test_old_doc_without_permissions_key_is_known_empty_baseline_not_unknown():
     assert result == ["Bash(sudo:*)"]
 
 
-def test_missing_or_unparseable_new_doc_is_empty_not_unknown():
+def test_missing_or_unparseable_new_doc_is_never_unknown():
     old = {"permissions": {"allow": ["Bash(ls:*)"]}}
     assert widens(old, None) == []
     assert widens(old, "not-a-json-object") == []
+
+
+def test_missing_new_doc_reports_the_deny_entries_it_drops():
+    old = {"permissions": {"allow": [], "deny": ["Bash(rm:*)"]}}
+    assert widens(old, None) == ["Bash(rm:*)"]
+    assert widens(old, "not-a-json-object") == ["Bash(rm:*)"]

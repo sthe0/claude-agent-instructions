@@ -65,9 +65,11 @@ def widens(old_doc: Any, new_doc: Any) -> list[str] | None:
       - non-empty list     -- the widening entries themselves.
 
     A `new_doc` that is absent or unparseable is treated as introducing no
-    surface at all, so it can only narrow (or leave unchanged) -- never widen
-    -- and returns `[]` rather than `None`. Only `old_doc`'s absence makes the
-    comparison itself impossible; `new_doc`'s does not.
+    surface at all, and is never UNKNOWN: only `old_doc`'s absence makes the
+    comparison itself impossible. It is NOT, however, always `[]` -- an empty
+    new surface removes every `permissions.deny` entry `old_doc` carried, so
+    those entries are reported as widening. That over-reports rather than
+    under-reports, which is the direction this module is required to fail in.
 
     A `old_doc` that IS a JSON object but simply has no `permissions` key (or
     a `permissions` object with no `allow`/`deny`) is a known, empty baseline
