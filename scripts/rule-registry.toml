@@ -364,6 +364,17 @@ delivery_marker = ""
 delivery_note = ""
 
 [[rule]]
+id = "never-agent-own-permission-surface"
+tier = 1
+locator_heading = "### Acting without asking"
+locator_phrase = "never the agent's own permission surface"
+kernel_reason = ""
+delivery_kind = "structured_hook"
+delivery_marker = ""
+delivery_note = "hook-guard-permission-self-grant.py, a PreToolUse gate on Edit|Write and Bash. Denies only on all three conjuncts at once: the call widens a permissions.allow surface (judged by JSON shape, never by filename), a permission-layer denial already stands in this session, and an added entry would have covered a denied call. The prose rule is broader than the hook - the hook is its decidable core."
+uninstrumented_reason = "A PreToolUse gate returns a structured allow/deny decision and emits no bracket tag or other narrative text, so neither a deny nor an allow leaves a countable marker in the transcript."
+
+[[rule]]
 id = "unknown-tool-lookup-budget"
 tier = 0
 locator_heading = "### Acting without asking"
