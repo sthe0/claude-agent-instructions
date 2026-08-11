@@ -14,7 +14,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from dataclass_domain import dataclasses_reached, leaf_paths
+import pytest
+
+from dataclass_domain import CyclicDataclassError, dataclasses_reached, leaf_paths
 
 
 @dataclass
@@ -99,3 +101,20 @@ def test_dataclasses_reached_records_a_diamond_reached_type_exactly_once():
 
 def test_dataclasses_reached_terminates_on_a_two_hop_cycle():
     assert dataclasses_reached(_CycleA) == (_CycleA, _CycleB)
+
+
+def test_leaf_paths_descends_a_diamond_on_both_branches():
+    """The control on `leaf_paths`' cycle guard being PATH-local: a global `seen`
+    would terminate the cycle too, and silently drop `right.leaf.value` as
+    already-visited. A path yielded per branch is the property that forbids it."""
+    assert leaf_paths(_Diamond) == ("left.leaf.value", "right.leaf.value")
+
+
+def test_leaf_paths_refuses_a_two_hop_cycle_by_name():
+    """`dataclasses_reached` terminates on `_CycleA` and returns; `leaf_paths` has no
+    finite answer to return, so it refuses. Before this guard it recursed to an
+    opaque `RecursionError` — an asymmetry with its sibling that the module's own
+    docstring, promising one shared traversal, did not admit."""
+    with pytest.raises(CyclicDataclassError) as excinfo:
+        leaf_paths(_CycleA)
+    assert "b.a" in str(excinfo.value)

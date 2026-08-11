@@ -8,7 +8,11 @@ drift apart.
 
 `leaf_paths` and `dataclasses_reached` both walk `dataclasses.fields`, unwrapping
 `X | None` and `list[X]` annotations, and recursing whenever the unwrapped type is
-itself a dataclass. Nothing here names a struct or a field: a dataclass added later
+itself a dataclass. They differ in what they remember across that recursion, and the
+difference is forced by what each yields: `dataclasses_reached` yields each TYPE once,
+so one accumulator shared by the whole walk is right; `leaf_paths` yields a PATH per
+branch, so it remembers only its own branch and both terminate on a cycle by their own
+means (see each function's docstring). Nothing here names a struct or a field: a dataclass added later
 to the walk, at any depth, is picked up without editing a caller — the exact
 property stage 10 of smd-act-defects-8 exists to establish, after an earlier draft
 substituted a hand-written five-name apposition for this traversal and silently
@@ -52,23 +56,48 @@ def _unwrap(tp):
     return tp
 
 
+class CyclicDataclassError(ValueError):
+    """A cycle in the type graph, raised by `leaf_paths` in place of the
+    `RecursionError` an unbounded descent would eventually hit. A cycle has no
+    finite leaf-path set, so there is no answer to truncate to: refusing by name
+    tells a caller WHICH field closed the loop, where a stack overflow tells it
+    only that something did."""
+
+
 def leaf_paths(cls, *, prefix: str = "") -> tuple[str, ...]:
     """Every leaf field reachable from `cls`, as dotted paths from the root, in
     field-declaration order, depth-first. A field whose unwrapped type is itself a
     dataclass is never a leaf: the traversal descends into it instead of yielding
     it, so `criterion.landed` contributes `criterion.landed.target` etc. rather
     than stopping at `criterion.landed` — the LandedSpec depth is REACHED, not
-    named."""
+    named. Raises `CyclicDataclassError` on a cyclic type graph."""
+    return tuple(_leaf_paths_into(cls, prefix, (cls,)))
+
+
+def _leaf_paths_into(cls, prefix: str, ancestors: tuple[type, ...]) -> list[str]:
+    """`ancestors` is PATH-local — the chain from the root down to `cls` on THIS
+    branch — where `dataclasses_reached`'s `seen` is one accumulator shared by the
+    whole walk. The asymmetry is not an oversight: that function yields each type
+    once, so a type met anywhere before is skipped; this one yields a path per
+    branch, so a type met on a SIBLING branch must still be descended into (a
+    diamond owes both `left.leaf.value` and `right.leaf.value`, pinned in
+    `test_dataclass_domain.py`). Only a repeat on the same branch is a cycle."""
     out: list[str] = []
     hints = typing.get_type_hints(cls)
     for f in dataclasses.fields(cls):
         nested = _unwrap(hints[f.name])
         path = f"{prefix}{f.name}"
         if dataclasses.is_dataclass(nested):
-            out.extend(leaf_paths(nested, prefix=f"{path}."))
+            if nested in ancestors:
+                raise CyclicDataclassError(
+                    f"{path}: {nested.__name__} is already its own ancestor on this "
+                    f"branch ({' -> '.join(a.__name__ for a in ancestors)}) — a cyclic "
+                    f"type graph has no finite leaf-path set"
+                )
+            out.extend(_leaf_paths_into(nested, f"{path}.", ancestors + (nested,)))
         else:
             out.append(path)
-    return tuple(out)
+    return out
 
 
 def dataclasses_reached(cls) -> tuple[type, ...]:
