@@ -414,6 +414,52 @@ def test_missing_canon_roots_file_does_not_raise(tmp_path):
     assert _allowed(proc), proc.stdout
 
 
+# --- `~`-spelled Bash writes: the lexer's `expanduser` fix makes this guard STRICTER
+# too (measured in test_bash_write_targets.py's closing comment), but none of the 34 rows
+# above notice -- every one of them still passes with `expanduser` removed from `_abs`.
+# These two pin the behaviour so a regression to the pre-fix lexer fails HERE, in the
+# language of the consumer whose deny is what actually keeps a `~`-spelled write out of a
+# registered canon root.
+
+def test_bash_tilde_spelled_write_into_canon_roots_file_denies(tmp_path, monkeypatch):
+    anchor = tmp_path / "canon-mirror"
+    anchor.mkdir()
+    (anchor / "doc.md").write_text("x\n")
+    roots_file = tmp_path / "canon-roots.local"
+    roots_file.write_text(f"{anchor}\n")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    proc = run_hook(_no_primary_core(tmp_path), {
+        "tool_name": "Bash",
+        "tool_input": {"command": "cp evil.md ~/canon-mirror/doc.md"},
+        "cwd": str(outside),
+    }, extra_env={"CLAUDE_CANON_ROOTS_FILE": str(roots_file)})
+    assert _denied(proc), proc.stdout
+
+
+def test_bash_tilde_spelled_write_outside_canon_allows(tmp_path, monkeypatch):
+    """Control for the row above: same fake HOME, same `~` spelling, but the expanded
+    target does not land under any registered canon root."""
+    anchor = tmp_path / "canon-mirror"
+    anchor.mkdir()
+    roots_file = tmp_path / "canon-roots.local"
+    roots_file.write_text(f"{anchor}\n")
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    proc = run_hook(_no_primary_core(tmp_path), {
+        "tool_name": "Bash",
+        "tool_input": {"command": "cp evil.md ~/outside-of-canon.md"},
+        "cwd": str(outside),
+    }, extra_env={"CLAUDE_CANON_ROOTS_FILE": str(roots_file)})
+    assert _allowed(proc), proc.stdout
+
+
 # --- symlinks: realpath both sides, so resolution decides, not the literal path ---
 
 def test_symlink_into_canon_denies(tmp_path):

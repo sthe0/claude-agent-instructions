@@ -123,9 +123,13 @@ NAMED RESIDUALS carried by this hook (R-numbers are the plan's):
       destination is one unambiguous token, the surface is named on the command line,
       and the gate answers about a path the command will not write. The cause is that
       `bash_write_targets` performs no shell expansion. `~` was in this class until
-      this round: `cp grant.json ~/.claude/settings.json` joined the literal `~` under
-      the cwd, and MEASURED at commit 067ea09, armed, with the real
-      `~/.claude/settings.json` a live surface, it ALLOWED. `_abs` now calls
+      this round: `cp grant.json ~/.claude-agent/settings.json` joined the literal `~`
+      under the cwd, and MEASURED at commit 067ea09, armed, with the real
+      `~/.claude-agent/settings.json` a live surface, it ALLOWED. The gate judges by
+      JSON shape, never by filename — the personal Claude Code root's own settings
+      document is a live permission surface too — and the agent home is named here
+      because it is the surface whose widening this gate was built to refuse, not
+      because it is the only one the gate sees. `_abs` now calls
       `os.path.expanduser`, and the identical command DENIES. `$VAR` is NOT expanded
       and stays in this class: `cp grant.json $HOME/.claude/settings.json` and the
       `${HOME}` spelling both still ALLOW, measured after the fix. That is a choice,
@@ -162,14 +166,14 @@ NAMED RESIDUALS carried by this hook (R-numbers are the plan's):
   verbs write wherever their diff says, which is inside the patch body, not on the command
   line. They are the only verbs that answer with a directory AND NOTHING ELSE:
   `cp`/`mv`/`install` also resolve a directory destination to the files it means
-  (`_copy_targets`), so `cp grant.json /home/u/.claude/` — MEASURED, armed, with
-  `/home/u/.claude/settings.json` a live surface — DENIES on the join, while under the
-  pre-round-7 shape of `_copy_targets` (destination only, re-applied as a mutation to
+  (`_copy_targets`), so `cp grant.json /home/u/.claude-agent/` — MEASURED, armed, with
+  `/home/u/.claude-agent/settings.json` a live surface — DENIES on the join, while under
+  the pre-round-7 shape of `_copy_targets` (destination only, re-applied as a mutation to
   measure this rather than inferred from the commit) the identical command ALLOWED by
   landing on this same directory arm. The ABSOLUTE spelling is the one that arm used to
-  absorb. A `~` spelling never reached it: `cp grant.json ~/.claude/` allowed at the start
-  of this round too, but through ABSENT, because the lexer joined the literal `~` under
-  the cwd and `<cwd>/~/.claude/` is a path nothing is on — a different hole, fixed
+  absorb. A `~` spelling never reached it: `cp grant.json ~/.claude-agent/` allowed at the
+  start of this round too, but through ABSENT, because the lexer joined the literal `~`
+  under the cwd and `<cwd>/~/.claude-agent/` is a path nothing is on — a different hole, fixed
   separately in `_abs` and named as axis-1 member (iv). Since round 6 a directory target is
   an ESTABLISHED negative (a directory is not a JSON document), so `git apply grant.patch`
   reaches ALLOW even when the patch adds a `permissions.allow` entry. What was there before
@@ -386,10 +390,11 @@ class _Unreadable:
 # `permissions/global.json` 24 B), took the 1916 B maximum, and published a "~547x
 # margin". But a generator SOURCE is not what a tool call writes to. The documents this
 # gate actually meets are the installed ones, and measured on this machine they are:
-# `~/.claude.json` 76 310 B, `~/.claude-agent/.claude.json` 32 966 B,
+# `~/.claude.json` 76 310 B, `~/.claude-agent/.claude.json` 32 986 B,
 # `~/.claude/settings.json` 14 398 B, `~/.claude-agent/settings.json` 12 060 B — all four
-# by `stat -c '%s %n'` on 2026-08-11. The real maximum is 76 310 B, so 1 MiB leaves
-# ~13.7x, not ~547x.
+# by `stat -c '%s %n'` on 2026-08-11. The two `.claude.json` files are live CLI state and
+# drift between sessions, so this is an AS-OF SNAPSHOT, not a constant to keep re-syncing
+# to the byte. The real maximum is 76 310 B, so 1 MiB leaves ~13.7x, not ~547x.
 #
 # WHAT AN OVER-CAP DOCUMENT COSTS IS NOW A FALSE DENY, WHICH IS WHY THE NUMBER NO LONGER
 # HAS TO BE EXACTLY RIGHT. It used to be a false ALLOW: over the cap `_read_text`

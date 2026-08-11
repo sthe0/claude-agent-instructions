@@ -81,25 +81,25 @@ def test_a_copy_destination_resolves_to_the_files_it_means(command, expected):
 @pytest.mark.parametrize("command, expected", [
     # `~` MEANS THE INVOKING USER'S HOME and this process runs as that user, so expanding it
     # names the path the command will really write. Until this round the literal `~` joined
-    # under the cwd, and `<cwd>/~/.claude/settings.json` is a path nothing is on -- which is
-    # how the self-grant gate read ABSENT ("a creation, nothing to widen") about the most
-    # ordinary spelling of the write it exists to stop.
-    ("cp s.json ~/.claude/settings.json",
-     ["/home/u/.claude/settings.json", "/home/u/.claude/settings.json/s.json"]),
-    ("cp s.json ~/.claude/", ["/home/u/.claude/s.json"]),
-    ("mv s.json ~/.claude/settings.json",
-     ["/home/u/.claude/settings.json", "/home/u/.claude/settings.json/s.json"]),
-    ("install -m 600 s.json ~/.claude/", ["/home/u/.claude/s.json"]),
+    # under the cwd, and `<cwd>/~/.claude-agent/settings.json` is a path nothing is on --
+    # which is how the self-grant gate read ABSENT ("a creation, nothing to widen") about the
+    # most ordinary spelling of the write it exists to stop.
+    ("cp s.json ~/.claude-agent/settings.json",
+     ["/home/u/.claude-agent/settings.json", "/home/u/.claude-agent/settings.json/s.json"]),
+    ("cp s.json ~/.claude-agent/", ["/home/u/.claude-agent/s.json"]),
+    ("mv s.json ~/.claude-agent/settings.json",
+     ["/home/u/.claude-agent/settings.json", "/home/u/.claude-agent/settings.json/s.json"]),
+    ("install -m 600 s.json ~/.claude-agent/", ["/home/u/.claude-agent/s.json"]),
     # `_abs` is the single choke point for every target token, which is why the redirect and
     # the other verb families expand too rather than needing four separate fixes.
-    ("echo x > ~/.claude/settings.json", ["/home/u/.claude/settings.json"]),
-    ("tee ~/.claude/settings.json", ["/home/u/.claude/settings.json"]),
+    ("echo x > ~/.claude-agent/settings.json", ["/home/u/.claude-agent/settings.json"]),
+    ("tee ~/.claude-agent/settings.json", ["/home/u/.claude-agent/settings.json"]),
     # `sed -i` emits its SCRIPT token as a candidate as well, which is the over-emission this
     # module's contract permits: `/w/s/a/b/` is a path nothing is on, so it answers nothing.
     # Pinned rather than tidied, because a reader who does not expect it will read the second
     # entry as the only one and mis-set their own policy.
-    ("sed -i s/a/b/ ~/.claude/settings.json",
-     ["/w/s/a/b/", "/home/u/.claude/settings.json"]),
+    ("sed -i s/a/b/ ~/.claude-agent/settings.json",
+     ["/w/s/a/b/", "/home/u/.claude-agent/settings.json"]),
     # A bare `~` resolves, and the ambiguous-token rule applies on top of it.
     ("cp s.json ~", ["/home/u", "/home/u/s.json"]),
     # `~` anywhere but the front is NOT a home reference and must not become one.
@@ -140,7 +140,7 @@ def test_an_absent_home_still_resolves_to_the_invoking_users_home(monkeypatch):
     monkeypatch.delenv("HOME", raising=False)
     home = os.path.expanduser("~")
     assert os.path.isabs(home) and home != "~"
-    assert command_write_targets("cp s.json ~/.claude/", CWD) == [f"{home}/.claude/s.json"]
+    assert command_write_targets("cp s.json ~/.claude-agent/", CWD) == [f"{home}/.claude-agent/s.json"]
 
 
 # --- the rest of the contract, so a change to it is not silent ----------------------

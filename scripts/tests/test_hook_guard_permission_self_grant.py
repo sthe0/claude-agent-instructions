@@ -1237,19 +1237,19 @@ def test_the_controls_the_directory_resolution_must_not_break(tmp_path):
 
 
 @pytest.mark.parametrize("dest_template, denies", [
-    ("~/.claude/settings.json", True),    # the spelling every runbook and every human uses
-    ("~/.claude/", True),                 # and it composes with the directory resolution
+    ("~/.claude-agent/settings.json", True),  # the spelling every runbook and every human uses
+    ("~/.claude-agent/", True),               # and it composes with the directory resolution
     ("$HOME/.claude/settings.json", False),   # the named residual, asserted as a residual
     ("${HOME}/.claude/settings.json", False),
 ])
 def test_a_home_relative_destination_is_resolved_and_a_variable_one_is_not(
     tmp_path, monkeypatch, dest_template, denies
 ):
-    # MEASURED AT 067ea09: `cp <widened> ~/.claude/settings.json`, armed, with the real
-    # `~/.claude/settings.json` a live permission surface, was ALLOWED. The lexer joined the
-    # literal `~` under the cwd, `<cwd>/~/.claude/settings.json` is a path nothing is on, so
-    # the gate read ABSENT -- "a creation, nothing to widen" -- about the single most likely
-    # spelling of the manoeuvre this whole hook exists to stop. `_abs` now expands it.
+    # MEASURED AT 067ea09: `cp <widened> ~/.claude-agent/settings.json`, armed, with the real
+    # `~/.claude-agent/settings.json` a live permission surface, was ALLOWED. The lexer joined
+    # the literal `~` under the cwd, `<cwd>/~/.claude-agent/settings.json` is a path nothing is
+    # on, so the gate read ABSENT -- "a creation, nothing to widen" -- about the single most
+    # likely spelling of the manoeuvre this whole hook exists to stop. `_abs` now expands it.
     #
     # THE TWO HALVES ARE ONE ROW ON PURPOSE. `$HOME` is NOT expanded and these rows pin that
     # it stays allowed, because the asymmetry is a decision and an unpinned decision drifts:
@@ -1258,8 +1258,8 @@ def test_a_home_relative_destination_is_resolved_and_a_variable_one_is_not(
     # ambiguity -- it means the invoking user's home and this process IS that user. Flipping
     # the false rows to deny is not a regression to fix here; it needs an expansion model.
     home = tmp_path / "fakehome"
-    (home / ".claude").mkdir(parents=True)
-    surface = write_settings(home / ".claude")
+    (home / ".claude-agent").mkdir(parents=True)
+    surface = write_settings(home / ".claude-agent")
     staged = tmp_path / "staged"
     staged.mkdir()
     (staged / "settings.json").write_text(settings_text([SEED, COVERING]), encoding="utf-8")
