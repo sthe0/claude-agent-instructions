@@ -45,9 +45,8 @@ _FILE_TOOLS = {"Edit", "Write", "Read", "Glob", "Grep"}
 
 _ENTRY_RE = re.compile(r"^(?P<tool>[A-Za-z_][A-Za-z0-9_]*)(?:\((?P<spec>.*)\))?$")
 
-_RAW_SEPARATORS = _BASH_SEPS | {"\n", "\r"}
 _SEP_PATTERN = re.compile(
-    "|".join(sorted((re.escape(s) for s in _RAW_SEPARATORS), key=len, reverse=True))
+    "|".join(sorted((re.escape(s) for s in _BASH_SEPS), key=len, reverse=True))
 )
 
 
@@ -68,7 +67,17 @@ def _has_unresolved_separator(command: str) -> bool:
     whitespace (or string start/end). A standalone-token separator (the
     well-formed spaced `&&` case) segments correctly under `shlex.split` and
     is left to real segment-wise matching; every other spelling is a case
-    `shlex.split` is known to mis-segment silently."""
+    `shlex.split` is known to mis-segment silently.
+
+    The standalone-token carve-out applies to `_BASH_SEPS` ONLY. It rests on
+    the separator surviving lexing as its own token, which is true of all six
+    of those and false by construction of `\\n`/`\\r`: `shlex.split` eats a
+    newline as ordinary whitespace, so a whitespace-surrounded one would pass
+    the carve-out and then be mis-segmented anyway -- returning `False` on a
+    command the lexer got wrong, which is the one direction this module must
+    never fail in. Any newline therefore short-circuits before the scan."""
+    if "\n" in command or "\r" in command:
+        return True
     for m in _SEP_PATTERN.finditer(command):
         before = command[m.start() - 1] if m.start() > 0 else " "
         after = command[m.end()] if m.end() < len(command) else " "

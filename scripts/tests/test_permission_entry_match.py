@@ -136,6 +136,26 @@ def test_every_compound_spelling_resolves_covering_via_the_raw_string_rule():
         assert covers("Bash(git:*)", "Bash", {"command": command}) is True, command
 
 
+# --- a whitespace-surrounded newline must not slip the carve-out ------------
+
+WHITESPACE_SURROUNDED_NEWLINES = [
+    "cd /repo \n    git push",
+    "run_it \n\tgit push --force",
+    "cd /repo \r\n git push",
+]
+
+
+def test_whitespace_surrounded_newline_still_resolves_covering():
+    # The standalone-token carve-out rests on the separator surviving lexing
+    # as its own token. That holds for all six `_BASH_SEPS` and is false by
+    # construction of a newline, which `shlex.split` eats as whitespace: these
+    # three spellings passed the carve-out, were then mis-segmented anyway,
+    # and returned False -- allowing the self-grant. COMPOUND_SPELLINGS misses
+    # them because its newline row has no space before the newline.
+    for command in WHITESPACE_SURROUNDED_NEWLINES:
+        assert covers("Bash(git:*)", "Bash", {"command": command}) is True, command
+
+
 # --- two negative controls the raw-string rule must NOT break ---------------
 
 def test_well_formed_spaced_and_still_resolves_through_real_segmentation():
