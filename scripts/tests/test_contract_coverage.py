@@ -189,12 +189,25 @@ def test_the_coverage_map_is_named_in_the_planner_contract():
 
 
 def test_the_material_refs_knowledge_refs_overlap_smell_is_documented():
-    text = _contract_text()
-    assert "material_refs" in text and "knowledge_refs" in text
-    assert "smell" in text, (
-        "the contract must say that a symbol in BOTH material_refs and knowledge_refs "
-        "is a smell the stage's own prose must justify — this is a documented "
-        "convention, not a submission refusal, so nothing in submission.py enforces it"
+    """`_label_documented` is deliberately NOT the predicate here, and the difference is
+    not a loophole: what must be documented is a RELATION between two fields, where a
+    naming position names ONE label. The contract states this rule in a bullet's own
+    subject ("A symbol named in **both** `material_refs` and `knowledge_refs` is a
+    smell"), not in front of a dash, so no naming run holds it and none should.
+
+    What does carry over is the part of that predicate which generalizes past labels:
+    the claim must hold WITHIN a single documenting list item. The prior shape, `"smell"
+    in _contract_text()`, was the same whole-file substring the review condemned for the
+    per-label assertions — satisfiable by the word appearing anywhere across ~235
+    concatenated lines while the two field names matched from an unrelated paragraph."""
+    assert any(
+        "smell" in b and "material_refs" in b and "knowledge_refs" in b
+        for b in _documenting_bullets(_contract_text())
+    ), (
+        "the contract must say, in one list item, that a symbol in BOTH material_refs "
+        "and knowledge_refs is a smell the stage's own prose must justify — this is a "
+        "documented convention, not a submission refusal, so nothing in submission.py "
+        "enforces it"
     )
 
 
