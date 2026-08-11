@@ -1086,10 +1086,16 @@ def _meta_place(meta) -> tuple:
     approval spine keys on — passed as "a re-sequencing". So the totality claim is made
     here and the named rows keep only the job they are good at, naming the norm.
 
-    Hand-written for the reason `plan.order_place` documents (each field needs its own
-    hashable, order-stable form, so it cannot be derived over `dataclasses.fields`), and
-    pinned the same way: `test_the_meta_residual_exhausts_plan_meta_s_field_set` goes red
-    the day a field is added to PlanMeta and not listed here.
+    Hand-written, but for a narrower reason than `plan.order_place`'s: eight of these ten
+    fields (`task_id` through `delivery_worktree`) are plain scalars or optional strings,
+    already hashable and comparable as `meta.X` with no transformation at all — a
+    `dataclasses.fields` derivation could emit those as-is. Only two actually need custom
+    handling: `final_check` and `order` are themselves compound structures, routed through
+    `_final_check_surface`/`order_place` for the same reason those helpers exist. The list
+    stays hand-written regardless, because a derived walk would still have to dispatch
+    `final_check`/`order` away from the plain fields, and because the totality claim needs
+    its own pin either way: `test_the_meta_residual_exhausts_plan_meta_s_field_set` goes
+    red the day a field is added to PlanMeta and not listed here.
 
     `final_check` rides through `_final_check_surface`, so a label-only edit is caught by
     neither this nor the named refusal above — labels are how a check is spoken about,

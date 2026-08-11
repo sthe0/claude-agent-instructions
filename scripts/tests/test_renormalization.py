@@ -72,6 +72,7 @@ from agentctl.state import (
 from agentctl.submission import submission_violations
 
 from conftest import SUBSTANTIVE_FINAL_CHECK, SUBSTANTIVE_ORDER
+from dataclass_domain import leaf_paths
 
 CORPUS = Path(__file__).resolve().parent / "fixtures" / "plan_corpus"
 
@@ -613,6 +614,11 @@ def _edited(src: str, dst: Path, old: str, new: str) -> str:
     return str(dst)
 
 
+#: The shape a hand-maintained ONE-LEVEL expansion used before this stage's recursive
+#: fix — `criterion` expanded into `Criterion`'s own fields, but `criterion.landed`
+#: (itself a dataclass) stayed a single opaque leaf, never further expanded. No longer
+#: used by the totality test below; kept only so the regression test right after it can
+#: show concretely what the shallower domain would have missed.
 _STAGE_CLUSTERS = {
     "subject": Subject, "means": Means, "actor": Actor,
     "criterion": Criterion, "principle": Principle,
@@ -620,8 +626,13 @@ _STAGE_CLUSTERS = {
 
 #: Every leaf field of a Stage's DEFINITION, and where the renormalization residual
 #: (`gates._renorm_stage_residual`) picks it up — or why it is deliberately outside.
-#: The clusters are expanded one level; `outcome` is left whole because it is excluded
-#: whole. Values are prose for whoever the test turns red on, never read by the assert.
+#: Expanded by `dataclass_domain.leaf_paths`, genuinely recursively rather than the one
+#: level a hand-written cluster map gave: `criterion.landed` and `outcome` are both
+#: dataclass-typed fields the traversal descends INTO, contributing their own leaves
+#: (`criterion.landed.target` etc., `outcome.status` etc.) rather than stopping at the
+#: struct boundary — as does `supplies`, a `list[Supply]`, contributing `supplies.on`
+#: etc. `control` stays a single leaf: it is a plain `str | None`, nothing to descend
+#: into. Values are prose for whoever the test turns red on, never read by the assert.
 _STAGE_RESIDUAL_COVERAGE = {
     "index": "outside: the key the two plans' stages are MATCHED on — a change here is "
              "an added or removed stage, refused by its own message above",
@@ -629,13 +640,21 @@ _STAGE_RESIDUAL_COVERAGE = {
     "conditions": "stage_question_key",
     "preconditions": "stage_question_key, via preconditions_place",
     "knowledge": "stage_question_key, via knowledge_place",
-    "supplies": "stage_question_key (and depends_on, which projects from it)",
+    "supplies.on": "stage_question_key (and depends_on, which projects from it)",
+    "supplies.element": "stage_question_key (and depends_on, which projects from it)",
+    "supplies.artifact": "stage_question_key (and depends_on, which projects from it)",
     "output_artifacts": "the residual's own splice — outside stage_question_key because "
                         "no Question.target names it, inside here because re-declaring "
                         "what a stage produces moves which green a check can reach",
-    "outcome": "outside: the mutable execution RECORD, not the definition — a plan doc "
-               "loaded from TOML carries its defaults, and leaving the live copy alone "
-               "is what this whole path is for",
+    "outcome.status": "outside: the mutable execution RECORD, not the definition — a "
+                      "plan doc loaded from TOML carries its defaults, and leaving the "
+                      "live copy alone is what this whole path is for",
+    "outcome.actual": "outside: the mutable execution RECORD, same reason",
+    "outcome.fail_digests": "outside: the mutable execution RECORD, same reason",
+    "outcome.cost_usd": "outside: the mutable execution RECORD, same reason",
+    "outcome.duration_ms": "outside: the mutable execution RECORD, same reason",
+    "outcome.spawn_count": "outside: the mutable execution RECORD, same reason",
+    "outcome.delivered_head": "outside: the mutable execution RECORD, same reason",
     "control": "outside: the control attestation record-result stamps, same reason",
     "subject.material": "stage_question_key",
     "subject.result": "stage_question_key",
@@ -656,7 +675,10 @@ _STAGE_RESIDUAL_COVERAGE = {
     "criterion.expected_exit": "stage_question_key",
     "criterion.verify_venue": "stage_question_key",
     "criterion.verify_kind": "stage_question_key",
-    "criterion.landed": "stage_question_key",
+    "criterion.landed.target": "stage_question_key, via the whole LandedSpec object",
+    "criterion.landed.delivered_stage": "stage_question_key, via the whole LandedSpec "
+                                        "object",
+    "criterion.landed.remote": "stage_question_key, via the whole LandedSpec object",
     "criterion.verify_venue_at_final": "stage_question_key",
     "criterion.observation": "outside: what a reviewer actually SAW — an execution "
                              "record, and the one this path most exists to preserve",
@@ -678,15 +700,16 @@ def test_the_stage_residual_exhausts_the_stage_s_field_set():
     `output_artifacts` (what the reachability lint reads as produced). Both passed the
     light path.
 
-    The membership is hand-written, as `order_place`'s is and for the same reason, so
-    like `test_order_place_exhausts_the_order_s_field_set` this is what makes the claim
-    true rather than restating it: add a field to Stage or to one of its declaration
-    clusters and this goes red until someone decides, in writing, which side it is on."""
-    leaves = set()
-    for f in dataclasses.fields(Stage):
-        cluster = _STAGE_CLUSTERS.get(f.name)
-        leaves |= ({f"{f.name}.{g.name}" for g in dataclasses.fields(cluster)}
-                   if cluster else {f.name})
+    The domain is derived by `dataclass_domain.leaf_paths`, genuinely recursively — an
+    earlier draft expanded `_STAGE_CLUSTERS` one level by hand and so never reached
+    `criterion.landed`'s own three fields, `outcome`'s seven, or `supplies`'s three;
+    a LandedSpec-only mutation would have passed that shallower version's own totality
+    check while never being exercised by anything downstream. The membership map itself
+    is still hand-written, as `order_place`'s is and for the same reason, so like
+    `test_order_place_exhausts_the_order_s_field_set` this is what makes the claim true
+    rather than restating it: add a field to Stage at any depth and this goes red until
+    someone decides, in writing, which side it is on."""
+    leaves = set(leaf_paths(Stage))
 
     assert leaves == set(_STAGE_RESIDUAL_COVERAGE), (
         f"a Stage field is in neither the renormalization residual nor its named "
@@ -695,6 +718,27 @@ def test_the_stage_residual_exhausts_the_stage_s_field_set():
         f"whether an edit to it is a re-sequencing (it is not, almost always), splice "
         f"it into gates._renorm_stage_residual, and record the decision here"
     )
+
+
+def test_the_one_level_expansion_would_have_missed_a_landedspec_only_mutation():
+    """The regression this stage's recursive switch guards against, made concrete. The
+    OLD domain (`_STAGE_CLUSTERS` expanded one level by hand) named `criterion.landed`
+    as a single leaf — so a hand-maintained coverage map only had to account for the
+    LandedSpec object AS A WHOLE, and a change touching only `LandedSpec.remote` (say)
+    was never separately demanded of anyone. The new domain forces exactly that: each of
+    LandedSpec's three fields is its own leaf, individually listed in
+    `_STAGE_RESIDUAL_COVERAGE`."""
+    old_one_level_domain = set()
+    for f in dataclasses.fields(Stage):
+        cluster = _STAGE_CLUSTERS.get(f.name)
+        old_one_level_domain |= ({f"{f.name}.{g.name}" for g in dataclasses.fields(cluster)}
+                                 if cluster else {f.name})
+    new_domain = set(leaf_paths(Stage))
+
+    assert "criterion.landed" in old_one_level_domain
+    assert "criterion.landed" not in new_domain
+    assert {"criterion.landed.target", "criterion.landed.delivered_stage",
+            "criterion.landed.remote"} <= new_domain
 
 
 def test_the_meta_residual_exhausts_plan_meta_s_field_set():
@@ -767,6 +811,29 @@ def test_renormalize_refuses_a_stage_field_outside_the_question_key(store, tmp_p
     d = _renormalize(store, _edited(plan, tmp_path / "q.toml",
                                     'capability_required = "cap"\nmaterial_refs',
                                     'capability_required = "cap"\ncost_tier = "large"\n'
+                                    'material_refs'))
+
+    assert d.ok is False, d.data
+    assert any("other than `means.procedure`" in b for b in d.data["blockers"]), (
+        d.data["blockers"]
+    )
+
+
+def test_renormalize_refuses_an_output_artifacts_re_declaration(store, tmp_path):
+    """`output_artifacts` is the residual's OTHER splice, and had no behavioral test of
+    its own before this stage's review — only `cost_tier`'s case above did, so a revert
+    of the `output_artifacts` line in `_renorm_stage_residual` would have stayed green.
+
+    Engine-consumed the same way `cost_tier` is: the verify-command reachability lint
+    reads it as what a stage produces, and no `Question.target` may name it, so
+    `stage_question_key` alone would wave a re-declaration through as a re-sequencing."""
+    plan = _write_plan(tmp_path / "p.toml")
+    _approved(store, plan)
+
+    d = _renormalize(store, _edited(plan, tmp_path / "q.toml",
+                                    'capability_required = "cap"\nmaterial_refs',
+                                    'capability_required = "cap"\n'
+                                    'output_artifacts = ["scripts/agentctl/gates.py"]\n'
                                     'material_refs'))
 
     assert d.ok is False, d.data

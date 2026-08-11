@@ -268,6 +268,7 @@ def _apply_refined_stage_fields(cur, refined) -> None:
     cur.criterion.verify_venue = refined.criterion.verify_venue
     cur.criterion.verify_kind = refined.criterion.verify_kind
     cur.criterion.landed = refined.criterion.landed
+    cur.criterion.verify_venue_at_final = refined.criterion.verify_venue_at_final
     cur.actor.executor = refined.actor.executor
     cur.actor.cost_tier = refined.actor.cost_tier
     # depends_on is a read-only projection over `supplies`, so the backing edges
