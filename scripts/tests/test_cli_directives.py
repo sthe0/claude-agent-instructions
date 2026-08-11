@@ -285,7 +285,7 @@ def test_measurable_record_result_requires_observation_on_substantive_session(st
     assert refused.action == "attest_observation"
     d = cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           observation="ran it and the produced output matched"),
+           observation=STAGE_OBSERVATIONS[0]),
         store=store,
     )
     assert d.ok is True
@@ -461,7 +461,7 @@ def test_record_result_spawn_stage_attributes_cost(store, fixtures_dir, tmp_path
 
     d = cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           observation="ran it and the produced output matched", cost_log=str(cost_log)),
+           observation=STAGE_OBSERVATIONS[0], cost_log=str(cost_log)),
         store=store,
     )
     assert d.ok is True
@@ -489,7 +489,7 @@ def test_record_result_spawn_stage_sums_multiple_log_rows(store, fixtures_dir, t
 
     d = cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           observation="ran it and the produced output matched", cost_log=str(cost_log)),
+           observation=STAGE_OBSERVATIONS[0], cost_log=str(cost_log)),
         store=store,
     )
     assert d.ok is True
@@ -509,7 +509,7 @@ def test_record_result_missing_cost_log_leaves_none(store, fixtures_dir, tmp_pat
 
     d = cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           observation="ran it and the produced output matched", cost_log=str(missing)),
+           observation=STAGE_OBSERVATIONS[0], cost_log=str(missing)),
         store=store,
     )
     assert d.ok is True

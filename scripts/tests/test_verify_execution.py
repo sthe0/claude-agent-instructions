@@ -43,6 +43,11 @@ def ns(**kw):
 # case whose passed claim the command contradicts.
 _RAN_THE_COMMAND = "compared the recorded claim against the exit code the verify_command actually returned"
 
+# The companion for the cases whose stage declares NO verify_command (runner=boom asserts
+# nothing is run at all): there is no exit code to compare, so what a controller here
+# compared is the produced work against the stage's own done criterion.
+_READ_THE_WORK = "no verify_command on this stage: read the work it produced against done criterion c"
+
 
 def _record_passed(store, sid, actual="ok", observation=_RAN_THE_COMMAND, **kw):
     return cli.cmd_record_result(
@@ -264,7 +269,7 @@ def test_measurable_pass_requires_observation_on_substantive_session(store):
     assert refused.action == "attest_observation"
     d = cli.cmd_record_result(
         ns(session="ar5", status="passed", actual="ok", control=None,
-           observation="ran it and the produced output matched"),
+           observation=_READ_THE_WORK),
         store=store, runner=boom,
     )
     assert d.ok is True

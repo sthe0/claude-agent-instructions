@@ -42,8 +42,13 @@ R1 = ["stage 1 verify_command"]
 """
 
 # What a controller would report having SEEN at each stage of the `plan_two_stage*`
-# fixture family (plain / _refined / _substantive — same three stages in the same order),
-# indexed by stage index - 1.
+# fixture family, indexed by stage index - 1. The plain and _refined plans stop at stage 2
+# ("Scaffold module", "Add tests"); _substantive adds the third ("Wire CI") — so a two-stage
+# driver takes STAGE_OBSERVATIONS[:2] and only a _substantive one reaches [2].
+#
+# Each string is true of ITS stage's done_criterion, and no more: stage 3 asks only that the
+# CI config reference test_mod, so its observation reads the config — it does not claim a
+# push or a CI run, neither of which any fixture here performs.
 #
 # Defect 2 broadened the observation requirement from acceptance_review stages to EVERY
 # stage of a substantive session: `record-result --status passed` now refuses a stage that
@@ -58,7 +63,7 @@ R1 = ["stage 1 verify_command"]
 STAGE_OBSERVATIONS = (
     "mod.py is on disk and importing it in a fresh interpreter raised nothing",
     "ran pytest over tests/test_mod.py: every case passed, none failed",
-    "pushed the branch and the CI run collected tests/test_mod.py and reported green",
+    "grepped .github/workflows/ci.yml: it names test_mod in the step that runs the suite",
 )
 
 # A plan-level end-to-end check, likewise required of a substantive plan. Written to be

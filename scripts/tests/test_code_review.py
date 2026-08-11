@@ -96,7 +96,13 @@ def _code_review(store, verdict, reviewer="code-reviewer", note="", concerns=Non
     )
 
 
-def _rr(store, status, actual="done", control=None, code_ref=None, observation="ran it and the produced output matched"):
+# `_dev_stage` declares no verify_command, so nothing here is ever run: the comparison a
+# controller of that stage could report is a read of the code it produced against its own
+# done criterion (`c`), which is also what the code-review gate is about.
+_OBSERVATION = "read the diff this stage produced against done criterion c; it does what c asks"
+
+
+def _rr(store, status, actual="done", control=None, code_ref=None, observation=_OBSERVATION):
     return cli.cmd_record_result(
         Namespace(session="cr", status=status, actual=actual, control=control,
                    observation=observation, code_ref=code_ref),

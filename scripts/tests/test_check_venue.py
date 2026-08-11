@@ -196,7 +196,9 @@ def test_missing_delivery_worktree_refuses_without_failing_stage(store, tmp_path
     store.save(s)
     d = cli.cmd_record_result(
         ns(session="v6", status="passed", actual="ok", control=None,
-           observation="ran it and the produced output matched"),
+           # the venue is missing, so pytest -q never runs (asserted below): what a
+           # controller could have compared here is the produced work itself.
+           observation="nothing was run: read the files the stage produced against done criterion c by hand"),
         store=store, runner=cap,
     )
     assert d.ok is False
