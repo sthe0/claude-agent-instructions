@@ -5,7 +5,9 @@ edit is seen by any part of the replan/carry-forward/question-invalidation machi
 Part A ties the planner's authoring contract (SKILL.md + policy.md) to submission.py's
 own three field tables — the same guard test_rejected_shapes.py gives the SUBMISSION
 seam's refusal behavior, aimed instead at the DOCUMENTATION an author reads before ever
-reaching that seam.
+reaching that seam. Part A′ then pins the naming predicate Part A is built on, over
+SYNTHETIC text: the two parts control different objects, and neither substitutes for the
+other (argued where Part A′ begins).
 
 Part B answers a different question than test_renormalization.py's
 `test_the_stage_residual_exhausts_the_stage_s_field_set` — that one asks whether the
@@ -87,20 +89,41 @@ _TRAILING_SPANS_RE = re.compile(r"(?:`[^`]+`[\s*/,]*)+$")
 
 #: Width is not position. A run may be perfectly bounded and still sit mid-clause, so a
 #: naming run must additionally OPEN A STATEMENT: begin its segment (modulo the list
-#: marker and emphasis characters) or follow a sentence-terminating boundary. The four
-#: real shapes across the two contract files, in front of their runs —
-#:   `- **`                                         opens a glossary bullet   → credit
-#:   `- **Knowledge & preconditions:** `             ends on `:`              → credit
-#:   `… element = "knowledge"`). ` / `… reason. `    ends a sentence          → credit
-#:   `` `verify_venue` on a stage, `venue` on a ``   mid-clause               → NO credit
-#: — and that last one is the whole point. `SKILL.md`'s dash-bracketed aside "… **declare**
-#: the venue — `verify_venue` on a stage, `venue` on a `[[final_check]]` — instead of
-#: hardcoding an absolute `cd` …" is about declaring a check's venue; the ` on a ` in front
-#: of the last span narrows the run to that span alone, and `final_check` was credited from
-#: it. So the assertion for that label held with `policy.md`'s glossary bullet — the one
-#: place in the contract that tells an author the field is submission-required — deleted.
-#: This rule drops that credit and no other.
-_STATEMENT_END = ".:;)?!"
+#: marker and emphasis characters), follow a sentence-terminating boundary, or follow a
+#: colon that CLOSES AN EMPHASISED SUBJECT (`…:** `, the bullet-subject shape). A BARE
+#: mid-sentence colon does not — see the last census row.
+#:
+#: The census below is the whole domain, enumerated over both files rather than recalled
+#: from the labels this file happens to track. The two contract files hold 88 pre-dash
+#: segments; `_TRAILING_SPANS_RE` refuses 67 of them for WIDTH — they do not end in a
+#: code-span run at all — before position is ever consulted. The other 21 split by the
+#: shape of the text in front of the run:
+#:   13  `- ` and `- **`                             opens the list item     → credit
+#:    1  `- **Knowledge & preconditions:** `         `:` closing a subject   → credit
+#:    2  `… = "knowledge"`). ` and `… same reason. `  ends a sentence        → credit
+#:    4  `` … `venue` on a ``, `…"). For `, `…; for ` mid-clause             → NO credit
+#:    1  `… in the provenance ledger: `              bare mid-sentence `:`   → NO credit
+#:
+#: The two refusing rows are why the rule exists, and they are separate cases.
+#:
+#: MID-CLAUSE. `SKILL.md`'s dash-bracketed aside "… **declare** the venue — `verify_venue`
+#: on a stage, `venue` on a `[[final_check]]` — instead of hardcoding an absolute `cd` …"
+#: is about declaring a check's venue; the ` on a ` in front of the last span narrows the
+#: run to that span alone, and `final_check` was credited from it. So the assertion for
+#: that label held with `policy.md`'s glossary bullet — the one place in the contract that
+#: tells an author the field is submission-required — deleted. That aside was the target;
+#: the other three mid-clause refusals (`SKILL.md`'s "… opens **directly** with the
+#: approval `AskUserQuestion`", and the two `measurable` / `acceptance-review` segments of
+#: the Expected-result-image item) are correct refusals in their own right, not collateral.
+#:
+#: BARE COLON. `policy.md`'s ledger bullet ends "… Record each as a claim in the provenance
+#: ledger: `agentctl ledger-add --status axiom|derivation|assumption ...` — …": a colon
+#: introducing a COMMAND EXAMPLE, not naming a field. Crediting it handed the bullet's flag
+#: vocabulary to the label domain, so `_label_documented("derivation", …)` was True off a
+#: CLI flag list — with nothing in the contract documenting `Principle.derivation` at all.
+#: The day that field enters a tracked field table, its assertion would go green off that
+#: flag list: the same vacuity class the two rules above removed, one field-table edit away.
+_STATEMENT_END = ".;)?!"
 
 #: A code span is credited by its identifier TOKENS, never by substring containment:
 #: `means.method` names both `means` and `method`, `[meta.order.coverage]` names
@@ -118,10 +141,17 @@ def _documenting_bullets(text: str) -> list[str]:
 
 def _opens_a_statement(before: str) -> bool:
     """True when a run trailing `before` inside its segment sits in a naming position —
-    `before` is empty once the list marker and markdown emphasis are stripped, or it ends
-    at a sentence-terminating boundary."""
-    head = _LIST_ITEM_RE.sub("", before).rstrip(" \t*_")
-    return head == "" or head[-1] in _STATEMENT_END
+    `before` is empty once the list marker and markdown emphasis are stripped, it ends at
+    a sentence-terminating boundary, or it ends at a colon that closes an EMPHASISED
+    subject (`**Knowledge & preconditions:** `). The emphasis is what distinguishes the
+    two colon shapes, so it is tested BEFORE the emphasis characters are stripped."""
+    head = _LIST_ITEM_RE.sub("", before).rstrip()
+    subject = head.rstrip(" \t*_")
+    if subject == "":
+        return True
+    if subject[-1] in _STATEMENT_END:
+        return True
+    return subject[-1] == ":" and head != subject
 
 
 def _naming_terms(bullet: str) -> set[str]:
@@ -156,6 +186,112 @@ def _label_documented(label: str, text: str) -> bool:
     tightening, which reached the right lines but still compared by substring inside
     them, so `customer_id` went on satisfying `customer`."""
     return any(label in _naming_terms(b) for b in _documenting_bullets(text))
+
+
+def _overlap_smell_documented(text: str) -> bool:
+    """True when ONE list item of `text` states the material_refs/knowledge_refs overlap
+    convention. Rationale for the shape — and for how its reach differs from
+    `_label_documented`'s — in the assertion that consumes it below."""
+    return any(
+        "smell" in b and "material_refs" in b and "knowledge_refs" in b
+        for b in _documenting_bullets(text)
+    )
+
+
+# --- Part A′: the naming predicates themselves, pinned over SYNTHETIC text --
+
+# Four review rounds established this predicate's behaviour by hand-running mutations
+# over the real contract files, and each round found a shape the previous one had not
+# considered. Nothing pinned the predicate itself, so any edit to it re-opened every
+# shape at once and the only detector was another review round. These cases close that:
+# one per shape, each id naming what that shape is here to hold.
+#
+# They do NOT duplicate the contract-file assertions above, and are not a weaker copy of
+# them: those pin THE DOCUMENTATION (does the contract still name `preconditions`?),
+# these pin THE PREDICATE (does a bare mid-sentence colon still refuse?). Two different
+# objects — the documentation can be rewritten without touching the predicate, and the
+# predicate can be rewritten without touching the documentation, and only a control per
+# object catches both.
+
+#: (id, synthetic list item, the tokens `_naming_terms` must return). Each id names, in
+#: one clause, the finding the case holds — a review round where the round established
+#: it, the contract shape where the rule was there to read the shape correctly.
+_NAMING_CASES = (
+    ("opens-the-list-item (the glossary-bullet shape)",
+     "- **`alpha`** — why it exists",
+     {"alpha"}),
+    ("emphasis-closed-subject-colon (round 4)",
+     "- **Subject:** `alpha` — why it exists",
+     {"alpha"}),
+    ("sentence-boundary (the SKILL.md material_refs shape)",
+     "- prose, and for the same reason. `alpha` — why it exists",
+     {"alpha"}),
+    ("close-paren-then-period (the SKILL.md preconditions shape)",
+     '- prose (`[[stage.supplies]] element = "knowledge"`). `alpha` — why it exists',
+     {"alpha"}),
+    ("mid-clause (the final_check aside this rule was added for)",
+     "- prose declaring the venue on a `alpha` — why it exists",
+     set()),
+    ("bare-mid-sentence-colon (round 4)",
+     "- prose recording each claim in the provenance ledger: `alpha` — why it exists",
+     set()),
+    ("multi-span run (round 2)",
+     "- **`alpha`** / **`beta`** — why they exist",
+     {"alpha", "beta"}),
+    ("a later dash names too (round 2)",
+     "- **Subject:** `alpha` — why it exists. And separately. `beta` — why it exists",
+     {"alpha", "beta"}),
+    ("token never substring (round 1)",
+     "- **`alpha_id`** — why it exists",
+     {"alpha_id"}),
+    ("no em dash names nothing (deliberate strictness)",
+     "- **`alpha`** is a submission-required field",
+     set()),
+    ("run must end the segment (the functional_place shape)",
+     "- **`alpha`** (a parenthetical the run cannot cross) — why it exists",
+     set()),
+)
+
+
+@pytest.mark.parametrize(
+    "bullet,expected", [pytest.param(b, e, id=i) for i, b, e in _NAMING_CASES]
+)
+def test_the_naming_position_predicate_holds_shape_by_shape(bullet, expected):
+    assert _naming_terms(bullet) == expected
+
+
+def test_a_label_is_documented_only_from_a_list_item():
+    """Round 1's original vacuity, in its purest form: the same naming position in
+    running prose rather than in a list item credits nothing. `_documenting_bullets` is
+    what carries this, and it is separately breakable from `_naming_terms`."""
+    assert _label_documented("alpha", "- **`alpha`** — why it exists")
+    assert not _label_documented("alpha", "**`alpha`** — why it exists")
+
+
+def test_the_overlap_smell_predicate_needs_all_three_in_ONE_item():
+    """Round 3 tightened this predicate from whole-text containment to one-list-item
+    co-occurrence, measured the difference against a decoy, and then discarded the decoy
+    — so nothing in the repo held it. `split_across_items` below IS that decoy, kept:
+    all three needles are present in the text, the whole-text predicate matched it, this
+    one refuses it, and the assertion above it states the needles so a reader can see the
+    decoy is genuine rather than take the test's word for it."""
+    one_item = "- a symbol in both `material_refs` and `knowledge_refs` is a smell"
+    assert _overlap_smell_documented(one_item)
+
+    split_across_items = (
+        "- a symbol in both `material_refs` and `knowledge_refs` must be justified\n"
+        "- an unrelated bullet about a code smell\n"
+    )
+    assert all(
+        needle in split_across_items
+        for needle in ("smell", "material_refs", "knowledge_refs")
+    )
+    assert not _overlap_smell_documented(split_across_items)
+
+    #: and, as for `_label_documented`, running prose is not a list item
+    assert not _overlap_smell_documented(
+        "a symbol in both `material_refs` and `knowledge_refs` is a smell"
+    )
 
 
 @pytest.mark.parametrize("label", tuple(l for _a, l, _s in _SUBSTANTIVE_SUBMISSION_FIELDS))
@@ -199,11 +335,24 @@ def test_the_material_refs_knowledge_refs_overlap_smell_is_documented():
     the claim must hold WITHIN a single documenting list item. The prior shape, `"smell"
     in _contract_text()`, was the same whole-file substring the review condemned for the
     per-label assertions — satisfiable by the word appearing anywhere across ~235
-    concatenated lines while the two field names matched from an unrelated paragraph."""
-    assert any(
-        "smell" in b and "material_refs" in b and "knowledge_refs" in b
-        for b in _documenting_bullets(_contract_text())
-    ), (
+    concatenated lines while the two field names matched from an unrelated paragraph.
+
+    TWO DIFFERENCES FROM THE PER-LABEL ASSERTIONS, both deliberate and neither hidden:
+
+    REACH. Two list items satisfy this — `policy.md`'s "A symbol named in both … is a
+    smell" bullet and `SKILL.md`'s "Knowledge & preconditions" item — so deleting either
+    ONE alone leaves this green. That is a weaker reach than a per-label assertion, whose
+    label typically hangs on a single glossary bullet, and it is the right reach for the
+    claim being made: what must hold is that THE CONTRACT documents the convention, not
+    that one particular file does.
+
+    SUBSTRING, NOT TOKENS. `"smell" in b` is a substring test sitting three lines from a
+    comment condemning substring containment, and the difference is the domain: that
+    comment governs IDENTIFIER matching, where `knowledge_refs` must not satisfy
+    `knowledge` and `customer_id` must not satisfy `customer`. "smell" is an English word
+    in running prose, not an identifier — there is no token boundary to respect and no
+    superstring in either file for it to falsely match."""
+    assert _overlap_smell_documented(_contract_text()), (
         "the contract must say, in one list item, that a symbol in BOTH material_refs "
         "and knowledge_refs is a smell the stage's own prose must justify — this is a "
         "documented convention, not a submission refusal, so nothing in submission.py "
