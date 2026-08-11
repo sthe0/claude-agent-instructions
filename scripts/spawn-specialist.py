@@ -292,7 +292,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--permission-mode",
         choices=("acceptEdits", "auto", "bypassPermissions", "default", "dontAsk", "plan"),
-        help="claude --permission-mode for the spawned process. Default: bypassPermissions for kind=developer (trusted local writes), default otherwise.",
+        help="claude --permission-mode for the spawned process. Default: acceptEdits for kind=developer (unattended local writes, and no wider), harness default otherwise. See resolve_permission_mode for why NOT bypassPermissions.",
     )
     p.add_argument(
         "--complexity",
@@ -449,8 +449,22 @@ DEVELOPER_SETTINGS_ALLOW = [
 #     allow-only payload therefore cannot express "read but not write"; the
 #     read kinds need an explicit `Edit(...)` DENY alongside their `Read`
 #     allow, or the grant is directional in name only.
+#
+# `developer` was excluded when the read kinds were first named, on the
+# reasoning that an executor never needs to open the plan: assemble_prompt
+# reads the file and embeds its full text, so the norm arrives with the brief.
+# That holds only while the brief is still in context. Observed 2026-08-10: a
+# stage-8 developer ran 11 minutes, was auto-compacted, lost the embedded plan,
+# and had no way back to it — `Read` and `Bash cat` on the plans directory both
+# refused, so it returned PERMISSION-REQUEST having written nothing ($6.50).
+# Delivery once is not availability: the longer a spawn runs, the likelier it
+# is to need its norm again and the likelier compaction has already taken it.
+# So an executor reads for the same reason a reviewer does, and gets the same
+# directional pair — the Edit DENY matters MORE here than for a reviewer, since
+# an executor that could rewrite the plan it is executing would be editing the
+# norm it is measured against.
 PLANS_WRITE_KINDS = ("planner",)
-PLANS_READ_KINDS = ("thinker", "code-reviewer")
+PLANS_READ_KINDS = ("thinker", "code-reviewer", "developer")
 
 
 def plans_permission_rules(kind: str, plans_directory: Path) -> tuple[list[str], list[str]]:

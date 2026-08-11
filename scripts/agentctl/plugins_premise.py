@@ -1,7 +1,11 @@
 """The question-provenance plugin: binds every question raised during substantive
 plan construction to the content element that produced it, and blocks approval
-while any raised question is still open or the independent enumeration
-cross-check has not run against the CURRENT plan content.
+while any raised question is still open, the independent enumeration cross-check
+has not run against the CURRENT plan content, or it HAS run against that content
+and its runner FAILED. The third condition is the one that used to discharge
+itself: the flag flipped because the pass ran, whatever it returned. Its route out
+is `agentctl question-enumerate-escape --reason <closed-set value>`, one countable
+row naming why — never silence.
 
 Gap-2 arming fix: `plugins_ledger`'s claim-provenance discipline arms only when
 `deliverable_kind` is 'reasoning'/'mixed' (state.py defaults it to '' at classify),
@@ -27,7 +31,7 @@ from __future__ import annotations
 import hashlib
 import os
 
-from . import gates, plan, premise
+from . import advisor, gates, plan, premise
 from .plugins import Plugin, PluginDirective, register
 from .state import PLAN_PRESENTATION_KIND_ESSENCE, WeightClass
 
@@ -37,9 +41,10 @@ def _auto_activate(state) -> bool:
     condition (the gap-2 fix). AGENTCTL_PREMISE is a test-seam that overrides in both
     directions ("1" forces on, "0" forces off), mirroring gates.plan_review_active's
     AGENTCTL_PLAN_REVIEW knob: it lets the suite at large default the gate off (the
-    premise gate fail-closes `approve` and its discharge verbs land in a later stage,
-    so every substantive-cycle e2e test would otherwise wedge at approve). Env-unset
-    — every real session — resolves to the plain weight_class predicate."""
+    premise gate fail-closes `approve`, so every substantive-cycle e2e test would
+    otherwise have to drive the discharge verbs — question-dispose, order-dispose,
+    question-enumerate — to reach approve at all). Env-unset — every real session —
+    resolves to the plain weight_class predicate."""
     env = os.environ.get("AGENTCTL_PREMISE")
     if env == "1":
         return True
@@ -55,6 +60,132 @@ _ENUMERATE_STALE = (
     "question enumeration cross-check ran against different plan content — "
     "re-run `agentctl question-enumerate`"
 )
+_ENUMERATE_RUNNER_FAILED = (
+    "question enumeration cross-check ran but its runner FAILED — record a typed escape "
+    "with `agentctl question-enumerate-escape --reason <reason> --note <text>`"
+)
+
+
+def _runner_failed_blocker(bag) -> str:
+    """The runner-failure blocker, carrying the reason the ENGINE already knows from
+    the failed run's own stderr. Pre-selecting it turns the escape into a
+    confirmation rather than a free choice among five tokens — the operator reads
+    back a value derived from the evidence instead of guessing which one fits."""
+    reason = advisor.classify_runner_failure(bag.get("enumerated_runner_stderr", "") or "")
+    return f"{_ENUMERATE_RUNNER_FAILED} — the stderr reads as `--reason {reason}`"
+
+
+def escape_recorded(bag, content_digest, reasons) -> bool:
+    """Whether an escape from `reasons` is on record against THIS plan content, THIS
+    launch window and THIS pass count.
+
+    Bound to the content digest for the same reason `enumerated_at` is: an escape
+    is a statement about one plan's one failed pass, and letting it survive an edit
+    of the plan would discharge the cross-check forever after a single infra blip —
+    the precise fail-open shape this blocker exists to close. A bag with no
+    `escapes` key at all (minted before this half existed) reads as no escape, not
+    as a KeyError.
+
+    The digest alone implements one plan's EVERY pass, which is the same fail-open
+    one level in, so the row binds to two counters as well. `enumerate_launch` is
+    bumped by every `_launch_enumeration`, so a resubmit or a replan that opens a
+    NEW window over the same bytes no longer inherits the previous window's escape —
+    a window with no enumeration, no wait and no escape row would otherwise approve
+    for free. `enumerate_pass` is bumped by every applied enumeration result, so a
+    SECOND failed pass at the same digest re-blocks and is counted; without it
+    `escape_counts` — this work's own refutation instrument — undercounts, and a
+    counter that undercounts cannot refute anything.
+
+    An INTEGER counter, not `enumerate_deadline`: the deadline is restamped by every
+    launch and by nothing else, so it would serve as an identity right up until two
+    launches land in the same clock tick or the deadline becomes configurable. A row
+    carrying NEITHER counter (minted before they existed) does not match — fail
+    CLOSED, because this is a fail-open fix and ambiguity must not discharge. The
+    cost is one extra escape recording on a session carried across the change; the
+    cost of the other choice is the hole staying open for exactly the bags most
+    likely to have one.
+
+    No digest (no plan submitted) means no escape is admissible — which is not the
+    liveness hole it looks like: `approve` is only reachable from PLAN_READY, and
+    reaching PLAN_READY runs the launch that clears the enumeration record back to
+    not-run, so an escapable blocker at the approve gate always has a plan to bind
+    to."""
+    if not content_digest:
+        return False
+    launch = int(bag.get("enumerate_launch") or 0)
+    passes = int(bag.get("enumerate_pass") or 0)
+    for record in bag.get("escapes", []) or []:
+        if (record.get("content_digest") == content_digest
+                and record.get("reason") in reasons
+                and record.get("enumerate_launch") == launch
+                and record.get("enumerate_pass") == passes):
+            return True
+    return False
+
+
+def _tally(records) -> dict:
+    """Three buckets, counted SEPARATELY, because they are three different facts about
+    the fleet and each calls for a different fix. `runner_failure` — the pass landed and
+    its runner broke — is an advisor-reliability work item. `not_landed` — no pass ever
+    arrived — is a detachment-liveness one. `manual` — the pass failed AND a coordinator
+    re-read the plan by hand — is neither: it is the gate working as designed, at cost.
+
+    The last split is the one this stage's own refutation turns on ("refuted if the
+    escape degrades into a click-through"): a fleet escaping via `manual` did the work
+    the enumeration exists to do, a fleet escaping via `advisor_timeout` did not, and a
+    single runner-failure total reports them as the same number. `manual` stays inside
+    premise.ENUMERATION_RUNNER_FAILURE_REASONS — admissibility is unchanged, since it
+    too speaks only for a run that actually failed; only the counting splits.
+
+    The infra/work-was-done distinction is read off `premise.ENUMERATION_INFRA_FAILURE_
+    REASONS` — the closed set that NAMES the infra subset — rather than re-derived here
+    as "in the wider family and not manual". A two-clause condition tracks the CURRENT
+    membership of the family by exclusion; a future infra reason added only to the wider
+    tuple would land in this bucket correctly under either form, but a future WORK-WAS-
+    DONE reason (a second `manual`-shaped token) would silently fall into `runner_failure`
+    under the exclusion form and nowhere under this one — it would need its own bucket,
+    which is the failure this split exists to avoid."""
+    reasons = [r.get("reason") for r in records]
+    return {
+        "runner_failure": sum(
+            1 for reason in reasons if reason in premise.ENUMERATION_INFRA_FAILURE_REASONS),
+        "manual": sum(
+            1 for reason in reasons if reason == premise.ESCAPE_MANUAL_ENUMERATION_DONE),
+        "not_landed": sum(
+            1 for reason in reasons if reason == premise.ESCAPE_ENUMERATION_NOT_LANDED),
+    }
+
+
+def escape_counts(bag, content_digest) -> dict:
+    """How often this gate has been escaped, on two axes — the single derivation both
+    surfaces (`agentctl status` and the plan_approval directive) read, so neither can
+    drift into its own idea of what an escape is. Always returns a dict — never None;
+    only its `this_plan` entry can be (see below).
+
+    This stage's own refutation is the escape rate itself: an escape nobody can count
+    is the fail-open it replaced, one level up. So the numbers are the deliverable.
+
+    `this_plan` is the number that means something AT THE GATE — a plan on its fourth
+    escape is a different object from one on its first. `session` is informational and
+    resets with `agentctl reset`, which is exactly why the per-digest count exists
+    beside it rather than instead of it.
+
+    Takes a real bag: whether the premise plugin is armed at all is decided by
+    cli._enumeration_escape_counts, the only caller, which returns its own None before
+    reaching here. `this_plan` is still None — 'not applicable', never 'measured zero'
+    — when no plan is submitted, since there is no plan version for a per-version count
+    to be about; its `session` half is a real zero and says so.
+
+    `.get` with defaults throughout: a bag minted before `escapes` existed reads as
+    zero, never KeyError."""
+    records = bag.get("escapes", []) or []
+    return {
+        "this_plan": (
+            _tally([r for r in records if r.get("content_digest") == content_digest])
+            if content_digest else None
+        ),
+        "session": _tally(records),
+    }
 
 
 def _plan_content_digest(doc: "plan.PlanDoc") -> str:
@@ -142,7 +273,17 @@ def premise_blockers(state, bag) -> list[str]:
        has, that it ran against the plan content AS IT CURRENTLY STANDS
        (bag['enumerated_at'] == the live content digest) — otherwise one
        enumerate call would silently discharge the flag forever across every
-       later replan.
+       later replan — and that the run it recorded did not FAIL. The three are
+       one if/elif chain, not three independent tests, because a relaunch clears
+       `enumerated` back to not-run while leaving the SUPERSEDED pass's
+       `enumerated_runner_ok` behind: firing the runner-failure blocker there
+       would demand an escape for a failure that a currently-running child may
+       be about to replace. So the failure branch speaks only for the pass that
+       landed against the content now under evaluation; the relaunch window is
+       _ENUMERATE_NOT_RUN's, with `enumeration_not_landed` as its route out.
+       Both escapable branches clear on an escape bound to the LIVE digest;
+       _ENUMERATE_STALE has no escape and needs none — re-running the check is
+       always available and always cheaper than recording a reason.
     4. order coverage (premise.validate_order_elements): every element of the order
        is covered by a stage the CURRENT plan contains, or cut with a reason. Unlike
        (1) an EMPTY bag blocks here, but only once a plan exists — before
@@ -180,9 +321,19 @@ def premise_blockers(state, bag) -> list[str]:
     )
 
     if not bag.get("enumerated"):
-        blockers.append(_ENUMERATE_NOT_RUN)
+        if not escape_recorded(bag, content_digest,
+                               (premise.ESCAPE_ENUMERATION_NOT_LANDED,)):
+            blockers.append(_ENUMERATE_NOT_RUN)
     elif content_digest is not None and bag.get("enumerated_at") != content_digest:
         blockers.append(_ENUMERATE_STALE)
+    elif bag.get("enumerated_runner_ok") is False:
+        # `is False`, never `is not True`: None means the advisor was ABSENT (also what
+        # `.get` yields for a bag minted before this field existed, and what the suite's
+        # injected stubs leave behind), and folding that into the failure branch would
+        # newly block sessions whose runner never failed.
+        if not escape_recorded(bag, content_digest,
+                               premise.ENUMERATION_RUNNER_FAILURE_REASONS):
+            blockers.append(_runner_failed_blocker(bag))
 
     if doc is not None and gates.plan_presentation_active(state):
         receipt = gates._plan_presentation_for(state, PLAN_PRESENTATION_KIND_ESSENCE)
@@ -236,7 +387,35 @@ register(
             "enumerated": False,
             "enumerated_at": "",
             "enumerated_runner_ok": None,
+            # The failed run's own stderr, carried from the pass that produced
+            # enumerated_runner_ok so the blocker can pre-select the escape reason
+            # instead of asking the operator to pick one blind.
+            "enumerated_runner_stderr": "",
             "enumerated_count": None,
+            # Typed escapes from the enumeration blockers, each bound to the plan
+            # content digest, the launch window and the pass count it was recorded
+            # against (see escape_recorded).
+            "escapes": [],
+            # Monotonic count of detached-worker launches, bumped by cli.py's
+            # _launch_enumeration, and the digest the latest one was launched for.
+            # Together they identify ONE launch window: the counter is what an escape
+            # binds to, the digest is what tells a retried `replan` that a window over
+            # these exact bytes is already outstanding and must not be reopened.
+            "enumerate_launch": 0,
+            "enumerate_launch_digest": "",
+            # Monotonic count of enumeration results APPLIED to this bag (both the
+            # synchronous command and the sidecar fold go through
+            # cli._apply_enumeration_result). An escape binds to it so a second failed
+            # pass at the same digest re-blocks instead of riding the first's escape.
+            "enumerate_pass": 0,
+            # Absolute epoch (launch instant + advisor.ENUMERATE_TIMEOUT_S), stamped by
+            # cli.py's _launch_enumeration on every detached-worker launch. None until
+            # the first launch. Read by cmd_question_enumerate_escape to decide whether
+            # an outstanding _ENUMERATE_NOT_RUN blocker has aged past the deadline into
+            # its `enumeration_not_landed` escape; premise_blockers itself does not
+            # consult it — the deadline decides whether the ESCAPE is admissible, not
+            # whether the blocker fires.
+            "enumerate_deadline": None,
         },
     )
 )

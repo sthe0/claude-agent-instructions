@@ -35,3 +35,11 @@ If the search surfaces a precedent for the current task, two outcomes:
    The manager surfaces both alternatives to the user for the choice; do not pre-decide.
 
 If no precedent surfaces — no extra step; plan from scratch.
+
+## Cost and resource assessment
+
+The Dimensions table under `SKILL.md` § Cost and resource assessment sizes a stage by **executor work volume** (implementation effort, means reused, ongoing resources, maintenance surface, stability). That table alone under-counts a stage whose deliverable must be **accepted by a reviewer**: each **review round** — a full declare → investigate → critique or plan-review cycle triggered by a rejected verdict — costs roughly as much active effort as a major stage of the plan itself, and a stage estimate that only sums executor steps misses it entirely.
+
+The trigger is **not** "this stage's own check is unmechanized". Concrete example: the `judge-import-blindness-and-norm-debt` plan spent **two** review rounds on the stage that mechanized pre-submit check observation — a stage whose own criterion was a fully mechanical `verify_command`, green on its first run — because what the reviewer contested was the **boundary of what the new mechanism claims to cover**, which no green check can attest. The following stage, four normalization records, then spent rounds of its own on the same axis — a reviewer contesting the placement and provenance of records whose own check was a green grep. So: when a stage's deliverable is a **norm, a verdict, or a mechanism's claimed coverage** — anything whose acceptance is a reviewer's judgment even where the stage's own check is mechanical — budget at least one review round beyond the Dimensions estimate, and say so explicitly in the stage's cost note.
+
+Budgeting a round must not legitimize one that a cheaper discriminator would have removed. [[2026-08-05-deferring-ask-gate-and-the-binding-timeout-layer]] § Self-critique carries the paired obligation: three rounds each justified by a genuine blocker were still an effort signal, and two of them would have collapsed into one had the runtime axis been exercised **before** the first review. Budget the round; spend the cheapest discriminator first anyway.

@@ -63,6 +63,43 @@ _KEY_BOUND_DISPOSITIONS = frozenset({"researched", "escalated", "assumed"})
 
 TARGET_RE = re.compile(r"^stage:(\d+)\.([a-z_]+)$")
 
+# --- typed escapes from the mandatory enumeration cross-check ------------------
+# The cross-check used to discharge itself fail-open: the flag flipped because the
+# pass RAN, whatever it returned. A runner failure now blocks approve until one of
+# these is recorded — typed rather than left to the free-text `note`, for the same
+# reason delivery.DELIVERY_ESCAPE_REASONS is typed: 'advisor_timeout x N' is a work
+# item (raise the bound, fix the runner), N notes are an archive nobody reads.
+ESCAPE_ADVISOR_UNAVAILABLE = "advisor_unavailable"
+ESCAPE_ADVISOR_TIMEOUT = "advisor_timeout"
+ESCAPE_ADVISOR_ERROR = "advisor_error"
+ESCAPE_MANUAL_ENUMERATION_DONE = "manual_enumeration_done"
+ESCAPE_ENUMERATION_NOT_LANDED = "enumeration_not_landed"
+
+# The three INFRASTRUCTURE reasons — the pass landed and its runner broke, nobody
+# did the work by hand. Named as its own tuple (rather than left implicit as
+# "ENUMERATION_RUNNER_FAILURE_REASONS minus manual") so a caller that needs the
+# infra/work-was-done distinction — plugins_premise._tally's runner_failure bucket —
+# reads it off the closed set instead of re-deriving it with a second condition that
+# a new reason could silently fall through.
+ENUMERATION_INFRA_FAILURE_REASONS = (
+    ESCAPE_ADVISOR_UNAVAILABLE,
+    ESCAPE_ADVISOR_TIMEOUT,
+    ESCAPE_ADVISOR_ERROR,
+)
+
+# Admissible only against a run that actually FAILED (enumerated_runner_ok is False).
+# advisor_unavailable is in the set but is never the reason the blocker pre-selects:
+# it names the injected-stub / advisor-absent path, which a live session reaches as
+# advisor_error, and only a caller who KNOWS the advisor was not there should choose
+# it. classify_runner_failure therefore returns the other two only.
+ENUMERATION_RUNNER_FAILURE_REASONS = ENUMERATION_INFRA_FAILURE_REASONS + (
+    ESCAPE_MANUAL_ENUMERATION_DONE,
+)
+
+ENUMERATION_ESCAPE_REASONS = ENUMERATION_RUNNER_FAILURE_REASONS + (
+    ESCAPE_ENUMERATION_NOT_LANDED,
+)
+
 
 def parse_target(target: str) -> tuple[str, int | None, str | None] | None:
     """Parse a Question.target address. Returns (kind, stage_index, element) where

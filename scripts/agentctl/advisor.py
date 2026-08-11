@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import time
 
 from lib import judge_ledger
 
+from . import premise
 from .config import Thresholds
 from .dispatch import RunResult
 from .text_shape import ELEMENT_NAMES
@@ -24,6 +26,59 @@ from .text_shape import ELEMENT_NAMES
 # coordination step.
 _ADVISOR_MODEL = "sonnet"
 _ADVISOR_TIMEOUT_S = 20
+
+# The one literal for "the runner hit its timeout": emitted by subprocess_runner and
+# read back by classify_runner_failure. Shared rather than restated at each end so the
+# classifier cannot drift into silently classifying every timeout as advisor_error.
+_TIMEOUT_STDERR_PREFIX = "advisor timed out after"
+
+# Whole-plan enumeration (enumerate_claims / enumerate_questions_health) is a
+# DIFFERENT cost class from a judge/advisor call: it re-reads an entire plan in one
+# shot, and calibration (docs/operations/advisor-timeout-calibration.md, 15 rows =
+# 5 sizes x 3 repeats) measured 15-170s of real latency under a 600s measurement
+# cap, high enough that no row was truncated by the bound under measurement -- far
+# past _ADVISOR_TIMEOUT_S=20, which would truncate nearly every whole-plan call.
+# 480 is DERIVED from that dataset rather than being a property of it:
+# 480 = ceil_to_minute(largest within-size max/min spread (size
+# 23018, 96.513/23.127 = 4.173174x, the refutation check's own number) * the min
+# elapsed_s at the largest sampled size (103.213s, size 203681)) =
+# ceil_to_minute(430.726) = 480. The spread is quoted here to six figures, not as
+# the 4.173x it is displayed as elsewhere, because the product of the ROUNDED
+# factors is 430.708 -- close enough to be indistinguishable after ceiling, far
+# enough that recomputing from the printed digits reads as an arithmetic error.
+# The literal below is that computed value, checked by test against the raw
+# committed dataset (advisor-calibration.jsonl) at full precision rather than
+# re-derived at runtime, so a calibration-note edit can never silently drift the
+# shipped timeout.
+_ENUMERATE_TIMEOUT_S_DEFAULT = 480
+_ENUMERATE_TIMEOUT_ENV = "AGENTCTL_ENUMERATE_TIMEOUT_S"
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    """Read an integer override off the environment, falling back to `default` on
+    anything unusable and saying so on stderr.
+
+    This runs at IMPORT time and `cli` imports this module at module scope, so a bare
+    `int(os.environ[...])` makes `AGENTCTL_ENUMERATE_TIMEOUT_S=8m` kill every agentctl
+    command with a ValueError traceback that names the variable nowhere. Non-positive
+    values are rejected too, in the other direction: `0` is fail-CLOSED (every
+    enumeration times out instantly) and so silently converts the fleet to permanent
+    escape-taking — a state nobody chose by typing a number."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = 0
+    if value <= 0:
+        print(f"agentctl: ignoring {name}={raw!r} — expected a positive integer "
+              f"number of seconds; using {default}", file=sys.stderr)
+        return default
+    return value
+
+
+ENUMERATE_TIMEOUT_S = _positive_int_env(_ENUMERATE_TIMEOUT_ENV, _ENUMERATE_TIMEOUT_S_DEFAULT)
 
 # The acceptance judge is a SEPARATE, cheaper tier than the warn-only advisor: it
 # gates a real transition (via the pure acceptance-review guardian), so it runs on the
@@ -73,7 +128,33 @@ _ENUMERATE_PROMPT = (
 )
 
 
-def enumerate_claims(artifact_text: str, runner) -> list[str]:
+def enumerate_subprocess_runner(
+    argv: list[str], *, timeout: int = ENUMERATE_TIMEOUT_S
+) -> RunResult:
+    """subprocess_runner bound to ENUMERATE_TIMEOUT_S -- the default runner for the
+    two whole-plan enumeration entry points (enumerate_claims,
+    enumerate_questions_health), whose calls run far longer than a judge/advisor
+    call and would be truncated by subprocess_runner's own _ADVISOR_TIMEOUT_S=20
+    default. subprocess_runner itself stays untouched: every judge_* caller keeps
+    the original 20s bound.
+
+    The keyword-only `timeout` mirrors subprocess_runner's own signature so both
+    enumeration entry points can name their ceiling AT THE CALL SITE, which is the
+    norm trunk settled on. Baking the ceiling into the runner instead would make
+    the two call sites read as if they carried the 20s advisory bound, and a
+    call-site keyword would then raise TypeError into the bare `except Exception`
+    below -- reported as an unhealthy runner rather than as the signature mismatch
+    it is. `test_enumerate_runner_signature` pins this.
+
+    Defined here, ahead of enumerate_claims/enumerate_questions_health, only
+    because Python evaluates a default-argument value at `def` time -- this name
+    must already exist when their `runner=enumerate_subprocess_runner` defaults
+    are bound. The `subprocess_runner` call inside the body resolves at CALL time,
+    so it is free to reference the module-level function defined later below."""
+    return subprocess_runner(argv, timeout=timeout)
+
+
+def enumerate_claims(artifact_text: str, runner=enumerate_subprocess_runner) -> list[str]:
     """Independent semantic re-reading of an outgoing deliverable that RAISES the
     load-bearing decisions/judgments/claims it detects, one statement per line.
 
@@ -82,8 +163,9 @@ def enumerate_claims(artifact_text: str, runner) -> list[str]:
     deterministic disposition gate (ledger.validate_candidates) is what turns each
     raised item into a blocker; this call only supplies the candidates.
 
-    Cost-bounded exactly like the warn-only advisor: `claude -p --model sonnet`
-    with an explicit _ADVISOR_TIMEOUT_S at the call site. Fail-open:
+    Cost-bounded like the warn-only advisor, but with ENUMERATE_TIMEOUT_S named at
+    the call site rather than _ADVISOR_TIMEOUT_S: this is a whole-artifact read, not
+    a binary judge, and 20s truncated it. Fail-open:
     a None runner, a non-zero exit, or any exception returns [] — an empty
     enumeration is a valid (if unhelpful) result; the mandatory-cross-check blocker
     is discharged by the `enumerated` flag the caller sets, not by the count."""
@@ -94,7 +176,7 @@ def enumerate_claims(artifact_text: str, runner) -> list[str]:
         prompt = _ENUMERATE_PROMPT.format(payload=artifact_text)
         result = runner(
             ["claude", "-p", "--model", _ADVISOR_MODEL, prompt],
-            timeout=_ADVISOR_TIMEOUT_S,
+            timeout=ENUMERATE_TIMEOUT_S,
         )
         if result.returncode != 0:
             return []
@@ -131,11 +213,11 @@ _ENUMERATE_QUESTIONS_PROMPT = (
 
 
 def enumerate_questions_health(
-    goal: str, done_criterion: str, plan_text: str, runner
-) -> tuple[bool | None, list[tuple[str, str]]]:
+    goal: str, done_criterion: str, plan_text: str, runner=enumerate_subprocess_runner
+) -> tuple[bool | None, list[tuple[str, str]], str]:
     """Independent re-reading of a WHOLE plan that RAISES the questions its
     construction should have provoked, as (target, question) pairs, together with a
-    runner-health flag.
+    runner-health flag and the runner's captured stderr.
 
     ONE bounded `claude -p --model sonnet` call over the goal + done-criterion + full
     plan text — deliberately whole-plan, not one call per element: the questions worth
@@ -147,29 +229,37 @@ def enumerate_questions_health(
     runner produced a usable answer, so the caller can record runner health and attach a
     non-blocking advisory when the pass was vacuous — WITHOUT ever re-gating on it:
 
-      * runner is None        -> (None, [])   advisor absent (disabled/stubbed)
-      * non-zero exit          -> (False, [])  runner reachable but failed
-      * exception              -> (False, [])  timeout/crash swallowed
-      * success (0 exit)       -> (True, pairs) pairs may still be empty
+      * runner is None        -> (None, [], "")        advisor absent (disabled/stubbed)
+      * non-zero exit          -> (False, [], stderr)   runner reachable but failed
+      * exception              -> (False, [], "")       timeout/crash swallowed
+      * success (0 exit)       -> (True, pairs, stderr) pairs may still be empty
 
-    The mandatory cross-check blocker is discharged by the `enumerated` flag the caller
-    sets REGARDLESS of the pair count — never by the count itself. Gating discharge on a
-    non-empty result would let a single 20 s timeout (or a genuinely question-free plan)
-    wedge approve permanently with no route out; fail-open buys that liveness, and the
-    silent-discharge cost it incurs is paid back non-blockingly by the caller's advisory,
-    not by making approve un-passable on infra failure."""
+    Fail-open here means this function RETURNS on a failed run instead of raising — it
+    does not mean the failure is forgiven. Those are two different layers and they are
+    deliberately split: the mandatory obligation lives in the GATE, so that is where
+    refusing belongs. plugins_premise.premise_blockers now blocks approve whenever the
+    recorded `enumerated_runner_ok` is False, discharged only by a typed escape
+    (`agentctl question-enumerate-escape`) counted against the plan's content digest.
+    Two things survive that change unaltered. The pair COUNT still never gates
+    discharge: a genuinely question-free plan is a healthy run, and gating on the count
+    would wedge approve on a pass that worked. And `None` — the advisor absent — still
+    discharges on the flag alone with a non-blocking advisory, since blocking a fleet
+    that never had an advisor would refuse approve for a check it cannot run. `stderr`
+    is carried so a background caller (the detached enumeration worker) can surface WHY
+    a run failed without the caller needing its own capture path — and so the blocker
+    can pre-select the escape reason from it."""
     if runner is None:
-        return None, []
+        return None, [], ""
     judge_ledger.begin_attributed_call("enumerate_questions_health")
     try:
         payload = f"GOAL:\n{goal}\n\nDONE CRITERION:\n{done_criterion}\n\nPLAN:\n{plan_text}"
         prompt = _ENUMERATE_QUESTIONS_PROMPT.format(payload=payload)
         result = runner(
             ["claude", "-p", "--model", _ADVISOR_MODEL, prompt],
-            timeout=_ADVISOR_TIMEOUT_S,
+            timeout=ENUMERATE_TIMEOUT_S,
         )
         if result.returncode != 0:
-            return False, []
+            return False, [], result.stderr or ""
         pairs: list[tuple[str, str]] = []
         for ln in (result.stdout or "").splitlines():
             if not ln.strip():
@@ -179,9 +269,9 @@ def enumerate_questions_health(
             if not sep or not target or not question:
                 continue
             pairs.append((target, question))
-        return True, pairs
+        return True, pairs, result.stderr or ""
     except Exception:
-        return False, []
+        return False, [], ""
     finally:
         judge_ledger.set_current_judge(None)
 
@@ -839,8 +929,26 @@ def subprocess_runner(argv: list[str], *, timeout: int = _ADVISOR_TIMEOUT_S) -> 
     except subprocess.TimeoutExpired:
         duration = time.monotonic() - start
         judge_ledger.call(judge_name, timed_out=True, duration=duration, returncode=None)
-        return RunResult(1, "", f"advisor timed out after {timeout}s", timed_out=True)
+        return RunResult(1, "", f"{_TIMEOUT_STDERR_PREFIX} {timeout}s", timed_out=True)
     except Exception as exc:
         duration = time.monotonic() - start
         judge_ledger.call(judge_name, timed_out=False, duration=duration, returncode=None, raised=repr(exc))
         raise
+
+
+def classify_runner_failure(stderr: str) -> str:
+    """Map a failed enumeration run's stderr onto the escape reason the ENGINE
+    pre-selects, so the human confirms a value rather than typing one the engine
+    already knows.
+
+    Two-valued on purpose. A timeout is the one failure whose stderr this process
+    itself wrote (subprocess_runner's TimeoutExpired arm), so it is the one this
+    function can recognise with certainty; everything else — a non-zero exit, an
+    unparseable reply, an OSError, an absent advisor binary, no stderr at all — is a
+    heterogeneous tail whose members would each need a fragile substring rule for no
+    gain, since the escape they take is the same. So advisor_error is a deliberate
+    catch-all, including for empty stderr, and the operator's --note carries the
+    detail the reason token deliberately does not."""
+    if _TIMEOUT_STDERR_PREFIX in (stderr or ""):
+        return premise.ESCAPE_ADVISOR_TIMEOUT
+    return premise.ESCAPE_ADVISOR_ERROR

@@ -53,10 +53,18 @@ from pathlib import Path
 from typing import Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from agentctl import advisor  # noqa: E402
-from lib import ask_text  # noqa: E402
-from lib import judge_budget  # noqa: E402
 from lib import judge_ledger  # noqa: E402
+
+# judge_ledger itself must import cleanly above for this to record anything —
+# it is stdlib-only (see its own module docstring) and is what every other
+# import failure here needs a working ledger to be recorded against.
+try:
+    from agentctl import advisor  # noqa: E402
+    from lib import ask_text  # noqa: E402
+    from lib import judge_budget  # noqa: E402
+except BaseException as exc:
+    judge_ledger.import_failed("deferring_disposition", f"{type(exc).__name__}: {exc}")
+    raise
 
 # Whole-ask budget for the judge, and the ceiling handed to the one call it
 # funds. Two superseded numbers are worth naming, because both were set from the

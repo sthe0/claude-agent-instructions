@@ -20,6 +20,10 @@ GIT_ENV = {
     "GIT_AUTHOR_EMAIL": "test@example.com",
     "GIT_COMMITTER_NAME": "Test",
     "GIT_COMMITTER_EMAIL": "test@example.com",
+    # A global core.hooksPath on a developer's machine would silently disable
+    # the fixture hooks this suite installs; isolate from both config levels.
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_CONFIG_SYSTEM": "/dev/null",
 }
 
 

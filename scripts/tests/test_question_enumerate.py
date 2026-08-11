@@ -167,6 +167,10 @@ def test_zero_candidates_attaches_advisory(store, tmp_path):
 
 
 def test_runner_failure_attaches_advisory(store, tmp_path):
+    """The advisory this arm carries CHANGED when the gate stopped discharging on a
+    failed run: the pass no longer meets the cross-check, so telling the coordinator
+    it was discharged would advise proceeding at the exact moment approve refuses.
+    The verb itself is still fail-open — the refusal lives in the gate, not here."""
     plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one")])
     _state(store, plan_path=plan_path)
     run = _runner("plan.goal\tshould never be read", returncode=1)
@@ -179,7 +183,7 @@ def test_runner_failure_attaches_advisory(store, tmp_path):
     assert bag["enumerated_count"] == 0
     assert bag["candidates"] == []
     advisories = d.data.get("advisories", [])
-    assert advisories and any("unavailable or failed" in a for a in advisories)
+    assert advisories and any("BLOCKED pending a typed escape" in a for a in advisories)
 
 
 # --- a stale enumerated_at re-blocks approve after a content change -------------

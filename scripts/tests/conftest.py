@@ -139,6 +139,47 @@ def _premise_gate_off_by_default(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_enumeration_launch_by_default(monkeypatch):
+    """Stub `cli._spawn_enumeration_worker` for the suite at large.
+
+    Stage 4 wired `_launch_enumeration` into `cmd_submit_plan`/`cmd_replan`
+    unconditionally whenever a premise bag exists, so ANY test that drives one of
+    those commands with the premise plugin genuinely live (AGENTCTL_PREMISE
+    deleted/"1" — see `_premise_gate_off_by_default` above) launches a REAL
+    detached child process that shells out to `claude -p` for a live advisor
+    call. That launch is fire-and-forget and never blocks the caller's return, so
+    it would never fail a test's assertions — it would just silently spend real
+    API cost and wall-clock in the background on every such test run, including
+    pre-existing tests (e.g. test_replan.py's #48(b) deadlock tests) that predate
+    Stage 4 and were never written to expect a live subprocess. Same
+    force-off-by-default accommodation as the gate fixtures above, applied to a
+    side effect rather than a gate.
+
+    Patches `cli._spawn_enumeration_worker` — the thin `cli`-owned wrapper around
+    `proc_tree.launch_supervised` — rather than `cli.proc_tree.launch_supervised`
+    itself: `cli.proc_tree` is the SAME module object `test_proc_tree.py` and
+    test_kill_tree_cli.py` import directly (`import proc_tree`), so mutating that
+    shared attribute here stubbed the real function out from under THEIR own
+    subject-under-test too, for every test in the suite. Only the leaf spawn is
+    suppressed; `_launch_enumeration`'s bag mutations (the deadline stamp and the
+    not-run clear) still run for real, since pre-existing tests depend on them.
+
+    A test that means to exercise the REAL launch mechanics (deadline stamping,
+    sidecar landing, argv recording) re-patches `cli._spawn_enumeration_worker`
+    itself — see test_enumerate_detach.py's behavioral launch tests.
+    `test_sidecar_lands_after_launcher_process_exits` runs one fully unstubbed
+    launch against a stub `claude` on PATH and asserts the child reaches the
+    worker entry point, so the spawn-to-worker wiring is covered.
+
+    KNOWN COVERAGE GAP, the price of this fixture: that unstubbed launch enters
+    at `cli._launch_enumeration`, so no test runs one originating from
+    `cmd_submit_plan`/`cmd_replan` — the command-level wiring is pinned only by
+    recorder stubs."""
+    from agentctl import cli
+    monkeypatch.setattr(cli, "_spawn_enumeration_worker", lambda *a, **kw: None)
+
+
+@pytest.fixture(autouse=True)
 def _code_review_gate_off_by_default(monkeypatch):
     """Default the code-review gate OFF for the suite at large, the same
     accommodation as `_plan_review_gate_off_by_default` above and for the same

@@ -71,19 +71,27 @@ from typing import Any, Callable
 # Make the sibling shared detector and lib/ importable whether this hook is run
 # directly (scripts/ on sys.path[0]) or loaded via importlib in tests.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from si_feedback_detect import find_signals, strip_injected_context  # noqa: E402
-from long_job_detect import detect as _detect_long_job  # noqa: E402
-from outage_escalation_detect import detect as _detect_outage  # noqa: E402
-import transcript_read  # noqa: E402
-from timer_arm_detect import (  # noqa: E402
-    closure_sought as _closure_sought,
-    waiter_armed as _waiter_armed,
-    iter_bash_commands as _iter_bash_commands,
-)
-from agentctl import advisor  # noqa: E402
-from agentctl.advisor import judge_binary_ask  # noqa: E402
-from lib import judge_budget  # noqa: E402
 from lib import judge_ledger  # noqa: E402
+
+# judge_ledger itself must import cleanly above for this to record anything —
+# it is stdlib-only (see its own module docstring) and is what every other
+# import failure here needs a working ledger to be recorded against.
+try:
+    from si_feedback_detect import find_signals, strip_injected_context  # noqa: E402
+    from long_job_detect import detect as _detect_long_job  # noqa: E402
+    from outage_escalation_detect import detect as _detect_outage  # noqa: E402
+    import transcript_read  # noqa: E402
+    from timer_arm_detect import (  # noqa: E402
+        closure_sought as _closure_sought,
+        waiter_armed as _waiter_armed,
+        iter_bash_commands as _iter_bash_commands,
+    )
+    from agentctl import advisor  # noqa: E402
+    from agentctl.advisor import judge_binary_ask  # noqa: E402
+    from lib import judge_budget  # noqa: E402
+except BaseException as exc:
+    judge_ledger.import_failed("turn_end", f"{type(exc).__name__}: {exc}")
+    raise
 
 # Whole-invocation deadline covering ALL judge calls this hook makes, and the
 # registration that must accommodate it (install-reminder-hooks.sh: 57s = this

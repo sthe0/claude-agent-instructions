@@ -47,13 +47,18 @@ def _discharge_plan_review(state, ob) -> bool:
 
 
 def _discharge_code_review(state, ob) -> bool:
-    # A replan can renumber/drop stages between mint and check; a stage that no
-    # longer exists has nothing left to review, so treat it as discharged rather
-    # than as a permanently-undischargeable obligation — the safe direction,
-    # since it never MASKS a real open review on a still-live stage.
+    # The ledger keys an obligation by stage INDEX, and a replan can both drop a
+    # stage and REASSIGN that index to a different one. Neither survivor owes a
+    # review: a dropped stage has nothing left to review, and a reassigned index
+    # now names a stage the minting rule never covered (review_dispatch mints only
+    # for needs_control(), i.e. spawn:developer). Both are the safe direction —
+    # neither can MASK a real open review, because a still-live spawn:developer
+    # stage falls through to the gate below. Without the needs_control() re-check
+    # the obligation is permanently undischargeable AND unreachable: at RESOLUTION
+    # there is no active stage, so cmd_code_review cannot record even an override.
     stage_index = ob.get("data", {}).get("stage")
     stage = next((s for s in state.stages if s.index == stage_index), None)
-    if stage is None:
+    if stage is None or not stage.needs_control():
         return True
     return not gates.code_review_blockers(state, stage)
 

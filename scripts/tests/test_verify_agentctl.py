@@ -1,6 +1,7 @@
 """verify-agentctl.py: structural invariant checker for the agentctl engine."""
 from __future__ import annotations
 
+import ast
 import importlib.util
 import sys
 from pathlib import Path
@@ -50,3 +51,54 @@ def test_check_dead_ends_detects_non_terminal_dead_end():
     problems = mod.check_dead_ends(all_nodes, transitions, terminal)
     assert problems, "expected dead-end problem for STUCK"
     assert any("dead-end" in p for p in problems)
+
+
+# --- the enumeration-writer pin: which fields, and which write shapes ----------
+
+def test_runner_health_fields_are_pinned_keys():
+    """`enumerated_runner_ok` is what the runner-failure blocker reads, so a write
+    to it outside a real pass is the sharpest form of the bypass this pin exists to
+    catch — the pin is worthless if that field is not among the watched keys."""
+    mod = _load_module()
+    assert {"enumerated_runner_ok", "enumerated_runner_stderr"} <= mod.ENUMERATION_KEYS
+
+
+def test_walker_catches_a_plain_assignment_bypass():
+    mod = _load_module()
+    src = "def sneak(bag):\n    bag['enumerated_runner_ok'] = True\n"
+    assert ("sneak", "enumerated_runner_ok") in mod.enumeration_bag_writers(ast.parse(src))
+
+
+def test_walker_catches_an_augmented_assignment_bypass():
+    """`bag['enumerate_pass'] += 1` is an AugAssign, a different node type from the
+    plain assignment the walker was written against."""
+    mod = _load_module()
+    src = "def sneak(bag):\n    bag['enumerate_pass'] += 1\n"
+    assert ("sneak", "enumerate_pass") in mod.enumeration_bag_writers(ast.parse(src))
+
+
+def test_walker_catches_update_and_setdefault_bypasses():
+    mod = _load_module()
+    src = (
+        "def by_dict(bag):\n"
+        "    bag.update({'enumerated': True})\n"
+        "def by_kwarg(bag):\n"
+        "    bag.update(enumerated_runner_ok=True)\n"
+        "def by_default(bag):\n"
+        "    bag.setdefault('enumerated_at', '')\n"
+    )
+    found = mod.enumeration_bag_writers(ast.parse(src))
+    assert ("by_dict", "enumerated") in found
+    assert ("by_kwarg", "enumerated_runner_ok") in found
+    assert ("by_default", "enumerated_at") in found
+
+
+def test_walker_ignores_unrelated_keys_and_reads():
+    mod = _load_module()
+    src = (
+        "def reader(bag):\n"
+        "    x = bag['enumerated_runner_ok']\n"
+        "    bag['unrelated'] = True\n"
+        "    bag.update({'also_unrelated': 1})\n"
+    )
+    assert mod.enumeration_bag_writers(ast.parse(src)) == set()

@@ -283,12 +283,25 @@ def test_no_judge_call_rides_the_runners_own_default_timeout(name):
     assert seen["argv"][seen["argv"].index("--model") + 1] == advisor._JUDGE_MODEL
 
 
-@pytest.mark.parametrize("name", ["enumerate_claims", "enumerate_questions_health", "judge"])
-def test_the_non_judge_advisory_calls_carry_the_advisory_timeout(name):
+@pytest.mark.parametrize(
+    "name,expected_timeout",
+    [
+        ("enumerate_claims", "ENUMERATE_TIMEOUT_S"),
+        ("enumerate_questions_health", "ENUMERATE_TIMEOUT_S"),
+        ("judge", "_ADVISOR_TIMEOUT_S"),
+    ],
+)
+def test_the_non_judge_advisory_calls_carry_the_advisory_timeout(name, expected_timeout):
     """The other half of the same defect: these three passed no timeout, so they
-    ran on the runner's default by accident rather than by decision. They keep
-    the advisory number — but explicitly, so moving a judge ceiling cannot move
-    them and vice versa."""
+    ran on the runner's default by accident rather than by decision. They now name
+    their ceiling explicitly, so moving a judge ceiling cannot move them and vice
+    versa.
+
+    The two enumeration entry points name ENUMERATE_TIMEOUT_S, not the advisory
+    20s: a whole-plan enumeration is a different cost class from a binary judge,
+    and the advisory number truncated every real call — the F3b defect. `judge`
+    keeps the advisory number. What the two arms share, and what this test is
+    actually for, is that each names its ceiling AT THE CALL SITE."""
     seen: dict = {}
 
     def run(argv, **kwargs):
@@ -303,7 +316,7 @@ def test_the_non_judge_advisory_calls_carry_the_advisory_timeout(name):
         "judge": lambda: advisor.judge("weight_classification", {"x": 1}, run, enabled=True),
     }
     calls[name]()
-    assert seen.get("timeout") == advisor._ADVISOR_TIMEOUT_S
+    assert seen.get("timeout") == getattr(advisor, expected_timeout)
 
 
 # --- the per-call floor is a per-call parameter -------------------------------

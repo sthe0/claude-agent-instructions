@@ -287,6 +287,15 @@ def agentctl_judge_ledger_log() -> Path:
     return agentctl_dir() / "judge-usage-ledger.jsonl"
 
 
+def agentctl_enumerate_sidecar_dir() -> Path:
+    """Detached-enumeration sidecar directory (``<root>/agentctl/enumerate-sidecars``
+    — see agentctl/enumerate_sidecar.py). One subdirectory per session, one file per
+    (session, plan content digest) — the detached worker's result payload, folded in
+    and discarded by the next ``approve``/``replan`` rather than by the worker itself
+    calling ``store.save()``."""
+    return agentctl_dir() / "enumerate-sidecars"
+
+
 def plans_dir() -> Path:
     """Coordination plan artifacts directory (``<root>/plans``)."""
     return agent_home() / "plans"

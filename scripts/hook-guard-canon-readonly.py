@@ -57,7 +57,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib import config_root, git_cwd, shell_tokens  # noqa: E402
+from lib import bash_write_targets, config_root, git_cwd, shell_tokens  # noqa: E402
 
 GIT_TIMEOUT_S = 3
 
@@ -204,25 +204,6 @@ def _is_git_commit(command: str) -> bool:
 # module's one genuinely reachable fail-open path (measured — a here-document body
 # never raises, which is why the stripper exists at all).
 
-_BASH_SEPS = {";", "&&", "||", "|", "|&", "&"}
-
-
-def _split_segments(tokens: list[str]):
-    """Yield the pipeline/list segments of a tokenized command, split on the
-    shell separators `; && || | |& &`. Best-effort: a separator glued inside a
-    single shlex token (`a;b`) is left intact — an accepted residual."""
-    seg: list[str] = []
-    for tok in tokens:
-        if tok in _BASH_SEPS:
-            if seg:
-                yield seg
-            seg = []
-        else:
-            seg.append(tok)
-    if seg:
-        yield seg
-
-
 def _canon_target(candidate: str, eff_cwd: str) -> str | None:
     """Realpath of `candidate` (resolved rel to `eff_cwd`) iff it lands in canon,
     else None. A not-yet-existing write target resolves through its nearest
@@ -238,129 +219,18 @@ def _canon_target(candidate: str, eff_cwd: str) -> str | None:
     return None
 
 
-def _canon_cwd(eff_cwd: str) -> str | None:
-    """Realpath of `eff_cwd` iff the cwd itself is canon — for cwd-relative
-    writers (`patch`, `git apply`) whose write target is derived from the diff,
-    not a shell-visible positional, so the cwd is the only decidable signal."""
-    parent = _nearest_existing_dir(eff_cwd)
-    if parent is None:
-        return None
-    if _is_in_canon(parent, eff_cwd):
-        return os.path.realpath(eff_cwd)
-    return None
-
-
-def _operands_until_redirect(rest: list[str]) -> list[str]:
-    """Tokens of a segment (after the command word) up to the first redirection
-    operator — `<`/`>` starts an I/O target, not a positional of the verb."""
-    out: list[str] = []
-    for tok in rest:
-        if tok and tok[0] in "<>":
-            break
-        out.append(tok)
-    return out
-
-
-def _sed_in_place(rest: list[str]) -> bool:
-    """True iff any token is a sed in-place flag: `-i`, `-i.bak`, `--in-place`,
-    `--in-place=.bak`, or a clustered short flag containing `i` (`-ni`)."""
-    for tok in rest:
-        if tok == "--in-place" or tok.startswith("--in-place="):
-            return True
-        if tok.startswith("-") and not tok.startswith("--") and "i" in tok[1:]:
-            return True
-    return False
-
-
-def _cp_mv_dest(rest: list[str]) -> str | None:
-    """The write destination of a `cp`/`mv`: the `-t DIR` / `--target-directory`
-    value if present, else the last positional. Returning only the destination
-    keeps copying OUT of canon (canon source, outside dest) allowed."""
-    positionals: list[str] = []
-    take_next = False
-    dest_opt: str | None = None
-    for tok in rest:
-        if take_next:
-            dest_opt = tok
-            take_next = False
-        elif tok in ("-t", "--target-directory"):
-            take_next = True
-        elif tok.startswith("--target-directory="):
-            dest_opt = tok.split("=", 1)[1]
-        elif tok.startswith("-"):
-            continue
-        else:
-            positionals.append(tok)
-    if dest_opt is not None:
-        return dest_opt
-    return positionals[-1] if positionals else None
-
-
-def _segment_write_target(seg: list[str], eff_cwd: str) -> str | None:
-    """The canon path a single command segment would write in place, or None.
-    Covers output redirection, `sed -i`, `tee`, `cp`/`mv` dest, `patch`, and
-    `git apply`; every path is resolved rel to `eff_cwd`."""
-    if not seg:
-        return None
-
-    # (a) output redirection anywhere in the segment: `> f`, `>> f`, glued `>f`/`>>f`.
-    for i, tok in enumerate(seg):
-        redirect_tgt: str | None = None
-        if tok in (">", ">>"):
-            redirect_tgt = seg[i + 1] if i + 1 < len(seg) else None
-        elif tok.startswith(">") and tok.strip(">"):
-            redirect_tgt = tok.lstrip(">")
-        if redirect_tgt:
-            hit = _canon_target(redirect_tgt, eff_cwd)
-            if hit:
-                return hit
-
-    # (b) verb-based writers.
-    verb = os.path.basename(seg[0]) if seg[0] else ""
-    rest = _operands_until_redirect(seg[1:])
-
-    if verb == "patch":
-        return _canon_cwd(eff_cwd)
-    if verb == "git" and "apply" in rest:
-        return _canon_cwd(eff_cwd)
-    if verb == "sed" and _sed_in_place(rest):
-        for tok in rest:
-            if tok.startswith("-"):
-                continue
-            hit = _canon_target(tok, eff_cwd)
-            if hit:
-                return hit
-        return None
-    if verb == "tee":
-        for tok in rest:
-            if tok.startswith("-"):
-                continue
-            hit = _canon_target(tok, eff_cwd)
-            if hit:
-                return hit
-        return None
-    if verb in ("cp", "mv"):
-        dest = _cp_mv_dest(rest)
-        if dest:
-            return _canon_target(dest, eff_cwd)
-        return None
-    return None
-
-
 def _canon_bash_write(command: str, payload_cwd: str) -> str | None:
     """Best-effort: the canon path a non-`git commit` Bash command writes in
     place, or None. Fail-open on any parse error (allow), reusing the leading-`cd`
     resolution so `cd <wt> && sed -i ... f` keys off the worktree, not the
-    session cwd."""
-    try:
-        tokens = shlex.split(command)
-    except Exception:
-        return None
-    if not tokens:
-        return None
+    session cwd. The write-target lexing (segments, redirect/`sed -i`/`tee`/
+    `cp`/`mv` targets) lives in `lib/bash_write_targets.py`, which knows nothing
+    of canon; every candidate it returns — already an absolute path, and in the
+    same priority order the lexer used to search internally — is checked here,
+    the only place that applies canon policy, stopping at the first hit."""
     eff_cwd = git_cwd.effective_git_cwd(command, payload_cwd)
-    for seg in _split_segments(tokens):
-        hit = _segment_write_target(seg, eff_cwd)
+    for candidate in bash_write_targets.command_write_targets(command, eff_cwd):
+        hit = _canon_target(candidate, eff_cwd)
         if hit:
             return hit
     return None
