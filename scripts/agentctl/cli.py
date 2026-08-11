@@ -4290,6 +4290,33 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
                          "(run: plan-review --target " + args.plan + ")",
                          data={"blockers": prblock})
 
+    # Submission seam (b): the single NEW-side load and the check it feeds. Its placement
+    # answers two separate orderings at once.
+    # Before the enumeration/plan_approval block below, because `_launch_enumeration` there
+    # is destructive and PERSISTED: it clears the premise bag's enumeration record back to
+    # not-run, bumps the launch counter, pins `enumerate_launch_digest` to the PROPOSED
+    # bytes, stamps a deadline and spawns a detached worker over them — and the
+    # `enumeration_bag_dirty` save below writes all of that to disk. Refusing after that
+    # would destroy the live session's bag in the name of a plan this command rejected,
+    # leaving the still-current plan blocked on an enumeration axis it was never at fault
+    # for. A command that refuses must not mutate persisted state. Both siblings already
+    # read this way: cmd_submit_plan validates before its own `_launch_enumeration`, and
+    # cmd_approve folds only after seam (c)'s refusal, for the same stated reason.
+    # Before diff_plans further down, so all three diff outcomes are covered by one check —
+    # a no_change replan re-materializes live stages from these bytes just as a refinement
+    # does, so "unchanged" is no reason to let an unvalidated plan in.
+    # Entry-point fallback — see cmd_submit_plan's identical comment. Bound here rather
+    # than below the refusals because this seam's own judged refusal needs it; binding a
+    # callable spends nothing, and the judge is reached only on a prefilter hit.
+    run = runner if runner is not None else advisor.subprocess_runner
+    new = _load(args.plan)
+    submission = _submission_problems(new, run, state.weight_class)
+    if submission:
+        return Directive(False, state.node, "fix_plan",
+                         "replan blocked: the corrected plan does not meet submission "
+                         "requirements",
+                         data={"problems": submission})
+
     # plan_approval PLUGIN gate: mirror cmd_approve's plugins.plugin_gate_blockers
     # composition so a refinement/no_change replan cannot rotate the plan bytes back
     # to VERIFYING while a premise-plugin blocker (undispositioned question, stale
@@ -4331,11 +4358,15 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     if enumeration_bag_dirty:
         # AFTER the finally restored plan_path — a save inside the swapped block
         # would persist the PROPOSED plan as the session's current one. Before the
-        # pblock return below, because this path refuses without reaching any of
+        # pblock return below, because that path refuses without reaching any of
         # cmd_replan's own save sites: unsaved, the deadline stamp Stage 5's escape
         # reads would never exist on disk, and the not-run clear would leave the
         # bag pinned to the superseded digest — i.e. the inescapable
         # _ENUMERATE_STALE, the exact routing the clear exists to prevent.
+        # What this save may legitimately persist is bounded from ABOVE, not here:
+        # seam (b) has already accepted these bytes, so every refusal still ahead
+        # (pblock, critique coverage) is one the session reached on a plan that met
+        # submission requirements — never on bytes it was about to reject outright.
         store.save(state)
     _log_gate(state, "plan_approval_plugin", pblock, passed=not pblock)
     if pblock:
@@ -4371,23 +4402,9 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # newer trunk tightened the schema (free-text executors #7, or a later-required
     # substantive field like [stage.principle].derivation) must stay diffable — the
     # lenient load keeps the structural parse but skips every submission-grade
-    # check. Only the NEW side (and submit-plan) is strict.
+    # check. Only the NEW side — loaded strictly at seam (b) above — and submit-plan
+    # are strict.
     old = _load(old_path, strict=False)
-    new = _load(args.plan)
-    # Submission seam (b): the single NEW-side load, placed BEFORE diff_plans so all three
-    # diff outcomes are covered by one check — a no_change replan re-materializes live
-    # stages from these bytes just as a refinement does, so "unchanged" is no reason to
-    # let an unvalidated plan in.
-    # Entry-point fallback — see cmd_submit_plan's identical comment. Bound here rather
-    # than below the refusals because this seam's own judged refusal needs it; binding a
-    # callable spends nothing, and the judge is reached only on a prefilter hit.
-    run = runner if runner is not None else advisor.subprocess_runner
-    submission = _submission_problems(new, run, state.weight_class)
-    if submission:
-        return Directive(False, state.node, "fix_plan",
-                         "replan blocked: the corrected plan does not meet submission "
-                         "requirements",
-                         data={"problems": submission})
     # coverage gate: inside the difficulty flow, the corrected plan must CARRY the
     # critique's similarities into conditions/invariants and CHANGE a means/method
     # for the declared differences. Empty split -> [] -> behaves exactly as before.
@@ -4416,10 +4433,11 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # break the property no matter how the list above it reads.)
     # (The load of args.plan can also raise out of the command, but it raises UPSTREAM of
     # the seam, so no placement inside this range answers for it.)
-    # Stamping at the seam was correct on today's control flow only because nothing saves
-    # between there and the coverage refusal; it made the invariant depend on the absence
-    # of a `store.save` rather than on placement, and the leak would be a silently wrong
-    # digest, not a crash.
+    # Stamping at seam (b) itself is now positively WRONG, not merely fragile: the
+    # enumeration block's `store.save` sits between that seam and the refusals above, so a
+    # digest stamped up there would be persisted for a plan the pblock or coverage gate
+    # then rejects. Placement, not the absence of an intervening save, is what carries the
+    # invariant — and the leak would be a silently wrong digest, not a crash.
     _stamp_accepted_plan_digest(state, args.plan)
 
     # Seam (b)'s advice channel, attached to whichever of this command's several success
