@@ -10,6 +10,7 @@ from agentctl import cli, plan, plugins
 from agentctl import plugins_premise as pp
 from agentctl.directive import Directive
 from agentctl.state import Node, StageStatus
+from conftest import STAGE_OBSERVATIONS
 
 
 def ns(**kw):
@@ -160,10 +161,11 @@ def test_resolve_completed_marker(store, fixtures_dir):
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
-    for _ in range(2):
+    for observation in STAGE_OBSERVATIONS[:2]:
         cli.cmd_next_stage(ns(session=sid), store=store)
         cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
-                               control="reviewed: ok"), store=store)
+                               control="reviewed: ok", observation=observation),
+                              store=store)
     cli.cmd_verify_final(ns(session=sid), store=store)
     # experience auto-activates for substantive sessions and gates resolution
     cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="searched"), store=store)
@@ -345,10 +347,11 @@ def test_reset_from_resolved_rearms(store, fixtures_dir):
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
-    for _ in range(2):
+    for observation in STAGE_OBSERVATIONS[:2]:
         cli.cmd_next_stage(ns(session=sid), store=store)
         cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
-                               control="reviewed: ok"), store=store)
+                               control="reviewed: ok", observation=observation),
+                              store=store)
     cli.cmd_verify_final(ns(session=sid), store=store)
     # experience auto-activates for substantive sessions and gates resolution
     cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="searched"), store=store)
@@ -532,14 +535,14 @@ def test_verify_final_populates_state_cost(store, fixtures_dir, tmp_path):
     # Pass stage 1
     cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           cost_log=str(cost_log)),
+           observation=STAGE_OBSERVATIONS[0], cost_log=str(cost_log)),
         store=store,
     )
     # Pass stage 2 (no cost log for this one)
     cli.cmd_next_stage(ns(session=sid), store=store)
     cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           cost_log=str(tmp_path / "empty.jsonl")),
+           observation=STAGE_OBSERVATIONS[1], cost_log=str(tmp_path / "empty.jsonl")),
         store=store,
     )
 
@@ -572,10 +575,10 @@ def test_resolve_directive_carries_cost(store, fixtures_dir, tmp_path):
         encoding="utf-8",
     )
 
-    for _ in range(2):
+    for observation in STAGE_OBSERVATIONS[:2]:
         cli.cmd_record_result(
             ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-               cost_log=str(cost_log)),
+               observation=observation, cost_log=str(cost_log)),
             store=store,
         )
         cli.cmd_next_stage(ns(session=sid), store=store)
@@ -603,9 +606,10 @@ def test_resolve_without_attributed_cost_has_empty_cost_dict(store, fixtures_dir
     sid = "cost-empty"
     _to_executing_spawn(store, sid, fixtures_dir)
 
-    for _ in range(2):
+    for observation in STAGE_OBSERVATIONS[:2]:
         cli.cmd_record_result(
-            ns(session=sid, status="passed", actual="ok", control="reviewed: ok"),
+            ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
+               observation=observation),
             store=store,
         )
         cli.cmd_next_stage(ns(session=sid), store=store)
@@ -704,10 +708,11 @@ def _to_verifying_all_passed_failing_finalcheck(store, sid, tmp_path):
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
-    for _ in range(2):
+    for observation in STAGE_OBSERVATIONS[:2]:
         cli.cmd_next_stage(ns(session=sid), store=store)
         cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
-                               control="reviewed: ok"), store=store)
+                               control="reviewed: ok", observation=observation),
+                              store=store)
 
 
 def test_verify_final_failure_routes_to_diagnosing(store, tmp_path):
@@ -747,7 +752,8 @@ def test_verify_final_pending_stage_stays_fix_stages(store, fixtures_dir):
     plan = _to_executing_spawn(store, sid, fixtures_dir)
     # Only stage 1 is passed; stage 2 remains PENDING.
     cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
-                           control="reviewed: ok"), store=store)
+                           control="reviewed: ok",
+                           observation=STAGE_OBSERVATIONS[0]), store=store)
 
     d = cli.cmd_verify_final(ns(session=sid), store=store)
     assert d.ok is False

@@ -41,6 +41,26 @@ text = "the fixture plan meets the substantive grade"
 R1 = ["stage 1 verify_command"]
 """
 
+# What a controller would report having SEEN at each stage of the `plan_two_stage*`
+# fixture family (plain / _refined / _substantive — same three stages in the same order),
+# indexed by stage index - 1.
+#
+# Defect 2 broadened the observation requirement from acceptance_review stages to EVERY
+# stage of a substantive session: `record-result --status passed` now refuses a stage that
+# records no comparison of the achieved result against the stage's goal, and refuses one
+# that merely echoes the expected image back. So every module driving this fixture to
+# PASSED owes a real observation.
+#
+# Shared for the same reason as SUBSTANTIVE_ORDER above: two dozen modules each inventing
+# their own is two dozen edits the next time this gate widens, and an invented one decays
+# into "ok" — re-creating inside the suite the exact defect the gate removes from the
+# engine.
+STAGE_OBSERVATIONS = (
+    "mod.py is on disk and importing it in a fresh interpreter raised nothing",
+    "ran pytest over tests/test_mod.py: every case passed, none failed",
+    "pushed the branch and the CI run collected tests/test_mod.py and reported green",
+)
+
 # A plan-level end-to-end check, likewise required of a substantive plan. Written to be
 # spliced at the END of a plan (a top-level array-of-tables closes any table context), and
 # deliberately trivial: fixtures that care what a final_check DOES declare their own.

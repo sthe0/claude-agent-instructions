@@ -22,6 +22,7 @@ from agentctl import cli
 from agentctl.dispatch import RunResult, build_argv
 from agentctl.plan import PlanError, load_plan, parse_plan
 from agentctl.state import Actor, Criterion, Means, Node, Stage, StageStatus, Subject
+from conftest import STAGE_OBSERVATIONS
 
 
 def ns(**kw):
@@ -271,7 +272,8 @@ def test_cmd_dispatch_continues_worktree_for_dependent_spawn_stage(store, fixtur
     assert "--continue-worktree" not in seen_argv[0]  # stage 1 has no dependency
 
     cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
-                            control="reviewed: ok"), store=store)
+                            control="reviewed: ok",
+                            observation=STAGE_OBSERVATIONS[0]), store=store)
     cli.cmd_next_stage(ns(session=sid), store=store)  # activates stage 2
 
     cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium",
@@ -299,7 +301,8 @@ def test_cmd_dispatch_omits_continue_worktree_without_delivery_worktree_or_repo_
     cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium",
                         dry_run=False), store=store, runner=runner)
     cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
-                            control="reviewed: ok"), store=store)
+                            control="reviewed: ok",
+                            observation=STAGE_OBSERVATIONS[0]), store=store)
     cli.cmd_next_stage(ns(session=sid), store=store)
     cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium",
                         dry_run=False), store=store, runner=runner)
