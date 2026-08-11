@@ -8,6 +8,7 @@ from argparse import Namespace
 
 from agentctl import cli
 from agentctl.state import Node, StageStatus
+from conftest import STAGE_OBSERVATIONS
 
 
 def ns(**kw):
@@ -111,10 +112,12 @@ def test_walkthrough_logs_one_event_per_gate_evaluation(store, monkeypatch, tmp_
     _to_executing_stage1(store, sid, plan)
 
     cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
-                             control="reviewed: ok", observation=""), store=store)
+                             control="reviewed: ok",
+                             observation=STAGE_OBSERVATIONS[0]), store=store)
     cli.cmd_next_stage(ns(session=sid), store=store)
     cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
-                             control="reviewed: ok", observation=""), store=store)
+                             control="reviewed: ok",
+                             observation=STAGE_OBSERVATIONS[1]), store=store)
     cli.cmd_verify_final(ns(session=sid), store=store)
     # the experience plugin auto-activates on the substantive spine and gates
     # resolve until its phases are recorded — complete them like a real session

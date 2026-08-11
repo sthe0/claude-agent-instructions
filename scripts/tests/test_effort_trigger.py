@@ -16,6 +16,7 @@ import pytest
 
 from agentctl import cli, effort
 from agentctl.state import Node, StageStatus
+from conftest import STAGE_OBSERVATIONS
 
 
 def ns(**kw):
@@ -107,7 +108,7 @@ def test_verify_final_fires_when_late_cost_tips_the_ratio(store, fixtures_dir, t
     _write_cost_log(cost_log, [{"plan_path": plan, "stage_index": 1, "cost_usd": 10.0}])
     d1 = cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           observation="", cost_log=str(cost_log)),
+           observation=STAGE_OBSERVATIONS[0], cost_log=str(cost_log)),
         store=store,
     )
     assert d1.ok is True and d1.action == "next_stage"
@@ -119,7 +120,7 @@ def test_verify_final_fires_when_late_cost_tips_the_ratio(store, fixtures_dir, t
     ])
     d2 = cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           observation="", cost_log=str(cost_log)),
+           observation=STAGE_OBSERVATIONS[1], cost_log=str(cost_log)),
         store=store,
     )
     assert d2.ok is True and d2.action == "verify_final"  # under threshold so far
@@ -201,11 +202,11 @@ def test_verify_final_failures_attach_a_live_divergence(store, tmp_path):
 
     cost_log = tmp_path / "costs.jsonl"
     _write_cost_log(cost_log, [])
-    for _ in range(2):
+    for observation in STAGE_OBSERVATIONS[:2]:
         cli.cmd_next_stage(ns(session=sid), store=store)
         cli.cmd_record_result(
             ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-               observation="", cost_log=str(cost_log)),
+               observation=observation, cost_log=str(cost_log)),
             store=store,
         )
 
@@ -285,11 +286,11 @@ def test_verify_final_venue_refusal_attaches_a_live_divergence(store, tmp_path):
 
     cost_log = tmp_path / "costs.jsonl"
     _write_cost_log(cost_log, [])
-    for _ in range(2):
+    for observation in STAGE_OBSERVATIONS[:2]:
         cli.cmd_next_stage(ns(session=sid), store=store)
         cli.cmd_record_result(
             ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-               observation="", cost_log=str(cost_log)),
+               observation=observation, cost_log=str(cost_log)),
             store=store,
         )
 
@@ -396,7 +397,7 @@ def test_kill_switch_suppresses_the_transition_but_not_the_accounting(store, fix
 
     d = cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           observation="", cost_log=str(cost_log)),
+           observation=STAGE_OBSERVATIONS[0], cost_log=str(cost_log)),
         store=store,
     )
 
@@ -425,7 +426,7 @@ def test_kill_switch_suppresses_verify_final_clean_pass_fire_too(store, fixtures
     _write_cost_log(cost_log, [{"plan_path": plan, "stage_index": 1, "cost_usd": 10.0}])
     d1 = cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           observation="", cost_log=str(cost_log)),
+           observation=STAGE_OBSERVATIONS[0], cost_log=str(cost_log)),
         store=store,
     )
     assert d1.ok is True and d1.action == "next_stage"
@@ -438,7 +439,7 @@ def test_kill_switch_suppresses_verify_final_clean_pass_fire_too(store, fixtures
     ])
     d2 = cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           observation="", cost_log=str(cost_log)),
+           observation=STAGE_OBSERVATIONS[1], cost_log=str(cost_log)),
         store=store,
     )
     assert d2.ok is True and d2.action == "verify_final"
@@ -553,7 +554,7 @@ def test_fire_diagnose_replan_cycle_then_refires_on_renewed_overrun(store, fixtu
     _write_cost_log(cost_log, [{"plan_path": plan, "stage_index": 1, "cost_usd": 100.0}])
     d1 = cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           observation="", cost_log=str(cost_log)),
+           observation=STAGE_OBSERVATIONS[0], cost_log=str(cost_log)),
         store=store,
     )
     assert d1.node == Node.DIAGNOSING.value
@@ -579,7 +580,7 @@ def test_fire_diagnose_replan_cycle_then_refires_on_renewed_overrun(store, fixtu
     ])
     d2 = cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           observation="", cost_log=str(cost_log)),
+           observation=STAGE_OBSERVATIONS[1], cost_log=str(cost_log)),
         store=store,
     )
 
@@ -602,10 +603,10 @@ def test_quality_row_carries_both_effort_vectors(store, fixtures_dir):
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
-    for _ in range(2):
+    for observation in STAGE_OBSERVATIONS[:2]:
         cli.cmd_next_stage(ns(session=sid), store=store)
         cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
-                                 control="reviewed: ok", observation="",
+                                 control="reviewed: ok", observation=observation,
                                  cost_log=None), store=store)
     cli.cmd_verify_final(ns(session=sid, cost_log=None), store=store)
     cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="searched",

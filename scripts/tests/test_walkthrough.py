@@ -5,6 +5,7 @@ from argparse import Namespace
 from agentctl import cli
 from agentctl.dispatch import RunResult
 from agentctl.state import Node
+from conftest import STAGE_OBSERVATIONS
 
 
 def fake_runner(argv):
@@ -65,7 +66,8 @@ def test_full_substantive_cycle(store, fixtures_dir):
                             dry_run=False), store=store, runner=fake_runner)
     assert d.ok
     d = cli.cmd_record_result(ns(session=sid, status="passed", actual="import ok",
-                               control="reviewed: ok"), store=store)
+                               control="reviewed: ok",
+                               observation=STAGE_OBSERVATIONS[0]), store=store)
     assert d.node == Node.VERIFYING.value
     assert d.action == "next_stage"
 
@@ -76,7 +78,8 @@ def test_full_substantive_cycle(store, fixtures_dir):
                             dry_run=False), store=store, runner=fake_runner)
     assert d.ok
     d = cli.cmd_record_result(ns(session=sid, status="passed", actual="tests green",
-                               control="reviewed: ok"), store=store)
+                               control="reviewed: ok",
+                               observation=STAGE_OBSERVATIONS[1]), store=store)
     assert d.action == "verify_final"
 
     d = cli.cmd_verify_final(ns(session=sid), store=store)
