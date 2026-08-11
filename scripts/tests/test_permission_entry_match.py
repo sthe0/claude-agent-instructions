@@ -1,11 +1,9 @@
-"""Hermetic tests for `lib/permission_entry_match.covers`. No live filesystem
-or transcript reads: every fixture below is either a synthetic call built to
-exercise one branch, or -- where labeled -- a RECONSTRUCTION consistent with
-the plan-time corpus measurement (PROVENANCE § 1: 3 078 transcripts, 1 341
-denial rows, Bash the plurality at 875) rather than a byte-identical row from
-that corpus. This developer session cannot read the live transcript store
-(outside this worktree and `~/.claude-agent/plans`), so no row is presented
-as verbatim when it is not.
+"""Hermetic tests for `lib/permission_entry_match.covers`. The tests read no
+live file: every fixture is a literal in this module. Most are synthetic calls
+built to exercise one branch; the block at the end is copied VERBATIM from the
+measured denial corpus, so the module is also tested against calls the harness
+actually produced and denied rather than only against calls a test author
+imagined. Each corpus fixture carries the `toolDenialKind` that classified it.
 """
 from __future__ import annotations
 
@@ -166,19 +164,50 @@ def test_multi_word_prefix_entry_from_the_live_surface_inventory():
     assert covers("Bash(git status:*)", "Bash", {"command": "git log"}) is False
 
 
-# --- a denied call consistent with the measured corpus (RECONSTRUCTION) -----
+# --- denied calls copied VERBATIM from the measured corpus --------------------
 #
-# This developer session cannot read the live transcript store, so no byte-
-# identical corpus row is available. RECONSTRUCTION: a compound Bash denial
-# shaped like the corpus's own majority case (PROVENANCE § 1: Bash 875/1341
-# denials; § 8: 302/875 of those are multi-line before any `;`/`&&` form is
-# counted) -- an agent denied on a multi-line `git push` attempt, self-
-# granting `Bash(git:*)` in response. Flagged as a residual in this stage's
-# COMPLETED report: the plan's done_criterion calls for a verbatim corpus
-# row, and neither [meta] nor PROVENANCE embeds one to copy.
+# Each `tool_input` below is byte-identical to a row in the live transcript
+# store, located by the top-level `toolDenialKind` field the harness stamps on
+# a denied call's result record and joined back to its originating `tool_use`
+# via `sourceToolAssistantUUID`. 1 535 denial rows across 359 of 3 665
+# transcripts carry it. The two values that matter here:
+#   `user-rejected`  -- the harness's own allowlist matcher
+#   `permission-rule` -- one of THIS repository's PreToolUse hooks
+# The point of testing against these rather than against invented calls is that
+# a compound command is what the harness actually denies: every Bash row below
+# is compound, and none of them is the well-formed spaced `&&` spelling that
+# `shlex` survives.
 
-RECONSTRUCTED_CORPUS_DENIAL_COMMAND = "cd /home/the0/cai-wt-perm-self-grant\ngit push origin perm-self-grant"
+CORPUS_BASH_SEMICOLON_PIPE = (
+    'ls -la /home/the0/.claude-agent/plans/ | grep -i smd; echo "---BRIEF---"; '
+    "ls -la /tmp/cc-scratch/smd-replan-brief-v4.md"
+)  # user-rejected
+
+CORPUS_BASH_FIND_ROOT = (
+    'cd /home/the0/claude-agent-instructions 2>/dev/null && pwd || echo "no canon dir here"; '
+    'echo "---"; find / -maxdepth 3 -iname "claude-agent-instructions" 2>/dev/null; '
+    'echo "---agentctl status from worktree---"; ls scripts/agentctl | head -5'
+)  # permission-rule -- the repo's find-root-scope guard
+
+CORPUS_BASH_NEWLINE_RM = (
+    "rm -rf /tmp/phase3-installer-test.Fwoo6r\n"
+    'grep -c "hook-phase3-due" /home/the0/.claude-agent/settings.json'
+)  # permission-rule -- the repo's destructive-rm guard
+
+CORPUS_EDIT_PATH = "/home/the0/claude-agent-instructions/scripts/self-diagnose.py"
+# permission-rule -- the repo's canon-readonly guard
 
 
-def test_reconstructed_corpus_shaped_denial_is_covered():
-    assert covers("Bash(git:*)", "Bash", {"command": RECONSTRUCTED_CORPUS_DENIAL_COMMAND}) is True
+def test_corpus_compound_bash_denials_are_covered():
+    for command in (
+        CORPUS_BASH_SEMICOLON_PIPE,
+        CORPUS_BASH_FIND_ROOT,
+        CORPUS_BASH_NEWLINE_RM,
+    ):
+        assert covers("Bash(git:*)", "Bash", {"command": command}) is True
+
+
+def test_corpus_edit_denial_matches_by_path_not_by_luck():
+    assert covers("Edit", "Edit", {"file_path": CORPUS_EDIT_PATH}) is True
+    assert covers("Edit(/home/the0/claude-agent-instructions/**)", "Edit", {"file_path": CORPUS_EDIT_PATH}) is True
+    assert covers("Edit(/tmp/**)", "Edit", {"file_path": CORPUS_EDIT_PATH}) is False
