@@ -89,6 +89,21 @@ def ns(**kw):
     return Namespace(**kw)
 
 
+def _record_delivered(store, sid):
+    """Record the delivering stage passed, then let the landed machinery decide.
+
+    A substantive stage's pass also needs an --observation (Defect 2); it is fixed
+    here because this file's subject is the freeze/verify machinery, not the
+    attestation. Worded as what a controller looked AT, so it stays true of the
+    case below where the engine then refuses the pass for an unfrozen head.
+    """
+    return cli.cmd_record_result(
+        ns(session=sid, status="passed", actual="delivered", control=None,
+           observation="checked the target branch's head in the declared venue against the commit this stage delivered"),
+        store=store, runner=None,
+    )
+
+
 def _landed_stage(index, *, target="main", remote="origin", delivered_stage,
                    status=StageStatus.ACTIVE.value):
     return Stage(
@@ -196,10 +211,7 @@ def test_self_referencing_stage_finds_frozen_head_present(tmp_path):
     stage = _landed_stage(1, delivered_stage=1)
     state = _executing("sr1", [stage])
     state.repo_root = str(work)
-    d = cli.cmd_record_result(
-        ns(session="sr1", status="passed", actual="delivered", control=None),
-        store=_MemStore(state), runner=None,
-    )
+    d = _record_delivered(_MemStore(state), "sr1")
     assert d.ok is True, d.detail
     assert stage.outcome.delivered_head == already_landed_sha
 
@@ -216,10 +228,7 @@ def test_never_landed_commit_becomes_a_real_failure(tmp_path):
                      venue="repo_root")
     stage = _shell_stage(1, verify_command=None, status=StageStatus.ACTIVE.value)
     state = _executing("nl1", [stage], repo_root=str(work), final_check=[fc])
-    d = cli.cmd_record_result(
-        ns(session="nl1", status="passed", actual="delivered", control=None),
-        store=(store := _MemStore(state)), runner=None,
-    )
+    d = _record_delivered(store := _MemStore(state), "nl1")
     assert d.ok is True  # stage 1 itself is a plain shell-less measurable pass
 
     d2 = cli.cmd_verify_final(ns(session="nl1"), store=store, runner=None)
@@ -241,10 +250,7 @@ def test_headline_landing_regression(tmp_path):
     stage = _shell_stage(1, status=StageStatus.ACTIVE.value)
     state = _executing("hl1", [stage], repo_root=str(work), final_check=[fc])
     store = _MemStore(state)
-    d = cli.cmd_record_result(
-        ns(session="hl1", status="passed", actual="delivered", control=None),
-        store=store, runner=None,
-    )
+    d = _record_delivered(store, "hl1")
     assert d.ok is True
     assert stage.outcome.delivered_head == delivered_sha
 
@@ -337,10 +343,7 @@ def test_delivered_stage_with_no_frozen_head_refuses(tmp_path):
     stage2 = _landed_stage(2, delivered_stage=1)
     state = _executing("nf1", [stage1, stage2], repo_root=str(work))
     state.current_stage = 2
-    d = cli.cmd_record_result(
-        ns(session="nf1", status="passed", actual="delivered", control=None),
-        store=_MemStore(state), runner=None,
-    )
+    d = _record_delivered(_MemStore(state), "nf1")
     assert d.ok is False
     assert d.action == "fix_venue"
     assert "not yet frozen" in d.detail
@@ -382,10 +385,7 @@ def test_no_delivery_worktree_freezes_repo_root_head_runs_green(tmp_path):
     state = _executing("dw1", [stage])
     state.repo_root = str(work)
     assert state.delivery_worktree is None
-    d = cli.cmd_record_result(
-        ns(session="dw1", status="passed", actual="delivered", control=None),
-        store=_MemStore(state), runner=None,
-    )
+    d = _record_delivered(_MemStore(state), "dw1")
     assert d.ok is True
     assert stage.outcome.delivered_head == sha
 

@@ -10,6 +10,10 @@ Covers the done-criterion scenarios:
   - --control accepted on a non-developer spawn stage without error
   - Stage.needs_control() / has_control() helpers
   - Stage round-trip preserves control field
+
+The control attestation is not the only thing a passed substantive stage owes —
+it also owes an --observation — so every allowed case below carries one. That
+half is exercised on its own elsewhere; here it is just a precondition.
 """
 from argparse import Namespace
 
@@ -73,9 +77,20 @@ def _store(*stages):
     return _Mem(_executing_state(*stages))
 
 
-def _rr(store, status, actual="done", control=None):
+# A passed stage of a substantive session owes an observation as well as a control
+# attestation (Defect 2 widened that gate past acceptance_review). This module's
+# subject is the control half, so the observation is a helper default, phrased
+# against this fixture's own abstract names: the artifact produced from material
+# "m", read against criterion "dc". Deliberately NOT "ran dc, it exited 0" — these
+# stages declare no verify_command, so nothing is run, and an observation claiming
+# a run that never happened is the same defect as a placeholder in better clothes.
+_READ_THE_ARTIFACT = "read the artifact produced from m and compared it against what dc asks for"
+
+
+def _rr(store, status, actual="done", control=None, observation=_READ_THE_ARTIFACT):
     return cli.cmd_record_result(
-        Namespace(session="rrc", status=status, actual=actual, control=control),
+        Namespace(session="rrc", status=status, actual=actual, control=control,
+                  observation=observation),
         store=store,
     )
 

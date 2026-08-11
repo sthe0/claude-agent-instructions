@@ -37,6 +37,21 @@ def ns(**kw):
     return Namespace(**kw)
 
 
+# A substantive stage's pass also needs an --observation (Defect 2). These stages
+# are hand-built fixtures with no domain of their own, so what a controller here
+# genuinely observed is the verification's own outcome — worded to stay true of the
+# case whose passed claim the command contradicts.
+_RAN_THE_COMMAND = "compared the recorded claim against the exit code the verify_command actually returned"
+
+
+def _record_passed(store, sid, actual="ok", observation=_RAN_THE_COMMAND, **kw):
+    return cli.cmd_record_result(
+        ns(session=sid, status="passed", actual=actual, control=None,
+           observation=observation),
+        store=store, **kw,
+    )
+
+
 def runner_returning(code):
     return lambda argv, *, timeout=None: RunResult(code, stdout="", stderr="")
 
@@ -101,20 +116,14 @@ def _verifying(sid, stage):
 
 def test_passed_with_matching_command_accepts(store):
     store.save(_executing("v1", _stage(1, verify_command="true", expected_exit=0)))
-    d = cli.cmd_record_result(
-        ns(session="v1", status="passed", actual="claim ok", control=None),
-        store=store, runner=runner_returning(0),
-    )
+    d = _record_passed(store, "v1", actual="claim ok", runner=runner_returning(0))
     assert d.ok is True
     assert store.load("v1").stage(1).outcome.status == StageStatus.PASSED.value
 
 
 def test_passed_claim_contradicted_by_command_becomes_failure(store):
     store.save(_executing("v2", _stage(1, verify_command="false", expected_exit=0)))
-    d = cli.cmd_record_result(
-        ns(session="v2", status="passed", actual="claim ok", control=None),
-        store=store, runner=runner_returning(1),
-    )
+    d = _record_passed(store, "v2", actual="claim ok", runner=runner_returning(1))
     assert d.ok is False
     assert d.node == Node.DIAGNOSING.value
     assert d.marker == "OVERCOME-DIFFICULTY"
@@ -125,19 +134,17 @@ def test_passed_claim_contradicted_by_command_becomes_failure(store):
 
 def test_nonzero_expected_exit_accepts_when_matched(store):
     store.save(_executing("v3", _stage(1, verify_command="exit 2", expected_exit=2)))
-    d = cli.cmd_record_result(
-        ns(session="v3", status="passed", actual="ok", control=None),
-        store=store, runner=runner_returning(2),
-    )
+    d = _record_passed(store, "v3", runner=runner_returning(2))
     assert d.ok is True
     assert store.load("v3").stage(1).outcome.status == StageStatus.PASSED.value
 
 
 def test_no_command_keeps_flag_only_behaviour(store):
     store.save(_executing("v4", _stage(1, verify_command=None)))
-    d = cli.cmd_record_result(
-        ns(session="v4", status="passed", actual="ok", control=None),
-        store=store, runner=boom,  # proves the runner is not invoked
+    d = _record_passed(
+        store, "v4",
+        observation="the stage declares no verify_command, so nothing was run to contradict the claim",
+        runner=boom,  # proves the runner is not invoked
     )
     assert d.ok is True
     assert store.load("v4").stage(1).outcome.status == StageStatus.PASSED.value
