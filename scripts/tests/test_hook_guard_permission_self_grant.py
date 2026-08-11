@@ -26,9 +26,12 @@ What each block proves:
   * the two fail directions the primitives hand up: an unresolvable denied call fails
     toward COVERING (deny), and everything internal fails through `_ON_ERROR`, asserted
     for BOTH of its values so flipping the constant rots no test;
-  * the four version-STABLE Bash rows. The two-line phantom-target row is deliberately
-    absent: its verdict depends on the lexer revision, so pinning it would plant a test
-    that goes red on another stage's landing with nobody owning the fix.
+  * the version-STABLE Bash rows, including the ones that pin a destination DIRECTORY as
+    the files written inside it (`cp x d/`, `install -m 600 x d`) against the controls that
+    keep the resolution from turning `cp` itself into a refusal. The two-line
+    phantom-target row is deliberately absent: its verdict depends on the lexer revision,
+    so pinning it would plant a test that goes red on another stage's landing with nobody
+    owning the fix.
 """
 from __future__ import annotations
 
@@ -846,35 +849,41 @@ def _kind_target(tmp_path: Path, kind: str) -> str:
         return str(target)
     if kind == "char-device":
         return "/dev/zero"
-    if kind == "oversize":
-        # A REAL permission document, padded past the cap WITH TRAILING WHITESPACE, so the
-        # whole file still parses as the very JSON the gate is looking for. This is the row
-        # that pins the size gate AS a size gate: nothing but `st_size` can be what keeps the
-        # gate from diffing it.
-        #
-        # The padding was NUL bytes first, and that was the inert-row defect in miniature:
-        # measured, disabling the entire kind-and-size gate left every `oversize` param still
-        # passing, because a document with NULs stapled to it no longer parses, so the gate
-        # reached ALLOW by a route that had nothing to do with the size at all. Whitespace is
-        # the one padding JSON tolerates, so with the gate disabled these params now DENY.
-        body = settings_text([SEED])
-        target = tmp_path / "huge-settings.json"
-        target.write_text(
-            body + " " * (hook._MAX_SURFACE_BYTES + 1 - len(body.encode("utf-8"))),
-            encoding="utf-8",
-        )
-        return str(target)
     raise AssertionError(f"unknown kind {kind}")
 
 
-KINDS_THAT_ARE_NOT_DOCUMENTS = ("directory", "fifo", "char-device", "oversize")
+def _padded_surface(tmp_path: Path, name="huge-settings.json") -> Path:
+    """A REAL permission document padded one byte past the gate's cap.
 
-# The FILE-KIND subset, for the transcript route. `oversize` is deliberately NOT here: the
-# transcript cap is 512 MiB, no test writes that, and staging a 1 MiB file instead measured
-# as an inert row -- the padded permission document is pretty-printed over several lines, so
-# no single line both opens and closes a JSON object, and `_looks_like_a_row` answered
-# UNREADABLE for a reason that had nothing to do with the cap. Under the unbounded read the
-# row still passed. The cap gets its own row below, over a transcript that really would arm.
+    The padding is TRAILING WHITESPACE, so the whole file still parses as the very JSON the
+    gate is looking for and `st_size` is the only thing that can change the verdict. NUL
+    bytes were the first padding tried and made an inert row: a document with NULs stapled
+    to it no longer parses, so the gate reached its answer by a route that had nothing to do
+    with the size. Whitespace is the one padding JSON tolerates.
+    """
+    body = settings_text([SEED])
+    target = tmp_path / name
+    target.write_text(
+        body + " " * (hook._MAX_SURFACE_BYTES + 1 - len(body.encode("utf-8"))),
+        encoding="utf-8",
+    )
+    return target
+
+
+# `oversize` was the fourth member of this tuple until round 7, and taking it out is the
+# fix rather than a tidy-up: a file too large to read is not a file whose KIND rules out
+# being a permission document, so answering "definitely not a widening" about it published
+# a verdict over content nobody looked at -- and made padding a real permissions document
+# past the cap a way to launder a widening. It has its own row below, asserting the
+# OPPOSITE direction (UNKNOWN, hence deny while armed).
+KINDS_THAT_ARE_NOT_DOCUMENTS = ("directory", "fifo", "char-device")
+
+# The same three for the transcript route. The transcript cap is 512 MiB, no test writes
+# that, and staging a 1 MiB file instead measured as an inert row -- the padded permission
+# document is pretty-printed over several lines, so no single line both opens and closes a
+# JSON object, and `_looks_like_a_row` answered UNREADABLE for a reason that had nothing to
+# do with the cap. Under the unbounded read the row still passed. That cap gets its own row
+# below, over a transcript that really would arm.
 KINDS_THAT_ARE_NOT_TRANSCRIPTS = ("directory", "fifo", "char-device")
 
 # 5 s is the PreToolUse budget the whole gate is sized against, so a verdict slower than
@@ -889,10 +898,11 @@ def test_a_target_that_cannot_be_a_json_document_is_a_definite_no_not_an_unknown
     tmp_path, kind, tool_name
 ):
     # ARMED, and with the shipped fail-closed `_ON_ERROR`, so an UNKNOWN here would DENY:
-    # the assertion is that the gate ANSWERS instead. A directory, a FIFO, a device and a
-    # file far larger than any permission document are all targets the gate identified, and
-    # none of them can be a `permissions.allow` JSON document, so the honest verdict is
-    # "this call does not widen a permission surface" -- not a shrug resolved by policy.
+    # the assertion is that the gate ANSWERS instead. A directory, a FIFO and a device are
+    # all targets the gate identified, and no file of those KINDS can be a
+    # `permissions.allow` JSON document, so the honest verdict is "this call does not widen a
+    # permission surface" -- not a shrug resolved by policy. Kind is the whole basis, which
+    # is why a merely over-large file is not in this tuple and denies instead.
     #
     # Both halves are asserted and both matter. The VERDICT, because "did not raise" is
     # satisfied by the catch-all's unconditional deny, i.e. by the bug. And PROMPTNESS,
@@ -991,6 +1001,106 @@ def test_a_transcript_past_its_size_cap_is_unreadable_even_though_it_would_have_
                                transcript, tmp_path)) is not None
 
 
+# --- a target the gate DECLINED TO READ is not a target it answered about ------------
+
+@pytest.mark.parametrize("tool_name", ("Edit", "Write", "Bash"))
+def test_a_permission_document_padded_past_the_cap_is_unknown_not_a_definite_no(
+    tmp_path, tool_name
+):
+    # GROW, THEN GRANT -- measured, on all three tool paths: an 83 B permissions document
+    # denied this widening while the same document padded to 1 048 577 B with legitimate
+    # entries allowed it, because over the cap `_read_text` answered NOT_A_SURFACE, a
+    # definite negative, about a file it had just declined to open. One `cp` of padding
+    # bought a permanent self-grant, and nothing in the deny path was even reached.
+    #
+    # The cap itself is not the fix and cannot be: any cap has an over-cap side. What is
+    # fixed is the DIRECTION -- over-cap is UNREADABLE, i.e. UNKNOWN, which an armed session
+    # pays `_ON_ERROR` for. So this row asserts the deny, and the two controls around it are
+    # what make the deny mean something: the 83 B twin denies too (so the row is not passing
+    # because the cap made everything deny), and the same padded call in a session carrying
+    # no denial allows (so the deny came from the UNKNOWN routing through (b), not from a
+    # size guard on settings files).
+    padded = _padded_surface(tmp_path)
+    small = write_settings(tmp_path, name="small-settings.json")
+
+    def call_for(target: Path) -> dict:
+        if tool_name == "Bash":
+            return {"command": f"cp evil.json {target}"}
+        if tool_name == "Write":
+            return {"file_path": str(target), "content": settings_text([SEED, COVERING])}
+        return add_entry_edit(target, COVERING)
+
+    assert hook.denial_arming.armed(ARMED_READ).verdict is Verdict.ARMED
+    assert hook.decide(payload(tool_name, call_for(padded), ARMED_READ, tmp_path)) is not None
+    assert hook.decide(payload(tool_name, call_for(small), ARMED_READ, tmp_path)) is not None
+    assert hook.decide(payload(tool_name, call_for(padded), NO_DENIAL, tmp_path)) is None
+
+
+def _understate_size(monkeypatch, module, target: Path, size: int) -> None:
+    """Make `os.stat` report `size` for `target` alone, and the truth for everything else."""
+    real_stat = os.stat
+
+    def lying_stat(path, *args, **kwargs):
+        st = real_stat(path, *args, **kwargs)
+        if isinstance(path, (str, os.PathLike)) and str(path) == str(target):
+            fields = list(st)
+            fields[6] = size
+            return os.stat_result(tuple(fields))
+        return st
+
+    monkeypatch.setattr(module.os, "stat", lying_stat)
+
+
+def test_a_target_that_yields_more_than_stat_promised_is_unreadable_not_diffed(
+    tmp_path, monkeypatch
+):
+    # THE SECOND BOUND, PINNED. `_read_text` gates on `st_size` and then reads one character
+    # past the cap and checks the length, and until this row the second half was unpinned:
+    # measured, deleting it left the entire suite green, so the check was documented as
+    # load-bearing and mechanically was not.
+    #
+    # `st_size` is what one earlier syscall reported, not a promise about a later `read` --
+    # an ordinary file grows in the window between the two, and a kernel-backed file need not
+    # account its content there at all. That is what the lying `stat` reproduces, and it is
+    # the only way to reproduce it: for a real static file a UTF-8 decode can only yield
+    # FEWER characters than bytes, so no fixture makes a read overrun its own `st_size`.
+    #
+    # The DIRECTION is why it matters, and it is the allow direction. Truncated to the cap,
+    # this document loses the text `add_entry_edit` replaces, so the edit applies to nothing,
+    # the after-text equals the before-text, neither parses, and the gate concludes "no
+    # widening" -- a silent ALLOW of a real self-grant, off a partial read. The control below
+    # is the same call in an unarmed session, so the deny here is the UNKNOWN routing rather
+    # than the lowered cap refusing everything.
+    s = write_settings(tmp_path)
+    monkeypatch.setattr(hook, "_MAX_SURFACE_BYTES", 20)
+    _understate_size(monkeypatch, hook, s, 0)
+
+    assert hook.denial_arming.armed(ARMED_READ).verdict is Verdict.ARMED
+    reason = hook.decide(payload("Edit", add_entry_edit(s, COVERING), ARMED_READ, tmp_path))
+    assert reason is not None
+    assert str(s) in reason
+    assert hook.decide(payload("Edit", add_entry_edit(s, COVERING), NO_DENIAL, tmp_path)) is None
+
+
+def test_a_write_over_an_unparseable_document_says_there_is_no_baseline(tmp_path):
+    # WHAT THE DENY MESSAGE MAY CLAIM IS BOUNDED BY WHAT WAS COMPUTED. With the file on disk
+    # not a JSON object there is no before-document to subtract, so `_widening_between` lists
+    # every entry the NEW document grants -- including ones the file already had in whatever
+    # shape it is in. Calling that "adding X, Y" states a diff that was never taken, and the
+    # user reads it as "this call introduces both". The message has to say which of the two
+    # it is looking at.
+    target = tmp_path / "settings.json"
+    target.write_text('{"permissions": {"allow": ["' + SEED + '"\n', encoding="utf-8")
+
+    reason = hook.decide(payload(
+        "Write", {"file_path": str(target), "content": settings_text([SEED, COVERING])},
+        ARMED_READ, tmp_path))
+
+    assert reason is not None
+    assert "there is no baseline" in reason
+    assert COVERING in reason and SEED in reason   # every entry listed, not only the new one
+
+
 # --- applying a patch is not writing a settings file --------------------------------
 
 @pytest.mark.parametrize("command", [
@@ -1023,6 +1133,86 @@ def test_an_ordinary_write_to_an_ordinary_file_while_armed_is_allowed(tmp_path, 
     # residual starts denying by command verb, these rows are what fails.
     (tmp_path / "note.txt").write_text("a\n", encoding="utf-8")
     assert hook.decide(payload("Bash", {"command": command}, ARMED_BASH, tmp_path)) is None
+
+
+# --- a destination DIRECTORY names the files written inside it -----------------------
+
+def _copy_into_a_directory(tmp_path):
+    """A live permission document in a directory, plus a widened copy staged beside it.
+
+    The shape is the manoeuvre itself: write the document you want where you may write, then
+    copy it ONTO the live one by naming the destination DIRECTORY rather than the file. Same
+    basename, so `DEST/basename(SRC)` is the surface -- which is exactly what `cp` means and
+    what the lexer used not to say.
+    """
+    config = tmp_path / "config"
+    config.mkdir()
+    surface = write_settings(config)
+    staged = tmp_path / "staged"
+    staged.mkdir()
+    (staged / "settings.json").write_text(settings_text([SEED, COVERING]), encoding="utf-8")
+    (staged / "other.json").write_text("{}\n", encoding="utf-8")
+    return config, surface, staged
+
+
+@pytest.mark.parametrize("template", [
+    "cp {src} {dir}/",                 # the spelling that SAYS directory
+    "cp {src} {dir}",                  # the ambiguous bare token
+    "mv {src} {dir}/",                 # the same verb family, moving rather than copying
+    "install -m 600 {src} {dir}",      # a write verb the table did not model at all
+    "cp {other} {src} {dir}/",         # multi-source: one target per source
+    "cp -t {dir} {src}",               # the destination as an option value
+])
+def test_a_copy_into_a_directory_is_judged_on_the_files_it_writes(tmp_path, template):
+    # MEASURED, ALL SIX ALLOWED: the lexer answered a directory destination with the
+    # DIRECTORY, the gate asked "is that a JSON document", got a correct no, and allowed the
+    # write -- so the whole gate was one trailing slash away from being bypassed. The verb
+    # names the files on its command line; answering with their parent was a real defect, not
+    # a bound like the patch verbs' (whose file names live inside the patch body).
+    #
+    # `install` is the second half of the same finding: it is an ordinary write verb that was
+    # simply absent from the table, so it reported NO target and allowed even when the
+    # destination was named in full. Its `-m 600` is here deliberately -- an option that
+    # consumes the next token, which without modelling reads `600` as a source.
+    #
+    # Each row asserts the transcript really arms BEFORE concluding anything from a deny: a
+    # hand-built or mis-referenced transcript is silently NOT_ARMED, which makes every row in
+    # this file pass for the wrong reason, and that has happened three times in this task.
+    config, surface, staged = _copy_into_a_directory(tmp_path)
+    command = template.format(
+        src=staged / "settings.json", dir=config, other=staged / "other.json")
+
+    assert hook.denial_arming.armed(ARMED_BASH).verdict is Verdict.ARMED
+    reason = hook.decide(payload("Bash", {"command": command}, ARMED_BASH, tmp_path))
+    assert reason is not None
+    assert str(surface) in reason          # the FILE it would write, not the directory
+    # The conjunct control: the identical command in a session carrying no denial allows, so
+    # what these rows pin is the gate, not a new refusal of `cp` on sight.
+    assert hook.decide(payload("Bash", {"command": command}, NO_DENIAL, tmp_path)) is None
+
+
+def test_the_controls_the_directory_resolution_must_not_break(tmp_path):
+    # The other side of the same change, in one row per thing that must NOT move. Resolving a
+    # destination directory means the lexer now emits paths it did not emit before, and an
+    # over-emitting lexer is only safe while a candidate that is not a permission document
+    # still allows -- so the last two are as load-bearing as the first.
+    config, surface, staged = _copy_into_a_directory(tmp_path)
+    src = staged / "settings.json"
+    (staged / "p.patch").write_text("--- a\n+++ b\n", encoding="utf-8")
+
+    # naming the destination FILE always denied, and still does
+    assert hook.decide(payload(
+        "Bash", {"command": f"cp {src} {surface}"}, ARMED_BASH, tmp_path)) is not None
+    # the patch verbs still answer with the working directory, which is still not a document
+    for command in (f"git apply {staged}/p.patch", f"patch -p1 -i {staged}/p.patch"):
+        assert hook.decide(payload("Bash", {"command": command}, ARMED_BASH, tmp_path)) is None
+    # an ordinary redirect to an ordinary file
+    assert hook.decide(payload(
+        "Bash", {"command": "echo hi > note.txt"}, ARMED_BASH, tmp_path)) is None
+    # a copy into a directory that holds no document of that name: the joined candidate is
+    # ABSENT, which answers the question with a no rather than shrugging
+    assert hook.decide(payload(
+        "Bash", {"command": f"cp {staged}/other.json {config}/"}, ARMED_BASH, tmp_path)) is None
 
 
 # --- the transcript path is a payload field, and gets a payload field's discipline ---
@@ -1084,8 +1274,12 @@ def test_the_other_file_tools_deny_the_very_payload_edit_denies(tmp_path):
 def test_a_multi_edit_that_grants_something_unrelated_is_still_allowed(tmp_path):
     # The control that keeps the row above off "MultiEdit denies everything while armed": the
     # same tool, a real widening, an entry that does not cover the denied call -- allowed.
-    # This is also what proves the edits are really applied and diffed rather than the tool
-    # name alone deciding, since a coarse verdict here would deny.
+    #
+    # What it rules out is the COARSE verdict -- judging on "the target is a permission
+    # surface today", as the NotebookEdit path does, would deny here. It does NOT by itself
+    # show the edits are applied and diffed, because an ALLOW is equally what an UNMODELLED
+    # tool produces; the row above, which denies, is what establishes that MultiEdit is
+    # judged at all. The pair is the claim, neither row alone.
     s = write_settings(tmp_path)
     multi = {"file_path": str(s),
              "edits": [{"old_string": f'"{SEED}"', "new_string": f'"{SEED}", "{OTHER_PREFIX}"'}]}

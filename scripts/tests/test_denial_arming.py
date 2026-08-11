@@ -8,6 +8,7 @@ could never represent.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -15,6 +16,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from lib import denial_arming  # noqa: E402
 from lib.denial_arming import (  # noqa: E402
     _ALL_DENIAL_KINDS,
     _ARMING_KINDS,
@@ -162,6 +164,48 @@ def test_undecodable_bytes_inside_a_valid_row_do_not_make_the_file_unreadable(tm
     )
     result = armed(path)
     assert result.verdict is Verdict.NOT_ARMED
+
+
+def test_a_transcript_that_yields_more_than_stat_promised_is_unreadable(tmp_path, monkeypatch):
+    # THE POST-READ LENGTH CHECK, PINNED. `_read_transcript` gates on `st_size` and then reads
+    # one character past the cap and checks what it got; measured, deleting that second check
+    # left this whole suite green, so it was documented as load-bearing and mechanically was
+    # not. `st_size` is what one earlier syscall reported, not a promise about a later `read`
+    # -- and a transcript is APPENDED TO by the very process asking, so the window between the
+    # two is a window in which the file grows. The lying `stat` here is that window; nothing
+    # else reproduces it, because for a static file a UTF-8 decode can only yield fewer
+    # characters than bytes.
+    #
+    # The direction is the whole point. A truncated read drops the file's NEWEST rows, which
+    # is exactly where the arming denial is: without the check this transcript comes back
+    # NOT_ARMED -- "this session hit no permission denial" -- and a caller built on that
+    # ALLOWS the self-grant. The control below is the same bytes read whole, so the row cannot
+    # pass by the fixture failing to arm in the first place.
+    rows = [
+        '{"type":"assistant","uuid":"a1","message":{"content":[{"type":"tool_use",'
+        '"name":"Read","input":{"file_path":"/srv/secrets/notes.md"}}]}}',
+        '{"type":"user","toolDenialKind":"permission-rule","sourceToolAssistantUUID":"a1",'
+        '"toolUseResult":"Error: Claude requested permissions"}',
+    ]
+    path = tmp_path / "grows.jsonl"
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    assert armed(path).verdict is Verdict.ARMED          # the same bytes, read whole, arm
+
+    real_stat = os.stat
+
+    def lying_stat(target, *args, **kwargs):
+        st = real_stat(target, *args, **kwargs)
+        if isinstance(target, (str, os.PathLike)) and str(target) == str(path):
+            fields = list(st)
+            fields[6] = 0                                 # `st_size` under-reports
+            return os.stat_result(tuple(fields))
+        return st
+
+    monkeypatch.setattr(denial_arming.os, "stat", lying_stat)
+    monkeypatch.setattr(denial_arming, "_MAX_TRANSCRIPT_BYTES", len(rows[0]))
+
+    assert armed(path).verdict is Verdict.UNREADABLE
 
 
 def test_a_truncated_tail_among_readable_rows_is_still_read():

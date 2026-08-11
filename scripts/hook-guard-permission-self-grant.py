@@ -32,11 +32,13 @@ opened.
 WHAT THE GATE COULD NOT ESTABLISH IS NOT A "NO". Conjunct (a) is THREE-valued, never
 two. Two different findings are established FACTS and answer it with a definite no. A
 target ABSENT from disk: nothing there to widen, so the call is a creation and is
-allowed. And a target the gate identified as something a `permissions.allow` JSON
-document cannot be — a directory, a FIFO, a socket, a device, or a regular file orders
-of magnitude larger than any permission document (`_read_text`). Neither is a shrug;
-both are answers, and treating the second as UNKNOWN instead is what denied every
-`git apply` in an armed session for five review rounds. A target that exists, is a
+allowed. And a target whose KIND a `permissions.allow` JSON document cannot have — a
+directory, a FIFO, a socket, a device (`_read_text`). Neither is a shrug; both are
+answers, and treating the second as UNKNOWN instead is what denied every
+`git apply` in an armed session for five review rounds. SIZE is deliberately not in that
+list: a file too large for this gate to read is a file it did not look at, so it is
+UNKNOWN below, and calling it a definite no made padding a real permissions document
+past the cap a way to launder a widening. A target that exists, is a
 plausible document, and still could NOT be read, a command that could not be tokenized,
 and a payload missing the fields this gate reads are none of them facts about the call:
 they are UNKNOWN, the gate either did not look or looked and could not tell. An UNKNOWN (a) neither allows nor denies on its own —
@@ -82,8 +84,14 @@ it is allowed without being judged, which is a named residual at `decide()`.
               entries to narrow (c) by.
   Bash      — deliberately coarser. A command is not applied before it runs, so no
               before/after pair exists and there are no entries to test for relevance
-              (R7). The path falls back to (a)+(b) alone: any write to a file that is
-              TODAY a permission surface, while armed, is refused.
+              (R7). The path falls back to (a)+(b) alone: while armed, a write is refused
+              whenever `bash_write_targets` NAMES a target that is TODAY a permission
+              surface. Not "any write" — the quantifier is over what the lexer resolves,
+              which is the honest bound and a much smaller set. `install SRC DIR` was
+              outside it until this round (the verb was unmodelled, so the command
+              reported no target at all); `tar -xf a.tar -C DIR` still is, and so is
+              anything routed through a script the hook cannot read. The unmodelled-verb
+              residual below carries the list.
 
 A relative path — a `file_path` on the Edit/Write paths, a write target on the Bash
 path — is resolved against the payload's own `cwd`, not against
@@ -95,8 +103,21 @@ not, and repository membership does not enter the verdict.
 NAMED RESIDUALS carried by this hook (R-numbers are the plan's):
 
   R7  The Bash path has no not-relevant branch — see above. It is bounded on two
-      axes. AXIS 1: the lexer sees only the agent's own command text, so a write
-      routed through a script the hook cannot read is not seen at all. AXIS 2: an
+      axes. AXIS 1: THE LEXER'S VERB TABLE IS AN ENUMERATION, so what it does not
+      model it does not report, and an unreported target is an ALLOW by a route that
+      never reached a verdict. Three known members, and they are different in kind.
+      (i) A write routed through a script — `bash /tmp/grant.sh` — is not in the
+      command text at all, and no verb table closes that. (ii) An unmodelled WRITE
+      VERB: `tar -xf a.tar -C DIR` extracts over any path inside the archive and
+      reports nothing, `dd of=…`, `rsync`, `python3 -c` likewise. `install` was in
+      this class until this round, which is the evidence that the class is real and
+      not theoretical: it is an ordinary write verb, it was simply absent from the
+      table, and it allowed a copy onto a live settings file. Adding a verb is a
+      one-line change in `lib/bash_write_targets.py`; `tar` is deliberately not
+      added, because its destination set lives inside the archive rather than on the
+      command line and reading it means a second grammar (the same reasoning as the
+      patch verbs below). (iii) The patch verbs, which DO report a target — the
+      working directory — and are their own paragraph below. AXIS 2: an
       untokenizable command. `bash_write_targets.command_write_targets` reports a
       parse failure as an EMPTY target list, byte-identical to a clean parse that
       found no write — so reading its result by truthiness alone would let one
@@ -121,8 +142,11 @@ NAMED RESIDUALS carried by this hook (R-numbers are the plan's):
   trade are stated here because only one of them is comfortable. `bash_write_targets`
   reports the working DIRECTORY as the write target of `patch` and `git apply` — those
   verbs write wherever their diff says, which is inside the patch body, not on the command
-  line. Since round 6 a directory target is an ESTABLISHED negative (a directory is not a
-  JSON document), so `git apply grant.patch` reaches ALLOW even when the patch adds a
+  line. They are now the ONLY verbs that answer with a directory: `cp`/`mv`/`install`
+  resolve a directory destination to the files it means (`_copy_targets`), which is why
+  `cp grant.json ~/.claude/` denies as of this round while it used to allow by landing on
+  this same arm. Since round 6 a directory target is an ESTABLISHED negative (a directory
+  is not a JSON document), so `git apply grant.patch` reaches ALLOW even when the patch adds a
   `permissions.allow` entry. What was there before is not better: the directory read as
   UNREADABLE, hence UNKNOWN, hence `_ON_ERROR` — measured, EVERY `git apply`, `git apply
   --check` and `patch -p1` in an armed session was denied, including the benign ones, which
@@ -217,12 +241,14 @@ from lib.denial_arming import Verdict  # noqa: E402
 # of these findings surprising instead of expected. What is claimed instead is a rule, and
 # it is a rule for the reader rather than an inventory: EVERY EXTERNAL SOURCE NEEDS EXACTLY
 # ONE FUNCTION THAT PARSES IT — establishing the declared types and bounds rather than
-# trusting them — and downstream code may then rely on what that function established. The
-# boundaries that exist so far are `_str_field` (payload fields), `_base_dir` plus
-# `_located` (ambient process state, and which file a path names), `_read_text` (the
-# target's kind, size and bytes) and `denial_arming._call_fields` (transcript content).
-# Anything this process did not itself compute needs a boundary of its own, and the
-# catch-all is not it.
+# trusting them — and downstream code may then rely on what that function established.
+#
+# No roster of those boundaries is kept here either, for the same reason and by the same
+# evidence: the roster this comment used to carry omitted `denial_arming._read_transcript`,
+# which is a boundary over the largest external input the gate has, and the omission was
+# invisible precisely because the list read as complete. A boundary is found by looking at
+# the function that reads the input, not by consulting a list of them. Anything this
+# process did not itself compute needs one, and the catch-all is not it.
 _ON_ERROR = "deny"
 
 _FILE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
@@ -255,10 +281,17 @@ class _Widening:
     the real one. On the Bash path it is False and `entries` empty — the command is not
     applied before it runs, so there is no before/after pair to diff and condition (c)
     has nothing to narrow with (R7).
+
+    `baseline_unparseable` records that `entries` was computed with NO before-document to
+    subtract, because what is on disk is not a JSON object (`_widening_between`). Every
+    entry the after-document grants is then listed, including ones that were already there
+    in whatever the file actually is — so the deny message must say so rather than assert
+    the call is adding them, which is a claim about a diff that was never taken.
     """
     surface: str
     entries: tuple[str, ...]
     entries_known: bool
+    baseline_unparseable: bool = False
 
 
 @dataclass(frozen=True)
@@ -279,13 +312,16 @@ class _Read(Enum):
 
       ABSENT       nothing is on the path, so nothing can be widened and the call is a
                    creation. A fact — allowed.
-      NOT_A_SURFACE the path was identified and it cannot be a `permissions.allow` JSON
-                   document: a directory, a FIFO, a socket, a device, or a regular file
-                   far larger than any permission document is. Also a fact, and also a
-                   definite "this call does not widen a permission surface" — see
-                   `_read_text` for why that verdict is inside the evidence domain.
-      UNREADABLE   the gate could not look: a regular file within the cap that still
-                   would not open or would not decode. The absence of any fact.
+      NOT_A_SURFACE the path was identified and its KIND cannot be a `permissions.allow`
+                   JSON document: a directory, a FIFO, a socket, a device. Also a fact,
+                   and also a definite "this call does not widen a permission surface" —
+                   see `_read_text` for why that verdict is inside the evidence domain.
+      UNREADABLE   the gate could not look: a regular file that would not open or would
+                   not decode, or one whose SIZE put it past `_MAX_SURFACE_BYTES` so the
+                   gate declined to read it, or one that yielded more than it claimed. The
+                   absence of any fact. Size belongs here and not above: an over-cap file
+                   could be a permission document perfectly well, and answering otherwise
+                   made padding one past the cap a way to launder a widening.
 
     Returning one `None` for ABSENT and UNREADABLE made "I could not look" answer "I
     looked and found nothing", on the ALLOW side, which is precisely what this gate must
@@ -299,14 +335,29 @@ class _Read(Enum):
 
 # The largest a file may be and still be read as a candidate permission document.
 #
-# MEASURED, not guessed. Every permission-surface document in this repository, by shape
-# (`grep -rl --include=*.json '"permissions"'`, then `stat -c %s`): `settings/base.json`
-# 1916 B, `cursor/config/cli-base.json` 1899 B, `benchmark-profile-spawn/settings.json`
-# 869 B, `benchmark-profile/settings.json` 788 B, `permissions/global.json` 24 B. The
-# largest is 1916 B, and `settings/base.json` is the generator SOURCE for the live
-# `~/.claude/settings.json`, so it bounds the population this gate meets. 1 MiB leaves a
-# ~547x margin — far beyond any plausible growth of a hand-maintained allow list, while
-# still bounding the read to something a PreToolUse hook can do without being noticed.
+# THE POPULATION IS THE LIVE DOCUMENTS, NOT THIS REPOSITORY'S SOURCES, and getting that
+# wrong is what made the previous margin claim false by a factor of forty. It read the
+# five in-repo files by shape (`grep -rl --include=*.json '"permissions"'`:
+# `settings/base.json` 1916 B, `cursor/config/cli-base.json` 1899 B,
+# `benchmark-profile-spawn/settings.json` 869 B, `benchmark-profile/settings.json` 788 B,
+# `permissions/global.json` 24 B), took the 1916 B maximum, and published a "~547x
+# margin". But a generator SOURCE is not what a tool call writes to. The documents this
+# gate actually meets are the installed ones, and measured on this machine they are:
+# `~/.claude.json` 76 310 B, `~/.claude-agent/.claude.json` 32 966 B,
+# `~/.claude/settings.json` 14 398 B, `~/.claude-agent/settings.json` 12 060 B. The real
+# maximum is 76 310 B, so 1 MiB leaves ~13.7x, not ~547x. (Those four sizes are the
+# reviewer's measurement, restated: stat-ing them is refused to this agent, whose reads
+# are confined to its own working directory. Re-measure with `stat -c '%s %n'` from a
+# session that can see them.)
+#
+# WHAT AN OVER-CAP DOCUMENT COSTS IS NOW A FALSE DENY, WHICH IS WHY THE NUMBER NO LONGER
+# HAS TO BE EXACTLY RIGHT. It used to be a false ALLOW: over the cap `_read_text`
+# answered NOT_A_SURFACE, a definite negative, so padding a real permissions document
+# past 1 MiB with legitimate entries made the identical widening allowed — grow, then
+# grant. Since the direction was corrected the answer is UNREADABLE, i.e. UNKNOWN, and an
+# armed session pays `_ON_ERROR`: one blocked call on a legitimately enormous permissions
+# file, which a user sanctions in a sentence. A margin that is too small now errs toward
+# refusing; before, it erred toward the hole the gate exists to close.
 _MAX_SURFACE_BYTES = 1024 * 1024
 
 
@@ -335,15 +386,30 @@ def _read_text(path: str) -> str | _Read:
     JSON DOCUMENT. A directory, a FIFO, a socket and a character device are not JSON
     documents and cannot become one by being written to, so "no" is an answer the evidence
     supports — unlike a definite "no" about a file the gate could not identify, which is
-    the defect this whole artifact exists to avoid. A regular file orders of magnitude
-    larger than every permission document on this machine is the same kind of answer, by
-    measurement rather than by kind (`_MAX_SURFACE_BYTES`).
+    the defect this whole artifact exists to avoid.
 
-    BOTH BOUNDS ARE LOAD-BEARING; the stat gate alone is not enough. A procfs file is
-    S_ISREG and reports `st_size` 0 while yielding content without end, so it passes the
-    size gate and would still read forever. `read(_MAX_SURFACE_BYTES + 1)` is what
-    actually bounds the memory, and it also closes the window between the stat and the
-    read in which the file could grow.
+    SIZE IS THE OPPOSITE CASE, AND USED TO BE HANDLED AS IF IT WERE THE SAME ONE. A file
+    over `_MAX_SURFACE_BYTES` is a regular file that could be a permission document
+    perfectly well; the only thing established about it is that this gate declined to read
+    it. Answering NOT_A_SURFACE there — a definite negative — published a verdict about
+    content nobody looked at, and it was exploitable in one step: pad a real permissions
+    document past the cap with legitimate entries and the identical widening allows. It is
+    UNREADABLE, exactly as `denial_arming._read_transcript` answers its own over-cap file,
+    and an armed session pays `_ON_ERROR` for it.
+
+    BOTH BOUNDS ARE LOAD-BEARING; the stat gate alone is not enough, and the second one is
+    NOT justified here by a claim about any particular kind of file. `st_size` is what one
+    earlier syscall reported, not a promise about how much a later `read` will yield: an
+    ordinary file can be appended to in the window between the two, and a kernel-backed
+    file need not account its content in `st_size` at all. So the read is bounded at
+    `_MAX_SURFACE_BYTES + 1` and the RESULT is length-checked — one character past the cap
+    is how a truncated read is told from a file that merely fits.
+
+    The check is not belt-and-braces, it changes a verdict: a truncated permissions
+    document must never be diffed as if it were whole. Dropping the tail drops entries, and
+    a baseline missing entries makes the after-document appear to grant them — a widening
+    reported where there was none, or the reverse when the tail is where the grant was.
+    Neither is a fact, so both are UNREADABLE.
 
     ENOENT alone does not mean ABSENT: a dangling symlink and a path under a
     non-directory both raise it while something IS on the path, so the lexical existence
@@ -369,13 +435,16 @@ def _read_text(path: str) -> str | _Read:
     if not stat.S_ISREG(st.st_mode):
         return _Read.NOT_A_SURFACE
     if st.st_size > _MAX_SURFACE_BYTES:
-        return _Read.NOT_A_SURFACE
+        return _Read.UNREADABLE  # too big to read is not the same fact as not a document
 
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as handle:
-            return handle.read(_MAX_SURFACE_BYTES + 1)
+            text = handle.read(_MAX_SURFACE_BYTES + 1)
     except (OSError, ValueError):
         return _Read.UNREADABLE
+    if len(text) > _MAX_SURFACE_BYTES:
+        return _Read.UNREADABLE  # `st_size` under-reported; a truncated document is not one
+    return text
 
 
 def _granted_allow(doc) -> list[str]:
@@ -444,16 +513,19 @@ def _widening_between(path: str, old_text: str, new_text: str) -> _Widening | No
         return None
 
     entries = permission_surface.widens(old_doc, new_doc)
-    if entries is None:
+    baseline_unparseable = entries is None
+    if baseline_unparseable:
         # UNKNOWN: the file on disk is not a JSON object, so no baseline exists to
         # diff against. `widens` refuses to coerce that to "no widening", and neither
         # does this caller: with no baseline, nothing shows any entry to be pre-
         # existing, so every entry the new document grants counts as granted here.
         # Over-reports rather than under-reports, and (c) still narrows the result.
+        # The flag travels with the result so the deny message can say which of the two
+        # it is looking at instead of calling both of them "adding".
         entries = _granted_allow(new_doc)
     if not entries:
         return None
-    return _Widening(path, tuple(entries), True)
+    return _Widening(path, tuple(entries), True, baseline_unparseable)
 
 
 def _located(path: str, what: str) -> str | _Unknown:
@@ -493,7 +565,22 @@ def _located(path: str, what: str) -> str | _Unknown:
     )
 
 
-def _file_tool_widening(tool_name: str, tool_input: dict, cwd: str) -> _Widening | _Unknown | None:
+def _target_path(tool_name: str, tool_input: dict, cwd: str) -> str | _Unknown:
+    """The absolute path a file tool's payload names as its write target, or UNKNOWN.
+
+    ONE FUNCTION FOR THE TARGET FIELD, because it is read out of untrusted input and this
+    gate's own rule (`_ON_ERROR`) is that every external source gets exactly one function
+    that parses it. Three separate things happen to that field — which key holds it
+    (`_TARGET_FIELD`, since `NotebookEdit` spells it differently), that it is a non-empty
+    string, and that it resolves to an absolute path — and they were written inline at the
+    one call site, which is how the wrong-key defect (D4) got in: the key was a literal, so
+    a tool whose field is named differently was read as having no target at all.
+
+    The other `tool_input` strings this gate reads (`command`, `content`,
+    `old_string`/`new_string`) deliberately keep their checks at their use sites. Each is
+    read exactly once, so its use site IS its single boundary, and each produces an
+    `_Unknown` whose sentence is specific to what that field would have determined.
+    """
     target_field = _TARGET_FIELD[tool_name]
     file_path = tool_input.get(target_field)
     if not isinstance(file_path, str) or not file_path:
@@ -502,13 +589,16 @@ def _file_tool_widening(tool_name: str, tool_input: dict, cwd: str) -> _Widening
             f"write — and with it whether that file is a permission surface — is unknown "
             f"rather than known to be no"
         )
-    located = _located(
+    return _located(
         file_path if os.path.isabs(file_path) else os.path.join(cwd, file_path),
         f"the file path this {tool_name} call carries, {file_path},",
     )
-    if isinstance(located, _Unknown):
-        return located
-    path = located
+
+
+def _file_tool_widening(tool_name: str, tool_input: dict, cwd: str) -> _Widening | _Unknown | None:
+    path = _target_path(tool_name, tool_input, cwd)
+    if isinstance(path, _Unknown):
+        return path
 
     old_text = _read_text(path)
     if old_text is _Read.ABSENT:
@@ -567,7 +657,11 @@ def _is_surface_on_disk(path: str) -> bool | _Unknown:
 
     The NOT_A_SURFACE arm is what makes `patch` and `git apply` judgeable on this path at
     all: `bash_write_targets` reports the working DIRECTORY as their write target, which
-    is exactly a path identified and known not to be a JSON document.
+    is exactly a path identified and known not to be a JSON document. They are also the
+    only verbs that still reach it that way — `cp`/`mv`/`install` resolve a directory
+    destination to the files inside it, so the arm no longer absorbs an ordinary copy onto
+    a permission document. What it costs is stated with the patch residual in the module
+    docstring; it is not a general clearance for directory targets.
     """
     text = _read_text(path)
     if text is _Read.ABSENT:
@@ -653,7 +747,14 @@ def _denial_phrase(denial, matched: str | None) -> str:
 
 
 def _deny_msg(widening: _Widening, denial, matched: str | None, tool_name: str) -> str:
-    if widening.entries_known:
+    if widening.entries_known and widening.baseline_unparseable:
+        granted = (
+            "granting " + ", ".join(repr(e) for e in widening.entries)
+            + " — the file on disk is not a JSON object, so there is no baseline to show "
+            "which of those it already granted, and every entry the new document carries is "
+            "listed"
+        )
+    elif widening.entries_known:
         granted = "adding " + ", ".join(repr(e) for e in widening.entries)
     else:
         granted = ("writing that file, so which entries it grants is not visible before the "
@@ -765,6 +866,14 @@ def decide(payload: dict) -> str | None:
     # denied until they were added. Closing it for a new tool means adding the name here and
     # its target field to `_TARGET_FIELD`; nothing detects the need automatically, so
     # "the gate allowed it" must never be read as "the gate judged it safe".
+    #
+    # THE MATCH IS EXACT-STRING, and that is part of the same residual rather than a
+    # separate one: `edit` and `EDIT` are not in `_MODELLED_TOOLS` and exit here. It is
+    # deliberate — the tool name is a protocol identifier the client emits with one fixed
+    # spelling, so case-folding it would only broaden the set toward names no client sends,
+    # and the gate would then be judging payloads whose shape it is guessing at. But it does
+    # mean the set is a list of literals, not a family, and a client that ever renamed a tool
+    # would silently leave it unjudged.
     tool_name = _str_field(payload, "tool_name", "")
     if tool_name not in _MODELLED_TOOLS:
         return None

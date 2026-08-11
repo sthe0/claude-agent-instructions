@@ -249,10 +249,14 @@ def _read_transcript(transcript_path: Path | str) -> str | None:
         bytes without end. `stat` answers both without opening anything.
       * larger than `_MAX_TRANSCRIPT_BYTES`, or yielding more than that many
         characters despite what `stat` reported. The second bound is not
-        redundant with the first: a procfs file is `S_ISREG` and reports
-        `st_size` 0 while yielding content indefinitely, so the size gate alone
-        would pass it straight into an unbounded read. It also closes the window
-        between the `stat` and the `open`.
+        redundant with the first, and does not rest on any claim about a
+        particular kind of file: `st_size` is what one earlier syscall reported,
+        not a promise about a later `read`. A transcript is APPENDED TO by a live
+        process — this one's own — so the window between the `stat` and the
+        `open` is a window in which the file grows, and a kernel-backed file need
+        not account its content in `st_size` at all. Reading one character past
+        the cap and checking the length is what tells a truncated read from a
+        file that fits.
       * anything else that raises -- ENOENT, EACCES, a NUL byte in the path
         (`ValueError`, not an `OSError`), a decode failure the replace handler
         somehow does not absorb.
