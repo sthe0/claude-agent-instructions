@@ -77,13 +77,30 @@ _EM_DASH = "—"
 #: The naming position in front of a dash is its TRAILING run of code spans — the
 #: `` `material_refs` / `knowledge_refs` `` of "… for the same reason. `material_refs` /
 #: `knowledge_refs` — the structural projection …". Spans in a run may be joined only by
-#: whitespace, markdown emphasis and a list separator; anything else ends the run, which
-#: is what keeps a passing mid-elaboration mention out of the naming position: in
-#: "… with `[[stage.supplies]] element = \"knowledge\"`). `preconditions` —" the `). `
-#: ends the run at `preconditions`, so the supplies span is not credited, and in
-#: "… `functional_place` (the place this plan's product fills … is inadequate —" the run
-#: is empty because the segment does not END in a span at all.
+#: whitespace, markdown emphasis and a list separator; anything else ends the run. What
+#: that buys is the run's WIDTH — where it starts, and so how many spans it holds — and
+#: nothing else: in "… with `[[stage.supplies]] element = \"knowledge\"`). `preconditions`
+#: —" the `). ` ends the run at `preconditions`, so the supplies span is not credited, and
+#: in "… `functional_place` (the place this plan's product fills … is inadequate —" the
+#: run is empty because the segment does not END in a span at all.
 _TRAILING_SPANS_RE = re.compile(r"(?:`[^`]+`[\s*/,]*)+$")
+
+#: Width is not position. A run may be perfectly bounded and still sit mid-clause, so a
+#: naming run must additionally OPEN A STATEMENT: begin its segment (modulo the list
+#: marker and emphasis characters) or follow a sentence-terminating boundary. The four
+#: real shapes across the two contract files, in front of their runs —
+#:   `- **`                                         opens a glossary bullet   → credit
+#:   `- **Knowledge & preconditions:** `             ends on `:`              → credit
+#:   `… element = "knowledge"`). ` / `… reason. `    ends a sentence          → credit
+#:   `` `verify_venue` on a stage, `venue` on a ``   mid-clause               → NO credit
+#: — and that last one is the whole point. `SKILL.md`'s dash-bracketed aside "… **declare**
+#: the venue — `verify_venue` on a stage, `venue` on a `[[final_check]]` — instead of
+#: hardcoding an absolute `cd` …" is about declaring a check's venue; the ` on a ` in front
+#: of the last span narrows the run to that span alone, and `final_check` was credited from
+#: it. So the assertion for that label held with `policy.md`'s glossary bullet — the one
+#: place in the contract that tells an author the field is submission-required — deleted.
+#: This rule drops that credit and no other.
+_STATEMENT_END = ".:;)?!"
 
 #: A code span is credited by its identifier TOKENS, never by substring containment:
 #: `means.method` names both `means` and `method`, `[meta.order.coverage]` names
@@ -99,9 +116,17 @@ def _documenting_bullets(text: str) -> list[str]:
     return [line for line in text.splitlines() if _LIST_ITEM_RE.match(line)]
 
 
+def _opens_a_statement(before: str) -> bool:
+    """True when a run trailing `before` inside its segment sits in a naming position —
+    `before` is empty once the list marker and markdown emphasis are stripped, or it ends
+    at a sentence-terminating boundary."""
+    head = _LIST_ITEM_RE.sub("", before).rstrip(" \t*_")
+    return head == "" or head[-1] in _STATEMENT_END
+
+
 def _naming_terms(bullet: str) -> set[str]:
     """Every identifier token this list item NAMES: for each em dash, the tokens of the
-    code spans trailing the text in front of it.
+    code spans trailing the text in front of it, when that run opens a statement.
 
     A list item with NO em dash therefore names nothing. That is deliberate and it is a
     narrowing — `SKILL.md`'s "Problem and done criteria" item mentions `[meta] goal` and
@@ -114,7 +139,7 @@ def _naming_terms(bullet: str) -> set[str]:
     terms: set[str] = set()
     for segment in bullet.split(_EM_DASH)[:-1]:
         run = _TRAILING_SPANS_RE.search(segment)
-        if run is None:
+        if run is None or not _opens_a_statement(segment[: run.start()]):
             continue
         for span in re.findall(r"`([^`]+)`", run.group(0)):
             terms.update(t for t in _TOKEN_SPLIT_RE.split(span) if t)
