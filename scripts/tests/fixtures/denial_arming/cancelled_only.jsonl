@@ -1,0 +1,1 @@
+{"type": "user", "uuid": "den-Y1", "toolDenialKind": "cancelled", "sourceToolAssistantUUID": null, "toolUseResult": "Error: cancelled", "_fixture_note": "SYNTHETIC -- never observed live (PROVENANCE section 1). Mutation control: adding \"cancelled\" to _ARMING_KINDS must flip this fixture's verdict to ARMED and break test_cancelled_denial_alone_does_not_arm."}

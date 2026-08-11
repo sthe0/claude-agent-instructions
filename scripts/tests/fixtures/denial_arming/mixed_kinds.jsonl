@@ -1,0 +1,10 @@
+{"type": "assistant", "uuid": "asst-1", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "rm -rf /tmp/x"}}]}}
+{"type": "user", "uuid": "den-1", "toolDenialKind": "permission-rule", "sourceToolAssistantUUID": "asst-1", "toolUseResult": "Error: denied by hook-guard-destructive-rm.py"}
+{"type": "assistant", "uuid": "asst-2", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_2", "name": "Write", "input": {"file_path": "/etc/passwd", "content": "x"}}]}}
+{"type": "user", "uuid": "den-2", "toolDenialKind": "user-rejected", "sourceToolAssistantUUID": "asst-2", "toolUseResult": "Error: The user doesn't want to proceed with this tool use."}
+{"type": "user", "uuid": "den-3", "toolDenialKind": "automode-blocked", "sourceToolAssistantUUID": "asst-missing", "toolUseResult": "Error: blocked by auto-mode classifier"}
+{"type": "user", "uuid": "den-4", "toolDenialKind": "automode-unavailable", "sourceToolAssistantUUID": null, "toolUseResult": "Error: auto-mode classifier unavailable"}
+{"type": "user", "uuid": "den-5", "toolDenialKind": "automode-parsing-error", "sourceToolAssistantUUID": null, "toolUseResult": "Error: auto-mode classifier response could not be parsed", "_fixture_note": "SYNTHETIC -- automode-parsing-error has never been observed live (PROVENANCE section 1); hand-authored from the decompiled classifier vocabulary."}
+{"type": "user", "uuid": "den-6", "toolDenialKind": "cancelled", "sourceToolAssistantUUID": null, "toolUseResult": "Error: request cancelled", "_fixture_note": "SYNTHETIC -- cancelled has never been observed live (PROVENANCE section 1); a user/system abort carrying no permission judgement."}
+{"type": "user", "uuid": "den-7", "toolDenialKind": "interrupted", "sourceToolAssistantUUID": null, "toolUseResult": "Error: interrupted by user", "_fixture_note": "SYNTHETIC -- interrupted has never been observed live (PROVENANCE section 1); a user/system abort carrying no permission judgement."}
+{"type": "user", "uuid": "den-9", "toolDenialKind": "permission-rule", "sourceToolAssistantUUID":

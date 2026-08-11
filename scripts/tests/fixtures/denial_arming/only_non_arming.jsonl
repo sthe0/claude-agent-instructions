@@ -1,0 +1,5 @@
+{"type": "assistant", "uuid": "asst-X", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_X", "name": "Bash", "input": {"command": "ls"}}]}}
+{"type": "user", "uuid": "den-X1", "toolDenialKind": "automode-unavailable", "sourceToolAssistantUUID": null, "toolUseResult": "Error: classifier unavailable"}
+{"type": "user", "uuid": "den-X2", "toolDenialKind": "automode-parsing-error", "sourceToolAssistantUUID": null, "toolUseResult": "Error: parse failure", "_fixture_note": "SYNTHETIC -- never observed live (PROVENANCE section 1)."}
+{"type": "user", "uuid": "den-X3", "toolDenialKind": "cancelled", "sourceToolAssistantUUID": null, "toolUseResult": "Error: cancelled", "_fixture_note": "SYNTHETIC -- never observed live (PROVENANCE section 1)."}
+{"type": "user", "uuid": "den-X4", "toolDenialKind": "interrupted", "sourceToolAssistantUUID": null, "toolUseResult": "Error: interrupted", "_fixture_note": "SYNTHETIC -- never observed live (PROVENANCE section 1)."}
