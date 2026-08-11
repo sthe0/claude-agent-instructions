@@ -1296,6 +1296,30 @@ disposition = "keep"
 ground = "Reads only ctx.self_improvement_feedback, which build_context() sets from si_feedback_detect.find_signals (prefilter) gated by a semantic judge — this guardian itself is pure boolean logic over that frozen result, per its own docstring (\"Pure: reads only the frozen ctx booleans\")."
 
 [[entry]]
+id = "56c97871186704d2"
+domain = "code"
+file = "scripts/lib/permission_entry_match.py"
+class = "structural"
+disposition = "keep"
+ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
+
+[[entry]]
+id = "d49ee7dd070210f0"
+domain = "code"
+file = "scripts/lib/permission_entry_match.py"
+class = "structural"
+disposition = "keep"
+ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
+
+[[entry]]
+id = "34e7b468f53dacd0"
+domain = "code"
+file = "scripts/lib/permission_entry_match.py"
+class = "structural"
+disposition = "keep"
+ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
+
+[[entry]]
 id = "32916389896957d8"
 domain = "code"
 file = "scripts/lib/planner_plan_check.py"
@@ -7286,6 +7310,14 @@ file = "scripts/hook-turn-end-gate.py"
 class = "structural"
 disposition = "keep"
 ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "1c6004d0450298e2"
+domain = "code_file_rollup"
+file = "scripts/lib/permission_entry_match.py"
+class = "structural"
+disposition = "keep"
+ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means. (file-level rollup of the file's scopes.)"
 
 [[entry]]
 id = "38282418dd74f963"
