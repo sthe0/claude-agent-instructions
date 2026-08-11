@@ -175,11 +175,13 @@ def _problems(d) -> list[str]:
     return list(d.data.get("problems", []))
 
 
-# --- the guard: the case list is the code's own two tables, nothing more, --
-# --- nothing less, and non-empty -------------------------------------------
+# --- the guard: _STAGE_LABELS/_META_LABELS are ALREADY exactly the two ------
+# --- submission tables' field set BY CONSTRUCTION (line 35-36's own tuple --
+# --- comprehensions) — what this test actually checks is that the two sets --
+# --- don't collide, are non-empty, and each label has a working recipe -----
 
 
-def test_omission_cases_are_exactly_the_two_submission_tables_field_set(tmp_path):
+def test_stage_and_meta_omission_labels_are_disjoint_and_each_has_a_recipe(tmp_path):
     assert _STAGE_LABELS and _META_LABELS
     assert not (set(_STAGE_LABELS) & set(_META_LABELS)), (
         "a label in both tables would be ambiguous below — _omit dispatches on "
