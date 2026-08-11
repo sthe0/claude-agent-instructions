@@ -9,7 +9,7 @@ tier: 1
 refs: [memory-global/leaves/capability-before-offload.md, memory-global/leaves/regex-not-for-semantic-classification.md, memory-global/leaves/experience/2026-07-09-landed-not-deployed-checkout-parked-on-feature-branch.md]
 plan_file: /home/the0/.claude-agent/plans/gc-criterion-and-defer-gate.toml
 created: 2026-08-05
-last_verified: 2026-08-10
+last_verified: 2026-08-11
 ---
 
 # A menu in which no option does the work, and the timeout layer that made its gate inert
@@ -71,5 +71,7 @@ Two independent deliveries, one approved plan (6 stages):
 
 ## Self-critique of the agent system
 The largest finding is one this task deliberately did **not** fix: all three judge-calling hooks (`hook-deferring-disposition-gate.py`, `hook-escalation-diagnosis-gate.py`, `hook-turn-end-gate.py`) were registered at 5 s. The two neighbours are therefore **inert in production today** — and because they are fail-open, they have been silent about it for their whole lifetime. That is the same family as [[2026-07-09-landed-not-deployed-checkout-parked-on-feature-branch]]: *committed ≠ running*, and a fail-open mechanism has no way to report its own non-execution. The generalisable rule: **a fail-open gate needs an execution counter, not just a decision path** — otherwise "never denied anything" and "never ran" are the same observation.
+
+**Follow-up, recorded elsewhere on purpose.** The norm debt this finding left open — *can an aborted judge call leave a false verdict behind, and would the ledger show it?* — was worked in the `judge-import-blindness-and-norm-debt` task and its verdict (V4: the observation object lies outside this ledger, plus two abort paths that remain unpositionable) lives in [[2026-07-04-spawn-budget-death-forensics-before-respawn]] § 2026-08-10, because an abort manifests as a marker-less child return, which is that leaf's subject rather than this one's. Read it from here; a keyword search for the judge-abort theme lands on this leaf first.
 
 Second: three review rounds on one stage is itself an effort signal. Each round was justified by a genuine blocker, but the first two would have been caught in one round by running the hook end-to-end with the real judge **before** the first review, instead of after the third. The runtime axis was checked last when it was the cheapest discriminator available.
