@@ -8,7 +8,7 @@ each control string an entry names actually resolves against the plan (a real
 stage's `verify_command`, a real `final_check` index, or a real landed-kind
 stage) — the gap `resolve_control`/`coverage_violations` closes.
 
-Fixture-domain only: every test above never touches the live smd-act-defects-8
+Fixture-domain only: every test in this file never touches the live smd-act-defects-8
 plan — a fixture plan and the one real plan under test are deliberately
 different failure surfaces. The check that THIS plan's own coverage map
 resolves runs in TWO places, not one: as a pytest case below

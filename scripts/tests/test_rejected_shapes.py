@@ -229,7 +229,7 @@ def test_meta_field_omission_is_refused_at_submission(label, store, tmp_path):
 # --- knowledge's supply-element alternative ---------------------------------
 
 
-def test_knowledge_is_not_refused_when_supplied_via_a_result_edge(store, tmp_path):
+def test_knowledge_is_not_refused_when_supplied_via_a_knowledge_edge(store, tmp_path):
     """`knowledge`'s row in `_SUBSTANTIVE_SUBMISSION_FIELDS` names `"knowledge"` as
     a supply-element alternative — a stage may satisfy the requirement either by
     filling the field or by carrying a supply edge whose `element` is
