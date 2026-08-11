@@ -301,6 +301,7 @@ UNKNOWN_A_LABELS = (
     "edit-without-old-and-new-strings",
     "bash-without-command-string",
     "tool-input-is-not-an-object",
+    "target-path-carrying-a-nul-byte",
 )
 
 
@@ -331,6 +332,13 @@ def unknown_a_call(tmp_path: Path, label: str):
         "edit-without-old-and-new-strings": ("Edit", {"file_path": str(real)}),
         "bash-without-command-string": ("Bash", {}),
         "tool-input-is-not-an-object": ("Edit", "not an object"),
+        # A NUL in the path raises ValueError BEFORE the syscall, so it is not an OSError
+        # and only reaches _Read.UNREADABLE because _read_text catches it explicitly.
+        # Uncaught it escapes to `main()`'s catch-all, which denies unconditionally -- this
+        # row is the one that keeps that deny out of a session carrying no denial at all.
+        "target-path-carrying-a-nul-byte": (
+            "Edit",
+            {"file_path": f"{tmp_path}/se\x00ttings.json", "old_string": "a", "new_string": "b"}),
     }[label]
 
 
@@ -364,7 +372,7 @@ def test_an_edit_target_unreadable_by_mode_is_unknown_too(tmp_path):
     # while something IS on the path", not any one errno.
     blocked = write_settings(tmp_path)
     blocked.chmod(0o000)
-    call = add_entry_edit.__wrapped__ if False else {
+    call = {
         "file_path": str(blocked), "old_string": f'"{SEED}"', "new_string": f'"{SEED}", "x"'}
     assert hook.decide(payload("Edit", call, NO_DENIAL, tmp_path)) is None
     assert hook.decide(payload("Edit", call, ARMED_READ, tmp_path)) is not None

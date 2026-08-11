@@ -35,11 +35,20 @@ call is a creation and is allowed. A target that exists but could NOT be read, a
 command that could not be tokenized, and a payload missing the fields this gate reads
 are none of them facts about the call: they are UNKNOWN, the gate either did not look
 or looked and could not tell. An UNKNOWN (a) neither allows nor denies on its own —
-`UNKNOWN AND False` is still False — so it falls through to (b), and only a session
-that IS armed pays `_ON_ERROR`. Denying every UNKNOWN outright would refuse innocent
-calls in sessions carrying no denial at all; allowing them is the hole this gate exists
-to close. This is the one case that reaches the transcript without (a) being settled,
-so the cost claim above holds for every call whose (a) the gate could answer.
+`UNKNOWN AND False` is still False — so it falls through to (b), and a session whose
+(b) is anything other than NOT_ARMED (armed, or a transcript that could not be read)
+pays `_ON_ERROR`. Denying every UNKNOWN outright would refuse innocent calls in sessions
+carrying no denial at all; allowing them is the hole this gate exists to close. This is
+the one case that reaches the transcript without (a) being settled, so the cost claim
+above holds for every call whose (a) the gate could answer.
+
+WHAT THAT CHOICE RESTS ON, stated so it can be attacked rather than assumed. Routing an
+UNKNOWN (a) through (b) TRANSFERS the burden onto (b): before, an unresolved (a) denied
+whatever (b) said; now a NOT_ARMED verdict is enough to allow. So the gate's soundness
+on this path is exactly `lib/denial_arming` never reporting NOT_ARMED for a session that
+does carry a real arming denial. `_ARMING_KINDS` is decompiled from the client rather
+than sampled from observed transcripts, which is why that holds today; a client that
+adds an arming denial kind silently narrows this gate, and it fails toward ALLOW.
 
 WHAT EACH TOOL PATH CAN SEE.
   Edit  — the target is read from disk, `old_string`→`new_string` is applied, and the
@@ -145,11 +154,11 @@ from lib.denial_arming import Verdict  # noqa: E402
 # tool name alone, before any payload field is looked at: a gate that denied tools it
 # does not model would be far outside its remit, and its input shape is not this hook's
 # business. And an error that leaves conjunct (a) UNKNOWN is not resolved here until
-# (b) says the session is armed — see the docstring: `UNKNOWN AND False` is False, and
-# denying an unreadable payload in a session that carries no permission denial at all
-# would refuse calls that cannot be self-grants by construction. Only a payload this
-# hook cannot read AT ALL (stdin that is not a JSON object, so there is not even a
-# transcript path to consult) denies unconditionally.
+# (b) comes back as anything other than NOT_ARMED — see the docstring: `UNKNOWN AND
+# False` is False, and denying an unreadable payload in a session that carries no
+# permission denial at all would refuse calls that cannot be self-grants by
+# construction. Only a payload this hook cannot read AT ALL (stdin that is not a JSON
+# object, so there is not even a transcript path to consult) denies unconditionally.
 _ON_ERROR = "deny"
 
 _FILE_TOOLS = ("Edit", "Write")
@@ -215,10 +224,18 @@ def _read_text(path: str) -> str | _Read:
     non-directory both raise it while something IS on the path, so the lexical existence
     check decides. Everything else an OS read can fail with — EACCES, EISDIR, EIO — is
     UNREADABLE by construction.
+
+    `ValueError` is caught alongside `OSError` and is not an afterthought: a path
+    carrying an embedded NUL raises it BEFORE the syscall, so it never was an `OSError`.
+    Uncaught it would escape the three-valued design entirely and reach `main()`'s
+    catch-all, which denies unconditionally — turning an unreadable target into a deny in
+    a session with no permission denial at all, the one outcome routing UNKNOWN through
+    (b) exists to prevent. `os.path.lexists` returns False on such a path, so it lands on
+    UNREADABLE.
     """
     try:
         return Path(path).read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         if isinstance(exc, (FileNotFoundError, NotADirectoryError)) and not os.path.lexists(path):
             return _Read.ABSENT
         return _Read.UNREADABLE
@@ -366,7 +383,7 @@ def _on_internal_error(detail: str) -> str | None:
     return (
         f"Refusing this call because the permission-self-grant gate could not evaluate it: "
         f"{detail}. This gate is fail-closed — an error it cannot resolve denies rather than "
-        f"allows, because the call it was judging touches the agent's own permission surface, "
+        f"allows, because the call it was judging may touch the agent's own permission surface, "
         f"and a widening that slips through on an error is exactly what the gate exists to "
         f"prevent. Do not retry a variant of this call: stop and ask the user."
     )
@@ -454,7 +471,7 @@ def decide(payload: dict) -> str | None:
     if arming.verdict is Verdict.UNREADABLE:
         return _on_internal_error(
             "this session's transcript could not be read, so whether a permission denial "
-            "preceded this widening is unknown rather than known to be no"
+            "preceded this call is unknown rather than known to be no"
         )
     if isinstance(widening, _Unknown):
         # Armed, and (a) unresolved: a self-grant cannot be ruled out. Fail closed.
