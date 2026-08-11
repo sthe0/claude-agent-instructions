@@ -64,34 +64,73 @@ def _contract_text() -> str:
 #: (`method`/`goal`/`coverage`/... as ordinary English, or an unrelated identifier).
 _LIST_ITEM_RE = re.compile(r"^\s*(?:-\s+|\d+\.\s+)")
 
-#: Splits a bullet at its first em dash. Every field-glossary bullet in this contract
-#: is shaped `- **\`label\`** — description`: the label sits in the NAMING term
-#: before the dash, the rationale after it. A backticked identifier that shows up
-#: only in the elaboration — e.g. `method`/`procedure` used as an aside inside the
-#: pre-existing "Procedure:" bullet's prose, or `final_check` inside an *example*
-#: embedded in the Order-coverage bullet's elaboration — is a passing reference, not
-#: the bullet naming that field, and the dash split is what tells the two apart.
-_TERM_SPLIT_RE = re.compile(r"—")
+#: An em dash separates a NAMING position from the rationale that follows it, and one
+#: list item may hold SEVERAL — `SKILL.md`'s "Knowledge & preconditions" bullet names
+#: `knowledge`, then `preconditions`, then `material_refs` / `knowledge_refs`, each in
+#: front of its own dash. Splitting at the FIRST dash only (the prior shape) credited
+#: the first and gave the rest zero, so eight assertions here were green solely because
+#: `policy.md` happens to document those same fields one-per-bullet: consolidating that
+#: glossary into one legitimate multi-field bullet would have turned them red with the
+#: documentation fully present, which is a test making an author contort prose.
+_EM_DASH = "—"
+
+#: The naming position in front of a dash is its TRAILING run of code spans — the
+#: `` `material_refs` / `knowledge_refs` `` of "… for the same reason. `material_refs` /
+#: `knowledge_refs` — the structural projection …". Spans in a run may be joined only by
+#: whitespace, markdown emphasis and a list separator; anything else ends the run, which
+#: is what keeps a passing mid-elaboration mention out of the naming position: in
+#: "… with `[[stage.supplies]] element = \"knowledge\"`). `preconditions` —" the `). `
+#: ends the run at `preconditions`, so the supplies span is not credited, and in
+#: "… `functional_place` (the place this plan's product fills … is inadequate —" the run
+#: is empty because the segment does not END in a span at all.
+_TRAILING_SPANS_RE = re.compile(r"(?:`[^`]+`[\s*/,]*)+$")
+
+#: A code span is credited by its identifier TOKENS, never by substring containment:
+#: `means.method` names both `means` and `method`, `[meta.order.coverage]` names
+#: `coverage`, and — the point — `knowledge_refs` does NOT name `knowledge` and
+#: `customer_id` does NOT name `customer`. Containment made each of those pairs one
+#: label: deleting the `customer` bullet from policy.md left `[customer]` green,
+#: satisfied by the neighbouring `customer_id` bullet, on exactly the pair the contract
+#: says does two different jobs.
+_TOKEN_SPLIT_RE = re.compile(r"[^A-Za-z0-9_]+")
 
 
 def _documenting_bullets(text: str) -> list[str]:
     return [line for line in text.splitlines() if _LIST_ITEM_RE.match(line)]
 
 
+def _naming_terms(bullet: str) -> set[str]:
+    """Every identifier token this list item NAMES: for each em dash, the tokens of the
+    code spans trailing the text in front of it.
+
+    A list item with NO em dash therefore names nothing. That is deliberate and it is a
+    narrowing — `SKILL.md`'s "Problem and done criteria" item mentions `[meta] goal` and
+    `[meta] done_criterion` in passing prose and no longer earns credit for them (they
+    are credited by policy.md § Meta submission fields, the glossary bullet that exists
+    to name them). The dash is what marks the naming/rationale boundary; without one
+    there is no distinguished position, and crediting the item's last code span instead
+    would credit whatever a bullet happens to END on — a file path, a cross-reference —
+    which is the vacuity this predicate exists to remove."""
+    terms: set[str] = set()
+    for segment in bullet.split(_EM_DASH)[:-1]:
+        run = _TRAILING_SPANS_RE.search(segment)
+        if run is None:
+            continue
+        for span in re.findall(r"`([^`]+)`", run.group(0)):
+            terms.update(t for t in _TOKEN_SPLIT_RE.split(span) if t)
+    return terms
+
+
 def _label_documented(label: str, text: str) -> bool:
-    """True when `label` is named — appears inside a backticked code span within the
-    naming term of a markdown list-item line — not merely somewhere across ~235
-    lines of prose. This is the tightened form of the old `label in _contract_text()`
-    bare substring test, which passed vacuously on any incidental appearance of an
-    ordinary English word (`method`, `goal`, `knowledge`, `coverage`, `requirements`,
-    ...) or an unrelated code identifier (e.g. `plan.goal` inside unrelated
-    premise-gate prose) anywhere in the concatenated SKILL.md + policy.md text."""
-    for bullet in _documenting_bullets(text):
-        term = _TERM_SPLIT_RE.split(bullet, maxsplit=1)[0]
-        for span in re.findall(r"`([^`]+)`", term):
-            if label in span:
-                return True
-    return False
+    """True when `label` is NAMED by some markdown list item of the contract — an
+    identifier token of a code span in that item's naming position — not merely present
+    somewhere across ~235 lines of prose. Two vacuities this replaces, both found by
+    review: `label in _contract_text()`, which passed on any incidental appearance of an
+    ordinary English word (`method`, `goal`, `knowledge`, `coverage`, `requirements`, …)
+    or an unrelated identifier (`plan.goal` in premise-gate prose); and its first
+    tightening, which reached the right lines but still compared by substring inside
+    them, so `customer_id` went on satisfying `customer`."""
+    return any(label in _naming_terms(b) for b in _documenting_bullets(text))
 
 
 @pytest.mark.parametrize("label", tuple(l for _a, l, _s in _SUBSTANTIVE_SUBMISSION_FIELDS))
@@ -324,11 +363,19 @@ def test_change_decision_coverage_is_pinned_by_mutation(leaf, expected):
 
 def test_cd_names_exactly_the_four_labels_the_mutation_harness_detects():
     """`_CD` is hand-written, unlike `_STAGE_LEAF_COVERAGE`'s per-leaf entries (derived
-    by the mutation run above). Mechanically cross-checked here against the literal
+    by the mutation run above). What this binds it to is exactly one thing: the literal
     `detected.add("...")` calls inside `test_change_decision_coverage_is_pinned_by_
-    mutation`'s own source — the actual vocabulary the mutation harness reports —
-    so a future author who adds, removes, or renames a change-decision function
-    cannot leave `_CD` silently out of sync with what that function detects."""
+    mutation`'s own source — this harness's own probe vocabulary. So renaming a column
+    in one place and not the other turns red, and a `_CD` entry no probe ever adds
+    turns red.
+
+    RESIDUAL, stated because the binding is easy to over-read: this proves `_CD` matches
+    the PROBES, not that the probes match the engine. The family of four is
+    hand-identified — there is no enumerator deriving "the functions that decide whether
+    a stage-field edit is seen" from `agentctl` — so a FIFTH such function added to the
+    engine with no probe added here leaves `_CD` and the probes perfectly in sync and
+    both blind to it. Nothing in this file goes red for that; only a reader adding the
+    probe closes it."""
     source = inspect.getsource(test_change_decision_coverage_is_pinned_by_mutation)
     labels = frozenset(re.findall(r'detected\.add\("([^"]+)"\)', source))
     assert labels == frozenset(_CD), (
