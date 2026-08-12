@@ -175,6 +175,22 @@ _STATEMENT_END = ".;?!"
 #: (`**Subject:** intro prose `alpha``) stays mid-clause. Round 7's sweep found nothing
 #: red when `$` was dropped — an element live in the rule and dead in every measurement,
 #: the same accident the terminator paragraph above records — so the case below pins it.
+#:
+#: Five parts of this regex move independently: the opener alternation and its lookbehind
+#: `(?<=\s)`, the tempered token `(?:(?!\1).)+`, the trailing `$`, and the closing
+#: backreference `\1` that makes the closer answer the opener. The anchor, the tempered
+#: token, and `$` are pinned by their own case above; the lookbehind's strength and the
+#: closing backreference were, until round 8, live in the rule and dead in every
+#: measurement — the same accident the terminator paragraph records, found this time in
+#: the subject-colon rule itself.
+#:
+#: Round 8's sweep found nothing red when `(?<=\s)` widened to `(?<=[^*_])`, yet the two
+#: are not equivalent: bold `**Note**` is refused because its second `*` is immediately
+#: followed by `*`, which kills the tempered token, but italic `*Note*` has no second `*`
+#: — so for it the lookbehind alone stands between `- *Note* on the ledger:*`alpha`*` and
+#: a credit, the round-7 witness in italic dress. Freeing the closer — trailing `\1` to
+#: `(?:\*\*|\*|_+)` — was equally silent: balance is what refuses an unclosed italic
+#: opener answering for a bold closer.
 _EMPHASISED_SUBJECT_COLON_RE = re.compile(r"(?:^|(?<=\s))(\*\*|\*|_+)(?:(?!\1).)+:\1$")
 
 #: A code span is credited by its identifier TOKENS, never by substring containment:
@@ -330,7 +346,13 @@ _NAMING_CASES = (
      "- prose (a parenthetical aside) `alpha` — why it exists",
      set()),
     ("an earlier bold word must not supply the opener (round 7)",
-     "- **Note** on the provenance ledger:*`alpha`* — why it exists",
+     "- **Note** prose recording each claim in the provenance ledger:*`alpha`* — why it exists",
+     set()),
+    ("the lookbehind admits an opener only after whitespace (round 8)",
+     "- *Note* on the provenance ledger:*`alpha`* — why it exists",
+     set()),
+    ("balance: the closer must be the opener, not merely emphasis (round 8)",
+     "- *Subject:**`alpha`** — why it exists",
      set()),
     ("an emphasised subject may hold an identifier (round 7)",
      "- **A `knowledge_refs` note:** `alpha` — why it exists",
