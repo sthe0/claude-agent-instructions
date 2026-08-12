@@ -180,14 +180,38 @@ def _is_git_commit(command: str) -> bool:
 # an interpreter one-liner that opens a path for writing internally
 # (`python3 -c "open(p,'w')"`, `perl -e '...'`, an `eval`'d string, any program
 # that writes a file with no shell-visible write verb) and a redirection glued to
-# a preceding word (`foo>bar`, `2>bar`) carry no token this hook can key on.
+# a preceding word (`foo>bar`, `2>bar`) carry no token this hook can key on. A
+# heredoc-fed interpreter (`python3 <<EOF`, `perl <<EOF`, `ruby <<EOF`, `node
+# <<EOF`) is the same residual in heredoc form: `neutralize_heredoc_constructs`
+# blanks the body so its text is never misread as shell syntax, but a write the
+# interpreter performs INSIDE that body (e.g. `open(p, 'w')`) stays just as
+# invisible to a bash-syntax scanner as the `-c`/`-e` one-liner case — hiding a
+# body from misreading is not the same as gaining the ability to read it.
 #
 # NAMED RESIDUAL — write verbs measured to reach canon TODAY, out of scope here
 # and unchanged by the here-document handling: `exec 3>f`, `exec 3>>f`, `dd of=f`,
-# `cp`/`mv` in forms the dest parser misses, `>|f`, `sort -o f`, `sed 'w f'`,
-# `awk '{print > "f"}'`, and `python3 <<EOF` (an interpreter consumer, which the
-# body stripper refuses to touch for exactly this reason). Closing these is a
-# separate change with its own evidence; do not read their absence as coverage.
+# `cp`/`mv` in forms the dest parser misses, `>|f`, `sort -o f`, `sed 'w f'`, and
+# `awk '{print > "f"}'`. Closing these is a separate change with its own
+# evidence; do not read their absence as coverage.
+#
+# NAMED RESIDUAL — the accepted clause-(v) trade: neutralization drops the
+# "residue holds exactly one statement" check that `strip_heredoc_bodies` still
+# applies, so a body an inert consumer PERSISTS and a later statement in the
+# SAME command goes on to run (`cat <<'EOF' > /tmp/s.sh ... EOF; bash
+# /tmp/s.sh`) is now hidden from the write-target scanner along with everything
+# else — this used to be a genuine (if accidental) catch, and giving it up is
+# what buys the ordinary-apostrophe / persisted-body case (I2) without
+# reopening the "what could a later statement do with this body" enumeration.
+# Pinned as an explicit ALLOW at
+# test_heredoc_body_persisted_and_run_by_later_statement_now_allows.
+#
+# NAMED RESIDUAL — a `ruby`/`perl` heredoc body that itself shells out
+# (`` `git commit` ``, `system("git commit")`, backtick/`` %x() ``) is native
+# code to its interpreter, not bash syntax, so `NON_SHELL_CONSUMERS` correctly
+# leaves it un-stripped by `strip_heredoc_bodies` and blanked (not read) by
+# `neutralize_heredoc_constructs` — this hook cannot see a commit the
+# interpreter's OWN process later issues, the same way it cannot see any other
+# write or command a spawned interpreter performs internally.
 #
 # NAMED RESIDUAL — a path holding an UNEXPANDED `$VAR` is denied BY DESIGN, not by
 # accident. Each Bash tool call is a fresh shell, so `$S` assigned in an earlier
@@ -196,13 +220,19 @@ def _is_git_commit(command: str) -> bool:
 # canon, so it cannot distinguish them and must deny both; `_deny_msg` names the
 # cause instead of pretending the path was literal.
 #
-# NAMED RESIDUAL — spurious DENYs the body stripper leaves behind, all in the safe
-# direction: only the FIRST here-document body is removed, so a second body on the
-# same command (`cat <<A <<B`) is still read as syntax; a `$(` opened inside a
-# quoted-delimiter body and closed after it leaves an unbalanced `)` in the
-# residue; and an unbalanced QUOTE anywhere makes `shlex.split` raise, which is the
-# module's one genuinely reachable fail-open path (measured — a here-document body
-# never raises, which is why the stripper exists at all).
+# NAMED RESIDUAL — spurious DENYs `_removal_regions` leaves behind, all in the
+# safe direction, shared identically by `strip_heredoc_bodies` and
+# `neutralize_heredoc_constructs` since both apply the SAME single walk: only
+# the FIRST here-document body is located (the walk returns as soon as it
+# records a `<<`/`<<-` construct), so a second body on the same command
+# (`cat <<A <<B`) is still read as syntax; a `$(` opened inside a
+# quoted-delimiter body and closed after it leaves an unbalanced `)` in what
+# survives, since the opening paren is removed/blanked along with the body but
+# its later partner is not; and an unbalanced QUOTE anywhere still makes
+# `shlex.split` raise on whatever text this reader leaves behind — the
+# module's one genuinely reachable fail-open path, and the reason `main()`'s
+# blanket `except Exception: return 0` still matters even after neutralization
+# closes the specific persisted-apostrophe case (I2) that used to reach it.
 
 def _canon_target(candidate: str, eff_cwd: str) -> str | None:
     """Realpath of `candidate` (resolved rel to `eff_cwd`) iff it lands in canon,
@@ -340,12 +370,26 @@ def decide(payload: dict) -> str | None:
             return None
         # A here-document body is DATA, not syntax: a Markdown blockquote line
         # inside one is not a `>` redirect, and a `git commit` MENTIONED in one is
-        # not a commit. Strip once, here, so that BOTH consumers below read the
-        # same text — `_is_git_commit` has the identical defect, and neither
-        # consumer's fail-open path can cover it, because `shlex` is a lexer and
-        # never raises on a body. Body text only is removed, so a canon path
-        # riding the command line survives this byte-for-byte.
-        command = shell_tokens.strip_heredoc_bodies(command)
+        # not a commit. Neutralize (blank the construct in place, never remove it)
+        # once, here -- but the two consumers below do NOT then read the same
+        # text: `_is_git_commit` reads this ONCE-neutralized `command`, while
+        # `_canon_bash_write` hands it on to `bash_write_targets.command_write_
+        # targets`, which neutralizes AGAIN internally. That second pass is
+        # deliberate, not redundant: the walk is not idempotent, since it stops at
+        # the FIRST `<<`/`<<-` it finds, so a command carrying a second construct
+        # (`cat <<A <<B`) is only fully blanked after two applications, and
+        # collapsing to one would silently widen what `command_write_targets` can
+        # see. And `shlex` is not uniformly safe on doubt: it never raises on a
+        # body it merely tokenizes as ordinary words, but it DOES raise
+        # `ValueError` on an unbalanced quote -- measured on a body persisted then
+        # run by a later statement, whose ordinary apostrophe reached `shlex`
+        # unneutralized under the OLD stripper (its clause (v) refused a residue
+        # holding more than one statement). Neutralization drops that clause, so
+        # this specific case is closed, but `main()`'s blanket
+        # `except Exception: return 0` remains the real backstop for whatever this
+        # reader still fails to recognize -- state that plainly rather than as if
+        # `shlex` alone were the safety net.
+        command = shell_tokens.neutralize_heredoc_constructs(command)
         payload_cwd = payload.get("cwd") or os.getcwd()
         if _is_git_commit(command):
             cwd = git_cwd.effective_git_cwd(command, payload_cwd)

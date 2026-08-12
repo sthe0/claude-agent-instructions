@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -495,47 +496,92 @@ def test_case_table_is_large_enough():
     assert len({name for name, _ in CASES}) == len(CASES), "duplicate case names"
 
 
+def _guard_decision_with(transform, canon, command, cwd) -> bool:
+    """`guard_denies(canon, command, cwd)` as `decide()` would compute it if its
+    Bash branch's `shell_tokens.neutralize_heredoc_constructs` call resolved to
+    `transform` instead -- swaps the module attribute for the one call, then
+    restores it, so both of `decide()`'s call sites (its own, and the one
+    inside `bash_write_targets.command_write_targets`, which reaches the same
+    module object via `from . import shell_tokens`) see `transform` uniformly."""
+    saved = shell_tokens.neutralize_heredoc_constructs
+    shell_tokens.neutralize_heredoc_constructs = transform
+    try:
+        return guard_denies(canon, command, cwd)
+    finally:
+        shell_tokens.neutralize_heredoc_constructs = saved
+
+
 @pytest.mark.skipif(not _bash_available(), reason="no bash: oracle has no ground truth")
 def test_body_removal_never_turns_a_real_write_from_deny_into_allow(canon):
-    """The differential predicate, over every construction in the table."""
+    """The differential predicate, over every construction in the table.
+
+    `decide()`'s Bash branch calls `shell_tokens.neutralize_heredoc_constructs`
+    UNCONDITIONALLY now, on every command it receives -- so a plain
+    `guard_denies(canon, raw, cwd)` no longer means "the guard with no heredoc
+    handling at all": it already reflects today's shipped transform, on both
+    sides of any comparison built from it alone. The claim this stage actually
+    makes is narrower and comparative -- did SWITCHING decide()'s internal call
+    from `strip_heredoc_bodies` to `neutralize_heredoc_constructs` ever turn a
+    real write from denied to allowed -- so that is what this test measures:
+    `_guard_decision_with(shell_tokens.strip_heredoc_bodies, ...)` reproduces
+    what decide() used to compute (BEFORE this stage), and a plain
+    `guard_denies(...)` is what it computes today (AFTER). Reusing `decide()`
+    itself as the oracle of guard behaviour avoids hand-reimplementing
+    `_is_git_commit`/`_canon_bash_write`'s call sequence a second time.
+
+    Two names, "write then exec" and "tee then source", are EXPECTED to flip
+    from denied to allowed and are excluded from `regressions` rather than
+    failing the run: both are the accepted clause-(v) trade (a heredoc body
+    persisted to a file and executed by a LATER statement, which dropping
+    clause (v) for neutralization deliberately stops refusing on) -- the same
+    trade `test_heredoc_body_persisted_and_run_by_later_statement_now_allows`
+    in `test_guard_canon_bash_writes.py` pins directly. Silently including
+    them here would make this test and that one contradict each other.
+    """
+    ACCEPTED_CLAUSE_V_TRADE = {"write then exec", "tee then source"}
     regressions = []
     exercised = 0
     bash_reached = 0
     for name, raw in CASES:
-        stripped = shell_tokens.strip_heredoc_bodies(raw)
-        if stripped == raw:
-            # Identical input reaches the guard, so its decision is identical and
-            # no oracle run can distinguish the two. Proof, not sampling.
+        neutralized = shell_tokens.neutralize_heredoc_constructs(raw)
+        if neutralized == raw:
+            # Today's shipped transform is a no-op on this input, so BEFORE and
+            # AFTER reach `decide()` having had the identical construct handling
+            # applied (none), and no oracle run can distinguish the two. Proof,
+            # not sampling.
             continue
         exercised += 1
         if not bash_writes(raw):
             continue
         bash_reached += 1
+        if name in ACCEPTED_CLAUSE_V_TRADE:
+            continue
         for cwd in (canon, Path("/tmp")):
-            if guard_denies(canon, raw, cwd) and not guard_denies(canon, stripped, cwd):
+            before = _guard_decision_with(shell_tokens.strip_heredoc_bodies, canon, raw, cwd)
+            after = guard_denies(canon, raw, cwd)
+            if before and not after:
                 regressions.append(f"{name} (cwd={cwd})")
-    assert not regressions, "body removal widened the guard: " + "; ".join(regressions)
+    assert not regressions, "the strip-to-neutralize migration widened the guard: " + "; ".join(regressions)
     # Neither number is derivable from `len(CASES)`, and a rule change that
     # quietly stopped recognizing most of the table would leave the assertion
     # above vacuously true, so both counts are asserted. They are MEASURED, not
-    # chosen: as committed, this loop counts exercised=75 and bash-reached=28
-    # over a corpus of 186. To re-derive them, add a `print` beside these asserts
-    # and run the test with `-s`; both are plain loop counters over `CASES` and
-    # nothing else feeds them.
+    # chosen: to re-derive them, add a `print` beside these asserts and run the
+    # test with `-s`; both are plain loop counters over `CASES` and nothing else
+    # feeds them.
     #
     # The two are asserted DIFFERENTLY, because only one of them can move on its
-    # own. `exercised` is a pure function of `strip_heredoc_bodies` and the table
-    # -- no environment feeds it -- so any drift in it IS a rule change and there
-    # is no honest slack to grant: it is pinned exactly. `bash_reached` additionally
-    # depends on what the local shell and coreutils really do, so it carries a floor
-    # a little under the measured value, and the floor still sits far enough above
-    # the pre-review value (15) that a regression to that state fails here.
-    assert exercised == 75, (
-        f"{exercised} of {len(CASES)} constructions were stripped, expected exactly 75: "
-        "this count cannot move without a change to the recognition rule or the table"
+    # own. `exercised` is a pure function of `neutralize_heredoc_constructs` and
+    # the table -- no environment feeds it -- so any drift in it IS a rule change
+    # and there is no honest slack to grant: it is pinned exactly. `bash_reached`
+    # additionally depends on what the local shell and coreutils really do, so it
+    # carries a floor a little under the measured value (37).
+    assert exercised == 93, (
+        f"{exercised} of {len(CASES)} constructions were acted on by "
+        "neutralize_heredoc_constructs, expected exactly 93: this count cannot "
+        "move without a change to the recognition rule or the table"
     )
-    assert bash_reached >= 25, (
-        f"only {bash_reached} of {exercised} stripped constructions actually wrote canon: "
+    assert bash_reached >= 30, (
+        f"only {bash_reached} of {exercised} acted-on constructions actually wrote canon: "
         "the predicate's `bash_writes` conjunct is barely loaded"
     )
 
@@ -545,19 +591,22 @@ def test_named_false_positives_are_removed(canon):
     """The other direction: the cases the stage exists to fix really do flip.
 
     This asserts only the permanent claim -- bash writes nothing, so the FIXED
-    guard must allow the command as given (`decide()` already strips
-    internally at its Bash entry point, so `raw` and `stripped` reach the same
-    decision). It does NOT assert "denied before stripping": that held only
-    against the pre-fix guard and was checked once, by hand, against
+    guard must allow the command as given (`decide()` already neutralizes
+    internally at its Bash entry point, so `raw` and `neutralized` reach the
+    same decision). It does NOT assert "denied before neutralization": that
+    held only against the pre-fix guard and was checked once, by hand, against
     `git show HEAD~1:scripts/hook-guard-canon-readonly.py` -- see the commit
     message for that result. A standing assertion of the old behaviour would
-    fail forever once the fix landed.
+    fail forever once the fix landed. `neutralized`, not `stripped`, because
+    `neutralize_heredoc_constructs` is what `decide()` actually calls now --
+    see `_guard_decision_with`'s docstring above for why the two are not
+    interchangeable here.
     """
     for name, raw in FALSE_POSITIVES:
         assert not bash_writes(raw), f"{name}: oracle says this really writes"
         assert not guard_denies(canon, raw, canon), f"{name}: still denied"
-        stripped = shell_tokens.strip_heredoc_bodies(raw)
-        assert not guard_denies(canon, stripped, canon), f"{name}: still denied after stripping"
+        neutralized = shell_tokens.neutralize_heredoc_constructs(raw)
+        assert not guard_denies(canon, neutralized, canon), f"{name}: still denied after neutralization"
 
 
 @pytest.mark.skipif(not _bash_available(), reason="no bash: oracle has no ground truth")
@@ -591,3 +640,282 @@ def test_oracle_goes_red_against_a_superseded_rule(canon):
             if guard_denies(canon, raw, cwd) and not guard_denies(canon, stripped, cwd):
                 caught.append(name)
     assert caught, "the oracle passed a rule known to be unsound — it measures nothing"
+
+
+# --- D1/D1a/D1c: coherence between the two appliers, and independence from the
+# shared producer they both consume ---------------------------------------
+
+def _recognized_by_strip(raw: str) -> bool:
+    return (
+        shell_tokens._recognized(raw, shell_tokens.CONSUMERS)
+        and shell_tokens.strip_heredoc_bodies(raw) != raw
+    )
+
+
+def test_strip_and_neutralize_agree_on_command_line_tokens():
+    """D1: for every construction BOTH appliers act on (i.e. `strip_heredoc_
+    bodies` did not bail out on clause (iv)'s narrower consumer set or clause
+    (v)'s residue check), `shlex.split` of the two outputs must agree --
+    `_strip_bodies` COLLAPSES a construct to a single separator character,
+    `neutralize_heredoc_constructs` BLANKS it to spaces of the same length,
+    and both are pure whitespace, so a lexer that only sees WORDS cannot tell
+    them apart. Run over both corpora, `CASES` and `FALSE_POSITIVES`, since
+    the two appliers must agree identically on both the everyday grammar
+    sweep and the named motivating false positives.
+
+    D1b -- what this test CANNOT catch, stated rather than left implicit:
+    both outputs are computed from the SAME `_removal_regions` walk, so a bug
+    that NARROWS what that walk recognizes (stops finding a construct it used
+    to) shrinks `_strip_bodies` and `neutralize_heredoc_constructs` together
+    -- their tokens would still agree, now vacuously, against `raw`'s own
+    unmodified tokens. Token equivalence between two consumers of one shared
+    producer is a coherence check on the two APPLIERS, not a correctness
+    check on the producer itself; only `test_strip_bodies_matches_a_frozen_
+    independent_reimplementation` below (D1c), built from a walk that shares
+    nothing with `_removal_regions`, can catch a narrowed producer.
+    """
+    for name, raw in CASES + FALSE_POSITIVES:
+        if not _recognized_by_strip(raw):
+            continue
+        stripped = shell_tokens.strip_heredoc_bodies(raw)
+        neutralized = shell_tokens.neutralize_heredoc_constructs(raw)
+        assert shlex.split(stripped) == shlex.split(neutralized), (
+            f"{name}: strip_heredoc_bodies and neutralize_heredoc_constructs "
+            f"disagree on command-line tokens\n  stripped:    {stripped!r}\n"
+            f"  neutralized: {neutralized!r}"
+        )
+
+
+ACTED_FLOOR_TEE = 4
+ACTED_FLOOR_NON_SHELL = 4
+ACTED_FLOOR_UNKNOWN = 0
+
+# One class per value clause (iv) can take for `neutralize_heredoc_constructs`:
+# a plain `CONSUMERS` member, a `NON_SHELL_CONSUMERS`-only member, and a name
+# on neither.
+_GRID_CONSUMERS = {"tee": "tee", "non_shell": "python3", "unknown": "curl"}
+
+_GRID_BODIES = [
+    "plain text",
+    "> looks/like/a/redirect",
+    "git commit -m nope",
+    "other people's apostrophe",
+]
+
+
+def test_neutralization_equivalence_grid():
+    """D1a: a generated grid crossing the three consumer classes clause (iv)
+    distinguishes with four representative body shapes, checking that
+    `neutralize_heredoc_constructs` acts (blanks) on exactly the classes its
+    own docstring claims to (`CONSUMERS | NON_SHELL_CONSUMERS`) and leaves an
+    unrecognized name alone -- named floor constants so a future consumer-set
+    change states its expected effect on this grid rather than silently
+    shifting a bare number the next reader has to re-derive.
+    """
+    acted = {"tee": 0, "non_shell": 0, "unknown": 0}
+    for cls, consumer in _GRID_CONSUMERS.items():
+        for body in _GRID_BODIES:
+            raw = f"{consumer} <<'EOF'\n{body}\nEOF"
+            neutralized = shell_tokens.neutralize_heredoc_constructs(raw)
+            assert len(neutralized) == len(raw), (cls, body)
+            if neutralized != raw:
+                acted[cls] += 1
+    assert acted["tee"] >= ACTED_FLOOR_TEE, acted
+    assert acted["non_shell"] >= ACTED_FLOOR_NON_SHELL, acted
+    assert acted["unknown"] == ACTED_FLOOR_UNKNOWN, acted
+
+
+def _frozen_strip_bodies(command: str) -> str:
+    """D1c: independent reimplementation of `strip_heredoc_bodies`, frozen at
+    the shape the pre-Stage-2 character-by-character scanner had before it
+    was inverted into `_removal_regions` + `_apply_regions`: it walks the
+    SAME doubt points, via the shared and UNCHANGED-by-the-refactor predicate
+    helpers (`_recognized`, `_pipeline_consumers_ok`, `_body_inert`,
+    `_DELIMITER_WORD`, `_WORD_END`, `_holds_multiple_statements`), but builds
+    output text directly and never calls `_removal_regions` or
+    `_apply_regions`.
+
+    This is the control D1 cannot be: two appliers that both consume
+    `_removal_regions`'s output necessarily agree with EACH OTHER even if
+    that shared producer were narrowed -- both would silently shrink together
+    and their outputs would still match. Only a separate walk that shares
+    nothing with the producer can catch that; this function, and the
+    byte-identity test built on it, are that separate walk.
+    """
+    if not shell_tokens._recognized(command, shell_tokens.CONSUMERS):
+        return command
+    residue = _frozen_walk(command)
+    if residue != command and shell_tokens._holds_multiple_statements(residue):
+        return command
+    return residue
+
+
+def _frozen_walk(command: str) -> str:
+    out: list[str] = []
+    pos = 0
+    i = 0
+    n = len(command)
+    quote = None
+    while i < n:
+        c = command[i]
+        if quote is None and c == "\\":
+            i += 2
+            continue
+        if quote is None and c in "'\"":
+            quote = c
+            i += 1
+            continue
+        if quote == '"' and c == "\\":
+            i += 2
+            continue
+        if quote and c == quote:
+            quote = None
+            i += 1
+            continue
+        if quote is None:
+            if c == "#" and (i == 0 or command[i - 1] in " \t\n"):
+                j = command.find("\n", i)
+                j = n if j < 0 else j
+                i = j
+                continue
+            if command.startswith("<<<", i):
+                if not shell_tokens._pipeline_consumers_ok(command, i, shell_tokens.CONSUMERS):
+                    return command
+                j = i + 3
+                while j < n and command[j] == " ":
+                    j += 1
+                if j < n and command[j] in "'\"":
+                    operand_quote = command[j]
+                    k = command.find(operand_quote, j + 1)
+                    if k == -1:
+                        return command
+                    if not shell_tokens._body_inert(operand_quote == "'", command[j + 1:k]):
+                        return command
+                    j = k + 1
+                    if j < n and command[j] not in shell_tokens._WORD_END:
+                        return command
+                else:
+                    start = j
+                    while j < n and command[j] not in shell_tokens._WORD_END:
+                        j += 1
+                    if not shell_tokens._body_inert(False, command[start:j]):
+                        return command
+                out.append(command[pos:i])
+                out.append(" ")
+                pos = j
+                i = j
+                continue
+            if command.startswith("<<", i):
+                if not shell_tokens._pipeline_consumers_ok(command, i, shell_tokens.CONSUMERS):
+                    return command
+                j = i + 2
+                if j < n and command[j] == "-":
+                    j += 1
+                while j < n and command[j] == " ":
+                    j += 1
+                match = shell_tokens._DELIMITER_WORD.match(command[j:])
+                if not match:
+                    return command
+                backslash, open_quote, word, close_quote = match.groups()
+                if open_quote and open_quote != close_quote:
+                    return command
+                delimiter_quoted = bool(backslash) or bool(open_quote)
+                j += match.end()
+                if j < n and command[j] not in shell_tokens._WORD_END:
+                    return command
+                lines = command[j:].split("\n")
+                terminator = None
+                for index, line in enumerate(lines[1:], start=1):
+                    if line.strip() == word:
+                        terminator = index
+                        break
+                if terminator is None:
+                    return command
+                if not shell_tokens._body_inert(delimiter_quoted, "\n".join(lines[1:terminator])):
+                    return command
+                line0_end = j + len(lines[0])
+                pre_len = len("\n".join(lines[:terminator + 1]))
+                pos_after_terminator = j + pre_len
+                body_end = pos_after_terminator + 1 if pos_after_terminator < n else pos_after_terminator
+                out.append(command[pos:i])
+                pos = j
+                out.append(command[pos:line0_end])
+                out.append("\n")
+                pos = body_end
+                return "".join(out) + command[pos:]
+        i += 1
+    if quote is not None:
+        return command
+    out.append(command[pos:])
+    return "".join(out)
+
+
+def test_strip_bodies_matches_a_frozen_independent_reimplementation():
+    """D1c: `strip_heredoc_bodies` must agree byte-for-byte with `_frozen_
+    strip_bodies` over both corpora. Unlike D1, this control shares no code
+    with `_removal_regions` on the reference side, so it is the one able to
+    catch a narrowed (or widened) producer -- see D1's docstring for why
+    token-equivalence between the two appliers cannot."""
+    for name, raw in CASES + FALSE_POSITIVES:
+        expected = shell_tokens.strip_heredoc_bodies(raw)
+        actual = _frozen_strip_bodies(raw)
+        assert actual == expected, (
+            f"{name}: frozen reference disagrees with strip_heredoc_bodies\n"
+            f"  shipped: {expected!r}\n  frozen:  {actual!r}"
+        )
+
+
+# --- D2/D3: named pins for the shipped guard's actual behaviour today -----
+
+_CASES_BY_NAME = dict(CASES)
+
+MUST_STILL_DENY = [
+    "here-string then write",
+    "tee canon argv",
+    "absolute cat tee canon",
+    "here-string bare operand canon",
+    "sort out to canon",
+    "wc glued canon redirect",
+    "two heredocs 1st quoted",
+    "amp after non-first-line heredoc",
+    "absolute tee canon argv",
+]
+
+
+@pytest.mark.skipif(not _bash_available(), reason="no bash: oracle has no ground truth")
+def test_nine_named_constructions_still_deny(canon):
+    """D2: nine hand-picked constructions, spanning the parse-desync,
+    shape-inside-recognized, inert-consumer-write, delimiter-quoting,
+    bound-asymmetry and reviewer-absolute-path families, asserted
+    individually rather than folded into the generic loop above -- so a
+    future reader sees, by name, which specific attacks this migration is
+    pinned not to have opened, without re-deriving them from
+    `test_body_removal_never_turns_a_real_write_from_deny_into_allow`'s
+    aggregate pass/fail. Picked from constructions this file measured, not
+    guessed by name -- e.g. "sort -o canon" looks like it should belong here
+    but is one of the nine pre-existing bypasses (see `_COMMAND_LINE_
+    WRITERS`'s "sort -o bare no heredoc"): `sort -o` was never a detected
+    write verb, heredoc or not, so it is excluded.
+    """
+    assert len(MUST_STILL_DENY) == 9, len(MUST_STILL_DENY)
+    for name in MUST_STILL_DENY:
+        raw = _CASES_BY_NAME[name]
+        assert bash_writes(raw), f"{name}: oracle says this does not actually write"
+        assert guard_denies(canon, raw, canon), f"{name}: no longer denied"
+
+
+@pytest.mark.skipif(not _bash_available(), reason="no bash: oracle has no ground truth")
+def test_widened_consumer_body_introduces_no_new_spurious_deny(canon):
+    """D3: `ruby`/`node`, added to clause (iv) only for neutralization (never
+    for `strip_heredoc_bodies`, which still refuses them), must not gain a
+    NEW spurious deny of their own -- a body that merely PRINTS something
+    that looks like a canon write must still allow, exactly as the python /
+    git-commit-mention false positives already pinned in
+    `test_heredoc_body_neutralization.py` do for `python3`. This is a fresh
+    construction (a `ruby` `puts`, not `python3`'s `print`), so it exercises
+    one of the OTHER names `NON_SHELL_CONSUMERS` added, not a duplicate of
+    T1/T3.
+    """
+    cmd = f"ruby <<'EOF'\nputs \"> {CANON}/should_not_matter\"\nEOF"
+    assert not bash_writes(cmd), "oracle says this really writes"
+    assert not guard_denies(canon, cmd, canon), "spuriously denied"

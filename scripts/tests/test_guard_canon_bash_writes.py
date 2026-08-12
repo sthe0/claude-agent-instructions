@@ -316,12 +316,26 @@ def test_heredoc_expanding_body_still_denies(tmp_path):
     assert _denied(run_hook(core, cmd, cwd=core))
 
 
-def test_heredoc_body_executed_by_later_statement_still_denies(tmp_path):
-    """An inert consumer can still PERSIST a body that a later statement runs, so
-    a residue holding more than one statement strips nothing."""
+def test_heredoc_body_persisted_and_run_by_later_statement_now_allows(tmp_path):
+    """The accepted clause-(v) trade, pinned so a later reader sees it as a
+    deliberate decision and not a silently absorbed regression.
+
+    An inert consumer can PERSIST a body that a later statement in the SAME
+    command goes on to run (`cat <<'EOF' > /tmp/s.sh ... EOF; bash /tmp/s.sh`).
+    `strip_heredoc_bodies`'s clause (v) used to catch exactly this by REFUSING
+    to strip when the residue holds more than one statement, leaving the body's
+    `echo x > scripts/existing.py` exposed to the write-target scanner as a
+    genuine (if accidental) catch. `neutralize_heredoc_constructs` drops clause
+    (v) on purpose (docs/decisions/heredoc-body-neutralization.md) — it only
+    hides a construct's own bytes, and the later `bash /tmp/s.sh` statement,
+    unaffected by blanking, is not itself a recognized write verb — so this
+    specific construction now ALLOWS. Trading it away is what buys T2 (an inert
+    consumer's body containing an ordinary apostrophe must not break `shlex`
+    lexing downstream) without reintroducing a second enumeration trap over
+    "what could a later statement do with a persisted body"."""
     core = make_core(tmp_path)
     cmd = "cat <<'EOF' > /tmp/s.sh\necho x > scripts/existing.py\nEOF\nbash /tmp/s.sh"
-    assert _denied(run_hook(core, cmd, cwd=core))
+    assert _allowed(run_hook(core, cmd, cwd=core))
 
 
 def test_heredoc_delimiter_not_ending_at_word_boundary_still_denies(tmp_path):
@@ -386,11 +400,11 @@ def test_body_stripper_is_called_once_on_the_bash_path():
     the count would report one as a violation with a message pointing at the
     wrong thing.
 
-    Both call shapes are matched. `shell_tokens.strip_heredoc_bodies(...)` parses
-    to an `ast.Attribute`, but a second call site introduced through
-    `from lib.shell_tokens import strip_heredoc_bodies` parses to an `ast.Name` —
-    matching only the first would leave exactly the kind of second consumer this
-    test exists to catch invisible to it.
+    Both call shapes are matched. `shell_tokens.neutralize_heredoc_constructs(...)`
+    parses to an `ast.Attribute`, but a second call site introduced through
+    `from lib.shell_tokens import neutralize_heredoc_constructs` parses to an
+    `ast.Name` — matching only the first would leave exactly the kind of second
+    consumer this test exists to catch invisible to it.
     """
     tree = ast.parse(HOOK_SCRIPT.read_text())
     calls = [
@@ -398,8 +412,8 @@ def test_body_stripper_is_called_once_on_the_bash_path():
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and (
-            (isinstance(node.func, ast.Attribute) and node.func.attr == "strip_heredoc_bodies")
-            or (isinstance(node.func, ast.Name) and node.func.id == "strip_heredoc_bodies")
+            (isinstance(node.func, ast.Attribute) and node.func.attr == "neutralize_heredoc_constructs")
+            or (isinstance(node.func, ast.Name) and node.func.id == "neutralize_heredoc_constructs")
         )
     ]
     assert len(calls) == 1, f"{len(calls)} call sites, expected exactly one"

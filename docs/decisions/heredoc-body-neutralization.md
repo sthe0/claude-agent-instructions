@@ -149,9 +149,73 @@ Recorded here for stage 2 to act on:
 
 ## Questions answered
 
-(Placeholder — populated by stage 2, item F, once the API split and the non-widening argument are
-implemented. This section header exists here so stage 2's verify_command can confirm the doc grows
-in place rather than being recreated.)
+**What is the API split, and why a shared producer?** `_removal_regions(command, consumers) ->
+list[tuple[int, int, str]] | None` is the one walk that locates every here-document/here-string
+construct's removal region and decides doubt; it returns `None`, as before, on any of clauses
+(i)/(ii)/(iii)/(vi)/(vii) failing. `_strip_bodies` (private) and the public `strip_heredoc_bodies`
+consume it via `_apply_regions`, which COLLAPSES each region to its `collapse_text` — unchanged
+external behaviour, verified byte-identical against a frozen independent reimplementation (D1c,
+below) rather than assumed from the refactor being "obviously equivalent". `neutralize_heredoc_
+constructs` (new) consumes the SAME region list but BLANKS each region with spaces (preserving every
+`\n`, so line numbers a later error message might report stay stable) instead of collapsing it — the
+output is the same length as the input, so a downstream `shlex` lexer sees whitespace where a body
+was, never the body's bytes, without needing to trust that a later statement never executes it.
+`heredoc_construct_spans` is the public span view (`list[tuple[int, int]]`) over the same regions, for
+a caller that wants the spans rather than a transformed string.
+
+**What does neutralization relax, and what stays absolute?** Clause (iv) (consumer allowlist) widens
+via `NON_SHELL_CONSUMERS = frozenset({"python", "python3", "perl", "ruby", "node"})`, unioned with
+`CONSUMERS` — a body fed to one of these is native code for that interpreter, never shell syntax, so
+blanking it is safe on the same ground `CONSUMERS` already rests on, just for a different reason (the
+body is inert to *this* parser, not because it is quoted or short). Clause (v) (residue holds one
+statement) is DROPPED entirely: neutralization does not care whether a later statement executes the
+blanked-away body, because blanking removes the body's TEXT from what `shlex` sees — it makes no
+claim about what real bash does when it runs. Clauses (i)/(ii)/(iii)/(vi)/(vii) are unchanged and
+absolute for both `strip_heredoc_bodies` and `neutralize_heredoc_constructs`: an unrecognized token, a
+function definition, an unbalanced quote, or a non-inert body still refuses the whole command
+(returns it byte-for-byte unmodified) rather than acting partially.
+
+**What is the non-widening argument, concretely?** Five independent controls in
+`test_shell_tokens_nonwidening.py`, each catching a different way the migration could have gone wrong:
+D1 (`test_strip_and_neutralize_agree_on_command_line_tokens`) checks the two appliers' outputs
+`shlex`-tokenize identically wherever both act — a coherence check on the two CONSUMERS of
+`_removal_regions`, which cannot by itself detect a bug that narrows the shared PRODUCER (documented
+in D1's own docstring, since both appliers would shrink together and still agree, now vacuously). D1c
+(`test_strip_bodies_matches_a_frozen_independent_reimplementation`) is the control that can: an
+independently-coded, from-scratch character walk that shares no code with `_removal_regions`, checked
+byte-identical against `strip_heredoc_bodies` over the full corpus plus `FALSE_POSITIVES`. D1a
+(`test_neutralization_equivalence_grid`) is a generated grid over the three classes clause (iv)
+distinguishes (a `CONSUMERS` member, a `NON_SHELL_CONSUMERS`-only member, an unrecognized name) crossed
+with four body shapes, with named floors (`ACTED_FLOOR_TEE`, `ACTED_FLOOR_NON_SHELL`,
+`ACTED_FLOOR_UNKNOWN`) so a future consumer-set change states its expected effect on the grid rather
+than an unexplained number drifting. D2 (`test_nine_named_constructions_still_deny`) pins nine
+individually-named real writes (spanning the parse-desync, shape-inside-recognized,
+inert-consumer-write, delimiter-quoting, bound-asymmetry and reviewer-absolute-path families) that
+must still be denied today, by name, independent of the aggregate loop. D3
+(`test_widened_consumer_body_introduces_no_new_spurious_deny`) checks the widened consumer set itself
+does not open a new false positive, using a `ruby` body distinct from the `python3` cases
+`test_heredoc_body_neutralization.py` already pins.
+
+**Was any previously-denied real write in the corpus found to flip to allowed?** Two, and both are the
+accepted clause-(v) trade named above in "Test-side gates a rename would silently break": "write then
+exec" (`cat <<'EOF' > /tmp/s.sh` ... `bash /tmp/s.sh`) and "tee then source" (the `tee`/`.` sourcing
+sibling of the same shape) — a body PERSISTED to a file and executed by a LATER, separate statement.
+Dropping clause (v) means neutralization no longer refuses on a multi-statement residue, so these two
+now allow, exactly as `test_heredoc_body_persisted_and_run_by_later_statement_now_allows` in
+`test_guard_canon_bash_writes.py` pins directly. `test_body_removal_never_turns_a_real_write_from_
+deny_into_allow` excludes these two names from its regression check by name, with a docstring pointing
+at that pinning test, rather than either failing on an already-decided trade or silently swallowing it
+into the aggregate pass.
+
+**Measured numbers, so a future drift is legible against a real baseline rather than a guess.** Of the
+corpus (`CORPUS = len(CASES)`), 93 constructions are EXERCISED by `neutralize_heredoc_constructs`
+(pinned exactly — a pure function of the transform and the table, so any drift is a rule change), of
+which 37 are BASH-REACHED (a measured floor of 30 is asserted, since this axis additionally depends on
+the local shell and coreutils). "sort -o canon" is NOT among the nine D2 pins despite looking like an
+obvious candidate: `sort -o` was never a detected write verb in `bash_write_targets.py` (only
+`sed -i`/`tee`/`cp`/`mv`/`patch`/`git apply` are), heredoc or not — it is one of the nine PRE-EXISTING
+bypasses named in `_COMMAND_LINE_WRITERS`'s "sort -o bare no heredoc", unaffected by this migration in
+either direction.
 
 ## Review dispositions
 

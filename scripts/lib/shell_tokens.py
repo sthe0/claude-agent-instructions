@@ -64,6 +64,32 @@ heredoc nested in `( )` or `$( )`, one in a multi-statement command
 (`cd /tmp && cat > x.md <<'EOF'`), one on a continued line, one in a command that
 also defines a function, and one with a bare delimiter whose body merely mentions
 a `$`, a backtick or a backslash, are all left untouched.
+
+The construction-LOCATING walk lives in exactly one place, `_removal_regions`,
+which returns `(start, end, collapse_text)` spans in command order. Two
+appliers consume that list without re-deriving location logic: `_strip_bodies`
+collapses each span (a `<<`/`<<-` body becomes a single `\n`, a `<<<` operand
+becomes a single ` `), and `neutralize_heredoc_constructs` instead BLANKS each
+span in place -- every character replaced with a space, except an original
+`\n`, which stays a `\n` -- so a downstream `shlex` lexer can walk past a
+construct without ever trusting its content as absent. A second, independent
+span-finding walk is the failure mode this split exists to prevent: a
+hand-written span formula is correct only once it is checked against the walk
+that already knows where these constructs are, and by then it was pointless to
+write a second one.
+
+Neutralization answers a narrower question than stripping does -- WHERE a
+construct is, not whether its body may be trusted away -- so it relaxes two of
+the seven clauses and leaves the rest untouched. Clause (iv)'s allowlist widens
+from `CONSUMERS` to `CONSUMERS | NON_SHELL_CONSUMERS`: a `python3`/`perl`/
+`ruby`/`node` heredoc body is native code to its interpreter and must stay
+UNTRUSTED (removing it would be wrong), but it is provably not bash syntax
+either, so hiding it from a shell lexer is safe even though removing it is
+not. Clause (v) (the residue holds exactly one statement) is dropped
+entirely: locating a construct never depended on what follows it. Clauses
+(i)-(iii), (vi) and (vii) stay exactly as they are for stripping -- they
+establish WHERE the construct is, which both operations need identically, and
+relaxing any of them would misidentify a span, not just its trust level.
 """
 from __future__ import annotations
 
@@ -79,6 +105,16 @@ CONSUMERS = frozenset({
     "cat", "tee", "head", "tail", "wc", "sort", "uniq", "nl", "rev",
     "base64", "md5sum", "sha256sum",
 })
+
+# Interpreters whose heredoc body is native code -- never safe to REMOVE (that
+# would change what runs) -- but provably not bash syntax either, so it is safe
+# to HIDE from a shell lexer. Consulted only by `neutralize_heredoc_constructs`
+# and `heredoc_construct_spans`, as `CONSUMERS | NON_SHELL_CONSUMERS`; never
+# merged into `CONSUMERS` itself, whose members' bodies `_strip_bodies` deletes
+# outright. Seeded minimally with the interpreters the three measured false
+# positives named; `bash`/`sh`/`zsh`/`env` and unknown names stay excluded on
+# purpose -- a shell body really is shell syntax.
+NON_SHELL_CONSUMERS = frozenset({"python", "python3", "perl", "ruby", "node"})
 
 # Characters that genuinely end an unquoted word in bash -- the metacharacter set
 # from bash(1) GLOSSARY, "a character that, when unquoted, separates words". Keep
@@ -128,8 +164,8 @@ def _command_line(command: str) -> str:
     return command
 
 
-def _consumer_ok(element: str) -> bool:
-    """True iff a pipeline element's command word is on `CONSUMERS`, after
+def _consumer_ok(element: str, consumers: frozenset[str] = CONSUMERS) -> bool:
+    """True iff a pipeline element's command word is on `consumers`, after
     skipping leading `VAR=value` assignments and taking the basename."""
     words = element.split()
     i = 0
@@ -137,10 +173,10 @@ def _consumer_ok(element: str) -> bool:
         i += 1
     if i >= len(words):
         return False
-    return os.path.basename(words[i]) in CONSUMERS
+    return os.path.basename(words[i]) in consumers
 
 
-def _pipeline_consumers_ok(command: str, pos: int) -> bool:
+def _pipeline_consumers_ok(command: str, pos: int, consumers: frozenset[str] = CONSUMERS) -> bool:
     """Clause (iv) for the pipeline owning the operator at `pos`. Pipeline-WIDE,
     not first-word-only: `cat <<'EOF' | bash` satisfies a first-word check while
     still executing the body, and was measured doing exactly that."""
@@ -151,10 +187,10 @@ def _pipeline_consumers_ok(command: str, pos: int) -> bool:
         if j != -1:
             end = min(end, j)
     pipeline = command[start + 1:end]
-    return all(_consumer_ok(part) for part in pipeline.split("|") if part.strip())
+    return all(_consumer_ok(part, consumers) for part in pipeline.split("|") if part.strip())
 
 
-def _recognized(command: str) -> bool:
+def _recognized(command: str, consumers: frozenset[str] = CONSUMERS) -> bool:
     """Clauses (ii)-(iv) over the whole command: does it match the positively
     understood shape? Clause (iii) deliberately does NOT work out WHICH name a
     definition rebinds -- any definition at all disqualifies -- because chasing
@@ -164,7 +200,7 @@ def _recognized(command: str) -> bool:
     head = _command_line(command)
     if any(token in head for token in _UNRECOGNIZED):
         return False
-    return all(_consumer_ok(part) for part in head.split("|"))
+    return all(_consumer_ok(part, consumers) for part in head.split("|"))
 
 
 def _holds_multiple_statements(residue: str) -> bool:
@@ -259,44 +295,52 @@ def _body_inert(delimiter_quoted: bool, text: str) -> bool:
     return delimiter_quoted or not any(ch in text for ch in _EXPANSION_TRIGGERS)
 
 
-def _strip_bodies(command: str) -> str:
-    """Remove the first here-document body / here-string operand, or return
-    `command` unchanged on any doubt. Fail-closed is the safe direction here: the
-    caller then sees MORE text than the shell would, never less."""
-    out = []
+def _removal_regions(command: str, consumers: frozenset[str]) -> list[tuple[int, int, str]] | None:
+    """Locate every here-document / here-string construct removable under
+    clauses (i)-(iv), (vi) and (vii), as `(start, end, collapse_text)` triples
+    in command order -- `None` on any doubt, discarding whatever was found so
+    far, since the walk is all-or-nothing. This is the ONE construction-locating
+    walk `_strip_bodies` and `neutralize_heredoc_constructs` both apply; it never
+    itself decides what a span becomes, only where it is.
+
+    Mirrors `_strip_bodies`'s original character-by-character scan exactly --
+    same quote/backslash/comment handling, same doubt points -- except it
+    records spans instead of building output text, and clause (iv) is checked
+    against the caller's `consumers` rather than the module-level `CONSUMERS`.
+    A `<<<` records one region and the walk continues; a `<<`/`<<-` records two
+    regions (the operator+delimiter token, and the body+terminator line) and
+    the walk ends there, exactly as the original ends its scan at the first
+    `<<`/`<<-` it removes.
+    """
+    regions: list[tuple[int, int, str]] = []
     i = 0
     n = len(command)
     quote = None
     while i < n:
         c = command[i]
         if quote is None and c == "\\":
-            out.append(command[i:i + 2])
             i += 2
             continue
         if quote is None and c in "'\"":
             quote = c
-            out.append(c)
             i += 1
             continue
         if quote == '"' and c == "\\":
-            out.append(command[i:i + 2])
             i += 2
             continue
         if quote and c == quote:
             quote = None
-            out.append(c)
             i += 1
             continue
         if quote is None:
             if c == "#" and (i == 0 or command[i - 1] in " \t\n"):
                 j = command.find("\n", i)
                 j = n if j < 0 else j
-                out.append(command[i:j])
                 i = j
                 continue
             if command.startswith("<<<", i):
-                if not _pipeline_consumers_ok(command, i):
-                    return command
+                if not _pipeline_consumers_ok(command, i, consumers):
+                    return None
                 j = i + 3
                 while j < n and command[j] == " ":
                     j += 1
@@ -304,24 +348,24 @@ def _strip_bodies(command: str) -> str:
                     operand_quote = command[j]
                     k = command.find(operand_quote, j + 1)
                     if k == -1:
-                        return command
+                        return None
                     if not _body_inert(operand_quote == "'", command[j + 1:k]):
-                        return command
+                        return None
                     j = k + 1
                     if j < n and command[j] not in _WORD_END:
-                        return command  # quoted operand glued to more word
+                        return None  # quoted operand glued to more word
                 else:
                     start = j
                     while j < n and command[j] not in _WORD_END:
                         j += 1
                     if not _body_inert(False, command[start:j]):
-                        return command
-                out.append(" ")
+                        return None
+                regions.append((i, j, " "))
                 i = j
                 continue
             if command.startswith("<<", i):
-                if not _pipeline_consumers_ok(command, i):
-                    return command
+                if not _pipeline_consumers_ok(command, i, consumers):
+                    return None
                 j = i + 2
                 if j < n and command[j] == "-":
                     j += 1
@@ -329,10 +373,10 @@ def _strip_bodies(command: str) -> str:
                     j += 1
                 match = _DELIMITER_WORD.match(command[j:])
                 if not match:
-                    return command
+                    return None
                 backslash, open_quote, word, close_quote = match.groups()
                 if open_quote and open_quote != close_quote:
-                    return command
+                    return None
                 delimiter_quoted = bool(backslash) or bool(open_quote)
                 j += match.end()
                 # (vii) The delimiter must END here in bash's grammar too. Reading
@@ -341,7 +385,7 @@ def _strip_bodies(command: str) -> str:
                 # body -- and a fail-closed path guarding only the not-found case
                 # does not help, because a terminator IS found, at the wrong line.
                 if j < n and command[j] not in _WORD_END:
-                    return command
+                    return None
                 lines = command[j:].split("\n")
                 terminator = None
                 for index, line in enumerate(lines[1:], start=1):
@@ -349,15 +393,51 @@ def _strip_bodies(command: str) -> str:
                         terminator = index
                         break
                 if terminator is None:
-                    return command
+                    return None
                 if not _body_inert(delimiter_quoted, "\n".join(lines[1:terminator])):
-                    return command
-                out.append(lines[0])
-                out.append("\n" + "\n".join(lines[terminator + 1:]))
-                return "".join(out)
-        out.append(c)
+                    return None
+                # Region A: the operator+delimiter token itself (`<<'EOF'`).
+                # Region B: the body+terminator line, plus its trailing newline
+                # when one exists in `command` -- `lines[0]` (redirect targets
+                # etc. on the operator's own line) sits UNCOVERED between them
+                # and survives verbatim, exactly as the original left it.
+                line0_end = j + len(lines[0])
+                pre_len = len("\n".join(lines[:terminator + 1]))
+                pos_after_terminator = j + pre_len
+                body_end = pos_after_terminator + 1 if pos_after_terminator < n else pos_after_terminator
+                regions.append((i, j, ""))
+                regions.append((line0_end, body_end, "\n"))
+                return regions
         i += 1
-    return command if quote is not None else "".join(out)
+    return regions if quote is None else None
+
+
+def _apply_regions(command: str, regions: list[tuple[int, int, str]]) -> str:
+    """`command` with every `(start, end, collapse_text)` region replaced by its
+    `collapse_text`, and every byte outside a region copied verbatim."""
+    out = []
+    pos = 0
+    for start, end, collapse in regions:
+        out.append(command[pos:start])
+        out.append(collapse)
+        pos = end
+    out.append(command[pos:])
+    return "".join(out)
+
+
+def _blank_region(command: str, start: int, end: int) -> str:
+    """`command[start:end]` with every character replaced by a space, except an
+    original `\\n`, which stays a `\\n` -- length-preserving, unlike the collapse
+    text `_removal_regions` computes for removal."""
+    return "".join(ch if ch == "\n" else " " for ch in command[start:end])
+
+
+def _strip_bodies(command: str) -> str:
+    """Remove the first here-document body / here-string operand, or return
+    `command` unchanged on any doubt. Fail-closed is the safe direction here: the
+    caller then sees MORE text than the shell would, never less."""
+    regions = _removal_regions(command, CONSUMERS)
+    return command if regions is None else _apply_regions(command, regions)
 
 
 def strip_heredoc_bodies(command: str) -> str:
@@ -375,3 +455,47 @@ def strip_heredoc_bodies(command: str) -> str:
     if residue != command and _holds_multiple_statements(residue):
         return command
     return residue
+
+
+def neutralize_heredoc_constructs(command: str) -> str:
+    """`command` with every recognized here-document body / here-string operand
+    BLANKED (each character replaced with a space, an original `\\n` preserved),
+    or `command` verbatim when it falls outside the recognized shape. Unlike
+    `strip_heredoc_bodies`, length is always preserved, so a byte offset outside
+    a blanked span still means what it meant in `command`.
+
+    Answers WHERE a construct is, not whether its body may be trusted, so it
+    widens clause (iv) to `CONSUMERS | NON_SHELL_CONSUMERS` and drops clause (v)
+    (see the module docstring) -- a heredoc a later statement goes on to execute
+    is still hidden from `shlex`, because hiding it does not require trusting
+    it, only locating it.
+    """
+    consumers = CONSUMERS | NON_SHELL_CONSUMERS
+    if not _recognized(command, consumers):
+        return command
+    regions = _removal_regions(command, consumers)
+    if regions is None:
+        return command
+    out = []
+    pos = 0
+    for start, end, _collapse in regions:
+        out.append(command[pos:start])
+        out.append(_blank_region(command, start, end))
+        pos = end
+    out.append(command[pos:])
+    return "".join(out)
+
+
+def heredoc_construct_spans(command: str) -> list[tuple[int, int]]:
+    """`[(start, end), ...]` of every here-document / here-string construct
+    `neutralize_heredoc_constructs` would blank in `command`, in command order,
+    or `[]` when it falls outside the recognized shape. Same widened clause
+    (iv) and dropped clause (v) as the neutralizer -- this is its span view,
+    not the stricter `strip_heredoc_bodies` shape."""
+    consumers = CONSUMERS | NON_SHELL_CONSUMERS
+    if not _recognized(command, consumers):
+        return []
+    regions = _removal_regions(command, consumers)
+    if regions is None:
+        return []
+    return [(start, end) for start, end, _collapse in regions]
