@@ -185,8 +185,8 @@ _STATEMENT_END = ".;?!"
 #: expected and not a defect in this comment. The enumeration is recall-based, not
 #: exhaustive.
 #:
-#: Ten parts this commit's sweep examined move independently, at the granularity where each element can
-#: be mutated on its own:
+#: Ten parts this commit's sweep examined move independently, at the granularity where
+#: each element can be mutated on its own:
 #:
 #:   1. the opener anchor `(?:^|(?<=\s))` — present or absent — pinned by
 #:      `an earlier bold word must not supply the opener (round 7)`
@@ -212,16 +212,16 @@ _STATEMENT_END = ".;?!"
 #:  10. the literal colon separator `:` — pinned by
 #:      `the emphasised subject's separator is the colon alone (round 11)`
 #:
-#: The tempered token `(?:(?!\1).)+` tests whether `\1` begins AT THE CURRENT POSITION,
-#: not after it. In `**Subject,**`, the lookahead at the comma succeeds (the closer `**`
-#: does not begin there), so `.` consumes the comma and the token continues; the closer
-#: still reaches the colon-terminated subject and then `$`. Dropping the colon reddens
-#: the case because without it the head `**Subject,**` matches through to end-of-string.
-#: This is what makes the round-11 case a genuine control on the literal `:` rather than
-#: an artifact of the closer's behaviour. A review of this file reasoned the other way
-#: — that the comma is BEFORE the lookahead because `(?!\1)` precedes `.` — and
-#: concluded the case was vacuous; the trap is easy to fall into and this note exists to
-#: stop the next reader falling into it.
+#: The tempered token `(?:(?!\1).)+` tests whether `\1` begins AT the position it stands
+#: on, not at the next one. In `**Subject,**` the lookahead succeeds at the comma — the
+#: closer `**` does not begin there — so `.` consumes the comma and the token runs on,
+#: stopping only at the first `*` of the closer. The shipped rule then demands a literal
+#: `:` where that `*` stands, finds none, and refuses the line; drop the `:` and the same
+#: head matches through `\1$`, crediting `alpha`. That is why the round-11 case is a
+#: control on the literal `:` and not an artifact of the closer. A review of this file
+#: read the lookahead as testing the FOLLOWING character, concluded the token stops
+#: before the comma, and called the case vacuous — this note exists so the next reader
+#: does not repeat that trace.
 #:
 #: Round 8's sweep found nothing red when `(?<=\s)` widened to `(?<=[^*_])`, yet the two
 #: are not equivalent: bold `**Note**` is refused because its second `*` is immediately
