@@ -185,7 +185,7 @@ _STATEMENT_END = ".;?!"
 #: expected and not a defect in this comment. The enumeration is recall-based, not
 #: exhaustive.
 #:
-#: Ten parts of this regex move independently, at the granularity where each element can
+#: Ten parts this commit's sweep examined move independently, at the granularity where each element can
 #: be mutated on its own:
 #:
 #:   1. the opener anchor `(?:^|(?<=\s))` — present or absent — pinned by
@@ -211,6 +211,17 @@ _STATEMENT_END = ".;?!"
 #:      `the subject's colon must END the head, not sit back in it (round 7)`
 #:  10. the literal colon separator `:` — pinned by
 #:      `the emphasised subject's separator is the colon alone (round 11)`
+#:
+#: The tempered token `(?:(?!\1).)+` tests whether `\1` begins AT THE CURRENT POSITION,
+#: not after it. In `**Subject,**`, the lookahead at the comma succeeds (the closer `**`
+#: does not begin there), so `.` consumes the comma and the token continues; the closer
+#: still reaches the colon-terminated subject and then `$`. Dropping the colon reddens
+#: the case because without it the head `**Subject,**` matches through to end-of-string.
+#: This is what makes the round-11 case a genuine control on the literal `:` rather than
+#: an artifact of the closer's behaviour. A review of this file reasoned the other way
+#: — that the comma is BEFORE the lookahead because `(?!\1)` precedes `.` — and
+#: concluded the case was vacuous; the trap is easy to fall into and this note exists to
+#: stop the next reader falling into it.
 #:
 #: Round 8's sweep found nothing red when `(?<=\s)` widened to `(?<=[^*_])`, yet the two
 #: are not equivalent: bold `**Note**` is refused because its second `*` is immediately
