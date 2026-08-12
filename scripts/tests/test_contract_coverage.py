@@ -176,13 +176,30 @@ _STATEMENT_END = ".;?!"
 #: red when `$` was dropped — an element live in the rule and dead in every measurement,
 #: the same accident the terminator paragraph above records — so the case below pins it.
 #:
-#: Five parts of this regex move independently: the opener alternation and its lookbehind
-#: `(?<=\s)`, the tempered token `(?:(?!\1).)+`, the trailing `$`, and the closing
-#: backreference `\1` that makes the closer answer the opener. The anchor, the tempered
-#: token, and `$` are pinned by their own case above; the lookbehind's strength and the
-#: closing backreference were, until round 8, live in the rule and dead in every
-#: measurement — the same accident the terminator paragraph records, found this time in
-#: the subject-colon rule itself.
+#: Nine parts of this regex move independently, at the granularity where each element can
+#: be mutated on its own:
+#:
+#:   1. the opener anchor `(?:^|(?<=\s))` — present or absent — pinned by
+#:      `an earlier bold word must not supply the opener (round 7)`
+#:   2. the lookbehind's strength, `\s` vs `[^*_]` — pinned by
+#:      `the lookbehind admits an opener only after whitespace (round 8)`
+#:   3. the alternation's MEMBERSHIP — dropping `_+` reddens the round-6 case, dropping
+#:      `\*\*` reddens four
+#:   4. the alternation's ORDER — an EQUIVALENT MUTANT: `(\*|\*\*|_+)` behaves
+#:      identically, because the engine backtracks through the alternatives, so
+#:      `**Subject:**` fails on `\*` (the tempered token immediately meets the second `*`)
+#:      and then succeeds on `\*\*`. It is unpinnable by construction, and saying so is the
+#:      point: an unkillable mutant is a fact about the rule, not a gap in the cases
+#:   5. the `_+` quantifier — pinned by
+#:      `doubled-underscore emphasis closes a subject too (round 9)`
+#:   6. the tempered token `(?:(?!\1).)` vs `[^*_]` — pinned by the two round-7
+#:      admit-direction cases
+#:   7. the tempered token's quantifier, `+` vs `*` — pinned by
+#:      `an emphasised subject must not be empty (round 9)`
+#:   8. the closing backreference `\1` — pinned by
+#:      `balance: the closer must be the opener, not merely emphasis (round 8)`
+#:   9. the trailing `$` — pinned by
+#:      `the subject's colon must END the head, not sit back in it (round 7)`
 #:
 #: Round 8's sweep found nothing red when `(?<=\s)` widened to `(?<=[^*_])`, yet the two
 #: are not equivalent: bold `**Note**` is refused because its second `*` is immediately
@@ -190,7 +207,24 @@ _STATEMENT_END = ".;?!"
 #: — so for it the lookbehind alone stands between `- *Note* on the ledger:*`alpha`*` and
 #: a credit, the round-7 witness in italic dress. Freeing the closer — trailing `\1` to
 #: `(?:\*\*|\*|_+)` — was equally silent: balance is what refuses an unclosed italic
-#: opener answering for a bold closer.
+#: opener answering for a bold closer. Both were live in the rule and dead in every
+#: measurement — the same accident the terminator paragraph above records — until round 8
+#: pinned #2 and #8.
+#:
+#: Round 8 counted five parts and stopped there, missing #5 and #7: narrowing `_+` to `_`
+#: and relaxing the tempered token's `+` to `*` both reddened nothing at round 8's commit,
+#: and both were dismissed as reachable only by malformed markdown. Neither is. `_+` admits
+#: a run of underscores, so `__Subject:__` — standard markdown bold, no less legitimate
+#: than `**Subject:**` — closes a subject the narrowed rule would refuse; and a subject
+#: with no subject in it, `- **:** …`, is exactly the shape ordinary prose invites once the
+#: tempered token's `+` is read as `*`. The same contrived-input misjudgement round 7 made
+#: about `*Note*` and round 8 itself corrected recurred one round later, on a different
+#: axis.
+#:
+#: After this commit eight of the nine are pinned by their own case and the ninth (#4) is
+#: an equivalent mutant, so the sweep has no survivor left that is not provably
+#: behaviour-preserving. That is a fact about the sweep AT THIS COMMIT — tie any number
+#: cited here to the commit it was measured at, not a live count to be re-quoted unchecked.
 _EMPHASISED_SUBJECT_COLON_RE = re.compile(r"(?:^|(?<=\s))(\*\*|\*|_+)(?:(?!\1).)+:\1$")
 
 #: A code span is credited by its identifier TOKENS, never by substring containment:
@@ -315,6 +349,9 @@ _NAMING_CASES = (
     ("single-underscore emphasis closes a subject too (round 6)",
      "- _Subject:_ `alpha` — why it exists",
      {"alpha"}),
+    ("doubled-underscore emphasis closes a subject too (round 9)",
+     "- __Subject:__ `alpha` — why it exists",
+     {"alpha"}),
     ("sentence-boundary (the SKILL.md material_refs shape)",
      "- prose, and for the same reason. `alpha` — why it exists",
      {"alpha"}),
@@ -353,6 +390,9 @@ _NAMING_CASES = (
      set()),
     ("balance: the closer must be the opener, not merely emphasis (round 8)",
      "- *Subject:**`alpha`** — why it exists",
+     set()),
+    ("an emphasised subject must not be empty (round 9)",
+     "- **:** `alpha` — why it exists",
      set()),
     ("an emphasised subject may hold an identifier (round 7)",
      "- **A `knowledge_refs` note:** `alpha` — why it exists",
