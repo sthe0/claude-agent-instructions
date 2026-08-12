@@ -79,10 +79,6 @@ def run_hook(core, command: str, cwd) -> subprocess.CompletedProcess:
     )
 
 
-def _denied(proc) -> bool:
-    return proc.returncode == 0 and '"permissionDecision": "deny"' in proc.stdout
-
-
 def _allowed(proc) -> bool:
     return proc.returncode == 0 and proc.stdout.strip() == ""
 
@@ -118,6 +114,10 @@ def test_apostrophe_in_persisted_heredoc_body_does_not_break_lexing():
         "python3 /tmp/x.md"
     )
     neutralized = shell_tokens.neutralize_heredoc_constructs(cmd)
+    # Length preservation is the property the whole span/offset API rests on:
+    # the neutralizer blanks a region in place, so every byte offset outside it
+    # still means what it meant in the original command.
+    assert len(neutralized) == len(cmd), (len(neutralized), len(cmd))
     tokens = shlex.split(neutralized)  # must not raise
     assert "python3" in tokens, tokens
     assert "/tmp/x.md" in tokens, tokens

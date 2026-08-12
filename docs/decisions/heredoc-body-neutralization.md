@@ -30,16 +30,24 @@ Command run from the worktree root:
 grep -rn "strip_heredoc_bodies\|command_write_targets\|shell_tokens\|bash_write_targets" --include='*.py' scripts/
 ```
 
-Output and classification:
+Output, captured verbatim at revision `de5fae1b84642658a3f8587851b4820556df9d03` (31 hits). The last
+three hits are this commit's own new test module, so the same command against `main` returns 28:
 
 ```
-scripts/hook-guard-canon-readonly.py:38:inspected (`lib/shell_tokens.py`), so a Markdown blockquote line inside a
+scripts/hook-guard-canon-readonly.py:38:inspected (`lib/shell_tokens.py`), so a Markdown blockquote line inside a body is
 scripts/hook-guard-canon-readonly.py:60:from lib import bash_write_targets, config_root, git_cwd, shell_tokens  # noqa: E402
 scripts/hook-guard-canon-readonly.py:227:    `cp`/`mv` targets) lives in `lib/bash_write_targets.py`, which knows nothing
 scripts/hook-guard-canon-readonly.py:232:    for candidate in bash_write_targets.command_write_targets(command, eff_cwd):
 scripts/hook-guard-canon-readonly.py:348:        command = shell_tokens.strip_heredoc_bodies(command)
 scripts/tests/test_no_semantic_unguarded.py:97:        "one-hop transitive import lib.shell_tokens carries only "
-scripts/lib/shell_tokens.py:363:def strip_heredoc_bodies(command: str) -> str:
+scripts/tests/test_guard_canon_bash_writes.py:389:    Both call shapes are matched. `shell_tokens.strip_heredoc_bodies(...)` parses
+scripts/tests/test_guard_canon_bash_writes.py:391:    `from lib.shell_tokens import strip_heredoc_bodies` parses to an `ast.Name` —
+scripts/tests/test_guard_canon_bash_writes.py:401:            (isinstance(node.func, ast.Attribute) and node.func.attr == "strip_heredoc_bodies")
+scripts/tests/test_guard_canon_bash_writes.py:402:            or (isinstance(node.func, ast.Name) and node.func.id == "strip_heredoc_bodies")
+scripts/lib/permission_entry_match.py:42:from .bash_write_targets import _BASH_SEPS, split_segments
+scripts/tests/test_heredoc_body_neutralization.py:37:from lib import shell_tokens  # noqa: E402
+scripts/tests/test_heredoc_body_neutralization.py:109:    `strip_heredoc_bodies` (clause (v): the residue holds two statements) —
+scripts/tests/test_heredoc_body_neutralization.py:120:    neutralized = shell_tokens.neutralize_heredoc_constructs(cmd)
 scripts/tests/test_shell_tokens_nonwidening.py:1:"""Differential oracle for `lib/shell_tokens.strip_heredoc_bodies`: real bash is
 scripts/tests/test_shell_tokens_nonwidening.py:64:from lib import shell_tokens  # noqa: E402
 scripts/tests/test_shell_tokens_nonwidening.py:505:        stripped = shell_tokens.strip_heredoc_bodies(raw)
@@ -51,16 +59,12 @@ scripts/tests/test_shell_tokens_nonwidening.py:576:        shell_tokens._body_in
 scripts/tests/test_shell_tokens_nonwidening.py:578:            residue = shell_tokens._strip_bodies(command)
 scripts/tests/test_shell_tokens_nonwidening.py:580:            shell_tokens._body_inert = saved
 scripts/tests/test_shell_tokens_nonwidening.py:581:        if residue != command and shell_tokens._holds_multiple_statements(residue):
-scripts/tests/test_guard_canon_bash_writes.py:389:    Both call shapes are matched. `shell_tokens.strip_heredoc_bodies(...)` parses
-scripts/tests/test_guard_canon_bash_writes.py:391:    `from lib.shell_tokens import strip_heredoc_bodies` parses to an `ast.Name` —
-scripts/tests/test_guard_canon_bash_writes.py:401:            (isinstance(node.func, ast.Attribute) and node.func.attr == "strip_heredoc_bodies")
-scripts/tests/test_guard_canon_bash_writes.py:402:            or (isinstance(node.func, ast.Name) and node.func.id == "strip_heredoc_bodies")
 scripts/lib/bash_write_targets.py:15:`lib/shell_tokens.py` before tokenizing, so a Markdown blockquote line inside a
 scripts/lib/bash_write_targets.py:23:from . import shell_tokens
 scripts/lib/bash_write_targets.py:148:def command_write_targets(command: str, eff_cwd: str) -> list[str]:
 scripts/lib/bash_write_targets.py:151:    here-string bodies first (`lib/shell_tokens.py`) so a line of body text is
 scripts/lib/bash_write_targets.py:154:    command = shell_tokens.strip_heredoc_bodies(command)
-scripts/lib/permission_entry_match.py:42:from .bash_write_targets import _BASH_SEPS, split_segments
+scripts/lib/shell_tokens.py:363:def strip_heredoc_bodies(command: str) -> str:
 ```
 
 Classification of every hit:
@@ -98,6 +102,10 @@ Classification of every hit:
   an AST gate asserting exactly one `strip_heredoc_bodies` call site inside `decide()`.
   **CHANGED** in stage 2: must assert the new function name instead, or it passes vacuously once the
   call site is renamed away.
+- `scripts/tests/test_heredoc_body_neutralization.py` lines 37, 109 and 120 — this commit's own new
+  test module, which is why the capture holds 31 hits where `main` holds 28. **SELF-REFERENCE, not a
+  consumer to migrate:** it is the regression suite the fix must turn GREEN, and its line 120 already
+  names `neutralize_heredoc_constructs`, the function stage 2 introduces.
 
 No other hit exists. The claim "no other consumer is affected" rests on this enumeration, not on
 recall.
@@ -115,12 +123,29 @@ Recorded here for stage 2 to act on:
   `grep -cE '<<<.*<<[^<]'` both return `0` against the file, and all six of its two-operator cases are
   `<< <<`, which the stripper leaves verbatim (clause (v) rejects the two-statement residue). That
   shape gap, not the corpus size, is what stage 2's D1a generated grid closes.
+  Its rename risk is subtler than a symbol name and must be handled explicitly. The oracle measures a
+  *differential* — real bash's behaviour against `guard_denies(raw)` versus `guard_denies(stripped)` —
+  and once `decide()` neutralizes internally, `raw` and `stripped` both travel the same neutralizing
+  path, so the differential stops measuring the transformation the hook actually ships while remaining
+  perfectly green. Renaming the symbol it calls is therefore not enough: the oracle must be re-pointed
+  at whichever function the hook now applies, so that what it compares is still the shipped transform.
 - `scripts/tests/test_no_semantic_unguarded.py` — its pinned entry `c66f1c838758119e` justifies
   `hook-guard-canon-readonly.py` as structural on the ground that "its one-hop transitive import
   `lib.shell_tokens` carries only shell-token-syntax regexes ... never natural-language meaning".
   Re-verify that ground holds after stage 2: a word-identity allowlist (`NON_SHELL_CONSUMERS`) is not
   a natural-language regex, so it should, but the id is content-derived and may need re-stamping if
   the docstring changes.
+- `scripts/tests/test_guard_canon_bash_writes.py`, function
+  `test_heredoc_body_executed_by_later_statement_still_denies` (line 319) — the one gate that does not
+  merely go vacuous but **inverts**. It asserts DENY on
+  `cat <<'EOF' > /tmp/s.sh` / `echo x > scripts/existing.py` / `EOF` / `bash /tmp/s.sh`, i.e. on
+  precisely the shape stage 2 trades away: an inert consumer PERSISTS a body that a later statement
+  then executes. That trade is already named as accepted consequence #1 in the plan, on the ground that
+  the guard cannot follow data through the filesystem into a second process and today's DENY is an
+  accident of clause (v) rather than a reasoned protection. Stage 2 must invert this test to assert
+  ALLOW **and cite the accepted consequence in its docstring**, so the record shows a DENY-to-ALLOW
+  change that was decided, not one that was absorbed while a green suite hid it. Silently deleting or
+  weakening it is a blocking defect.
 
 ## Questions answered
 
