@@ -176,7 +176,16 @@ _STATEMENT_END = ".;?!"
 #: red when `$` was dropped — an element live in the rule and dead in every measurement,
 #: the same accident the terminator paragraph above records — so the case below pins it.
 #:
-#: Nine parts of this regex move independently, at the granularity where each element can
+#: This list is the set of independently-movable parts of the regex that a mutation sweep
+#: at this commit examined, each with its own red case demonstrating the part matters. It
+#: is not a claim that there exists no eleventh part — a universal assertion about
+#: completeness cannot be established by enumerating the parts a particular sweep happened
+#: to test. Rounds 5, 7, 9, and 11 each found a part the previous round's count had missed;
+#: the list grows as reviews continue, and finding another in a later round is therefore
+#: expected and not a defect in this comment. The enumeration is recall-based, not
+#: exhaustive.
+#:
+#: Ten parts of this regex move independently, at the granularity where each element can
 #: be mutated on its own:
 #:
 #:   1. the opener anchor `(?:^|(?<=\s))` — present or absent — pinned by
@@ -200,6 +209,8 @@ _STATEMENT_END = ".;?!"
 #:      `balance: the closer must be the opener, not merely emphasis (round 8)`
 #:   9. the trailing `$` — pinned by
 #:      `the subject's colon must END the head, not sit back in it (round 7)`
+#:  10. the literal colon separator `:` — pinned by
+#:      `the emphasised subject's separator is the colon alone (round 11)`
 #:
 #: Round 8's sweep found nothing red when `(?<=\s)` widened to `(?<=[^*_])`, yet the two
 #: are not equivalent: bold `**Note**` is refused because its second `*` is immediately
@@ -221,10 +232,11 @@ _STATEMENT_END = ".;?!"
 #: about `*Note*` and round 8 itself corrected recurred one round later, on a different
 #: axis.
 #:
-#: After this commit eight of the nine are pinned by their own case and the ninth (#4) is
-#: an equivalent mutant, so the sweep has no survivor left that is not provably
-#: behaviour-preserving. That is a fact about the sweep AT THIS COMMIT — tie any number
-#: cited here to the commit it was measured at, not a live count to be re-quoted unchecked.
+#: After this commit, nine of the ten are pinned by their own case and the tenth (#4) is
+#: an equivalent mutant. This accounts for every part the sweep examined: each is either
+#: independently pinned or provably equivalent. That is a fact about the sweep AT THIS
+#: COMMIT — tie any number cited here to the commit it was measured at, not a live count to
+#: be re-quoted unchecked.
 _EMPHASISED_SUBJECT_COLON_RE = re.compile(r"(?:^|(?<=\s))(\*\*|\*|_+)(?:(?!\1).)+:\1$")
 
 #: A code span is credited by its identifier TOKENS, never by substring containment:
@@ -393,6 +405,9 @@ _NAMING_CASES = (
      set()),
     ("an emphasised subject must not be empty (round 9)",
      "- **:** `alpha` — why it exists",
+     set()),
+    ("the emphasised subject's separator is the colon alone (round 11)",
+     "- **Subject,** `alpha` — why it exists",
      set()),
     ("an emphasised subject may hold an identifier (round 7)",
      "- **A `knowledge_refs` note:** `alpha` — why it exists",
