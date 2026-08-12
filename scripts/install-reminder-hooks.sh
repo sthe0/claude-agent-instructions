@@ -129,12 +129,13 @@ DESIRED = [
     # stay deterministic. Fail-open otherwise.
     ("PreToolUse",       "Edit|Write", "hook-guard-canon-readonly.py", 5),
     ("PreToolUse",       "Bash",  "hook-guard-canon-readonly.py", 5),
-    # Hard gate: deny a call that widens the agent's own `permissions.allow`
-    # surface (judged by JSON shape, never by filename) while a permission-layer
-    # denial already stands in this session AND at least one added entry would
-    # have covered a denied call. Absent any one of the three conjuncts it
-    # allows — approval of a plan sanctions an action, never a widening of the
-    # rules that judge the action.
+    # Hard gate: deny a call that widens the agent's own permission surface — an
+    # entry ADDED to `permissions.allow` or REMOVED from `permissions.deny`, by
+    # JSON shape, never by filename — while a permission denial already stands in
+    # this session. FAIL-CLOSED: it allows only where it has ESTABLISHED a
+    # conjunct false (no widening / no arming denial / no added entry covering a
+    # denied call); one it cannot EVALUATE denies. Approval of a plan sanctions an
+    # action, never a widening of the rules that judge the action.
     ("PreToolUse",       "Edit|Write", "hook-guard-permission-self-grant.py", 5),
     ("PreToolUse",       "Bash",  "hook-guard-permission-self-grant.py", 5),
     ("PostToolUse",      "Write", "hook-self-critique-reminder.py",  5),
