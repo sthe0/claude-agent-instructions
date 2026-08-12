@@ -137,9 +137,9 @@ GATE_BEARING_HOOKS: "tuple[tuple[str, str], ...]" = (
      "the Stop-event guardian shell; absent, no turn-boundary obligation "
      "(self-improvement engagement, resolution) is ever blocked on"),
     ("hook-guard-permission-self-grant.py",
-     "denies a call that widens the agent's own permission surface while a "
-     "permission denial stands in the session; absent, a self-grant proceeds "
-     "silently and the widened entry outlives the task"),
+     "fail-closed: allows only where it has established one of its conjuncts "
+     "false; absent, a self-grant proceeds silently and the widened entry "
+     "outlives the task"),
 )
 
 # The TIMEOUT axis: how long a registration must be allowed to run.

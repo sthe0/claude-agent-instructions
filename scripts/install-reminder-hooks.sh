@@ -130,12 +130,9 @@ DESIRED = [
     ("PreToolUse",       "Edit|Write", "hook-guard-canon-readonly.py", 5),
     ("PreToolUse",       "Bash",  "hook-guard-canon-readonly.py", 5),
     # Hard gate: deny a call that widens the agent's own permission surface — an
-    # entry ADDED to `permissions.allow` or REMOVED from `permissions.deny`, by
-    # JSON shape, never by filename — while a permission denial already stands in
-    # this session. FAIL-CLOSED: it allows only where it has ESTABLISHED a
-    # conjunct false (no widening / no arming denial / no added entry covering a
-    # denied call); one it cannot EVALUATE denies. Approval of a plan sanctions an
-    # action, never a widening of the rules that judge the action.
+    # entry ADDED to `permissions.allow` or REMOVED from `permissions.deny` — in
+    # response to a denial this session already hit. FAIL-CLOSED: allows only on
+    # an ESTABLISHED-false conjunct. Detail: hook-guard-permission-self-grant.py.
     ("PreToolUse",       "Edit|Write", "hook-guard-permission-self-grant.py", 5),
     ("PreToolUse",       "Bash",  "hook-guard-permission-self-grant.py", 5),
     ("PostToolUse",      "Write", "hook-self-critique-reminder.py",  5),

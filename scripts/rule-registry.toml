@@ -53,6 +53,9 @@
 ##                    marker ("structured_hook"/"harness"): why no firing of this
 ##                    rule is countable from the transcript. Empty for the
 ##                    marker-bearing kinds, whose delivery_marker IS the count.
+##                    Not applicable to tier 0 (kernel) rules: they carry no
+##                    delivery_kind at all - rule-salience-report.py:133 gates the
+##                    whole delivery_kind/uninstrumented_reason check on tier != 0.
 ##
 ## Enumerated from the CLAUDE.md text at commit e7006be (stage 3 HEAD), 217 lines.
 
@@ -376,8 +379,8 @@ locator_phrase = "never the agent's own permission surface"
 kernel_reason = ""
 delivery_kind = "structured_hook"
 delivery_marker = ""
-delivery_note = "hook-guard-permission-self-grant.py, a PreToolUse gate on Edit|Write and Bash. Three conjuncts: (a) the call widens a permission surface - an entry ADDED to permissions.allow or REMOVED from permissions.deny, by JSON shape, never by filename; (b) a denial of an arming kind already stands in this session; (c) an added entry would have covered a denied call. FAIL-CLOSED (_ON_ERROR = deny): it allows only where it has ESTABLISHED a conjunct false, so a conjunct it cannot EVALUATE refuses instead. (c) narrows nothing on the Bash and NotebookEdit limbs, which have no before/after pair to diff - any write onto a live surface denies; nor when the transcript can no longer resolve the denied call (tool_name is None - fail toward covering). Broader than the hook only where no modelled tool is involved."
-uninstrumented_reason = "Neither direction is countable PER GATE. On the ALLOW path a PreToolUse hook that permits a call logs no firing signal at all (registry header, structured_hook). On the DENY path the text IS greppable in a toolDenialKind transcript row, but carries no per-gate attribution: `permission-rule` is the OTHERWISE branch of the client's denial mapper, so every deny-capable hook in this repo lands in that one bucket and the field distinguishing a harness-allowlist refusal from a hook-origin deny is discarded before the row is written - lib/denial_arming.py:89-92."
+delivery_note = "hook-guard-permission-self-grant.py, a PreToolUse gate on Edit|Write and Bash. Three conjuncts: (a) the call widens a permission surface - an entry ADDED to permissions.allow OR REMOVED from permissions.deny, by JSON shape, never by filename; (b) a denial of an arming kind already stands in this session; (c) an added entry would have covered a denied call. FAIL-CLOSED (_ON_ERROR = deny): it allows only where it has ESTABLISHED a conjunct false, so a conjunct it cannot EVALUATE refuses instead."
+uninstrumented_reason = "Neither direction is countable PER GATE. On the ALLOW path a PreToolUse hook that permits a call logs no firing signal at all (registry header, structured_hook). On the DENY path the text IS greppable in a toolDenialKind transcript row, but carries no per-gate attribution: the row does not name which hook produced the deny."
 
 [[rule]]
 id = "unknown-tool-lookup-budget"
