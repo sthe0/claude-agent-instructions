@@ -183,8 +183,8 @@ _STATEMENT_END = ".;?!"
 #:      `an earlier bold word must not supply the opener (round 7)`
 #:   2. the lookbehind's strength, `\s` vs `[^*_]` — pinned by
 #:      `the lookbehind admits an opener only after whitespace (round 8)`
-#:   3. the alternation's MEMBERSHIP — dropping `_+` reddens the round-6 case, dropping
-#:      `\*\*` reddens four
+#:   3. the alternation's MEMBERSHIP — dropping `_+` reddens both underscore cases
+#:      (round 6 and round 9), dropping `\*\*` reddens four
 #:   4. the alternation's ORDER — an EQUIVALENT MUTANT: `(\*|\*\*|_+)` behaves
 #:      identically, because the engine backtracks through the alternatives, so
 #:      `**Subject:**` fails on `\*` (the tempered token immediately meets the second `*`)
