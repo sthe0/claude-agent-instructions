@@ -10,12 +10,18 @@ Two halves, split along the structural/semantic seam
 
   * STRUCTURAL — decidable, and BLOCKS. Every `verify_command` and every
     `final_check[*].command` containing `--deselect` is a SITE. A site
-    DESELECTS the node ids named after each `--deselect` flag. A node is
-    GUARDED when the command contains a single-node pytest invocation naming
-    that node whose exit status is captured into a variable and compared to
-    exactly 1 in a conjunct PRECEDING the deselecting run — bound through the
-    same variable name the invocation assigned, so a bare "-eq 1" anywhere in
-    the command cannot pass as a guard for every node it contains. A site
+    DESELECTS the node ids named after each `--deselect` flag, in either the
+    `--deselect <node>` or the `--deselect=<node>` spelling; an occurrence in
+    neither spelling is itself a violation naming the site, never a silent
+    skip — a site whose every occurrence went unread would otherwise deselect
+    an unbounded set and report a clean, empty one. A node is GUARDED when
+    the command contains a single-node pytest invocation naming that node —
+    a node id, which carries `::`, not a directory — whose exit status is
+    captured into a variable and compared to exactly 1, in a conjunct that
+    reaches the deselecting run through `&&` alone, so that the node being
+    red is what lets that run happen. The binding is through the same
+    variable name the invocation assigned, so a bare "-eq 1" anywhere in the
+    command cannot pass as a guard for every node it contains. A site
     deselecting a node it does not guard, guarding a node it does not
     deselect, or naming a node set that disagrees with another site's, is a
     violation.
@@ -27,11 +33,14 @@ Two halves, split along the structural/semantic seam
     same thing without a numeral and is invisible to a cardinality filter
     alone. It only REPORTS, printed untruncated with field and line, every
     count DERIVED from the enumeration and never written into a format
-    string, and it always exits 0 regardless of what it finds: a machine
-    judging whether a sentence ASSERTS a count (the defect) rather than
-    merely counting beside a full list (permitted) would be a regex
-    adjudicating meaning, the anti-pattern this repository refuses. Its value
-    is bounding what a reader must read, not deciding it for them.
+    string, and it always exits 0 regardless of what it finds — a failure
+    inside the sweep itself degrades to a "sweep unavailable" line rather
+    than a traceback, so the reading cannot change the verdict on any path
+    and not merely on every reading. A machine judging whether a sentence
+    ASSERTS a count (the defect) rather than merely counting beside a full
+    list (permitted) would be a regex adjudicating meaning, the anti-pattern
+    this repository refuses. Its value is bounding what a reader must read,
+    not deciding it for them.
 
 Accepts a single plan path, on the same CLI shape as check-order-coverage.py,
 whose structural half this script mirrors.
@@ -49,9 +58,9 @@ from agentctl.plan import PlanError, load_plan  # noqa: E402
 
 # --- structural half -----------------------------------------------------
 
-_DESELECT_RE = re.compile(r"--deselect\s+(?P<node>\S+?)(?=\s|;|\}|$)")
+_DESELECT_RE = re.compile(r"--deselect(?:\s+|=)(?P<node>\S+?)(?=\s|;|\}|$)")
 _GUARD_INVOCATION_RE = re.compile(
-    r"pytest\s+(?P<node>\S+?)\s+-q\s*>\s*/dev/null\s+2>&1;\s*(?P<var>\w+)=\$\?"
+    r"pytest\s+(?P<node>\S+::\S+?)\s+-q\s*>\s*/dev/null\s+2>&1;\s*(?P<var>\w+)=\$\?"
 )
 _GUARD_COMPARISON_RE = re.compile(r"test\s+\$(?P<var>\w+)\s+-eq\s+(?P<val>\d+)")
 
@@ -74,9 +83,21 @@ def _deselected_nodes(command: str) -> list[str]:
     return [m.group("node") for m in _DESELECT_RE.finditer(command)]
 
 
+def _reaches_deselect_conjunctively(command: str, start: int, first_deselect: int) -> bool:
+    """Whether everything between a guard comparison ending at `start` and the
+    deselecting run is an `&&` chain. A comparison whose result a `;` discards,
+    or a `||` diverts, does not decide whether the deselecting run happens, so
+    it proves nothing about the node — textual precedence is not the property."""
+    if start > first_deselect:
+        return False
+    between = command[start:first_deselect]
+    return between.lstrip().startswith("&&") and ";" not in between and "||" not in between
+
+
 def _guarded_nodes(command: str) -> set[str]:
     """Node ids whose exit status is captured into a variable and compared to
-    exactly 1, in a conjunct preceding the first `--deselect` in `command`."""
+    exactly 1, in a conjunct reaching the first `--deselect` in `command`
+    through `&&`."""
     first_deselect = command.find("--deselect")
     prefix = command if first_deselect == -1 else command[:first_deselect]
     captured = {
@@ -87,8 +108,11 @@ def _guarded_nodes(command: str) -> set[str]:
         if m.group("val") != "1":
             continue
         node = captured.get(m.group("var"))
-        if node is not None:
-            guarded.add(node)
+        if node is None:
+            continue
+        if not _reaches_deselect_conjunctively(command, m.end(), first_deselect):
+            continue
+        guarded.add(node)
     return guarded
 
 
@@ -106,6 +130,15 @@ def structural_violations(doc) -> list[str]:
     union: frozenset[str] = frozenset().union(*(nodes for nodes, _ in per_site.values()))
 
     out: list[str] = []
+    for label, cmd in sorted(sites):
+        occurrences = cmd.count("--deselect")
+        named = len(_deselected_nodes(cmd))
+        if named != occurrences:
+            out.append(
+                f"{label}: {occurrences} `--deselect` occurrence(s) but only "
+                f"{named} name a node this resolver can read — an unrecognised "
+                f"spelling is a failure, never a silent skip"
+            )
     for label, (nodes, _guarded) in sorted(per_site.items()):
         if nodes != union:
             out.append(
@@ -116,7 +149,7 @@ def structural_violations(doc) -> list[str]:
         for node in sorted(nodes - guarded):
             out.append(
                 f"{label}: deselects {node!r} without a guard proving it exits "
-                f"1 in a conjunct preceding the deselecting run"
+                f"1 in a conjunct reaching the deselecting run through `&&`"
             )
         for node in sorted(guarded - nodes):
             out.append(f"{label}: guards {node!r} (proven exit 1) but never deselects it")
@@ -224,10 +257,21 @@ def main(argv: list[str]) -> int:
 
     violations = structural_violations(doc)
 
-    hits = semantic_report(Path(plan_path))
-    print(f"SEMANTIC SWEEP — {len(hits)} candidate sentence(s) to read in {plan_path}:")
-    for label, lineno, sentence in hits:
-        print(f"  {label} (line {lineno}): {sentence}")
+    # Blanket except: the sweep re-reads the plan's raw text independently of
+    # load_plan, and "the reading can never change the verdict" has to hold on
+    # every path — a decode error or an I/O race inside a report-only half must
+    # not become this process's exit code, nor suppress the FAIL block below.
+    try:
+        hits = semantic_report(Path(plan_path))
+    except Exception as exc:
+        print(
+            f"SEMANTIC SWEEP — unavailable for {plan_path} "
+            f"({exc.__class__.__name__}: {exc}); report-only, verdict unaffected"
+        )
+    else:
+        print(f"SEMANTIC SWEEP — {len(hits)} candidate sentence(s) to read in {plan_path}:")
+        for label, lineno, sentence in hits:
+            print(f"  {label} (line {lineno}): {sentence}")
 
     if violations:
         print(
