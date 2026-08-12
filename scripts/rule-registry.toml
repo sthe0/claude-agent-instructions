@@ -379,8 +379,8 @@ locator_phrase = "never the agent's own permission surface"
 kernel_reason = ""
 delivery_kind = "structured_hook"
 delivery_marker = ""
-delivery_note = "hook-guard-permission-self-grant.py, a PreToolUse gate on Edit|Write and Bash. Three conjuncts: (a) the call widens a permission surface - an entry ADDED to permissions.allow OR REMOVED from permissions.deny, by JSON shape, never by filename; (b) a denial of an arming kind already stands in this session; (c) an added entry would have covered a denied call. FAIL-CLOSED (_ON_ERROR = deny): it allows only where it has ESTABLISHED a conjunct false, so a conjunct it cannot EVALUATE refuses instead."
-uninstrumented_reason = "Neither direction is countable PER GATE. On the ALLOW path a PreToolUse hook that permits a call logs no firing signal at all (registry header, structured_hook). On the DENY path the text IS greppable in a toolDenialKind transcript row, but carries no per-gate attribution: the row does not name which hook produced the deny."
+delivery_note = "hook-guard-permission-self-grant.py, a PreToolUse gate on Edit|Write and Bash. Three conjuncts: (a) the call widens a permission surface - an entry ADDED to permissions.allow OR REMOVED from permissions.deny, by JSON shape, never by filename; (b) a denial of an arming kind already stands in this session; (c) an added entry would have covered a denied call. FAIL-CLOSED (_ON_ERROR = deny): a conjunct it cannot EVALUATE refuses instead of allowing."
+uninstrumented_reason = "The ALLOW path is not countable PER GATE: a PreToolUse hook that permits a call logs no firing signal at all (registry header, structured_hook). The DENY path is untested rather than settled - the deny text IS greppable in a toolDenialKind transcript row, but no live-captured hook-origin denial is on record to show what such a row attributes; the one fixture shaped from a real refusal is a harness allowlist refusal, which had no hook to name."
 
 [[rule]]
 id = "unknown-tool-lookup-budget"

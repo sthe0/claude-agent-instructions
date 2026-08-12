@@ -87,9 +87,9 @@ _MAX_TRANSCRIPT_BYTES = 512 * 1024 * 1024
 # fails toward ALLOW; that is a named limit in the gate's module docstring.
 #
 # `permission-rule` being the OTHERWISE branch is also why the gate needs its
-# conjunct (c): every deny-capable PreToolUse hook in this repo lands in that
-# one bucket, and the field that would tell a harness-allowlist refusal from a
-# hook-origin deny is discarded before the transcript row is written.
+# conjunct (c): the kind alone does not tell a harness-allowlist refusal from a
+# hook-origin deny, and no live-captured hook-origin row is on record to say
+# what one carries.
 _ARMING_KINDS = frozenset({
     "permission-rule",   # a hard deny -- the harness allowlist or one of this repo's own hooks
     "user-rejected",     # the harness's interactive allow/deny prompt was answered "no"
