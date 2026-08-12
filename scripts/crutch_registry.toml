@@ -6168,6 +6168,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "b31b6c8e4db2b98a"
+domain = "code"
+file = "scripts/tests/test_shell_tokens_nonwidening.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "647aa89ee786ac4e"
 domain = "code"
 file = "scripts/tests/test_shell_tokens_nonwidening.py"

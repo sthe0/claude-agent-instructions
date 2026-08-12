@@ -47,6 +47,7 @@ construction is disqualified by clause (ii) anyway.
 from __future__ import annotations
 
 import importlib.util
+import itertools
 import os
 import shlex
 import shutil
@@ -62,7 +63,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 HOOK_SCRIPT = SCRIPTS_DIR / "hook-guard-canon-readonly.py"
 
 sys.path.insert(0, str(SCRIPTS_DIR))
-from lib import shell_tokens  # noqa: E402
+from lib import bash_write_targets, shell_tokens  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location("guard_hook_under_test", HOOK_SCRIPT)
 guard_hook = importlib.util.module_from_spec(_spec)
@@ -686,43 +687,216 @@ def test_strip_and_neutralize_agree_on_command_line_tokens():
         )
 
 
-ACTED_FLOOR_TEE = 4
-ACTED_FLOOR_NON_SHELL = 4
+# Floors on the D1a grid below, all four measured against the grid this file
+# actually generates (234 cells) and re-measured whenever an axis changes.
+#
+# The three ACTED_ floors count cells `neutralize_heredoc_constructs` acts on,
+# one per value clause (iv) can take, and pin CLASS MEMBERSHIP: the widened
+# allowlist really does reach a `NON_SHELL_CONSUMERS`-only name, and really
+# does not reach a name on neither list. They cannot catch a narrowed producer
+# -- the neutralizer acts as soon as the walk finds ONE construct, so dropping
+# every construct after the first leaves all three counts untouched.
+# STRIPPED_FLOOR_TEE is the floor that can: `strip_heredoc_bodies` keeps clause
+# (v), so a walk that stops early leaves the later constructs' body lines in
+# the residue, the multi-statement check rejects it, and the count falls (30 ->
+# 18 measured, against the reviewer's `return regions` narrowing of the `<<<`
+# branch). Two different questions, deliberately two different numbers.
+ACTED_FLOOR_TEE = 78
+ACTED_FLOOR_NON_SHELL = 78
 ACTED_FLOOR_UNKNOWN = 0
+STRIPPED_FLOOR_TEE = 30
+
+# The same stripper measurement, split by construct count -- asserted EXACTLY,
+# not as a floor, because the split is where the grammar claim lives: a
+# construction is strippable iff the walk reaches every construct in it, which
+# (clause (v) rejecting the leftover body lines of a walk that stopped early)
+# happens iff at most ONE of its operators is a `<<`/`<<-`. That is 3 of 3
+# sequences at count 1, 5 of 9 at count 2 and 7 of 27 at count 3, each doubled
+# by the operand axis. A bare sum would let a loss at one count hide behind a
+# gain at another.
+STRIPPED_ACTED_BY_COUNT = {1: 6, 2: 10, 3: 14}
 
 # One class per value clause (iv) can take for `neutralize_heredoc_constructs`:
 # a plain `CONSUMERS` member, a `NON_SHELL_CONSUMERS`-only member, and a name
-# on neither.
-_GRID_CONSUMERS = {"tee": "tee", "non_shell": "python3", "unknown": "curl"}
+# on neither. `myunknowncmd` rather than a real-but-unlisted binary (`curl`,
+# say): the unknown class is asserted at EXACTLY zero, so it must rest on a
+# name that cannot quietly join `CONSUMERS` one day and turn a real assertion
+# into a vacuous one.
+_GRID_CONSUMERS = {"tee": "tee", "non_shell": "python3", "unknown": "myunknowncmd"}
 
-_GRID_BODIES = [
+# The three operator forms, and every ORDERED sequence of one, two or three of
+# them -- 3 + 9 + 27 = 39. Ordered, not "the same form repeated": bash's
+# grammar is asymmetric (unbounded `<<<` repetitions, then at most ONE
+# `<<`/`<<-`, which ends the walk), so `<<<` then `<<` and `<<` then `<<<` are
+# different constructions and only a mixed sequence exercises the difference.
+_GRID_FORMS = ("<<", "<<-", "<<<")
+_GRID_SEQUENCES = tuple(
+    seq
+    for count in (1, 2, 3)
+    for seq in itertools.product(_GRID_FORMS, repeat=count)
+)
+
+# Body shapes, rotated across the generated constructs rather than crossed as a
+# fifth axis: each is a shape whose MISREADING as command-line syntax is the
+# whole point of the neutralizer (a redirect, a git commit, an apostrophe that
+# unbalances `shlex`), and each appears in cells of every class, count and
+# operator form.
+_GRID_BODIES = (
     "plain text",
     "> looks/like/a/redirect",
     "git commit -m nope",
     "other people's apostrophe",
-]
+)
+
+
+def _grid_command(consumer: str, forms: tuple[str, ...], operand: bool, body_start: int) -> str:
+    """One grid cell: `consumer`, one construct per entry of `forms` in order,
+    optionally a trailing operand after the last operator, and the bodies the
+    `<<`/`<<-` entries need, in the order bash reads them."""
+    head = consumer
+    bodies = []
+    for index, form in enumerate(forms):
+        body = _GRID_BODIES[(body_start + index) % len(_GRID_BODIES)]
+        if form == "<<<":
+            head += f" <<<hs{index + 1}"
+            continue
+        delimiter = f"D{index + 1}"
+        head += f" {form}'{delimiter}'"
+        indent = "\t" if form == "<<-" else ""  # `<<-` strips leading tabs
+        bodies.append(f"{indent}{body}\n{indent}{delimiter}")
+    if operand:
+        head += f" {CANON}/{MARKER}"
+    return head + ("\n" + "\n".join(bodies) if bodies else "")
+
+
+def _grid_cells() -> tuple[tuple[str, tuple[str, ...], bool, str], ...]:
+    cells: list[tuple[str, tuple[str, ...], bool, str]] = []
+    for cls, consumer in _GRID_CONSUMERS.items():
+        for forms in _GRID_SEQUENCES:
+            for operand in (True, False):
+                cells.append(
+                    (cls, forms, operand, _grid_command(consumer, forms, operand, len(cells)))
+                )
+    return tuple(cells)
+
+
+GRID_CELLS = _grid_cells()
+GRID_COMMANDS = tuple(cell[3] for cell in GRID_CELLS)
+
+
+def _widened_removal(raw: str) -> str:
+    """The REMOVAL (collapse) form of `raw` under the same widened allowlist
+    `neutralize_heredoc_constructs` uses -- i.e. what `strip_heredoc_bodies`
+    would produce if clause (iv) reached `NON_SHELL_CONSUMERS` and clause (v)
+    were dropped. The reference side for grid cells the shipped stripper
+    refuses outright, which would otherwise have no removal form to compare a
+    blanking against."""
+    consumers = shell_tokens.CONSUMERS | shell_tokens.NON_SHELL_CONSUMERS
+    if not shell_tokens._recognized(raw, consumers):
+        return raw
+    regions = shell_tokens._removal_regions(raw, consumers)
+    if regions is None:
+        return raw
+    return shell_tokens._apply_regions(raw, regions)
+
+
+def _tokens_or_raise(text: str):
+    """`shlex.split(text)`, or the exception type it raised -- so two texts can
+    be asserted equal as a PAIR: equal tokens, or equally untokenizable. A body
+    holding an unbalanced apostrophe really does make `shlex` raise, and on a
+    cell where neither transform acts both sides must raise alike rather than
+    the assertion being skipped."""
+    try:
+        return ("tokens", shlex.split(text))
+    except ValueError as exc:
+        return ("raise", type(exc).__name__)
 
 
 def test_neutralization_equivalence_grid():
-    """D1a: a generated grid crossing the three consumer classes clause (iv)
-    distinguishes with four representative body shapes, checking that
-    `neutralize_heredoc_constructs` acts (blanks) on exactly the classes its
-    own docstring claims to (`CONSUMERS | NON_SHELL_CONSUMERS`) and leaves an
-    unrecognized name alone -- named floor constants so a future consumer-set
-    change states its expected effect on this grid rather than silently
-    shifting a bare number the next reader has to re-derive.
+    """D1a: a GENERATED grid over the four axes the shape space actually has --
+    operator form (`<<`, `<<-`, `<<<`), construct count (1, 2, 3, as ordered
+    sequences over the three forms), consumer class (clause (iv)'s three), and
+    a trailing operand after the last operator (present / absent) -- 3 x 39 x 2
+    = 234 cells.
+
+    The multi-construct rows are the load-bearing ones: a walk that stops after
+    the first construct is a real DENY-to-ALLOW widening on commands bash
+    genuinely accepts (`tee <<<aaa <<<bbb f`), and no earlier control saw one,
+    since the oracle corpus contains no multi-here-string case at all.
+
+    Asserted per cell: `neutralize_heredoc_constructs` preserves length, and
+    its output pairs with the corresponding REMOVAL form under `shlex` --
+    equal tokens, or equally untokenizable. Asserted over the grid: the three
+    class floors, plus the stripper floor that a narrowed producer breaks (see
+    the constants' own comment for which floor answers which question).
     """
-    acted = {"tee": 0, "non_shell": 0, "unknown": 0}
-    for cls, consumer in _GRID_CONSUMERS.items():
-        for body in _GRID_BODIES:
-            raw = f"{consumer} <<'EOF'\n{body}\nEOF"
-            neutralized = shell_tokens.neutralize_heredoc_constructs(raw)
-            assert len(neutralized) == len(raw), (cls, body)
-            if neutralized != raw:
-                acted[cls] += 1
+    assert len(_GRID_SEQUENCES) == 39, len(_GRID_SEQUENCES)
+    assert len(GRID_CELLS) == 234, len(GRID_CELLS)
+
+    acted = {cls: 0 for cls in _GRID_CONSUMERS}
+    stripped_acted = {cls: 0 for cls in _GRID_CONSUMERS}
+    stripped_by_count = {count: 0 for count in STRIPPED_ACTED_BY_COUNT}
+    for cls, forms, operand, raw in GRID_CELLS:
+        neutralized = shell_tokens.neutralize_heredoc_constructs(raw)
+        assert len(neutralized) == len(raw), (cls, forms, operand, raw)
+        stripped = shell_tokens.strip_heredoc_bodies(raw)
+        reference = stripped if stripped != raw else _widened_removal(raw)
+        assert _tokens_or_raise(neutralized) == _tokens_or_raise(reference), (
+            f"{cls} {forms} operand={operand}: blanking and removal disagree\n"
+            f"  raw:         {raw!r}\n  neutralized: {neutralized!r}\n"
+            f"  removal:     {reference!r}"
+        )
+        if neutralized != raw:
+            acted[cls] += 1
+        if stripped != raw:
+            stripped_acted[cls] += 1
+            stripped_by_count[len(forms)] += 1
+
     assert acted["tee"] >= ACTED_FLOOR_TEE, acted
     assert acted["non_shell"] >= ACTED_FLOOR_NON_SHELL, acted
     assert acted["unknown"] == ACTED_FLOOR_UNKNOWN, acted
+    assert stripped_acted["tee"] >= STRIPPED_FLOOR_TEE, stripped_acted
+    assert stripped_by_count == STRIPPED_ACTED_BY_COUNT, stripped_by_count
+    # The stripper's clause (iv) is the NARROW set, so it must never act
+    # outside `CONSUMERS` -- the mirror image of the widened floors above.
+    assert stripped_acted["non_shell"] == 0, stripped_acted
+    assert stripped_acted["unknown"] == 0, stripped_acted
+
+
+def test_heredoc_construct_spans_are_the_neutralizers_own_span_view():
+    """S1: `heredoc_construct_spans` is a public export with no in-tree caller
+    yet (stage 3's diff-region reader is its first), so nothing but a direct
+    test pins it. Three claims: a span covers exactly the text its construct
+    occupies, blanking the spans by hand reproduces
+    `neutralize_heredoc_constructs` byte for byte over the whole D1a grid (the
+    view and the applier cannot drift), and doubt yields `[]` rather than a
+    partial list -- the all-or-nothing contract, on both the consumer and the
+    body-expansion doubt points.
+    """
+    multi = "tee <<<aaa <<<bbb /tmp/f"
+    spans = shell_tokens.heredoc_construct_spans(multi)
+    assert spans == [(4, 10), (11, 17)], spans
+    assert [multi[start:end] for start, end in spans] == ["<<<aaa", "<<<bbb"]
+
+    heredoc = "cat <<'EOF' /tmp/f\nbody\nEOF"
+    assert [
+        heredoc[start:end] for start, end in shell_tokens.heredoc_construct_spans(heredoc)
+    ] == ["<<'EOF'", "\nbody\nEOF"]
+
+    # `[]` on doubt: a shell consumer (clause (iv)), and an unquoted delimiter
+    # whose body the shell itself would expand (clause (vi)).
+    assert shell_tokens.heredoc_construct_spans("bash <<'EOF'\necho hi\nEOF") == []
+    assert shell_tokens.heredoc_construct_spans("cat <<EOF\n$(id)\nEOF") == []
+
+    for raw in GRID_COMMANDS:
+        by_hand = raw
+        for start, end in reversed(shell_tokens.heredoc_construct_spans(raw)):
+            # Blanked here rather than through the module's own `_blank_region`:
+            # a mutation of that helper would move both sides of the comparison
+            # together and this control would never see it.
+            blanked = "".join(ch if ch == "\n" else " " for ch in raw[start:end])
+            by_hand = by_hand[:start] + blanked + by_hand[end:]
+        assert by_hand == shell_tokens.neutralize_heredoc_constructs(raw), raw
 
 
 def _frozen_strip_bodies(command: str) -> str:
@@ -850,13 +1024,22 @@ def _frozen_walk(command: str) -> str:
     return "".join(out)
 
 
+_GRID_CASES = tuple((f"grid cell {index}", raw) for index, raw in enumerate(GRID_COMMANDS))
+
+
 def test_strip_bodies_matches_a_frozen_independent_reimplementation():
     """D1c: `strip_heredoc_bodies` must agree byte-for-byte with `_frozen_
-    strip_bodies` over both corpora. Unlike D1, this control shares no code
-    with `_removal_regions` on the reference side, so it is the one able to
-    catch a narrowed (or widened) producer -- see D1's docstring for why
-    token-equivalence between the two appliers cannot."""
-    for name, raw in CASES + FALSE_POSITIVES:
+    strip_bodies` over both corpora AND over the D1a grid. Unlike D1, this
+    control shares no code with `_removal_regions` on the reference side, so it
+    is the one able to catch a narrowed (or widened) producer -- see D1's
+    docstring for why token-equivalence between the two appliers cannot.
+
+    The grid is included because the corpora alone cannot exercise the
+    property: neither holds a single multi-here-string construction, so a walk
+    narrowed to stop after the first construct stays byte-identical over both
+    and this control passes vacuously. The grid's 234 generated cells are where
+    the second and third constructs live."""
+    for name, raw in CASES + FALSE_POSITIVES + list(_GRID_CASES):
         expected = shell_tokens.strip_heredoc_bodies(raw)
         actual = _frozen_strip_bodies(raw)
         assert actual == expected, (
@@ -896,12 +1079,120 @@ def test_nine_named_constructions_still_deny(canon):
     but is one of the nine pre-existing bypasses (see `_COMMAND_LINE_
     WRITERS`'s "sort -o bare no heredoc"): `sort -o` was never a detected
     write verb, heredoc or not, so it is excluded.
+
+    COVERAGE, so the two D2 sets are not read as duplicates: these nine are
+    drawn from the PRE-EXISTING corpus, assembled before the multi-construct
+    grammar was understood, and measured across them the two-here-string,
+    here-string-then-heredoc, heredoc-then-here-string and `<<-` tab-strip
+    shapes each appear ZERO times. The shapes this migration newly reaches are
+    pinned by construction in `test_nine_enumerated_constructions_still_deny`
+    below; this set pins that what the corpus already knew about did not
+    regress.
     """
     assert len(MUST_STILL_DENY) == 9, len(MUST_STILL_DENY)
     for name in MUST_STILL_DENY:
         raw = _CASES_BY_NAME[name]
         assert bash_writes(raw), f"{name}: oracle says this does not actually write"
         assert guard_denies(canon, raw, canon), f"{name}: no longer denied"
+
+
+# The nine constructions the stage's plan enumerates, written out by
+# CONSTRUCTION rather than selected by corpus name -- one per shape the
+# region-producer inversion newly reaches, so this set cannot silently miss a
+# shape the way a name-based selection from an older corpus already did.
+ENUMERATED_MUST_STILL_DENY = [
+    ("quoted heredoc, tee operand", f"tee <<'EOF' {CANON}/{MARKER}\nhello body\nEOF"),
+    ("here-string, tee operand", f"tee <<<data {CANON}/{MARKER}"),
+    ("two here-strings", f"tee <<<aaa <<<bbb {CANON}/{MARKER}"),
+    ("here-string then heredoc", f"tee <<<aaa <<'EOF' {CANON}/{MARKER}\nbody\nEOF"),
+    ("tab-strip heredoc", f"tee <<-'EOF' {CANON}/{MARKER}\n\tbody\n\tEOF"),
+    ("shell consumer, body writes", f"bash <<'EOF'\necho x > {CANON}/{MARKER}\nEOF"),
+    ("unknown consumer, body writes", f"myunknowncmd <<'EOF'\necho x > {CANON}/{MARKER}\nEOF"),
+    ("unquoted delimiter, body expanded", f"python3 - <<EOF\n$(echo x > {CANON}/{MARKER})\nEOF"),
+    ("heredoc then here-string", f"tee <<'A' <<<xxx {CANON}/{MARKER}\nb1\nA"),
+]
+
+# The one enumerated construction real bash cannot be made to write with: the
+# consumer does not exist, so bash reports "command not found" and never runs a
+# body it was only ever going to read as stdin data. It is pinned anyway, and
+# its oracle claim is asserted in the NEGATIVE direction below, because what it
+# pins is the guard's conservatism -- an unknown consumer's body is not TRUSTED,
+# so the write named inside it must still deny -- not a measured write.
+_NOT_BASH_REACHED = {"unknown consumer, body writes"}
+
+
+@pytest.mark.skipif(not _bash_available(), reason="no bash: oracle has no ground truth")
+def test_nine_enumerated_constructions_still_deny(canon):
+    """D2, by construction: the nine commands the plan enumerates, each written
+    out in full rather than looked up in the corpus. Eight carry the same
+    bash-oracle guard as the name-selected set -- real bash is measured to write
+    canon first, so a deny that stopped being a deny is a measured widening and
+    not a claim about a command nobody ran. The ninth cannot be bash-reachable
+    at all (see `_NOT_BASH_REACHED`) and asserts that explicitly rather than
+    quietly dropping the guard.
+    """
+    assert len(ENUMERATED_MUST_STILL_DENY) == 9, len(ENUMERATED_MUST_STILL_DENY)
+    for name, raw in ENUMERATED_MUST_STILL_DENY:
+        if name in _NOT_BASH_REACHED:
+            assert not bash_writes(raw), f"{name}: now bash-reachable -- give it the oracle guard"
+        else:
+            assert bash_writes(raw), f"{name}: oracle says this does not actually write"
+        assert guard_denies(canon, raw, canon), f"{name}: no longer denied"
+
+
+_DOUBLE_APPLICATION = f"tee <<'A' <<<xxx {CANON}/{MARKER}\nb1\nA"
+
+
+def _once_only(transform):
+    """`transform` on the FIRST call, then the identity -- the composed hook
+    path with its second neutralization collapsed away, which is exactly the
+    edit `test_double_application_is_load_bearing` has to be able to see."""
+    state = {"used": False}
+
+    def once(command: str) -> str:
+        if state["used"]:
+            return command
+        state["used"] = True
+        return transform(command)
+
+    return once
+
+
+@pytest.mark.skipif(not _bash_available(), reason="no bash: oracle has no ground truth")
+def test_double_application_is_load_bearing(canon):
+    """R6 item 2: `decide()` neutralizes once itself and `command_write_targets`
+    neutralizes AGAIN internally, and the second application is not redundant --
+    the walk ends at the first `<<`/`<<-`, so a command carrying a construct
+    AFTER one needs two passes before its operand becomes visible. Nothing
+    pinned that until now: collapsing the two calls into one is a real
+    DENY-to-ALLOW widening on a command real bash writes, and every test stayed
+    green.
+
+    Pinned at both levels, since neither alone says it. MECHANISM: one
+    application leaves no write target, two produce canon's. HOOK-OBSERVABLE:
+    the shipped path denies, and the same path with the second application
+    collapsed away (`_once_only`) allows -- a single `neutralize_heredoc_
+    constructs` call cannot express the composition, so the count has to be
+    asserted through `decide()` itself.
+    """
+    assert bash_writes(_DOUBLE_APPLICATION), "oracle says this does not actually write"
+    command = _DOUBLE_APPLICATION.replace(CANON, str(canon))
+
+    once = bash_write_targets.command_write_targets(command, str(canon))
+    twice = bash_write_targets.command_write_targets(
+        shell_tokens.neutralize_heredoc_constructs(command), str(canon)
+    )
+    assert once == [], f"one application already sees a target: {once}"
+    assert str(canon / MARKER) in twice, twice
+
+    assert guard_denies(canon, _DOUBLE_APPLICATION, canon), "the shipped path stopped denying"
+    collapsed = _guard_decision_with(
+        _once_only(shell_tokens.neutralize_heredoc_constructs), canon, _DOUBLE_APPLICATION, canon
+    )
+    assert not collapsed, (
+        "a single application already denies -- this test can no longer tell the two-pass hook "
+        "path from a one-pass one, so it has stopped pinning R6 item 2"
+    )
 
 
 @pytest.mark.skipif(not _bash_available(), reason="no bash: oracle has no ground truth")

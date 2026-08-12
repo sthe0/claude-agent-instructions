@@ -121,8 +121,14 @@ Recorded here for stage 2 to act on:
 - `scripts/tests/test_shell_tokens_nonwidening.py` — the differential bash oracle, extended in
   stage 2. Its 186-case corpus contains ZERO multi-here-string cases: `grep -cE '<<<.*<<<'` and
   `grep -cE '<<<.*<<[^<]'` both return `0` against the file, and all six of its two-operator cases are
-  `<< <<`, which the stripper leaves verbatim (clause (v) rejects the two-statement residue). That
-  shape gap, not the corpus size, is what stage 2's D1a generated grid closes.
+  `<< <<`, which the stripper leaves verbatim (clause (v) rejects the two-statement residue). Stage 2
+  closes that shape gap by CONSTRUCTION rather than by adding corpus rows: D1a's grid enumerates every
+  ordered sequence of one, two and three constructs over the three operator forms (`<<`, `<<-`, `<<<`),
+  and D1c's frozen-reference byte-identity control was extended to run over those 234 generated cells
+  as well as the corpora — without which a producer narrowed to stop after the first construct stays
+  byte-identical over every corpus row and both controls pass vacuously. A grid confined to one
+  operator form and one construct per command, as the first stage-2 draft shipped, leaves the gap
+  exactly where it was.
   Its rename risk is subtler than a symbol name and must be handled explicitly. The oracle measures a
   *differential* — real bash's behaviour against `guard_denies(raw)` versus `guard_denies(stripped)` —
   and once `decide()` neutralizes internally, `raw` and `stripped` both travel the same neutralizing
@@ -175,7 +181,7 @@ absolute for both `strip_heredoc_bodies` and `neutralize_heredoc_constructs`: an
 function definition, an unbalanced quote, or a non-inert body still refuses the whole command
 (returns it byte-for-byte unmodified) rather than acting partially.
 
-**What is the non-widening argument, concretely?** Five independent controls in
+**What is the non-widening argument, concretely?** Seven independent controls in
 `test_shell_tokens_nonwidening.py`, each catching a different way the migration could have gone wrong:
 D1 (`test_strip_and_neutralize_agree_on_command_line_tokens`) checks the two appliers' outputs
 `shlex`-tokenize identically wherever both act — a coherence check on the two CONSUMERS of
@@ -183,17 +189,31 @@ D1 (`test_strip_and_neutralize_agree_on_command_line_tokens`) checks the two app
 in D1's own docstring, since both appliers would shrink together and still agree, now vacuously). D1c
 (`test_strip_bodies_matches_a_frozen_independent_reimplementation`) is the control that can: an
 independently-coded, from-scratch character walk that shares no code with `_removal_regions`, checked
-byte-identical against `strip_heredoc_bodies` over the full corpus plus `FALSE_POSITIVES`. D1a
-(`test_neutralization_equivalence_grid`) is a generated grid over the three classes clause (iv)
-distinguishes (a `CONSUMERS` member, a `NON_SHELL_CONSUMERS`-only member, an unrecognized name) crossed
-with four body shapes, with named floors (`ACTED_FLOOR_TEE`, `ACTED_FLOOR_NON_SHELL`,
-`ACTED_FLOOR_UNKNOWN`) so a future consumer-set change states its expected effect on the grid rather
-than an unexplained number drifting. D2 (`test_nine_named_constructions_still_deny`) pins nine
-individually-named real writes (spanning the parse-desync, shape-inside-recognized,
-inert-consumer-write, delimiter-quoting, bound-asymmetry and reviewer-absolute-path families) that
-must still be denied today, by name, independent of the aggregate loop. D3
-(`test_widened_consumer_body_introduces_no_new_spurious_deny`) checks the widened consumer set itself
-does not open a new false positive, using a `ruby` body distinct from the `python3` cases
+byte-identical against `strip_heredoc_bodies` over the full corpus, `FALSE_POSITIVES` and D1a's
+generated cells. D1a (`test_neutralization_equivalence_grid`) is a generated grid over the four axes
+the shape space has — operator form (`<<`, `<<-`, `<<<`), construct count (1, 2, 3, as ordered
+sequences over those forms, so `<<<` then `<<` and `<<` then `<<<` are separate cells), the three
+classes clause (iv) distinguishes (a `CONSUMERS` member, a `NON_SHELL_CONSUMERS`-only member, an
+unrecognized name), and a trailing operand after the last operator — 3 × 39 × 2 = 234 cells, with
+named floors (`ACTED_FLOOR_TEE`, `ACTED_FLOOR_NON_SHELL`, `ACTED_FLOOR_UNKNOWN`) so a future
+consumer-set change states its expected effect on the grid rather than an unexplained number drifting.
+Those three floors pin clause (iv)'s class membership and cannot see a narrowed producer (the
+neutralizer acts as soon as ONE construct is found, whatever happens to the rest); `STRIPPED_FLOOR_TEE`
+and `STRIPPED_ACTED_BY_COUNT` are the ones that can, because clause (v) rejects the leftover body lines
+a walk that stopped early leaves behind — measured 30 stripper-acted cells (6 / 10 / 14 at counts
+1 / 2 / 3), falling to 18 under a producer narrowed to return after its first `<<<` region. D2 pins
+eighteen real writes that must still be denied today, in two sets: nine selected by name from the
+pre-existing corpus (`test_nine_named_constructions_still_deny`, spanning the parse-desync,
+shape-inside-recognized, inert-consumer-write, delimiter-quoting, bound-asymmetry and
+reviewer-absolute-path families) and nine written out by construction
+(`test_nine_enumerated_constructions_still_deny`), which is where the multi-construct and `<<-` shapes
+the older corpus never held are pinned. R6 (`test_double_application_is_load_bearing`) pins the
+composed hook path's TWO applications, at both the `command_write_targets` level and through `decide()`
+itself, since collapsing them to one is a measured DENY-to-ALLOW widening on `tee <<'A' <<<xxx <canon>/f`.
+The span view (`test_heredoc_construct_spans_are_the_neutralizers_own_span_view`) pins
+`heredoc_construct_spans`, which stage 3 is the first caller of, against the neutralizer it is a view
+of. D3 (`test_widened_consumer_body_introduces_no_new_spurious_deny`) checks the widened consumer set
+itself does not open a new false positive, using a `ruby` body distinct from the `python3` cases
 `test_heredoc_body_neutralization.py` already pins.
 
 **Was any previously-denied real write in the corpus found to flip to allowed?** Two, and both are the
