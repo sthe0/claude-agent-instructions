@@ -136,24 +136,46 @@ _TRAILING_SPANS_RE = re.compile(r"(?:`[^`]+`[\s*/,]*)+$")
 #: in this string, and none of them was exercised: the one census row that looks like it
 #: turns on `;` (`"…; for "`) is refused because its subject ends on the word "for", not
 #: because of the `;` — so no row in either contract file ends a naming position on `;`,
-#: `?`, or `!`. Measured directly: dropping `;` alone (leaving `.?!`) changes nothing —
-#: the suite still passes at 78, and both contract files still credit exactly the same
-#: 14 list items and 19 distinct tokens, line for line. An element live in the rule and
-#: dead in every measurement is an accident waiting to be "cleaned up" by the next
-#: reader, unlike `)`, which is over-broad and belongs out; the three cases below pin
-#: each terminator on synthetic text so none of them can go unnoticed again.
+#: `?`, or `!`. Measured directly, before the three cases below existed and when the suite
+#: stood at 78: dropping `;` alone (leaving `.?!`) changed nothing — the suite still
+#: passed, and both contract files still credited exactly the same 14 list items and 19
+#: distinct tokens, line for line. An element live in the rule and dead in every
+#: measurement is an accident waiting to be "cleaned up" by the next reader, unlike `)`,
+#: which is over-broad and belongs out; the three cases below pin each terminator on
+#: synthetic text so none of them can go unnoticed again.
 _STATEMENT_END = ".;?!"
 
-#: The emphasised-subject colon of the census's second row, spelled as BALANCED emphasis:
-#: an opening run, the subject text, the colon, then the SAME closer. Its predecessor
-#: asked only whether the text ended in emphasis characters at all, which is equally true
-#: when the emphasis decorates the RUN rather than the subject — so `…ledger: *`alpha`*`,
+#: The emphasised-subject colon of the census's second row, spelled as BALANCED emphasis
+#: whose opener BELONGS TO THE SUBJECT: an opening run that starts the head or follows
+#: whitespace, the subject text, the colon, then the SAME closer. The first shape asked
+#: only whether the text ended in emphasis characters at all, which is equally true when
+#: the emphasis decorates the RUN rather than the subject — so `…ledger: *`alpha`*`,
 #: `…ledger:_ `alpha``, and `…ledger:*`alpha`*` all credited off the bare mid-sentence
 #: colon of the LAST census row, the one shape this rule exists to refuse. Balance is what
 #: separates them, and it is why `head.endswith(":**") or head.endswith(":*")` is not the
 #: fix: that still credits the no-space `…ledger:*`alpha`*` and additionally drops the
 #: legitimate single-underscore subject `_Subject:_`.
-_EMPHASISED_SUBJECT_COLON_RE = re.compile(r"(\*\*|\*|_+)[^*_]+:\1$")
+#:
+#: Balance alone is not enough either, because this is SEARCHED and a match may start
+#: anywhere in `head`: an earlier bold word donates the opener while the trailing `*` of
+#: an emphasised run donates the closer, and the refused shape returns one word away from
+#: the case that pins it — `- **Note** on the provenance ledger:*`alpha`*` differs from
+#: that case by its leading `**Note**` alone. The `(?:^|(?<=\s))` prefix is what ties the
+#: opener to the subject rather than to whatever emphasis the line happens to carry.
+#:
+#: The subject is `(?:(?!\1).)+` and not `[^*_]+` because the latter forbids `*` and `_`
+#: INSIDE the subject, refusing the legitimate ``**A `knowledge_refs` note:**`` and
+#: `**The *real* subject:**` — a test making an author contort prose, the failure this
+#: file condemns above. Anchoring alone (`(?:^|[^*_])(\*\*|\*|_+)[^*_]+:\1$`) closes the
+#: witness while keeping both of those refusals: it reddens the two admit-direction cases
+#: below.
+#:
+#: The closing `$` carries the other half of "the opener belongs to the subject": the
+#: closed subject must END the head, so a run following ordinary prose LATER in the head
+#: (`**Subject:** intro prose `alpha``) stays mid-clause. Round 7's sweep found nothing
+#: red when `$` was dropped — an element live in the rule and dead in every measurement,
+#: the same accident the terminator paragraph above records — so the case below pins it.
+_EMPHASISED_SUBJECT_COLON_RE = re.compile(r"(?:^|(?<=\s))(\*\*|\*|_+)(?:(?!\1).)+:\1$")
 
 #: A code span is credited by its identifier TOKENS, never by substring containment:
 #: `means.method` names both `means` and `method`, `[meta.order.coverage]` names
@@ -175,8 +197,9 @@ def _opens_a_statement(before: str) -> bool:
     a sentence-terminating boundary, or it ends at a colon that closes an EMPHASISED
     subject (`**Knowledge & preconditions:** `). The emphasis is what distinguishes the
     two colon shapes, so it is read off `head` — before the emphasis characters are
-    stripped — and it must be BALANCED, or the run's own emphasis answers for the
-    subject's (see `_EMPHASISED_SUBJECT_COLON_RE`)."""
+    stripped — and it must be BALANCED and OPENED BY THE SUBJECT, or else the run's own
+    emphasis (or an earlier bold word's) answers for the subject's (see
+    `_EMPHASISED_SUBJECT_COLON_RE`)."""
     head = _LIST_ITEM_RE.sub("", before).rstrip()
     subject = head.rstrip(" \t*_")
     if subject == "":
@@ -253,9 +276,19 @@ def _overlap_smell_documented(text: str) -> bool:
 #: opens-the-list-item and sentence-boundary positives survive an unconditional-True
 #: `_opens_a_statement`, because a predicate that credits everything still credits them.
 #: They are not decoration — both redden when `_TRAILING_SPANS_RE` loses its trailing
-#: glue, which is what lets a run end on emphasis or whitespace — but the POSITIONAL
-#: clauses they look like they hold are held by the negatives below them, and adding
-#: further positives of that shape would not raise the block's power.
+#: glue, which is what lets a run end on emphasis or whitespace, and each is among the
+#: many positives that redden when its own clause is deleted (a removed `return True` can
+#: only be caught by a positive; no negative can see it). What they cannot do is show that
+#: position is consulted AT ALL — the negatives below them, not these positives, are what
+#: prove that — so adding further positives of that shape would not raise the block's
+#: power.
+#:
+#: The negative side has its own low-power entry, kept for a different reason:
+#: `mid-clause (the final_check aside this rule was added for)` is uniquely reddened by no
+#: mutation — re-admitting a bare `:` reddens the three bare-colon cases and round 7's
+#: earlier-bold-word one, and re-adding `)` reddens the close-paren one. It earns its place
+#: as the real contract shape the rule was added for, which the synthetic negatives around
+#: it do not hold.
 _NAMING_CASES = (
     ("opens-the-list-item (the glossary-bullet shape)",
      "- **`alpha`** — why it exists",
@@ -295,6 +328,18 @@ _NAMING_CASES = (
      set()),
     ("a close paren does not end a statement (round 6)",
      "- prose (a parenthetical aside) `alpha` — why it exists",
+     set()),
+    ("an earlier bold word must not supply the opener (round 7)",
+     "- **Note** on the provenance ledger:*`alpha`* — why it exists",
+     set()),
+    ("an emphasised subject may hold an identifier (round 7)",
+     "- **A `knowledge_refs` note:** `alpha` — why it exists",
+     {"alpha"}),
+    ("an emphasised subject may hold nested emphasis (round 7)",
+     "- **The *real* subject:** `alpha` — why it exists",
+     {"alpha"}),
+    ("the subject's colon must END the head, not sit back in it (round 7)",
+     "- **Subject:** intro prose `alpha` — why it exists",
      set()),
     ("multi-span run (round 2)",
      "- **`alpha`** / **`beta`** — why they exist",
