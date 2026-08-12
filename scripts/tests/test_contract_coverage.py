@@ -129,6 +129,19 @@ _TRAILING_SPANS_RE = re.compile(r"(?:`[^`]+`[\s*/,]*)+$")
 #: the mid-clause aside `prose (an aside) `alpha` —`. Dropping it changes nothing on
 #: either contract file (14 credited list items before and after, no label lost); the
 #: close-paren case below pins the refusal so re-adding it turns red.
+#:
+#: `;`, `?`, and `!`, by contrast, ARE terminators, and the distinction from `)` is real:
+#: a paren closes an aside INSIDE a clause, whereas a semicolon ends a clause that is
+#: itself a statement, and `?`/`!` end a sentence outright. All three were already live
+#: in this string, and none of them was exercised: the one census row that looks like it
+#: turns on `;` (`"…; for "`) is refused because its subject ends on the word "for", not
+#: because of the `;` — so no row in either contract file ends a naming position on `;`,
+#: `?`, or `!`. Measured directly: dropping `;` alone (leaving `.?!`) changes nothing —
+#: the suite still passes at 78, and both contract files still credit exactly the same
+#: 14 list items and 19 distinct tokens, line for line. An element live in the rule and
+#: dead in every measurement is an accident waiting to be "cleaned up" by the next
+#: reader, unlike `)`, which is over-broad and belongs out; the three cases below pin
+#: each terminator on synthetic text so none of them can go unnoticed again.
 _STATEMENT_END = ".;?!"
 
 #: The emphasised-subject colon of the census's second row, spelled as BALANCED emphasis:
@@ -258,6 +271,15 @@ _NAMING_CASES = (
      {"alpha"}),
     ("close-paren-then-period (the SKILL.md preconditions shape)",
      '- prose (`[[stage.supplies]] element = "knowledge"`). `alpha` — why it exists',
+     {"alpha"}),
+    ("semicolon-ends-a-clause-statement (unpinned before this stage)",
+     "- one clause; `alpha` — why it exists",
+     {"alpha"}),
+    ("question-mark-ends-a-sentence (unpinned before this stage)",
+     "- a question? `alpha` — why it exists",
+     {"alpha"}),
+    ("exclamation-mark-ends-a-sentence (unpinned before this stage)",
+     "- emphatic point! `alpha` — why it exists",
      {"alpha"}),
     ("mid-clause (the final_check aside this rule was added for)",
      "- prose declaring the venue on a `alpha` — why it exists",
