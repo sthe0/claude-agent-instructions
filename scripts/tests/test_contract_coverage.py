@@ -123,7 +123,24 @@ _TRAILING_SPANS_RE = re.compile(r"(?:`[^`]+`[\s*/,]*)+$")
 #: CLI flag list — with nothing in the contract documenting `Principle.derivation` at all.
 #: The day that field enters a tracked field table, its assertion would go green off that
 #: flag list: the same vacuity class the two rules above removed, one field-table edit away.
-_STATEMENT_END = ".;)?!"
+#:
+#: `)` is deliberately NOT a terminator. The one census row that ends on a paren ends
+#: `").`, credited by the `.` that follows it, so admitting a bare `)` could only ever ADD
+#: the mid-clause aside `prose (an aside) `alpha` —`. Dropping it changes nothing on
+#: either contract file (14 credited list items before and after, no label lost); the
+#: close-paren case below pins the refusal so re-adding it turns red.
+_STATEMENT_END = ".;?!"
+
+#: The emphasised-subject colon of the census's second row, spelled as BALANCED emphasis:
+#: an opening run, the subject text, the colon, then the SAME closer. Its predecessor
+#: asked only whether the text ended in emphasis characters at all, which is equally true
+#: when the emphasis decorates the RUN rather than the subject — so `…ledger: *`alpha`*`,
+#: `…ledger:_ `alpha``, and `…ledger:*`alpha`*` all credited off the bare mid-sentence
+#: colon of the LAST census row, the one shape this rule exists to refuse. Balance is what
+#: separates them, and it is why `head.endswith(":**") or head.endswith(":*")` is not the
+#: fix: that still credits the no-space `…ledger:*`alpha`*` and additionally drops the
+#: legitimate single-underscore subject `_Subject:_`.
+_EMPHASISED_SUBJECT_COLON_RE = re.compile(r"(\*\*|\*|_+)[^*_]+:\1$")
 
 #: A code span is credited by its identifier TOKENS, never by substring containment:
 #: `means.method` names both `means` and `method`, `[meta.order.coverage]` names
@@ -144,14 +161,16 @@ def _opens_a_statement(before: str) -> bool:
     `before` is empty once the list marker and markdown emphasis are stripped, it ends at
     a sentence-terminating boundary, or it ends at a colon that closes an EMPHASISED
     subject (`**Knowledge & preconditions:** `). The emphasis is what distinguishes the
-    two colon shapes, so it is tested BEFORE the emphasis characters are stripped."""
+    two colon shapes, so it is read off `head` — before the emphasis characters are
+    stripped — and it must be BALANCED, or the run's own emphasis answers for the
+    subject's (see `_EMPHASISED_SUBJECT_COLON_RE`)."""
     head = _LIST_ITEM_RE.sub("", before).rstrip()
     subject = head.rstrip(" \t*_")
     if subject == "":
         return True
     if subject[-1] in _STATEMENT_END:
         return True
-    return subject[-1] == ":" and head != subject
+    return _EMPHASISED_SUBJECT_COLON_RE.search(head) is not None
 
 
 def _naming_terms(bullet: str) -> set[str]:
@@ -216,12 +235,23 @@ def _overlap_smell_documented(text: str) -> bool:
 #: (id, synthetic list item, the tokens `_naming_terms` must return). Each id names, in
 #: one clause, the finding the case holds — a review round where the round established
 #: it, the contract shape where the rule was there to read the shape correctly.
+#:
+#: Two of them are BASELINES rather than discriminators of one clause: the
+#: opens-the-list-item and sentence-boundary positives survive an unconditional-True
+#: `_opens_a_statement`, because a predicate that credits everything still credits them.
+#: They are not decoration — both redden when `_TRAILING_SPANS_RE` loses its trailing
+#: glue, which is what lets a run end on emphasis or whitespace — but the POSITIONAL
+#: clauses they look like they hold are held by the negatives below them, and adding
+#: further positives of that shape would not raise the block's power.
 _NAMING_CASES = (
     ("opens-the-list-item (the glossary-bullet shape)",
      "- **`alpha`** — why it exists",
      {"alpha"}),
     ("emphasis-closed-subject-colon (round 4)",
      "- **Subject:** `alpha` — why it exists",
+     {"alpha"}),
+    ("single-underscore emphasis closes a subject too (round 6)",
+     "- _Subject:_ `alpha` — why it exists",
      {"alpha"}),
     ("sentence-boundary (the SKILL.md material_refs shape)",
      "- prose, and for the same reason. `alpha` — why it exists",
@@ -235,17 +265,29 @@ _NAMING_CASES = (
     ("bare-mid-sentence-colon (round 4)",
      "- prose recording each claim in the provenance ledger: `alpha` — why it exists",
      set()),
+    ("bare colon before an emphasised RUN, spaced (round 5)",
+     "- prose recording each claim in the provenance ledger: *`alpha`* — why it exists",
+     set()),
+    ("bare colon before an emphasised RUN, unspaced (round 5; refutes the obvious fix)",
+     "- prose recording each claim in the provenance ledger:*`alpha`* — why it exists",
+     set()),
+    ("a close paren does not end a statement (round 6)",
+     "- prose (a parenthetical aside) `alpha` — why it exists",
+     set()),
     ("multi-span run (round 2)",
      "- **`alpha`** / **`beta`** — why they exist",
      {"alpha", "beta"}),
     ("a later dash names too (round 2)",
      "- **Subject:** `alpha` — why it exists. And separately. `beta` — why it exists",
      {"alpha", "beta"}),
-    ("token never substring (round 1)",
+    ("the token split keeps `_` inside one identifier (round 1's splitter half)",
      "- **`alpha_id`** — why it exists",
      {"alpha_id"}),
     ("no em dash names nothing (deliberate strictness)",
-     "- **`alpha`** is a submission-required field",
+     "- **`alpha`**",
+     set()),
+    ("the glue between spans does not reach across prose (round 6)",
+     "- **`alpha`** and later `beta` — why they exist",
      set()),
     ("run must end the segment (the functional_place shape)",
      "- **`alpha`** (a parenthetical the run cannot cross) — why it exists",
@@ -263,9 +305,17 @@ def test_the_naming_position_predicate_holds_shape_by_shape(bullet, expected):
 def test_a_label_is_documented_only_from_a_list_item():
     """Round 1's original vacuity, in its purest form: the same naming position in
     running prose rather than in a list item credits nothing. `_documenting_bullets` is
-    what carries this, and it is separately breakable from `_naming_terms`."""
+    what carries this, and it is separately breakable from `_naming_terms`.
+
+    The third assertion holds round 1's OTHER half at the level it actually lives on.
+    `_naming_terms` returns a token SET, so every case above it is pinned through set
+    membership and none of them can see how this function consults that set: relaxing
+    `label in terms` to `any(label in t for t in terms)` restores `customer` credited off
+    `customer_id` — the finding verbatim — with every other assertion in this file still
+    green, because they all assert True and a superstring predicate is a superset."""
     assert _label_documented("alpha", "- **`alpha`** — why it exists")
     assert not _label_documented("alpha", "**`alpha`** — why it exists")
+    assert not _label_documented("alpha", "- **`alpha_id`** — why it exists")
 
 
 def test_the_overlap_smell_predicate_needs_all_three_in_ONE_item():
@@ -351,7 +401,19 @@ def test_the_material_refs_knowledge_refs_overlap_smell_is_documented():
     comment governs IDENTIFIER matching, where `knowledge_refs` must not satisfy
     `knowledge` and `customer_id` must not satisfy `customer`. "smell" is an English word
     in running prose, not an identifier — there is no token boundary to respect and no
-    superstring in either file for it to falsely match."""
+    superstring in either file for it to falsely match.
+
+    That argument covers ONE of the three needles, and the other two — `material_refs`
+    and `knowledge_refs` — are identifiers, i.e. squarely the domain the token comment
+    governs. Two things make substring safe for them. DIRECTION: the failure that comment
+    records is a needle satisfied by a LONGER identifier, and these two needles ARE the
+    longer forms; matching them by substring can only be wrong if the files hold something
+    longer still (`material_refs_extra`), and neither file holds any superstring of either
+    (measured over both, not assumed). FIXITY: unlike `_label_documented`, whose label
+    domain is generated from submission.py's field tables and so grows whenever a field is
+    added, these two needles are literals of this predicate — a new field cannot silently
+    change what they match, so the measurement above does not go stale behind a field-table
+    edit the way a generated domain would."""
     assert _overlap_smell_documented(_contract_text()), (
         "the contract must say, in one list item, that a symbol in BOTH material_refs "
         "and knowledge_refs is a smell the stage's own prose must justify — this is a "
