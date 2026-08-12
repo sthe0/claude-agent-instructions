@@ -91,7 +91,7 @@ _MAX_TRANSCRIPT_BYTES = 512 * 1024 * 1024
 # hook-origin deny, and no live-captured hook-origin row is on record to say
 # what one carries.
 _ARMING_KINDS = frozenset({
-    "permission-rule",   # a hard deny -- the harness allowlist or one of this repo's own hooks
+    "permission-rule",   # a hard deny -- the harness allowlist
     "user-rejected",     # the harness's interactive allow/deny prompt was answered "no"
     "automode-blocked",  # the auto-mode classifier judged the call unsafe and blocked it
 })

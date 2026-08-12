@@ -1,5 +1,5 @@
 {"type": "assistant", "uuid": "asst-1", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "rm -rf /tmp/x"}}]}}
-{"type": "user", "uuid": "den-1", "toolDenialKind": "permission-rule", "sourceToolAssistantUUID": "asst-1", "toolUseResult": "Error: denied by hook-guard-destructive-rm.py"}
+{"type": "user", "uuid": "den-1", "toolDenialKind": "permission-rule", "sourceToolAssistantUUID": "asst-1", "toolUseResult": "Error: denied by hook-guard-destructive-rm.py", "_fixture_note": "provenance not recorded"}
 {"type": "assistant", "uuid": "asst-2", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_2", "name": "Write", "input": {"file_path": "/etc/passwd", "content": "x"}}]}}
 {"type": "user", "uuid": "den-2", "toolDenialKind": "user-rejected", "sourceToolAssistantUUID": "asst-2", "toolUseResult": "Error: The user doesn't want to proceed with this tool use."}
 {"type": "user", "uuid": "den-3", "toolDenialKind": "automode-blocked", "sourceToolAssistantUUID": "asst-missing", "toolUseResult": "Error: blocked by auto-mode classifier"}

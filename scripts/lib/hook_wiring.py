@@ -138,7 +138,7 @@ GATE_BEARING_HOOKS: "tuple[tuple[str, str], ...]" = (
      "(self-improvement engagement, resolution) is ever blocked on"),
     ("hook-guard-permission-self-grant.py",
      "denies a call widening the agent's own permission surface in answer to a "
-     "denial of an arming kind, and denies what it cannot evaluate; absent, a "
+     "denial of an arming kind; absent, a "
      "self-grant proceeds silently and the widened entry outlives the task"),
 )
 
