@@ -9,22 +9,40 @@ Two halves, split along the structural/semantic seam
 (memory-global/leaves/regex-not-for-semantic-classification.md):
 
   * STRUCTURAL — decidable, and BLOCKS. Every `verify_command` and every
-    `final_check[*].command` containing `--deselect` is a SITE. A site
-    DESELECTS the node ids named after each `--deselect` flag, in either the
-    `--deselect <node>` or the `--deselect=<node>` spelling; an occurrence in
-    neither spelling is itself a violation naming the site, never a silent
-    skip — a site whose every occurrence went unread would otherwise deselect
-    an unbounded set and report a clean, empty one. A node is GUARDED when
-    the command contains a single-node pytest invocation naming that node —
-    a node id, which carries `::`, not a directory — whose exit status is
-    captured into a variable and compared to exactly 1, in a conjunct that
-    reaches the deselecting run through `&&` alone, so that the node being
-    red is what lets that run happen. The binding is through the same
-    variable name the invocation assigned, so a bare "-eq 1" anywhere in the
-    command cannot pass as a guard for every node it contains. A site
-    deselecting a node it does not guard, guarding a node it does not
-    deselect, or naming a node set that disagrees with another site's, is a
-    violation.
+    `final_check[*].command` containing a structurally-present `--deselect`
+    (one outside any quoting or substitution — see below) is a SITE. A site
+    DESELECTS the node ids named after each structurally-present `--deselect`
+    flag, in either the `--deselect <node>` or the `--deselect=<node>`
+    spelling; a structurally-present occurrence in neither spelling, or a
+    fragment this resolver cannot read as shell structure at all, is itself a
+    violation naming the site, never a silent skip — a site whose every
+    occurrence went unread would otherwise deselect an unbounded set and
+    report a clean, empty one. A node is GUARDED when the command contains a
+    single-node pytest invocation naming that node — a node id, which carries
+    `::`, not a directory — whose exit status is captured into a variable and
+    compared to exactly 1, in a conjunct — not one beginning with `!`, which
+    inverts the property rather than establishing it — that reaches the
+    deselecting run through `&&` alone, so that the node being red is what
+    lets that run happen. The guard invocation is recognised only in the
+    exact literal shape `pytest <node> -q > /dev/null 2>&1; <var>=$?` — a
+    different flag order, a different redirect, or none at all is unread,
+    not proven absent. The binding is through the same variable name the
+    invocation assigned, so a bare "-eq 1" anywhere in the command cannot
+    pass as a guard for every node it contains. A site deselecting a node it
+    does not guard, guarding a node it does not deselect, or naming a node
+    set that disagrees with another site's, is a violation.
+
+    "Structurally present" is decided by a quote-aware scan of the command
+    text: a `;`, a `||`, a bare `&` (not `&&`), a newline, or a `--deselect`
+    flag counts only when it sits outside single quotes, double quotes, a
+    `$(...)` command substitution, and a backtick substitution — the same
+    four constructs a real shell itself recognises as removing a character's
+    ordinary meaning. Inside any of them the character is ordinary text, not
+    shell structure. When the scan cannot tell — an unterminated quote or
+    substitution — it never guesses either a clean verdict or a violation for
+    that fragment specifically; the enclosing site is failed instead, on the
+    same "never a silent skip" terms as an unrecognised `--deselect`
+    spelling.
 
   * SEMANTIC — a high-recall prefilter, never a judge. It selects sentences
     carrying exception-set vocabulary together with EITHER a cardinality word
@@ -63,43 +81,161 @@ _GUARD_INVOCATION_RE = re.compile(
     r"pytest\s+(?P<node>\S+::\S+?)\s+-q\s*>\s*/dev/null\s+2>&1;\s*(?P<var>\w+)=\$\?"
 )
 _GUARD_COMPARISON_RE = re.compile(r"test\s+\$(?P<var>\w+)\s+-eq\s+(?P<val>\d+)")
+_TOP_LEVEL_SEP_RE = re.compile(r"&&|\|\||&|;|\n")
+_LABEL_ORDER_RE = re.compile(r"^(?P<kind>stage|final_check) (?P<index>\d+)")
+
+
+class _UnscannableFragment(ValueError):
+    """A shell fragment `_mask_quoted` cannot fully account for — an
+    unterminated quote or substitution. Never resolved by guessing: the
+    caller turns this into a violation naming the site."""
+
+
+def _mask_quoted(command: str) -> str:
+    """`command` with every character inside a single-quoted string, a
+    double-quoted string, a `$(...)` command substitution, or a backtick
+    substitution replaced by a space — same length, so a match position or
+    span computed against the result still indexes `command` itself. A `\\`
+    masks itself and the character it escapes together, everywhere but inside
+    a single-quoted string, where backslash is ordinary text. Raises
+    `_UnscannableFragment` on an unterminated quote or substitution rather
+    than guessing where it would have closed.
+
+    What this scanner does NOT decide: parameter expansion (`${...}`), here-
+    documents, and process substitution (`<(...)`/`>(...)`) are not tracked
+    as their own contexts — a `;` or a quote inside one of those is read at
+    face value, structurally present or not, exactly as if the construct
+    were not there."""
+    out = list(command)
+    stack = ["TOP"]
+    i, n = 0, len(command)
+    while i < n:
+        frame = stack[-1]
+        c = command[i]
+        if frame == "SQ":
+            if c == "'":
+                stack.pop()
+            out[i] = " "
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            out[i] = out[i + 1] = " "
+            i += 2
+            continue
+        if c == "`":
+            if frame == "BT":
+                stack.pop()
+            else:
+                stack.append("BT")
+            out[i] = " "
+            i += 1
+            continue
+        if c == '"':
+            if frame == "DQ":
+                stack.pop()
+            else:
+                stack.append("DQ")
+            out[i] = " "
+            i += 1
+            continue
+        if c == "'" and frame != "DQ":
+            stack.append("SQ")
+            out[i] = " "
+            i += 1
+            continue
+        if command[i : i + 2] == "$(":
+            stack.append("DS")
+            out[i] = out[i + 1] = " "
+            i += 2
+            continue
+        if c == ")" and frame == "DS":
+            stack.pop()
+            out[i] = " "
+            i += 1
+            continue
+        if frame != "TOP":
+            out[i] = " "
+        i += 1
+    if stack != ["TOP"]:
+        raise _UnscannableFragment(f"unterminated {stack[-1]} in {command!r}")
+    return "".join(out)
+
+
+def _label_sort_key(label: str):
+    """Numeric order within a kind, so `stage 10` sorts after `stage 2` — a
+    plain string sort would put it before, since '1' < '2' character-wise."""
+    m = _LABEL_ORDER_RE.match(label)
+    return (m.group("kind"), int(m.group("index"))) if m else (label, -1)
+
+
+def _is_deselect_site(cmd: str) -> bool:
+    """Whether `cmd` contains a structurally-present `--deselect` — one that
+    survives `_mask_quoted`, so a comment or a quoted string merely mentioning
+    the flag does not make a command a site. A command the scanner cannot
+    read as shell structure is still a site: `structural_violations` reports
+    it as a violation rather than silently excluding it."""
+    if "--deselect" not in cmd:
+        return False
+    try:
+        return "--deselect" in _mask_quoted(cmd)
+    except _UnscannableFragment:
+        return True
 
 
 def _sites(doc) -> list[tuple[str, str]]:
-    """Every (label, command) whose command contains `--deselect`, labelled on
-    the same grammar check-order-coverage.py's resolve_control accepts."""
+    """Every (label, command) with a structurally-present `--deselect`,
+    labelled on the same grammar check-order-coverage.py's resolve_control
+    accepts, in numeric label order."""
     out = []
     for stage in doc.stages:
         cmd = stage.criterion.verify_command
-        if cmd and "--deselect" in cmd:
+        if cmd and _is_deselect_site(cmd):
             out.append((f"stage {stage.index} verify_command", cmd))
     for i, fc in enumerate(doc.meta.final_check, start=1):
-        if fc.command and "--deselect" in fc.command:
+        if fc.command and _is_deselect_site(fc.command):
             out.append((f"final_check {i}", fc.command))
-    return out
+    return sorted(out, key=lambda pair: _label_sort_key(pair[0]))
 
 
 def _deselected_nodes(command: str) -> list[str]:
     return [m.group("node") for m in _DESELECT_RE.finditer(command)]
 
 
-def _reaches_deselect_conjunctively(command: str, start: int, first_deselect: int) -> bool:
-    """Whether everything between a guard comparison ending at `start` and the
-    deselecting run is an `&&` chain. A comparison whose result a `;` discards,
-    or a `||` diverts, does not decide whether the deselecting run happens, so
-    it proves nothing about the node — textual precedence is not the property."""
-    if start > first_deselect:
+def _conjunct_start(masked_command: str, pos: int) -> int:
+    """The offset where the conjunct ending at `pos` begins: just past the
+    nearest top-level operator before `pos`, or 0 if there is none."""
+    start = 0
+    for m in _TOP_LEVEL_SEP_RE.finditer(masked_command[:pos]):
+        start = m.end()
+    return start
+
+
+def _negated_comparison(masked_command: str, comparison_start: int) -> bool:
+    """Whether the conjunct containing the guard comparison beginning at
+    `comparison_start` opens with `!` — a negated comparison licenses the
+    deselecting run when the node comes back GREEN, the opposite of a guard."""
+    conjunct_start = _conjunct_start(masked_command, comparison_start)
+    return masked_command[conjunct_start:comparison_start].lstrip().startswith("!")
+
+
+def _reaches_deselect_conjunctively(masked_command: str, start: int, first_deselect: int) -> bool:
+    """Whether every top-level operator between a guard comparison ending at
+    `start` and `first_deselect` is `&&`. A `;` that discards the comparison's
+    result, a `||` that diverts it, a bare `&`, or a newline in between proves
+    nothing about the node — textual precedence is not the property."""
+    between = masked_command[start:first_deselect]
+    if not between.lstrip().startswith("&&"):
         return False
-    between = command[start:first_deselect]
-    return between.lstrip().startswith("&&") and ";" not in between and "||" not in between
+    return all(m.group() == "&&" for m in _TOP_LEVEL_SEP_RE.finditer(between))
 
 
-def _guarded_nodes(command: str) -> set[str]:
+def _guarded_nodes(masked_command: str) -> set[str]:
     """Node ids whose exit status is captured into a variable and compared to
-    exactly 1, in a conjunct reaching the first `--deselect` in `command`
-    through `&&`."""
-    first_deselect = command.find("--deselect")
-    prefix = command if first_deselect == -1 else command[:first_deselect]
+    exactly 1, in a non-negated conjunct reaching the first structurally-
+    present `--deselect` in `masked_command` through `&&` alone. Callers only
+    ever pass a `masked_command` that contains `--deselect` at least once."""
+    first_deselect = masked_command.find("--deselect")
+    prefix = masked_command[:first_deselect]
     captured = {
         m.group("var"): m.group("node") for m in _GUARD_INVOCATION_RE.finditer(prefix)
     }
@@ -110,7 +246,9 @@ def _guarded_nodes(command: str) -> set[str]:
         node = captured.get(m.group("var"))
         if node is None:
             continue
-        if not _reaches_deselect_conjunctively(command, m.end(), first_deselect):
+        if _negated_comparison(masked_command, m.start()):
+            continue
+        if not _reaches_deselect_conjunctively(masked_command, m.end(), first_deselect):
             continue
         guarded.add(node)
     return guarded
@@ -123,33 +261,47 @@ def structural_violations(doc) -> list[str]:
     if not sites:
         return []
 
-    per_site = {
-        label: (frozenset(_deselected_nodes(cmd)), _guarded_nodes(cmd))
-        for label, cmd in sites
-    }
-    union: frozenset[str] = frozenset().union(*(nodes for nodes, _ in per_site.values()))
-
     out: list[str] = []
-    for label, cmd in sorted(sites):
-        occurrences = cmd.count("--deselect")
-        named = len(_deselected_nodes(cmd))
+    per_site: dict[str, tuple[frozenset[str], set[str]]] = {}
+    for label, cmd in sites:
+        try:
+            masked = _mask_quoted(cmd)
+        except _UnscannableFragment as exc:
+            out.append(
+                f"{label}: cannot be read as shell structure ({exc}) — a "
+                f"fragment this resolver cannot decide is a violation naming "
+                f"the site, never a silent skip and never a silent guard"
+            )
+            continue
+        occurrences = masked.count("--deselect")
+        nodes = _deselected_nodes(masked)
+        named = len(nodes)
         if named != occurrences:
             out.append(
                 f"{label}: {occurrences} `--deselect` occurrence(s) but only "
                 f"{named} name a node this resolver can read — an unrecognised "
                 f"spelling is a failure, never a silent skip"
             )
-    for label, (nodes, _guarded) in sorted(per_site.items()):
+        per_site[label] = (frozenset(nodes), _guarded_nodes(masked))
+
+    if not per_site:
+        return out
+
+    union: frozenset[str] = frozenset().union(*(nodes for nodes, _ in per_site.values()))
+    for label, (nodes, _guarded) in sorted(per_site.items(), key=lambda kv: _label_sort_key(kv[0])):
         if nodes != union:
             out.append(
                 f"{label}: deselects {sorted(nodes)}, which disagrees with the "
                 f"union of every --deselect site's node set {sorted(union)}"
             )
-    for label, (nodes, guarded) in sorted(per_site.items()):
+    for label, (nodes, guarded) in sorted(per_site.items(), key=lambda kv: _label_sort_key(kv[0])):
         for node in sorted(nodes - guarded):
             out.append(
                 f"{label}: deselects {node!r} without a guard proving it exits "
-                f"1 in a conjunct reaching the deselecting run through `&&`"
+                f"1 in a conjunct reaching the deselecting run through `&&` — "
+                f"either no such guard exists, or it exists but is written in "
+                f"a spelling this resolver does not recognise (the required "
+                f"literal shape is in this script's module docstring)"
             )
         for node in sorted(guarded - nodes):
             out.append(f"{label}: guards {node!r} (proven exit 1) but never deselects it")
@@ -266,7 +418,8 @@ def main(argv: list[str]) -> int:
     except Exception as exc:
         print(
             f"SEMANTIC SWEEP — unavailable for {plan_path} "
-            f"({exc.__class__.__name__}: {exc}); report-only, verdict unaffected"
+            f"({exc.__class__.__name__}: {exc}); report-only, verdict unaffected — "
+            f"0 candidate sentence(s) enumerated (not an empty worklist)"
         )
     else:
         print(f"SEMANTIC SWEEP — {len(hits)} candidate sentence(s) to read in {plan_path}:")
@@ -283,7 +436,11 @@ def main(argv: list[str]) -> int:
         return 1
 
     sites = _sites(doc)
-    all_nodes = sorted(frozenset().union(*(_deselected_nodes(c) for _, c in sites))) if sites else []
+    all_nodes = (
+        sorted(frozenset().union(*(_deselected_nodes(_mask_quoted(c)) for _, c in sites)))
+        if sites
+        else []
+    )
     print(
         f"OK — {plan_path}: {len(sites)} --deselect site(s), "
         f"{len(all_nodes)} node(s), all identical and individually guarded"

@@ -180,6 +180,123 @@ def test_a_guard_invocation_after_the_deselecting_run_does_not_count():
     assert any("NODE_A" in v and "without a guard" in v for v in violations)
 
 
+def test_a_quoted_semicolon_inside_a_guard_chain_does_not_break_it():
+    # The `;` sits inside single quotes, so it is not structural: the guard
+    # chain reaching the deselecting run through `&&` alone is still intact.
+    command = (
+        "python3 -m pytest f.py::NODE_A -q > /dev/null 2>&1; a=$?; "
+        "test $a -eq 1 && python3 -c 'import os; os.getcwd()' && "
+        "python3 -m pytest scripts/tests -q --deselect f.py::NODE_A"
+    )
+    doc = _doc([_stage_dict(1, verify_command=command)])
+    assert structural_violations(doc) == []
+
+
+def test_a_quoted_double_pipe_inside_a_guard_chain_does_not_break_it():
+    command = (
+        "python3 -m pytest f.py::NODE_A -q > /dev/null 2>&1; a=$?; "
+        "test $a -eq 1 && grep -E 'a||b' f.py && "
+        "python3 -m pytest scripts/tests -q --deselect f.py::NODE_A"
+    )
+    doc = _doc([_stage_dict(1, verify_command=command)])
+    assert structural_violations(doc) == []
+
+
+def test_a_semicolon_inside_a_command_substitution_does_not_break_a_guard_chain():
+    command = (
+        "python3 -m pytest f.py::NODE_A -q > /dev/null 2>&1; a=$?; "
+        "test $a -eq 1 && x=$(echo a; echo b) && "
+        "python3 -m pytest scripts/tests -q --deselect f.py::NODE_A"
+    )
+    doc = _doc([_stage_dict(1, verify_command=command)])
+    assert structural_violations(doc) == []
+
+
+def test_a_newline_between_the_comparison_and_the_deselecting_run_is_not_a_guard():
+    # A newline is a statement separator exactly as `;` is: the deselecting
+    # run on the next line executes whether or not NODE_A came back red.
+    command = (
+        "python3 -m pytest f.py::NODE_A -q > /dev/null 2>&1; a=$?; "
+        "test $a -eq 1 && echo ok\n"
+        "python3 -m pytest scripts/tests -q --deselect f.py::NODE_A"
+    )
+    doc = _doc([_stage_dict(1, verify_command=command)])
+    violations = structural_violations(doc)
+    assert any("NODE_A" in v and "without a guard" in v for v in violations)
+
+
+def test_a_bare_ampersand_between_the_comparison_and_the_deselecting_run_is_not_a_guard():
+    command = (
+        "python3 -m pytest f.py::NODE_A -q > /dev/null 2>&1; a=$?; "
+        "test $a -eq 1 & python3 -m pytest scripts/tests -q --deselect f.py::NODE_A"
+    )
+    doc = _doc([_stage_dict(1, verify_command=command)])
+    violations = structural_violations(doc)
+    assert any("NODE_A" in v and "without a guard" in v for v in violations)
+
+
+def test_a_negated_comparison_is_not_a_guard():
+    # `!` inverts the property: the deselecting run is licensed exactly when
+    # NODE_A comes back GREEN, the opposite of what a guard must prove.
+    command = (
+        "python3 -m pytest f.py::NODE_A -q > /dev/null 2>&1; a=$?; "
+        "! test $a -eq 1 && python3 -m pytest scripts/tests -q --deselect f.py::NODE_A"
+    )
+    doc = _doc([_stage_dict(1, verify_command=command)])
+    violations = structural_violations(doc)
+    assert any("NODE_A" in v and "without a guard" in v for v in violations)
+
+
+def test_a_deselect_inside_a_quoted_string_is_not_read_as_a_node():
+    command = (
+        "python3 -m pytest f.py::NODE_A -q > /dev/null 2>&1; a=$?; "
+        'echo "pass --deselect to skip" && '
+        "test $a -eq 1 && "
+        "python3 -m pytest scripts/tests -q --deselect f.py::NODE_A"
+    )
+    doc = _doc([_stage_dict(1, verify_command=command)])
+    assert structural_violations(doc) == []
+
+
+def test_a_guard_comparison_after_the_deselecting_run_does_not_count():
+    # The invocation capturing `a` precedes the deselecting run, but the
+    # comparison itself comes after it — restricting BOTH regex scans to the
+    # prefix before the first `--deselect` is the single mechanism that must
+    # catch this, now that the redundant `start > first_deselect` check is
+    # gone.
+    command = (
+        "python3 -m pytest f.py::NODE_A -q > /dev/null 2>&1; a=$?; "
+        "python3 -m pytest scripts/tests -q --deselect f.py::NODE_A; "
+        "test $a -eq 1"
+    )
+    doc = _doc([_stage_dict(1, verify_command=command)])
+    violations = structural_violations(doc)
+    assert any("NODE_A" in v and "without a guard" in v for v in violations)
+
+
+def test_an_unterminated_quote_is_a_violation_naming_the_site():
+    command = "python3 -m pytest scripts/tests -q --deselect f.py::NODE_A 'unterminated"
+    doc = _doc([_stage_dict(1, verify_command=command)])
+    violations = structural_violations(doc)
+    assert any("stage 1" in v and "cannot be read as shell structure" in v for v in violations)
+
+
+def test_the_failure_message_names_the_unrecognised_spelling_possibility():
+    # should-fix 3: a guard written in a working-but-differently-spelled
+    # idiom (here `&>` instead of `> /dev/null 2>&1`) is unread, not
+    # disproven — the message must say so rather than claiming the guard is
+    # simply absent.
+    command = (
+        "python3 -m pytest f.py::NODE_A -q &> /dev/null; a=$?; "
+        "test $a -eq 1 && python3 -m pytest scripts/tests -q --deselect f.py::NODE_A"
+    )
+    doc = _doc([_stage_dict(1, verify_command=command)])
+    violations = structural_violations(doc)
+    assert any(
+        "NODE_A" in v and "spelling this resolver does not recognise" in v for v in violations
+    )
+
+
 def test_a_whole_directory_invocation_is_not_a_guarded_node():
     # `scripts/tests` is not a node id; registering it would trip the
     # guards-but-never-deselects branch on a correct plan.
@@ -356,3 +473,11 @@ def test_main_exits_one_on_a_missing_file():
 def test_main_resolves_against_the_committed_smd_act_defects_8_snapshot():
     snapshot = Path(__file__).parent / "fixtures" / "plan_snapshot_smd-act-defects-8.toml"
     assert main(["check-exception-set-enumeration.py", str(snapshot)]) == 0
+
+
+def test_main_prints_the_expected_summary_for_the_snapshot(capsys):
+    snapshot = Path(__file__).parent / "fixtures" / "plan_snapshot_smd-act-defects-8.toml"
+    assert main(["check-exception-set-enumeration.py", str(snapshot)]) == 0
+    out = capsys.readouterr().out
+    assert "6 --deselect site(s), 2 node(s), all identical and individually guarded" in out
+    assert "SEMANTIC SWEEP — 67 candidate sentence(s)" in out
