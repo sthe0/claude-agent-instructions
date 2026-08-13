@@ -235,6 +235,32 @@ def test_a_bare_ampersand_between_the_comparison_and_the_deselecting_run_is_not_
     assert any("NODE_A" in v and "without a guard" in v for v in violations)
 
 
+def test_a_bare_ampersand_after_a_leading_and_chain_is_still_not_a_guard():
+    # The `&&` sits at the head of `between`, so the leading-`&&` prefix test
+    # alone would pass this; only scanning the rest of `between` for a
+    # non-`&&` separator (the bare `&` before `python3`) can catch it.
+    command = (
+        "python3 -m pytest f.py::NODE_A -q > /dev/null 2>&1; a=$?; "
+        "test $a -eq 1 && echo ok & python3 -m pytest scripts/tests -q --deselect f.py::NODE_A"
+    )
+    doc = _doc([_stage_dict(1, verify_command=command)])
+    violations = structural_violations(doc)
+    assert any("NODE_A" in v and "without a guard" in v for v in violations)
+
+
+def test_a_redirect_ampersand_between_the_comparison_and_the_deselecting_run_is_still_a_guard():
+    # `>&2` must be consumed by the separator scan without being counted as a
+    # bare `&` — a diagnostic redirect added to the chain must not turn a
+    # correct guard into a reported violation.
+    command = (
+        "python3 -m pytest f.py::NODE_A -q > /dev/null 2>&1; a=$?; "
+        'test $a -eq 1 && echo "falling back" >&2 && '
+        "python3 -m pytest scripts/tests -q --deselect f.py::NODE_A"
+    )
+    doc = _doc([_stage_dict(1, verify_command=command)])
+    assert structural_violations(doc) == []
+
+
 def test_a_negated_comparison_is_not_a_guard():
     # `!` inverts the property: the deselecting run is licensed exactly when
     # NODE_A comes back GREEN, the opposite of what a guard must prove.
@@ -260,10 +286,15 @@ def test_a_deselect_inside_a_quoted_string_is_not_read_as_a_node():
 
 def test_a_guard_comparison_after_the_deselecting_run_does_not_count():
     # The invocation capturing `a` precedes the deselecting run, but the
-    # comparison itself comes after it — restricting BOTH regex scans to the
-    # prefix before the first `--deselect` is the single mechanism that must
-    # catch this, now that the redundant `start > first_deselect` check is
-    # gone.
+    # comparison itself comes after it. `_guarded_nodes` restricts its
+    # comparison scan to the prefix ending at the first `--deselect`, so this
+    # comparison is never even found — but this particular case does not
+    # discriminate that from a second, redundant reason: since the
+    # comparison's end (`start`) here is greater than `first_deselect`,
+    # `masked_command[start:first_deselect]` is the empty string regardless
+    # of which text was scanned, which already fails the leading-`&&` test on
+    # its own. Both explanations agree on this command; neither is proven
+    # solely by it.
     command = (
         "python3 -m pytest f.py::NODE_A -q > /dev/null 2>&1; a=$?; "
         "python3 -m pytest scripts/tests -q --deselect f.py::NODE_A; "
@@ -272,6 +303,51 @@ def test_a_guard_comparison_after_the_deselecting_run_does_not_count():
     doc = _doc([_stage_dict(1, verify_command=command)])
     violations = structural_violations(doc)
     assert any("NODE_A" in v and "without a guard" in v for v in violations)
+
+
+def test_a_trailing_comment_with_an_apostrophe_is_not_read_as_an_unterminated_quote():
+    # Without comment masking, the apostrophe in "don't" opens a single-quote
+    # frame that never closes, and the site is (wrongly) reported as
+    # unscannable rather than clean.
+    command = (
+        "python3 -m pytest f.py::NODE_A -q > /dev/null 2>&1; a=$?; "
+        "test $a -eq 1 && python3 -m pytest scripts/tests -q --deselect f.py::NODE_A  "
+        "# don't drop this"
+    )
+    doc = _doc([_stage_dict(1, verify_command=command)])
+    assert structural_violations(doc) == []
+
+
+def test_a_commented_out_deselect_does_not_contribute_a_phantom_node():
+    # Without comment masking, the `--deselect` mentioned in the comment
+    # would be read as a second, unguarded node on the same site.
+    command = (
+        "python3 -m pytest f.py::NODE_A -q > /dev/null 2>&1; a=$?; "
+        "test $a -eq 1 && python3 -m pytest scripts/tests -q --deselect f.py::NODE_A  "
+        "# also --deselect f.py::NODE_B someday"
+    )
+    doc = _doc([_stage_dict(1, verify_command=command)])
+    assert structural_violations(doc) == []
+
+
+def test_a_semicolon_inside_a_backtick_substitution_does_not_break_a_guard_chain():
+    command = (
+        "python3 -m pytest f.py::NODE_A -q > /dev/null 2>&1; a=$?; "
+        "test $a -eq 1 && x=`echo a; echo b` && "
+        "python3 -m pytest scripts/tests -q --deselect f.py::NODE_A"
+    )
+    doc = _doc([_stage_dict(1, verify_command=command)])
+    assert structural_violations(doc) == []
+
+
+def test_a_backslash_escaped_semicolon_at_top_level_does_not_break_a_guard_chain():
+    command = (
+        "python3 -m pytest f.py::NODE_A -q > /dev/null 2>&1; a=$?; "
+        "test $a -eq 1 && echo a\\; b && "
+        "python3 -m pytest scripts/tests -q --deselect f.py::NODE_A"
+    )
+    doc = _doc([_stage_dict(1, verify_command=command)])
+    assert structural_violations(doc) == []
 
 
 def test_an_unterminated_quote_is_a_violation_naming_the_site():

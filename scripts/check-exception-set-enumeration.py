@@ -33,11 +33,14 @@ Two halves, split along the structural/semantic seam
     set that disagrees with another site's, is a violation.
 
     "Structurally present" is decided by a quote-aware scan of the command
-    text: a `;`, a `||`, a bare `&` (not `&&`), a newline, or a `--deselect`
-    flag counts only when it sits outside single quotes, double quotes, a
-    `$(...)` command substitution, and a backtick substitution — the same
-    four constructs a real shell itself recognises as removing a character's
-    ordinary meaning. Inside any of them the character is ordinary text, not
+    text: a `;`, a `||`, a bare `&` (not `&&` and not a fd redirect like
+    `2>&1`, `>&2`, or `&>`), a newline, or a `--deselect` flag counts only
+    when it sits outside single quotes, double quotes, a `$(...)` command
+    substitution, a backtick substitution, and a `#` comment (which runs
+    forward from itself to its line's end) — the same constructs a real
+    shell itself recognises as removing a character's ordinary meaning,
+    though a comment removes forward to a line end rather than up to a
+    paired delimiter. Inside any of them the character is ordinary text, not
     shell structure. When the scan cannot tell — an unterminated quote or
     substitution — it never guesses either a clean verdict or a violation for
     that fragment specifically; the enclosing site is failed instead, on the
@@ -81,7 +84,13 @@ _GUARD_INVOCATION_RE = re.compile(
     r"pytest\s+(?P<node>\S+::\S+?)\s+-q\s*>\s*/dev/null\s+2>&1;\s*(?P<var>\w+)=\$\?"
 )
 _GUARD_COMPARISON_RE = re.compile(r"test\s+\$(?P<var>\w+)\s+-eq\s+(?P<val>\d+)")
-_TOP_LEVEL_SEP_RE = re.compile(r"&&|\|\||&|;|\n")
+# A fd redirect spelled with `&` (`2>&1`, `>&2`, `&>`, `&>>`) must be consumed
+# by this scan so its `&` is never mistaken for `&&` or a bare `&` separator
+# — the first alternative matches the numbered-fd forms, the second the
+# `&>`/`&>>` forms — but neither is itself a separator; only the alternatives
+# named in `_SEPARATORS` are.
+_TOP_LEVEL_SCAN_RE = re.compile(r"[0-9]*[<>]&[0-9-]*|&>>?|&&|\|\||&|;|\n")
+_SEPARATORS = frozenset({"&&", "||", "&", ";", "\n"})
 _LABEL_ORDER_RE = re.compile(r"^(?P<kind>stage|final_check) (?P<index>\d+)")
 
 
@@ -93,19 +102,35 @@ class _UnscannableFragment(ValueError):
 
 def _mask_quoted(command: str) -> str:
     """`command` with every character inside a single-quoted string, a
-    double-quoted string, a `$(...)` command substitution, or a backtick
-    substitution replaced by a space — same length, so a match position or
-    span computed against the result still indexes `command` itself. A `\\`
-    masks itself and the character it escapes together, everywhere but inside
-    a single-quoted string, where backslash is ordinary text. Raises
+    double-quoted string, a `$(...)` command substitution, a backtick
+    substitution, or a top-level `#` comment replaced by a space — same
+    length, so a match position or span computed against the result still
+    indexes `command` itself. A `\\` masks itself and the character it
+    escapes together, everywhere but inside a single-quoted string, where
+    backslash is ordinary text. A `#` starts a comment only when it sits at
+    the start of `command` or immediately after whitespace, and the comment
+    then masks everything up to (not including) the next newline. Raises
     `_UnscannableFragment` on an unterminated quote or substitution rather
     than guessing where it would have closed.
 
-    What this scanner does NOT decide: parameter expansion (`${...}`), here-
-    documents, and process substitution (`<(...)`/`>(...)`) are not tracked
-    as their own contexts — a `;` or a quote inside one of those is read at
-    face value, structurally present or not, exactly as if the construct
-    were not there."""
+    What this scanner gets wrong in ways that do NOT raise: a `$(...)` frame
+    is closed by the FIRST unmatched `)`, so a genuinely nested one — a
+    `case … )` arm, or `$( (cd x; ls) ; b )` — closes the substitution early
+    and reads everything after it at top level, with the frame stack back at
+    `["TOP"]` by the time the scan ends, so nothing is raised; this is the
+    one construct here that can misread silently rather than announce
+    itself as unscannable. `$'...'` and `$"..."` (ANSI-C and locale-
+    translated quoting) are scanned as ordinary `'...'`/`"..."` strings, so a
+    `\\'` inside `$'...'` — an escape bash itself honours there — closes the
+    quote early and mis-frames what follows. Arithmetic `$((...))` is
+    mis-read the same way as the nested-`)` case, but harmlessly, since a
+    bare `)` is neither a separator nor `--deselect`.
+
+    What this scanner does NOT decide at all: parameter expansion
+    (`${...}`), here-documents, and process substitution (`<(...)`/`>(...)`)
+    are not tracked as their own contexts — a `;` or a quote inside one of
+    those is read at face value, structurally present or not, exactly as if
+    the construct were not there."""
     out = list(command)
     stack = ["TOP"]
     i, n = 0, len(command)
@@ -117,6 +142,14 @@ def _mask_quoted(command: str) -> str:
                 stack.pop()
             out[i] = " "
             i += 1
+            continue
+        if frame == "TOP" and c == "#" and (i == 0 or command[i - 1] in " \t\n"):
+            end = command.find("\n", i)
+            if end == -1:
+                end = n
+            for k in range(i, end):
+                out[k] = " "
+            i = end
             continue
         if c == "\\" and i + 1 < n:
             out[i] = out[i + 1] = " "
@@ -197,15 +230,29 @@ def _sites(doc) -> list[tuple[str, str]]:
     return sorted(out, key=lambda pair: _label_sort_key(pair[0]))
 
 
-def _deselected_nodes(command: str) -> list[str]:
-    return [m.group("node") for m in _DESELECT_RE.finditer(command)]
+def _deselected_nodes(masked_command: str) -> list[str]:
+    return [m.group("node") for m in _DESELECT_RE.finditer(masked_command)]
+
+
+def _top_level_separators(masked_command: str):
+    """Every top-level statement/control separator in `masked_command`, in
+    scan order. A fd redirect spelled with `&` (`2>&1`, `>&2`, `&>`, `&>>`)
+    is consumed by `_TOP_LEVEL_SCAN_RE` so it cannot be mistaken for a
+    separator starting mid-redirect, but it is never itself yielded — it
+    changes where a command's output goes, not whether one command's exit
+    status can gate the next. The single mechanism behind both
+    `_conjunct_start` and `_reaches_deselect_conjunctively`, so they cannot
+    drift apart on what counts as a separator."""
+    for m in _TOP_LEVEL_SCAN_RE.finditer(masked_command):
+        if m.group() in _SEPARATORS:
+            yield m
 
 
 def _conjunct_start(masked_command: str, pos: int) -> int:
     """The offset where the conjunct ending at `pos` begins: just past the
     nearest top-level operator before `pos`, or 0 if there is none."""
     start = 0
-    for m in _TOP_LEVEL_SEP_RE.finditer(masked_command[:pos]):
+    for m in _top_level_separators(masked_command[:pos]):
         start = m.end()
     return start
 
@@ -226,7 +273,7 @@ def _reaches_deselect_conjunctively(masked_command: str, start: int, first_desel
     between = masked_command[start:first_deselect]
     if not between.lstrip().startswith("&&"):
         return False
-    return all(m.group() == "&&" for m in _TOP_LEVEL_SEP_RE.finditer(between))
+    return all(m.group() == "&&" for m in _top_level_separators(between))
 
 
 def _guarded_nodes(masked_command: str) -> set[str]:
@@ -436,6 +483,10 @@ def main(argv: list[str]) -> int:
         return 1
 
     sites = _sites(doc)
+    # `_mask_quoted(c)` is unguarded here because it cannot raise: every site
+    # already passed it once inside `structural_violations` above, and a
+    # raise there appends to `violations`, which would have returned 1 before
+    # reaching this line.
     all_nodes = (
         sorted(frozenset().union(*(_deselected_nodes(_mask_quoted(c)) for _, c in sites)))
         if sites

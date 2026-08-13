@@ -676,14 +676,6 @@ disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
 
 [[entry]]
-id = "1b9bb5ccb0d5532a"
-domain = "code"
-file = "scripts/check-exception-set-enumeration.py"
-class = "structural"
-disposition = "keep"
-ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
-
-[[entry]]
 id = "1f70715b00826b45"
 domain = "code"
 file = "scripts/check-exception-set-enumeration.py"
@@ -716,7 +708,7 @@ disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
 
 [[entry]]
-id = "7ce3cab89cda4239"
+id = "d3f0e9b6c9743532"
 domain = "code"
 file = "scripts/check-exception-set-enumeration.py"
 class = "structural"
