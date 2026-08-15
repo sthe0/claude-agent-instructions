@@ -35,6 +35,8 @@ import time
 from pathlib import Path
 
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
+from agentctl.plan import load_plan  # parse the TOML plan for a single-stage brief projection
+from agentctl.render import render_stage_brief  # pure PlanDoc+index -> markdown brief
 from lib import argv_text  # one place decides how an argv value names its text
 from lib import marker_extract  # unconditional second-pass marker extraction (model is the primary classifier)
 from lib.config_root import iter_transcripts, plans_dir, skills_dir  # config-root resolver (isolated system root)
@@ -144,6 +146,43 @@ def permissions_digest(project_file: Path | None) -> str:
     return "\n\n".join(chunks)
 
 
+def brief_eligible(args: argparse.Namespace) -> bool:
+    """Whether assemble_prompt should project `args.plan` to a single-stage
+    brief (render_stage_brief) rather than inlining the whole plan text.
+
+    All of the following must hold:
+      - `args.kind` is one of PLANS_READ_KINDS (the same set already granted
+        read access to the plans directory by plans_permission_rules — a
+        kind that cannot read the plans tree has no business getting a
+        projection sourced from it either);
+      - the caller opted in via `--plan-brief`;
+      - a stage index was supplied (nothing to project without one);
+      - `args.plan` resolves (Path.resolve() on BOTH sides, mirroring
+        plans_permission_rules' own symlink-safe containment pattern) inside
+        `plans_dir()` — a plan living outside the trusted plans tree never
+        gets this treatment even if `--plan-brief` is passed by mistake.
+
+    Any single failing condition falls back to False (whole-plan behavior),
+    never raises.
+    """
+    if getattr(args, "kind", None) not in PLANS_READ_KINDS:
+        return False
+    if not getattr(args, "plan_brief", False):
+        return False
+    if getattr(args, "stage_index", None) is None:
+        return False
+    plan_path = getattr(args, "plan", None)
+    if not plan_path:
+        return False
+    try:
+        resolved_plan = Path(plan_path).resolve()
+        resolved_plans_dir = plans_dir().resolve()
+        resolved_plan.relative_to(resolved_plans_dir)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
 def assemble_prompt(args: argparse.Namespace, depth: int, permissions: str) -> str:
     plan = argv_text.read_required_file(args.plan, "--plan")
     constraints = (argv_text.read_arg_text(args.constraints) or "").rstrip()
@@ -168,7 +207,17 @@ def assemble_prompt(args: argparse.Namespace, depth: int, permissions: str) -> s
             f"stage's work.",
             "",
         ]
-    sections += ["## Working plan", "", plan, ""]
+    if brief_eligible(args):
+        doc = load_plan(str(args.plan))
+        plan_label = (
+            f"## Working plan — stage {args.stage_index} brief "
+            f"(projected; the full plan lives at `{args.plan}`, not inlined here)"
+        )
+        plan_body = render_stage_brief(doc, args.stage_index)
+    else:
+        plan_label = "## Working plan"
+        plan_body = plan
+    sections += [plan_label, "", plan_body, ""]
     sections += [
         "## Done criterion for this step",
         "",
@@ -315,6 +364,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--stage-index", type=int, default=None, help="index of the plan stage this spawn serves (optional; enables per-stage cost attribution)")
     p.add_argument(
+        "--plan-brief",
+        action="store_true",
+        help="project only --stage-index's stage into the prompt (render_stage_brief) "
+        "instead of inlining the whole plan; requires --kind in PLANS_READ_KINDS, "
+        "--stage-index set, and --plan to resolve inside plans_dir() — falls back "
+        "to today's whole-plan behavior otherwise (see brief_eligible)",
+    )
+    p.add_argument(
         "--continue-worktree",
         default=None,
         help="path of a prior dependent stage's linked worktree/branch to continue "
@@ -377,6 +434,37 @@ SPAWN_AUTOCOMPACT_WINDOW_TOKENS = (
     round(AUTOCOMPACT_CEILING_TOKENS / (1 - PRECOMPUTE_BUFFER_FRACTION))
     + OUTPUT_RESERVE_TOKENS
 )
+
+# Hard ceiling on the ASSEMBLED SPAWN PROMPT (the stdin payload assemble_prompt
+# returns), guarding a DIFFERENT failure than AUTOCOMPACT_CEILING_TOKENS above:
+# that one pins the CHILD's own compaction window once it is already running;
+# this one is the PARENT's pre-spawn decision whether to launch the child at
+# all. Re-measured 2026-08-15 against installed Claude Code client 2.1.220 (the
+# same bundle AUTOCOMPACT_CEILING_TOKENS cites), taking the smallest and most
+# conservative of three observed compositions (144k/160k/167k) — a plan whose
+# assembled prompt exceeds this hits the hard "Prompt is too long" failure the
+# smd-act-defects-8 stage-13 dispatch hit (363,377-char plan alone, 97% of a
+# 215,416-token prompt, dead in 13.5s after costing $0.81). Do NOT re-derive
+# without re-reading the bundle; do NOT add a per-model window table — the
+# same rationale as AUTOCOMPACT_CEILING_TOKENS applies (one conservative
+# number, not a table nobody re-verifies per model).
+DISPATCH_PROMPT_CEILING_TOKENS = 144_000
+
+# Conservative chars-per-token divisor for estimating an assembled prompt's
+# token count from its char count without invoking a tokenizer. Fixed below
+# the 1.744 chars/token actually measured on the failed dispatch above
+# (375,759 chars / 215,416 tokens), so this estimate errs toward refusing
+# early rather than discovering the failure only after the child is spawned.
+PROMPT_CHARS_PER_TOKEN = 1.5
+
+DISPATCH_PROMPT_CEILING_CHARS = int(DISPATCH_PROMPT_CEILING_TOKENS * PROMPT_CHARS_PER_TOKEN)
+
+
+def prompt_exceeds_ceiling(prompt: str) -> bool:
+    """Whether the assembled prompt (stdin payload) is too large to safely
+    spawn, per DISPATCH_PROMPT_CEILING_CHARS. Applies uniformly regardless of
+    whether the size came from the brief or whole-plan path."""
+    return len(prompt) > DISPATCH_PROMPT_CEILING_CHARS
 
 
 # Code-executing permission scoped to developer spawns only, injected into the
@@ -694,8 +782,45 @@ def main(argv: list[str] | None = None) -> int:
     tier_label_usd = budget_value(args.budget, constants)
     cap = runaway_ceiling(constants)
     perms = permissions_digest(args.project_permissions)
-    prompt = assemble_prompt(args, depth_next, perms)
+    try:
+        prompt = assemble_prompt(args, depth_next, perms)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        log_refused(
+            "stage-brief-error",
+            {"kind": args.kind, "plan": argv_text.abbreviate(args.plan), "stage_index": args.stage_index},
+        )
+        return 2
     model = resolve_model(args)
+
+    if prompt_exceeds_ceiling(prompt):
+        measured = len(prompt)
+        model_desc = (
+            f"resolved to --model {model}"
+            if model is not None
+            else "inherited from the parent (no per-kind/complexity model resolved)"
+        )
+        print(
+            f"error: assembled prompt is {measured} chars, exceeding the "
+            f"{DISPATCH_PROMPT_CEILING_CHARS}-char ({DISPATCH_PROMPT_CEILING_TOKENS}-token) "
+            f"pre-spawn refusal ceiling for this child ({model_desc}); refusing before "
+            f"spawning. Shrink constraints/dossier, or dispatch with --plan-brief if not "
+            f"already set.",
+            file=sys.stderr,
+        )
+        log_refused(
+            "prompt-too-large",
+            {
+                "kind": args.kind,
+                "chars": measured,
+                "ceiling_chars": DISPATCH_PROMPT_CEILING_CHARS,
+                "model": model,
+                "plan_brief": getattr(args, "plan_brief", False),
+                "stage_index": args.stage_index,
+            },
+        )
+        return 5
+
     plans_directory = plans_dir()
 
     cmd = [
