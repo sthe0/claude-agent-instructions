@@ -307,9 +307,15 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         (FinalCheck, "venue"),  # excluded: labels-only method
         (FinalCheck, "kind"),  # excluded except as the unlabelled-check fallback (see label test)
         (FinalCheck, "landed"),  # excluded: labels-only method
+        # LandedSpec is reachable only through Criterion.landed and FinalCheck.landed,
+        # both excluded above. It is walked anyway: otherwise a field added to
+        # LandedSpec escapes both this drift check and the dedicated landed-check
+        # test, which asserts three field values by name and so cannot notice a fourth.
+        (LandedSpec, "target"), (LandedSpec, "remote"), (LandedSpec, "delivered_stage"),
     }
     declared = set()
-    for cls in (Stage, Subject, Means, Actor, Criterion, Principle, Supply, PlanMeta, FinalCheck):
+    for cls in (Stage, Subject, Means, Actor, Criterion, Principle, Supply, PlanMeta,
+                FinalCheck, LandedSpec):
         for f in dataclasses.fields(cls):
             declared.add((cls, f.name))
     missing = declared - checked
