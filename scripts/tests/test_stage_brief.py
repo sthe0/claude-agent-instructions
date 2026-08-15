@@ -1100,6 +1100,73 @@ def test_main_refusal_names_inherited_model_when_none_resolved(tmp_path, monkeyp
     assert "inherited" in capsys.readouterr().err.lower()
 
 
+# --- the refusal never reaches the launch site (assertion 10) ----------------
+
+
+class _ChildLaunched(Exception):
+    """Raised by the sentinel standing in for `proc_tree.launch_supervised`."""
+
+
+@pytest.mark.parametrize(
+    "path_argv, path_name",
+    [
+        (["--stage-index", "1", "--plan-brief"], "brief"),
+        ([], "whole-plan"),
+    ],
+    ids=["brief", "whole-plan"],
+)
+def test_oversized_prompt_never_reaches_the_launch_site(
+    tmp_path, monkeypatch, capsys, path_argv, path_name
+):
+    """The refusal's whole point is that no child is started, and `rc == 5`
+    does not establish that. A return code is a claim made after the fact: a
+    `main()` that spawned, measured, killed the child and then returned 5
+    satisfies it exactly as well as one that refused before spawning, and so
+    does one whose ceiling check drifts below the launch in a later refactor.
+    Only the launch site itself can answer, so this substitutes a sentinel for
+    `proc_tree.launch_supervised` — the single call that starts the child — and
+    asserts it was never called, on BOTH the brief and whole-plan paths.
+
+    The sentinel raises as well as records: were it reached, main() would
+    otherwise carry a stand-in return value into its post-launch code and fail
+    somewhere unrelated, reporting the wrong defect.
+
+    Known residual: the sentinel binds to `proc_tree.launch_supervised` by name,
+    so a rewrite that starts the child some other way (a bare `subprocess.Popen`)
+    goes unobserved here. That is a supervision regression in its own right and
+    is guarded where supervision is tested; naming it beats implying this test
+    covers it.
+    """
+    monkeypatch.setattr(MOD, "plans_dir", lambda: tmp_path)
+    plan_path, _ = _two_stage_doc(tmp_path)
+
+    calls: list[tuple] = []
+
+    def sentinel(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise _ChildLaunched(f"a child was launched on the {path_name} path")
+
+    # `proc_tree` is a module object shared with any other importer; monkeypatch
+    # restores the real attribute at teardown.
+    monkeypatch.setattr(MOD.proc_tree, "launch_supervised", sentinel)
+
+    argv = [
+        "--kind", "developer",
+        "--plan", str(plan_path),
+        "--done-criterion", "do the thing",
+        "--criterion-type", "measurable",
+        "--constraints", "x" * (MOD.dispatch_prompt_ceiling_chars(None) + 1),
+        *path_argv,
+    ]
+    rc = MOD.main(argv)
+
+    assert calls == [], f"the {path_name} refusal launched a child before refusing"
+    # Secondary: the refusal is the reason nothing launched, not an unrelated
+    # early exit (a missing plan, an unparseable stage) that also never spawns.
+    assert rc == 5
+    assert "exceeding" in capsys.readouterr().err
+
+
 # --- non-portable, non-asserted real-plan measurement -----------------------
 
 
