@@ -12,7 +12,7 @@ outright ("Prompt is too long"). This module covers:
     eligibility gate (kind + flag + stage index + plans_dir containment) and
     the byte-identical whole-plan fallback when any condition fails.
   - `spawn-specialist.py`'s pre-spawn refusal when the assembled prompt
-    exceeds `DISPATCH_PROMPT_CEILING_CHARS`, on both the brief and
+    exceeds `dispatch_prompt_ceiling_chars`, on both the brief and
     whole-plan paths.
 """
 from __future__ import annotations
@@ -460,26 +460,71 @@ def test_assemble_prompt_byte_identical_fallback_when_not_eligible(tmp_path, mon
 # --- prompt-size ceiling -----------------------------------------------------
 
 
-def test_ceiling_constants_match_the_supplied_derivation():
-    assert MOD.DISPATCH_PROMPT_CEILING_TOKENS == 144_000
-    assert MOD.PROMPT_CHARS_PER_TOKEN == 1.5
-    assert MOD.DISPATCH_PROMPT_CEILING_CHARS == 216_000
-    # The three pre-existing constants (a distinct concern — the CHILD's own
-    # compaction-window pin) must be untouched by this stage's change.
+def test_ceiling_inputs_are_the_ones_the_derivation_names():
+    """The ceiling's INPUTS — never its output digit. Asserting the digit is
+    what locked a hand-measured 144000 into the tree as if it were derived; a
+    client release that moves a borrowed term must move the ceiling with it,
+    and a test pinning the result would then fail on the correct new value."""
+    # ours (the child's own compaction-window pin — untouched by this change)
     assert MOD.AUTOCOMPACT_CEILING_TOKENS == 150_000
-    assert MOD.OUTPUT_RESERVE_TOKENS == 20_000
     assert MOD.PRECOMPUTE_BUFFER_FRACTION == 0.2
+    # borrowed from the installed client bundle
+    assert MOD.OUTPUT_RESERVE_TOKENS == 20_000
+    assert MOD.CLIENT_TRIGGER_FLOOR_MARGIN_TOKENS == 13_000
+    # the roster floor standing in for the client's `model max` term
+    assert MOD.MODEL_FLOOR_WINDOW_TOKENS == 200_000
+
+
+def test_ceiling_reproduces_both_steps_of_the_client_trigger():
+    window = min(MOD.MODEL_FLOOR_WINDOW_TOKENS, MOD.SPAWN_AUTOCOMPACT_WINDOW_TOKENS)
+    usable = window - MOD.OUTPUT_RESERVE_TOKENS
+    expected = min(
+        round(usable * (1 - MOD.PRECOMPUTE_BUFFER_FRACTION)),
+        usable - MOD.CLIENT_TRIGGER_FLOOR_MARGIN_TOKENS,
+    )
+    assert MOD.dispatch_prompt_ceiling_tokens("sonnet") == expected
+    assert MOD.dispatch_prompt_ceiling_chars("sonnet") == int(
+        expected * MOD.PROMPT_CHARS_PER_TOKEN
+    )
+
+
+def test_ceiling_errs_toward_refusing_early():
+    """Direction of safety, the property the derivation exists to hold —
+    stated as inequalities so it survives any re-measure of the inputs."""
+    ceiling = MOD.dispatch_prompt_ceiling_tokens("sonnet")
+    # (a) the min() binds BELOW the fraction-only reading of the trigger: a
+    #     guard built from our three constants alone would be too generous.
+    fraction_only = round(
+        (MOD.SPAWN_AUTOCOMPACT_WINDOW_TOKENS - MOD.OUTPUT_RESERVE_TOKENS)
+        * (1 - MOD.PRECOMPUTE_BUFFER_FRACTION)
+    )
+    assert ceiling < fraction_only
+    # (b) the ceiling sits below the child's own pinned compaction window.
+    assert ceiling < MOD.SPAWN_AUTOCOMPACT_WINDOW_TOKENS
+    # (c) the char divisor sits below the 1.744 chars/token measured on the
+    #     failed dispatch, so the char budget is smaller than the measurement
+    #     would allow rather than larger.
+    assert MOD.PROMPT_CHARS_PER_TOKEN < 1.744
+
+
+def test_ceiling_for_an_inherited_model_equals_the_resolved_one(tmp_path):
+    """Assertion (11)'s derivation half: an unresolved model (child inherits
+    the parent's) must fall back to the roster floor, never to no ceiling and
+    never to zero. Both mistakes pass every other assertion in this module."""
+    assert MOD.dispatch_prompt_ceiling_tokens(None) == MOD.dispatch_prompt_ceiling_tokens("sonnet")
+    assert MOD.dispatch_prompt_ceiling_chars(None) > 0
 
 
 def test_prompt_exceeds_ceiling_boundary():
-    assert MOD.prompt_exceeds_ceiling("x" * MOD.DISPATCH_PROMPT_CEILING_CHARS) is False
-    assert MOD.prompt_exceeds_ceiling("x" * (MOD.DISPATCH_PROMPT_CEILING_CHARS + 1)) is True
+    ceiling = MOD.dispatch_prompt_ceiling_chars(None)
+    assert MOD.prompt_exceeds_ceiling("x" * ceiling) is False
+    assert MOD.prompt_exceeds_ceiling("x" * (ceiling + 1)) is True
 
 
 def test_main_refuses_oversized_prompt_before_spawning(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(MOD, "plans_dir", lambda: tmp_path)
     plan_path, _ = _two_stage_doc(tmp_path)
-    oversized_constraints = "x" * (MOD.DISPATCH_PROMPT_CEILING_CHARS + 1)
+    oversized_constraints = "x" * (MOD.dispatch_prompt_ceiling_chars(None) + 1)
     argv = [
         "--kind", "developer",
         "--plan", str(plan_path),
@@ -493,7 +538,7 @@ def test_main_refuses_oversized_prompt_before_spawning(tmp_path, monkeypatch, ca
     assert rc == 5
     err = capsys.readouterr().err
     assert "exceeding" in err
-    assert str(MOD.DISPATCH_PROMPT_CEILING_CHARS) in err
+    assert str(MOD.dispatch_prompt_ceiling_chars("sonnet")) in err
 
 
 def test_main_refuses_oversized_prompt_on_whole_plan_path_too(tmp_path, monkeypatch, capsys):
@@ -501,7 +546,7 @@ def test_main_refuses_oversized_prompt_on_whole_plan_path_too(tmp_path, monkeypa
     --plan-brief) must refuse identically."""
     monkeypatch.setattr(MOD, "plans_dir", lambda: tmp_path)
     plan_path, _ = _two_stage_doc(tmp_path)
-    oversized_constraints = "x" * (MOD.DISPATCH_PROMPT_CEILING_CHARS + 1)
+    oversized_constraints = "x" * (MOD.dispatch_prompt_ceiling_chars(None) + 1)
     argv = [
         "--kind", "developer",
         "--plan", str(plan_path),
@@ -520,7 +565,7 @@ def test_main_refusal_names_inherited_model_when_none_resolved(tmp_path, monkeyp
     claim a model was resolved."""
     monkeypatch.setattr(MOD, "plans_dir", lambda: tmp_path)
     plan_path, _ = _two_stage_doc(tmp_path)
-    oversized_constraints = "x" * (MOD.DISPATCH_PROMPT_CEILING_CHARS + 1)
+    oversized_constraints = "x" * (MOD.dispatch_prompt_ceiling_chars(None) + 1)
     argv = [
         "--kind", "code-reviewer",
         "--plan", str(plan_path),

@@ -428,43 +428,87 @@ AUTOCOMPACT_CEILING_TOKENS = 150_000
 # tengu_amber_moleskin / tengu_amber_rokovoko in client 2.1.220), so a fraction change
 # moves the trigger. The previous percentage mechanism carried the same exposure —
 # the fraction term is an outer min() in the client's trigger — so nothing is lost.
+# The next two are CLIENT-side constants, read out of the installed bundle at
+# /opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe,
+# client 2.1.220 — not values this repository owns. They move on a client
+# release without our involvement, so re-READ them from that bundle rather than
+# re-deriving them, and locate them by the surrounding literal strings rather
+# than by symbol name (the minifier renames symbols between builds). This is
+# the discipline config.md's claude-md-max-chars row already records for a
+# borrowed constant; the version named above is the only thing that later tells
+# a reader whether the numbers here still match the installed client.
 OUTPUT_RESERVE_TOKENS = 20_000        # min(maxOutputTokens, 20000) in the client
+CLIENT_TRIGGER_FLOOR_MARGIN_TOKENS = 13_000   # the floor term of the trigger's min()
 PRECOMPUTE_BUFFER_FRACTION = 0.2      # client default; server-tunable (see above)
 SPAWN_AUTOCOMPACT_WINDOW_TOKENS = (
     round(AUTOCOMPACT_CEILING_TOKENS / (1 - PRECOMPUTE_BUFFER_FRACTION))
     + OUTPUT_RESERVE_TOKENS
 )
 
-# Hard ceiling on the ASSEMBLED SPAWN PROMPT (the stdin payload assemble_prompt
-# returns), guarding a DIFFERENT failure than AUTOCOMPACT_CEILING_TOKENS above:
-# that one pins the CHILD's own compaction window once it is already running;
-# this one is the PARENT's pre-spawn decision whether to launch the child at
-# all. Re-measured 2026-08-15 against installed Claude Code client 2.1.220 (the
-# same bundle AUTOCOMPACT_CEILING_TOKENS cites), taking the smallest and most
-# conservative of three observed compositions (144k/160k/167k) — a plan whose
-# assembled prompt exceeds this hits the hard "Prompt is too long" failure the
-# smd-act-defects-8 stage-13 dispatch hit (363,377-char plan alone, 97% of a
-# 215,416-token prompt, dead in 13.5s after costing $0.81). Do NOT re-derive
-# without re-reading the bundle; do NOT add a per-model window table — the
-# same rationale as AUTOCOMPACT_CEILING_TOKENS applies (one conservative
-# number, not a table nobody re-verifies per model).
-DISPATCH_PROMPT_CEILING_TOKENS = 144_000
+# The `model max` term of the client's min(model max, configured window) step.
+# Deliberately ONE number rather than a per-model table, on the same rationale
+# as SPAWN_AUTOCOMPACT_WINDOW_TOKENS: it is the smallest window in the current
+# spawn roster — every MODEL_BY_KIND entry resolves to sonnet, whose maximum is
+# 200k — so applying it to every model is exact for the roster as it stands and
+# conservative for anything larger. A smaller-window model joining the roster
+# would make it too generous: a residual, not a guarantee.
+MODEL_FLOOR_WINDOW_TOKENS = 200_000
 
 # Conservative chars-per-token divisor for estimating an assembled prompt's
 # token count from its char count without invoking a tokenizer. Fixed below
-# the 1.744 chars/token actually measured on the failed dispatch above
+# the 1.744 chars/token actually measured on the failed dispatch below
 # (375,759 chars / 215,416 tokens), so this estimate errs toward refusing
 # early rather than discovering the failure only after the child is spawned.
+# The distance from 1.744 down to 1.5 is picked headroom, not a derivation:
+# only the ratio is measured, and nothing in it fixes how far below to sit.
 PROMPT_CHARS_PER_TOKEN = 1.5
 
-DISPATCH_PROMPT_CEILING_CHARS = int(DISPATCH_PROMPT_CEILING_TOKENS * PROMPT_CHARS_PER_TOKEN)
+
+def dispatch_prompt_ceiling_tokens(model: str | None) -> int:
+    """Largest assembled prompt (in tokens) this parent will spawn a child with.
+
+    Guards a DIFFERENT failure than AUTOCOMPACT_CEILING_TOKENS above: that one
+    pins the CHILD's own compaction window once it is already running; this is
+    the PARENT's pre-spawn decision whether to launch the child at all — the
+    failure the smd-act-defects-8 stage-13 dispatch hit (363,377-char plan
+    alone, 97% of a 215,416-token prompt, dead in 13.5s after costing $0.81).
+
+    Derived rather than written down, by reproducing BOTH steps of the client's
+    trigger: the min(model max, configured window) resolution, then the
+    min(fraction term, floor-margin term) trigger itself. Reproducing only the
+    fraction term reads 6000 tokens too generous on every spawn this repository
+    makes — once the model max clamps the window below our own pin, the floor
+    margin is what binds — and a guard that admits a prompt the client then
+    compacts is the very failure it exists to prevent.
+
+    `model` is the alias `resolve_model` returned, or None when none resolved
+    and the child inherits the parent's. It is deliberately not consulted:
+    every model takes MODEL_FLOOR_WINDOW_TOKENS, which is what gives the
+    inherited case a real ceiling instead of none. It stays in the signature as
+    the seam a smaller-window model would land on, and because the refusal
+    message reports which of the two cases produced the number.
+    """
+    window = min(MODEL_FLOOR_WINDOW_TOKENS, SPAWN_AUTOCOMPACT_WINDOW_TOKENS)
+    usable = window - OUTPUT_RESERVE_TOKENS
+    return min(
+        round(usable * (1 - PRECOMPUTE_BUFFER_FRACTION)),
+        usable - CLIENT_TRIGGER_FLOOR_MARGIN_TOKENS,
+    )
 
 
-def prompt_exceeds_ceiling(prompt: str) -> bool:
+def dispatch_prompt_ceiling_chars(model: str | None) -> int:
+    """The token ceiling above, converted into the unit the assembled prompt is
+    already measured in. The CEILING is multiplied by a divisor set below the
+    measured ratio, so the conversion shrinks the char budget; the prompt is
+    never converted the other way, which would invert that safety margin."""
+    return int(dispatch_prompt_ceiling_tokens(model) * PROMPT_CHARS_PER_TOKEN)
+
+
+def prompt_exceeds_ceiling(prompt: str, model: str | None = None) -> bool:
     """Whether the assembled prompt (stdin payload) is too large to safely
-    spawn, per DISPATCH_PROMPT_CEILING_CHARS. Applies uniformly regardless of
-    whether the size came from the brief or whole-plan path."""
-    return len(prompt) > DISPATCH_PROMPT_CEILING_CHARS
+    spawn. Applies uniformly regardless of whether the size came from the
+    brief or whole-plan path."""
+    return len(prompt) > dispatch_prompt_ceiling_chars(model)
 
 
 # Code-executing permission scoped to developer spawns only, injected into the
@@ -793,7 +837,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     model = resolve_model(args)
 
-    if prompt_exceeds_ceiling(prompt):
+    ceiling_chars = dispatch_prompt_ceiling_chars(model)
+    if prompt_exceeds_ceiling(prompt, model):
         measured = len(prompt)
         model_desc = (
             f"resolved to --model {model}"
@@ -802,7 +847,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(
             f"error: assembled prompt is {measured} chars, exceeding the "
-            f"{DISPATCH_PROMPT_CEILING_CHARS}-char ({DISPATCH_PROMPT_CEILING_TOKENS}-token) "
+            f"{ceiling_chars}-char ({dispatch_prompt_ceiling_tokens(model)}-token) "
             f"pre-spawn refusal ceiling for this child ({model_desc}); refusing before "
             f"spawning. Shrink constraints/dossier, or dispatch with --plan-brief if not "
             f"already set.",
@@ -813,7 +858,7 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "kind": args.kind,
                 "chars": measured,
-                "ceiling_chars": DISPATCH_PROMPT_CEILING_CHARS,
+                "ceiling_chars": ceiling_chars,
                 "model": model,
                 "plan_brief": getattr(args, "plan_brief", False),
                 "stage_index": args.stage_index,
