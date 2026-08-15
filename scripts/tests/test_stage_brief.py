@@ -21,6 +21,8 @@ import argparse
 import dataclasses
 import importlib.util
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -1165,6 +1167,71 @@ def test_oversized_prompt_never_reaches_the_launch_site(
     # early exit (a missing plan, an unparseable stage) that also never spawns.
     assert rc == 5
     assert "exceeding" in capsys.readouterr().err
+
+
+# --- verify command's own -k selection, term by term (assertion 8) ---------
+#
+# pytest's exit code distinguishes only the empty TOTAL selection, never an
+# empty term inside a disjunction: a suite run through
+# `-k 'a or b or c'` reports green so long as ANY term matches something, so a
+# keyword silently misspelled in a later rename removes its own share of
+# coverage while the run as a whole keeps passing. Checked here by
+# COLLECTION, one keyword at a time, never inferred from a green run of the
+# six-term selection as a whole.
+
+_VERIFY_COMMAND_KEYWORDS = (
+    "stage_brief",
+    "plan_brief",
+    "prompt_continuity",
+    "dispatch_semantics",
+    "dispatch_cwd",
+    "spawn_specialist_compose",
+)
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _collected_node_ids(keyword: str) -> list[str]:
+    """Every test node id a real `--collect-only -k <keyword>` selects under
+    scripts/tests — a subprocess, not a parse of a green run's summary line,
+    since a green run's exit code cannot tell an empty disjunction term from
+    a populated one."""
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "scripts/tests", "-q", "--collect-only", "-k", keyword],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    return [line for line in result.stdout.splitlines() if "::test_" in line]
+
+
+def test_stage_brief_and_plan_brief_keywords_collect_at_least_one_test():
+    """The two LOAD-BEARING terms of the verify command's `-k` selection —
+    both collected zero tests before this stage's work landed, because the
+    tests they name are the ones this stage itself writes. Both are satisfied
+    INSIDE this module: `stage_brief` matches by this file's own module name
+    (`test_stage_brief`), `plan_brief` matches
+    `test_build_argv_always_appends_plan_brief_flag` above. Recorded per
+    keyword so a future reader sees which term proves what."""
+    counts = {kw: len(_collected_node_ids(kw)) for kw in ("stage_brief", "plan_brief")}
+    for kw, n in counts.items():
+        assert n >= 1, f"load-bearing keyword {kw!r} collects zero tests: {counts}"
+    print(f"\nload-bearing keyword coverage: {counts}")
+
+
+def test_verify_command_keyword_selection_is_non_vacuous_term_by_term():
+    """All six terms of the verify command's own `-k` selection. The other
+    four (`prompt_continuity`, `dispatch_semantics`, `dispatch_cwd`,
+    `spawn_specialist_compose`) are regression guards against a later rename
+    — each already collects tests today, in its own sibling module
+    (test_spawn_prompt_continuity.py, test_dispatch_semantics.py,
+    test_dispatch_cwd.py, test_spawn_specialist_compose.py)."""
+    counts = {kw: len(_collected_node_ids(kw)) for kw in _VERIFY_COMMAND_KEYWORDS}
+    for kw, n in counts.items():
+        assert n >= 1, (
+            f"keyword {kw!r} in the verify command's -k selection collects zero tests: {counts}"
+        )
+    print(f"\nverify-command keyword coverage: {counts}")
 
 
 # --- non-portable, non-asserted real-plan measurement -----------------------
