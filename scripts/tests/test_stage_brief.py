@@ -434,6 +434,74 @@ def test_brief_eligible_false_when_plan_outside_plans_dir(tmp_path, monkeypatch)
     assert MOD.brief_eligible(_args(plan_path)) is False
 
 
+# --- the symlink pair (assertion 9) ------------------------------------------
+#
+# The gate dereferences BOTH sides before deciding containment, and only the
+# pair proves it: a literal-prefix implementation passes the refusing half and
+# fails the admitting one, while an implementation testing containment of the
+# as-given path passes the admitting half and hands the child a path under no
+# directory it was granted. Either half alone is satisfied by a prefix test.
+#
+# The refusing half is not hypothetical. This repository carries a
+# resolution-confirmed incident in which a path-based read-only guard was
+# defeated because the directory it exempted was itself a symlink into the
+# checkout it protected; the recorded remedy is exactly "dereference before
+# deciding" (memory-global/leaves/experience/
+# 2026-08-12-symlinked-write-path-defeats-path-based-guard.md). Prose is what
+# that incident already had, so this pins it with a probe.
+
+
+@pytest.mark.skipif(
+    not hasattr(Path, "symlink_to"), reason="platform without symlink support"
+)
+def test_symlink_inside_plans_dir_pointing_out_gets_the_whole_plan(tmp_path, monkeypatch):
+    """Half (i): the path LOOKS contained and its target is not. A literal
+    string-prefix containment check admits this and hands a plans_dir()-only
+    child a projection sourced from a file it may not open."""
+    plans = (tmp_path / "plans").resolve()
+    plans.mkdir()
+    outside = (tmp_path / "elsewhere").resolve()
+    outside.mkdir()
+    real_plan = outside / "plan.toml"
+    real_plan.write_text(TWO_STAGE_TOML, encoding="utf-8")
+
+    link = plans / "plan.toml"
+    link.symlink_to(real_plan)
+    monkeypatch.setattr(MOD, "plans_dir", lambda: plans)
+
+    assert MOD.brief_plan_path(_args(link)) is None
+    prompt = MOD.assemble_prompt(_args(link), depth=1, permissions="")
+    assert "Review the feature" in prompt  # whole plan text, unprojected
+    assert "projected" not in prompt  # and no pointer line
+
+
+@pytest.mark.skipif(
+    not hasattr(Path, "symlink_to"), reason="platform without symlink support"
+)
+def test_symlink_outside_plans_dir_pointing_in_gets_the_brief(tmp_path, monkeypatch):
+    """Half (ii): the path LOOKS uncontained and its target is contained. The
+    child may open the target, so it earns the brief — and the pointer must
+    name the target, never the outside spelling it was reached by, which is the
+    one path plans_dir() does not grant."""
+    plans = (tmp_path / "plans").resolve()
+    plans.mkdir()
+    outside = (tmp_path / "elsewhere").resolve()
+    outside.mkdir()
+    real_plan = plans / "plan.toml"
+    real_plan.write_text(TWO_STAGE_TOML, encoding="utf-8")
+
+    link = outside / "plan.toml"
+    link.symlink_to(real_plan)
+    monkeypatch.setattr(MOD, "plans_dir", lambda: plans)
+
+    assert MOD.brief_plan_path(_args(link)) == real_plan
+    prompt = MOD.assemble_prompt(_args(link), depth=1, permissions="")
+    assert "Implement the feature" in prompt
+    assert "Review the feature" not in prompt  # projected, not the whole plan
+    assert f"`{real_plan}`" in prompt  # pointer names the target...
+    assert str(link) not in prompt  # ...never the outside spelling
+
+
 # --- spawn-specialist.py assemble_prompt ------------------------------------
 
 
