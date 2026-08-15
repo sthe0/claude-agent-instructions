@@ -589,6 +589,28 @@ def _token_bearing_values(obj: object, token: str) -> list[str]:
     return found
 
 
+def _reachable_scalars(node: object) -> list[str]:
+    """Every scalar under `node` rendered as the text it would appear as —
+    dataclass fields walked reflectively so a field added to FinalCheck or
+    LandedSpec is covered without editing the caller. Booleans and None are
+    skipped: they have no literal surface in the rendered brief."""
+    out: list[str] = []
+    if node is None or isinstance(node, bool):
+        return out
+    if dataclasses.is_dataclass(node):
+        for f in dataclasses.fields(node):
+            out.extend(_reachable_scalars(getattr(node, f.name)))
+    elif isinstance(node, (list, tuple, set)):
+        for item in node:
+            out.extend(_reachable_scalars(item))
+    elif isinstance(node, str):
+        if node:
+            out.append(node)
+    elif isinstance(node, int):
+        out.append(str(node))
+    return out
+
+
 def test_twelve_stage_fixture_holds_the_shape_its_assertions_rest_on(tmp_path):
     """The fixture is itself load-bearing: every exclusion and size assertion
     below is only a discrimination if this shape holds. Asserted here rather
@@ -749,28 +771,6 @@ def test_twelve_stage_brief_carries_final_checks_by_label_only(tmp_path):
                 assert value not in section, (
                     f"final check {i}'s {f.name} contributed {value!r} to the brief"
                 )
-
-
-def _reachable_scalars(node: object) -> list[str]:
-    """Every scalar under `node` rendered as the text it would appear as —
-    dataclass fields walked reflectively so a field added to FinalCheck or
-    LandedSpec is covered without editing the caller. Booleans and None are
-    skipped: they have no literal surface in the rendered brief."""
-    out: list[str] = []
-    if node is None or isinstance(node, bool):
-        return out
-    if dataclasses.is_dataclass(node):
-        for f in dataclasses.fields(node):
-            out.extend(_reachable_scalars(getattr(node, f.name)))
-    elif isinstance(node, (list, tuple, set)):
-        for item in node:
-            out.extend(_reachable_scalars(item))
-    elif isinstance(node, str):
-        if node:
-            out.append(node)
-    elif isinstance(node, int):
-        out.append(str(node))
-    return out
 
 
 # --- agentctl plan-render --stage -------------------------------------------
