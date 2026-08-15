@@ -147,45 +147,25 @@ def permissions_digest(project_file: Path | None) -> str:
 
 
 def brief_plan_path(args: argparse.Namespace) -> Path | None:
-    """The RESOLVED path of `args.plan` when assemble_prompt should project it
-    to a single-stage brief (render_stage_brief) rather than inlining the whole
-    plan text; None when it should not.
+    """The resolved path of `args.plan` when assemble_prompt should project it
+    to a single-stage brief rather than inlining the whole plan text; None
+    when it should not (any condition failing falls back to whole-plan
+    behavior, never raises).
 
-    All of the following must hold:
-      - `args.kind` is one of PLANS_READ_KINDS (the same set already granted
-        read access to the plans directory by plans_permission_rules — a
-        kind that cannot read the plans tree has no business getting a
-        projection sourced from it either);
-      - the caller opted in via `--plan-brief`;
-      - a stage index was supplied (nothing to project without one);
-      - `args.plan` resolves (Path.resolve() on BOTH sides, mirroring
-        plans_permission_rules' own symlink-safe containment pattern) inside
-        `plans_dir()` — a plan living outside the trusted plans tree never
-        gets this treatment even if `--plan-brief` is passed by mistake.
-
-    The RESOLVED path is returned rather than discarded because the eligible
-    set includes a path given OUTSIDE plans_dir() whose target lies inside it.
-    There, the child holds --add-dir on plans_dir() and so may open the target
-    but not the path as typed on argv, so a pointer naming the argv spelling
-    would name a file under no directory the child was granted — handed over by
-    the very branch that checked it was reachable.
-
-    Any single failing condition falls back to None (whole-plan behavior),
-    never raises.
+    Returns the resolved path rather than `args.plan` as given because a
+    path given outside `plans_dir()` whose target resolves inside it is still
+    eligible, and the child's --add-dir only covers `plans_dir()` — a pointer
+    spelled as given could name a file the child has no grant to open.
     """
-    if getattr(args, "kind", None) not in PLANS_READ_KINDS:
-        return None
-    if not getattr(args, "plan_brief", False):
-        return None
-    if getattr(args, "stage_index", None) is None:
-        return None
+    kind_can_read_plans = getattr(args, "kind", None) in PLANS_READ_KINDS
+    opted_in = getattr(args, "plan_brief", False)
+    has_stage_index = getattr(args, "stage_index", None) is not None
     plan_path = getattr(args, "plan", None)
-    if not plan_path:
+    if not (kind_can_read_plans and opted_in and has_stage_index and plan_path):
         return None
     try:
         resolved_plan = Path(plan_path).resolve()
-        resolved_plans_dir = plans_dir().resolve()
-        resolved_plan.relative_to(resolved_plans_dir)
+        resolved_plan.relative_to(plans_dir().resolve())
     except (OSError, ValueError):
         return None
     return resolved_plan
@@ -480,35 +460,12 @@ PROMPT_CHARS_PER_TOKEN = 1.5
 
 
 def dispatch_prompt_ceiling_tokens(model: str | None) -> int:
-    """Largest assembled prompt (in tokens) this parent will spawn a child with.
-
-    Guards a DIFFERENT failure than AUTOCOMPACT_CEILING_TOKENS above: that one
-    pins the CHILD's own compaction window once it is already running; this is
-    the PARENT's pre-spawn decision whether to launch the child at all — the
-    failure the smd-act-defects-8 stage-13 dispatch hit (363,377-char plan
-    alone, 97% of a 215,416-token prompt, dead in 13.5s after costing $0.81).
-
-    Derived rather than written down, by reproducing BOTH steps of the client's
-    trigger: the min(model max, configured window) resolution, then the
-    min(fraction term, floor-margin term) trigger itself. Reproducing only the
-    fraction term reads 6000 tokens too generous on every spawn this repository
-    makes — once the model max clamps the window below our own pin, the floor
-    margin is what binds — and a guard that admits a prompt the client then
-    compacts is the very failure it exists to prevent.
-
-    `model` is the alias `resolve_model` returned, or None when none resolved
-    and the child inherits the parent's. It is deliberately not consulted:
-    every model takes MODEL_FLOOR_WINDOW_TOKENS, which is what gives the
-    inherited case a real ceiling instead of none. It stays in the signature as
-    the seam a smaller-window model would land on, and because the refusal
-    message reports which of the two cases produced the number.
-    """
+    """Largest assembled prompt (in tokens) this parent will spawn a child with."""
     window = min(MODEL_FLOOR_WINDOW_TOKENS, SPAWN_AUTOCOMPACT_WINDOW_TOKENS)
     usable = window - OUTPUT_RESERVE_TOKENS
-    return min(
-        round(usable * (1 - PRECOMPUTE_BUFFER_FRACTION)),
-        usable - CLIENT_TRIGGER_FLOOR_MARGIN_TOKENS,
-    )
+    fraction_term = round(usable * (1 - PRECOMPUTE_BUFFER_FRACTION))
+    floor_margin_term = usable - CLIENT_TRIGGER_FLOOR_MARGIN_TOKENS
+    return min(fraction_term, floor_margin_term)
 
 
 def dispatch_prompt_ceiling_chars(model: str | None) -> int:
