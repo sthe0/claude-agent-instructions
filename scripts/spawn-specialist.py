@@ -146,9 +146,10 @@ def permissions_digest(project_file: Path | None) -> str:
     return "\n\n".join(chunks)
 
 
-def brief_eligible(args: argparse.Namespace) -> bool:
-    """Whether assemble_prompt should project `args.plan` to a single-stage
-    brief (render_stage_brief) rather than inlining the whole plan text.
+def brief_plan_path(args: argparse.Namespace) -> Path | None:
+    """The RESOLVED path of `args.plan` when assemble_prompt should project it
+    to a single-stage brief (render_stage_brief) rather than inlining the whole
+    plan text; None when it should not.
 
     All of the following must hold:
       - `args.kind` is one of PLANS_READ_KINDS (the same set already granted
@@ -162,25 +163,38 @@ def brief_eligible(args: argparse.Namespace) -> bool:
         `plans_dir()` — a plan living outside the trusted plans tree never
         gets this treatment even if `--plan-brief` is passed by mistake.
 
-    Any single failing condition falls back to False (whole-plan behavior),
+    The RESOLVED path is returned rather than discarded because the eligible
+    set includes a path given OUTSIDE plans_dir() whose target lies inside it.
+    There, the child holds --add-dir on plans_dir() and so may open the target
+    but not the path as typed on argv, so a pointer naming the argv spelling
+    would name a file under no directory the child was granted — handed over by
+    the very branch that checked it was reachable.
+
+    Any single failing condition falls back to None (whole-plan behavior),
     never raises.
     """
     if getattr(args, "kind", None) not in PLANS_READ_KINDS:
-        return False
+        return None
     if not getattr(args, "plan_brief", False):
-        return False
+        return None
     if getattr(args, "stage_index", None) is None:
-        return False
+        return None
     plan_path = getattr(args, "plan", None)
     if not plan_path:
-        return False
+        return None
     try:
         resolved_plan = Path(plan_path).resolve()
         resolved_plans_dir = plans_dir().resolve()
         resolved_plan.relative_to(resolved_plans_dir)
     except (OSError, ValueError):
-        return False
-    return True
+        return None
+    return resolved_plan
+
+
+def brief_eligible(args: argparse.Namespace) -> bool:
+    """Whether `args` earns a projected stage brief — `brief_plan_path`'s
+    predicate face, for callers that need the decision and not the path."""
+    return brief_plan_path(args) is not None
 
 
 def assemble_prompt(args: argparse.Namespace, depth: int, permissions: str) -> str:
@@ -207,11 +221,12 @@ def assemble_prompt(args: argparse.Namespace, depth: int, permissions: str) -> s
             f"stage's work.",
             "",
         ]
-    if brief_eligible(args):
+    resolved_plan = brief_plan_path(args)
+    if resolved_plan is not None:
         doc = load_plan(str(args.plan))
         plan_label = (
             f"## Working plan — stage {args.stage_index} brief "
-            f"(projected; the full plan lives at `{args.plan}`, not inlined here)"
+            f"(projected; the full plan lives at `{resolved_plan}`, not inlined here)"
         )
         plan_body = render_stage_brief(doc, args.stage_index)
     else:

@@ -446,6 +446,33 @@ def test_assemble_prompt_projects_brief_when_eligible(tmp_path, monkeypatch):
     assert "brief" in prompt.lower()
 
 
+def test_assemble_prompt_pointer_names_the_resolved_plan_path(tmp_path, monkeypatch):
+    """The pointer is the child's ONLY route back to what the projection left
+    out, so it must name a path the child can actually open: the resolved one,
+    which is what plans_dir() grants, never the spelling that happened to
+    arrive on argv. Pinned on the pointer's LITERAL text — a substring test for
+    the resolved path alone passes on a prompt that also carries the argv
+    spelling somewhere else."""
+    real_dir = (tmp_path / "plans").resolve()
+    real_dir.mkdir()
+    monkeypatch.setattr(MOD, "plans_dir", lambda: real_dir)
+    plan_path, _ = _two_stage_doc(real_dir)
+
+    # An indirect spelling of the SAME file: resolve() collapses it, so a
+    # pointer built from `args.plan` and one built from the resolved path are
+    # distinguishable in the rendered text.
+    argv_spelling = real_dir / "sub" / ".." / plan_path.name
+    (real_dir / "sub").mkdir()
+
+    prompt = MOD.assemble_prompt(_args(argv_spelling), depth=1, permissions="")
+    expected = (
+        f"## Working plan — stage 1 brief (projected; the full plan lives at "
+        f"`{plan_path.resolve()}`, not inlined here)"
+    )
+    assert expected in prompt
+    assert str(argv_spelling) not in prompt
+
+
 def test_assemble_prompt_byte_identical_fallback_when_not_eligible(tmp_path, monkeypatch):
     monkeypatch.setattr(MOD, "plans_dir", lambda: tmp_path)
     plan_path, _ = _two_stage_doc(tmp_path)
