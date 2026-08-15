@@ -1024,3 +1024,110 @@ def test_replan_refresh_delivery_worktree(store, fixtures_dir, tmp_path, kind):
     state = store.load(sid)
     assert state.delivery_worktree == expected
     assert state.repo_root == repo
+
+
+def test_apply_refined_carries_verify_venue_at_final():
+    """Regression test: verify_venue_at_final added to Criterion schema (v24) after
+    _apply_refined_stage_fields was written. A stage declaring verify_venue_at_final
+    must carry that value after the copy, not drop it to None."""
+    cur = Stage(
+        index=1,
+        title="live stage",
+        subject=Subject(material="m", result="r-old", invariants="i"),
+        means=Means(means="means", method="method"),
+        actor=Actor(executor="spawn:test"),
+        criterion=Criterion(
+            criterion_type="measurable",
+            done_criterion="done",
+            verify_venue="delivery",
+            verify_venue_at_final=None,
+        ),
+        conditions="c",
+        supplies=[],
+    )
+    refined = Stage(
+        index=1,
+        title="refined",
+        subject=Subject(material="m", result="r-new", invariants="i"),
+        means=Means(means="means", method="method"),
+        actor=Actor(executor="spawn:test"),
+        criterion=Criterion(
+            criterion_type="measurable",
+            done_criterion="done",
+            verify_venue="delivery",
+            verify_venue_at_final="repo_root",
+        ),
+        conditions="c",
+        supplies=[],
+    )
+
+    cli._apply_refined_stage_fields(cur, refined)
+    assert cur.criterion.verify_venue_at_final == "repo_root"
+
+
+def test_apply_refined_copies_all_criterion_fields_except_engine_written():
+    """Behavioral totality test: _apply_refined_stage_fields must copy every
+    Criterion field that the plan declares, and skip only the engine-written ones.
+    A field forgotten here silently loses its declaration across a replan; this test
+    catches the omission by asserting that for EACH field, the destination holds
+    either the source's value (copied) or its original value (deliberately skipped),
+    with the skipped set exactly the named engine-written set."""
+    from dataclasses import fields as dc_fields
+
+    # Build two stages whose every Criterion field differs.
+    def _criterion_with_tag(tag):
+        return Criterion(
+            criterion_type=f"measurable-{tag}",
+            done_criterion=f"done-{tag}",
+            verify_command=f"cmd-{tag}",
+            expected_exit=1 if tag == "src" else 2,
+            observation=f"obs-{tag}",
+            verify_venue=f"delivery-{tag}" if tag == "src" else "repo_root",
+            verify_kind=f"shell-{tag}" if tag == "src" else "landed",
+            landed=LandedSpec(target=f"target-{tag}", delivered_stage=1 if tag == "src" else 2),
+            verify_venue_at_final=f"final-{tag}" if tag == "src" else None,
+        )
+
+    cur = Stage(
+        index=1,
+        title="cur",
+        subject=Subject(material="m", result="r", invariants="i"),
+        means=Means(means="means", method="method"),
+        actor=Actor(executor="spawn:test"),
+        criterion=_criterion_with_tag("cur"),
+        conditions="c",
+        supplies=[],
+    )
+    refined = Stage(
+        index=1,
+        title="refined",
+        subject=Subject(material="m", result="r", invariants="i"),
+        means=Means(means="means", method="method"),
+        actor=Actor(executor="spawn:test"),
+        criterion=_criterion_with_tag("src"),
+        conditions="c",
+        supplies=[],
+    )
+    original_observation = cur.criterion.observation
+
+    cli._apply_refined_stage_fields(cur, refined)
+
+    # For each field, assert it was either copied or deliberately skipped.
+    skipped = cli._CRITERION_ENGINE_WRITTEN_FIELDS
+    for field in dc_fields(Criterion):
+        refined_val = getattr(refined.criterion, field.name)
+        result_val = getattr(cur.criterion, field.name)
+        if field.name in skipped:
+            # Engine-written fields must NOT be copied.
+            assert result_val == original_observation or field.name == "observation", \
+                f"Field {field.name} should be skipped but was changed"
+        else:
+            # All other fields must be copied.
+            assert result_val == refined_val, \
+                f"Field {field.name} should be copied but was not: got {result_val}, expected {refined_val}"
+
+    # The copied set plus the skipped set must cover every field exactly once.
+    all_fields = {f.name for f in dc_fields(Criterion)}
+    copied = all_fields - skipped
+    assert copied | skipped == all_fields, \
+        f"Copied and skipped sets do not partition all fields. Copied: {copied}, Skipped: {skipped}"
