@@ -35,6 +35,8 @@ import time
 from pathlib import Path
 
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
+from agentctl.plan import load_plan  # parse the TOML plan for a single-stage brief projection
+from agentctl.render import render_stage_brief  # pure PlanDoc+index -> markdown brief
 from lib import argv_text  # one place decides how an argv value names its text
 from lib import marker_extract  # unconditional second-pass marker extraction (model is the primary classifier)
 from lib.config_root import iter_transcripts, plans_dir, skills_dir  # config-root resolver (isolated system root)
@@ -144,6 +146,37 @@ def permissions_digest(project_file: Path | None) -> str:
     return "\n\n".join(chunks)
 
 
+def brief_plan_path(args: argparse.Namespace) -> Path | None:
+    """The resolved path of `args.plan` when assemble_prompt should project it
+    to a single-stage brief rather than inlining the whole plan text; None
+    when it should not (any condition failing falls back to whole-plan
+    behavior, never raises).
+
+    Returns the resolved path rather than `args.plan` as given because a
+    path given outside `plans_dir()` whose target resolves inside it is still
+    eligible, and the child's --add-dir only covers `plans_dir()` — a pointer
+    spelled as given could name a file the child has no grant to open.
+    """
+    kind_can_read_plans = getattr(args, "kind", None) in PLANS_READ_KINDS
+    opted_in = getattr(args, "plan_brief", False)
+    has_stage_index = getattr(args, "stage_index", None) is not None
+    plan_path = getattr(args, "plan", None)
+    if not (kind_can_read_plans and opted_in and has_stage_index and plan_path):
+        return None
+    try:
+        resolved_plan = Path(plan_path).resolve()
+        resolved_plan.relative_to(plans_dir().resolve())
+    except (OSError, ValueError):
+        return None
+    return resolved_plan
+
+
+def brief_eligible(args: argparse.Namespace) -> bool:
+    """Whether `args` earns a projected stage brief — `brief_plan_path`'s
+    predicate face, for callers that need the decision and not the path."""
+    return brief_plan_path(args) is not None
+
+
 def assemble_prompt(args: argparse.Namespace, depth: int, permissions: str) -> str:
     plan = argv_text.read_required_file(args.plan, "--plan")
     constraints = (argv_text.read_arg_text(args.constraints) or "").rstrip()
@@ -168,7 +201,18 @@ def assemble_prompt(args: argparse.Namespace, depth: int, permissions: str) -> s
             f"stage's work.",
             "",
         ]
-    sections += ["## Working plan", "", plan, ""]
+    resolved_plan = brief_plan_path(args)
+    if resolved_plan is not None:
+        doc = load_plan(str(args.plan))
+        plan_label = (
+            f"## Working plan — stage {args.stage_index} brief "
+            f"(projected; the full plan lives at `{resolved_plan}`, not inlined here)"
+        )
+        plan_body = render_stage_brief(doc, args.stage_index)
+    else:
+        plan_label = "## Working plan"
+        plan_body = plan
+    sections += [plan_label, "", plan_body, ""]
     sections += [
         "## Done criterion for this step",
         "",
@@ -315,6 +359,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--stage-index", type=int, default=None, help="index of the plan stage this spawn serves (optional; enables per-stage cost attribution)")
     p.add_argument(
+        "--plan-brief",
+        action="store_true",
+        help="project only --stage-index's stage into the prompt (render_stage_brief) "
+        "instead of inlining the whole plan; requires --kind in PLANS_READ_KINDS, "
+        "--stage-index set, and --plan to resolve inside plans_dir() — falls back "
+        "to today's whole-plan behavior otherwise (see brief_eligible)",
+    )
+    p.add_argument(
         "--continue-worktree",
         default=None,
         help="path of a prior dependent stage's linked worktree/branch to continue "
@@ -371,12 +423,64 @@ AUTOCOMPACT_CEILING_TOKENS = 150_000
 # tengu_amber_moleskin / tengu_amber_rokovoko in client 2.1.220), so a fraction change
 # moves the trigger. The previous percentage mechanism carried the same exposure —
 # the fraction term is an outer min() in the client's trigger — so nothing is lost.
+# The next two are CLIENT-side constants, read out of the installed bundle at
+# /opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe,
+# client 2.1.220 — not values this repository owns. They move on a client
+# release without our involvement, so re-READ them from that bundle rather than
+# re-deriving them, and locate them by the surrounding literal strings rather
+# than by symbol name (the minifier renames symbols between builds). This is
+# the discipline config.md's claude-md-max-chars row already records for a
+# borrowed constant; the version named above is the only thing that later tells
+# a reader whether the numbers here still match the installed client.
 OUTPUT_RESERVE_TOKENS = 20_000        # min(maxOutputTokens, 20000) in the client
+CLIENT_TRIGGER_FLOOR_MARGIN_TOKENS = 13_000   # the floor term of the trigger's min()
 PRECOMPUTE_BUFFER_FRACTION = 0.2      # client default; server-tunable (see above)
 SPAWN_AUTOCOMPACT_WINDOW_TOKENS = (
     round(AUTOCOMPACT_CEILING_TOKENS / (1 - PRECOMPUTE_BUFFER_FRACTION))
     + OUTPUT_RESERVE_TOKENS
 )
+
+# The `model max` term of the client's min(model max, configured window) step.
+# Deliberately ONE number rather than a per-model table, on the same rationale
+# as SPAWN_AUTOCOMPACT_WINDOW_TOKENS: it is the smallest window in the current
+# spawn roster — every MODEL_BY_KIND entry resolves to sonnet, whose maximum is
+# 200k — so applying it to every model is exact for the roster as it stands and
+# conservative for anything larger. A smaller-window model joining the roster
+# would make it too generous: a residual, not a guarantee.
+MODEL_FLOOR_WINDOW_TOKENS = 200_000
+
+# Conservative chars-per-token divisor for estimating an assembled prompt's
+# token count from its char count without invoking a tokenizer. Fixed below
+# the 1.744 chars/token actually measured on the failed dispatch below
+# (375,759 chars / 215,416 tokens), so this estimate errs toward refusing
+# early rather than discovering the failure only after the child is spawned.
+# The distance from 1.744 down to 1.5 is picked headroom, not a derivation:
+# only the ratio is measured, and nothing in it fixes how far below to sit.
+PROMPT_CHARS_PER_TOKEN = 1.5
+
+
+def dispatch_prompt_ceiling_tokens(model: str | None) -> int:
+    """Largest assembled prompt (in tokens) this parent will spawn a child with."""
+    window = min(MODEL_FLOOR_WINDOW_TOKENS, SPAWN_AUTOCOMPACT_WINDOW_TOKENS)
+    usable = window - OUTPUT_RESERVE_TOKENS
+    fraction_term = round(usable * (1 - PRECOMPUTE_BUFFER_FRACTION))
+    floor_margin_term = usable - CLIENT_TRIGGER_FLOOR_MARGIN_TOKENS
+    return min(fraction_term, floor_margin_term)
+
+
+def dispatch_prompt_ceiling_chars(model: str | None) -> int:
+    """The token ceiling above, converted into the unit the assembled prompt is
+    already measured in. The CEILING is multiplied by a divisor set below the
+    measured ratio, so the conversion shrinks the char budget; the prompt is
+    never converted the other way, which would invert that safety margin."""
+    return int(dispatch_prompt_ceiling_tokens(model) * PROMPT_CHARS_PER_TOKEN)
+
+
+def prompt_exceeds_ceiling(prompt: str, model: str | None = None) -> bool:
+    """Whether the assembled prompt (stdin payload) is too large to safely
+    spawn. Applies uniformly regardless of whether the size came from the
+    brief or whole-plan path."""
+    return len(prompt) > dispatch_prompt_ceiling_chars(model)
 
 
 # Code-executing permission scoped to developer spawns only, injected into the
@@ -694,8 +798,46 @@ def main(argv: list[str] | None = None) -> int:
     tier_label_usd = budget_value(args.budget, constants)
     cap = runaway_ceiling(constants)
     perms = permissions_digest(args.project_permissions)
-    prompt = assemble_prompt(args, depth_next, perms)
+    try:
+        prompt = assemble_prompt(args, depth_next, perms)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        log_refused(
+            "stage-brief-error",
+            {"kind": args.kind, "plan": argv_text.abbreviate(args.plan), "stage_index": args.stage_index},
+        )
+        return 2
     model = resolve_model(args)
+
+    ceiling_chars = dispatch_prompt_ceiling_chars(model)
+    if prompt_exceeds_ceiling(prompt, model):
+        measured = len(prompt)
+        model_desc = (
+            f"resolved to --model {model}"
+            if model is not None
+            else "inherited from the parent (no per-kind/complexity model resolved)"
+        )
+        print(
+            f"error: assembled prompt is {measured} chars, exceeding the "
+            f"{ceiling_chars}-char ({dispatch_prompt_ceiling_tokens(model)}-token) "
+            f"pre-spawn refusal ceiling for this child ({model_desc}); refusing before "
+            f"spawning. Shrink constraints/dossier, or dispatch with --plan-brief if not "
+            f"already set.",
+            file=sys.stderr,
+        )
+        log_refused(
+            "prompt-too-large",
+            {
+                "kind": args.kind,
+                "chars": measured,
+                "ceiling_chars": ceiling_chars,
+                "model": model,
+                "plan_brief": getattr(args, "plan_brief", False),
+                "stage_index": args.stage_index,
+            },
+        )
+        return 5
+
     plans_directory = plans_dir()
 
     cmd = [

@@ -20,6 +20,7 @@ import shlex
 import subprocess
 import sys
 import time
+from dataclasses import fields
 from pathlib import Path
 
 import proc_tree
@@ -225,6 +226,9 @@ def _snapshot_approved_plan(store: StateStore, state: SessionState) -> tuple[str
     return str(snap), digest
 
 
+_CRITERION_ENGINE_WRITTEN_FIELDS = frozenset({"observation"})
+
+
 def _apply_refined_stage_fields(cur, refined) -> None:
     """Copy the definition fields of a freshly-loaded stage onto the matching live
     stage. Shared by both replan branches that re-materialize from a corrected plan
@@ -249,6 +253,7 @@ def _apply_refined_stage_fields(cur, refined) -> None:
     replan substantive: copying them is a no-op for the two replan callers and
     load-bearing only for the approve-time refresh, which absorbs an in-place edit
     made at plan-mutable PLAN_READY."""
+
     cur.title = refined.title
     cur.subject.material = refined.subject.material
     cur.subject.result = refined.subject.result
@@ -261,18 +266,11 @@ def _apply_refined_stage_fields(cur, refined) -> None:
     cur.knowledge = refined.knowledge
     cur.conditions = refined.conditions
     cur.preconditions = refined.preconditions
-    cur.criterion.verify_command = refined.criterion.verify_command
-    cur.criterion.expected_exit = refined.criterion.expected_exit
-    cur.criterion.done_criterion = refined.criterion.done_criterion
-    cur.criterion.criterion_type = refined.criterion.criterion_type
-    cur.criterion.verify_venue = refined.criterion.verify_venue
-    cur.criterion.verify_kind = refined.criterion.verify_kind
-    cur.criterion.landed = refined.criterion.landed
-    cur.criterion.verify_venue_at_final = refined.criterion.verify_venue_at_final
+    for field in fields(Criterion):
+        if field.name not in _CRITERION_ENGINE_WRITTEN_FIELDS:
+            setattr(cur.criterion, field.name, getattr(refined.criterion, field.name))
     cur.actor.executor = refined.actor.executor
     cur.actor.cost_tier = refined.actor.cost_tier
-    # depends_on is a read-only projection over `supplies`, so the backing edges
-    # are what must be copied for the key's deps element to track the plan.
     cur.supplies = list(refined.supplies)
 
 
@@ -5420,6 +5418,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("plan-render"); sp.add_argument("--plan", required=True,
         help="TOML plan to render to a markdown prose view on demand (a projection, "
              "never written to disk — the TOML is the single source of truth)")
+    sp.add_argument("--stage", type=int, default=None,
+        help="render only this stage index as a brief projection, instead of "
+             "the whole plan (the spawn prompt's per-dispatch projection)")
     # Accept (and ignore) --session so the harness-session auto-injection
     # (_inject_default_session) is a no-op here: rendering is a pure, session-free
     # read of the plan file, unlike every other verb which drives session state.

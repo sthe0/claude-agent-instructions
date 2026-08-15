@@ -1028,3 +1028,101 @@ def test_replan_refresh_delivery_worktree(store, fixtures_dir, tmp_path, kind):
     state = store.load(sid)
     assert state.delivery_worktree == expected
     assert state.repo_root == repo
+
+
+def test_apply_refined_carries_verify_venue_at_final():
+    """Regression test: verify_venue_at_final added to Criterion schema (v24) after
+    _apply_refined_stage_fields was written. A stage declaring verify_venue_at_final
+    must carry that value after the copy, not drop it to None."""
+    cur = Stage(
+        index=1,
+        title="live stage",
+        subject=Subject(material="m", result="r-old", invariants="i"),
+        means=Means(means="means", method="method"),
+        actor=Actor(executor="spawn:test"),
+        criterion=Criterion(
+            criterion_type="measurable",
+            done_criterion="done",
+            verify_venue="delivery",
+            verify_venue_at_final=None,
+        ),
+        conditions="c",
+        supplies=[],
+    )
+    refined = Stage(
+        index=1,
+        title="refined",
+        subject=Subject(material="m", result="r-new", invariants="i"),
+        means=Means(means="means", method="method"),
+        actor=Actor(executor="spawn:test"),
+        criterion=Criterion(
+            criterion_type="measurable",
+            done_criterion="done",
+            verify_venue="delivery",
+            verify_venue_at_final="repo_root",
+        ),
+        conditions="c",
+        supplies=[],
+    )
+
+    cli._apply_refined_stage_fields(cur, refined)
+    assert cur.criterion.verify_venue_at_final == "repo_root"
+
+
+def test_apply_refined_copies_all_criterion_fields_except_engine_written():
+    """A new Criterion field added after this function was written must not be silently dropped."""
+    from dataclasses import fields as dc_fields
+
+    def _criterion_with_tag(tag):
+        return Criterion(
+            criterion_type=f"measurable-{tag}",
+            done_criterion=f"done-{tag}",
+            verify_command=f"cmd-{tag}",
+            expected_exit=1 if tag == "src" else 2,
+            observation=f"obs-{tag}",
+            verify_venue=f"delivery-{tag}" if tag == "src" else "repo_root",
+            verify_kind=f"shell-{tag}" if tag == "src" else "landed",
+            landed=LandedSpec(target=f"target-{tag}", delivered_stage=1 if tag == "src" else 2),
+            verify_venue_at_final=f"final-{tag}" if tag == "src" else None,
+        )
+
+    cur = Stage(
+        index=1,
+        title="cur",
+        subject=Subject(material="m", result="r", invariants="i"),
+        means=Means(means="means", method="method"),
+        actor=Actor(executor="spawn:test"),
+        criterion=_criterion_with_tag("cur"),
+        conditions="c",
+        supplies=[],
+    )
+    refined = Stage(
+        index=1,
+        title="refined",
+        subject=Subject(material="m", result="r", invariants="i"),
+        means=Means(means="means", method="method"),
+        actor=Actor(executor="spawn:test"),
+        criterion=_criterion_with_tag("src"),
+        conditions="c",
+        supplies=[],
+    )
+
+    assert all(getattr(cur.criterion, f.name) != getattr(refined.criterion, f.name)
+               for f in dc_fields(Criterion)), \
+        "Fixtures must differ in every field"
+
+    pre_copy_values = {f.name: getattr(cur.criterion, f.name) for f in dc_fields(Criterion)}
+    cli._apply_refined_stage_fields(cur, refined)
+
+    expected_engine_written = {"observation"}
+    for field in dc_fields(Criterion):
+        result_val = getattr(cur.criterion, field.name)
+        refined_val = getattr(refined.criterion, field.name)
+        if field.name in expected_engine_written:
+            assert result_val == pre_copy_values[field.name], \
+                f"Engine-written field {field.name} should not be copied"
+        else:
+            assert result_val == refined_val, \
+                f"Field {field.name} should be copied but was not"
+
+    assert cli._CRITERION_ENGINE_WRITTEN_FIELDS == expected_engine_written
