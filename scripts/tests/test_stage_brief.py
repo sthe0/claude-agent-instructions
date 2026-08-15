@@ -18,6 +18,7 @@ outright ("Prompt is too long"). This module covers:
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import importlib.util
 from pathlib import Path
 
@@ -26,7 +27,17 @@ import pytest
 from agentctl.dispatch import build_argv
 from agentctl.plan import PlanDoc, PlanMeta, load_plan
 from agentctl.render import cmd_plan_render, render_stage_brief
-from agentctl.state import Actor, Criterion, Means, Principle, Stage, Subject, Supply
+from agentctl.state import (
+    Actor,
+    Criterion,
+    FinalCheck,
+    LandedSpec,
+    Means,
+    Principle,
+    Stage,
+    Subject,
+    Supply,
+)
 
 SCRIPT = Path(__file__).resolve().parent.parent / "spawn-specialist.py"
 
@@ -63,6 +74,7 @@ method = "add the handler"
 conditions = "none"
 invariants = "existing tests keep passing"
 capability_required = "edit source files"
+output_artifacts = ["src/feature.py", "docs/feature.md"]
 
 [stage.principle]
 statement = "s"
@@ -95,6 +107,13 @@ refutation = "r"
 
 [[stage.supplies]]
 on = 1
+
+[[final_check]]
+command = "pytest -q"
+label = "unit tests green"
+
+[[final_check]]
+command = "true"
 """
 
 
@@ -155,6 +174,172 @@ def test_render_stage_brief_renders_fields_the_whole_plan_view_omits():
     assert "reviewed by code-reviewer" in brief  # control
     assert "prior attempt failed on X" in brief  # criterion.observation
     assert "Expected exit:** 1" in brief  # criterion.expected_exit (nonzero)
+
+
+def test_render_stage_brief_direct_dependency_carries_title_result_and_artifacts(tmp_path):
+    """Stage 2 depends on stage 1 (`[[stage.supplies]] on = 1`). Rendered from
+    stage 2's side, the brief must carry stage 1's title, its expected result
+    image, and its output artifacts — as stage 1's own block, distinct from
+    stage 2's own **Expected result image**."""
+    _, doc = _two_stage_doc(tmp_path)
+    brief = render_stage_brief(doc, 2)
+    assert "Implement the feature" in brief  # dependency's title
+    assert "the feature works per the spec" in brief  # dependency's result image
+    assert "docs/feature.md" in brief  # dependency's output_artifacts
+    # Stage 2's own result image must still be present, and distinguishable
+    # from the dependency's — this asserts the SHAPE, not just presence.
+    assert "review is clean" in brief
+
+
+def test_render_stage_brief_renders_final_check_labels(tmp_path):
+    """meta.final_check carries two checks: one labelled, one not. Both must
+    surface in the brief by label (or, for the unlabelled one, by position +
+    kind) — never as a bare command/venue/kind dump."""
+    _, doc = _two_stage_doc(tmp_path)
+    brief = render_stage_brief(doc, 1)
+    assert "unit tests green" in brief
+    assert "check 2 (shell)" in brief  # the unlabelled check: position + kind
+    assert "`true`" not in brief  # the unlabelled check's command must not leak
+
+
+def test_render_stage_brief_covers_every_populated_field(tmp_path):
+    """Reflection-anchored regression: every dataclass field of Stage/PlanMeta
+    and their nested structs must be considered here, so a field silently
+    added later without a matching assertion is caught by the drift check
+    below rather than by discovering, months on, that a dispatched specialist
+    never received it. `Stage.outcome` is the SOLE deliberate exclusion (the
+    engine's mutable execution history, not an input) and is asserted absent,
+    not merely un-asserted. `FinalCheck`'s command/venue/kind are excluded by
+    the stage-brief's own labels-only method (covered separately, above) — not
+    by this test — so they are intentionally left out of `CHECKED_FIELDS`
+    with a comment, same as `Stage.outcome`.
+    """
+    principle = Principle(
+        statement="STATEMENT_V", source="SOURCE_V", derivation="DERIVATION_V",
+        confidence="CONFIDENCE_V", refutation="REFUTATION_V",
+    )
+    criterion = Criterion(
+        criterion_type="CRITERION_TYPE_V",
+        done_criterion="DONE_CRITERION_V",
+        verify_command="VERIFY_COMMAND_V",
+        expected_exit=42,
+        observation="OBSERVATION_V",
+        verify_venue="VERIFY_VENUE_V",
+        verify_venue_at_final="VERIFY_VENUE_AT_FINAL_V",
+    )
+    stage = Stage(
+        index=1,
+        title="TITLE_V",
+        subject=Subject(material="MATERIAL_V", result="RESULT_V", invariants="INVARIANTS_V"),
+        means=Means(means="MEANS_V", method="METHOD_V"),
+        actor=Actor(executor="EXECUTOR_V", capability_required="CAPABILITY_V", cost_tier="COST_TIER_V"),
+        criterion=criterion,
+        principle=principle,
+        conditions="CONDITIONS_V",
+        supplies=[Supply(on=7, element="ELEMENT_V", artifact="ARTIFACT_V")],
+        output_artifacts=["OUTPUT_ARTIFACT_V"],
+        control="CONTROL_V",
+    )
+    meta = PlanMeta(
+        task_id="TASK_ID_V",
+        goal="GOAL_V",
+        done_criterion="OVERALL_DONE_CRITERION_V",
+        criterion_type="OVERALL_CRITERION_TYPE_V",
+        weight_class="WEIGHT_CLASS_V",
+        external_research="EXTERNAL_RESEARCH_V",
+        repo_root="REPO_ROOT_V",
+        delivery_worktree="DELIVERY_WORKTREE_V",
+        final_check=[FinalCheck(command="FC_COMMAND_V", label="FC_LABEL_V")],
+    )
+    doc = PlanDoc(meta=meta, stages=[stage])
+    brief = render_stage_brief(doc, 1)
+
+    must_appear = [
+        "TITLE_V", "MATERIAL_V", "RESULT_V", "INVARIANTS_V", "MEANS_V", "METHOD_V",
+        "EXECUTOR_V", "CAPABILITY_V", "COST_TIER_V", "CRITERION_TYPE_V",
+        "DONE_CRITERION_V", "VERIFY_COMMAND_V", "42", "OBSERVATION_V",
+        "VERIFY_VENUE_V", "VERIFY_VENUE_AT_FINAL_V", "STATEMENT_V", "SOURCE_V",
+        "DERIVATION_V", "CONFIDENCE_V", "REFUTATION_V", "CONDITIONS_V",
+        "OUTPUT_ARTIFACT_V", "CONTROL_V", "on stage 7", "ELEMENT_V", "ARTIFACT_V",
+        "TASK_ID_V", "GOAL_V", "OVERALL_DONE_CRITERION_V", "OVERALL_CRITERION_TYPE_V",
+        "WEIGHT_CLASS_V", "EXTERNAL_RESEARCH_V", "REPO_ROOT_V", "DELIVERY_WORKTREE_V",
+        "FC_LABEL_V",
+    ]
+    assert "## Stage 1: TITLE_V" in brief  # Stage.index, via the section heading
+
+    for value in must_appear:
+        assert value in brief, f"{value!r} (a populated field's value) missing from stage brief"
+
+    # The documented exclusions: Stage.outcome (engine execution history) and
+    # FinalCheck.command (the stage-brief's labels-only method for final checks).
+    assert "FC_COMMAND_V" not in brief
+    assert stage.outcome.status not in brief  # "pending" — never rendered at all
+
+    # Drift check: every field on every struct render_stage_brief consults
+    # must be accounted for above (present in must_appear) or explicitly
+    # named as a deliberate exclusion here — a newly-added field satisfies
+    # neither and fails this assertion, rather than passing silently.
+    checked = {
+        (Stage, "index"), (Stage, "title"), (Stage, "subject"), (Stage, "means"),
+        (Stage, "actor"), (Stage, "criterion"), (Stage, "principle"),
+        (Stage, "conditions"), (Stage, "supplies"), (Stage, "output_artifacts"),
+        (Stage, "outcome"),  # excluded: engine execution history
+        (Stage, "control"),
+        (Subject, "material"), (Subject, "result"), (Subject, "invariants"),
+        (Means, "means"), (Means, "method"),
+        (Actor, "executor"), (Actor, "capability_required"), (Actor, "cost_tier"),
+        (Criterion, "criterion_type"), (Criterion, "done_criterion"),
+        (Criterion, "verify_command"), (Criterion, "expected_exit"),
+        (Criterion, "observation"), (Criterion, "verify_venue"),
+        (Criterion, "verify_kind"),  # excluded: branch discriminator, not echoed literally
+        (Criterion, "landed"),  # excluded here: covered by the landed-check test below instead
+        (Criterion, "verify_venue_at_final"),
+        (Principle, "statement"), (Principle, "source"), (Principle, "derivation"),
+        (Principle, "confidence"), (Principle, "refutation"),
+        (Supply, "on"), (Supply, "element"), (Supply, "artifact"),
+        (PlanMeta, "task_id"), (PlanMeta, "goal"), (PlanMeta, "done_criterion"),
+        (PlanMeta, "criterion_type"), (PlanMeta, "weight_class"),
+        (PlanMeta, "external_research"), (PlanMeta, "repo_root"),
+        (PlanMeta, "delivery_worktree"), (PlanMeta, "final_check"),
+        (FinalCheck, "label"),
+        (FinalCheck, "command"),  # excluded: labels-only method
+        (FinalCheck, "expected_exit"),  # excluded: labels-only method
+        (FinalCheck, "venue"),  # excluded: labels-only method
+        (FinalCheck, "kind"),  # excluded except as the unlabelled-check fallback (see label test)
+        (FinalCheck, "landed"),  # excluded: labels-only method
+    }
+    declared = set()
+    for cls in (Stage, Subject, Means, Actor, Criterion, Principle, Supply, PlanMeta, FinalCheck):
+        for f in dataclasses.fields(cls):
+            declared.add((cls, f.name))
+    missing = declared - checked
+    assert not missing, f"new field(s) not accounted for in this coverage test: {missing}"
+
+
+def test_render_stage_brief_renders_landed_check_fields():
+    """LandedSpec's three fields (target, remote, delivered_stage) are a
+    distinct nested struct from FinalCheck/Criterion's other fields and are
+    only reachable via `criterion.verify_kind == 'landed'` — a separate
+    fixture from the coverage test above, since `landed` and `verify_command`
+    are mutually exclusive on one Criterion (plan.py's R1)."""
+    stage = Stage(
+        index=1,
+        title="Land it",
+        subject=Subject(material="m", result="r"),
+        means=Means(means="means", method="method"),
+        actor=Actor(executor="spawn:developer"),
+        criterion=Criterion(
+            criterion_type="measurable",
+            done_criterion="landed",
+            verify_kind="landed",
+            landed=LandedSpec(target="TARGET_V", remote="REMOTE_V", delivered_stage=9),
+        ),
+    )
+    doc = PlanDoc(meta=PlanMeta(task_id="t"), stages=[stage])
+    brief = render_stage_brief(doc, 1)
+    assert "TARGET_V" in brief
+    assert "REMOTE_V" in brief
+    assert "stage 9" in brief
 
 
 # --- agentctl plan-render --stage -------------------------------------------

@@ -114,10 +114,18 @@ def render_stage_brief(doc: PlanDoc, stage_index: int) -> str:
     stage, including ones the whole-plan view omits for brevity across many
     stages (`output_artifacts`, `control`, `criterion.observation`,
     `criterion.expected_exit`) — a single-stage view has no size budget excuse
-    to silently drop a field the executor might need. The mutable `Outcome`
-    record (status/actual/fail_digests/cost_usd/duration_ms/spawn_count/
-    delivered_head) is deliberately never rendered: it is the engine's
-    execution HISTORY of the stage, not an input to it.
+    to silently drop a field the executor might need. Each direct dependency
+    (`depends_on`, derived from `supplies`) is rendered as its own block
+    (title, expected result image, output artifacts) distinct from this
+    stage's own fields; transitive dependencies are not carried. The raw
+    `supplies` edges (on/element/artifact) are rendered separately from the
+    resolved dependency blocks. `meta.final_check` entries are carried by
+    label only (an unlabeled check by 1-based position + kind) — never their
+    command/venue/kind detail, which belongs to the full plan file. Meta's
+    `delivery_worktree` is carried alongside the plan's other meta fields.
+    The mutable `Outcome` record (status/actual/fail_digests/cost_usd/
+    duration_ms/spawn_count/delivered_head) is deliberately never rendered:
+    it is the engine's execution HISTORY of the stage, not an input to it.
 
     Raises ValueError if no stage in `doc` carries `stage_index`.
     """
@@ -135,6 +143,8 @@ def render_stage_brief(doc: PlanDoc, stage_index: int) -> str:
     lines.append(f"- **Overall criterion type:** {m.criterion_type}")
     if m.repo_root:
         lines.append(f"- **Repo root:** {m.repo_root}")
+    if m.delivery_worktree:
+        lines.append(f"- **Delivery worktree:** {m.delivery_worktree}")
     if m.external_research:
         lines.append(f"- **External research:** {m.external_research}")
     lines.append("")
@@ -189,7 +199,24 @@ def render_stage_brief(doc: PlanDoc, stage_index: int) -> str:
     if s.output_artifacts:
         lines.append(f"- **Output artifacts:** {', '.join(s.output_artifacts)}")
     if s.depends_on:
-        lines.append(f"- **Depends on:** {', '.join(str(d) for d in sorted(s.depends_on))}")
+        lines.append("- **Depends on** (direct dependencies only; see their own stage for detail):")
+        for dep_index in sorted(s.depends_on):
+            dep = next((d for d in doc.stages if d.index == dep_index), None)
+            if dep is None:
+                continue
+            lines.append(f"  - Stage {dep.index}: {dep.title}")
+            lines.append(f"    - **Its expected result image:** {dep.subject.result}")
+            if dep.output_artifacts:
+                lines.append(f"    - **Its output artifacts:** {', '.join(dep.output_artifacts)}")
+    if s.supplies:
+        lines.append("- **Supplies** (raw provision edges this stage declares):")
+        for sup in s.supplies:
+            edge = f"on stage {sup.on}"
+            if sup.element:
+                edge += f", element: {sup.element}"
+            if sup.artifact:
+                edge += f", artifact: {sup.artifact}"
+            lines.append(f"  - {edge}")
     if s.control:
         lines.append(f"- **Control (prior attestation):** {s.control}")
     if s.principle is not None:
@@ -200,6 +227,19 @@ def render_stage_brief(doc: PlanDoc, stage_index: int) -> str:
             f"confidence: {p.confidence}; refutation: {p.refutation})"
         )
     lines.append("")
+
+    if m.final_check:
+        lines.append(
+            "## Final verification (labels only — this stage does not need the "
+            "commands; see the full plan file for those)"
+        )
+        lines.append("")
+        for i, fc in enumerate(m.final_check, start=1):
+            if fc.label:
+                lines.append(f"- {fc.label}")
+            else:
+                lines.append(f"- check {i} ({fc.kind})")
+        lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
 
