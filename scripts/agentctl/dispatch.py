@@ -145,6 +145,7 @@ def build_argv(
         complexity,
     ]
     argv.extend(["--stage-index", str(stage.index)])
+    argv.append("--plan-brief")
     if continue_worktree:
         argv.extend(["--continue-worktree", continue_worktree])
     if constraints:
