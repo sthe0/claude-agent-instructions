@@ -1066,15 +1066,9 @@ def test_apply_refined_carries_verify_venue_at_final():
 
 
 def test_apply_refined_copies_all_criterion_fields_except_engine_written():
-    """Behavioral totality test: _apply_refined_stage_fields must copy every
-    Criterion field that the plan declares, and skip only the engine-written ones.
-    A field forgotten here silently loses its declaration across a replan; this test
-    catches the omission by asserting that for EACH field, the destination holds
-    either the source's value (copied) or its original value (deliberately skipped),
-    with the skipped set exactly the named engine-written set."""
+    """A new Criterion field added after this function was written must not be silently dropped."""
     from dataclasses import fields as dc_fields
 
-    # Build two stages whose every Criterion field differs.
     def _criterion_with_tag(tag):
         return Criterion(
             criterion_type=f"measurable-{tag}",
@@ -1108,26 +1102,25 @@ def test_apply_refined_copies_all_criterion_fields_except_engine_written():
         conditions="c",
         supplies=[],
     )
-    original_observation = cur.criterion.observation
 
+    assert all(getattr(cur.criterion, f.name) != getattr(refined.criterion, f.name)
+               for f in dc_fields(Criterion)), \
+        "Fixtures must differ in every field"
+
+    pre_copy_values = {f.name: getattr(cur.criterion, f.name) for f in dc_fields(Criterion)}
     cli._apply_refined_stage_fields(cur, refined)
 
-    # For each field, assert it was either copied or deliberately skipped.
-    skipped = cli._CRITERION_ENGINE_WRITTEN_FIELDS
+    expected_engine_written = {"observation"}
     for field in dc_fields(Criterion):
-        refined_val = getattr(refined.criterion, field.name)
         result_val = getattr(cur.criterion, field.name)
-        if field.name in skipped:
-            # Engine-written fields must NOT be copied.
-            assert result_val == original_observation or field.name == "observation", \
-                f"Field {field.name} should be skipped but was changed"
+        refined_val = getattr(refined.criterion, field.name)
+        if field.name in expected_engine_written:
+            assert result_val == pre_copy_values[field.name], \
+                f"Engine-written field {field.name} should not be copied"
         else:
-            # All other fields must be copied.
             assert result_val == refined_val, \
-                f"Field {field.name} should be copied but was not: got {result_val}, expected {refined_val}"
+                f"Field {field.name} should be copied but was not"
 
-    # The copied set plus the skipped set must cover every field exactly once.
     all_fields = {f.name for f in dc_fields(Criterion)}
-    copied = all_fields - skipped
-    assert copied | skipped == all_fields, \
-        f"Copied and skipped sets do not partition all fields. Copied: {copied}, Skipped: {skipped}"
+    copied = all_fields - expected_engine_written
+    assert copied | expected_engine_written == all_fields

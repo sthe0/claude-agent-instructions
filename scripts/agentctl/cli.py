@@ -20,6 +20,7 @@ import shlex
 import subprocess
 import sys
 import time
+from dataclasses import fields
 from pathlib import Path
 
 import proc_tree
@@ -231,7 +232,6 @@ def _apply_refined_stage_fields(cur, refined) -> None:
     replan substantive: copying them is a no-op for the two replan callers and
     load-bearing only for the approve-time refresh, which absorbs an in-place edit
     made at plan-mutable PLAN_READY."""
-    from dataclasses import fields
 
     cur.title = refined.title
     cur.subject.result = refined.subject.result
