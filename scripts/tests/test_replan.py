@@ -1121,6 +1121,4 @@ def test_apply_refined_copies_all_criterion_fields_except_engine_written():
             assert result_val == refined_val, \
                 f"Field {field.name} should be copied but was not"
 
-    all_fields = {f.name for f in dc_fields(Criterion)}
-    copied = all_fields - expected_engine_written
-    assert copied | expected_engine_written == all_fields
+    assert cli._CRITERION_ENGINE_WRITTEN_FIELDS == expected_engine_written
