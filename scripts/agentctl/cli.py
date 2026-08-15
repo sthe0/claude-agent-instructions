@@ -4857,6 +4857,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("plan-render"); sp.add_argument("--plan", required=True,
         help="TOML plan to render to a markdown prose view on demand (a projection, "
              "never written to disk — the TOML is the single source of truth)")
+    sp.add_argument("--stage", type=int, default=None,
+        help="render only this stage index as a brief projection, instead of "
+             "the whole plan (the spawn prompt's per-dispatch projection)")
     # Accept (and ignore) --session so the harness-session auto-injection
     # (_inject_default_session) is a no-op here: rendering is a pure, session-free
     # read of the plan file, unlike every other verb which drives session state.
