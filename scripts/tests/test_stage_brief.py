@@ -233,11 +233,14 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
     stage = Stage(
         index=1,
         title="TITLE_V",
-        subject=Subject(material="MATERIAL_V", result="RESULT_V", invariants="INVARIANTS_V"),
-        means=Means(means="MEANS_V", method="METHOD_V"),
+        subject=Subject(material="MATERIAL_V", result="RESULT_V", invariants="INVARIANTS_V",
+                        material_refs=["MATERIAL_REF_V"], knowledge_refs=["KNOWLEDGE_REF_V"]),
+        means=Means(means="MEANS_V", method="METHOD_V", procedure="PROCEDURE_V"),
         actor=Actor(executor="EXECUTOR_V", capability_required="CAPABILITY_V", cost_tier="COST_TIER_V"),
         criterion=criterion,
         principle=principle,
+        knowledge="KNOWLEDGE_V",
+        preconditions="PRECONDITIONS_V",
         conditions="CONDITIONS_V",
         supplies=[Supply(on=7, element="ELEMENT_V", artifact="ARTIFACT_V")],
         output_artifacts=["OUTPUT_ARTIFACT_V"],
@@ -263,6 +266,7 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         "DONE_CRITERION_V", "VERIFY_COMMAND_V", "42", "OBSERVATION_V",
         "VERIFY_VENUE_V", "VERIFY_VENUE_AT_FINAL_V", "STATEMENT_V", "SOURCE_V",
         "DERIVATION_V", "CONFIDENCE_V", "REFUTATION_V", "CONDITIONS_V",
+        "MATERIAL_REF_V", "KNOWLEDGE_V", "KNOWLEDGE_REF_V", "PROCEDURE_V", "PRECONDITIONS_V",
         "OUTPUT_ARTIFACT_V", "CONTROL_V", "on stage 7", "ELEMENT_V", "ARTIFACT_V",
         "TASK_ID_V", "GOAL_V", "OVERALL_DONE_CRITERION_V", "OVERALL_CRITERION_TYPE_V",
         "WEIGHT_CLASS_V", "EXTERNAL_RESEARCH_V", "REPO_ROOT_V", "DELIVERY_WORKTREE_V",
@@ -287,9 +291,10 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         (Stage, "actor"), (Stage, "criterion"), (Stage, "principle"),
         (Stage, "conditions"), (Stage, "supplies"), (Stage, "output_artifacts"),
         (Stage, "outcome"),  # excluded: engine execution history
-        (Stage, "control"),
+        (Stage, "control"), (Stage, "knowledge"), (Stage, "preconditions"),
         (Subject, "material"), (Subject, "result"), (Subject, "invariants"),
-        (Means, "means"), (Means, "method"),
+        (Subject, "material_refs"), (Subject, "knowledge_refs"),
+        (Means, "means"), (Means, "method"), (Means, "procedure"),
         (Actor, "executor"), (Actor, "capability_required"), (Actor, "cost_tier"),
         (Criterion, "criterion_type"), (Criterion, "done_criterion"),
         (Criterion, "verify_command"), (Criterion, "expected_exit"),
@@ -304,6 +309,12 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         (PlanMeta, "criterion_type"), (PlanMeta, "weight_class"),
         (PlanMeta, "external_research"), (PlanMeta, "repo_root"),
         (PlanMeta, "delivery_worktree"), (PlanMeta, "final_check"),
+        # excluded: the typed order is the ROOT's material at the approval gate — it is
+        # plan-level, grows with the customer's requirement count, and the executor of one
+        # stage receives its own requirement through that stage's own fields plus
+        # meta.goal/done_criterion. Carrying it would restore the size coupling this
+        # projection exists to break.
+        (PlanMeta, "order"),
         (FinalCheck, "label"),
         (FinalCheck, "command"),  # excluded: labels-only method
         (FinalCheck, "expected_exit"),  # excluded: labels-only method

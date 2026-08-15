@@ -167,6 +167,12 @@ def render_stage_brief(doc: PlanDoc, stage_index: int) -> str:
         lines.append(f"- **Cost tier:** {s.actor.cost_tier}")
     if s.subject.material:
         lines.append(f"- **Material:** {s.subject.material}")
+    if s.subject.material_refs:
+        lines.append(f"- **Material refs:** {', '.join(s.subject.material_refs)}")
+    if s.knowledge:
+        lines.append(f"- **Knowledge:** {s.knowledge}")
+    if s.subject.knowledge_refs:
+        lines.append(f"- **Knowledge refs:** {', '.join(s.subject.knowledge_refs)}")
     lines.append(f"- **Expected result image:** {s.subject.result}")
     if s.subject.invariants:
         lines.append(f"- **Invariants:** {s.subject.invariants}")
@@ -174,6 +180,10 @@ def render_stage_brief(doc: PlanDoc, stage_index: int) -> str:
         lines.append(f"- **Means:** {s.means.means}")
     if s.means.method:
         lines.append(f"- **Method:** {s.means.method}")
+    if s.means.procedure:
+        lines.append(f"- **Procedure:** {s.means.procedure}")
+    if s.preconditions:
+        lines.append(f"- **Preconditions:** {s.preconditions}")
     if s.conditions:
         lines.append(f"- **Conditions:** {s.conditions}")
     lines.append(f"- **Criterion type:** {s.criterion.criterion_type}")
