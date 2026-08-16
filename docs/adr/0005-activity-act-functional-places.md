@@ -300,9 +300,27 @@ blocks the stage outright.
 1. **`spawn-specialist.py` inlines the whole plan into a stage prompt**, so prompt size scales
    with plan size until it exceeds a spawned child's context window. This is what forced the
    `dispatch-stage-projection` sub-plan earlier in this task.
-2. **`_apply_refined_stage_fields` carries a plan's criterion fields into session state by a
-   hand-written enumeration**, so a field a later schema version adds is silently dropped on the
-   next replan rather than carried forward.
+2. **The change-decision function family — `carry_key`, `apply_refined`, `diff_plans`,
+   `question_key` — reads a Stage's fields by hand-written enumeration**, so a field a later
+   schema version adds is silently dropped on the next replan rather than carried forward. Stage
+   10's leaf-coverage enumerator measured which leaves each function actually detects, by
+   mutation rather than by reading the source, and returned four uncovered cells; they are listed
+   here because that enumerator's report is the only place they otherwise survive, and per this
+   section's standing rule an engine defect found in flight is appended here rather than repaired.
+   The four, with the consequence each carries:
+   - `actor.capability_required` — invisible to `carry_key`, `apply_refined` **and** `diff_plans`.
+     A replan correcting only the required capability diffs as `no_change`, so the correction is
+     silently dropped: the exact failure class this key family exists to close.
+   - `supplies.element` / `supplies.artifact` — invisible to `carry_key` by design (carry-forward
+     never needed them), but also invisible to `diff_plans`, which is *not* a stated design;
+     `_structural_signature` reads only `depends_on`.
+   - `output_artifacts` — invisible to all four. A refinement replan correcting a stage's declared
+     output artifacts leaves the live stage stale, and the edit diffs as `no_change` outright.
+   - `principle.*` — not copied by `_apply_refined_stage_fields`. This one sits inside that
+     function's own stated contract (it covers `stage_carry_key`, which does not read `principle`
+     either), so it is a contract-consistent limitation rather than a violation — but a corrected
+     principle still never reaches the live stage on a refinement replan, only on a fresh
+     submission.
 3. **`pop-subplan` marks the originating stage PASSED with no actual, no cost, and no spawn
    count** when the sub-plan it closes supplied that stage's MEANS rather than its RESULT — the
    record left behind understates what was actually spent to reach the pass.
