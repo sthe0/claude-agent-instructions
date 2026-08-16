@@ -260,7 +260,8 @@ reopened).
 whose site-set is derivable from an artifact the plan already holds (a field list, a corpus
 fixture, a `--deselect` set). It cannot cover a judgment call no enumerator can decide — concretely,
 the plan's own **cost-tier pricing** defect (`cost_tier = "large"` under-pricing the actual draw
-of stages 8 through 11) is exactly such a judgment, and no enumerator in this plan touches it.
+of every code stage that declares it — 8, 9, 10, 11 and 13) is exactly such a judgment, and no
+enumerator in this plan touches it.
 The plan's own reading is that this defect "stood wrong in every code stage at once with no first
 instance at all" — which is the interesting part: a defect with no first instance has no moment
 at which a reviewer could have caught it by noticing a change.
@@ -360,7 +361,7 @@ The fully composed filing command, so that discharging this obligation later is 
 rather than a re-derivation of what was to be filed:
 
 ```
-python3 scripts/file-difficulty.py --target scripts/lib/hook_wiring.py --ground "probe() reports a chain member it cannot READ as ABSENT rather than as unaccounted-for, on any CPython whose Path.is_file() lets EACCES propagate (measured, 3.12.3): a root-owned mode-700 directory in the chain makes the enforcement-is-OFF banner go silent with no trace. An existence the filesystem will not report is not a proven absence" --severity medium --layer core --evidence "red at trunk tip since 5a3c737; re-measured red in the delivery venue 2026-08-16, exit 1 standalone. Node: scripts/tests/test_hook_wiring.py::test_an_unsearchable_chain_member_is_unaccounted_for_not_absent"
+python3 scripts/file-difficulty.py --target scripts/lib/hook_wiring.py --ground "probe() reports a chain member it cannot READ as ABSENT rather than as unaccounted-for, on any CPython whose Path.is_file() IGNORES EACCES and returns False: the not-on-disk branch then skips the member silently, so a root-owned mode-700 directory in the chain is counted as one that is not there. Probed 2026-08-13 in the delivery venue, uid 501, on a mode-000 directory holding a real file: python 3.14.5 returns False and the node is red, python 3.9.6 raises PermissionError errno 13 and it is green — one and the same tree. An existence the filesystem will not report is not a proven absence" --severity medium --layer core --evidence "red under the interpreter this venue runs (python 3.14.5) since the node was added at 5a3c737, NOT introduced by that commit — its own message records its premise as measured under python 3.12.3, where EACCES still propagated and the module's try/except OSError classified the member correctly; a later CPython removed the behaviour it had measured, so the redness is interpreter-relative. Re-measured red in the delivery venue 2026-08-16, exit 1 standalone. Node: scripts/tests/test_hook_wiring.py::test_an_unsearchable_chain_member_is_unaccounted_for_not_absent"
 ```
 
 This act is recorded as **outstanding on the user**: filing this Core defect requires either a
