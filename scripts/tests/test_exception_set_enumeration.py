@@ -555,5 +555,5 @@ def test_main_prints_the_expected_summary_for_the_snapshot(capsys):
     snapshot = Path(__file__).parent / "fixtures" / "plan_snapshot_smd-act-defects-8.toml"
     assert main(["check-exception-set-enumeration.py", str(snapshot)]) == 0
     out = capsys.readouterr().out
-    assert "6 --deselect site(s), 2 node(s), all identical and individually guarded" in out
-    assert "SEMANTIC SWEEP — 67 candidate sentence(s)" in out
+    assert "6 --deselect site(s), 1 node(s), all identical and individually guarded" in out
+    assert "SEMANTIC SWEEP — 78 candidate sentence(s)" in out
