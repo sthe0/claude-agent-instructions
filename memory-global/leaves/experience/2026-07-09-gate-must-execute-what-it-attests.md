@@ -9,7 +9,7 @@ tier: 1
 refs: [2026-07-04-topological-gate-when-signal-unobservable.md, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md, 2026-06-24-gate-exemption-is-category-error-for-result-images.md]
 plan_file: /home/the0/.claude-agent/plans/hook-ask-defer-timer-block.v4.toml
 created: 2026-07-09
-last_verified: 2026-08-11
+last_verified: 2026-08-15
 ---
 
 # A gate must execute the artifact it attests, and every refusal it can issue must reach a resolution cycle
@@ -51,6 +51,10 @@ Notice the executed spec differs from the attested artifact (dispatch handed a s
 - Where it arose: agentctl session 779c1cca · claude-agent-instructions: scripts/agentctl/advisor.py (ENUMERATE_TIMEOUT_S, enumerate_subprocess_runner), new scripts/agentctl/enumerate_sidecar.py, scripts/agentctl/cli.py (_launch_enumeration, _apply_enumeration_result, cmd_submit_plan/cmd_replan), scripts/agentctl/premise.py (ENUMERATION_ESCAPE_REASONS), scripts/verify-agentctl.py (check_enumeration_writers), new scripts/measure-advisor-latency.py + docs/operations/advisor-calibration.jsonl + docs/operations/detached-enumeration-design.md · branch advisor-enumerate-timeout
 - Working plan: /Users/the0/.claude-agent/plans/advisor-timeout-f3b-v12.toml
 
+
+### 2026-08-15 — Instance 6 — the assertion that cannot fail, and a red run reasoned instead of run (agentctl criterion-carry fix)
+- Where it arose: scripts/agentctl/cli.py::_apply_refined_stage_fields + scripts/tests/test_replan.py; sub-plan dispatch-stage-projection, stages 4-5
+- Working plan: /Users/the0/.claude-agent/plans/dispatch-stage-projection.toml
 ## Common core & variations
 **Common:** One functional ground with the two engine defects above: a gate or verifier is only as truthful as the thing it actually reads. Attest what you execute; announce only what you read; scan only what is under version control. Each instance reported GREEN (or a confident directive) while grounded in something other than the artifact it governed.
 
