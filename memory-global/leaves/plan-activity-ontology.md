@@ -25,7 +25,7 @@ A plan has a `[meta]` head and one or more `[[stage]]` blocks; each stage is a f
 
 | # | Element | Code field (canonical) |
 |---|---------|--------------|
-| 1 | **Order** — what must be done | `meta.goal` |
+| 1 | **Order** — what must be done | `meta.goal` (free text, always accepted) + `meta.order` (typed `state.Order`, parsed from an additive `[meta.order]` table — `requirements`/`coverage`/`customer_id`; a plan authored before it existed keeps loading without it) |
 | 2 | **Material + result** — what is transformed, from what initial state, into what | `stage.subject.material` (initial state + relevant properties) + `stage.subject.result` |
 | 2'| **Knowledge** — what must already be known for the method over the means to reach the result image; a place of its own, upstream of both the norm (#7) and the selection of means (#4). Its two structural projections divide the symbols the stage touches: what it *transforms* vs what it *relies on and leaves alone* | `stage.knowledge` + `stage.subject.material_refs` (transformed) + `stage.subject.knowledge_refs` (relied on). Required of a substantive stage **at the submission seam** (`scripts/agentctl/submission.py`), never in the loader — an incoming `Supply(element="knowledge")` edge fills the place instead |
 | 3 | **Control criterion** — how conformance of result to order is checked | `stage.criterion.criterion_type` (measurable \| acceptance_review) + `stage.criterion.done_criterion` |
@@ -42,6 +42,16 @@ A plan has a `[meta]` head and one or more `[[stage]]` blocks; each stage is a f
 ### Weight gating (substantive-only)
 
 The full element set is **mandatory for substantive plans** (`meta.weight_class = "substantive"`) and optional/lighter for `small_change` / `chat`. When `weight_class` is absent, treat the plan **leniently** (new fields optional) so legacy plans keep parsing — strictness applies only where substantive is declared. This mirrors the `schema:leaf/v1` grandfathering: opt-in enforcement, grandfather the rest. See [[leaf-schema]].
+
+### Element 3 splits an objective control from a subjective acceptance
+
+Element 3 (the control criterion) covers two distinct checks the engine used to conflate: an
+objective **control** (does the result match the order — `criterion_type = measurable`, checked
+by `verify_command`) and a subjective **acceptance** (does the customer accept it —
+`criterion_type = acceptance_review`). The latter is a typed hand-off to the customer:
+`AcceptanceReview` (a verdict bound to `sha256(observation)`) or an explicit `AcceptanceBypass`
+(gated on a non-empty reviewer and note). See ADR-0005 for the corpus evidence and the
+control-criterion difficulties this distinction surfaced in practice.
 
 ### Element 3 — a machine-enforced instance: review of a developer-actor stage
 
@@ -118,3 +128,4 @@ The actor must have the **whole** plan before it, to be guided by it — not onl
 - [[experience-leaf-schema]] — the `difficulty/v1` schema; the difficulty graph (cycles allowed) that recursive sub-ordering mirrors (order → plan → difficulty → induced order → …).
 - [[partition-markers]] — M1–M4 decide whether a substantive plan ships as one PR or several (delivery partition); orthogonal to this element-completeness axis.
 - [[coordinator-objective]] — the objective function a plan's choices are weighed against.
+- [ADR-0005](../../docs/adr/0005-activity-act-functional-places.md) — the 8 categorical defects that closed the gap between this leaf and the code model, with corpus evidence, what was deliberately left unimplemented, and the control-criterion difficulties the closing work surfaced.
