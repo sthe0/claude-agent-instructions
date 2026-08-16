@@ -36,15 +36,26 @@ factor can be re-normed onto: `материал`, `средство`, `норм�
 An acceptance-review pass could previously be satisfied by an observation that merely restated
 the expected result image. Stage 3 added a prefilter (recall ≥0.70, false-flag rate ≤0.25 against
 a hand-labelled corpus) backed by the fail-open acceptance judge described below. Measured over
-the 200-stage fixture: 11 of 200 stages (5.5%) carry an echo — this supersedes an earlier,
-uncorrected figure of 58 of 200 (29.0%) produced before the labelling method itself was fixed;
-the 5.5% figure is the one the prefilter's recall/false-flag thresholds were tuned against.
+the 200-stage fixture: 11 of 200 stages (5.5%) carry an echo. An earlier figure of 58 of 200
+(29.0%) differed largely **definitionally** rather than by refutation — the two counts were
+counting different things. The 0.70 recall floor and the 0.25 false-positive ceiling were fixed
+**before** the labelling and stayed unchanged after it; the stage forbids re-tightening a
+threshold in response to a result, so the measurement did not tune them. What the measurement did
+change is the **remedy**: at 5.5% prevalence, refusing a submission on a model's reading of what
+a sentence means would spend an author's round trip on a coin flip, so the remedy was downsized
+from a hard submission refusal to an author-facing warning — "an echo NEVER refuses"
+(`submission.py:652`). The thresholds now govern what the warning fires on, not what the engine
+refuses.
 
 ### Defect 4 — `material_refs`/`knowledge_refs` on the operative surface (stage 4, toml line 239)
 
-`gates.py`'s `_operative_surface` — the set of symbols a difficulty record or a renormalization
-is allowed to touch — did not include the two lists Defect 1 introduced, so a factor discovered
-inside either list had no legal destination. Stage 4 added both to `_operative_surface`.
+`gates.py`'s `_operative_surface` — what the engine executes or dispatches on, as opposed to the
+plan's prose — deliberately excludes narrative fields so that no amount of rewriting can satisfy
+the CHANGE half of the replan-coverage gate. But that exclusion also made a **re-selected
+material invisible** to the gate: a stage could change what it transforms and the change would
+register as prose. Stage 4 admitted `material_refs`/`knowledge_refs` to the surface, which works
+precisely because they are typed: they cannot be reworded, only re-declared, so a re-selection
+becomes observable without the CHANGE half becoming satisfiable by prose.
 
 ### Defect 6 — preconditions as their own place (stage 5, toml line 275)
 
@@ -69,23 +80,35 @@ from prose. Stage 7 added `state.Order` (parsed from a `[meta.order]` TOML table
 `requirements`/`coverage`/`customer_id` sub-fields) alongside `meta.goal`, which the loader still
 accepts and never refuses — `[meta.order]` is additive, not a replacement, precisely so a plan
 authored before it existed keeps loading. The corpus was **not** migrated onto it (see
-Deliberately not done); five plan-byte bindings in the codebase (loader, submission seam,
-`plan-render`, the acceptance path's customer-id check, and the coverage lint) reference it.
+Deliberately not done). The bindings verified in the codebase are the loader, the submission seam,
+the acceptance path's customer-id check (`cli.py:2808`) and the coverage lint; `plan-render` was
+named in an earlier draft and is **not** one — `render.py` mentions "order" only in a docstring
+about stage ordering.
 
 ### Defect 2 — control vs. acceptance (stage 8, toml line 453, cost_tier = large)
 
 The engine had one path for "did the result match," conflating an objective check (element 3,
-control) with a customer's subjective sign-off. Stage 8 introduced `AcceptanceReview` (a recorded
-verdict bound to `sha256(observation)`) and `AcceptanceBypass` (an explicit override, gated on a
-non-empty reviewer and note) as the typed hand-off to the customer — this is the acceptance path
-the plan's own reasoning already leaned on before it was a type (see Corrections). This is the
+control) with a customer's subjective sign-off. Stage 8 introduced `AcceptanceReview` — bound to
+the **accepted plan digest**, authored only by `[meta.order].customer_id` (a mismatch is refused
+at write time, `cli.py:2808`), carrying one verdict per order requirement, and gated at
+`resolution_blockers` via `_acceptance_review_resolution_blockers` — and `AcceptanceBypass`, an
+explicit override gated on a non-empty `--bypass-reason` ("a bypass is a reasoned override, not a
+shrug"). Together they are the typed hand-off to the customer that the plan's own reasoning
+already leaned on before it was a type (see Corrections). The pre-existing stage-level
+`StageReview`, bound to `sha256(observation)`, is a **different** record and predates this plan
+(`e3041f4`); an earlier draft of this ADR described stage 8's work using `StageReview`'s
+properties and thereby credited stage 8 with machinery that already existed. This is the
 stage that produced the **139 of 4226** control-criterion difficulty and the cost-tier
 under-pricing finding, both recorded below.
 
 ### Defect 3 — means (fixed instrument) vs. method/procedure (way of use) (stage 9, toml line 500, cost_tier = large)
 
-`stage.means.method` conflated the instrument that must stay unchanged across the
-transformation with the way that instrument is put to use, which may legitimately vary. Stage 9
+`stage.means.method` conflated two different things a plan has to say about instruments already
+fixed in `stage.means.means`: the **requirement on the way of acting** — what the transformation
+must be an instance of, which is the planner's and the customer's and moves only through review
+and approval — and the **sequence of operations** by which the actor satisfies that requirement,
+which may legitimately vary. (`means.means`, the instrument itself, was never in question and is
+untouched by this defect.) Stage 9
 split `stage.means.procedure` out from `method`, added a distinctness refusal (the two fields
 must not merely restate each other after normalization), and wired the field into
 renormalization (`replan --renormalize` transplants only `means.procedure` onto a live stage,
@@ -150,10 +173,13 @@ exhibit it: with no advisor process reachable, the **fail-open** checks Defects 
 unreachable judge returns no advisory and the gate simply does not fire, by design, so neither
 stage's guard degrades the pass into a false block. Stage 8's acceptance path is the opposite
 shape: the judge itself is fail-open (a timeout records no verdict), but the **gate is
-fail-closed** — `gates.acceptance_review_blockers` refuses PASSED when no matching review exists,
-so an unreachable advisor there drives every acceptance-review stage toward a recorded
-`AcceptanceBypass` rather than toward silence. The asymmetry (two checks going quiet, one check
-forcing a recorded bypass) is the direct, observed consequence of which of the two design
+fail-closed**, at two different levels. At the stage level,
+`gates.acceptance_review_blockers` reads the per-stage `StageReview` and refuses PASSED when no
+matching review exists, so an unreachable advisor drives the stage toward a recorded `override`
+verdict (reviewer + note). At the plan level, the accept path writes `AcceptanceBypass` once, and
+an unreachable acceptance judge is answered by `--bypass --bypass-reason` rather than by silence.
+The asymmetry (two checks going quiet, two gates each
+forcing a recorded escape) is the direct, observed consequence of which of the two design
 patterns — fail-open guard vs. fail-open-judge/fail-closed-gate — each defect's stage chose.
 
 ## The submission-vs-load seam decision
@@ -183,37 +209,42 @@ Stage 8's own done-criterion measurement narrowed its `verify_command` to a name
 **139 of 4226** collected test IDs — via an explicit `--deselect` of
 `test_hook_wiring.py::test_an_unsearchable_chain_member_is_unaccounted_for_not_absent`, the one
 member of the exception set this plan could not bring to green without exceeding its own scope.
-This sits in direct tension with an advisory lint the engine already ships for exactly this
-shape — `verify_command_scope_warnings` — which counsels the **opposite**: narrower
-`verify_command` scoping is the pattern that lint exists to flag down, not to endorse. This
-tension is recorded here **honestly, as unresolved** — this stage does not adjudicate whether the
-deselect was the right call against the lint's own advice; it states that the two now point in
-opposite directions and leaves the disagreement standing.
+This sits in tension with an advisory lint the engine already ships for exactly this shape —
+`verify_command_scope_warnings` — but not in the direction an earlier draft claimed. The lint
+warns when a command runs an **aggregate suite without a scope flag**, and its advice is to
+narrow ("scope it to the gate that enforces it … so pre-existing unrelated reds cannot false-fail
+the stage"). So the lint pushes toward exactly what stage 8 did. The real disagreement is with
+this plan's own full-suite-corroboration norm, and it is about *which* red a stage should be
+allowed to see: the lint would spare a stage every red it does not own, the norm insists a stage
+see the whole tree it is landing into. The two are left pointing in opposite directions here
+rather than adjudicated.
 
-**Correction to the plan's own stage count.** As of this stage, eleven of the thirteen stages
-declared a `verify_command` that ran a named subset rather than the full suite. After re-checking
-that count for this record, seven are still DECIDED BY a subset alone with no full-suite
-corroboration anywhere in the plan's history — and all seven of those are among stages 1–7, which
-are PASSED and are deliberately not reopened by this stage. An earlier count of "eight of the
-thirteen" circulated in an earlier draft of the plan's own narrative and was itself an uncaught
-error; it is retracted here in favor of the eleven/seven figures above.
+**Correction to the plan's own stage count.** Eleven of the thirteen stages declared a
+`verify_command` that ran a named subset rather than the full suite. Four of those eleven —
+stages 8 through 11 — were widened during this plan, which is why they left the set. Seven
+remain, and all seven are among stages 1–7, which are PASSED and are deliberately not reopened by
+this stage. An earlier count of "eight of the thirteen" circulated in an earlier draft of the
+plan's narrative; it was caught in review and is superseded by the eleven/seven figures above.
 
 ### Stages 10 and 13: `b90bade` and the `_normalize_stderr` retraction
 
-A merge at sha `b90bade` brought a second trunk-red node onto the branch partway through this
-plan's stage-13 reconciliation. That second red node's recorded cause — a drifted traceback line
-number — was retracted on 2026-08-13 once `_normalize_stderr` was checked against the exact
-revision the original reading was taken from: `_normalize_stderr` had already redacted that same
-line number at that revision, which makes the recorded cause impossible to have produced the
-symptom actually observed. The retraction stands; no replacement cause has been established.
+A merge at sha `b90bade` (2026-08-11, "reconcile the material **stage 10** transforms" — not the
+stage-13 reconciliation, which is `0314158` of 2026-08-16) brought a second trunk-red node onto
+the branch partway through stage 10. It was admitted into the exception set at the stage-10
+difficulty of 2026-08-12, and **retracted from the set** on 2026-08-13: re-measured, it was green
+standalone and green in the full suite while byte-identical to `origin/main`. Its recorded cause —
+a drifted traceback line number — was retracted in the same act, because `_normalize_stderr` had
+already redacted that very line number at the revision the original reading was taken from, which
+makes the recorded cause impossible to have produced the symptom. So the set is back to one
+member. No replacement cause was established, and none is owed: the node is not red.
 
 ### The residual: cause-provenance
 
 What the 2026-08-13 retraction leaves open, in a term coined for this record because no shorter
 one already existed: **cause-provenance**. The exception set's mechanical form proves that a
 named member is RED at every run — that much is checked, every time, by construction. It proves
-nothing about the cause recorded beside that member. A recorded cause can be wrong (as `b90bade`'s
-was) without the exception-set mechanism itself ever noticing, because the mechanism was built to
+nothing about the cause recorded beside that member. A recorded cause can be wrong (as the
+retracted member's was) without the exception-set mechanism itself ever noticing, because the mechanism was built to
 answer "is this member still red," not "is the reason we wrote down still the reason." This
 residual is not closed by this plan.
 
@@ -228,8 +259,11 @@ reopened).
 **The bound on what enumeration can cover.** A mechanical enumerator only covers a defect class
 whose site-set is derivable from an artifact the plan already holds (a field list, a corpus
 fixture, a `--deselect` set). It cannot cover a judgment call no enumerator can decide — concretely,
-the plan's own **cost-tier pricing** defect (stage 8 and 9's `cost_tier = "large"` under-pricing
-their actual draw) is exactly such a judgment, and no enumerator in this plan touches it.
+the plan's own **cost-tier pricing** defect (`cost_tier = "large"` under-pricing the actual draw
+of stages 8 through 11) is exactly such a judgment, and no enumerator in this plan touches it.
+The plan's own reading is that this defect "stood wrong in every code stage at once with no first
+instance at all" — which is the interesting part: a defect with no first instance has no moment
+at which a reviewer could have caught it by noticing a change.
 
 **Retraction: the ordering fault is not evidenced by `effort-replan-absolute`.** An earlier draft
 of this record anchored the ordering-fault's currency claim on the `effort-replan-absolute`
@@ -298,10 +332,14 @@ blocks the stage outright.
    re-armed by a substantive replan is re-dispatched at full cost with no way to say
    "re-attest only": stages 9 and 10 together cost 9.86 USD to re-attest work already in the tree.
 
-None of the eight has been repaired by this plan; each is filed here as the plan's own standing
-rule requires, for a later plan to pick up as its order. Items 6 to 8 were appended by the root
-coordinator rather than by this stage's executor, which observed none of them: they occurred in
-the parent session, dispatching this plan's own stages.
+None of the eight has been repaired by this plan. They are **recorded** here, for a later plan to
+pick up as its order — but recording is not filing: the plan's standing rule requires them to go
+through the same channel, in the same act, under the same publication confirmation as the Core
+defect below, and that channel is unreachable from this machine. So all **nine** filings — the
+trunk-red Core defect and these eight — are outstanding on the user, not just the one the next
+section composes a command for. Items 6 to 8 were appended by the root coordinator rather than by
+this stage's executor, which observed none of them: they occurred in the parent session,
+dispatching this plan's own stages.
 
 ## Filing the one remaining trunk-red Core defect
 
@@ -322,7 +360,7 @@ The fully composed filing command, so that discharging this obligation later is 
 rather than a re-derivation of what was to be filed:
 
 ```
-python3 scripts/file-difficulty.py --target scripts/tests/test_hook_wiring.py::test_an_unsearchable_chain_member_is_unaccounted_for_not_absent --ground "the exception-set enumeration and check-exception-set-enumeration.py both treat this deselected member as accounted for, but no chain in the corpus or the fixture actually searches it, so it is unaccounted for rather than absent" --severity medium --layer core --evidence "scripts/tests/test_hook_wiring.py::test_an_unsearchable_chain_member_is_unaccounted_for_not_absent; smd-act-defects-8.toml stage 8 verify_command --deselect"
+python3 scripts/file-difficulty.py --target scripts/lib/hook_wiring.py --ground "probe() reports a chain member it cannot READ as ABSENT rather than as unaccounted-for, on any CPython whose Path.is_file() lets EACCES propagate (measured, 3.12.3): a root-owned mode-700 directory in the chain makes the enforcement-is-OFF banner go silent with no trace. An existence the filesystem will not report is not a proven absence" --severity medium --layer core --evidence "red at trunk tip since 5a3c737; re-measured red in the delivery venue 2026-08-16, exit 1 standalone. Node: scripts/tests/test_hook_wiring.py::test_an_unsearchable_chain_member_is_unaccounted_for_not_absent"
 ```
 
 This act is recorded as **outstanding on the user**: filing this Core defect requires either a
@@ -333,12 +371,11 @@ procedure requires cannot be asked of the user until the channel is reachable to
 ## Consequences
 
 - No engine behavior changes as a result of this stage; it is a documentation-only record.
-- The 30 corpus plans that fail strict load remain pre-existing debt, recorded here, not
-  discharged by this plan.
-- The eight engine defects above and the trunk-red Core defect are the standing input to whatever
-  plan next takes up this engine as its material.
-- The cause-provenance residual and the `verify_command_scope_warnings` tension are both left
-  open rather than resolved, per this stage's own scope.
+- Everything this ADR leaves open — the 30 strict-load corpus failures, the nine outstanding
+  filings, the cause-provenance residual, the lint-vs-norm tension — is the standing input to
+  whatever plan next takes up this engine as its material. This ADR is their durable address in
+  the repository, which is what makes them survivable independently of whether the difficulty
+  channel is ever reachable from a given machine.
 
 ## See also
 

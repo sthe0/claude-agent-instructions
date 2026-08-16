@@ -48,9 +48,12 @@ The full element set is **mandatory for substantive plans** (`meta.weight_class 
 Element 3 (the control criterion) covers two distinct checks the engine used to conflate: an
 objective **control** (does the result match the order — `criterion_type = measurable`, checked
 by `verify_command`) and a subjective **acceptance** (does the customer accept it —
-`criterion_type = acceptance_review`). The latter is a typed hand-off to the customer:
-`AcceptanceReview` (a verdict bound to `sha256(observation)`) or an explicit `AcceptanceBypass`
-(gated on a non-empty reviewer and note). See ADR-0005 for the corpus evidence and the
+`criterion_type = acceptance_review`). The latter is a typed hand-off to the customer at the
+plan level: `AcceptanceReview` — bound to the accepted plan digest, authored only by
+`[meta.order].customer_id`, one verdict per order requirement, gated at `resolution_blockers` —
+or an explicit `AcceptanceBypass`, gated on a non-empty `--bypass-reason`. Distinct from the
+per-stage `StageReview` (bound to `sha256(observation)`, escaped by an `override` verdict), which
+is older and gates a stage rather than resolution. See ADR-0005 for the corpus evidence and the
 control-criterion difficulties this distinction surfaced in practice.
 
 ### Element 3 — a machine-enforced instance: review of a developer-actor stage
