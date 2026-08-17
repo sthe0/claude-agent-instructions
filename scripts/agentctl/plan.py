@@ -142,6 +142,7 @@ from .state import (
 )
 from .text_shape import ELEMENT_NAMES as _ELEMENT_NAMES
 from .text_shape import PLACEHOLDER_SET as _PLACEHOLDER_SET
+from .text_shape import WHOLE_STAGE_ELEMENT
 from .text_shape import normalize_string as _normalize_string
 
 
@@ -1301,10 +1302,99 @@ def stage_carry_key(stage) -> tuple:
     )
 
 
-def stage_question_key(stage) -> str:
-    """Stable digest of a stage's FULL definition, used by premise.py to decide
-    whether a disposed Question bound to `stage:<n>.<element>` still targets the
-    same bytes it was answered against.
+_WHOLE_STAGE_DEFINITION: tuple[str, ...] | None = None
+
+# Which stage fields constitute each name of the question-target vocabulary, as dotted
+# leaf paths of `Stage`. TOTAL over text_shape.ELEMENT_NAMES by construction — a name
+# absent here raises KeyError rather than degrading to the whole-stage digest, and
+# `test_question_key_scope.py` goes red the moment the vocabulary gains one. Its
+# companion test also pins the COMPLEMENT: every leaf of `Stage` is either claimed by a
+# name here or recorded there as deliberately unclaimed, so a field added to `Stage`
+# cannot end up invalidating nothing by default.
+_ELEMENT_FIELDS: dict[str, tuple[str, ...] | None] = {
+    "material": ("subject.material", "subject.material_refs",
+                 "supplies.on", "supplies.element", "supplies.artifact"),
+    "result": ("subject.result",),
+    "invariants": ("subject.invariants",),
+    "knowledge": ("knowledge", "subject.knowledge_refs"),
+    "means": ("means.means",),
+    "method": ("means.method",),
+    "procedure": ("means.procedure",),
+    "executor": ("actor.executor",),
+    "capability": ("actor.capability_required",),
+    "criterion": ("criterion.criterion_type", "criterion.done_criterion",
+                  "criterion.verify_command", "criterion.expected_exit",
+                  "criterion.verify_venue", "criterion.verify_kind",
+                  "criterion.landed.target", "criterion.landed.delivered_stage",
+                  "criterion.landed.remote", "criterion.verify_venue_at_final"),
+    "done_criterion": ("criterion.done_criterion",),
+    "principle": ("principle.statement", "principle.source", "principle.derivation",
+                  "principle.confidence", "principle.refutation"),
+    "conditions": ("conditions",),
+    "preconditions": ("preconditions",),
+    "control": _WHOLE_STAGE_DEFINITION,
+    "order": _WHOLE_STAGE_DEFINITION,
+    "requirements": _WHOLE_STAGE_DEFINITION,
+}
+
+
+def _leaf_values(stage, path: str) -> tuple:
+    """Values reached by a dotted leaf path from a Stage, always as a tuple.
+
+    A list-valued segment PROJECTS rather than terminating: `supplies.on` yields every
+    supply's `on`, in declaration order, so the tuple is sensitive to a reordering as
+    well as to a rewrite. A None owner short-circuits to `(None,)`, which is why the
+    optional structs (`principle`, `criterion.landed`) can be addressed leaf-by-leaf
+    without a presence test at every call site — and is unambiguous only because neither
+    struct is constructible with all of its own leaves None (`LandedSpec.target` and
+    `Principle.statement` are required)."""
+    owners: tuple = (stage,)
+    for name in path.split("."):
+        reached: list = []
+        for owner in owners:
+            value = None if owner is None else getattr(owner, name)
+            if isinstance(value, list):
+                reached.extend(value)
+            else:
+                reached.append(value)
+        owners = tuple(reached)
+    return owners
+
+
+def stage_element_keys(stage) -> dict[str, str]:
+    """Every change-decision key a question bound to this stage can be checked against:
+    one per name of the question-target vocabulary, plus the reserved WHOLE_STAGE_ELEMENT
+    entry holding the whole-stage digest.
+
+    Which of the two a given stamp is allowed to match is premise.py's decision, not this
+    module's — see `premise._accepted_keys`."""
+    keys = {WHOLE_STAGE_ELEMENT: stage_question_key(stage)}
+    for name in sorted(_ELEMENT_NAMES):
+        keys[name] = stage_question_key(stage, name)
+    return keys
+
+
+def stage_question_key(stage, element: str | None = None) -> str:
+    """Stable digest of a stage's FULL definition — or, given an `element`, of just that
+    element's contribution — used by premise.py to decide whether a disposed Question
+    bound to `stage:<n>.<element>` still targets the same bytes it was answered against.
+
+    With no `element` (and for the three names `_ELEMENT_FIELDS` maps to
+    `_WHOLE_STAGE_DEFINITION`) the digest covers the whole stage, byte-for-byte as it did
+    before element scoping existed — the identity the back-compatibility of every already
+    persisted `disposed_at_key` rests on. With an `element` it hashes that element's
+    fields TAGGED with the element's own name, so two elements whose text happens to
+    coincide cannot produce one digest (the collision this key family has already been
+    bitten by twice — see `procedure_place`).
+
+    The element form is deliberately the STRICTER of the two on the venue fields: it
+    hashes `verify_venue` / `verify_kind` / `verify_venue_at_final` raw where the
+    whole-stage payload normalizes them, so a whitespace-only edit invalidates a
+    `criterion` question that the whole-stage digest would have let stand. Erring toward
+    re-confirmation is the safe direction here (the reachable route out is
+    `question-rebind --confirm-still-valid`), and matching the normalization would mean
+    threading it per path through a walker that has no business knowing which fields are
+    prose.
 
     A THIRD member of the key family beside `_structural_signature` (drives
     replan refinement-vs-substantive classification) and `stage_carry_key` (drives
@@ -1333,6 +1423,11 @@ def stage_question_key(stage) -> str:
     Question.disposed_at_key and compared across processes, so it must survive a
     JSON round-trip byte-for-byte (a tuple would not, once JSON turns it into a
     list)."""
+    if element is not None:
+        paths = _ELEMENT_FIELDS[element]
+        if paths is not _WHOLE_STAGE_DEFINITION:
+            payload = repr((element, tuple(_leaf_values(stage, p) for p in paths)))
+            return hashlib.sha256(payload.encode("utf-8")).hexdigest()
     principle = stage.principle
     principle_tuple = (
         (principle.statement, principle.source, principle.derivation,

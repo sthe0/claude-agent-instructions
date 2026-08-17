@@ -53,6 +53,7 @@ from dataclasses import dataclass
 
 from .text_shape import ELEMENT_NAMES
 from .text_shape import PLACEHOLDER_SET as _PLACEHOLDER_SET
+from .text_shape import WHOLE_STAGE_ELEMENT
 from .text_shape import normalize_string as _normalize_string
 
 VALID_DISPOSITIONS = frozenset({"open", "researched", "escalated", "assumed", "retired"})
@@ -185,19 +186,40 @@ _REQUIRED_FIELDS = {
 }
 
 
-def validate_questions(questions: list[Question], *, stage_keys: dict[int, str]) -> list[str]:
-    """Pure: a question bag + the caller's {stage_index: current_key} map ->
+def _accepted_keys(element_keys: dict[str, str], element: str) -> tuple[str, ...]:
+    """The stamps rule 12 lets stand for a question on `element`: that element's own
+    current key, and the whole stage's.
+
+    The whole-stage key is not a hole to be tightened later. It is the only thing a stamp
+    written before the map carried per-element entries can match, and there is no
+    migration that could rewrite those stamps — a stamp is a digest of a plan version that
+    may no longer exist anywhere. Dropping it would flip every question disposed by an
+    older engine to a staleness blocker in one step."""
+    accepted = (element_keys.get(element), element_keys.get(WHOLE_STAGE_ELEMENT))
+    return tuple(k for k in accepted if k is not None)
+
+
+def validate_questions(
+    questions: list[Question], *, stage_keys: dict[int, dict[str, str]]
+) -> list[str]:
+    """Pure: a question bag + the caller's {stage_index: {element: current_key}} map ->
     blockers (empty iff every raised question is closed). An empty question bag
     is NOT itself a blocker (see module docstring) — only an individual raised,
     undisposed, or malformed question is.
 
     `stage_keys` is opaque to this module: the caller decides what "current key"
-    means for a stage (typically a digest of its own fields) and this module only
-    compares a disposed question's stamped `disposed_at_key` against it. Passing
-    an empty `stage_keys` dict skips BOTH the dangling-target check (rule 2) and
-    the key-mismatch check (rule 12) — the caller who cannot yet compute keys
-    (e.g. before a plan exists) gets a validator that checks disposition-shape
-    only, not binding.
+    means for a stage's element (typically a digest of the fields that constitute it) and
+    this module only compares a disposed question's stamped `disposed_at_key` against the
+    keys the caller supplies. Passing an empty `stage_keys` dict skips BOTH the
+    dangling-target check (rule 2) and the key-mismatch check (rule 12) — the caller who
+    cannot yet compute keys (e.g. before a plan exists) gets a validator that checks
+    disposition-shape only, not binding.
+
+    An inner map is expected to carry both the key of each element and, under the reserved
+    WHOLE_STAGE_ELEMENT entry, one for the whole stage; rule 12 accepts EITHER. A missing
+    entry of either kind is not an error but it is not a discharge either: an unmatched
+    stamp blocks, so the failure direction of an incomplete map is re-confirmation, never
+    a silently unchecked question.
     """
     blockers: list[str] = []
 
@@ -206,7 +228,7 @@ def validate_questions(questions: list[Question], *, stage_keys: dict[int, str])
         if parsed is None:
             blockers.append(f"question {q.id!r} has an unparseable target {q.target!r}")
             continue
-        kind, stage_index, _element = parsed
+        kind, stage_index, element = parsed
 
         if (
             kind == "stage"
@@ -264,10 +286,10 @@ def validate_questions(questions: list[Question], *, stage_keys: dict[int, str])
             and q.disposition in _KEY_BOUND_DISPOSITIONS
             and stage_keys
             and stage_index in stage_keys
-            and q.disposed_at_key != stage_keys[stage_index]
+            and q.disposed_at_key not in _accepted_keys(stage_keys[stage_index], element)
         ):
             blockers.append(
-                f"question {q.id!r} is bound to stage {stage_index}, whose definition "
+                f"question {q.id!r} is bound to stage {stage_index}'s {element}, which "
                 "changed since this question was disposed — re-confirm it against the "
                 "current stage or leave it open for re-disposition"
             )

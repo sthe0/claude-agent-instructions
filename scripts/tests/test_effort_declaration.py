@@ -26,6 +26,7 @@ from agentctl.plan import (
     diff_plans,
     parse_plan,
     stage_carry_key,
+    stage_element_keys,
     stage_question_key,
 )
 from agentctl.state import (
@@ -73,6 +74,9 @@ def test_undeclared_cost_tier_matches_declared_on_carry_and_question_keys():
     assert declared.actor.cost_tier == "large"
     assert stage_carry_key(bare) == stage_carry_key(declared)
     assert stage_question_key(bare) == stage_question_key(declared)
+    # cost_tier is an execution price, not a place a question can be answered against,
+    # so it must stay out of every element-scoped key as well as the whole-stage one.
+    assert stage_element_keys(bare) == stage_element_keys(declared)
 
 
 def test_undeclared_cost_tier_matches_declared_on_structural_signature():

@@ -302,7 +302,7 @@ def premise_blockers(state, bag) -> list[str]:
     plan_path = getattr(state, "plan_path", None)
     if plan_path:
         doc = plan.load_plan(plan_path)
-        stage_keys = {s.index: plan.stage_question_key(s) for s in doc.stages}
+        stage_keys = {s.index: plan.stage_element_keys(s) for s in doc.stages}
         content_digest = _plan_content_digest(doc)
     else:
         doc = None

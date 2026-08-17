@@ -10,6 +10,14 @@ from agentctl.premise import (
 )
 
 
+def _element_keys(whole_stage, **elements):
+    """A per-stage `element -> key` map in the shape plan.stage_element_keys returns:
+    the reserved whole-stage entry plus whichever element keys a case needs."""
+    keys = {premise.WHOLE_STAGE_ELEMENT: whole_stage}
+    keys.update(elements)
+    return keys
+
+
 def _researched(**overrides):
     base = dict(
         id="q1",
@@ -33,7 +41,7 @@ def test_target_must_parse():
 
 def test_dangling_stage_target_blocks():
     q = _researched(target="stage:3.means", disposed_at_key="k1")
-    blockers = validate_questions([q], stage_keys={1: "a"})
+    blockers = validate_questions([q], stage_keys={1: _element_keys("a")})
     assert any("stage 3" in b and "dangling" in b for b in blockers)
 
 
@@ -108,20 +116,50 @@ def test_derivation_may_not_echo_answer_or_source():
 
 def test_stage_bound_key_mismatch_blocks():
     q = _researched(target="stage:2.means", disposed_at_key="OLDKEY")
-    blockers = validate_questions([q], stage_keys={2: "NEWKEY"})
+    blockers = validate_questions(
+        [q], stage_keys={2: _element_keys("NEWKEY", means="NEWKEY-MEANS")})
     assert any("stage 2" in b and "changed" in b for b in blockers)
 
 
 def test_unrelated_stage_edit_does_not_invalidate():
     q = _researched(target="stage:3.means", disposed_at_key="KEEP")
-    # stage 3's key is unchanged; only stage 5 (an unrelated stage) changed.
-    blockers = validate_questions([q], stage_keys={3: "KEEP", 5: "CHANGED-NOW"})
+    # stage 3's means is unchanged; only stage 5 (an unrelated stage) changed.
+    blockers = validate_questions([q], stage_keys={
+        3: _element_keys("STAGE-3", means="KEEP"),
+        5: _element_keys("CHANGED-NOW", means="CHANGED-NOW-MEANS"),
+    })
     assert blockers == []
+
+
+def test_sibling_element_edit_does_not_invalidate():
+    """The narrowing this map shape exists for: stage 3's method was rewritten, so the
+    whole-stage key moved, but a question answered against its MEANS still stands."""
+    q = _researched(target="stage:3.means", disposed_at_key="MEANS-KEY")
+    blockers = validate_questions([q], stage_keys={
+        3: _element_keys("WHOLE-STAGE-MOVED", means="MEANS-KEY", method="METHOD-MOVED"),
+    })
+    assert blockers == []
+
+
+def test_whole_stage_stamp_still_discharges():
+    """A key stamped before the map carried per-element entries — no migration can
+    rewrite it, so the whole-stage entry must keep discharging it."""
+    q = _researched(target="stage:3.means", disposed_at_key="LEGACY-WHOLE-STAGE")
+    blockers = validate_questions([q], stage_keys={
+        3: _element_keys("LEGACY-WHOLE-STAGE", means="MEANS-KEY"),
+    })
+    assert blockers == []
+
+
+def test_element_absent_from_the_map_blocks_rather_than_discharges():
+    q = _researched(target="stage:3.means", disposed_at_key="MEANS-KEY")
+    blockers = validate_questions([q], stage_keys={3: _element_keys("WHOLE")})
+    assert any("stage 3" in b and "changed" in b for b in blockers)
 
 
 def test_plan_goal_target_exempt_from_key_check():
     q = _researched(target="plan.goal", disposed_at_key="")
-    blockers = validate_questions([q], stage_keys={1: "some-key"})
+    blockers = validate_questions([q], stage_keys={1: _element_keys("some-key")})
     assert blockers == []
 
 

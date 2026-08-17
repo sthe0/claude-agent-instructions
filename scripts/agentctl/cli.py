@@ -1130,8 +1130,10 @@ def _enumeration_escape_counts(state, doc: "PlanDoc | None" = None) -> dict | No
 
 
 def _bound_stage_key(state, question: "premise.Question", plan_path: str | None = None) -> str:
-    """The current stage_question_key of the stage a Question is bound to — the
-    value dispose/rebind stamp into `disposed_at_key`. Returns "" for
+    """The current stage_question_key of the ELEMENT a Question is bound to — the
+    value dispose/rebind stamp into `disposed_at_key`. Scoped to the element rather
+    than the whole stage so that editing one place of a stage's definition leaves the
+    questions answered against its other places dispositioned. Returns "" for
     plan.goal / plan.done_criterion targets (no per-goal key repeats under a stage
     index), for an unparseable target, and when no plan has been submitted yet
     (`state.plan_path` empty) — exactly the cases premise.validate_questions
@@ -1150,7 +1152,7 @@ def _bound_stage_key(state, question: "premise.Question", plan_path: str | None 
     parsed = premise.parse_target(question.target)
     if parsed is None:
         return ""
-    kind, stage_index, _element = parsed
+    kind, stage_index, element = parsed
     if kind != "stage":
         return ""
     if plan_path is None:
@@ -1158,7 +1160,7 @@ def _bound_stage_key(state, question: "premise.Question", plan_path: str | None 
     if not plan_path:
         return ""
     doc = load_plan(plan_path)
-    keys = {s.index: stage_question_key(s) for s in doc.stages}
+    keys = {s.index: stage_question_key(s, element) for s in doc.stages}
     return keys.get(stage_index, "")
 
 

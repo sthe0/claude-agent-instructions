@@ -1006,3 +1006,47 @@ def test_refinement_replan_rebinds_only_changed_stage_questions(store, tmp_path)
     assert "stage 2" in rebind[0]
     # stage 1's question — bound to the untouched stage — is NOT re-blocked.
     assert not any("stage 1" in b for b in blockers)
+
+
+def test_refinement_replan_leaves_untouched_elements_of_a_changed_stage(store, tmp_path):
+    """The same pricing one level finer, and the reason `disposed_at_key` is stamped
+    per element: the refinement rewrites stage 2's verify_command, so its whole-stage
+    key moves — but a question answered against stage 2's MEANS is answered against
+    bytes that did not move, and demanding a rebind for it teaches the rebind verb as
+    a formality. The test above covers the same replan for a stamp written before the
+    key was element-scoped, which has only the whole-stage key to match and so still
+    blocks."""
+    sid = "replan-rebind-element-scope"
+    old_path = tmp_path / "plan.toml"
+    old_path.write_text(_two_stage_plan_text(stage2_verify_cmd="true"))
+    _approved_two_stage(store, sid, old_path)
+
+    old_doc = plan.load_plan(str(old_path))
+    means_key_by_index = {
+        s.index: plan.stage_question_key(s, "means") for s in old_doc.stages
+    }
+
+    new_path = tmp_path / "plan_refined.toml"
+    new_path.write_text(_two_stage_plan_text(stage2_verify_cmd="false"))
+
+    state = store.load(sid)
+    plugins.activate(state, "premise")
+    bag = state.plugins["premise"]
+    bag["enumerated"] = True
+    bag["enumerated_at"] = pp._plan_content_digest(plan.load_plan(str(new_path)))
+    bag["questions"] = [
+        {
+            "id": f"q{i}", "target": f"stage:{i}.means",
+            "question": f"is stage {i}'s means sound?",
+            "disposition": "assumed", "own_research": "read the surrounding code",
+            "basis": "matches the existing working caller",
+            "risk": "the caller may change",
+            "disposed_at_key": means_key_by_index[i],
+        }
+        for i in (1, 2)
+    ]
+    store.save(state)
+
+    d = cli.cmd_replan(ns(session=sid, plan=str(new_path)), store=store)
+    blockers = d.data.get("blockers", []) if d.data else []
+    assert not [b for b in blockers if "changed since this question was disposed" in b]

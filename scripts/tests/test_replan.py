@@ -857,9 +857,12 @@ def test_corrected_plan_is_rebindable_so_the_premise_gate_stops_deadlocking_repl
     cli.cmd_submit_plan(ns(session=sid, plan=base), store=store)
     assert "premise" in store.load(sid).plugins  # gate really is live
 
-    # a question bound to stage 1, disposed against the BASE plan's stage 1 key
-    cli.cmd_question_raise(ns(session=sid, id="Q1", target="stage:1.result",
-                              question="does the scaffold need a __init__.py?"),
+    # a question bound to stage 1, disposed against the BASE plan's stage 1 key.
+    # `order` keys to the whole stage, so the retitle below moves it; a `result`-bound
+    # question would rightly survive an edit that leaves stage 1's result alone.
+    cli.cmd_question_raise(ns(session=sid, id="Q1", target="stage:1.order",
+                              question="is scaffolding the module the first thing "
+                              "this plan must do?"),
                            store=store)
     cli.cmd_question_research(ns(session=sid, id="Q1", attempted="checked the fixture"),
                               store=store)
@@ -878,7 +881,8 @@ def test_corrected_plan_is_rebindable_so_the_premise_gate_stops_deadlocking_repl
     # the deadlock itself: Q1's stamp is bound to the OLD (unretitled) stage 1
     blocked = cli.cmd_replan(ns(session=sid, plan=corrected), store=store)
     assert blocked.ok is False
-    assert any("definition changed" in b for b in blocked.data.get("blockers", []))
+    assert any("changed since this question was disposed" in b
+               for b in blocked.data.get("blockers", []))
     assert store.load(sid).node == Node.EXECUTING.value  # nothing moved
 
     # the route out: rebind Q1 against the corrected plan by name, and enumerate
@@ -927,8 +931,9 @@ def test_corrected_plan_is_redisposable_so_the_premise_gate_stops_deadlocking_re
     cli.cmd_submit_plan(ns(session=sid, plan=base), store=store)
     assert "premise" in store.load(sid).plugins  # gate really is live
 
-    cli.cmd_question_raise(ns(session=sid, id="Q1", target="stage:1.result",
-                              question="does the scaffold need a __init__.py?"),
+    cli.cmd_question_raise(ns(session=sid, id="Q1", target="stage:1.order",
+                              question="is scaffolding the module the first thing "
+                              "this plan must do?"),
                            store=store)
     cli.cmd_question_research(ns(session=sid, id="Q1", attempted="checked the fixture"),
                               store=store)
@@ -946,16 +951,17 @@ def test_corrected_plan_is_redisposable_so_the_premise_gate_stops_deadlocking_re
 
     blocked = cli.cmd_replan(ns(session=sid, plan=corrected), store=store)
     assert blocked.ok is False
-    assert any("definition changed" in b for b in blocked.data.get("blockers", []))
+    assert any("changed since this question was disposed" in b
+               for b in blocked.data.get("blockers", []))
     assert store.load(sid).node == Node.EXECUTING.value
 
     # the route out: the retitle prompted a genuinely different answer, so this is
     # a fresh disposition rather than a mere rebind — and it must stamp against
     # the corrected plan, named directly, in the same act
     d = cli.cmd_question_dispose(ns(session=sid, id="Q1", to="researched",
-                                    answer="yes — the revised scaffold packages "
-                                    "as a namespace package", source="fixture",
-                                    derivation="split-module layout needs it",
+                                    answer="yes — the revised scaffold is what the "
+                                    "wiring stage now depends on", source="fixture",
+                                    derivation="the added CI stage reaches back to it",
                                     basis="", risk="", plan=corrected), store=store)
     assert d.ok is True
     d = cli.cmd_question_enumerate(ns(session=sid, plan=corrected), store=store,

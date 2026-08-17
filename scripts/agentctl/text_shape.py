@@ -54,3 +54,9 @@ ELEMENT_NAMES = frozenset(
         "principle", "conditions", "preconditions",
     }
 )
+
+# The reserved WHOLE-STAGE entry of a per-stage `element name -> change-decision key` map
+# (plan.stage_element_keys, read by premise.validate_questions). Empty rather than a word
+# because a question target must name at least one character, so nothing an author can
+# write ever collides with it.
+WHOLE_STAGE_ELEMENT = ""
