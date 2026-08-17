@@ -420,10 +420,14 @@ def validate_order_elements(
     return blockers
 
 
+def _collapse_whitespace(text: str) -> str:
+    return " ".join(text.split())
+
+
 def render_coverage_block(
     elements: list[OrderElement],
     stage_count: int,
-    accepted_risks: "list[tuple[str, str, str]] | None" = None,
+    accepted_risks: "list[tuple[str, str, str, str, str, str]] | None" = None,
 ) -> str:
     """The scope-coverage block: the plan's size and what it does with each element
     of the order, plus (schema 28) every LIVE risk acceptance discharging a `revise`
@@ -433,10 +437,13 @@ def render_coverage_block(
     second hand-written rendering would drift against the check. This is the single
     generator; nothing else composes the text.
 
-    `accepted_risks` is `(scope, concern_id, author)` triples, already narrowed to
-    the live (non-stale) ones by the caller — plugins_premise.coverage_block, via
-    gates._risk_acceptance_stale — so this function itself never judges staleness;
-    it only renders what it is handed, same division of labour as `elements` above.
+    `accepted_risks` is `(scope, concern_id, concern_text, basis, risk, author)`
+    sextuples, already narrowed to the live (non-stale) ones by the caller —
+    plugins_premise.coverage_block, via gates._risk_acceptance_stale — so this
+    function itself never judges staleness; it only renders what it is handed, same
+    division of labour as `elements` above. The three free-text fields are collapsed
+    to single-line form (internal whitespace collapsed to single spaces) since the
+    block is checked line-wise for containment in the presented essence.
     """
     covered = sorted(
         (e for e in elements if e.disposition == "covered"),
@@ -452,8 +459,10 @@ def render_coverage_block(
     lines += [f"- covered: {e.element} -> stage {e.stage}" for e in covered]
     lines += [f"- cut: {e.element} — {e.reason}" for e in cut]
     lines += [
-        f"- accepted risk: scope {scope!r} concern {concern_id!r} — accepted by {author}"
-        for scope, concern_id, author in accepted
+        f"- accepted risk: scope {scope!r} concern {concern_id!r} "
+        f"({_collapse_whitespace(concern_text)!r}) — accepted by {author}: "
+        f"basis {_collapse_whitespace(basis)!r}, risk {_collapse_whitespace(risk)!r}"
+        for scope, concern_id, concern_text, basis, risk, author in accepted
     ]
     return "\n".join(lines)
 

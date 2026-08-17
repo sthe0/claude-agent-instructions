@@ -3027,6 +3027,7 @@ def cmd_risk_accept(args, *, store: StateStore, runner: Runner | None = None) ->
         author=author,
         meta_digest=plan_meta_digest(doc),
         stage_keys={str(k): v for k, v in plan_stage_digests(doc).items()},
+        concern_text=review.concerns[valid_ids.index(concern_id)],
     )
     state.risk_acceptances.append(acceptance)
     blockers = gates.plan_review_blockers(state, target)

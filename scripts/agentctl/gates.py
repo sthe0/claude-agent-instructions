@@ -363,9 +363,13 @@ def _risk_acceptance_stale(ra, doc) -> bool:
     return stage_index is not None and stage_index in moved_stages
 
 
-def _concern_discharged(scope: str, concern_id: str, state: SessionState, doc) -> bool:
+def _concern_discharged(scope: str, concern_id: str, concern_text: str, state: SessionState, doc) -> bool:
     return any(
-        ra.scope == scope and ra.concern_id == concern_id and not _risk_acceptance_stale(ra, doc)
+        ra.scope == scope
+        and ra.concern_id == concern_id
+        and ra.concern_text
+        and _normalize_string(ra.concern_text) == _normalize_string(concern_text)
+        and not _risk_acceptance_stale(ra, doc)
         for ra in state.risk_acceptances
     )
 
@@ -402,7 +406,10 @@ def _plan_review_verdict_blockers(pr, *, state: SessionState | None = None, doc=
     # against, discharge cannot be established at all.
     if pr.verdict != _PLAN_REVIEW_REVISE or not pr.concerns or state is None or doc is None:
         return default
-    if all(_concern_discharged(pr.scope, cid, state, doc) for cid in _plan_review_concern_ids(pr)):
+    if all(
+        _concern_discharged(pr.scope, cid, text, state, doc)
+        for cid, text in zip(_plan_review_concern_ids(pr), pr.concerns)
+    ):
         return []
     return default
 

@@ -20,7 +20,7 @@ import shlex
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 
-SCHEMA_VERSION = 28
+SCHEMA_VERSION = 29
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -471,14 +471,18 @@ def plan_review_concern_ids(pr: "PlanReview") -> list[str]:
 
 # A recorded, attributed acceptance of one PlanReview concern's risk (schema 28) —
 # the customer-facing alternative to editing the plan to make a `revise` concern go
-# away. Binds to the exact concern via (scope, concern_id), never to its prose, and
-# to the exact plan version via the same meta/stage-digest snapshot PlanReview
-# itself carries — plan.changed_parts reads reviewed_meta_digest/reviewed_stage_keys
-# (aliased here as meta_digest/stage_keys) identically for both records, so an
-# acceptance recorded against one plan version does not survive a later edit to the
-# part its concern lives in. `basis`/`risk` mirror premise.py's `assumed` question
-# disposition exactly (same two required free-text fields, same anti-placeholder
-# check) — accepting a risk is the same kind of act as assuming one.
+# away. `concern_id` is the key, but the id alone is not the binding: `concern_text`
+# (schema 29) pins the acceptance to the concern's prose at record time, and
+# gates._concern_discharged requires that text still match the concern currently
+# at that id — a rephrased or replaced concern at the same positional id stops
+# discharging rather than silently rebinding to it. Also binds to the exact plan
+# version via the same meta/stage-digest snapshot PlanReview itself carries —
+# plan.changed_parts reads reviewed_meta_digest/reviewed_stage_keys (aliased here as
+# meta_digest/stage_keys) identically for both records, so an acceptance recorded
+# against one plan version does not survive a later edit to the part its concern
+# lives in. `basis`/`risk` mirror premise.py's `assumed` question disposition
+# exactly (same two required free-text fields, same anti-placeholder check) —
+# accepting a risk is the same kind of act as assuming one.
 @dataclass
 class RiskAcceptance:
     scope: str
@@ -489,6 +493,7 @@ class RiskAcceptance:
     author: str
     meta_digest: str = ""
     stage_keys: dict[str, str] = field(default_factory=dict)
+    concern_text: str = ""
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "RiskAcceptance | None":
@@ -503,6 +508,7 @@ class RiskAcceptance:
             author=d.get("author", ""),
             meta_digest=d.get("meta_digest", ""),
             stage_keys=dict(raw) if isinstance(raw := d.get("stage_keys"), dict) else {},
+            concern_text=d.get("concern_text", ""),
         )
 
 

@@ -264,7 +264,7 @@ def coverage_block(state, bag, *, doc=None) -> str | None:
         doc = plan.load_plan(plan_path)
     elements = premise.order_elements_from_dicts(bag.get("order_elements", []))
     accepted_risks = [
-        (ra.scope, ra.concern_id, ra.author)
+        (ra.scope, ra.concern_id, ra.concern_text, ra.basis, ra.risk, ra.author)
         for ra in getattr(state, "risk_acceptances", [])
         if not gates._risk_acceptance_stale(ra, doc)
     ]
