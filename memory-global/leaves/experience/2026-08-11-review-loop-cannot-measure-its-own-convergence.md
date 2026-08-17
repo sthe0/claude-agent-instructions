@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "user"
 refs: [/Users/the0/.claude-agent/plans/plan-convergence-evidence/cause-account.md, /Users/the0/.claude-agent/plans/plan-convergence-revision-log.md]
 created: 2026-08-11
-last_verified: 2026-08-11
+last_verified: 2026-08-17
 ---
 
 # A plan-review loop that records no finding data cannot measure its own convergence, and has no verb for 'the study cannot be done'
@@ -25,6 +25,16 @@ Establish the CAUSE of large-plan non-convergence before designing any remedy (u
 ### 2026-08-11 — plan-convergence-cause: 12 rounds of review on one plan, then a census of all 71 recorded rounds
 - Where it arose: agentctl sessions on ~/claude-agent-instructions; population = 71 review rounds across 12 series pinned in rounds-manifest-pinned.tsv
 - Working plan: Stage 1 built the availability census and per-series convergence table against root-pinned manifests (71/15/5/0; the 42 surviving review artifacts are DISJOINT from the 71 recorded rounds). Stage 2 instrumented the one series retaining both H1 variables — this plan's own six rounds — and wrote the account: r(bytes, BLOCKING) = -0.30 at n = 6, -0.16 at n = 5, i.e. weakly OPPOSITE to H1, reported with an explicit refusal to generalize (n = 6; one author; and the series is instrumented precisely BECAUSE it was under observation). Stage 3 instrumented the loop prospectively so the three missing quantities are recorded from the next round on — plan_sha256, plan_bytes, concern text, note and two optional finding counts onto the durable plan_review event — landed as 21ba780. Population-scale facts that DO survive: rounds per series 19/16/9/6/5/5/3/3/2/1/1/1; 11 of 12 series terminate in pass; 37 revise / 33 pass / 1 override over 71 rounds.
+
+
+### 2026-08-17 — the iatrogenic floor, measured: 15 rounds, 0 passes, 79% of breakers self-inflicted
+- Where it arose: permission-decision-renorm — a 113.6 KB PreToolUse-guard plan taken through 15 independent thinker review rounds, then stopped by the user before execution
+- Working plan: Instrument the loop this leaf could not measure, then act on the number. Each round: tag findings [breaks] vs [improves] and return revise only on a [breaks]; record breakers per round AND whether each sits inside the passage the previous round's fix edited. Stop when the self-inflicted fraction, not the finding count, says the loop cannot terminate. Report that number to the user as the decision, not the plan.
+
+## Common core & variations
+**Common:** This leaf's third mechanism — repair is an authoring act at the density where authoring introduces defects, so the finding count falls to a NON-ZERO FLOOR and a pass-required gate cannot terminate by construction — is here confirmed by direct measurement rather than inferred. Breakers by round: 6,1,0,3,1,1,2,2,2,3,1,2,3,3,1 = 31 total; of the 24 found from round 4 on, 19 (79%) were defects the immediately preceding round's own fix introduced. Zero rounds closed with zero plan edits, the loop's only fixed point, so it never had a reachable exit. The plan grew 59.8 KB to 113.6 KB (+90%) across the series. The fourth mechanism reproduced exactly too: the two defects invisible to review at any round count were artifact-to-machinery fit failures — a stage whose commit the repo's own pre-commit spine would have refused (found round 13, after twelve reviews), and a guard watching the GATE_BEARING_HOOKS constant instead of the live hooks.PreToolUse array, so an edit deleting the row that ran the guard itself tripped nothing (found round 14, after thirteen). The leaf's own predicted remedy is the one taken: not shrinking the artifact but SPLITTING it, so the finished part is frozen rather than re-reviewed.
+
+**Variations:** Two additions. (1) The severity split gives the loop a stopping CONDITION it lacked but not a stop — breakers stayed above zero in every round but the last. Instrumenting a loop tells you it will not terminate; it does not terminate it. Someone still has to stop it, and the measured self-inflicted fraction is what makes that a decision rather than a surrender. (2) A DERIVED ENUMERATION has the same non-convergence signature from a different cause. The plan's registry of gate-neutralizing env keys was derived by scanning the tree, and ten successive completeness claims were falsified (28 keys, 36, three argument shapes, the *.py language domain, PYTHONPATH, AGENT_RECURSION_DEPTH, three more, a git-config family, a loader-preload family), growing it to 69 while never once being complete. A registry derived from where someone looked is bounded by where they looked, and no number of rounds moves that bound. The structural exit is INVERSION — deny every key, allow a named benign few — which removes the need to have looked; its honest cost is that the benign list becomes the whole trust surface, and it had already been wrong twice. When the same claim is falsified three times running, the method is the finding.
 
 ## Cost
 12 plan-review rounds $18.89 / ~72 min (BLOCKING series 4,4,4,4,3,3,1,1,0,0,0,0); stage 3 developer spawn $3.62 / 14.6 min; code review $2.06. Ten rounds passed before a single measurement ran.
