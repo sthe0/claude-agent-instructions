@@ -576,3 +576,20 @@ def test_premise_blockers_rejects_essence_carrying_only_the_old_accepted_risk_fo
     blockers = pp.premise_blockers(state, bag)
     assert any("does not carry the current scope-coverage block" in b for b in blockers)
     assert any(current_line in b for b in blockers)
+
+
+def test_order_list_md_carries_the_live_accepted_risk_lines(store, tmp_path, fixtures_dir):
+    """`order-list --format md` is what the coordinator pastes into the essence, so it
+    must BE the block the gate re-derives. Rendering it without the live acceptances
+    would have the gate reject an essence over lines this command never printed."""
+    plan_path = tmp_path / "plan.toml"
+    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    doc = load_plan(str(plan_path))
+    state, bag = _premise_state(plan_path, doc)
+    state.risk_acceptances = [
+        _acceptance("", "c-tests", "missing test coverage for the new branch", plan_path, doc)
+    ]
+    store.save(state)
+    d = cli.cmd_order_list(ns(session=state.session_id, format="md"), store=store)
+    assert d.detail == pp.coverage_block(state, bag, doc=doc)
+    assert "c-tests" in d.detail

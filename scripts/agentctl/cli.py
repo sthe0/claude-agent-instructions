@@ -1529,10 +1529,13 @@ def cmd_order_dispose(args, *, store: StateStore, runner: Runner | None = None) 
 
 
 def cmd_order_list(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
-    """Read-only render of the order bag. `--format md` IS
-    premise.render_coverage_block — the same text the essence must carry — so the
-    coordinator pastes what the gate will check rather than composing a second
-    rendering of its own. A PROJECTION, never a source of truth. Does not mutate."""
+    """Read-only render of the order bag. `--format md` IS the gate's own block,
+    via the same plugins_premise.coverage_block the essence check re-derives — so
+    the coordinator pastes what the gate will check rather than composing a second
+    rendering of its own. Calling render_coverage_block directly here would be that
+    second rendering: it would silently omit the live risk acceptances the gate
+    demands, and the pasted essence would be rejected for lines this command never
+    showed. A PROJECTION, never a source of truth. Does not mutate."""
     state, bag = _question_bag(store, args.session)
     if bag is None:
         return Directive(False, state.node, "noop", "plugin 'premise' is not active")
@@ -1540,7 +1543,8 @@ def cmd_order_list(args, *, store: StateStore, runner: Runner | None = None) -> 
     plan_path = getattr(state, "plan_path", None)
     stage_count = len(load_plan(plan_path).stages) if plan_path else 0
     if getattr(args, "format", None) == "md":
-        detail = premise.render_coverage_block(elements, stage_count)
+        detail = plugins_premise.coverage_block(state, bag) or premise.render_coverage_block(
+            elements, stage_count)
     else:
         detail = "; ".join(f"{e.id}={e.disposition}" for e in elements) or "no order elements"
     return Directive(
