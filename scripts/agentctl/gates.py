@@ -41,8 +41,9 @@ from lib import config_root
 from lib import hook_wiring
 
 from . import delivery
-from .plan import PlanError, load_plan, order_place, stage_question_key
+from .plan import PlanError, changed_parts, load_plan, order_place, stage_question_key
 from .state import Node, SessionState, StageStatus, WeightClass
+from .state import plan_review_scope_for_stage as _plan_review_scope_for_stage
 from .state import PLAN_PRESENTATION_KIND_ESSENCE as _PLAN_PRESENTATION_KIND_ESSENCE
 from .state import Stage as _Stage
 from .text_shape import PLACEHOLDER_SET as _PLACEHOLDER_SET
@@ -328,58 +329,34 @@ def plan_review_active(state: SessionState) -> bool:
     return state.weight_class == WeightClass.SUBSTANTIVE.value
 
 
-def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[str]:
-    """Precondition guardian for `approve` and every `replan`: a thinker review with
-    a passing (or user-overridden) verdict, BOUND to the exact plan version being
-    approved/applied, must have been recorded. This is an INTERNAL command
-    precondition mirroring difficulty_blockers — deliberately absent from GUARDIANS
-    so verify-agentctl requires no new hook to cover it. [] == may pass.
-
-    Inactive (chat / small-change / AGENTCTL_PLAN_REVIEW=0) => [] always: the gate
-    is byte-identical to absent for non-substantive sessions. Active checks:
-      - a review must exist (state.plan_review) — else the gate is unmet;
-      - it must be bound to `target_plan` (pr.plan_path == target_plan) — a review
-        of an earlier plan version is stale and does not clear a later one;
-      - the verdict must be `pass` WITH a non-empty reviewer-attested plan_sha256
-        (from --plan-digest) matching the live bytes, or `override` with a non-empty
-        reviewer AND note (the explicit user deadlock escape); `revise`/unknown blocks.
-        A `pass` whose plan_sha256 is EMPTY (no attestation) blocks — a reviewer that
-        could not read the plan cannot bind it."""
-    if not plan_review_active(state):
-        return []
-    pr = state.plan_review
-    if pr is None:
-        return ["no thinker review recorded — run: plan-review (thinker verdict required before this plan is approved/applied)"]
-    if not target_plan or pr.plan_path != target_plan:
-        return [
-            "thinker review is stale — it examined "
-            f"{pr.plan_path!r} but the target plan is {target_plan!r}; re-run plan-review on the current plan"
-        ]
+def _plan_review_content_stale(pr, target_plan: str) -> str | None:
     # #16: the coordinator edits plans in place, so a same-path binding is not a
     # content binding — recompute the plan's sha256 and reject a drift. Fail-open:
     # an unreadable target degrades to the path-only binding above, never wedging
-    # the gate on a transient read error. (An EMPTY stored hash used to degrade to
-    # path-only too; on the PASS path below that is now REVERSED — see the pass
-    # branch's attestation requirement.)
-    if pr.plan_sha256:
-        try:
-            current = hashlib.sha256(Path(target_plan).read_bytes()).hexdigest()
-        except OSError:
-            current = None
-        if current is not None and current != pr.plan_sha256:
-            return [
-                "thinker review is stale — the plan content at "
-                f"{target_plan!r} changed since it was reviewed; re-run plan-review"
-            ]
+    # the gate on a transient read error.
+    if not pr.plan_sha256:
+        return None
+    try:
+        current = hashlib.sha256(Path(target_plan).read_bytes()).hexdigest()
+    except OSError:
+        return None
+    if current == pr.plan_sha256:
+        return None
+    return (
+        "thinker review is stale — the plan content at "
+        f"{target_plan!r} changed since it was reviewed; re-run plan-review"
+    )
+
+
+def _plan_review_verdict_blockers(pr) -> list[str]:
     if pr.verdict == _PLAN_REVIEW_PASS:
         # CONTRACT INVERSION (reviewer-attested binding): plan_sha256 is now the
         # digest the REVIEWER attested via --plan-digest, not an engine auto-
         # compute. An EMPTY hash on the pass path means the reviewer supplied no
         # proof it read the plan — so a sibling-session reviewer that could not
         # read the plan cannot bind a pass; block and let the difficulty surface.
-        # (A non-empty hash was already checked against the live bytes above, and
-        # fails OPEN on a transient OSError.) The override branch below is NOT
-        # reached by this — the deadlock escape stays attestation-free.
+        # The override branch below is NOT reached by this — the deadlock escape
+        # stays attestation-free.
         if not pr.plan_sha256:
             return [
                 "thinker review is not attested — the reviewer supplied no "
@@ -397,6 +374,134 @@ def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[s
             return ["thinker review override requires a non-empty " + " and ".join(missing) + " (the user's explicit escape reason)"]
         return []
     return [f"thinker review verdict is {pr.verdict!r} — plan blocked until a passing review (or an explicit override) is recorded"]
+
+
+def _plan_review_blockers_whole(pr, target_plan: str | None) -> list[str]:
+    if pr is None:
+        return ["no thinker review recorded — run: plan-review (thinker verdict required before this plan is approved/applied)"]
+    if not target_plan or pr.plan_path != target_plan:
+        return [
+            "thinker review is stale — it examined "
+            f"{pr.plan_path!r} but the target plan is {target_plan!r}; re-run plan-review on the current plan"
+        ]
+    stale = _plan_review_content_stale(pr, target_plan)
+    if stale:
+        return [stale]
+    return _plan_review_verdict_blockers(pr)
+
+
+def _plan_review_baseline(pr) -> dict:
+    return {"meta": pr.reviewed_meta_digest, "stages": pr.reviewed_stage_keys}
+
+
+def _plan_review_blockers_coverage(state: SessionState, target_plan: str, doc) -> list[str]:
+    """The whole-plan review covers everything it passed on the day its recorded
+    keys still match; a moved stage owes its own stage-scoped pass at the CURRENT
+    key. A moved meta/order always demands a fresh whole-plan review — a
+    stage-scoped reviewer never saw the order, so it cannot re-cover a meta
+    change no matter how current its own stage's key is."""
+    whole = state.plan_review
+    if whole is None:
+        return ["no thinker review recorded — run: plan-review (thinker verdict required before this plan is approved/applied)"]
+    if not target_plan or whole.plan_path != target_plan:
+        return [
+            "thinker review is stale — it examined "
+            f"{whole.plan_path!r} but the target plan is {target_plan!r}; re-run plan-review on the current plan"
+        ]
+    meta_moved, moved_stages = changed_parts(doc, _plan_review_baseline(whole))
+    if meta_moved:
+        return [
+            "thinker review is stale — the plan's meta/order changed since it was "
+            "reviewed; re-run plan-review"
+        ]
+    blockers = _plan_review_verdict_blockers(whole)
+    if blockers:
+        return blockers
+    for index in sorted(moved_stages):
+        scope = _plan_review_scope_for_stage(index)
+        spr = state.plan_stage_reviews.get(scope)
+        if spr is None or spr.plan_path != target_plan:
+            return [
+                f"stage {index} changed since the whole-plan review; needs its own "
+                f"pass — run: plan-review --scope {scope}"
+            ]
+        stage_meta_moved, stage_moved = changed_parts(doc, _plan_review_baseline(spr))
+        if stage_meta_moved:
+            return [
+                f"thinker review for stage {index} is stale — the plan's meta/order "
+                "changed since it was reviewed; re-run plan-review (a stage-scoped "
+                "review cannot cover a meta change)"
+            ]
+        if index in stage_moved:
+            return [
+                f"thinker review is stale — stage {index} changed again since "
+                f"{scope!r} was reviewed; re-run plan-review --scope {scope}"
+            ]
+        blockers = _plan_review_verdict_blockers(spr)
+        if blockers:
+            return blockers
+    return []
+
+
+def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[str]:
+    """Precondition guardian for `approve` and every `replan`: a thinker review with
+    a passing (or user-overridden) verdict, BOUND to the exact plan version being
+    approved/applied, must have been recorded. This is an INTERNAL command
+    precondition mirroring difficulty_blockers — deliberately absent from GUARDIANS
+    so verify-agentctl requires no new hook to cover it. [] == may pass.
+
+    Inactive (chat / small-change / AGENTCTL_PLAN_REVIEW=0) => [] always: the gate
+    is byte-identical to absent for non-substantive sessions.
+
+    With no stage-scoped review recorded (state.plan_stage_reviews empty), this
+    reduces to the whole-plan-only check `_plan_review_blockers_whole` ran alone —
+    same branches, same messages, as before stage-scoped reviews existed at all.
+    Once a stage-scoped review exists, coverage is delegated to
+    `_plan_review_blockers_coverage`, which checks the whole-plan record's own
+    attestation/verdict directly (`_plan_review_verdict_blockers`) rather than via
+    `_plan_review_blockers_whole` — the byte-hash staleness check in that helper
+    would trip on any unrelated edit and defeat per-stage coverage, so staleness
+    here is decided solely by `changed_parts` against the recorded meta/stage keys."""
+    if not plan_review_active(state):
+        return []
+    if not state.plan_stage_reviews or not target_plan:
+        return _plan_review_blockers_whole(state.plan_review, target_plan)
+    try:
+        doc = load_plan(target_plan)
+    except (OSError, PlanError):
+        return _plan_review_blockers_whole(state.plan_review, target_plan)
+    return _plan_review_blockers_coverage(state, target_plan, doc)
+
+
+def plan_review_delta(state: SessionState, doc) -> "tuple[bool, set[int]]":
+    """What a reviewer still needs to look at in `doc`, independent of any
+    verdict/attestation check: (whole_plan_needed, stage indices still needing
+    their own pass). No whole-plan review yet recorded reads the same as one
+    whose meta/order moved — both mean "review the whole thing". Backs the
+    read-only `plan-review-delta` command in place of a raw digest dump.
+
+    NOT reused by `_plan_review_blockers_coverage`, despite computing a related
+    gap over the same baseline: that gate additionally binds each review to
+    `target_plan` (a path check this function has no parameter for), fails fast
+    on the first uncovered part instead of enumerating all of them, and folds
+    in the verdict/attestation check this function deliberately excludes. The
+    two share only their building blocks (`_plan_review_baseline`,
+    `changed_parts`), not a call path."""
+    whole = state.plan_review
+    baseline = _plan_review_baseline(whole) if whole is not None else {"meta": "", "stages": {}}
+    meta_moved, moved_stages = changed_parts(doc, baseline)
+    if meta_moved:
+        return True, set()
+    needing: set[int] = set()
+    for index in moved_stages:
+        spr = state.plan_stage_reviews.get(_plan_review_scope_for_stage(index))
+        if spr is None:
+            needing.add(index)
+            continue
+        stage_meta_moved, stage_moved = changed_parts(doc, _plan_review_baseline(spr))
+        if stage_meta_moved or index in stage_moved:
+            needing.add(index)
+    return False, needing
 
 
 def plan_presentation_active(state: SessionState) -> bool:

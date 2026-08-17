@@ -38,6 +38,7 @@ from .plan import (
     META_PART,
     PlanDoc,
     PlanError,
+    changed_parts,
     check_venue_warnings,
     load_plan,
     plan_meta_digest,
@@ -47,7 +48,7 @@ from .plan import (
     verify_command_reachability_blockers,
     verify_command_scope_warnings,
 )
-from .render import cmd_plan_render, render_stages_md
+from .render import cmd_plan_render, render_plan_md, render_stages_md
 from .submission import submission_advice, submission_violations
 from .state import (
     _EXECUTION_NODES,
@@ -85,6 +86,8 @@ from .state import (
     PlanFrame,
     PlanPresentation,
     PlanReview,
+    plan_review_scope_for_stage,
+    plan_review_scope_stage_index,
     RequirementVerdict,
     Route,
     SessionState,
@@ -2446,10 +2449,27 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     state.node = transition(state.node, "revise_plan" if resubmitting else "submit_plan")
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
     if resubmitting:
-        # The plan changed, so any recorded thinker review examined a now-stale
-        # version — clear it unconditionally so the plan-review gate re-arms for the
-        # new plan (a same-path in-place edit would slip a plan_path-bound check).
-        state.plan_review = None
+        # The plan changed, so any recorded thinker review that no longer covers
+        # the resubmitted bytes must clear so the plan-review gate re-arms for
+        # them. "No longer covers" is decided per review record via the SAME
+        # plan.changed_parts a review's own recorded digests feed the coverage
+        # gate with — a review recorded before this field existed (empty
+        # reviewed_meta_digest/reviewed_stage_keys) compares as "everything
+        # moved" against ANY doc, reproducing the old unconditional clear for
+        # every legacy record without a special case.
+        def _still_covers(pr: PlanReview) -> bool:
+            meta_moved, moved = changed_parts(
+                doc, {"meta": pr.reviewed_meta_digest, "stages": pr.reviewed_stage_keys})
+            if meta_moved:
+                return False
+            idx = plan_review_scope_stage_index(pr.scope)
+            return True if idx is None else idx not in moved
+
+        if state.plan_review is not None and not _still_covers(state.plan_review):
+            state.plan_review = None
+        state.plan_stage_reviews = {
+            scope: pr for scope, pr in state.plan_stage_reviews.items() if _still_covers(pr)
+        }
     state.plan_submitted_ts = time.time()
     state.log("submit_plan", plan=plan_path, verified=True, revised=resubmitting)
     bag = state.plugins.get("premise")
@@ -2802,7 +2822,17 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
 
     The reviewer must pass --plan-digest <hex> (the sha256 of its OWN read of the
     plan); it is cross-checked against the live bytes and stored as the attested
-    plan_sha256. A passing verdict does NOT bind without a matching attestation."""
+    plan_sha256. A passing verdict does NOT bind without a matching attestation.
+
+    --scope 'stage:<n>' binds the review to one stage instead of the whole plan
+    (stage 5): the record also carries the engine's OWN digests of the plan's
+    meta and per-stage parts at this moment (plan_meta_digest/plan_stage_digests),
+    which gates.plan_review_blockers compares against the live plan via
+    plan.changed_parts to decide whether this review still covers what it once
+    covered. Recording those digests requires a LOADABLE plan — a whole-plan
+    review degrades gracefully to a digest-less record on a parse failure (still
+    useful as a path/content-hash-bound record), but a stage-scoped review REFUSES:
+    it cannot confirm the named stage even exists without parsing the plan."""
     state = _require(store, args.session)
     target = getattr(args, "target", None) or state.plan_path
     if not target:
@@ -2810,11 +2840,37 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
             False, state.node, "noop",
             "no plan to review: submit a plan first, or pass --target <plan.toml>",
         )
+    scope = (getattr(args, "scope", None) or "").strip()
+    doc = None
+    parse_error = None
+    try:
+        doc = load_plan(target)
+    except (OSError, PlanError) as e:
+        parse_error = str(e)
+    if scope:
+        stage_index = plan_review_scope_stage_index(scope)
+        if stage_index is None:
+            return Directive(
+                False, state.node, "noop",
+                f"--scope {scope!r} is not a recognized scope (expected 'stage:<n>')",
+            )
+        if doc is None:
+            return Directive(
+                False, state.node, "noop",
+                f"cannot validate --scope {scope!r}: {target} failed to load: {parse_error}",
+            )
+        if not any(s.index == stage_index for s in doc.stages):
+            return Directive(
+                False, state.node, "noop",
+                f"--scope {scope!r}: no stage {stage_index} in {target}",
+            )
     # An override is the USER's escape from a reviewer's `revise` deadlock — the
     # reviewer who issued the blocking verdict cannot override themselves. Checked
     # here, before the record is overwritten and the prior reviewer's identity lost.
+    # Scope-aware: an override of a STAGE-scoped revise compares against the prior
+    # review of that SAME scope, never against the whole-plan record.
     if args.verdict == gates._PLAN_REVIEW_OVERRIDE:
-        prev = state.plan_review
+        prev = state.plan_stage_reviews.get(scope) if scope else state.plan_review
         new_reviewer = (getattr(args, "reviewer", "") or "").strip()
         if (
             prev is not None
@@ -2847,22 +2903,31 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
                 f"({live!r}) at {target!r}: the reviewer read a different or stale "
                 "plan; re-read the current plan and re-run plan-review",
             )
-    state.plan_review = PlanReview(
+    review = PlanReview(
         plan_path=target,
         verdict=args.verdict,
         reviewer=getattr(args, "reviewer", "") or "",
         concerns=list(getattr(args, "concerns", None) or []),
         note=getattr(args, "note", "") or "",
         plan_sha256=attested,
+        scope=scope,
+        reviewed_meta_digest=plan_meta_digest(doc) if doc is not None else "",
+        reviewed_stage_keys=(
+            {str(k): v for k, v in plan_stage_digests(doc).items()} if doc is not None else {}
+        ),
     )
+    if scope:
+        state.plan_stage_reviews[scope] = review
+    else:
+        state.plan_review = review
     blockers = gates.plan_review_blockers(state, target)
     _log_gate(state, "plan_review", blockers, passed=not blockers)
-    state.log("plan_review", target=target, verdict=args.verdict,
-              reviewer=state.plan_review.reviewer,
-              plan_sha256=state.plan_review.plan_sha256,
+    state.log("plan_review", target=target, verdict=args.verdict, scope=scope,
+              reviewer=review.reviewer,
+              plan_sha256=review.plan_sha256,
               plan_bytes=_plan_file_bytes(target),
-              concerns=state.plan_review.concerns,
-              note=state.plan_review.note,
+              concerns=review.concerns,
+              note=review.note,
               findings_blocking=getattr(args, "findings_blocking", None),
               findings_nonblocking=getattr(args, "findings_nonblocking", None))
     store.save(state)
@@ -2876,6 +2941,45 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
         True, state.node, "continue",
         f"thinker review recorded for {target} (verdict={args.verdict}); "
         "the plan-review gate is now satisfied for this plan version",
+    )
+
+
+def cmd_plan_review_delta(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Read-only: what a reviewer needs to look at in the plan RIGHT NOW, given
+    what's already been reviewed — the brief `plan-review` itself does not need,
+    but a human/thinker preparing to run it does. Replaces hand-computing this
+    from a raw digest dump: `data['stages']` names the moved stages, and the
+    Directive's markdown is their actual current rendering via render_stages_md
+    (or the whole plan via render_plan_md when a meta/order change, or the
+    absence of any prior review, means nothing narrower will do)."""
+    state = _require(store, args.session)
+    target = getattr(args, "plan", None) or state.plan_path
+    if not target:
+        return Directive(
+            False, state.node, "noop",
+            "no plan to diff: submit a plan first, or pass --plan <plan.toml>",
+        )
+    try:
+        doc = load_plan(target)
+    except (OSError, PlanError) as e:
+        return Directive(False, state.node, "noop", f"{target} failed to load: {e}")
+    whole_plan_needed, stage_indices = gates.plan_review_delta(state, doc)
+    stages = sorted(stage_indices)
+    if whole_plan_needed:
+        md = render_plan_md(doc)
+        detail = (
+            f"whole-plan review needed for {target}: its meta/order changed since "
+            "the last whole-plan review, or none has been recorded yet"
+        )
+    elif stages:
+        md = render_stages_md(doc, stages)
+        detail = f"stage-scoped review needed for stage(s) {stages} in {target}"
+    else:
+        md = ""
+        detail = f"no review gap: every part of {target} is covered by its current review"
+    return Directive(
+        True, state.node, "inspect", detail,
+        data={"markdown": md, "whole_plan": whole_plan_needed, "stages": stages},
     )
 
 
@@ -5286,6 +5390,7 @@ COMMANDS = {
     "present-plan": cmd_present_plan,
     "confirm-delivery": cmd_confirm_delivery,
     "plan-review": cmd_plan_review,
+    "plan-review-delta": cmd_plan_review_delta,
     "stage-review": cmd_stage_review,
     "code-review": cmd_code_review,
     "accept": cmd_accept,
@@ -5351,6 +5456,7 @@ _SESSION_COMMANDS = (
     "question-candidate-dispose",
     "order-raise", "order-dispose", "order-list", "classify", "plan",
     "plan-render", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
+    "plan-review-delta",
     "stage-review", "code-review", "accept", "approve", "partition", "partition-units",
     "next-stage", "dispatch", "resolve-permission", "record-result", "declare",
     "investigate", "critique", "normalize", "verify-final", "resolve", "reject",
@@ -5416,8 +5522,8 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("control", ("question-raise",),
      "structured control address matched against controls.MATERIALITY_GRAMMARS — a "
      "grammar-bound name, never the prose --control of record-result/close"),
-    ("plan", ("plan-render", "submit-plan", "replan", "drive", "push-subplan",
-              "question-enumerate", "question-enumerate-worker",
+    ("plan", ("plan-render", "plan-review-delta", "submit-plan", "replan", "drive",
+              "push-subplan", "question-enumerate", "question-enumerate-worker",
               "question-enumerate-escape", "question-dispose",
               "question-rebind", "question-raise"), "plan file path"),
     ("digest", ("question-enumerate-worker",),
@@ -5433,6 +5539,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
      "the escape is --note, which is RESOLVE"),
     ("reviewer", ("plan-review", "stage-review", "code-review"), "reviewer name"),
     ("plan_digest", ("plan-review",), "sha256 the review binds to"),
+    ("scope", ("plan-review",), "'' or 'stage:<n>' — the review's binding, not narrative"),
     ("code_ref", ("code-review", "record-result"), "commit / PR reference the verdict binds to"),
     ("unit", ("partition", "partition-units"), "'|'-delimited partition-unit record"),
     ("author", ("accept",), "acceptance author id — an identity token, not narrative"),
@@ -5721,11 +5828,19 @@ def build_parser() -> argparse.ArgumentParser:
                          "plan; cross-checked against the live bytes and stored as the "
                          "attested plan_sha256. A passing verdict does NOT bind without "
                          "it — a reviewer that could not read the plan cannot attest.")
+    sp.add_argument("--scope", default=None,
+                    help="'stage:<n>' to bind this review to one stage instead of the "
+                         "whole plan; omitted (or '') means whole-plan, the only kind "
+                         "that existed before stage 5")
     sp.add_argument("--findings-blocking", dest="findings_blocking", type=int, default=None,
                     help="count of blocking findings this round produced (audit trail)")
     sp.add_argument("--findings-nonblocking", dest="findings_nonblocking", type=int,
                     default=None,
                     help="count of non-blocking findings this round produced (audit trail)")
+    sp = add("plan-review-delta"); sp.add_argument("--session", required=True)
+    sp.add_argument("--plan", default=None,
+                    help="plan file to diff against recorded reviews (defaults to the "
+                         "session's current plan_path)")
     sp = add("stage-review"); sp.add_argument("--session", required=True)
     sp.add_argument("--verdict", choices=list(gates.STAGE_REVIEW_VERDICTS), required=True,
                     help="pass = clears the acceptance gate; revise = blocks; override = "

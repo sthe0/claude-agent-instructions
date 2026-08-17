@@ -20,7 +20,7 @@ import shlex
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 
-SCHEMA_VERSION = 26
+SCHEMA_VERSION = 27
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -401,13 +401,25 @@ class PlanReview:
     plan_path binds the verdict to a NAME, but the coordinator edits plans in place,
     so a same-path rewrite would inherit a PASS granted to different bytes. The gate
     recomputes the hash and rejects a content drift. Empty on legacy records (absent
-    key -> default), which degrades the gate to the prior path-only binding."""
+    key -> default), which degrades the gate to the prior path-only binding.
+
+    `scope` (schema 27) is "" for a whole-plan review (the only kind that used to
+    exist) or `plan_review_scope_for_stage(n)` for a review of stage n alone.
+    `reviewed_meta_digest`/`reviewed_stage_keys` are the ENGINE's own digests of the
+    plan's meta and per-stage parts AT RECORD TIME (plan.plan_meta_digest /
+    plan.plan_stage_digests) — distinct from the REVIEWER-attested `plan_sha256`
+    above. Empty/default on legacy records and on any record recorded without a
+    loadable plan, which is what makes plan.changed_parts read them as "everything
+    moved" (see gates.plan_review_blockers)."""
     plan_path: str
     verdict: str
     reviewer: str
     concerns: list[str] = field(default_factory=list)
     note: str = ""
     plan_sha256: str = ""
+    scope: str = ""
+    reviewed_meta_digest: str = ""
+    reviewed_stage_keys: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "PlanReview | None":
@@ -420,7 +432,24 @@ class PlanReview:
             concerns=list(d.get("concerns", [])),
             note=d.get("note", ""),
             plan_sha256=d.get("plan_sha256", ""),
+            scope=d.get("scope", ""),
+            reviewed_meta_digest=d.get("reviewed_meta_digest", ""),
+            reviewed_stage_keys=dict(raw) if isinstance(raw := d.get("reviewed_stage_keys"), dict) else {},
         )
+
+
+_PLAN_REVIEW_STAGE_SCOPE_PREFIX = "stage:"
+
+
+def plan_review_scope_for_stage(index: int) -> str:
+    return f"{_PLAN_REVIEW_STAGE_SCOPE_PREFIX}{index}"
+
+
+def plan_review_scope_stage_index(scope: str) -> "int | None":
+    if not scope.startswith(_PLAN_REVIEW_STAGE_SCOPE_PREFIX):
+        return None
+    rest = scope[len(_PLAN_REVIEW_STAGE_SCOPE_PREFIX):]
+    return int(rest) if rest.isdigit() else None
 
 
 # The acceptance-review analogue of PlanReview (schema 14): one recorded verdict on
@@ -1160,6 +1189,12 @@ class SessionState:
     # dataclass default via from_dict), so the gate has no observable and — for a
     # substantive session — blocks approval/replan until a review is recorded.
     plan_review: "PlanReview | None" = None
+    # Stage-scoped thinker reviews (schema 27), keyed by PlanReview.scope — the
+    # per-part sibling of plan_review above, which stays the whole-plan (scope "")
+    # slot. Empty on legacy states (absent key -> dataclass default via from_dict),
+    # which is what makes the coverage gate in gates.py fall back to plan_review
+    # alone, unchanged.
+    plan_stage_reviews: dict[str, "PlanReview"] = field(default_factory=dict)
     # The acceptance-review judge records backing the acceptance-review gate (schema
     # 14): one StageReview per acceptance_review stage that has been judged, and one
     # JudgeBypass per gate bypass (kill switch / override). Both default to [] — legacy
@@ -1470,6 +1505,10 @@ class SessionState:
         data["permission_request"] = PermissionRequest(**pr) if pr else None
         data["difficulty"] = Difficulty.from_dict(data.get("difficulty"))
         data["plan_review"] = PlanReview.from_dict(data.get("plan_review"))
+        data["plan_stage_reviews"] = {
+            scope: r for scope, v in (data.get("plan_stage_reviews") or {}).items()
+            if (r := PlanReview.from_dict(v)) is not None
+        }
         data["stage_reviews"] = [
             r for r in (StageReview.from_dict(x) for x in data.get("stage_reviews", [])) if r is not None
         ]
