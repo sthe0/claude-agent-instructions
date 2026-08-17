@@ -172,9 +172,10 @@ save sites, on both counts:
   **before** `plan_approval`'s blockers are computed — i.e. before the refusal path that
   returns without reaching the function's own success-path save. The governing comment names
   the cost directly: *"Persist BEFORE the gate is evaluated, not after: the blockers below are
-  computed from the folded bag and name its `qenum-N` candidates, and this function returns on
-  any blocker WITHOUT reaching its own `store.save()` — so a fold left in memory would refuse
-  the approve while `question-candidate-dispose --id qenum-1` had nothing to find"*
+  computed from the folded bag and name its `qenum-<part>-N` candidates, and this function
+  returns on any blocker WITHOUT reaching its own `store.save()` — so a fold left in memory
+  would refuse the approve while `question-candidate-dispose --id qenum-meta-1` had nothing
+  to find"*
   (`cli.py:2507-2511`). A lost fold would have left exactly that dangling reference; the extra
   save exists because it is not free, not because it is unnecessary.
 - **`cmd_replan` does NOT persist the fold via a save it already performs.** The fold sits

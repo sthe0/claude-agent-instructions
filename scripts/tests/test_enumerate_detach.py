@@ -25,7 +25,7 @@ Covers:
     touches a concurrent worker's `.tmp-*.json`;
   - the fold end to end through `cmd_approve` and against `store.load()`, not
     an in-memory bag: a landed sidecar is folded, PERSISTED, and refuses the
-    approve on its own `qenum-N` candidates -- which are then dispositionable,
+    approve on its own `qenum-<part>-N` candidates -- which are then dispositionable,
     the whole point of persisting before the gate is evaluated -- plus its two
     dispositions-are-not-resurrected halves (a no-op at an already-enumerated
     digest; a statement-keyed re-raise when the plan moved on);
@@ -665,7 +665,7 @@ class TestDetachedRelaunchOnReplan:
         the CORRECTED plan's digest before a retried `replan` runs must be folded
         AND PERSISTED, not merely mutated on the in-memory `state` object --
         cmd_replan's own store.save() sites are all past the early return this
-        refusing path takes. An unpersisted fold would name qenum-N candidates
+        refusing path takes. An unpersisted fold would name qenum-<part>-N candidates
         that exist nowhere on disk, and `question-candidate-dispose` could not
         address them -- the central case for detaching on the replan side: replan
         against a corrected plan, launch, _ENUMERATE_NOT_RUN, wait, retry replan
@@ -707,14 +707,14 @@ class TestDetachedRelaunchOnReplan:
         blocked = cli.cmd_replan(ns(session=sid, plan=corrected), store=store)
 
         assert blocked.ok is False
-        assert any("qenum-1" in b for b in blocked.data.get("blockers", []))
+        assert any("qenum-meta-1" in b for b in blocked.data.get("blockers", []))
         # a matching sidecar folds in place of a redundant relaunch
         assert launches == []
 
         bag = store.load(sid).plugins["premise"]
         assert bag["enumerated"] is True
         assert bag["enumerated_at"] == digest
-        assert [c["id"] for c in bag["candidates"]] == ["qenum-1", "qenum-2"]
+        assert [c["id"] for c in bag["candidates"]] == ["qenum-meta-1", "qenum-meta-2"]
         assert all(c["disposition"] == "raised" for c in bag["candidates"])
 
     def test_a_replan_refused_at_submission_leaves_the_premise_bag_untouched(
@@ -803,7 +803,7 @@ class TestFoldThroughApprove:
         """The ordinary happy path of detaching: the worker lands pairs, `approve`
         folds them, refuses naming them, and the coordinator disposes them and
         approves. Every step of that is on disk — the refusing `approve` returns
-        before its own store.save(), so an unpersisted fold would name `qenum-N`
+        before its own store.save(), so an unpersisted fold would name `qenum-<part>-N`
         ids `question-candidate-dispose` could not find, and a destructive read
         would leave no sidecar to re-fold and no launch site on the approve path:
         `_ENUMERATE_NOT_RUN` forever, escapable only by the 480 s synchronous
@@ -820,18 +820,18 @@ class TestFoldThroughApprove:
 
         blocked = cli.cmd_approve(ns(session=sid, by="user"), store=store)
         assert blocked.ok is False
-        assert any("qenum-1" in b for b in blocked.data["blockers"])
+        assert any("qenum-meta-1" in b for b in blocked.data["blockers"])
 
         bag = store.load(sid).plugins["premise"]
         assert bag["enumerated"] is True
         assert bag["enumerated_at"] == digest
         assert bag["enumerated_runner_ok"] is True
-        assert [c["id"] for c in bag["candidates"]] == ["qenum-1", "qenum-2"]
+        assert [c["id"] for c in bag["candidates"]] == ["qenum-meta-1", "qenum-meta-2"]
         assert all(c["disposition"] == "raised" for c in bag["candidates"])
         # idempotent: the matching sidecar survives the refusing fold
         assert enumerate_sidecar.sidecar_path(sid, digest, root=root).exists()
 
-        for cid in ("qenum-1", "qenum-2"):
+        for cid in ("qenum-meta-1", "qenum-meta-2"):
             d = cli.cmd_question_candidate_dispose(
                 ns(session=sid, id=cid, as_="dismissed", reason="answered in the goal",
                    question=None), store=store)
@@ -858,7 +858,7 @@ class TestFoldThroughApprove:
             runner=lambda argv, **_kw: RunResult(0, "\n".join(f"{t}\t{q}" for t, q in pairs), ""),
         )
         assert cli.cmd_question_candidate_dispose(
-            ns(session=sid, id="qenum-1", as_="dismissed", reason="answered in the goal",
+            ns(session=sid, id="qenum-meta-1", as_="dismissed", reason="answered in the goal",
                question=None), store=store).ok is True
 
         _land_sidecar(store, sid, plan, pairs)
@@ -889,7 +889,7 @@ class TestFoldThroughApprove:
             runner=lambda argv, **_kw: RunResult(0, "goal\tthe question the coordinator saw", ""),
         )
         assert cli.cmd_question_candidate_dispose(
-            ns(session=sid, id="qenum-1", as_="dismissed", reason="answered", question=None),
+            ns(session=sid, id="qenum-meta-1", as_="dismissed", reason="answered", question=None),
             store=store).ok is True
         digest = _land_sidecar(store, sid, plan,
                                [("stage 2", "a question the worker asked instead")])
@@ -906,7 +906,7 @@ class TestFoldThroughApprove:
 
     def test_fold_re_raises_a_candidate_whose_statement_changed(
             self, store, fixtures_dir, tmp_path, monkeypatch):
-        """Preservation is keyed on the statement, not the id: `qenum-1` of a pass
+        """Preservation is keyed on the statement, not the id: `qenum-meta-1` of a pass
         over corrected plan content is a DIFFERENT question, and inheriting the old
         disposition would discharge a question nobody read. Here the bag's prior
         enumeration is stale (a digest-changing replan cleared it), so the fold runs
@@ -922,7 +922,7 @@ class TestFoldThroughApprove:
             runner=lambda argv, **_kw: RunResult(0, "goal\tthe OLD question", ""),
         )
         assert cli.cmd_question_candidate_dispose(
-            ns(session=sid, id="qenum-1", as_="dismissed", reason="answered", question=None),
+            ns(session=sid, id="qenum-meta-1", as_="dismissed", reason="answered", question=None),
             store=store).ok is True
         # simulate the not-run clear a digest-changing relaunch leaves behind, so the
         # fold is not short-circuited by the same-digest no-op
@@ -936,7 +936,7 @@ class TestFoldThroughApprove:
         blocked = cli.cmd_approve(ns(session=sid, by="user"), store=store)
 
         assert blocked.ok is False
-        assert any("qenum-1" in b for b in blocked.data["blockers"])
+        assert any("qenum-meta-1" in b for b in blocked.data["blockers"])
         cand = store.load(sid).plugins["premise"]["candidates"][0]
         assert cand["disposition"] == "raised"
         assert "a DIFFERENT question" in cand["statement"]

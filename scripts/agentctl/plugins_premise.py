@@ -28,7 +28,6 @@ Adding a terminal here would reopen, at the plugin layer, the hole being closed 
 the CLI layer. This plugin is `scope='task'`, retired only at the task boundary."""
 from __future__ import annotations
 
-import hashlib
 import os
 
 from . import advisor, gates, plan, premise
@@ -191,8 +190,8 @@ def escape_counts(bag, content_digest) -> dict:
 def _plan_content_digest(doc: "plan.PlanDoc") -> str:
     """A digest of the plan's PARSED content (post-tomllib), so a TOML comment-only
     edit — which tomllib never surfaces as a field — is already a no-op here
-    without any extra comment-stripping logic. Reuses `stage_question_key` per
-    stage rather than re-deriving a parallel notion of 'stage bytes', and
+    without any extra comment-stripping logic. Reuses the per-stage whole-stage key
+    rather than re-deriving a parallel notion of 'stage bytes', and
     `plan.order_place` for the order rather than re-deriving a notion of 'order
     bytes': it is the wider of the two order keys, so a re-wording, an added or
     renamed requirement id, and a coverage-key change all move the digest. A
@@ -200,20 +199,52 @@ def _plan_content_digest(doc: "plan.PlanDoc") -> str:
     rewritten under a discharged enumeration is exactly the staleness this digest
     exists to catch.
 
-    The order is SPLICED (`+ order_place(...)`) rather than occupying a slot in the
-    tuple: `order_place` is empty for an order-less plan, so such a plan's payload
-    stays byte-identical to the one this function produced before the order field
-    existed, and no live session's already-discharged enumeration is re-armed by
-    the field's arrival."""
-    payload = repr((
-        doc.meta.goal,
-        doc.meta.done_criterion,
-        doc.meta.criterion_type,
-        doc.meta.weight_class,
-        doc.meta.repo_root,
-        tuple(sorted((s.index, plan.stage_question_key(s)) for s in doc.stages)),
-    ) + plan.order_place(doc.meta))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    The composition lives in `plan.plan_content_digest` beside the per-part digests
+    it recomposes; this name is what the escape rows, the launch window and every
+    persisted `enumerated_at` were written against, so it stays."""
+    return plan.plan_content_digest(doc)
+
+
+def enumeration_baseline(bag) -> dict:
+    """The per-part digests the recorded enumeration ran against, in the shape
+    `plan.changed_parts` compares against."""
+    return {
+        "meta": bag.get("enumerated_meta_at") or "",
+        "stages": bag.get("enumerated_stage_at") or {},
+    }
+
+
+def stale_enumeration_parts(bag, doc) -> tuple[bool, set[int]]:
+    """Which parts of `doc` the recorded enumeration no longer speaks for.
+
+    A bag carrying NEITHER part digest predates the per-part split and can only be
+    judged whole: reading its empty maps as "no part enumerated" would flip every
+    already-discharged live session to _ENUMERATE_STALE on its next call."""
+    baseline = enumeration_baseline(bag)
+    if not baseline["meta"] and not baseline["stages"]:
+        if bag.get("enumerated_at") == plan.plan_content_digest(doc):
+            return False, set()
+        return True, set(plan.plan_stage_digests(doc))
+    return plan.changed_parts(doc, baseline)
+
+
+def enumeration_is_stale(bag, doc) -> bool:
+    meta_stale, stale_stages = stale_enumeration_parts(bag, doc)
+    return meta_stale or bool(stale_stages)
+
+
+def enumeration_run_scope(bag, doc) -> tuple[bool, set[int]]:
+    """The parts a re-run must cover — `(whole_plan, {stage indices})`.
+
+    Narrowed to the stages that moved only when a pass has landed and the plan's
+    meta is unchanged; every other case reads the whole plan, so a first pass and an
+    explicitly re-requested one behave exactly as they did before the split. A moved
+    goal / done criterion / order re-opens every stage's fit to it, which is why a
+    meta move widens rather than adding a part."""
+    meta_stale, stale_stages = stale_enumeration_parts(bag, doc)
+    if stale_stages and not meta_stale and bag.get("enumerated"):
+        return False, stale_stages
+    return True, set(plan.plan_stage_digests(doc))
 
 
 def coverage_block(state, bag, *, doc=None) -> str | None:
@@ -270,10 +301,10 @@ def premise_blockers(state, bag) -> list[str]:
        set-but-unparseable path is not a state this gate needs to defend against.
     2. candidate disposition-completeness (premise.validate_question_candidates);
     3. the enumeration cross-check has RUN at all (bag['enumerated']) and, if it
-       has, that it ran against the plan content AS IT CURRENTLY STANDS
-       (bag['enumerated_at'] == the live content digest) — otherwise one
-       enumerate call would silently discharge the flag forever across every
-       later replan — and that the run it recorded did not FAIL. The three are
+       has, that no PART of the plan has moved since the pass that covered it
+       (stale_enumeration_parts) — otherwise one enumerate call would silently
+       discharge the flag forever across every later replan — and that the run it
+       recorded did not FAIL. The three are
        one if/elif chain, not three independent tests, because a relaunch clears
        `enumerated` back to not-run while leaving the SUPERSEDED pass's
        `enumerated_runner_ok` behind: firing the runner-failure blocker there
@@ -324,7 +355,7 @@ def premise_blockers(state, bag) -> list[str]:
         if not escape_recorded(bag, content_digest,
                                (premise.ESCAPE_ENUMERATION_NOT_LANDED,)):
             blockers.append(_ENUMERATE_NOT_RUN)
-    elif content_digest is not None and bag.get("enumerated_at") != content_digest:
+    elif content_digest is not None and enumeration_is_stale(bag, doc):
         blockers.append(_ENUMERATE_STALE)
     elif bag.get("enumerated_runner_ok") is False:
         # `is False`, never `is not True`: None means the advisor was ABSENT (also what
@@ -386,6 +417,13 @@ register(
             "order_elements": [],
             "enumerated": False,
             "enumerated_at": "",
+            # The per-part digests the recorded pass covered: the plan's meta/order,
+            # and one entry per stage index (as a string — these round-trip through
+            # JSON). Both empty means "no part enumerated" for a bag minted since the
+            # split and "judge by enumerated_at alone" for one minted before it; the
+            # two are told apart in stale_enumeration_parts, which is the only reader.
+            "enumerated_meta_at": "",
+            "enumerated_stage_at": {},
             "enumerated_runner_ok": None,
             # The failed run's own stderr, carried from the pass that produced
             # enumerated_runner_ok so the blocker can pre-select the escape reason

@@ -103,6 +103,14 @@ def render_plan_md(doc: PlanDoc) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def render_stages_md(doc: PlanDoc, stage_indices) -> str:
+    """The plan projected onto a SUBSET of its stages, in index order — the reading an
+    advisor is given when only those stages have moved. Each stage carries the plan's
+    meta with it (see `render_stage_brief`), so a question about a stage's fit to the
+    goal is still answerable from the projection alone."""
+    return "\n".join(render_stage_brief(doc, index) for index in sorted(stage_indices))
+
+
 def render_stage_brief(doc: PlanDoc, stage_index: int) -> str:
     """Pure: a PlanDoc + one stage index -> a markdown brief of JUST that stage.
 

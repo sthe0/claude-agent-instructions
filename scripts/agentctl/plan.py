@@ -1479,6 +1479,72 @@ def stage_question_key(stage, element: str | None = None) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+META_PART = "meta"
+
+
+def stage_part(index: int) -> str:
+    return f"s{index}"
+
+
+def plan_meta_digest(doc: PlanDoc) -> str:
+    """Digest of everything the plan states about itself outside its stages — the goal,
+    the done criterion and the order. Its own function rather than a slice of the
+    composite below, because a question raised against the goal goes stale on exactly
+    these bytes and on no stage's."""
+    payload = repr((
+        doc.meta.goal,
+        doc.meta.done_criterion,
+        doc.meta.criterion_type,
+        doc.meta.weight_class,
+        doc.meta.repo_root,
+    ) + order_place(doc.meta))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def plan_stage_digests(doc: PlanDoc) -> dict[int, str]:
+    return {s.index: stage_element_keys(s)[WHOLE_STAGE_ELEMENT] for s in doc.stages}
+
+
+def plan_content_digest(doc: PlanDoc) -> str:
+    """The whole-plan digest, recomposed from the same per-stage values
+    `plan_stage_digests` reports.
+
+    The payload is byte-for-byte the one this function produced before the per-part
+    split, and must stay so: escapes, launch windows and every already-persisted
+    `enumerated_at` bind to this value, so a changed payload would void a live
+    session's escape and re-arm a discharged cross-check. `test_enumeration_keying`
+    pins the value for a fixture plan. The order stays SPLICED (`+ order_place(...)`)
+    rather than taking a slot in the tuple: `order_place` is empty for an order-less
+    plan, which is what keeps such a plan's payload the one this produced before the
+    order field existed."""
+    payload = repr((
+        doc.meta.goal,
+        doc.meta.done_criterion,
+        doc.meta.criterion_type,
+        doc.meta.weight_class,
+        doc.meta.repo_root,
+        tuple(sorted(
+            (s.index, stage_element_keys(s)[WHOLE_STAGE_ELEMENT]) for s in doc.stages)),
+    ) + order_place(doc.meta))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def changed_parts(doc: PlanDoc, baseline_digests: dict) -> tuple[bool, set[int]]:
+    """Which parts of `doc` have moved since `baseline_digests` — `(meta_moved,
+    {stage indices})`, given `{'meta': <digest>, 'stages': {index: <digest>}}`.
+
+    The baseline is a PARAMETER rather than something read out of a particular
+    record, so the same comparison serves a premise bag's enumeration record and a
+    plan review's own recorded keys. Stage indices are compared as strings: the
+    baseline typically arrives from JSON, which has no integer keys."""
+    recorded = {str(k): v for k, v in (baseline_digests.get("stages") or {}).items()}
+    moved = {
+        index for index, digest in plan_stage_digests(doc).items()
+        if recorded.get(str(index)) != digest
+    }
+    return (baseline_digests.get("meta") or "") != plan_meta_digest(doc), moved
+
+
 def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
     """Return 'no_change' | 'refinement' | 'substantive'."""
     if _structural_signature(old) != _structural_signature(new):

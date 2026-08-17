@@ -35,15 +35,19 @@ from .directive import Directive
 from .dispatch import Runner, dispatch_stage, parse_marker, subprocess_runner
 from .machine import transition
 from .plan import (
+    META_PART,
     PlanDoc,
     PlanError,
     check_venue_warnings,
     load_plan,
+    plan_meta_digest,
+    plan_stage_digests,
+    stage_part,
     stage_question_key,
     verify_command_reachability_blockers,
     verify_command_scope_warnings,
 )
-from .render import cmd_plan_render
+from .render import cmd_plan_render, render_stages_md
 from .submission import submission_advice, submission_violations
 from .state import (
     _EXECUTION_NODES,
@@ -1499,20 +1503,71 @@ def cmd_question_candidate_dispose(args, *, store: StateStore, runner: Runner | 
     )
 
 
+_LEGACY_ENUMERATION_ID = re.compile(r"^qenum-\d+$")
+
+
+def _enumeration_part(target: str) -> str:
+    """Which part of the plan a raised pair belongs to. A target that does not parse
+    as a stage address belongs to the plan-level part — including a malformed one,
+    which is the safe direction: `meta` is covered by every whole-plan pass, so a
+    question the advisor addressed badly is still raised somewhere rather than
+    dropped."""
+    parsed = premise.parse_target(target)
+    if parsed is not None and parsed[0] == "stage":
+        return stage_part(parsed[1])
+    return META_PART
+
+
+def _inherit_disposition(existing: dict, entry: dict, preserve: bool) -> dict:
+    if (preserve and existing.get("statement") == entry["statement"]
+            and existing.get("disposition") != "raised"):
+        return dict(existing)
+    return entry
+
+
+def _upsert_candidate(candidates: list, entry: dict, *, preserve_disposition: bool) -> None:
+    for j, existing in enumerate(candidates):
+        if existing.get("id") == entry["id"]:
+            candidates[j] = _inherit_disposition(existing, entry, preserve_disposition)
+            return
+    # A candidate raised under the pre-part id scheme is the SAME question when its
+    # statement is identical, so it is taken over rather than left standing beside its
+    # own successor — otherwise a session carried across the change meets both, and the
+    # disposition it already recorded protects neither.
+    for j, existing in enumerate(candidates):
+        if (_LEGACY_ENUMERATION_ID.match(existing.get("id") or "")
+                and existing.get("statement") == entry["statement"]):
+            taken_over = _inherit_disposition(existing, entry, preserve_disposition)
+            candidates[j] = {**taken_over, "id": entry["id"]}
+            return
+    candidates.append(entry)
+
+
 def _apply_enumeration_result(
     bag: dict, doc: PlanDoc, plan_path, pairs: list[tuple[str, str]], runner_ok: bool | None,
-    *, preserve_disposition: bool = False, stderr: str = "",
+    *, parts: tuple[bool, set[int]] | None = None,
+    preserve_disposition: bool = False, stderr: str = "",
 ) -> list[str]:
-    """Upsert `pairs` as 'raised' QuestionCandidates (last-wins by deterministic
-    qenum-N id) and stamp the bag's enumerated/enumerated_at/enumerated_plan/
-    enumerated_runner_ok/enumerated_runner_stderr/enumerated_count fields from ONE
-    enumeration pass's result. `stderr` is the failed pass's own diagnostic: the
-    runner-failure blocker reads it back to pre-select an escape reason, so it must
-    travel with the runner_ok it explains and not be re-derived later from a run
-    nobody kept.
+    """Upsert `pairs` as 'raised' QuestionCandidates (last-wins by a deterministic
+    `qenum-<part>-N` id) and stamp the bag's enumerated/enumerated_at/enumerated_plan/
+    enumerated_runner_ok/enumerated_runner_stderr/enumerated_count fields plus the
+    per-part digests the pass covered, from ONE enumeration pass's result. `stderr` is
+    the failed pass's own diagnostic: the runner-failure blocker reads it back to
+    pre-select an escape reason, so it must travel with the runner_ok it explains and
+    not be re-derived later from a run nobody kept.
     Shared by the synchronous cmd_question_enumerate path and the detached-worker
     sidecar fold (cmd_approve/cmd_replan) so both apply identical upsert semantics
     to the SAME bag shape regardless of which path produced the pairs.
+
+    `parts` is what the pass actually read — `(whole_plan, {stage indices})` from
+    plugins_premise.enumeration_run_scope, None for a whole-plan pass. Only those
+    parts' digests are refreshed, so a stage nobody re-read stays recorded against
+    the bytes it WAS read at, and only those parts' candidate ids are renumbered:
+    another part's candidates, and the dispositions recorded against them, are left
+    exactly as they stand. A pass may still raise a pair about a part outside its
+    scope — a cross-cutting question is the thing a narrowed reading is most likely
+    to surface — and that pair is upserted into its own part rather than dropped;
+    what it does not do is refresh that part's digest.
 
     `preserve_disposition` is what separates the two callers. A human running
     `question-enumerate` ASKED for a fresh pass, so re-raising a candidate they had
@@ -1521,29 +1576,36 @@ def _apply_enumeration_result(
     recorded `dismissed`+reason or `recorded`+question link there would discard the
     user's own disposition and refuse the approve that disposition existed to
     unblock. Preservation is keyed on the statement being IDENTICAL, not on the id
-    alone: `qenum-3` of a later pass is a different question than `qenum-3` of an
-    earlier one unless its text says otherwise, and inheriting a disposition across
-    a changed statement would silently discharge a question nobody read."""
+    alone: `qenum-s1-3` of a later pass is a different question than `qenum-s1-3` of
+    an earlier one unless its text says otherwise, and inheriting a disposition
+    across a changed statement would silently discharge a question nobody read."""
+    live_stages = plan_stage_digests(doc)
+    meta_covered, stage_scope = parts if parts is not None else (True, set(live_stages))
+
+    by_part: dict[str, list[tuple[str, str]]] = {}
+    for target, question in pairs:
+        by_part.setdefault(_enumeration_part(target), []).append((target, question))
+
     candidates = bag.setdefault("candidates", [])
     raised: list[str] = []
-    for i, (target, question) in enumerate(pairs):
-        cid = f"qenum-{i + 1}"
-        entry = {"id": cid, "statement": f"[{target}] {question}", "disposition": "raised",
-                 "reason": "", "question": ""}
-        for j, c in enumerate(candidates):
-            if c.get("id") == cid:
-                if (preserve_disposition
-                        and c.get("statement") == entry["statement"]
-                        and c.get("disposition") != "raised"):
-                    entry = c
-                candidates[j] = entry
-                break
-        else:
-            candidates.append(entry)
-        raised.append(cid)
+    for part, part_pairs in by_part.items():
+        for i, (target, question) in enumerate(part_pairs):
+            entry = {"id": f"qenum-{part}-{i + 1}",
+                     "statement": f"[{target}] {question}", "disposition": "raised",
+                     "reason": "", "question": ""}
+            _upsert_candidate(candidates, entry, preserve_disposition=preserve_disposition)
+            raised.append(entry["id"])
 
     bag["enumerated"] = True
     bag["enumerated_at"] = plugins_premise._plan_content_digest(doc)
+    if meta_covered:
+        bag["enumerated_meta_at"] = plan_meta_digest(doc)
+    recorded = bag.get("enumerated_stage_at") or {}
+    bag["enumerated_stage_at"] = {
+        str(index): (digest if index in stage_scope else recorded[str(index)])
+        for index, digest in live_stages.items()
+        if index in stage_scope or str(index) in recorded
+    }
     bag["enumerated_plan"] = str(plan_path)
     bag["enumerated_runner_ok"] = runner_ok
     bag["enumerated_runner_stderr"] = stderr
@@ -1557,13 +1619,16 @@ def cmd_question_enumerate(args, *, store: StateStore, runner: Runner | None = N
     bounded advisor pass (advisor.enumerate_questions_health, `claude -p --model sonnet`,
     cost-bounded) re-reads goal + done_criterion + the full plan text and RAISES the
     questions the plan's construction should have provoked but left implicit, each UPSERT
-    as a 'raised' QuestionCandidate (last-wins by a deterministic `qenum-N` id), then
+    as a 'raised' QuestionCandidate (last-wins by a deterministic `qenum-<part>-N` id), then
     flips bag['enumerated']=True and stamps bag['enumerated_at'] with the CURRENT plan
     content digest so a later content change re-blocks approve (the staleness check).
 
-    ONE call over the whole plan, not one per element: the questions worth raising are
-    overwhelmingly cross-element, and per-element fan-out would multiply cost by the
-    element count for no recall gain (argued in enumerate_questions_health).
+    ONE call, not one per element: the questions worth raising are overwhelmingly
+    cross-element, and per-element fan-out would multiply cost by the element count for
+    no recall gain (argued in enumerate_questions_health). That one call reads the whole
+    plan unless a landed pass already covers every part but a few moved STAGES, in which
+    case it reads those stages (plugins_premise.enumeration_run_scope) and leaves the
+    other parts' candidates and dispositions untouched.
 
     The flag is flipped REGARDLESS of the pair count — never gated on a non-empty
     result. A count-gate is the tempting inversion and it is WRONG: a genuinely
@@ -1624,20 +1689,32 @@ def cmd_question_enumerate(args, *, store: StateStore, runner: Runner | None = N
         return Directive(False, state.node, "noop",
                          f"cannot parse plan {plan_path!r}: {exc}")
 
+    whole_plan, stage_scope = plugins_premise.enumeration_run_scope(bag, doc)
+    if not whole_plan:
+        plan_text = render_stages_md(doc, stage_scope)
+
     run = runner if runner is not None else advisor.enumerate_subprocess_runner
     runner_ok, pairs, stderr = advisor.enumerate_questions_health(
         doc.meta.goal, doc.meta.done_criterion, plan_text, run)
 
-    raised = _apply_enumeration_result(bag, doc, plan_path, pairs, runner_ok, stderr=stderr)
-    state.log("question_enumerate", raised=len(raised), runner_ok=runner_ok, via="command")
+    raised = _apply_enumeration_result(bag, doc, plan_path, pairs, runner_ok, stderr=stderr,
+                                       parts=(whole_plan, stage_scope))
+    state.log("question_enumerate", raised=len(raised), runner_ok=runner_ok, via="command",
+              stages=sorted(stage_scope) if not whole_plan else None)
     store.save(state)
 
+    scope_note = "" if whole_plan else (
+        " (narrowed to stage(s) "
+        + ", ".join(str(index) for index in sorted(stage_scope))
+        + " — the only parts whose content moved since the last pass)")
     d = Directive(
         True, state.node, "continue",
-        f"question enumeration cross-check ran; raised {len(raised)} candidate(s) — "
-        "disposition each with `agentctl question-candidate-dispose --id <qenum-N> "
+        f"question enumeration cross-check ran; raised {len(raised)} candidate(s)"
+        f"{scope_note} — "
+        "disposition each with `agentctl question-candidate-dispose --id qenum-<part>-N "
         "--as recorded --question <qid> | --as dismissed --reason <text>`",
-        data={"raised": raised, "enumerated": True, "runner_ok": runner_ok},
+        data={"raised": raised, "enumerated": True, "runner_ok": runner_ok,
+              "whole_plan": whole_plan, "stages": sorted(stage_scope)},
     )
     # THREE arms, because runner_ok is three-valued and the three states now have
     # three different truths. `False` no longer discharges anything — the gate
@@ -1665,6 +1742,17 @@ def cmd_question_enumerate(args, *, store: StateStore, runner: Runner | None = N
             "done_criterion + every stage by hand for smuggled premises before approving"
         )
     return d
+
+
+def _parse_stage_scope(raw) -> set[int] | None:
+    """`--stages 3,7` -> {3, 7}; absent, empty or unreadable -> None, meaning the whole
+    plan. A hand-typed nonsense value widens the reading rather than narrowing it to
+    nothing, so the worst a bad value costs is the cross-check the engine ran before
+    scoping existed."""
+    tokens = [token.strip() for token in str(raw or "").split(",") if token.strip()]
+    if not tokens or not all(token.isdigit() for token in tokens):
+        return None
+    return {int(token) for token in tokens}
 
 
 def cmd_question_enumerate_worker(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -1709,6 +1797,10 @@ def cmd_question_enumerate_worker(args, *, store: StateStore, runner: Runner | N
             f"does not match the content digest of {args.plan!r} ({recomputed[:12]}…) — the "
             "plan changed after the launch, or this worker was invoked by hand")
 
+    stage_scope = _parse_stage_scope(getattr(args, "stages", None))
+    if stage_scope is not None:
+        plan_text = render_stages_md(doc, stage_scope)
+
     run = runner if runner is not None else advisor.enumerate_subprocess_runner
     runner_ok, pairs, stderr_text = advisor.enumerate_questions_health(
         doc.meta.goal, doc.meta.done_criterion, plan_text, run)
@@ -1719,6 +1811,9 @@ def cmd_question_enumerate_worker(args, *, store: StateStore, runner: Runner | N
         "stderr": stderr_text,
         "content_digest": args.digest,
         "plan_path": str(args.plan),
+        # Absent (None) means the whole plan, which is also what a sidecar written
+        # before the scope existed says by saying nothing.
+        "stages": sorted(stage_scope) if stage_scope is not None else None,
     })
     return Directive(True, "worker", "noop",
                       f"enumeration worker finished; {len(pairs)} pair(s) written to sidecar")
@@ -2055,7 +2150,9 @@ def _launch_enumeration(state: SessionState, bag: dict, doc: PlanDoc, plan_path)
     Clearing enumerated/enumerated_at back to not-run (rather than leaving a
     still-True flag pinned to a now-superseded digest) routes the outstanding-child
     window onto the escapable _ENUMERATE_NOT_RUN blocker instead of the inescapable
-    _ENUMERATE_STALE one — see plugins_premise.premise_blockers.
+    _ENUMERATE_STALE one — see plugins_premise.premise_blockers. The PER-PART digests
+    survive that clear: a narrowed launch reads only the stages that moved, so the
+    record its fold completes is the one holding what every other part was read at.
 
     Fire-and-forget by design: launch_supervised's child is detached
     (start_new_session=True, stdio to DEVNULL) and this process never reaps it —
@@ -2068,6 +2165,8 @@ def _launch_enumeration(state: SessionState, bag: dict, doc: PlanDoc, plan_path)
     fleet-wide rise in the `not_landed` escape bucket, and the success rows give that
     bucket a denominator. The log runs before the caller's store.save(), which every
     call site performs."""
+    # The scope is derived from the very record the clear below destroys.
+    whole_plan, stage_scope = plugins_premise.enumeration_run_scope(bag, doc)
     digest = plugins_premise._plan_content_digest(doc)
     bag["enumerated"] = False
     bag["enumerated_at"] = ""
@@ -2076,10 +2175,13 @@ def _launch_enumeration(state: SessionState, bag: dict, doc: PlanDoc, plan_path)
     bag["enumerate_deadline"] = (
         time.time() + advisor.ENUMERATE_TIMEOUT_S + _ENUMERATE_LAUNCH_MARGIN_S)
     scripts_dir = Path(__file__).resolve().parent.parent
+    argv = [sys.executable, "-m", "agentctl", "question-enumerate-worker",
+            "--session", state.session_id, "--plan", str(plan_path), "--digest", digest]
+    if not whole_plan:
+        argv += ["--stages", ",".join(str(index) for index in sorted(stage_scope))]
     try:
         _spawn_enumeration_worker(
-            [sys.executable, "-m", "agentctl", "question-enumerate-worker",
-             "--session", state.session_id, "--plan", str(plan_path), "--digest", digest],
+            argv,
             cwd=str(scripts_dir),
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
@@ -2132,8 +2234,11 @@ def _fold_enumeration_sidecar(state: SessionState, doc: PlanDoc, plan_path) -> b
         return False
     pairs = [tuple(p) for p in payload.get("pairs", [])]
     runner_ok = payload.get("runner_ok")
+    sidecar_stages = payload.get("stages")
+    parts = ((True, set(plan_stage_digests(doc))) if sidecar_stages is None
+             else (False, set(sidecar_stages)))
     raised = _apply_enumeration_result(bag, doc, plan_path, pairs, runner_ok,
-                                       preserve_disposition=True,
+                                       parts=parts, preserve_disposition=True,
                                        stderr=payload.get("stderr", ""))
     # `via` is stated on BOTH producers rather than encoded as this one's presence:
     # a distinction carried by an absent field reads as a forgotten field to the
@@ -2923,10 +3028,10 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         if _approved_doc is not None and _fold_enumeration_sidecar(
                 state, _approved_doc, state.plan_path):
             # Persist BEFORE the gate is evaluated, not after: the blockers below
-            # are computed from the folded bag and name its `qenum-N` candidates,
-            # and this function returns on any blocker WITHOUT reaching its own
-            # store.save() — so a fold left in memory would refuse the approve
-            # while `question-candidate-dispose --id qenum-1` had nothing to find.
+            # are computed from the folded bag and name its `qenum-<part>-N`
+            # candidates, and this function returns on any blocker WITHOUT reaching
+            # its own store.save() — so a fold left in memory would refuse the approve
+            # while `question-candidate-dispose --id qenum-meta-1` had nothing to find.
             store.save(state)
     blockers = (
         gates.blockers(state, "plan_approval")
@@ -4350,7 +4455,12 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
                 # expiry, is in docs/operations/detached-enumeration-design.md.
                 outstanding = (not bag.get("enumerated")
                                and bag.get("enumerate_launch_digest") == proposed_digest)
-                if proposed_digest != bag.get("enumerated_at") and not outstanding:
+                # Owed when a PART moved, not when the whole-plan digest did: a plan
+                # whose composite rotated because a stage was deleted introduces no
+                # bytes anyone has yet to read.
+                owed = (not bag.get("enumerated")
+                        or plugins_premise.enumeration_is_stale(bag, proposed))
+                if owed and not outstanding:
                     _launch_enumeration(state, bag, proposed, args.plan)
                     enumeration_bag_dirty = True
         pblock = plugins.plugin_gate_blockers(state, "plan_approval")
@@ -5181,6 +5291,8 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("digest", ("question-enumerate-worker",),
      "plan content digest the launcher computed — the sidecar's key, passed down "
      "verbatim rather than a narrative"),
+    ("stages", ("question-enumerate-worker",),
+     "comma-separated stage indices the launcher narrowed the pass to"),
     ("new", ("check-coverage",), "corrected plan file path — the object under a coverage pre-check, not narrative"),
     ("rendering_file", ("present-plan",), "path to the rendered presentation"),
     ("by", ("confirm-delivery", "approve", "resolve"), "who acted — a name, not a narrative"),
@@ -5373,9 +5485,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--digest", required=True,
                     help="plan content digest the launcher computed (plugins_premise."
                          "_plan_content_digest) — the sidecar write's key")
+    sp.add_argument("--stages", default="",
+                    help="comma-separated stage indices to read instead of the whole "
+                         "plan, when only those stages moved; omit for the whole plan")
 
     sp = add("question-candidate-dispose"); sp.add_argument("--session", required=True)
-    sp.add_argument("--id", required=True, help="candidate id (qenum-N) to disposition")
+    sp.add_argument("--id", required=True,
+                    help="candidate id (qenum-<part>-N) to disposition")
     sp.add_argument("--as", dest="as_", required=True, choices=["recorded", "dismissed"])
     sp.add_argument("--reason", default="", help="required when --as dismissed")
     sp.add_argument("--question", default="",
