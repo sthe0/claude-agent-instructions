@@ -1,0 +1,33 @@
+title: Permission-surface guard does not cover the spawn-flag axis that motivated it
+
+The permission-decision re-norming task (plan: ~/.claude-agent/plans/permission-decision-renorm.toml)
+ships a PreToolUse guard that denies edits widening the agent's own permission surface through a
+`settings*.json` document. It deliberately does NOT cover the axis that motivated the whole task:
+
+  - `claude -p --permission-mode bypassPermissions` (a spawn-time command-line flag)
+  - the same widening via a shell environment variable set before the spawn
+  - the same widening via a launchd plist or any other process-launch surface
+
+All three reach the identical gates while touching no settings document, so the shipped guard cannot
+observe them. This is stated in the plan's `[meta].goal` as an explicit scope boundary, and it was
+carried as an escalated question into the plan-approval ask, so the user approved the plan knowing
+the gap exists.
+
+Why this needs its own item: the plan's own resolution closes with the guard delivered and the
+motivating incident still unguarded. Nothing in the delivered artifact records that. Without this
+entry the trigger is forgotten the moment the plan resolves — which is precisely the failure the
+task existed to prevent, reproduced one level up.
+
+Shape of a fix (not a design, just the axis): the spawn-flag surface is not a document the agent
+edits, it is an argv the agent constructs. The natural gate is therefore not PreToolUse/Edit but
+PreToolUse/Bash matching on `claude -p` invocations, and the natural rule is that a permission-mode
+widening flag on a spawn is allowed only when the approved plan declares it for that stage — the
+same "within the powers the approved plan granted" test branch (a) of the new rule already states
+in prose. `spawn-specialist.py` already restricts `bypassPermissions` to `kind=developer`, so the
+policy exists; what is missing is the gate that makes hand-rolled spawns obey it.
+
+Related: the same session recorded that the derived-registry approach to enumerating gate-
+neutralizing environment keys had five successive completeness claims falsified, and proposed a
+structural inversion (deny every env key written into a settings document, allow only a named
+benign few). If that inversion is adopted, this item's fix should be designed against it rather
+than against the 41-key list.
