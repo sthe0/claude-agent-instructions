@@ -106,7 +106,8 @@ def test_fresh_substantive_session_arms_premise_without_deliverable_kind(capsys,
 def test_approve_refused_with_open_question(capsys, root):
     sid = _build_substantive(capsys, root)
     _run(capsys, root, "question-raise", "--session", sid, "--id", "Q1",
-         "--target", "plan.goal", "--question", "is the goal even agreed?")
+         "--target", "plan.goal", "--question", "is the goal even agreed?",
+         "--control", "stage 1 done_criterion")
     _run(capsys, root, "question-enumerate", "--session", sid)  # discharge the cross-check
 
     rc, d = _run(capsys, root, "approve", "--session", sid, "--by", "user")
@@ -161,7 +162,8 @@ def test_approve_refused_when_not_enumerated(capsys, root):
 def test_approve_allowed_when_dispositioned_and_enumerated(capsys, root):
     sid = _build_substantive(capsys, root)
     _run(capsys, root, "question-raise", "--session", sid, "--id", "Q1",
-         "--target", "plan.goal", "--question", "is the goal even agreed?")
+         "--target", "plan.goal", "--question", "is the goal even agreed?",
+         "--control", "stage 1 done_criterion")
     _run(capsys, root, "question-research", "--session", sid, "--id", "Q1",
          "--attempted", "read the tracker thread and the two prior runs")
     _run(capsys, root, "question-dispose", "--session", sid, "--id", "Q1",

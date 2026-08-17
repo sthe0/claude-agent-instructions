@@ -134,6 +134,10 @@ class Question:
     risk: str = ""
     reason: str = ""
     disposed_at_key: str = ""
+    # The control this question's answer could flip, named at raise time and
+    # resolved against the plan THERE. Empty for every question minted before the
+    # naming was required — those still discharge the gate; see validate_questions.
+    control: str = ""
 
 
 def questions_from_dicts(raw: list[dict]) -> list[Question]:
@@ -151,6 +155,7 @@ def questions_from_dicts(raw: list[dict]) -> list[Question]:
             "risk": d.get("risk", ""),
             "reason": d.get("reason", ""),
             "disposed_at_key": d.get("disposed_at_key", ""),
+            "control": d.get("control", ""),
         })
         for d in raw
     ]
@@ -171,6 +176,7 @@ def questions_to_dicts(questions: list[Question]) -> list[dict]:
             "risk": q.risk,
             "reason": q.reason,
             "disposed_at_key": q.disposed_at_key,
+            "control": q.control,
         }
         for q in questions
     ]
@@ -220,6 +226,12 @@ def validate_questions(
     entry of either kind is not an error but it is not a discharge either: an unmatched
     stamp blocks, so the failure direction of an incomplete map is re-confirmation, never
     a silently unchecked question.
+
+    A Question's `control` is deliberately NOT checked here. Naming the control a
+    question bears on is enforced at the WRITE seam (cli.cmd_question_raise), because
+    every question persisted in a live session before the requirement existed carries
+    none — a gate demanding one would convert each of them into a blocker, which is the
+    opposite of what the requirement is for.
     """
     blockers: list[str] = []
 
@@ -431,6 +443,13 @@ def render_coverage_block(elements: list[OrderElement], stage_count: int) -> str
 
 
 VALID_CANDIDATE_DISPOSITIONS = frozenset({"raised", "recorded", "dismissed"})
+
+# The reason the ENGINE records when it dismisses an enumeration candidate itself: the
+# candidate is addressed to a stage the plan does not contain, so no control of this
+# plan could turn on its answer. One fixed token, for the same reason the enumeration
+# escapes are typed — 'immaterial x N' is a work item, N hand-written sentences are an
+# archive nobody reads.
+CANDIDATE_IMMATERIAL = "immaterial: addressed to no control this plan contains"
 
 
 @dataclass

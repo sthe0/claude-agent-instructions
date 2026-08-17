@@ -26,7 +26,7 @@ from pathlib import Path
 import proc_tree
 from lib import argv_text, config_root
 
-from . import advisor, continuations, cost, delivery, effort, enumerate_sidecar, gates, ledger, permissions, plugins, plugins_ledger, plugins_premise, premise, solved_marker
+from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, gates, ledger, permissions, plugins, plugins_ledger, plugins_premise, premise, solved_marker
 from .checkrun import format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
@@ -1168,27 +1168,126 @@ def _bound_stage_key(state, question: "premise.Question", plan_path: str | None 
     return keys.get(stage_index, "")
 
 
+def _materiality_doc(state, named_plan) -> "tuple[PlanDoc | None, str]":
+    """(plan a raised question's control is resolved against, refusal). Both empty
+    when no plan exists yet: 'does this control exist in this plan' is undecidable
+    before there is a plan, and refusing every pre-submission question would close
+    the channel exactly where a plan's construction raises the most of them.
+
+    A NAMED --plan that cannot be loaded refuses instead of skipping — otherwise
+    naming any unreadable path is a one-flag bypass of the whole check."""
+    if named_plan:
+        try:
+            return load_plan(named_plan), ""
+        except (OSError, PlanError) as exc:
+            return None, f"cannot load the plan named by --plan ({named_plan!r}): {exc}"
+    plan_path = getattr(state, "plan_path", None)
+    if not plan_path:
+        return None, ""
+    try:
+        return load_plan(plan_path), ""
+    except (OSError, PlanError):
+        return None, ""
+
+
+def _materiality_advisories(control: str, question: str, doc, state, runner) -> list[str]:
+    """The PERCEPTION half of the materiality check, warn-only. The engine has
+    already decided the rule half — the control resolves against this plan — and a
+    judge may not reopen it; all that is left is whether the answer could MOVE the
+    control, which no document decides.
+
+    A judged NO is surfaced; a fail-open False is not. The reason field is what
+    separates them, and here that distinction is the whole safety property: the
+    advisory asserts the plan's own controls are indifferent to this question, and
+    a False produced by a killed subprocess asserts nothing."""
+    try:
+        enabled = advisor.resolve_enabled(getattr(state, "weight_class", None))
+    except Exception:
+        return []
+    run = runner if runner is not None else advisor.subprocess_runner
+    try:
+        verdict, reason = advisor.judge_question_materiality(
+            control, question, run, enabled=enabled,
+            control_text=controls.control_text(
+                control, doc, grammars=controls.MATERIALITY_GRAMMARS),
+        )
+    except Exception:
+        return []
+    if verdict or reason:
+        return []
+    return [
+        f"advisory (never blocking): the judge reads {control!r} as unable to change "
+        f"its verdict on this question's answer — re-check that this is the control "
+        f"the question really bears on"
+    ]
+
+
 def cmd_question_raise(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Record (or re-declare) one OPEN question arising during plan construction.
-    Permissive exactly like ledger-add: a malformed target is stored as-is and the
-    GATE (premise.validate_questions) reports it, so the moment-of-arising record is
-    never lost to an argparse rejection. UPSERT by --id, last write wins — re-raising
-    resets the entry to open. state.log stamps the act; that timestamp IS the
-    moment-of-arising record and is why questions live in state, not the plan file."""
+    Permissive exactly like ledger-add about its TARGET: a malformed one is stored
+    as-is and the GATE (premise.validate_questions) reports it, so the moment-of-
+    arising record is never lost to an argparse rejection. UPSERT by --id, last
+    write wins — re-raising resets the entry to open. state.log stamps the act; that
+    timestamp IS the moment-of-arising record and is why questions live in state,
+    not the plan file.
+
+    NOT permissive about --control, and this is the one seam that is not: a question
+    must name the control of this plan its answer could flip, and a name that
+    resolves to nothing here is refused. The refusal lives at this WRITE seam rather
+    than at the gate on purpose — every question persisted before the requirement
+    existed carries no control name, and a gate demanding one would convert each of
+    them into a blocker on a session that can no longer go back and answer it.
+    Enforced here, the requirement binds every question raised from now on and none
+    raised before.
+
+    `--plan` names the plan the control is resolved against, defaulting to
+    `state.plan_path`, for the CORRECTED plan of a replan — the same deadlock
+    `question-dispose`/`question-rebind` carry the flag for (#48(b)): without it a
+    question about a stage that exists only in the correction could never be
+    raised."""
     state, bag = _question_bag(store, args.session)
     if bag is None:
         return Directive(False, state.node, "noop", "plugin 'premise' is not active")
+    named_plan = getattr(args, "plan", None)
+    if named_plan is not None and not str(named_plan).strip():
+        return Directive(False, state.node, "noop",
+                         "--plan was given an empty path; omit the flag to raise "
+                         "against the session's own plan, or name a real one")
+    control = getattr(args, "control", None)
+    if control is not None:
+        control = str(control).strip()
+        if not control:
+            return Directive(False, state.node, "noop",
+                             "--control was given an empty name; name the control of "
+                             "this plan whose verdict the answer could change")
+    doc, refusal = _materiality_doc(state, named_plan)
+    if refusal:
+        return Directive(False, state.node, "noop", refusal)
+    if control and doc is not None:
+        problem = controls.resolve_control(
+            control, doc, grammars=controls.MATERIALITY_GRAMMARS)
+        if problem:
+            return Directive(
+                False, state.node, "noop",
+                f"--control names no control of this plan — {problem}",
+                data={"control": control},
+            )
     questions = premise.questions_from_dicts(bag.get("questions", []))
     questions = [q for q in questions if q.id != args.id]
-    questions.append(premise.Question(id=args.id, target=args.target, question=args.question or ""))
+    questions.append(premise.Question(id=args.id, target=args.target,
+                                      question=args.question or "", control=control or ""))
     bag["questions"] = premise.questions_to_dicts(questions)
     state.log("question_raise", question=args.id, target=args.target)
     store.save(state)
-    return Directive(
+    advisories = (
+        _materiality_advisories(control, args.question or "", doc, state, runner)
+        if control and doc is not None else []
+    )
+    return _with_advisories(Directive(
         True, state.node, "continue",
         f"question {args.id!r} raised (open) against {args.target!r}",
-        data={"questions": [q.id for q in questions]},
-    )
+        data={"questions": [q.id for q in questions], "control": control or ""},
+    ), advisories)
 
 
 def cmd_question_research(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -1342,21 +1441,25 @@ def cmd_question_retire(args, *, store: StateStore, runner: Runner | None = None
 def cmd_question_list(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Read-only render of the question bag. `--format md` is the THINKER'S read
     surface (state is canonical and so invisible to a reviewer who reads only the
-    plan): a markdown table of target | question | disposition | own_research |
-    source | derivation. A PROJECTION, exactly like the plan-render — never a second
-    source of truth. Does not mutate state."""
+    plan): a markdown table of target | control | question | disposition |
+    own_research | source | derivation. A PROJECTION, exactly like the plan-render —
+    never a second source of truth. Does not mutate state.
+
+    `control` is rendered because it is the column a reviewer can DISAGREE with: it
+    claims which of the plan's own controls the answer moves, and the engine only
+    checked that the control exists."""
     state, bag = _question_bag(store, args.session)
     if bag is None:
         return Directive(False, state.node, "noop", "plugin 'premise' is not active")
     questions = premise.questions_from_dicts(bag.get("questions", []))
     if getattr(args, "format", None) == "md":
         rows = [
-            "| target | question | disposition | own_research | source | derivation |",
-            "|---|---|---|---|---|---|",
+            "| target | control | question | disposition | own_research | source | derivation |",
+            "|---|---|---|---|---|---|---|",
         ]
         for q in questions:
             rows.append(
-                f"| {q.target} | {q.question} | {q.disposition} | "
+                f"| {q.target} | {q.control} | {q.question} | {q.disposition} | "
                 f"{q.own_research} | {q.source} | {q.derivation} |"
             )
         detail = "\n".join(rows)
@@ -1518,6 +1621,26 @@ def _enumeration_part(target: str) -> str:
     return META_PART
 
 
+def _candidate_immateriality(target: str, doc) -> str:
+    """The reason to record an enumerated candidate as already dismissed, "" to
+    raise it. A candidate the engine can see is addressed to no control of this
+    plan is not a question the coordinator has to sit down and disposition: it
+    cannot move any verdict this plan will reach.
+
+    Only a STAGE target carries a derivable control — that stage's own
+    done_criterion. A plan-level or unparseable target is raised, the same safe
+    direction `_enumeration_part` takes on the same input and for the same reason:
+    a badly-addressed question is still a question, and dismissing it on the
+    strength of an address WE could not parse would discard it silently."""
+    parsed = premise.parse_target(target)
+    if parsed is None or parsed[0] != "stage":
+        return ""
+    control = f"stage {parsed[1]} done_criterion"
+    unresolved = controls.resolve_control(
+        control, doc, grammars=controls.MATERIALITY_GRAMMARS)
+    return premise.CANDIDATE_IMMATERIAL if unresolved else ""
+
+
 def _inherit_disposition(existing: dict, entry: dict, preserve: bool) -> dict:
     if (preserve and existing.get("statement") == entry["statement"]
             and existing.get("disposition") != "raised"):
@@ -1548,8 +1671,12 @@ def _apply_enumeration_result(
     *, parts: tuple[bool, set[int]] | None = None,
     preserve_disposition: bool = False, stderr: str = "",
 ) -> list[str]:
-    """Upsert `pairs` as 'raised' QuestionCandidates (last-wins by a deterministic
-    `qenum-<part>-N` id) and stamp the bag's enumerated/enumerated_at/enumerated_plan/
+    """Upsert `pairs` as QuestionCandidates (last-wins by a deterministic
+    `qenum-<part>-N` id) — 'raised', except that a pair the engine can see is
+    addressed to no control of this plan is written 'dismissed' with the one
+    countable immateriality reason (see `_candidate_immateriality`), because a
+    candidate that cannot move any verdict is not work for the coordinator —
+    and stamp the bag's enumerated/enumerated_at/enumerated_plan/
     enumerated_runner_ok/enumerated_runner_stderr/enumerated_count fields plus the
     per-part digests the pass covered, from ONE enumeration pass's result. `stderr` is
     the failed pass's own diagnostic: the runner-failure blocker reads it back to
@@ -1590,9 +1717,11 @@ def _apply_enumeration_result(
     raised: list[str] = []
     for part, part_pairs in by_part.items():
         for i, (target, question) in enumerate(part_pairs):
+            immaterial = _candidate_immateriality(target, doc)
             entry = {"id": f"qenum-{part}-{i + 1}",
-                     "statement": f"[{target}] {question}", "disposition": "raised",
-                     "reason": "", "question": ""}
+                     "statement": f"[{target}] {question}",
+                     "disposition": "dismissed" if immaterial else "raised",
+                     "reason": immaterial, "question": ""}
             _upsert_candidate(candidates, entry, preserve_disposition=preserve_disposition)
             raised.append(entry["id"])
 
@@ -5284,10 +5413,13 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("claim", ("ledger-dispose",), "id of the grounding claim, not its text"),
     ("artifact", ("ledger-enumerate",), "path to the deliverable being cross-checked"),
     ("target", ("question-raise", "plan-review"), "plan element address or plan file path"),
+    ("control", ("question-raise",),
+     "structured control address matched against controls.MATERIALITY_GRAMMARS — a "
+     "grammar-bound name, never the prose --control of record-result/close"),
     ("plan", ("plan-render", "submit-plan", "replan", "drive", "push-subplan",
               "question-enumerate", "question-enumerate-worker",
               "question-enumerate-escape", "question-dispose",
-              "question-rebind"), "plan file path"),
+              "question-rebind", "question-raise"), "plan file path"),
     ("digest", ("question-enumerate-worker",),
      "plan content digest the launcher computed — the sidecar's key, passed down "
      "verbatim rather than a narrative"),
@@ -5428,6 +5560,15 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the plan element the question arose against: plan.goal, "
                          "plan.done_criterion, or stage:<n>.<element>")
     sp.add_argument("--question", default="", help="the question text")
+    sp.add_argument("--control", required=True,
+                    help="the control of this plan whose verdict the answer could flip: "
+                         "'stage <n> verify_command', 'stage <n> done_criterion', "
+                         "'stage <n> landed assertion', 'final_check <n>', or "
+                         "'order requirement <id>'. Refused when it names nothing this "
+                         "plan contains")
+    sp.add_argument("--plan", default=None,
+                    help="resolve --control against this plan instead of the session's "
+                         "current plan_path (use when raising against a CORRECTED plan)")
 
     sp = add("question-research"); sp.add_argument("--session", required=True)
     sp.add_argument("--id", required=True, help="question id to attach the research attempt to")

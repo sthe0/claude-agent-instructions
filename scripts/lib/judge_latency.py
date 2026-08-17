@@ -125,6 +125,11 @@ MEASURED: "dict[str, dict[str, Row]]" = {
             n=0, min_s=None, median_s=None, p90_s=None, max_s=None,
             provenance=(), note=UNMEASURED_NOTE,
         ),
+        "question_materiality": Row(
+            judge="question_materiality",
+            n=0, min_s=None, median_s=None, p90_s=None, max_s=None,
+            provenance=(), note=UNMEASURED_NOTE,
+        ),
     },
 }
 

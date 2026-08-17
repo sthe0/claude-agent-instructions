@@ -276,6 +276,14 @@ disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
 
 [[entry]]
+id = "3ae17918a62e4c83"
+domain = "code"
+file = "scripts/agentctl/controls.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
 id = "a3179cd164795231"
 domain = "code"
 file = "scripts/agentctl/dispatch.py"
@@ -730,22 +738,6 @@ file = "scripts/check-exception-set-enumeration.py"
 class = "structural"
 disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
-
-[[entry]]
-id = "51615cdc94aee287"
-domain = "code"
-file = "scripts/check-order-coverage.py"
-class = "structural"
-disposition = "keep"
-ground = "The three regexes match the closed control-name grammar this resolver accepts (`stage <n> verify_command` / `final_check <n>` / `stage <n> landed assertion`), by prefix, to look the named control up in the plan's own stages — a lookup key, not a reading of what the control means; the free-prose parenthetical an author may append is deliberately ignored."
-
-[[entry]]
-id = "97ca17b379c9fc81"
-domain = "code"
-file = "scripts/check-order-coverage.py"
-class = "structural"
-disposition = "keep"
-ground = "The three regexes match the closed control-name grammar this resolver accepts (`stage <n> verify_command` / `final_check <n>` / `stage <n> landed assertion`), by prefix, to look the named control up in the plan's own stages — a lookup key, not a reading of what the control means; the free-prose parenthetical an author may append is deliberately ignored."
 
 [[entry]]
 id = "43756d079618a9ef"
@@ -6188,6 +6180,22 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "a807310f04caa60b"
+domain = "code"
+file = "scripts/tests/test_question_materiality.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "67e488ae06febc17"
+domain = "code"
+file = "scripts/tests/test_question_materiality.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "422f62923b0d077e"
 domain = "code"
 file = "scripts/tests/test_renormalization.py"
@@ -7524,6 +7532,14 @@ disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "b163aeb85d72e4ed"
+domain = "code_file_rollup"
+file = "scripts/agentctl/controls.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "73ba5c434608a64e"
 domain = "code_file_rollup"
 file = "scripts/agentctl/dispatch.py"
@@ -7650,14 +7666,6 @@ file = "scripts/check-exception-set-enumeration.py"
 class = "structural"
 disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification. (file-level rollup of the file's scopes.)"
-
-[[entry]]
-id = "f9cb936ec38550f6"
-domain = "code_file_rollup"
-file = "scripts/check-order-coverage.py"
-class = "structural"
-disposition = "keep"
-ground = "The three regexes match the closed control-name grammar this resolver accepts (`stage <n> verify_command` / `final_check <n>` / `stage <n> landed assertion`), by prefix, to look the named control up in the plan's own stages — a lookup key, not a reading of what the control means; the free-prose parenthetical an author may append is deliberately ignored. (file-level rollup of the file's scopes.)"
 
 [[entry]]
 id = "a9f7006666c6b725"
@@ -8783,6 +8791,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "13a5925398922fbe"
 domain = "code_file_rollup"
 file = "scripts/tests/test_question_enumerate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "f1d44d16e2a6f2ff"
+domain = "code_file_rollup"
+file = "scripts/tests/test_question_materiality.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
@@ -16513,6 +16529,30 @@ ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's
 
 [[entry]]
 id = "d4170c601c056263"
+domain = "prose"
+file = "memory-global/leaves/question-provenance-gate.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "35da0bf91ba9490e"
+domain = "prose"
+file = "memory-global/leaves/question-provenance-gate.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "743e46e8addd6490"
+domain = "prose"
+file = "memory-global/leaves/question-provenance-gate.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "7c63246b8f957ccd"
 domain = "prose"
 file = "memory-global/leaves/question-provenance-gate.md"
 class = "perception"

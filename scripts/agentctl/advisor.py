@@ -862,6 +862,105 @@ def judge_deferring_disposition(
         judge_ledger.set_current_judge(None)
 
 
+# LAST-RESORT ceiling, by lib/judge_latency.py::last_resort_ceiling_s — the same
+# number and the same rule as _BINARY_ASK_TIMEOUT_S, for the same reason as
+# _ACCEPTANCE_JUDGE_TIMEOUT_S: this judge runs inside `agentctl question-raise`,
+# outside every hook, so no harness budget narrows it and none of the per-row
+# in-hook ceilings apply. Its own latency row is UNMEASURED and says so.
+_QUESTION_MATERIALITY_TIMEOUT_S = 41
+
+_QUESTION_MATERIALITY_PROMPT = (
+    "A plan carries CONTROLS -- the checks that decide whether its stages passed. "
+    "Someone raised a QUESTION during that plan's construction and named the "
+    "control they believe its answer bears on. Decide whether answering the "
+    "question one way rather than another could actually CHANGE that control's "
+    "verdict.\n\n"
+    "Answer YES when a different answer plausibly changes what the control "
+    "checks, what it would accept, or whether it passes at all.\n\n"
+    "Answer NO when the question is about something the control does not decide "
+    "-- a different part of the plan, background context, a matter of style or "
+    "wording, or a detail the control would pass or fail on identically either "
+    "way.\n\n"
+    "Answer on the FIRST line with exactly YES or NO, nothing else.\n\n"
+    "CONTROL: {control}\n"
+    "WHAT THE CONTROL SAYS: {control_text}\n"
+    "QUESTION: {question}"
+)
+
+
+def question_materiality_prefilter(control: str, question: str) -> bool:
+    """The deterministic half: a control was named AND there is a question to weigh
+    it against. Whether the NAME resolves against the plan is the caller's own
+    check and is not repeated here -- the engine refuses an unresolvable name at
+    the write seam, so this judge is only ever reached for a resolved one.
+
+    Public for the same reason binary_ask_prefilter is: a caller has to know
+    whether a call will happen before it decides to make one."""
+    return bool(isinstance(control, str) and control.strip()
+                and isinstance(question, str) and question.strip())
+
+
+def judge_question_materiality(
+    control: str,
+    question: str,
+    runner,
+    *,
+    control_text: str = "",
+    enabled: bool = True,
+    timeout: int = _QUESTION_MATERIALITY_TIMEOUT_S,
+    remaining: float | None = None,
+    ceiling: float | None = None,
+) -> tuple[bool, str]:
+    """Advisory judge behind the question-materiality check: could this question's
+    answer really flip the verdict of the control it names?
+
+    The split this implements is the whole point of the check. Whether the named
+    control EXISTS in this plan is decidable from the plan document, so the engine
+    decides it (agentctl.controls) and refuses at the write seam. Whether the
+    answer would MOVE it is not decidable from any document, so it comes here --
+    and the caller surfaces the verdict without ever blocking on it.
+
+    Three-valued fail-open contract, mirroring judge_binary_ask: reason is "" for
+    a genuine model verdict and a non-empty "...(fail-open)" string wherever the
+    False is FABRICATED. Here the distinction is load-bearing in the OTHER
+    direction from its neighbours: their consumers block, so a fabricated False is
+    the safe direction and the reason is only for the ledger. This consumer
+    surfaces a judged False as "the plan says this question cannot move that
+    control" -- a claim a fail-open False has no standing to make -- so the caller
+    must surface nothing at all unless the reason is empty."""
+    if not enabled:
+        return _judge_unavailable(
+            "question_materiality", _KILLSWITCH_REASON, stage="killswitch",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    if not question_materiality_prefilter(control, question):
+        return False, ""
+    if runner is None:
+        return _judge_unavailable(
+            "question_materiality", _NO_RUNNER_REASON, stage="no_runner",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    judge_ledger.set_current_judge("question_materiality")
+    start = time.monotonic()
+    try:
+        prompt = _QUESTION_MATERIALITY_PROMPT.format(
+            control=control, control_text=control_text or "(not rendered)",
+            question=question,
+        )
+        result = runner(["claude", "-p", "--model", _JUDGE_MODEL, prompt], timeout=timeout)
+        return _record_result(
+            "question_materiality", result, duration=time.monotonic() - start,
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    except Exception:
+        return _record_raised(
+            "question_materiality", duration=time.monotonic() - start,
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    finally:
+        judge_ledger.set_current_judge(None)
+
+
 def resolve_enabled(weight_class: str | None, *, thresholds: Thresholds | None = None) -> bool:
     """Resolve whether the advisor should run for this call.
 

@@ -103,11 +103,13 @@ a detail: four standard estimators on the n=18 deferring sample give 29.94 /
 | `hook-turn-end-gate.py` | `binary_ask` | `haiku` | `topup2-sample.json:binary_ask` | 16 | 5.93 | 7.46 | 11.06 | 11.52 | 13 | 0 | 0.0000 | 0.1875 |
 | `hook-turn-end-gate.py` | `outage_escalation` | `haiku` | `latency-sample.json:outage + ab-sample.json:outage_std` | 16 | 7.19 | 10.89 | 19.16 | 25.96 | 27 | 0 | 0.0000 | 0.1875 |
 | — | `acceptance_judge` | `haiku` | UNMEASURED — no latency sample exists | — | — | — | — | — | — | — | — | — |
+| — | `question_materiality` | `haiku` | UNMEASURED — no latency sample exists | — | — | — | — | — | — | — | — | — |
 
-`acceptance_judge` is listed because leaving it out would be the quieter lie: the
-`MEASURED` table carries a row for it, and a reader comparing the two would
-otherwise assume it was covered. It runs outside any hook, so no harness timeout
-kills it and the last-resort ceiling applies. It is **not** sized by evidence.
+`acceptance_judge` and `question_materiality` are listed because leaving them out
+would be the quieter lie: the `MEASURED` table carries a row for each, and a reader
+comparing the two would otherwise assume they were covered. Both run outside any
+hook, so no harness timeout kills them and the last-resort ceiling applies. Neither
+is sized by evidence.
 
 ### The zero rule
 
@@ -161,7 +163,8 @@ do not establish.
   the tail is most likely made of.
 - **Verdict correctness in general.** Each run confirms one expected verdict on
   one payload. The residual error rate is in section 3, not closed by these runs.
-- **The `acceptance_judge` path**, which no hook invokes and no sample covers.
+- **The `acceptance_judge` and `question_materiality` paths**, which no hook
+  invokes and no sample covers.
 
 ## 6. Reproducing this
 
