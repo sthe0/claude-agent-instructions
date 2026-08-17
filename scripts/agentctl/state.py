@@ -20,7 +20,7 @@ import shlex
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 
-SCHEMA_VERSION = 27
+SCHEMA_VERSION = 28
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -410,7 +410,15 @@ class PlanReview:
     plan.plan_stage_digests) — distinct from the REVIEWER-attested `plan_sha256`
     above. Empty/default on legacy records and on any record recorded without a
     loadable plan, which is what makes plan.changed_parts read them as "everything
-    moved" (see gates.plan_review_blockers)."""
+    moved" (see gates.plan_review_blockers).
+
+    `concern_ids` (schema 28) is the stable identity of each entry in `concerns`,
+    positionally paired — a RiskAcceptance binds to `concern_id`, never to the prose
+    in `concerns`, so rephrasing a concern cannot silently rebind or unbind an
+    acceptance. Shorter than `concerns` (or empty) on any record whose concerns were
+    given no explicit id; `plan_review_concern_ids` fills the gap with a
+    position-derived id, which is also what a legacy pre-schema-28 record gets in
+    full."""
     plan_path: str
     verdict: str
     reviewer: str
@@ -420,6 +428,7 @@ class PlanReview:
     scope: str = ""
     reviewed_meta_digest: str = ""
     reviewed_stage_keys: dict[str, str] = field(default_factory=dict)
+    concern_ids: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "PlanReview | None":
@@ -435,6 +444,7 @@ class PlanReview:
             scope=d.get("scope", ""),
             reviewed_meta_digest=d.get("reviewed_meta_digest", ""),
             reviewed_stage_keys=dict(raw) if isinstance(raw := d.get("reviewed_stage_keys"), dict) else {},
+            concern_ids=list(d.get("concern_ids", [])),
         )
 
 
@@ -450,6 +460,50 @@ def plan_review_scope_stage_index(scope: str) -> "int | None":
         return None
     rest = scope[len(_PLAN_REVIEW_STAGE_SCOPE_PREFIX):]
     return int(rest) if rest.isdigit() else None
+
+
+def plan_review_concern_ids(pr: "PlanReview") -> list[str]:
+    """Every concern's stable id, positional over `pr.concerns`: an explicit
+    `concern_ids[i]` where recorded, else the derived legacy id `c<i>`."""
+    ids = pr.concern_ids
+    return [ids[i] if i < len(ids) and ids[i] else f"c{i}" for i in range(len(pr.concerns))]
+
+
+# A recorded, attributed acceptance of one PlanReview concern's risk (schema 28) —
+# the customer-facing alternative to editing the plan to make a `revise` concern go
+# away. Binds to the exact concern via (scope, concern_id), never to its prose, and
+# to the exact plan version via the same meta/stage-digest snapshot PlanReview
+# itself carries — plan.changed_parts reads reviewed_meta_digest/reviewed_stage_keys
+# (aliased here as meta_digest/stage_keys) identically for both records, so an
+# acceptance recorded against one plan version does not survive a later edit to the
+# part its concern lives in. `basis`/`risk` mirror premise.py's `assumed` question
+# disposition exactly (same two required free-text fields, same anti-placeholder
+# check) — accepting a risk is the same kind of act as assuming one.
+@dataclass
+class RiskAcceptance:
+    scope: str
+    concern_id: str
+    plan_path: str
+    basis: str
+    risk: str
+    author: str
+    meta_digest: str = ""
+    stage_keys: dict[str, str] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict | None) -> "RiskAcceptance | None":
+        if not d:
+            return None
+        return cls(
+            scope=d["scope"],
+            concern_id=d["concern_id"],
+            plan_path=d.get("plan_path", ""),
+            basis=d.get("basis", ""),
+            risk=d.get("risk", ""),
+            author=d.get("author", ""),
+            meta_digest=d.get("meta_digest", ""),
+            stage_keys=dict(raw) if isinstance(raw := d.get("stage_keys"), dict) else {},
+        )
 
 
 # The acceptance-review analogue of PlanReview (schema 14): one recorded verdict on
@@ -1195,6 +1249,12 @@ class SessionState:
     # which is what makes the coverage gate in gates.py fall back to plan_review
     # alone, unchanged.
     plan_stage_reviews: dict[str, "PlanReview"] = field(default_factory=dict)
+    # Recorded risk acceptances discharging `revise` concerns (schema 28) — see
+    # RiskAcceptance's docstring for the binding. Empty on legacy pre-schema-28
+    # states (absent key -> dataclass default via from_dict), which is what makes
+    # gates._plan_review_verdict_blockers fall back to today's unconditional block
+    # on a `revise` verdict, unchanged.
+    risk_acceptances: list["RiskAcceptance"] = field(default_factory=list)
     # The acceptance-review judge records backing the acceptance-review gate (schema
     # 14): one StageReview per acceptance_review stage that has been judged, and one
     # JudgeBypass per gate bypass (kill switch / override). Both default to [] — legacy
@@ -1509,6 +1569,9 @@ class SessionState:
             scope: r for scope, v in (data.get("plan_stage_reviews") or {}).items()
             if (r := PlanReview.from_dict(v)) is not None
         }
+        data["risk_acceptances"] = [
+            r for r in (RiskAcceptance.from_dict(x) for x in data.get("risk_acceptances", [])) if r is not None
+        ]
         data["stage_reviews"] = [
             r for r in (StageReview.from_dict(x) for x in data.get("stage_reviews", [])) if r is not None
         ]

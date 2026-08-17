@@ -43,7 +43,9 @@ from lib import hook_wiring
 from . import delivery
 from .plan import PlanError, changed_parts, load_plan, order_place, stage_question_key
 from .state import Node, SessionState, StageStatus, WeightClass
+from .state import plan_review_concern_ids as _plan_review_concern_ids
 from .state import plan_review_scope_for_stage as _plan_review_scope_for_stage
+from .state import plan_review_scope_stage_index as _plan_review_scope_stage_index
 from .state import PLAN_PRESENTATION_KIND_ESSENCE as _PLAN_PRESENTATION_KIND_ESSENCE
 from .state import Stage as _Stage
 from .text_shape import PLACEHOLDER_SET as _PLACEHOLDER_SET
@@ -348,7 +350,27 @@ def _plan_review_content_stale(pr, target_plan: str) -> str | None:
     )
 
 
-def _plan_review_verdict_blockers(pr) -> list[str]:
+def _risk_acceptance_stale(ra, doc) -> bool:
+    """Mirrors how the review the acceptance answers would itself judge staleness
+    at that scope: a moved order/meta always invalidates; a moved stage invalidates
+    only an acceptance scoped to that stage — a whole-plan concern's acceptance
+    survives an unrelated stage edit, exactly as the whole-plan review's own
+    verdict does (see _plan_review_blockers_coverage)."""
+    meta_moved, moved_stages = changed_parts(doc, {"meta": ra.meta_digest, "stages": ra.stage_keys})
+    if meta_moved:
+        return True
+    stage_index = _plan_review_scope_stage_index(ra.scope)
+    return stage_index is not None and stage_index in moved_stages
+
+
+def _concern_discharged(scope: str, concern_id: str, state: SessionState, doc) -> bool:
+    return any(
+        ra.scope == scope and ra.concern_id == concern_id and not _risk_acceptance_stale(ra, doc)
+        for ra in state.risk_acceptances
+    )
+
+
+def _plan_review_verdict_blockers(pr, *, state: SessionState | None = None, doc=None) -> list[str]:
     if pr.verdict == _PLAN_REVIEW_PASS:
         # CONTRACT INVERSION (reviewer-attested binding): plan_sha256 is now the
         # digest the REVIEWER attested via --plan-digest, not an engine auto-
@@ -373,10 +395,19 @@ def _plan_review_verdict_blockers(pr) -> list[str]:
         if missing:
             return ["thinker review override requires a non-empty " + " and ".join(missing) + " (the user's explicit escape reason)"]
         return []
-    return [f"thinker review verdict is {pr.verdict!r} — plan blocked until a passing review (or an explicit override) is recorded"]
+    default = [f"thinker review verdict is {pr.verdict!r} — plan blocked until a passing review (or an explicit override) is recorded"]
+    # A revise verdict clears only when EVERY concern is discharged — an empty
+    # concerns list must never vacuously discharge (nothing to check is not the
+    # same as everything checked out), and with no state/doc to check acceptances
+    # against, discharge cannot be established at all.
+    if pr.verdict != _PLAN_REVIEW_REVISE or not pr.concerns or state is None or doc is None:
+        return default
+    if all(_concern_discharged(pr.scope, cid, state, doc) for cid in _plan_review_concern_ids(pr)):
+        return []
+    return default
 
 
-def _plan_review_blockers_whole(pr, target_plan: str | None) -> list[str]:
+def _plan_review_blockers_whole(pr, target_plan: str | None, *, state: SessionState | None = None, doc=None) -> list[str]:
     if pr is None:
         return ["no thinker review recorded — run: plan-review (thinker verdict required before this plan is approved/applied)"]
     if not target_plan or pr.plan_path != target_plan:
@@ -387,7 +418,7 @@ def _plan_review_blockers_whole(pr, target_plan: str | None) -> list[str]:
     stale = _plan_review_content_stale(pr, target_plan)
     if stale:
         return [stale]
-    return _plan_review_verdict_blockers(pr)
+    return _plan_review_verdict_blockers(pr, state=state, doc=doc)
 
 
 def _plan_review_baseline(pr) -> dict:
@@ -414,7 +445,7 @@ def _plan_review_blockers_coverage(state: SessionState, target_plan: str, doc) -
             "thinker review is stale — the plan's meta/order changed since it was "
             "reviewed; re-run plan-review"
         ]
-    blockers = _plan_review_verdict_blockers(whole)
+    blockers = _plan_review_verdict_blockers(whole, state=state, doc=doc)
     if blockers:
         return blockers
     for index in sorted(moved_stages):
@@ -437,7 +468,7 @@ def _plan_review_blockers_coverage(state: SessionState, target_plan: str, doc) -
                 f"thinker review is stale — stage {index} changed again since "
                 f"{scope!r} was reviewed; re-run plan-review --scope {scope}"
             ]
-        blockers = _plan_review_verdict_blockers(spr)
+        blockers = _plan_review_verdict_blockers(spr, state=state, doc=doc)
         if blockers:
             return blockers
     return []
@@ -455,8 +486,10 @@ def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[s
 
     With no stage-scoped review recorded (state.plan_stage_reviews empty), this
     reduces to the whole-plan-only check `_plan_review_blockers_whole` ran alone —
-    same branches, same messages, as before stage-scoped reviews existed at all.
-    Once a stage-scoped review exists, coverage is delegated to
+    same branches, same messages, as before stage-scoped reviews existed at all;
+    `doc` (schema 28, for accepted-risk discharge) is still loaded and threaded
+    through on this path, but no branch below it depends on the load having
+    succeeded. Once a stage-scoped review exists, coverage is delegated to
     `_plan_review_blockers_coverage`, which checks the whole-plan record's own
     attestation/verdict directly (`_plan_review_verdict_blockers`) rather than via
     `_plan_review_blockers_whole` — the byte-hash staleness check in that helper
@@ -464,12 +497,14 @@ def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[s
     here is decided solely by `changed_parts` against the recorded meta/stage keys."""
     if not plan_review_active(state):
         return []
-    if not state.plan_stage_reviews or not target_plan:
-        return _plan_review_blockers_whole(state.plan_review, target_plan)
-    try:
-        doc = load_plan(target_plan)
-    except (OSError, PlanError):
-        return _plan_review_blockers_whole(state.plan_review, target_plan)
+    doc = None
+    if target_plan:
+        try:
+            doc = load_plan(target_plan)
+        except (OSError, PlanError):
+            doc = None
+    if not state.plan_stage_reviews or doc is None:
+        return _plan_review_blockers_whole(state.plan_review, target_plan, state=state, doc=doc)
     return _plan_review_blockers_coverage(state, target_plan, doc)
 
 

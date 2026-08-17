@@ -86,9 +86,11 @@ from .state import (
     PlanFrame,
     PlanPresentation,
     PlanReview,
+    plan_review_concern_ids,
     plan_review_scope_for_stage,
     plan_review_scope_stage_index,
     RequirementVerdict,
+    RiskAcceptance,
     Route,
     SessionState,
     SHOW_FULL_PLAN_MARKER,
@@ -2915,6 +2917,7 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
         reviewed_stage_keys=(
             {str(k): v for k, v in plan_stage_digests(doc).items()} if doc is not None else {}
         ),
+        concern_ids=list(getattr(args, "concern_ids", None) or []),
     )
     if scope:
         state.plan_stage_reviews[scope] = review
@@ -2940,6 +2943,106 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
     return Directive(
         True, state.node, "continue",
         f"thinker review recorded for {target} (verdict={args.verdict}); "
+        "the plan-review gate is now satisfied for this plan version",
+    )
+
+
+def cmd_risk_accept(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Record a customer-facing acceptance of ONE named PlanReview concern's risk —
+    the alternative to editing the plan to make a `revise` concern go away. Purely a
+    recorder, mirroring cmd_plan_review: gates.plan_review_blockers re-derives
+    discharge itself at approve/replan by reading state.risk_acceptances, so a
+    mis-bound acceptance recorded here simply fails to clear the gate rather than
+    erroring.
+
+    `--basis`/`--risk` mirror premise.py's `assumed` question disposition exactly:
+    both are required free text, and neither may be a bare placeholder (see
+    gates._PLACEHOLDER_SET). Bound to the plan version at record time via the SAME
+    meta/stage-digest snapshot a PlanReview itself carries — gates._risk_acceptance_stale
+    reads them via plan.changed_parts identically."""
+    state = _require(store, args.session)
+    target = state.plan_path
+    if not target:
+        return Directive(
+            False, state.node, "noop",
+            "no plan to accept a risk against: submit a plan first",
+        )
+    scope = (getattr(args, "scope", None) or "").strip()
+    concern_id = (getattr(args, "concern_id", "") or "").strip()
+    basis = (getattr(args, "basis", "") or "").strip()
+    risk = (getattr(args, "risk", "") or "").strip()
+    author = (getattr(args, "author", "") or "").strip()
+    missing = [name for name, value in
+               (("concern-id", concern_id), ("basis", basis), ("risk", risk), ("author", author))
+               if not value]
+    if missing:
+        return Directive(
+            False, state.node, "noop",
+            "risk-accept requires a non-empty --" + " and --".join(missing),
+        )
+    for value, flag in ((basis, "--basis"), (risk, "--risk")):
+        if gates._normalize_string(value) in gates._PLACEHOLDER_SET:
+            return Directive(
+                False, state.node, "noop",
+                f"{flag} {value!r} reads as a placeholder, not a reason — say what concretely",
+            )
+    try:
+        doc = load_plan(target)
+    except (OSError, PlanError) as e:
+        return Directive(
+            False, state.node, "noop",
+            f"cannot record a risk acceptance: {target} failed to load: {e}",
+        )
+    if scope:
+        stage_index = plan_review_scope_stage_index(scope)
+        if stage_index is None:
+            return Directive(
+                False, state.node, "noop",
+                f"--scope {scope!r} is not a recognized scope (expected 'stage:<n>')",
+            )
+        if not any(s.index == stage_index for s in doc.stages):
+            return Directive(
+                False, state.node, "noop",
+                f"--scope {scope!r}: no stage {stage_index} in {target}",
+            )
+    review = state.plan_stage_reviews.get(scope) if scope else state.plan_review
+    if review is None:
+        return Directive(
+            False, state.node, "noop",
+            f"no thinker review recorded at scope {scope!r} — nothing there to accept a concern from",
+        )
+    valid_ids = plan_review_concern_ids(review)
+    if concern_id not in valid_ids:
+        return Directive(
+            False, state.node, "noop",
+            f"concern {concern_id!r} is not among scope {scope!r}'s recorded concerns "
+            f"{valid_ids!r} — check --concern-id against the review",
+        )
+    acceptance = RiskAcceptance(
+        scope=scope,
+        concern_id=concern_id,
+        plan_path=target,
+        basis=basis,
+        risk=risk,
+        author=author,
+        meta_digest=plan_meta_digest(doc),
+        stage_keys={str(k): v for k, v in plan_stage_digests(doc).items()},
+    )
+    state.risk_acceptances.append(acceptance)
+    blockers = gates.plan_review_blockers(state, target)
+    _log_gate(state, "plan_review", blockers, passed=not blockers)
+    state.log("risk_accept", target=target, scope=scope, concern_id=concern_id,
+              author=author, basis=basis, risk=risk)
+    store.save(state)
+    if blockers:
+        return Directive(
+            False, state.node, "plan_review",
+            "risk acceptance recorded but does not clear the gate",
+            data={"blockers": blockers},
+        )
+    return Directive(
+        True, state.node, "continue",
+        f"risk acceptance recorded for {target} (scope={scope!r} concern={concern_id!r}); "
         "the plan-review gate is now satisfied for this plan version",
     )
 
@@ -5391,6 +5494,7 @@ COMMANDS = {
     "confirm-delivery": cmd_confirm_delivery,
     "plan-review": cmd_plan_review,
     "plan-review-delta": cmd_plan_review_delta,
+    "risk-accept": cmd_risk_accept,
     "stage-review": cmd_stage_review,
     "code-review": cmd_code_review,
     "accept": cmd_accept,
@@ -5456,7 +5560,7 @@ _SESSION_COMMANDS = (
     "question-candidate-dispose",
     "order-raise", "order-dispose", "order-list", "classify", "plan",
     "plan-render", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
-    "plan-review-delta",
+    "plan-review-delta", "risk-accept",
     "stage-review", "code-review", "accept", "approve", "partition", "partition-units",
     "next-stage", "dispatch", "resolve-permission", "record-result", "declare",
     "investigate", "critique", "normalize", "verify-final", "resolve", "reject",
@@ -5473,7 +5577,7 @@ _RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("statement", ("ledger-add", "ledger-candidate")),
     ("source", ("ledger-add", "question-dispose")),
     ("premises", ("ledger-add",)),
-    ("basis", ("ledger-add", "question-dispose")),
+    ("basis", ("ledger-add", "question-dispose", "risk-accept")),
     ("reason", ("ledger-dispose", "question-retire", "question-candidate-dispose",
                 "order-dispose", "reject", "block")),
     ("element", ("order-raise",)),
@@ -5481,7 +5585,7 @@ _RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("attempted", ("question-research",)),
     ("answer", ("question-dispose",)),
     ("derivation", ("question-dispose",)),
-    ("risk", ("question-dispose",)),
+    ("risk", ("question-dispose", "risk-accept")),
     ("confirm_still_valid", ("question-rebind",)),
     ("concerns", ("plan-review", "stage-review", "code-review")),
     ("observation", ("stage-review", "record-result", "close")),
@@ -5539,10 +5643,13 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
      "the escape is --note, which is RESOLVE"),
     ("reviewer", ("plan-review", "stage-review", "code-review"), "reviewer name"),
     ("plan_digest", ("plan-review",), "sha256 the review binds to"),
-    ("scope", ("plan-review",), "'' or 'stage:<n>' — the review's binding, not narrative"),
+    ("scope", ("plan-review", "risk-accept"), "'' or 'stage:<n>' — the review's binding, not narrative"),
+    ("concern_ids", ("plan-review",),
+     "explicit stable ids for --concern, positionally paired — ids, not narrative"),
+    ("concern_id", ("risk-accept",), "the concern id this acceptance answers — an id, not narrative"),
     ("code_ref", ("code-review", "record-result"), "commit / PR reference the verdict binds to"),
     ("unit", ("partition", "partition-units"), "'|'-delimited partition-unit record"),
-    ("author", ("accept",), "acceptance author id — an identity token, not narrative"),
+    ("author", ("accept", "risk-accept"), "acceptance author id — an identity token, not narrative"),
     ("verdict", ("accept",), "'|'-delimited requirement-verdict record"),
     ("budget", ("dispatch",), "budget tier name"),
     ("complexity", ("dispatch",), "complexity tier name"),
@@ -5818,6 +5925,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="who performed the review (the user, for an override)")
     sp.add_argument("--concern", dest="concerns", action="append", default=None,
                     help="a blocking concern the thinker raised (repeatable; audit trail)")
+    sp.add_argument("--concern-id", dest="concern_ids", action="append", default=None,
+                    help="stable id for the --concern at the same position (repeatable, "
+                         "positionally paired); omitted concerns get a derived id "
+                         "(c0, c1, ...) via state.plan_review_concern_ids — risk-accept "
+                         "binds to this id, never to the concern's prose")
     sp.add_argument("--note", default="",
                     help="override justification, or a free-text note")
     sp.add_argument("--target", default=None,
@@ -5841,6 +5953,21 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--plan", default=None,
                     help="plan file to diff against recorded reviews (defaults to the "
                          "session's current plan_path)")
+    sp = add("risk-accept"); sp.add_argument("--session", required=True)
+    sp.add_argument("--scope", default=None,
+                    help="'' or 'stage:<n>' — the review scope the accepted concern was "
+                         "raised in (must match a recorded plan-review's --scope)")
+    sp.add_argument("--concern-id", dest="concern_id", default="",
+                    help="the concern id this acceptance answers (see plan-review's "
+                         "--concern-id, or its derived c0/c1/... form)")
+    sp.add_argument("--basis", default="",
+                    help="why the risk is being accepted rather than fixed — mirrors "
+                         "question-dispose --disposition assumed's --basis")
+    sp.add_argument("--risk", default="",
+                    help="what could go wrong by accepting rather than fixing — mirrors "
+                         "question-dispose --disposition assumed's --risk")
+    sp.add_argument("--author", default="",
+                    help="who is accepting the risk — an identity token, not narrative")
     sp = add("stage-review"); sp.add_argument("--session", required=True)
     sp.add_argument("--verdict", choices=list(gates.STAGE_REVIEW_VERDICTS), required=True,
                     help="pass = clears the acceptance gate; revise = blocks; override = "

@@ -249,18 +249,26 @@ def enumeration_run_scope(bag, doc) -> tuple[bool, set[int]]:
 
 def coverage_block(state, bag, *, doc=None) -> str | None:
     """The scope-coverage block the presented essence must carry — the plan's stage
-    count plus what it does with each element of the order — or None when no plan is
-    submitted yet (nothing to size, nothing to cover). `doc` is an already-loaded
-    PlanDoc when the caller has one (premise_blockers does), so the block is derived
-    from the same bytes its other checks used. premise.render_coverage_block is the
-    single generator; this only supplies its two inputs."""
+    count, what it does with each element of the order, and every LIVE risk
+    acceptance discharging a `revise` concern — or None when no plan is submitted yet
+    (nothing to size, nothing to cover). `doc` is an already-loaded PlanDoc when the
+    caller has one (premise_blockers does), so the block is derived from the same
+    bytes its other checks used. premise.render_coverage_block is the single
+    generator; this only supplies its inputs, including staleness-filtering the
+    acceptances via gates._risk_acceptance_stale (premise.py cannot do this itself —
+    it has no access to gates/state/plan)."""
     plan_path = getattr(state, "plan_path", None)
     if not plan_path:
         return None
     if doc is None:
         doc = plan.load_plan(plan_path)
     elements = premise.order_elements_from_dicts(bag.get("order_elements", []))
-    return premise.render_coverage_block(elements, len(doc.stages))
+    accepted_risks = [
+        (ra.scope, ra.concern_id, ra.author)
+        for ra in getattr(state, "risk_acceptances", [])
+        if not gates._risk_acceptance_stale(ra, doc)
+    ]
+    return premise.render_coverage_block(elements, len(doc.stages), accepted_risks=accepted_risks)
 
 
 def coverage_block_missing_lines(block: str, rendering_text: str) -> list[str]:

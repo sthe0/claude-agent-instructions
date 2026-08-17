@@ -420,18 +420,30 @@ def validate_order_elements(
     return blockers
 
 
-def render_coverage_block(elements: list[OrderElement], stage_count: int) -> str:
+def render_coverage_block(
+    elements: list[OrderElement],
+    stage_count: int,
+    accepted_risks: "list[tuple[str, str, str]] | None" = None,
+) -> str:
     """The scope-coverage block: the plan's size and what it does with each element
-    of the order. Deterministic (covered lines in stage order, then cut lines in id
-    order; no timestamps) because it is a GATE input — the essence presented to the
-    user must contain it verbatim, so a second hand-written rendering would drift
-    against the check. This is the single generator; nothing else composes the text.
+    of the order, plus (schema 28) every LIVE risk acceptance discharging a `revise`
+    concern. Deterministic (covered lines in stage order, cut lines in id order,
+    accepted-risk lines in (scope, concern_id) order; no timestamps) because it is a
+    GATE input — the essence presented to the user must contain it verbatim, so a
+    second hand-written rendering would drift against the check. This is the single
+    generator; nothing else composes the text.
+
+    `accepted_risks` is `(scope, concern_id, author)` triples, already narrowed to
+    the live (non-stale) ones by the caller — plugins_premise.coverage_block, via
+    gates._risk_acceptance_stale — so this function itself never judges staleness;
+    it only renders what it is handed, same division of labour as `elements` above.
     """
     covered = sorted(
         (e for e in elements if e.disposition == "covered"),
         key=lambda e: (e.stage if e.stage is not None else -1, e.id),
     )
     cut = sorted((e for e in elements if e.disposition == "cut"), key=lambda e: e.id)
+    accepted = sorted(accepted_risks or [], key=lambda t: (t[0], t[1]))
 
     lines = [
         f"[scope] plan has {stage_count} stage(s); order: {len(elements)} element(s) "
@@ -439,6 +451,10 @@ def render_coverage_block(elements: list[OrderElement], stage_count: int) -> str
     ]
     lines += [f"- covered: {e.element} -> stage {e.stage}" for e in covered]
     lines += [f"- cut: {e.element} — {e.reason}" for e in cut]
+    lines += [
+        f"- accepted risk: scope {scope!r} concern {concern_id!r} — accepted by {author}"
+        for scope, concern_id, author in accepted
+    ]
     return "\n".join(lines)
 
 
