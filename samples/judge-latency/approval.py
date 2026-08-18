@@ -7,7 +7,11 @@ the hook meets both populations on the PLAN_READY node and the judge must answer
 either one inside the same budget: an approval ask (expected YES) and an
 ordinary confirm ask fired at the same node (expected NO). Both are real asks
 taken from the session that introduced the classifier, flattened the way
-lib.ask_text.flat_text flattens them.
+lib.ask_text.flat_text flattens them -- except the APPROVAL arm's marker
+literal below, transcribed as [SHOW_FULL_PLAN] rather than the actual
+SHOW_FULL_PLAN_MARKER spelling [show-full-plan] (agentctl/state.py). Harmless
+to this sample: judge_approval_ask reads the ask's free text, not the marker
+constant, so the drift changes nothing the classifier is scored against.
 
 Run from this directory:  python3 approval.py
 """

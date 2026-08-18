@@ -249,18 +249,18 @@ def test_missing_session_id_allows(tmp_path):
 
 def test_gate_decision_pure_function():
     mod = _load_module()
-    assert mod.gate_decision("PLAN_READY", 100.0, 100.0)[0] == "deny"
-    assert mod.gate_decision("PLAN_READY", 105.0, 100.0)[0] == "deny"
-    assert mod.gate_decision("PLAN_READY", 100.0, 105.0)[0] == "allow"
-    assert mod.gate_decision("EXECUTING", 100.0, 100.0)[0] == "allow"
-    assert mod.gate_decision("PLAN_READY", None, 100.0)[0] == "allow"
-    assert mod.gate_decision("PLAN_READY", 100.0, None)[0] == "allow"
-    assert mod.gate_decision("PLAN_READY", None, None)[0] == "allow"
+    assert mod.gate_decision("PLAN_READY", 100.0, 100.0, is_approval_ask=True)[0] == "deny"
+    assert mod.gate_decision("PLAN_READY", 105.0, 100.0, is_approval_ask=True)[0] == "deny"
+    assert mod.gate_decision("PLAN_READY", 100.0, 105.0, is_approval_ask=True)[0] == "allow"
+    assert mod.gate_decision("EXECUTING", 100.0, 100.0, is_approval_ask=True)[0] == "allow"
+    assert mod.gate_decision("PLAN_READY", None, 100.0, is_approval_ask=True)[0] == "allow"
+    assert mod.gate_decision("PLAN_READY", 100.0, None, is_approval_ask=True)[0] == "allow"
+    assert mod.gate_decision("PLAN_READY", None, None, is_approval_ask=True)[0] == "allow"
     # turn_start_ts (transcript) takes priority over the legacy timestamp pair
-    assert mod.gate_decision("PLAN_READY", 105.0, 100.0, turn_start_ts=110.0)[0] == "allow"
-    assert mod.gate_decision("PLAN_READY", 105.0, 100.0, turn_start_ts=100.0)[0] == "deny"
-    assert mod.gate_decision("PLAN_READY", 100.0, 105.0, turn_start_ts=None)[0] == "allow"
-    assert mod.gate_decision("PLAN_READY", 105.0, 100.0, turn_start_ts=None)[0] == "deny"
+    assert mod.gate_decision("PLAN_READY", 105.0, 100.0, turn_start_ts=110.0, is_approval_ask=True)[0] == "allow"
+    assert mod.gate_decision("PLAN_READY", 105.0, 100.0, turn_start_ts=100.0, is_approval_ask=True)[0] == "deny"
+    assert mod.gate_decision("PLAN_READY", 100.0, 105.0, turn_start_ts=None, is_approval_ask=True)[0] == "allow"
+    assert mod.gate_decision("PLAN_READY", 105.0, 100.0, turn_start_ts=None, is_approval_ask=True)[0] == "deny"
 
 
 def test_gate_decision_normalized_match_ts_none_degrades_to_allow():
@@ -282,6 +282,7 @@ def test_gate_decision_normalized_match_ts_none_degrades_to_allow():
         receipt_stale_reason=None,
         delivered_texts=[(drifted, None)],
         has_show_full_plan_option=True,
+        is_approval_ask=True,
     )
     assert decision == "allow"
     assert delivery_verified is True

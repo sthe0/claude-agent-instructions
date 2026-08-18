@@ -154,6 +154,7 @@ def test_a_call_started_at_the_floor_could_have_finished_the_fastest_run():
 _DERIVED_CONSTANTS = [
     (_ESCALATION, "_JUDGE_MIN_CALL_S", "outage_escalation", judge_latency.call_floor_s),
     (_DEFERRING, "_ASK_JUDGE_MIN_CALL_S", "deferring_disposition", judge_latency.call_floor_s),
+    (_APPROVAL, "_APPROVAL_ASK_JUDGE_MIN_CALL_S", "approval_ask", judge_latency.call_floor_s),
     (_TURN_END, "_TURN_FEEDBACK_MIN_CALL_S", "feedback_signal", judge_latency.call_floor_s),
     (_TURN_END, "_TURN_FEEDBACK_CALL_CAP_S", "feedback_signal", judge_latency.call_ceiling_s),
     (_TURN_END, "_TURN_BINARY_ASK_MIN_CALL_S", "binary_ask", judge_latency.call_floor_s),

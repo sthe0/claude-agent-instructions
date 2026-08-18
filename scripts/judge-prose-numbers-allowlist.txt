@@ -93,6 +93,7 @@ samples/judge-latency/README.md:31:a008f585  # provenance and n of the deferring
 samples/judge-latency/README.md:32:8b3fc2d5  # provenance and n of the outage row (10 + 6 = 16)
 samples/judge-latency/README.md:33:dcb31d7a  # provenance and n of the feedback row (10 + 16 = 26)
 samples/judge-latency/README.md:34:f159378b  # provenance and n of the binary_ask row (16)
+samples/judge-latency/README.md:36:6035ebd1  # provenance and n of the approval_ask row, mirroring judge_latency.MEASURED's provenance pairs (16 + 16 = 32)
 samples/judge-latency/README.md:62:26defe90  # the measured cost of excluding topup-sample.json: binary_ask p90 16.70 -> 11.06 and its floor 17 -> 12; recorded so the exclusion is auditable
 samples/judge-latency/README.md:69:3c1d709f  # 52s = the approved turn-end budget this feasibility table is evaluated against
 samples/judge-latency/README.md:73:8e952622  # 43.56 = the sum of the three turn-end p90s (13.34 + 11.06 + 19.16); the 8.44s headroom is 52 - 43.56
@@ -100,7 +101,6 @@ samples/judge-latency/README.md:74:0384f6fb  # 51.53 = the sum of the three obse
 samples/judge-latency/README.md:84:af842d45  # 52s again, in the sentence that names it the APPROVED height rather than a derived one
 samples/judge-latency/README.md:89:e7a33457  # max 71.96 belongs to lean-sample.json, a SUPPORTING sample excluded from every row — cited to show the lean prompt's worse tail
 samples/judge-latency/README.md:90:ba28e247  # historical: the original 5s registration the haiku baseline made look survivable
-samples/judge-latency/README.md:36:6035ebd1  # provenance and n of the approval_ask row, mirroring judge_latency.MEASURED's provenance pairs (16 + 16 = 32)
 
 # live-run-evidence.md — the stage-4 write-up. Every number here is either one of
 # the three recorded live runs or a statistic the checker recomputes from the

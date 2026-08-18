@@ -8,6 +8,7 @@ absent-runner outcomes end-to-end.
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import sys
@@ -80,9 +81,11 @@ def run_hook_no_claude(payload: dict, config_dir: Path) -> subprocess.CompletedP
 # (a) an unrelated ask at PLAN_READY is allowed -------------------------------
 
 def test_unrelated_ask_is_allowed_even_with_a_pending_receipt(tmp_path):
-    # A satisfied receipt exists and delivery was never verified for THIS ask
-    # -- if the classifier didn't gate scope, this would deny on "not
-    # delivered". A NO classifier must instead let it straight through.
+    # Receipt + marker + a genuine delivery are all present here (same fixture
+    # shape as test_identified_approval_ask_with_verified_delivery_stamps) --
+    # if the classifier didn't gate scope, this would ALLOW and STAMP, not
+    # deny. A NO classifier must instead let it through unstamped: the real
+    # discriminator this test proves is _stamp(tmp_path, "u1") is None.
     write_full_state(tmp_path, "u1", plan_presentations=[make_receipt(RENDERING, presented_ts=100.0)])
     t = write_transcript(tmp_path / "t.jsonl", [
         user_prompt_entry(90.0),
@@ -212,3 +215,100 @@ def test_non_judged_invocation_writes_no_approval_ask_records(tmp_path):
 
     records = _ledger_records(tmp_path)
     assert [r for r in records if r.get("judge") == "approval_ask"] == []
+
+
+# (f) a same-turn ask skips the classifier entirely ---------------------------
+
+def test_same_turn_ask_skips_the_classifier_entirely(tmp_path):
+    """decide()'s own same-turn early-out (mirroring gate_decision's, which
+    denies on this before it ever looks at is_approval_ask) must stop the
+    judge branch from running at all -- not merely let gate_decision's deny
+    discard a verdict the judge already spent time computing. No claude stub
+    is on PATH here on purpose: if the skip regressed, decide() would either
+    need a stub to answer or fail loudly trying to invoke one, so the
+    classifier's total absence from the ledger is the proof the call was
+    skipped, not merely that it happened to run and lose."""
+    write_full_state(tmp_path, "f1", plan_submitted_ts=105.0, last_user_prompt_ts=100.0,
+                      plan_presentations=[make_receipt(RENDERING, presented_ts=100.0)])
+    t = write_transcript(tmp_path / "t.jsonl", [user_prompt_entry(100.0)])  # no later boundary
+    proc = run_hook_no_claude(ask_payload("f1", t), tmp_path)
+    assert proc.returncode == 0
+    assert _is_deny(proc)
+    assert "same" in json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+
+    records = _ledger_records(tmp_path)
+    assert [r for r in records if r.get("judge") == "approval_ask"] == []
+
+
+# (g) the whole-invocation judge budget --------------------------------------
+#
+# Driven in-process (unlike (a)-(f) above): a subprocess test has no cheap way
+# to control time.monotonic() readings, and the budget path is a timing
+# decision, not a text/state one. Mirrors test_deferring_disposition_gate.py's
+# _FakeTime convention exactly.
+
+class _FakeTime:
+    """Stand-in for the hook's module-level `time` import: `.monotonic()`
+    returns values from `sequence` in call order (holding the last value once
+    exhausted), so the budget test below is deterministic and instant -- it
+    never actually sleeps for 13s."""
+
+    def __init__(self, sequence):
+        self._values = list(sequence)
+        self._i = 0
+
+    def monotonic(self):
+        value = self._values[self._i]
+        if self._i < len(self._values) - 1:
+            self._i += 1
+        return value
+
+
+def _load_module_fresh():
+    spec = importlib.util.spec_from_file_location("hook_plan_delivery_gate_budget", HOOK)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_budget_exhausted_before_the_call_fails_open_and_logs_stage_budget(tmp_path, monkeypatch):
+    """Finding 1's fix: decide() opens its JudgeBudget as the very first
+    statement, so a deadline already spent by the time remaining_and_timeout
+    is read must skip the judge call and record the fail-open outcome as
+    stage="budget" -- not attempt a doomed call. Same golden-path fixture as
+    test_judged_invocation_writes_entered_and_decided_for_approval_ask (node
+    PLAN_READY, an active presentation with a fired prefilter), but with the
+    module's own `time` replaced by a clock that has already spent the whole
+    13s budget by the time the budget object takes its first reading."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    # The suite-wide _plan_presentation_gate_off_by_default autouse fixture sets
+    # AGENTCTL_PLAN_PRESENTATION=0; subprocess tests in this file never inherit
+    # it (their env= is a full replacement), but this test calls decide() in the
+    # same process, so it must re-enable the gate explicitly -- same accommodation
+    # test_plan_presentation.py makes for the same reason.
+    monkeypatch.setenv("AGENTCTL_PLAN_PRESENTATION", "1")
+    write_full_state(tmp_path, "g1", plan_presentations=[make_receipt(RENDERING, presented_ts=100.0)])
+    t = write_transcript(tmp_path / "t.jsonl", [
+        user_prompt_entry(90.0),
+        text_only_entry(105.0, RENDERING),
+        user_prompt_entry(110.0),
+    ])
+
+    mod = _load_module_fresh()
+    # deadline reading -> 0.0 (deadline = 13.0); remaining_and_timeout's single
+    # reading -> 20.0 (remaining = -7.0, well under the 11s floor).
+    monkeypatch.setattr(mod, "time", _FakeTime([0.0, 20.0]))
+
+    decision, reason, sp, receipt = mod.decide(ask_payload("g1", t))
+    assert decision == "allow"
+    assert reason == ""
+    assert receipt is None  # a fail-open allow must never stamp
+
+    records = judge_ledger.read_records()
+    entered = [r for r in records if r["kind"] == "entered" and r["judge"] == "approval_ask"]
+    decided = [r for r in records if r["kind"] == "decided" and r["judge"] == "approval_ask"]
+    assert len(entered) == 1
+    assert len(decided) == 1
+    assert decided[0]["stage"] == "budget"
+    assert decided[0]["verdict"] is False

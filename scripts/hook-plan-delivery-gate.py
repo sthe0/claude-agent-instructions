@@ -109,6 +109,7 @@ try:
     from agentctl.state import SessionState as _SessionState  # noqa: E402
     from agentctl.state import SHOW_FULL_PLAN_MARKER  # noqa: E402
     from lib import config_root  # noqa: E402
+    from lib import judge_budget  # noqa: E402
     from lib.ask_text import flat_text  # noqa: E402
     from lib.transcript_turns import delivered_final_texts, latest_turn_start  # noqa: E402
 except BaseException as exc:
@@ -127,16 +128,20 @@ _APPROVAL_ASK_KILLSWITCH_ENV = "CLAUDE_APPROVAL_ASK_SEMANTIC"
 # This hook's own whole-invocation judge budget — owned here rather than read
 # off advisor._APPROVAL_ASK_TIMEOUT_S, mirroring how every sibling hook
 # (_JUDGE_BUDGET_S, _ASK_JUDGE_BUDGET_S, _TURN_JUDGE_BUDGET_S) owns its budget
-# independently of the judge function's own internal default. Until this judge
-# had its own sample the two constants happened to share the value 41 anyway —
-# both were the family LAST_RESORT_CEILING_S, a fallback for a judge with no
-# measurement of its own, not a number derived from this judge's behaviour.
-# With n=32 (samples/judge-latency/approval-sample.json) now measured, this
-# hook's own ceiling replaces that borrowed fallback: lib/judge_latency.py's
-# ceiling rule, `ceil(max) + 1` over n=32 (max 11.42s) = 13s. With exactly one
-# call there is no later call to protect, so this number is also the ceiling
-# handed to it — capping the only call lower would forfeit budget for nothing.
+# independently of the judge function's own internal default. lib/judge_latency.
+# py's ceiling rule, `ceil(max) + 1` over n=32 (max 11.42s) = 13s. With exactly
+# one call there is no later call to protect, so this number is also the
+# ceiling handed to it — capping the only call lower would forfeit budget for
+# nothing.
 _APPROVAL_ASK_JUDGE_BUDGET_S = 13
+
+# Below this remaining budget a judge call cannot plausibly finish and would
+# only spend the wait on a guaranteed timeout; stop judging and fail open
+# instead, exactly like every other unreachable-judge path in this hook. This
+# is lib/judge_latency.py's floor rule, `ceil(p90)` over n=32 — comfortably
+# above the fastest run observed (5.88s), which is what makes a call started
+# with exactly the floor left reachable rather than doomed.
+_APPROVAL_ASK_JUDGE_MIN_CALL_S = 11
 
 # SHOW_FULL_PLAN_MARKER is defined in agentctl.state (imported above) — the
 # coordinator embeds it in a "show the full plan" option's label (or
@@ -247,6 +252,23 @@ def _has_show_full_plan_option(tool_input: dict) -> bool:
     return False
 
 
+def _same_turn_denied(
+    plan_submitted_ts: float | None,
+    last_user_prompt_ts: float | None,
+    turn_start_ts: float | None,
+) -> bool:
+    """The same-turn predicate, shared by gate_decision (which must still deny
+    on it) and decide() (which uses it to skip a judge call whose verdict
+    gate_decision would discard anyway — see decide()'s own comment on this).
+    plan_submitted_ts is None is deliberately NOT handled here: both callers
+    already have their own no-plan-yet early-out ahead of this check."""
+    if turn_start_ts is not None:
+        return plan_submitted_ts >= turn_start_ts
+    if last_user_prompt_ts is not None:
+        return plan_submitted_ts >= last_user_prompt_ts
+    return False
+
+
 def gate_decision(
     node: str,
     plan_submitted_ts: float | None,
@@ -258,17 +280,16 @@ def gate_decision(
     receipt_stale_reason: str | None = None,
     delivered_texts: list[tuple[str, float | None]] | None = None,
     has_show_full_plan_option: bool = False,
-    is_approval_ask: bool = True,
+    is_approval_ask: bool,
 ) -> tuple[str, str, bool]:
     """Pure decision. Returns ("allow"|"deny", reason, delivery_verified).
 
-    is_approval_ask defaults to True so every pre-existing caller that never
-    passes it keeps exercising the strict-check path unmodified; main() is
-    the only caller that computes it (via the classifier) and passes it
-    explicitly. False short-circuits to an unverified allow — the classifier
-    fails open toward "not the approval ask", so an absent/slow/malformed
-    call can only widen what passes through, never deny a question the user
-    needed answered.
+    is_approval_ask is required (no default): main() is the only production
+    caller, and it always computes it via the classifier before calling in.
+    False short-circuits to an unverified allow — the classifier fails open
+    toward "not the approval ask", so an absent/slow/malformed call can only
+    widen what passes through, never deny a question the user needed
+    answered.
 
     ALLOW != VERIFIED: delivery_verified is True ONLY when this call actually
     observed the rendering land (present — exact, or normalized for
@@ -291,10 +312,7 @@ def gate_decision(
     if plan_submitted_ts is None:
         return "allow", "", False
 
-    if turn_start_ts is not None:
-        if plan_submitted_ts >= turn_start_ts:
-            return "deny", _SAME_TURN_REASON, False
-    elif last_user_prompt_ts is not None and plan_submitted_ts >= last_user_prompt_ts:
+    if _same_turn_denied(plan_submitted_ts, last_user_prompt_ts, turn_start_ts):
         return "deny", _SAME_TURN_REASON, False
     # Both turn_start_ts and last_user_prompt_ts missing: the same-turn check
     # itself has no observable, but delivered_texts below is an INDEPENDENT
@@ -388,7 +406,19 @@ def decide(payload: dict) -> tuple[str, str, Path | None, _PlanPresentation | No
     Every early exit before gate_decision returns a silent ("allow", "") and
     never calls entered(), so a payload that resolved no session is
     indistinguishable, on the ledger, from one at PLAN_READY with no plan yet.
-    The receipt is present iff gate_decision verified delivery."""
+    The receipt is present iff gate_decision verified delivery.
+
+    Opened as the very first statement, before latest_turn_start below ever
+    touches the transcript — mirroring hook-turn-end-gate.py's build_context,
+    not hook-deferring-disposition-gate.py's decide (which opens its budget
+    after payload parsing, because extracting ask_text from an already-parsed
+    tool_input is no file I/O). Here, both latest_turn_start (before the judge
+    call) and delivered_final_texts (after it) are unbounded transcript reads,
+    so the deadline must be live for the very first one or it quietly spends
+    part of its own headroom before the budget ever knows the clock started."""
+    budget = judge_budget.JudgeBudget(
+        _APPROVAL_ASK_JUDGE_BUDGET_S, _APPROVAL_ASK_JUDGE_MIN_CALL_S, clock=time.monotonic
+    )
     if payload.get("tool_name") != "AskUserQuestion":
         return "allow", "", None, None
     session_id = payload.get("session_id") or ""
@@ -413,28 +443,50 @@ def decide(payload: dict) -> tuple[str, str, Path | None, _PlanPresentation | No
     is_approval_ask = False
 
     # Only do the heavier state/transcript work when the same-turn check's
-    # own cheap fields say this is even potentially a gated ask — mirrors the
-    # pure core's own early-outs so a non-PLAN_READY / no-plan-yet ask never
-    # pays for a second state load or a transcript re-scan.
+    # own cheap fields say this is even potentially a gated ask — mirrors two
+    # of the pure core's three early-outs (node != GATED_NODE, no plan yet),
+    # so such an ask never pays for a second state load or a transcript
+    # re-scan. The third early-out (same-turn) is honoured separately below,
+    # via same_turn_denied, and skips only the judge call: gate_decision's
+    # same-turn deny fires before it ever looks at presentation_active or
+    # receipt, so a same-turn ask's judge call would otherwise buy nothing but
+    # a verdict gate_decision discards.
     if node == GATED_NODE and plan_ts is not None:
+        same_turn_denied = _same_turn_denied(plan_ts, prompt_ts, turn_start_ts)
         state = _load_session_state(sp)
         if state is not None:
             presentation_active = _gates.plan_presentation_active(state)
             if presentation_active:
-                ask_text = flat_text(payload.get("tool_input") or {})
-                # Skipping the call on a False prefilter is safe because
-                # judge_approval_ask runs this same prefilter internally as
-                # its own second gate: the skip reproduces the (False, "")
-                # that call would have returned anyway.
-                prefilter_fired = _advisor.approval_ask_prefilter(ask_text)
-                judge_ledger.entered("approval_ask", prefilter_fired=prefilter_fired)
-                if prefilter_fired:
-                    is_approval_ask, _reason = _advisor.judge_approval_ask(
-                        ask_text,
-                        _advisor.subprocess_runner,
-                        enabled=os.environ.get(_APPROVAL_ASK_KILLSWITCH_ENV) != "0",
-                        timeout=_APPROVAL_ASK_JUDGE_BUDGET_S,
-                    )
+                if not same_turn_denied:
+                    ask_text = flat_text(payload.get("tool_input") or {})
+                    # Skipping the call on a False prefilter is safe because
+                    # judge_approval_ask runs this same prefilter internally
+                    # as its own second gate: the skip reproduces the same
+                    # False verdict that call would have returned anyway
+                    # (though not, when the kill-switch is set, the same
+                    # ledger record).
+                    prefilter_fired = _advisor.approval_ask_prefilter(ask_text)
+                    judge_ledger.entered("approval_ask", prefilter_fired=prefilter_fired)
+                    if prefilter_fired:
+                        remaining_before_call, call_timeout = budget.remaining_and_timeout(
+                            _APPROVAL_ASK_JUDGE_BUDGET_S
+                        )
+                        if call_timeout is None:
+                            judge_ledger.decided(
+                                "approval_ask", stage="budget", verdict=False,
+                                reason="budget exhausted before call (fail-open)",
+                                remaining=remaining_before_call, threshold=None,
+                                ceiling=_APPROVAL_ASK_JUDGE_BUDGET_S,
+                            )
+                        else:
+                            is_approval_ask, _reason = _advisor.judge_approval_ask(
+                                ask_text,
+                                _advisor.subprocess_runner,
+                                enabled=os.environ.get(_APPROVAL_ASK_KILLSWITCH_ENV) != "0",
+                                timeout=call_timeout,
+                                remaining=remaining_before_call,
+                                ceiling=_APPROVAL_ASK_JUDGE_BUDGET_S,
+                            )
                 receipt = _gates._plan_presentation_for(state, _KIND_ESSENCE)
                 if receipt is not None:
                     receipt_stale_reason = _receipt_stale_reason(state)
@@ -469,7 +521,7 @@ def main() -> int:
         # has_directive means "printed a directive", as in the sibling hooks.
         # The allow-path delivery stamp has no counterpart in it: an allow
         # that stamps and one that does not both report False, since neither
-        # printed. No sibling has a second allow-path side effect to name.
+        # printed.
         has_directive = decision == "deny"
         judge_ledger.final(has_directive=has_directive)
         emit_ok = True
