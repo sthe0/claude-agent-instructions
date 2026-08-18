@@ -1262,8 +1262,8 @@ class SessionState:
     # on a `revise` verdict, unchanged.
     risk_acceptances: list["RiskAcceptance"] = field(default_factory=list)
     # Pre-approval review-round counter (schema 30): cmd_submit_plan increments it on
-    # every resubmission at PLAN_READY (the revise_plan self-loop); cmd_approve resets
-    # it to 0 on a successful approval. Read by gates.plan_review_round_release_active
+    # every resubmission at PLAN_READY (the revise_plan self-loop) made while a review
+    # record stands; cmd_approve resets it to 0 on a successful approval. Read by gates.plan_review_round_release_active
     # against the Rule-of-Three threshold config.md's effort-replan-absolute reuses. 0
     # on legacy states (absent key -> dataclass default via from_dict's cls(**data)).
     plan_review_rounds: int = 0

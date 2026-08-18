@@ -21,6 +21,7 @@ from argparse import Namespace
 import pytest
 
 from agentctl import cli, gates
+from agentctl.config import Thresholds
 from agentctl.state import Node, PlanReview, SessionState
 
 
@@ -85,7 +86,9 @@ def test_release_never_empties_the_blockers_list(gate_on):
     so the gate must stay structurally blocking."""
     s = _subst(plan_review_rounds=5,  # well past the threshold
                plan_review=PlanReview("/plan.toml", "revise", "thinker"))
-    assert gates.plan_review_blockers(s, s.plan_path) != []
+    blockers = gates.plan_review_blockers(s, s.plan_path)
+    assert blockers != []
+    assert "at round 5" in blockers[0]  # the live count, not a threshold-shaped literal
 
 
 def test_round_release_inactive_below_threshold(gate_on):
@@ -96,6 +99,15 @@ def test_round_release_inactive_below_threshold(gate_on):
 def test_round_release_active_at_and_past_threshold(gate_on):
     assert gates.plan_review_round_release_active(_subst(plan_review_rounds=3)) is True
     assert gates.plan_review_round_release_active(_subst(plan_review_rounds=4)) is True
+
+
+def test_the_threshold_comes_from_config_not_a_literal(gate_on):
+    """The stage's whole claim is that it REUSES effort-replan-absolute rather than
+    minting a key, so the predicate must read the row. Every other test asserts against
+    the row's shipped value of 3, which a hardcoded 3 satisfies just as well."""
+    retuned = Thresholds({"effort-replan-absolute": "2"})
+    assert gates.plan_review_round_release_active(_subst(plan_review_rounds=2), retuned) is True
+    assert gates.plan_review_round_release_active(_subst(plan_review_rounds=1), retuned) is False
 
 
 def test_a_recorded_pass_still_clears_regardless_of_rounds(gate_on):
