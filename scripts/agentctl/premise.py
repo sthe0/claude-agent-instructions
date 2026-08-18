@@ -427,7 +427,7 @@ def _collapse_whitespace(text: str) -> str:
 def render_coverage_block(
     elements: list[OrderElement],
     stage_count: int,
-    accepted_risks: "list[tuple[str, str, str, str, str, str]] | None" = None,
+    accepted_risks: "list[tuple[str, str, str, str, str, str, bool]] | None" = None,
 ) -> str:
     """The scope-coverage block: the plan's size and what it does with each element
     of the order, plus (schema 28) every LIVE risk acceptance discharging a `revise`
@@ -437,12 +437,16 @@ def render_coverage_block(
     second hand-written rendering would drift against the check. This is the single
     generator; nothing else composes the text.
 
-    `accepted_risks` is `(scope, concern_id, concern_text, basis, risk, author)`
-    sextuples, already narrowed to the live (non-stale) ones by the caller —
-    plugins_premise.coverage_block, via gates._risk_acceptance_stale — so this
-    function itself never judges staleness; it only renders what it is handed, same
-    division of labour as `elements` above. The three free-text fields are collapsed
-    to single-line form (internal whitespace collapsed to single spaces) since the
+    `accepted_risks` is `(scope, concern_id, concern_text, basis, risk, author,
+    superseded)` septuples, already narrowed to the live (non-stale) ones by the
+    caller — plugins_premise.coverage_block, via gates._risk_acceptance_stale — so
+    this function itself never judges staleness; it only renders what it is handed,
+    same division of labour as `elements` above. `superseded` (gates.
+    _risk_acceptance_superseded) marks an acceptance whose concern id survived a
+    plan edit but whose text at that id changed underneath it — kept in the
+    rendering rather than dropped, so a customer scanning the essence sees it did
+    NOT silently keep discharging. The three free-text fields are collapsed to
+    single-line form (internal whitespace collapsed to single spaces) since the
     block is checked line-wise for containment in the presented essence.
     """
     covered = sorted(
@@ -462,7 +466,9 @@ def render_coverage_block(
         f"- accepted risk: scope {scope!r} concern {concern_id!r} "
         f"({_collapse_whitespace(concern_text)!r}) — accepted by {author}: "
         f"basis {_collapse_whitespace(basis)!r}, risk {_collapse_whitespace(risk)!r}"
-        for scope, concern_id, concern_text, basis, risk, author in accepted
+        + (" — SUPERSEDED: concern text changed at this id, no longer discharges"
+           if superseded else "")
+        for scope, concern_id, concern_text, basis, risk, author, superseded in accepted
     ]
     return "\n".join(lines)
 

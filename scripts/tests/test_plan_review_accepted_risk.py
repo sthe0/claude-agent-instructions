@@ -353,6 +353,25 @@ def test_risk_accept_refuses_an_unknown_concern_id(store, fixtures_dir, gate_on)
     assert store.load(sid).risk_acceptances == []
 
 
+def test_risk_accept_refuses_a_duplicate_concern_id(store, fixtures_dir, gate_on):
+    """A review recording the same id for two different concerns makes
+    valid_ids.index(concern_id) ambiguous — it would silently resolve to the
+    FIRST match. Refuse instead of guessing which concern the acceptance binds
+    to."""
+    sid = "ra-dupid"
+    plan_path = str(fixtures_dir / "plan_two_stage_substantive.toml")
+    _to_plan_ready(store, sid, plan_path)
+    cli.cmd_plan_review(ns(session=sid, target=None, scope=None, verdict="revise",
+                           reviewer="thinker", concerns=["missing tests", "missing docs"],
+                           concern_ids=["c-dup", "c-dup"], note="", plan_digest=None), store=store)
+    d = cli.cmd_risk_accept(ns(session=sid, scope=None, concern_id="c-dup",
+                                basis="the team accepts the gap", risk="a regression ships",
+                                author="fedor"), store=store)
+    assert d.ok is False
+    assert "ambiguous" in d.detail
+    assert store.load(sid).risk_acceptances == []
+
+
 def test_risk_accept_refuses_a_placeholder_basis(store, fixtures_dir, gate_on):
     sid = "ra-placeholder"
     plan_path = str(fixtures_dir / "plan_two_stage_substantive.toml")
@@ -464,8 +483,8 @@ def test_render_coverage_block_appends_accepted_risk_lines_sorted_deterministica
     text = premise.render_coverage_block(
         elements, 1,
         accepted_risks=[
-            ("stage:2", "c-b", "some\n concern", "a  basis", "some risk", "eve"),
-            ("", "c-a", "another concern", "another basis", "another risk", "alice"),
+            ("stage:2", "c-b", "some\n concern", "a  basis", "some risk", "eve", False),
+            ("", "c-a", "another concern", "another basis", "another risk", "alice", False),
         ],
     )
     assert text.splitlines()[-2:] == [
@@ -503,6 +522,45 @@ def test_coverage_block_excludes_a_stale_accepted_risk(tmp_path, fixtures_dir):
     block = pp.coverage_block(state, bag, doc=doc1)
     assert "c-tests" in block
     assert "c-retitle" not in block
+
+
+def test_coverage_block_marks_a_superseded_accepted_risk_instead_of_dropping_it(tmp_path, fixtures_dir):
+    """A concern rephrased at the SAME id (same plan version, so digest-staleness
+    never fires) must not keep rendering as an ordinary accepted-risk line — that
+    would read as still discharging when gates._concern_discharged no longer
+    agrees. It must also not be dropped outright: the customer needs to see the
+    acceptance existed and stopped covering anything."""
+    plan_path = tmp_path / "plan.toml"
+    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    doc = load_plan(str(plan_path))
+    review = _whole_review(plan_path, doc)  # current concern text: "missing test coverage..."
+    acceptance = _acceptance("", "c-tests", "an older phrasing of this concern", plan_path, doc)
+    state = SessionState(session_id="s", task_id="t", weight_class="SUBSTANTIVE",
+                         plan_path=str(plan_path), plan_review=review,
+                         risk_acceptances=[acceptance])
+    plugins.activate(state, "premise")
+    bag = state.plugins["premise"]
+    block = pp.coverage_block(state, bag, doc=doc)
+    assert "c-tests" in block
+    assert "SUPERSEDED" in block
+
+
+def test_coverage_block_does_not_mark_a_live_accepted_risk_as_superseded(tmp_path, fixtures_dir):
+    """The other direction: an acceptance whose text still matches the concern
+    currently at that id renders as an ordinary line, no marker."""
+    plan_path = tmp_path / "plan.toml"
+    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    doc = load_plan(str(plan_path))
+    review = _whole_review(plan_path, doc)
+    acceptance = _acceptance("", "c-tests", "missing test coverage for the new branch", plan_path, doc)
+    state = SessionState(session_id="s", task_id="t", weight_class="SUBSTANTIVE",
+                         plan_path=str(plan_path), plan_review=review,
+                         risk_acceptances=[acceptance])
+    plugins.activate(state, "premise")
+    bag = state.plugins["premise"]
+    block = pp.coverage_block(state, bag, doc=doc)
+    assert "c-tests" in block
+    assert "SUPERSEDED" not in block
 
 
 def _premise_state(plan_path, doc):

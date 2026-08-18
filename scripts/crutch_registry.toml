@@ -5796,7 +5796,23 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "9137d732c46a7c66"
+domain = "code"
+file = "scripts/tests/test_plan_review_accepted_risk.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "9dd2e66cb5f2dc92"
+domain = "code"
+file = "scripts/tests/test_plan_review_accepted_risk.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "a55477e2a4727e0b"
 domain = "code"
 file = "scripts/tests/test_plan_review_accepted_risk.py"
 class = "not-a-gate"
@@ -6055,6 +6071,46 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "76b41fb51bdbcc5f"
 domain = "code"
 file = "scripts/tests/test_plan_review_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "7f494814f0465208"
+domain = "code"
+file = "scripts/tests/test_plan_review_round_budget.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "76dc0eb6ccedf281"
+domain = "code"
+file = "scripts/tests/test_plan_review_round_budget.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "14dcd562980ad55e"
+domain = "code"
+file = "scripts/tests/test_plan_review_round_budget.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "14fa57d535fe49b2"
+domain = "code"
+file = "scripts/tests/test_plan_review_round_budget.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "867ff531f425229c"
+domain = "code"
+file = "scripts/tests/test_plan_review_round_budget.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
@@ -8999,6 +9055,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "478bd7ddfafd1073"
 domain = "code_file_rollup"
 file = "scripts/tests/test_plan_review_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "ae713da89290cb2b"
+domain = "code_file_rollup"
+file = "scripts/tests/test_plan_review_round_budget.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"

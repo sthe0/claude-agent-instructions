@@ -2455,6 +2455,10 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     state.node = transition(state.node, "revise_plan" if resubmitting else "submit_plan")
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
     if resubmitting:
+        # The PLAN_READY resubmission self-loop is the event that starts a review
+        # round (gates.plan_review_round_release_active reads this against the
+        # Rule-of-Three threshold); cmd_approve resets it on a successful approval.
+        state.plan_review_rounds += 1
         # The plan changed, so any recorded thinker review that no longer covers
         # the resubmitted bytes must clear so the plan-review gate re-arms for
         # them. "No longer covers" is decided per review record via the SAME
@@ -3022,6 +3026,13 @@ def cmd_risk_accept(args, *, store: StateStore, runner: Runner | None = None) ->
             f"concern {concern_id!r} is not among scope {scope!r}'s recorded concerns "
             f"{valid_ids!r} — check --concern-id against the review",
         )
+    if valid_ids.count(concern_id) > 1:
+        return Directive(
+            False, state.node, "noop",
+            f"concern {concern_id!r} appears {valid_ids.count(concern_id)} times in scope "
+            f"{scope!r}'s recorded concerns {valid_ids!r} — ambiguous which one this "
+            "acceptance binds to; the review must give each concern a distinct --concern-id",
+        )
     acceptance = RiskAcceptance(
         scope=scope,
         concern_id=concern_id,
@@ -3374,10 +3385,11 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             # its own store.save() — so a fold left in memory would refuse the approve
             # while `question-candidate-dispose --id qenum-meta-1` had nothing to find.
             store.save(state)
+    review_blockers = gates.plan_review_blockers(state, state.plan_path)
     blockers = (
         gates.blockers(state, "plan_approval")
         + plugins.plugin_gate_blockers(state, "plan_approval")
-        + gates.plan_review_blockers(state, state.plan_path)
+        + review_blockers
         + gates.plan_presentation_blockers(state, state.plan_path)
     )
     if not args.by or not args.by.strip():
@@ -3388,10 +3400,22 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         # is the one person who both can see the number and is about to decide what to
         # do about it — and if the blocker below is the enumeration one, the decision
         # is literally whether to add to that count.
+        round_release = None
+        if review_blockers and gates.plan_review_round_release_active(state):
+            round_release = {"rounds": state.plan_review_rounds}
+            already_logged = any(
+                e.get("event") == "plan_review_round_release"
+                and e.get("rounds") == state.plan_review_rounds
+                for e in state.history
+            )
+            if not already_logged:
+                state.log("plan_review_round_release", rounds=state.plan_review_rounds)
+                store.save(state)
         return _with_advisories(
             Directive(False, state.node, "fix_plan", "cannot approve", data={
                 "blockers": blockers,
                 "enumeration_escapes": _enumeration_escape_counts(state, _approved_doc),
+                "plan_review_round_release": round_release,
             }),
             echo_advice)
     # Seam (c)'s stamp, past BOTH of this command's refusals — the submission check above and
@@ -3401,6 +3425,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     _stamp_accepted_plan_digest(state, state.plan_path)
     effort.arm(state)  # opens the effort-divergence window — see effort.py's ARMED-ONLY
     state.approval = GateRecord("plan_approval", armed=True, passed=True, by=args.by)
+    state.plan_review_rounds = 0
     state.node = transition(state.node, "approve")
     snap = _snapshot_approved_plan(store, state)
     if snap:

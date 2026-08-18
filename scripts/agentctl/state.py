@@ -20,7 +20,7 @@ import shlex
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 
-SCHEMA_VERSION = 29
+SCHEMA_VERSION = 30
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -1261,6 +1261,12 @@ class SessionState:
     # gates._plan_review_verdict_blockers fall back to today's unconditional block
     # on a `revise` verdict, unchanged.
     risk_acceptances: list["RiskAcceptance"] = field(default_factory=list)
+    # Pre-approval review-round counter (schema 30): cmd_submit_plan increments it on
+    # every resubmission at PLAN_READY (the revise_plan self-loop); cmd_approve resets
+    # it to 0 on a successful approval. Read by gates.plan_review_round_release_active
+    # against the Rule-of-Three threshold config.md's effort-replan-absolute reuses. 0
+    # on legacy states (absent key -> dataclass default via from_dict's cls(**data)).
+    plan_review_rounds: int = 0
     # The acceptance-review judge records backing the acceptance-review gate (schema
     # 14): one StageReview per acceptance_review stage that has been judged, and one
     # JudgeBypass per gate bypass (kill switch / override). Both default to [] — legacy

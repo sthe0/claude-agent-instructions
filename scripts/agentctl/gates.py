@@ -41,6 +41,7 @@ from lib import config_root
 from lib import hook_wiring
 
 from . import delivery
+from .config import Thresholds
 from .plan import PlanError, changed_parts, load_plan, order_place, stage_question_key
 from .state import Node, SessionState, StageStatus, WeightClass
 from .state import plan_review_concern_ids as _plan_review_concern_ids
@@ -363,6 +364,22 @@ def _risk_acceptance_stale(ra, doc) -> bool:
     return stage_index is not None and stage_index in moved_stages
 
 
+def _risk_acceptance_superseded(ra, state: SessionState) -> bool:
+    """True for a non-stale acceptance whose concern id survived a plan edit but
+    whose text at that id no longer matches what was actually accepted — a
+    rephrased/replaced concern at the same id, distinct from `_risk_acceptance_stale`
+    (which drops an acceptance whose plan VERSION moved; this instead flags one
+    whose version is current but whose concern PROSE moved under it)."""
+    review = state.plan_stage_reviews.get(ra.scope) if ra.scope else state.plan_review
+    if review is None:
+        return True
+    ids = _plan_review_concern_ids(review)
+    if ra.concern_id not in ids:
+        return True
+    current_text = review.concerns[ids.index(ra.concern_id)]
+    return _normalize_string(current_text) != _normalize_string(ra.concern_text)
+
+
 def _concern_discharged(scope: str, concern_id: str, concern_text: str, state: SessionState, doc) -> bool:
     return any(
         ra.scope == scope
@@ -481,6 +498,31 @@ def _plan_review_blockers_coverage(state: SessionState, target_plan: str, doc) -
     return []
 
 
+#: Message substituted for whatever `plan_review_blockers` would otherwise return once
+#: the round-release fires (see `plan_review_round_release_active`). Names the two
+#: decisions the ORDER, not the engine, must resolve — a scope/risk question is the
+#: customer's to answer, so this never clears the block by itself; it only stops
+#: demanding a further review and routes to an explicit choice instead.
+_PLAN_REVIEW_ROUND_RELEASE_MESSAGE = (
+    "review round budget exhausted at round {rounds} (Rule-of-Three — config.md's "
+    "effort-replan-absolute, reused) — the requirement for a further thinker review is "
+    "released; decide directly: approve with the recorded accepted risks, or cut scope "
+    "and resubmit"
+)
+
+
+def plan_review_round_release_active(state: SessionState | None, thr: Thresholds | None = None) -> bool:
+    """True once `state.plan_review_rounds` (PLAN_READY resubmissions since the last
+    approval) has reached the Rule-of-Three threshold this stage reuses rather than
+    duplicating — config.md's `effort-replan-absolute`. Past this point
+    `plan_review_blockers` stops demanding another review pass and routes to the user
+    instead (see `_PLAN_REVIEW_ROUND_RELEASE_MESSAGE`)."""
+    if state is None:
+        return False
+    thr = thr if thr is not None else Thresholds()
+    return state.plan_review_rounds >= thr.effort_replan_absolute()
+
+
 def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[str]:
     """Precondition guardian for `approve` and every `replan`: a thinker review with
     a passing (or user-overridden) verdict, BOUND to the exact plan version being
@@ -501,7 +543,12 @@ def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[s
     attestation/verdict directly (`_plan_review_verdict_blockers`) rather than via
     `_plan_review_blockers_whole` — the byte-hash staleness check in that helper
     would trip on any unrelated edit and defeat per-stage coverage, so staleness
-    here is decided solely by `changed_parts` against the recorded meta/stage keys."""
+    here is decided solely by `changed_parts` against the recorded meta/stage keys.
+
+    Round release wraps the OUTERMOST result: whatever combination of "no review",
+    "stale", or "verdict blocked" branches produced a non-empty list, past the round
+    threshold every one of them collapses to the single routing message — the review
+    requirement is released as one event, not per sub-reason."""
     if not plan_review_active(state):
         return []
     doc = None
@@ -511,8 +558,12 @@ def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[s
         except (OSError, PlanError):
             doc = None
     if not state.plan_stage_reviews or doc is None:
-        return _plan_review_blockers_whole(state.plan_review, target_plan, state=state, doc=doc)
-    return _plan_review_blockers_coverage(state, target_plan, doc)
+        blockers = _plan_review_blockers_whole(state.plan_review, target_plan, state=state, doc=doc)
+    else:
+        blockers = _plan_review_blockers_coverage(state, target_plan, doc)
+    if blockers and plan_review_round_release_active(state):
+        return [_PLAN_REVIEW_ROUND_RELEASE_MESSAGE.format(rounds=state.plan_review_rounds)]
+    return blockers
 
 
 def plan_review_delta(state: SessionState, doc) -> "tuple[bool, set[int]]":
