@@ -156,9 +156,10 @@ def test_drafting_resubmissions_before_any_review_are_not_rounds(store, fixtures
 
 
 def _to_round_budget_exhausted(store, sid, plan):
-    """A reviewed plan, then 3 resubmissions past the initial PLAN_READY submission —
-    plan_review_rounds lands exactly at the threshold with the negotiation the budget
-    bounds actually under way."""
+    """One whole-plan revise verdict, then 3 resubmissions of the same bytes — the
+    cheapest state that sits exactly at the threshold. It is NOT the three-turn
+    negotiation the budget is named for; the review-edit-resubmit shape is exercised by
+    test_a_stage_scoped_review_staled_by_its_own_answer_still_spends_a_round."""
     _to_plan_ready(store, sid, plan)
     _record_revise(store, sid, plan)
     for _ in range(3):
@@ -252,10 +253,16 @@ def test_a_stage_scoped_review_staled_by_its_own_answer_still_spends_a_round(
 
     s = store.load(sid)
     assert s.plan_review_rounds == 3
-    assert s.plan_review is None and not s.plan_stage_reviews  # every record staled away
+    assert not s.plan_stage_reviews  # the reviews staled away, the spent rounds did not
     assert gates.plan_review_round_release_active(s) is True
     blockers = gates.plan_review_blockers(s, plan)
     assert len(blockers) == 1 and "round budget exhausted at round 3" in blockers[0]
+
+    # A bare resubmission from THIS state — rounds already spent, every record staled —
+    # is still a redraft nobody has reviewed, so it must not advance the count. Reached
+    # only here: the before-any-review test cannot, its count is zero by construction.
+    cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
+    assert store.load(sid).plan_review_rounds == 3
 
 
 def test_approval_resets_the_round_count(store, fixtures_dir, gate_on):

@@ -513,8 +513,8 @@ _PLAN_REVIEW_ROUND_RELEASE_MESSAGE = (
     "effort-replan-absolute, reused) — no further thinker review is required, but the "
     "decision is yours and must be recorded: to go ahead with the plan as it stands, "
     "run plan-review --verdict override --reviewer <you> --note <why it is acceptable>; "
-    "to cut scope instead, edit the plan and resubmit. `approve` on its own stays "
-    "refused until one of those is recorded"
+    "to cut scope instead, edit the plan and resubmit. Recording one of those clears "
+    "this gate; `approve` still answers to every other gate as well"
 )
 
 
