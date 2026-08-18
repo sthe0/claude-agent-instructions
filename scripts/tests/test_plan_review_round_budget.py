@@ -55,6 +55,11 @@ def test_at_threshold_requirement_released_with_recorded_reason(gate_on):
     assert "no further thinker review is required" in blockers[0]
     assert "round budget exhausted at round 3" in blockers[0]
     assert "override" in blockers[0] and "cut scope" in blockers[0]
+    # Pinned because this clause has been wrong twice: it must not claim the override is
+    # the ONLY act that opens the gate — a fresh passing review clears it at any count,
+    # as test_a_recorded_pass_still_clears_regardless_of_rounds shows.
+    assert "cutting scope does not by itself open this gate" in blockers[0]
+    assert "nothing else" not in blockers[0]
 
 
 def test_release_does_not_re_derive_that_a_review_happened(gate_on):
@@ -206,6 +211,15 @@ def test_release_present_in_surfaced_payload_and_recorded(store, fixtures_dir, g
     assert d2.data["plan_review_round_release"] == {"rounds": 3}
     events = [e for e in store.load(sid).history if e.get("event") == "plan_review_round_release"]
     assert len(events) == 1
+
+    # ...but a release at a NEW count is a new fact: the dedup is per round, so the
+    # history stays countable. Keying it on the event name alone would silently drop
+    # every release after the first.
+    cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
+    d3 = cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    assert d3.data["plan_review_round_release"] == {"rounds": 4}
+    events = [e for e in store.load(sid).history if e.get("event") == "plan_review_round_release"]
+    assert [e["rounds"] for e in events] == [3, 4]
 
 
 def test_the_released_directive_names_an_act_that_actually_opens_the_gate(store, fixtures_dir,

@@ -514,8 +514,8 @@ _PLAN_REVIEW_ROUND_RELEASE_MESSAGE = (
     "decision is yours and must be recorded: to go ahead with the plan as it stands, "
     "run plan-review --verdict override --reviewer <you> --note <why it is acceptable>; "
     "to cut scope instead, edit the plan and resubmit — but the budget does not refill, "
-    "so this gate opens on that override and on nothing else; `approve` still answers "
-    "to every other gate as well"
+    "so cutting scope does not by itself open this gate; `approve` still answers to "
+    "every other gate as well"
 )
 
 
