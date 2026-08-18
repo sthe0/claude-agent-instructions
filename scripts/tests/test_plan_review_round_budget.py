@@ -56,14 +56,15 @@ def test_at_threshold_requirement_released_with_recorded_reason(gate_on):
     assert "override" in blockers[0] and "cut scope" in blockers[0]
 
 
-def test_release_does_not_fire_before_any_review_was_recorded(gate_on):
-    """The budget bounds a review NEGOTIATION, so resubmissions of a plan nobody has
-    reviewed are not rounds of one. Releasing there would announce an exhausted budget
-    that was never spent and hide the message naming the actual next step."""
-    s = _subst(plan_review_rounds=5)
-    assert gates.plan_review_round_release_active(s) is False
+def test_release_does_not_re_derive_that_a_review_happened(gate_on):
+    """"A review happened" is carried by the count, not re-read off the records still on
+    file. The two diverge whenever a review is staled by the edit that answers it, and
+    re-deriving would then read three spent rounds as none — so the release fires on the
+    count alone, with no review record present."""
+    s = _subst(plan_review_rounds=3)
+    assert gates.plan_review_round_release_active(s) is True
     blockers = gates.plan_review_blockers(s, s.plan_path)
-    assert blockers and "no thinker review" in blockers[0]
+    assert len(blockers) == 1 and "round budget exhausted" in blockers[0]
 
 
 def test_release_wraps_every_blocking_sub_reason_uniformly(gate_on):
@@ -88,19 +89,13 @@ def test_release_never_empties_the_blockers_list(gate_on):
 
 
 def test_round_release_inactive_below_threshold(gate_on):
-    reviewed = {"plan_review": PlanReview("/plan.toml", "revise", "thinker")}
-    assert gates.plan_review_round_release_active(
-        _subst(plan_review_rounds=0, **reviewed)) is False
-    assert gates.plan_review_round_release_active(
-        _subst(plan_review_rounds=2, **reviewed)) is False
+    assert gates.plan_review_round_release_active(_subst(plan_review_rounds=0)) is False
+    assert gates.plan_review_round_release_active(_subst(plan_review_rounds=2)) is False
 
 
 def test_round_release_active_at_and_past_threshold(gate_on):
-    reviewed = {"plan_review": PlanReview("/plan.toml", "revise", "thinker")}
-    assert gates.plan_review_round_release_active(
-        _subst(plan_review_rounds=3, **reviewed)) is True
-    assert gates.plan_review_round_release_active(
-        _subst(plan_review_rounds=4, **reviewed)) is True
+    assert gates.plan_review_round_release_active(_subst(plan_review_rounds=3)) is True
+    assert gates.plan_review_round_release_active(_subst(plan_review_rounds=4)) is True
 
 
 def test_a_recorded_pass_still_clears_regardless_of_rounds(gate_on):
@@ -217,6 +212,50 @@ def test_the_released_directive_names_an_act_that_actually_opens_the_gate(store,
                            concerns=None, note="the residual risk is acceptable",
                            target=plan, plan_digest=None), store=store)
     assert cli.cmd_approve(ns(session=sid, by="user"), store=store).node == Node.APPROVED.value
+
+
+def _retitle_stage(plan, index, text):
+    from pathlib import Path
+    before = _sha256_file(plan)
+    lines = Path(plan).read_text().splitlines()
+    seen = 0
+    for i, line in enumerate(lines):
+        if line.strip() == "[[stage]]":
+            seen += 1
+        elif seen == index and line.startswith("title = "):
+            lines[i] = f'title = "{text}"'
+            break
+    else:
+        raise AssertionError(f"no title line for stage {index}")
+    Path(plan).write_text("\n".join(lines) + "\n")
+    assert _sha256_file(plan) != before
+
+
+def test_a_stage_scoped_review_staled_by_its_own_answer_still_spends_a_round(
+        store, fixtures_dir, tmp_path, gate_on):
+    """The realistic stage-scoped negotiation: review stage 2, edit stage 2 to answer it,
+    resubmit — which stales that very review, so no record survives the cycle. Three such
+    cycles are three spent rounds and must release. Reading "did a review happen" off the
+    surviving records instead of off the count reported none of them, leaving the release
+    silent in exactly the workflow the stage-scoped verdict exists to support."""
+    import shutil
+    sid = "rb-stage-scoped"
+    plan = str(tmp_path / "p.toml")
+    shutil.copy(fixtures_dir / "plan_two_stage.toml", plan)
+    _to_plan_ready(store, sid, plan)
+    for n in range(3):
+        cli.cmd_plan_review(ns(session=sid, verdict="revise", reviewer="thinker",
+                               concerns=[f"stage 2 concern {n}"], note="", target=plan,
+                               plan_digest=_sha256_file(plan), scope="stage:2"), store=store)
+        _retitle_stage(plan, 2, f"Add tests, revision {n}")
+        cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
+
+    s = store.load(sid)
+    assert s.plan_review_rounds == 3
+    assert s.plan_review is None and not s.plan_stage_reviews  # every record staled away
+    assert gates.plan_review_round_release_active(s) is True
+    blockers = gates.plan_review_blockers(s, plan)
+    assert len(blockers) == 1 and "round budget exhausted at round 3" in blockers[0]
 
 
 def test_approval_resets_the_round_count(store, fixtures_dir, gate_on):

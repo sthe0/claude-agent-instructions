@@ -525,12 +525,12 @@ def plan_review_round_release_active(state: SessionState | None, thr: Thresholds
     `plan_review_blockers` stops demanding another review pass and routes to the user
     instead (see `_PLAN_REVIEW_ROUND_RELEASE_MESSAGE`).
 
-    A release requires that at least one review was actually recorded: the budget bounds
-    a review NEGOTIATION, and resubmissions of a plan nobody has reviewed are not rounds
-    of one — releasing there would announce a budget that was never spent."""
+    "A review actually happened" is carried by the count itself — `cmd_submit_plan`
+    advances it only while a review record stands — and deliberately NOT re-derived here
+    from the records still on file. Re-deriving it reads a PAST event off a PRESENT
+    record, and the two diverge exactly when a stage-scoped review is staled by the same
+    edit that answers it: three spent rounds would then look like none."""
     if state is None:
-        return False
-    if state.plan_review is None and not state.plan_stage_reviews:
         return False
     thr = thr if thr is not None else Thresholds()
     return state.plan_review_rounds >= thr.effort_replan_absolute()
