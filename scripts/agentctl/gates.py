@@ -503,11 +503,18 @@ def _plan_review_blockers_coverage(state: SessionState, target_plan: str, doc) -
 #: decisions the ORDER, not the engine, must resolve — a scope/risk question is the
 #: customer's to answer, so this never clears the block by itself; it only stops
 #: demanding a further review and routes to an explicit choice instead.
+#: Every act it names must be EXECUTABLE from this state: `approve` is not (the release
+#: keeps the blockers non-empty by design) and neither is `risk-accept` once a
+#: resubmission has staled the acceptances — a directive whose exits all bounce is the
+#: livelock this plan exists to remove. Hence `plan-review --verdict override`, the one
+#: existing act that both records the decision and opens the gate.
 _PLAN_REVIEW_ROUND_RELEASE_MESSAGE = (
     "review round budget exhausted at round {rounds} (Rule-of-Three — config.md's "
-    "effort-replan-absolute, reused) — the requirement for a further thinker review is "
-    "released; decide directly: approve with the recorded accepted risks, or cut scope "
-    "and resubmit"
+    "effort-replan-absolute, reused) — no further thinker review is required, but the "
+    "decision is yours and must be recorded: to go ahead with the plan as it stands, "
+    "run plan-review --verdict override --reviewer <you> --note <why it is acceptable>; "
+    "to cut scope instead, edit the plan and resubmit. `approve` on its own stays "
+    "refused until one of those is recorded"
 )
 
 
@@ -516,8 +523,14 @@ def plan_review_round_release_active(state: SessionState | None, thr: Thresholds
     approval) has reached the Rule-of-Three threshold this stage reuses rather than
     duplicating — config.md's `effort-replan-absolute`. Past this point
     `plan_review_blockers` stops demanding another review pass and routes to the user
-    instead (see `_PLAN_REVIEW_ROUND_RELEASE_MESSAGE`)."""
+    instead (see `_PLAN_REVIEW_ROUND_RELEASE_MESSAGE`).
+
+    A release requires that at least one review was actually recorded: the budget bounds
+    a review NEGOTIATION, and resubmissions of a plan nobody has reviewed are not rounds
+    of one — releasing there would announce a budget that was never spent."""
     if state is None:
+        return False
+    if state.plan_review is None and not state.plan_stage_reviews:
         return False
     thr = thr if thr is not None else Thresholds()
     return state.plan_review_rounds >= thr.effort_replan_absolute()

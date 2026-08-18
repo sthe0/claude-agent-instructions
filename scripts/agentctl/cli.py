@@ -2455,10 +2455,12 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     state.node = transition(state.node, "revise_plan" if resubmitting else "submit_plan")
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
     if resubmitting:
-        # The PLAN_READY resubmission self-loop is the event that starts a review
-        # round (gates.plan_review_round_release_active reads this against the
-        # Rule-of-Three threshold); cmd_approve resets it on a successful approval.
-        state.plan_review_rounds += 1
+        # A round is one turn of review-then-revise, so the counter (read by
+        # gates.plan_review_round_release_active, reset by cmd_approve) advances only
+        # while a review record stands — redrafts of a plan nobody reviewed are not
+        # rounds. Read before the staleness clear below, which ends the round.
+        if state.plan_review is not None or state.plan_stage_reviews:
+            state.plan_review_rounds += 1
         # The plan changed, so any recorded thinker review that no longer covers
         # the resubmitted bytes must clear so the plan-review gate re-arms for
         # them. "No longer covers" is decided per review record via the SAME

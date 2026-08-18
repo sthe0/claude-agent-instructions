@@ -1,13 +1,15 @@
 """Stage 7: the pre-approval review-round budget. Counts PLAN_READY resubmission
 rounds (the revise_plan self-loop) on the session, reused against the SAME
 Rule-of-Three threshold as effort-replan-absolute (config.md, no new key) rather
-than a fresh one. Below the threshold every plan_review_blockers verdict is
-byte-identical to before this stage; at the threshold every blocking sub-reason
-collapses into one routing message naming the two decisions only the customer can
-make (approve with the recorded accepted risks, or cut scope) — the blockers list
-stays non-empty, so approve remains structurally refused, and the release itself is
-recorded (state.history, deduped per round count) and surfaced in cmd_approve's
-failing Directive payload rather than happening silently. Approval resets the count.
+than a fresh one. Below the threshold, and before any review has been recorded at
+all, every plan_review_blockers verdict is byte-identical to before this stage; at
+the threshold every blocking sub-reason collapses into one routing message naming
+the two decisions only the customer can make — record an override to go ahead as it
+stands, or cut scope and resubmit. The blockers list stays non-empty, so approve
+remains structurally refused; the release itself is recorded (state.history, deduped
+per round count) and surfaced in cmd_approve's failing Directive payload rather than
+happening silently; and the override the message names must actually reach APPROVED,
+since a routing whose named exits all bounce is a livelock. Approval resets the count.
 
 Group 1 locks gates.plan_review_round_release_active / plan_review_blockers
 directly (mirrors test_plan_review_gate.py's Group 1 style). Group 2 drives the
@@ -45,40 +47,60 @@ def test_below_threshold_review_still_required(gate_on):
 
 
 def test_at_threshold_requirement_released_with_recorded_reason(gate_on):
-    s = _subst(plan_review_rounds=3)
-    blockers = gates.plan_review_blockers(s, s.plan_path)
-    assert len(blockers) == 1
-    assert "released" in blockers[0]
-    assert "round 3" in blockers[0] or "round budget exhausted at round 3" in blockers[0]
-    assert "approve" in blockers[0] and "cut scope" in blockers[0]
-
-
-def test_release_wraps_every_blocking_sub_reason_uniformly(gate_on):
-    """Not just the no-review case: a `revise` verdict's blockers collapse to the
-    same single routing message once the round threshold is met."""
     s = _subst(plan_review_rounds=3,
                plan_review=PlanReview("/plan.toml", "revise", "thinker"))
     blockers = gates.plan_review_blockers(s, s.plan_path)
     assert len(blockers) == 1
-    assert "released" in blockers[0]
+    assert "no further thinker review is required" in blockers[0]
+    assert "round budget exhausted at round 3" in blockers[0]
+    assert "override" in blockers[0] and "cut scope" in blockers[0]
+
+
+def test_release_does_not_fire_before_any_review_was_recorded(gate_on):
+    """The budget bounds a review NEGOTIATION, so resubmissions of a plan nobody has
+    reviewed are not rounds of one. Releasing there would announce an exhausted budget
+    that was never spent and hide the message naming the actual next step."""
+    s = _subst(plan_review_rounds=5)
+    assert gates.plan_review_round_release_active(s) is False
+    blockers = gates.plan_review_blockers(s, s.plan_path)
+    assert blockers and "no thinker review" in blockers[0]
+
+
+def test_release_wraps_every_blocking_sub_reason_uniformly(gate_on):
+    """Whichever sub-reason a recorded review produced — a `revise` verdict here, a
+    staleness blocker on the same record — collapses to the one routing message once
+    the round threshold is met."""
+    s = _subst(plan_review_rounds=3,
+               plan_review=PlanReview("/plan.toml", "revise", "thinker"))
+    assert len(gates.plan_review_blockers(s, s.plan_path)) == 1
+    stale = _subst(plan_review_rounds=3,
+                   plan_review=PlanReview("/other.toml", "pass", "thinker", plan_sha256="ab12"))
+    assert len(gates.plan_review_blockers(stale, stale.plan_path)) == 1
 
 
 def test_release_never_empties_the_blockers_list(gate_on):
     """Never auto-approve: the release replaces the WORDING, not the fact that
     approve is still refused — a scope/risk question is the customer's to answer,
     so the gate must stay structurally blocking."""
-    s = _subst(plan_review_rounds=5)  # well past the threshold
+    s = _subst(plan_review_rounds=5,  # well past the threshold
+               plan_review=PlanReview("/plan.toml", "revise", "thinker"))
     assert gates.plan_review_blockers(s, s.plan_path) != []
 
 
 def test_round_release_inactive_below_threshold(gate_on):
-    assert gates.plan_review_round_release_active(_subst(plan_review_rounds=0)) is False
-    assert gates.plan_review_round_release_active(_subst(plan_review_rounds=2)) is False
+    reviewed = {"plan_review": PlanReview("/plan.toml", "revise", "thinker")}
+    assert gates.plan_review_round_release_active(
+        _subst(plan_review_rounds=0, **reviewed)) is False
+    assert gates.plan_review_round_release_active(
+        _subst(plan_review_rounds=2, **reviewed)) is False
 
 
 def test_round_release_active_at_and_past_threshold(gate_on):
-    assert gates.plan_review_round_release_active(_subst(plan_review_rounds=3)) is True
-    assert gates.plan_review_round_release_active(_subst(plan_review_rounds=4)) is True
+    reviewed = {"plan_review": PlanReview("/plan.toml", "revise", "thinker")}
+    assert gates.plan_review_round_release_active(
+        _subst(plan_review_rounds=3, **reviewed)) is True
+    assert gates.plan_review_round_release_active(
+        _subst(plan_review_rounds=4, **reviewed)) is True
 
 
 def test_a_recorded_pass_still_clears_regardless_of_rounds(gate_on):
@@ -109,20 +131,41 @@ def test_first_submission_does_not_count_as_a_round(store, fixtures_dir, gate_on
     assert store.load(sid).plan_review_rounds == 0
 
 
-def test_each_resubmission_at_plan_ready_counts_one_round(store, fixtures_dir, gate_on):
+def _record_revise(store, sid, plan):
+    cli.cmd_plan_review(ns(session=sid, verdict="revise", reviewer="thinker",
+                           concerns=["the migration drops a column"], note="",
+                           target=plan, plan_digest=_sha256_file(plan)), store=store)
+
+
+def test_each_resubmission_after_a_review_counts_one_round(store, fixtures_dir, gate_on):
     sid = "rb-resub"
     plan = str(fixtures_dir / "plan_two_stage.toml")
     _to_plan_ready(store, sid, plan)
+    _record_revise(store, sid, plan)
     cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
     assert store.load(sid).plan_review_rounds == 1
     cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
     assert store.load(sid).plan_review_rounds == 2
 
 
-def _to_round_budget_exhausted(store, sid, plan):
-    """3 resubmissions past the initial PLAN_READY submission — plan_review_rounds
-    lands exactly at the threshold, no review ever recorded."""
+def test_drafting_resubmissions_before_any_review_are_not_rounds(store, fixtures_dir, gate_on):
+    """A round is one turn of review-then-revise. Redrafting a plan nobody has looked
+    at yet spends none of the budget — counting it would exhaust a review budget on
+    rounds of review that never took place."""
+    sid = "rb-draft"
+    plan = str(fixtures_dir / "plan_two_stage.toml")
     _to_plan_ready(store, sid, plan)
+    for _ in range(4):
+        cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
+    assert store.load(sid).plan_review_rounds == 0
+
+
+def _to_round_budget_exhausted(store, sid, plan):
+    """A reviewed plan, then 3 resubmissions past the initial PLAN_READY submission —
+    plan_review_rounds lands exactly at the threshold with the negotiation the budget
+    bounds actually under way."""
+    _to_plan_ready(store, sid, plan)
+    _record_revise(store, sid, plan)
     for _ in range(3):
         cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
     assert store.load(sid).plan_review_rounds == 3
@@ -132,6 +175,7 @@ def test_below_threshold_approve_payload_carries_no_release(store, fixtures_dir,
     sid = "rb-none"
     plan = str(fixtures_dir / "plan_two_stage.toml")
     _to_plan_ready(store, sid, plan)
+    _record_revise(store, sid, plan)
     cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)  # rounds=1, still < 3
     d = cli.cmd_approve(ns(session=sid, by="user"), store=store)
     assert d.node == Node.PLAN_READY.value
@@ -156,10 +200,30 @@ def test_release_present_in_surfaced_payload_and_recorded(store, fixtures_dir, g
     assert len(events) == 1
 
 
+def test_the_released_directive_names_an_act_that_actually_opens_the_gate(store, fixtures_dir,
+                                                                          gate_on):
+    """The release is a routing, and a routing that names no reachable exit is a
+    livelock, not a route. Following the directive literally must end at APPROVED —
+    otherwise the user re-runs `approve`, gets this same message, and the plan gate
+    loops exactly as the machinery this stage belongs to exists to prevent."""
+    sid = "rb-exit"
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    _to_round_budget_exhausted(store, sid, plan)
+    released = gates.plan_review_blockers(store.load(sid), plan)[0]
+    assert "plan-review --verdict override" in released
+
+    assert cli.cmd_approve(ns(session=sid, by="user"), store=store).node == Node.PLAN_READY.value
+    cli.cmd_plan_review(ns(session=sid, verdict="override", reviewer="user",
+                           concerns=None, note="the residual risk is acceptable",
+                           target=plan, plan_digest=None), store=store)
+    assert cli.cmd_approve(ns(session=sid, by="user"), store=store).node == Node.APPROVED.value
+
+
 def test_approval_resets_the_round_count(store, fixtures_dir, gate_on):
     sid = "rb-reset"
     plan = str(fixtures_dir / "plan_two_stage.toml")
     _to_plan_ready(store, sid, plan)
+    _record_revise(store, sid, plan)
     cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)  # rounds=1
     assert store.load(sid).plan_review_rounds == 1
     cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker",
