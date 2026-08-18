@@ -1,10 +1,10 @@
 ---
 name: ask-user-question-split-turn
-description: The plan-presentation delivery gate — the essence rendering must land as a completed turn's final message bound to plan_sha256 before cmd_approve; hook-plan-delivery-gate.py enforcement, its two-prover split, and two residuals. (The former universal AskUserQuestion turn-split is retired — the client render bug it worked around is fixed on 2.1.216.)
+description: The plan-presentation delivery gate — the essence rendering must land as a completed turn's final message bound to plan_sha256 before cmd_approve, scoped by a fail-open classifier to the ask it identifies as the approval ask; hook-plan-delivery-gate.py enforcement, its two-prover split, and its residuals. (The former universal AskUserQuestion turn-split is retired — the client render bug it worked around is fixed on 2.1.216.)
 schema: leaf/v1
 type: feedback
 created: 2026-07-14
-last_verified: 2026-07-21
+last_verified: 2026-08-18
 ---
 
 ## Difficulty
@@ -19,7 +19,9 @@ Plan approval must prove an *act of presentation* actually occurred: the plan's 
 
 ### Machine enforcement — what the delivery gate actually checks (and what it does not)
 
-- **Delivery check** (`hook-plan-delivery-gate.py` + the `PlanPresentation` receipt): at `PLAN_READY`, the registered essence rendering must have landed as a COMPLETED turn's **FINAL** assistant message — terminal at BLOCK granularity, strictly after the receipt that registered it — bound to the current `plan_sha256`. On positive verification, and **only** there, the hook stamps a `source=hook` delivery receipt; `cmd_approve` requires that stamp. This is a DELIVERY guarantee, grounded on the receipt binding to the plan version, not on any client render behavior.
+- **Scope — a classifier, not every ask at the node.** The receipt/freshness/delivery/marker checks below apply only to an `AskUserQuestion` that `advisor.judge_approval_ask` identifies as the plan-approval ask — **not** to every `AskUserQuestion` raised at node `PLAN_READY`. A second coordinator-supplied "this is the approval ask" marker was considered and rejected: the coordinator supplying it proves only that the coordinator SAID this is the approval ask, never that it IS one, so the classifier is a fail-open model judgement over the ask's own text instead.
+- **Fail-open direction — load-bearing.** On any absent, slow or malformed classifier call, `is_approval_ask` resolves to `False` and the hook short-circuits to an unverified ALLOW: an unavailable classifier can only WIDEN what is allowed through, never deny a question the user needed answered. This is safe only because the irreversible act it protects — recording approval — stays fail-**closed** one layer down: `main()` stamps a delivery receipt only when `gate_decision` returns `delivery_verified=True`, never on a fail-open ALLOW, and `cmd_approve` refuses without that stamp regardless of what the hook let through. See [ADR-0006](../../docs/adr/0006-premise-invalidation-scope.md) invariant 4. Escape: `AGENTCTL_PLAN_PRESENTATION=0` disables the classifier entirely (kill-switch also reachable as `CLAUDE_APPROVAL_ASK_SEMANTIC=0`).
+- **Delivery check** (`hook-plan-delivery-gate.py` + the `PlanPresentation` receipt), once an ask IS classified as the approval ask: the registered essence rendering must have landed as a COMPLETED turn's **FINAL** assistant message — terminal at BLOCK granularity, strictly after the receipt that registered it — bound to the current `plan_sha256`. On positive verification, and **only** there, the hook stamps a `source=hook` delivery receipt; `cmd_approve` requires that stamp. This is a DELIVERY guarantee, grounded on the receipt binding to the plan version, not on any client render behavior.
 - **NOT machine-checked (perception):** that the rendering faithfully renders the plan, and that the essence is genuinely self-contained. tech-writer authors these; the thinker's plan-review checks them. Describing either as enforced is a defect — do not repeat it.
 
 **What the two-prover split DOES close** (least obvious, easiest to dismantle by accident): delivery is observable ONLY by the hook — only hooks receive a `transcript_path`; agentctl never sees a transcript. So the hook PRODUCES the proof (a stamp bound to the plan version + rendering) and `cmd_approve` CONSUMES it (`plan_presentation_blockers` requires both a bound receipt and a bound stamp). Therefore `present-plan` → never emit → `approve --by user` FAILS: no ask fires, so the hook never runs, so nothing stamps, so approve refuses. Two properties hold it up, both easy to erode: (i) **ALLOW != VERIFIED** — the hook stamps only on positive verification, never on a fail-open ALLOW, or it would manufacture the proof it exists to demand; (ii) the only remaining path to approval-without-delivery is the explicit, audit-logged, per-plan-version `confirm-delivery --by --note` escape (it exists because a refusal with no reachable exit trains bypasses — experience leaf `2026-07-09-gate-must-execute-what-it-attests`). An escape used routinely rather than exceptionally is the signal to fix the hook, never to widen the escape.
@@ -27,9 +29,11 @@ Plan approval must prove an *act of presentation* actually occurred: the plan's 
 **Two residuals the mechanism does NOT close — real limits, but not silent ones:**
 1. **The essence has no lower bound.** `full` renderings get anchor-completeness checking; `essence` gets none, correctly — a summary is a summary. So registering "план готов" as the essence, emitting it, and asking for approval passes every machine check. The gate proves that AN ACT OF PRESENTATION OCCURRED and those exact bytes landed, bound to this plan version — **not** that anything meaningful was shown. It raises the floor from "nothing" to "whatever you registered"; that is a real gain and is not "the user saw the plan". Adequacy of the essence is perception (tech-writer authors, thinker plan-review checks).
 2. **Delivery is not reading.** Terminal position in a completed turn proves the harness rendered the bytes, not that the user read them. That is the ceiling of any mechanical check available here.
+3. **Classifier recall < 100%.** A genuine approval ask the classifier misreads as unrelated is not an unsafe approval — the fail-closed stamp requirement still catches it, surfacing later as a `confirm-delivery` escape when `approve` refuses for want of a stamp. The observable to watch is the rate of that escape: a rise means the classifier's recall, not the gate's safety, is what needs fixing.
 
 ## See also
 
 - `CLAUDE.md` § Escalation to the user — the `AskUserQuestion`-mandatory mandate and the "unanswered question survives the turn" norm.
 - [acting-without-asking.md](acting-without-asking.md) § Approved plan — the canonical two-acts plan-approval definition this gate enforces.
 - [outcome-format.md](outcome-format.md) — the main-first shape of a final-message artifact.
+- [ADR-0006](../../docs/adr/0006-premise-invalidation-scope.md) — invariant 4, the fail-open classifier / fail-closed approval-stamp pairing this leaf documents.
