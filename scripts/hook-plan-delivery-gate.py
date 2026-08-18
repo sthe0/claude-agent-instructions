@@ -66,7 +66,7 @@ CLOSED on recording approval (the irreversible act) — and that inversion only
 works because the escape stays reachable.
 
 SCOPE: the receipt/freshness/delivery/marker checks below apply only to an ask
-the classifier (agentctl.advisor.judge_approval_ask, invoked from main())
+the classifier (agentctl.advisor.judge_approval_ask, invoked from decide())
 identifies as the plan-approval ask — not to every AskUserQuestion at node
 PLAN_READY. A second coordinator-supplied "this is the approval ask" marker
 was considered and rejected, for the same reason SHOW_FULL_PLAN_MARKER alone

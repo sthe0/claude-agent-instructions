@@ -11,10 +11,11 @@ question should name the control its answer could flip, a review should bind to 
 actually read, an accepted risk should discharge without an edit, the pre-approval phase should
 carry an effort limiter the way every other phase already does, and the delivery gate's escape
 channel should be reachable without weakening the case it protects. Stages 2–8 landed the seven
-independent changes this required. This ADR is stage 9's record of the four invariants the
-resulting code deliberately does not comment — each recorded with the failure it prevents, since a
-rule stated without its failure is indistinguishable from an arbitrary choice — plus the
-alternatives weighed and rejected while making them.
+independent changes this required. This ADR is stage 9's record of four invariants the resulting
+code states only in a local comment at its own site: it gathers them where a reader touching one
+digest function can see the other three, records for each the failure it prevents — since a rule
+stated without its failure is indistinguishable from an arbitrary choice — and carries the
+alternatives weighed and rejected while making them, which the code does not.
 
 Three of the four invariants come from the same migration: the premise/enumeration machinery moved
 from one whole-plan digest to per-part digests (meta + one per stage) without breaking any state a
@@ -24,7 +25,7 @@ guards is fail-closed one layer further in.
 
 ## Decision
 
-### Invariant 1 — absent-field digest identity (stage 2, toml line ~201)
+### Invariant 1 — absent-field digest identity (introduced in `1bf44b2`, pre-branch; preserved by stage 2, toml line ~201)
 
 `plan.stage_question_key(stage, element=None)` only ever contributes `verify_venue_at_final` to its
 hash payload when the stage actually declares it:
@@ -94,7 +95,7 @@ unnecessary rather than solving a problem it would otherwise need to.
 
 ### Invariant 4 — fail-open direction of the delivery classifier (stage 8, toml line ~852)
 
-`hook-plan-delivery-gate.py`'s `main()` computes `advisor.judge_approval_ask` before calling
+`hook-plan-delivery-gate.py`'s `decide()` computes `advisor.judge_approval_ask` before calling
 `gate_decision(..., is_approval_ask=...)`. `is_approval_ask=False` short-circuits to an unverified
 ALLOW — the receipt/freshness/delivery/marker checks apply only to an ask the classifier identifies
 as the plan-approval ask, never to every `AskUserQuestion` at node `PLAN_READY`. An absent, slow or
@@ -102,8 +103,9 @@ malformed classifier call can therefore only WIDEN what passes through, never de
 user needed answered.
 
 This is safe specifically because the irreversible act the gate protects — recording approval — is
-fail-**closed** one layer further in: `main()` stamps a delivery receipt only when `gate_decision`
-returns `delivery_verified=True`, never on a fail-open ALLOW ("or it would manufacture the proof it
+fail-**closed** one layer further in: `main()` stamps a delivery receipt only for the receipt
+`decide()` hands back, which is set only when `gate_decision` returned `delivery_verified=True`,
+never on a fail-open ALLOW ("or it would manufacture the proof it
 exists to demand"), and `cmd_approve` refuses without that stamp regardless of what the hook let
 through. The classifier fails toward "not the approval ask" because the act it protects fails
 closed one layer down — inverting the failure direction at the live-turn layer only works because
@@ -133,7 +135,8 @@ instead.
 - No engine behavior changes as a result of this stage; it is a documentation-only record.
 - A later change to any of the three enumeration/premise digest functions (`stage_question_key`,
   `plan_content_digest`, `stale_enumeration_parts`) should re-check this ADR's invariants before
-  landing, since none of the three carries the reasoning in-line.
+  landing: each site carries a local comment, but none carries the other two invariants' reasoning
+  or the rejected alternatives.
 - The fail-open/fail-closed pairing (invariant 4) is the pattern to reuse for any future advisory
   judge gating a `PLAN_READY`-adjacent hook: judge fails open on the cheap, retryable decision;
   the irreversible act one layer down stays fail-closed.

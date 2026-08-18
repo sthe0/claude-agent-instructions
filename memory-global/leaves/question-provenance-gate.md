@@ -1,10 +1,10 @@
 ---
 name: question-provenance-gate
-description: The premise plugin gates plan_approval on question provenance — every planning question dispositioned, an enumeration cross-check run, and every element of the ORDER either covered by a stage or cut with a reason and visible in the approved essence — the plan-time twin of the ledger's resolution-time claim gate; carries the honest ceiling INCLUDING the silent-advisor fail-open hole, the designed-in incentive gradient, and the unenumerated order.
+description: The premise plugin gates plan_approval on question provenance — every planning question dispositioned, an enumeration cross-check run, and every element of the ORDER either covered by a stage or cut with a reason and visible in the approved essence — the plan-time twin of the ledger's resolution-time claim gate; a question binds to the ELEMENT it targets, must name the control its answer could flip, and the pre-approval review rounds carry a budget; carries the honest ceiling INCLUDING the silent-advisor fail-open hole, the designed-in incentive gradient, and the unenumerated order.
 schema: leaf/v1
 type: reference
 created: 2026-07-20
-last_verified: 2026-08-05
+last_verified: 2026-08-18
 ---
 
 ## Difficulty
@@ -38,7 +38,7 @@ An ungrounded planning leap — "the reporter says it reproduces", "the goal is 
 
 ## Honest ceiling — what is NOT guaranteed
 
-Overselling this mechanism is the likeliest way for it to do harm. Guaranteed (fail-closed, decidable): over the questions ACTUALLY RECORDED, no `open` one survives approve; no `escalated` one has empty own_research; no element-bound question is silently carried across a change to an ELEMENT OTHER than the one it targets; every substantive Principle carries a non-restatement derivation; no plan is submitted whose control names a path nothing produces. NOT guaranteed:
+Overselling this mechanism is the likeliest way for it to do harm. Guaranteed (fail-closed, decidable): over the questions ACTUALLY RECORDED, no `open` one survives approve; no `escalated` one has empty own_research; no element-bound question is silently carried across a change to the ELEMENT IT TARGETS (a change to any OTHER element of the same stage no longer invalidates it); every substantive Principle carries a non-restatement derivation; no plan is submitted whose control names a path nothing produces. NOT guaranteed:
 
 - **RECALL < 100%.** A question neither the planner nor the advisor pass surfaces still escapes. The advisor *widens* recall; it does not close it. Inherited verbatim from the ledger's honest residual.
 - **FABRICATION.** `own_research: "searched X, found nothing"` and a plausible-but-false `derivation` both clear the gate. The derivation field raises the COST and FALSIFIABILITY of the lie — a fabricated derivation from a REAL source tears on the first cross-check, and a reviewer can test the inference rather than only the citation's existence — but it does not detect it.
@@ -56,7 +56,7 @@ So gap 1 is NARROWED, not closed: an ungrounded leap previously dissolved in con
 
 ## Incentive gradient (F7 — a designed-in gradient, not a perception ceiling)
 
-`plan.goal` and `plan.done_criterion` targets are EXEMPT from the rebind check (by design: they bind to the order, not to plan bytes), and `question-raise` is deliberately permissive about targets. So an agent minimizing its own friction binds every question to `plan.goal` and never pays a rebind — a goal-bound question is well-formed, dispositionable, and cheap forever, and the gate cannot tell a question that genuinely concerns the order from one parked there to dodge maintenance. This is not a perception ceiling — it is a gradient the design itself creates. Knowingly accepted: (1) the alternative — inferring a question's TRUE target from its text — is exactly the perception the rule/perception table refuses to mechanize, and a wrong inference would misfile the record; (2) the F6 scoped-key fix SHRINKS it materially — under a whole-plan sha ANY edit invalidated EVERY stage-bound question, so the pressure to park on `plan.goal` was constant; scoped to the bound stage's own definition, a rebind is due only when that stage actually changed, so the gradient is a slope rather than a cliff. The countermeasure is the thinker review reading `question-list --format md` — perception, the right layer for it.
+`plan.goal` and `plan.done_criterion` targets are EXEMPT from the rebind check (by design: they bind to the order, not to plan bytes), and `question-raise` is deliberately permissive about targets. So an agent minimizing its own friction binds every question to `plan.goal` and never pays a rebind — a goal-bound question is well-formed, dispositionable, and cheap forever, and the gate cannot tell a question that genuinely concerns the order from one parked there to dodge maintenance. This is not a perception ceiling — it is a gradient the design itself creates. Knowingly accepted: (1) the alternative — inferring a question's TRUE target from its text — is exactly the perception the rule/perception table refuses to mechanize, and a wrong inference would misfile the record; (2) the F6 scoped-key fix SHRINKS it materially — under a whole-plan sha ANY edit invalidated EVERY stage-bound question, so the pressure to park on `plan.goal` was constant; scoped to the bound ELEMENT's own definition, a rebind is due only when the element the question targets actually changed — an edit elsewhere in the same stage costs nothing — so the gradient is a slope rather than a cliff. The countermeasure is the thinker review reading `question-list --format md` — perception, the right layer for it.
 
 ## Element-scoped invalidation (a question binds to the element it targets, not the whole stage)
 
