@@ -48,6 +48,7 @@ def _load_hook(filename: str):
 _TURN_END = _load_hook("hook-turn-end-gate.py")
 _DEFERRING = _load_hook("hook-deferring-disposition-gate.py")
 _ESCALATION = _load_hook("hook-escalation-diagnosis-gate.py")
+_APPROVAL = _load_hook("hook-plan-delivery-gate.py")
 
 
 def _samples(row: judge_latency.Row) -> "list[float]":
@@ -201,6 +202,7 @@ def test_a_single_call_hooks_budget_is_never_what_truncates_its_call():
     single = {
         "hook-escalation-diagnosis-gate.py": _ESCALATION._JUDGE_BUDGET_S,
         "hook-deferring-disposition-gate.py": _DEFERRING._ASK_JUDGE_BUDGET_S,
+        "hook-plan-delivery-gate.py": _APPROVAL._APPROVAL_ASK_JUDGE_BUDGET_S,
     }
     for hook, budget in single.items():
         sequence = judge_latency.HOOK_CALL_SEQUENCE[hook]
@@ -226,7 +228,8 @@ def test_the_last_resort_ceiling_is_the_family_maximum_plus_one():
     assert judge_latency.LAST_RESORT_CEILING_S == math.ceil(slowest) + 1
     for constant in (advisor._BINARY_ASK_TIMEOUT_S,
                      advisor._DEFERRING_DISPOSITION_TIMEOUT_S,
-                     advisor._ACCEPTANCE_JUDGE_TIMEOUT_S):
+                     advisor._ACCEPTANCE_JUDGE_TIMEOUT_S,
+                     advisor._APPROVAL_ASK_TIMEOUT_S):
         assert constant == judge_latency.LAST_RESORT_CEILING_S
 
 

@@ -15,7 +15,7 @@ sits in `final_check` and re-runs **from canon** after the change lands.
 Every latency below is wall-clock around `advisor.subprocess_runner`, measured with
 `time.monotonic()`, one process at a time.
 
-## The four calibrated rows
+## The five calibrated rows
 
 | pool | n | min | median | p90 | max | threshold | ceiling `ceil(max)+1` |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -23,6 +23,7 @@ Every latency below is wall-clock around `advisor.subprocess_runner`, measured w
 | outage | 16 | 7.19 | 10.89 | 19.16 | 25.96 | **20** | **27** |
 | feedback | 26 | 10.73 | 11.86 | 13.34 | 14.05 | **14** | **16** |
 | binary_ask | 16 | 5.93 | 7.46 | 11.06 | 11.52 | **12** | **13** |
+| approval_ask | 32 | 5.88 | 7.93 | 10.34 | 11.42 | **11** | **13** |
 
 Provenance of each row, file by file:
 
@@ -32,9 +33,13 @@ Provenance of each row, file by file:
 | outage | `latency-sample.json:outage` (n=10) + `ab-sample.json:outage_std` (n=6) |
 | feedback | `latency-sample.json:feedback` (n=10) + `topup2-sample.json:feedback` (n=16) |
 | binary_ask | `topup2-sample.json:binary_ask` (n=16) |
+| approval_ask | `approval-sample.json:approval` (n=16) + `approval-sample.json:not_approval` (n=16) |
 
 All 32 verdicts in `topup2-sample.json` are correct (`ok: true` on every row); the
 sample measures latency, not accuracy, but a wrong verdict would have invalidated it.
+Likewise all 32 verdicts in `approval-sample.json` (both arms) are correct — the
+`approval` arm's expected answer is YES, `not_approval`'s is NO, and `ok` is exactly
+that comparison, not a raw count.
 
 ## `topup-sample.json` is EXCLUDED — read this before using it
 

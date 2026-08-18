@@ -1,6 +1,7 @@
-"""Append-only execution ledger for the three judge-calling hooks (hook-
+"""Append-only execution ledger for the four judge-calling hooks (hook-
 escalation-diagnosis-gate.py, hook-deferring-disposition-gate.py, hook-turn-
-end-gate.py), all funneled through agentctl.advisor.subprocess_runner.
+end-gate.py, hook-plan-delivery-gate.py), all funneled through
+agentctl.advisor.subprocess_runner.
 
 Difficulty removed: a judge call that fails open is, by construction,
 invisible on every existing observable — the hook still exits 0, the harness
@@ -62,7 +63,7 @@ _lock = threading.Lock()
 _state: dict = {"invocation_id": None, "source": None, "hook": None, "judge": None}
 
 # The ``hook`` field carries the SHORT name each hook passes to hook_start(),
-# while every other table that reasons about these same three hooks
+# while every other table that reasons about these same four hooks
 # (lib/judge_latency.HOOK_CALL_SEQUENCE, lib/hook_wiring.TIMEOUT_REQUIREMENTS)
 # is keyed by script basename. A reader that has to cross from one keying to
 # the other needs the translation, and this module owns the ``hook``
@@ -74,6 +75,7 @@ HOOK_NAME_BY_BASENAME: "dict[str, str]" = {
     "hook-escalation-diagnosis-gate.py": "escalation_diagnosis",
     "hook-deferring-disposition-gate.py": "deferring_disposition",
     "hook-turn-end-gate.py": "turn_end",
+    "hook-plan-delivery-gate.py": "plan_delivery",
 }
 
 

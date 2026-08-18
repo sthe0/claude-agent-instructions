@@ -90,8 +90,23 @@ def make_receipt(rendering_text: str, presented_ts: float, plan_path: str = "/pl
     )
 
 
+def _write_approval_classifier_stub(bin_dir: Path) -> None:
+    """A fake `claude` on PATH that always answers YES -- the classifier's
+    first line format (advisor._classify). Every fixture in this file asks
+    the default "Approve the plan?" question, so a constant YES is enough to
+    keep reaching the strict receipt/delivery/marker checks this suite
+    exercises; test_plan_delivery_gate_judge.py covers the classifier's own
+    YES/NO discrimination."""
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    stub = bin_dir / "claude"
+    stub.write_text("#!/bin/sh\necho YES\n")
+    stub.chmod(0o755)
+
+
 def run_hook(payload: dict, config_dir: Path) -> subprocess.CompletedProcess:
-    env = {"PATH": "/usr/bin:/bin", "HOME": str(config_dir), "CLAUDE_CONFIG_DIR": str(config_dir)}
+    bin_dir = config_dir / "_fakebin"
+    _write_approval_classifier_stub(bin_dir)
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(config_dir), "CLAUDE_CONFIG_DIR": str(config_dir)}
     return subprocess.run(
         [sys.executable, str(HOOK)], input=json.dumps(payload),
         capture_output=True, text=True, env=env,
@@ -274,11 +289,10 @@ def test_no_marker_option_denies(tmp_path):
     assert MARKER in json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_non_approval_worded_ask_still_gated_scope_widening_accepted(tmp_path):
-    # SCOPE is accepted to be "any ask at PLAN_READY", not just a self-
-    # identified approval ask -- a differently-worded question with no
-    # receipt still denies, and (separately) one WITH a satisfied receipt +
-    # marker still allows regardless of its wording.
+def test_non_approval_worded_ask_still_denied_same_turn(tmp_path):
+    # The same-turn check runs before the classifier and is wording-agnostic:
+    # a differently-worded ask submitted this same turn still denies, whether
+    # or not the classifier would call it the approval ask.
     write_full_state(tmp_path, "s10", plan_presentations=[])
     t = write_transcript(tmp_path / "t.jsonl", [user_prompt_entry(90.0)])
     proc = run_hook(ask_payload("s10", t, question="Which color?"), tmp_path)

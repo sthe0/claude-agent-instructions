@@ -71,6 +71,9 @@ scripts/agentctl/advisor.py:636:1d9f44a3  # same superseded note; "missed the ta
 scripts/agentctl/advisor.py:637:011dc63b  # median 17.43 / p90 37.58 / max 39.99 over n=18 = judge_latency.MEASURED["deferring_disposition"]
 
 # --- scripts/install-reminder-hooks.sh ---------------------------------------
+scripts/install-reminder-hooks.sh:86:ce23f03a  # historical: the hook's previous 5s registration, which covered only the pre-judge structural checks before this stage added the approval-ask classifier call
+scripts/install-reminder-hooks.sh:88:e9ed07fa  # 5.88s = judge_latency.MEASURED["approval_ask"].min_s over n=32 — the fastest observed run, already slower than the previous 5s registration
+scripts/install-reminder-hooks.sh:89:4243f262  # n=32 = judge_latency.MEASURED["approval_ask"].n, the approval-ask row's sample size (samples/judge-latency/approval-sample.json)
 scripts/install-reminder-hooks.sh:93:6a8d39b3  # p90 19.16 over n=16 = judge_latency.MEASURED["outage_escalation"].p90_s
 scripts/install-reminder-hooks.sh:101:2d2694e5  # quotes the superseded n=4 note ("11.6-13.5s") against the current deferring row (median 17.43, p90 37.58)
 
@@ -81,6 +84,7 @@ scripts/lib/hook_wiring.py:132:0bb1075e  # 30s = the approved whole-invocation b
 scripts/lib/hook_wiring.py:134:b6c91e80  # 45s = the approved whole-invocation budget of hook-deferring-disposition-gate.py
 scripts/lib/hook_wiring.py:137:12d5e5bc  # 52s = the approved whole-invocation budget of hook-turn-end-gate.py, the three-judge hook
 scripts/lib/hook_wiring.py:159:13ce4bee  # K = 1 is the declared call count of the two single-judge hooks; at K=1 judge_latency.required_budget_s has no preceding call to pay for
+scripts/lib/hook_wiring.py:164:7966136e  # 13s = _APPROVAL_ASK_JUDGE_BUDGET_S, the hook's own whole-invocation judge budget, mirroring the sibling rows above
 scripts/lib/hook_wiring.py:397:56471431  # historical: the 5s registration used as the example of a slow-judge hook the report must surface
 
 # --- samples/judge-latency/README.md -----------------------------------------
@@ -96,6 +100,7 @@ samples/judge-latency/README.md:74:0384f6fb  # 51.53 = the sum of the three obse
 samples/judge-latency/README.md:84:af842d45  # 52s again, in the sentence that names it the APPROVED height rather than a derived one
 samples/judge-latency/README.md:89:e7a33457  # max 71.96 belongs to lean-sample.json, a SUPPORTING sample excluded from every row — cited to show the lean prompt's worse tail
 samples/judge-latency/README.md:90:ba28e247  # historical: the original 5s registration the haiku baseline made look survivable
+samples/judge-latency/README.md:36:6035ebd1  # provenance and n of the approval_ask row, mirroring judge_latency.MEASURED's provenance pairs (16 + 16 = 32)
 
 # live-run-evidence.md — the stage-4 write-up. Every number here is either one of
 # the three recorded live runs or a statistic the checker recomputes from the

@@ -102,6 +102,7 @@ a detail: four standard estimators on the n=18 deferring sample give 29.94 /
 | `hook-turn-end-gate.py` | `feedback_signal` | `haiku` | `latency-sample.json:feedback + topup2-sample.json:feedback` | 26 | 10.73 | 11.86 | 13.34 | 14.05 | 16 | 0 | 0.0000 | 0.1154 |
 | `hook-turn-end-gate.py` | `binary_ask` | `haiku` | `topup2-sample.json:binary_ask` | 16 | 5.93 | 7.46 | 11.06 | 11.52 | 13 | 0 | 0.0000 | 0.1875 |
 | `hook-turn-end-gate.py` | `outage_escalation` | `haiku` | `latency-sample.json:outage + ab-sample.json:outage_std` | 16 | 7.19 | 10.89 | 19.16 | 25.96 | 27 | 0 | 0.0000 | 0.1875 |
+| `hook-plan-delivery-gate.py` | `approval_ask` | `haiku` | `approval-sample.json:approval + approval-sample.json:not_approval` | 32 | 5.88 | 7.93 | 10.34 | 11.42 | 13 | 0 | 0.0000 | 0.0938 |
 | — | `acceptance_judge` | `haiku` | UNMEASURED — no latency sample exists | — | — | — | — | — | — | — | — | — |
 | — | `question_materiality` | `haiku` | UNMEASURED — no latency sample exists | — | — | — | — | — | — | — | — | — |
 
@@ -119,8 +120,9 @@ With zero events in n trials the 95% upper bound on the rate is the rule of thre
 3/n — so the honest statement is not "the hooks never fail open" but:
 
 > On the evidence available, the per-call fail-open rate is **at most 17%**
-> (deferring, 3/18), **19%** (outage, 3/16), **12%** (feedback, 3/26) and
-> **19%** (binary_ask, 3/16), each at 95% confidence.
+> (deferring, 3/18), **19%** (outage, 3/16), **12%** (feedback, 3/26),
+> **19%** (binary_ask, 3/16) and **10%** (approval_ask, 3/32), each at 95%
+> confidence.
 
 These bounds are wide because the samples are small, and they shrink only with
 more calls. Section 2 supplies the concrete reason not to dismiss them: a live

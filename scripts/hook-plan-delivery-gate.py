@@ -65,21 +65,20 @@ is deliberately split: fail OPEN on the live turn (cheap to retry), fail
 CLOSED on recording approval (the irreversible act) — and that inversion only
 works because the escape stays reachable.
 
-SCOPE: both new checks (receipt presence/freshness, delivery landing, the
-show-full-plan option) apply to EVERY AskUserQuestion at node PLAN_READY, not
-only a self-identified "approve this plan?" ask. This widening is ACCEPTED,
-not an oversight: the hook cannot distinguish "the approval ask" from "any ask
-at this node" without a marker the coordinator supplies, and a gate the
-coordinator must remember to opt itself into is exactly the forgettable-prose
-failure this whole task exists to remove. A second identifying marker was
-considered and rejected: the only natural marker IS the show-full-plan
-option itself, so an ask carrying it would trivially pass the option check by
-construction, and an ask lacking it is by definition not an approval ask —
-making a distinct "this is the approval ask" marker either vacuous or visible
-to the user as machine noise. The real cost is small and bounded: once a plan
-exists, ANY ask at PLAN_READY must now be preceded by a delivered essence and
-must offer to show the full plan — which is a coherent norm in its own right,
-not an accident. Escape: AGENTCTL_PLAN_PRESENTATION=0.
+SCOPE: the receipt/freshness/delivery/marker checks below apply only to an ask
+the classifier (agentctl.advisor.judge_approval_ask, invoked from main())
+identifies as the plan-approval ask — not to every AskUserQuestion at node
+PLAN_READY. A second coordinator-supplied "this is the approval ask" marker
+was considered and rejected, for the same reason SHOW_FULL_PLAN_MARKER alone
+cannot serve this role: the coordinator supplies it, so it proves only that
+the coordinator SAID this is the approval ask, never that it IS one. The
+classifier is a fail-open model judgment over the ask's own text instead: on
+any absent/slow/malformed call it resolves to "not the approval ask", so an
+unavailable classifier can only widen what is ALLOWED, never deny a question
+the user needed answered — the irreversible act it protects (recording
+approval) stays fail-CLOSED one layer down, since cmd_approve refuses without
+a delivery stamp regardless of what this hook allowed through. Escape:
+AGENTCTL_PLAN_PRESENTATION=0.
 
 DENY is signaled with the PreToolUse permissionDecision JSON on stdout:
   {"hookSpecificOutput": {"hookEventName": "PreToolUse",
@@ -90,24 +89,54 @@ Always exits 0 — a hook crash must never wedge the workflow.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from agentctl import delivery as _delivery  # noqa: E402
-from agentctl import gates as _gates  # noqa: E402
-from agentctl.state import PLAN_PRESENTATION_KIND_ESSENCE as _KIND_ESSENCE  # noqa: E402
-from agentctl.state import PlanPresentation as _PlanPresentation  # noqa: E402
-from agentctl.state import SessionState as _SessionState  # noqa: E402
-from agentctl.state import SHOW_FULL_PLAN_MARKER  # noqa: E402
-from lib import config_root  # noqa: E402
-from lib.transcript_turns import delivered_final_texts, latest_turn_start  # noqa: E402
+from lib import judge_ledger  # noqa: E402
+
+# judge_ledger itself must import cleanly above for this to record anything —
+# it is stdlib-only (see its own module docstring) and is what every other
+# import failure here needs a working ledger to be recorded against.
+try:
+    from agentctl import advisor as _advisor  # noqa: E402
+    from agentctl import delivery as _delivery  # noqa: E402
+    from agentctl import gates as _gates  # noqa: E402
+    from agentctl.state import PLAN_PRESENTATION_KIND_ESSENCE as _KIND_ESSENCE  # noqa: E402
+    from agentctl.state import PlanPresentation as _PlanPresentation  # noqa: E402
+    from agentctl.state import SessionState as _SessionState  # noqa: E402
+    from agentctl.state import SHOW_FULL_PLAN_MARKER  # noqa: E402
+    from lib import config_root  # noqa: E402
+    from lib.ask_text import flat_text  # noqa: E402
+    from lib.transcript_turns import delivered_final_texts, latest_turn_start  # noqa: E402
+except BaseException as exc:
+    judge_ledger.import_failed("plan_delivery", f"{type(exc).__name__}: {exc}")
+    raise
 
 resolve_state_path = config_root.resolve_agentctl_state_file
 
 # The only node this gate concerns itself with: the plan-approval hard gate.
 GATED_NODE = "PLAN_READY"
+
+# Safe-by-default kill-switch: unset or any value other than "0" leaves the
+# classifier enabled, matching every other semantic judge's env convention.
+_APPROVAL_ASK_KILLSWITCH_ENV = "CLAUDE_APPROVAL_ASK_SEMANTIC"
+
+# This hook's own whole-invocation judge budget — owned here rather than read
+# off advisor._APPROVAL_ASK_TIMEOUT_S, mirroring how every sibling hook
+# (_JUDGE_BUDGET_S, _ASK_JUDGE_BUDGET_S, _TURN_JUDGE_BUDGET_S) owns its budget
+# independently of the judge function's own internal default. Until this judge
+# had its own sample the two constants happened to share the value 41 anyway —
+# both were the family LAST_RESORT_CEILING_S, a fallback for a judge with no
+# measurement of its own, not a number derived from this judge's behaviour.
+# With n=32 (samples/judge-latency/approval-sample.json) now measured, this
+# hook's own ceiling replaces that borrowed fallback: lib/judge_latency.py's
+# ceiling rule, `ceil(max) + 1` over n=32 (max 11.42s) = 13s. With exactly one
+# call there is no later call to protect, so this number is also the ceiling
+# handed to it — capping the only call lower would forfeit budget for nothing.
+_APPROVAL_ASK_JUDGE_BUDGET_S = 13
 
 # SHOW_FULL_PLAN_MARKER is defined in agentctl.state (imported above) — the
 # coordinator embeds it in a "show the full plan" option's label (or
@@ -229,8 +258,17 @@ def gate_decision(
     receipt_stale_reason: str | None = None,
     delivered_texts: list[tuple[str, float | None]] | None = None,
     has_show_full_plan_option: bool = False,
+    is_approval_ask: bool = True,
 ) -> tuple[str, str, bool]:
     """Pure decision. Returns ("allow"|"deny", reason, delivery_verified).
+
+    is_approval_ask defaults to True so every pre-existing caller that never
+    passes it keeps exercising the strict-check path unmodified; main() is
+    the only caller that computes it (via the classifier) and passes it
+    explicitly. False short-circuits to an unverified allow — the classifier
+    fails open toward "not the approval ask", so an absent/slow/malformed
+    call can only widen what passes through, never deny a question the user
+    needed answered.
 
     ALLOW != VERIFIED: delivery_verified is True ONLY when this call actually
     observed the rendering land (present — exact, or normalized for
@@ -264,6 +302,8 @@ def gate_decision(
     # not fail open here — we fall through and let it decide.
 
     if not presentation_active:
+        return "allow", "", False
+    if not is_approval_ask:
         return "allow", "", False
     if receipt is None:
         return "deny", _NO_RECEIPT_REASON, False
@@ -342,20 +382,22 @@ def _stamp_delivery(state_file: Path, receipt: _PlanPresentation) -> None:
         pass
 
 
-def main() -> int:
-    try:
-        payload = json.load(sys.stdin)
-    except Exception:
-        return 0
+def decide(payload: dict) -> tuple[str, str, Path | None, _PlanPresentation | None]:
+    """Returns (decision, reason, state_file_path, receipt-to-stamp).
+
+    Every early exit before gate_decision returns a silent ("allow", "") and
+    never calls entered(), so a payload that resolved no session is
+    indistinguishable, on the ledger, from one at PLAN_READY with no plan yet.
+    The receipt is present iff gate_decision verified delivery."""
     if payload.get("tool_name") != "AskUserQuestion":
-        return 0
+        return "allow", "", None, None
     session_id = payload.get("session_id") or ""
     sp = resolve_state_path(session_id)
     if sp is None:
-        return 0
+        return "allow", "", None, None
     fields = load_gate_fields(sp)
     if fields is None:
-        return 0
+        return "allow", "", sp, None
     node, plan_ts, prompt_ts = fields
 
     turn_start_ts = None
@@ -368,6 +410,7 @@ def main() -> int:
     receipt_stale_reason: str | None = None
     delivered_texts: list[tuple[str, float | None]] | None = None
     has_marker = False
+    is_approval_ask = False
 
     # Only do the heavier state/transcript work when the same-turn check's
     # own cheap fields say this is even potentially a gated ask — mirrors the
@@ -378,6 +421,20 @@ def main() -> int:
         if state is not None:
             presentation_active = _gates.plan_presentation_active(state)
             if presentation_active:
+                ask_text = flat_text(payload.get("tool_input") or {})
+                # Skipping the call on a False prefilter is safe because
+                # judge_approval_ask runs this same prefilter internally as
+                # its own second gate: the skip reproduces the (False, "")
+                # that call would have returned anyway.
+                prefilter_fired = _advisor.approval_ask_prefilter(ask_text)
+                judge_ledger.entered("approval_ask", prefilter_fired=prefilter_fired)
+                if prefilter_fired:
+                    is_approval_ask, _reason = _advisor.judge_approval_ask(
+                        ask_text,
+                        _advisor.subprocess_runner,
+                        enabled=os.environ.get(_APPROVAL_ASK_KILLSWITCH_ENV) != "0",
+                        timeout=_APPROVAL_ASK_JUDGE_BUDGET_S,
+                    )
                 receipt = _gates._plan_presentation_for(state, _KIND_ESSENCE)
                 if receipt is not None:
                     receipt_stale_reason = _receipt_stale_reason(state)
@@ -392,12 +449,42 @@ def main() -> int:
         receipt_stale_reason=receipt_stale_reason,
         delivered_texts=delivered_texts,
         has_show_full_plan_option=has_marker,
+        is_approval_ask=is_approval_ask,
     )
-    if decision == "deny":
-        deny_with(reason)
-    elif delivery_verified:
-        assert receipt is not None  # delivery_verified is only ever True via a real receipt
-        _stamp_delivery(sp, receipt)
+    return decision, reason, sp, (receipt if delivery_verified else None)
+
+
+def main() -> int:
+    judge_ledger.hook_start("plan_delivery")
+    try:
+        payload = json.load(sys.stdin)
+    except Exception:
+        return 0
+    if not isinstance(payload, dict):
+        return 0
+    judge_ledger.source_from_payload(payload)
+
+    try:
+        decision, reason, sp, verified_receipt = decide(payload)
+        # has_directive means "printed a directive", as in the sibling hooks.
+        # The allow-path delivery stamp has no counterpart in it: an allow
+        # that stamps and one that does not both report False, since neither
+        # printed. No sibling has a second allow-path side effect to name.
+        has_directive = decision == "deny"
+        judge_ledger.final(has_directive=has_directive)
+        emit_ok = True
+        try:
+            if has_directive:
+                deny_with(reason)
+            elif verified_receipt is not None:
+                assert sp is not None  # verified_receipt is only ever set alongside sp
+                _stamp_delivery(sp, verified_receipt)
+        except Exception:
+            emit_ok = False
+        judge_ledger.emitted(ok=emit_ok, had_directive=has_directive)
+    except Exception as exc:
+        judge_ledger.discarded(reason=repr(exc))
+        return 0  # fail-open — a hook must never wedge the ask
     return 0
 
 

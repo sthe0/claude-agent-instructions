@@ -120,6 +120,12 @@ MEASURED: "dict[str, dict[str, Row]]" = {
             n=16, min_s=5.93, median_s=7.46, p90_s=11.06, max_s=11.52,
             provenance=(("topup2-sample.json", "binary_ask"),),
         ),
+        "approval_ask": Row(
+            judge="approval_ask",
+            n=32, min_s=5.88, median_s=7.93, p90_s=10.34, max_s=11.42,
+            provenance=(("approval-sample.json", "approval"),
+                        ("approval-sample.json", "not_approval")),
+        ),
         "acceptance_judge": Row(
             judge="acceptance_judge",
             n=0, min_s=None, median_s=None, p90_s=None, max_s=None,
@@ -208,6 +214,7 @@ HOOK_CALL_SEQUENCE: "dict[str, tuple[str, ...]]" = {
     "hook-escalation-diagnosis-gate.py": ("outage_escalation",),
     "hook-deferring-disposition-gate.py": ("deferring_disposition",),
     "hook-turn-end-gate.py": ("feedback_signal", "binary_ask", "outage_escalation"),
+    "hook-plan-delivery-gate.py": ("approval_ask",),
 }
 
 # Head-room the whole-invocation budget must keep beyond the calls it plans, for

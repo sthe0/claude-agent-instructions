@@ -961,6 +961,95 @@ def judge_question_materiality(
         judge_ledger.set_current_judge(None)
 
 
+_APPROVAL_ASK_TIMEOUT_S = 41
+
+_APPROVAL_ASK_PROMPT = (
+    "You are given every user-facing string of an AskUserQuestion an AI coding "
+    "assistant is about to show its user, written in any language. Decide "
+    "whether this ask is asking the user to APPROVE A PLAN -- the formal "
+    "approve/reject decision on a plan of work already presented -- as "
+    "opposed to any other kind of question.\n\n"
+    "Answer YES only when the ask's substance is approving, rejecting, or "
+    "confirming a plan that has been presented (e.g. \"Approve this plan?\", "
+    "\"Go ahead with the plan above?\", \"Одобряем план?\"), including when it "
+    "also offers to show the full plan text.\n\n"
+    "Answer NO for: any other confirm/binary/menu question, a scope or "
+    "wording choice, a request for a value, or an ask that does not concern "
+    "approving a plan at all.\n\n"
+    "Answer on the FIRST line with exactly YES or NO, nothing else.\n\n"
+    "ASK:\n{text}"
+)
+
+
+def approval_ask_prefilter(ask_text: str) -> bool:
+    """The deterministic half: is there any ask text at all to judge? Mirrors
+    question_materiality_prefilter's bar -- genuinely empty input cannot be the
+    approval ask, so this is a GENUINE False, not a fail-open one.
+
+    Public for the same reason binary_ask_prefilter is: a caller has to know
+    whether a call is going to happen before it decides to make one."""
+    return isinstance(ask_text, str) and bool(ask_text.strip())
+
+
+def judge_approval_ask(
+    ask_text: str,
+    runner,
+    *,
+    enabled: bool = True,
+    timeout: int = _APPROVAL_ASK_TIMEOUT_S,
+    remaining: float | None = None,
+    ceiling: float | None = None,
+) -> tuple[bool, str]:
+    """Semantic judge behind hook-plan-delivery-gate.py's scope classifier: is
+    this AskUserQuestion the plan-approval ask -- the one the receipt/
+    freshness/delivery/marker checks must apply to -- as opposed to any other
+    ask fired at the PLAN_READY node?
+
+    Self-contained prefilter, like judge_binary_ask / judge_question_materiality:
+    the caller passes the ask's own flattened text (lib.ask_text.flat_text) and
+    this function decides for itself whether there is anything to send the
+    model.
+
+    Three-valued fail-open contract mirroring judge_binary_ask: reason is "" for
+    a genuine model verdict and a non-empty "...(fail-open)" string wherever the
+    False is FABRICATED -- disabled/no runner, non-zero exit, empty/unparseable
+    output, a timeout (``result.timed_out``), or an exception. The consumer
+    (hook-plan-delivery-gate.py) is fail-open in the direction that WIDENS what
+    is allowed through, never the direction that certifies a delivery: a
+    fabricated False only ever skips the strict checks, and the caller stamps a
+    delivery receipt on none of those skipped paths. ``remaining``/``ceiling``
+    are forwarded to the ledger only, alongside ``timeout`` as the active
+    threshold."""
+    if not enabled:
+        return _judge_unavailable(
+            "approval_ask", _KILLSWITCH_REASON, stage="killswitch",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    if not approval_ask_prefilter(ask_text):
+        return False, ""
+    if runner is None:
+        return _judge_unavailable(
+            "approval_ask", _NO_RUNNER_REASON, stage="no_runner",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    judge_ledger.set_current_judge("approval_ask")
+    start = time.monotonic()
+    try:
+        prompt = _APPROVAL_ASK_PROMPT.format(text=ask_text)
+        result = runner(["claude", "-p", "--model", _JUDGE_MODEL, prompt], timeout=timeout)
+        return _record_result(
+            "approval_ask", result, duration=time.monotonic() - start,
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    except Exception:
+        return _record_raised(
+            "approval_ask", duration=time.monotonic() - start,
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    finally:
+        judge_ledger.set_current_judge(None)
+
+
 def resolve_enabled(weight_class: str | None, *, thresholds: Thresholds | None = None) -> bool:
     """Resolve whether the advisor should run for this call.
 
