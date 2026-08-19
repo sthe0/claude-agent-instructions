@@ -79,6 +79,42 @@
 #                                          <key> | python3
 #                                          verify-ticket-plan-sync.py --plan
 #                                          <toml> --comment-file -`.
+#   tracker_plan_artifact_digest <key> <basename>
+#                                        -> print the sha256 hex digest of the
+#                                          durable artifact named <basename>
+#                                          published on <key> (the same
+#                                          artifact tracker_publish_plan
+#                                          creates). Probed the same way as
+#                                          tracker_read (`declare -F
+#                                          tracker_plan_artifact_digest`)
+#                                          before being called. Exactly ONE
+#                                          degrade class, same shape as
+#                                          tracker_read: exit 0 = a 64-hex-
+#                                          character sha256 digest printed on
+#                                          stdout AND NOTHING ELSE THERE — no
+#                                          banner or progress line, since the
+#                                          consumer reads the whole of stdout
+#                                          as the digest and a backend that
+#                                          adds one degrades an OK verdict to
+#                                          NO-ARTIFACT; diagnostics belong on
+#                                          stderr. ANY nonzero = unavailable
+#                                          (absent, mismatched read, or any
+#                                          other failure), reason on stderr.
+#                                          TIE-BREAK: when several durable
+#                                          artifacts on <key> share the same
+#                                          <basename>, THE MOST RECENT ONE
+#                                          WINS — stated once here at the
+#                                          contract level so every backend
+#                                          answers it the same way, rather
+#                                          than leaving each implementation to
+#                                          invent its own resolution. Intended
+#                                          consumer: the plan-publication gate
+#                                          (verify-tracker-plan-published.py),
+#                                          which compares this digest against
+#                                          the local plan's sha256 to confirm
+#                                          the artifact tracker_publish_plan
+#                                          created still matches the approved
+#                                          plan bytes.
 #
 # Optional write verbs (declared only by trackers that support them):
 #   tracker_comment <key> <markdown-path>

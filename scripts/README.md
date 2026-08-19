@@ -139,6 +139,7 @@ Automation for the agent-instructions system: setup / symlink wiring, `verify-*`
 | [verify-terms.py](verify-terms.py) | Check-module contract: scan all tracked files (content + path) against the discovered term ruleset(s) (`lib/term_ruleset.py`); registered in `verify-all.py`; `--expect-rulesets N` asserts the ruleset count discovered (used to prove the Core tree itself carries zero rulesets) |
 | [verify-tests-accompany-code.py](verify-tests-accompany-code.py) | `commit-msg` advisory (warn-only, never blocks): nudge when staged non-test `scripts/**.py` carries no test delta; `[skip-test-guard: <reason>]` trailer suppresses it |
 | [verify-ticket-plan-sync.py](verify-ticket-plan-sync.py) | Compare a ticket's posted plan against the local TOML via an embedded/extracted `plan_sha256` marker (`--emit-marker` / `--plan … --comment-file -` / `--marker`); tracker-agnostic, `--selftest` covers the OK/DRIFT/NO-PLAN cases |
+| [verify-tracker-plan-published.py](verify-tracker-plan-published.py) | Plan-publication gate: resolve the project's tracker backend and reduce its `tracker_plan_marker`/`tracker_plan_artifact_digest` verbs to one of five statuses (OK/DRIFT/NO-PLAN/NO-ARTIFACT/UNVERIFIABLE); tracker-agnostic, `--selftest` covers all five plus both exit-3 sub-cases and both fail-closed seam routes |
 <!-- inventory:scripts:end -->
 
 ## Project-entry libraries
