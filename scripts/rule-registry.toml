@@ -289,6 +289,16 @@ delivery_marker = "agentctl question-raise"
 delivery_note = "gates.premise; no un-dispositioned premise survives approve."
 
 [[rule]]
+id = "own-research-precedes-escalation"
+tier = 1
+locator_heading = "### Escalation to the user"
+locator_phrase = "Own research precedes escalation"
+kernel_reason = ""
+delivery_kind = "agentctl_construct"
+delivery_marker = "agentctl question-research"
+delivery_note = "premise.validate_questions refuses --to escalated on empty own_research, but binds only the premise bag at plan_approval; this rule extends the same three acts to questions arising mid-execution and at plan review."
+
+[[rule]]
 id = "doubt-own-snapshot-before-escalating"
 tier = 0
 locator_heading = "### Escalation to the user"
