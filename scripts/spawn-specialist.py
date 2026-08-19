@@ -508,6 +508,7 @@ DEVELOPER_SETTINGS_ALLOW = [
     "Bash(python3 scripts/verify-all.py:*)",
     "Bash(python3 scripts/verify-agentctl.py:*)",
     "Bash(python3 scripts/gen_crutch_registry.py:*)",
+    "Bash(python3 scripts/verify-process-doc-sync.py:*)",
     # read-only inspection (acceptEdits does not imply defaultMode auto's classifier)
     "Bash(ls:*)", "Bash(cat:*)", "Bash(head:*)", "Bash(tail:*)", "Bash(wc:*)",
     "Bash(grep:*)", "Bash(rg:*)", "Bash(find:*)", "Bash(stat:*)", "Bash(pwd)",
