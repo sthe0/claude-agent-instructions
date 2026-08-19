@@ -51,7 +51,9 @@ What this skill is **not**:
 
 ## Content guidance per action
 
-Adapt the detail to the project's conventions. If project memory specifies a comment format, follow it. Otherwise: terse, factual, linkable. Plan posts include the markdown plan (or a link to a plan file) and flag stages needing approval. Progress posts are one line plus an artifact link. Final-result posts list all artifacts.
+Adapt the detail to the project's conventions. If project memory specifies a comment format, follow it. Otherwise: terse, factual, linkable. Plan posts include the markdown plan (or the plan file **attached** to the ticket) and flag stages needing approval. Progress posts are one line plus an artifact link. Final-result posts list all artifacts.
+
+**Never post a local filesystem path as if it were a reachable reference.** A path like `/home/<user>/.claude-agent/plans/<slug>.toml` only exists on the agent's own machine — a ticket reader cannot open it. When the ticket's readers need the actual file, **attach/upload it** to the ticket (or link a URL their own account can reach); when they only need to see its content, inline the rendered plan in the comment. This is the tracker-facing instance of [outcome-format.md](../../memory-global/leaves/outcome-format.md) point (3).
 
 **Cite every external run you rely on.** Any external graph/run whose result you use in a comment or conclusion is published in that ticket with its URL + terminal status — and, for a run that failed but whose number was salvaged off-graph, the recompute method that recovered it. A conclusion resting on a run whose URL is absent from the ticket is unreproducible and reads as "all green" even when the run failed; this is the tracker-side instance of the L1 claim-ledger grounding rule (`formalization-ladder-l1-l3`), the same requirement the tech-writer exposition rule and [[long-job-monitoring]] step 0 carry for their surfaces.
 
