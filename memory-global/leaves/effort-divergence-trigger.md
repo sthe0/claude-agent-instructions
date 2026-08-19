@@ -4,7 +4,7 @@ description: The engine enters the difficulty cycle by itself when actual effort
 type: reference
 schema: leaf/v1
 created: 2026-08-05
-last_verified: 2026-08-05
+last_verified: 2026-08-20
 ---
 
 # The effort-divergence trigger
@@ -29,7 +29,7 @@ A plan is a **norm**. Running far past it is not merely expensive; it is evidenc
 
 **When it fires at you.** Do not treat it as an engine fault and do not work around it. Run the ordinary `declare → investigate → critique → replan`, and let the declaration's numbers be the evidence — the question to answer is *what about the real situation did this plan not know*, not *how do I get back under the number*. Re-arming is deliberate: the baseline rebases onto the actual at each firing, and a further fire additionally requires a `replan` since the last one, so the trigger is silent until a new norm exists to violate.
 
-**The honest weakness: the estimate is declared by the same actor it constrains.** Nothing structural prevents a comfortable estimate. The only mitigation is that estimate and actual both land on the quality-ledger row, so both the thresholds and the estimating habit can be recalibrated against what they actually caught — see [[policy-effectiveness-tracking]] for the Flags-fire → self-improvement → record-movement procedure that is supposed to consume them. Secondary blind spots: the spend scale reads only what the cost ledger attributes to this plan's path, so a task whose overrun is entirely in the main thread under-reads there and is covered only by wall-clock; and the hook-stamped accumulators are best-effort.
+**The honest weakness: the estimate is declared by the same actor it constrains.** Nothing structural prevents a comfortable estimate. The only mitigation is that estimate and actual both land on the quality-ledger row, so both the thresholds and the estimating habit can be recalibrated against what they actually caught — see [[policy-effectiveness-tracking]] for the Flags-fire → self-improvement → record-movement procedure that is supposed to consume them. Secondary blind spots: the spend scale reads only what the cost ledger attributes to this plan's path, so a task whose overrun is entirely in the main thread under-reads there and is covered only by wall-clock; and the hook-stamped accumulators are best-effort. A third blind spot is structural rather than best-effort: a review round is **not one of its four scales**, so a cycle whose cost concentrates in review passes rather than replans runs unmeasured — measured while this mechanism was being extended, fifteen thinker verdicts across five replans with the trigger never firing on review cost — and the quality-ledger row the closing sequence writes carries the same four ratios and no fifth, so those rounds leave nothing to recalibrate against either. What partially covers the gap is a separate mechanism, the round-release valve on `plan_review_rounds`, which routes a review loop to the user at `effort-replan-absolute` rounds; the counter it reads was long advanced only on the pre-approval path, leaving the valve unreachable from `replan` — exactly where post-approval review cycles recur — until the counter was extended to advance there too. And on the scales that are counted, `record_fire` rebases the baseline onto the current actuals, so one firing consumes that scale's window: the next fire needs a fresh overrun measured from the new baseline, not the continuation of the old one.
 
 ## See also
 
