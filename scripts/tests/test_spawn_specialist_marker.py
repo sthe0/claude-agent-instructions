@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from lib import marker_extract
+from lib import host_llm, marker_extract
 from lib import planner_plan_check as MOD
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
@@ -145,7 +145,7 @@ def test_build_extraction_invoked_unconditionally_on_clean_marker(monkeypatch):
     # extractor would never run here. It must run anyway (Claude path only).
     mod = _load_wrapper("spawn-specialist.py")
     monkeypatch.delenv(marker_extract.ENV_KILL_SWITCH, raising=False)
-    monkeypatch.setattr(marker_extract.shutil, "which", lambda name: "/usr/bin/claude")
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/claude")
     calls, spy = _spy_runner()
     monkeypatch.setattr(mod.marker_extract, "subprocess_runner", spy)
 
@@ -162,7 +162,7 @@ def test_cursor_build_extraction_never_invokes_claude(wrapper, monkeypatch):
     """Cursor hard gate: _build_extraction must not shell out to claude -p."""
     mod = _load_wrapper(wrapper)
     monkeypatch.delenv(marker_extract.ENV_KILL_SWITCH, raising=False)
-    monkeypatch.setattr(marker_extract.shutil, "which", lambda name: "/usr/bin/claude")
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/claude")
     calls, spy = _spy_runner("RESOLVED" if "escape" in wrapper else "COMPLETED")
     monkeypatch.setattr(mod.marker_extract, "subprocess_runner", spy)
 

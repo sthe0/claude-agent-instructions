@@ -226,6 +226,17 @@ def _build_extraction(result_text: str) -> "marker_extract.Extraction | None":
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
+    bound_host = os.environ.get("AGENTCTL_RUNTIME_HOST")
+    if bound_host == "claude":
+        print(
+            "error: AGENTCTL_RUNTIME_HOST=claude; refusing to spawn a Cursor "
+            "`agent -p` escape from a Claude-bound session. Use the "
+            "overcome-difficulty recursive escape (`claude -p`) instead.",
+            file=sys.stderr,
+        )
+        log_refused("cross-host", {"bound_host": bound_host, "this_host": "cursor"})
+        return 5
+
     if args.smoke:
         prompt = "Reply with exactly one line: RESOLVED: ping"
         timeout_sec = min(args.timeout_sec, 90)

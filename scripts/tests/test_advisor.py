@@ -703,3 +703,47 @@ def test_the_last_resort_defaults_are_computed_from_the_measurements():
             f"advisor.{const_name} is {getattr(advisor, const_name)}, but the "
             f"measured family ceiling is {ceiling}"
         )
+
+
+class TestRuntimeHostArgv:
+    @pytest.fixture(autouse=True)
+    def _pin_cursor_binary(self, monkeypatch):
+        from lib import host_llm
+        monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/agent" if name == "agent" else None)
+
+    def _recording_runner(self, seen, stdout="YES\nreason"):
+        def runner(argv, **kwargs):
+            seen.append(argv)
+            return RunResult(0, stdout=stdout, stderr="")
+        return runner
+
+    def test_judge_cursor_host_builds_agent_argv(self):
+        seen = []
+        advisor.judge(
+            "weight_classification", {}, self._recording_runner(seen, "concern"),
+            enabled=True, runtime_host="cursor",
+        )
+        argv = seen[0]
+        assert argv[0] == "/usr/bin/agent"
+        assert "claude" not in argv
+        assert "--model" not in argv
+
+    def test_enumerate_claims_cursor_host_builds_agent_argv(self):
+        seen = []
+        advisor.enumerate_claims(
+            "some deliverable text", self._recording_runner(seen, "claim one"), runtime_host="cursor",
+        )
+        assert seen[0][0] == "/usr/bin/agent"
+
+    def test_acceptance_judge_cursor_host_builds_agent_argv(self):
+        seen = []
+        advisor.acceptance_judge(
+            "observation", "expected", self._recording_runner(seen), enabled=True, runtime_host="cursor",
+        )
+        assert seen[0][0] == "/usr/bin/agent"
+        assert "--model" not in seen[0]
+
+    def test_default_runtime_host_is_claude_for_backward_compat(self):
+        seen = []
+        advisor.judge("weight_classification", {}, self._recording_runner(seen, "concern"), enabled=True)
+        assert seen[0][0] == "claude"

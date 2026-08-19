@@ -31,15 +31,18 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
 from typing import Callable
 
+from lib import host_llm
 from lib.planner_plan_check import RETURN_MARKERS
+from lib.runtime_models import HOST_CLAUDE, model_for
 
-_EXTRACT_MODEL = "haiku"
+# "low" complexity per lib.runtime_models — Claude's haiku, byte-identical to
+# the pre-host-aware constant this module always used.
+_EXTRACT_COMPLEXITY = "low"
 # 30s, not advisor.py's 20s: that ceiling is sized for a short question, while
 # this pass reads up to _WINDOW_MAX chars of specialist output.
 _EXTRACT_TIMEOUT_S = 30
@@ -128,14 +131,17 @@ def enabled() -> bool:
     return os.environ.get(ENV_KILL_SWITCH, "1") != "0"
 
 
-def extractor_available() -> bool:
+def extractor_available(host: str = HOST_CLAUDE) -> bool:
     """Portability guard: site C (``spawn-cursor-escape.py``) may run under a
-    Cursor ``agent`` CLI environment where ``claude`` is not on PATH."""
-    return shutil.which("claude") is not None
+    Cursor ``agent`` CLI environment where ``claude`` is not on PATH — and vice
+    versa. Delegates to ``lib.host_llm.preflight``, the one place that knows
+    which binary (and, for Cursor, which API key) a given host actually needs."""
+    ok, _ = host_llm.preflight(host)
+    return ok
 
 
-def model() -> str:
-    return os.environ.get(ENV_MODEL) or _EXTRACT_MODEL
+def model(host: str = HOST_CLAUDE) -> str:
+    return os.environ.get(ENV_MODEL) or model_for(host, _EXTRACT_COMPLEXITY)
 
 
 def hint_markers_for(kind: str | None) -> tuple[str, ...]:
@@ -202,18 +208,21 @@ def extract(
     hint: tuple[str, ...] = (),
     runner: Runner | None = None,
     timeout: int = _EXTRACT_TIMEOUT_S,
+    runtime_host: str = HOST_CLAUDE,
 ) -> Extraction:
     """Run the perception pass over ``result_text`` and return its verdict.
 
     Fail CLOSED. A process error, timeout, exception, empty output, unparseable
     reply, NONE verdict, or a token outside ``allowed`` all return
     ``marker=None`` — never a guessed marker, and never ``degraded`` (the caller
-    degrades only on the observable claude-absent condition, so no judgement
-    failure can be mistaken for "the pass did not run"). Never raises."""
+    degrades only on the observable claude-absent/agent-absent condition, so no
+    judgement failure can be mistaken for "the pass did not run"). Never
+    raises."""
     run = runner or subprocess_runner
     prompt = build_prompt(result_text, allowed, hint)
     try:
-        res = run(["claude", "-p", "--model", model(), prompt], timeout=timeout)
+        argv = host_llm.build_prompt_argv(runtime_host, model(runtime_host), prompt)
+        res = run(argv, timeout=timeout)
     except Exception as exc:  # a broken runner must never crash a finished spawn
         return Extraction(None, reason=f"extractor raised: {type(exc).__name__}: {exc}"[:200])
 
@@ -251,6 +260,7 @@ def build_extraction(
     kind: str | None = None,
     allowed: tuple[str, ...] = RETURN_MARKERS,
     runner: Runner | None = None,
+    runtime_host: str = HOST_CLAUDE,
 ) -> Extraction | None:
     """The shared call-site guard behind each wrapper's ``_build_extraction``.
 
@@ -262,19 +272,24 @@ def build_extraction(
 
     ``None`` means the kill switch is off, so the caller takes the legacy
     word-scan path BYTE-IDENTICALLY. A ``degraded`` verdict means the pass
-    could not run because ``claude`` is off PATH — same legacy fallback, but
-    recorded in telemetry so an unexpectedly-absent extractor is visible."""
+    could not run because ``runtime_host``'s CLI is unavailable (``claude`` off
+    PATH, or neither ``agent``/``cursor-agent`` on PATH / no usable API key) —
+    same legacy fallback, but recorded in telemetry so an unexpectedly-absent
+    extractor is visible."""
     if not enabled():
         return None
-    if not extractor_available():
+    if not extractor_available(runtime_host):
         return Extraction(
-            None, reason="claude not on PATH; extractor unavailable", degraded=True
+            None,
+            reason=f"{host_llm.binary_for(runtime_host)} unavailable; extractor unavailable",
+            degraded=True,
         )
     return extract(
         result_text,
         allowed=allowed,
         hint=hint_markers_for(kind) if kind else (),
         runner=runner or subprocess_runner,
+        runtime_host=runtime_host,
     )
 
 

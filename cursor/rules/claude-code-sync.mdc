@@ -13,6 +13,8 @@ Edit policy in `~/claude-agent-instructions/`; never patch this rule in isolatio
 
 **You (Cursor) must never run the `claude` CLI**, in any form — not `claude`, not `claude -p`, not `claude --agent <x>`, not via Bash or any other tool, not as part of any skill or workflow. If the user explicitly asks, decline and explain that this Cursor session does not call out to Claude Code. Consequently the **specialist-spawn template** (CLAUDE.md § Spawning specialists) and the **recursive escape** in `overcome-difficulty` (both `claude -p` invocations) **do not apply to you** — escalate per § Difficulty escape in Cursor instead; anything else in CLAUDE.md / memory / skills that involves running `claude` is likewise non-applicable. The rest of `CLAUDE.md` (coordination cycle, skills, memory model, on-task-resolution rule, etc.) still applies.
 
+**`agentctl` sticky `runtime_host`.** On Cursor, start/classify with `--host cursor` (or let classify auto-detect). The session binds once; `dispatch` then routes spawn stages through `spawn-cursor-specialist.py` (`agent -p`), never `spawn-specialist.py` (`claude -p`). Advisor judges and marker extraction follow the same host. Cross-host fallback is refused.
+
 ## You are the root coordinator
 
 There is no separate manager subagent. Coordinate every substantive task yourself.
@@ -166,7 +168,7 @@ The PERMISSION-REQUEST protocol still applies, just in-thread: before an externa
 
 The recursive escape inside `overcome-difficulty/SKILL.md` spawns `claude -p`. **That is forbidden in Cursor** (see § Hard gate). When inline declaration → investigation → critique does not converge in this session:
 
-1. **`spawn-cursor-escape.py`** — fresh `agent -p` manager (not `claude`); key `~/.cursor_api_key`; install `curl https://cursor.com/install | gunzip | bash`. Markers: `RESOLVED:` / `INVESTIGATION:` / `LOOP_DETECTED:`. Detail: `memory-global/leaves/system-knowledge/cursor-agent-cli-spawn.md`.
+1. **`spawn-cursor-escape.py`** — fresh `agent -p` manager (not `claude`); key `~/.cursor_api_key`; install `curl https://cursor.com/install | gunzip | bash`. Markers: `RESOLVED:` / `INVESTIGATION:` / `LOOP_DETECTED:`. Detail: `memory-global/leaves/system-knowledge/cursor-agent-cli-spawn.md`. Planned specialist stages under a `runtime_host=cursor` session go through `agentctl dispatch` → `spawn-cursor-specialist.py` (same CLI family).
 2. **`/clear` or new chat** — if `agent` unavailable or escape returns `LOOP_DETECTED:`.
 3. **Structured escalate** — Expected/Actual/Mismatch, what you tried, options.
 4. **Optional Claude Code handoff** — self-contained paste for the user; you do not run `claude`.

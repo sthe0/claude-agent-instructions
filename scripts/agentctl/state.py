@@ -20,7 +20,7 @@ import shlex
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 
-SCHEMA_VERSION = 30
+SCHEMA_VERSION = 31
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -1392,6 +1392,8 @@ class SessionState:
     effort_fires: list[dict] = field(default_factory=list)
     effort_spend_seen: dict = field(default_factory=dict)
     user_prompt_count: int = 0
+    # coordination host (schema 31): claude|cursor, None until bound.
+    runtime_host: str | None = None
     schema_version: int = SCHEMA_VERSION
 
     def __post_init__(self) -> None:

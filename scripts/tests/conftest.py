@@ -312,6 +312,13 @@ def _no_ambient_project_dir(monkeypatch):
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
 
 
+
+@pytest.fixture(autouse=True)
+def _default_claude_runtime_host(monkeypatch):
+    """Default CLAUDE_CODE_SESSION_ID so runtime_host.detect_host() resolves to claude."""
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "agentctl-test-session")
+
+
 @pytest.fixture
 def store(tmp_path):
     return FileStateStore(tmp_path / "state")

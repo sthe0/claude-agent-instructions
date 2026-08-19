@@ -755,6 +755,17 @@ def _build_extraction(result_text: str, kind: str) -> "marker_extract.Extraction
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
+    bound_host = os.environ.get("AGENTCTL_RUNTIME_HOST")
+    if bound_host == "cursor":
+        print(
+            "error: AGENTCTL_RUNTIME_HOST=cursor; refusing to spawn a Claude "
+            "`claude -p` specialist from a Cursor-bound session. Use "
+            "spawn-cursor-specialist.py instead.",
+            file=sys.stderr,
+        )
+        log_refused("cross-host", {"kind": args.kind, "bound_host": bound_host, "this_host": "claude"})
+        return 5
+
     if not argv_text.is_readable_file(args.plan):
         print(argv_text.file_arg_error("--plan", args.plan), file=sys.stderr)
         log_refused("plan-not-found", {"kind": args.kind, "plan": argv_text.abbreviate(args.plan)})

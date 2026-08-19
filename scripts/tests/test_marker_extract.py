@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from lib import marker_extract
+from lib import host_llm, marker_extract
 from lib.planner_plan_check import RETURN_MARKERS
 
 # spawn-cursor-escape.py's own, deliberately different vocabulary — the caller
@@ -205,9 +205,9 @@ def test_enabled_is_false_only_for_the_exact_documented_value(monkeypatch):
 
 
 def test_extractor_available_reflects_shutil_which(monkeypatch):
-    monkeypatch.setattr(marker_extract.shutil, "which", lambda name: "/usr/bin/claude")
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/claude")
     assert marker_extract.extractor_available() is True
-    monkeypatch.setattr(marker_extract.shutil, "which", lambda name: None)
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: None)
     assert marker_extract.extractor_available() is False
 
 
@@ -241,19 +241,19 @@ def test_build_extraction_returns_none_and_never_runs_under_the_kill_switch(monk
 
 def test_build_extraction_degrades_when_claude_is_absent(monkeypatch):
     monkeypatch.delenv(marker_extract.ENV_KILL_SWITCH, raising=False)
-    monkeypatch.setattr(marker_extract.shutil, "which", lambda name: None)
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: None)
     calls: list = []
     result = marker_extract.build_extraction("x", kind="developer", runner=_spy_runner(calls))
     assert result is not None
     assert result.marker is None
     assert result.degraded is True
-    assert "PATH" in result.reason
+    assert "unavailable" in result.reason
     assert calls == []
 
 
 def test_build_extraction_runs_the_pass_when_reachable(monkeypatch):
     monkeypatch.delenv(marker_extract.ENV_KILL_SWITCH, raising=False)
-    monkeypatch.setattr(marker_extract.shutil, "which", lambda name: "/usr/bin/claude")
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/claude")
     calls: list = []
     result = marker_extract.build_extraction("x", kind="developer", runner=_spy_runner(calls))
     assert result is not None and result.marker == "COMPLETED"
@@ -263,7 +263,7 @@ def test_build_extraction_runs_the_pass_when_reachable(monkeypatch):
 
 def test_build_extraction_hints_from_the_kind_without_narrowing_acceptance(monkeypatch):
     monkeypatch.delenv(marker_extract.ENV_KILL_SWITCH, raising=False)
-    monkeypatch.setattr(marker_extract.shutil, "which", lambda name: "/usr/bin/claude")
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/claude")
     seen: list = []
 
     def run(argv, **kwargs):
@@ -293,3 +293,23 @@ def test_prompt_is_bounded_and_keeps_both_head_and_tail():
 def test_short_text_is_passed_through_whole():
     prompt = marker_extract.build_prompt("short body", RETURN_MARKERS)
     assert "characters elided" not in prompt
+
+
+def test_model_cursor_host_defaults_to_auto(monkeypatch):
+    monkeypatch.delenv(marker_extract.ENV_MODEL, raising=False)
+    assert marker_extract.model("cursor") is None
+
+
+def test_extract_cursor_host_builds_agent_argv_without_model(monkeypatch):
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/agent" if name == "agent" else None)
+    seen: list = []
+
+    def run(argv, **kwargs):
+        seen.append(argv)
+        return marker_extract.RunResult(0, _reply("COMPLETED"), "")
+
+    result = marker_extract.extract("body", runner=run, runtime_host="cursor")
+    assert result.marker == "COMPLETED"
+    assert seen[0][0] == "/usr/bin/agent"
+    assert "claude" not in seen[0]
+    assert "--model" not in seen[0]

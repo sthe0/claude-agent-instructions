@@ -14,7 +14,9 @@ import subprocess
 import sys
 import time
 
+from lib import host_llm
 from lib import judge_ledger
+from lib.runtime_models import HOST_CLAUDE, model_for
 
 from . import premise
 from .config import Thresholds
@@ -24,7 +26,8 @@ from .text_shape import ELEMENT_NAMES
 # Cheap model + hard cap: the advisor auto-activates for every substantive session's
 # cognition points, so each call must stay bounded in cost and can never hang a
 # coordination step.
-_ADVISOR_MODEL = "sonnet"
+_ADVISOR_COMPLEXITY = "medium"
+_ADVISOR_MODEL = model_for(HOST_CLAUDE, _ADVISOR_COMPLEXITY)
 _ADVISOR_TIMEOUT_S = 20
 
 # The one literal for "the runner hit its timeout": emitted by subprocess_runner and
@@ -83,7 +86,8 @@ ENUMERATE_TIMEOUT_S = _positive_int_env(_ENUMERATE_TIMEOUT_ENV, _ENUMERATE_TIMEO
 # The acceptance judge is a SEPARATE, cheaper tier than the warn-only advisor: it
 # gates a real transition (via the pure acceptance-review guardian), so it runs on the
 # cheapest model and is fail-open (a missing verdict blocks at the gate, never passes).
-_JUDGE_MODEL = "haiku"
+_JUDGE_COMPLEXITY = "low"
+_JUDGE_MODEL = model_for(HOST_CLAUDE, _JUDGE_COMPLEXITY)
 JUDGE_REVIEWER = "judge:haiku"
 # Last-resort ceiling for a judge call made outside any hook budget, by the rule
 # in lib/judge_latency.py::last_resort_ceiling_s — one second past the slowest
@@ -91,6 +95,10 @@ JUDGE_REVIEWER = "judge:haiku"
 # module is UNMEASURED, so this default is the only number available to it; the
 # test-suite asserts the literal still equals what that rule computes.
 _ACCEPTANCE_JUDGE_TIMEOUT_S = 41
+def _prompt_argv(runtime_host: str, complexity: str, prompt: str) -> list[str]:
+    model = model_for(runtime_host, complexity)
+    return host_llm.build_prompt_argv(runtime_host, model, prompt)
+
 _JUDGE_PASS = "pass"
 _JUDGE_REVISE = "revise"
 
@@ -154,7 +162,7 @@ def enumerate_subprocess_runner(
     return subprocess_runner(argv, timeout=timeout)
 
 
-def enumerate_claims(artifact_text: str, runner=enumerate_subprocess_runner) -> list[str]:
+def enumerate_claims(artifact_text: str, runner=enumerate_subprocess_runner, *, runtime_host: str = HOST_CLAUDE) -> list[str]:
     """Independent semantic re-reading of an outgoing deliverable that RAISES the
     load-bearing decisions/judgments/claims it detects, one statement per line.
 
@@ -175,7 +183,7 @@ def enumerate_claims(artifact_text: str, runner=enumerate_subprocess_runner) -> 
     try:
         prompt = _ENUMERATE_PROMPT.format(payload=artifact_text)
         result = runner(
-            ["claude", "-p", "--model", _ADVISOR_MODEL, prompt],
+            _prompt_argv(runtime_host, _ADVISOR_COMPLEXITY, prompt),
             timeout=ENUMERATE_TIMEOUT_S,
         )
         if result.returncode != 0:
@@ -213,7 +221,8 @@ _ENUMERATE_QUESTIONS_PROMPT = (
 
 
 def enumerate_questions_health(
-    goal: str, done_criterion: str, plan_text: str, runner=enumerate_subprocess_runner
+    goal: str, done_criterion: str, plan_text: str, runner=enumerate_subprocess_runner,
+    *, runtime_host: str = HOST_CLAUDE,
 ) -> tuple[bool | None, list[tuple[str, str]], str]:
     """Independent re-reading of a WHOLE plan that RAISES the questions its
     construction should have provoked, as (target, question) pairs, together with a
@@ -255,7 +264,7 @@ def enumerate_questions_health(
         payload = f"GOAL:\n{goal}\n\nDONE CRITERION:\n{done_criterion}\n\nPLAN:\n{plan_text}"
         prompt = _ENUMERATE_QUESTIONS_PROMPT.format(payload=payload)
         result = runner(
-            ["claude", "-p", "--model", _ADVISOR_MODEL, prompt],
+            _prompt_argv(runtime_host, _ADVISOR_COMPLEXITY, prompt),
             timeout=ENUMERATE_TIMEOUT_S,
         )
         if result.returncode != 0:
@@ -277,15 +286,16 @@ def enumerate_questions_health(
 
 
 def enumerate_questions(
-    goal: str, done_criterion: str, plan_text: str, runner
+    goal: str, done_criterion: str, plan_text: str, runner,
+    *, runtime_host: str = HOST_CLAUDE,
 ) -> list[tuple[str, str]]:
     """Thin wrapper over enumerate_questions_health returning only the (target,
     question) pairs — the recall-widener surface, symmetric with enumerate_claims. A
     caller that also needs to record runner health calls the _health variant directly."""
-    return enumerate_questions_health(goal, done_criterion, plan_text, runner)[1]
+    return enumerate_questions_health(goal, done_criterion, plan_text, runner, runtime_host=runtime_host)[1]
 
 
-def judge(kind: str, payload: dict, runner, *, enabled: bool | None = None) -> list[str]:
+def judge(kind: str, payload: dict, runner, *, enabled: bool | None = None, runtime_host: str = HOST_CLAUDE) -> list[str]:
     """Return advisory strings for the given cognition point, or [] if disabled/failed.
 
     Warn-only: callers MUST NOT branch on the return value for control flow.
@@ -302,7 +312,7 @@ def judge(kind: str, payload: dict, runner, *, enabled: bool | None = None) -> l
             return []
         prompt = template.format(payload=payload)
         result = runner(
-            ["claude", "-p", "--model", _ADVISOR_MODEL, prompt],
+            _prompt_argv(runtime_host, _ADVISOR_COMPLEXITY, prompt),
             timeout=_ADVISOR_TIMEOUT_S,
         )
         if result.returncode != 0:
@@ -320,6 +330,7 @@ def acceptance_judge(
     runner,
     *,
     enabled: bool,
+    runtime_host: str = HOST_CLAUDE,
     timeout: int = _ACCEPTANCE_JUDGE_TIMEOUT_S,
 ) -> tuple[str | None, str]:
     """Cheap external judge for an acceptance observation, backing the acceptance-review
@@ -353,7 +364,7 @@ def acceptance_judge(
             "On the SECOND line give a one-line reason."
         )
         result = runner(
-            ["claude", "-p", "--model", _JUDGE_MODEL, prompt], timeout=timeout
+            _prompt_argv(runtime_host, _JUDGE_COMPLEXITY, prompt), timeout=timeout
         )
         if result.returncode != 0:
             return None, "judge exited non-zero (fail-open)"
@@ -546,6 +557,7 @@ def judge_binary_ask(
     timeout: int = _BINARY_ASK_TIMEOUT_S,
     remaining: float | None = None,
     ceiling: float | None = None,
+    runtime_host: str = HOST_CLAUDE,
 ) -> tuple[bool, str]:
     """Language-independent semantic judge: does ``final_text`` end with a binary /
     confirm question that should have gone through an AskUserQuestion click-gate?
@@ -591,7 +603,7 @@ def judge_binary_ask(
     start = time.monotonic()
     try:
         prompt = _BINARY_ASK_PROMPT.format(text=final_text)
-        result = runner(["claude", "-p", "--model", _JUDGE_MODEL, prompt], timeout=timeout)
+        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY, prompt), timeout=timeout)
         return _record_result(
             "binary_ask", result, duration=time.monotonic() - start,
             timeout=timeout, remaining=remaining, ceiling=ceiling,
@@ -680,6 +692,7 @@ def judge_feedback_signal(
     timeout: int = _BINARY_ASK_TIMEOUT_S,
     remaining: float | None = None,
     ceiling: float | None = None,
+    runtime_host: str = HOST_CLAUDE,
 ) -> tuple[bool, str]:
     """Semantic judge behind the self-improvement regex prefilter: does
     ``user_text`` carry genuine agent-behavior feedback (a correction, a stated
@@ -725,7 +738,7 @@ def judge_feedback_signal(
     start = time.monotonic()
     try:
         prompt = _FEEDBACK_JUDGE_PROMPT.format(text=user_text)
-        result = runner(["claude", "-p", "--model", _JUDGE_MODEL, prompt], timeout=timeout)
+        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY, prompt), timeout=timeout)
         return _record_result(
             "feedback_signal", result, duration=time.monotonic() - start,
             timeout=timeout, remaining=remaining, ceiling=ceiling,
@@ -747,6 +760,7 @@ def judge_outage_escalation(
     timeout: int = _BINARY_ASK_TIMEOUT_S,
     remaining: float | None = None,
     ceiling: float | None = None,
+    runtime_host: str = HOST_CLAUDE,
 ) -> tuple[bool, str]:
     """Semantic judge behind the outage-escalation regex prefilter: does
     ``assistant_text`` escalate a live, un-diagnosed external-service failure to
@@ -786,7 +800,7 @@ def judge_outage_escalation(
     start = time.monotonic()
     try:
         prompt = _OUTAGE_ESCALATION_JUDGE_PROMPT.format(text=assistant_text)
-        result = runner(["claude", "-p", "--model", _JUDGE_MODEL, prompt], timeout=timeout)
+        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY, prompt), timeout=timeout)
         return _record_result(
             "outage_escalation", result, duration=time.monotonic() - start,
             timeout=timeout, remaining=remaining, ceiling=ceiling,
@@ -808,6 +822,7 @@ def judge_deferring_disposition(
     timeout: int = _DEFERRING_DISPOSITION_TIMEOUT_S,
     remaining: float | None = None,
     ceiling: float | None = None,
+    runtime_host: str = HOST_CLAUDE,
 ) -> tuple[bool, str]:
     """Semantic judge behind the deferring-disposition regex prefilter: does this
     AskUserQuestion menu offer the user nothing but branches that postpone or
@@ -848,7 +863,7 @@ def judge_deferring_disposition(
     start = time.monotonic()
     try:
         prompt = _DEFERRING_DISPOSITION_JUDGE_PROMPT.format(text=ask_text)
-        result = runner(["claude", "-p", "--model", _JUDGE_MODEL, prompt], timeout=timeout)
+        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY, prompt), timeout=timeout)
         return _record_result(
             "deferring_disposition", result, duration=time.monotonic() - start,
             timeout=timeout, remaining=remaining, ceiling=ceiling,
@@ -910,6 +925,7 @@ def judge_question_materiality(
     timeout: int = _QUESTION_MATERIALITY_TIMEOUT_S,
     remaining: float | None = None,
     ceiling: float | None = None,
+    runtime_host: str = HOST_CLAUDE,
 ) -> tuple[bool, str]:
     """Advisory judge behind the question-materiality check: could this question's
     answer really flip the verdict of the control it names?
@@ -947,7 +963,7 @@ def judge_question_materiality(
             control=control, control_text=control_text or "(not rendered)",
             question=question,
         )
-        result = runner(["claude", "-p", "--model", _JUDGE_MODEL, prompt], timeout=timeout)
+        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY, prompt), timeout=timeout)
         return _record_result(
             "question_materiality", result, duration=time.monotonic() - start,
             timeout=timeout, remaining=remaining, ceiling=ceiling,
@@ -999,6 +1015,7 @@ def judge_approval_ask(
     timeout: int = _APPROVAL_ASK_TIMEOUT_S,
     remaining: float | None = None,
     ceiling: float | None = None,
+    runtime_host: str = HOST_CLAUDE,
 ) -> tuple[bool, str]:
     """Semantic judge behind hook-plan-delivery-gate.py's scope classifier: is
     this AskUserQuestion the plan-approval ask -- the one the receipt/
@@ -1036,7 +1053,7 @@ def judge_approval_ask(
     start = time.monotonic()
     try:
         prompt = _APPROVAL_ASK_PROMPT.format(text=ask_text)
-        result = runner(["claude", "-p", "--model", _JUDGE_MODEL, prompt], timeout=timeout)
+        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY, prompt), timeout=timeout)
         return _record_result(
             "approval_ask", result, duration=time.monotonic() - start,
             timeout=timeout, remaining=remaining, ceiling=ceiling,
