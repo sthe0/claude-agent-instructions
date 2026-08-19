@@ -23,7 +23,12 @@ Every latency below is wall-clock around `advisor.subprocess_runner`, measured w
 | outage | 16 | 7.19 | 10.89 | 19.16 | 25.96 | **20** | **27** |
 | feedback | 26 | 10.73 | 11.86 | 13.34 | 14.05 | **14** | **16** |
 | binary_ask | 16 | 5.93 | 7.46 | 11.06 | 11.52 | **12** | **13** |
-| approval_ask | 32 | 5.88 | 7.93 | 10.34 | 11.42 | **11** | **13** |
+| approval_ask | 64 | 5.88 | 12.77 | 17.29 | 19.14 | **18** | **21** |
+
+`approval_ask`'s threshold/ceiling are as computed by `lib/judge_latency.py`
+today; see "approval2-sample.json — the regime shifted" below for why this row
+now spans two non-overlapping populations and why its median is not usable for
+sizing anything.
 
 Provenance of each row, file by file:
 
@@ -33,7 +38,7 @@ Provenance of each row, file by file:
 | outage | `latency-sample.json:outage` (n=10) + `ab-sample.json:outage_std` (n=6) |
 | feedback | `latency-sample.json:feedback` (n=10) + `topup2-sample.json:feedback` (n=16) |
 | binary_ask | `topup2-sample.json:binary_ask` (n=16) |
-| approval_ask | `approval-sample.json:approval` (n=16) + `approval-sample.json:not_approval` (n=16) |
+| approval_ask | `approval-sample.json:approval` (n=16) + `approval-sample.json:not_approval` (n=16) + `approval2-sample.json:approval` (n=16) + `approval2-sample.json:not_approval` (n=16) |
 
 All 32 verdicts in `topup2-sample.json` are correct (`ok: true` on every row); the
 sample measures latency, not accuracy, but a wrong verdict would have invalidated it.
@@ -66,6 +71,45 @@ and would have had to go into the ceiling.
 
 The exclusion moves numbers materially — `binary_ask` p90 16.70 -> 11.06, threshold
 17 -> 12 — so it is recorded rather than silently dropped.
+
+## `approval2-sample.json` — the regime shifted
+
+Taken because `approval-sample.json`'s max (11.42s) stopped bounding observed
+latency: on a live session the same judge, on the real ask text of that
+session, returned in 12.71 / 12.51 / 11.96s — past the ceiling the first
+sample computed — and the judge ledger recorded two consecutive
+`timed_out: true` rows for it minutes apart.
+
+`approval2.py` is identical in method to `approval.py` — one process under an
+`O_CREAT|O_EXCL` pid lock, the `approval`/`not_approval` arms alternating
+inside it so machine-load drift hits both equally, N=16 per arm — and was run
+with a **120s per-call timeout**, well above anything either sample measured.
+That makes its 32 latencies **uncensored**: every call was left to run to
+completion rather than being cut off at a budget. This is NOT true of the
+production judge ledger — a call killed at the hook's whole-invocation budget
+is recorded there at approximately the budget, not at how long it would
+actually have taken — which is why the ledger's `timed_out: true` rows can
+show a problem exists but cannot be used to size the fix.
+
+The two samples' ranges do not overlap at all:
+
+```
+approval-sample.json   (n=32):  5.88 -- 11.42
+approval2-sample.json  (n=32): 14.12 -- 19.14
+```
+
+i.e. the judge roughly doubled in latency between the two measurements, with
+an empty gap between the fastest call in the second sample and the slowest
+call in the first. The `approval_ask` row above pools all four series (both
+samples, both arms) into one n=64 population per
+`lib/judge_latency.py`'s own comment on that row — the merge is deliberate,
+not an oversight, and that comment explains the one place it costs something
+(the merged median falls inside the empty gap and describes no call that ever
+ran, which is safe only because this judge's median is never used to size a
+ceiling or a floor).
+
+All 32 verdicts in `approval2-sample.json` are correct (`ok: true` on every
+row, both arms), same as `approval-sample.json`.
 
 ## Turn-end feasibility
 

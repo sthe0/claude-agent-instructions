@@ -122,9 +122,26 @@ MEASURED: "dict[str, dict[str, Row]]" = {
         ),
         "approval_ask": Row(
             judge="approval_ask",
-            n=32, min_s=5.88, median_s=7.93, p90_s=10.34, max_s=11.42,
+            # Merges two non-overlapping regimes: approval-sample.json's 32
+            # calls ran 5.88-11.42s; approval2-sample.json's 32 calls, taken
+            # after the judge was observed timing out in production against
+            # that first sample's ceiling, ran 14.12-19.14s with an empty gap
+            # between the two ranges. The merged median (12.77) therefore
+            # falls IN that gap and describes no call that ever ran. That is
+            # safe to leave standing only because this judge's median is never
+            # used for sizing a ceiling or a floor — required_budget_s sums the
+            # medians of the calls PRECEDING the last one on a shared budget,
+            # and HOOK_CALL_SEQUENCE declares K=1 for hook-plan-delivery-gate.py
+            # (see samples/judge-latency/README.md), so only p90_s and max_s
+            # ever reach a constant. approval-sample.json stays in the
+            # provenance rather than being dropped: it is a valid observation
+            # of an earlier regime (unlike topup-sample.json, taken under
+            # contended load), and keeping it is what keeps max_s conservative.
+            n=64, min_s=5.88, median_s=12.77, p90_s=17.29, max_s=19.14,
             provenance=(("approval-sample.json", "approval"),
-                        ("approval-sample.json", "not_approval")),
+                        ("approval-sample.json", "not_approval"),
+                        ("approval2-sample.json", "approval"),
+                        ("approval2-sample.json", "not_approval")),
         ),
         "acceptance_judge": Row(
             judge="acceptance_judge",

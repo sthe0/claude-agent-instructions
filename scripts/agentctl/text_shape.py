@@ -7,10 +7,35 @@ so this module has no opinion about which document shape uses it.
 """
 from __future__ import annotations
 
+import unicodedata
+
 
 def normalize_string(s: str) -> str:
     """Normalize a string for comparison: casefold, strip, and collapse internal whitespace."""
     return " ".join((s or "").casefold().split())
+
+
+def normalize_for_match(s: str) -> str:
+    """`normalize_string` plus: drop every Unicode format character (category Cf).
+
+    For comparing bytes we REGISTERED against bytes a client RENDERED. A soft
+    hyphen (U+00AD), a zero-width space/joiner (U+200B/U+200D), a BOM (U+FEFF)
+    or a bidi mark can be introduced or dropped anywhere along that path; the
+    difference is invisible to whoever authored the text, so no amount of care
+    avoids it, and it carries no content of its own. Dropping such characters
+    therefore cannot mask a genuinely missing word or line — a real omission
+    still fails the comparison — while their presence on one side alone would
+    otherwise fail a delivery that did happen.
+
+    Separate from `normalize_string` rather than folded into it because that one
+    also guards the plan-field placeholder checks (PLACEHOLDER_SET, the
+    substantive-stage validation), where a field whose text is padded with
+    invisible characters is something a validator should NOTICE, not silently
+    look through.
+    """
+    return normalize_string(
+        "".join(c for c in (s or "") if unicodedata.category(c) != "Cf")
+    )
 
 
 # Placeholder values a required free-text field must not use.

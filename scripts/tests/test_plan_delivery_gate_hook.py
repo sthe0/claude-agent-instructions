@@ -288,6 +288,157 @@ def test_gate_decision_normalized_match_ts_none_degrades_to_allow():
     assert delivery_verified is True
 
 
+# --- the certificate is computed independently of the classifier -------------
+#
+# The measured failure this covers: the approval-ask judge timed out, the
+# classifier failed open to is_approval_ask=False, the old code returned an
+# unverified allow from that branch alone, the hook stamped nothing, and
+# `agentctl approve` then refused a delivery that had in fact landed. What the
+# transcript shows has nothing to do with which ask is in flight, so the
+# observation must ride out on the fail-open allow too.
+
+RENDERING = "## Stage 1\n...full plan essence..."
+
+
+def _receipt(presented_ts: float = 100.0, rendering_text: str = RENDERING) -> PlanPresentation:
+    return PlanPresentation(
+        plan_path="/plan.toml", kind="essence", plan_sha256="a" * 64,
+        rendering_sha256="b" * 64, rendering_text=rendering_text,
+        presented_ts=presented_ts,
+    )
+
+
+def _decide(mod, **kwargs):
+    base = dict(
+        presentation_active=True,
+        receipt=_receipt(),
+        receipt_stale_reason=None,
+        delivered_texts=[(RENDERING, 110.0)],
+        has_show_full_plan_option=True,
+    )
+    base.update(kwargs)
+    # turn_start_ts=110 puts the plan submission (100) in an EARLIER turn, so
+    # the same-turn check upstream never fires and each case below exercises
+    # the branch it names.
+    return mod.gate_decision("PLAN_READY", 100.0, 90.0, turn_start_ts=110.0, **base)
+
+
+def test_non_approval_ask_still_certifies_an_observed_delivery():
+    # (a) The defect itself: a fail-open classifier verdict must not destroy
+    # the observation.
+    assert _decide(_load_module(), is_approval_ask=False) == ("allow", "", True)
+
+
+def test_non_approval_ask_without_delivery_certifies_nothing():
+    # (b) Fail-open the OTHER way is not permitted either: no observation, no
+    # stamp -- allow because the classifier said this is not the gated ask.
+    mod = _load_module()
+    assert _decide(mod, is_approval_ask=False, delivered_texts=[("something else", 110.0)]) == (
+        "allow", "", False,
+    )
+
+
+def test_stale_receipt_is_never_certified_on_either_branch():
+    # (c) A stale receipt is an OBSERVED NEGATIVE, not a missing observable:
+    # a receipt bound to another plan version must never be certified, however
+    # convincingly its bytes appear in the transcript.
+    mod = _load_module()
+    stale = "receipt is for a different plan version"
+    assert _decide(mod, is_approval_ask=False, receipt_stale_reason=stale) == ("allow", "", False)
+    decision, reason, verified = _decide(mod, is_approval_ask=True, receipt_stale_reason=stale)
+    assert (decision, reason, verified) == ("deny", stale, False)
+
+
+def test_unreadable_transcript_certifies_nothing_on_either_branch():
+    # (d) delivered_texts is None -- a MISSING observable. Fails open on both
+    # branches (allow), and stamps on neither.
+    mod = _load_module()
+    assert _decide(mod, is_approval_ask=False, delivered_texts=None) == ("allow", "", False)
+    assert _decide(mod, is_approval_ask=True, delivered_texts=None) == ("allow", "", False)
+
+
+def test_missing_receipt_certifies_nothing_on_the_fail_open_branch():
+    mod = _load_module()
+    assert _decide(mod, is_approval_ask=False, receipt=None) == ("allow", "", False)
+
+
+def test_soft_hyphen_drift_still_verifies_the_delivery():
+    # (e) The live case: the delivered text differs from the registered
+    # rendering only by one U+00AD the client inserted mid-word (and a trailing
+    # newline). Both tiers used to fail, so the hook DENIED a delivery that
+    # happened.
+    mod = _load_module()
+    registered = "## Stage 1\nDecouple the certificate"
+    delivered = "## Stage 1\nDecouple the certi" + chr(0x00AD) + "ficate\n"
+    assert _decide(
+        mod, is_approval_ask=True, receipt=_receipt(rendering_text=registered),
+        delivered_texts=[(delivered, 110.0)],
+    ) == ("allow", "", True)
+
+
+def test_a_missing_word_still_denies():
+    # (f) The property that makes (e) safe: normalization tolerates
+    # reformatting, not omission.
+    mod = _load_module()
+    registered = "## Stage 1\nDecouple the certificate"
+    delivered = "## Stage 1\nDecouple the\n"
+    decision, reason, verified = _decide(
+        mod, is_approval_ask=True, receipt=_receipt(rendering_text=registered),
+        delivered_texts=[(delivered, 110.0)],
+    )
+    assert decision == "deny"
+    assert reason == mod._NOT_DELIVERED_REASON
+    assert verified is False
+
+
+def test_approval_ask_deny_reasons_and_their_order_are_unchanged():
+    # (g) The DENY ladder the extension must leave exactly as it was. Each case
+    # below supplies MORE than one failing condition where it can, so the
+    # assertion pins the ORDER and not merely the reason text.
+    mod = _load_module()
+
+    # same-turn beats everything downstream, including a missing receipt
+    decision, reason, verified = mod.gate_decision(
+        "PLAN_READY", 100.0, 90.0, turn_start_ts=95.0,
+        presentation_active=True, receipt=None, receipt_stale_reason=None,
+        delivered_texts=None, has_show_full_plan_option=False, is_approval_ask=True,
+    )
+    assert (decision, reason, verified) == ("deny", mod._SAME_TURN_REASON, False)
+
+    # no receipt beats both the missing marker and the missing delivery
+    assert _decide(mod, is_approval_ask=True, receipt=None,
+                   has_show_full_plan_option=False, delivered_texts=[]) == (
+        "deny", mod._NO_RECEIPT_REASON, False,
+    )
+
+    # a stale receipt beats the missing marker
+    stale = "receipt is for a different plan version"
+    assert _decide(mod, is_approval_ask=True, receipt_stale_reason=stale,
+                   has_show_full_plan_option=False) == ("deny", stale, False)
+
+    # the missing marker beats the missing delivery
+    assert _decide(mod, is_approval_ask=True, has_show_full_plan_option=False,
+                   delivered_texts=[]) == ("deny", mod._NO_MARKER_REASON, False)
+
+    # and with all the above satisfied, an absent delivery is the last DENY
+    assert _decide(mod, is_approval_ask=True, delivered_texts=[]) == (
+        "deny", mod._NOT_DELIVERED_REASON, False,
+    )
+
+
+def test_a_delivery_predating_the_receipt_is_not_the_delivery():
+    # The receipt registers the rendering; only a landing AFTER it can be that
+    # rendering's delivery. Unchanged by the extension, pinned here because
+    # _delivery_observed now owns the comparison.
+    mod = _load_module()
+    assert _decide(mod, is_approval_ask=True, delivered_texts=[(RENDERING, 90.0)]) == (
+        "deny", mod._NOT_DELIVERED_REASON, False,
+    )
+    assert _decide(mod, is_approval_ask=False, delivered_texts=[(RENDERING, 90.0)]) == (
+        "allow", "", False,
+    )
+
+
 def test_load_gate_fields_missing_node_returns_none(tmp_path):
     mod = _load_module()
     p = tmp_path / "s.json"

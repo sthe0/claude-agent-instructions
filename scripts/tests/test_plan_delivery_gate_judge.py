@@ -80,21 +80,40 @@ def run_hook_no_claude(payload: dict, config_dir: Path) -> subprocess.CompletedP
 
 # (a) an unrelated ask at PLAN_READY is allowed -------------------------------
 
-def test_unrelated_ask_is_allowed_even_with_a_pending_receipt(tmp_path):
-    # Receipt + marker + a genuine delivery are all present here (same fixture
-    # shape as test_identified_approval_ask_with_verified_delivery_stamps) --
-    # if the classifier didn't gate scope, this would ALLOW and STAMP, not
-    # deny. A NO classifier must instead let it through unstamped: the real
-    # discriminator this test proves is _stamp(tmp_path, "u1") is None.
+def test_unrelated_ask_is_allowed_where_an_approval_ask_would_be_denied(tmp_path):
+    # The scope discriminator, stated on the axis the classifier actually
+    # governs: the DENY verdict. Receipt and marker are present but the
+    # rendering never landed, so an ask judged YES DENIES here
+    # (test_identified_approval_ask_never_delivered_still_denies). A NO must
+    # let it through -- and certify nothing, there being nothing to certify.
+    # The second boundary at 110 is what puts the submission (100) in an
+    # earlier turn, so the same-turn check upstream cannot be what allows or
+    # denies here.
     write_full_state(tmp_path, "u1", plan_presentations=[make_receipt(RENDERING, presented_ts=100.0)])
+    t = write_transcript(tmp_path / "t.jsonl", [user_prompt_entry(90.0), user_prompt_entry(110.0)])
+    proc = run_hook_answering(ask_payload("u1", t, question="Which color?"), tmp_path, "NO")
+    assert not _is_deny(proc)
+    assert _stamp(tmp_path, "u1") is None
+
+
+def test_unrelated_ask_still_certifies_a_delivery_it_observed(tmp_path):
+    # The other half of the same boundary: the classifier governs the DENY
+    # verdict and NOTHING else. What the transcript shows -- the registered
+    # rendering, landed after the receipt registered it -- has nothing to do
+    # with which ask is in flight, so the certificate is issued here exactly as
+    # it is for an ask judged YES (test_identified_approval_ask_with_verified_
+    # delivery_stamps).
+    write_full_state(tmp_path, "u2", plan_presentations=[make_receipt(RENDERING, presented_ts=100.0)])
     t = write_transcript(tmp_path / "t.jsonl", [
         user_prompt_entry(90.0),
         text_only_entry(105.0, RENDERING),
         user_prompt_entry(110.0),
     ])
-    proc = run_hook_answering(ask_payload("u1", t, question="Which color?"), tmp_path, "NO")
+    proc = run_hook_answering(ask_payload("u2", t, question="Which color?"), tmp_path, "NO")
     assert not _is_deny(proc)
-    assert _stamp(tmp_path, "u1") is None
+    stamp = _stamp(tmp_path, "u2")
+    assert stamp is not None
+    assert stamp.source == delivery_mod.SOURCE_HOOK
 
 
 # (b) an identified approval ask still fails every structural check ----------
@@ -132,14 +151,16 @@ def test_identified_approval_ask_never_delivered_still_denies(tmp_path):
     assert _stamp(tmp_path, "b4") is None
 
 
-# (c) an absent runner allows and does not stamp ------------------------------
+# (c) an absent runner allows, and still certifies what it saw ----------------
 
-def test_absent_claude_binary_allows_without_stamping_even_when_delivered(tmp_path):
-    # Receipt + marker + a genuine delivery are all present -- with claude on
-    # PATH this would ALLOW + STAMP (see test_delivered_allows_and_stamps).
-    # With no `claude` executable reachable, subprocess_runner raises inside
-    # the classifier, which fails open to "not the approval ask": still an
-    # ALLOW, but the strict/stamping path is never reached.
+def test_absent_claude_binary_allows_and_still_certifies_the_delivery(tmp_path):
+    # The measured failure this fix removes. With no `claude` reachable,
+    # subprocess_runner raises inside the classifier, which fails open to "not
+    # the approval ask" -- exactly what a judge TIMEOUT does on a live session.
+    # The allow is correct; withholding the stamp was not. Receipt, marker and
+    # a genuine delivery are all present and all observed without asking the
+    # classifier anything, so the certificate must be issued: without it
+    # `agentctl approve` goes on to refuse a delivery that did happen.
     write_full_state(tmp_path, "c1", plan_presentations=[make_receipt(RENDERING, presented_ts=100.0)])
     t = write_transcript(tmp_path / "t.jsonl", [
         user_prompt_entry(90.0),
@@ -149,7 +170,21 @@ def test_absent_claude_binary_allows_without_stamping_even_when_delivered(tmp_pa
     proc = run_hook_no_claude(ask_payload("c1", t), tmp_path)
     assert proc.returncode == 0
     assert not _is_deny(proc)
-    assert _stamp(tmp_path, "c1") is None
+    stamp = _stamp(tmp_path, "c1")
+    assert stamp is not None
+    assert stamp.source == delivery_mod.SOURCE_HOOK
+
+
+def test_absent_claude_binary_certifies_nothing_when_nothing_landed(tmp_path):
+    # The guard on the test above: an unreachable classifier does not turn the
+    # allow itself into proof. Same absent runner, same receipt, and a
+    # transcript whose turns are all boundaries -- the rendering never landed.
+    write_full_state(tmp_path, "c2", plan_presentations=[make_receipt(RENDERING, presented_ts=100.0)])
+    t = write_transcript(tmp_path / "t.jsonl", [user_prompt_entry(90.0), user_prompt_entry(110.0)])
+    proc = run_hook_no_claude(ask_payload("c2", t), tmp_path)
+    assert proc.returncode == 0
+    assert not _is_deny(proc)
+    assert _stamp(tmp_path, "c2") is None
 
 
 # (d) a judged approval ask with a verified delivery does stamp --------------
@@ -303,7 +338,11 @@ def test_budget_exhausted_before_the_call_fails_open_and_logs_stage_budget(tmp_p
     decision, reason, sp, receipt = mod.decide(ask_payload("g1", t))
     assert decision == "allow"
     assert reason == ""
-    assert receipt is None  # a fail-open allow must never stamp
+    # The fail-open allow carries the certificate, because the delivery was
+    # observed before the budget question ever arose -- an exhausted budget
+    # costs us the CLASSIFICATION, not the observation. The unobserved case is
+    # covered by test_absent_claude_binary_certifies_nothing_when_nothing_landed.
+    assert receipt is not None
 
     records = judge_ledger.read_records()
     entered = [r for r in records if r["kind"] == "entered" and r["judge"] == "approval_ask"]

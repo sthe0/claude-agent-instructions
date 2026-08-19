@@ -32,14 +32,18 @@ and the finding that motivated this extension):
    substitute for a fresh delivery — see _receipt_stale_reason and the
    post-dating loop in gate_decision).
 
-NORMALIZED MATCH: the delivered-text comparison in the loop below is a
+NORMALIZED MATCH: the delivered-text comparison in _delivery_observed is a
 two-tier check — exact substring first, then (only if that fails) a
-normalized substring via text_shape.normalize_string (casefold + collapse
-whitespace), so incidental newline/whitespace/casefold drift between the
-registered essence and the delivered turn text no longer trips
-_NOT_DELIVERED_REASON. Genuinely missing CONTENT (a dropped word/line) still
-fails both tiers and still denies — normalization tolerates reformatting,
-not omission.
+normalized substring via text_shape.normalize_for_match: casefold, collapse
+whitespace, and DROP every Unicode format character (category Cf). The
+whitespace tiers cover incidental newline/casefold drift; the Cf tier covers
+what a live session hit — a registered rendering of 7629 chars against a
+delivered 7627, differing by one U+00AD SOFT HYPHEN the client had inserted
+mid-word plus a trailing newline, which failed BOTH tiers and denied a
+delivery that had happened. Nobody who authors the text can see such a
+character, so no amount of care avoids it. Genuinely missing CONTENT (a
+dropped word/line) still fails both tiers and still denies — normalization
+tolerates reformatting, not omission.
 
 PERMISSION IS NOT PROOF. The hook ALLOWS on every genuinely missing
 observable (no live session, unreadable state, wrong node, absent/unparsable
@@ -65,20 +69,33 @@ is deliberately split: fail OPEN on the live turn (cheap to retry), fail
 CLOSED on recording approval (the irreversible act) — and that inversion only
 works because the escape stays reachable.
 
-SCOPE: the receipt/freshness/delivery/marker checks below apply only to an ask
-the classifier (agentctl.advisor.judge_approval_ask, invoked from decide())
-identifies as the plan-approval ask — not to every AskUserQuestion at node
-PLAN_READY. A second coordinator-supplied "this is the approval ask" marker
-was considered and rejected, for the same reason SHOW_FULL_PLAN_MARKER alone
-cannot serve this role: the coordinator supplies it, so it proves only that
-the coordinator SAID this is the approval ask, never that it IS one. The
-classifier is a fail-open model judgment over the ask's own text instead: on
-any absent/slow/malformed call it resolves to "not the approval ask", so an
-unavailable classifier can only widen what is ALLOWED, never deny a question
-the user needed answered — the irreversible act it protects (recording
-approval) stays fail-CLOSED one layer down, since cmd_approve refuses without
-a delivery stamp regardless of what this hook allowed through. Escape:
-AGENTCTL_PLAN_PRESENTATION=0.
+SCOPE: the classifier (agentctl.advisor.judge_approval_ask, invoked from
+decide()) governs the DENY verdict and nothing else. It decides whether the
+receipt/freshness/delivery/marker checks below may deny THIS ask — they apply
+only to an ask it identifies as the plan-approval ask, not to every
+AskUserQuestion at node PLAN_READY. A second coordinator-supplied "this is the
+approval ask" marker was considered and rejected, for the same reason
+SHOW_FULL_PLAN_MARKER alone cannot serve this role: the coordinator supplies
+it, so it proves only that the coordinator SAID this is the approval ask,
+never that it IS one. The classifier is a fail-open model judgment over the
+ask's own text instead: on any absent/slow/malformed call it resolves to "not
+the approval ask", so an unavailable classifier can only widen what is
+ALLOWED, never deny a question the user needed answered — the irreversible act
+it protects (recording approval) stays fail-CLOSED one layer down, since
+cmd_approve refuses without a delivery stamp regardless of what this hook
+allowed through. Escape: AGENTCTL_PLAN_PRESENTATION=0.
+
+THE CERTIFICATE IS NOT THE CLASSIFIER'S TO WITHHOLD. Whether the registered
+rendering landed in the transcript is a fact about the transcript; it has
+nothing to do with which ask is in flight, and _delivery_observed reads it
+without asking the classifier anything. It therefore runs ABOVE the
+is_approval_ask short-circuit in gate_decision, and its result rides out on
+the fail-open allow too. Coupling the two cost a live session an approval:
+the judge timed out, the classifier failed open to "not the approval ask",
+the old code returned from that branch before the delivery loop ran, no stamp
+was written, and cmd_approve then refused a delivery that had in fact landed
+— a fail-open classifier that can only WIDEN the verdict was, through the
+certificate, denying downstream.
 
 DENY is signaled with the PreToolUse permissionDecision JSON on stdout:
   {"hookSpecificOutput": {"hookEventName": "PreToolUse",
@@ -108,6 +125,11 @@ try:
     from agentctl.state import PlanPresentation as _PlanPresentation  # noqa: E402
     from agentctl.state import SessionState as _SessionState  # noqa: E402
     from agentctl.state import SHOW_FULL_PLAN_MARKER  # noqa: E402
+    # Imported directly rather than through a gates.py re-export (the route
+    # _normalize_string takes): gates.py has no use of its own for this
+    # normalizer, and a re-export exists to spare a module a second import,
+    # not to become the address of everything text_shape holds.
+    from agentctl import text_shape as _text_shape  # noqa: E402
     from lib import config_root  # noqa: E402
     from lib import judge_budget  # noqa: E402
     from lib.ask_text import flat_text  # noqa: E402
@@ -128,20 +150,30 @@ _APPROVAL_ASK_KILLSWITCH_ENV = "CLAUDE_APPROVAL_ASK_SEMANTIC"
 # This hook's own whole-invocation judge budget — owned here rather than read
 # off advisor._APPROVAL_ASK_TIMEOUT_S, mirroring how every sibling hook
 # (_JUDGE_BUDGET_S, _ASK_JUDGE_BUDGET_S, _TURN_JUDGE_BUDGET_S) owns its budget
-# independently of the judge function's own internal default. lib/judge_latency.
-# py's ceiling rule, `ceil(max) + 1` over n=32 (max 11.42s) = 13s. With exactly
-# one call there is no later call to protect, so this number is also the
-# ceiling handed to it — capping the only call lower would forfeit budget for
-# nothing.
-_APPROVAL_ASK_JUDGE_BUDGET_S = 13
+# independently of the judge function's own internal default.
+#
+# lib/judge_latency.py's ceiling rule, `ceil(max) + 1` over the merged n=64
+# population (max 19.14s), is 21s — but this constant is no longer pinned to
+# that ceiling by equality (it was, at 13s, and the population moved past it:
+# a fresh n=32 sample taken after production started timing out ran
+# 14.12-19.14s, entirely above the first sample's 11.42s max). 30s instead:
+# this hook now joins the `>=` shape every OTHER single-call hook in this repo
+# already uses (e.g. outage_escalation's ceiling of 27 under a budget of 30),
+# which is what gives them slack over a ceiling computed from a population that
+# has already been observed to move by ~70% within one day. The `>=` rule
+# itself is enforced by
+# test_a_single_call_hooks_budget_is_never_what_truncates_its_call in
+# scripts/tests/test_judge_latency.py.
+_APPROVAL_ASK_JUDGE_BUDGET_S = 30
 
 # Below this remaining budget a judge call cannot plausibly finish and would
 # only spend the wait on a guaranteed timeout; stop judging and fail open
 # instead, exactly like every other unreachable-judge path in this hook. This
-# is lib/judge_latency.py's floor rule, `ceil(p90)` over n=32 — comfortably
-# above the fastest run observed (5.88s), which is what makes a call started
-# with exactly the floor left reachable rather than doomed.
-_APPROVAL_ASK_JUDGE_MIN_CALL_S = 11
+# is lib/judge_latency.py's floor rule, `ceil(p90)` over the merged n=64
+# population — comfortably above the fastest run observed (5.88s), which is
+# what makes a call started with exactly the floor left reachable rather than
+# doomed.
+_APPROVAL_ASK_JUDGE_MIN_CALL_S = 18
 
 # SHOW_FULL_PLAN_MARKER is defined in agentctl.state (imported above) — the
 # coordinator embeds it in a "show the full plan" option's label (or
@@ -269,6 +301,60 @@ def _same_turn_denied(
     return False
 
 
+def _delivery_observed(
+    receipt: _PlanPresentation | None,
+    receipt_stale_reason: str | None,
+    delivered_texts: list[tuple[str, float | None]] | None,
+) -> bool:
+    """Did the registered rendering LAND in a delivered final text, after the
+    receipt registered it? The positive observation, and nothing else.
+
+    Every input here is gathered independently of which ask is in flight, which
+    is why this is a module-level function called ABOVE gate_decision's
+    is_approval_ask short-circuit rather than a loop inside the approval-ask
+    branch (see the module docstring's SCOPE paragraph).
+
+    False on each of the three ways the observation is unavailable or negative,
+    and they are not the same kind of thing: receipt is None and
+    delivered_texts is None are MISSING observables, while a
+    receipt_stale_reason is an observed negative — a receipt bound to a plan
+    version other than the current one must never be certified, however
+    convincingly its bytes appear in the transcript. All three return False
+    because "not observed" and "observed absent" are both grounds not to
+    certify; only the DENY verdict needs to tell them apart, and gate_decision
+    keeps doing that.
+    """
+    if receipt is None or receipt_stale_reason is not None or delivered_texts is None:
+        return False
+    degraded_match = False
+    for text, ts in delivered_texts:
+        matched = receipt.rendering_text in text
+        if not matched:
+            # Tier 2: incidental whitespace/newline/casefold drift, and
+            # invisible Cf characters inserted or dropped by the rendering
+            # pipeline, must not trigger _NOT_DELIVERED_REASON —
+            # normalize_for_match removes only things a reader cannot read, so
+            # genuinely missing CONTENT (a dropped word/line) still fails this
+            # tier too.
+            matched = (
+                _text_shape.normalize_for_match(receipt.rendering_text)
+                in _text_shape.normalize_for_match(text)
+            )
+        if not matched:
+            continue
+        if ts is None:
+            # The delivery landed but its own timestamp couldn't be parsed —
+            # a missing observable on the DELIVERY side only (presented_ts
+            # itself is a required PlanPresentation field and can never be
+            # missing). Degrade to the match tier already established above
+            # rather than wedging.
+            degraded_match = True
+            continue
+        if ts > receipt.presented_ts:
+            return True
+    return degraded_match
+
+
 def gate_decision(
     node: str,
     plan_submitted_ts: float | None,
@@ -286,22 +372,26 @@ def gate_decision(
 
     is_approval_ask is required (no default): main() is the only production
     caller, and it always computes it via the classifier before calling in.
-    False short-circuits to an unverified allow — the classifier fails open
-    toward "not the approval ask", so an absent/slow/malformed call can only
-    widen what passes through, never deny a question the user needed
-    answered.
+    False short-circuits to an allow — the classifier fails open toward "not
+    the approval ask", so an absent/slow/malformed call can only widen what
+    passes through, never deny a question the user needed answered. It does
+    NOT short-circuit the certificate: _delivery_observed has already run by
+    then, and its result rides out on that allow, because what the transcript
+    shows has nothing to do with which ask is in flight.
 
     ALLOW != VERIFIED: delivery_verified is True ONLY when this call actually
     observed the rendering land (present — exact, or normalized for
-    whitespace/newline/casefold drift — in a delivered_final_texts entry
-    that either post-dates the receipt's presented_ts, or — degraded — has an
-    unparsable landing timestamp; see the loop below). It is False on every
-    other path: every fail-open allow (wrong node, no plan yet, presentation
-    inactive, unreadable transcript) AND every deny. main() must stamp iff
-    delivery_verified, never merely `decision == "allow"` — the existing core
-    already allows for node != PLAN_READY and for plan_submitted_ts is None,
-    and stamping on either would manufacture proof of a delivery that was
-    never observed, for a plan the session may not even have.
+    whitespace/newline/casefold drift and invisible Cf characters — in a
+    delivered_final_texts entry that either post-dates the receipt's
+    presented_ts, or — degraded — has an unparsable landing timestamp; see
+    _delivery_observed). It is False on every deny, and on every fail-open
+    allow that had no observation to carry (wrong node, no plan yet,
+    presentation inactive, no receipt, stale receipt, unreadable transcript).
+    main() must stamp iff delivery_verified, never merely
+    `decision == "allow"` — the core allows for node != PLAN_READY and for
+    plan_submitted_ts is None, and stamping on either would manufacture proof
+    of a delivery that was never observed, for a plan the session may not even
+    have.
 
     The same-turn check (unchanged from before this extension) runs first and
     can only DENY; the presentation/delivery checks below are ADDITIVE — they
@@ -321,8 +411,11 @@ def gate_decision(
 
     if not presentation_active:
         return "allow", "", False
+
+    observed = _delivery_observed(receipt, receipt_stale_reason, delivered_texts)
+
     if not is_approval_ask:
-        return "allow", "", False
+        return "allow", "", observed
     if receipt is None:
         return "deny", _NO_RECEIPT_REASON, False
     if receipt_stale_reason is not None:
@@ -334,31 +427,7 @@ def gate_decision(
         # negative — fail open, and (per the docstring above) do NOT stamp.
         return "allow", "", False
 
-    verified = False
-    degraded_match = False
-    for text, ts in delivered_texts:
-        matched = receipt.rendering_text in text
-        if not matched:
-            # Tier 2: incidental whitespace/newline/casefold drift between the
-            # registered essence and the delivered turn text must not trigger
-            # _NOT_DELIVERED_REASON — normalize_string only collapses
-            # whitespace and casefolds, so genuinely missing CONTENT (a
-            # dropped word/line) still fails this tier too.
-            matched = _gates._normalize_string(receipt.rendering_text) in _gates._normalize_string(text)
-        if not matched:
-            continue
-        if ts is None:
-            # The delivery landed but its own timestamp couldn't be parsed —
-            # a missing observable on the DELIVERY side only (presented_ts
-            # itself is a required PlanPresentation field and can never be
-            # missing). Degrade to the match tier already established above
-            # rather than wedging.
-            degraded_match = True
-            continue
-        if ts > receipt.presented_ts:
-            verified = True
-            break
-    if verified or degraded_match:
+    if observed:
         return "allow", "", True
     return "deny", _NOT_DELIVERED_REASON, False
 

@@ -82,14 +82,15 @@ DESIRED = [
     # Hard gate: deny a plan-approval AskUserQuestion issued the same turn the
     # plan was submitted — pre-tool-call text may never render, so the click-
     # question would arrive with nothing behind it ("Я не вижу плана").
-    # 18 = the hook's own _APPROVAL_ASK_JUDGE_BUDGET_S=13 plus interpreter-start
-    # headroom, the same shape as the three gates below. The previous 5s covered
-    # only the non-judge structural checks; once the approval-ask classifier
-    # (Stage 8) put a judge call on this path, its fastest measured run (5.88s
-    # over n=32, lib/judge_latency.py) already exceeded the registration, so the
-    # harness killed the hook mid-judge on every approval ask and the delivery
-    # receipt it writes on success never got stamped.
-    ("PreToolUse",       "AskUserQuestion", "hook-plan-delivery-gate.py", 18),
+    # 35 = the hook's own _APPROVAL_ASK_JUDGE_BUDGET_S=30 plus interpreter-start
+    # headroom, the same shape as the three gates below. The previous 18 was
+    # sized off approval-sample.json alone (n=32, max 11.42s); a second n=32
+    # sample taken after production started recording timed_out:true rows
+    # against that ceiling (approval2-sample.json) ran 14.12-19.14s, entirely
+    # above the first sample's max, so the merged population's own ceiling
+    # (lib/judge_latency.py, approval_ask row) moved to 21s and this
+    # registration is sized off the hook's new 30s budget instead.
+    ("PreToolUse",       "AskUserQuestion", "hook-plan-delivery-gate.py", 35),
     # Pre-emptive primary gate: deny an AskUserQuestion that escalates an external-
     # service failure to the user WITHOUT a recorded diagnosis (present-tense outage
     # cue + user-facing ask, and neither overcome-difficulty invoked nor a declared

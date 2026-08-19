@@ -155,6 +155,20 @@ _DERIVED_CONSTANTS = [
     (_ESCALATION, "_JUDGE_MIN_CALL_S", "outage_escalation", judge_latency.call_floor_s),
     (_DEFERRING, "_ASK_JUDGE_MIN_CALL_S", "deferring_disposition", judge_latency.call_floor_s),
     (_APPROVAL, "_APPROVAL_ASK_JUDGE_MIN_CALL_S", "approval_ask", judge_latency.call_floor_s),
+    # _APPROVAL_ASK_JUDGE_BUDGET_S is deliberately ABSENT from this table now.
+    # It used to be listed here, tied by EQUALITY to call_ceiling_s("approval_ask")
+    # — this hook's own claim, not a family rule, per the comment that used to
+    # sit above this entry. That tie broke the tie's own reason for existing:
+    # the ceiling was computed from a 32-call population, the population then
+    # moved (a second sample taken after production timeouts ran entirely above
+    # the first sample's max), and an equality-pinned budget would have had to
+    # be re-derived and re-pinned on every such move with zero headroom in
+    # between. The budget now sits ABOVE the ceiling instead, joining the other
+    # two single-call hooks' `>=` shape — see
+    # test_a_single_call_hooks_budget_is_never_what_truncates_its_call below
+    # (still covers all three, unweakened) and
+    # test_the_approval_ask_budgets_headroom_over_its_ceiling_is_real (which
+    # pins the reason: the headroom itself, not a coincidence).
     (_TURN_END, "_TURN_FEEDBACK_MIN_CALL_S", "feedback_signal", judge_latency.call_floor_s),
     (_TURN_END, "_TURN_FEEDBACK_CALL_CAP_S", "feedback_signal", judge_latency.call_ceiling_s),
     (_TURN_END, "_TURN_BINARY_ASK_MIN_CALL_S", "binary_ask", judge_latency.call_floor_s),
@@ -209,6 +223,24 @@ def test_a_single_call_hooks_budget_is_never_what_truncates_its_call():
         sequence = judge_latency.HOOK_CALL_SEQUENCE[hook]
         assert hook_wiring.TIMEOUT_REQUIREMENT_CALLS[hook] == 1 == len(sequence)
         assert budget >= judge_latency.call_ceiling_s(sequence[0]), hook
+
+
+def test_the_approval_ask_budgets_headroom_over_its_ceiling_is_real():
+    """Pins the REASON _APPROVAL_ASK_JUDGE_BUDGET_S dropped its equality tie to
+    call_ceiling_s, not just the `>=` fact test_a_single_call_hooks_budget_is_
+    never_what_truncates_its_call already covers: the 9s gap between the 30s
+    budget and the 21s ceiling this row currently computes must be headroom
+    over a real measurement, not an artifact of a budget nobody re-checked
+    against a moved row. A budget that happened to clear the ceiling only
+    because the ceiling itself had drifted out from under it would pass the
+    plain `>=` check just as happily — this is a headroom assertion, not a
+    claim that the tail can never move again."""
+    ceiling = judge_latency.call_ceiling_s("approval_ask")
+    headroom = _APPROVAL._APPROVAL_ASK_JUDGE_BUDGET_S - ceiling
+    assert headroom > 0, (
+        f"budget {_APPROVAL._APPROVAL_ASK_JUDGE_BUDGET_S} must clear the "
+        f"measured ceiling {ceiling}"
+    )
 
 
 def test_the_turn_end_budgets_own_floor_is_the_least_restrictive_of_its_three():

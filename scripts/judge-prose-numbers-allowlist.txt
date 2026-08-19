@@ -33,6 +33,11 @@
 # the mechanism guarantees is narrower and still worth having: no governed
 # sentence changes without a human re-reading the reason attached to it.
 
+# --- scripts/lib/judge_latency.py ---------------------------------------------
+scripts/lib/judge_latency.py:126:c2bd6e19  # 5.88-11.42s = approval-sample.json's range, the first (now superseded) regime in the approval_ask row's provenance
+scripts/lib/judge_latency.py:128:89d91532  # 14.12-19.14s = approval2-sample.json's range, the second regime observed after production timeouts against the first sample's ceiling
+scripts/lib/judge_latency.py:134:6c63598b  # K=1 = HOOK_CALL_SEQUENCE["hook-plan-delivery-gate.py"]; why only p90_s/max_s, not the bimodal median, ever reach a constant
+
 # --- scripts/hook-turn-end-gate.py -------------------------------------------
 scripts/hook-turn-end-gate.py:89:539d8834  # 57s registration = the 52s turn-end budget + interpreter-start headroom; both sides pinned by lib/hook_wiring.TIMEOUT_REQUIREMENTS
 scripts/hook-turn-end-gate.py:92:e5251162  # historical: the 5s registration and advisor's 8s default this hook used to run under — the defect record, not a current number
@@ -71,9 +76,10 @@ scripts/agentctl/advisor.py:636:1d9f44a3  # same superseded note; "missed the ta
 scripts/agentctl/advisor.py:637:011dc63b  # median 17.43 / p90 37.58 / max 39.99 over n=18 = judge_latency.MEASURED["deferring_disposition"]
 
 # --- scripts/install-reminder-hooks.sh ---------------------------------------
-scripts/install-reminder-hooks.sh:86:ce23f03a  # historical: the hook's previous 5s registration, which covered only the pre-judge structural checks before this stage added the approval-ask classifier call
-scripts/install-reminder-hooks.sh:88:e9ed07fa  # 5.88s = judge_latency.MEASURED["approval_ask"].min_s over n=32 — the fastest observed run, already slower than the previous 5s registration
-scripts/install-reminder-hooks.sh:89:4243f262  # n=32 = judge_latency.MEASURED["approval_ask"].n, the approval-ask row's sample size (samples/judge-latency/approval-sample.json)
+scripts/install-reminder-hooks.sh:87:a3879c8a  # n=32, max 11.42s = judge_latency's prior approval_ask stats from approval-sample.json alone, the basis the superseded 18s registration rested on
+scripts/install-reminder-hooks.sh:89:94d47d98  # 19.14s = approval2-sample.json's max, the second n=32 sample whose calls ran past the first sample's ceiling in production
+scripts/install-reminder-hooks.sh:91:4d3f1fb8  # 21s = judge_latency.call_ceiling_s("approval_ask") = ceil(max 19.14) + 1 over the merged n=64 population
+scripts/install-reminder-hooks.sh:92:9e47f121  # 30s = _APPROVAL_ASK_JUDGE_BUDGET_S, the hook's own new whole-invocation budget this registration is sized off
 scripts/install-reminder-hooks.sh:93:6a8d39b3  # p90 19.16 over n=16 = judge_latency.MEASURED["outage_escalation"].p90_s
 scripts/install-reminder-hooks.sh:101:2d2694e5  # quotes the superseded n=4 note ("11.6-13.5s") against the current deferring row (median 17.43, p90 37.58)
 
@@ -84,7 +90,7 @@ scripts/lib/hook_wiring.py:132:0bb1075e  # 30s = the approved whole-invocation b
 scripts/lib/hook_wiring.py:134:b6c91e80  # 45s = the approved whole-invocation budget of hook-deferring-disposition-gate.py
 scripts/lib/hook_wiring.py:137:12d5e5bc  # 52s = the approved whole-invocation budget of hook-turn-end-gate.py, the three-judge hook
 scripts/lib/hook_wiring.py:159:13ce4bee  # K = 1 is the declared call count of the two single-judge hooks; at K=1 judge_latency.required_budget_s has no preceding call to pay for
-scripts/lib/hook_wiring.py:164:7966136e  # 13s = _APPROVAL_ASK_JUDGE_BUDGET_S, the hook's own whole-invocation judge budget, mirroring the sibling rows above
+scripts/lib/hook_wiring.py:164:7c67ab7c  # 30s = _APPROVAL_ASK_JUDGE_BUDGET_S, the hook's own whole-invocation judge budget, mirroring the sibling rows above (supersedes the 13s tie removed once the equality assertion was dropped)
 scripts/lib/hook_wiring.py:397:56471431  # historical: the 5s registration used as the example of a slow-judge hook the report must surface
 
 # --- samples/judge-latency/README.md -----------------------------------------
@@ -93,8 +99,14 @@ samples/judge-latency/README.md:31:a008f585  # provenance and n of the deferring
 samples/judge-latency/README.md:32:8b3fc2d5  # provenance and n of the outage row (10 + 6 = 16)
 samples/judge-latency/README.md:33:dcb31d7a  # provenance and n of the feedback row (10 + 16 = 26)
 samples/judge-latency/README.md:34:f159378b  # provenance and n of the binary_ask row (16)
-samples/judge-latency/README.md:36:6035ebd1  # provenance and n of the approval_ask row, mirroring judge_latency.MEASURED's provenance pairs (16 + 16 = 32)
+samples/judge-latency/README.md:41:c4f7ab96  # provenance and n of the approval_ask row after the regime-shift merge: both arms of both samples (16+16+16+16 = 64), mirroring judge_latency.MEASURED's provenance pairs
 samples/judge-latency/README.md:62:26defe90  # the measured cost of excluding topup-sample.json: binary_ask p90 16.70 -> 11.06 and its floor 17 -> 12; recorded so the exclusion is auditable
+samples/judge-latency/README.md:77:81a7a13d  # 11.42s = approval-sample.json's max — the ceiling that production observed being exceeded, prompting approval2-sample.json
+samples/judge-latency/README.md:79:eac5879f  # 12.71/12.51/11.96s = the three live-session calls that exceeded approval-sample.json's ceiling, the direct evidence for taking approval2-sample.json
+samples/judge-latency/README.md:86:a5722323  # 120s = approval2.py's per-call timeout, chosen well above anything either sample measured so the 32 latencies are uncensored
+samples/judge-latency/README.md:97:87568fe3  # 5.88-11.42 = approval-sample.json's full observed range (n=32), quoted to show the two samples' ranges do not overlap
+samples/judge-latency/README.md:98:764cc418  # 14.12-19.14 = approval2-sample.json's full observed range (n=32), the non-overlapping second regime
+samples/judge-latency/README.md:104:3a471dab  # n=64 = the merged approval_ask population size (both samples, both arms) per judge_latency.py's MEASURED row
 samples/judge-latency/README.md:69:3c1d709f  # 52s = the approved turn-end budget this feasibility table is evaluated against
 samples/judge-latency/README.md:73:8e952622  # 43.56 = the sum of the three turn-end p90s (13.34 + 11.06 + 19.16); the 8.44s headroom is 52 - 43.56
 samples/judge-latency/README.md:74:0384f6fb  # 51.53 = the sum of the three observed maxima (14.05 + 11.52 + 25.96); the 0.47s headroom is 52 - 51.53

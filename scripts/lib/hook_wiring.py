@@ -160,8 +160,8 @@ TIMEOUT_REQUIREMENTS: "tuple[tuple[str, int, str], ...]" = (
      "whole-invocation budget"),
     ("hook-turn-end-gate.py", 52,
      "up to three judges in one invocation under a 52s whole-invocation budget"),
-    ("hook-plan-delivery-gate.py", 13,
-     "one approval-ask judge under a 13s whole-invocation budget"),
+    ("hook-plan-delivery-gate.py", 30,
+     "one approval-ask judge under a 30s whole-invocation budget"),
 )
 
 # Each TIMEOUT_REQUIREMENTS minimum, above, is a copy of a number the hook
