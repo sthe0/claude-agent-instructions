@@ -92,7 +92,7 @@ def test_dispatch_stage_claude_host_never_names_the_cursor_wrapper():
     seen = []
     dispatch_stage(stage, "/tmp/plan.toml", runner=_capture_runner(seen), runtime_host=HOST_CLAUDE)
     assert seen[0][1] == str(SPAWN_CLI)
-    assert "cursor" not in seen[0][1]
+    assert "spawn-cursor-specialist.py" not in seen[0][1]
 
 
 def test_dispatch_stage_cursor_host_never_names_the_claude_wrapper():

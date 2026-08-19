@@ -18,6 +18,7 @@ import pytest
 
 from agentctl import cli
 from agentctl.dispatch import RunResult
+from lib.runtime_models import HOST_CLAUDE
 from agentctl.config import Thresholds
 from agentctl.plan import (
     _COST_TIERS,
@@ -163,6 +164,7 @@ def _executing(sid, stage):
         approval=GateRecord("plan_approval", armed=True, passed=True),
         partition=Partition(m1=True, verdict="recommended"),
         stages=[stage],
+        runtime_host=HOST_CLAUDE,
     )
     s.current_stage = 1
     return s
