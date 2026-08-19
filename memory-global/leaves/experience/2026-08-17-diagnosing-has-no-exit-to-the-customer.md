@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "user (AskUserQuestion at the resolution gate, 202
 refs: [review-loop-cannot-measure-its-own-convergence, no-circuit-breaker-on-verification-effort, effort-divergence-trigger, scope-substitution-at-plan-authoring, coordinator-objective]
 plan_file: /Users/the0/.claude-agent/plans/smd-act-defects-8.toml
 created: 2026-08-17
-last_verified: 2026-08-17
+last_verified: 2026-08-19
 ---
 
 # The effort-divergence cycle has no exit that renegotiates the order with its customer
@@ -26,6 +26,16 @@ Read the activity-theory repository and the MMPK literature, critique the implem
 ### 2026-08-17 — initial
 - Where it arose: agentctl-driven SUBSTANTIVE task smd-act-defects-8: 13 stages, 8 categorical defects repaired, landed as 77 commits at e8d7eb9
 - Working plan: /Users/the0/.claude-agent/plans/smd-act-defects-8.toml
+
+
+### 2026-08-19 — a requirement WITHDRAWN by the customer has no verdict to be recorded as
+- Where it arose: an agentctl-driven SUBSTANTIVE backlog-triage task over the Core issue tracker plus two org-internal queues: 5 stages, all PASSED, stage 5's deliverable (verify-process-doc-sync.py) rejected in full over two acceptance rounds
+- Working plan: /home/the0/.claude-agent/plans/backlog-triage-core-org.toml
+
+## Common core & variations
+**Common:** The engine can re-author a plan but cannot renegotiate the ORDER with its customer. Here the customer did renegotiate — withdrawing requirement R5 after the work itself showed the requirement rested on a flawed premise — and the engine had no way to write that down.
+
+**Variations:** Two distinct exits were missing, in sequence. (1) From node VERIFYING with every stage PASSED there is no edge back to DIAGNOSING, so replan — the honest verb for amending an order — is unreachable precisely once the work is finished enough to have DISPROVED a requirement. (2) accept --verdict takes only <id>|pass|fail, and neither fits: fail says the agent failed to build a thing the customer no longer wants and blocks resolution; pass says it was built. R5 was therefore recorded as pass carrying a note that states in its first words that the requirement was NOT fulfilled and was withdrawn — a verdict contradicting its own annotation, which is what an absent vocabulary term looks like in a ledger. Unlike the 2026-08-17 instance the cost signal was healthy (10.04 USD, 6 spawns, no effort-divergence firing) and the customer intervened early and twice; the gap surfaced anyway, which locates it in the state machine's edge set rather than in overrun.
 
 ## Cost
 428.24 USD over 57 spawns (developer 36 / 354.21, code-reviewer 15 / 56.58, thinker 6 / 17.45), plus unattributed main-thread tokens; 12 days wall-clock (2026-08-04 to 2026-08-16); 11 replans; 164 user prompts. Orientation was 150-250 USD, so roughly 2x the top of it.
