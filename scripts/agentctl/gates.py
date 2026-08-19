@@ -513,24 +513,31 @@ _PLAN_REVIEW_ROUND_RELEASE_MESSAGE = (
     "effort-replan-absolute, reused) — no further thinker review is required, but the "
     "decision is yours and must be recorded: to go ahead with the plan as it stands, "
     "run plan-review --verdict override --reviewer <you> --note <why it is acceptable>; "
-    "to cut scope instead, edit the plan and resubmit — but the budget does not refill, "
-    "so cutting scope does not by itself open this gate; `approve` still answers to "
-    "every other gate as well"
+    "to cut scope instead, edit the plan and re-apply it by the route your state allows "
+    "— `submit-plan` before approval, `replan --plan <edited>` after it — but the budget "
+    "does not refill, so cutting scope does not by itself open this gate; `approve` "
+    "still answers to every other gate as well"
 )
 
 
 def plan_review_round_release_active(state: SessionState | None, thr: Thresholds | None = None) -> bool:
-    """True once `state.plan_review_rounds` (PLAN_READY resubmissions since the last
-    approval) has reached the Rule-of-Three threshold this stage reuses rather than
-    duplicating — config.md's `effort-replan-absolute`. Past this point
-    `plan_review_blockers` stops demanding another review pass and routes to the user
+    """True once `state.plan_review_rounds` has reached the Rule-of-Three threshold this
+    stage reuses rather than duplicating — config.md's `effort-replan-absolute`. Past this
+    point `plan_review_blockers` stops demanding another review pass and routes to the user
     instead (see `_PLAN_REVIEW_ROUND_RELEASE_MESSAGE`).
 
+    The count spans BOTH review loops, since both are the same difficulty wearing two
+    costumes: `cmd_submit_plan` advances it per PLAN_READY resubmission before approval,
+    and `cmd_plan_review` advances it per plan VERSION reviewed after approval — the
+    `replan` loop, which is where review cycles overwhelmingly recur. It resets at
+    `approve` and at `replan` respectively (see `state.plan_review_counted_digest`).
+
     "A review actually happened" is carried by the count itself — `cmd_submit_plan`
-    advances it only while a review record stands — and deliberately NOT re-derived here
-    from the records still on file. Re-deriving it reads a PAST event off a PRESENT
-    record, and the two diverge exactly when a stage-scoped review is staled by the same
-    edit that answers it: three spent rounds would then look like none."""
+    advances it only while a review record stands, `cmd_plan_review` only when recording
+    one — and deliberately NOT re-derived here from the records still on file. Re-deriving
+    it reads a PAST event off a PRESENT record, and the two diverge exactly when a
+    stage-scoped review is staled by the same edit that answers it: three spent rounds
+    would then look like none."""
     if state is None:
         return False
     thr = thr if thr is not None else Thresholds()

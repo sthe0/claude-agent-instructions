@@ -1,5 +1,5 @@
-"""Stage 7: the pre-approval review-round budget. Counts PLAN_READY resubmission
-rounds (the revise_plan self-loop) on the session, reused against the SAME
+"""Stage 7: the review-round budget. Counts review rounds on the session, reused
+against the SAME
 Rule-of-Three threshold as effort-replan-absolute (config.md, no new key) rather
 than a fresh one. Below the threshold, and before any review has been recorded at
 all, every plan_review_blockers verdict is byte-identical to before this stage; at
@@ -13,7 +13,10 @@ since a routing whose named exits all bounce is a livelock. Approval resets the 
 
 Group 1 locks gates.plan_review_round_release_active / plan_review_blockers
 directly (mirrors test_plan_review_gate.py's Group 1 style). Group 2 drives the
-real CLI (cmd_submit_plan increment, cmd_approve surface/record/reset)."""
+real CLI on the PRE-approval loop (cmd_submit_plan increment, cmd_approve
+surface/record/reset). Group 3 drives it on the POST-approval one — the `replan`
+path, where review cycles actually recur and where the counted unit is a plan
+VERSION rather than a recorded verdict."""
 from __future__ import annotations
 
 from argparse import Namespace
@@ -310,3 +313,203 @@ def _sha256_file(p) -> str:
     import hashlib
     from pathlib import Path
     return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+
+
+# --- 3. cmd_plan_review / cmd_replan: the POST-APPROVAL loop --------------------
+#
+# Group 2 above covers the pre-approval loop, which is the only one the counter
+# originally reached. Review cycles overwhelmingly recur AFTER approval, on the
+# `replan` path, where the same thinker review is demanded and nothing advanced the
+# count — so the release valve was unreachable exactly where it was needed. These
+# cases live in this module rather than a parallel one because they are the same
+# counter: split across two files, a change to the counting unit would be reviewed
+# against half its coverage.
+
+def _to_executing(store, sid, plan):
+    """Drive a substantive session with the review gate LIVE to EXECUTING, so the
+    verdicts below land in the post-approval region."""
+    _to_plan_ready(store, sid, plan)
+    cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker", concerns=None,
+                           note="", target=plan, plan_digest=_sha256_file(plan)), store=store)
+    cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
+                         m3_severe=False, m4_severe=False), store=store)
+    cli.cmd_next_stage(ns(session=sid), store=store)
+
+
+def _revise_post(store, sid, plan):
+    return cli.cmd_plan_review(ns(session=sid, verdict="revise", reviewer="thinker",
+                                  concerns=["stage 2 still asserts nothing"], note="",
+                                  target=plan, plan_digest=_sha256_file(plan)), store=store)
+
+
+def _copy_fixture(fixtures_dir, tmp_path, name, as_="p.toml"):
+    import shutil
+    dest = str(tmp_path / as_)
+    shutil.copy(fixtures_dir / name, dest)
+    return dest
+
+
+def test_a_coverage_pass_over_one_plan_version_spends_exactly_one_round(
+        store, fixtures_dir, tmp_path, gate_on):
+    """(e) The regression the counting unit exists for. gates._plan_review_blockers_
+    coverage surfaces ONE uncovered stage at a time, so an honest first pass over a
+    three-stage plan records three stage-scoped verdicts against a single set of plan
+    bytes. Counting VERDICTS would exhaust the budget inside that pass — and since the
+    release SUBSTITUTES the blocker list, "stage 3 has not been reviewed" would be
+    replaced by "no further review is required", retiring a review nobody performed."""
+    sid = "rr-cov"
+    plan = _copy_fixture(fixtures_dir, tmp_path, "plan_two_stage_substantive.toml", "p3.toml")
+    _to_executing(store, sid, plan)
+    digest = _sha256_file(plan)
+    for stage in (1, 2, 3):
+        cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker", concerns=None,
+                               note="", target=plan, plan_digest=digest,
+                               scope=f"stage:{stage}"), store=store)
+    s = store.load(sid)
+    assert s.plan_review_rounds == 1          # one VERSION reviewed, not three verdicts
+    assert s.plan_review_counted_digest == digest
+    assert gates.plan_review_round_release_active(s) is False
+
+
+def test_post_approval_versions_count_and_release_lands_in_the_verdict_directive(
+        store, fixtures_dir, tmp_path, gate_on):
+    """(a) Three post-approval verdicts on three distinct plan versions exhaust the
+    budget, and the third verdict's OWN Directive carries the release — the increment
+    sits before the blockers computation precisely so the coordinator is not told to
+    review again one call after the budget ran out."""
+    sid = "rr-post"
+    plan = _copy_fixture(fixtures_dir, tmp_path, "plan_two_stage.toml")
+    _to_executing(store, sid, plan)
+    assert store.load(sid).plan_review_rounds == 0
+
+    for n in range(2):
+        d = _revise_post(store, sid, plan)
+        assert d.data["plan_review_round_release"] is None
+        assert store.load(sid).plan_review_rounds == n + 1
+        _retitle_stage(plan, 2, f"Add tests, revision {n}")
+
+    d = _revise_post(store, sid, plan)
+    s = store.load(sid)
+    assert s.plan_review_rounds == 3
+    assert gates.plan_review_round_release_active(s) is True
+    assert d.data["plan_review_round_release"] == {"rounds": 3}
+    assert len(d.data["blockers"]) == 1
+    assert "round budget exhausted at round 3" in d.data["blockers"][0]
+
+
+def test_a_verdict_before_approval_does_not_touch_the_post_approval_counter(
+        store, fixtures_dir, gate_on):
+    """(b) Pins the disjointness of the two increment sites, which otherwise rests only
+    on statement order inside cmd_submit_plan (it sets approval.passed = False BEFORE
+    its own increment). A verdict recorded at PLAN_READY must move neither field —
+    double-counting one round would halve the budget."""
+    sid = "rr-pre"
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    _to_plan_ready(store, sid, plan)
+    _record_revise(store, sid, plan)
+    s = store.load(sid)
+    assert s.plan_review_rounds == 0
+    assert s.plan_review_counted_digest == ""
+
+
+def test_replan_resets_the_counter_and_the_counted_version(store, fixtures_dir, gate_on):
+    """(c) A replan that gets past every refusal has applied a corrected plan, so the
+    rounds spent arguing about the previous one are settled. The marker resets with the
+    counter: left behind, it would make the next loop's first review look already
+    counted."""
+    sid = "rr-reset"
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    _to_executing(store, sid, plan)
+    _revise_post(store, sid, plan)
+    assert store.load(sid).plan_review_rounds == 1
+    cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker", concerns=None,
+                           note="", target=refined,
+                           plan_digest=_sha256_file(refined)), store=store)
+    assert store.load(sid).plan_review_rounds == 2
+
+    d = cli.cmd_replan(ns(session=sid, plan=refined), store=store)
+    assert d.ok is True
+    s = store.load(sid)
+    assert s.plan_review_rounds == 0
+    assert s.plan_review_counted_digest == ""
+
+
+def test_release_reaches_the_coordinator_on_the_replan_path(
+        store, fixtures_dir, tmp_path, gate_on):
+    """(f) The half-delivery this stage removes: with the release active, cmd_replan
+    used to keep answering "the corrected plan needs a thinker review" — naming as the
+    cure the very act the valve had just retired, leaving the loop without an exit — and
+    the plan_review_round_release event existed only in cmd_approve, so the telemetry
+    the defect was measured with would still read zero after the fix."""
+    sid = "rr-replan-release"
+    plan = _copy_fixture(fixtures_dir, tmp_path, "plan_two_stage.toml")
+    _to_executing(store, sid, plan)
+    for n in range(3):
+        _revise_post(store, sid, plan)
+        _retitle_stage(plan, 2, f"Add tests, revision {n}")
+    assert store.load(sid).plan_review_rounds == 3
+
+    d = cli.cmd_replan(ns(session=sid, plan=plan), store=store)
+    assert d.ok is False and d.action == "plan_review"
+    assert "needs a thinker review" not in d.detail
+    assert d.data["plan_review_round_release"] == {"rounds": 3}
+    assert len(d.data["blockers"]) == 1
+    assert "round budget exhausted at round 3" in d.data["blockers"][0]
+    # One event for the round, though two different commands surfaced it — the dedup is
+    # per round count, so the history stays countable as a metric.
+    events = [e for e in store.load(sid).history if e.get("event") == "plan_review_round_release"]
+    assert [e["rounds"] for e in events] == [3]
+
+
+def _parent_at_executing(store, sid, *, rounds, digest):
+    from agentctl.state import GateRecord
+    s = SessionState(session_id=sid, task_id="parent", weight_class="SUBSTANTIVE",
+                     plan_path="/plan.toml", plan_verified=True,
+                     node=Node.EXECUTING.value,
+                     approval=GateRecord("plan_approval", armed=True, passed=True, by="user"),
+                     current_stage=1,
+                     plan_review_rounds=rounds, plan_review_counted_digest=digest)
+    store.save(s)
+    return s
+
+
+def test_a_service_sub_plan_neither_spends_nor_inherits_the_parents_rounds(store):
+    """(d) Custody, not discard — the same shape as the effort block beside it. This is
+    also why the counter's monotonicity invariant is scoped to one plan-stack level: the
+    pop restoring the parent's smaller count is custody, not a decrease."""
+    from agentctl.state import (
+        Actor, Criterion, GateRecord, Means, Outcome, Stage, StageStatus, Subject,
+    )
+    sid = "rr-custody"
+    _parent_at_executing(store, sid, rounds=2, digest="cafe1234")
+
+    cli.cmd_push_subplan(ns(session=sid, plan="/tmp/child.toml", task="child",
+                            originating_stage=1), store=store)
+    state = store.load(sid)
+    assert state.plan_stack[0].plan_review_rounds == 2
+    assert state.plan_stack[0].plan_review_counted_digest == "cafe1234"
+    assert state.plan_review_rounds == 0        # the child argues on its own budget
+    assert state.plan_review_counted_digest == ""
+
+    # The child spends rounds of its own, then resolves.
+    state.plan_review_rounds = 3
+    state.plan_review_counted_digest = "beef5678"
+    state.stages = [Stage(index=1, title="child stage",
+                          subject=Subject(material="m", result="img"),
+                          means=Means(means="Edit", method="do"),
+                          actor=Actor(executor="in_thread"),
+                          criterion=Criterion(criterion_type="measurable", done_criterion="done"),
+                          outcome=Outcome(status=StageStatus.PASSED.value))]
+    state.resolution = GateRecord("resolution", armed=True, passed=True, by="user")
+    state.node = Node.RESOLVED.value
+    state.current_stage = None
+    store.save(state)
+
+    assert cli.cmd_pop_subplan(ns(session=sid), store=store).ok is True
+    restored = store.load(sid)
+    # Restored, NOT merged like effort_actuals: the child's rounds were spent arguing
+    # about the child's plan, which no longer exists once the parent resumes.
+    assert restored.plan_review_rounds == 2
+    assert restored.plan_review_counted_digest == "cafe1234"

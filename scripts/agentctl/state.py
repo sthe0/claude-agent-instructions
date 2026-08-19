@@ -1057,6 +1057,15 @@ class PlanFrame:
     effort_actuals: dict
     effort_fires: list[dict]
     effort_spend_seen: dict
+    # Review-round custody (schema 30). The counter and its counted-version marker belong
+    # to the plan under review, so a service sub-plan neither spends the parent's budget
+    # nor inherits it: cmd_push_subplan snapshots them here and zeroes the live pair,
+    # cmd_pop_subplan restores them. This is why the counter's monotonicity invariant is
+    # scoped to one plan-stack level — a pop restoring the parent's smaller count is
+    # custody, not a decrease. Defaults carry legacy frames (absent keys), which restore
+    # the same zeroed pair a fresh push would produce.
+    plan_review_rounds: int = 0
+    plan_review_counted_digest: str = ""
 
 
 @dataclass
@@ -1261,13 +1270,29 @@ class SessionState:
     # gates._plan_review_verdict_blockers fall back to today's unconditional block
     # on a `revise` verdict, unchanged.
     risk_acceptances: list["RiskAcceptance"] = field(default_factory=list)
-    # Pre-approval review-round counter (schema 30): cmd_submit_plan increments it on
-    # every resubmission at PLAN_READY (the revise_plan self-loop) made while a review
-    # record stands; cmd_approve resets it to 0 on a successful approval. Read by
-    # gates.plan_review_round_release_active against the Rule-of-Three threshold
-    # config.md's effort-replan-absolute reuses. 0
+    # Review-round counter (schema 30), advanced on BOTH review paths:
+    #   * pre-approval — cmd_submit_plan increments it on every resubmission at
+    #     PLAN_READY (the revise_plan self-loop) made while a review record stands;
+    #     cmd_approve resets it to 0 on a successful approval.
+    #   * post-approval — cmd_plan_review increments it per plan VERSION reviewed once
+    #     the approval gate has passed (the `replan` loop, which is where review cycles
+    #     actually recur); cmd_replan resets it and plan_review_counted_digest together.
+    # The two paths are disjoint in time, not merely by convention: cmd_submit_plan sets
+    # approval.passed = False BEFORE its own increment, so no single call can satisfy
+    # both conditions. Read by gates.plan_review_round_release_active against the
+    # Rule-of-Three threshold config.md's effort-replan-absolute reuses. 0
     # on legacy states (absent key -> dataclass default via from_dict's cls(**data)).
     plan_review_rounds: int = 0
+    # sha256 of the plan bytes whose review last advanced plan_review_rounds on the
+    # post-approval path (schema 30). The counted UNIT is a plan VERSION, not a recorded
+    # verdict: gates._plan_review_blockers_coverage surfaces ONE uncovered stage at a
+    # time, so an honest first coverage pass over a plan with three moved stages records
+    # three verdicts against identical bytes. Counting verdicts would fire the release
+    # part-way through that pass — and because the release SUBSTITUTES the whole blocker
+    # list rather than adding to it, "stage 3 has not been reviewed" would be replaced by
+    # "no further review is required", retiring a requirement nobody satisfied. Empty on
+    # legacy states (absent key -> dataclass default via from_dict's cls(**data)).
+    plan_review_counted_digest: str = ""
     # The acceptance-review judge records backing the acceptance-review gate (schema
     # 14): one StageReview per acceptance_review stage that has been judged, and one
     # JudgeBypass per gate bypass (kill switch / override). Both default to [] — legacy
@@ -1625,6 +1650,8 @@ class SessionState:
                 effort_actuals=f.get("effort_actuals") or {},
                 effort_fires=f.get("effort_fires") or [],
                 effort_spend_seen=f.get("effort_spend_seen") or {},
+                plan_review_rounds=f.get("plan_review_rounds") or 0,
+                plan_review_counted_digest=f.get("plan_review_counted_digest") or "",
             )
             for f in data.get("plan_stack", [])
         ]

@@ -2833,6 +2833,32 @@ def cmd_confirm_delivery(args, *, store: StateStore, runner: Runner | None = Non
     )
 
 
+def _note_round_release(state, review_blockers, store: StateStore) -> dict | None:
+    """The round-release payload for a refusal, plus its once-per-round telemetry event.
+
+    Shared by every command whose refusal can carry the release — approve, plan-review
+    and replan — because the valve firing is only useful if the coordinator reading THAT
+    refusal sees it. The log event is the metric this valve's reachability was measured
+    with, so a command that surfaces the release but never logs it would leave the metric
+    reading 0 after the fix. Deduped on the round number: the same round can be refused
+    many times, and each refusal must not add a fresh event.
+
+    Returns None when the valve is not active, which is also the payload callers put on
+    the Directive — an explicit "no release here" rather than a missing key.
+    """
+    if not (review_blockers and gates.plan_review_round_release_active(state)):
+        return None
+    already_logged = any(
+        e.get("event") == "plan_review_round_release"
+        and e.get("rounds") == state.plan_review_rounds
+        for e in state.history
+    )
+    if not already_logged:
+        state.log("plan_review_round_release", rounds=state.plan_review_rounds)
+        store.save(state)
+    return {"rounds": state.plan_review_rounds}
+
+
 def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Record a thinker review of a plan version, backing the plan-review gate.
 
@@ -2944,6 +2970,31 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
         state.plan_stage_reviews[scope] = review
     else:
         state.plan_review = review
+    # POST-APPROVAL round counting. cmd_submit_plan's increment covers only the
+    # pre-approval resubmission loop; review cycles overwhelmingly recur AFTER
+    # approval, on the `replan` path, where the same thinker review is demanded and
+    # nothing advanced the counter — leaving the round-release valve unreachable
+    # exactly where it is needed. The two increments are disjoint in time, not by
+    # convention: cmd_submit_plan sets approval.passed = False BEFORE its own
+    # increment, so no single call can satisfy both conditions.
+    #
+    # The unit is a plan VERSION, not a verdict — see plan_review_counted_digest's
+    # field comment in state.py for why counting verdicts would fire the release
+    # inside a legitimate stage-coverage pass and retire reviews nobody performed.
+    #
+    # An UNREADABLE plan does not count and leaves the marker untouched. That is the
+    # conservative direction here even though over-counting is the usual fail-safe:
+    # because the release SUBSTITUTES the outstanding blockers rather than adding to
+    # them, an over-count can cancel a review requirement nobody satisfied, whereas an
+    # under-count only leaves the user's existing one-sentence override as the exit.
+    #
+    # Placed BEFORE the blockers call so the verdict that exhausts the budget surfaces
+    # the release in its own Directive, rather than one round later.
+    if state.approval is not None and state.approval.passed:
+        counted = _plan_file_sha256(target)
+        if counted and counted != state.plan_review_counted_digest:
+            state.plan_review_rounds += 1
+            state.plan_review_counted_digest = counted
     blockers = gates.plan_review_blockers(state, target)
     _log_gate(state, "plan_review", blockers, passed=not blockers)
     state.log("plan_review", target=target, verdict=args.verdict, scope=scope,
@@ -2956,10 +3007,11 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
               findings_nonblocking=getattr(args, "findings_nonblocking", None))
     store.save(state)
     if blockers:
+        round_release = _note_round_release(state, blockers, store)
         return Directive(
             False, state.node, "plan_review",
             "thinker review recorded but does not clear the gate",
-            data={"blockers": blockers},
+            data={"blockers": blockers, "plan_review_round_release": round_release},
         )
     return Directive(
         True, state.node, "continue",
@@ -3413,17 +3465,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         # is the one person who both can see the number and is about to decide what to
         # do about it — and if the blocker below is the enumeration one, the decision
         # is literally whether to add to that count.
-        round_release = None
-        if review_blockers and gates.plan_review_round_release_active(state):
-            round_release = {"rounds": state.plan_review_rounds}
-            already_logged = any(
-                e.get("event") == "plan_review_round_release"
-                and e.get("rounds") == state.plan_review_rounds
-                for e in state.history
-            )
-            if not already_logged:
-                state.log("plan_review_round_release", rounds=state.plan_review_rounds)
-                store.save(state)
+        round_release = _note_round_release(state, review_blockers, store)
         return _with_advisories(
             Directive(False, state.node, "fix_plan", "cannot approve", data={
                 "blockers": blockers,
@@ -3439,6 +3481,11 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     effort.arm(state)  # opens the effort-divergence window — see effort.py's ARMED-ONLY
     state.approval = GateRecord("plan_approval", armed=True, passed=True, by=args.by)
     state.plan_review_rounds = 0
+    # Cleared with the counter, not merely alongside it: the marker is what makes the
+    # NEXT post-approval review count as round 1. Left carrying the approved plan's
+    # digest, a first replan-time review of that same unedited plan would be read as
+    # "already counted" and skipped.
+    state.plan_review_counted_digest = ""
     state.node = transition(state.node, "approve")
     snap = _snapshot_approved_plan(store, state)
     if snap:
@@ -4777,10 +4824,22 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     prblock = gates.plan_review_blockers(state, args.plan)
     _log_gate(state, "plan_review", prblock, passed=not prblock)
     if prblock:
-        return Directive(False, state.node, "plan_review",
-                         "replan blocked: the corrected plan needs a thinker review "
-                         "(run: plan-review --target " + args.plan + ")",
-                         data={"blockers": prblock})
+        # With the round-release valve active the blockers ARE the release message,
+        # which says no further review is required — so the refusal must stop
+        # prescribing one, or the engine would name as the cure the very act the
+        # valve just retired, and the loop would have no exit. This is the path the
+        # valve exists for: post-approval replan is where review cycles recur.
+        round_release = _note_round_release(state, prblock, store)
+        message = (
+            "replan blocked: the review-round budget is spent, so the decision is "
+            "yours — see blockers"
+            if round_release
+            else "replan blocked: the corrected plan needs a thinker review "
+                 "(run: plan-review --target " + args.plan + ")"
+        )
+        return Directive(False, state.node, "plan_review", message,
+                         data={"blockers": prblock,
+                               "plan_review_round_release": round_release})
 
     # Submission seam (b): the single NEW-side load and the check it feeds. Its placement
     # answers two separate orderings at once.
@@ -4923,6 +4982,19 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             _log_gate(state, "replan_coverage_waiver", cov, passed=True)
 
     kind = diff_plans(old, new)
+    # The replan-loop counterpart of cmd_approve's reset: a replan that gets this far has
+    # applied a corrected plan, so the rounds spent arguing about the previous one are
+    # settled and the next loop starts from zero. Placed here — past every refusal of this
+    # command and common to all three of its success branches — so a REFUSED replan never
+    # silently refills the budget it was blocked by.
+    #
+    # The `--renormalize` early return above is deliberately NOT reset: that path changes
+    # the sequence without touching the norm under review (it demands no review at all and
+    # logs `renormalize` precisely so the effort trigger does not read it as a norm
+    # revision), so the rounds already spent still belong to the same norm and stay
+    # against it.
+    state.plan_review_rounds = 0
+    state.plan_review_counted_digest = ""
     # Stamped HERE and not up at the seam: every refusal path of this command is now behind
     # us — the last of them being the critique-coverage gate just above — so like seam (a)
     # the digest only ever names bytes the session ACCEPTED. (Not an enumeration: this
@@ -5183,6 +5255,8 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
         effort_actuals=dict(state.effort_actuals),
         effort_fires=list(state.effort_fires),
         effort_spend_seen=dict(state.effort_spend_seen),
+        plan_review_rounds=state.plan_review_rounds,
+        plan_review_counted_digest=state.plan_review_counted_digest,
     )
     state.plan_stack.append(frame)
     # Reset to a fresh child cycle — the child re-classifies and plans normally.
@@ -5220,6 +5294,11 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
     state.effort_actuals = {}
     state.effort_fires = []
     state.effort_spend_seen = {}
+    # Review-round custody (schema 30), on the same reasoning as the effort block above:
+    # the frame holds the parent's pair, so the child argues about its own plan on its own
+    # budget and cannot spend — or be charged for — the parent's rounds.
+    state.plan_review_rounds = 0
+    state.plan_review_counted_digest = ""
     state.log("push_subplan", child_plan=child_plan, originating_stage=originating, depth=len(state.plan_stack))
     store.save(state)
     return Directive(
@@ -5269,6 +5348,11 @@ def cmd_pop_subplan(args, *, store: StateStore, runner: Runner | None = None) ->
     state.effort_baseline = frame.effort_baseline
     state.effort_fires = frame.effort_fires
     state.effort_spend_seen = frame.effort_spend_seen
+    # Review-round custody (schema 30). Restored, NOT merged like effort_actuals: rounds
+    # are argument about a particular plan, and the child's rounds were spent arguing
+    # about the child's plan, which no longer exists once the parent resumes.
+    state.plan_review_rounds = frame.plan_review_rounds
+    state.plan_review_counted_digest = frame.plan_review_counted_digest
     state.node = new_node
     # The parent PLAN FILE is authoritative for the venue, so re-derive it here
     # rather than trust the frame: a frame captured after the value was already
