@@ -30,6 +30,8 @@ git clone git@github.com:sthe0/claude-agent-instructions.git ~/claude-agent-inst
 
 `doctor.sh` confirms the runtime is actually ready: the `claude` CLI is on PATH, the constitution is loaded, the engine hooks are armed, and `agentctl` runs. Fix any `[FAIL]` line (usually by re-running `setup-symlinks.sh`) before the first task.
 
+For **Cursor** as the coordination host, also run `~/claude-agent-instructions/cursor/scripts/cursor-doctor.sh` after global symlinks — it checks the Cursor mirror symlinks, `agent`/`cursor-agent` on PATH, and `agentctl` from the repo.
+
 ## Isolated config root
 
 > **The user↔Core switch (the one thing not to miss).** Bare **`claude` = your personal install** on `~/.claude`, never touched. **`claude-task` / `claude-agent` = the Core system** on `~/.claude-agent`. Switching between the two is just choosing which entry point you launch — nothing is shared, copied, or overwritten between them. On a clean install `doctor.sh` and `onboard` print this switch and how to start your first task at the end (see [Starting a task](#starting-a-task-with-claude-task)).
@@ -78,9 +80,32 @@ You usually don't run this by hand: after a successful `sync-instructions-repo.s
 
 Project-specific Cursor rules live in the project's own `<project>/.claude/rules/` tree and are wired to `<project>/.cursor/rules/` by the project's own setup script.
 
+
+## Cursor readiness
+
+`cursor/scripts/cursor-doctor.sh` is the Cursor-side counterpart to `doctor.sh`: read-only checks for the global Cursor rule symlink, `permissions.json`, the Cursor CLI, and `python3 -m agentctl` from this repo. Warnings only for missing API keys or `cli-config.json`. Wired into `verify-instructions-sync.sh` when the script is executable.
+
 ## Per-project local setup
 
-Each product repo has its own `.claude/scripts/setup-local.sh`. Run it from the project root after the global setup above. It calls the global `scripts/setup-project-memory.sh` where applicable and creates any project-level Cursor symlinks.
+
+Each product repo ships a minimal `.claude/scripts/setup-local.sh` at the project root. Example:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+GLOBAL="$HOME/claude-agent-instructions/scripts"
+"$GLOBAL/setup-project-memory.sh" "$REPO_ROOT"
+mkdir -p "$REPO_ROOT/.cursor/rules"
+for rule in "$REPO_ROOT/.claude/rules/"*.mdc; do
+  [[ -f "$rule" ]] || continue
+  ln -sfn "$(realpath "$rule")" "$REPO_ROOT/.cursor/rules/$(basename "$rule")"
+done
+"$HOME/claude-agent-instructions/cursor/scripts/link-project-cursor-agents.sh" "$REPO_ROOT"
+```
+
+Run it from the project root after global setup. It calls the global `scripts/setup-project-memory.sh` where applicable and creates project-level Cursor symlinks.
+
 
 ## Multi-project workspaces (optional)
 

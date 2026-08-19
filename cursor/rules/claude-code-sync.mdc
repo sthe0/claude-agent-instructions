@@ -71,7 +71,7 @@ A **difficulty** is a divergence between reality and the plan — either a step'
 
 ## Skills (Cursor has no Skill tool — invoke by reading)
 
-Three global skills live in `~/.claude-agent/skills/`. Cursor cannot trigger them through a `Skill` tool, so **you invoke them by reading the SKILL.md and following it in this conversation** when the trigger fires.
+**Four** global skills live in `~/.claude-agent/skills/`. Cursor cannot trigger them through a `Skill` tool, so **you invoke them by reading the SKILL.md and following it in this conversation** when the trigger fires.
 
 ### `overcome-difficulty`
 
@@ -143,11 +143,11 @@ If a fact qualifies for two scopes, write to the **most specific**. Duplicate co
 
 Each scope also carries two sub-folders: `experience/` (per-task post-resolution leaves, § On task resolution above) and `system-knowledge/` (durable non-self-evident system/process/architecture facts; recording criteria in `~/.claude-agent/CLAUDE.md` § Memory). Cursor has no auto-memory write mechanism — write memory files directly when triggered.
 
-## Specializations in Cursor (read inline, do not spawn)
+## Specializations in Cursor (inline default; engine spawn when runtime_host=cursor)
 
-Specialization skills live in `~/.claude-agent/skills/<name>/SKILL.md`. The CLAUDE.md spawn pattern (separate `claude -p` process with `--append-system-prompt-file`) **does not apply in Cursor** — see § Hard gate above.
+Specialization skills live in `~/.claude-agent/skills/<name>/SKILL.md`. **Default in this Cursor chat:** read the SKILL.md **inline** and apply its principles here — no `claude -p`, no separate manager process (§ Hard gate).
 
-When a plan step calls for a specialization, **read the SKILL.md inline** and apply its working principles in your current Cursor context. You stay in-thread; you do not spawn a separate process.
+When `agentctl` plans a **spawn stage** and the session's sticky **`runtime_host=cursor`**, the engine routes through **`agentctl dispatch` → `spawn-cursor-specialist.py` (`agent -p`)** — still never `claude -p`. In-thread reading remains the path for non-spawn plan steps and when the engine is unavailable.
 
 | Specialization | Read when a plan step calls for | SKILL.md |
 |---|---|---|
@@ -174,6 +174,11 @@ The recursive escape inside `overcome-difficulty/SKILL.md` spawns `claude -p`. *
 4. **Optional Claude Code handoff** — self-contained paste for the user; you do not run `claude`.
 
 Do not attempt to invoke `claude` from Bash as a workaround. The gate is unconditional.
+
+
+## Hookless Cursor obligations
+
+Cursor has no SessionStart/Stop/PreToolUse hooks — the same rules apply, **prose-enforced**. **Substantive** tasks: run **`agentctl classify`** (add **`--host cursor`** when this host is Cursor) at task start when the engine is available. **Production Edit/Write** only after plan approval and an execution node (mirror § Acting without asking = `hook-state-gate.py` equivalent). **End-of-turn:** run **`self-improvement`** when feedback warrants it and put the **resolution ask** in the same reply — hooks do not block. Use **AskQuestion** for fixed-choice confirms when attached; a prose menu at the end is not a substitute. Periodically run **`~/claude-agent-instructions/scripts/self-diagnose.py`** (no SessionStart auto-run).
 
 ## Instructions repository (git)
 

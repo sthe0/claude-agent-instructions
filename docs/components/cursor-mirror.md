@@ -12,4 +12,15 @@ Three disciplines keep the mirror honest:
 
 At runtime the rule is wired to `~/.cursor/rules/claude-code-sync.mdc` by `setup-symlinks.sh`, the same single wiring command that installs the Claude-side symlinks.
 
+
+## Hook compensation (Claude Code → Cursor)
+
+| Claude hook / gate cluster | Cursor compensation |
+|---|---|
+| SessionStart (`self-diagnose`, scope registration) | Coordinator runs `~/claude-agent-instructions/scripts/self-diagnose.py` periodically; no auto-run |
+| PreToolUse / `hook-state-gate.py` (plan approval, execution node) | Prose + `agentctl` spine; mirror § Hookless Cursor obligations |
+| Stop / `hook-turn-end-gate.py` (self-improvement, resolution) | Same-turn self-improvement + resolution ask in the final reply |
+| Skill tool invocation | Read `SKILL.md` inline in chat |
+| `AskUserQuestion` | **AskQuestion** when attached; else fixed-choice prose |
+
 Cursor sessions still run the `agentctl` spine when the engine is available (CLI + hooks); the mirror's thin prose must not be read as a hand-walk carve-out. Claude Code's `AskUserQuestion` maps to Cursor's **AskQuestion** when that tool is attached (otherwise ask the same fixed-choice question in prose).

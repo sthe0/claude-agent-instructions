@@ -21,6 +21,7 @@ CHECKS: list[str] = [
     "lint-settings-base",
     "verify-cross-refs",
     "lint-cursor-mirror",
+    "lint-cursor-mirror-cochange",
     "lint-prose-length",
     "verify-experience-leaf",
     "verify-leaf-structure",
@@ -47,7 +48,7 @@ CHECK_ARGS: dict[str, list[str]] = {
 
 
 def load_check(name: str, scripts_dir: Path):
-    if name == "lint-cursor-mirror":
+    if name.startswith("lint-cursor-mirror"):
         path = scripts_dir.parent / "cursor" / "scripts" / f"{name}.py"
     else:
         path = scripts_dir / f"{name}.py"
