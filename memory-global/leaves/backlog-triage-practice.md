@@ -1,0 +1,66 @@
+---
+name: backlog-triage-practice
+description: "Разбор беклога" as a nameable, recurring task type across the Core (GitHub Issues) and Org (org-tier tracker) backlog tiers — compact priority rubric + procedure, referencing (not duplicating) the general coordination-spine docs.
+type: reference
+schema: leaf/v1
+created: 2026-08-19
+last_verified: 2026-08-19
+---
+
+# Backlog triage as a task type
+
+## Difficulty
+
+The backlog accumulates across two disjoint sources — Core (public GitHub Issues, `sthe0/claude-agent-instructions`, labels `difficulty`/`backlog`) and Org (an org-tier tracker's backlog + report queues — see [[instruction-dev-queues]] for the tier model; org-specific queue names/keys are internal detail and don't belong in this Core leaf) — with no standing way to (a) see both together, (b) rank them by anything other than recency/gut feel, or (c) re-derive that ranking each time the user actually has attention to spend on the backlog, since which item is "most worth doing" changes as items get closed, drift in, or accumulate cluster-mates. Without a repeatable procedure, every visit re-invents the triage from scratch — costly, and prone to silently inventing urgency for items that carry no real signal.
+
+This leaf packages "разбор беклога" (backlog triage over a named scope) as one instance of the **general task-resolution process** already governed by `~/.claude-agent/CLAUDE.md` § Coordination spine, `scripts/agentctl/README.md`, and [[plan-activity-ontology]] — it does **not** restate that model. What it adds is specific to this one task type: the priority rubric and the collection procedure. Per explicit user correction: the engine itself never picks which task to work on — triage produces an ORDERED LIST, not an autonomous action; work on a specific item begins only via an explicit appeal naming that item.
+
+## Guidance
+
+### Scope
+
+A backlog-triage task names its sources up front (today: Core GitHub Issues + the Org tier's backlog and report queues; a future run may add/drop a source — state it explicitly, don't assume the set is fixed). Run as a normal Substantive task through the coordination spine (multi-source external reads, likely > `substantive-wall-clock-min` — see `~/.claude-agent/config.md`), not a special-cased flow.
+
+### Priority rubric
+
+```
+score(item) = breadth_weight(item) × recurrence_mass(item) / cost_to_resolve(item, in_flight_discount)
+```
+
+This is a direct generalization of engine mass-triggers that already exist for other events — `core-difficulty-mass-threshold` and `principle-promotion-threshold` (`~/.claude-agent/config.md`) both count "how many times has this recurred" for a different grading event; backlog priority reapplies the same recurrence-mass form to a fourth event.
+
+- **breadth_weight**: `narrow`=1 / `shared-mechanism`=3 / `universal`=8 — the severity ladder (low/medium/high/critical = 1/2/4/8) applied to *how many future task-passes touch the functional place this item is about*, not to severity. `universal` = every substantive session traverses the mechanism (a core gate, dispatch, marker-parsing, verification path); `shared-mechanism` = a subset of sessions/paths; `narrow` = a one-off script/leaf/edge case.
+- **recurrence_mass**: the item's own severity-mass (Core `severity:*` label, 1/2/4/8) **plus** the count of other independent items sharing the same functional ground (a cluster — same counting form as `core-difficulty-mass-threshold`). An item with neither a severity label nor a cluster gets `recurrence_mass = 1` and **must be explicitly marked "no urgency signal"** — never silently defaulted to a guessed weight.
+- **cost_to_resolve**: a budget-tier estimate (`budget-small-usd`/`-medium-usd`/`-large-usd`) divided by an in-flight-readiness coefficient — 1.0 if no plan exists yet, ~0.5 if there's a clear what-to-do without a formal plan, ~0.3 if a plan/TOML is already approved and merely deferred. This must come from the item's own text (e.g. "план готов, исполнение отложено", "стадии N из M сделаны") — never assumed.
+- **Hard partial order overrides score.** An item's text naming an explicit, unambiguous dependency on another item creates a hard ordering edge — the dependent item cannot rank above its blocker regardless of score. Indirect/partial mentions stay soft signal (feed into cost/mass within a cluster) and are never promoted to a hard edge. This is the anti-guessing invariant for dependencies, mirroring the anti-guessing invariant for urgency above.
+- **No deadline axis.** The rubric has no urgency-by-date term because no source item has carried an explicit deadline so far (the one exception, a user-deferred item, is handled via in-flight discount, not urgency). If a future item names an explicit deadline/external commitment, don't fold it into existing axes by guesswork — escalate to add a deadline axis.
+
+### Procedure
+
+1. **Collect** open items per source into raw tables (title/labels-or-status/updated date) — one file per source, so later runs can diff against the prior collection instead of re-deriving from nothing.
+2. **Classify** each item: breadth (from labels + title, cross-cutting-mechanism keywords), recurrence_mass (severity label + cluster membership by shared functional ground), cost_to_resolve (scope keywords + in-flight readiness from the item's own text).
+3. **Score and rank**, then apply the hard partial order from step 3's explicit-dependency scan on top.
+4. **Mark** every zero-signal item explicitly in its own section — never let it silently inherit a middling score that reads as a real judgment.
+5. **Re-run per visit.** The next time the user returns to the backlog, re-collect and re-score from scratch — don't reuse a stale ranking. Items close, new items appear, in-flight discounts change as plans land.
+6. **Never auto-select.** The output is the ordered list plus its reasoning. Starting work on any specific item is a separate, explicit appeal naming that item — this triage procedure itself never dispatches work.
+
+### Working instance (2026-08-19)
+
+First run: Core (68 open: 64 `backlog` + 4 `difficulty`) + Org tier (12 open across the backlog and report queues) = 80 items, scored and ranked in `backlog-prioritized-2026-08-19.md` (published as an Artifact for the user — see the session's delivery; org-specific ticket keys and donor codenames stay in that private Artifact and the org-tier backlog, not in this Core-committed leaf, per [[instruction-dev-queues]]'s tier-split rule). Top of the ranked list at this run: Core #79 (marker-extractor double-marker/emphasis false-MALFORMED), #59 (PLAN_READY gate blocks any non-approval `AskUserQuestion`), #77/#75/#67 (marker-timeout and pop-subplan-state clustering). The run also confirmed one explicit hard-edge cluster within the Org tier's multi-track program items — a later track was textually ordered after an earlier "keystone" track in the program's own donor-map text (see the Artifact for the specific track chain).
+
+### Identified engine gaps (candidates, not auto-filed)
+
+Surfaced while executing this instance — presented to the user at the resolution gate for a decision on whether to file them:
+
+1. **Scratchpad not exempt from the Edit/Write state gate.** System instructions direct using the session scratch directory instead of `/tmp`, but `hook-state-gate.py`/`exempt_paths.py` only exempts literal `/tmp/` and three memory directories — the scratchpad path itself is not recognized.
+2. **No cross-source priority digest for "разбор беклога."** `core-difficulty-digest.py` only reads Core; the Org tier has no equivalent, so a cross-tier digest (this leaf's whole point) has no standing tool and was built ad hoc in-session (`score-backlog.py` in the session scratchpad — not committed, would need to move to a durable script location to be reusable).
+3. **Delivery-proof staleness can recur after a correct re-presentation.** [[question-provenance-gate]] and [[ask-user-question-split-turn]] both document the single-cycle case (`order-dispose` forces a new `rendering_sha256` → re-present → clean stamp). This session hit a **second** "delivery proof is stale" block from `approve` on the SAME re-presentation cycle, after an apparently-correct re-present→timer→final-message→fresh-approval sequence — requiring `agentctl confirm-delivery --escape-reason transcript_unverifiable`. Neither leaf states whether a repeat block is expected (a stamp/receipt race across two turns) or a defect in the order-dispose → re-present → approve sequencing; unresolved, flagged for the user to decide whether to file it.
+4. **`~/.claude-agent/memory-global/leaves/` is canon, not personal auto-memory, on this machine.** CLAUDE.md's memory-scope table describes `memory-global` as directly editable ("Global engineering ... Imported into every session"), but here it is a symlink into the canon `claude-agent-instructions` checkout, so a direct `Write` is denied by `hook-guard-canon-readonly.py` and requires `session-isolate.sh` + `land-on-main.sh` — the same production-edit path as Core code, not a lighter-weight memory-write path. `session-isolate.sh` also mis-detected the workspace backend as `arc` on first run here and required `CLAUDE_WORKSPACE_BACKEND=git` to succeed.
+
+## See also
+
+- [[plan-activity-ontology]] — the 8-element elementary-plan structure this task's stages are built from; not restated here.
+- [[coordinator-objective]] — the axes (minimize cost/tokens/attention, maximize autonomy/reliability/verifiability) this rubric's breadth/mass/cost terms are derived from.
+- [[function-place-difficulty]] — breadth as "how central is the functional place" is this leaf's application of that model to backlog items.
+- [[instruction-dev-queues]] — the Core/Org/Project 3-tier queue model these two backlog sources belong to.
+- [[question-provenance-gate]] — the order-coverage/delivery-proof mechanism behind gap #3 above.
