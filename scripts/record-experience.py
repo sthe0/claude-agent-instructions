@@ -336,6 +336,11 @@ def cmd_search(a) -> int:
     print(f"analogous {noun}s ({verb} one instead of duplicating):")
     for score, leaf, desc in scored[:8]:
         print(f"  [{score:>3}] {leaf.name}\n        {desc}")
+        # The runnable form is ADDED, never substituted for the readable label —
+        # and only in the tier where `extend` is the verb the listing offers: a
+        # principle leaf has no `## Contexts`, so cmd_extend rejects it outright.
+        if tier == "experience":
+            print(f"        extend --leaf {leaf.resolve()}")
     return 0
 
 
@@ -424,7 +429,7 @@ def cmd_new(a) -> int:
         sys.exit(f"refusing to overwrite existing leaf: {path}")
     # Fragmentation guard: refuse silent duplication of an analogous difficulty.
     justify_new = getattr(a, "justify_new", None)
-    best_sim, best_name = 0.0, None
+    best_sim, best_leaf = 0.0, None
     for leaf in sorted(exp_dir.glob("*.md")):
         if leaf.name == "MEMORY.md" or leaf.name == filename:
             continue
@@ -439,12 +444,15 @@ def cmd_new(a) -> int:
         existing_ground = desc + " " + diff_body
         sim = _similarity(existing_ground, a.difficulty)
         if sim > best_sim:
-            best_sim, best_name = sim, leaf.name
+            best_sim, best_leaf = sim, leaf
     if best_sim >= JOIN_RATIO and not justify_new:
+        # The name stays where it is READ, the path goes where it is EXECUTED.
+        # Resolved here rather than trusting the root: on --scope project the
+        # root is caller-supplied via --project-dir and may be relative.
         sys.exit(
-            f"refusing to fragment: analogous leaf {best_name!r} already exists "
+            f"refusing to fragment: analogous leaf {best_leaf.name!r} already exists "
             f"(similarity {best_sim:.2f} >= {JOIN_RATIO:.2f}). "
-            f"Use `extend --leaf {best_name}` to add a context, "
+            f"Use `extend --leaf {best_leaf.resolve()}` to add a context, "
             f"or pass `--justify-new \"<reason>\"` for a genuinely distinct difficulty."
         )
     path.write_text(standalone_body(a), encoding="utf-8")
@@ -458,7 +466,10 @@ def cmd_new(a) -> int:
 def cmd_extend(a) -> int:
     path = Path(a.leaf)
     if not path.exists():
-        sys.exit(f"leaf not found: {path}")
+        sys.exit(
+            f"leaf not found: {path} — --leaf takes a path to the leaf file, "
+            f"not a leaf name. Run `record-experience.py search <keywords>` to "
+            f"print a runnable one.")
     text = path.read_text(encoding="utf-8")
     span = section_span(text, "Contexts")
     if not span:
@@ -493,7 +504,10 @@ def cmd_extend(a) -> int:
 def cmd_set_last_verified(a) -> int:
     path = Path(a.leaf)
     if not path.exists():
-        sys.exit(f"leaf not found: {path}")
+        sys.exit(
+            f"leaf not found: {path} — --leaf takes a path to the leaf file, "
+            f"not a leaf name. Run `record-experience.py search <keywords>` to "
+            f"print a runnable one.")
     text = path.read_text(encoding="utf-8")
     if not FRONTMATTER.match(text):
         sys.exit(f"leaf has no YAML frontmatter block: {path}")
