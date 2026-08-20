@@ -524,6 +524,16 @@ DEVELOPER_SETTINGS_ALLOW = [
     # merge-base and rev-list. Landing stays absent: `git push` is the coordinator's.
     "Bash(git fetch:*)", "Bash(git merge:*)", "Bash(git merge-base:*)",
     "Bash(git rev-list:*)", "Bash(git checkout:*)", "Bash(git restore:*)",
+    # spawn-outcome-typing stage 4 measures marker_extract's own latency via
+    # real host calls — scoped to the extractor's own model and driver script,
+    # not a blanket claude -p or python3 grant. User-authorized 2026-08-20 as a
+    # temporary unblock; `agentctl resolve-permission --decision granted` was
+    # tried first and does not actually widen a harness-level Bash grant (it
+    # only clears engine state and is documented as manager-driven for the
+    # actual record) — a proper per-stage/plan-declared permission mechanism
+    # is filed separately rather than built under this stage's time pressure.
+    "Bash(claude -p --model haiku:*)",
+    "Bash(python3 scripts/measure-marker-extractor-latency.py:*)",
 ]
 
 # The plan-artifact directory (lib.config_root.plans_dir()) is where a
