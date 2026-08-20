@@ -63,17 +63,27 @@ RETURN_MARKERS = (
 )
 MARKER_RE = re.compile(rf"^({'|'.join(RETURN_MARKERS)}):")
 
+# Mirrors scripts/spawn-specialist.py's constants of the same name — the
+# CHILD's own terminal condition, classified there BEFORE the marker question
+# is asked (issue #78's ENOTFOUND run, issue #80's "Prompt is too long" run).
+# Not specialist return markers (not in RETURN_MARKERS): like "MALFORMED",
+# these are envelope labels spawn-specialist.py itself writes onto the FIRST
+# line, so the same ordered scan below resolves them the same way.
+CHILD_INFRA_FAILURE = "CHILD_INFRA_FAILURE"
+CHILD_EXHAUSTED = "CHILD_EXHAUSTED"
+_CHILD_OUTCOME_MARKERS = (CHILD_INFRA_FAILURE, CHILD_EXHAUSTED)
+
 
 def parse_marker(stdout: str) -> tuple[str | None, str]:
     """Read a spawn's stdout for its return marker.
 
-    ONE ordered scan of the non-blank lines: the first line carrying either a
-    known ``^MARKER:`` or a ``MALFORMED:`` prefix wins, and both tests share the
-    single loop body so the winner is the first in DOCUMENT order. Keeping them
-    in one pass is load-bearing — two sequential passes (all lines for a marker,
-    then all lines for MALFORMED) would let a stray ``COMPLETED:`` line inside a
-    MALFORMED envelope's preserved original out-rank the envelope itself, a
-    fail-open mis-route.
+    ONE ordered scan of the non-blank lines: the first line carrying a known
+    ``^MARKER:``, a ``MALFORMED:`` prefix, or a CHILD_* outcome prefix wins,
+    and every case shares the single loop body so the winner is the first in
+    DOCUMENT order. Keeping them in one pass is load-bearing — two sequential
+    passes (all lines for a marker, then all lines for MALFORMED/CHILD_*)
+    would let a stray ``COMPLETED:`` line inside a preserved original
+    out-rank the envelope itself, a fail-open mis-route.
 
     ``lib.planner_plan_check.check_planner_return`` — which ``spawn-specialist.py``
     already ran on this text before it reached our stdout — canonicalises a
@@ -88,8 +98,9 @@ def parse_marker(stdout: str) -> tuple[str | None, str]:
     BARE, so that body is ``""`` for every canonicalised marker — the digest
     lives on its own ``Digest:`` line, deliberately off the line this parse
     feeds to ``cmd_dispatch``'s deterministic consumers (the permission gate
-    among them). A ``MALFORMED:`` line maps to marker "MALFORMED"; if no line
-    carries a marker, map to (None, "")."""
+    among them). A ``MALFORMED:`` line maps to marker "MALFORMED"; a
+    ``CHILD_INFRA_FAILURE:``/``CHILD_EXHAUSTED:`` line maps to that same
+    token; if no line carries a marker, map to (None, "")."""
     for line in (stdout or "").splitlines():
         line = line.strip()
         if not line:
@@ -99,6 +110,10 @@ def parse_marker(stdout: str) -> tuple[str | None, str]:
             return m.group(1), line[m.end():].strip()
         if line.startswith("MALFORMED:"):
             return "MALFORMED", line[len("MALFORMED:"):].strip()
+        for child_marker in _CHILD_OUTCOME_MARKERS:
+            prefix = child_marker + ":"
+            if line.startswith(prefix):
+                return child_marker, line[len(prefix):].strip()
     return None, ""
 
 # A runner takes an argv list and returns (returncode, stdout, stderr).

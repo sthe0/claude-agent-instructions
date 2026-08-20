@@ -32,7 +32,14 @@ from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
 from .partition import render_section, render_units, verdict
 from .directive import Directive
-from .dispatch import Runner, dispatch_stage, parse_marker, subprocess_runner
+from .dispatch import (
+    CHILD_EXHAUSTED,
+    CHILD_INFRA_FAILURE,
+    Runner,
+    dispatch_stage,
+    parse_marker,
+    subprocess_runner,
+)
 from .machine import transition
 from .plan import (
     META_PART,
@@ -3839,6 +3846,28 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
             f"stage {stage.index} requests permission: {action}",
             marker="PERMISSION-REQUEST",
             data={**base, "action": action, "options": ["once", "project", "global", "deny"]},
+        )
+    if marker == CHILD_INFRA_FAILURE:
+        # A transient condition about the RUN, never a judgement about the
+        # output — named directive only, no automatic re-spawn: the
+        # coordinator still spends the money on the retry.
+        store.save(state)
+        return Directive(
+            False, state.node, "retry_dispatch",
+            f"stage {stage.index} spawn never reached (or lost) the API — "
+            "transient; recommend retrying the same dispatch",
+            marker="CHILD_INFRA_FAILURE", data={**base, "reason": body},
+        )
+    if marker == CHILD_EXHAUSTED:
+        # A resource condition about the RUN — the child was refused for size
+        # before it could answer. Recommend a reduced brief or the re-attest
+        # path (stage 6); again a directive only, no automatic re-spawn.
+        store.save(state)
+        return Directive(
+            False, state.node, "reduce_brief_or_reattest",
+            f"stage {stage.index} spawn was refused for size before it could "
+            "answer — recommend a reduced brief or the re-attest path",
+            marker="CHILD_EXHAUSTED", data={**base, "reason": body},
         )
     if marker is None and result.returncode != 0:
         store.save(state)

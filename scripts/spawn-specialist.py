@@ -769,6 +769,93 @@ def _build_extraction(result_text: str, kind: str) -> "marker_extract.Extraction
     return marker_extract.build_extraction(result_text, kind=kind)
 
 
+# The CHILD's own terminal condition, distinct from every marker/extraction
+# outcome above: these two classes mean the child never got far enough to
+# answer at all, so asking the marker question about its output is asking the
+# wrong question (issue #78, #80 — see CHILD_OUTCOME_NOTE below). CHILD_ANSWERED
+# is not a signature match; it is what a genuine terminal marker forces
+# regardless of any match (see _resolve_child_outcome's precedence rule).
+CHILD_ANSWERED = "CHILD_ANSWERED"
+CHILD_INFRA_FAILURE = "CHILD_INFRA_FAILURE"
+CHILD_EXHAUSTED = "CHILD_EXHAUSTED"
+
+# Signatures the `claude` CLI itself emits on its own stdout/stderr when a run
+# never reaches (or loses) the API, or is refused outright for size before it
+# can answer. These are STRUCTURAL strings a host CLI emits about its own
+# process, not free text a model authored, so matching them here is parsing a
+# machine's own output rather than classifying meaning (the exception this
+# repo's regex-not-for-semantic-classification rule carves out) — and the
+# match only ever shapes a RECOMMENDATION (see _resolve_child_outcome), never
+# suppresses a result the child produced. One entry per family; each cites the
+# observed instance that put it here. Additive: an unmatched failure falls
+# back to today's NO_MARKER/EXTRACTOR_* handling, never to a guess.
+_CHILD_OUTCOME_SIGNATURES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # Issue #78, 2026-08-13 dispatch: died on
+    # "API Error: Unable to connect to API (ENOTFOUND)" after 24.7 minutes and
+    # $0.68 — the child never reached a model turn.
+    (CHILD_INFRA_FAILURE, ("API Error", "Unable to connect to API", "ENOTFOUND")),
+    # Issue #80, 2026-08-16 dispatch: ran 28.4 minutes and $5.52 and was
+    # refused outright with "Prompt is too long", nothing committed.
+    (CHILD_EXHAUSTED, ("Prompt is too long",)),
+)
+
+CHILD_OUTCOME_NOTE: dict[str, str] = {
+    CHILD_INFRA_FAILURE: (
+        "the child spawn never reached, or lost, the API before exiting — a "
+        "transient infrastructure condition, not a judgement about the "
+        "specialist's output. Recommended move: retry the same dispatch."
+    ),
+    CHILD_EXHAUSTED: (
+        "the child spawn was refused for size (a context/prompt-size limit) "
+        "before it could answer — a resource condition, not a judgement about "
+        "the specialist's output. Recommended move: a reduced brief, or the "
+        "re-attest path for a stage the child may have partly completed."
+    ),
+}
+
+
+def classify_child_outcome(stdout: str, stderr: str, returncode: int) -> tuple[str, str | None]:
+    """The high-recall signature scan alone, with no knowledge of whether a
+    marker was found — ``returncode`` is accepted for a future signature
+    keyed on exit code but unused today; every current signature is a
+    substring of the CLI's own stdout/stderr. Returns
+    ``(CHILD_INFRA_FAILURE | CHILD_EXHAUSTED, matched_substring)`` or
+    ``(CHILD_ANSWERED, None)`` when nothing matches. Callers that need the
+    marker-precedence rule applied use ``_resolve_child_outcome`` instead —
+    this function alone does NOT know a marker exists and must never be
+    treated as the final verdict."""
+    haystack = f"{stdout}\n{stderr}"
+    for outcome, signatures in _CHILD_OUTCOME_SIGNATURES:
+        for signature in signatures:
+            if signature in haystack:
+                return outcome, signature
+    return CHILD_ANSWERED, None
+
+
+def _resolve_child_outcome(
+    stdout: str, stderr: str, returncode: int, marker: str | None
+) -> tuple[str, str | None]:
+    """Apply the precedence rule the prefilter's legitimacy rests on: a
+    genuine terminal marker ALWAYS outranks a signature match. ``marker`` is
+    ``check_planner_return``'s parsed marker (``None`` when no line carried
+    one) — the same signal that already decided whether the specialist's
+    output was routable. A signature can therefore only relabel a run that
+    was already going to MALFORMED/NO_MARKER; it can never discard or
+    override a result the child produced."""
+    if marker is not None:
+        return CHILD_ANSWERED, None
+    return classify_child_outcome(stdout, stderr, returncode)
+
+
+def _child_outcome_envelope(outcome: str, matched: str, result_text: str, stderr: str) -> str:
+    """The envelope for a CHILD_INFRA_FAILURE / CHILD_EXHAUSTED run: states
+    what happened to the RUN, never that the output was malformed. Falls back
+    to stderr for the preserved body when the child's stdout never carried
+    anything (the common shape for both documented instances)."""
+    body = result_text if result_text.strip() else stderr
+    return f"{outcome}: {CHILD_OUTCOME_NOTE[outcome]} (matched {matched!r}).\n\n{body}"
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
@@ -984,9 +1071,29 @@ def main(argv: list[str] | None = None) -> int:
     forwarded, ok, parsed_marker = check_planner_return(
         result_text, args.kind, extraction=extraction
     )
+
+    # Classify the CHILD's own terminal condition BEFORE trusting the marker
+    # question's answer: a run that never reached the API or was refused for
+    # size answers "no marker" for a reason that has nothing to do with the
+    # specialist's output being unparseable. Precedence is enforced inside
+    # _resolve_child_outcome — a found marker always wins, so this can only
+    # relabel a run already headed to MALFORMED/NO_MARKER, never suppress one.
+    child_outcome, child_matched = _resolve_child_outcome(
+        completed.stdout, completed.stderr, completed.returncode, parsed_marker
+    )
+    if child_outcome != CHILD_ANSWERED:
+        forwarded = _child_outcome_envelope(child_outcome, child_matched, result_text, completed.stderr)
+
     sys.stdout.write(forwarded)
     if not forwarded.endswith("\n"):
         sys.stdout.write("\n")
+
+    # outcome_class defaults to the extraction's own verdict; a matched CHILD_*
+    # signature overrides it — this stage's whole point is that "the extractor
+    # judged NO_MARKER" is the wrong report when the child never ran at all.
+    outcome_class = extraction.outcome if extraction is not None else None
+    if child_outcome != CHILD_ANSWERED:
+        outcome_class = child_outcome
 
     log_cost_entry({
         "ts": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
@@ -1006,7 +1113,7 @@ def main(argv: list[str] | None = None) -> int:
         "extractor_model": marker_extract.model() if extraction is not None else None,
         "extractor_degraded": extraction.degraded if extraction is not None else None,
         "extraction_reason": extraction.reason if extraction is not None else None,
-        "outcome_class": extraction.outcome if extraction is not None else None,
+        "outcome_class": outcome_class,
         **_spawn_tags(),
     })
 
@@ -1038,7 +1145,7 @@ def main(argv: list[str] | None = None) -> int:
     if parsed_marker:
         summary_bits.append(f"marker={parsed_marker}")
     if not ok:
-        summary_bits.append("MALFORMED")
+        summary_bits.append(child_outcome if child_outcome != CHILD_ANSWERED else "MALFORMED")
     print(" ".join(summary_bits), file=sys.stderr)
 
     return completed.returncode
