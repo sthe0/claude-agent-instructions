@@ -525,14 +525,21 @@ DEVELOPER_SETTINGS_ALLOW = [
     "Bash(git fetch:*)", "Bash(git merge:*)", "Bash(git merge-base:*)",
     "Bash(git rev-list:*)", "Bash(git checkout:*)", "Bash(git restore:*)",
     # spawn-outcome-typing stage 4 measures marker_extract's own latency via
-    # real host calls — scoped to the extractor's own model and driver script,
-    # not a blanket claude -p or python3 grant. User-authorized 2026-08-20 as a
-    # temporary unblock; `agentctl resolve-permission --decision granted` was
-    # tried first and does not actually widen a harness-level Bash grant (it
-    # only clears engine state and is documented as manager-driven for the
-    # actual record) — a proper per-stage/plan-declared permission mechanism
-    # is filed separately rather than built under this stage's time pressure.
-    "Bash(claude -p --model haiku:*)",
+    # real host calls — scoped to the driver script only. User-authorized
+    # 2026-08-20 as a temporary unblock; a proper per-stage/plan-declared
+    # permission mechanism (agentctl dispatch reading extra grants from the
+    # plan TOML instead of a static fleet-wide list) is filed separately
+    # rather than built under this stage's time pressure.
+    #
+    # A sibling "Bash(claude -p --model haiku:*)" grant was added alongside
+    # this one at first, then removed the same day on code-review: the
+    # script drives claude via host_llm.build_prompt_argv +
+    # marker_extract.subprocess_runner INSIDE this already-permitted
+    # python3 process, never through the Bash tool directly, so the extra
+    # grant was both unused and, being "claude -p ... :*" (unbounded
+    # trailing args), a bypass of spawn-specialist.py's own outcome-typing
+    # ledger for any developer that DID reach for it directly — the exact
+    # defect this plan exists to fix.
     "Bash(python3 scripts/measure-marker-extractor-latency.py:*)",
 ]
 
