@@ -1006,6 +1006,7 @@ def main(argv: list[str] | None = None) -> int:
         "extractor_model": marker_extract.model() if extraction is not None else None,
         "extractor_degraded": extraction.degraded if extraction is not None else None,
         "extraction_reason": extraction.reason if extraction is not None else None,
+        "outcome_class": extraction.outcome if extraction is not None else None,
         **_spawn_tags(),
     })
 

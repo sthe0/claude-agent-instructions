@@ -60,6 +60,73 @@ def test_parse_marker_finds_marker_after_preamble():
     assert parse_marker("summary line\nMALFORMED: no marker\n") == ("MALFORMED", "no marker")
 
 
+def _always_failing_runner(calls):
+    def run(argv, **kwargs):
+        calls.append(argv)
+        from lib.marker_extract import RunResult
+        return RunResult(1, "", "boom")
+
+    return run
+
+
+def test_extractor_failed_falls_back_and_the_legacy_scan_finds_a_marker(monkeypatch):
+    # Stage-3 scenario: the model extractor itself never delivers a verdict
+    # (retry exhausted, outcome=EXTRACTOR_FAILED) but the legacy any-line scan
+    # the caller falls back to DOES find a marker in the specialist's own text.
+    # That marker is used, and no AGENTCTL_MARKER_EXTRACTOR instruction is
+    # surfaced — that env var only helps a FUTURE spawn, not this one.
+    from lib import host_llm, marker_extract
+    from lib.planner_plan_check import check_planner_return
+
+    monkeypatch.delenv(marker_extract.ENV_KILL_SWITCH, raising=False)
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/claude")
+    calls: list = []
+    extraction = marker_extract.build_extraction(
+        "COMPLETED: shipped it, tests green.\n",
+        kind="developer",
+        runner=_always_failing_runner(calls),
+    )
+    assert extraction.outcome == marker_extract.OUTCOME_EXTRACTOR_FAILED
+    assert extraction.degraded is True
+    assert len(calls) == marker_extract._MAX_EXTRACT_ATTEMPTS  # retried, not one-shot
+
+    forwarded, ok, marker = check_planner_return(
+        "COMPLETED: shipped it, tests green.\n", "developer", extraction=extraction
+    )
+    assert ok is True
+    assert marker == "COMPLETED"
+    assert "AGENTCTL_MARKER_EXTRACTOR" not in forwarded
+
+
+def test_extractor_failed_falls_back_and_the_legacy_scan_finds_none(monkeypatch):
+    # Same observation failure, but the specialist's own text has no marker-
+    # shaped line either: MALFORMED as today, attributed to the reader/
+    # extractor having failed to observe rather than to the child specialist's
+    # output being unparseable — and still no env-var instruction for a spawn
+    # that has already finished.
+    from lib import host_llm, marker_extract
+    from lib.planner_plan_check import check_planner_return
+
+    monkeypatch.delenv(marker_extract.ENV_KILL_SWITCH, raising=False)
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/claude")
+    calls: list = []
+    extraction = marker_extract.build_extraction(
+        "just a summary, no marker at all",
+        kind="developer",
+        runner=_always_failing_runner(calls),
+    )
+    assert extraction.outcome == marker_extract.OUTCOME_EXTRACTOR_FAILED
+    assert extraction.degraded is True
+
+    forwarded, ok, marker = check_planner_return(
+        "just a summary, no marker at all", "developer", extraction=extraction
+    )
+    assert ok is False
+    assert marker is None
+    assert parse_marker(forwarded)[0] == "MALFORMED"
+    assert "AGENTCTL_MARKER_EXTRACTOR" not in forwarded
+
+
 def test_malformed_envelope_outranks_a_marker_line_in_the_preserved_original():
     # The scan is ONE ordered pass, so the winner is the first line in DOCUMENT
     # order. A MALFORMED envelope preserves the specialist's original bytes
