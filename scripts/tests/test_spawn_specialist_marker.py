@@ -78,6 +78,58 @@ def test_marker_word_mid_sentence_not_matched():
     assert text.startswith("MALFORMED:")
 
 
+# --- decoration stripping (issue #79) and multi-marker resolution ------------
+
+@pytest.mark.parametrize(
+    "decorated",
+    [
+        "**COMPLETED:** shipped it",
+        "__COMPLETED:__ shipped it",
+        "`COMPLETED:` shipped it",
+        "## COMPLETED: shipped it",
+        "> COMPLETED: shipped it",
+        "- COMPLETED: shipped it",
+    ],
+    ids=["bold", "underscore", "backtick", "heading", "blockquote", "bullet"],
+)
+def test_validate_marker_accepts_each_decoration_shape(decorated):
+    text, ok = MOD.validate_marker(decorated)
+    assert ok is True
+    assert text == decorated  # unchanged on success
+
+
+def test_validate_marker_accepts_agreeing_terminal_markers():
+    text, ok = MOD.validate_marker("COMPLETED: draft\nmore\nCOMPLETED: final")
+    assert ok is True
+
+
+def test_validate_marker_terminal_marker_wins_over_an_emphasised_verdict_headline():
+    # Corpus-dominant shape: a code-reviewer's emphasis-wrapped verdict headline
+    # precedes its true terminal marker. The headline must not beat the terminal
+    # line, and the message still passes.
+    text = "**REVIEW: revise**\nprose about the diff\nCOMPLETED: reviewed the stage diff"
+    assert MOD.extract_marker(text) == "COMPLETED"
+    result, ok = MOD.validate_marker(text)
+    assert ok is True
+    assert result == text  # unchanged on success
+
+
+def test_validate_marker_accepts_a_later_decoy_marker_line_as_terminal():
+    # The accepted cost of last-hit resolution: a correct marker followed later
+    # by a decoy marker line resolves to that LATER line rather than MALFORMED —
+    # this scan refuses to discard the output, not to pick between two readings.
+    text = (
+        "COMPLETED: shipped it, tests pass.\n\n"
+        "(Had the tests failed I would have returned\n"
+        "REPLAN: revise the approach\n"
+        "but they passed.)"
+    )
+    assert MOD.extract_marker(text) == "REPLAN"
+    result, ok = MOD.validate_marker(text)
+    assert ok is True
+    assert result == text
+
+
 # --- identity: both wrappers bind the SHARED functions -----------------------
 
 def _load_wrapper(name: str):
