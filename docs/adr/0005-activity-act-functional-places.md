@@ -360,6 +360,20 @@ section composes a command for. Items 6 to 8 were appended by the root coordinat
 this stage's executor, which observed none of them: they occurred in the parent session,
 dispatching this plan's own stages.
 
+**Discharged 2026-08-20.** The channel became reachable (see the correction in the next section),
+and the user confirmed publication for all nine. The eight are now filed, one issue each, labelled
+`layer:core` / `backlog` / `severity:*`, each body checked by `scripts/check-org-neutral.py` before
+submission: defect 1 → [#147](https://github.com/sthe0/claude-agent-instructions/issues/147),
+2 → [#148](https://github.com/sthe0/claude-agent-instructions/issues/148),
+3 → [#149](https://github.com/sthe0/claude-agent-instructions/issues/149),
+4 → [#150](https://github.com/sthe0/claude-agent-instructions/issues/150),
+5 → [#151](https://github.com/sthe0/claude-agent-instructions/issues/151),
+6 → [#152](https://github.com/sthe0/claude-agent-instructions/issues/152),
+7 → [#153](https://github.com/sthe0/claude-agent-instructions/issues/153),
+8 → [#154](https://github.com/sthe0/claude-agent-instructions/issues/154). The paragraph above is
+left as written: it recorded what was true when the stage ran, and the obligation it names is
+discharged by this note, not by editing the record of it.
+
 ## Filing the one remaining trunk-red Core defect
 
 This stage's `procedure` requires filing the one Core-repository defect this task's own
@@ -387,11 +401,23 @@ This act is recorded as **outstanding on the user**: filing this Core defect req
 this task can create for itself, and the confirmation-before-filing step this stage's own
 procedure requires cannot be asked of the user until the channel is reachable to receive it.
 
+**Discharged 2026-08-20 — and the unreachability above was a mis-attribution.** `~/.github-token`
+did exist; `gh` was installed but authenticated with a fine-grained PAT that lacked the needed
+scopes, so every write returned `403 Resource not accessible by personal access token`. That
+message names the CREDENTIAL, not the operation: re-authenticating `gh` with the classic token
+already sitting in `~/.github-token` made the same calls succeed. The probe of 2026-08-16 read a
+credential failure as an absent channel and recorded the obligation as un-askable on that basis —
+the correct move would have been to doubt the probe's own snapshot before concluding the venue
+was out of reach. The defect was re-measured (still red under this machine's Python 3.12.3,
+consistent with the interpreter-relative claim), passed `check-org-neutral.py`, and is filed as
+[#146](https://github.com/sthe0/claude-agent-instructions/issues/146).
+
 ## Consequences
 
 - No engine behavior changes as a result of this stage; it is a documentation-only record.
-- Everything this ADR leaves open — the 30 strict-load corpus failures, the nine outstanding
-  filings, the cause-provenance residual, the lint-vs-norm tension — is the standing input to
+- Everything this ADR leaves open — the 30 strict-load corpus failures, the nine filings (all
+  discharged 2026-08-20 as issues #146-#154, and now tracked there rather than here), the
+  cause-provenance residual, the lint-vs-norm tension — is the standing input to
   whatever plan next takes up this engine as its material. This ADR is their durable address in
   the repository, which is what makes them survivable independently of whether the difficulty
   channel is ever reachable from a given machine.
