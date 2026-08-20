@@ -54,8 +54,25 @@ from lib.runtime_models import HOST_CLAUDE, model_for
 # "low" complexity per lib.runtime_models — Claude's haiku, byte-identical to
 # the pre-host-aware constant this module always used.
 _EXTRACT_COMPLEXITY = "low"
-# 30s, not advisor.py's 20s: that ceiling is sized for a short question, while
-# this pass reads up to _WINDOW_MAX chars of specialist output.
+# DERIVED from docs/operations/marker-extractor-calibration.jsonl (24 rows, 4
+# sizes spanning this pass's own _WINDOW_MAX range, 3 idle + 3 induced-load
+# repeats each — see docs/operations/marker-extractor-calibration.md), by the
+# same method advisor.py's _ENUMERATE_TIMEOUT_S_DEFAULT uses on its own
+# dataset: ceil_to_5s(largest within-size max/min spread across the POOLED
+# idle+loaded rows x the minimum elapsed_s at the largest sampled input_chars).
+# The spread is size 1200's (29.281/17.944 = 1.6317989300044584x); the minimum
+# is size 12000's (16.819s):
+#   ceil_to_5(1.6317989300044584 x 16.819) = ceil_to_5(27.445227239714987) = 30
+# That the pooled derivation reproduces the PRE-EXISTING value is coincidence,
+# not circularity — this constant was never derived before (its prior comment
+# justified it only as "not advisor.py's 20s", a comparison with no
+# measurement behind it) and the arithmetic above is what the committed test
+# (scripts/tests/test_marker_extract_calibration.py) recomputes from the raw
+# dataset, not from these rounded digits. Over the IDLE-ONLY rows the same
+# rule yields 25 (spread 1.3345540715208961x at size 3500, same 16.819s
+# minimum) — strictly less than the pooled 30, so the loaded repeats
+# demonstrably moved the answer even though they did not move it past this
+# constant's pre-measurement value.
 _EXTRACT_TIMEOUT_S = 30
 
 # Whole output below this; above it, head + elision + tail (see build_prompt).
