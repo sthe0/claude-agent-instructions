@@ -6053,6 +6053,9 @@ def build_parser() -> argparse.ArgumentParser:
                     choices=["", "reasoning", "code", "ops", "mixed"],
                     help="what kind of artifact this task produces; 'reasoning'/'mixed' "
                          "arms the claim-provenance ledger plugin on a SUBSTANTIVE session")
+    sp.add_argument("--host", choices=runtime_host.HOSTS, default=None,
+                    help="coordination host this session dispatches through (claude|cursor); "
+                         "required (or ambient-detectable) at classify — sticky thereafter")
 
     sp = add("plan"); sp.add_argument("--session", required=True)
     sp = add("plan-render"); sp.add_argument("--plan", required=True,

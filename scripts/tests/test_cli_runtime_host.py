@@ -5,6 +5,7 @@ rather than an uncaught exception.
 """
 from __future__ import annotations
 
+import json
 from argparse import Namespace
 
 from agentctl import cli
@@ -101,3 +102,37 @@ def test_cmd_classify_conflicting_explicit_host_refuses_without_raising(store):
     assert store.load("s8").runtime_host == HOST_CLAUDE
     # Classify never partially applied on the refused bind.
     assert store.load("s8").weight_class is None
+
+# --- CLI argparse surface: --host must reach cmd_classify ----------------------
+
+def test_classify_parser_accepts_host_flag():
+    args = cli.build_parser().parse_args([
+        "classify", "--session", "s", "--host", "cursor", "--architectural",
+    ])
+    assert args.host == HOST_CURSOR
+
+
+def test_cli_classify_conflicting_host_via_main_not_argparse(capsys, tmp_path):
+    """Regression: classify --host <other> must not die in argparse; sticky
+    HostConflict surfaces as Directive(ok=False) through cli.main."""
+    root = str(tmp_path)
+    rc = cli.main([
+        "--state-root", root,
+        "start", "--session", "cli-host", "--task", "t",
+        "--host", HOST_CLAUDE,
+    ])
+    assert rc == 0
+    capsys.readouterr()  # discard start directive JSON
+
+    rc = cli.main([
+        "--state-root", root,
+        "classify", "--session", "cli-host", "--host", HOST_CURSOR,
+        "--architectural",
+    ])
+    assert rc == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert "already bound" in payload["detail"]
+    assert HOST_CLAUDE in payload["detail"]
+    assert HOST_CURSOR in payload["detail"]
+
