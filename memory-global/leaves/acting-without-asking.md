@@ -112,6 +112,8 @@ The carve-out phrase "after the plan is approved" (see § In-context carve-out b
   2. **Approval.** The user then explicitly approves via an `AskUserQuestion` that carries a distinct **"show the full plan"** option; choosing it re-presents via `agentctl present-plan --kind full` (re-running present→timer→final-message→ask) and **never** re-submits for approval.
 - **(b)** an in-conversation plan text the user has explicitly confirmed ("ok, proceed", "looks good", etc.).
 
+**Backlog / audit-list approval is not plan approval.** When the user approves an enumerated backlog (audit items, P0–P3, «fix all gaps»), that act authorizes the *set of outcomes*, not an execution plan. You still owe presentation + explicit approval per (a) or (b) above before the first production edit — including when spawning a specialist: the spawn brief is not a substitute for showing the plan to the user.
+
 Deciding what to do in your own head is **not** an approved plan. If you are about to Edit a production file and neither (a) nor (b) exists, you are outside the carve-out — stop, invoke `planner`, present the plan, wait for approval.
 
 **What is machine-guaranteed vs perception (do not overstate):** the gate proves an act of presentation occurred and those exact bytes landed as a final message bound to this plan version — **not** that the essence is adequate or that the user read it. Essence adequacy is perception (tech-writer authors, thinker plan-review checks). See [[ask-user-question-split-turn]] § Machine enforcement for the two residuals.

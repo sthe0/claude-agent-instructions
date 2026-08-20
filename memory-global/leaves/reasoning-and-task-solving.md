@@ -19,7 +19,7 @@ last_verified: 2026-07-13
 
 ## Plan and approval
 
-- Non-trivial work: decompose (yourself or `Task → planner`), show the plan, wait for explicit OK unless the user said "do it now".
+- Non-trivial work: decompose (yourself or `Task → planner`), **present the plan in the user's dialogue**, wait for explicit OK. **Exceptions:** only bare «do it now» / «ok, proceed» on a plan *already shown this session* — not approval of an audit backlog or priority list alone («do all P0–P3», «давай последовательно»). Those approve scope; you still present the execution plan + verification before editing.
 - As root coordinator, do not substitute yourself for `developer` on production code when policy assigns that role.
 
 ## When stuck
