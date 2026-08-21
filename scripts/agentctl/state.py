@@ -20,7 +20,7 @@ import shlex
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 
-SCHEMA_VERSION = 31
+SCHEMA_VERSION = 32
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -589,6 +589,56 @@ class CodeReview:
             concerns=list(d.get("concerns", [])),
             note=d.get("note", ""),
             code_sha256=d.get("code_sha256", ""),
+        )
+
+
+# The stage-6 re-attest carry-forward record (schema 32): built fresh, in full, on
+# every substantive replan, one entry per stage the replan found ELIGIBLE to
+# re-attest — i.e. its immediately-prior live outcome was PASSED. Structurally the
+# same charter as StageReview/CodeReview (one typed record per stage, looked up by
+# a last-wins scan), but this one is not itself a verdict: `dispatch --re-attest`
+# still re-runs the stage's own control before trusting it, so the stash only
+# carries what a normal dispatch would otherwise have to re-derive from scratch —
+# whether the replan touched the stage's operative surface, and what to carry
+# forward if it re-attests. Kept on SessionState rather than as new Stage/Outcome
+# fields specifically so it never enters the Stage-leaf totality tests
+# (test_renormalization/test_question_key_scope/test_contract_coverage all
+# enumerate `leaf_paths(Stage)`; SessionState has no such test).
+@dataclass
+class ReattestStash:
+    """One stage's re-attest eligibility, computed at the substantive replan that
+    re-armed it.
+
+    `stage_index` binds the stash to its stage. `operative_surface_matched` is
+    True iff `plan.stage_reattest_key` was IDENTICAL between the stage's prior
+    (PASSED) definition and its just-replanned one — condition 2 of the three the
+    route checks; a False entry is kept (not dropped) so a refusal can name the
+    specific reason rather than reporting "no stash" for a stage that had one.
+    `prior_outcome`/`prior_control` are what re-attest carries forward on success
+    — copies, not aliases, of the stage's outcome/control at the moment PASSED was
+    last recorded, so a later mutation of the stash's own copy (the `[re_attested]`
+    marker appended to `.actual`) can never also mutate the ORIGINAL record it was
+    copied from. `reattest_digest` is `plan.stage_reattest_digest` of the
+    JUST-REPLANNED stage — re-validated against the LIVE stage at dispatch time
+    (not merely trusted from this record) so a further plan edit made during the
+    PLAN_READY window, after this stash was built, is caught rather than trusted
+    stale."""
+    stage_index: int
+    operative_surface_matched: bool
+    prior_outcome: Outcome
+    prior_control: str | None
+    reattest_digest: str
+
+    @classmethod
+    def from_dict(cls, d: dict | None) -> "ReattestStash | None":
+        if not d:
+            return None
+        return cls(
+            stage_index=int(d["stage_index"]),
+            operative_surface_matched=bool(d.get("operative_surface_matched", False)),
+            prior_outcome=Outcome(**d["prior_outcome"]) if d.get("prior_outcome") else Outcome(),
+            prior_control=d.get("prior_control"),
+            reattest_digest=d.get("reattest_digest", ""),
         )
 
 
@@ -1419,6 +1469,14 @@ class SessionState:
     user_prompt_count: int = 0
     # coordination host (schema 31): claude|cursor, None until bound.
     runtime_host: str | None = None
+    # Stage-6 re-attest carry-forward records (schema 32): rebuilt FROM SCRATCH by
+    # every substantive replan (never accumulated across replans — the only cost
+    # of a gap is an unnecessary full re-dispatch, never an incorrect PASS), one
+    # ReattestStash per stage the replan found PASSED immediately prior. Empty on
+    # legacy pre-schema-32 states (absent key -> dataclass default via from_dict),
+    # so `dispatch --re-attest` has no observable and falls back to a normal
+    # dispatch (fail-closed toward the more expensive, never the cheaper, path).
+    reattest_stash: list[ReattestStash] = field(default_factory=list)
     schema_version: int = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -1618,6 +1676,9 @@ class SessionState:
         data["judge_bypassed"] = [JudgeBypass(**b) for b in data.get("judge_bypassed", [])]
         data["code_reviews"] = [
             r for r in (CodeReview.from_dict(x) for x in data.get("code_reviews", [])) if r is not None
+        ]
+        data["reattest_stash"] = [
+            r for r in (ReattestStash.from_dict(x) for x in data.get("reattest_stash", [])) if r is not None
         ]
         data["acceptance_review"] = AcceptanceReview.from_dict(data.get("acceptance_review"))
         data["acceptance_bypass"] = AcceptanceBypass.from_dict(data.get("acceptance_bypass"))

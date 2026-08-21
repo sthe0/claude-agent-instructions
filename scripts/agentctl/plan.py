@@ -1302,6 +1302,48 @@ def stage_carry_key(stage) -> tuple:
     )
 
 
+def stage_reattest_key(stage) -> tuple:
+    """Narrow "operative surface" identity for the stage-6 re-attest route: a prior
+    PASSED control attestation is still trustworthy without re-running the actor
+    that produced it only if this key is unchanged — method, control criterion,
+    expected result image, executor, and done criterion.
+
+    Deliberately NARROWER than `stage_carry_key` (which gates the FREE, no-cost
+    Outcome carry-forward on a stage's WHOLE definition — title/conditions/
+    invariants included) and differently scoped than `gates._operative_surface`
+    (a whole-PLAN function answering the refinement-vs-substantive question,
+    which for that reason excludes done_criterion/expected_result_image as
+    prose). Re-attest still pays for a fresh control re-run (the third of its
+    three conditions), so this key only needs to rule out a replan that moved
+    WHAT the stage is being held to — a title/conditions/knowledge edit elsewhere
+    in the stage is safe to re-attest through.
+    """
+    return (
+        stage.means.method,
+        stage.actor.executor,
+        stage.subject.result,
+        stage.criterion.criterion_type,
+        stage.criterion.done_criterion,
+        stage.criterion.verify_command,
+        stage.criterion.expected_exit,
+        _normalize_string(stage.criterion.verify_venue),
+        _normalize_string(stage.criterion.verify_kind),
+        stage.criterion.landed,
+        *((_normalize_string(stage.criterion.verify_venue_at_final),)
+          if stage.criterion.verify_venue_at_final else ()),
+    )
+
+
+def stage_reattest_digest(stage) -> str:
+    """Stable sha256 hex digest of `stage_reattest_key(stage)` — persisted on a
+    `ReattestStash` at replan time and recomputed against the LIVE stage at
+    dispatch time, so a further plan edit made during the PLAN_READY window
+    (after the stash was built but before `dispatch --re-attest` runs) is
+    caught rather than trusted stale. A digest, not the raw tuple, for the same
+    reason `stage_question_key` returns one: it is compared across processes."""
+    return hashlib.sha256(repr(stage_reattest_key(stage)).encode("utf-8")).hexdigest()
+
+
 _WHOLE_STAGE_DEFINITION: tuple[str, ...] | None = None
 
 # Which stage fields constitute each name of the question-target vocabulary, as dotted

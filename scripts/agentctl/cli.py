@@ -52,6 +52,7 @@ from .plan import (
     plan_stage_digests,
     stage_part,
     stage_question_key,
+    stage_reattest_digest,
     verify_command_reachability_blockers,
     verify_command_scope_warnings,
 )
@@ -85,6 +86,7 @@ from .state import (
     Normalization,
     NORMALIZATION_DESTINATIONS,
     NORMALIZATION_LEVELS,
+    Outcome,
     PermissionRequest,
     PLAN_PRESENTATION_KIND_ESSENCE,
     PLAN_PRESENTATION_KIND_FULL,
@@ -96,6 +98,7 @@ from .state import (
     plan_review_concern_ids,
     plan_review_scope_for_stage,
     plan_review_scope_stage_index,
+    ReattestStash,
     RequirementVerdict,
     RiskAcceptance,
     Route,
@@ -3723,6 +3726,124 @@ def _continuation_worktree(state: SessionState, stage: Stage) -> str | None:
     return None
 
 
+def _reattest_stash_for(state: SessionState, stage_index: int) -> ReattestStash | None:
+    """The most-recently-built ReattestStash entry for `stage_index`, or None.
+
+    Last-wins, mirroring gates._stage_review_for / _code_review_for — though in
+    practice cmd_replan's substantive branch replaces state.reattest_stash
+    wholesale each time, so at most one entry per stage_index ever exists at
+    once; the scan is written to match the family's convention rather than
+    because duplicates are expected."""
+    match = [r for r in state.reattest_stash if r.stage_index == stage_index]
+    return match[-1] if match else None
+
+
+def _try_reattest(
+    state: SessionState, stage: Stage, store: StateStore, runner: Runner | None,
+) -> Directive | None:
+    """Stage 6: re-arm a PASSED stage that a substantive replan re-armed, via a
+    fresh control re-run, instead of paying for a full specialist re-spawn.
+
+    Returns a terminal Directive on success. Returns None on ANY refusal, after
+    logging the specific failing condition via state.log("reattest_declined", ...)
+    — the caller (cmd_dispatch) falls through to the existing, unmodified dispatch
+    path on None, so refusal always degrades to a normal (byte-identical) dispatch
+    rather than stranding the session. The three conditions, checked in order:
+
+      1. a ReattestStash exists for this stage (built only for a stage that had a
+         prior PASSED outcome at replan time — see cmd_replan);
+      2. the replan that built the stash did not touch the stage's operative
+         surface (stash.operative_surface_matched), AND nothing has re-edited the
+         stage since (the live stage_reattest_digest still matches the digest
+         stashed at replan time — a plan edit made during the PLAN_READY window
+         is caught here rather than trusted stale);
+      3. the stage's own control — its verify_command/landed check, in its
+         declared venue — passes when RE-RUN NOW. Reuses the exact primitives
+         cmd_record_result uses for a measurable stage, so a re-attest pass is
+         held to the identical bar as a normal pass; a stale prior PASS is never
+         carried forward on faith.
+
+    Gate preservation: the code-review gate reads state.code_reviews directly
+    (keyed by stage_index, untouched by replan), so calling gates.code_review_
+    blockers here — exactly as cmd_record_result does — is naturally fresh with
+    no stash of its own; a stage cannot reach PASSED via this route that
+    couldn't reach PASSED via the normal one.
+    """
+    stash = _reattest_stash_for(state, stage.index)
+    if stash is None:
+        state.log("reattest_declined", stage=stage.index,
+                   reason="no prior PASSED outcome recorded for this stage")
+        return None
+    if not stash.operative_surface_matched:
+        state.log("reattest_declined", stage=stage.index,
+                   reason="replan touched the stage's operative surface "
+                          "(method/control criterion/expected result image/executor/done criterion)")
+        return None
+    if stage_reattest_digest(stage) != stash.reattest_digest:
+        state.log("reattest_declined", stage=stage.index,
+                   reason="stage was edited again after the re-attest stash was built")
+        return None
+
+    crit = stage.criterion
+    if crit.criterion_type == CriterionType.MEASURABLE.value and crit.verify_kind == CheckKind.LANDED.value:
+        ok, refusal, _result = _landed_check_result(state, crit.landed, runner)
+        if refusal:
+            state.log("reattest_declined", stage=stage.index,
+                       reason=f"landed check refused: {refusal}")
+            return None
+        if not ok:
+            state.log("reattest_declined", stage=stage.index,
+                       reason="control failed on re-run (landed check: delivered commit "
+                              "not (yet) contained in the declared target)")
+            return None
+    else:
+        cwd = None
+        if crit.verify_command and crit.criterion_type == CriterionType.MEASURABLE.value:
+            cwd, refusal = _resolve_or_refuse(state, crit.verify_venue)
+            if refusal:
+                state.log("reattest_declined", stage=stage.index,
+                           reason=f"verify_command refused: {refusal}")
+                return None
+        ok, result = _verify_command_result(stage, runner, cwd=cwd)
+        if not ok:
+            state.log("reattest_declined", stage=stage.index,
+                       reason=f"control failed on re-run (exit {result.returncode} != "
+                              f"expected {crit.expected_exit}: {crit.verify_command})")
+            return None
+
+    if stage.needs_control() and not (stash.prior_control or "").strip():
+        state.log("reattest_declined", stage=stage.index,
+                   reason="stage needs a control attestation but the stashed prior "
+                          "control is empty")
+        return None
+    if stage.needs_control() and gates.code_review_active(state):
+        crb = gates.code_review_blockers(state, stage)
+        if crb:
+            state.log("reattest_declined", stage=stage.index,
+                       reason=f"code review gate: {'; '.join(crb)}")
+            return None
+
+    # All three conditions hold: carry the prior Outcome AND control attestation
+    # forward instead of re-spawning to reproduce them — marking the record with
+    # an explicit [re_attested] tag so the saving is countable/auditable.
+    stage.outcome = stash.prior_outcome
+    stage.control = stash.prior_control
+    marker = "[re_attested]"
+    stage.outcome.actual = (
+        f"{stage.outcome.actual}\n{marker}" if stage.outcome.actual else marker
+    )
+    stage.outcome.status = StageStatus.PASSED.value
+    state.current_stage = None
+    state.node = transition(state.node, "verify")  # EXECUTING -> VERIFYING
+    state.log("reattest", stage=stage.index)
+    store.save(state)
+    if state.all_stages_passed():
+        return Directive(True, state.node, "verify_final",
+                          f"stage {stage.index} re-attested; all stages passed")
+    return Directive(True, state.node, "next_stage",
+                      f"stage {stage.index} re-attested; more stages ready")
+
+
 def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
                  perm_checker=None) -> Directive:
     state = _require(store, args.session)
@@ -3735,6 +3856,14 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
         return Directive(False, state.node, "next_stage", "no active stage to dispatch")
     if not stage.is_spawn():
         return Directive(True, state.node, "execute_in_thread", f"stage {stage.index} is in-thread; no spawn")
+    # Stage 6: an explicit, OPT-IN re-attest request. Absent --re-attest this
+    # branch never runs — cmd_dispatch's behavior stays byte-identical to
+    # before. On refusal _try_reattest has already logged the specific failing
+    # condition; falling through below runs the existing, unmodified dispatch.
+    if bool(getattr(args, "re_attest", False)):
+        directive = _try_reattest(state, stage, store, runner)
+        if directive is not None:
+            return directive
     dry_run = bool(getattr(args, "dry_run", False))
     # Tier resolution order: explicit --budget flag > the stage's declared
     # Actor.cost_tier > the "medium" default — same precedence on the argparse
@@ -5148,7 +5277,38 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # work to PENDING and force needless re-verification. Compare each new stage
     # against the LIVE stage (what actually ran) by the full-fidelity carry key; an
     # unchanged, previously-PASSED stage keeps its recorded Outcome intact.
+    # Stage 6: build the re-attest stash FRESH alongside the carry-forward pass
+    # above — same PASSED gating, a NARROWER key (method/control criterion/
+    # expected result image/executor/done criterion, not the stage's whole
+    # definition). This never accumulates across replans: each substantive
+    # replan replaces state.reattest_stash wholesale, so a stage re-armed two
+    # replans ago and never re-dispatched since simply has no entry — the only
+    # cost of that gap is one unnecessary full dispatch, never an incorrect
+    # PASS, and `dispatch --re-attest` treats a missing entry as condition-1
+    # failure (no prior PASSED to re-attest against) rather than an error.
     live_by_index = {s.index: s for s in state.stages}
+    reattest_stash: list[ReattestStash] = []
+    for ns in new.stages:
+        prev = live_by_index.get(ns.index)
+        if prev is None or prev.outcome.status != StageStatus.PASSED.value:
+            continue
+        matched = stage_reattest_digest(prev) == stage_reattest_digest(ns)
+        reattest_stash.append(ReattestStash(
+            stage_index=ns.index,
+            operative_surface_matched=matched,
+            prior_outcome=Outcome(
+                status=prev.outcome.status,
+                actual=prev.outcome.actual,
+                fail_digests=list(prev.outcome.fail_digests),
+                cost_usd=prev.outcome.cost_usd,
+                duration_ms=prev.outcome.duration_ms,
+                spawn_count=prev.outcome.spawn_count,
+                delivered_head=prev.outcome.delivered_head,
+            ),
+            prior_control=prev.control,
+            reattest_digest=stage_reattest_digest(ns),
+        ))
+    state.reattest_stash = reattest_stash
     for ns in new.stages:
         prev = live_by_index.get(ns.index)
         if (prev is not None
@@ -6201,6 +6361,12 @@ def build_parser() -> argparse.ArgumentParser:
                          "the already-approved stage — never a scope or done-criterion change; "
                          "long text as '@<path>' (forwarded, resolved by the specialist itself)")
     sp.add_argument("--dry-run", action="store_true")
+    # Stage 6, OPT-IN: re-enter a stage recorded PASSED and re-armed by a
+    # substantive replan without paying for a full (re-)spawn, when the replan
+    # left the stage's operative surface untouched AND its own control passes
+    # NOW. Absent, behavior is byte-identical to today — refusal is the default,
+    # never an automatic route.
+    sp.add_argument("--re-attest", action="store_true")
     sp = add("resolve-permission"); sp.add_argument("--session", required=True)
     sp.add_argument("--decision", choices=["granted", "denied"], required=True)
     sp.add_argument("--scope", choices=["once", "project", "global"], default="once")
