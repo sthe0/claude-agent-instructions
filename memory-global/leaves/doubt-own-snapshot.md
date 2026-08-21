@@ -4,7 +4,7 @@ description: When a user's stated requirement appears to contradict what you obs
 type: feedback
 schema: leaf/v1
 created: 2026-07-02
-last_verified: 2026-07-28
+last_verified: 2026-08-21
 ---
 
 # Before you doubt a requirement, doubt your own snapshot
@@ -32,6 +32,12 @@ Concrete instance (2026-07-11): a whole plan plus **four** thinker-review rounds
 ### The outage direction: doubt your own probe before declaring a service down
 
 The same difficulty has an *external-failure* twin. When a service appears to fail, your bare probe is the stale snapshot — a `curl`/one-shot call can fail for a dozen reasons that are not "the service is down" (wrong client, missing ambient context, expired token, a transient, the wrong endpoint). Before you declare it down or escalate the outage to the user, reproduce the failure with the **real client** the working path uses, and actively seek a **counter-example** (open the UI, try a second access path) — a genuine outage survives both, a false premise does not. Never launder the unverified premise into a sub-agent question ("the endpoint is down — how do I get access?"): the sub-agent inherits the premise and **circularly confirms** it. Route it through overcome-difficulty (reproduce → ≥2 hypotheses, each with a cheap falsifier) instead. Enforced pre-emptively by `hook-escalation-diagnosis-gate.py` (denies the un-diagnosed AskUserQuestion) and, as a Stop backstop, by the `escalation_without_diagnosis` turn guardian.
+
+### The authoring direction: a plan's own claims about code/engine mechanics are a snapshot too
+
+A plan stage that asserts a code-behavior fact, an engine-mechanic fact (which venue a control resolves against, how a gate discharges), or a real-world timing feasibility (a done_criterion resting on calendar time) is taking a **snapshot** of the live system at authoring time — and that snapshot goes stale (or was simply never taken) exactly like a stale `main` or a stale probe. The planner's existing "numbers and deadlines without a source" rule already forces this for bare numeric claims; the same trace-to-source discipline generalizes to code-behavior and engine-mechanic claims: before a stage's text commits to "X already does Y" or "the venue resolves to Z", grep/read the actual source (or, for a timing claim, derive the calendar math from data already in hand) rather than asserting it from memory or plausibility.
+
+Concrete instance (2026-08-21, `spawn-outcome-typing` plan, session `fa80b9a9`): 3 replans fired against one plan between approvals — a plan clause asserting unverified existing-code behavior, a done_criterion binding a multi-week real-world statistical measurement to one delivery session, and a stage assuming `verify_venue` would resolve to the delivery worktree when it is engine-hardcoded to the canonical checkout. All three were checkable from already-existing source/data *at planning time* (the code was readable, the engine mechanic was readable in `agentctl` source, the spawn-rate-derived timeline was computable from data already in hand) — none depended on runtime-only state. This tripped the engine's own effort-divergence trigger (`effort-replan-absolute` = 3) as a "chosen norm visibly missing something essential" signal, which is exactly what it is for.
 
 ### The currency direction: an artifact checked against its own backup is not verified
 
