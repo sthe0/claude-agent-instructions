@@ -4,7 +4,7 @@ description: When a user's stated requirement appears to contradict what you obs
 type: feedback
 schema: leaf/v1
 created: 2026-07-02
-last_verified: 2026-08-21
+last_verified: 2026-08-24
 ---
 
 # Before you doubt a requirement, doubt your own snapshot
@@ -46,6 +46,12 @@ Comparing a **mutable** artifact against its own copy or backup establishes **in
 Concrete instance (2026-07-27): `~/.local/log/claude-policy-ledger.jsonl` had been frozen for 25 days — 184 rows, newest row dated 2026-07-03 — because the scanner that appends to it only ever ran by hand. It was checked during an unrelated incident by comparing it against its own backup: same row count, same sums, structurally valid JSONL. Every check it received passed **while it was broken**, because each one tested integrity. No integrity check could have caught this; only "the newest row is 25 days old" could.
 
 The same failure appears one level up, in the guards a plan writes: a control that pins a base state by a **literal commit SHA** is a snapshot of that base and goes stale the moment the base moves. Name the base by a **derived** ref instead — `git merge-base HEAD origin/main`, the branch's fork point — which stays correct as the trunk advances. In this leaf's own delivery the plan-time SHA went stale twice before execution and a third time between approval and the first stage.
+
+### The reporting direction: a closure claim in a reply is a snapshot too
+
+Telling the user a task/ticket is "closed", "resolved", or "done" is itself a claim about live system state, not a summary of the conversation you remember. When an `agentctl`-tracked session exists, that claim has an authoritative source — `agentctl status --session <id>` and its `resolution_passed` + per-stage fields — and conversation memory is exactly the kind of snapshot this leaf warns about: it goes stale fastest right after a context-compaction resume, when only a summary of prior work survives and the boundary between "a narrow sub-thread finished" and "the whole tracked task finished" blurs. Before any sentence asserting closure/resolution, check `agentctl status` and match the claim to what it reports — never assert closure from memory alone.
+
+Concrete instance (2026-08-24, session `7514dd40-b947-4cc5-84aa-983476c2515c`): right after a compaction resume, a landed instructions-repo edit — unrelated to the tracked task's actual deliverable — was described to the user as "the task was closed earlier in this session," conflating a narrow sub-thread this session had actually handled (attaching a comparison artifact, fixing a stale-path citation) with the task's real done criterion, a model migration still in progress. `agentctl status` showed `resolution_passed: false`, with three of six plan stages (deploy to a shared pre-production environment, measure, land to trunk) still `ACTIVE`/`PENDING`. The user caught it with one question, in effect: how is this closed when the migration itself never happened?
 
 ## See also
 
