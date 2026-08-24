@@ -1174,7 +1174,7 @@ class TestEscapeCountsAreVisible:
 
     def test_advisor_unavailable_tallies_as_runner_failure(self):
         """`_tally` reads the infra/work-was-done split off
-        `premise.ENUMERATION_INFRA_FAILURE_REASONS` — the closed set naming the THREE
+        `premise.ENUMERATION_INFRA_FAILURE_REASONS` — the closed set naming the FOUR
         infra reasons — rather than re-deriving it as "in the wider family and not
         manual". `advisor_unavailable` is the one member of that set no end-to-end
         test above ever produces (the blocker never pre-selects it; only an operator

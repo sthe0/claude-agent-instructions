@@ -13,6 +13,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -106,6 +107,19 @@ def test_main_emits_one_line_on_signal():
     lines = [l for l in p.stdout.decode().splitlines() if l.strip()]
     assert len(lines) == 1
     assert lines[0].startswith("[self-improvement-reminder]")
+
+
+def test_main_silent_inside_a_judge_child():
+    """A judge subprocess's own prompt carries feedback-shaped example text, so
+    this hook's tier-1 detector fires on it — which is exactly how the judge came
+    to call itself 126 levels deep. Sandbox isolation removes the trigger; this
+    marker is the independent second line of defense, so it must win over a
+    prompt that would otherwise fire."""
+    env = dict(os.environ)
+    env[_mod.JUDGE_CHILD_ENV_VAR] = "1"
+    p = _run(json.dumps({"prompt": "did you run self-improvement?"}).encode(), env=env)
+    assert p.returncode == 0
+    assert p.stdout.decode().strip() == ""
 
 
 def test_main_silent_on_neutral():
