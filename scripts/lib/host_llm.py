@@ -16,11 +16,47 @@ from __future__ import annotations
 
 import os
 import shutil
+import tempfile
 from pathlib import Path
 
 from .runtime_models import HOST_CLAUDE, HOST_CURSOR, HOSTS
 
 DEFAULT_CURSOR_API_KEY_FILE = Path.home() / ".cursor_api_key"
+
+# A bare `claude -p ...` argv is a FULL Claude Code session: absent isolation it
+# inherits the ambient CLAUDE_CONFIG_DIR and cwd, so it loads the fleet's own
+# settings.json and registers the same hooks the coordinating session runs under.
+# Measured on this machine: a judge prompt containing feedback-shaped example text
+# (the self-improvement judge's own template) re-entered hook-self-improvement-
+# reminder.py on itself, recursing 126 levels deep to a 111 364-char prompt, and
+# 1583 such calls exhausted a 5-hour quota window in 48 minutes. Pointing
+# CLAUDE_CONFIG_DIR at an empty, agent-owned directory and running from an empty
+# cwd (no CLAUDE.md chain to discover) leaves no settings.json for any hook to
+# register from, so the recursion cannot start regardless of prompt content. A
+# live A/B on the same 989-byte prompt: ambient cache_creation_input_tokens
+# 40 707 vs. isolated 8 499.
+_SANDBOX_ROOT = Path(tempfile.gettempdir()) / "claude-judge-sandbox"
+
+
+def isolated_run_kwargs() -> dict:
+    """kwargs for subprocess.run() that isolate a single-turn `claude -p ...` call
+    from the fleet's own hook registrations (see _SANDBOX_ROOT's comment above).
+
+    `env` is os.environ COPIED, never replaced, with only CLAUDE_CONFIG_DIR
+    overridden: auth is env-carried (ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY), so
+    replacing the environment would break every judge's ability to authenticate.
+    `cwd` is a separate empty directory so no project-level CLAUDE.md chain is
+    discovered from the working directory either. Both sandbox directories are
+    created on demand (mkdir is idempotent and safe under concurrent callers).
+    """
+    home = _SANDBOX_ROOT / "home"
+    cwd = _SANDBOX_ROOT / "cwd"
+    home.mkdir(parents=True, exist_ok=True)
+    cwd.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)
+    env["CLAUDE_CONFIG_DIR"] = str(home)
+    return {"cwd": str(cwd), "env": env}
+
 
 _HOST_BINARY_FAMILY = {
     HOST_CLAUDE: frozenset({"claude"}),

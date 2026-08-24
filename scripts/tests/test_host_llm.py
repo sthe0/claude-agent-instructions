@@ -8,6 +8,8 @@ installed, or on ~/.cursor_api_key's real contents.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from lib import host_llm
@@ -170,3 +172,31 @@ def test_build_prompt_argv_cursor_includes_workspace_when_given(monkeypatch, tmp
 def test_build_prompt_argv_unknown_host_raises():
     with pytest.raises(ValueError):
         host_llm.build_prompt_argv("windows", "model", "prompt")
+
+
+# --- isolated_run_kwargs -------------------------------------------------------------
+
+def test_isolated_run_kwargs_preserves_ambient_env_and_overrides_config_dir(monkeypatch):
+    monkeypatch.setenv("HOST_LLM_ISOLATION_SENTINEL", "still-here")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    kwargs = host_llm.isolated_run_kwargs()
+    assert kwargs["env"]["HOST_LLM_ISOLATION_SENTINEL"] == "still-here"
+    assert kwargs["env"]["ANTHROPIC_API_KEY"] == "sk-ant-test"
+    assert "claude-judge-sandbox" in kwargs["env"]["CLAUDE_CONFIG_DIR"]
+
+
+def test_isolated_run_kwargs_cwd_and_config_dir_are_created_and_empty():
+    kwargs = host_llm.isolated_run_kwargs()
+    cwd = Path(kwargs["cwd"])
+    config_dir = Path(kwargs["env"]["CLAUDE_CONFIG_DIR"])
+    assert cwd.is_dir()
+    assert config_dir.is_dir()
+    assert not (cwd / "CLAUDE.md").exists()
+    assert not (config_dir / "settings.json").exists()
+
+
+def test_isolated_run_kwargs_is_idempotent_across_calls():
+    first = host_llm.isolated_run_kwargs()
+    second = host_llm.isolated_run_kwargs()
+    assert first["cwd"] == second["cwd"]
+    assert first["env"]["CLAUDE_CONFIG_DIR"] == second["env"]["CLAUDE_CONFIG_DIR"]

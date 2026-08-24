@@ -190,7 +190,10 @@ Runner = Callable[..., RunResult]
 
 def subprocess_runner(argv: list[str], *, timeout: int = _EXTRACT_TIMEOUT_S) -> RunResult:
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(
+            argv, capture_output=True, text=True, timeout=timeout,
+            **host_llm.isolated_run_kwargs(),
+        )
         return RunResult(proc.returncode, proc.stdout, proc.stderr)
     except subprocess.TimeoutExpired:
         return RunResult(1, "", f"marker extractor timed out after {timeout}s")

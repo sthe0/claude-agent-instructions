@@ -1111,7 +1111,12 @@ def subprocess_runner(argv: list[str], *, timeout: int = _ADVISOR_TIMEOUT_S) -> 
     function's own stderr literal below. The judge name comes from the ambient
     ``judge_ledger.take_current_judge()`` carrier (set by the calling judge
     function immediately before invoking the injected ``runner``), because this
-    function's own signature is frozen and cannot grow a judge-name parameter."""
+    function's own signature is frozen and cannot grow a judge-name parameter.
+
+    The subprocess itself runs under ``host_llm.isolated_run_kwargs()`` (cwd +
+    CLAUDE_CONFIG_DIR pinned to an empty sandbox, rest of the environment
+    preserved) — see that function's docstring for why an unisolated judge call
+    can recurse into the fleet's own hooks."""
     judge_name = judge_ledger.take_current_judge()
     if judge_name is None:
         # Every caller in this module now self-identifies before invoking the
@@ -1127,7 +1132,10 @@ def subprocess_runner(argv: list[str], *, timeout: int = _ADVISOR_TIMEOUT_S) -> 
     judge_ledger.started(judge_name)
     start = time.monotonic()
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(
+            argv, capture_output=True, text=True, timeout=timeout,
+            **host_llm.isolated_run_kwargs(),
+        )
         duration = time.monotonic() - start
         judge_ledger.call(judge_name, timed_out=False, duration=duration, returncode=proc.returncode)
         return RunResult(proc.returncode, proc.stdout, proc.stderr, timed_out=False)

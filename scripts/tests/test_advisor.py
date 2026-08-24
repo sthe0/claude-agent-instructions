@@ -164,6 +164,20 @@ class TestSubprocessRunner:
         result = advisor.subprocess_runner(["claude", "-p", "x"], timeout=1)
         assert result.returncode != 0
 
+    def test_runs_isolated_via_host_llm(self, monkeypatch):
+        captured = {}
+
+        def fake_run(argv, **kwargs):
+            captured.update(kwargs)
+            return subprocess.CompletedProcess(argv, 0, stdout="ok", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        monkeypatch.setenv("HOST_LLM_ISOLATION_SENTINEL", "present")
+        advisor.subprocess_runner(["claude", "-p", "x"], timeout=5)
+        assert captured["env"]["HOST_LLM_ISOLATION_SENTINEL"] == "present"
+        assert "claude-judge-sandbox" in captured["env"]["CLAUDE_CONFIG_DIR"]
+        assert "claude-judge-sandbox" in captured["cwd"]
+
 
 # ── cmd_classify wiring ───────────────────────────────────────────────────────
 

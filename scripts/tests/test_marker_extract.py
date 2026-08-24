@@ -284,6 +284,21 @@ def test_subprocess_runner_converts_a_timeout_into_a_failed_runresult(monkeypatc
     assert "timed out after 7s" in result.stderr
 
 
+def test_subprocess_runner_runs_isolated_via_host_llm(monkeypatch):
+    captured = {}
+
+    def fake_run(argv, **kwargs):
+        captured.update(kwargs)
+        return marker_extract.subprocess.CompletedProcess(argv, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(marker_extract.subprocess, "run", fake_run)
+    monkeypatch.setenv("HOST_LLM_ISOLATION_SENTINEL", "present")
+    marker_extract.subprocess_runner(["claude"], timeout=7)
+    assert captured["env"]["HOST_LLM_ISOLATION_SENTINEL"] == "present"
+    assert "claude-judge-sandbox" in captured["env"]["CLAUDE_CONFIG_DIR"]
+    assert "claude-judge-sandbox" in captured["cwd"]
+
+
 # --- (g2) kill switch: the ENV VAR itself, pinned to the documented value ------
 
 
