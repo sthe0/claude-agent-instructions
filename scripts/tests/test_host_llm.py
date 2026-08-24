@@ -8,6 +8,8 @@ installed, or on ~/.cursor_api_key's real contents.
 """
 from __future__ import annotations
 
+import os
+import threading
 from pathlib import Path
 
 import pytest
@@ -195,8 +197,47 @@ def test_isolated_run_kwargs_cwd_and_config_dir_are_created_and_empty():
     assert not (config_dir / "settings.json").exists()
 
 
-def test_isolated_run_kwargs_is_idempotent_across_calls():
+def test_isolated_run_kwargs_reuses_one_slot_per_thread():
+    """Repeated calls from one thread must not leave a directory behind each time."""
     first = host_llm.isolated_run_kwargs()
     second = host_llm.isolated_run_kwargs()
     assert first["cwd"] == second["cwd"]
     assert first["env"]["CLAUDE_CONFIG_DIR"] == second["env"]["CLAUDE_CONFIG_DIR"]
+
+
+def test_isolated_run_kwargs_gives_concurrent_threads_distinct_slots():
+    """`claude` writes live state into CLAUDE_CONFIG_DIR, and
+    measure-marker-extractor-latency.py drives these calls through a
+    ThreadPoolExecutor — so concurrent callers must not share one config root."""
+    seen: list[dict] = []
+    lock = threading.Lock()
+
+    def collect():
+        kwargs = host_llm.isolated_run_kwargs()
+        with lock:
+            seen.append(kwargs)
+
+    threads = [threading.Thread(target=collect) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    config_dirs = {k["env"]["CLAUDE_CONFIG_DIR"] for k in seen}
+    cwds = {k["cwd"] for k in seen}
+    assert len(config_dirs) == 4
+    assert len(cwds) == 4
+
+
+def test_isolated_run_kwargs_prunes_slots_of_exited_processes(monkeypatch):
+    root = host_llm._SANDBOX_ROOT
+    root.mkdir(parents=True, exist_ok=True)
+    dead = root / "2147483646-1"  # above /proc/sys/kernel/pid_max on Linux
+    (dead / "home").mkdir(parents=True, exist_ok=True)
+    live = root / f"{os.getpid()}-999999"
+    (live / "home").mkdir(parents=True, exist_ok=True)
+
+    host_llm.isolated_run_kwargs()
+
+    assert not dead.exists()
+    assert live.exists()

@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
+import threading
 from pathlib import Path
 
 from .runtime_models import HOST_CLAUDE, HOST_CURSOR, HOSTS
@@ -38,6 +39,31 @@ DEFAULT_CURSOR_API_KEY_FILE = Path.home() / ".cursor_api_key"
 _SANDBOX_ROOT = Path(tempfile.gettempdir()) / "claude-judge-sandbox"
 
 
+def _prune_dead_slots() -> None:
+    """Remove sandbox slots whose owning process is gone.
+
+    A slot is named `<pid>-<tid>`, so its owner is decidable rather than guessed
+    at by age: a slot whose pid no longer exists can never be written to again,
+    while a slot belonging to a live process is skipped however old it is. Purely
+    best-effort — a concurrent pruner may unlink the same tree first, and a
+    recycled pid only leaves one stale slot behind.
+    """
+    try:
+        slots = list(_SANDBOX_ROOT.iterdir())
+    except OSError:
+        return
+    for slot in slots:
+        pid_part = slot.name.partition("-")[0]
+        if not pid_part.isdigit():
+            continue
+        try:
+            os.kill(int(pid_part), 0)
+        except ProcessLookupError:
+            shutil.rmtree(slot, ignore_errors=True)
+        except OSError:
+            continue
+
+
 def isolated_run_kwargs() -> dict:
     """kwargs for subprocess.run() that isolate a single-turn `claude -p ...` call
     from the fleet's own hook registrations (see _SANDBOX_ROOT's comment above).
@@ -46,11 +72,22 @@ def isolated_run_kwargs() -> dict:
     overridden: auth is env-carried (ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY), so
     replacing the environment would break every judge's ability to authenticate.
     `cwd` is a separate empty directory so no project-level CLAUDE.md chain is
-    discovered from the working directory either. Both sandbox directories are
-    created on demand (mkdir is idempotent and safe under concurrent callers).
+    discovered from the working directory either.
+
+    The sandbox is per (process, thread), NOT one shared pair: `claude` treats
+    CLAUDE_CONFIG_DIR as writable live state (`.claude.json`, `history.jsonl`),
+    and these calls genuinely do run concurrently — measure-marker-extractor-
+    latency.py drives them through a ThreadPoolExecutor — so one shared root
+    would have N subprocesses racing on the same files, trading the recursion
+    this function removes for a corruption that degrades the judges just as
+    silently. Keyed by pid+tid rather than a fresh mkdtemp per call so a caller
+    making many calls reuses one directory instead of leaving one behind each
+    time; slots of exited processes are reaped by _prune_dead_slots.
     """
-    home = _SANDBOX_ROOT / "home"
-    cwd = _SANDBOX_ROOT / "cwd"
+    _prune_dead_slots()
+    slot = _SANDBOX_ROOT / f"{os.getpid()}-{threading.get_ident()}"
+    home = slot / "home"
+    cwd = slot / "cwd"
     home.mkdir(parents=True, exist_ok=True)
     cwd.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
