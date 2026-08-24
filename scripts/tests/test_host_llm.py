@@ -217,14 +217,24 @@ def test_isolated_run_kwargs_reuses_one_slot_per_thread():
 def test_isolated_run_kwargs_gives_concurrent_threads_distinct_slots():
     """`claude` writes live state into CLAUDE_CONFIG_DIR, and
     measure-marker-extractor-latency.py drives these calls through a
-    ThreadPoolExecutor — so concurrent callers must not share one config root."""
+    ThreadPoolExecutor — so concurrent callers must not share one config root.
+
+    The barrier is load-bearing, not ceremony: the slot key is pid+tid, and
+    CPython reuses a tid once its thread exits, so without it an early thread
+    can finish before a later one starts and legitimately hand back the same
+    slot. That serial reuse is the intended behaviour (one directory per
+    caller, not one per call) — what must never happen is two threads holding
+    the same slot AT THE SAME TIME, which is what this pins.
+    """
     seen: list[dict] = []
     lock = threading.Lock()
+    all_inside = threading.Barrier(4, timeout=10)
 
     def collect():
         kwargs = host_llm.isolated_run_kwargs()
         with lock:
             seen.append(kwargs)
+        all_inside.wait()
 
     threads = [threading.Thread(target=collect) for _ in range(4)]
     for t in threads:
