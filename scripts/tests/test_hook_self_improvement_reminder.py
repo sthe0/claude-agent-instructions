@@ -91,11 +91,12 @@ def test_tier2b_needs_agent_ref():
 # ---------------------------------------------------------------------------
 # main() via subprocess — exactly one line / silence / exit 0 always
 # ---------------------------------------------------------------------------
-def _run(stdin_bytes: bytes):
+def _run(stdin_bytes: bytes, env=None):
     return subprocess.run(
         [sys.executable, str(HOOK_SCRIPT)],
         input=stdin_bytes,
         capture_output=True,
+        env=env,
     )
 
 

@@ -38,6 +38,16 @@ DEFAULT_CURSOR_API_KEY_FILE = Path.home() / ".cursor_api_key"
 # 40 707 vs. isolated 8 499.
 _SANDBOX_ROOT = Path(tempfile.gettempdir()) / "claude-judge-sandbox"
 
+# Defense in depth alongside the sandbox above: CLAUDE_CONFIG_DIR isolation
+# removes the hook-recursion TRIGGER (no settings.json for a hook to register
+# from), but a hook that still runs inside this env (imported by a future
+# caller that forgets to isolate, or invoked directly for some other reason)
+# has no way to tell "I am the sandboxed child" from "I am the coordinating
+# session". Every hook that itself calls a judge checks this marker first and
+# exits before doing any work — a second, independent line of defense that
+# does not depend on the sandbox actually being wired up correctly everywhere.
+JUDGE_CHILD_ENV_VAR = "AGENTCTL_JUDGE_CHILD"
+
 
 def _prune_dead_slots() -> None:
     """Remove sandbox slots whose owning process is gone.
@@ -92,6 +102,7 @@ def isolated_run_kwargs() -> dict:
     cwd.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
     env["CLAUDE_CONFIG_DIR"] = str(home)
+    env[JUDGE_CHILD_ENV_VAR] = "1"
     return {"cwd": str(cwd), "env": env}
 
 

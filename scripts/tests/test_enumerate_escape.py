@@ -468,6 +468,27 @@ class TestClassifyRunnerFailure:
         assert result.returncode != 0
         assert advisor.classify_runner_failure(result.stderr) == premise.ESCAPE_ADVISOR_TIMEOUT
 
+    def test_quota_refusal_gets_its_own_reason(self):
+        """A session-limit refusal names a resource ceiling, not a broken runner:
+        it must land in its own bucket so a fleet-wide quota exhaustion is
+        visible instead of vanishing into the generic-error tally. Wording is
+        the one observed verbatim from the host CLI."""
+        assert advisor.classify_runner_failure(
+            "You've hit your session limit · resets 12am (Europe/Moscow)"
+        ) == premise.ESCAPE_ADVISOR_QUOTA
+
+    def test_quota_match_is_case_insensitive(self):
+        assert advisor.classify_runner_failure(
+            "Error: Session Limit reached") == premise.ESCAPE_ADVISOR_QUOTA
+
+    def test_timeout_wins_over_a_quota_mention(self):
+        """The timeout arm is the stderr this process itself wrote, so it stays
+        first: a quota phrase appearing inside a timeout diagnostic must not
+        re-label a runner this side knows timed out."""
+        assert advisor.classify_runner_failure(
+            f"{advisor._TIMEOUT_STDERR_PREFIX} 480s (session limit?)"
+        ) == premise.ESCAPE_ADVISOR_TIMEOUT
+
     def test_any_other_stderr_is_the_catch_all(self):
         assert advisor.classify_runner_failure(
             "claude: command not found") == premise.ESCAPE_ADVISOR_ERROR

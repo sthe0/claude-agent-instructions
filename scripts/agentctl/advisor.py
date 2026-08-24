@@ -1154,14 +1154,23 @@ def classify_runner_failure(stderr: str) -> str:
     pre-selects, so the human confirms a value rather than typing one the engine
     already knows.
 
-    Two-valued on purpose. A timeout is the one failure whose stderr this process
-    itself wrote (subprocess_runner's TimeoutExpired arm), so it is the one this
-    function can recognise with certainty; everything else — a non-zero exit, an
-    unparseable reply, an OSError, an absent advisor binary, no stderr at all — is a
-    heterogeneous tail whose members would each need a fragile substring rule for no
-    gain, since the escape they take is the same. So advisor_error is a deliberate
-    catch-all, including for empty stderr, and the operator's --note carries the
-    detail the reason token deliberately does not."""
-    if _TIMEOUT_STDERR_PREFIX in (stderr or ""):
+    Three-valued on purpose, up from two. A timeout is the one failure whose
+    stderr this process itself wrote (subprocess_runner's TimeoutExpired arm), so
+    it is the one this function can recognise with certainty. A quota/session-
+    limit refusal is the second: its stderr shape is stable (observed verbatim:
+    "You've hit your session limit · resets 12am (Europe/Moscow)") and,
+    unlike a generic failure, names a resource ceiling rather than a broken
+    runner — worth its own reason so a fleet-wide quota exhaustion shows up as
+    its own bucket instead of vanishing into the generic-error tally. Everything
+    else — an ordinary non-zero exit, an unparseable reply, an OSError, an absent
+    advisor binary, no stderr at all — is a heterogeneous tail whose members
+    would each need a fragile substring rule for no gain, since the escape they
+    take is the same. So advisor_error remains the catch-all, including for
+    empty stderr, and the operator's --note carries the detail the reason token
+    deliberately does not."""
+    text = stderr or ""
+    if _TIMEOUT_STDERR_PREFIX in text:
         return premise.ESCAPE_ADVISOR_TIMEOUT
+    if "session limit" in text.lower():
+        return premise.ESCAPE_ADVISOR_QUOTA
     return premise.ESCAPE_ADVISOR_ERROR

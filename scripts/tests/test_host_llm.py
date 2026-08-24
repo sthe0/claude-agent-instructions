@@ -187,6 +187,15 @@ def test_isolated_run_kwargs_preserves_ambient_env_and_overrides_config_dir(monk
     assert "claude-judge-sandbox" in kwargs["env"]["CLAUDE_CONFIG_DIR"]
 
 
+def test_isolated_run_kwargs_sets_judge_child_marker():
+    """A hook that runs inside this env (even though CLAUDE_CONFIG_DIR isolation
+    already removes its own recursion trigger) must be able to tell it is a
+    sandboxed judge child and refuse to do any work — the second, independent
+    line of defense the marker exists for."""
+    kwargs = host_llm.isolated_run_kwargs()
+    assert kwargs["env"][host_llm.JUDGE_CHILD_ENV_VAR] == "1"
+
+
 def test_isolated_run_kwargs_cwd_and_config_dir_are_created_and_empty():
     kwargs = host_llm.isolated_run_kwargs()
     cwd = Path(kwargs["cwd"])

@@ -43,6 +43,7 @@ from typing import Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib import judge_ledger  # noqa: E402
+from lib.host_llm import JUDGE_CHILD_ENV_VAR  # noqa: E402
 
 # judge_ledger itself must import cleanly above for this to record anything —
 # it is stdlib-only (see its own module docstring) and is what every other
@@ -238,6 +239,8 @@ def decide(payload: dict, *, runner: Callable | None = None) -> str | None:
 
 
 def main() -> int:
+    if os.environ.get(JUDGE_CHILD_ENV_VAR):
+        return 0  # a sandboxed judge subprocess, not a real user turn — allow, no opinion
     judge_ledger.hook_start("escalation_diagnosis")
     try:
         payload = json.load(sys.stdin)

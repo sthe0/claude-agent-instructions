@@ -26,6 +26,7 @@ Scope:
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -34,10 +35,13 @@ from pathlib import Path
 # the script's dir to sys.path).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from lib.host_llm import JUDGE_CHILD_ENV_VAR  # noqa: E402
 from si_feedback_detect import find_signals  # noqa: E402
 
 
 def main() -> int:
+    if os.environ.get(JUDGE_CHILD_ENV_VAR):
+        return 0  # a sandboxed judge subprocess, not a real user turn — allow, no opinion
     try:
         payload = json.load(sys.stdin)
     except Exception:

@@ -72,6 +72,7 @@ from typing import Any, Callable
 # directly (scripts/ on sys.path[0]) or loaded via importlib in tests.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib import judge_ledger  # noqa: E402
+from lib.host_llm import JUDGE_CHILD_ENV_VAR  # noqa: E402
 
 # judge_ledger itself must import cleanly above for this to record anything —
 # it is stdlib-only (see its own module docstring) and is what every other
@@ -831,6 +832,8 @@ def decide(
 
 
 def main() -> int:
+    if os.environ.get(JUDGE_CHILD_ENV_VAR):
+        return 0  # a sandboxed judge subprocess, not a real user turn — allow, no opinion
     judge_ledger.hook_start("turn_end")
     # Opened first, before the stdin payload is even read, so the deadline
     # honestly covers transcript parsing too — not only the judge calls. Under
