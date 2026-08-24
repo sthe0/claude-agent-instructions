@@ -52,6 +52,7 @@ class DifficultyRecord:
     severity: Severity
     reporter: str      # who/what submitted it
     evidence: str = ""  # free-text: quote, log line, link
+    cost_estimate: str = ""  # free-text: what the problem costs, or "not estimable: <reason>"
 
     def __post_init__(self) -> None:
         # Validate/normalise the severity enum even if a raw string slipped in.

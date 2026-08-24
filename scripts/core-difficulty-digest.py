@@ -65,6 +65,19 @@ class Cluster:
         # name — a live adapter sets reporter from the submitting identity).
         return {r.reporter for r in self.items}
 
+    @property
+    def costs(self) -> list[str]:
+        # non-empty cost_estimate values, in item order — 'not estimable: ...' entries and real
+        # estimates are already textually distinct, so no further split is needed here.
+        return [r.cost_estimate for r in self.items if r.cost_estimate]
+
+    @property
+    def outside_cost_gate_count(self) -> int:
+        # members whose cost_estimate is empty — a raw filing that bypassed file-difficulty.py's
+        # --cost/--cost-not-estimable gate reads identically to this, which is the point: it
+        # makes that bypass visible instead of letting it read as a legitimate zero.
+        return sum(1 for r in self.items if not r.cost_estimate)
+
 
 def cluster_records(records: list[DifficultyRecord], join_ratio: float = JOIN_RATIO) -> list[Cluster]:
     """Group records by functional ground. A record joins the best-matching existing cluster
@@ -147,6 +160,14 @@ def _format(flagged: list[Cluster]) -> str:
             f"  [mass {c.mass}{crit}] {c.functional_ground!r} "
             f"— {len(c.items)} report(s) by {sorted(c.reporters)}"
         )
+        cost_bits = []
+        if c.costs:
+            cost_bits.append("cost: " + "; ".join(repr(v) for v in c.costs))
+        gap = c.outside_cost_gate_count
+        if gap:
+            cost_bits.append(f"{gap} of {len(c.items)} filed outside the cost gate")
+        if cost_bits:
+            lines.append("    " + " — ".join(cost_bits))
     lines.append("  → route each through planner → approval → developer (the digest only flags).")
     return "\n".join(lines)
 

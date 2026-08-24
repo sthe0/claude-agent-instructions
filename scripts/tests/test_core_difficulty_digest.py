@@ -20,10 +20,10 @@ sys.modules["core_difficulty_digest"] = digest_mod
 _SPEC.loader.exec_module(digest_mod)
 
 
-def _rec(ground, sev, reporter, ts="2026-06-26T00:00:00", target="CLAUDE.md"):
+def _rec(ground, sev, reporter, ts="2026-06-26T00:00:00", target="CLAUDE.md", cost_estimate=""):
     return dc.DifficultyRecord(
         ts=ts, layer="core", target=target, functional_ground=ground,
-        severity=sev, reporter=reporter, evidence="e",
+        severity=sev, reporter=reporter, evidence="e", cost_estimate=cost_estimate,
     )
 
 
@@ -70,6 +70,60 @@ def test_distinct_grounds_stay_separate():
     ]
     clusters = digest_mod.cluster_records(recs)
     assert len(clusters) == 2
+
+
+# ── cost note + outside-the-cost-gate marker ──────────────────────────────────
+
+def test_digest_shows_cost_note_for_cluster_with_costs():
+    recs = [
+        _rec("ground A", dc.Severity.HIGH, "c1", cost_estimate="$3/week"),
+        _rec("ground A", dc.Severity.HIGH, "c2", cost_estimate="$3/week"),
+    ]
+    out = digest_mod._format(digest_mod.digest(recs, threshold=1))
+    assert "$3/week" in out
+    assert "outside the cost gate" not in out
+
+
+def test_digest_shows_both_values_for_a_cluster_with_differing_costs():
+    recs = [
+        _rec("ground A", dc.Severity.HIGH, "c1", cost_estimate="$3/week"),
+        _rec("ground A", dc.Severity.HIGH, "c2", cost_estimate="~8k tokens per session"),
+    ]
+    out = digest_mod._format(digest_mod.digest(recs, threshold=1))
+    assert "$3/week" in out
+    assert "~8k tokens per session" in out
+
+
+def test_digest_marks_cluster_with_any_empty_member_outside_the_cost_gate():
+    """Constraint: the marker fires whenever AT LEAST ONE member is empty — not only when
+    ALL are — and carries the count, so a bypassed filing landing alongside properly-filed
+    ones is still visible."""
+    recs = [
+        _rec("ground A", dc.Severity.HIGH, "c1", cost_estimate="$3/week"),
+        _rec("ground A", dc.Severity.HIGH, "c2", cost_estimate=""),
+    ]
+    out = digest_mod._format(digest_mod.digest(recs, threshold=1))
+    assert "1 of 2 filed outside the cost gate" in out
+    assert "$3/week" in out
+
+
+def test_digest_all_empty_cluster_shows_n_of_n_outside_the_cost_gate():
+    recs = [
+        _rec("ground A", dc.Severity.HIGH, "c1", cost_estimate=""),
+        _rec("ground A", dc.Severity.HIGH, "c2", cost_estimate=""),
+    ]
+    out = digest_mod._format(digest_mod.digest(recs, threshold=1))
+    assert "2 of 2 filed outside the cost gate" in out
+
+
+def test_cluster_costs_and_outside_cost_gate_count_properties():
+    recs = [
+        _rec("ground A", dc.Severity.HIGH, "c1", cost_estimate="$3/week"),
+        _rec("ground A", dc.Severity.HIGH, "c2", cost_estimate=""),
+    ]
+    [cluster] = digest_mod.cluster_records(recs)
+    assert cluster.costs == ["$3/week"]
+    assert cluster.outside_cost_gate_count == 1
 
 
 def test_threshold_reader_override_and_placeholder_fallback(tmp_path):

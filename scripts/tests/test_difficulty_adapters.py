@@ -16,7 +16,7 @@ import difficulty_channel as dc
 from difficulty_channel.adapters import external, github
 
 
-def _rec():
+def _rec(cost_estimate=""):
     return dc.DifficultyRecord(
         ts="2026-06-26T00:00:00",
         layer="core",
@@ -25,6 +25,7 @@ def _rec():
         severity=dc.Severity.HIGH,
         reporter="agent",
         evidence="session quote",
+        cost_estimate=cost_estimate,
     )
 
 
@@ -95,6 +96,76 @@ def test_github_pull_round_trips_through_fake_http():
     assert r.target == "CLAUDE.md"
     assert r.reporter == "agent"
     assert r.evidence == "session quote"
+
+
+def test_github_cost_line_rendered_before_evidence_marker():
+    fields = github.record_to_fields(_rec(cost_estimate="~8k tokens per session"))
+    body = fields["body"]
+    assert "**Cost:** ~8k tokens per session" in body
+    assert body.index("**Cost:**") < body.index("**Evidence:**")
+
+
+def test_github_cost_round_trips_byte_for_byte():
+    fields = github.record_to_fields(_rec(cost_estimate="~8k tokens per session"))
+
+    def fake_http(method, url, headers, body):
+        return [{
+            "body": fields["body"],
+            "labels": [{"name": lbl} for lbl in fields["labels"]],
+            "title": fields["title"],
+            "created_at": "2026-06-26T00:00:00Z",
+            "user": {"login": "agent"},
+        }]
+
+    ch = github.GitHubChannel(http=fake_http, token="t")
+    [r] = ch.pull()
+    assert r.cost_estimate == "~8k tokens per session"
+
+
+def test_github_empty_cost_round_trips_to_empty_string_not_none():
+    fields = github.record_to_fields(_rec(cost_estimate=""))
+
+    def fake_http(method, url, headers, body):
+        return [{
+            "body": fields["body"],
+            "labels": [{"name": lbl} for lbl in fields["labels"]],
+            "title": fields["title"],
+            "created_at": "2026-06-26T00:00:00Z",
+            "user": {"login": "agent"},
+        }]
+
+    ch = github.GitHubChannel(http=fake_http, token="t")
+    [r] = ch.pull()
+    assert r.cost_estimate == ""
+    assert r.cost_estimate is not None
+
+
+def test_github_pull_pre_change_body_with_no_cost_line_parses_empty():
+    """An issue filed before this change carries no **Cost:** line at all — must not crash."""
+    def fake_http(method, url, headers, body):
+        return [{
+            "body": (
+                "**Target:** `CLAUDE.md`\n"
+                "**Layer:** core\n"
+                "**Functional ground:** gate denies a legitimate memory write\n"
+                "**Severity:** high\n"
+                "**Reporter:** agent\n"
+                "**Observed:** 2026-06-26T00:00:00\n\n"
+                "**Evidence:**\nsession quote"
+            ),
+            "labels": [
+                {"name": "severity:high"},
+                {"name": "layer:core"},
+                {"name": "difficulty"},
+            ],
+            "title": "[core] gate denies a legitimate memory write",
+            "created_at": "2026-06-26T00:00:00Z",
+            "user": {"login": "agent"},
+        }]
+
+    ch = github.GitHubChannel(http=fake_http, token="t")
+    [r] = ch.pull()
+    assert r.cost_estimate == ""
 
 
 def test_github_pull_filters_old_records():

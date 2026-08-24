@@ -42,6 +42,12 @@ def _now_iso() -> str:
 
 
 def _build_record(args: argparse.Namespace, ts: str | None = None) -> dc.DifficultyRecord:
+    if args.cost is not None:
+        cost_estimate = args.cost
+    elif args.cost_not_estimable is not None:
+        cost_estimate = f"not estimable: {args.cost_not_estimable}"
+    else:
+        cost_estimate = ""
     return dc.DifficultyRecord(
         ts=ts or _now_iso(),
         layer=args.layer,
@@ -50,6 +56,7 @@ def _build_record(args: argparse.Namespace, ts: str | None = None) -> dc.Difficu
         severity=dc.Severity.parse(args.severity),
         reporter=args.reporter or os.environ.get("USER", "unknown"),
         evidence=args.evidence or "",
+        cost_estimate=cost_estimate,
     )
 
 
@@ -63,6 +70,8 @@ def _print_record(record: dc.DifficultyRecord) -> None:
     print(f"  reporter:          {record.reporter}")
     if record.evidence:
         print(f"  evidence:          {record.evidence!r}")
+    if record.cost_estimate:
+        print(f"  cost_estimate:     {record.cost_estimate!r}")
 
 
 def main(argv: list[str] | None = None, _ts: str | None = None) -> int:
@@ -78,6 +87,14 @@ def main(argv: list[str] | None = None, _ts: str | None = None) -> int:
                    help="which layer the difficulty is against (default: core)")
     p.add_argument("--evidence", default="",
                    help="supporting quote, log line, or link")
+    p.add_argument("--cost", default=None,
+                   help="what the problem costs per occurrence or per week, in whatever unit "
+                        "fits: '~8k tokens per session', '$3/week', '2 replans per ticket' "
+                        "(mutually exclusive with --cost-not-estimable; exactly one is required "
+                        "to actually file)")
+    p.add_argument("--cost-not-estimable", default=None, metavar="REASON",
+                   help="explicit reason no cost estimate is possible (mutually exclusive with "
+                        "--cost; exactly one is required to actually file)")
     p.add_argument("--reporter", default="",
                    help="who/what is filing (default: $USER)")
     p.add_argument("--channel", default=None,
@@ -174,6 +191,16 @@ def main(argv: list[str] | None = None, _ts: str | None = None) -> int:
         for line in routing_lines:
             print(line)
         return 0
+
+    if (args.cost is not None) == (args.cost_not_estimable is not None):
+        got = "both" if args.cost is not None else "neither"
+        print(
+            "error: exactly one of --cost or --cost-not-estimable is required to file "
+            "(so a fixable loss is never left unmeasured, and a genuinely non-estimable one "
+            f"is never silently skipped) — got {got}",
+            file=sys.stderr,
+        )
+        return 2
 
     if authority.is_author() and not args.force_report:
         print(

@@ -62,6 +62,28 @@ def test_severity_enum_validates_and_carries_mass():
         dc.Severity.parse("catastrophic")
 
 
+def test_cost_estimate_defaults_empty_and_is_settable():
+    r = _rec()
+    assert r.cost_estimate == ""
+    r2 = dc.DifficultyRecord(
+        ts="t", layer="core", target="x", functional_ground="g",
+        severity=dc.Severity.LOW, reporter="r", cost_estimate="$3/week",
+    )
+    assert r2.cost_estimate == "$3/week"
+
+
+def test_scan_text_covers_cost_estimate_generically():
+    """scan_text() enumerates dataclasses.fields(self) generically (no per-field allowlist),
+    so a new field is covered by the pre-publication term gate without an edit to scan_text()
+    itself — pin that property directly rather than leave it an unverified claim."""
+    r = dc.DifficultyRecord(
+        ts="t", layer="core", target="x", functional_ground="g",
+        severity=dc.Severity.LOW, reporter="r",
+        cost_estimate="ORG_INTERNAL_TOKEN_MARKER",
+    )
+    assert "ORG_INTERNAL_TOKEN_MARKER" in r.scan_text()
+
+
 def test_empty_functional_ground_rejected():
     with pytest.raises(ValueError):
         dc.DifficultyRecord(

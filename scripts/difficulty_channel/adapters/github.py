@@ -38,7 +38,8 @@ def record_to_fields(record: DifficultyRecord, stream: str = "report") -> dict:
         f"**Functional ground:** {record.functional_ground}\n"
         f"**Severity:** {record.severity.value}\n"
         f"**Reporter:** {record.reporter}\n"
-        f"**Observed:** {record.ts}\n\n"
+        f"**Observed:** {record.ts}\n"
+        f"**Cost:** {record.cost_estimate}\n\n"
         f"**Evidence:**\n{record.evidence}"
     )
     stream_label = BACKLOG_LABEL if stream == "backlog" else DIFFICULTY_LABEL
@@ -255,6 +256,7 @@ def _issue_to_record(issue: dict) -> DifficultyRecord:
         or (issue.get("user") or {}).get("login", "unknown")
     )
     ts = _parse_body_field(body, "Observed") or issue.get("created_at", "")
+    cost_estimate = _parse_body_field(body, "Cost")
 
     evidence = ""
     body_lines = body.splitlines()
@@ -271,6 +273,7 @@ def _issue_to_record(issue: dict) -> DifficultyRecord:
         severity=severity,
         reporter=reporter,
         evidence=evidence,
+        cost_estimate=cost_estimate,
     )
 
 

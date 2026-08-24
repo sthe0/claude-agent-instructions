@@ -122,7 +122,7 @@ def test_submit_via_null_channel_returns_handle(no_plugin_dir, monkeypatch, caps
     monkeypatch.setattr(_mod.authority, "is_author", lambda: False)
     dc.register_channel("null-test", dc.NullChannel)
     rc = _run("--target", "CLAUDE.md", "--ground", "gate wording ambiguous",
-              "--severity", "high", "--channel", "null-test")
+              "--severity", "high", "--channel", "null-test", "--cost", "$1/week")
     assert rc == 0
     # NullChannel returns mem-<n>; the handle is printed to stdout
     assert "mem-" in capsys.readouterr().out
@@ -133,7 +133,8 @@ def test_submit_via_null_channel_record_survives_round_trip(no_plugin_dir, monke
     ch = dc.NullChannel()
     dc.register_channel("null-rt", lambda: ch)
     _run("--target", "docs/x.md", "--ground", "missing example",
-         "--severity", "low", "--reporter", "testbot", "--channel", "null-rt")
+         "--severity", "low", "--reporter", "testbot", "--channel", "null-rt",
+         "--cost", "2 replans per ticket")
     recs = ch.pull()
     assert len(recs) == 1
     r = recs[0]
@@ -142,6 +143,66 @@ def test_submit_via_null_channel_record_survives_round_trip(no_plugin_dir, monke
     assert r.severity is dc.Severity.LOW
     assert r.reporter == "testbot"
     assert r.layer == "core"
+
+
+# ── cost gate (exactly one of --cost / --cost-not-estimable to actually file) ─
+
+def test_neither_cost_flag_exits_2_naming_both_flags(no_plugin_dir, monkeypatch, capsys):
+    monkeypatch.setattr(_mod.authority, "is_author", lambda: False)
+    dc.register_channel("null-cost-neither", dc.NullChannel)
+    rc = _run("--target", "CLAUDE.md", "--ground", "x", "--channel", "null-cost-neither")
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "--cost" in err
+    assert "--cost-not-estimable" in err
+
+
+def test_both_cost_flags_exits_2_naming_both_flags(no_plugin_dir, monkeypatch, capsys):
+    monkeypatch.setattr(_mod.authority, "is_author", lambda: False)
+    dc.register_channel("null-cost-both", dc.NullChannel)
+    rc = _run("--target", "CLAUDE.md", "--ground", "x", "--channel", "null-cost-both",
+              "--cost", "$1/week", "--cost-not-estimable", "no baseline")
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "--cost" in err
+    assert "--cost-not-estimable" in err
+
+
+def test_cost_alone_sets_cost_estimate_verbatim(no_plugin_dir, monkeypatch):
+    monkeypatch.setattr(_mod.authority, "is_author", lambda: False)
+    ch = dc.NullChannel()
+    dc.register_channel("null-cost-alone", lambda: ch)
+    rc = _run("--target", "CLAUDE.md", "--ground", "x", "--channel", "null-cost-alone",
+              "--cost", "~8k tokens per session")
+    assert rc == 0
+    [r] = ch.pull()
+    assert r.cost_estimate == "~8k tokens per session"
+
+
+def test_cost_not_estimable_alone_sets_marker(no_plugin_dir, monkeypatch):
+    monkeypatch.setattr(_mod.authority, "is_author", lambda: False)
+    ch = dc.NullChannel()
+    dc.register_channel("null-cost-notest", lambda: ch)
+    rc = _run("--target", "CLAUDE.md", "--ground", "x", "--channel", "null-cost-notest",
+              "--cost-not-estimable", "no baseline exists")
+    assert rc == 0
+    [r] = ch.pull()
+    assert "not estimable" in r.cost_estimate
+    assert "no baseline exists" in r.cost_estimate
+
+
+def test_dry_run_shows_cost_line_when_given(capsys):
+    rc = _run("--target", "CLAUDE.md", "--ground", "x", "--cost", "$3/week", "--dry-run")
+    assert rc == 0
+    assert "$3/week" in capsys.readouterr().out
+
+
+def test_dry_run_does_not_require_a_cost_flag(capsys):
+    """The cost gate is a submission-time requirement (mirrors the author/term-scan checks,
+    which likewise only run past the dry-run preview) — a routing preview stays available
+    without forcing the caller to already know the cost."""
+    rc = _run("--target", "CLAUDE.md", "--ground", "x", "--dry-run")
+    assert rc == 0
 
 
 # ── bad severity ──────────────────────────────────────────────────────────────
@@ -240,7 +301,8 @@ def test_dry_run_project_target_resolves_queue(org_channel, tmp_path, capsys):
 def test_author_machine_refuses_without_force_report(no_plugin_dir, monkeypatch, capsys):
     monkeypatch.setattr(_mod.authority, "is_author", lambda: True)
     dc.register_channel("null-authority-1", dc.NullChannel)
-    rc = _run("--target", "CLAUDE.md", "--ground", "x", "--channel", "null-authority-1")
+    rc = _run("--target", "CLAUDE.md", "--ground", "x", "--channel", "null-authority-1",
+              "--cost", "$1/week")
     assert rc != 0
     assert "force-report" in capsys.readouterr().err
 
@@ -250,7 +312,7 @@ def test_author_machine_force_report_proceeds(no_plugin_dir, monkeypatch, capsys
     ch = dc.NullChannel()
     dc.register_channel("null-authority-2", lambda: ch)
     rc = _run("--target", "CLAUDE.md", "--ground", "x", "--channel", "null-authority-2",
-              "--force-report")
+              "--force-report", "--cost", "$1/week")
     assert rc == 0
     assert len(ch.pull()) == 1
 
@@ -259,7 +321,8 @@ def test_non_author_machine_proceeds_without_force_report(no_plugin_dir, monkeyp
     monkeypatch.setattr(_mod.authority, "is_author", lambda: False)
     ch = dc.NullChannel()
     dc.register_channel("null-authority-3", lambda: ch)
-    rc = _run("--target", "CLAUDE.md", "--ground", "x", "--channel", "null-authority-3")
+    rc = _run("--target", "CLAUDE.md", "--ground", "x", "--channel", "null-authority-3",
+              "--cost", "$1/week")
     assert rc == 0
     assert len(ch.pull()) == 1
 
