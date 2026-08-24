@@ -54,12 +54,13 @@ def _load_module():
     return mod
 
 
-def run_hook(payload: dict, config_dir: Path) -> subprocess.CompletedProcess:
+def run_hook(payload: dict, config_dir: Path, env_extra: dict | None = None) -> subprocess.CompletedProcess:
     # HOME also pinned to tmp_path: resolve_agentctl_state_file's legacy-root
     # fallback hardcodes Path.home() (not CLAUDE_CONFIG_DIR) — without this an
     # unset HOME falls back to the real user's home and the hook would read
     # ~/.claude/agentctl/state for a session-id collision with a real file.
     env = {"PATH": "/usr/bin:/bin", "HOME": str(config_dir), "CLAUDE_CONFIG_DIR": str(config_dir)}
+    env.update(env_extra or {})
     return subprocess.run(
         [sys.executable, str(HOOK)],
         input=json.dumps(payload),
@@ -117,6 +118,23 @@ def test_deny_when_plan_submitted_same_turn(tmp_path):
     assert _is_deny(proc)
     reason = _deny_reason(proc)
     assert "final" in reason.lower() and "plan" in reason.lower()
+
+
+def test_silent_inside_a_judge_child(tmp_path):
+    """A judge subprocess is not a user turn, so this hook must have no opinion
+    about it — and, more to the point, must not reach its own judge from inside
+    one. The same fixture that denies above is driven twice, so the silence is
+    demonstrated against a world that would otherwise deny rather than against a
+    fixture that was never going to say anything."""
+    write_state(tmp_path, "sessguard", "PLAN_READY", plan_submitted_ts=100.0, last_user_prompt_ts=100.0)
+    unguarded = run_hook(ask_payload("sessguard"), tmp_path)
+    assert unguarded.stdout.strip(), "fixture must produce a decision without the marker"
+
+    marker = _load_module().JUDGE_CHILD_ENV_VAR
+    proc = run_hook(ask_payload("sessguard"), tmp_path, env_extra={marker: "1"})
+
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == ""
 
 
 def test_deny_when_plan_submitted_after_prompt(tmp_path):

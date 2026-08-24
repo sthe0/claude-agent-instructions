@@ -132,6 +132,7 @@ try:
     from agentctl import text_shape as _text_shape  # noqa: E402
     from lib import config_root  # noqa: E402
     from lib import judge_budget  # noqa: E402
+    from lib.host_llm import JUDGE_CHILD_ENV_VAR  # noqa: E402
     from lib.ask_text import flat_text  # noqa: E402
     from lib.transcript_turns import delivered_final_texts, latest_turn_start  # noqa: E402
 except BaseException as exc:
@@ -576,6 +577,8 @@ def decide(payload: dict) -> tuple[str, str, Path | None, _PlanPresentation | No
 
 
 def main() -> int:
+    if os.environ.get(JUDGE_CHILD_ENV_VAR):
+        return 0  # a sandboxed judge subprocess, not a real user turn — allow, no opinion
     judge_ledger.hook_start("plan_delivery")
     try:
         payload = json.load(sys.stdin)
