@@ -73,7 +73,9 @@ CHARS_PER_TOKEN = 3
 # token-economy analysis used, so the PRICE block's share is comparable to it.
 PRICE_WINDOW_DAYS = 14
 
-# The size of the "what would N more chars cost" marginal-price example.
+# The unit the marginal price is quoted in. 1000 chars is roughly a paragraph of
+# instruction prose — the size of an edit someone actually contemplates making,
+# which is the decision this price exists to inform.
 PRICE_MARGIN_CHARS = 1000
 
 # (glob pattern relative to repo root, config-key for the limit).

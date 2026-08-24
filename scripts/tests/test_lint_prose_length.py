@@ -219,6 +219,34 @@ def test_compute_price_margin_scales_linearly():
     assert p2["margin_share_pct"] == 2 * p1["margin_share_pct"]
 
 
+def test_compute_price_pins_absolute_values():
+    # Hand-computed from the inputs: 90000 chars / charsPerToken 3 = 30000 tokens,
+    # which is also the per-step cost (the surface rides every step); 30000 * 1000
+    # steps / 1000000 window tokens = 3000%. Pinned as literals because a scaling
+    # test alone cannot catch a factor that is held constant within it.
+    mod = _load_mod()
+    price = mod.compute_price(
+        90_000, n_days=14, n_steps=1000, total_tokens=1_000_000, margin_chars=1000
+    )
+    margin_tokens = 1000 / 3
+    assert price["surface_tokens"] == 30_000.0
+    assert price["tokens_per_step"] == 30_000.0
+    assert price["share_pct"] == 3000.0
+    assert price["margin_tokens_per_step"] == margin_tokens
+    assert price["margin_share_pct"] == margin_tokens * 1000 / 1_000_000 * 100
+
+
+def test_compute_price_share_tracks_step_count():
+    # Doubling the step count doubles both shares: n_steps enters nowhere else, so
+    # dropping it from the numerator would leave every other assertion green.
+    mod = _load_mod()
+    one = mod.compute_price(90_000, n_days=14, n_steps=1000, total_tokens=1_000_000)
+    two = mod.compute_price(90_000, n_days=14, n_steps=2000, total_tokens=1_000_000)
+    assert two["share_pct"] == 2 * one["share_pct"]
+    assert two["margin_share_pct"] == 2 * one["margin_share_pct"]
+    assert two["tokens_per_step"] == one["tokens_per_step"]
+
+
 def test_compute_price_zero_total_tokens_no_zerodiv():
     mod = _load_mod()
     price = mod.compute_price(90_000, n_days=14, n_steps=0, total_tokens=0)
