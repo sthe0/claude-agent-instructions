@@ -79,10 +79,19 @@ ESCAPE_ADVISOR_ERROR = "advisor_error"
 # two hid a fleet-wide judge outage behind a generic error label with no
 # work-item signal to raise the bound.
 ESCAPE_ADVISOR_QUOTA = "advisor_quota"
+# Our own inability to hand the judge subprocess a credential — distinct from the
+# quota reason, which classifies the SERVICE's refusal. They have different
+# operators and different fixes ("wait or raise the ceiling" vs "the isolation
+# seam could not read a local token"), and collapsing them would hide the one
+# failure mode the seam can itself cause behind the one it cannot. It is not
+# hypothetical: isolation replaces CLAUDE_CONFIG_DIR, the client resolves auth at
+# that root, and for two stages that made every isolated judge answer nothing at
+# all while a fail-open advisor reported success.
+ESCAPE_ADVISOR_CREDENTIAL = "advisor_credential"
 ESCAPE_MANUAL_ENUMERATION_DONE = "manual_enumeration_done"
 ESCAPE_ENUMERATION_NOT_LANDED = "enumeration_not_landed"
 
-# The four INFRASTRUCTURE reasons — the pass landed and its runner broke, nobody
+# The five INFRASTRUCTURE reasons — the pass landed and its runner broke, nobody
 # did the work by hand. Named as its own tuple (rather than left implicit as
 # "ENUMERATION_RUNNER_FAILURE_REASONS minus manual") so a caller that needs the
 # infra/work-was-done distinction — plugins_premise._tally's runner_failure bucket —
@@ -93,13 +102,14 @@ ENUMERATION_INFRA_FAILURE_REASONS = (
     ESCAPE_ADVISOR_TIMEOUT,
     ESCAPE_ADVISOR_ERROR,
     ESCAPE_ADVISOR_QUOTA,
+    ESCAPE_ADVISOR_CREDENTIAL,
 )
 
 # Admissible only against a run that actually FAILED (enumerated_runner_ok is False).
 # advisor_unavailable is in the set but is never the reason the blocker pre-selects:
 # it names the injected-stub / advisor-absent path, which a live session reaches as
 # advisor_error, and only a caller who KNOWS the advisor was not there should choose
-# it. classify_runner_failure therefore returns one of the other three only.
+# it. classify_runner_failure therefore returns one of the other four only.
 ENUMERATION_RUNNER_FAILURE_REASONS = ENUMERATION_INFRA_FAILURE_REASONS + (
     ESCAPE_MANUAL_ENUMERATION_DONE,
 )

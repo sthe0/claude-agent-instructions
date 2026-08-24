@@ -477,6 +477,24 @@ class TestClassifyRunnerFailure:
             "You've hit your session limit · resets 12am (Europe/Moscow)"
         ) == premise.ESCAPE_ADVISOR_QUOTA
 
+    def test_a_missing_credential_gets_its_own_reason_ahead_of_the_catch_all(self):
+        """"We could not read a local credential" and "the service refused us for
+        quota" have different operators and different fixes: the first is ours to
+        repair, the second is waiting. The stderr is the one subprocess_runner
+        itself writes; the end-to-end production of it from an unauthenticated
+        world lives in test_advisor.py."""
+        assert advisor.classify_runner_failure(
+            f"{advisor._CREDENTIAL_STDERR_PREFIX}\nInvalid API key"
+        ) == premise.ESCAPE_ADVISOR_CREDENTIAL
+
+    def test_a_missing_credential_wins_over_a_quota_mention(self):
+        """A child that never authenticated cannot have been refused for quota, so
+        a session-limit phrase in its output must not re-label the one failure this
+        seam can itself cause — and mask the local fix."""
+        assert advisor.classify_runner_failure(
+            f"{advisor._CREDENTIAL_STDERR_PREFIX}\nYou've hit your session limit"
+        ) == premise.ESCAPE_ADVISOR_CREDENTIAL
+
     def test_quota_match_is_case_insensitive(self):
         assert advisor.classify_runner_failure(
             "Error: Session Limit reached") == premise.ESCAPE_ADVISOR_QUOTA
@@ -1174,7 +1192,7 @@ class TestEscapeCountsAreVisible:
 
     def test_advisor_unavailable_tallies_as_runner_failure(self):
         """`_tally` reads the infra/work-was-done split off
-        `premise.ENUMERATION_INFRA_FAILURE_REASONS` — the closed set naming the FOUR
+        `premise.ENUMERATION_INFRA_FAILURE_REASONS` — the closed set naming the FIVE
         infra reasons — rather than re-deriving it as "in the wider family and not
         manual". `advisor_unavailable` is the one member of that set no end-to-end
         test above ever produces (the blocker never pre-selects it; only an operator

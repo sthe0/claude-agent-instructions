@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import advisor, cli
+from agentctl import advisor, cli, premise
 from agentctl.config import Thresholds
 from agentctl.dispatch import RunResult
 from agentctl.state import (
@@ -177,6 +177,72 @@ class TestSubprocessRunner:
         assert captured["env"]["HOST_LLM_ISOLATION_SENTINEL"] == "present"
         assert "claude-judge-sandbox" in captured["env"]["CLAUDE_CONFIG_DIR"]
         assert "claude-judge-sandbox" in captured["cwd"]
+
+    # ── the credential label: produced from an unauthenticated WORLD ──────────
+    #
+    # Isolation pins CLAUDE_CONFIG_DIR, and the client resolves auth from that
+    # root — so the seam can itself leave the child with no way to authenticate.
+    # These three drive the real seam over a real (empty or env-authenticated)
+    # config root rather than restating the literal, so a drift between what
+    # subprocess_runner writes and what classify_runner_failure reads fails here.
+
+    def _unauthenticated_world(self, monkeypatch, tmp_path):
+        """An ambient config root holding no credential file, and no auth left in
+        the environment either: the apiKeyHelper machine shape, plus a lost
+        stored credential."""
+        from lib import host_llm
+
+        monkeypatch.setattr(host_llm, "harness_config_root", lambda: tmp_path)
+        for var in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+            monkeypatch.delenv(var, raising=False)
+
+    def _failing_run(self, monkeypatch, stderr="Invalid API key · Please run /login"):
+        def fake_run(argv, **kwargs):
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr=stderr)
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+    def test_a_failed_call_from_an_unauthenticated_child_is_labelled(
+            self, monkeypatch, tmp_path):
+        self._unauthenticated_world(monkeypatch, tmp_path)
+        self._failing_run(monkeypatch)
+
+        result = advisor.subprocess_runner(["claude", "-p", "x"], timeout=5)
+
+        assert advisor.classify_runner_failure(result.stderr) == \
+            premise.ESCAPE_ADVISOR_CREDENTIAL
+        assert "Invalid API key" in result.stderr, "the child's own diagnostic survives"
+
+    def test_a_successful_call_is_never_labelled_a_credential_failure(
+            self, monkeypatch, tmp_path):
+        """The label is a failure classification, not a machine audit: a child
+        that answered is authenticated by demonstration, whatever this side
+        believed it had to lend."""
+        self._unauthenticated_world(monkeypatch, tmp_path)
+
+        def fake_run(argv, **kwargs):
+            return subprocess.CompletedProcess(argv, 0, stdout="YES", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        result = advisor.subprocess_runner(["claude", "-p", "x"], timeout=5)
+
+        assert result.returncode == 0
+        assert advisor._CREDENTIAL_STDERR_PREFIX not in result.stderr
+
+    def test_an_env_authenticated_child_that_fails_keeps_the_generic_reason(
+            self, monkeypatch, tmp_path):
+        """The machine shape that must never be mislabelled: no stored credential
+        to borrow, but a plain environment API key the child inherits. Its
+        failures are ordinary failures, and telling its operator to fix a
+        credential would send them after a file that was never involved."""
+        self._unauthenticated_world(monkeypatch, tmp_path)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-fixture")
+        self._failing_run(monkeypatch, stderr="claude: unexpected error")
+
+        result = advisor.subprocess_runner(["claude", "-p", "x"], timeout=5)
+
+        assert advisor.classify_runner_failure(result.stderr) == \
+            premise.ESCAPE_ADVISOR_ERROR
 
 
 # ── cmd_classify wiring ───────────────────────────────────────────────────────

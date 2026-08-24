@@ -366,10 +366,13 @@ _SETTINGS_KEY_DISPOSITIONS: dict[str, str] = {
     "hooks": "DROPPED ON PURPOSE. This key is the recursion; removing it is the fix",
     "env": "harmless — env reaches the child as a copy of os.environ, not through settings",
     "model": (
-        "harmless on HOST_CLAUDE, which requires --model. NOT harmless on "
-        "HOST_CURSOR, which used to permit model=None and would then have taken "
-        "the SANDBOX root's default: build_prompt_argv now requires an explicit "
-        "model there — the one enumeration entry that needed a code change"
+        "harmless on HOST_CLAUDE, which requires --model. Also harmless on "
+        "HOST_CURSOR, contrary to the suspicion this enumeration was written to "
+        "check: model=None there is the documented way to ask Cursor for Auto "
+        "(every CURSOR_COMPLEXITY_MODEL tier is None), and the `agent` binary "
+        "reads neither this file nor CLAUDE_CONFIG_DIR, so isolation cannot "
+        "change which model it picks — the sandbox root has no settings.json for "
+        "anything to default from in the first place"
     ),
     "permissions": (
         "harmless today: no judge prompt expects tool use. A future judge that "
@@ -519,17 +522,17 @@ def build_prompt_argv(
             raise ValueError("model is required for HOST_CLAUDE")
         argv = [binary, "-p", "--model", model, prompt]
     elif host == HOST_CURSOR:
-        # An omitted model used to be permitted here, which under isolation would
-        # silently take the SANDBOX root's default rather than the ambient one
-        # the caller believes it is running under — the r5 enumeration's one
-        # entry that needed a code change rather than a recorded disposition.
-        # HOST_CLAUDE was already immune because it requires --model.
-        if model is None:
-            raise ValueError("model is required for HOST_CURSOR")
-        argv = [
-            binary, "-p", "--trust", "--force", "--approve-mcps",
-            "--output-format", "text", "--model", model,
-        ]
+        # `model is None` is a FIRST-CLASS value here, not an omission: every tier
+        # of CURSOR_COMPLEXITY_MODEL is None, and omitting --model is how a caller
+        # asks Cursor for Auto (spawn-cursor-specialist.py's --complexity help says
+        # so verbatim). It is also isolation-safe: the only root isolation replaces
+        # is CLAUDE_CONFIG_DIR, which the `agent` binary never reads, and HOME is
+        # inherited untouched — so Auto resolves identically inside and outside the
+        # sandbox. See the r5 disposition table below.
+        argv = [binary, "-p", "--trust", "--force", "--approve-mcps",
+                "--output-format", "text"]
+        if model is not None:
+            argv += ["--model", model]
         if workspace is not None:
             argv += ["--workspace", str(workspace)]
         argv.append(prompt)

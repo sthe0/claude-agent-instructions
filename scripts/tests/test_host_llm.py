@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from lib import host_llm
-from lib.runtime_models import HOST_CLAUDE, HOST_CURSOR
+from lib.runtime_models import CURSOR_COMPLEXITY_MODEL, HOST_CLAUDE, HOST_CURSOR
 
 
 def _load_probe():
@@ -188,14 +188,25 @@ def test_build_prompt_argv_cursor_includes_workspace_when_given(monkeypatch, tmp
     assert argv[-1] == "prompt"  # workspace inserted before the trailing prompt
 
 
-def test_build_prompt_argv_cursor_refuses_an_omitted_model(monkeypatch):
-    """The isolated root carries no settings.json, so an omitted --model would
-    silently take the SANDBOX's default model instead of the ambient one the
-    caller believes it is running under. HOST_CLAUDE was already immune (it
-    requires --model); this is the r5 enumeration's one code change."""
+def test_build_prompt_argv_cursor_treats_an_absent_model_as_auto(monkeypatch):
+    """The r5 enumeration's one suspected code change, pinned at its REFUTED
+    disposition. The suspicion was that model=None on HOST_CURSOR would, under
+    isolation, take the sandbox root's default model. It cannot: `agent` reads
+    neither settings.json nor CLAUDE_CONFIG_DIR, and every tier of
+    CURSOR_COMPLEXITY_MODEL is None precisely because omitting --model is how
+    this repo asks Cursor for Auto. Refusing None here would instead have
+    disarmed every judge on a cursor host silently, the advisor being fail-open —
+    the exact defect class this stage exists to remove."""
     monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/agent" if name == "agent" else None)
-    with pytest.raises(ValueError):
-        host_llm.build_prompt_argv(HOST_CURSOR, None, "prompt")
+    assert all(tier is None for tier in CURSOR_COMPLEXITY_MODEL.values()), (
+        "if a tier ever names a real model, the Auto contract below is no longer "
+        "what the judges run under and this disposition needs re-deciding"
+    )
+
+    argv = host_llm.build_prompt_argv(HOST_CURSOR, None, "prompt")
+
+    assert "--model" not in argv
+    assert argv[-1] == "prompt"
 
 
 def test_build_prompt_argv_unknown_host_raises():

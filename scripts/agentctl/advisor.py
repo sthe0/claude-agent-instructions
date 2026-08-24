@@ -35,6 +35,13 @@ _ADVISOR_TIMEOUT_S = 20
 # classifier cannot drift into silently classifying every timeout as advisor_error.
 _TIMEOUT_STDERR_PREFIX = "advisor timed out after"
 
+# The same shared-literal arrangement for "the child had no way to authenticate":
+# emitted by subprocess_runner only when a call FAILED and the isolated child held
+# neither a borrowed OAuth token nor an environment API key, and read back by
+# classify_runner_failure. Written by us, never matched against the CLI's own words,
+# because the CLI's not-logged-in phrasing is not a stable contract.
+_CREDENTIAL_STDERR_PREFIX = "advisor had no credential to lend the isolated child"
+
 # Whole-plan enumeration (enumerate_claims / enumerate_questions_health) is a
 # DIFFERENT cost class from a judge/advisor call: it re-reads an entire plan in one
 # shot, and calibration (docs/operations/advisor-timeout-calibration.md, 15 rows =
@@ -1090,6 +1097,19 @@ def resolve_enabled(weight_class: str | None, *, thresholds: Thresholds | None =
     return mode == _ADVISOR_MODE_SUBSTANTIVE and weight_class == _SUBSTANTIVE_WEIGHT_CLASS
 
 
+def _child_was_authenticated(run_kwargs: dict) -> bool:
+    """Did the isolated child hold an auth source? Read from the status the
+    sandbox seam stamped into the very env the child ran with, so this cannot
+    drift from what was actually handed over. An unknown status reads as
+    authenticated: this predicate only ever ADDS a failure label, and mislabelling
+    a working machine is the worse error."""
+    env = run_kwargs.get("env") or {}
+    status = env.get(host_llm.JUDGE_TOKEN_STATUS_ENV_VAR)
+    if status is None:
+        return True
+    return status in host_llm.AUTHENTICATED_TOKEN_STATUSES
+
+
 def subprocess_runner(argv: list[str], *, timeout: int = _ADVISOR_TIMEOUT_S) -> RunResult:
     """Real `claude -p` runner with a hard timeout. Not judge()'s default (a caller
     that wants a live advisor pass this explicitly) — kept separate so the fail-open
@@ -1116,7 +1136,15 @@ def subprocess_runner(argv: list[str], *, timeout: int = _ADVISOR_TIMEOUT_S) -> 
     The subprocess itself runs under ``host_llm.isolated_run_kwargs()`` (cwd +
     CLAUDE_CONFIG_DIR pinned to an empty sandbox, rest of the environment
     preserved) — see that function's docstring for why an unisolated judge call
-    can recurse into the fleet's own hooks."""
+    can recurse into the fleet's own hooks.
+
+    That isolation can itself remove the child's credential (the client resolves
+    auth at CLAUDE_CONFIG_DIR), so when a call fails AND the child held no auth
+    source at all, its stderr is prefixed with a marker that
+    ``classify_runner_failure`` maps to its own escape reason. Only then: a
+    machine authenticated by a plain environment API key must never be labelled
+    a credential failure, and an authenticated call that fails for any other
+    reason keeps its own classification."""
     judge_name = judge_ledger.take_current_judge()
     if judge_name is None:
         # Every caller in this module now self-identifies before invoking the
@@ -1132,13 +1160,16 @@ def subprocess_runner(argv: list[str], *, timeout: int = _ADVISOR_TIMEOUT_S) -> 
     judge_ledger.started(judge_name)
     start = time.monotonic()
     try:
+        run_kwargs = host_llm.isolated_run_kwargs()
         proc = subprocess.run(
-            argv, capture_output=True, text=True, timeout=timeout,
-            **host_llm.isolated_run_kwargs(),
+            argv, capture_output=True, text=True, timeout=timeout, **run_kwargs,
         )
         duration = time.monotonic() - start
         judge_ledger.call(judge_name, timed_out=False, duration=duration, returncode=proc.returncode)
-        return RunResult(proc.returncode, proc.stdout, proc.stderr, timed_out=False)
+        stderr = proc.stderr
+        if proc.returncode != 0 and not _child_was_authenticated(run_kwargs):
+            stderr = f"{_CREDENTIAL_STDERR_PREFIX}\n{stderr}"
+        return RunResult(proc.returncode, proc.stdout, stderr, timed_out=False)
     except subprocess.TimeoutExpired:
         duration = time.monotonic() - start
         judge_ledger.call(judge_name, timed_out=True, duration=duration, returncode=None)
@@ -1154,10 +1185,15 @@ def classify_runner_failure(stderr: str) -> str:
     pre-selects, so the human confirms a value rather than typing one the engine
     already knows.
 
-    Three-valued on purpose, up from two. A timeout is the one failure whose
+    Four-valued on purpose, up from two. A timeout is the one failure whose
     stderr this process itself wrote (subprocess_runner's TimeoutExpired arm), so
-    it is the one this function can recognise with certainty. A quota/session-
-    limit refusal is the second: its stderr shape is stable (observed verbatim:
+    it is the one this function can recognise with certainty. A missing credential
+    is the same kind of certainty from the other end: subprocess_runner writes
+    that prefix only when the isolated child held no auth source at all, which is
+    a failure THIS seam can itself cause and the only one whose fix is local — so
+    it must not collapse into the quota reason, which classifies the SERVICE's
+    refusal of an authenticated call and is fixed by waiting. A quota/session-
+    limit refusal is the third: its stderr shape is stable (observed verbatim:
     "You've hit your session limit · resets 12am (Europe/Moscow)") and,
     unlike a generic failure, names a resource ceiling rather than a broken
     runner — worth its own reason so a fleet-wide quota exhaustion shows up as
@@ -1171,6 +1207,8 @@ def classify_runner_failure(stderr: str) -> str:
     text = stderr or ""
     if _TIMEOUT_STDERR_PREFIX in text:
         return premise.ESCAPE_ADVISOR_TIMEOUT
+    if _CREDENTIAL_STDERR_PREFIX in text:
+        return premise.ESCAPE_ADVISOR_CREDENTIAL
     if "session limit" in text.lower():
         return premise.ESCAPE_ADVISOR_QUOTA
     return premise.ESCAPE_ADVISOR_ERROR
