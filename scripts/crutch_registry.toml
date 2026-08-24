@@ -4732,6 +4732,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "6afa1edba514c7d4"
+domain = "code"
+file = "scripts/tests/test_lint_prose_length.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "5b2c6d452a34c18c"
 domain = "code"
 file = "scripts/tests/test_marker_dispatch.py"
@@ -9311,6 +9319,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "35a7482e686cffc5"
 domain = "code_file_rollup"
 file = "scripts/tests/test_ledger_plugin.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "1e63e73831282760"
+domain = "code_file_rollup"
+file = "scripts/tests/test_lint_prose_length.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
@@ -18608,6 +18624,14 @@ disposition = "keep"
 ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
 
 [[entry]]
+id = "0da724a74d0d30b9"
+domain = "prose"
+file = "memory-global/leaves/system-knowledge/MEMORY.md"
+class = "not-normative"
+disposition = "keep"
+ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
+
+[[entry]]
 id = "ff2ad7cc3b05813f"
 domain = "prose"
 file = "memory-global/leaves/system-knowledge/agentctl-stage-vector-staleness.md"
@@ -18947,6 +18971,54 @@ ground = "System-knowledge leaves document durable FACTS about how an external s
 id = "018eeb64e28789da"
 domain = "prose"
 file = "memory-global/leaves/system-knowledge/prewrite-hook-retirement-criterion.md"
+class = "not-normative"
+disposition = "keep"
+ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
+
+[[entry]]
+id = "97847c00c0626bb4"
+domain = "prose"
+file = "memory-global/leaves/system-knowledge/prompt-cache-1h-ttl-already-active.md"
+class = "not-normative"
+disposition = "keep"
+ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
+
+[[entry]]
+id = "04cc9596f44a9e9d"
+domain = "prose"
+file = "memory-global/leaves/system-knowledge/prompt-cache-1h-ttl-already-active.md"
+class = "not-normative"
+disposition = "keep"
+ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
+
+[[entry]]
+id = "baaff31303456baf"
+domain = "prose"
+file = "memory-global/leaves/system-knowledge/prompt-cache-1h-ttl-already-active.md"
+class = "not-normative"
+disposition = "keep"
+ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
+
+[[entry]]
+id = "d4d73ab0cbfa2710"
+domain = "prose"
+file = "memory-global/leaves/system-knowledge/prompt-cache-1h-ttl-already-active.md"
+class = "not-normative"
+disposition = "keep"
+ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
+
+[[entry]]
+id = "1f3a310c84eae75c"
+domain = "prose"
+file = "memory-global/leaves/system-knowledge/prompt-cache-1h-ttl-already-active.md"
+class = "not-normative"
+disposition = "keep"
+ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
+
+[[entry]]
+id = "5398988eff8c9eb4"
+domain = "prose"
+file = "memory-global/leaves/system-knowledge/prompt-cache-1h-ttl-already-active.md"
 class = "not-normative"
 disposition = "keep"
 ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."

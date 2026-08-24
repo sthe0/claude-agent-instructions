@@ -149,7 +149,10 @@ def test_surface_report_consistency(tmp_path, capsys):
     assert reported_total == breakdown_total
 
 
-def test_surface_report_no_transcript_io_without_include_dynamic(tmp_path, capsys):
+def test_surface_report_no_dynamic_scan_without_include_dynamic(tmp_path, capsys):
+    # scan_dynamic_injection() is gated by --include-dynamic; the separate
+    # PRICE block (price_window_stats()) is NOT gated by that flag and reads
+    # transcripts unconditionally — see the module docstring.
     _make_repo(tmp_path, claude_lines=50)
 
     mod = _load_mod()
@@ -160,7 +163,64 @@ def test_surface_report_no_transcript_io_without_include_dynamic(tmp_path, capsy
         raise AssertionError("scan_dynamic_injection must not run without --include-dynamic")
 
     mod.scan_dynamic_injection = _boom
+    mod.price_window_stats = lambda n_days=mod.PRICE_WINDOW_DAYS: None
     rc = mod.main(["--surface-report"])
     out = capsys.readouterr().out
     assert rc == 0
     assert "DYNAMIC" not in out
+
+
+def test_surface_report_price_block_renders(tmp_path, capsys):
+    _make_repo(tmp_path, claude_lines=50)
+
+    mod = _load_mod()
+    mod.REPO_ROOT = tmp_path
+    mod.CONFIG_MD = tmp_path / "config.md"
+    mod.price_window_stats = lambda n_days=mod.PRICE_WINDOW_DAYS: {
+        "n_days": 14,
+        "n_steps": 1000,
+        "total_tokens": 1_000_000,
+    }
+    rc = mod.main(["--surface-report"])
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "tokens per step" in out
+    assert "charsPerToken" in out
+    assert "14 days" in out
+    assert "1000 steps" in out
+    assert "per 1000 chars" in out
+    assert "% of the measured 14-day window" in out
+
+
+def test_surface_report_price_no_transcript_data_degrades(tmp_path, capsys):
+    _make_repo(tmp_path, claude_lines=50)
+
+    mod = _load_mod()
+    mod.REPO_ROOT = tmp_path
+    mod.CONFIG_MD = tmp_path / "config.md"
+    mod.price_window_stats = lambda n_days=mod.PRICE_WINDOW_DAYS: None
+    rc = mod.main(["--surface-report"])
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "no transcript data — cannot price" in out
+
+
+def test_compute_price_margin_scales_linearly():
+    mod = _load_mod()
+    p1 = mod.compute_price(
+        90_000, n_days=14, n_steps=1000, total_tokens=1_000_000, margin_chars=1000
+    )
+    p2 = mod.compute_price(
+        90_000, n_days=14, n_steps=1000, total_tokens=1_000_000, margin_chars=2000
+    )
+    assert p2["margin_tokens_per_step"] == 2 * p1["margin_tokens_per_step"]
+    assert p2["margin_share_pct"] == 2 * p1["margin_share_pct"]
+
+
+def test_compute_price_zero_total_tokens_no_zerodiv():
+    mod = _load_mod()
+    price = mod.compute_price(90_000, n_days=14, n_steps=0, total_tokens=0)
+    assert price["share_pct"] == 0.0
+    assert price["margin_share_pct"] == 0.0

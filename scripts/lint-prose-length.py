@@ -41,15 +41,20 @@ crisis; the early warning turns it into routine maintenance.
 always-loaded surface (CLAUDE.md + config.md + memory-global/MEMORY.md + the
 sum of all skill descriptions) against the ADVISORY (never FAIL)
 `always-loaded-surface-advisory-chars` ceiling, plus a per-surface
-breakdown. It never changes the exit code and runs instead of (not
-alongside) the governed-ceiling checks above. With `--include-dynamic` it
-additionally reports OBSERVED UserPromptSubmit hook-injection volume from
-recent session transcripts, labelled DYNAMIC — never summed into the static
-total. Without that flag, no transcript I/O happens at all.
+breakdown and a PRICE block that converts the total into a measured
+tokens-per-step cost against a live transcript window (see
+always-loaded-surface-advisory-chars in config.md) — this block always reads
+live session transcripts, independent of `--include-dynamic`. It never
+changes the exit code and runs instead of (not alongside) the
+governed-ceiling checks above. With `--include-dynamic` it additionally
+reports OBSERVED UserPromptSubmit hook-injection volume from recent session
+transcripts, labelled DYNAMIC — never summed into the static total; that
+additional scan is the only transcript read gated by the flag.
 """
 from __future__ import annotations
 
 import argparse
+import datetime
 import importlib.util
 import re
 import sys
@@ -57,6 +62,19 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_MD = REPO_ROOT / "config.md"
+
+# The harness's OWN approximation for every current model (see
+# claude-md-max-chars in config.md) — not a tokenizer result. Named in every
+# PRICE line that uses it so the approximation is never mistaken for a
+# measured token count.
+CHARS_PER_TOKEN = 3
+
+# The trailing window priced by default — matches the window the opening
+# token-economy analysis used, so the PRICE block's share is comparable to it.
+PRICE_WINDOW_DAYS = 14
+
+# The size of the "what would N more chars cost" marginal-price example.
+PRICE_MARGIN_CHARS = 1000
 
 # (glob pattern relative to repo root, config-key for the limit).
 GOVERNED = [
@@ -237,6 +255,107 @@ def surface_breakdown() -> tuple[list[tuple[str, int]], int]:
     return rows, sum(n for _, n in rows)
 
 
+def _parse_iso_timestamp(raw: str) -> datetime.datetime | None:
+    """Best-effort ISO-8601 parse of a transcript row's timestamp, tolerant of
+    the trailing 'Z' Python's fromisoformat rejects on older interpreters."""
+    try:
+        return datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def price_window_stats(n_days: int = PRICE_WINDOW_DAYS) -> dict[str, int] | None:
+    """(n_days, n_steps, total_tokens) aggregated from live session
+    transcripts over the trailing n_days — the measured window the PRICE
+    block prices the surface against. Reuses the same loader idiom as
+    scan_dynamic_injection() (_load_cost_report / _load_config_root /
+    cost_report._iter_jsonl) rather than a second transcript-reading path.
+
+    One API response emits several transcript rows sharing an identical
+    `message.id` and `usage` object, so rows are deduplicated by that id —
+    a naive per-row sum roughly doubles every count. A step's token size is
+    input_tokens + cache_read_input_tokens + cache_creation_input_tokens
+    (all three cost quota tokens on the input side; output_tokens is
+    excluded because the surface priced here rides the INPUT context, not
+    generation).
+
+    Returns None if no transcript data is found at all (fresh machine / no
+    history within the window) — never a fabricated zero.
+    """
+    cost_report = _load_cost_report()
+    config_root = _load_config_root()
+    if cost_report is None or config_root is None:
+        return None
+    files = config_root.iter_transcripts()
+    if not files:
+        return None
+
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=n_days)
+    seen_ids: set[str] = set()
+    total_tokens = 0
+    n_steps = 0
+    found_any = False
+    for path in files:
+        for d in cost_report._iter_jsonl(path):
+            if d.get("type") != "assistant":
+                continue
+            msg = d.get("message")
+            if not isinstance(msg, dict):
+                continue
+            usage = msg.get("usage")
+            if not usage:
+                continue
+            ts_raw = d.get("timestamp") or msg.get("ts")
+            ts = _parse_iso_timestamp(ts_raw) if isinstance(ts_raw, str) else None
+            if ts is None or ts < cutoff:
+                continue
+            found_any = True
+            msg_id = msg.get("id")
+            if msg_id:
+                if msg_id in seen_ids:
+                    continue
+                seen_ids.add(msg_id)
+            total_tokens += (
+                (usage.get("input_tokens") or 0)
+                + (usage.get("cache_read_input_tokens") or 0)
+                + (usage.get("cache_creation_input_tokens") or 0)
+            )
+            n_steps += 1
+    if not found_any:
+        return None
+    return {"n_days": n_days, "n_steps": n_steps, "total_tokens": total_tokens}
+
+
+def compute_price(
+    surface_chars: int,
+    n_days: int,
+    n_steps: int,
+    total_tokens: int,
+    chars_per_token: int = CHARS_PER_TOKEN,
+    margin_chars: int = PRICE_MARGIN_CHARS,
+) -> dict[str, float]:
+    """Pure arithmetic over an already-measured window — split out from
+    price_window_stats() so the price derivation is unit-testable without
+    transcripts. total_tokens == 0 degrades to 0% shares rather than raising,
+    since a genuinely empty (but non-None) window is a valid input."""
+    surface_tokens = surface_chars / chars_per_token
+    tokens_per_step = surface_tokens
+    share_pct = (tokens_per_step * n_steps / total_tokens * 100) if total_tokens else 0.0
+
+    margin_tokens_per_step = margin_chars / chars_per_token
+    margin_share_pct = (
+        (margin_tokens_per_step * n_steps / total_tokens * 100) if total_tokens else 0.0
+    )
+    return {
+        "surface_tokens": surface_tokens,
+        "tokens_per_step": tokens_per_step,
+        "share_pct": share_pct,
+        "margin_chars": margin_chars,
+        "margin_tokens_per_step": margin_tokens_per_step,
+        "margin_share_pct": margin_share_pct,
+    }
+
+
 def cmd_surface_report(constants: dict[str, str], include_dynamic: bool) -> int:
     """Report-only: the aggregate always-loaded surface plus its breakdown.
     Never fails — the aggregate is disclosed, not enforced (see
@@ -247,6 +366,51 @@ def cmd_surface_report(constants: dict[str, str], include_dynamic: bool) -> int:
     for label, n in breakdown:
         print(f"  {label}: {n} chars")
     print(f"  TOTAL: {total} chars")
+
+    price_window = price_window_stats()
+    if price_window is None:
+        print("  PRICE: no transcript data — cannot price")
+    else:
+        price = compute_price(
+            total,
+            price_window["n_days"],
+            price_window["n_steps"],
+            price_window["total_tokens"],
+        )
+        print(
+            "  PRICE (Core-repo surface only, the scope surface_breakdown() "
+            "measures — the live session surface is larger, e.g. it also "
+            "carries a project's own CLAUDE.md and memory index):"
+        )
+        print(
+            f"    window: {price_window['n_days']} days, "
+            f"{price_window['n_steps']} steps, "
+            f"{price_window['total_tokens']} tokens (measured from live "
+            "session transcripts)"
+        )
+        print(
+            f"    surface: {total} chars / charsPerToken={CHARS_PER_TOKEN} "
+            "(the harness's own approximation for every current model, not "
+            f"a tokenizer result) = {price['surface_tokens']:.0f} tokens"
+        )
+        print(
+            f"    cost: {price['tokens_per_step']:.0f} tokens per step (it "
+            f"rides every step) = {price['share_pct']:.4f}% of the measured "
+            f"{price_window['n_days']}-day window — denominated in tokens, "
+            "not dollars: transcripts carry no per-class cost field (only "
+            "token counts), and under flat billing quota tokens, not "
+            "dollars, are the scarce resource; cache-write, cache-read and "
+            "fresh-input tokens are weighted equally here, a deliberate "
+            "simplification whose known cost is that it under-states "
+            "cache-write pressure (cache-write list-prices higher per "
+            "token than fresh input or cache-read)"
+        )
+        print(
+            f"    marginal price per {price['margin_chars']} chars: "
+            f"{price['margin_tokens_per_step']:.0f} tokens per step = "
+            f"{price['margin_share_pct']:.4f}% of the measured "
+            f"{price_window['n_days']}-day window"
+        )
 
     advisory_raw = constants.get("always-loaded-surface-advisory-chars")
     if advisory_raw is not None:
