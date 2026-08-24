@@ -543,6 +543,10 @@ def _default_filer(row: dict) -> "tuple[int, str]":
         "--severity", "low",
         "--stream", "backlog",
         "--reporter", "self-diagnose",
+        # An explicit, honest non-estimable declaration, not a bypass: this row is
+        # machine-detected self-friction and its loss is not measured at detection
+        # time, so a fabricated number would be worse than none.
+        "--cost-not-estimable", "machine-detected self-friction; not measured at detection time",
     ]
     try:
         proc = subprocess.run(argv, capture_output=True, text=True, timeout=60)
