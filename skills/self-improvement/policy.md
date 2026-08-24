@@ -129,6 +129,8 @@ A difficulty's **tier** decides its destination; the destination's mechanics are
 
 The model classifies the tier; `--queue`/`--stream` (or the resolved project field) carry it to the right surface.
 
+**File through `file-difficulty.py`, never a raw `gh issue create`.** Every Core difficulty or backlog item goes through the script — an author machine that means to file rather than fix passes `--force-report`. *Difficulty removed:* the raw path writes an issue body directly and therefore bypasses the record itself — the cost gate (`--cost TEXT` | `--cost-not-estimable REASON`), the tier/stream routing above, and the term scan all sit inside the script, so a raw filing lands unpriced and cannot be ranked against the triage rubric's `cost_of_problem` term ([backlog-triage-practice](../../memory-global/leaves/backlog-triage-practice.md)). The bypass is not silent afterwards — `core-difficulty-digest.py` marks a cluster `N of M filed outside the cost gate` for members whose cost is empty — but a marker at the consuming surface detects the bypass, it does not repair it.
+
 ### Working a queued difficulty: verify actuality first
 
 *Difficulty removed: a queued difficulty records the desired-vs-actual as of filing time; the configuration keeps evolving, so planning work from the ticket text alone spends a full plan-approval-develop cycle on a divergence that may no longer exist.*
