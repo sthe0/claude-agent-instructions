@@ -14,24 +14,32 @@ judgement on this machine" becomes visible instead of inferred.
 Read-only. It opens the ledger and nothing else — no judge is called, no
 subprocess is spawned, no session state is written.
 
-Two deliberate design points, both easy to get wrong:
+Three deliberate design points, all easy to get wrong:
 
 * The duration statistics are computed over outcomes 4 and 5 ONLY, for two
   DIFFERENT reasons (see DURATION_POPULATION_IDS). Widening the population
-  either way makes a sicker judge look faster.
+  either way makes a sicker judge look faster. --latency reuses that same
+  membership rather than filtering the raw ledger again, so the two surfaces
+  cannot come to disagree about which calls count.
 * Every count is derived from the declared OUTCOMES table, so the prose here
   contains no hardcoded tally of how many outcomes there are or how many of
   them fail open. A fifteenth outcome changes the printed numbers by itself.
+* --latency splits every judge by the CEILING its calls ran under. This ledger
+  spans a ceiling change, so a rate pooled across one describes neither regime
+  and can hide a repair as easily as a regression.
 
 Usage:
     scripts/judge-usage-report.py [--ledger PATH]
+    scripts/judge-usage-report.py --latency [--since WINDOW] [--ledger PATH]
 """
 from __future__ import annotations
 
 import argparse
 import sys
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -114,6 +122,21 @@ FAIL_OPEN_OUTCOMES = tuple(o for o in OUTCOMES if o.id not in NOT_FAIL_OPEN_IDS)
 #     too would double-count the one call it wraps.
 DURATION_POPULATION_IDS = frozenset({"4", "5"})
 
+# The two members of that population, named so the latency view splits it by the
+# same field the tabulation classified it with. Reading the timeout numerator off
+# `timed_out` instead would give this report two answers to "was it a timeout"
+# — the classifier's and its own — which can then disagree.
+TIMEOUT_OUTCOME_ID = "5"
+
+# NOT part of the duration population, and never folded into it. A judge skipped
+# for want of remaining budget produced no verdict, exactly like one killed on
+# its ceiling — but it never became a call, so no statistic computed over calls
+# can see it. hook-turn-end-gate.py runs three judges in sequence on one fixed
+# budget, so raising an early judge's ceiling spends what a later one needs:
+# the skip channel is a route to "the verdict silently stopped existing" that
+# leaves every timeout number green. It gets its own column.
+BUDGET_SKIP_OUTCOME_ID = "3"
+
 # advisor._judge_unavailable writes three no-call stages, but the taxonomy
 # names only one row for them (7c). They are folded into that row and broken
 # out per stage in the rendering, so the widening stays visible rather than
@@ -167,12 +190,21 @@ NO_HOOK = "(engine path, no hook)"
 
 @dataclass(frozen=True)
 class JudgePoint:
-    """One judge-level outcome, with the two keys the report breaks down by."""
+    """One judge-level outcome, with the two keys the report breaks down by.
+
+    ``ceiling`` and ``ts`` are AXES, not membership: they widen what a point can
+    be grouped and windowed by without touching which points count. The latency
+    view needs both — the ledger spans a ceiling change, so a rate pooled across
+    one describes no regime that ever ran, and "a fresh window" is the unit a
+    post-repair measurement is stated in — while the outcome tabulation above
+    reads neither."""
 
     hook: str
     judge: str
     outcome_id: str
     duration: "float | None"
+    ceiling: "float | None" = None
+    ts: "float | None" = None
 
 
 def _text(value, fallback: str) -> str:
@@ -281,9 +313,10 @@ def classify_judge_points(records: "list[dict]") -> "tuple[list[JudgePoint], lis
     for record in records:
         kind = record.get("kind")
         judge = _text(record.get("judge"), UNATTRIBUTED)
+        ts = _number(record.get("ts"))
         if kind == "entered":
             if not record.get("prefilter_fired"):
-                points.append(JudgePoint(hook, judge, "2", None))
+                points.append(JudgePoint(hook, judge, "2", None, None, ts))
         elif kind == "decided":
             outcome_id = classify_decided(record)
             if outcome_id is None:
@@ -293,7 +326,8 @@ def classify_judge_points(records: "list[dict]") -> "tuple[list[JudgePoint], lis
                 )
                 continue
             duration = _number(record.get("duration"))
-            points.append(JudgePoint(hook, judge, outcome_id, duration))
+            ceiling = _number(record.get("ceiling"))
+            points.append(JudgePoint(hook, judge, outcome_id, duration, ceiling, ts))
     pending, pairing_complaints = unpaired_started(records)
     complaints.extend(pairing_complaints)
     for judge, count in pending.items():
@@ -426,6 +460,95 @@ class Tally:
             for values in self.durations_by_judge().values()
             for duration in values
         ]
+
+
+@dataclass
+class Stats:
+    """One (judge, ceiling) group's latency, its timeout rate, and — held apart
+    from both — how often the judge was skipped before it could be called."""
+
+    durations: "list[float]" = field(default_factory=list)
+    timeouts: int = 0
+    budget_skips: int = 0
+
+    @property
+    def n(self) -> int:
+        return len(self.durations)
+
+    @property
+    def rate(self) -> "float | None":
+        """Timeouts as a share of the CALLS. None when the group holds none —
+        a group that exists only because the judge was skipped has no rate, and
+        printing 0% there would read as "this judge never times out"."""
+        return self.timeouts / self.n if self.n else None
+
+    @property
+    def min_s(self) -> "float | None":
+        return min(self.durations) if self.durations else None
+
+    @property
+    def median_s(self) -> "float | None":
+        return judge_latency.median(self.durations) if self.durations else None
+
+    @property
+    def p90_s(self) -> "float | None":
+        return judge_latency.p90(self.durations) if self.durations else None
+
+    @property
+    def max_s(self) -> "float | None":
+        return max(self.durations) if self.durations else None
+
+
+def latency_by_judge(
+    points: "list[JudgePoint]", since: "float | None" = None
+) -> "dict[tuple[str, float | None], Stats]":
+    """Latency and timeout rate per (judge, ceiling), over `points` alone.
+
+    Pure: no file is read and nothing is printed, because the drift check that
+    consumes these statistics must reach them as values rather than by scraping
+    this script's stdout.
+
+    The population is DURATION_POPULATION_IDS — the SAME membership rule
+    ``Tally.durations_by_judge`` uses, deliberately not a second filter over raw
+    ledger fields. A filter like ``stage == "call"`` looks equivalent and is not:
+    it also admits the calls outcomes 4 and 5 exclude (a fast refusal, an
+    off-vocabulary answer, an exception with no result), which on this repo's own
+    ledger is 4 rows of outage_escalation's 16. Two population definitions living
+    in one script under one word ("duration", "rate") is how this view and the
+    duration table above it come to disagree about a judge in the same output.
+
+    ``since`` is an epoch cutoff; a point with no recorded ``ts`` cannot be shown
+    to fall inside a window, so a window excludes it rather than assuming it."""
+    groups: "dict[tuple[str, float | None], Stats]" = defaultdict(Stats)
+    for point in points:
+        if since is not None and (point.ts is None or point.ts < since):
+            continue
+        if point.outcome_id in DURATION_POPULATION_IDS:
+            if point.duration is None:
+                continue
+            stats = groups[(point.judge, point.ceiling)]
+            stats.durations.append(point.duration)
+            if point.outcome_id == TIMEOUT_OUTCOME_ID:
+                stats.timeouts += 1
+        elif point.outcome_id == BUDGET_SKIP_OUTCOME_ID:
+            groups[(point.judge, point.ceiling)].budget_skips += 1
+    return dict(groups)
+
+
+def parse_since(value: str, now: "float | None" = None) -> float:
+    """Epoch seconds for a ``--since`` argument: ``Nd`` (N days back from now)
+    or an ISO date / datetime. A bare date is read in local time, which is the
+    reading an operator naming a day means."""
+    text = value.strip()
+    if text.endswith("d") and text[:-1].isdigit():
+        days = int(text[:-1])
+        return (time.time() if now is None else now) - days * 86400
+    try:
+        return datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"not a window: {value!r} — expected an ISO date/datetime or Nd"
+        ) from None
 
 
 def tally(read: "judge_ledger.LedgerRead", ledger_path: Path) -> Tally:
@@ -608,6 +731,68 @@ def format_durations(result: Tally) -> "list[str]":
     return lines
 
 
+def _format_ceiling(ceiling: "float | None") -> str:
+    if ceiling is None:
+        return "unrecorded"
+    return f"{ceiling:g}"
+
+
+def _seconds(value: "float | None") -> str:
+    """A measured second, or a dash where there is nothing to measure. A group
+    reached only through the skip column has no call in it, and a 0.00 there
+    would read as a very fast judge."""
+    return f"{value:>6.2f}" if value is not None else f"{'-':>6}"
+
+
+def _latency_row(judge: str, ceiling: "float | None", stats: Stats, width: int) -> str:
+    key = f"{judge} @ {_format_ceiling(ceiling)}s"
+    # Likewise "n/a" and not 0.0%: a judge that was only ever skipped has no
+    # timeout rate, and the flattering reading of a printed zero is the opposite
+    # of what the row says.
+    rate = f"{stats.rate * 100:>5.1f}%" if stats.rate is not None else f"{'n/a':>6}"
+    return (
+        f"  {key:<{width}}  n={stats.n:>5}  timeouts={stats.timeouts:>5}  "
+        f"rate={rate}  min={_seconds(stats.min_s)} "
+        f"median={_seconds(stats.median_s)} p90={_seconds(stats.p90_s)} "
+        f"max={_seconds(stats.max_s)}  budget-skips={stats.budget_skips}"
+    )
+
+
+def format_latency(
+    result: Tally, since: "float | None" = None, window: str = ""
+) -> "list[str]":
+    """The per-(judge, ceiling) latency and timeout-rate view."""
+    if result.missing or result.read_error:
+        return format_verdict(result)
+    population = ", ".join(sorted(DURATION_POPULATION_IDS))
+    lines = [
+        f"Judge execution ledger: {result.ledger_path}",
+        f"  {result.record_count} records, {_format_size(result.size_bytes)} on disk",
+        f"  window: {window if window else 'the whole ledger'}",
+        "",
+        f"Call latency and timeout rate per judge and per CEILING, over outcomes "
+        f"{population} only",
+        "  (the same population as the duration table — see "
+        "DURATION_POPULATION_IDS). Rows are split by the ceiling the call ran",
+        "  under: this ledger spans a ceiling change, and a rate pooled across "
+        "one describes no regime that ever ran.",
+        f"  budget-skips counts outcome ({BUDGET_SKIP_OUTCOME_ID}) "
+        f"{OUTCOME_BY_ID[BUDGET_SKIP_OUTCOME_ID].label} — held OUT of n and out "
+        f"of the rate,",
+        "  because such a judge never became a call and no rate over calls can "
+        "see it.",
+    ]
+    groups = latency_by_judge(result.judge_points, since)
+    if not groups:
+        lines.append("  (no call in this window carries a duration)")
+        return lines
+    ordered = sorted(groups.items(), key=lambda kv: (kv[0][0], kv[0][1] is None, kv[0][1]))
+    width = max(len(f"{judge} @ {_format_ceiling(ceiling)}s") for judge, ceiling in groups)
+    for (judge, ceiling), stats in ordered:
+        lines.append(_latency_row(judge, ceiling, stats, width))
+    return lines
+
+
 def _plural(count: int, noun: str) -> str:
     """The verdict line is the one sentence an operator reads, and "1 fail-open
     judge decision points" reads as a template rather than a finding."""
@@ -731,14 +916,40 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="ledger path (default: the configured judge execution ledger)",
     )
+    parser.add_argument(
+        "--latency",
+        action="store_true",
+        help="print the per-judge, per-ceiling latency and timeout-rate view "
+        "instead of the outcome report",
+    )
+    parser.add_argument(
+        "--since",
+        type=parse_since,
+        default=None,
+        metavar="WINDOW",
+        help="restrict --latency to calls at or after this point: an ISO date / "
+        "datetime, or Nd for N days back",
+    )
     return parser
 
 
 def main(argv: "list[str] | None" = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.since is not None and not args.latency:
+        parser.error("--since applies to --latency, which was not asked for")
     path = args.ledger if args.ledger is not None else judge_ledger.ledger_path()
     read = judge_ledger.read_ledger(path)
-    print("\n".join(format_report(tally(read, path))))
+    result = tally(read, path)
+    if args.latency:
+        window = (
+            f"calls at or after {datetime.fromtimestamp(args.since).isoformat(' ')}"
+            if args.since is not None
+            else ""
+        )
+        print("\n".join(format_latency(result, args.since, window)))
+        return 0
+    print("\n".join(format_report(result)))
     return 0
 
 
