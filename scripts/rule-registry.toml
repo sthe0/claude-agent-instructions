@@ -467,6 +467,16 @@ delivery_kind = "agentctl_construct"
 delivery_marker = "agentctl record-result"
 delivery_note = "agentctl.effort.divergence, evaluated at cmd_record_result and cmd_verify_final; a fire transitions VERIFYING -> DIAGNOSING and returns marker OVERCOME-DIFFICULTY with an effort_divergence payload. The marker is a COARSE proxy in the over-reading direction: record-result runs on every stage result, divergent or not, so an observed count is an upper bound on deliveries, not a firing count. A true firing signal lives in the directive's data payload (tool_use OUTPUT), which this report does not read. Env kill-switch AGENTCTL_EFFORT=0 suppresses evaluation entirely with no observable trace."
 
+[[rule]]
+id = "replans-scale-second-firing-ask-user"
+tier = 0
+locator_heading = "### When the work is stuck"
+locator_phrase = "Two re-entry signals warrant a direct user question"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = "Prose-only interim rule; the structural round-release valve for the replans scale is out of this plan's scope (sibling plan enumerate-round-budget). No engine delivery exists yet."
+
 # ---------------------------------------------------------------------------
 # ### When the user corrects agent behavior
 # ---------------------------------------------------------------------------
