@@ -498,18 +498,45 @@ def test_borrowing_leaves_the_fleets_credential_file_untouched(monkeypatch, tmp_
     assert (cred.read_bytes(), cred.stat().st_mode, cred.stat().st_mtime_ns) == before
 
 
-def test_other_auth_variables_are_stripped_only_when_a_token_was_borrowed(monkeypatch, tmp_path):
-    """Exactly one auth source reaches the child. Leaving a second beside the
-    borrowed one makes which credential it used unknowable — the same ambiguity
-    that let the false env-carried-auth premise survive stage 1 unnoticed."""
+def test_env_auth_beats_a_stored_credential_and_leaves_the_child_untouched(monkeypatch, tmp_path):
+    """The client's own auth-precedence ladder ranks env auth ABOVE the stored
+    credential, so a machine holding BOTH — a proxy-authenticated host that
+    also carries a stale ~/.claude/.credentials.json, the empirically
+    documented shape in this fleet — must NOT have the stored token borrowed
+    beside the env key. Borrowing here shipped a subscription OAuth token to a
+    proxy endpoint AND stripped the env variable the parent session was
+    actually running on, then mislabelled the resulting failure as
+    advisor_error (TOKEN_BORROWED reads as authenticated).
+    """
     _sandbox(monkeypatch, tmp_path)
-    _ambient(monkeypatch, tmp_path, token="tok-2")
+    _ambient(monkeypatch, tmp_path, token="tok-stored")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
 
     env = host_llm.isolated_run_kwargs()["env"]
 
-    assert env[host_llm._OAUTH_TOKEN_ENV_VAR] == "tok-2"
-    assert "ANTHROPIC_API_KEY" not in env
+    assert env["ANTHROPIC_API_KEY"] == "sk-ant-test"
+    assert host_llm._OAUTH_TOKEN_ENV_VAR not in env
+    assert env[host_llm.JUDGE_TOKEN_STATUS_ENV_VAR] == host_llm.TOKEN_ENV_AUTH
+    assert env[host_llm.JUDGE_TOKEN_STATUS_ENV_VAR] in host_llm.AUTHENTICATED_TOKEN_STATUSES
+
+
+@pytest.mark.parametrize("gateway_var", ["CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"])
+def test_a_gateway_mode_flag_counts_as_env_auth(monkeypatch, tmp_path, gateway_var):
+    """Bedrock/Vertex flags route the client past every other credential source
+    and pick up AWS/GCP creds from the environment. A machine that carries one
+    beside a stored ~/.claude/.credentials.json must not be dragged into
+    TOKEN_BORROWED — the label reads authenticated, but the borrowed OAuth
+    token is overridden by the gateway routing, and its status therefore
+    describes a child the client never used."""
+    _sandbox(monkeypatch, tmp_path)
+    _ambient(monkeypatch, tmp_path, token="tok-stored")
+    monkeypatch.setenv(gateway_var, "1")
+
+    env = host_llm.isolated_run_kwargs()["env"]
+
+    assert env[gateway_var] == "1"
+    assert host_llm._OAUTH_TOKEN_ENV_VAR not in env
+    assert env[host_llm.JUDGE_TOKEN_STATUS_ENV_VAR] == host_llm.TOKEN_ENV_AUTH
 
 
 def test_an_env_authenticated_machine_keeps_its_key(monkeypatch, tmp_path):

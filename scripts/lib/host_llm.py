@@ -210,12 +210,19 @@ def _remove(entry: Path) -> None:
 # unbounded silent corruption of the credential the interactive session runs on.
 _CREDENTIALS_FILENAME = ".credentials.json"
 _OAUTH_TOKEN_ENV_VAR = "CLAUDE_CODE_OAUTH_TOKEN"
-# Auth sources OTHER than the borrowed token, removed from the child's env only
-# when a token was actually borrowed. Unconditional removal would destroy the
-# only credential a no-stored-token machine has; leaving one beside a borrowed
-# token would make which credential the child used unknowable — the same
-# ambiguity that let the false env-carried-auth premise survive unnoticed.
+# Env-carried auth sources OTHER than the borrowed OAuth token. Their presence
+# means the child already has a credential the client's own precedence ladder
+# ranks ABOVE the stored file — so borrowing is suppressed and these are left
+# untouched. Stripping them would destroy the only credential a proxy- or
+# API-key-authenticated machine has.
 _OTHER_AUTH_ENV_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+# Gateway-mode flags: when either is truthy the client routes through
+# Bedrock/Vertex instead of the Anthropic API and picks up AWS/GCP credentials
+# from the ambient environment. They rank above every other auth source on the
+# client's ladder, so a machine that carries one is env-authenticated even
+# without an ANTHROPIC_* variable set — otherwise a stored credential file
+# would drag such a machine into TOKEN_BORROWED and mislabel every failure.
+_GATEWAY_MODE_ENV_VARS = ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX")
 
 # Why the child has the auth it has, recorded in its own environment so the
 # caller can read it back off the kwargs it just built — no module-level state
@@ -266,34 +273,47 @@ def _read_oauth_token(path: Path) -> tuple[str | None, str]:
 def _lend_auth(env: dict) -> str:
     """Give `env` exactly one credential and return why it has the one it has.
 
-    Never raises (see `_read_oauth_token`). A machine authenticated by a plain
-    environment API key keeps working untouched — no token to borrow, nothing
-    stripped. A machine authenticated by `apiKeyHelper` genuinely loses auth
-    under isolation, because the helper is a command name declared in
-    settings.json and isolation is precisely the removal of settings.json; no
-    borrow can fix that, and what this returns for it is loudness rather than
-    function.
+    Never raises (see `_read_oauth_token`). The client's own auth-precedence
+    ladder ranks env-carried auth ABOVE the stored credential, so the env is
+    consulted FIRST: a machine that already carries env auth (an API key, an
+    auth token, a Bedrock/Vertex gateway flag, or a previously-lent OAuth
+    token) is left untouched — no file read, no borrow, no strip. Only a
+    machine with no env auth reaches the credential file, and only then does
+    the token get lent through the child's environment.
+
+    A machine authenticated by `apiKeyHelper` genuinely loses auth under
+    isolation, because the helper is a command name declared in settings.json
+    and isolation is precisely the removal of settings.json; no borrow can fix
+    that, and what this returns for it is loudness rather than function.
     """
+    if _has_env_auth(env):
+        # Env-auth outranks the stored credential on the client's ladder, so
+        # borrowing would either be overridden (Bedrock/Vertex) or make which
+        # credential the child ran on unknowable (an ANTHROPIC_* key alongside
+        # a lent OAuth token). Neither is what the seam wants to hand a judge.
+        return TOKEN_ENV_AUTH
+
     ambient = harness_config_root()
     if ambient == _SANDBOX_ROOT or _SANDBOX_ROOT in ambient.parents:
         # Already inside a sandbox slot: there is no credential file to borrow
-        # from, and whatever auth this process was itself lent is inherited.
-        return TOKEN_ENV_AUTH if _has_env_auth(env) else TOKEN_NONE_SELF_REFERENTIAL
+        # from, and env auth would have already returned above if present.
+        return TOKEN_NONE_SELF_REFERENTIAL
 
     token, status = _read_oauth_token(ambient / _CREDENTIALS_FILENAME)
     if token is None:
-        return TOKEN_ENV_AUTH if _has_env_auth(env) else status
+        return status
 
+    # No strip loop: _has_env_auth returned False above, which means every
+    # variable in _OTHER_AUTH_ENV_VARS was already absent. A pop here would be
+    # a dead no-op and would read as a live guard the code no longer needs.
     env[_OAUTH_TOKEN_ENV_VAR] = token
-    for var in _OTHER_AUTH_ENV_VARS:
-        env.pop(var, None)
     return TOKEN_BORROWED
 
 
 def _has_env_auth(env: dict) -> bool:
     return any(
         (env.get(var) or "").strip()
-        for var in (_OAUTH_TOKEN_ENV_VAR,) + _OTHER_AUTH_ENV_VARS
+        for var in (_OAUTH_TOKEN_ENV_VAR,) + _OTHER_AUTH_ENV_VARS + _GATEWAY_MODE_ENV_VARS
     )
 
 
