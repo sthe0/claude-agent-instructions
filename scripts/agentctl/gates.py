@@ -40,6 +40,7 @@ from pathlib import Path
 from lib import config_root
 from lib import hook_wiring
 
+from . import advisor as _advisor
 from . import delivery
 from .config import Thresholds
 from .plan import PlanError, changed_parts, load_plan, order_place, stage_question_key
@@ -1126,6 +1127,70 @@ def _operative_surface(doc) -> tuple:
     return (stage_surface, meta_surface)
 
 
+def _semantic_invariants_coverage(
+    item: str,
+    norm_haystack: str,
+    *,
+    runner=None,
+) -> bool:
+    """Check whether one critique invariant is semantically covered by the plan text.
+
+    Runs the casefold+whitespace-normalized substring check as a fast prefilter: a
+    literal match short-circuits at zero cost.  On prefilter miss, invokes the model
+    judge with advisor._INVARIANTS_JUDGE_PROMPT, following the judge_binary_ask
+    template (fail-open on every error path):
+
+      AGENTCTL_ADVISOR=0 AND no explicit runner  → False  (substring result, no model)
+      timeout / crash / unparseable response     → True   (fail open, do not block)
+      model says YES                             → True   (covered)
+      model says NO                              → False  (not covered)
+
+    When AGENTCTL_ADVISOR=0 and no runner is provided, the function falls back to the
+    substring result rather than fail-open so that the test suite's per-suite
+    advisor-isolation fixture (conftest._advisor_off_by_default) does not silently
+    open the gate for every test that calls this indirectly through cli.py.
+    Tests that exercise the semantic path inject an explicit runner.
+
+    Per memory-global/leaves/regex-not-for-semantic-classification.md: a substring
+    check driving a hard block on natural-language meaning determinizes perception at
+    the wrong level; the correct shape is a high-recall prefilter + model-judged
+    decision + fail-open on every error (perception boundary).
+    """
+    norm_item = _normalize_string(item)
+    if norm_item in norm_haystack:
+        return True  # fast path: literal substring match, no model call
+
+    # When no runner is supplied, respect the advisor kill-switch: skip the model
+    # call and return the substring result (False) so the gate is unchanged.
+    if runner is None:
+        if os.environ.get("AGENTCTL_ADVISOR") == "0":
+            return False
+        runner = _advisor.subprocess_runner
+
+    try:
+        prompt = _advisor._INVARIANTS_JUDGE_PROMPT.format(
+            invariant=item, plan_text=norm_haystack
+        )
+        argv = _advisor._prompt_argv(
+            _advisor.HOST_CLAUDE, _advisor._JUDGE_COMPLEXITY, prompt
+        )
+        result = runner(argv, timeout=_advisor._ADVISOR_TIMEOUT_S)
+        if result.returncode != 0:
+            return True  # non-zero exit — fail open
+        lines = [
+            ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()
+        ]
+        if not lines:
+            return True  # no output — fail open
+        if lines[0].upper().startswith("YES"):
+            return True
+        if lines[0].upper().startswith("NO"):
+            return False
+        return True  # unparseable — fail open
+    except Exception:
+        return True  # crash — fail open
+
+
 def replan_coverage_blockers(old_doc, new_doc, critique) -> list[str]:
     """Verify the critique's similarities/differences split is COVERED by the
     corrected plan — the dataflow, NOT the cognitive item->field mapping (that
@@ -1147,9 +1212,10 @@ def replan_coverage_blockers(old_doc, new_doc, critique) -> list[str]:
 
     Declared-item-scoped: empty lists pass vacuously, so a critique that records no
     split (or, via the cmd_replan guard, a replan with no difficulty present)
-    behaves exactly as before. Membership is substring after `_normalize_string`
-    on both sides (casefold + collapsed whitespace) — an honest rephrasing of the
-    same invariant passes; a genuinely absent one still blocks.
+    behaves exactly as before. Coverage is checked via `_semantic_invariants_coverage`:
+    a casefold+whitespace-normalized substring match is tried first (fast path, zero
+    cost); on miss, a model judge decides semantically so honest paraphrases pass
+    without blocking the replan (see that function's docstring for fail-open detail).
 
     Unlike the two hard gates this takes PlanDocs, not just state — it is therefore
     NOT registered in GUARDIANS and is called directly from cmd_replan."""
@@ -1165,7 +1231,7 @@ def replan_coverage_blockers(old_doc, new_doc, critique) -> list[str]:
     for item in critique.invariants_to_preserve:
         if not (item or "").strip():
             continue
-        if _normalize_string(item) not in norm_haystack:
+        if not _semantic_invariants_coverage(item, norm_haystack):
             out.append(
                 f"similarity to preserve not carried into any stage conditions/invariants: {item!r}"
             )
