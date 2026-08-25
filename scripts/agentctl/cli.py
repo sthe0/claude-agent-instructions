@@ -2020,8 +2020,12 @@ def cmd_question_enumerate_escape(args, *, store: StateStore, runner: Runner | N
     branches are (a) a landed pass whose runner FAILED — escaped by the four
     runner-failure reasons — and (b) an enumeration that has not landed at all,
     escaped by `enumeration_not_landed` once the launch deadline has passed. A
-    stale enumeration is deliberately not escapable and needs no escape: re-running
-    the check clears it, always.
+    stale enumeration is escapable only once the round budget is spent: re-running
+    the check clears staleness per step, but each re-run surfaces questions whose
+    disposition edits the plan and stales the enumeration again, so per-step
+    clearing is not loop termination. Below the budget, re-running is the route
+    out; at or above it `plan_enumerate_round_release_active` fires and
+    `enumerate_rounds_exhausted` is the additional escape.
 
     Admissibility is checked against the bag rather than trusted from the operator:
     a runner-failure reason offered while the last pass reports healthy (or absent —

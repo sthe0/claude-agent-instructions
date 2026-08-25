@@ -322,8 +322,11 @@ def premise_blockers(state, bag) -> list[str]:
        landed against the content now under evaluation; the relaunch window is
        _ENUMERATE_NOT_RUN's, with `enumeration_not_landed` as its route out.
        Both escapable branches clear on an escape bound to the LIVE digest;
-       _ENUMERATE_STALE has no escape and needs none — re-running the check is
-       always available and always cheaper than recording a reason.
+       _ENUMERATE_STALE has no escape below the round budget — re-running the
+       check is available and cheaper than recording a reason. At or above it
+       (`gates.plan_enumerate_round_release_active`) the branch routes to the
+       round-release message instead, and `enumerate_rounds_exhausted` is its
+       escape: re-running clears staleness per step but re-arms it over the loop.
     4. order coverage (premise.validate_order_elements): every element of the order
        is covered by a stage the CURRENT plan contains, or cut with a reason. Unlike
        (1) an EMPTY bag blocks here, but only once a plan exists — before
