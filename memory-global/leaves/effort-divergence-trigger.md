@@ -36,3 +36,4 @@ A plan is a **norm**. Running far past it is not merely expensive; it is evidenc
 - [[function-place-difficulty]] — why an overrun is a symptom of a broken functional place rather than a number to force back into range.
 - [[policy-effectiveness-tracking]] — the quality-ledger loop the fires and both effort vectors feed, and the only calibration path for a self-set estimate.
 - [[recording-experience]] — the resolution-time record where a firing's lesson is supposed to land.
+- [[plan-cost-tier-empirical-stage-underestimate]] — a concrete recurring case of "the estimate set by the same actor it constrains": `cost_tier` under-prices a multi-variant measurement or acceptance-judge-gated stage; the authoring fix.
