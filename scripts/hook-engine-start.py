@@ -56,11 +56,20 @@ _NEXT_HINTS = {
 
 
 def _load_state(session_id: str) -> dict | None:
-    """Return the parsed state dict, or None when missing / corrupt / unreadable."""
+    """Return the parsed state dict, or None when missing / corrupt / unreadable.
+
+    Intentionally checks ONLY the current root (agentctl_state_dir()), not the
+    legacy fallback that resolve_agentctl_state_file() adds. The legacy fallback
+    is correct for gates (fail-closed means 'old root has nothing' must never
+    mean 'allow'), but wrong for this informational hook: a pre-migration session
+    in ~/.claude/agentctl/state/ would surface as 'Live session: task=<old-task>'
+    throughout an entirely unrelated conversation whose session_id happens to
+    collide with the legacy file's name (item I, baa1daea cross-session reminder).
+    """
     if not session_id:
         return None
-    p = config_root.resolve_agentctl_state_file(session_id)
-    if p is None:
+    p = config_root.agentctl_state_dir() / f"{config_root.sanitize_session_id(session_id)}.json"
+    if not p.exists():
         return None
     try:
         data = json.loads(p.read_text(encoding="utf-8"))

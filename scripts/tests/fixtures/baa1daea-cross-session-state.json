@@ -1,0 +1,11 @@
+{
+  "session_id": "baa1daea-e560-4133-8af3-6cae096d0d92",
+  "task_id": "max-32c56a7f-8da1-43aa-9b29-4dea183b009d",
+  "node": "DIAGNOSING",
+  "weight_class": "SUBSTANTIVE",
+  "goal": "[redacted for test fixture — original was a multi-stage plan goal]",
+  "overall_done_criterion": "[redacted for test fixture]",
+  "overall_criterion_type": "measurable",
+  "plan_path": null,
+  "stages": []
+}
