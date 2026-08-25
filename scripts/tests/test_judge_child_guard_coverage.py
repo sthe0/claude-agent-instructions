@@ -80,15 +80,42 @@ def _main_function(tree: ast.Module) -> ast.FunctionDef | None:
 def _guard_is_first_statement(main: ast.FunctionDef) -> bool:
     """The guard must be `main()`'s FIRST statement, not merely present: a guard
     placed after the ledger call, the stdin read or the judge call has already
-    done the thing it exists to prevent."""
+    done the thing it exists to prevent. The test must also be POSITIVE
+    (`if os.environ.get(MARKER):` — enter the body when the marker is present):
+    a negated form like `if not os.environ.get(MARKER): return 0` reads at a
+    glance like a guard but disables the hook everywhere EXCEPT inside a judge
+    child — the inverse of what the guard exists to enforce."""
     first = main.body[0]
     if not isinstance(first, ast.If):
         return False
     if _GUARD_ENV_NAME not in {n.id for n in ast.walk(first.test) if isinstance(n, ast.Name)}:
         return False
+    if _marker_is_under_negation(first.test):
+        return False
     return any(
         isinstance(stmt, ast.Return) and isinstance(stmt.value, ast.Constant) and stmt.value.value == 0
         for stmt in first.body
+    )
+
+
+def _marker_is_under_negation(node: ast.AST) -> bool:
+    """True if `JUDGE_CHILD_ENV_VAR` appears inside a boolean negation of the
+    test — a `not ...` unary op or a `!=` / `not in` comparison. Either shape
+    makes the body reachable when the marker is ABSENT, which is exactly what a
+    judge-child guard must never do.
+    """
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        return _references_marker(node.operand)
+    if isinstance(node, ast.Compare):
+        if any(isinstance(op, (ast.NotEq, ast.NotIn)) for op in node.ops):
+            return _references_marker(node)
+    return any(_marker_is_under_negation(child) for child in ast.iter_child_nodes(node))
+
+
+def _references_marker(node: ast.AST) -> bool:
+    return any(
+        isinstance(n, ast.Name) and n.id == _GUARD_ENV_NAME
+        for n in ast.walk(node)
     )
 
 
@@ -150,6 +177,45 @@ def test_the_guard_check_rejects_a_guard_that_runs_too_late():
 
     assert _guard_is_first_statement(_main_function(late)) is False
     assert _guard_is_first_statement(_main_function(first)) is True
+
+
+def test_the_guard_check_rejects_a_guard_whose_test_is_inverted():
+    """RED arm for the negated shape. `if not os.environ.get(MARKER): return 0`
+    passes any check that only asks whether the marker NAME appears in the test,
+    but disables the hook everywhere EXCEPT inside a judge child — the inverse
+    of what the guard exists to enforce. A control that accepts the negation of
+    what it checks is not a control; each shape below is a mutation the
+    predicate must reject.
+    """
+    unary_not = ast.parse(
+        "def main():\n"
+        "    if not os.environ.get(JUDGE_CHILD_ENV_VAR):\n"
+        "        return 0\n"
+        "    return 0\n"
+    )
+    not_equal = ast.parse(
+        "def main():\n"
+        "    if os.environ.get(JUDGE_CHILD_ENV_VAR) != '1':\n"
+        "        return 0\n"
+        "    return 0\n"
+    )
+    not_in = ast.parse(
+        "def main():\n"
+        "    if JUDGE_CHILD_ENV_VAR not in os.environ:\n"
+        "        return 0\n"
+        "    return 0\n"
+    )
+    positive = ast.parse(
+        "def main():\n"
+        "    if os.environ.get(JUDGE_CHILD_ENV_VAR):\n"
+        "        return 0\n"
+        "    return 0\n"
+    )
+
+    assert _guard_is_first_statement(_main_function(unary_not)) is False
+    assert _guard_is_first_statement(_main_function(not_equal)) is False
+    assert _guard_is_first_statement(_main_function(not_in)) is False
+    assert _guard_is_first_statement(_main_function(positive)) is True
 
 
 def test_the_seam_check_rejects_a_hook_that_calls_no_judge():
