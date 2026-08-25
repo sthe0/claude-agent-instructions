@@ -1482,6 +1482,12 @@ def cmd_question_list(args, *, store: StateStore, runner: Runner | None = None) 
                 f"| {q.target} | {q.control} | {q.question} | {q.disposition} | "
                 f"{q.own_research} | {q.source} | {q.derivation} |"
             )
+        if bag.get("enumeration_refused_oversize"):
+            rows.append(
+                "\n**enumeration refused (oversize)** — plan too large for judge "
+                "subprocess argv (E2BIG); split the plan or record "
+                "`agentctl question-enumerate-escape --reason advisor_oversize --note <text>`"
+            )
         detail = "\n".join(rows)
     else:
         detail = "; ".join(f"{q.id}={q.disposition}" for q in questions) or "no questions"
@@ -2412,6 +2418,14 @@ def _fold_enumeration_sidecar(state: SessionState, doc: PlanDoc, plan_path) -> b
     raised = _apply_enumeration_result(bag, doc, plan_path, pairs, runner_ok,
                                        parts=parts, preserve_disposition=True,
                                        stderr=payload.get("stderr", ""))
+    # Surface the oversize escape explicitly so question-list --format md shows
+    # "enumeration refused (oversize)" rather than a silent absence or a generic
+    # advisor_error bucket entry — the split-the-plan work item is different from
+    # a runner-health alarm and must be visible to the reviewer reading the bag.
+    if runner_ok is False:
+        _fold_escape = advisor.classify_runner_failure(payload.get("stderr", ""))
+        if _fold_escape == premise.ESCAPE_ADVISOR_OVERSIZE:
+            bag["enumeration_refused_oversize"] = True
     # `via` is stated on BOTH producers rather than encoded as this one's presence:
     # a distinction carried by an absent field reads as a forgotten field to the
     # next person grepping the history, and these rows now have three readers.

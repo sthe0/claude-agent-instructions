@@ -9,6 +9,7 @@ session (see resolve_enabled).
 """
 from __future__ import annotations
 
+import errno
 import os
 import subprocess
 import sys
@@ -41,6 +42,12 @@ _TIMEOUT_STDERR_PREFIX = "advisor timed out after"
 # classify_runner_failure. Written by us, never matched against the CLI's own words,
 # because the CLI's not-logged-in phrasing is not a stable contract.
 _CREDENTIAL_STDERR_PREFIX = "advisor had no credential to lend the isolated child"
+
+# Written into the sidecar's `stderr` field by enumerate_questions_health when the
+# OS raises E2BIG before the judge subprocess can start — the plan's prompt text
+# exceeded ARG_MAX in the judge's argv. Read back by classify_runner_failure so a
+# caller that only has the stored stderr string can still detect the oversize class.
+_E2BIG_STDERR_MARKER = "Argument list too long"
 
 # Whole-plan enumeration (enumerate_claims / enumerate_questions_health) is a
 # DIFFERENT cost class from a judge/advisor call: it re-reads an entire plan in one
@@ -286,6 +293,13 @@ def enumerate_questions_health(
                 continue
             pairs.append((target, question))
         return True, pairs, result.stderr or ""
+    except OSError as exc:
+        # E2BIG: the judge subprocess argv (which carries the prompt text) exceeded
+        # ARG_MAX. Preserve the error in stderr so the sidecar's classify_runner_failure
+        # can surface ESCAPE_ADVISOR_OVERSIZE instead of the generic ESCAPE_ADVISOR_ERROR.
+        if exc.errno == errno.E2BIG:
+            return False, [], f"{_E2BIG_STDERR_MARKER}: {exc}"
+        return False, [], ""
     except Exception:
         return False, [], ""
     finally:
@@ -1180,12 +1194,12 @@ def subprocess_runner(argv: list[str], *, timeout: int = _ADVISOR_TIMEOUT_S) -> 
         raise
 
 
-def classify_runner_failure(stderr: str) -> str:
+def classify_runner_failure(stderr: str, *, exc: Exception | None = None) -> str:
     """Map a failed enumeration run's stderr onto the escape reason the ENGINE
     pre-selects, so the human confirms a value rather than typing one the engine
     already knows.
 
-    Four-valued on purpose, up from two. A timeout is the one failure whose
+    Five-valued on purpose, up from four. A timeout is the one failure whose
     stderr this process itself wrote (subprocess_runner's TimeoutExpired arm), so
     it is the one this function can recognise with certainty. A missing credential
     is the same kind of certainty from the other end: subprocess_runner writes
@@ -1197,13 +1211,23 @@ def classify_runner_failure(stderr: str) -> str:
     "You've hit your session limit · resets 12am (Europe/Moscow)") and,
     unlike a generic failure, names a resource ceiling rather than a broken
     runner — worth its own reason so a fleet-wide quota exhaustion shows up as
-    its own bucket instead of vanishing into the generic-error tally. Everything
-    else — an ordinary non-zero exit, an unparseable reply, an OSError, an absent
-    advisor binary, no stderr at all — is a heterogeneous tail whose members
-    would each need a fragile substring rule for no gain, since the escape they
-    take is the same. So advisor_error remains the catch-all, including for
-    empty stderr, and the operator's --note carries the detail the reason token
-    deliberately does not."""
+    its own bucket instead of vanishing into the generic-error tally. An oversize
+    (E2BIG) failure is the fourth: the plan's prompt text exceeded ARG_MAX in the
+    judge subprocess's argv before it could even read stdin; the fix is splitting
+    the plan, not retrying the runner or waiting for quota. It is recognised from
+    either the exception directly (caller supplies `exc`) or from _E2BIG_STDERR_MARKER
+    in the stored stderr (the round-trip path via the sidecar file). Everything
+    else — an ordinary non-zero exit, an unparseable reply, an absent advisor
+    binary, no stderr at all — is a heterogeneous tail whose members would each
+    need a fragile substring rule for no gain, since the escape they take is the
+    same. So advisor_error remains the catch-all, including for empty stderr, and
+    the operator's --note carries the detail the reason token deliberately does not.
+
+    `exc` is the live exception object for call sites that have it (e.g. an OSError
+    raised directly in the worker and not yet serialised to a sidecar); the bare
+    `stderr` string suffices for the fold path that reads back a stored sidecar."""
+    if exc is not None and isinstance(exc, OSError) and exc.errno == errno.E2BIG:
+        return premise.ESCAPE_ADVISOR_OVERSIZE
     text = stderr or ""
     if _TIMEOUT_STDERR_PREFIX in text:
         return premise.ESCAPE_ADVISOR_TIMEOUT
@@ -1211,4 +1235,6 @@ def classify_runner_failure(stderr: str) -> str:
         return premise.ESCAPE_ADVISOR_CREDENTIAL
     if "session limit" in text.lower():
         return premise.ESCAPE_ADVISOR_QUOTA
+    if _E2BIG_STDERR_MARKER in text:
+        return premise.ESCAPE_ADVISOR_OVERSIZE
     return premise.ESCAPE_ADVISOR_ERROR
