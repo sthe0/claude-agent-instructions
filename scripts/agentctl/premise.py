@@ -88,10 +88,15 @@ ESCAPE_ADVISOR_QUOTA = "advisor_quota"
 # that root, and for two stages that made every isolated judge answer nothing at
 # all while a fail-open advisor reported success.
 ESCAPE_ADVISOR_CREDENTIAL = "advisor_credential"
+# The plan's content exceeded the OS argv limit (E2BIG) when the worker tried to launch
+# the judge subprocess with the prompt text in argv. Distinct from advisor_error so that
+# a fleet-wide rise in this bucket is a split-the-plan work item, not a runner-health
+# alarm — the two have different operators and different fixes.
+ESCAPE_ADVISOR_OVERSIZE = "advisor_oversize"
 ESCAPE_MANUAL_ENUMERATION_DONE = "manual_enumeration_done"
 ESCAPE_ENUMERATION_NOT_LANDED = "enumeration_not_landed"
 
-# The five INFRASTRUCTURE reasons — the pass landed and its runner broke, nobody
+# The six INFRASTRUCTURE reasons — the pass landed and its runner broke, nobody
 # did the work by hand. Named as its own tuple (rather than left implicit as
 # "ENUMERATION_RUNNER_FAILURE_REASONS minus manual") so a caller that needs the
 # infra/work-was-done distinction — plugins_premise._tally's runner_failure bucket —
@@ -103,13 +108,14 @@ ENUMERATION_INFRA_FAILURE_REASONS = (
     ESCAPE_ADVISOR_ERROR,
     ESCAPE_ADVISOR_QUOTA,
     ESCAPE_ADVISOR_CREDENTIAL,
+    ESCAPE_ADVISOR_OVERSIZE,
 )
 
 # Admissible only against a run that actually FAILED (enumerated_runner_ok is False).
 # advisor_unavailable is in the set but is never the reason the blocker pre-selects:
 # it names the injected-stub / advisor-absent path, which a live session reaches as
 # advisor_error, and only a caller who KNOWS the advisor was not there should choose
-# it. classify_runner_failure therefore returns one of the other four only.
+# it. classify_runner_failure therefore returns one of the other five only.
 ENUMERATION_RUNNER_FAILURE_REASONS = ENUMERATION_INFRA_FAILURE_REASONS + (
     ESCAPE_MANUAL_ENUMERATION_DONE,
 )
