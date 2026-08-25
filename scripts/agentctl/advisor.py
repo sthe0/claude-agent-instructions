@@ -460,6 +460,18 @@ _BINARY_ASK_PROMPT = (
     "MESSAGE:\n{text}"
 )
 
+_INVARIANTS_JUDGE_PROMPT = (
+    "You are given an INVARIANT and a PLAN TEXT. Decide whether the invariant is "
+    "semantically preserved by the plan text — even if the exact wording differs.\n\n"
+    "INVARIANT:\n{invariant}\n\n"
+    "PLAN TEXT:\n{plan_text}\n\n"
+    "Answer YES if the invariant's intent is covered by the plan text (preserved, "
+    "even as a paraphrase or distributed across multiple places). Answer NO if the "
+    "invariant is absent or contradicted. Be strict on genuine absence; lenient on "
+    "paraphrase.\n\n"
+    "Answer on the FIRST line with exactly YES or NO, nothing else."
+)
+
 
 _MISSING = object()
 
