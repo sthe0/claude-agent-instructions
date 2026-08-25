@@ -544,6 +544,46 @@ def plan_review_round_release_active(state: SessionState | None, thr: Thresholds
     return state.plan_review_rounds >= thr.effort_replan_absolute()
 
 
+#: Message substituted for the staleness blocker in `premise_blockers` once the
+#: enumerate round-release fires (see `plan_enumerate_round_release_active`). Names
+#: the one act that both records the decision and opens ONLY the staleness gate —
+#: the other premise blockers (undispositioned questions, order-coverage, runner
+#: failure) remain standing regardless, so `approve` is still structurally refused.
+#: Every act named here must be EXECUTABLE from this state: `question-enumerate-
+#: escape --reason enumerate_rounds_exhausted` is the only one, because `approve`
+#: never clears a non-empty blockers list by itself.
+PLAN_ENUMERATE_ROUND_RELEASE_MESSAGE = (
+    "enumeration round budget exhausted at pass {passes} (Rule-of-Three — config.md's "
+    "effort-replan-absolute, reused) — no further re-run is required, but the decision is "
+    "yours and must be recorded: to proceed with the plan as it stands, run "
+    "question-enumerate-escape --reason enumerate_rounds_exhausted --note <why the current "
+    "plan is acceptable>; to refine instead, edit the plan and re-run question-enumerate "
+    "— the budget does not refill on an edit, so a re-run does not by itself open this gate; "
+    "`approve` still answers to every other premise blocker as well"
+)
+
+
+def plan_enumerate_round_release_active(bag, thr: Thresholds | None = None) -> bool:
+    """True once the premise bag's `enumerate_pass` reaches the Rule-of-Three threshold
+    this function reuses — config.md's `effort-replan-absolute`. Past this point
+    `premise_blockers` stops demanding another re-run for a stale enumeration and routes
+    to the user instead (see `PLAN_ENUMERATE_ROUND_RELEASE_MESSAGE`).
+
+    Uses `enumerate_pass` (the monotonic count of applied enumeration results) rather
+    than a per-content-digest counter. `enumerate_pass` is never reset when the plan
+    content digest moves — it grows with every `_apply_enumeration_result` call across
+    ALL digest transitions in the session. That monotonicity is the right property
+    here: the treadmill being bounded is the full planning loop (enumerate → surface
+    questions → dispose → edit → stale → enumerate again), and each lap increments
+    `enumerate_pass` exactly once, so the total pass count directly measures how many
+    laps the user has paid for. A per-digest count would reset on every plan edit and
+    could never fire across the treadmill's own lap boundary."""
+    if bag is None:
+        return False
+    thr = thr if thr is not None else Thresholds()
+    return int(bag.get("enumerate_pass") or 0) >= thr.effort_replan_absolute()
+
+
 def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[str]:
     """Precondition guardian for `approve` and every `replan`: a thinker review with
     a passing (or user-overridden) verdict, BOUND to the exact plan version being

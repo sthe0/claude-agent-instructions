@@ -2127,6 +2127,16 @@ def cmd_question_enumerate_escape(args, *, store: StateStore, runner: Runner | N
                     "nothing was raised in its place; run `agentctl question-raise` for what "
                     "the hand re-reading found (or dispose of the pass with the reason that "
                     "names the failure)")
+    elif reason == premise.ESCAPE_ENUMERATE_ROUNDS_EXHAUSTED:
+        if not gates.plan_enumerate_round_release_active(bag):
+            passes = int(bag.get("enumerate_pass") or 0)
+            threshold = Thresholds().effort_replan_absolute()
+            return Directive(
+                False, state.node, "noop",
+                f"--reason {reason} is admissible only once the enumerate round budget is "
+                f"exhausted ({passes}/{threshold} pass(es) applied so far) — run "
+                "`agentctl question-enumerate` to advance the count, or re-run until the "
+                "budget is spent")
     else:
         if bag.get("enumerated"):
             return Directive(
@@ -2163,7 +2173,7 @@ def cmd_question_enumerate_escape(args, *, store: StateStore, runner: Runner | N
     # premise_blockers consults for this branch, not over `(reason,)` alone.
     family = (
         premise.ENUMERATION_RUNNER_FAILURE_REASONS if reason in premise.ENUMERATION_RUNNER_FAILURE_REASONS
-        else (premise.ESCAPE_ENUMERATION_NOT_LANDED,)
+        else (reason,)
     )
     already = plugins_premise.escape_recorded(bag, digest, family)
     escapes.append({

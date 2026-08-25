@@ -1464,3 +1464,70 @@ class TestEnumerateAdvisoryArms:
                                lambda argv, **_kw: RunResult(0, "stage 1\tdoes the bound hold?\n", ""))
 
         assert adv == []
+
+
+# --- enumerate_rounds_exhausted admissibility ---
+
+class TestEnumerateRoundsExhaustedAdmissibility:
+    """The new reason is admissible only once the enumerate round budget is spent
+    (gates.plan_enumerate_round_release_active returns True). Before that, the gate
+    refuses it, naming the pass count so the operator knows how far they are."""
+
+    def _stale_bag_state(self, plan_path, *, passes):
+        state = SessionState(session_id="s", task_id="t", plan_path=plan_path,
+                             weight_class=WeightClass.SUBSTANTIVE.value)
+        plugins.activate(state, "premise")
+        bag = state.plugins["premise"]
+        bag["order_elements"] = [{
+            "id": "O1", "element": "the order this plan answers",
+            "disposition": "covered", "stage": 1, "reason": "",
+        }]
+        bag["enumerated"] = True
+        bag["enumerated_at"] = "a-stale-digest-from-an-earlier-plan"
+        bag["enumerate_pass"] = passes
+        return state, bag
+
+    def test_refused_when_release_inactive(self, store, fixtures_dir):
+        """Below the threshold (passes=2 < 3) the reason is rejected with the
+        current pass count so the operator knows what is needed."""
+        plan_path = str(fixtures_dir / "plan_two_stage.toml")
+        state, _ = self._stale_bag_state(plan_path, passes=2)
+        store.save(state)
+
+        d = cli.cmd_question_enumerate_escape(
+            _escape_ns("s", premise.ESCAPE_ENUMERATE_ROUNDS_EXHAUSTED,
+                       note="want to skip", plan=plan_path),
+            store=store)
+
+        assert not d.ok
+        assert "admissible only once" in d.detail or "budget is exhausted" in d.detail
+        assert "2/3" in d.detail
+
+    def test_admitted_when_release_active(self, store, fixtures_dir):
+        """At the threshold the reason is admitted and the escape is recorded."""
+        plan_path = str(fixtures_dir / "plan_two_stage.toml")
+        state, _ = self._stale_bag_state(plan_path, passes=3)
+        store.save(state)
+
+        d = cli.cmd_question_enumerate_escape(
+            _escape_ns("s", premise.ESCAPE_ENUMERATE_ROUNDS_EXHAUSTED,
+                       note="acceptable at this pass count", plan=plan_path),
+            store=store)
+
+        assert d.ok, d.detail
+        saved = store.load("s")
+        escapes = saved.plugins["premise"].get("escapes", [])
+        assert any(e.get("reason") == premise.ESCAPE_ENUMERATE_ROUNDS_EXHAUSTED
+                   for e in escapes)
+
+    def test_in_closed_reason_set(self):
+        """The new reason token is a member of ENUMERATION_ESCAPE_REASONS — the
+        argparse choices= at the CLI surface picks it up automatically."""
+        assert premise.ESCAPE_ENUMERATE_ROUNDS_EXHAUSTED in premise.ENUMERATION_ESCAPE_REASONS
+
+    def test_not_in_runner_failure_reasons(self):
+        """The reason speaks for a budget-exhaustion decision, not a failed run —
+        offering it while the runner reports healthy must not be admitted via the
+        runner-failure admissibility path."""
+        assert (premise.ESCAPE_ENUMERATE_ROUNDS_EXHAUSTED
+                not in premise.ENUMERATION_RUNNER_FAILURE_REASONS)

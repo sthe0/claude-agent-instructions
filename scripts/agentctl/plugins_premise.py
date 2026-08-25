@@ -365,7 +365,16 @@ def premise_blockers(state, bag) -> list[str]:
                                (premise.ESCAPE_ENUMERATION_NOT_LANDED,)):
             blockers.append(_ENUMERATE_NOT_RUN)
     elif content_digest is not None and enumeration_is_stale(bag, doc):
-        blockers.append(_ENUMERATE_STALE)
+        if gates.plan_enumerate_round_release_active(bag):
+            if not escape_recorded(bag, content_digest,
+                                   (premise.ESCAPE_ENUMERATE_ROUNDS_EXHAUSTED,)):
+                blockers.append(
+                    gates.PLAN_ENUMERATE_ROUND_RELEASE_MESSAGE.format(
+                        passes=int(bag.get("enumerate_pass") or 0)
+                    )
+                )
+        else:
+            blockers.append(_ENUMERATE_STALE)
     elif bag.get("enumerated_runner_ok") is False:
         # `is False`, never `is not True`: None means the advisor was ABSENT (also what
         # `.get` yields for a bag minted before this field existed, and what the suite's
