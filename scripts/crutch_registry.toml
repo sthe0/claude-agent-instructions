@@ -4052,6 +4052,78 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "e330342f65f00d16"
+domain = "code"
+file = "scripts/tests/test_gates_invariants_coverage.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "4b8e2b12cbe11b95"
+domain = "code"
+file = "scripts/tests/test_gates_invariants_coverage.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "5090655c29cec046"
+domain = "code"
+file = "scripts/tests/test_gates_invariants_coverage.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "b19cd60de4a8d8e3"
+domain = "code"
+file = "scripts/tests/test_gates_invariants_coverage.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "bbe66dc15de6a915"
+domain = "code"
+file = "scripts/tests/test_gates_invariants_coverage.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "8cc8f6057a348196"
+domain = "code"
+file = "scripts/tests/test_gates_invariants_coverage.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "a56116c16777ab38"
+domain = "code"
+file = "scripts/tests/test_gates_invariants_coverage.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "8dbfef84e10109be"
+domain = "code"
+file = "scripts/tests/test_gates_invariants_coverage.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "a3d279e758af82fe"
+domain = "code"
+file = "scripts/tests/test_gates_invariants_coverage.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "f4971033f7c7276d"
 domain = "code"
 file = "scripts/tests/test_guard_canon_bash_writes.py"
@@ -9223,6 +9295,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "ee5d4eb72017aa09"
 domain = "code_file_rollup"
 file = "scripts/tests/test_gates.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "af60050a77dc03d8"
+domain = "code_file_rollup"
+file = "scripts/tests/test_gates_invariants_coverage.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
@@ -15552,6 +15632,14 @@ disposition = "keep"
 ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
 
 [[entry]]
+id = "a6ad0f139d13e7ec"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-08-11-review-loop-cannot-measure-its-own-convergence.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
 id = "0a4c2cb9f6b6660d"
 domain = "prose"
 file = "memory-global/leaves/experience/2026-08-11-review-loop-cannot-measure-its-own-convergence.md"
@@ -17448,6 +17536,14 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
+id = "c9556cbab3fdeb6e"
+domain = "prose"
+file = "memory-global/leaves/principles/MEMORY.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
 id = "a1be1b68b9681285"
 domain = "prose"
 file = "memory-global/leaves/principles/MEMORY.md"
@@ -17699,6 +17795,118 @@ ground = "Principle leaves (principle/v1) are deliberately generality-graded pro
 id = "b68e52c7a8079e95"
 domain = "prose"
 file = "memory-global/leaves/principles/result-checked-against-its-result-image.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "5b4f1d63fa78f916"
+domain = "prose"
+file = "memory-global/leaves/principles/review-loop-cannot-measure-its-own-convergence.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "5caab92c17c6c9b0"
+domain = "prose"
+file = "memory-global/leaves/principles/review-loop-cannot-measure-its-own-convergence.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "c36eeec5ac493e84"
+domain = "prose"
+file = "memory-global/leaves/principles/review-loop-cannot-measure-its-own-convergence.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "d950c599bca03d36"
+domain = "prose"
+file = "memory-global/leaves/principles/review-loop-cannot-measure-its-own-convergence.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "d470711264b31817"
+domain = "prose"
+file = "memory-global/leaves/principles/review-loop-cannot-measure-its-own-convergence.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "f181c523ad261d75"
+domain = "prose"
+file = "memory-global/leaves/principles/review-loop-cannot-measure-its-own-convergence.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "4e5423ed82745bc2"
+domain = "prose"
+file = "memory-global/leaves/principles/review-loop-cannot-measure-its-own-convergence.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "6084e9343c177b52"
+domain = "prose"
+file = "memory-global/leaves/principles/review-loop-cannot-measure-its-own-convergence.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "b9c9802aac11f928"
+domain = "prose"
+file = "memory-global/leaves/principles/review-loop-cannot-measure-its-own-convergence.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "22188891b33476b5"
+domain = "prose"
+file = "memory-global/leaves/principles/review-loop-cannot-measure-its-own-convergence.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "033b489c41cc6096"
+domain = "prose"
+file = "memory-global/leaves/principles/review-loop-cannot-measure-its-own-convergence.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "6f4f0136d59b3392"
+domain = "prose"
+file = "memory-global/leaves/principles/review-loop-cannot-measure-its-own-convergence.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "5d8df0cf68ddc284"
+domain = "prose"
+file = "memory-global/leaves/principles/review-loop-cannot-measure-its-own-convergence.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "26e73f6183cd039e"
+domain = "prose"
+file = "memory-global/leaves/principles/review-loop-cannot-measure-its-own-convergence.md"
 class = "perception"
 disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
@@ -18112,7 +18320,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "5def6e2f2825a601"
+id = "86eb8120deb53db2"
 domain = "prose"
 file = "memory-global/leaves/question-provenance-gate.md"
 class = "perception"
@@ -18120,7 +18328,31 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "95889769f0b34453"
+id = "9661215f42f788b2"
+domain = "prose"
+file = "memory-global/leaves/question-provenance-gate.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "e73d536e5a56acb9"
+domain = "prose"
+file = "memory-global/leaves/question-provenance-gate.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "ff51ac547839f932"
+domain = "prose"
+file = "memory-global/leaves/question-provenance-gate.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "ffbfe8959d83ba7b"
 domain = "prose"
 file = "memory-global/leaves/question-provenance-gate.md"
 class = "perception"
@@ -18145,6 +18377,22 @@ ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's
 
 [[entry]]
 id = "7c63246b8f957ccd"
+domain = "prose"
+file = "memory-global/leaves/question-provenance-gate.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "7a49cfd6ae94cd9b"
+domain = "prose"
+file = "memory-global/leaves/question-provenance-gate.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "b4d9a10c6d9cb8b9"
 domain = "prose"
 file = "memory-global/leaves/question-provenance-gate.md"
 class = "perception"
