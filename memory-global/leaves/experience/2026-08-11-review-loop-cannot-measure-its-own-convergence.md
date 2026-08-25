@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "user"
 refs: [/Users/the0/.claude-agent/plans/plan-convergence-evidence/cause-account.md, /Users/the0/.claude-agent/plans/plan-convergence-revision-log.md]
 created: 2026-08-11
-last_verified: 2026-08-20
+last_verified: 2026-08-25
 ---
 
 # A plan-review loop that records no finding data cannot measure its own convergence, and has no verb for 'the study cannot be done'
@@ -37,6 +37,10 @@ Establish the CAUSE of large-plan non-convergence before designing any remedy (u
 - Working plan: Two stages. (1) Advance state.plan_review_rounds on the POST-approval path too, keyed on a new plan_review_counted_digest so the counting unit is a plan VERSION rather than a verdict, reset wherever the plan version changes (approve, replan, sub-plan push/pop), and deliver the round-release notice in all three renderings of the replan path; six regression tests plus three doc sites corrected. (2) Record the matching blind spot in the effort-divergence trigger's leaf. Both stages measurable, the full 4913-test suite as the control.
 
 
+
+### 2026-08-25 — The enumeration axis had the same non-terminating shape, and its docstring argued it could not
+- Where it arose: agentctl premise gate: gates.plan_enumerate_round_release_active, plugins_premise.premise_blockers, premise.ENUMERATION_ESCAPE_REASONS
+- Working plan: Mirror the already-shipped plan-review round release onto the enumeration axis: a predicate on the existing enumerate_pass counter at the existing effort-replan-absolute threshold, collapsing ONLY the staleness blocker, discharged by one new closed-set reason; then record in prose the perception half the mechanism cannot decide.
 ## Common core & variations
 **Common:** This leaf's third mechanism — repair is an authoring act at the density where authoring introduces defects, so the finding count falls to a NON-ZERO FLOOR and a pass-required gate cannot terminate by construction — is here confirmed by direct measurement rather than inferred. Breakers by round: 6,1,0,3,1,1,2,2,2,3,1,2,3,3,1 = 31 total; of the 24 found from round 4 on, 19 (79%) were defects the immediately preceding round's own fix introduced. Zero rounds closed with zero plan edits, the loop's only fixed point, so it never had a reachable exit. The plan grew 59.8 KB to 113.6 KB (+90%) across the series. The fourth mechanism reproduced exactly too: the two defects invisible to review at any round count were artifact-to-machinery fit failures — a stage whose commit the repo's own pre-commit spine would have refused (found round 13, after twelve reviews), and a guard watching the GATE_BEARING_HOOKS constant instead of the live hooks.PreToolUse array, so an edit deleting the row that ran the guard itself tripped nothing (found round 14, after thirteen). The leaf's own predicted remedy is the one taken: not shrinking the artifact but SPLITTING it, so the finished part is frozen rather than re-reviewed.
 
