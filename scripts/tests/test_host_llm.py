@@ -255,11 +255,12 @@ def _sandbox(monkeypatch, tmp_path):
 def test_isolated_run_kwargs_preserves_ambient_env_and_overrides_config_dir(monkeypatch, tmp_path):
     """env is COPIED and preserved, never replaced — only CLAUDE_CONFIG_DIR and
     the judge-child/auth variables are ours to set."""
+    _sandbox(monkeypatch, tmp_path)
     _ambient(monkeypatch, tmp_path, token="tok-abc")
     monkeypatch.setenv("HOST_LLM_ISOLATION_SENTINEL", "still-here")
     kwargs = host_llm.isolated_run_kwargs()
     assert kwargs["env"]["HOST_LLM_ISOLATION_SENTINEL"] == "still-here"
-    assert "claude-judge-sandbox" in kwargs["env"]["CLAUDE_CONFIG_DIR"]
+    assert host_llm._SANDBOX_ROOT.name in kwargs["env"]["CLAUDE_CONFIG_DIR"]
 
 
 def test_isolated_run_kwargs_sets_judge_child_marker():
