@@ -23,6 +23,10 @@ the two sub-indexes stay physically separate but record two profiles of the same
 - [A complete option space is generated from the functional ground](option-space-spans-axes-from-functional-ground.md) — span orthogonal axes (passive/active, batch/continuous, precedence/synthesis); generate options from the difficulty's ground, not a mechanism catalogue; ask what invariant subsumes them. ← `coordinator-pitfalls`, `2026-06-26-critique-primitive-unifies-conflict-and-principle`.
 - [The reflexive exit is the base activity figure over a norm](reflexive-exit-is-base-activity-figure.md) — self-improvement / overcome-difficulty / proactive self-diagnosis are one figure with material=the norm (transform=re-norming, control=achievability of the norm's result, result=norm adequate to the order); its search space is the knowledge space = memory. ← `2026-07-14-smd-principle-norm-category-error-and-budget-exhaustion`, `function-place-difficulty`.
 
+## Level 1 — sibling-context rules
+
+- [A review loop with a non-zero finding floor does not terminate by construction](review-loop-cannot-measure-its-own-convergence.md) — four mechanisms explain why a bounded round count is load-bearing, not a heuristic: unanswerable hypothesis, no verb for "study cannot be done," iatrogenic floor, artifact-to-machinery gap. ← `2026-08-11-review-loop-cannot-measure-its-own-convergence`.
+
 ## Level 2 — task-class rules
 
 - [A verdict covers the evidence domain it claims](verdict-covers-the-evidence-domain-it-claims.md) — a gate demanding proof whose PROVER is absent, and a checker enumerating from the git index while reading the working tree, are one fault: a verdict issued over evidence never actually looked at. Escape hatches stay reachable, diagnosed, typed and counted; surfacing an obligation never discharges it. ← `ask-user-question-split-turn`, `2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan`.
