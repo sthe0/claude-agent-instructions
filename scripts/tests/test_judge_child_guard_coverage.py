@@ -17,6 +17,31 @@ which is why this file exists: it derives the set that NEEDS a guard from the
 tree instead of from memory, so a new judge-calling hook fails here on the
 commit that adds it rather than in a quota fire.
 
+The check that VALIDATES each guard's shape is likewise an ALLOWLIST, not a
+denylist. Only one test expression is accepted:
+
+    if os.environ.get(JUDGE_CHILD_ENV_VAR):
+        return 0
+
+Every other shape is refused — including semantically-equivalent positive forms
+like `JUDGE_CHILD_ENV_VAR in os.environ`, walrus wrappers, and any comparison
+against `None` / `""`. This inverts an earlier denylist that enumerated
+"negative shapes to reject" (UnaryOp(Not), Compare(NotEq), Compare(NotIn)) and
+grew a hole: three further inversions (`== None`, `is None`, `in (None, "")`,
+and a walrus around any of them) mean "marker ABSENT" without matching the
+rejected node kinds, so a hook written that way would silently disable itself
+everywhere EXCEPT inside a judge child — the exact inverse of the guard, and
+the shape that would rejoin the recursion this stage exists to stop.
+Extending the rejection list by one more entry each time such a shape is
+spotted reproduces the very defect this stage was created to repair. An
+allowlist closes the class instead of one entry at a time.
+
+The trade-off is explicit: a legitimate positive form outside the allowlist
+(e.g. `if JUDGE_CHILD_ENV_VAR in os.environ:`) is refused too, and the
+rejection message names the accepted shape so the author can tell "the
+predicate has not caught up with a genuinely new form" from "this shape does
+not mean what you think it means".
+
 Scope, stated honestly: a hook counts as judge-calling when it imports
 `agentctl.advisor` (any alias) or reaches a judge seam in `lib.host_llm` /
 `lib.marker_extract` directly. TRANSITIVE reach is deliberately not enumerated —
@@ -77,46 +102,65 @@ def _main_function(tree: ast.Module) -> ast.FunctionDef | None:
     return None
 
 
-def _guard_is_first_statement(main: ast.FunctionDef) -> bool:
-    """The guard must be `main()`'s FIRST statement, not merely present: a guard
-    placed after the ledger call, the stdin read or the judge call has already
-    done the thing it exists to prevent. The test must also be POSITIVE
-    (`if os.environ.get(MARKER):` — enter the body when the marker is present):
-    a negated form like `if not os.environ.get(MARKER): return 0` reads at a
-    glance like a guard but disables the hook everywhere EXCEPT inside a judge
-    child — the inverse of what the guard exists to enforce."""
+_ACCEPTED_GUARD_SOURCE = (
+    f"    if os.environ.get({_GUARD_ENV_NAME}):\n"
+    f"        return 0"
+)
+
+
+def _guard_shape_reason(main: ast.FunctionDef) -> str | None:
+    """Return None if `main` opens with the accepted guard; otherwise a short
+    description of the shape that was seen instead. The guard must be `main()`'s
+    FIRST statement (a guard placed after the ledger call, the stdin read or the
+    judge call has already done the thing it exists to prevent) and its test
+    must match the single accepted shape (see `_test_is_accepted_shape`)."""
     first = main.body[0]
     if not isinstance(first, ast.If):
-        return False
-    if _GUARD_ENV_NAME not in {n.id for n in ast.walk(first.test) if isinstance(n, ast.Name)}:
-        return False
-    if _marker_is_under_negation(first.test):
-        return False
-    return any(
+        return f"first statement is {type(first).__name__}, not an `if`"
+    if not _test_is_accepted_shape(first.test):
+        return f"test is `{ast.unparse(first.test)}` — not the accepted shape"
+    if not any(
         isinstance(stmt, ast.Return) and isinstance(stmt.value, ast.Constant) and stmt.value.value == 0
         for stmt in first.body
-    )
+    ):
+        return "guard body does not `return 0`"
+    return None
 
 
-def _marker_is_under_negation(node: ast.AST) -> bool:
-    """True if `JUDGE_CHILD_ENV_VAR` appears inside a boolean negation of the
-    test — a `not ...` unary op or a `!=` / `not in` comparison. Either shape
-    makes the body reachable when the marker is ABSENT, which is exactly what a
-    judge-child guard must never do.
-    """
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
-        return _references_marker(node.operand)
-    if isinstance(node, ast.Compare):
-        if any(isinstance(op, (ast.NotEq, ast.NotIn)) for op in node.ops):
-            return _references_marker(node)
-    return any(_marker_is_under_negation(child) for child in ast.iter_child_nodes(node))
+def _guard_is_first_statement(main: ast.FunctionDef) -> bool:
+    """Boolean wrapper over `_guard_shape_reason` for callers that only need a
+    verdict."""
+    return _guard_shape_reason(main) is None
 
 
-def _references_marker(node: ast.AST) -> bool:
-    return any(
-        isinstance(n, ast.Name) and n.id == _GUARD_ENV_NAME
-        for n in ast.walk(node)
-    )
+def _test_is_accepted_shape(node: ast.AST) -> bool:
+    """ALLOWLIST predicate. The accepted shape is exactly the expression
+
+        os.environ.get(JUDGE_CHILD_ENV_VAR)
+
+    used as an `if` test — a `Call` on `os.environ.get` with one positional
+    argument that is the `Name` `JUDGE_CHILD_ENV_VAR`, no keywords. Any other
+    node kind is refused: negations (`not …`, `!=`, `not in`), equality/is
+    tests against `None` or the empty string, membership in a container of
+    falsy values, walrus wrappers around any of those, `bool(…)` calls,
+    boolean operators — every shape the denylist could and could not enumerate.
+    Refused shapes include forms that are semantically POSITIVE (`in os.environ`,
+    a walrus without a comparison); the trade-off is stated in the module
+    docstring."""
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if not (isinstance(func, ast.Attribute) and func.attr == "get"):
+        return False
+    receiver = func.value
+    if not (isinstance(receiver, ast.Attribute) and receiver.attr == "environ"):
+        return False
+    if not (isinstance(receiver.value, ast.Name) and receiver.value.id == "os"):
+        return False
+    if node.keywords or len(node.args) != 1:
+        return False
+    arg = node.args[0]
+    return isinstance(arg, ast.Name) and arg.id == _GUARD_ENV_NAME
 
 
 def _hook_trees() -> list[tuple[Path, ast.Module]]:
@@ -141,20 +185,30 @@ def test_the_enumeration_finds_the_hooks_it_is_meant_to_cover():
 
 
 def test_every_judge_calling_hook_guards_against_its_own_child():
-    unguarded = []
+    unguarded: list[tuple[str, str]] = []
     for path, tree in _hook_trees():
         if not _calls_a_judge(tree):
             continue
         main = _main_function(tree)
-        if main is None or not _guard_is_first_statement(main):
-            unguarded.append(path.name)
+        if main is None:
+            unguarded.append((path.name, "no `main()` function"))
+            continue
+        reason = _guard_shape_reason(main)
+        if reason is not None:
+            unguarded.append((path.name, reason))
 
     assert unguarded == [], (
-        f"judge-calling hook(s) without the judge-child guard as main()'s first "
-        f"statement: {unguarded}. Add:\n"
-        f"    if os.environ.get({_GUARD_ENV_NAME}):\n"
-        f"        return 0\n"
-        f"and a test that drives the hook with the marker set."
+        "judge-calling hook(s) without the accepted judge-child guard as "
+        "main()'s first statement:\n"
+        + "\n".join(f"  - {name}: {reason}" for name, reason in unguarded)
+        + "\nThe ONLY accepted shape is:\n"
+        + _ACCEPTED_GUARD_SOURCE
+        + "\nThis is an ALLOWLIST — even semantically-equivalent positive forms "
+        "(`in os.environ`, walrus, etc.) are refused. Either write the guard in "
+        "the accepted shape and add a test that drives the hook with the marker "
+        "set, or, if the refused shape is a genuinely new positive form the "
+        "predicate has not caught up with, extend `_test_is_accepted_shape` "
+        "here to admit it (and add a positive-control test for the new form)."
     )
 
 
@@ -179,43 +233,106 @@ def test_the_guard_check_rejects_a_guard_that_runs_too_late():
     assert _guard_is_first_statement(_main_function(first)) is True
 
 
-def test_the_guard_check_rejects_a_guard_whose_test_is_inverted():
-    """RED arm for the negated shape. `if not os.environ.get(MARKER): return 0`
-    passes any check that only asks whether the marker NAME appears in the test,
-    but disables the hook everywhere EXCEPT inside a judge child — the inverse
-    of what the guard exists to enforce. A control that accepts the negation of
-    what it checks is not a control; each shape below is a mutation the
-    predicate must reject.
+def test_the_guard_check_rejects_every_shape_that_is_not_the_accepted_one():
+    """RED arm for the allowlist. Each shape below either INVERTS the guard
+    (body reachable when the marker is ABSENT — disables the hook everywhere
+    except inside a judge child, the exact defect this stage exists to close)
+    or is a plausible non-accepted expression a future author might reach for.
+    Every one must be refused; a control that accepts the negation of what it
+    checks is not a control.
+
+    The first three shapes are the reason this predicate was rewritten from a
+    denylist to an allowlist: `== None`, `is None`, and `in (None, "")` each
+    mean "marker ABSENT" without matching the previous rejection list's
+    `UnaryOp(Not)` / `Compare(NotEq)` / `Compare(NotIn)` kinds, so they slipped
+    through undetected. A walrus wrapping any of them inherits the same gap.
     """
-    unary_not = ast.parse(
-        "def main():\n"
-        "    if not os.environ.get(JUDGE_CHILD_ENV_VAR):\n"
-        "        return 0\n"
-        "    return 0\n"
-    )
-    not_equal = ast.parse(
-        "def main():\n"
-        "    if os.environ.get(JUDGE_CHILD_ENV_VAR) != '1':\n"
-        "        return 0\n"
-        "    return 0\n"
-    )
-    not_in = ast.parse(
-        "def main():\n"
-        "    if JUDGE_CHILD_ENV_VAR not in os.environ:\n"
-        "        return 0\n"
-        "    return 0\n"
-    )
-    positive = ast.parse(
-        "def main():\n"
-        "    if os.environ.get(JUDGE_CHILD_ENV_VAR):\n"
-        "        return 0\n"
-        "    return 0\n"
+    def _mk(test_line: str) -> ast.FunctionDef:
+        src = (
+            "def main():\n"
+            f"    {test_line}\n"
+            "        return 0\n"
+            "    return 0\n"
+        )
+        return _main_function(ast.parse(src))
+
+    # The three inversion shapes that motivated this rewrite — each equivalent
+    # in effect to `if not os.environ.get(MARKER):` and each invisible to the
+    # previous denylist.
+    eq_none = _mk("if os.environ.get(JUDGE_CHILD_ENV_VAR) == None:")
+    is_none = _mk("if os.environ.get(JUDGE_CHILD_ENV_VAR) is None:")
+    in_none_or_empty = _mk("if os.environ.get(JUDGE_CHILD_ENV_VAR) in (None, ''):")
+    walrus_is_none = _mk(
+        "if (m := os.environ.get(JUDGE_CHILD_ENV_VAR)) is None:"
     )
 
-    assert _guard_is_first_statement(_main_function(unary_not)) is False
-    assert _guard_is_first_statement(_main_function(not_equal)) is False
-    assert _guard_is_first_statement(_main_function(not_in)) is False
-    assert _guard_is_first_statement(_main_function(positive)) is True
+    # The three inversion shapes the old denylist did catch — kept here to
+    # prove the allowlist keeps rejecting them, not only the new ones.
+    unary_not = _mk("if not os.environ.get(JUDGE_CHILD_ENV_VAR):")
+    not_equal = _mk("if os.environ.get(JUDGE_CHILD_ENV_VAR) != '1':")
+    not_in = _mk("if JUDGE_CHILD_ENV_VAR not in os.environ:")
+
+    # Plausible additional shapes an author might write that mean "absent" or
+    # simply differ from the accepted expression — all refused by the allowlist.
+    len_zero = _mk("if len(os.environ.get(JUDGE_CHILD_ENV_VAR) or '') == 0:")
+    not_bool = _mk("if not bool(os.environ.get(JUDGE_CHILD_ENV_VAR)):")
+    is_empty_string = _mk("if os.environ.get(JUDGE_CHILD_ENV_VAR) == '':")
+
+    # Semantically POSITIVE forms that are still refused because the allowlist
+    # names one shape and only one; the rejection message tells the author.
+    in_environ = _mk("if JUDGE_CHILD_ENV_VAR in os.environ:")
+    walrus_truthy = _mk("if m := os.environ.get(JUDGE_CHILD_ENV_VAR):")
+    os_getenv = _mk("if os.getenv(JUDGE_CHILD_ENV_VAR):")
+    with_default = _mk("if os.environ.get(JUDGE_CHILD_ENV_VAR, ''):")
+
+    for main in (
+        eq_none, is_none, in_none_or_empty, walrus_is_none,
+        unary_not, not_equal, not_in,
+        len_zero, not_bool, is_empty_string,
+        in_environ, walrus_truthy, os_getenv, with_default,
+    ):
+        assert _guard_is_first_statement(main) is False, (
+            f"allowlist accepted a non-accepted shape: {ast.unparse(main.body[0].test)}"
+        )
+
+    # And the accepted shape must still be accepted.
+    positive = _mk("if os.environ.get(JUDGE_CHILD_ENV_VAR):")
+    assert _guard_is_first_statement(positive) is True
+
+
+def test_the_predicate_admits_all_five_real_hook_guards():
+    """Positive control. An allowlist is only useful if it admits the shapes
+    that actually appear in the tree — otherwise it is a rule that will be
+    suppressed on first contact with real code. The five hooks below carry the
+    marker guard today (four are judge-callers; `hook-self-improvement-reminder`
+    is guarded defensively because its OUTPUT lands inside a judge). The
+    predicate must accept every one of them, unmodified."""
+    expected = {
+        "hook-turn-end-gate.py",
+        "hook-escalation-diagnosis-gate.py",
+        "hook-self-improvement-reminder.py",
+        "hook-plan-delivery-gate.py",
+        "hook-deferring-disposition-gate.py",
+    }
+    seen: set[str] = set()
+    for path, tree in _hook_trees():
+        if path.name not in expected:
+            continue
+        seen.add(path.name)
+        main = _main_function(tree)
+        assert main is not None, f"{path.name}: no main() function"
+        reason = _guard_shape_reason(main)
+        assert reason is None, (
+            f"{path.name}: allowlist refused the real guard shape ({reason}). "
+            "Either this hook now writes its guard differently (fix the hook) "
+            "or the allowlist has drifted from the accepted shape (fix here)."
+        )
+    missing = expected - seen
+    assert missing == set(), (
+        f"positive control found no such hook file(s): {sorted(missing)} — "
+        "the file was renamed or removed. Update the expected set here after "
+        "verifying the new file still carries the guard."
+    )
 
 
 def test_the_seam_check_rejects_a_hook_that_calls_no_judge():
