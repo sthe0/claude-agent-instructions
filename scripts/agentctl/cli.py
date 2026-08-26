@@ -3048,6 +3048,19 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
                 "reviewer whose 'revise' verdict it would override (the user is the "
                 "expected override author)",
             )
+        # An override is the plan's CUSTOMER overruling a reviewer's blocking verdict —
+        # not an escape hatch for any caller to self-record one under an arbitrary
+        # --reviewer string. Mirrors cmd_accept's author/customer_id check: both records
+        # are only valid when authored by the customer of record. Degrades to a
+        # pass-through (no check) when the plan has no [meta.order] or an empty
+        # customer_id, same as cmd_accept.
+        order = doc.meta.order if doc is not None else None
+        if order is not None and order.customer_id and new_reviewer != order.customer_id:
+            return Directive(
+                False, state.node, "noop",
+                f"override reviewer {new_reviewer!r} does not match order customer_id "
+                f"{order.customer_id!r}; record it as the customer of record, or correct --reviewer",
+            )
     # --plan-digest is the sha256 the REVIEWER computed from its OWN read of the
     # target plan file. Cross-check it against the engine's live digest and REFUSE
     # to record on mismatch (a reviewer that read a different/stale file must not
