@@ -670,7 +670,18 @@ PLAN_PRESENTATION_RENDERING_CAP_BYTES = 64 * 1024
 
 PLAN_PRESENTATION_KIND_ESSENCE = "essence"
 PLAN_PRESENTATION_KIND_FULL = "full"
-PLAN_PRESENTATION_KINDS = (PLAN_PRESENTATION_KIND_ESSENCE, PLAN_PRESENTATION_KIND_FULL)
+# Third instance of the same charter (see the module comment above): proof that
+# a proposed replan's diff rendering was shown to the user, bound to the
+# PROPOSED plan's bytes (the OLD side of the diff is already pinned
+# independently by state.plan_snapshot_path, which cmd_replan diffs against).
+# Gated by gates.replan_authorization_blockers, recorded by cmd_present_plan
+# exactly like the other two kinds.
+PLAN_PRESENTATION_KIND_REPLAN_DIFF = "replan_diff"
+PLAN_PRESENTATION_KINDS = (
+    PLAN_PRESENTATION_KIND_ESSENCE,
+    PLAN_PRESENTATION_KIND_FULL,
+    PLAN_PRESENTATION_KIND_REPLAN_DIFF,
+)
 
 # Language-independent ASCII marker a plan-approval AskUserQuestion option must
 # embed (label or description) to show the full plan. Checked by
@@ -678,6 +689,12 @@ PLAN_PRESENTATION_KINDS = (PLAN_PRESENTATION_KIND_ESSENCE, PLAN_PRESENTATION_KIN
 # cli.cmd_present_plan's essence Directive — single-sourced here so the two can
 # never drift apart.
 SHOW_FULL_PLAN_MARKER = "[show-full-plan]"
+
+# Language-independent ASCII marker a replan-diff rendering must embed so the
+# delivery hook (extended by stage 4) can recognize the turn as carrying a
+# replan-authorization presentation, exactly mirroring SHOW_FULL_PLAN_MARKER —
+# single-sourced here so the emitter and the checker can never drift apart.
+AUTHORIZE_REPLAN_MARKER = "[authorize-replan]"
 
 
 @dataclass

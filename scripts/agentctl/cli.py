@@ -65,6 +65,7 @@ from .state import (
     Actor,
     AcceptanceBypass,
     AcceptanceReview,
+    AUTHORIZE_REPLAN_MARKER,
     CheckKind,
     CheckVenue,
     CodeReview,
@@ -91,6 +92,7 @@ from .state import (
     PermissionRequest,
     PLAN_PRESENTATION_KIND_ESSENCE,
     PLAN_PRESENTATION_KIND_FULL,
+    PLAN_PRESENTATION_KIND_REPLAN_DIFF,
     PLAN_PRESENTATION_KINDS,
     PLAN_PRESENTATION_RENDERING_CAP_BYTES,
     PlanFrame,
@@ -2646,16 +2648,42 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     return d
 
 
+# Kinds superseded by KIND ALONE, ignoring plan_path — see
+# _record_plan_presentation's docstring for why replan_diff differs from
+# essence/full. An explicit set, not an inline special case, so a future
+# kind must choose its supersede key deliberately rather than inherit one
+# by falling through an if/else.
+_SUPERSEDE_BY_KIND_ALONE = frozenset({PLAN_PRESENTATION_KIND_REPLAN_DIFF})
+
+
 def _record_plan_presentation(state: SessionState, presentation: PlanPresentation) -> None:
-    """Store a PlanPresentation, one per (plan_path, kind) — SUPERSEDE, not
-    append. Mirrors _record_stage_review's replace-then-append idiom: a later
-    presentation of the same plan/kind fully replaces the prior receipt, so
+    """Store a PlanPresentation — SUPERSEDE, not append. Mirrors
+    _record_stage_review's replace-then-append idiom: a later presentation
+    fully replaces the prior receipt for the same key, so
     gates._plan_presentation_for's last-wins scan never has to choose between
-    a stale and a fresh receipt for the same (plan_path, kind)."""
-    state.plan_presentations = [
-        p for p in state.plan_presentations
-        if not (p.plan_path == presentation.plan_path and p.kind == presentation.kind)
-    ]
+    a stale and a fresh receipt.
+
+    The supersede KEY splits by kind: essence/full supersede on
+    (plan_path, kind), unchanged since these kinds always present
+    state.plan_path — a session only ever runs one plan at a time, so the
+    path component never actually discriminates for them. replan_diff
+    (`_SUPERSEDE_BY_KIND_ALONE`) supersedes on kind ALONE: cmd_present_plan
+    resolves its target from `--plan`, which varies across replan attempts
+    against different candidate plan files, so keying on plan_path would let
+    a receipt for a path the session has since moved off linger forever
+    (unbounded rendering_text growth, and a stale entry surviving in
+    last-wins scans across paths) instead of being replaced the moment a
+    fresh diff is presented — only one proposed-diff receipt is ever
+    current, and a receipt for an abandoned path is dead by definition."""
+    if presentation.kind in _SUPERSEDE_BY_KIND_ALONE:
+        state.plan_presentations = [
+            p for p in state.plan_presentations if p.kind != presentation.kind
+        ]
+    else:
+        state.plan_presentations = [
+            p for p in state.plan_presentations
+            if not (p.plan_path == presentation.plan_path and p.kind == presentation.kind)
+        ]
     state.plan_presentations.append(presentation)
 
 
@@ -2709,17 +2737,40 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
             False, state.node, "noop",
             f"unknown presentation kind {kind!r}; expected one of {PLAN_PRESENTATION_KINDS}",
         )
+    explicit_plan = getattr(args, "plan", None)
+    if explicit_plan and kind != PLAN_PRESENTATION_KIND_REPLAN_DIFF:
+        # --plan is a degree of freedom only replan_diff needs (the proposed
+        # plan is a different file than state.plan_path): widening it to
+        # essence/full would let a receipt be stamped for a file the session
+        # is not executing, which plan_presentation_blockers never checks for.
+        return Directive(
+            False, state.node, "noop",
+            f"--plan is only accepted with --kind {PLAN_PRESENTATION_KIND_REPLAN_DIFF!r}; "
+            f"essence/full always present state.plan_path ({state.plan_path!r})",
+        )
+    target = explicit_plan or state.plan_path
     if kind == PLAN_PRESENTATION_KIND_ESSENCE:
         # essence is the receipt an approval ask is assembled from — gate it on
         # the same plan_review_blockers precondition as approve/replan, so a
         # thinker review must exist BEFORE that receipt can be stamped, not only
         # before the terminal approve. `full` is the detailed on-request view,
         # not the approval trigger, so it stays ungated.
-        prblock = gates.plan_review_blockers(state, state.plan_path)
+        prblock = gates.plan_review_blockers(state, target)
         _log_gate(state, "plan_review", prblock, passed=not prblock)
         if prblock:
             return Directive(
                 False, state.node, "noop", "cannot present essence",
+                data={"blockers": prblock},
+            )
+    elif kind == PLAN_PRESENTATION_KIND_REPLAN_DIFF:
+        # A proposed diff must itself have cleared thinker review before it can
+        # be shown as the authorization prompt — the same precondition essence
+        # pays, over the PROPOSED bytes rather than state.plan_path.
+        prblock = gates.plan_review_blockers(state, target)
+        _log_gate(state, "plan_review", prblock, passed=not prblock)
+        if prblock:
+            return Directive(
+                False, state.node, "noop", "cannot present replan_diff",
                 data={"blockers": prblock},
             )
     rendering_file = getattr(args, "rendering_file", None)
@@ -2805,15 +2856,15 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
                 )
 
     presentation = PlanPresentation(
-        plan_path=state.plan_path,
+        plan_path=target,
         kind=kind,
-        plan_sha256=_plan_file_sha256(state.plan_path),
+        plan_sha256=_plan_file_sha256(target),
         rendering_sha256=hashlib.sha256(raw).hexdigest(),
         rendering_text=text,
         presented_ts=time.time(),
     )
     _record_plan_presentation(state, presentation)
-    state.log("present_plan", plan=state.plan_path, kind=kind,
+    state.log("present_plan", plan=target, kind=kind,
               rendering_sha256=presentation.rendering_sha256)
     store.save(state)
 
@@ -2844,6 +2895,31 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
         }
         return Directive(True, state.node, "continue", detail, data=data)
 
+    if kind == PLAN_PRESENTATION_KIND_REPLAN_DIFF:
+        # Mirrors the essence choreography above exactly, substituting the
+        # replan-authorization marker for the approval one — this is the
+        # rendering a non-substantive replan's diff-authorization ask is
+        # assembled from, gated by gates.replan_authorization_blockers.
+        next_steps = [
+            "arm a `sleep 2` background timer now (atomic with deferring the ask)",
+            "emit THIS exact rendering as the turn's FINAL text message — zero "
+            "tool calls after it",
+            "next turn, open directly with the replan-authorization "
+            "AskUserQuestion (zero preceding text) carrying an option whose "
+            f"label or description embeds the literal marker {AUTHORIZE_REPLAN_MARKER!r}",
+        ]
+        detail = (
+            "presentation receipt recorded (kind=replan_diff). Next: "
+            + " Then, ".join(f"({i}) {step}" for i, step in enumerate(next_steps, 1))
+        )
+        data = {
+            "rendering_sha256": presentation.rendering_sha256,
+            "plan_sha256": presentation.plan_sha256,
+            "authorize_replan_marker": AUTHORIZE_REPLAN_MARKER,
+            "next_steps": next_steps,
+        }
+        return Directive(True, state.node, "continue", detail, data=data)
+
     return Directive(
         True, state.node, "continue",
         f"presentation receipt recorded (kind={kind}); emit this exact rendering "
@@ -2867,14 +2943,28 @@ def cmd_confirm_delivery(args, *, store: StateStore, runner: Runner | None = Non
     manual override), never to gate WHO may approve. cmd_present_plan and the
     delivery hook must never call this themselves; it is reachable only as a
     human-initiated command, enforced by rejecting `--by hook` outright.
+
+    `--kind` (default essence) selects WHICH presentation receipt this stamp
+    binds to — essence/full back the plan-approval gate
+    (gates.plan_presentation_blockers), replan_diff backs the replan-
+    authorization gate (gates.replan_authorization_blockers). Without this,
+    the replan_diff gate would have no reachable escape at all: the same
+    disabled/uninstalled-hook brick this command exists to prevent for
+    approval would apply to every non-substantive replan on such a machine.
     """
     state = _require(store, args.session)
-    receipt = gates._plan_presentation_for(state, PLAN_PRESENTATION_KIND_ESSENCE)
+    kind = getattr(args, "kind", None) or PLAN_PRESENTATION_KIND_ESSENCE
+    if kind not in PLAN_PRESENTATION_KINDS:
+        return Directive(
+            False, state.node, "noop",
+            f"unknown presentation kind {kind!r}; expected one of {PLAN_PRESENTATION_KINDS}",
+        )
+    receipt = gates._plan_presentation_for(state, kind)
     if receipt is None:
         return Directive(
             False, state.node, "noop",
-            "no essence presentation receipt exists yet — run present-plan "
-            "--kind essence before confirm-delivery has anything to bind to",
+            f"no {kind} presentation receipt exists yet — run present-plan "
+            f"--kind {kind} before confirm-delivery has anything to bind to",
         )
     by = (getattr(args, "by", "") or "").strip()
     note = (getattr(args, "note", "") or "").strip()
@@ -2927,12 +3017,12 @@ def cmd_confirm_delivery(args, *, store: StateStore, runner: Runner | None = Non
         escape_reason=escape_reason,
     )
     delivery.write_stamp(state_file, stamp)
-    state.log("confirm_delivery", by=by, note=note, escape_reason=escape_reason)
+    state.log("confirm_delivery", by=by, note=note, escape_reason=escape_reason, kind=kind)
     store.save(state)
     return Directive(
         True, state.node, "continue",
-        f"delivery override recorded by {by!r}; the plan-presentation gate is "
-        "now satisfied for this receipt",
+        f"delivery override recorded by {by!r}; the {kind} presentation's gate "
+        "is now satisfied for this receipt",
     )
 
 
@@ -6239,7 +6329,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("plan", ("plan-render", "plan-review-delta", "submit-plan", "replan", "drive",
               "push-subplan", "question-enumerate", "question-enumerate-worker",
               "question-enumerate-escape", "question-dispose",
-              "question-rebind", "question-raise"), "plan file path"),
+              "question-rebind", "question-raise", "present-plan"), "plan file path"),
     ("digest", ("question-enumerate-worker",),
      "plan content digest the launcher computed — the sidecar's key, passed down "
      "verbatim rather than a narrative"),
@@ -6522,13 +6612,23 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("present-plan"); sp.add_argument("--session", required=True)
     sp.add_argument("--kind", choices=list(PLAN_PRESENTATION_KINDS), default=PLAN_PRESENTATION_KIND_ESSENCE,
                     help="essence = free-form summary, no completeness check; "
-                         "full = every [stage N] anchor required, stage-enumerated")
+                         "full = every [stage N] anchor required, stage-enumerated; "
+                         "replan_diff = proposed-diff rendering for a non-substantive "
+                         "replan against a candidate plan file (see --plan)")
+    sp.add_argument("--plan", default=None,
+                    help="candidate plan file the presentation is stamped against; "
+                         "only legal with --kind replan_diff (defaults to the session's "
+                         "current plan_path there too), refused for essence/full which "
+                         "always target the session's own plan")
     sp.add_argument("--rendering-file", dest="rendering_file", default=None,
                     help="file containing the exact bytes shown to the user")
     sp.add_argument("--emit-skeleton", dest="emit_skeleton", action="store_true",
                     help="print the [stage N] anchor scaffold for a `full` rendering; "
                          "stamps nothing")
     sp = add("confirm-delivery"); sp.add_argument("--session", required=True)
+    sp.add_argument("--kind", choices=list(PLAN_PRESENTATION_KINDS), default=PLAN_PRESENTATION_KIND_ESSENCE,
+                    help="which presentation's delivery this override confirms — must "
+                         "match the --kind used at present-plan time")
     sp.add_argument("--by", required=True,
                     help="the human who confirms delivery (must not be 'hook')")
     sp.add_argument("--note", required=True,
