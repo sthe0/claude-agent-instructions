@@ -31,7 +31,7 @@ from .checkrun import format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
 from .partition import render_section, render_units, verdict
-from .directive import Directive
+from .directive import Directive, DIRECTIVE_ESCALATE_TO_USER
 from .dispatch import (
     CHILD_EXHAUSTED,
     CHILD_INFRA_FAILURE,
@@ -690,6 +690,25 @@ def _diagnose_effort_divergence(
         marker="OVERCOME-DIFFICULTY",
         data={"effort_divergence": fire},
     )
+
+
+def _effort_fire_escalation_data(state: SessionState) -> dict:
+    """The fire-context payload attached to every gates.effort_fire_blockers refusal
+    (dispatch/replan/submit_plan) — the last (unacknowledged) entry of
+    state.effort_fires plus the identifiers a coordinator needs to call
+    `agentctl fire-acknowledge` against the right session. Shared by all three call
+    sites so the payload shape never drifts between them."""
+    fire = state.effort_fires[-1] if state.effort_fires else {}
+    return {
+        "task_id": state.task_id,
+        "session_id": state.session_id,
+        "scale": fire.get("scale"),
+        "kind": fire.get("kind"),
+        "actual": fire.get("actual"),
+        "estimate": fire.get("estimate"),
+        "multiple": fire.get("multiple"),
+        "ts": fire.get("ts"),
+    }
 
 
 def _freeze_delivered_head(state: SessionState, stage, runner: Runner | None) -> None:
@@ -2458,6 +2477,15 @@ def _fold_enumeration_sidecar(state: SessionState, doc: PlanDoc, plan_path) -> b
 
 def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
+    efblock = gates.effort_fire_blockers(state)
+    _log_gate(state, "effort_fire", efblock, passed=not efblock)
+    if efblock:
+        return Directive(
+            False, state.node, "fire_acknowledge",
+            "submit_plan blocked by an unacknowledged effort-divergence fire",
+            marker=DIRECTIVE_ESCALATE_TO_USER,
+            data={"blockers": efblock, "effort_fire": _effort_fire_escalation_data(state)},
+        )
     plan_path = args.plan
     # #15: a resubmission — the coordinator revised the plan at PLAN_READY (after a
     # thinker `revise` verdict, or the user's own pre-approval edit) and re-runs
@@ -3943,6 +3971,15 @@ def _try_reattest(
 def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
                  perm_checker=None) -> Directive:
     state = _require(store, args.session)
+    efblock = gates.effort_fire_blockers(state)
+    _log_gate(state, "effort_fire", efblock, passed=not efblock)
+    if efblock:
+        return Directive(
+            False, state.node, "fire_acknowledge",
+            "dispatch blocked by an unacknowledged effort-divergence fire",
+            marker=DIRECTIVE_ESCALATE_TO_USER,
+            data={"blockers": efblock, "effort_fire": _effort_fire_escalation_data(state)},
+        )
     try:
         host = runtime_host.require_bound_host(state)
     except runtime_host.HostAmbiguousError as exc:
@@ -5009,6 +5046,24 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     state = _require(store, args.session)
     from .plan import diff_plans, load_plan as _load, stage_carry_key
 
+    # precondition: an unacknowledged effort-divergence fire (whether it forced this
+    # DIAGNOSING entry itself via the passing-diagnose path, or merely rode along on
+    # a failing stage/final-check's Directive) must be explicitly decided via
+    # `agentctl fire-acknowledge` before the plan may be re-sequenced — this is the
+    # gap the FAILING branches of record_result/verify_final left open (they attach
+    # the fire data but never force a decision on it). Checked FIRST, ahead of
+    # difficulty_blockers, since it is orthogonal to the declare/investigate/
+    # critique/normalize cycle that difficulty_blockers governs.
+    efblock = gates.effort_fire_blockers(state)
+    _log_gate(state, "effort_fire", efblock, passed=not efblock)
+    if efblock:
+        return Directive(
+            False, state.node, "fire_acknowledge",
+            "replan blocked by an unacknowledged effort-divergence fire",
+            marker=DIRECTIVE_ESCALATE_TO_USER,
+            data={"blockers": efblock, "effort_fire": _effort_fire_escalation_data(state)},
+        )
+
     # precondition: inside the DIAGNOSING cycle, the difficulty record must be
     # complete before a plan may be re-normed (variant (b) — internal command
     # precondition, not a tool-hook gate). [] outside DIAGNOSING.
@@ -5465,6 +5520,65 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         "substantive replan; HARD GATE — re-approval required",
         marker="PLAN-READY",
     ), echo_advice)
+
+
+def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """The synchronous decision `gates.effort_fire_blockers` refuses dispatch/replan/
+    submit_plan without: appends an "ack" onto the LAST entry of state.effort_fires
+    (never deletes — the append-only audit trail is preserved) recording who decided
+    and what. Three decisions:
+
+    - "continue": accept the overrun and keep executing the current plan as-is. No
+      node change — whatever node the fire's own diagnose transition already put the
+      session in (always DIAGNOSING, since every record_fire call site forces that
+      transition in the same call) is left untouched; the coordinator proceeds
+      through the ordinary declare/investigate/critique/normalize/replan cycle next.
+    - "abandon": the order no longer warrants continuing. Parks the session at
+      BLOCKED — the same bypass-transition() idiom cmd_block itself uses — rather
+      than RESOLVED: a mid-execution fire routinely fires with stages still
+      PENDING, and check_invariants refuses RESOLVED unless every stage is
+      PASSED, so RESOLVED would be a lie for exactly the sessions this decision
+      exists to stop. cmd_unblock remains the (audited) way back in, same as an
+      ordinary block.
+    - "revise": the plan itself needs to change in response to the overrun. No node
+      change needed for the same reason as "continue" (already DIAGNOSING); the
+      difference is purely in the human decision recorded, informing what the
+      coordinator does next.
+    """
+    state = _require(store, args.session)
+    if not state.effort_fires:
+        return Directive(False, state.node, "noop", "no effort-divergence fire recorded")
+    last = state.effort_fires[-1]
+    if last.get("ack") is not None:
+        return Directive(True, state.node, "noop", "fire already acknowledged", data={"fire": last})
+    decision = args.decision
+    if decision not in ("continue", "abandon", "revise"):
+        return Directive(False, state.node, "noop", f"invalid --decision {decision!r}: "
+                         "must be one of continue, abandon, revise")
+    if not args.by or not args.by.strip():
+        return Directive(False, state.node, "noop", "empty --by: must name who decided")
+    last["ack"] = {
+        "by": args.by,
+        "decision": decision,
+        "ts": _utcnow(),
+        "note": getattr(args, "note", None),
+    }
+    state.log("fire_acknowledge", by=args.by, decision=decision)
+    if decision == "abandon":
+        state.blocked_from = state.node
+        state.node = Node.BLOCKED.value
+        state.log("block", reason="user-abandoned-after-fire")
+        store.save(state)
+        return Directive(True, state.node, "unblock",
+                         "session abandoned after unacknowledged effort-divergence fire; "
+                         "unblock to resume",
+                         marker="ESCALATE",
+                         data={"fire": last})
+    store.save(state)
+    next_action = "declare" if state.difficulty is not None else "next_stage"
+    return Directive(True, state.node, next_action,
+                     f"fire acknowledged (decision={decision}); resuming",
+                     data={"fire": last})
 
 
 def cmd_block(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -5973,6 +6087,7 @@ COMMANDS = {
     "resolve": cmd_resolve,
     "reject": cmd_reject,
     "replan": cmd_replan,
+    "fire-acknowledge": cmd_fire_acknowledge,
     "check-coverage": cmd_check_coverage,
     "block": cmd_block,
     "unblock": cmd_unblock,
@@ -6025,8 +6140,8 @@ _SESSION_COMMANDS = (
     "stage-review", "code-review", "accept", "approve", "partition", "partition-units",
     "next-stage", "dispatch", "resolve-permission", "record-result", "declare",
     "investigate", "critique", "normalize", "verify-final", "resolve", "reject",
-    "replan", "check-coverage", "block", "unblock", "status", "drive", "close",
-    "push-subplan", "pop-subplan",
+    "replan", "fire-acknowledge", "check-coverage", "block", "unblock", "status",
+    "drive", "close", "push-subplan", "pop-subplan", "task-reset",
 )
 
 # (dest, subcommands that declare it)
@@ -6034,7 +6149,7 @@ _RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("goal", ("start", "reset")),
     ("done_criterion", ("start", "reset")),
     ("note", ("plugin-record", "confirm-delivery", "plan-review", "stage-review", "code-review",
-              "accept", "question-enumerate-escape")),
+              "accept", "question-enumerate-escape", "fire-acknowledge")),
     ("statement", ("ledger-add", "ledger-candidate")),
     ("source", ("ledger-add", "question-dispose")),
     ("premises", ("ledger-add",)),
@@ -6098,7 +6213,10 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
      "comma-separated stage indices the launcher narrowed the pass to"),
     ("new", ("check-coverage",), "corrected plan file path — the object under a coverage pre-check, not narrative"),
     ("rendering_file", ("present-plan",), "path to the rendered presentation"),
-    ("by", ("confirm-delivery", "approve", "resolve"), "who acted — a name, not a narrative"),
+    ("by", ("confirm-delivery", "approve", "resolve", "fire-acknowledge"), "who acted — a name, not a narrative"),
+    # --decision is NOT listed here: argparse `choices=` already makes it a non-candidate
+    # for the @<path> partition (test_argv_text_call_sites.py's _is_candidate excludes any
+    # action with choices set), so classifying it would be a stale entry the moment it's added.
     ("escape_reason", ("confirm-delivery",),
      "one token from delivery.DELIVERY_ESCAPE_REASONS — the narrative half of "
      "the escape is --note, which is RESOLVE"),
@@ -6595,6 +6713,16 @@ def build_parser() -> argparse.ArgumentParser:
                          "the edit reaches a method, a criterion, a result image or the goal")
     sp.add_argument("--cost-log", dest="cost_log", default=None,
                     help="override cost log path for tests (defaults to cost.COST_LOG)")
+    sp = add("fire-acknowledge"); sp.add_argument("--session", required=True)
+    sp.add_argument("--by", required=True, help="who decided — a name, not a narrative")
+    sp.add_argument("--decision", required=True, choices=["continue", "abandon", "revise"],
+                    help="continue: accept the overrun, keep executing; abandon: park the "
+                         "session at BLOCKED (via blocked_from, same as cmd_block) with "
+                         "reason 'user-abandoned-after-fire' — never RESOLVED, since a "
+                         "mid-execution fire routinely leaves stages PENDING and "
+                         "check_invariants refuses RESOLVED unless every stage PASSED; "
+                         "revise: route to the ordinary DIAGNOSING replan cycle")
+    sp.add_argument("--note", default=None)
     sp = add("check-coverage"); sp.add_argument("--session", required=True)
     sp.add_argument("--new", required=True,
                     help="corrected plan file to check against the active critique, "
