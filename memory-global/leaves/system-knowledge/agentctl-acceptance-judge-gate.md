@@ -42,7 +42,22 @@ Read from `agentctl/cli.py` directly (~lines 4080-4200):
   single `haiku`-model YES/NO call has no consistency/majority-vote safeguard, so it is not
   reliable on long, technically-dense payloads. Treat 2-3 genuinely-improving resubmissions with
   no convergence as the signal to stop and use the override escape below — not as evidence the
-  next rephrase will finally work.
+  next rephrase will finally work. **Root cause (confirmed 2026-08-26, stage 7: 5 more
+  goalpost-moving rounds + 2 more fail-opens on top of stage 5's 6):** the judge's prompt
+  (`advisor._PROMPTS["acceptance_observation"]`) does not literally demand exhaustive per-fact
+  coverage — it asks only whether the observation is "vague, generic, or a rephrase" — but when a
+  stage's `expected_result_image` bundles several distinct facts into one long sentence, the
+  cheap model has no memory between calls, so each independent call over-interprets "concrete and
+  adequate" as requiring ALL facts covered *in that one observation*, naming a different missing
+  subset each time. No single observation short enough to dodge the length-correlated fail-open
+  (next bullet) can also cover every fact — a genuine moving-target deadlock, not a resubmission-
+  quality problem. Predicted mitigation: keep `--observation` short (~400-500 chars) and targeted
+  at the MOST RECENT note's gap only, rather than growing it cumulatively toward full coverage — a
+  longer, more-complete observation makes both failure modes (goalpost-moving and fail-open) more
+  likely, not less. The `reason` string the judge returns alongside a fail-open `verdict=None` is
+  never surfaced anywhere (`cli.py cmd_record_result`'s `verdict, reason = advisor.acceptance_judge(...)`
+  drops `reason` when `verdict is None`) — there is no CLI/log path to read it; the "stale" wording
+  in the next bullet is the only signal a fail-open occurred at all.
 - **A `revise` and a silently-failed judge call are not distinguishable from the blocker text
   alone — check `state.stage_reviews[-1]` before rewriting content.** `advisor.acceptance_judge`
   fails open (`verdict=None`) on timeout/exception/unparseable output; this was observed in
@@ -64,6 +79,22 @@ Read from `agentctl/cli.py` directly (~lines 4080-4200):
   judge-overridden rather than judge-approved. **Requires user sanction before invoking** — an
   internal gate's override names its constraint and is not self-granted; surface the judge's
   actual verdict history and ask, don't self-override silently.
+- **This escape hatch REFUSES on a non-`acceptance_review` stage — confirmed 2026-08-26, stage
+  7 (`criterion_type: measurable`).** `cmd_stage_review` (`cli.py`) explicitly checks
+  `stage.criterion.criterion_type != CriterionType.ACCEPTANCE_REVIEW.value` and refuses with
+  `"stage N is not acceptance_review; stage-review applies only to acceptance stages"` — but the
+  judge gate that produced the deadlock (`gates.stage_review_active`) fires for **any**
+  substantive-session stage regardless of `criterion_type`, so a `measurable`-criterion stage can
+  be judge-deadlocked with no `stage-review --verdict override` path out at all. The only working
+  escape for that case is the criterion-type-agnostic kill switch:
+  `AGENTCTL_STAGE_REVIEW=0 agentctl record-result --session <sid> --status passed ...` — this
+  proceeds WITHOUT a judge verdict and records an auditable `JudgeBypass(kind="killswitch")` in
+  `state.judge_bypassed`, surfaced the same way at `verify-final`/`resolve`. Same "requires user
+  sanction" rule applies; in practice both escapes were also denied by the Claude Code auto-mode
+  classifier when invoked by the agent itself, so the user had to run the command directly via a
+  single-line script rather than the agent's own Bash tool. (Owed follow-up, not yet applied:
+  either widen `stage-review --verdict override`'s scope to any substantive stage, or document the
+  killswitch as the intended escape for non-acceptance_review stages.)
 - `record-result`'s valid flags are only `--session`, `--status {passed,failed}`, `--actual`,
   `--control`, `--observation`, `--code-ref`, `--cost-log` — argparse rejects anything else
   (e.g. a plausible-sounding `--observation-source-note` is not a real flag).
