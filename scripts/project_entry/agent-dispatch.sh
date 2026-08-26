@@ -157,6 +157,72 @@ _backend_config_value() {
 # ── Core dispatch function ────────────────────────────────────────────────────
 # _dispatch_agent <backend> <profile> [first-token] [remaining-agent-args...]
 #
+# _maybe_offer_project_register — no args; reads/writes the caller's locals via
+# bash dynamic scoping (_cmd, _assume_yes). Called only when enter-task's
+# empty-context guard (rc==2, --key/--new selectors only) just failed, so the
+# caller can retry the SAME enter-task invocation once registration succeeds.
+# Returns 0 only when a project record was actually written.
+_maybe_offer_project_register() {
+  local _pwd_phys; _pwd_phys="$(pwd -P)"
+  local _key; _key="$(basename "$_pwd_phys")"
+
+  # Ancestor guard FIRST: if any ancestor already resolves to a project, this
+  # cwd is inside it — offer nothing (a nested registration would shadow it).
+  # No selector arg: a selector-form call would under-match a
+  # workspace_subpath-only record (no workspace_path).
+  local _anc="$_pwd_phys" _anc_key
+  while [[ "$_anc" != "/" ]]; do
+    _anc="$(dirname "$_anc")"
+    if _anc_key="$(cd "$_anc" && project_resolve 2>/dev/null)"; then
+      printf '%s: %s is inside already-registered project '\''%s'\'' (%s); not offering to register a nested project.\n' \
+        "$_cmd" "$_pwd_phys" "$_anc_key" "$_anc" >&2
+      return 1
+    fi
+    [[ "$_anc" == "/" ]] && break
+  done
+
+  # Collision guard: the candidate key is already registered at a different path.
+  if project_get_fields "$_key" >/dev/null 2>&1; then
+    printf '%s: project key '\''%s'\'' is already registered elsewhere; not auto-registering %s. Use --project <key>, or --register --as <other-key>.\n' \
+      "$_cmd" "$_key" "$_pwd_phys" >&2
+    return 1
+  fi
+
+  if [[ -n "${CLAUDE_LAUNCH_DRYRUN:-}" ]]; then
+    return 1
+  fi
+
+  local _queue=""
+  if [[ "${_assume_yes:-}" == "1" ]]; then
+    _queue="${CLAUDE_TRACKER_QUEUE:-}"
+  elif [[ -t 0 ]]; then
+    printf '%s: no project is registered for this directory (%s).\n' "$_cmd" "$_pwd_phys" >&2
+    printf '%s: register it as project '\''%s'\''? [y/N] ' "$_cmd" "$_key" >&2
+    local _ans; read -r _ans
+    case "$_ans" in
+      [yY]|[yY][eE][sS]) : ;;
+      *) printf '%s: not registering; use --project <key> or cd into a project directory.\n' "$_cmd" >&2; return 1 ;;
+    esac
+    printf "%s: tracker queue for '%s' (e.g. PROJ) [Enter to skip]: " "$_cmd" "$_key" >&2
+    read -r _queue
+  else
+    printf '%s: no project resolved from context (%s); set CLAUDE_LAUNCH_ASSUME_YES=1 to auto-register, or use --project.\n' "$_cmd" "$_pwd_phys" >&2
+    return 1
+  fi
+
+  local -a _reg_args=(--register "$_pwd_phys" --as "$_key")
+  [[ -n "$_queue" ]] && _reg_args+=(--queue "$_queue")
+  if ! "$_LAUNCHERS_ENTER_TASK" "${_reg_args[@]}" >/dev/null; then
+    printf '%s: registration failed.\n' "$_cmd" >&2
+    return 1
+  fi
+  if [[ -z "$_queue" ]]; then
+    printf '%s: registered '\''%s'\'' with no tracker queue. To set one later: %s --register %s --as %s --queue <QUEUE>\n' \
+      "$_cmd" "$_key" "$_cmd" "$_pwd_phys" "$_key" >&2
+  fi
+  return 0
+}
+
 # Routes the first token: -h/--help prints usage; no task (or a bare agent flag)
 # launches the backend binary in the current dir under the auth profile (with a
 # hint on how to start a real task); a ticket / --new / plain name enters an
@@ -175,6 +241,7 @@ _dispatch_agent() {
   [[ "$_profile" == "default" ]] && _cmd="${_prefix}-task" || _cmd="${_prefix}-${_profile}"
   local -a _spec _cargs=() _pass=()
   local _opening_flag=""
+  local _offered=""
 
   _maybe_onboard
 
@@ -299,9 +366,20 @@ _dispatch_agent() {
       # guard fires under --dry-run too, so a doomed entry (e.g. no project
       # resolvable from cwd) aborts here with its explanation instead of
       # after a wasted "y".
-      local _pf_err
+      local _pf_err _pf_rc
       _pf_err="$(mktemp)"
-      if ! "$_LAUNCHERS_ENTER_TASK" ${_pass[@]+"${_pass[@]}"} "${_spec[@]}" --dry-run >/dev/null 2>"$_pf_err"; then
+      "$_LAUNCHERS_ENTER_TASK" ${_pass[@]+"${_pass[@]}"} "${_spec[@]}" --dry-run >/dev/null 2>"$_pf_err"
+      _pf_rc=$?
+      if [[ "$_pf_rc" -eq 2 && -z "$_offered" ]]; then
+        _offered=1
+        if _maybe_offer_project_register; then
+          rm -f "$_pf_err"
+          _pf_err="$(mktemp)"
+          "$_LAUNCHERS_ENTER_TASK" ${_pass[@]+"${_pass[@]}"} "${_spec[@]}" --dry-run >/dev/null 2>"$_pf_err"
+          _pf_rc=$?
+        fi
+      fi
+      if [[ "$_pf_rc" -ne 0 ]]; then
         printf '%s: workspace entry failed:\n' "$_cmd" >&2
         sed 's/^/  /' "$_pf_err" >&2
         rm -f "$_pf_err"
@@ -324,9 +402,29 @@ _dispatch_agent() {
   # external side effects while still printing the would-be directory. Capture
   # enter-task's stderr so a failure surfaces ITS explanation instead of a
   # generic message (the hint used to be swallowed by 2>/dev/null).
-  local _dir _errfile
+  local _dir _errfile _out _rc
   _errfile="$(mktemp)"
-  _dir="$(CLAUDE_LAUNCH_ASSUME_YES="$_assume_yes" "$_LAUNCHERS_ENTER_TASK" ${_pass[@]+"${_pass[@]}"} "${_spec[@]}" ${CLAUDE_LAUNCH_DRYRUN:+--dry-run} 2>"$_errfile" | tail -1)"
+  # Capture stdout+rc from a plain command substitution (no pipe INSIDE it) —
+  # ${PIPESTATUS[0]} after a pipe inside a command substitution does not
+  # report the substituted command's exit code, so the `| tail -1` that used
+  # to trail this line moved to a second step over the already-captured text.
+  _out="$(CLAUDE_LAUNCH_ASSUME_YES="$_assume_yes" "$_LAUNCHERS_ENTER_TASK" ${_pass[@]+"${_pass[@]}"} "${_spec[@]}" ${CLAUDE_LAUNCH_DRYRUN:+--dry-run} 2>"$_errfile")"
+  _rc=$?
+  _dir="$(printf '%s\n' "$_out" | tail -1)"
+  if [[ "$_rc" -eq 2 && -z "$_offered" ]]; then
+    case "${_spec[0]:-}" in
+      --key|--new)
+        _offered=1
+        if _maybe_offer_project_register; then
+          rm -f "$_errfile"
+          _errfile="$(mktemp)"
+          _out="$(CLAUDE_LAUNCH_ASSUME_YES="$_assume_yes" "$_LAUNCHERS_ENTER_TASK" ${_pass[@]+"${_pass[@]}"} "${_spec[@]}" ${CLAUDE_LAUNCH_DRYRUN:+--dry-run} 2>"$_errfile")"
+          _rc=$?
+          _dir="$(printf '%s\n' "$_out" | tail -1)"
+        fi
+        ;;
+    esac
+  fi
   if [[ -z "$_dir" ]]; then
     printf '%s: workspace entry failed:\n' "$_cmd" >&2
     sed 's/^/  /' "$_errfile" >&2
