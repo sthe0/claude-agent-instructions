@@ -190,7 +190,7 @@ def add(
     count: int,
     *,
     session_id: str | None = None,
-    now: str | None = None,
+    now: float | str | None = None,
     root: Path | None = None,
 ) -> dict:
     """Add `count` to `axis`'s running total for `task_id` and persist it,
