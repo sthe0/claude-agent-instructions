@@ -3,7 +3,7 @@ name: spawning-specialists
 description: Full mechanics of spawning a specialist via claude -p — spawn template inputs, budget tiers, recursion cap, monitoring a running spawn, after-spawn checks, bypassPermissions discipline, return markers.
 type: reference
 created: 2026-06-04
-last_verified: 2026-07-27
+last_verified: 2026-08-26
 ---
 
 # Spawning specialists
@@ -83,6 +83,12 @@ Elevation of any kind is not a substitute for **prompt-level discipline**:
 
 - The `--constraints` / dossier **must** contain an explicit hard-deny list — no `cd` / no Write / no Edit / no VCS commit outside `<assigned-mount>`, no internal package-build / `docker push` / smoke tests of other tickets — plus a self-check at session start (`pwd` ⊆ expected mount; if not, return `CLARIFY:`).
 - Without this discipline the child treats sibling mounts (referenced as "analogs") as fair game for "understanding through execution".
+
+## A spawned specialist has no continuation channel — never background-and-wait-for-notify
+
+A `claude -p` spawn is a **one-shot batch process**, unlike the root/interactive session, which genuinely receives `<task-notification>` when a backgrounded job it started finishes. If a spawned specialist launches a long-running background command (`docker run -d`, `docker wait &`, any `run_in_background`-style step) and ends its own turn assuming it will be "notified later" to continue, nothing calls it back — the process simply terminates once its turn ends, the work is orphaned, and `spawn-specialist.py`'s marker extractor finds no terminal marker and reports `MALFORMED:`, routing the parent session to `BLOCKED`/`ESCALATE`.
+
+**The `--constraints` / dossier for any stage whose control involves a long-running external command must say so explicitly:** execute the command synchronously/blocking within the specialist's own turn (foreground `docker run`, or an inline `docker wait` that is actually awaited before the turn ends) and only return a marker once the real exit is known — never background it and end the turn early. Discovered when a project-ticket stage's `developer` spawn, running a smoke test inside a container it had just built, backgrounded a `docker wait`, wrote "I'll continue once notified", and exited with `MALFORMED` — the underlying container was in fact still running (stuck retrying an exhausted LLM quota, a separate resource-level problem), but the spawn never discovered that because it never blocked on the result at all.
 
 ## Return markers
 
