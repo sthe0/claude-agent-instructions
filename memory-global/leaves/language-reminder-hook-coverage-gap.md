@@ -4,7 +4,7 @@ description: hook-language-reminder.py fires only on UserPromptSubmit — autono
 type: feedback
 schema: leaf/v1
 created: 2026-08-25
-last_verified: 2026-08-25
+last_verified: 2026-08-26
 ---
 
 ## Difficulty
@@ -13,11 +13,14 @@ last_verified: 2026-08-25
 
 Confirmed 2026-08-25 in a project session conducted entirely in Russian: after a long autonomous investigation (tool calls + task-notification turns only, no fresh user prompt in between), the first user-facing reply on resuming was written in English — the rule itself (CLAUDE.md § Instruction language) was correct and known, but the mechanized nudge that operationalizes it never fired for that specific turn shape. The user caught it immediately; the very next turn's reminder fired normally and the lapse self-corrected in one round.
 
+**Second occurrence, 2026-08-26, same project, same turn shape:** a long autonomous git/bash cleanup sequence (no fresh user message in between) ended with a full outcome report composed entirely in English. This is exactly the second independent lapse this leaf's own Guidance named as the trigger to stop deferring and actually build the `Stop`-hook extension.
+
 ## Guidance
 
-Before writing user-facing text on a turn that opened with tool results / task notifications rather than a fresh user message, explicitly re-check the dialogue's established language yourself — no automated reminder will do it for you on that turn shape. This is a personal-habit mitigation, not a fix: a real fix (e.g. a `Stop`-hook that inspects the model's own about-to-ship text against the session's detected dialogue language) was considered and deliberately **not** built yet — the cost of a new mechanism (design + false-positive risk on code/identifiers/proper nouns embedded in an otherwise-correct-language reply + review) currently outweighs the benefit of a single low-severity, self-correcting lapse. Per the Rule of Three (see `principle-promotion-threshold` in `~/.claude-agent/config.md`), one occurrence does not clear the bar for mechanization — a second independent lapse on this exact turn shape is the trigger to actually build the `Stop`-hook extension.
+Before writing user-facing text on a turn that opened with tool results / task notifications rather than a fresh user message, explicitly re-check the dialogue's established language yourself — no automated reminder will do it for you on that turn shape. This remains true as a fallback, but is no longer the only mitigation: the second occurrence above fired the Rule-of-Three trigger this leaf itself set, and a concrete `Stop`-hook extension (a new pure guardian in `hook-turn-end-gate.py`, deterministic script-ratio check, no model call) has been proposed and filed as [claude-agent-instructions#190](https://github.com/sthe0/claude-agent-instructions/issues/190) (`backlog`/`layer:core`/`severity:medium`) — the user chose to park it in the backlog rather than implement immediately. Once #190 lands, this leaf's Guidance should be re-verified against the shipped mechanism and this personal-habit fallback demoted to a backstop.
 
 ## See also
 
 - CLAUDE.md § Instruction language — the underlying rule this hook operationalizes.
-- `~/claude-agent-instructions/scripts/hook-language-reminder.py` — the existing mechanism to extend, if this recurs.
+- `~/claude-agent-instructions/scripts/hook-language-reminder.py` — the existing mechanism, to be extended by #190.
+- [claude-agent-instructions#190](https://github.com/sthe0/claude-agent-instructions/issues/190) — the filed `Stop`-hook extension proposal (backlog, not yet implemented).
