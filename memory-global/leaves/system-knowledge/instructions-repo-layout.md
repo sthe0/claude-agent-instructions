@@ -4,7 +4,7 @@ description: Canonical layout of ~/claude-agent-instructions/ — global tree, r
 type: reference
 schema: leaf/v1
 created: 2026-06-26
-last_verified: 2026-07-27
+last_verified: 2026-08-26
 ---
 
 ## Difficulty
@@ -77,12 +77,13 @@ scripts/
   hook-readme-currency-reminder.py     # PreToolUse Bash: before a VCS commit (git or otherwise), list READMEs next to changed code that aren't in the changeset — verify currency
   hook-resolution-reminder.py          # UserPromptSubmit: nudge when user reply is brief gratitude — do NOT treat as resolution confirmation
   hook-context-growth-reminder.py      # UserPromptSubmit: nudge when live context size crosses a band (reads transcript usage); throttled per band per session
+  hook-burn-rate-guard.py              # UserPromptSubmit: fast-burn companion to policy-scorecard.py's 7-day spend flag — warns when the last 15 min AND the last 3 h are both past a multiple of the declared medium-tier rate; advisory, throttled per band per session
   install-reminder-hooks.sh            # idempotently wire the canonical reminder-hook set into machine-local settings.json (hooks are not merged from base.json)
   set-context-cap.sh                   # set the context window (and so the auto-compaction trigger): writes CLAUDE_CODE_AUTO_COMPACT_WINDOW + autoCompactWindow into base.json, deletes the two deprecated keys, refuses windows under ~210k
   lint-permissions.py                  # permissions JSON schema check
   permissions-cli.py                   # CLI for permissions/*.json
   spawn-specialist.py                  # `claude -p` spawn wrapper (recursion cap, budget, permissions, cost log)
-  cost-report.py                       # aggregate spawn cost log
+  cost-report.py                       # aggregate spawn cost log (prices through lib/transcript_cost.py, the single dated rate table + message.id dedup shared with policy-scorecard.py and hook-burn-rate-guard.py)
   tool-usage-report.py                 # aggregate Skill / Agent / spawn invocations per task — feeds experience leaf § Cost, effort, and tool usage
   memory-audit.py                      # informational memory leaves audit
   skill-usage-audit.py                 # informational: which user-invocable skills are actually invoked vs only catalog-loaded (see memory-global/leaves/skill-catalog-curation.md)

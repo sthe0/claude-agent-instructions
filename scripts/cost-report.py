@@ -17,7 +17,6 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
-import hashlib
 import json
 import re
 import statistics
@@ -27,48 +26,20 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.config_root import projects_roots
+from lib import transcript_cost
 
 COST_LOG = Path.home() / ".local" / "log" / "claude-spawn-costs.jsonl"
 
-# USD per 1M tokens. Rates change — refresh via the `claude-api` skill.
-# cache_write = 5-minute cache-creation rate (1.25x base input); cache_read = 0.1x base input.
-# This table is also the model REGISTRY: policy-scorecard.py derives its per-model
-# token buckets from these keys, so a new model is one row here, not an edit in six
-# places. Keys are matched against a model id by substring, so no key may be a
-# substring of another.
-PRICING_USD_PER_MTOK = {
-    "opus":   {"input": 5.0,  "output": 25.0, "cache_write": 6.25,  "cache_read": 0.50},
-    "sonnet": {"input": 3.0,  "output": 15.0, "cache_write": 3.75,  "cache_read": 0.30},
-    "haiku":  {"input": 1.0,  "output": 5.0,  "cache_write": 1.25,  "cache_read": 0.10},
-    "fable":  {"input": 10.0, "output": 50.0, "cache_write": 12.5,  "cache_read": 1.00},
-}
-_FALLBACK_RATES = PRICING_USD_PER_MTOK["opus"]
-
-# Short content hash of the rate table, stamped onto each ledger row as `priced_by`
-# so a rate change announces itself instead of silently splitting the ledger across
-# two tables. Derived, never hand-written: a version string nobody remembers to bump
-# is the same rotting mirror this table's consumers exist to avoid.
-PRICING_SHA = hashlib.sha256(
-    json.dumps(PRICING_USD_PER_MTOK, sort_keys=True).encode("utf-8")
-).hexdigest()[:12]
-
-
-def _rates_for(model: str | None) -> dict:
-    m = (model or "").lower()
-    for key in PRICING_USD_PER_MTOK:
-        if key in m:
-            return PRICING_USD_PER_MTOK[key]
-    return _FALLBACK_RATES
-
-
-def token_cost(usage: dict, model: str | None) -> float:
-    r = _rates_for(model)
-    return (
-        (usage.get("input_tokens", 0) or 0) * r["input"]
-        + (usage.get("output_tokens", 0) or 0) * r["output"]
-        + (usage.get("cache_creation_input_tokens", 0) or 0) * r["cache_write"]
-        + (usage.get("cache_read_input_tokens", 0) or 0) * r["cache_read"]
-    ) / 1_000_000
+# The rate table, its content hash and the pricing function live in
+# lib/transcript_cost.py, which owns the accounting rules a second reader would
+# otherwise have to rediscover (message.id dedup, per-type price weighting) and
+# carries the date the rates were last checked. Re-exported under the names this
+# module has always published, because policy-scorecard.py and its tests reach
+# for `cost_report.PRICING_USD_PER_MTOK` / `PRICING_SHA` / `token_cost`.
+PRICING_USD_PER_MTOK = transcript_cost.PRICING_USD_PER_MTOK
+PRICING_SHA = transcript_cost.PRICING_SHA
+_rates_for = transcript_cost.rates_for
+token_cost = transcript_cost.token_cost
 
 
 def parse_entries(path: Path) -> list[dict]:
@@ -237,16 +208,10 @@ CORRECTION_RE = re.compile(
 )
 
 
-def _iter_jsonl(path: Path):
-    with path.open(encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                yield json.loads(line)
-            except json.JSONDecodeError:
-                continue
+# Same tolerant JSONL read, one implementation. transcript_cost's also survives a
+# missing file, which is strictly safer for every caller here (all of them reach
+# this with a path a glob just produced).
+_iter_jsonl = transcript_cost.iter_jsonl
 
 
 def _msg_text(content) -> str:

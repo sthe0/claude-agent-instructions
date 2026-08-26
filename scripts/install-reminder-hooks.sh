@@ -64,6 +64,13 @@ _hook_script_path = _sd_mod._hook_script_path
 # (event, matcher-or-None, script-basename [+ optional args], timeout)
 DESIRED = [
     ("UserPromptSubmit", None,    "hook-context-growth-reminder.py", 5),
+    # The fast-burn companion to policy-scorecard.py's 7-day spend flag, which by
+    # construction can only fire after the window it would report on has closed.
+    # Warns (never blocks) when the last 15 min AND the last 3 h are both past the
+    # scorecard's own calibrated multiple of the declared medium-tier rate. 5 =
+    # the advisory default; its heaviest step is importing policy-scorecard.py for
+    # that constant, measured at ~10 ms.
+    ("UserPromptSubmit", None,    "hook-burn-rate-guard.py",         5),
     ("UserPromptSubmit", None,    "hook-engine-start.py",            5),
     ("UserPromptSubmit", None,    "hook-resolution-reminder.py",     5),
     ("UserPromptSubmit", None,    "hook-self-improvement-reminder.py", 5),
