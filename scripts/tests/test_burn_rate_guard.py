@@ -1,9 +1,11 @@
 """Stage 3: the fast-burn guard — two-window conjunction, throttled, fail-open.
 
-The three properties pinned here are the three that make it safe to run on every
+The four properties pinned here are the four that make it safe to run on every
 prompt of every session: it stays quiet unless BOTH windows are hot (so a
-one-off expensive turn and a long-finished spike are both silent), it says a
-thing at most once per band per session, and it never fails loudly.
+one-off expensive turn and a long-finished spike are both silent), it measures
+against wall-clock NOW rather than the transcript's own last message (so a
+resumed session is not warned about last night), it says a thing at most once
+per band per session, and it never fails loudly.
 """
 from __future__ import annotations
 
@@ -28,19 +30,24 @@ _SPEC.loader.exec_module(mod)
 from lib import transcript_cost as tc  # noqa: E402
 
 UTC = dt.timezone.utc
-ANCHOR = dt.datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
 USD_PER_TOKEN = tc.PRICING_USD_PER_MTOK["opus"]["input"] / 1_000_000
 
 
-def _transcript(tmp_path, spend, name="transcript.jsonl"):
-    """A transcript from ``[(minutes_before_anchor, usd), ...]``.
+def _transcript(tmp_path, spend, name="transcript.jsonl", *, age_min=0.0):
+    """A transcript from ``[(minutes_before_now, usd), ...]``.
+
+    Timestamps are relative to REAL wall-clock now, because that is what the
+    guard anchors its windows on. ``age_min`` pushes the whole transcript that
+    many minutes further into the past, which is how a resumed or long-idle
+    session is expressed.
 
     Priced through the real table (opus base input) rather than a fabricated
     number, so the fixtures move with the rates instead of pinning a stale copy.
     """
+    anchor = dt.datetime.now(UTC) - dt.timedelta(minutes=age_min)
     lines = []
     for i, (minutes, usd) in enumerate(spend):
-        ts = (ANCHOR - dt.timedelta(minutes=minutes)).isoformat().replace("+00:00", "Z")
+        ts = (anchor - dt.timedelta(minutes=minutes)).isoformat().replace("+00:00", "Z")
         lines.append(json.dumps({
             "timestamp": ts,
             "message": {
@@ -124,6 +131,55 @@ def test_band_for_requires_both_and_treats_abstention_as_silence():
     assert mod.band_for(1.0, 20.0, 5.0, 10.0) == 0
     assert mod.band_for(None, 20.0, 5.0, 10.0) == 0  # abstain != zero, and != hot
     assert mod.band_for(20.0, None, 5.0, 10.0) == 0
+
+
+# --- the windows end at NOW, not at the last message --------------------------
+
+def test_a_stale_burst_on_a_resumed_session_is_silent(monkeypatch, capsys, tmp_path):
+    """The same burst that fires while it is happening must not fire an hour
+    later. Anchoring the windows on the transcript's own last message instead of
+    on wall-clock now re-prices last night's session as though it were live —
+    every resumed session would open with a burn warning about finished work."""
+    fresh = _transcript(tmp_path, BOTH_HOT, name="fresh.jsonl")
+    _, out_fresh, _ = _run(monkeypatch, capsys, tmp_path, fresh)
+    assert "burn-rate" in out_fresh  # the burst is real while it is live
+
+    stale = _transcript(tmp_path, BOTH_HOT, name="stale.jsonl", age_min=60)
+    rc, out_stale, _ = _run(monkeypatch, capsys, tmp_path, stale)
+    assert rc == 0
+    assert out_stale == ""
+
+
+def test_a_long_idle_session_is_silent(monkeypatch, capsys, tmp_path):
+    """Ten hours idle puts every message outside even the slow window."""
+    rc, out, _ = _run(
+        monkeypatch, capsys, tmp_path,
+        _transcript(tmp_path, BOTH_VERY_HOT, age_min=600))
+    assert rc == 0
+    assert out == ""
+
+
+def test_a_stale_burst_does_not_consume_the_throttle(monkeypatch, capsys, tmp_path):
+    """The costly half of the same defect: firing on a resumed session's stale
+    burst also STAMPS the band, so the genuine burn that follows in that session
+    is the one that goes unwarned."""
+    stale = _transcript(tmp_path, BOTH_HOT, name="stale.jsonl", age_min=60)
+    _, out_stale, sid = _run(monkeypatch, capsys, tmp_path, stale)
+    assert out_stale == ""
+
+    live = _transcript(tmp_path, BOTH_HOT, name="live.jsonl")
+    _, out_live, _ = _run(monkeypatch, capsys, tmp_path, live, session=sid)
+    assert "burn-rate" in out_live
+
+
+def test_evaluate_anchors_on_wall_clock_now(tmp_path, monkeypatch):
+    """Stated directly against evaluate(), so the property survives a rewrite of
+    main(): moving `now` forward past the window silences a hot transcript."""
+    monkeypatch.setattr(mod, "thresholds", lambda: (5.0, 10.0))
+    t = _transcript(tmp_path, BOTH_HOT)
+    assert mod.evaluate(str(t)) is not None
+    later = dt.datetime.now(UTC) + dt.timedelta(hours=6)
+    assert mod.evaluate(str(t), now=later) is None
 
 
 # --- throttling ---------------------------------------------------------------
@@ -237,6 +293,18 @@ def test_unknown_slow_floor_leaves_the_hook_silent(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "thresholds", lambda: (5.0, 10.0))
     monkeypatch.setattr(mod, "slow_min_span_h", lambda: None)
     assert mod.evaluate(str(_transcript(tmp_path, BOTH_HOT))) is None
+
+
+def test_deep_history_before_the_window_does_not_hide_a_live_burn(
+        monkeypatch, capsys, tmp_path):
+    """The hook reads only the transcript's tail. A long, cheap history in front
+    of a hot window must neither be scanned into the answer nor cause the tail
+    read to stop short of the window's far edge."""
+    ancient = [(1200 + i, 0.001) for i in range(400)]
+    rc, out, _ = _run(
+        monkeypatch, capsys, tmp_path, _transcript(tmp_path, ancient + BOTH_HOT))
+    assert rc == 0
+    assert "burn-rate" in out
 
 
 def test_never_emits_a_permission_decision(monkeypatch, capsys, tmp_path):

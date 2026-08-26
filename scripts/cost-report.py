@@ -353,7 +353,8 @@ def main(argv: list[str] | None = None) -> int:
                 note = f"{len(sp)} spawn(s) in transcript time-span (window-matched, not tag-isolated)"
             except ValueError:
                 pass
-        print(f"cost-report: project budget    transcripts: {tr['n_files']}    spawn-log: {args.log}")
+        print(f"cost-report: project budget    transcripts: {tr['n_files']}    spawn-log: {args.log}"
+              f"    rates verified: {transcript_cost.PRICING_VERIFIED}")
         print()
         print(budget_report(tr, spawn_cost, note))
         return 0
@@ -376,7 +377,8 @@ def main(argv: list[str] | None = None) -> int:
         print(csv_out(spawns, refused))
         return 0
 
-    print(f"cost-report: {window_label}    file: {args.log}")
+    print(f"cost-report: {window_label}    file: {args.log}"
+          f"    rates verified: {transcript_cost.PRICING_VERIFIED}")
     print()
     if args.detail:
         print(detail(spawns, refused))

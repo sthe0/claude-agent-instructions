@@ -137,7 +137,7 @@ def iter_jsonl(path: Path | str) -> Iterator[dict]:
                 yield obj
 
 
-def parse_ts(value) -> dt.datetime | None:
+def parse_ts_or_none(value) -> dt.datetime | None:
     """An ISO timestamp as an aware UTC datetime, or None when it will not parse.
 
     Deliberately NOT ``cost-report.py``'s ``parse_ts``, which raises. That one
@@ -145,6 +145,10 @@ def parse_ts(value) -> dt.datetime | None:
     worth surfacing; this one reads transcripts, where it is Tuesday. Naive
     values are read as UTC so that a single mislabelled row cannot make a whole
     window's comparisons raise.
+
+    The name says ``_or_none`` because ``cost-report.py`` re-exports from this
+    module: two functions called ``parse_ts`` reachable through one import
+    surface, with opposite failure behaviour, is a trap for the next reader.
     """
     if not isinstance(value, str) or not value:
         return None
@@ -170,7 +174,16 @@ class UsageRow:
 
 
 def iter_usage_rows(path: Path | str) -> Iterator[UsageRow]:
-    """Billed messages from a transcript, deduplicated by ``message.id``.
+    """Billed messages from a whole transcript, deduplicated by ``message.id``."""
+    return rows_from(iter_jsonl(path))
+
+
+def rows_from(objects: Iterable[dict]) -> Iterator[UsageRow]:
+    """Billed messages from already-decoded transcript objects.
+
+    Split out from ``iter_usage_rows`` so the whole-file read and the trailing
+    read below share one set of accounting rules — a second copy of the dedup is
+    the exact defect this module exists to prevent.
 
     FIRST occurrence wins. The repeats exist because the harness writes one line
     per content block of the same message and copies the message-level ``usage``
@@ -184,7 +197,7 @@ def iter_usage_rows(path: Path | str) -> Iterator[UsageRow]:
     """
     seen: set[str] = set()
     anonymous = 0
-    for obj in iter_jsonl(path):
+    for obj in objects:
         msg = obj.get("message")
         if not isinstance(msg, dict):
             continue
@@ -203,7 +216,7 @@ def iter_usage_rows(path: Path | str) -> Iterator[UsageRow]:
         model = msg.get("model")
         yield UsageRow(
             message_id=key,
-            ts=parse_ts(obj.get("timestamp")),
+            ts=parse_ts_or_none(obj.get("timestamp")),
             model=model if isinstance(model, str) else None,
             usage=usage,
             usd=token_cost(usage, model),
@@ -212,6 +225,126 @@ def iter_usage_rows(path: Path | str) -> Iterator[UsageRow]:
 
 def usage_rows(path: Path | str) -> list[UsageRow]:
     return list(iter_usage_rows(path))
+
+
+# How much of a transcript's tail one backward step reads. Large enough that an
+# ordinary few-hour window is one or two reads, small enough that the common case
+# is not a multi-megabyte read to answer a question about the last few minutes.
+TAIL_BLOCK_BYTES = 256 * 1024
+
+# Hard stop on the backward walk. A transcript whose tail carries no parseable
+# timestamps at all would otherwise be read end to end — i.e. back to exactly the
+# cost this function exists to avoid — so the walk gives up and returns what it
+# has. Sized well above any plausible few-hour window on a heavy session.
+TAIL_MAX_BYTES = 16 * 1024 * 1024
+
+
+def _oldest_ts_in(chunk: bytes, *, skip_partial_head: bool) -> dt.datetime | None:
+    """The first parseable timestamp inside one raw block, or None.
+
+    Read as the block's oldest, which holds because the harness appends each row
+    as it happens, so file order is timestamp order. Were a row ever written out
+    of order the cost is bounded either way: a too-late reading only makes the
+    backward walk read one more block than it needed.
+    """
+    lines = chunk.split(b"\n")
+    if skip_partial_head:
+        lines = lines[1:]
+    for raw in lines:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            obj = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(obj, dict):
+            ts = parse_ts_or_none(obj.get("timestamp"))
+            if ts is not None:
+                return ts
+    return None
+
+
+def iter_tail_jsonl(
+    path: Path | str,
+    since: dt.datetime,
+    *,
+    block_size: int = TAIL_BLOCK_BYTES,
+    max_bytes: int = TAIL_MAX_BYTES,
+) -> Iterator[dict]:
+    """Objects from the tail of a JSONL file, reaching back to ``since``.
+
+    Why this exists rather than filtering ``iter_jsonl``: the caller is a
+    ``UserPromptSubmit`` hook that asks about the last few hours, and the file it
+    asks about grows without bound over a session — measured at 809 ms of pure
+    parsing on a 120 MB transcript, against a 5 s harness timeout, on every
+    prompt. Reading only the tail makes the cost a function of the WINDOW rather
+    than of the session's whole history.
+
+    Blocks are read backwards from EOF and the walk stops once a block's
+    earliest-in-file timestamp precedes ``since`` — so the yielded range always
+    OVERRUNS the window rather than clipping it, and the caller's own window
+    filter is what decides membership. Objects are yielded in file order.
+
+    Tolerant on the same terms as ``iter_jsonl``: a missing or unreadable file
+    yields nothing, and the block boundary's leading partial line is dropped
+    exactly when there is more file behind it.
+    """
+    p = Path(path)
+    try:
+        size = p.stat().st_size
+        handle = p.open("rb")
+    except OSError:
+        return
+    chunks: list[bytes] = []
+    pos = size
+    with handle as fh:
+        while pos > 0 and (size - pos) < max_bytes:
+            step = min(block_size, pos)
+            pos -= step
+            try:
+                fh.seek(pos)
+                chunk = fh.read(step)
+            except OSError:
+                break
+            chunks.append(chunk)
+            oldest = _oldest_ts_in(chunk, skip_partial_head=pos > 0)
+            if oldest is not None and oldest < since:
+                break
+    blob = b"".join(reversed(chunks))
+    if pos > 0:
+        # More file behind what was read: the first line is a fragment of a row
+        # whose beginning was never read, and json.loads would reject it anyway.
+        _, _, blob = blob.partition(b"\n")
+    for line in blob.split(b"\n"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(obj, dict):
+            yield obj
+
+
+def tail_usage_rows(
+    path: Path | str,
+    since: dt.datetime,
+    *,
+    block_size: int = TAIL_BLOCK_BYTES,
+) -> list[UsageRow]:
+    """``usage_rows`` restricted to the tail that reaches back to ``since``.
+
+    Dedup is by ``message.id`` within the tail, which is the same answer the
+    whole-file read gives for any row inside the window: every repeat of a
+    message carries an identical ``usage`` object, so which occurrence wins
+    cannot change a cost.
+
+    ``block_size`` is exposed so a test can force the multi-block path on a small
+    fixture; production has no reason to pass it.
+    """
+    return list(rows_from(iter_tail_jsonl(path, since, block_size=block_size)))
 
 
 def price_weighted_usd(rows: Iterable[UsageRow]) -> float:
@@ -233,6 +366,15 @@ def window_rate(
     opposite error — a session two minutes old whose first expensive turn reads
     as an enormous per-hour rate — is what ``min_span_h`` is for. Below it this
     returns None, which every caller must treat as "no answer", not as zero.
+
+    There are three separate abstentions, all returning None: no dated row at
+    all; FEWER THAN TWO dated rows inside the window (one row spans no time, so
+    there is no rate to compute); and an observed span below ``min_span_h``.
+
+    ``anchor`` is where the window ends, and callers asking a question about NOW
+    must pass it. Defaulting to the last message's own timestamp answers "how
+    fast was this session burning while it was running", which on a resumed or
+    long-idle session is a different question with a much larger answer.
     """
     dated = [r for r in rows if r.ts is not None]
     if not dated:

@@ -166,10 +166,10 @@ def test_unparseable_timestamp_does_not_raise(tmp_path):
 
 
 def test_naive_timestamp_read_as_utc():
-    assert tc.parse_ts("2026-08-26T10:00:00") == dt.datetime(2026, 8, 26, 10, 0, tzinfo=UTC)
-    assert tc.parse_ts("2026-08-26T10:00:00Z") == dt.datetime(2026, 8, 26, 10, 0, tzinfo=UTC)
-    assert tc.parse_ts(None) is None
-    assert tc.parse_ts("") is None
+    assert tc.parse_ts_or_none("2026-08-26T10:00:00") == dt.datetime(2026, 8, 26, 10, 0, tzinfo=UTC)
+    assert tc.parse_ts_or_none("2026-08-26T10:00:00Z") == dt.datetime(2026, 8, 26, 10, 0, tzinfo=UTC)
+    assert tc.parse_ts_or_none(None) is None
+    assert tc.parse_ts_or_none("") is None
 
 
 # --- window_rate --------------------------------------------------------------
@@ -207,6 +207,105 @@ def test_window_rate_honours_explicit_anchor():
     # Anchoring an hour later halves the rate: same money, twice the span.
     later = anchor + dt.timedelta(hours=1)
     assert tc.window_rate(rows, 3.0, anchor=later) == 3.0
+
+
+# --- the trailing read --------------------------------------------------------
+#
+# The hook asks about the last few hours on every prompt, of a file that grows
+# all session. These pin the two things that make reading only the tail safe:
+# it must return the same answer the whole-file read would inside the window,
+# and it must be no less tolerant of a broken file.
+
+def _dated_lines(count, *, start, step_s, msg_id=lambda i: f"m{i}", pad=0):
+    lines = []
+    for i in range(count):
+        ts = (start + dt.timedelta(seconds=i * step_s)).isoformat().replace("+00:00", "Z")
+        line = json.loads(_line(msg_id(i), ts=ts, input=MTOK))
+        if pad:
+            line["padding"] = "x" * pad
+        lines.append(json.dumps(line))
+    return lines
+
+
+def test_tail_matches_a_full_read_inside_the_window(tmp_path):
+    """Same rows, same cost — over a file far larger than one read block, so the
+    backward walk really does span several of them."""
+    start = dt.datetime(2026, 8, 26, 6, 0, tzinfo=UTC)
+    path = _write(tmp_path, _dated_lines(600, start=start, step_s=30, pad=2000))
+    since = start + dt.timedelta(seconds=600 * 30) - dt.timedelta(hours=1)
+
+    tail = tc.tail_usage_rows(path, since)
+    full = tc.usage_rows(path)
+    # Every row the window would select is present, in file order...
+    assert [r.message_id for r in tail if r.ts >= since] == \
+        [r.message_id for r in full if r.ts and r.ts >= since]
+    # ...and the rate the caller actually asks for is identical. Compared against
+    # the UNFILTERED full read, because the tail deliberately overruns `since`:
+    # window_rate's own membership test is what decides, and it must decide the
+    # same way on both.
+    assert tc.window_rate(tail, 1.0) == tc.window_rate(full, 1.0)
+
+
+def test_tail_overruns_the_window_rather_than_clipping_it(tmp_path):
+    """It stops at the first block reaching past ``since``, so it returns at
+    least the window — never part of it. Clipping would under-count the oldest
+    minutes of every window."""
+    start = dt.datetime(2026, 8, 26, 6, 0, tzinfo=UTC)
+    path = _write(tmp_path, _dated_lines(50, start=start, step_s=60))
+    since = start + dt.timedelta(minutes=40)
+    rows = tc.tail_usage_rows(path, since)
+    inside = [r for r in rows if r.ts >= since]
+    assert len(inside) == 10
+    assert len(rows) >= len(inside)
+
+
+def test_tail_reads_a_whole_short_file(tmp_path):
+    start = dt.datetime(2026, 8, 26, 6, 0, tzinfo=UTC)
+    path = _write(tmp_path, _dated_lines(3, start=start, step_s=60))
+    rows = tc.tail_usage_rows(path, start - dt.timedelta(hours=1))
+    assert [r.message_id for r in rows] == ["m0", "m1", "m2"]
+
+
+def test_tail_drops_the_leading_fragment_not_a_whole_row(tmp_path):
+    """A block boundary lands mid-line. Dropping that fragment is required (it
+    is not valid JSON); dropping the first COMPLETE row instead would silently
+    lose a message per read."""
+    start = dt.datetime(2026, 8, 26, 6, 0, tzinfo=UTC)
+    lines = _dated_lines(40, start=start, step_s=60, pad=200)
+    path = _write(tmp_path, lines)
+    rows = tc.tail_usage_rows(
+        path, start + dt.timedelta(minutes=39), block_size=64)
+    assert rows
+    assert rows[-1].message_id == "m39"
+
+
+def test_tail_survives_a_truncated_final_line(tmp_path):
+    start = dt.datetime(2026, 8, 26, 6, 0, tzinfo=UTC)
+    body = "\n".join(_dated_lines(5, start=start, step_s=60))
+    p = tmp_path / "t.jsonl"
+    p.write_text(body + '\n{"timestamp": "2026-08', encoding="utf-8")
+    rows = tc.tail_usage_rows(p, start - dt.timedelta(hours=1))
+    assert [r.message_id for r in rows] == ["m0", "m1", "m2", "m3", "m4"]
+
+
+def test_tail_of_a_missing_file_is_empty(tmp_path):
+    assert tc.tail_usage_rows(tmp_path / "nope.jsonl", dt.datetime.now(UTC)) == []
+
+
+def test_tail_dedups_by_message_id(tmp_path):
+    """Same rule as the whole-file read — the shared rows_from, not a copy."""
+    start = dt.datetime(2026, 8, 26, 6, 0, tzinfo=UTC)
+    path = _write(tmp_path, _dated_lines(4, start=start, step_s=60, msg_id=lambda i: "same"))
+    rows = tc.tail_usage_rows(path, start - dt.timedelta(hours=1))
+    assert len(rows) == 1
+
+
+def test_tail_gives_up_on_a_file_with_no_timestamps(tmp_path):
+    """No parseable timestamp anywhere means no stopping point; the walk is
+    bounded by max_bytes rather than reading an arbitrarily large file."""
+    path = _write(tmp_path, [_line(f"m{i}", ts="not-a-date", input=1) for i in range(50)])
+    rows = tc.tail_usage_rows(path, dt.datetime.now(UTC))
+    assert len(rows) == 50
 
 
 # --- single-source invariants -------------------------------------------------

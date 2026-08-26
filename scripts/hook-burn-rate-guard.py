@@ -46,6 +46,28 @@ commissioned this named that failure as its own refutation condition.) So the tw
 windows the conjunction ranges over are both live, and what the periodic
 instrument supplies is its calibration and its disposition, not a second vote.
 
+Both windows end at wall-clock NOW
+----------------------------------
+
+Not at the transcript's last message. Those two anchors answer different
+questions, and only one of them is this hook's: "is spend running hot RIGHT NOW"
+versus "was this session ever running hot". On a resumed or long-idle session the
+second re-prices a finished burst as live — and then stamps the band as fired, so
+the genuine burn that follows in that same session is the one nobody warns about.
+Anchoring on the last message would therefore lose the case the hook exists for
+while opening every resumed session with a warning about last night's work.
+
+Reading only the tail of the transcript
+---------------------------------------
+
+This runs on every prompt, against a file that grows all session — 120 MB and
+still growing is ordinary, and parsing one end to end was measured at 0.81 s of
+parse / 1.03 s end to end (code review of this hook, 2026-08-27) against a 5 s
+harness timeout, with nothing bounding the growth. Since the question only
+ever reaches back SLOW_WINDOW_H, ``transcript_cost.tail_usage_rows`` walks
+backwards from EOF and stops at the first block that predates the window: the
+cost becomes a function of the window, not of the session's history.
+
 Why it warns and never blocks
 -----------------------------
 
@@ -96,6 +118,8 @@ on every prompt of every session, which is far worse than a missed warning.
 """
 from __future__ import annotations
 
+import datetime as dt
+import functools
 import importlib.util
 import json
 import os
@@ -104,7 +128,7 @@ from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
-from lib import transcript_cost  # noqa: E402
+from lib import band_throttle, transcript_cost  # noqa: E402
 
 # Significance window: how far back "sustained" is allowed to look. Costs nothing
 # when the session is younger, because window_rate divides by the span actually
@@ -164,30 +188,42 @@ def load_policy_scorecard():
     return module
 
 
+@functools.lru_cache(maxsize=4)
+def _profile_for(tier: str) -> "tuple[float, float] | None":
+    """config.md's declared (USD per hour, active hours) for one cost tier.
+
+    Cached because reading it parses config.md, and one invocation of this hook
+    asks for it twice — once for the threshold, once for the observation floor.
+    Keyed on the tier rather than cached bare so that changing ``NORMAL_TIER``
+    still changes the answer.
+    """
+    try:
+        from agentctl.config import Thresholds
+
+        thr = Thresholds()
+        minutes = thr.effort_stage_minutes(tier)
+        if minutes <= 0:
+            return None
+        hours = minutes / 60.0
+        return thr.budget_usd_float(tier) / hours, hours
+    except Exception:
+        return None
+
+
 def normal_profile() -> "tuple[float, float] | None":
-    """config.md's declared (USD per hour, active hours) for a typical stage.
+    """The declared (USD per hour, active hours) of a typical stage.
 
     Both numbers come from the same tier's two rows, and both are returned
     together because they are one statement — "B dollars per M active minutes" —
     that the rest of this file then uses twice: as the rate to compare against,
     and as how long to observe before comparing.
 
-    Imported inside the function, and every failure folded into None, because
+    Imported inside ``_profile_for``, and every failure folded into None, because
     config.md is a file an operator edits: a reshaped table, or an agentctl that
     will not import, must leave the hook silent rather than raising on someone's
     prompt.
     """
-    try:
-        from agentctl.config import Thresholds
-
-        thr = Thresholds()
-        minutes = thr.effort_stage_minutes(NORMAL_TIER)
-        if minutes <= 0:
-            return None
-        hours = minutes / 60.0
-        return thr.budget_usd_float(NORMAL_TIER) / hours, hours
-    except Exception:
-        return None
+    return _profile_for(NORMAL_TIER)
 
 
 def normal_rate_usd_per_h() -> float | None:
@@ -234,26 +270,15 @@ def band_for(fast: float | None, slow: float | None, warn: float, escalate: floa
     return 0
 
 
-def state_path(session_id: str) -> Path:
-    safe = "".join(c for c in (session_id or "nosession") if c.isalnum() or c in "-_")
+def state_root() -> Path:
+    """Where this hook's per-session band stamps live.
+
+    Under ``~/.local/state`` rather than ``/tmp`` because a burn warning should
+    survive a reboot for as long as the session might; ``band_throttle`` prunes
+    the directory on write, since nothing else will.
+    """
     base = os.environ.get(STATE_DIR_ENV, "").strip()
-    directory = Path(base) if base else DEFAULT_STATE_DIR
-    return directory / (safe or "nosession")
-
-
-def already_fired(path: Path) -> int:
-    try:
-        return int(path.read_text(encoding="utf-8").strip() or 0)
-    except (OSError, ValueError):
-        return 0
-
-
-def record_fired(path: Path, band: int) -> None:
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(str(band), encoding="utf-8")
-    except OSError:
-        pass
+    return Path(base) if base else DEFAULT_STATE_DIR
 
 
 def message(band: int, fast: float, slow: float, warn: float, escalate: float) -> str:
@@ -279,8 +304,29 @@ def message(band: int, fast: float, slow: float, warn: float, escalate: float) -
     )
 
 
-def evaluate(transcript_path: str) -> "tuple[int, float, float, float, float] | None":
-    """(band, fast, slow, warn, escalate), or None when there is nothing to say."""
+def evaluate(
+    transcript_path: str, now: "dt.datetime | None" = None,
+) -> "tuple[int, float, float, float, float] | None":
+    """(band, fast, slow, warn, escalate), or None when there is nothing to say.
+
+    Both windows end at WALL-CLOCK NOW, never at the transcript's own last
+    message. Anchoring on the last message asks "how fast was this session
+    burning while it was running", so a session resumed after a night's gap
+    re-prices last night's burst as though it were happening now — and, because
+    the band is then stamped as fired, silences the real burn that follows.
+
+    ``now`` is a parameter only so tests can pin it; nothing in production passes
+    one.
+    """
+    now = now or dt.datetime.now(dt.timezone.utc)
+    # The transcript is checked FIRST: it is the input most likely to be absent
+    # (a fresh session, a path already rotated away), and the threshold lookup
+    # behind it costs an interpreter-level import of policy-scorecard.py —
+    # ~40 ms that must not be spent to discover there was nothing to measure.
+    rows = transcript_cost.tail_usage_rows(
+        transcript_path, now - dt.timedelta(hours=SLOW_WINDOW_H))
+    if not rows:
+        return None
     limits = thresholds()
     if limits is None:
         return None
@@ -288,13 +334,10 @@ def evaluate(transcript_path: str) -> "tuple[int, float, float, float, float] | 
     slow_floor = slow_min_span_h()
     if slow_floor is None:
         return None
-    rows = transcript_cost.usage_rows(transcript_path)
-    if not rows:
-        return None
     fast = transcript_cost.window_rate(
-        rows, FAST_WINDOW_H, min_span_h=FAST_MIN_SPAN_H)
+        rows, FAST_WINDOW_H, anchor=now, min_span_h=FAST_MIN_SPAN_H)
     slow = transcript_cost.window_rate(
-        rows, SLOW_WINDOW_H, min_span_h=slow_floor)
+        rows, SLOW_WINDOW_H, anchor=now, min_span_h=slow_floor)
     band = band_for(fast, slow, warn, escalate)
     if band == 0:
         return None
@@ -315,10 +358,10 @@ def main() -> int:
         if verdict is None:
             return 0
         band, fast, slow, warn, escalate = verdict
-        sp = state_path(session_id)
-        if band <= already_fired(sp):
+        root = state_root()
+        if band <= band_throttle.fired_band(session_id, root):
             return 0
-        record_fired(sp, band)
+        band_throttle.record_band(session_id, band, root)
         print(message(band, fast, slow, warn, escalate))
     except Exception:
         return 0

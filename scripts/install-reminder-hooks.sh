@@ -69,7 +69,9 @@ DESIRED = [
     # Warns (never blocks) when the last 15 min AND the last 3 h are both past the
     # scorecard's own calibrated multiple of the declared medium-tier rate. 5 =
     # the advisory default; its heaviest step is importing policy-scorecard.py for
-    # that constant, measured at ~10 ms.
+    # that constant, measured at ~40 ms. The transcript read in front of it is
+    # bounded by the 3 h window rather than by session length (transcript_cost's
+    # tail read), so this timeout does not need to grow with a long session.
     ("UserPromptSubmit", None,    "hook-burn-rate-guard.py",         5),
     ("UserPromptSubmit", None,    "hook-engine-start.py",            5),
     ("UserPromptSubmit", None,    "hook-resolution-reminder.py",     5),
