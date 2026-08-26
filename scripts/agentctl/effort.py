@@ -576,7 +576,12 @@ def record_fire(state: SessionState, div: Divergence, *, now: float) -> dict:
     appended record). MANDATORY after any caller acts on a `Divergence` — see
     `divergence()`'s CALLER OBLIGATION. `now` is REQUIRED and supplied by the caller —
     this module reads no clock, and a default would let a future call site silently
-    ship an unstamped `ts` straight onto the durable quality-ledger row."""
+    ship an unstamped `ts` straight onto the durable quality-ledger row.
+
+    The appended record starts with no "ack" key — gates.effort_fire_blockers reads
+    exactly that absence to refuse dispatch/replan/submit_plan until
+    `agentctl fire-acknowledge` appends one (never replaces the record; the audit
+    trail stays append-only)."""
     state.effort_baseline = actual(state)
     record = {
         "scale": div.scale,

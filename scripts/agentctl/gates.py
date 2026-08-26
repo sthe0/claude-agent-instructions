@@ -959,6 +959,35 @@ def effort_active(state: SessionState) -> bool:
     return state.weight_class == WeightClass.SUBSTANTIVE.value
 
 
+def effort_fire_blockers(state: SessionState) -> list[str]:
+    """INTERNAL command precondition, NOT a tool-intercepting gate (absent from
+    GUARDIANS, like difficulty_blockers/normalization_blockers above) — [] == ok.
+
+    The two existing fire sites in cli.py (_diagnose_effort_divergence,
+    _diagnose_venue_refusal) already force the session into DIAGNOSING synchronously
+    on a PASSING record-result/verify-final. What they do NOT close: a session that
+    reaches DIAGNOSING via a FAILING branch gets the fire data bolted onto an
+    unrelated failure Directive as a side-note (data["effort_divergence"]), and
+    cmd_dispatch itself never looks at state.effort_fires at all — a still-executing
+    session can be re-dispatched into another stage with the fire sitting unread.
+    This gate closes both: while the LAST entry in state.effort_fires carries no
+    "ack" key (appended only by `agentctl fire-acknowledge`), dispatch/replan/
+    submit_plan all refuse — converting the notification from a state flag a session
+    can silently ignore into a synchronous precondition the coordinator's own next
+    action is blocked on, without disturbing effort_fires' append-only audit trail."""
+    if not effort_active(state):
+        return []
+    if not state.effort_fires:
+        return []
+    last = state.effort_fires[-1]
+    if last.get("ack") is not None:
+        return []
+    return [
+        f"unacknowledged effort-divergence fire (scale={last.get('scale')!r}, "
+        f"multiple={last.get('multiple')!r}) — run `agentctl fire-acknowledge` first"
+    ]
+
+
 def _stage_review_for(state: SessionState, stage_index: int):
     """The most-recently-recorded StageReview for `stage_index`, or None. Last-wins so
     a manual override recorded after a judge verdict supersedes it."""
