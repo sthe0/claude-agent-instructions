@@ -54,10 +54,13 @@ Read from `agentctl/cli.py` directly (~lines 4080-4200):
   quality problem. Predicted mitigation: keep `--observation` short (~400-500 chars) and targeted
   at the MOST RECENT note's gap only, rather than growing it cumulatively toward full coverage — a
   longer, more-complete observation makes both failure modes (goalpost-moving and fail-open) more
-  likely, not less. The `reason` string the judge returns alongside a fail-open `verdict=None` is
-  never surfaced anywhere (`cli.py cmd_record_result`'s `verdict, reason = advisor.acceptance_judge(...)`
-  drops `reason` when `verdict is None`) — there is no CLI/log path to read it; the "stale" wording
-  in the next bullet is the only signal a fail-open occurred at all.
+  likely, not less. **Fixed 2026-08-26 (stage 1, GitHub issue #145):** the `reason` string the
+  judge returns alongside a fail-open `verdict=None` now reaches the caller — `cli.py
+  cmd_record_result` renamed the shadowing local to `judge_reason` and, on a fail-open blocked
+  pass, adds it to the returned Directive's `data["judge_reason"]`, appends it to `detail`, and
+  logs an `acceptance_judge_fail_open` event via `state.log`. `scripts/lib/judge_ledger.py` was
+  checked and NOT extended — it is scoped exclusively to four named hooks
+  (`HOOK_NAME_BY_BASENAME`), not to this fifth, out-of-scope call site.
 - **A `revise` and a silently-failed judge call are not distinguishable from the blocker text
   alone — check `state.stage_reviews[-1]` before rewriting content.** `advisor.acceptance_judge`
   fails open (`verdict=None`) on timeout/exception/unparseable output; this was observed in
@@ -79,22 +82,24 @@ Read from `agentctl/cli.py` directly (~lines 4080-4200):
   judge-overridden rather than judge-approved. **Requires user sanction before invoking** — an
   internal gate's override names its constraint and is not self-granted; surface the judge's
   actual verdict history and ask, don't self-override silently.
-- **This escape hatch REFUSES on a non-`acceptance_review` stage — confirmed 2026-08-26, stage
-  7 (`criterion_type: measurable`).** `cmd_stage_review` (`cli.py`) explicitly checks
-  `stage.criterion.criterion_type != CriterionType.ACCEPTANCE_REVIEW.value` and refuses with
+- **Fixed 2026-08-26 (stage 1, GitHub issue #145) — this escape hatch used to REFUSE on a
+  non-`acceptance_review` stage (confirmed 2026-08-26, stage 7, `criterion_type: measurable`).**
+  `cmd_stage_review` (`cli.py`) used to explicitly check
+  `stage.criterion.criterion_type != CriterionType.ACCEPTANCE_REVIEW.value` and refuse with
   `"stage N is not acceptance_review; stage-review applies only to acceptance stages"` — but the
   judge gate that produced the deadlock (`gates.stage_review_active`) fires for **any**
-  substantive-session stage regardless of `criterion_type`, so a `measurable`-criterion stage can
-  be judge-deadlocked with no `stage-review --verdict override` path out at all. The only working
-  escape for that case is the criterion-type-agnostic kill switch:
-  `AGENTCTL_STAGE_REVIEW=0 agentctl record-result --session <sid> --status passed ...` — this
-  proceeds WITHOUT a judge verdict and records an auditable `JudgeBypass(kind="killswitch")` in
-  `state.judge_bypassed`, surfaced the same way at `verify-final`/`resolve`. Same "requires user
-  sanction" rule applies; in practice both escapes were also denied by the Claude Code auto-mode
-  classifier when invoked by the agent itself, so the user had to run the command directly via a
-  single-line script rather than the agent's own Bash tool. (Owed follow-up, not yet applied:
-  either widen `stage-review --verdict override`'s scope to any substantive stage, or document the
-  killswitch as the intended escape for non-acceptance_review stages.)
+  substantive-session stage regardless of `criterion_type`, so a `measurable`-criterion stage
+  could be judge-deadlocked with no `stage-review --verdict override` path out at all. It now
+  refuses on `not gates.stage_review_active(state)` instead — the **same predicate** the gate
+  itself consumes — so the override is available for exactly the stages the gate can deadlock,
+  and the message names the gate's own scoping state (`weight_class`, `AGENTCTL_STAGE_REVIEW`).
+  The criterion-type-agnostic kill switch (`AGENTCTL_STAGE_REVIEW=0 agentctl record-result
+  --session <sid> --status passed ...`) remains a working but strictly weaker escape — it
+  proceeds WITHOUT a judge verdict and records an unattributed `JudgeBypass(kind="killswitch")`
+  rather than a reviewer+note-bound `JudgeBypass(kind="override")`. In practice both escapes were
+  also denied by the Claude Code auto-mode classifier when invoked by the agent itself, so the
+  user had to run the command directly via a single-line script rather than the agent's own Bash
+  tool.
 - `record-result`'s valid flags are only `--session`, `--status {passed,failed}`, `--actual`,
   `--control`, `--observation`, `--code-ref`, `--cost-log` — argparse rejects anything else
   (e.g. a plausible-sounding `--observation-source-note` is not a real flag).

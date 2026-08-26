@@ -3282,22 +3282,36 @@ def cmd_plan_review_delta(args, *, store: StateStore, runner: Runner | None = No
 
 
 def cmd_stage_review(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
-    """Record a manual review of the active acceptance_review stage's observation,
-    backing the acceptance-review gate. Mirrors cmd_plan_review — purely a recorder; the
+    """Record a manual review of the active stage's observation, backing the
+    acceptance-review judge gate. Mirrors cmd_plan_review — purely a recorder; the
     COGNITION (a human judging, or authoring an override) happens outside. The verdict is
     bound to the observation bytes passed via --observation (defaulting to the stage's
     current observation), so gates.acceptance_review_blockers can reject a drift. The
     automated cheap judge writes an equivalent record inline in record-result; this
-    command is the human path (chiefly the override deadlock escape)."""
+    command is the human path (chiefly the override deadlock escape).
+
+    Scope is gates.stage_review_active(state) — the SAME predicate the gate itself
+    consumes — not criterion_type. This is a deliberate widening (GitHub issue #145):
+    the gate was already broadened past acceptance_review-only stages (Defect 2: control
+    compares result with goal at every stage of a SUBSTANTIVE session, see
+    cmd_record_result's observation gate), but this escape hatch had not followed, so a
+    measurable-criterion stage judge-deadlocked with NO scoped override at all — only the
+    session-wide AGENTCTL_STAGE_REVIEW=0 kill switch, which records a strictly weaker,
+    unattributed JudgeBypass(kind='killswitch') instead of this command's
+    reviewer+note-bound JudgeBypass(kind='override'). Widening the escape to the gate's
+    own scope strictly improves auditability; narrowing the gate back down would
+    contradict that deliberate broadening instead of resolving the mismatch."""
     state = _require(store, args.session)
     stage = state.active_stage()
     if stage is None:
         return Directive(False, state.node, "next_stage", "no active stage to review")
-    if stage.criterion.criterion_type != CriterionType.ACCEPTANCE_REVIEW.value:
+    if not gates.stage_review_active(state):
         return Directive(
             False, state.node, "noop",
-            f"stage {stage.index} is not acceptance_review; stage-review applies only to "
-            "acceptance stages",
+            f"the acceptance-judge gate is not active for this session "
+            f"(weight_class={state.weight_class}, "
+            f"AGENTCTL_STAGE_REVIEW={os.environ.get('AGENTCTL_STAGE_REVIEW', '<unset>')}); "
+            "stage-review records an override of that gate and has nothing to override here",
         )
     observation = getattr(args, "observation", None)
     if observation is None:
@@ -4299,7 +4313,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
         stage.criterion.observation = observation
         if gates.stage_review_active(state):
             judge_runner = runner if runner is not None else advisor.subprocess_runner
-            verdict, reason = advisor.acceptance_judge(
+            verdict, judge_reason = advisor.acceptance_judge(
                 observation, stage.subject.result, judge_runner, enabled=True,
                 timeout=advisor._ACCEPTANCE_JUDGE_TIMEOUT_S)
             if verdict is not None:
@@ -4307,18 +4321,31 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
                     state,
                     StageReview(
                         stage_index=stage.index, verdict=verdict,
-                        reviewer=advisor.JUDGE_REVIEWER, note=reason,
+                        reviewer=advisor.JUDGE_REVIEWER, note=judge_reason,
                         observation_sha256=_observation_sha256(observation),
                     ),
                     from_judge=True,
                 )
+            else:
+                # Fail-open: the judge CALL ITSELF failed (disabled/errored/timed out),
+                # leaving no StageReview — acceptance_review_blockers below then reports
+                # "no acceptance judge verdict recorded", wording that reads as "the
+                # observation is weak, judge it again" rather than "the judge was
+                # unreachable". Log the judge's own reason so a session review can tell
+                # the two apart even if the caller only looks at the blocking Directive.
+                state.log("acceptance_judge_fail_open", stage=stage.index, reason=judge_reason)
             ab = gates.acceptance_review_blockers(state, stage)
             if ab:
                 store.save(state)
+                detail = f"stage {stage.index} acceptance pass blocked by the judge gate"
+                data = {"blockers": ab}
+                if verdict is None:
+                    detail += f" (judge call failed: {judge_reason})"
+                    data["judge_reason"] = judge_reason
                 return Directive(
                     False, state.node, "attest_observation",
-                    f"stage {stage.index} acceptance pass blocked by the judge gate",
-                    data={"blockers": ab},
+                    detail,
+                    data=data,
                 )
             # Cleared: if it cleared via an override, that is a bypass of a genuine
             # passing verdict — record it visibly (never cleared by a later review).
