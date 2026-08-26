@@ -284,6 +284,23 @@ def _isolate_judge_ledger(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_task_accumulator(tmp_path, monkeypatch):
+    """Redirect the cross-session task accumulator to tmp for the suite at large.
+
+    task_accumulator.py has no per-call `root` plumbed through from cli.py (unlike
+    the unit tests in test_task_accumulator.py, which pass `root=tmp_path`
+    directly) -- cmd_approve/cmd_replan/cmd_record_result/cmd_verify_final all call
+    it with the default root. Without this override every test that drives one of
+    those commands reads and writes the SAME real `~/.claude-agent/agentctl/
+    task-accumulators/` file for whatever task_id it happens to share with other
+    tests (a common fixture default), so counts leak across unrelated tests and
+    accumulate past `effort-replan-absolute` until `effort.divergence` fires and
+    routes an otherwise-passing `cmd_record_result` into DIAGNOSING instead of
+    VERIFYING. Same accommodation as `_isolate_judge_ledger`."""
+    monkeypatch.setenv("AGENTCTL_TASK_ACCUMULATOR_DIR", str(tmp_path / "task-accumulators"))
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_recursion_depth(monkeypatch):
     """Drop the ambient AGENT_RECURSION_DEPTH for the suite at large.
 

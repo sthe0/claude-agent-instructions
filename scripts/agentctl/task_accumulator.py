@@ -19,7 +19,11 @@ plain data -- the same shape `refresh_spend(state, rows, path)` already uses
 for the cost ledger.
 
 Schema (``schema_version=1``), one JSON file per `task_id` under
-``config_root.agentctl_task_accumulator_dir() / "<sha256(task_id)>.json"``::
+``config_root.agentctl_task_accumulator_dir() / "<sha256(task_id)>.json"`` --
+honors an ``$AGENTCTL_TASK_ACCUMULATOR_DIR`` override (mirroring
+`edit_ledger.py`'s ``$AGENTCTL_EDIT_LEDGER``), which is what lets the test
+suite redirect every `cli.py` call site to a per-test tmp dir instead of the
+real cross-machine accumulator directory::
 
     {
       "schema_version": 1,
@@ -60,15 +64,23 @@ AXES = ("replan_count", "plan_review_rounds", "plan_enumerate_rounds", "code_rev
 
 SCHEMA_VERSION = 1
 
-DEFAULT_ROOT = config_root.agentctl_task_accumulator_dir()
-
 
 def _hash_task_id(task_id: str) -> str:
     return hashlib.sha256((task_id or "").encode("utf-8")).hexdigest()
 
 
 def _root(root: Path | None) -> Path:
-    return Path(root) if root is not None else DEFAULT_ROOT
+    """Resolved lazily per call, never cached at import time, so an
+    `$AGENTCTL_TASK_ACCUMULATOR_DIR` override set by a test AFTER this module
+    is imported still takes effect -- the same discipline `edit_ledger.py`'s
+    `_ledger_path()` and `judge_ledger.py` already use for their own
+    env-overridable paths."""
+    if root is not None:
+        return Path(root)
+    override = os.environ.get("AGENTCTL_TASK_ACCUMULATOR_DIR")
+    if override:
+        return Path(override).expanduser()
+    return config_root.agentctl_task_accumulator_dir()
 
 
 def _path(task_id: str, root: Path | None = None) -> Path:
