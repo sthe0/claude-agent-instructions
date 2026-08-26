@@ -48,7 +48,8 @@ def _cursor():
 def _specialist_prompt(extra_argv: list[str]) -> str:
     mod = _specialist()
     args = mod.build_parser().parse_args(
-        ["--kind", "developer", "--done-criterion", "d", "--criterion-type", "measurable"]
+        ["--kind", "developer", "--done-criterion", "d", "--criterion-type", "measurable",
+         "--complexity", "medium"]
         + extra_argv
     )
     return mod.assemble_prompt(args, depth=1, permissions="")
@@ -153,7 +154,8 @@ def test_specialist_main_refuses_an_inline_plan_before_launching(monkeypatch, ca
 
     rc = mod.main(
         ["--kind", "developer", "--plan", PROSE_NOT_A_PATH,
-         "--done-criterion", "d", "--criterion-type", "measurable"]
+         "--done-criterion", "d", "--criterion-type", "measurable",
+         "--complexity", "medium"]
     )
 
     assert rc == 2

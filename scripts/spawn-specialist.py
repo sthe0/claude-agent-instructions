@@ -338,7 +338,8 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("acceptEdits", "auto", "bypassPermissions", "default", "dontAsk", "plan"),
         help="claude --permission-mode for the spawned process. Default: acceptEdits for kind=developer (unattended local writes, and no wider), harness default otherwise. See resolve_permission_mode for why NOT bypassPermissions.",
     )
-    p.add_argument(
+    model_group = p.add_mutually_exclusive_group(required=True)
+    model_group.add_argument(
         "--complexity",
         choices=("low", "medium", "high"),
         help="task difficulty -> sub-agent model: low=haiku, medium=sonnet, high=opus. "
@@ -350,12 +351,24 @@ def build_parser() -> argparse.ArgumentParser:
         "scoped refactor, standard plan, routine debugging) -- pick this when unsure; "
         "high = subtle reasoning, architecture, tricky debugging, cross-cutting change, "
         "or adversarial verification where correctness is load-bearing. "
-        "Overrides the per-kind default; --model overrides this.",
+        "Required unless --model is given: there is no inherit-the-parent-model "
+        "fallback, the manager always classifies. Clamped by --max-complexity if set.",
+    )
+    model_group.add_argument(
+        "--model",
+        help="explicit model alias (e.g. sonnet, haiku, opus). An intentional exact "
+        "override, NOT subject to --max-complexity (which only clamps the "
+        "--complexity classification path). Mutually exclusive with --complexity; "
+        "prefer --complexity unless you need an exact model.",
     )
     p.add_argument(
-        "--model",
-        help="explicit model alias (e.g. sonnet, haiku, opus). Wins over --complexity "
-        "and the per-kind default. Prefer --complexity unless you need an exact model.",
+        "--max-complexity",
+        choices=("low", "medium", "high"),
+        default=None,
+        help="ceiling on the model tier a --complexity classification may resolve "
+        "to (e.g. --max-complexity medium caps a 'high' classification down to "
+        "sonnet). Default: unset, no ceiling -- --complexity high still reaches "
+        "opus. Does not affect an explicit --model.",
     )
     p.add_argument("--stage-index", type=int, default=None, help="index of the plan stage this spawn serves (optional; enables per-stage cost attribution)")
     p.add_argument(
@@ -384,26 +397,31 @@ def build_parser() -> argparse.ArgumentParser:
 # per-token price, so routing any complexity band there is a spend decision for the
 # user to make explicitly via `--model fable`, not a default.
 COMPLEXITY_MODEL = {"low": "haiku", "medium": "sonnet", "high": "opus"}
-
-# Fallback model per specialization, used only when neither --model nor --complexity
-# is given. Cheap-but-capable Sonnet for the high-volume implementation/analysis roles;
-# planner is omitted so it inherits the parent (stronger) model.
-MODEL_BY_KIND = {
-    "developer": "sonnet",
-    "thinker": "sonnet",
-    "tech-writer": "sonnet",
-    "yandex-cloud-expert": "sonnet",
-}
+COMPLEXITY_ORDER = ("low", "medium", "high")
 
 
-def resolve_model(args: argparse.Namespace) -> str | None:
+def _clamp_complexity(complexity: str, ceiling: "str | None") -> str:
+    """`complexity`, capped to `ceiling` on COMPLEXITY_ORDER (no-op if
+    `ceiling` is None or complexity is already at/below it)."""
+    if ceiling is None:
+        return complexity
+    if COMPLEXITY_ORDER.index(complexity) > COMPLEXITY_ORDER.index(ceiling):
+        return ceiling
+    return complexity
+
+
+def resolve_model(args: argparse.Namespace) -> str:
     """Model alias for `claude -p --model`, by precedence:
-    explicit --model > --complexity map > per-kind default > None (inherit parent)."""
+    explicit --model (exact override, ignores --max-complexity) > --complexity,
+    clamped by --max-complexity if set, mapped through COMPLEXITY_MODEL.
+
+    --model and --complexity are a required mutually-exclusive pair (see
+    build_parser) — there is no third "neither given" case, so this never
+    inherits the parent's model."""
     if args.model:
         return args.model
-    if args.complexity:
-        return COMPLEXITY_MODEL[args.complexity]
-    return MODEL_BY_KIND.get(args.kind)
+    complexity = _clamp_complexity(args.complexity, args.max_complexity)
+    return COMPLEXITY_MODEL[complexity]
 
 
 # Absolute context ceiling before auto-compaction (tokens) — our own intent, not a
@@ -927,17 +945,12 @@ def main(argv: list[str] | None = None) -> int:
     ceiling_chars = dispatch_prompt_ceiling_chars(model)
     if prompt_exceeds_ceiling(prompt, model):
         measured = len(prompt)
-        model_desc = (
-            f"resolved to --model {model}"
-            if model is not None
-            else "inherited from the parent (no per-kind/complexity model resolved)"
-        )
         print(
             f"error: assembled prompt is {measured} chars, exceeding the "
             f"{ceiling_chars}-char ({dispatch_prompt_ceiling_tokens(model)}-token) "
-            f"pre-spawn refusal ceiling for this child ({model_desc}); refusing before "
-            f"spawning. Shrink constraints/dossier, or dispatch with --plan-brief if not "
-            f"already set.",
+            f"pre-spawn refusal ceiling for this child (resolved to --model {model}); "
+            f"refusing before spawning. Shrink constraints/dossier, or dispatch with "
+            f"--plan-brief if not already set.",
             file=sys.stderr,
         )
         log_refused(
@@ -976,8 +989,7 @@ def main(argv: list[str] | None = None) -> int:
     permission_mode = resolve_permission_mode(args)
     if permission_mode is not None:
         cmd.extend(["--permission-mode", permission_mode])
-    if model is not None:
-        cmd.extend(["--model", model])
+    cmd.extend(["--model", model])
     # The prompt is NOT appended to argv: with the plan inlined it exceeds Linux
     # MAX_ARG_STRLEN (32 pages = 131072 bytes for a single argv string), which execve
     # rejects with E2BIG before the child starts. It travels via stdin instead (see

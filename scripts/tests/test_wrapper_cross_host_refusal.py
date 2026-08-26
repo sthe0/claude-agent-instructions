@@ -44,6 +44,7 @@ def test_spawn_specialist_refuses_under_cursor_bound_host(monkeypatch, tmp_path)
     rc = mod.main([
         "--kind", "developer", "--plan", str(plan),
         "--done-criterion", "done", "--criterion-type", "measurable",
+        "--complexity", "medium",
     ])
     assert rc == 5
 
@@ -58,11 +59,13 @@ def test_spawn_specialist_proceeds_to_normal_validation_when_host_is_claude_or_u
     rc = mod.main([
         "--kind", "nonexistent-kind-xyz", "--plan", str(plan),
         "--done-criterion", "done", "--criterion-type", "measurable",
+        "--complexity", "medium",
     ])
     assert rc == 2
     monkeypatch.setenv("AGENTCTL_RUNTIME_HOST", "claude")
     rc = mod.main([
         "--kind", "nonexistent-kind-xyz", "--plan", str(plan),
         "--done-criterion", "done", "--criterion-type", "measurable",
+        "--complexity", "medium",
     ])
     assert rc == 2

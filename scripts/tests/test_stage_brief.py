@@ -1064,6 +1064,7 @@ def test_main_refuses_oversized_prompt_before_spawning(tmp_path, monkeypatch, ca
         "--done-criterion", "do the thing",
         "--criterion-type", "measurable",
         "--constraints", oversized_constraints,
+        "--complexity", "medium",
         "--stage-index", "1",
         "--plan-brief",
     ]
@@ -1086,31 +1087,33 @@ def test_main_refuses_oversized_prompt_on_whole_plan_path_too(tmp_path, monkeypa
         "--done-criterion", "do the thing",
         "--criterion-type", "measurable",
         "--constraints", oversized_constraints,
+        "--complexity", "medium",
     ]
     rc = MOD.main(argv)
     assert rc == 5
     assert "exceeding" in capsys.readouterr().err
 
 
-def test_main_refusal_names_inherited_model_when_none_resolved(tmp_path, monkeypatch, capsys):
-    """code-reviewer has no MODEL_BY_KIND entry and no --complexity here, so
-    resolve_model returns None; the refusal message must say INHERITED, not
-    claim a model was resolved."""
+def test_main_requires_complexity_or_model_no_inherit_fallback(tmp_path, monkeypatch, capsys):
+    """--complexity and --model are a required, mutually exclusive pair
+    (build_parser's model_group) — omitting both is an argparse-level refusal
+    before main() ever runs, not a silent inherit-the-parent-model fallback."""
     monkeypatch.setattr(MOD, "plans_dir", lambda: tmp_path)
     plan_path, _ = _two_stage_doc(tmp_path)
-    oversized_constraints = "x" * (MOD.dispatch_prompt_ceiling_chars(None) + 1)
     argv = [
         "--kind", "code-reviewer",
         "--plan", str(plan_path),
         "--done-criterion", "do the thing",
         "--criterion-type", "measurable",
-        "--constraints", oversized_constraints,
         "--stage-index", "2",
         "--plan-brief",
     ]
-    rc = MOD.main(argv)
-    assert rc == 5
-    assert "inherited" in capsys.readouterr().err.lower()
+    with pytest.raises(SystemExit) as excinfo:
+        MOD.main(argv)
+    assert excinfo.value.code == 2
+    err = capsys.readouterr().err
+    assert "--complexity" in err and "--model" in err
+    assert "required" in err.lower()
 
 
 # --- the refusal never reaches the launch site (assertion 10) ----------------
@@ -1169,6 +1172,7 @@ def test_oversized_prompt_never_reaches_the_launch_site(
         "--done-criterion", "do the thing",
         "--criterion-type", "measurable",
         "--constraints", "x" * (MOD.dispatch_prompt_ceiling_chars(None) + 1),
+        "--complexity", "medium",
         *path_argv,
     ]
     rc = MOD.main(argv)
