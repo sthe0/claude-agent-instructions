@@ -2900,10 +2900,21 @@ def _note_round_release(state, review_blockers, store: StateStore) -> dict | Non
     reading 0 after the fix. Deduped on the round number: the same round can be refused
     many times, and each refusal must not add a fresh event.
 
-    Returns None when the valve is not active, which is also the payload callers put on
-    the Directive — an explicit "no release here" rather than a missing key.
+    Checks the SOLO plan-review axis OR the combined cross-axis ceiling (item A):
+    `gates.plan_review_blockers` substitutes the release message into its own
+    returned blockers on EITHER condition, so a guard that only checked the solo
+    axis would miss a cross-axis-only release and report None here while the
+    caller's blockers already carry the substituted message. The payload shape
+    itself is unchanged by this — still keyed only on `rounds` — so existing
+    exact-dict assertions against the solo-axis path keep passing.
+
+    Returns None when neither valve is active, which is also the payload callers put
+    on the Directive — an explicit "no release here" rather than a missing key.
     """
-    if not (review_blockers and gates.plan_review_round_release_active(state)):
+    if not (
+        review_blockers
+        and (gates.plan_review_round_release_active(state) or gates.cross_axis_friction_release_active(state))
+    ):
         return None
     already_logged = any(
         e.get("event") == "plan_review_round_release"
@@ -3288,6 +3299,11 @@ def cmd_code_review(args, *, store: StateStore, runner: Runner | None = None) ->
             "only to developer-produced code",
         )
     code_ref = getattr(args, "code_ref", None) or None
+    if gates._code_review_for(state, stage.index) is not None:
+        # A re-review of a stage already reviewed once — the code-review axis's
+        # round-release counter (item A / issue #96), mirroring plan_review_rounds'
+        # per-resubmission increment; reset by cmd_approve/cmd_replan alongside it.
+        state.code_review_rounds += 1
     _record_code_review(
         state,
         CodeReview(
@@ -3543,6 +3559,10 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # digest, a first replan-time review of that same unedited plan would be read as
     # "already counted" and skipped.
     state.plan_review_counted_digest = ""
+    # Reset alongside plan_review_rounds (item A) — approval starts a fresh execution
+    # against the newly-approved plan, so friction spent reviewing code under the
+    # PRIOR plan version should not count against this one.
+    state.code_review_rounds = 0
     state.node = transition(state.node, "approve")
     snap = _snapshot_approved_plan(store, state)
     if snap:
@@ -5209,6 +5229,9 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # against it.
     state.plan_review_rounds = 0
     state.plan_review_counted_digest = ""
+    # Reset alongside the pair above (item A) — same reasoning: rounds spent
+    # code-reviewing the previous plan version are settled once a corrected plan lands.
+    state.code_review_rounds = 0
     # Stamped HERE and not up at the seam: every refusal path of this command is now behind
     # us — the last of them being the critique-coverage gate just above — so like seam (a)
     # the digest only ever names bytes the session ACCEPTED. (Not an enumeration: this
@@ -5502,6 +5525,7 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
         effort_spend_seen=dict(state.effort_spend_seen),
         plan_review_rounds=state.plan_review_rounds,
         plan_review_counted_digest=state.plan_review_counted_digest,
+        code_review_rounds=state.code_review_rounds,
     )
     state.plan_stack.append(frame)
     # Reset to a fresh child cycle — the child re-classifies and plans normally.
@@ -5544,6 +5568,8 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
     # budget and cannot spend — or be charged for — the parent's rounds.
     state.plan_review_rounds = 0
     state.plan_review_counted_digest = ""
+    # Code-review round custody (item A, schema 33) — same reasoning, same frame.
+    state.code_review_rounds = 0
     state.log("push_subplan", child_plan=child_plan, originating_stage=originating, depth=len(state.plan_stack))
     store.save(state)
     return Directive(
@@ -5598,6 +5624,8 @@ def cmd_pop_subplan(args, *, store: StateStore, runner: Runner | None = None) ->
     # about the child's plan, which no longer exists once the parent resumes.
     state.plan_review_rounds = frame.plan_review_rounds
     state.plan_review_counted_digest = frame.plan_review_counted_digest
+    # Code-review round custody (item A, schema 33) — same restore-not-merge reasoning.
+    state.code_review_rounds = frame.code_review_rounds
     state.node = new_node
     # The parent PLAN FILE is authoritative for the venue, so re-derive it here
     # rather than trust the frame: a frame captured after the value was already
