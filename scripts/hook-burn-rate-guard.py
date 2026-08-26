@@ -103,6 +103,15 @@ number the next reader should trust:
 - FIRE band>=1 (warn, $16.20/h): 4/21 (19%); FIRE band>=2 (escalate, $36.45/h):
   0/21 (0%).
 
+A replay has no wall-clock "now", so it necessarily anchors each window at a
+message timestamp rather than at prompt-submission time the way production
+does — and submission is always later than the last assistant message by the
+user's think-time, which only enlarges the denominator and dilutes the rate.
+So the anchor set above is a superset of the realistic ones, and these firing
+rates are UPPER BOUNDS on what production would show, not point estimates —
+conservative in the same direction as the 25-min floor, not a source of
+false confidence.
+
 So: discriminating power is no longer unproven. The guard is quiet on the
 large majority of ordinary sessions (81%), warns on a real minority whose peak
 rate does exceed the medium-tier label read as an hourly rate, and never
@@ -169,6 +178,12 @@ FAST_MIN_SPAN_H = FAST_WINDOW_H / 2.0
 
 STATE_DIR_ENV = "CC_BURN_RATE_STATE_DIR"
 DEFAULT_STATE_DIR = Path.home() / ".local" / "state" / "claude-burn-rate-guard"
+
+# Namespaces this guard's stamp files within state_root() so a prune never
+# touches another caller's files even if STATE_DIR_ENV is pointed at a shared
+# or mistyped directory — band_throttle._prune treats an empty prefix as
+# "this caller owns the whole root".
+BAND_PREFIX = "band-"
 
 # The tier whose declared dollar label and declared active-minutes are read as
 # "one stage of typical size", i.e. the normal rate. Two config.md keys, one
@@ -369,9 +384,9 @@ def main() -> int:
             return 0
         band, fast, slow, warn, escalate = verdict
         root = state_root()
-        if band <= band_throttle.fired_band(session_id, root):
+        if band <= band_throttle.fired_band(session_id, root, BAND_PREFIX):
             return 0
-        band_throttle.record_band(session_id, band, root)
+        band_throttle.record_band(session_id, band, root, BAND_PREFIX)
         print(message(band, fast, slow, warn, escalate))
     except Exception:
         return 0

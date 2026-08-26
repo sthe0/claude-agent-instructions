@@ -211,6 +211,28 @@ def test_a_different_session_is_not_throttled(monkeypatch, capsys, tmp_path):
     assert "burn-rate" in out2
 
 
+def test_a_stale_foreign_file_in_the_state_dir_survives_the_prune(
+    monkeypatch, capsys, tmp_path
+):
+    """band_throttle._prune only removes entries matching this caller's
+    prefix; if CC_BURN_RATE_STATE_DIR is ever pointed at a directory another
+    tool also writes into, an unprefixed pre-existing file must not be
+    treated as this guard's own and deleted on the next band write."""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True)
+    foreign = state_dir / "not-ours.txt"
+    foreign.write_text("do not touch", encoding="utf-8")
+    import os
+    import time
+    old = time.time() - 40 * 86400  # older than band_throttle.MAX_AGE_DAYS
+    os.utime(foreign, (old, old))
+
+    _run(monkeypatch, capsys, tmp_path, _transcript(tmp_path, BOTH_HOT))
+
+    assert foreign.exists()
+    assert foreign.read_text(encoding="utf-8") == "do not touch"
+
+
 # --- fail-open ----------------------------------------------------------------
 
 def test_missing_transcript_is_silent_and_exits_zero(monkeypatch, capsys, tmp_path):
