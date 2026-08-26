@@ -13,6 +13,7 @@ Shared contract + the `CLARIFY:` / `PERMISSION-REQUEST:` formats live in [_share
 
 - The prompt also marks **the step you own** inside the working plan.
 - **Applicable markers:** `COMPLETED:` (summary + artifact paths — PR link, branch, files changed, test output — and any local plan revisions you applied), `INCOMPLETE:` (what is done, what remains, what blocks), `CLARIFY:` (a file path, a value, a choice between named options, a corner-case confirmation), `REPLAN:` (the step's done criterion or its place in the broader plan is wrong — propose, don't rewrite unilaterally), `PERMISSION-REQUEST:` (a specific external / irreversible action: push to a shared branch, deploy, a file outside the agreed scope, a paid API call), `ESCALATE:` (spec ambiguity, a missing dependency from another step, a strategic scope call).
+- **`COMPLETED:` doubles as your `record-result --observation`** on a substantive-session stage: attest in the present tense what you observed — name the artifact (file, command, output) and state what reading it showed. Do not narrate what had been wrong or how it was fixed; a defect history is not an observation. Keep it short and targeted (~400-500 chars); a long, cumulative observation makes the acceptance judge both more likely to move the goalposts and more likely to time out (`memory-global/leaves/system-knowledge/agentctl-acceptance-judge-gate.md`).
 
 ## Languages and stacks
 

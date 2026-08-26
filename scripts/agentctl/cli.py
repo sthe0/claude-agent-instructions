@@ -125,6 +125,21 @@ TASK_QUALITY_LOG = Path.home() / ".local" / "log" / "claude-task-quality.jsonl"
 _GIT_HEAD_TIMEOUT_S = 5
 _VALID_QUALITY_RATINGS = (1, 2, 3, 4, 5)
 
+# The required observation shape, stated once and referenced everywhere an
+# observation is authored or its rejection explained (GitHub issue #95):
+# a rubric's success form must live at the authoring point, not only at the
+# refusal point. Kept short and length-bounded because the acceptance-judge
+# leaf's empirical finding is that long, cumulative observations are what
+# drives the fail-open rate up, not just the revise rate.
+OBSERVATION_CONTRACT = (
+    "attest in the present tense what you observed: name the artifact "
+    "(file, command, output) and state what reading it showed. Do not "
+    "narrate what had been wrong or how it was fixed — a defect history is "
+    "not an observation. Keep it short and targeted (~400-500 chars); a "
+    "long cumulative observation makes the judge both more likely to move "
+    "the goalposts and more likely to time out."
+)
+
 
 def _digest(text: str) -> str:
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:12]
@@ -4423,16 +4438,16 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
         if not norm_obs:
             return Directive(
                 False, state.node, "attest_observation",
-                f"stage {stage.index} {reason}; pass requires recording WHAT you "
-                "observed, distinct from the expected image "
+                f"stage {stage.index} {reason}; pass requires recording an observation — "
+                f"{OBSERVATION_CONTRACT} "
                 "(supply: record-result --observation '<what you observed>')",
             )
         if norm_obs == norm_img:
             return Directive(
                 False, state.node, "attest_observation",
-                f"stage {stage.index} {reason}; pass requires recording WHAT you "
-                "observed, distinct from the expected image — "
-                "echoing the target does not count "
+                f"stage {stage.index} {reason}; pass requires recording an observation, "
+                "not echoing the target — "
+                f"{OBSERVATION_CONTRACT} "
                 "(supply: record-result --observation '<what you observed>')",
             )
 
@@ -6885,9 +6900,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="control-criterion attestation (required for spawn:developer stages "
                          "when recording passed; accepted on any stage)")
     sp.add_argument("--observation", default="",
-                    help="what you actually observed, distinct from the expected image "
-                         "(required when recording passed on an acceptance_review stage, "
-                         "or on any stage of a substantive session)")
+                    help=f"{OBSERVATION_CONTRACT} (required when recording passed on an "
+                         "acceptance_review stage, or on any stage of a substantive session)")
     sp.add_argument("--code-ref", dest="code_ref", default=None,
                     help="for spawn:developer stages: the reviewed-code revision/digest, to "
                          "cross-check against the bound CodeReview's --code-ref (drift -> stale)")
@@ -7015,8 +7029,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--actual", default="")
     sp.add_argument("--control", default=None)
     sp.add_argument("--observation", default="",
-                    help="what you actually observed, distinct from the expected image "
-                         "(threaded to record-result; see record-result --observation)")
+                    help=f"{OBSERVATION_CONTRACT} (threaded to record-result; see "
+                         "record-result --observation)")
     sp.add_argument("--confirmed-by", dest="confirmed_by", default=None,
                     help="human token authorizing the wrapper to cross the resolution "
                          "gate; pass ONLY after explicit user confirmation")

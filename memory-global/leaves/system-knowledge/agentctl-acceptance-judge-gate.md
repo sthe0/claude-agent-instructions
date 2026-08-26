@@ -18,6 +18,13 @@ judge's verdict and its stated reason actually live.
 
 Read from `agentctl/cli.py` directly (~lines 4080-4200):
 
+- **The required observation shape** (`cli.OBSERVATION_CONTRACT`, stated at every authoring point —
+  `record-result --observation` help, `close --observation` help, and both observation-refusal
+  Directives): attest in the present tense what you observed: name the artifact (file, command,
+  output) and state what reading it showed. Do not narrate what had been wrong or how it was fixed
+  — a defect history is not an observation. Keep it short and targeted (~400-500 chars); a long
+  cumulative observation makes the judge both more likely to move the goalposts and more likely to
+  time out.
 - On `record-result --status passed`, when `requires_observation` is true (an
   `acceptance_review` stage, or **any** stage of a SUBSTANTIVE session), the CLI first checks the
   observation is non-empty and differs from the expected image (`gates._normalize_string`).
