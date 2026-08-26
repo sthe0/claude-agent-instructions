@@ -2716,6 +2716,20 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
             )
 
     if kind == PLAN_PRESENTATION_KIND_ESSENCE:
+        # Fold any landed enumerator sidecar BEFORE computing the coverage block,
+        # so candidates are in the bag when the receipt is stamped (#60). The fold
+        # is idempotent: a second call from cmd_approve at the same digest is a
+        # no-op (the same-digest guard in _fold_enumeration_sidecar fires). A failed
+        # plan load is swallowed — it surfaces moments later via the coverage_block
+        # check below which also loads the plan.
+        _fold_pres_bag = state.plugins.get("premise")
+        if _fold_pres_bag is not None:
+            try:
+                _fold_pres_doc = load_plan(state.plan_path)
+                if _fold_enumeration_sidecar(state, _fold_pres_doc, state.plan_path):
+                    store.save(state)
+            except Exception:
+                pass
         # The scope-coverage block must be IN the essence — checked the same
         # mechanical way the `full` branch above checks stage anchors (containment
         # of engine-generated lines, never a read of the essence's own prose).
