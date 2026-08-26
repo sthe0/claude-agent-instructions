@@ -4,7 +4,7 @@ description: The premise plugin gates plan_approval on question provenance — e
 schema: leaf/v1
 type: reference
 created: 2026-07-20
-last_verified: 2026-08-18
+last_verified: 2026-08-26
 ---
 
 ## Difficulty
@@ -69,6 +69,16 @@ Load-bearing, and the reason this is a NARROWING rather than a loosening: `verif
 Nothing previously capped how many `submit-plan` → thinker-revise → resubmit cycles a plan could churn through before approval — every other phase of the spine (replan count, cost tiers) carries a limiter; the pre-approval phase did not, so the cheapest place to start a round was also the one place its number was invisible. `state.plan_review_rounds` counts `PLAN_READY` resubmissions since the last `approve`, advanced only while a review record actually stands (never re-derived from records on file, since a stage-scoped review staled by the very edit that answered it would then read as "no review happened"). At `effort-replan-absolute` (config.md's Rule-of-Three threshold — the same one `CLAUDE.md`'s effort-divergence trigger reuses, not a new key) `plan_review_blockers` stops demanding another review pass and instead routes to the user: accept the plan as it stands via a distinct-reviewer `plan-review --verdict override`, naming why, or cut scope and resubmit — which does not itself refill the budget. The threshold never approves by itself; a scope or risk question at round three is the customer's to answer, not the engine's.
 
 **The enumeration axis is the same shape and needed the same budget.** `cmd_question_enumerate_escape`'s docstring used to argue that a stale enumeration is deliberately not escapable and needs no escape, because re-running the check clears it, *always*. That is true per step and false over the loop: re-running clears staleness but surfaces questions; dispositioning a question frequently edits the plan; the edit moves the plan content digest; the digest change stales the enumeration again. Not a wedge — a **treadmill**, whose every lap is paid for in the user's attention, and whose step rule was correct precisely because it had no termination rule. So `gates.plan_enumerate_round_release_active` mirrors the review twin on the *same* `effort-replan-absolute` threshold and on the *existing* `enumerate_pass` counter (monotonic over the bag's life and deliberately not re-based on a digest change — a per-digest counter would reset on every plan edit and so could never fire across the treadmill's own lap boundary; no new config key, no copy of the review-round code). In `premise_blockers` only the staleness arm of the `if/elif` chain collapses: the undispositioned-question, order-coverage and runner-failure arms are peer branches and stand untouched. The discharge stays typed and countable — one new closed-set reason, `enumerate_rounds_exhausted`, added to `ENUMERATION_ESCAPE_REASONS` and NOT to `ENUMERATION_RUNNER_FAILURE_REASONS` (so it can never discharge a failed runner), refused outright while the release is inactive. Liveness holds on every branch: stale below the budget → re-run; stale at or above it → the new reason; runner-failed → the four F3b reasons; not landed → `enumeration_not_landed`.
+
+## Presenting the round-release choice to the user
+
+`plan_review_round_release_active` firing retires only the GATE's demand for another mandatory review pass — the blocker text's "no further thinker review is required" is not "no further thinker review is possible". An additional, purely advisory thinker-review pass remains spawnable before the coordinator records the now-mandatory `override`, at its own judgment, for extra scrutiny on a plan the budget no longer forces through review. The `AskUserQuestion` presented at this gate must therefore offer, at minimum, three options rather than a bare override-vs-show-full-plan binary:
+
+- record `override` now (name the reviewer + note) — recommended when the plan is already well-scrutinized;
+- spawn one more advisory thinker pass first, then record `override` regardless (the budget does not refill; this pass buys extra scrutiny, not another required gate) — recommended when open concerns remain;
+- cut scope and resubmit (`replan` / `submit-plan`) — a fresh round is owed only if scope actually changed.
+
+Narrowing to the first two repeats, at this specific gate, the general failure the materiality test names elsewhere in this leaf: presenting the courses the ENGINE happens to gate rather than the full set the coordinator's own analysis enumerated (`CLAUDE.md` § AskUserQuestion mandatory-use, "an ask's options must span the full set"). Confirmed 2026-08-26 by exhaustive git-history search (`log -S` on the candidate phrasings, plus a full-repo grep): no prior version of `CLAUDE.md`, this leaf, or any skill ever wrote the middle option down — its past appearances were unrecorded model recall, not an encoded rule, which is exactly why it could regress with nothing to catch the drop.
 
 ## Materiality (a raised question names the control its answer could flip)
 
