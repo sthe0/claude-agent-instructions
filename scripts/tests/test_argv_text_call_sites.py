@@ -237,7 +237,7 @@ def _specialist_prompt(extra_argv: list[str], plan: str) -> str:
     mod = _load("spawn-specialist.py", "spawn_specialist")
     args = mod.build_parser().parse_args(
         ["--kind", "developer", "--criterion-type", "measurable", "--plan", plan,
-         "--complexity", "medium"]
+         "--complexity", "medium", "--effort", "medium"]
         + extra_argv
     )
     return mod.assemble_prompt(args, depth=1, permissions="")

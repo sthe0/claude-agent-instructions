@@ -106,6 +106,7 @@ def _dry_run(tmp_path: Path, home: Path, tier: str) -> subprocess.CompletedProce
         "--done-criterion", "stub does nothing",
         "--criterion-type", "measurable",
         "--complexity", "medium",
+        "--effort", "medium",
         "--budget", tier,
         "--dry-run",
     ]
@@ -164,6 +165,7 @@ def _run_spawn(tmp_path: Path, home: Path, bin_dir: Path, tier: str) -> subproce
         "--done-criterion", "stub does nothing",
         "--criterion-type", "measurable",
         "--complexity", "medium",
+        "--effort", "medium",
         "--budget", tier,
     ]
     return subprocess.run(cmd, env=_base_env(home, bin_dir), capture_output=True, text=True, timeout=30)

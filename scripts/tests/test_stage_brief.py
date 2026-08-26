@@ -1065,6 +1065,7 @@ def test_main_refuses_oversized_prompt_before_spawning(tmp_path, monkeypatch, ca
         "--criterion-type", "measurable",
         "--constraints", oversized_constraints,
         "--complexity", "medium",
+        "--effort", "medium",
         "--stage-index", "1",
         "--plan-brief",
     ]
@@ -1088,6 +1089,7 @@ def test_main_refuses_oversized_prompt_on_whole_plan_path_too(tmp_path, monkeypa
         "--criterion-type", "measurable",
         "--constraints", oversized_constraints,
         "--complexity", "medium",
+        "--effort", "medium",
     ]
     rc = MOD.main(argv)
     assert rc == 5
@@ -1173,6 +1175,7 @@ def test_oversized_prompt_never_reaches_the_launch_site(
         "--criterion-type", "measurable",
         "--constraints", "x" * (MOD.dispatch_prompt_ceiling_chars(None) + 1),
         "--complexity", "medium",
+        "--effort", "medium",
         *path_argv,
     ]
     rc = MOD.main(argv)

@@ -370,6 +370,19 @@ def build_parser() -> argparse.ArgumentParser:
         "sonnet). Default: unset, no ceiling -- --complexity high still reaches "
         "opus. Does not affect an explicit --model.",
     )
+    p.add_argument(
+        "--effort",
+        choices=("low", "medium", "high", "xhigh", "max"),
+        required=True,
+        help="claude -p --effort reasoning-effort level for the spawned child. "
+        "Required, with no inherit-the-parent fallback, on the same rationale as "
+        "--complexity/--model (see resolve_model): an optional flag with a "
+        "default degrades into an unconsidered default under time pressure. "
+        "Rubric: low = cheap dispatch/retrieval/polling; medium = standard "
+        "implementation or analysis (pick when unsure); high/xhigh = subtle "
+        "reasoning, architecture, adversarial verification where correctness is "
+        "load-bearing; max = rare, only for the most contested judgment calls.",
+    )
     p.add_argument("--stage-index", type=int, default=None, help="index of the plan stage this spawn serves (optional; enables per-stage cost attribution)")
     p.add_argument(
         "--plan-brief",
@@ -990,6 +1003,7 @@ def main(argv: list[str] | None = None) -> int:
     if permission_mode is not None:
         cmd.extend(["--permission-mode", permission_mode])
     cmd.extend(["--model", model])
+    cmd.extend(["--effort", args.effort])
     # The prompt is NOT appended to argv: with the plan inlined it exceeds Linux
     # MAX_ARG_STRLEN (32 pages = 131072 bytes for a single argv string), which execve
     # rejects with E2BIG before the child starts. It travels via stdin instead (see
@@ -1113,6 +1127,7 @@ def main(argv: list[str] | None = None) -> int:
         "kind": args.kind,
         "budget_tier": args.budget,
         "budget_usd_cap": cap,
+        "effort": args.effort,
         "depth": depth_next,
         "cost_usd": cost_usd,
         "duration_ms": duration_ms,

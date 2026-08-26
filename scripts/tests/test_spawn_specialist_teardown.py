@@ -86,6 +86,8 @@ def test_wrapper_sigterm_reaps_claude_subtree(tmp_path):
         "measurable",
         "--complexity",
         "medium",
+        "--effort",
+        "medium",
     ]
 
     wrapper = subprocess.Popen(
