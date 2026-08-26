@@ -20,7 +20,7 @@ import shlex
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 
-SCHEMA_VERSION = 32
+SCHEMA_VERSION = 33  # 33: SessionState/PlanFrame gain code_review_rounds (item A / issue #96)
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -1116,6 +1116,10 @@ class PlanFrame:
     # the same zeroed pair a fresh push would produce.
     plan_review_rounds: int = 0
     plan_review_counted_digest: str = ""
+    # Code-review round custody (item A / GitHub issue #96) — mirrors plan_review_rounds
+    # above: the service sub-plan's own code-review rounds are a separate budget from the
+    # parent's, so cmd_push_subplan snapshots and zeroes, cmd_pop_subplan restores.
+    code_review_rounds: int = 0
 
 
 @dataclass
@@ -1358,6 +1362,16 @@ class SessionState:
     # spawn:developer stage's PASSED record until a review is recorded
     # (fail-closed).
     code_reviews: list[CodeReview] = field(default_factory=list)
+    # Code-review round counter (item A / GitHub issue #96) — the code-review axis's
+    # analog of plan_review_rounds above: this axis previously had no round-release
+    # valve at all. Incremented by cmd_code_review each time a verdict is recorded for
+    # a stage that already had one (a re-review, not the first pass); reset alongside
+    # plan_review_rounds by cmd_approve and cmd_replan. Read by
+    # gates.code_review_round_release_active and by gates.cross_axis_friction_release_active
+    # (which sums this axis with plan_review_rounds and the plan-enumerate axis's own
+    # counter against ONE shared ceiling). 0 on legacy states (absent key -> dataclass
+    # default via from_dict's cls(**data)).
+    code_review_rounds: int = 0
     # Plan-level acceptance record backing the resolution gate's acceptance check
     # (schema 26): the ORDER's customer accepting the delivered PRODUCT against the
     # order's declared requirements, once, at resolution — distinct from every
@@ -1713,6 +1727,7 @@ class SessionState:
                 effort_spend_seen=f.get("effort_spend_seen") or {},
                 plan_review_rounds=f.get("plan_review_rounds") or 0,
                 plan_review_counted_digest=f.get("plan_review_counted_digest") or "",
+                code_review_rounds=f.get("code_review_rounds") or 0,
             )
             for f in data.get("plan_stack", [])
         ]

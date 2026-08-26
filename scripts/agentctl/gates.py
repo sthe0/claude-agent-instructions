@@ -44,6 +44,7 @@ from . import advisor as _advisor
 from . import delivery
 from .config import Thresholds
 from .plan import PlanError, changed_parts, load_plan, order_place, stage_question_key
+from .round_release import RoundReleaseCounter, compute_cross_axis_ceiling
 from .state import Node, SessionState, StageStatus, WeightClass
 from .state import plan_review_concern_ids as _plan_review_concern_ids
 from .state import plan_review_scope_for_stage as _plan_review_scope_for_stage
@@ -521,6 +522,21 @@ _PLAN_REVIEW_ROUND_RELEASE_MESSAGE = (
 )
 
 
+#: The plan-review axis's round-release valve (see `round_release.RoundReleaseCounter`)
+#: — one instance per axis, all three sharing the same threshold accessor
+#: (`Thresholds.effort_replan_absolute`) and comparison, differing only in WHERE their
+#: round count lives.
+_PLAN_REVIEW_ROUND_COUNTER = RoundReleaseCounter(
+    name="plan_review", getter=lambda state: state.plan_review_rounds,
+)
+_CODE_REVIEW_ROUND_COUNTER = RoundReleaseCounter(
+    name="code_review", getter=lambda state: state.code_review_rounds,
+)
+_PLAN_ENUMERATE_ROUND_COUNTER = RoundReleaseCounter(
+    name="plan_enumerate", getter=lambda bag: bag.get("enumerate_pass"),
+)
+
+
 def plan_review_round_release_active(state: SessionState | None, thr: Thresholds | None = None) -> bool:
     """True once `state.plan_review_rounds` has reached the Rule-of-Three threshold this
     stage reuses rather than duplicating — config.md's `effort-replan-absolute`. Past this
@@ -538,11 +554,12 @@ def plan_review_round_release_active(state: SessionState | None, thr: Thresholds
     one — and deliberately NOT re-derived here from the records still on file. Re-deriving
     it reads a PAST event off a PRESENT record, and the two diverge exactly when a
     stage-scoped review is staled by the same edit that answers it: three spent rounds
-    would then look like none."""
-    if state is None:
-        return False
-    thr = thr if thr is not None else Thresholds()
-    return state.plan_review_rounds >= thr.effort_replan_absolute()
+    would then look like none.
+
+    Delegates to `_PLAN_REVIEW_ROUND_COUNTER` (see `round_release.RoundReleaseCounter`);
+    kept as a standalone function because it is part of this module's public surface
+    (imported directly by cli.py and the test suite)."""
+    return _PLAN_REVIEW_ROUND_COUNTER.release_active(state, thr)
 
 
 #: Message substituted for the staleness blocker in `premise_blockers` once the
@@ -578,11 +595,76 @@ def plan_enumerate_round_release_active(bag, thr: Thresholds | None = None) -> b
     questions → dispose → edit → stale → enumerate again), and each lap increments
     `enumerate_pass` exactly once, so the total pass count directly measures how many
     laps the user has paid for. A per-digest count would reset on every plan edit and
-    could never fire across the treadmill's own lap boundary."""
-    if bag is None:
+    could never fire across the treadmill's own lap boundary.
+
+    Delegates to `_PLAN_ENUMERATE_ROUND_COUNTER` (see
+    `round_release.RoundReleaseCounter`); kept as a standalone function for the same
+    reason as `plan_review_round_release_active`."""
+    return _PLAN_ENUMERATE_ROUND_COUNTER.release_active(bag, thr)
+
+
+def cross_axis_friction_release_active(state: SessionState | None, thr: Thresholds | None = None) -> bool:
+    """True once the SUM of plan-review + plan-enumerate + code-review round counts
+    reaches the shared Rule-of-Three threshold (config.md's `effort-replan-absolute`)
+    — even when no single axis has individually reached it.
+
+    Exists because the three per-axis valves (`plan_review_round_release_active`,
+    `plan_enumerate_round_release_active`, `code_review_round_release_active`) each
+    hold an independent budget against their own scale: a session can spend 2 rounds
+    on plan-review plus 2 on code-review — 4 total, past the threshold — with neither
+    individual valve firing. Real session baa1daea reached 5+ combined rounds with no
+    valve firing at all. This predicate closes that gap by reading all three counts
+    together, via `round_release.compute_cross_axis_ceiling`.
+
+    Reads the plan-enumerate count from `state.plugins.get("premise")` (a plugin-owned
+    bag `plugins_premise.py` mutates — see `plan_enumerate_round_release_active`)
+    rather than a duplicate SessionState field, so this module never writes to
+    premise-owned state; `state.plugins` defaults to `{}`, so a missing "premise" key
+    degrades to 0 rather than an error.
+
+    Wiring this predicate into the plan-enumerate axis's OWN gate (`plugins_premise.py`)
+    is deliberately out of scope here — see that module's docstring for which stage
+    owns it; this function is usable from either side."""
+    if state is None:
         return False
-    thr = thr if thr is not None else Thresholds()
-    return int(bag.get("enumerate_pass") or 0) >= thr.effort_replan_absolute()
+    bag = state.plugins.get("premise")
+    values = (
+        _PLAN_REVIEW_ROUND_COUNTER.value(state),
+        _CODE_REVIEW_ROUND_COUNTER.value(state),
+        _PLAN_ENUMERATE_ROUND_COUNTER.value(bag),
+    )
+    return compute_cross_axis_ceiling(values, thr)
+
+
+def _round_release_wrap(
+    blockers: list[str], state: SessionState, counter: RoundReleaseCounter, message_template: str,
+) -> list[str]:
+    """Shared outermost-substitution behavior for a round-release valve, reused by
+    `plan_review_blockers` and `code_review_blockers`: once EITHER this axis's own
+    counter or the combined cross-axis ceiling has fired, every blocker the caller
+    would otherwise return collapses into the ONE routing message `message_template`
+    names — never a partial substitution, and never both a solo and a cross-axis
+    message at once.
+
+    When the axis fires alone, this reproduces exactly what the pre-cross-axis code
+    did (`message_template.format(rounds=counter.value(state))`) — the byte-identical
+    backward-compat path. When only the COMBINED ceiling fired (this axis's own count
+    is still under threshold), the message gets one extra sentence naming that so a
+    reader is not told "round budget exhausted" for a round count that, read alone,
+    is not exhausted."""
+    if not blockers:
+        return blockers
+    solo = counter.release_active(state)
+    cross = cross_axis_friction_release_active(state)
+    if not (solo or cross):
+        return blockers
+    message = message_template.format(rounds=counter.value(state))
+    if not solo:
+        message += (
+            " (released by the COMBINED cross-axis friction ceiling, not this axis alone "
+            "— see cross_axis_friction_release_active)"
+        )
+    return [message]
 
 
 def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[str]:
@@ -609,8 +691,9 @@ def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[s
 
     Round release wraps the OUTERMOST result: whatever combination of "no review",
     "stale", or "verdict blocked" branches produced a non-empty list, past the round
-    threshold every one of them collapses to the single routing message — the review
-    requirement is released as one event, not per sub-reason."""
+    threshold (this axis's own, or the combined cross-axis ceiling — see
+    `_round_release_wrap`) every one of them collapses to the single routing
+    message — the review requirement is released as one event, not per sub-reason."""
     if not plan_review_active(state):
         return []
     doc = None
@@ -623,9 +706,7 @@ def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[s
         blockers = _plan_review_blockers_whole(state.plan_review, target_plan, state=state, doc=doc)
     else:
         blockers = _plan_review_blockers_coverage(state, target_plan, doc)
-    if blockers and plan_review_round_release_active(state):
-        return [_PLAN_REVIEW_ROUND_RELEASE_MESSAGE.format(rounds=state.plan_review_rounds)]
-    return blockers
+    return _round_release_wrap(blockers, state, _PLAN_REVIEW_ROUND_COUNTER, _PLAN_REVIEW_ROUND_RELEASE_MESSAGE)
 
 
 def plan_review_delta(state: SessionState, doc) -> "tuple[bool, set[int]]":
@@ -931,6 +1012,33 @@ def acceptance_review_blockers(state: SessionState, stage: "_Stage") -> list[str
     return [f"acceptance judge verdict is {review.verdict!r} — pass blocked until a passing verdict (or an explicit override) is recorded"]
 
 
+#: Message substituted for whatever `code_review_blockers` would otherwise return once
+#: the round-release fires (see `code_review_round_release_active`). Mirrors
+#: `_PLAN_REVIEW_ROUND_RELEASE_MESSAGE` — item A / GitHub issue #96: this axis
+#: previously had NO round-release valve at all, so a stuck revise/re-review loop was
+#: unbounded. Names the one act executable from this state that both records the
+#: user's decision and opens the gate: `code-review --verdict override`.
+_CODE_REVIEW_ROUND_RELEASE_MESSAGE = (
+    "code review round budget exhausted at round {rounds} (Rule-of-Three — config.md's "
+    "effort-replan-absolute, reused) — no further code-reviewer pass is required, but the "
+    "decision is yours and must be recorded: to accept the code as it stands, run "
+    "code-review --verdict override --reviewer <you> --note <why it is acceptable>; "
+    "to request changes instead, address them and re-run code-review — the budget does "
+    "not refill, so a re-review does not by itself open this gate; record-result still "
+    "answers to every other gate as well"
+)
+
+
+def code_review_round_release_active(state: SessionState | None, thr: Thresholds | None = None) -> bool:
+    """True once `state.code_review_rounds` has reached the Rule-of-Three threshold —
+    config.md's `effort-replan-absolute`. Past this point `code_review_blockers` stops
+    demanding another code-reviewer pass and routes to the user instead (see
+    `_CODE_REVIEW_ROUND_RELEASE_MESSAGE`). Mirrors `plan_review_round_release_active`;
+    closes the item A / GitHub issue #96 gap (this axis previously had no valve at all).
+    Delegates to `_CODE_REVIEW_ROUND_COUNTER` (see `round_release.RoundReleaseCounter`)."""
+    return _CODE_REVIEW_ROUND_COUNTER.release_active(state, thr)
+
+
 def code_review_active(state: SessionState) -> bool:
     """Whether the code-reviewer gate applies to this session.
 
@@ -975,9 +1083,24 @@ def code_review_blockers(
         reviewed a different code revision than the one now being recorded; either side
         empty degrades to verdict-only (legacy / unbound review);
       - the verdict must be `pass`, or `override` with a non-empty reviewer AND note
-        (the explicit user escape); `revise`/unknown blocks."""
+        (the explicit user escape); `revise`/unknown blocks.
+
+    Round release wraps the OUTERMOST result (see `_round_release_wrap`): past this
+    axis's own round threshold, or the combined cross-axis ceiling, whatever the
+    checks above produced collapses to the single routing message — item A / GitHub
+    issue #96: this axis previously had no round-release valve at all."""
     if not code_review_active(state):
         return []
+    blockers = _code_review_verdict_blockers(state, stage, expected_code_sha256)
+    return _round_release_wrap(blockers, state, _CODE_REVIEW_ROUND_COUNTER, _CODE_REVIEW_ROUND_RELEASE_MESSAGE)
+
+
+def _code_review_verdict_blockers(
+    state: SessionState, stage: "_Stage", expected_code_sha256: str | None,
+) -> list[str]:
+    """The verdict/staleness checks `code_review_blockers` runs once the gate is
+    active — split out so the round-release wrap in the caller sees one outermost
+    result regardless of which branch below produced it."""
     review = _code_review_for(state, stage.index)
     if review is None:
         return [
