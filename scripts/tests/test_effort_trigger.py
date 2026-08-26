@@ -567,6 +567,17 @@ def test_fire_diagnose_replan_cycle_then_refires_on_renewed_overrun(store, fixtu
                         failure_address="нормативное"), store=store)
     cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
 
+    # Stage 7: replan is blocked until the fire itself is explicitly decided —
+    # this is the synchronous escalation closing the gap where a fire sat in
+    # state.effort_fires unread while the ordinary difficulty cycle proceeded
+    # around it.
+    d_blocked = cli.cmd_replan(ns(session=sid, plan=refined), store=store)
+    assert d_blocked.ok is False
+    assert d_blocked.marker == "ESCALATE_TO_USER"
+    cli.cmd_fire_acknowledge(
+        ns(session=sid, by="user", decision="revise", note=None), store=store,
+    )
+
     d_replan = cli.cmd_replan(ns(session=sid, plan=refined), store=store)
     assert d_replan.action == "next_stage"
     state = store.load(sid)
