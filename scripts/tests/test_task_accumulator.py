@@ -15,7 +15,7 @@ from agentctl import task_accumulator as ta
 
 def test_get_on_missing_file_returns_zeroed_shape(tmp_path):
     data = ta.get("some-task", root=tmp_path)
-    assert data["schema_version"] == 1
+    assert data["schema_version"] == ta.SCHEMA_VERSION
     assert data["task_id"] == "some-task"
     assert data["per_axis_totals"] == {axis: 0 for axis in ta.AXES}
     assert data["session_ids_contributing"] == []
@@ -127,7 +127,7 @@ def test_persisted_file_is_valid_json_with_expected_keys(tmp_path):
     ta.add("task-a", "replan_count", 1, root=tmp_path)
     path = ta._path("task-a", root=tmp_path)
     on_disk = json.loads(path.read_text(encoding="utf-8"))
-    assert on_disk["schema_version"] == 1
+    assert on_disk["schema_version"] == ta.SCHEMA_VERSION
     assert set(on_disk["per_axis_totals"]) == set(ta.AXES)
 
 
@@ -144,7 +144,7 @@ def test_get_degrades_gracefully_on_future_schema_version(tmp_path):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"schema_version": 999, "task_id": "task-a"}), encoding="utf-8")
     data = ta.get("task-a", root=tmp_path)
-    assert data["schema_version"] == 1
+    assert data["schema_version"] == ta.SCHEMA_VERSION
     assert data["per_axis_totals"] == {axis: 0 for axis in ta.AXES}
 
 

@@ -345,6 +345,29 @@ def _thresholds_for_absolute(thr: Thresholds) -> dict:
     }
 
 
+def comparands(state: SessionState, thr: Thresholds | None = None) -> dict:
+    """What each scale's delta is measured against: the STORED estimate for a ratio
+    scale, the configured absolute count for an absolute one. A zero means the scale
+    is inapplicable (no stored estimate, or an accounting-only threshold).
+
+    Split out of `ratios` so a REPORT can name the same comparand the comparison used,
+    without either recomputing the ladder or reaching into `_thresholds_for_absolute`."""
+    thr = thr if thr is not None else Thresholds()
+    est = state.effort_estimate or {}
+    absolute = _thresholds_for_absolute(thr)
+    return {
+        scale: (float(est.get(scale) or 0.0) if scale in RATIO_SCALES else absolute[scale])
+        for scale in SCALE_ORDER
+    }
+
+
+def describe(scale: str) -> tuple[str, str]:
+    """This scale's human label and unit — for a caller that formats its own numbers
+    (the read-only `effort-check` report, the watch hook's one line) instead of taking
+    the fully-formed `Divergence.framing`."""
+    return _LABEL[scale], _UNIT[scale]
+
+
 def ratios(state: SessionState, thr: Thresholds | None = None) -> dict:
     """Per-scale `delta / comparand`, or None where the scale is inapplicable.
 
@@ -352,18 +375,12 @@ def ratios(state: SessionState, thr: Thresholds | None = None) -> dict:
     count for an absolute one. None means "this scale cannot fire and cannot be ranked":
     an unarmed session, a zero estimate, or a zero (accounting-only) threshold. Read by
     the quality-ledger row as well as by `divergence()`."""
-    thr = thr if thr is not None else Thresholds()
-    est = state.effort_estimate or {}
-    absolute = _thresholds_for_absolute(thr)
+    comparand = comparands(state, thr)
     delta = deltas(state)
-
-    out: dict[str, float | None] = {}
-    for scale in SCALE_ORDER:
-        comparand = (
-            float(est.get(scale) or 0.0) if scale in RATIO_SCALES else absolute[scale]
-        )
-        out[scale] = (delta[scale] / comparand) if comparand > 0 else None
-    return out
+    return {
+        scale: (delta[scale] / comparand[scale]) if comparand[scale] > 0 else None
+        for scale in SCALE_ORDER
+    }
 
 
 def _replans_since_last_fire(state: SessionState) -> int:

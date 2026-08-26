@@ -74,6 +74,12 @@ DESIRED = [
     # tail read), so this timeout does not need to grow with a long session.
     ("UserPromptSubmit", None,    "hook-burn-rate-guard.py",         5),
     ("UserPromptSubmit", None,    "hook-engine-start.py",            5),
+    # Turn-driven half of the effort-divergence trigger, which otherwise only ever
+    # compares inside a command the coordinator chose to run. Drives the read-only
+    # `agentctl effort-check` in a subprocess — a state load plus a cost-ledger read,
+    # with the hook's own CHECK_TIMEOUT_S (8 s) bounding it from the inside; 10 here
+    # so the outer timeout cannot pre-empt that inner one and lose its silence.
+    ("UserPromptSubmit", None,    "hook-effort-divergence-watch.py", 10),
     ("UserPromptSubmit", None,    "hook-resolution-reminder.py",     5),
     ("UserPromptSubmit", None,    "hook-self-improvement-reminder.py", 5),
     ("UserPromptSubmit", None,    "hook-tracker-reminder.py",        5),

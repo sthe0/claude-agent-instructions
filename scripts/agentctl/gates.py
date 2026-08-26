@@ -1103,6 +1103,79 @@ def effort_fire_blockers(state: SessionState) -> list[str]:
     ]
 
 
+#: The reopen axis's own round-release valve. `getter` is the identity because the
+#: count arrives as a plain int read from the cross-session task accumulator by
+#: cli.py — this module may not touch the filesystem (AST-purity contract), and the
+#: count cannot live on SessionState because `cmd_reset` replaces it (see
+#: task_accumulator.AXES). Same threshold as every other axis: `effort-replan-absolute`.
+_RESOLVED_REENTRY_COUNTER = RoundReleaseCounter(
+    name="resolved_reentry", getter=lambda count: count,
+)
+
+_RESOLVED_REENTRY_REASON_MESSAGE = (
+    "this reset would re-open task {task!r}, which already reached RESOLVED — "
+    "pass `--reopen-reason '<what the confirmed resolution turned out to miss>'` to "
+    "record why the closed order is being re-entered. Re-opening a resolved task is a "
+    "difficulty signal (CLAUDE.md § When the work is stuck), not routine re-arming: "
+    "RESOLVED has no outgoing edge but `pop_subplan`, so reset is the ONLY way back in "
+    "and it discards the effort baseline, the replan count and every round-release "
+    "counter with it. If this is a NEW task, pass a different `--task` instead."
+)
+
+_RESOLVED_REENTRY_CEILING_MESSAGE = (
+    "task {task!r} has already been re-opened {rounds} times after resolution — at "
+    "config.md's `effort-replan-absolute` this stops being a reason to record and "
+    "becomes a decision to put to the user. Ask, via AskUserQuestion, whether this "
+    "order still warrants continuing at all (CLAUDE.md § When the work is stuck, "
+    "\"Two re-entry signals\"), then re-run this reset with "
+    "`--reopen-user-decision '<the answer they gave>'`."
+)
+
+
+def resolved_reentry_blockers(
+    prior_node: str | None,
+    *,
+    task_id: str,
+    same_task: bool,
+    reopen_count: int,
+    reason: str = "",
+    user_decision: str = "",
+    thr: Thresholds | None = None,
+) -> list[str]:
+    """Precondition for `cmd_reset` re-entering a task that already RESOLVED. [] == ok.
+
+    PURE, and takes plain data rather than a SessionState + a store: `reopen_count`
+    comes from the cross-session task accumulator, whose read is a filesystem seam this
+    module may not cross (`ast_purity.py`). Same shape as `effort.refresh_spend(state,
+    rows, path)` — the caller reads, the pure module decides.
+
+    Fires only on a re-entry of the SAME order (`same_task`): resetting a resolved
+    session onto a DIFFERENT `--task` is the ordinary "one task ≈ one session" re-arm
+    and must stay free. That is also why `--force` is not an escape here — it answers a
+    different question (discard a LIVE prior task), and a gate whose escape is a flag
+    that means something else teaches the coordinator to reach for `--force` reflexively.
+
+    Two rungs, in this order:
+      * at/past the threshold (`_RESOLVED_REENTRY_COUNTER`), a recorded reason is no
+        longer enough — the blocker directs an explicit user decision, discharged by
+        `--reopen-user-decision`. This is the round_release release-active shape:
+        repeated friction on one axis stops being self-served and goes to the user.
+      * below it, the reopen is permitted once a reason is supplied.
+
+    Both messages name an act that is EXECUTABLE from the blocked state (a flag on the
+    very command that just refused). A refusal whose exits all bounce is the livelock
+    this gate exists to remove, and an undocumented dead end is what gets bypassed by
+    hand-editing state.json."""
+    if prior_node != Node.RESOLVED.value or not same_task:
+        return []
+    count = int(reopen_count or 0)
+    if _RESOLVED_REENTRY_COUNTER.release_active(count, thr) and not (user_decision or "").strip():
+        return [_RESOLVED_REENTRY_CEILING_MESSAGE.format(task=task_id, rounds=count)]
+    if not (reason or "").strip():
+        return [_RESOLVED_REENTRY_REASON_MESSAGE.format(task=task_id)]
+    return []
+
+
 def _stage_review_for(state: SessionState, stage_index: int):
     """The most-recently-recorded StageReview for `stage_index`, or None. Last-wins so
     a manual override recorded after a judge verdict supersedes it."""

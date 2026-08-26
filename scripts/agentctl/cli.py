@@ -884,7 +884,16 @@ def cmd_reset(args, *, store: StateStore, runner: Runner | None = None) -> Direc
     """Re-arm a session for a NEW task once its prior task is closed. Refuses to
     discard a live prior task (not RESOLVED/ROUTED/BLOCKED) unless --force, so a
     new prompt cannot silently wipe in-flight work. Otherwise builds a fresh
-    CLASSIFIED SessionState from the same args cmd_start uses."""
+    CLASSIFIED SessionState from the same args cmd_start uses.
+
+    Second refusal, for the opposite case: re-entering a task that already reached
+    RESOLVED. RESOLVED has no outgoing edge but `pop_subplan`, so this command is the
+    only way back into a closed order — and the fresh SessionState it builds zeroes the
+    effort baseline, the replan count and every round-release counter, so an unbounded
+    reopen loop pays nothing and nobody is ever asked whether the order still stands.
+    `gates.resolved_reentry_blockers` requires a recorded reason, and past
+    `effort-replan-absolute` reopens a recorded user decision; the count it reads lives
+    in the cross-session accumulator precisely because this command discards state."""
     prior = store.load(args.session)
     if (
         prior is not None
@@ -896,6 +905,26 @@ def cmd_reset(args, *, store: StateStore, runner: Runner | None = None) -> Direc
             f"prior task '{prior.task_id}' is live at node={prior.node}; "
             "resolve/block it or pass --force to discard",
         )
+    reopen_reason = (getattr(args, "reopen_reason", None) or "").strip()
+    reopen_decision = (getattr(args, "reopen_user_decision", None) or "").strip()
+    reopening = prior is not None and prior.node == Node.RESOLVED.value and prior.task_id == args.task
+    reentry_count = (
+        int(task_accumulator.get(prior.task_id)["per_axis_totals"].get("resolved_reentry", 0) or 0)
+        if reopening else 0
+    )
+    reentry_blockers = gates.resolved_reentry_blockers(
+        prior.node if prior is not None else None,
+        task_id=args.task,
+        same_task=reopening,
+        reopen_count=reentry_count,
+        reason=reopen_reason,
+        user_decision=reopen_decision,
+    )
+    if reentry_blockers:
+        return Directive(
+            False, prior.node, "noop", "; ".join(reentry_blockers),
+            data={"blockers": reentry_blockers, "resolved_reentry_count": reentry_count},
+        )
     new = SessionState(
         session_id=args.session,
         task_id=args.task,
@@ -906,6 +935,19 @@ def cmd_reset(args, *, store: StateStore, runner: Runner | None = None) -> Direc
     )
     runtime_host.bind_runtime_host(new, getattr(args, "host", None), require=False)
     new.log("reset", task=new.task_id, prior_task=(prior.task_id if prior else None))
+    if reopening:
+        # Counted in the accumulator, which survives this command; logged on the new
+        # state, which is what a reader of THIS task's history will open. Neither
+        # substitutes for the other: the log carries the reason, the accumulator
+        # carries the count the ceiling compares.
+        task_accumulator.add(
+            new.task_id, "resolved_reentry", 1,
+            session_id=new.session_id, now=_utcnow(),
+        )
+        new.log(
+            "resolved_reentry", reason=reopen_reason,
+            user_decision=reopen_decision or None, prior_reopens=reentry_count,
+        )
     store.save(new)
     # Hygiene, not a security boundary (delivery.delete_stamp's own docstring):
     # a stale stamp cannot silently clear a later task's gate since the gate
@@ -916,7 +958,10 @@ def cmd_reset(args, *, store: StateStore, runner: Runner | None = None) -> Direc
     if state_file is not None:
         delivery.delete_stamp(state_file)
     return Directive(
-        True, new.node, "classify", "session re-armed for new task; run classify",
+        True, new.node, "classify",
+        (f"resolved task re-opened (reopen #{reentry_count + 1}); run classify"
+         if reopening else "session re-armed for new task; run classify"),
+        data={"resolved_reentry_count": reentry_count + 1} if reopening else {},
     )
 
 
@@ -5843,6 +5888,85 @@ def cmd_check_coverage(args, *, store: StateStore, runner: Runner | None = None)
     return Directive(True, state.node, "inspect", "OK — coverage clear")
 
 
+def cmd_effort_check(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Read-only effort-divergence report: where does this session stand against the
+    norm its approved plan declared, on each of the four scales?
+
+    Exists because the trigger only ever fires INSIDE a command the coordinator chose
+    to run (`record-result`, `verify-final`, or the `gates.effort_fire_blockers` refusal
+    on `dispatch`/`submit-plan`/`replan`). A session that runs long WITHOUT reaching one
+    of those — a stage the coordinator keeps working, a specialist that never returns —
+    diverges unobserved, however far past the multiple it goes. This command is the
+    observation that does not depend on such a call arriving, and it is what the
+    UserPromptSubmit watch hook drives on every prompt.
+
+    STRICTLY READ-ONLY, and `ok=True` on every path including a refusal-shaped answer:
+    it never transitions, never seeds a difficulty, never appends to `state.effort_fires`
+    and never calls `store.save`. A read command with a side effect would be a SECOND,
+    hidden fire site — it would consume the one-fire-per-replan budget belt 2 keeps
+    (`effort._replans_since_last_fire`) without anyone having diagnosed anything, and
+    the real fire site would then fall silent. `effort.refresh_spend` does mutate the
+    loaded `SessionState` in memory (that is how the spend accumulator is read at all);
+    with no save, the on-disk state is untouched, which the test asserts on the bytes.
+
+    Deliberately does NOT call `effort.rederive`: the fire sites compare against the
+    STORED estimate, so re-deriving here would report a divergence against a comparand
+    no gate uses — a watch that disagrees with the gate it watches is worse than none."""
+    state = store.load(args.session) if getattr(args, "session", None) else None
+    if state is None:
+        return Directive(True, "(none)", "start", "no session state; nothing to check",
+                         data={"armed": False, "scales": []})
+    if not effort.armed(state):
+        return Directive(
+            True, state.node, "inspect",
+            "effort trigger not armed (no approved-plan baseline); no scale can diverge",
+            data={"armed": False, "active": gates.effort_active(state), "scales": []},
+        )
+    effort.refresh_spend(state, _cost_rows(args), state.plan_path)
+    thr = Thresholds()
+    multiple = thr.effort_divergence_multiple()
+    delta = effort.deltas(state)
+    comparand = effort.comparands(state, thr)
+    ratio = effort.ratios(state, thr)
+    scales = []
+    for scale in effort.SCALE_ORDER:
+        label, unit = effort.describe(scale)
+        kind = "ratio" if scale in effort.RATIO_SCALES else "absolute"
+        trigger = multiple if kind == "ratio" else 1.0
+        observed = ratio[scale]
+        scales.append({
+            "scale": scale, "label": label, "unit": unit, "kind": kind,
+            "actual": delta[scale], "comparand": comparand[scale], "ratio": observed,
+            # Normalized "how far past its OWN line", so the four scales rank against
+            # each other — the same footing effort.divergence puts them on.
+            "past_own_trigger": (observed / trigger) if observed is not None else None,
+            "at_or_past_threshold": observed is not None and observed >= trigger,
+        })
+    div = effort.divergence(
+        state, thr,
+        cross_session_totals=task_accumulator.get(state.task_id)["per_axis_totals"],
+    )
+    over = [s["scale"] for s in scales if s["at_or_past_threshold"]]
+    detail = (
+        f"effort divergence on {', '.join(over)}" if over
+        else "no scale at or past its threshold"
+    )
+    return Directive(
+        True, state.node, "inspect", detail,
+        data={
+            "armed": True,
+            # Whether a fire site WOULD act on this: gates.effort_active is the same
+            # predicate they consult, so a report that omitted it would read as an
+            # alarm on a session where the trigger is switched off.
+            "active": gates.effort_active(state),
+            "over_threshold": over,
+            "would_fire": div.scale if div is not None else None,
+            "framing": div.framing if div is not None else None,
+            "scales": scales,
+        },
+    )
+
+
 def cmd_status(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = store.load(args.session) if getattr(args, "session", None) else None
     if state is None:
@@ -6338,6 +6462,7 @@ COMMANDS = {
     "replan": cmd_replan,
     "fire-acknowledge": cmd_fire_acknowledge,
     "check-coverage": cmd_check_coverage,
+    "effort-check": cmd_effort_check,
     "block": cmd_block,
     "unblock": cmd_unblock,
     "status": cmd_status,
@@ -6389,7 +6514,7 @@ _SESSION_COMMANDS = (
     "stage-review", "code-review", "accept", "approve", "partition", "partition-units",
     "next-stage", "dispatch", "resolve-permission", "record-result", "declare",
     "investigate", "critique", "normalize", "verify-final", "resolve", "reject",
-    "replan", "fire-acknowledge", "check-coverage", "block", "unblock", "status",
+    "replan", "fire-acknowledge", "check-coverage", "effort-check", "block", "unblock", "status",
     "drive", "close", "push-subplan", "pop-subplan", "task-reset",
 )
 
@@ -6430,6 +6555,8 @@ _RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("coverage_waiver", ("replan",)),
     ("normalization_waiver", ("replan",)),
     ("bypass_reason", ("accept",)),
+    ("reopen_reason", ("reset",)),
+    ("reopen_user_decision", ("reset",)),
 )
 
 # (dest, subcommands that declare it, why '@' means nothing here)
@@ -6481,7 +6608,8 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("verdict", ("accept",), "'|'-delimited requirement-verdict record"),
     ("budget", ("dispatch",), "budget tier name"),
     ("complexity", ("dispatch",), "complexity tier name"),
-    ("cost_log", ("record-result", "resolve", "verify-final", "replan"), "cost log file path (test override)"),
+    ("cost_log", ("record-result", "resolve", "verify-final", "replan", "effort-check"),
+     "cost log file path (test override)"),
     ("quality_by", ("resolve", "close"), "how the quality rating was obtained — a fixed token"),
     ("confirmed_by", ("close",), "who confirmed — a name, not a narrative"),
     ("approved_by", ("drive",), "who approved — a name, not a narrative"),
@@ -6557,6 +6685,16 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--criterion-type", dest="criterion_type", default=CriterionType.MEASURABLE.value)
     sp.add_argument("--recursion-depth", dest="recursion_depth", type=int, default=0)
     sp.add_argument("--force", action="store_true")
+    sp.add_argument("--reopen-reason", dest="reopen_reason", default="",
+                    help="why a task that already RESOLVED is being re-entered — required by "
+                         "gates.resolved_reentry_blockers, because reset is the only way back "
+                         "into a closed order and it discards the effort baseline, the replan "
+                         "count and every round-release counter on the way in")
+    sp.add_argument("--reopen-user-decision", dest="reopen_user_decision", default="",
+                    help="the user's answer to whether this order still warrants continuing. "
+                         "Required INSTEAD of --reopen-reason once the task has been re-opened "
+                         "`effort-replan-absolute` times: past that count the decision is no "
+                         "longer the coordinator's to record for itself")
     sp.add_argument("--host", choices=runtime_host.HOSTS, default=None,
                     help="coordination host this session dispatches through (claude|cursor); auto-detected when omitted (best-effort; classify is the hard gate)")
 
@@ -6993,6 +7131,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--new", required=True,
                     help="corrected plan file to check against the active critique, "
                          "BEFORE spending a thinker plan-review on it")
+    sp = add("effort-check"); sp.add_argument("--session", required=True)
+    sp.add_argument("--cost-log", dest="cost_log", default=None,
+                    help="cost log file path (test override)")
     sp = add("block"); sp.add_argument("--session", required=True); sp.add_argument("--reason", default="")
     sp = add("unblock"); sp.add_argument("--session", required=True)
     sp = add("status"); sp.add_argument("--session", required=False)

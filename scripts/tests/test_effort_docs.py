@@ -55,11 +55,14 @@ def test_the_section_names_the_window_both_fire_sites_and_the_no_question_termin
     assert "never a question" in body.lower() or "asks the user nothing" in body.lower()
 
 
-def test_the_section_carries_five_honest_limits():
+def test_the_section_carries_six_honest_limits():
+    """The count is pinned so a limit cannot be quietly dropped when the mechanism it
+    documents is extended. Raising it is a deliberate act: the sixth arrived with the
+    turn-driven watch, whose closure is scoped to a session that started the engine."""
     body = _section()
     limits = body[body.index("**Honest limits.**") :]
     numbered = re.findall(r"^\d+\. ", limits, flags=re.MULTILINE)
-    assert len(numbered) == 5, f"expected 5 honest limits, found {len(numbered)}"
+    assert len(numbered) == 6, f"expected 6 honest limits, found {len(numbered)}"
 
 
 def test_every_config_key_the_section_cites_is_defined_in_config_md():

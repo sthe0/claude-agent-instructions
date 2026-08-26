@@ -76,6 +76,7 @@ scripts/agentctl/advisor.py:636:1d9f44a3  # same superseded note; "missed the ta
 scripts/agentctl/advisor.py:637:011dc63b  # median 17.43 / p90 37.58 / max 39.99 over n=18 = judge_latency.MEASURED["deferring_disposition"]
 
 # --- scripts/install-reminder-hooks.sh ---------------------------------------
+scripts/install-reminder-hooks.sh:80:486f9f77  # 8 s = hook-effort-divergence-watch.py's own CHECK_TIMEOUT_S, the declared subprocess bound the 10 s registration must not pre-empt; a chosen constant, not a measurement — this hook runs no judge, it drives the read-only `agentctl effort-check`
 scripts/install-reminder-hooks.sh:87:a3879c8a  # n=32, max 11.42s = judge_latency's prior approval_ask stats from approval-sample.json alone, the basis the superseded 18s registration rested on
 scripts/install-reminder-hooks.sh:89:94d47d98  # 19.14s = approval2-sample.json's max, the second n=32 sample whose calls ran past the first sample's ceiling in production
 scripts/install-reminder-hooks.sh:91:4d3f1fb8  # 21s = judge_latency.call_ceiling_s("approval_ask") = ceil(max 19.14) + 1 over the merged n=64 population

@@ -228,6 +228,14 @@ disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
 
 [[entry]]
+id = "3632041d7e5e9de9"
+domain = "code"
+file = "scripts/agentctl/cli.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
 id = "5d83d0922dfdfae9"
 domain = "code"
 file = "scripts/agentctl/cli.py"
@@ -525,6 +533,14 @@ ground = "The deterministic engine. Its regexes parse the engine's own structure
 
 [[entry]]
 id = "f7b470c810312d19"
+domain = "code"
+file = "scripts/agentctl/gates.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "0e05ac9d2f6b10a1"
 domain = "code"
 file = "scripts/agentctl/gates.py"
 class = "structural"
@@ -3684,7 +3700,7 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
-id = "cefe41a61ae03344"
+id = "6898dcbe73c1f309"
 domain = "code"
 file = "scripts/tests/test_effort_docs.py"
 class = "not-a-gate"
@@ -7580,6 +7596,38 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "56c52e48edc4181a"
+domain = "code"
+file = "scripts/tests/test_resolved_reentry_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "a46f97933d1f5f26"
+domain = "code"
+file = "scripts/tests/test_resolved_reentry_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "edca5fb244061e39"
+domain = "code"
+file = "scripts/tests/test_resolved_reentry_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "314024ae9f6b50fa"
+domain = "code"
+file = "scripts/tests/test_resolved_reentry_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "7b8b85e34a1313c6"
 domain = "code"
 file = "scripts/tests/test_review_attestation_capability.py"
@@ -10212,6 +10260,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "e09f86c9fecc51ff"
+domain = "code_file_rollup"
+file = "scripts/tests/test_resolved_reentry_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "cd8841d72b513837"
 domain = "code_file_rollup"
 file = "scripts/tests/test_review_attestation_capability.py"
@@ -11080,7 +11136,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "dad01ace96bc5993"
+id = "86340c4c37af76cd"
 domain = "prose"
 file = "memory-global/leaves/ask-user-question-split-turn.md"
 class = "already-mechanized"
@@ -11185,6 +11241,22 @@ ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's
 
 [[entry]]
 id = "c3fbd533cb7f3ecc"
+domain = "prose"
+file = "memory-global/leaves/ask-user-question-split-turn.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "1ee97507628cb9f6"
+domain = "prose"
+file = "memory-global/leaves/ask-user-question-split-turn.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "9362b1898a2bc4f6"
 domain = "prose"
 file = "memory-global/leaves/ask-user-question-split-turn.md"
 class = "perception"
@@ -12273,6 +12345,30 @@ ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's
 
 [[entry]]
 id = "50e8994dfae2568e"
+domain = "prose"
+file = "memory-global/leaves/effort-divergence-trigger.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "0cb9cc61521cca9e"
+domain = "prose"
+file = "memory-global/leaves/effort-divergence-trigger.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "a1e431975ed85a92"
+domain = "prose"
+file = "memory-global/leaves/effort-divergence-trigger.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "e7df4a14df387160"
 domain = "prose"
 file = "memory-global/leaves/effort-divergence-trigger.md"
 class = "perception"
@@ -16384,6 +16480,30 @@ disposition = "keep"
 ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
 
 [[entry]]
+id = "abec5df6e7ff58b6"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-08-27-self-attested-identity-field-needs-declared-principal-check.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "4ecb6dc3f798d4be"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-08-27-self-attested-identity-field-needs-declared-principal-check.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "a64e21b2d5c6c584"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-08-27-self-attested-identity-field-needs-declared-principal-check.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
 id = "33579aafa8e162be"
 domain = "prose"
 file = "memory-global/leaves/experience/MEMORY.md"
@@ -17185,6 +17305,14 @@ ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's
 
 [[entry]]
 id = "371c67a18feb6071"
+domain = "prose"
+file = "memory-global/leaves/language-reminder-hook-coverage-gap.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "ed361407929b182e"
 domain = "prose"
 file = "memory-global/leaves/language-reminder-hook-coverage-gap.md"
 class = "perception"
@@ -19752,7 +19880,7 @@ disposition = "keep"
 ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
 
 [[entry]]
-id = "8c7c99fe837b72fe"
+id = "ea4b3962b3a24b08"
 domain = "prose"
 file = "memory-global/leaves/system-knowledge/agentctl-acceptance-judge-gate.md"
 class = "not-normative"
@@ -19760,12 +19888,20 @@ disposition = "keep"
 ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
 
 [[entry]]
-id = "e727cdb0ee22cff3"
+id = "3219230482a6e151"
 domain = "prose"
 file = "memory-global/leaves/system-knowledge/agentctl-acceptance-judge-gate.md"
-class = "already-mechanized"
+class = "not-normative"
 disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
+
+[[entry]]
+id = "8c7c99fe837b72fe"
+domain = "prose"
+file = "memory-global/leaves/system-knowledge/agentctl-acceptance-judge-gate.md"
+class = "not-normative"
+disposition = "keep"
+ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
 
 [[entry]]
 id = "c2ca0015284d5609"
@@ -21249,6 +21385,14 @@ ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the s
 
 [[entry]]
 id = "f555725ef1f6f587"
+domain = "prose"
+file = "skills/specializations/developer/SKILL.md"
+class = "perception"
+disposition = "keep"
+ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
+
+[[entry]]
+id = "b6c28b15da8009c9"
 domain = "prose"
 file = "skills/specializations/developer/SKILL.md"
 class = "perception"

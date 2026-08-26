@@ -18,7 +18,8 @@ counts in with `add()`, and passes the resulting numbers to `effort.py` as
 plain data -- the same shape `refresh_spend(state, rows, path)` already uses
 for the cost ledger.
 
-Schema (``schema_version=1``), one JSON file per `task_id` under
+Schema (``schema_version=2``; a ``1`` file is read and zero-filled, see
+``READABLE_SCHEMA_VERSIONS``), one JSON file per `task_id` under
 ``config_root.agentctl_task_accumulator_dir() / "<sha256(task_id)>.json"`` --
 honors an ``$AGENTCTL_TASK_ACCUMULATOR_DIR`` override (mirroring
 `edit_ledger.py`'s ``$AGENTCTL_EDIT_LEDGER``), which is what lets the test
@@ -26,13 +27,14 @@ suite redirect every `cli.py` call site to a per-test tmp dir instead of the
 real cross-machine accumulator directory::
 
     {
-      "schema_version": 1,
+      "schema_version": 2,
       "task_id": "<original id, for humans skimming the directory>",
       "per_axis_totals": {
         "replan_count": 0,
         "plan_review_rounds": 0,
         "plan_enumerate_rounds": 0,
-        "code_review_rounds": 0
+        "code_review_rounds": 0,
+        "resolved_reentry": 0
       },
       "session_ids_contributing": ["18fb6860", "2442a5ac"],
       "last_updated": "<caller-supplied timestamp, e.g. an ISO8601 string>"
@@ -54,15 +56,33 @@ from pathlib import Path
 
 from lib import config_root
 
-#: The four axes this accumulator tracks. `replan_count` is the one currently
-#: consumed by `effort.divergence` (the REPLANS scale); the other three are
-#: recorded for the same cross-session visibility but are not, in this stage,
-#: wired into any live gate -- `plan_review_rounds`/`code_review_rounds`/
-#: `plan_enumerate_rounds`'s own round-release valves stay session-local
-#: (`round_release.py`, `gates.py`), unchanged by this module.
-AXES = ("replan_count", "plan_review_rounds", "plan_enumerate_rounds", "code_review_rounds")
+#: The axes this accumulator tracks. `replan_count` is the one consumed by
+#: `effort.divergence` (the REPLANS scale) and `resolved_reentry` the one consumed
+#: by `gates.resolved_reentry_blockers`; the remaining three are recorded for the
+#: same cross-session visibility but are not wired into any live gate --
+#: `plan_review_rounds`/`code_review_rounds`/`plan_enumerate_rounds`'s own
+#: round-release valves stay session-local (`round_release.py`, `gates.py`),
+#: unchanged by this module.
+#:
+#: `resolved_reentry` counts how many times a task that had reached RESOLVED was
+#: re-opened by `cmd_reset`. It lives HERE and not on `SessionState` for the reason
+#: this whole module exists, in its sharpest form: `cmd_reset` builds a brand-new
+#: SessionState, so a counter kept there would be zeroed by the very act it is
+#: supposed to count -- an unbounded reopen loop that resets its own budget each lap.
+AXES = (
+    "replan_count", "plan_review_rounds", "plan_enumerate_rounds", "code_review_rounds",
+    "resolved_reentry",
+)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+#: Schema versions `_coerce` can read. An older file is read, not discarded: every
+#: axis is zero-filled by name (`totals.get(axis, 0)`), so a v1 file simply arrives
+#: with `resolved_reentry` at 0 and its accumulated `replan_count` intact. Treating
+#: v1 as foreign instead would silently zero every accumulator on disk the moment
+#: this version shipped -- handing every stuck task a fresh Rule-of-Three budget,
+#: which is the exact defect the module was written to remove.
+READABLE_SCHEMA_VERSIONS = (1, 2)
 
 
 def _hash_task_id(task_id: str) -> str:
@@ -109,7 +129,7 @@ def _coerce(raw: str, task_id: str) -> dict:
         data = json.loads(raw)
     except json.JSONDecodeError:
         return _empty(task_id)
-    if not isinstance(data, dict) or data.get("schema_version") != SCHEMA_VERSION:
+    if not isinstance(data, dict) or data.get("schema_version") not in READABLE_SCHEMA_VERSIONS:
         return _empty(task_id)
     totals = data.get("per_axis_totals") or {}
     return {
