@@ -296,6 +296,14 @@ def agentctl_enumerate_sidecar_dir() -> Path:
     return agentctl_dir() / "enumerate-sidecars"
 
 
+def agentctl_task_accumulator_dir() -> Path:
+    """Cross-session per-task effort accumulator directory (``<root>/agentctl/
+    task-accumulators`` — see agentctl/task_accumulator.py). One file per
+    ``task_id`` (hashed), surviving `reset` and session close alike — only the
+    dedicated `task-reset` subcommand clears an entry."""
+    return agentctl_dir() / "task-accumulators"
+
+
 def plans_dir() -> Path:
     """Coordination plan artifacts directory (``<root>/plans``)."""
     return agent_home() / "plans"
