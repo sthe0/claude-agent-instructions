@@ -460,11 +460,11 @@ SPAWN_AUTOCOMPACT_WINDOW_TOKENS = (
 
 # The `model max` term of the client's min(model max, configured window) step.
 # Deliberately ONE number rather than a per-model table, on the same rationale
-# as SPAWN_AUTOCOMPACT_WINDOW_TOKENS: it is the smallest window in the current
-# spawn roster — every MODEL_BY_KIND entry resolves to sonnet, whose maximum is
-# 200k — so applying it to every model is exact for the roster as it stands and
-# conservative for anything larger. A smaller-window model joining the roster
-# would make it too generous: a residual, not a guarantee.
+# as SPAWN_AUTOCOMPACT_WINDOW_TOKENS: every COMPLEXITY_MODEL entry (haiku,
+# sonnet, opus) shares this 200k maximum, so applying it to every model is
+# exact for the roster as it stands and conservative for anything larger. A
+# smaller-window model joining the roster would make it too generous: a
+# residual, not a guarantee.
 MODEL_FLOOR_WINDOW_TOKENS = 200_000
 
 # Conservative chars-per-token divisor for estimating an assembled prompt's
