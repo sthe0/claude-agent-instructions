@@ -83,33 +83,43 @@ reach one; it never denies anything itself.
 Calibration, replayed 2026-08-26 — and what it refutes
 ------------------------------------------------------
 
-Every constant above was replayed against the 10 real transcripts reachable at
-the time (5 root sessions + 5 subagent sessions of one worktree), by anchoring
-both windows at each of their 293 assistant messages in turn. Result and the
-numbers behind it, so the next reader re-derives instead of re-guessing:
+Every constant above was replayed twice. First, against the 10 real transcripts
+reachable inside one worktree sandbox (5 root + 5 subagent sessions), by
+anchoring both windows at each of their 293 assistant messages in turn — that
+pass predates the wall-clock-now anchor fix (see below) and predates finding
+the isolated agent home (`~/.claude-agent/projects`, ~7000 transcripts) rather
+than the legacy fallback (`~/.claude/projects`, 79 transcripts) is the actual
+transcript population on this fleet.
 
-- session spans 0.1-23.3 min; mean session rate $12.62-$99.10/h, and $19.4 /
-  $12.6 / $28.4 per hour for the three sessions long enough to evaluate;
-- at the shipped floor (one declared medium stage, 25 min) NOTHING in the sample
-  fires — but no sampled session lasts 25 min, so this sample cannot tell a
-  correctly-quiet guard from a dead one;
-- sweeping the floor down: at 10 min it warns on 3 of the 3 sessions long enough
-  to evaluate, i.e. on ALL ordinary stage work in the sample.
+Second — 2026-08-27, coordinator replay, post-anchor-fix code, 120 most recent
+transcripts under `~/.claude-agent/projects` (any host, any project) — the
+number the next reader should trust:
 
-That last line refutes the THRESHOLD ANCHOR, not the mechanism. config.md's
-declared medium-tier rate is $7.20/h ($3.00 over 25 active minutes), so warning
-starts at $16.20/h — BELOW the observed mean rate of an ordinary opus stage
-session (~$20/h). The declared dollar figure is a per-task telemetry label, and
-reading it as a per-hour rate is what puts the threshold under the population it
-is meant to sit above. Recalibrating it is `budget-calibration.py`'s existing
+- sampled=120, evaluable=21 (span >= the 25-min slow floor; 95 sessions were
+  shorter and abstain by construction, 4 had unparseable rows);
+- session span: median 0.09 h, max 177.36 h;
+- peak observed min(fast, slow) rate over the evaluable sessions: median
+  $10.02/h, p90 $17.60/h, max $26.94/h;
+- FIRE band>=1 (warn, $16.20/h): 4/21 (19%); FIRE band>=2 (escalate, $36.45/h):
+  0/21 (0%).
+
+So: discriminating power is no longer unproven. The guard is quiet on the
+large majority of ordinary sessions (81%), warns on a real minority whose peak
+rate does exceed the medium-tier label read as an hourly rate, and never
+escalates on anything in the sample — consistent with the design intent (rare
+warn, rarer escalate, silence is the default failure mode). The prior sweep's
+finding still stands as the reason the floor sits at 25 min and not lower:
+config.md's declared medium-tier rate is $7.20/h ($3.00 over 25 active
+minutes), so warning starts at $16.20/h, a threshold that continues to be a
+per-task telemetry label read as a per-hour rate rather than a rate derived
+from first principles. Recalibrating it is `budget-calibration.py`'s existing
 job (it already flags tiers to raise or lower against recorded spend) and is
-deliberately NOT done here: this hook's contract is to reuse the calibration the
-periodic instrument owns, never to mint a rate of its own.
-
-So: shipped at the conservative end, where the failure mode is silence rather
-than a warning on every stage, and honest that the discriminating power is
-unproven until either the tier labels are recalibrated or a session longer than
-one declared stage is replayed.
+deliberately NOT done here: this hook's contract is to reuse the calibration
+the periodic instrument owns, never to mint a rate of its own. Re-run this
+replay (walk `~/.claude-agent/projects/**/*.jsonl`, sort by mtime, anchor at
+every assistant-message timestamp in turn) if the tier labels are ever
+recalibrated — the ratio of evaluable-to-total sessions and the firing rate
+are both cheap to reproduce and are the numbers that would need to move.
 
 Fail-open in every direction — missing transcript, unreadable transcript,
 malformed rows, missing state dir, an import that will not load, any exception at
