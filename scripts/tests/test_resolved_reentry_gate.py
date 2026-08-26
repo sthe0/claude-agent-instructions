@@ -13,6 +13,7 @@ both halves: the refusal shape, and where the number survives.
 """
 import json
 from argparse import Namespace
+from pathlib import Path
 
 from agentctl import cli, gates, task_accumulator
 from agentctl.config import Thresholds
@@ -104,6 +105,23 @@ def test_gate_escalates_at_the_threshold():
     assert gates.resolved_reentry_blockers(
         Node.RESOLVED.value, task_id="demo", same_task=True, reopen_count=thr - 1,
         reason="still not fixed") == []
+
+
+def test_the_ceiling_demands_the_decision_AND_the_reason():
+    """"No longer enough" is not "no longer required": the highest-friction reopens —
+    the ones a user was asked about — must still say what the last lap missed. The two
+    flags answer different questions, so discharging one must not discharge the other."""
+    thr = Thresholds().effort_replan_absolute()
+    decision_only = gates.resolved_reentry_blockers(
+        Node.RESOLVED.value, task_id="demo", same_task=True, reopen_count=thr,
+        user_decision="user said keep going")
+    assert len(decision_only) == 1
+    assert "--reopen-reason" in decision_only[0]
+    # and the ceiling message points at the pairing rather than at a replacement
+    at_ceiling = gates.resolved_reentry_blockers(
+        Node.RESOLVED.value, task_id="demo", same_task=True, reopen_count=thr,
+        reason="still not fixed")
+    assert "alongside `--reopen-reason`" in at_ceiling[0]
 
 
 # --- wired into cmd_reset ------------------------------------------------------
@@ -208,8 +226,12 @@ def test_blocked_prior_node_is_unaffected(store, fixtures_dir):
 
 def test_a_schema_v1_accumulator_file_still_loads(tmp_path, monkeypatch):
     """A file written before `resolved_reentry` existed must be READ, not discarded:
-    treating v1 as foreign would zero every accumulator on disk the moment this
-    version shipped, handing every stuck task a fresh Rule-of-Three budget."""
+    zeroing every accumulator on disk the moment this version shipped would hand every
+    stuck task a fresh Rule-of-Three budget. Which is also why adding the axis did not
+    bump `SCHEMA_VERSION`: `_coerce` is name-keyed and zero-fills, so the axis costs no
+    version event — while a bump would make code at an older commit (this repo is
+    routinely worked from several concurrent worktrees) read the newer file as foreign
+    and zero it in the same way, only in the other direction."""
     monkeypatch.setenv("AGENTCTL_TASK_ACCUMULATOR_DIR", str(tmp_path))
     path = tmp_path / f"{task_accumulator._hash_task_id('legacy')}.json"
     path.write_text(json.dumps({
@@ -234,3 +256,18 @@ def test_a_schema_v1_accumulator_file_still_loads(tmp_path, monkeypatch):
     assert reread["schema_version"] == task_accumulator.SCHEMA_VERSION
     assert reread["per_axis_totals"]["replan_count"] == 2
     assert reread["per_axis_totals"]["resolved_reentry"] == 1
+
+
+def test_the_task_id_bypass_is_disclosed_where_the_gate_is_documented():
+    """The gate keys on `task_id` EQUALITY, and the slug is supplied by the actor being
+    counted — `test_reset_onto_a_different_task_after_resolution_is_untouched` above is
+    the same behaviour seen from the ordinary side. A counter that can be reset by
+    rewording its key is friction, not a lock, and a limit that is only known to whoever
+    wrote it is not disclosed at all: pin the disclosure in both places a reader arrives
+    at this gate through."""
+    root = Path(__file__).resolve().parents[2]
+    readme = (root / "scripts" / "agentctl" / "README.md").read_text(encoding="utf-8")
+    leaf = (root / "memory-global" / "leaves"
+            / "effort-divergence-trigger.md").read_text(encoding="utf-8")
+    for text, where in ((readme, "agentctl/README.md"), (leaf, "the effort leaf")):
+        assert "task_id" in text and "slug" in text, f"{where} must name the key and its bypass"

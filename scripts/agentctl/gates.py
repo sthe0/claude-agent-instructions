@@ -1128,7 +1128,9 @@ _RESOLVED_REENTRY_CEILING_MESSAGE = (
     "becomes a decision to put to the user. Ask, via AskUserQuestion, whether this "
     "order still warrants continuing at all (CLAUDE.md § When the work is stuck, "
     "\"Two re-entry signals\"), then re-run this reset with "
-    "`--reopen-user-decision '<the answer they gave>'`."
+    "`--reopen-user-decision '<the answer they gave>'` alongside `--reopen-reason` — "
+    "the decision does not replace the reason, it answers a different question (who "
+    "authorized another lap, not what the last one missed)."
 )
 
 
@@ -1157,9 +1159,12 @@ def resolved_reentry_blockers(
 
     Two rungs, in this order:
       * at/past the threshold (`_RESOLVED_REENTRY_COUNTER`), a recorded reason is no
-        longer enough — the blocker directs an explicit user decision, discharged by
+        longer ENOUGH — the blocker directs an explicit user decision, discharged by
         `--reopen-user-decision`. This is the round_release release-active shape:
         repeated friction on one axis stops being self-served and goes to the user.
+        Not enough, but still owed: the second rung below still runs, so the highest-
+        friction reopens carry BOTH a reason and a decision. They answer different
+        questions — what the last lap missed, and who authorized another one.
       * below it, the reopen is permitted once a reason is supplied.
 
     Both messages name an act that is EXECUTABLE from the blocked state (a flag on the

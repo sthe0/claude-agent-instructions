@@ -18,8 +18,8 @@ counts in with `add()`, and passes the resulting numbers to `effort.py` as
 plain data -- the same shape `refresh_spend(state, rows, path)` already uses
 for the cost ledger.
 
-Schema (``schema_version=2``; a ``1`` file is read and zero-filled, see
-``READABLE_SCHEMA_VERSIONS``), one JSON file per `task_id` under
+Schema (``schema_version=1``; adding an AXIS is deliberately not a version event,
+see ``READABLE_SCHEMA_VERSIONS``), one JSON file per `task_id` under
 ``config_root.agentctl_task_accumulator_dir() / "<sha256(task_id)>.json"`` --
 honors an ``$AGENTCTL_TASK_ACCUMULATOR_DIR`` override (mirroring
 `edit_ledger.py`'s ``$AGENTCTL_EDIT_LEDGER``), which is what lets the test
@@ -27,7 +27,7 @@ suite redirect every `cli.py` call site to a per-test tmp dir instead of the
 real cross-machine accumulator directory::
 
     {
-      "schema_version": 2,
+      "schema_version": 1,
       "task_id": "<original id, for humans skimming the directory>",
       "per_axis_totals": {
         "replan_count": 0,
@@ -74,14 +74,18 @@ AXES = (
     "resolved_reentry",
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 1
 
-#: Schema versions `_coerce` can read. An older file is read, not discarded: every
-#: axis is zero-filled by name (`totals.get(axis, 0)`), so a v1 file simply arrives
-#: with `resolved_reentry` at 0 and its accumulated `replan_count` intact. Treating
-#: v1 as foreign instead would silently zero every accumulator on disk the moment
-#: this version shipped -- handing every stuck task a fresh Rule-of-Three budget,
-#: which is the exact defect the module was written to remove.
+#: Schema versions `_coerce` can read, and the seam a genuine BREAKING change would
+#: use. Adding an axis is not one: `_coerce` is name-keyed and zero-fills every axis
+#: (`totals.get(axis, 0)`), so a file written before `resolved_reentry` existed arrives
+#: with that axis at 0 and its accumulated `replan_count` intact, and a version event
+#: would buy nothing. It would COST something, though, and the cost is why the version
+#: stays at 1: this repo is routinely worked from several concurrent worktrees at
+#: different commits, and code that does not yet know the newer number reads a file
+#: stamped with it as foreign -- i.e. as `_empty()` -- silently zeroing the very
+#: cross-session totals this module exists to preserve. `2` stays READABLE because a
+#: build during development wrote it; nothing writes it now.
 READABLE_SCHEMA_VERSIONS = (1, 2)
 
 

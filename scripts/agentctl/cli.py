@@ -5911,7 +5911,11 @@ def cmd_effort_check(args, *, store: StateStore, runner: Runner | None = None) -
 
     Deliberately does NOT call `effort.rederive`: the fire sites compare against the
     STORED estimate, so re-deriving here would report a divergence against a comparand
-    no gate uses — a watch that disagrees with the gate it watches is worse than none."""
+    no gate uses — a watch that disagrees with the gate it watches is worse than none.
+    The same rule is why every per-scale row is computed from `effort.effective_deltas`
+    / `effective_ratios` with the same cross-session totals `divergence()` is handed:
+    `at_or_past_threshold` (what the hook speaks on) and `would_fire` (what a fire site
+    would act on) must be answers about one vector, not two."""
     state = store.load(args.session) if getattr(args, "session", None) else None
     if state is None:
         return Directive(True, "(none)", "start", "no session state; nothing to check",
@@ -5925,9 +5929,16 @@ def cmd_effort_check(args, *, store: StateStore, runner: Runner | None = None) -
     effort.refresh_spend(state, _cost_rows(args), state.plan_path)
     thr = Thresholds()
     multiple = thr.effort_divergence_multiple()
-    delta = effort.deltas(state)
+    # The SAME cross-session totals the fire sites pass, read once and used for both
+    # halves of this report. Reporting the session-local vector while `would_fire` was
+    # decided on the cross-session one is how a watch goes silent on exactly the case it
+    # exists for: a resolved re-entry hands the fresh SessionState a replan count of 0
+    # while the accumulator still holds the prior laps. See effort.effective_deltas.
+    cross_totals = task_accumulator.get(state.task_id)["per_axis_totals"]
+    local = effort.deltas(state)
+    delta = effort.effective_deltas(state, cross_session_totals=cross_totals)
     comparand = effort.comparands(state, thr)
-    ratio = effort.ratios(state, thr)
+    ratio = effort.effective_ratios(state, thr, cross_session_totals=cross_totals)
     scales = []
     for scale in effort.SCALE_ORDER:
         label, unit = effort.describe(scale)
@@ -5941,11 +5952,12 @@ def cmd_effort_check(args, *, store: StateStore, runner: Runner | None = None) -
             # each other — the same footing effort.divergence puts them on.
             "past_own_trigger": (observed / trigger) if observed is not None else None,
             "at_or_past_threshold": observed is not None and observed >= trigger,
+            # Whether the accumulator, not this session's own history, supplied the
+            # number — so a reader of the line knows the count is the TASK's, not the
+            # session's, without having to open the accumulator to find out.
+            "cross_session": delta[scale] > local[scale],
         })
-    div = effort.divergence(
-        state, thr,
-        cross_session_totals=task_accumulator.get(state.task_id)["per_axis_totals"],
-    )
+    div = effort.divergence(state, thr, cross_session_totals=cross_totals)
     over = [s["scale"] for s in scales if s["at_or_past_threshold"]]
     detail = (
         f"effort divergence on {', '.join(over)}" if over
@@ -6692,9 +6704,11 @@ def build_parser() -> argparse.ArgumentParser:
                          "count and every round-release counter on the way in")
     sp.add_argument("--reopen-user-decision", dest="reopen_user_decision", default="",
                     help="the user's answer to whether this order still warrants continuing. "
-                         "Required INSTEAD of --reopen-reason once the task has been re-opened "
-                         "`effort-replan-absolute` times: past that count the decision is no "
-                         "longer the coordinator's to record for itself")
+                         "Required IN ADDITION to --reopen-reason once the task has been "
+                         "re-opened `effort-replan-absolute` times: past that count a reason "
+                         "the coordinator wrote for itself is no longer enough, but it is "
+                         "still owed — the reason says what is being re-opened, the decision "
+                         "says who authorized re-opening it again")
     sp.add_argument("--host", choices=runtime_host.HOSTS, default=None,
                     help="coordination host this session dispatches through (claude|cursor); auto-detected when omitted (best-effort; classify is the hard gate)")
 

@@ -122,7 +122,11 @@ def message(scale: dict) -> str:
         f"[effort-divergence] {scale.get('label')} on this task is "
         f"{scale.get('actual', 0):.2f} {scale.get('unit')} against "
         f"{scale.get('comparand', 0):.2f} — {scale.get('past_own_trigger', 0):.1f}x past its "
-        "own trigger, and no engine command has fired the check. The chosen norm is "
+        # "not reported THIS TURN", not "never fired": the hook reads a report, and the
+        # report does not carry `effort_fires`. That a fired scale is normally back under
+        # its line (record_fire rebases the baseline) makes the stronger claim true most
+        # of the time, which is exactly the kind of claim that is wrong when it matters.
+        "own trigger, and no engine command has reported it this turn. The chosen norm is "
         "visibly missing something essential about the real situation. Run the "
         "difficulty cycle now — `agentctl declare` -> `investigate` -> `critique` -> "
         "`replan` (CLAUDE.md § When the work is stuck) — asking WHAT the plan does not "

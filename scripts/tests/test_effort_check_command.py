@@ -13,7 +13,7 @@ unchanged across the call.
 import json
 from argparse import Namespace
 
-from agentctl import cli, effort
+from agentctl import cli, effort, task_accumulator
 from agentctl.config import Thresholds
 from agentctl.state import Node
 from conftest import STAGE_OBSERVATIONS
@@ -94,6 +94,47 @@ def test_reports_a_scale_past_its_threshold(store, fixtures_dir, monkeypatch):
     row = next(s for s in d.data["scales"] if s["scale"] == effort.SCALE_REPLANS)
     assert row["at_or_past_threshold"] is True
     assert row["past_own_trigger"] >= 1.0
+
+
+def test_the_report_agrees_with_would_fire_across_sessions(store, fixtures_dir):
+    """The load-bearing agreement: a scale the gate WOULD fire on must be a scale the
+    report says is at or past its threshold.
+
+    This is the resolved-reentry shape, and it is not hypothetical — it is what the
+    other half of this same change manufactures by construction. `reset` builds a fresh
+    SessionState whose own replan count is 0, while the cross-session accumulator still
+    holds the prior laps. `divergence()` reads the accumulator; a report computed from
+    session-local `deltas()` would therefore say "nothing over threshold" on exactly the
+    session the trigger exists to catch, and the watch hook — which speaks on the report,
+    not on `would_fire` — would stay silent through it.
+    """
+    sid = "ec-cross"
+    _to_approved(store, fixtures_dir, sid, task="cross-demo")
+    state = store.load(sid)
+    assert effort.replan_count(state) == 0          # this session has logged none
+    task_accumulator.add("cross-demo", "replan_count",
+                         Thresholds().effort_replan_absolute(), session_id=sid, now=None)
+
+    d = cli.cmd_effort_check(ns(session=sid), store=store)
+    row = next(s for s in d.data["scales"] if s["scale"] == effort.SCALE_REPLANS)
+    assert d.data["would_fire"] == effort.SCALE_REPLANS
+    assert row["at_or_past_threshold"] is True
+    assert effort.SCALE_REPLANS in d.data["over_threshold"]
+    assert row["actual"] == float(Thresholds().effort_replan_absolute())
+    assert row["cross_session"] is True             # and the row says where it came from
+    assert "effort divergence on" in d.detail
+
+
+def test_every_scale_row_agrees_with_would_fire(store, fixtures_dir):
+    """Generalized: `would_fire`, when set, is always one of `over_threshold`. Pins the
+    invariant for the scales as a set rather than for `replans` alone, so a future scale
+    that grows a cross-session (or otherwise non-session-local) source cannot reintroduce
+    the split on a different row."""
+    sid = "ec-agree"
+    _to_approved(store, fixtures_dir, sid, task="agree-demo")
+    task_accumulator.add("agree-demo", "replan_count", 99, session_id=sid, now=None)
+    d = cli.cmd_effort_check(ns(session=sid), store=store)
+    assert d.data["would_fire"] in d.data["over_threshold"]
 
 
 def test_writes_nothing(store, fixtures_dir, tmp_path):
