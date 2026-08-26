@@ -300,7 +300,10 @@ def agentctl_task_accumulator_dir() -> Path:
     """Cross-session per-task effort accumulator directory (``<root>/agentctl/
     task-accumulators`` — see agentctl/task_accumulator.py). One file per
     ``task_id`` (hashed), surviving `reset` and session close alike — only the
-    dedicated `task-reset` subcommand clears an entry."""
+    dedicated `task-reset` subcommand clears an entry. Honors an
+    ``$AGENTCTL_TASK_ACCUMULATOR_DIR`` override at the call site
+    (task_accumulator.py's `_root()`), mirroring `agentctl_edit_log()`'s role
+    for edit-log.jsonl."""
     return agentctl_dir() / "task-accumulators"
 
 
