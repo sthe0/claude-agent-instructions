@@ -6656,6 +6656,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = add("task-reset", help="explicit renegotiation: zero the cross-session "
              "task accumulator (item B) for --task — never called from `reset`")
+    # Session-independent by design (cmd_task_reset's own docstring), but
+    # _inject_default_session unconditionally appends --session <harness> when
+    # $CLAUDE_CODE_SESSION_ID is set (i.e. every real invocation inside a
+    # Claude Code session) — mirror plan-render's suppressed-absorb pattern so
+    # that injection doesn't crash argparse with "unrecognized arguments".
+    sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
     sp.add_argument("--task", required=True, help="task_id whose accumulator to zero")
     sp.add_argument("--reason", required=True,
                     help="why this task's accumulated cross-session friction is being forgiven")

@@ -7,6 +7,7 @@ import json
 
 import pytest
 
+from agentctl import cli
 from agentctl import task_accumulator as ta
 
 
@@ -193,3 +194,38 @@ def test_concurrent_adds_from_multiple_processes_do_not_drop_increments(tmp_path
         assert rc == 0
     data = ta.get("race-task", root=tmp_path)
     assert data["per_axis_totals"]["replan_count"] == 100
+
+
+# --- CLI layer: `agentctl task-reset` --------------------------------------------
+
+def test_cli_task_reset_clears_accumulator_but_session_reset_does_not(tmp_path, monkeypatch, capsys):
+    """CLI/argparse coverage for the `task-reset` subcommand: driving it through
+    `cli.main` (real dispatch/argparse, not a direct `task_accumulator.reset()`
+    call) must zero the accumulator, while the ordinary session `reset`
+    subcommand -- run against the same task_id -- must leave it untouched
+    (task_accumulator.reset's own docstring: "Never called from `cmd_reset`")."""
+    acc_root = tmp_path / "acc"
+    state_root = tmp_path / "state"
+    monkeypatch.setenv("AGENTCTL_TASK_ACCUMULATOR_DIR", str(acc_root))
+
+    ta.add("cli-task", "replan_count", 3, session_id="sess-1", root=acc_root)
+    assert ta.get("cli-task", root=acc_root)["per_axis_totals"]["replan_count"] == 3
+
+    rc = cli.main([
+        "--state-root", str(state_root),
+        "task-reset", "--task", "cli-task", "--reason", "renegotiated scope",
+    ])
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert payload["ok"] is True
+    assert ta.get("cli-task", root=acc_root)["per_axis_totals"] == {axis: 0 for axis in ta.AXES}
+
+    # Re-seed, then drive an ordinary session `reset` on the SAME task_id.
+    ta.add("cli-task", "replan_count", 5, root=acc_root)
+    rc = cli.main([
+        "--state-root", str(state_root),
+        "reset", "--session", "cli-sess", "--task", "cli-task",
+    ])
+    capsys.readouterr()
+    assert rc == 0
+    assert ta.get("cli-task", root=acc_root)["per_axis_totals"]["replan_count"] == 5
