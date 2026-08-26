@@ -164,6 +164,11 @@ class Question:
     # resolved against the plan THERE. Empty for every question minted before the
     # naming was required — those still discharge the gate; see validate_questions.
     control: str = ""
+    # Set by invalidate_stale_dispositions when the stage field this question was
+    # disposed against has changed since disposal. Surfaces in question-list output
+    # so the mismatch is visible without waiting for the approve gate. Cleared when
+    # the key is again valid (e.g. the edit was reverted on a later replan).
+    stale_note: str = ""
 
 
 def questions_from_dicts(raw: list[dict]) -> list[Question]:
@@ -182,6 +187,7 @@ def questions_from_dicts(raw: list[dict]) -> list[Question]:
             "reason": d.get("reason", ""),
             "disposed_at_key": d.get("disposed_at_key", ""),
             "control": d.get("control", ""),
+            "stale_note": d.get("stale_note", ""),
         })
         for d in raw
     ]
@@ -203,6 +209,7 @@ def questions_to_dicts(questions: list[Question]) -> list[dict]:
             "reason": q.reason,
             "disposed_at_key": q.disposed_at_key,
             "control": q.control,
+            "stale_note": q.stale_note,
         }
         for q in questions
     ]
@@ -578,3 +585,42 @@ def validate_question_candidates(
                 )
 
     return blockers
+
+
+# The note stamped on a question whose dispose binding has gone stale — a typed
+# constant so a later `question-list` parser can identify these reliably rather
+# than pattern-matching free text.
+STALE_DISPOSITION_NOTE = "stale disposition: cited stage field changed on replan"
+
+
+def invalidate_stale_dispositions(
+    bag: dict, stage_keys: dict[int, dict[str, str]]
+) -> bool:
+    """Walk all key-bound-disposed questions; for each whose disposed_at_key no
+    longer matches the current stage-element key, stamp stale_note so the mismatch
+    is visible in question-list output on the next replan (#123). The disposition
+    itself is preserved — re-opening would lose the audit trail. Clears stale_note
+    when the key is again valid (e.g. the edit was reverted on a later replan).
+    Returns True if any question was annotated or un-annotated.
+
+    Pure: no filesystem, subprocess or network access.
+    """
+    questions = questions_from_dicts(bag.get("questions", []))
+    changed = False
+    for q in questions:
+        if q.disposition not in _KEY_BOUND_DISPOSITIONS:
+            continue
+        parsed = parse_target(q.target)
+        if parsed is None or parsed[0] != "stage":
+            continue
+        _, stage_index, element = parsed
+        if not stage_keys or stage_index not in stage_keys:
+            continue  # dangling target: validate_questions handles it separately
+        accepted = _accepted_keys(stage_keys[stage_index], element)
+        note = "" if q.disposed_at_key in accepted else STALE_DISPOSITION_NOTE
+        if q.stale_note != note:
+            q.stale_note = note
+            changed = True
+    if changed:
+        bag["questions"] = questions_to_dicts(questions)
+    return changed
