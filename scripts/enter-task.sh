@@ -16,12 +16,23 @@
 #                 [--workspace <backend>] [--tracker <backend>]
 #                 [--project <registry-key>] [--dry-run]
 #                 [--list-projects]
-#                 [--register <repo-path> [--as <registry-key>]]
+#                 [--register <repo-path> [--as <registry-key>] [--tracker <backend>] [--queue <queue>]]
 #
 # Backend NAME selection precedence:
 #   explicit flag  >  env (CLAUDE_WORKSPACE_BACKEND / CLAUDE_TRACKER_BACKEND)
 #   >  project record (workspace_backend / tracker_backend)
 #   >  identity (project_backend / tracker_backend)  >  detector (git / github-if-gh-else-none).
+#
+# Exit codes: 2 = no project resolved from context for --new/--key with no
+# explicit tracker (the empty-context guard); every other nonzero exit is a
+# generic failure (1). Exit 2 lets a caller (agent-dispatch.sh) branch on this
+# one specific condition without parsing stderr text.
+#
+# --register detects workspace_backend from the target directory itself (git,
+# then arc, else the git default) and writes the workspace-locating field that
+# backend actually consumes (workspace_path for git, workspace_subpath for arc,
+# relative to the arc backend's checkout root). --tracker/--queue on --register record
+# tracker_backend/tracker_queue (written only when non-empty).
 #
 # --dry-run performs ZERO external effects (no git/gh/compose side effects).
 set -uo pipefail
@@ -48,7 +59,7 @@ slug() {
 selector="" sel_arg=""           # one of: key|new|reuse|name|init + its value
 ws_flag="" tr_flag="" project=""
 DRY_RUN=""
-do_list_projects="" do_register="" register_path="" register_as=""
+do_list_projects="" do_register="" register_path="" register_as="" register_queue=""
 init_target=""
 
 set_selector() {
@@ -70,6 +81,7 @@ while [[ $# -gt 0 ]]; do
     --list-projects)  do_list_projects=1; shift 1 ;;
     --register)       do_register=1; register_path="${2:-}"; shift 2 ;;
     --as)             register_as="${2:-}"; shift 2 ;;
+    --queue)          register_queue="${2:-}"; shift 2 ;;
     -h|--help)        grep '^#' "$0" | sed 's/^#\{0,1\} \{0,1\}//'; exit 0 ;;
     *)                die "unknown argument: $1" ;;
   esac
@@ -82,9 +94,44 @@ if [[ -n "$do_list_projects" ]]; then
 fi
 if [[ -n "$do_register" ]]; then
   [[ -n "$register_path" ]] || die "--register needs a repo path"
+  _reg_phys="$(cd "$register_path" 2>/dev/null && pwd -P)" || die "--register: cannot resolve '$register_path'"
+  _reg_key="${register_as:-$(basename "$_reg_phys")}"
+
+  # Detect the real backend for THIS directory (git, then arc, else the git
+  # default) — mirrors hook-scope-track.py::resolve_repo_root_vcs exactly, not
+  # the machine-wide detect_backend.py (which answers "installed tools", not
+  # "this directory's VCS", and would misclassify a git dir on an arc+git box).
+  _reg_backend="git" _arc_top=""
+  _git_top="$(cd "$_reg_phys" 2>/dev/null && timeout 4 git rev-parse --show-toplevel 2>/dev/null)"
+  if [[ -n "$_git_top" ]]; then
+    _reg_backend="git"
+  elif command -v arc >/dev/null 2>&1 && _arc_top="$(cd "$_reg_phys" 2>/dev/null && timeout 4 arc root 2>/dev/null)" && [[ -n "$_arc_top" ]]; then
+    _reg_backend="arc"
+  fi
+
+  _reg_fields=("workspace_backend=$_reg_backend")
+  if [[ "$_reg_backend" == "arc" ]]; then
+    # Exact equality (the arc root itself) is handled separately from the
+    # proper-subdirectory case: the glob prefix pattern below requires a `/`
+    # after $_arc_top, which an exact match never has, so an unguarded equality
+    # would otherwise fall through to the "unexpected mount layout" die below.
+    if [[ "$_reg_phys" == "$_arc_top" ]]; then
+      _reg_subpath=""
+    elif [[ "$_reg_phys" == "$_arc_top"/* ]]; then
+      _reg_subpath="${_reg_phys#"$_arc_top"/}"
+    else
+      die "--register: '$_reg_phys' is not inside arc root '$_arc_top' (unexpected mount layout)"
+    fi
+    [[ -n "$_reg_subpath" ]] || die "--register: '$_reg_phys' is the arc backend's checkout root; register a project subdirectory instead"
+    _reg_fields+=("workspace_subpath=$_reg_subpath")
+  else
+    _reg_fields+=("workspace_path=$_reg_phys")
+  fi
+  [[ -n "$tr_flag" ]] && _reg_fields+=("tracker_backend=$tr_flag")
+  [[ -n "$register_queue" ]] && _reg_fields+=("tracker_queue=$register_queue")
+
   _local_root="$(project_local_root)"
-  _reg_key="${register_as:-$(basename "$register_path")}"
-  project_register "$_local_root" "$_reg_key" "workspace_path=$register_path" "workspace_backend=git"
+  project_register "$_local_root" "$_reg_key" "${_reg_fields[@]}"
   exit $?
 fi
 
@@ -181,7 +228,7 @@ if [[ "$selector" == "new" || "$selector" == "key" ]]; then
     log "enter-task: no project resolved from context (cwd=$PWD)"
     log "enter-task: use --project <key> or cd into a project directory; available projects:"
     project_list >&2
-    exit 1
+    exit 2
   fi
 fi
 

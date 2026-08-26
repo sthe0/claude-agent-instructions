@@ -13,6 +13,12 @@ ENTER="$SCRIPTS_DIR/enter-task.sh"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+# Canonicalize once: --register now resolves its target via `pwd -P` (physical
+# path, matching projects.py resolve()'s os.getcwd()). On this class of machine
+# /var/tmp is itself a symlink (e.g. -> /place/vartmp), so every later
+# comparison against $TMP must use the SAME physical form the script computes,
+# or register/detect assertions spuriously diverge from a literal-path $TMP.
+TMP="$(cd "$TMP" && pwd -P)"
 
 FAKE_TOPLEVEL="$TMP/myrepo"          # repo name = myrepo, parent = $TMP
 mkdir -p "$FAKE_TOPLEVEL"
@@ -302,7 +308,9 @@ check "--project proj/alpha: subpath=proj/alpha in log" \
 check "--project no longer appends subpath to project_dir" \
   '[[ "$REPLY" == "$TMP/myrepo-task-a" ]]'
 
-# 12. --new from a no-record cwd with no explicit --tracker aborts with the list.
+# 12. --new from a no-record cwd with no explicit --tracker aborts with the list,
+#     exiting exactly 2 (the reserved empty-context-guard code agent-dispatch.sh
+#     branches on).
 NOWHERE="$TMP/nowhere-cwd"; mkdir -p "$NOWHERE"
 # Use a detector stub that returns 'git github' so there IS a tracker detected
 # (but no project resolves). The guard must still fire because no --tracker flag.
@@ -311,7 +319,7 @@ printf 'print("git github")\n' > "$FAKE_DET"
 abort_out="$(cd "$NOWHERE" && CLAUDE_BACKEND_DETECTOR="$FAKE_DET" \
   bash "$ENTER" --new "task" 2>&1 >/dev/null)"
 abort_rc=$?
-check "--new from no-record cwd exits non-zero" '[[ $abort_rc -ne 0 ]]'
+check "--new from no-record cwd exits exactly 2 (empty-context guard code)" '[[ $abort_rc -eq 2 ]]'
 check "--new from no-record cwd prints project list (proj/alpha)" \
   'grep -q "proj/alpha" <<<"$abort_out"'
 
@@ -320,6 +328,91 @@ check "--new from no-record cwd prints project list (proj/alpha)" \
 CLAUDE_LAUNCH_ASSUME_YES=1 run_log --new "Add the widget" --tracker github
 check "--new with explicit --tracker bypasses empty-context guard" \
   'grep -q "issue create" "$GH_CALLS"'
+
+# === --register backend-detection tests =====================================
+# These shell out to the REAL git/arc binaries (the probe deliberately bypasses
+# the GIT_BIN stub seam and detect_backend.py, mirroring hook-scope-track.py's
+# per-directory VCS probe) — not strictly hermetic, but timeout(4)-bounded and
+# consistent with existing case 9's non-hermetic real-git/arc dependency.
+
+# register-backend-detect-git: a REAL git repo detects workspace_backend=git
+# and writes workspace_path (not workspace_subpath).
+printf '\n--- --register backend-detect: git ---\n'
+GIT_DETECT_DIR="$TMP/real-git-repo"
+mkdir -p "$GIT_DETECT_DIR"
+( cd "$GIT_DETECT_DIR" && git init -q )
+bash "$ENTER" --register "$GIT_DETECT_DIR" --as "test/gitdetect" 2>/dev/null
+git_reg_json="$(cat "$TEST_LOCAL/test/gitdetect/agent-project.json" 2>/dev/null)"
+check "register-backend-detect-git: workspace_backend is git" \
+  'grep -Eq "\"workspace_backend\":[[:space:]]*\"git\"" <<<"$git_reg_json"'
+check "register-backend-detect-git: workspace_path recorded" \
+  'grep -q "workspace_path" <<<"$git_reg_json"'
+check "register-backend-detect-git: no workspace_subpath key" \
+  '! grep -q "workspace_subpath" <<<"$git_reg_json"'
+
+# register-backend-detect-arc: a stub `arc` on PATH (implementing ONLY `root`,
+# deliberately not --cwd/info) simulates an arc-backed checkout; the project dir sits
+# under it at a subpath. Must detect workspace_backend=arc and write
+# workspace_subpath (relative to the arc root), NOT workspace_path — asserting
+# workspace_backend alone would pass on exactly the broken record shape (G1).
+printf '\n--- --register backend-detect: arc ---\n'
+ARC_ROOT="$TMP/arc-checkout"
+ARC_PROJ_SUB="area/proj"
+ARC_PROJ_DIR="$ARC_ROOT/$ARC_PROJ_SUB"
+mkdir -p "$ARC_PROJ_DIR"
+ARC_STUB_BIN="$TMP/arc-stub-bin"; mkdir -p "$ARC_STUB_BIN"
+cat >"$ARC_STUB_BIN/arc" <<EOF
+#!/usr/bin/env bash
+case "\$1" in
+  root) printf '%s\n' "$ARC_ROOT" ;;
+  *)    exit 1 ;;
+esac
+EOF
+chmod +x "$ARC_STUB_BIN/arc"
+PATH="$ARC_STUB_BIN:$PATH" bash "$ENTER" --register "$ARC_PROJ_DIR" --as "test/arcdetect" 2>/dev/null
+arc_reg_json="$(cat "$TEST_LOCAL/test/arcdetect/agent-project.json" 2>/dev/null)"
+check "register-backend-detect-arc: workspace_backend is arc" \
+  'grep -Eq "\"workspace_backend\":[[:space:]]*\"arc\"" <<<"$arc_reg_json"'
+check "register-backend-detect-arc: workspace_subpath == $ARC_PROJ_SUB" \
+  'grep -Eq "\"workspace_subpath\":[[:space:]]*\"$ARC_PROJ_SUB\"" <<<"$arc_reg_json"'
+check "register-backend-detect-arc: NO workspace_path key (the G1 regression shape)" \
+  '! grep -q "workspace_path" <<<"$arc_reg_json"'
+
+# register-arc-root-empty-subpath-dies: registering the arc backend's checkout root itself
+# (subpath would compute empty) must die with a register-a-subdirectory message,
+# not write an unusable record.
+arc_root_out="$(PATH="$ARC_STUB_BIN:$PATH" bash "$ENTER" --register "$ARC_ROOT" --as "test/arcrootdies" 2>&1 >/dev/null)"
+arc_root_rc=$?
+check "register-arc-root-empty-subpath-dies: exits non-zero" \
+  '[[ $arc_root_rc -ne 0 ]]'
+check "register-arc-root-empty-subpath-dies: message mentions registering a subdirectory" \
+  'grep -qi "subdirectory" <<<"$arc_root_out"'
+check "register-arc-root-empty-subpath-dies: no record written" \
+  '[[ ! -f "$TEST_LOCAL/test/arcrootdies/agent-project.json" ]]'
+
+# register-queue-field: --register --tracker/--queue append tracker_backend/
+# tracker_queue only when non-empty; a plain --register (no flags) stays
+# byte-identical to the pre-existing behavior on those two keys.
+printf '\n--- --register: tracker/queue fields ---\n'
+QUEUE_DIR="$TMP/queue-repo"
+mkdir -p "$QUEUE_DIR"
+( cd "$QUEUE_DIR" && git init -q )
+bash "$ENTER" --register "$QUEUE_DIR" --as "test/queuefield" --tracker github --queue "Q-NEW" 2>/dev/null
+queue_reg_json="$(cat "$TEST_LOCAL/test/queuefield/agent-project.json" 2>/dev/null)"
+check "register-queue-field: tracker_backend recorded" \
+  'grep -Eq "\"tracker_backend\":[[:space:]]*\"github\"" <<<"$queue_reg_json"'
+check "register-queue-field: tracker_queue recorded" \
+  'grep -Eq "\"tracker_queue\":[[:space:]]*\"Q-NEW\"" <<<"$queue_reg_json"'
+
+NOQUEUE_DIR="$TMP/noqueue-repo"
+mkdir -p "$NOQUEUE_DIR"
+( cd "$NOQUEUE_DIR" && git init -q )
+bash "$ENTER" --register "$NOQUEUE_DIR" --as "test/noqueuefield" 2>/dev/null
+noqueue_reg_json="$(cat "$TEST_LOCAL/test/noqueuefield/agent-project.json" 2>/dev/null)"
+check "register-queue-field: no --tracker/--queue omits tracker_backend key" \
+  '! grep -q "tracker_backend" <<<"$noqueue_reg_json"'
+check "register-queue-field: no --tracker/--queue omits tracker_queue key" \
+  '! grep -q "tracker_queue" <<<"$noqueue_reg_json"'
 
 echo
 printf 'enter-task tests: %d passed, %d failed\n' "$PASS" "$FAIL"
