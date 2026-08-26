@@ -50,6 +50,7 @@ from .plan import (
     load_plan,
     plan_meta_digest,
     plan_stage_digests,
+    stage_element_keys,
     stage_part,
     stage_question_key,
     stage_reattest_digest,
@@ -1478,8 +1479,9 @@ def cmd_question_list(args, *, store: StateStore, runner: Runner | None = None) 
             "|---|---|---|---|---|---|---|",
         ]
         for q in questions:
+            disp = q.disposition + (f" — {q.stale_note}" if q.stale_note else "")
             rows.append(
-                f"| {q.target} | {q.control} | {q.question} | {q.disposition} | "
+                f"| {q.target} | {q.control} | {q.question} | {disp} | "
                 f"{q.own_research} | {q.source} | {q.derivation} |"
             )
         if bag.get("enumeration_refused_oversize"):
@@ -1490,7 +1492,10 @@ def cmd_question_list(args, *, store: StateStore, runner: Runner | None = None) 
             )
         detail = "\n".join(rows)
     else:
-        detail = "; ".join(f"{q.id}={q.disposition}" for q in questions) or "no questions"
+        detail = "; ".join(
+            f"{q.id}={q.disposition}" + (" [stale]" if q.stale_note else "")
+            for q in questions
+        ) or "no questions"
     return Directive(
         True, state.node, "inspect", detail,
         data={"questions": premise.questions_to_dicts(questions)},
@@ -5124,6 +5129,15 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         # (pblock, critique coverage) is one the session reached on a plan that met
         # submission requirements — never on bytes it was about to reject outright.
         store.save(state)
+    # Invalidate dispositions whose cited stage fields moved in the proposed plan so
+    # the mismatch is visible in question-list output even when this replan is blocked
+    # by the gate (#123). Runs here — after the try-finally restored plan_path and
+    # before the pblock return — so a blocked replan still surfaces stale notes on disk.
+    _inv_bag = state.plugins.get("premise")
+    if _inv_bag is not None:
+        _inv_stage_keys = {s.index: stage_element_keys(s) for s in new.stages}
+        if premise.invalidate_stale_dispositions(_inv_bag, _inv_stage_keys):
+            store.save(state)
     _log_gate(state, "plan_approval_plugin", pblock, passed=not pblock)
     if pblock:
         # The escape counts ride THIS refusal for cmd_approve's reason — the coordinator
