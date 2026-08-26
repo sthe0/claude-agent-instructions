@@ -151,6 +151,7 @@ def build_argv(
     *,
     budget: str = "medium",
     complexity: str = "medium",
+    effort: str = "medium",
     dry_run: bool = False,
     continue_worktree: str | None = None,
     constraints: str = "",
@@ -175,6 +176,8 @@ def build_argv(
         budget,
         "--complexity",
         complexity,
+        "--effort",
+        effort,
     ]
     argv.extend(["--stage-index", str(stage.index)])
     argv.append("--plan-brief")
@@ -227,6 +230,7 @@ def dispatch_stage(
     runner: Runner | None = None,
     budget: str = "medium",
     complexity: str = "medium",
+    effort: str = "medium",
     dry_run: bool = False,
     continue_worktree: str | None = None,
     cwd: str | None = None,
@@ -246,9 +250,10 @@ def dispatch_stage(
         if staged_done_criterion is not None:
             staged.append(staged_done_criterion)
         argv = build_argv(
-            stage, plan_path, budget=budget, complexity=complexity, dry_run=dry_run,
-            continue_worktree=continue_worktree, constraints=norm_constraints,
-            done_criterion=norm_done_criterion, runtime_host=runtime_host,
+            stage, plan_path, budget=budget, complexity=complexity, effort=effort,
+            dry_run=dry_run, continue_worktree=continue_worktree,
+            constraints=norm_constraints, done_criterion=norm_done_criterion,
+            runtime_host=runtime_host,
         )
         run = runner or subprocess_runner
         # cwd is only threaded to the runner when set, so every pre-existing

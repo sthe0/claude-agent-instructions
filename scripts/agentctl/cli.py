@@ -3968,6 +3968,15 @@ def _try_reattest(
                       f"stage {stage.index} re-attested; more stages ready")
 
 
+# cmd_dispatch's fallback when neither --effort nor a per-stage reasoning-effort
+# field (there is no such field on Actor, unlike cost_tier) supplies one. Mirrors
+# the cost_tier -> budget relationship one rung down: a stage costed "large"
+# is presumed to warrant deeper reasoning than one costed "small". Unmapped or
+# absent cost_tier falls through to the dict's .get default of "medium", same
+# as the --budget resolution just above.
+_EFFORT_BY_COST_TIER = {"small": "low", "medium": "medium", "large": "high"}
+
+
 def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
                  perm_checker=None) -> Directive:
     state = _require(store, args.session)
@@ -4003,11 +4012,23 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
     # path (getattr(args, "budget", None)) and any in-process Namespace caller
     # that also omits --budget.
     tier = getattr(args, "budget", None) or stage.actor.cost_tier or "medium"
+    # Same resolution order as --budget above: explicit --effort flag > a
+    # cost_tier-derived default > "medium". spawn-specialist.py now hard-requires
+    # --effort (no inherit-the-parent fallback there either), so dispatch_stage
+    # must always hand it a value — never omit the flag and let the child's own
+    # argparse refuse with "the following arguments are required: --effort".
+    # There is no plan-declared per-stage reasoning-effort field (unlike
+    # cost_tier on Actor), so the derived default reuses the same three-tier
+    # cost_tier already on the stage rather than inventing a new plan field.
+    effort_tier = getattr(args, "effort", None) or _EFFORT_BY_COST_TIER.get(
+        stage.actor.cost_tier, "medium"
+    )
     result = dispatch_stage(
         stage, state.plan_path or "",
         runner=runner,
         budget=tier,
         complexity=getattr(args, "complexity", "medium"),
+        effort=effort_tier,
         continue_worktree=_continuation_worktree(state, stage),
         constraints=getattr(args, "constraints", "") or "",
         dry_run=dry_run,
@@ -6612,6 +6633,14 @@ def build_parser() -> argparse.ArgumentParser:
     # explicitly set to medium" and fall through to the stage's declared cost_tier
     # before the "medium" default.
     sp.add_argument("--budget", default=None); sp.add_argument("--complexity", default="medium")
+    # None (not e.g. "medium"), same reason as --budget above: lets cmd_dispatch
+    # tell "omitted" apart from "explicitly medium" and fall through to the
+    # cost_tier-derived default (_EFFORT_BY_COST_TIER) before "medium". Choices
+    # mirror spawn-specialist.py's own --effort (the child this argv reaches).
+    sp.add_argument("--effort", choices=("low", "medium", "high", "xhigh", "max"), default=None,
+                    help="claude -p reasoning-effort level for the dispatched child. Optional: "
+                    "defaults from the stage's cost_tier (small->low, medium->medium, "
+                    "large->high) rather than requiring the caller to classify twice.")
     sp.add_argument("--constraints", default="",
                     help="clarification for the spawned specialist that bounds HOW it does "
                          "the already-approved stage — never a scope or done-criterion change; "
