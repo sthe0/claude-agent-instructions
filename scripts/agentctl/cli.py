@@ -26,7 +26,7 @@ from pathlib import Path
 import proc_tree
 from lib import argv_text, config_root
 
-from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, gates, ledger, permissions, plugins, plugins_ledger, plugins_premise, premise, runtime_host, solved_marker
+from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, gates, ledger, permissions, plugins, plugins_ledger, plugins_premise, premise, runtime_host, solved_marker, task_accumulator
 from .checkrun import format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
@@ -850,6 +850,24 @@ def cmd_reset(args, *, store: StateStore, runner: Runner | None = None) -> Direc
         delivery.delete_stamp(state_file)
     return Directive(
         True, new.node, "classify", "session re-armed for new task; run classify",
+    )
+
+
+def cmd_task_reset(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Explicit renegotiation: zero the cross-session task accumulator (item B)
+    for `--task`. The ONLY path that clears it — `cmd_reset` deliberately does
+    NOT, since the accumulator is task-scoped, not session-scoped: a fresh
+    session re-armed on the same stuck task must inherit its prior friction,
+    not silently forgive it (that would defeat the accumulator's entire
+    purpose). Session-independent by design (no `--session`, no state load) —
+    the accumulator lives outside any single session's state file — and
+    requires `--reason` so this is never a casual one-flag habit; a user
+    genuinely renegotiating a task's scope states why."""
+    task_accumulator.reset(args.task)
+    return Directive(
+        True, "(task-scoped)", "noop",
+        f"cross-session task accumulator reset for task {args.task!r}: {args.reason}",
+        data={"task": args.task, "reason": args.reason},
     )
 
 
@@ -3552,6 +3570,17 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # digest for bytes it did not approve.
     _stamp_accepted_plan_digest(state, state.plan_path)
     effort.arm(state)  # opens the effort-divergence window — see effort.py's ARMED-ONLY
+    # Fold this session's review-round counts into the cross-session task accumulator
+    # (item B) BEFORE the reset-to-0 below — approval is the reset point, so this is
+    # the last moment these session-local counts are readable.
+    task_accumulator.add(
+        state.task_id, "plan_review_rounds", state.plan_review_rounds,
+        session_id=state.session_id, now=_utcnow(),
+    )
+    task_accumulator.add(
+        state.task_id, "code_review_rounds", state.code_review_rounds,
+        session_id=state.session_id, now=_utcnow(),
+    )
     state.approval = GateRecord("plan_approval", armed=True, passed=True, by=args.by)
     state.plan_review_rounds = 0
     # Cleared with the counter, not merely alongside it: the marker is what makes the
@@ -4319,7 +4348,9 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
     # unconditionally — only ACTING on a fire is gated by gates.effort_active — see
     # effort.py's module docstring and gates.effort_active's docstring.
     effort.refresh_spend(state, _rows, state.plan_path)
-    div = effort.divergence(state)
+    div = effort.divergence(
+        state, cross_session_totals=task_accumulator.get(state.task_id)["per_axis_totals"],
+    )
 
     state.node = transition(state.node, "verify")  # EXECUTING -> VERIFYING
 
@@ -4428,7 +4459,9 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     # plan_path (including engine-mandated review spawns no stage attributes), the
     # rollup needs only what record-result already stamped onto each Outcome.
     effort.refresh_spend(state, _cost_rows(args), state.plan_path)
-    div = effort.divergence(state)
+    div = effort.divergence(
+        state, cross_session_totals=task_accumulator.get(state.task_id)["per_axis_totals"],
+    )
     # Final-gate execution (defense in depth): re-run every measurable stage's
     # verify_command — a later stage may have regressed an earlier one. Any
     # non-match refuses RESOLUTION rather than trusting the recorded PASSED flags.
@@ -5227,6 +5260,17 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # logs `renormalize` precisely so the effort trigger does not read it as a norm
     # revision), so the rounds already spent still belong to the same norm and stay
     # against it.
+    #
+    # Fold into the cross-session task accumulator (item B) before the reset, same
+    # reasoning as cmd_approve's fold above.
+    task_accumulator.add(
+        state.task_id, "plan_review_rounds", state.plan_review_rounds,
+        session_id=state.session_id, now=_utcnow(),
+    )
+    task_accumulator.add(
+        state.task_id, "code_review_rounds", state.code_review_rounds,
+        session_id=state.session_id, now=_utcnow(),
+    )
     state.plan_review_rounds = 0
     state.plan_review_counted_digest = ""
     # Reset alongside the pair above (item A) — same reasoning: rounds spent
@@ -5309,6 +5353,9 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             state.difficulty = None
             state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
             state.log("replan", kind="no_change", exited_diagnosing=True)
+            task_accumulator.add(
+                state.task_id, "replan_count", 1, session_id=state.session_id, now=_utcnow(),
+            )
             effort.rederive(state)  # re-derive AFTER logging so this in-flight replan is counted
             store.save(state)
             if state.ready_stages():
@@ -5342,6 +5389,9 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             state.difficulty = None
             state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
         state.log("replan", kind="refinement", exited_diagnosing=diagnosing)
+        task_accumulator.add(
+            state.task_id, "replan_count", 1, session_id=state.session_id, now=_utcnow(),
+        )
         effort.rederive(state)  # re-derive AFTER logging so this replan is counted
         store.save(state)
         if state.node == Node.VERIFYING.value and state.ready_stages():
@@ -5405,6 +5455,9 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
     state.node = Node.PLAN_READY.value
     state.log("replan", kind="substantive")
+    task_accumulator.add(
+        state.task_id, "replan_count", 1, session_id=state.session_id, now=_utcnow(),
+    )
     effort.rederive(state)  # re-derive AFTER logging so this replan is counted
     store.save(state)
     return _with_advisories(Directive(
@@ -5928,6 +5981,7 @@ COMMANDS = {
     "close": cmd_close,
     "push-subplan": cmd_push_subplan,
     "pop-subplan": cmd_pop_subplan,
+    "task-reset": cmd_task_reset,
 }
 
 
@@ -5986,7 +6040,7 @@ _RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("premises", ("ledger-add",)),
     ("basis", ("ledger-add", "question-dispose", "risk-accept")),
     ("reason", ("ledger-dispose", "question-retire", "question-candidate-dispose",
-                "order-dispose", "reject", "block")),
+                "order-dispose", "reject", "block", "task-reset")),
     ("element", ("order-raise",)),
     ("question", ("question-raise", "question-candidate-dispose")),
     ("attempted", ("question-research",)),
@@ -6018,7 +6072,7 @@ _RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
 _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("state_root", (_ROOT,), "directory path the state store is rooted at"),
     ("session", _SESSION_COMMANDS, "session id — the slug state is keyed by"),
-    ("task", ("start", "reset", "push-subplan"), "task slug, not a description"),
+    ("task", ("start", "reset", "push-subplan", "task-reset"), "task slug, not a description"),
     ("criterion_type", ("start", "reset"), "one of two fixed verification kinds"),
     ("plugin", ("plugin-activate", "plugin-deactivate", "plugin-record"), "plugin registry name"),
     ("phase", ("plugin-record",), "plugin phase name from a fixed vocabulary"),
@@ -6599,6 +6653,12 @@ def build_parser() -> argparse.ArgumentParser:
                          "(defaults to state.current_stage)")
 
     sp = add("pop-subplan"); sp.add_argument("--session", required=True)
+
+    sp = add("task-reset", help="explicit renegotiation: zero the cross-session "
+             "task accumulator (item B) for --task — never called from `reset`")
+    sp.add_argument("--task", required=True, help="task_id whose accumulator to zero")
+    sp.add_argument("--reason", required=True,
+                    help="why this task's accumulated cross-session friction is being forgiven")
     return p
 
 

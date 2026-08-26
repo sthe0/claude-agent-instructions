@@ -57,6 +57,25 @@ snapshot of the same vector, so `actual >= baseline` holds with no clamp. The
 writer-by-writer argument, and what a future writer breaking it should look like, is on
 `deltas()`.
 
+CROSS-SESSION (item B). `divergence()` accepts an optional `cross_session_totals`
+dict — the current `per_axis_totals` from `task_accumulator.get(state.task_id)`,
+read by the CALLER (cli.py) and passed in as plain data, keeping this module pure
+exactly as `refresh_spend(state, rows, path)` already does for the cost ledger.
+Only the REPLANS scale consults it: a restarted session on the same `task_id`
+starts `deltas()`'s SCALE_REPLANS at 0 (a fresh session has empty `history`), so a
+task that hit 2 replans, closed, and reopened would get a brand-new 3-replan
+budget every time — the exact symptom `round_release.py` closed WITHIN a session,
+still open ACROSS one. The accumulator's `replan_count` total already includes
+this session's own replans (cli.py adds 1 to it at every `state.log("replan", ...)`
+site, the same three sites `replan_count()` itself counts from), so `divergence()`
+takes `max(delta[SCALE_REPLANS], cross_session_totals["replan_count"])` rather
+than adding the two — using the larger of "what this session alone has logged"
+and "what this task has accumulated across every session that touched it" as the
+scale's actual, so a fire happens when EITHER exceeds the threshold, never both
+counted twice. The other three accumulator axes (`plan_review_rounds`,
+`plan_enumerate_rounds`, `code_review_rounds`) are recorded by cli.py for the same
+cross-session visibility but are not, in this stage, consulted by any live gate.
+
 SUB-PLAN CUSTODY. `cmd_push_subplan` resets `state.stages` and re-runs the full
 classify -> ... -> approve spine for a service sub-plan, so a naive second `arm()` would
 compare the PARENT's whole accumulated actual against the CHILD's tiny estimate — a
@@ -374,7 +393,9 @@ def _framing(scale: str, kind: str, act: float, comparand: float, multiple: floa
     )
 
 
-def divergence(state: SessionState, thr: Thresholds | None = None) -> Divergence | None:
+def divergence(
+    state: SessionState, thr: Thresholds | None = None, *, cross_session_totals: dict | None = None
+) -> Divergence | None:
     """The scale on which this session has diverged past the multiple, or None.
 
     Returns None — no fire — when any of these hold, and each is deliberate:
@@ -383,6 +404,15 @@ def divergence(state: SessionState, thr: Thresholds | None = None) -> Divergence
       * a firing has already happened and no `replan` has been logged since (belt 2);
       * every scale is inapplicable (zero estimate / accounting-only threshold) or below
         the multiple.
+
+    `cross_session_totals` (item B, module docstring's CROSS-SESSION section) is the
+    optional caller-supplied `per_axis_totals` dict from `task_accumulator.get`. Only
+    its `"replan_count"` entry is consulted, and only for the REPLANS scale, whose
+    actual becomes `max(delta[SCALE_REPLANS], cross_session_totals["replan_count"])` —
+    the larger of this session's own count and the task's accumulated cross-session
+    count, so a restarted session on the same stuck task inherits the prior session's
+    count instead of starting a fresh budget. `None` (the default) reproduces the
+    session-local-only behavior exactly, unchanged from before item B.
 
     When several scales fire, the one furthest past its OWN trigger is returned (ties
     break on SCALE_ORDER) — NOT the one with the largest raw `multiple`. A ratio scale's
@@ -417,9 +447,18 @@ def divergence(state: SessionState, thr: Thresholds | None = None) -> Divergence
     delta = deltas(state)
     rat = ratios(state, thr)
 
+    cross_replans = float((cross_session_totals or {}).get("replan_count") or 0.0)
+    replans_cross_session = cross_replans > delta[SCALE_REPLANS]
+    effective_replans = cross_replans if replans_cross_session else delta[SCALE_REPLANS]
+
     candidates: list[Divergence] = []
     for scale in SCALE_ORDER:
-        observed = rat[scale]
+        is_cross_replans = scale == SCALE_REPLANS and replans_cross_session
+        if is_cross_replans:
+            comparand = absolute[SCALE_REPLANS]
+            observed = (effective_replans / comparand) if comparand > 0 else None
+        else:
+            observed = rat[scale]
         if observed is None:
             continue
         if scale in RATIO_SCALES:
@@ -427,17 +466,24 @@ def divergence(state: SessionState, thr: Thresholds | None = None) -> Divergence
             comparand, fires = float(est.get(scale) or 0.0), observed >= multiple
         else:
             kind, comparand = "absolute", absolute[scale]
-            fires = delta[scale] >= comparand
+            fires = effective_replans >= comparand if is_cross_replans else delta[scale] >= comparand
         if not fires:
             continue
+        act = effective_replans if is_cross_replans else delta[scale]
+        framing = _framing(scale, kind, act, comparand, observed)
+        if is_cross_replans:
+            framing = (
+                f"{framing} (includes {cross_replans:g} replans accumulated across prior "
+                f"sessions on this task, via the cross-session task accumulator)"
+            )
         candidates.append(
             Divergence(
                 scale=scale,
                 kind=kind,
-                actual=delta[scale],
+                actual=act,
                 estimate=comparand,
                 multiple=observed,
-                framing=_framing(scale, kind, delta[scale], comparand, observed),
+                framing=framing,
             )
         )
 
