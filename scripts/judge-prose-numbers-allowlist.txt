@@ -101,6 +101,7 @@ samples/judge-latency/README.md:32:8b3fc2d5  # provenance and n of the outage ro
 samples/judge-latency/README.md:33:dcb31d7a  # provenance and n of the feedback row (10 + 16 = 26)
 samples/judge-latency/README.md:34:f159378b  # provenance and n of the binary_ask row (16)
 samples/judge-latency/README.md:41:c4f7ab96  # provenance and n of the approval_ask row after the regime-shift merge: both arms of both samples (16+16+16+16 = 64), mirroring judge_latency.MEASURED's provenance pairs
+samples/judge-latency/README.md:43:4bb3ed6b  # provenance and n of the landing_discipline row: landing-discipline-sample.json's two arms, 8 pr_proposing + 8 direct_push calls, the real n=16 sampler run this session
 samples/judge-latency/README.md:62:26defe90  # the measured cost of excluding topup-sample.json: binary_ask p90 16.70 -> 11.06 and its floor 17 -> 12; recorded so the exclusion is auditable
 samples/judge-latency/README.md:77:81a7a13d  # 11.42s = approval-sample.json's max — the ceiling that production observed being exceeded, prompting approval2-sample.json
 samples/judge-latency/README.md:79:eac5879f  # 12.71/12.51/11.96s = the three live-session calls that exceeded approval-sample.json's ceiling, the direct evidence for taking approval2-sample.json

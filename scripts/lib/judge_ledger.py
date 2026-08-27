@@ -1,7 +1,7 @@
-"""Append-only execution ledger for the four judge-calling hooks (hook-
+"""Append-only execution ledger for the five judge-calling hooks (hook-
 escalation-diagnosis-gate.py, hook-deferring-disposition-gate.py, hook-turn-
-end-gate.py, hook-plan-delivery-gate.py), all funneled through
-agentctl.advisor.subprocess_runner.
+end-gate.py, hook-plan-delivery-gate.py, hook-resolution-reminder.py), all
+funneled through agentctl.advisor.subprocess_runner.
 
 Difficulty removed: a judge call that fails open is, by construction,
 invisible on every existing observable — the hook still exits 0, the harness
@@ -24,7 +24,7 @@ metadata — because the ledger's job is counting outcomes, not reproducing
 what was asked.
 
 Ambient state (invocation_id / source / current judge) exists because the
-five production ``runner(...)`` call sites inside the four judge functions
+six production ``runner(...)`` call sites inside the five judge functions
 and hook-turn-end-gate.py's ``_judged()`` helper are frozen by a concurrent
 change and cannot grow a ledger-context parameter — so each judge function
 sets ``set_current_judge(name)`` on the one line immediately before its
@@ -63,19 +63,20 @@ _lock = threading.Lock()
 _state: dict = {"invocation_id": None, "source": None, "hook": None, "judge": None}
 
 # The ``hook`` field carries the SHORT name each hook passes to hook_start(),
-# while every other table that reasons about these same four hooks
+# while every other table that reasons about these same five hooks
 # (lib/judge_latency.HOOK_CALL_SEQUENCE, lib/hook_wiring.TIMEOUT_REQUIREMENTS)
 # is keyed by script basename. A reader that has to cross from one keying to
 # the other needs the translation, and this module owns the ``hook``
 # vocabulary, so the translation lives here once instead of as an inline copy
 # inside each reader. tests/test_dispatch_witness.py asserts the key set still
-# equals HOOK_CALL_SEQUENCE's, so a fourth judge-calling hook cannot be added
+# equals HOOK_CALL_SEQUENCE's, so a sixth judge-calling hook cannot be added
 # to one table and forgotten in the other.
 HOOK_NAME_BY_BASENAME: "dict[str, str]" = {
     "hook-escalation-diagnosis-gate.py": "escalation_diagnosis",
     "hook-deferring-disposition-gate.py": "deferring_disposition",
     "hook-turn-end-gate.py": "turn_end",
     "hook-plan-delivery-gate.py": "plan_delivery",
+    "hook-resolution-reminder.py": "landing_discipline",
 }
 
 
@@ -126,7 +127,7 @@ def current_source() -> str:
 
 
 def set_current_judge(name: str | None) -> None:
-    """Ambient carrier the four judge functions set to their own name on the
+    """Ambient carrier the five judge functions set to their own name on the
     line immediately before their frozen ``runner(...)`` call, so
     ``subprocess_runner`` — which receives no judge-name argument — can
     attribute the call it is about to make."""

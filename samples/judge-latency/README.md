@@ -15,7 +15,7 @@ sits in `final_check` and re-runs **from canon** after the change lands.
 Every latency below is wall-clock around `advisor.subprocess_runner`, measured with
 `time.monotonic()`, one process at a time.
 
-## The five calibrated rows
+## The six calibrated rows
 
 | pool | n | min | median | p90 | max | threshold | ceiling `ceil(max)+1` |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -24,6 +24,7 @@ Every latency below is wall-clock around `advisor.subprocess_runner`, measured w
 | feedback | 26 | 10.73 | 11.86 | 13.34 | 14.05 | **14** | **16** |
 | binary_ask | 16 | 5.93 | 7.46 | 11.06 | 11.52 | **12** | **13** |
 | approval_ask | 64 | 5.88 | 12.77 | 17.29 | 19.14 | **18** | **21** |
+| landing_discipline | 16 | 3.88 | 4.96 | 6.37 | 15.38 | **7** | **17** |
 
 `approval_ask`'s threshold/ceiling are as computed by `lib/judge_latency.py`
 today; see "approval2-sample.json — the regime shifted" below for why this row
@@ -39,6 +40,7 @@ Provenance of each row, file by file:
 | feedback | `latency-sample.json:feedback` (n=10) + `topup2-sample.json:feedback` (n=16) |
 | binary_ask | `topup2-sample.json:binary_ask` (n=16) |
 | approval_ask | `approval-sample.json:approval` (n=16) + `approval-sample.json:not_approval` (n=16) + `approval2-sample.json:approval` (n=16) + `approval2-sample.json:not_approval` (n=16) |
+| landing_discipline | `landing-discipline-sample.json:pr_proposing` (n=8) + `landing-discipline-sample.json:direct_push` (n=8) |
 
 All 32 verdicts in `topup2-sample.json` are correct (`ok: true` on every row); the
 sample measures latency, not accuracy, but a wrong verdict would have invalidated it.
@@ -132,6 +134,35 @@ approved plan's own words —
 "выполнимость неравенства о размере бюджета проверяется ПОСЛЕ
 предусловия". The height is the user's call, and 52 s is what was approved.
 
+## `landing-discipline-sample.json` — sixteen distinct menus, no prefilter
+
+`judge_landing_discipline_ask` (the semantic judge behind
+`hook-resolution-reminder.py`'s PreToolUse landing-discipline check) has no
+regex/content prefilter ahead of it — every invocation at an open resolution
+gate consults the judge directly. Its sample therefore needed real wording
+diversity rather than one text repeated: 8 `pr_proposing` and 8 `direct_push`
+menus, each a distinct, hand-authored AskUserQuestion resolution-gate menu
+(question + every option's label/description), run one process at a time
+under an `O_CREAT|O_EXCL` pid lock with the two arms alternating inside it —
+same discipline as `approval2.py`.
+
+15 of the 16 verdicts are correct (`ok`, computed the same way as the other
+rows' — the comparison against the arm's expected label, not a raw count).
+The one miss (`direct_push` index 5, judged YES/proposes-PR when the expected
+answer was NO) is a fixture-labeling artifact, not a judge accuracy miss:
+that menu's own rejected option is worded "Оставить на review в другом
+репо" —
+<!-- Language exception: verbatim quote of the fixture's own option text; translating it would stop the quote from evidencing the vocabulary overlap it names. -->
+its non-recommended alternative carries the same "review" vocabulary
+the judge's YES criterion looks for, so the text itself is genuinely
+ambiguous about which arm it belongs to, independent of the judge under
+test. Either way the latency is still a real, countable call — dropping it
+would undercount `n` for no reason the estimator cares about, and
+`hook-resolution-reminder.py`'s own PreToolUse branch fails open on judge
+unavailability, never on a judge answering wrong, so this is a note for
+whoever authors the next fixture batch, not a defect in this stage's
+measurement.
+
 ## Supporting samples (not part of the four rows)
 
 - `lean-sample.json` — lean vs standard prompt A/B; shows the lean prompt is not
@@ -141,7 +172,7 @@ approved plan's own words —
 
 ## Reproducing
 
-`sample.py`, `ab.py`, `topup.py` / `topup2.py` are the runners as executed; `stats.py`
-prints the table. They import `agentctl.advisor` from this branch and each call the
-real judge, so a re-run costs real model calls and will not reproduce the latencies
-exactly — only their shape.
+`sample.py`, `ab.py`, `topup.py` / `topup2.py`, `sample_landing_discipline.py` are the
+runners as executed; `stats.py` prints the table. They import `agentctl.advisor` from
+this branch and each call the real judge, so a re-run costs real model calls and will
+not reproduce the latencies exactly — only their shape.
