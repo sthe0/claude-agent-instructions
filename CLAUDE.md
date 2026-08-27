@@ -93,7 +93,7 @@ The engine drives the *shell*: a FAILED stage routes to `DIAGNOSING`, where it e
 
 **A third entry — effort divergence — needs no human to notice it.** When actual effort runs past the *current* plan's re-derived estimate by the configured multiple — spend, active wall-clock or replan count, measured from plan approval — the engine routes even a **passing** result into `DIAGNOSING` itself, pre-framed, asking nothing: the chosen norm is visibly missing something essential about the real situation. An ordinary difficulty, not an engine fault. Scales, window, limits: [effort-divergence-trigger.md](memory-global/leaves/effort-divergence-trigger.md).
 
-**Two re-entry signals warrant a direct user question instead of another replan.** A second `replans`-scale firing for the same order (prose-only), and re-entry of an already-`RESOLVED` one (`reset` refuses without `--reopen-reason`; at `effort-replan-absolute` reopens it demands `--reopen-user-decision`): ask via `AskUserQuestion` whether the order still stands. Why: [effort-divergence-trigger.md](memory-global/leaves/effort-divergence-trigger.md).
+**Two re-entry signals warrant a direct user question instead of another replan.** A second `replans`-scale firing for the same order (prose-only), and re-entry of an already-`RESOLVED` one (`reset` refuses without `--reopen-reason`; at `effort-replan-absolute` reopens it demands `--reopen-user-decision` alongside `--reopen-reason`, not instead of it): ask via `AskUserQuestion` whether the order still stands. Why: [effort-divergence-trigger.md](memory-global/leaves/effort-divergence-trigger.md).
 
 ### When the user corrects agent behavior
 

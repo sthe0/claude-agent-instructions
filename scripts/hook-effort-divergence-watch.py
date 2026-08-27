@@ -117,16 +117,29 @@ def band_for(scale: dict) -> int:
     return max(1, int(scale.get("past_own_trigger") or 1))
 
 
-def message(scale: dict) -> str:
-    return (
+def message(scale: dict, *, already_fired: bool) -> str:
+    lead = (
         f"[effort-divergence] {scale.get('label')} on this task is "
         f"{scale.get('actual', 0):.2f} {scale.get('unit')} against "
         f"{scale.get('comparand', 0):.2f} — {scale.get('past_own_trigger', 0):.1f}x past its "
+        "own trigger, and "
+    )
+    if already_fired:
+        # `would_fire` is None: belt 2's one-fire-per-replan budget for this scale is
+        # already spent, so the coordinator's actual blocked next act is
+        # `fire-acknowledge`, not another `declare` — naming `declare` here would send
+        # the coordinator to a command that is not what is stuck.
+        return lead + (
+            "this scale already fired and is awaiting acknowledgment — the blocked "
+            "next act is `agentctl fire-acknowledge`, not another `declare`. "
+            "`agentctl effort-check --session <id>` prints all four scales."
+        )
+    return lead + (
         # "not reported THIS TURN", not "never fired": the hook reads a report, and the
         # report does not carry `effort_fires`. That a fired scale is normally back under
         # its line (record_fire rebases the baseline) makes the stronger claim true most
         # of the time, which is exactly the kind of claim that is wrong when it matters.
-        "own trigger, and no engine command has reported it this turn. The chosen norm is "
+        "no engine command has reported it this turn. The chosen norm is "
         "visibly missing something essential about the real situation. Run the "
         "difficulty cycle now — `agentctl declare` -> `investigate` -> `critique` -> "
         "`replan` (CLAUDE.md § When the work is stuck) — asking WHAT the plan does not "
@@ -156,7 +169,12 @@ def main() -> int:
         if band <= band_throttle.fired_band(session_id, root, prefix):
             return 0
         band_throttle.record_band(session_id, band, root, prefix)
-        print(message(scale))
+        # `would_fire` is None exactly when belt 2 (the one-fire-per-replan budget,
+        # `effort._replans_since_last_fire`) has already spent this scale's fire and
+        # no replan has happened since — the coordinator's blocked next act is then
+        # `fire-acknowledge`, not `declare`, even though the scale is still over its line.
+        already_fired = (directive.get("data") or {}).get("would_fire") is None
+        print(message(scale, already_fired=already_fired))
     except Exception:
         return 0
     return 0

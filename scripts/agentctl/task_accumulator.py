@@ -86,6 +86,16 @@ SCHEMA_VERSION = 1
 #: stamped with it as foreign -- i.e. as `_empty()` -- silently zeroing the very
 #: cross-session totals this module exists to preserve. `2` stays READABLE because a
 #: build during development wrote it; nothing writes it now.
+#:
+#: Staying at 1 has its own smaller residual, disclosed for the same reason as the
+#: `task_id`-bypass in README honest limit 7: `_coerce` keys `per_axis_totals` on
+#: THIS module's own `AXES` tuple (`{axis: totals.get(axis, 0) for axis in AXES}`),
+#: not on whatever keys the file happens to hold. An older-commit worktree whose
+#: `AXES` predates a newly-added axis still reads schema_version 1 as its own, so
+#: its next `add()` writes a `per_axis_totals` with that axis silently absent --
+#: dropping just the new axis's count, not the whole file. Smaller blast radius than
+#: a version bump (which would zero every axis), and still the reason a genuinely
+#: new axis is worth landing everywhere before any worktree starts relying on it.
 READABLE_SCHEMA_VERSIONS = (1, 2)
 
 

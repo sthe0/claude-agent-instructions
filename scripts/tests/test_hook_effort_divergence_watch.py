@@ -4,8 +4,9 @@ The hook exists because every other comparison in the trigger happens inside a
 command the coordinator CHOSE to run. Running on every prompt is only safe if the
 hook is inert in all four failure directions, so those are what is pinned here: it
 never blocks and never speaks on a broken input, it stays quiet while the trigger
-is unarmed or already fired, it says a given scale at most once per band, and each
-scale keeps its own band so one loud scale cannot mute another.
+is unarmed or switched off for this session, it says a given scale at most once
+per band, and each scale keeps its own band so one loud scale cannot mute
+another.
 
 The last two tests pin the CONTRACT WITH THE ENGINE rather than the hook's own
 logic: `effort-check`'s stdout must be parseable JSON and nothing else (a stray
@@ -38,6 +39,8 @@ _SPEC.loader.exec_module(mod)
 from agentctl import cli, effort, task_accumulator  # noqa: E402
 from agentctl.config import Thresholds  # noqa: E402
 
+_UNSET = object()
+
 
 def row(scale="spend", *, past=2.0, at_or_past=True, **kw):
     """One `scales[]` row in the shape `cmd_effort_check` emits."""
@@ -51,12 +54,20 @@ def row(scale="spend", *, past=2.0, at_or_past=True, **kw):
     return out
 
 
-def directive(rows, *, armed=True, active=True):
+def directive(rows, *, armed=True, active=True, would_fire=_UNSET):
+    """`would_fire` defaults to the first over-threshold row's scale, matching what
+    the real CLI reports on an ordinary (not-yet-fired-and-acknowledged) divergence
+    — the shape every test in this file except the belt-2 ones below wants. Pass
+    `would_fire=None` explicitly to model the belt-2 window: a scale still over its
+    threshold whose one-fire-per-replan budget is already spent.
+    """
+    over = [r["scale"] for r in rows if r["at_or_past_threshold"]]
+    if would_fire is _UNSET:
+        would_fire = over[0] if over else None
     return {
         "ok": True, "node": "APPROVED", "action": "report", "detail": "",
         "data": {"armed": armed, "active": active, "scales": rows,
-                 "over_threshold": [r["scale"] for r in rows if r["at_or_past_threshold"]],
-                 "would_fire": None, "framing": ""},
+                 "over_threshold": over, "would_fire": would_fire, "framing": ""},
     }
 
 
@@ -95,6 +106,22 @@ def test_the_same_band_is_said_only_once_per_session(monkeypatch, capsys, tmp_pa
     assert out2 == ""
 
 
+def test_a_scale_already_fired_and_awaiting_ack_names_fire_acknowledge(
+    monkeypatch, capsys, tmp_path
+):
+    """Belt 2's one-fire-per-replan budget is already spent for this scale
+    (`would_fire` is None even though the scale is still `over_threshold`): the
+    coordinator's actual blocked next act is `agentctl fire-acknowledge`, not
+    another `declare` — naming `declare` here would send it to a command that
+    is not what is stuck."""
+    rc, out, _ = _run(monkeypatch, capsys, tmp_path,
+                      directive([row()], would_fire=None))
+    assert rc == 0
+    assert "[effort-divergence]" in out
+    assert "agentctl fire-acknowledge" in out
+    assert "agentctl declare" not in out
+
+
 # --- and stays quiet in every direction that is not a divergence --------------
 
 def test_an_unarmed_session_is_silent(monkeypatch, capsys, tmp_path):
@@ -104,8 +131,9 @@ def test_an_unarmed_session_is_silent(monkeypatch, capsys, tmp_path):
 
 
 def test_an_inactive_trigger_is_silent(monkeypatch, capsys, tmp_path):
-    """`active` goes false once the engine itself is already handling the fire —
-    repeating it on the user's prompt would be noise on top of a live diagnosis."""
+    """`active` is `gates.effort_active` — the trigger switched off for this session
+    (`AGENTCTL_EFFORT=0`, or a non-SUBSTANTIVE weight class) — not an in-flight fire;
+    a watch that speaks for a switch the session itself turned off is noise."""
     rc, out, _ = _run(monkeypatch, capsys, tmp_path, directive([row()], active=False))
     assert (rc, out) == (0, "")
 

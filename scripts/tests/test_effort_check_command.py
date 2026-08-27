@@ -126,14 +126,19 @@ def test_the_report_agrees_with_would_fire_across_sessions(store, fixtures_dir):
 
 
 def test_every_scale_row_agrees_with_would_fire(store, fixtures_dir):
-    """Generalized: `would_fire`, when set, is always one of `over_threshold`. Pins the
-    invariant for the scales as a set rather than for `replans` alone, so a future scale
-    that grows a cross-session (or otherwise non-session-local) source cannot reintroduce
-    the split on a different row."""
+    """`would_fire`, when set, is always one of `over_threshold` -- checked here on the
+    replans row specifically (the one this change made cross-session), NOT as a general
+    claim about every scale: `would_fire` can legitimately be None with `over_threshold`
+    non-empty (belt 2 already spent this scale's one-fire-per-replan budget, see
+    `hook-effort-divergence-watch.py`'s `already_fired` branch), and that is not a
+    disagreement this test is meant to catch. A future scale that grows a cross-session
+    (or otherwise non-session-local) source should extend this same replans-shaped check
+    for its own row, not lean on this one to have generalized for it."""
     sid = "ec-agree"
     _to_approved(store, fixtures_dir, sid, task="agree-demo")
     task_accumulator.add("agree-demo", "replan_count", 99, session_id=sid, now=None)
     d = cli.cmd_effort_check(ns(session=sid), store=store)
+    assert d.data["would_fire"] == effort.SCALE_REPLANS
     assert d.data["would_fire"] in d.data["over_threshold"]
 
 
