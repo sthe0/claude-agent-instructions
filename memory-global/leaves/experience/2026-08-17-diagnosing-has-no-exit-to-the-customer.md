@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "user (AskUserQuestion at the resolution gate, 202
 refs: [review-loop-cannot-measure-its-own-convergence, no-circuit-breaker-on-verification-effort, effort-divergence-trigger, scope-substitution-at-plan-authoring, coordinator-objective]
 plan_file: /Users/the0/.claude-agent/plans/smd-act-defects-8.toml
 created: 2026-08-17
-last_verified: 2026-08-19
+last_verified: 2026-08-27
 ---
 
 # The effort-divergence cycle has no exit that renegotiates the order with its customer
@@ -32,6 +32,10 @@ Read the activity-theory repository and the MMPK literature, critique the implem
 - Where it arose: an agentctl-driven SUBSTANTIVE backlog-triage task over the Core issue tracker plus two org-internal queues: 5 stages, all PASSED, stage 5's deliverable (verify-process-doc-sync.py) rejected in full over two acceptance rounds
 - Working plan: /home/the0/.claude-agent/plans/backlog-triage-core-org.toml
 
+
+### 2026-08-27 — the replans scale is a fixed point — every closing replan re-arms itself, and only an undocumented env-var escape hatch breaks the loop
+- Where it arose: agentctl-driven SUBSTANTIVE task at an org-internal deployment, session ed1e2dd0-8dec-4a05-a802-710612808849: a documentation/reconciliation stage of a multi-stage plan (v14), all stages PASSED
+- Working plan: /home/the0/.claude-agent/plans/de495-fix-codeact-multiblock-v14.toml
 ## Common core & variations
 **Common:** The engine can re-author a plan but cannot renegotiate the ORDER with its customer. Here the customer did renegotiate — withdrawing requirement R5 after the work itself showed the requirement rested on a flawed premise — and the engine had no way to write that down.
 
