@@ -50,6 +50,7 @@ from .state import plan_review_concern_ids as _plan_review_concern_ids
 from .state import plan_review_scope_for_stage as _plan_review_scope_for_stage
 from .state import plan_review_scope_stage_index as _plan_review_scope_stage_index
 from .state import PLAN_PRESENTATION_KIND_ESSENCE as _PLAN_PRESENTATION_KIND_ESSENCE
+from .state import PLAN_PRESENTATION_KIND_REPLAN_DIFF as _PLAN_PRESENTATION_KIND_REPLAN_DIFF
 from .state import Stage as _Stage
 from .text_shape import PLACEHOLDER_SET as _PLACEHOLDER_SET
 from .text_shape import normalize_string as _normalize_string
@@ -760,8 +761,16 @@ def plan_presentation_active(state: SessionState) -> bool:
 
 def _plan_presentation_for(state: SessionState, kind: str):
     """The most-recently-recorded PlanPresentation for `kind`, or None.
-    cmd_present_plan supersedes rather than appends, so in practice at most one
-    match exists per kind; last-wins mirrors _stage_review_for regardless."""
+
+    cmd_present_plan supersedes rather than appends, so at most one match
+    exists per kind — but the supersede KEY differs by kind (see
+    cli._record_plan_presentation's docstring): essence/full supersede on
+    (plan_path, kind), which is equivalent to kind-alone in practice because
+    both always present state.plan_path (one plan per session); replan_diff
+    supersedes on kind alone explicitly, because its target varies across
+    replan attempts against different candidate plan files. Either way this
+    scan only ever needs the last match; last-wins mirrors _stage_review_for
+    regardless."""
     match = [p for p in state.plan_presentations if p.kind == kind]
     return match[-1] if match else None
 
@@ -813,6 +822,67 @@ def _no_stamp_blocker(probe) -> str:
         "confirm-delivery --by <you> --note <why> --escape-reason " +
         delivery.ESCAPE_HOOK_NOT_INSTALLED + " as the escape"
     )
+
+
+def _receipt_binding_blocker(receipt, target_plan: str | None, label: str) -> str | None:
+    """Shared receipt-side staleness check for the plan-presentation family:
+    the receipt must name the exact plan path AND content currently in play.
+    Fails OPEN on missing observables (mirrors plan_review_blockers's `if
+    pr.plan_sha256:` legacy-degradation guard). `label` names the presentation
+    kind in the message only (e.g. "plan presentation", "replan-diff
+    presentation") — never the word "delivery", since
+    hook-plan-delivery-gate.py's _receipt_stale_reason partitions gates'
+    messages by that substring. None == the receipt is still current."""
+    if not target_plan or receipt.plan_path != target_plan:
+        return (
+            f"{label} is stale — it presented "
+            f"{receipt.plan_path!r} but the target plan is {target_plan!r}; "
+            "re-run present-plan on the current plan"
+        )
+    if receipt.plan_sha256:
+        try:
+            current = hashlib.sha256(Path(target_plan).read_bytes()).hexdigest()
+        except OSError:
+            current = None
+        if current is not None and current != receipt.plan_sha256:
+            return (
+                f"{label} is stale — the plan content at "
+                f"{target_plan!r} changed since it was presented; re-run present-plan"
+            )
+    return None
+
+
+def _delivery_stamp_blocker(state: SessionState, receipt, probe) -> list[str]:
+    """Shared delivery-proof check for the plan-presentation family: the
+    receipt must additionally be PROVEN DELIVERED (a delivery stamp exists,
+    bound to the exact receipt). Fails CLOSED — see plan_presentation_blockers'
+    docstring for the full fail-open/fail-closed rationale. [] == delivered."""
+    state_file = config_root.resolve_agentctl_state_file(state.session_id)
+    stamp = delivery.read_stamp(state_file) if state_file is not None else None
+    if stamp is None:
+        return [_no_stamp_blocker(probe if probe is not None else hook_wiring.probe)]
+    if stamp.plan_sha256 != receipt.plan_sha256 or stamp.rendering_sha256 != receipt.rendering_sha256:
+        return [
+            "delivery proof is stale — it verified a different plan/rendering "
+            "than the current presentation receipt; re-present and re-verify "
+            "(or confirm-delivery --by <you> --note <why> --escape-reason "
+            "<" + "|".join(delivery.DELIVERY_ESCAPE_REASONS) + ">)"
+        ]
+    if stamp.source == delivery.SOURCE_HOOK:
+        return []
+    if stamp.source == delivery.SOURCE_OVERRIDE:
+        missing = []
+        if not (stamp.by or "").strip():
+            missing.append("by")
+        if not (stamp.note or "").strip():
+            missing.append("note")
+        if missing:
+            return [
+                "delivery override requires a non-empty " + " and ".join(missing) +
+                " (the user's explicit escape reason) — re-run confirm-delivery"
+            ]
+        return []
+    return [f"delivery stamp source is {stamp.source!r} — expected 'hook' or 'override'"]
 
 
 def plan_presentation_blockers(
@@ -878,49 +948,94 @@ def plan_presentation_blockers(
             "no plan presentation recorded — run: present-plan --kind essence "
             "(the plan must be shown to the user before it can be approved)"
         ]
-    if not target_plan or receipt.plan_path != target_plan:
-        return [
-            "plan presentation is stale — it presented "
-            f"{receipt.plan_path!r} but the target plan is {target_plan!r}; "
-            "re-run present-plan on the current plan"
-        ]
-    if receipt.plan_sha256:
-        try:
-            current = hashlib.sha256(Path(target_plan).read_bytes()).hexdigest()
-        except OSError:
-            current = None
-        if current is not None and current != receipt.plan_sha256:
-            return [
-                "plan presentation is stale — the plan content at "
-                f"{target_plan!r} changed since it was presented; re-run present-plan"
-            ]
+    stale = _receipt_binding_blocker(receipt, target_plan, "plan presentation")
+    if stale is not None:
+        return [stale]
+    return _delivery_stamp_blocker(state, receipt, probe)
 
-    state_file = config_root.resolve_agentctl_state_file(state.session_id)
-    stamp = delivery.read_stamp(state_file) if state_file is not None else None
-    if stamp is None:
-        return [_no_stamp_blocker(probe if probe is not None else hook_wiring.probe)]
-    if stamp.plan_sha256 != receipt.plan_sha256 or stamp.rendering_sha256 != receipt.rendering_sha256:
+
+def replan_authorization_active(state: SessionState) -> bool:
+    """Whether the replan-authorization gate applies to this session.
+
+    Scoped exactly like plan_presentation_active: SUBSTANTIVE sessions always
+    pay it; chat/small-change never do. AGENTCTL_REPLAN_AUTHORIZATION overrides
+    in both directions ("1" forces on, "0" forces off). Env-only reads, no
+    file/subprocess I/O, so this predicate itself stays pure (the guardian it
+    gates is not fully pure — see replan_authorization_blockers)."""
+    env = os.environ.get("AGENTCTL_REPLAN_AUTHORIZATION")
+    if env == "1":
+        return True
+    if env == "0":
+        return False
+    return state.weight_class == WeightClass.SUBSTANTIVE.value
+
+
+def replan_authorization_blockers(
+    state: SessionState,
+    target_plan: str | None,
+    *,
+    diff_kind: str,
+    probe=None,
+) -> list[str]:
+    """Precondition guardian for `replan` outside the DIAGNOSING difficulty
+    cycle: a non-substantive edit (refinement or no_change) to an ALREADY
+    APPROVED plan must have been PRESENTED to the user as a diff rendering
+    (a replan_diff receipt exists, bound to the exact proposed plan bytes) AND
+    that presentation must be PROVEN DELIVERED — the third instance of the
+    plan-presentation/plan-review charter (see state.py's module comment on
+    PlanPresentation), extending it rather than duplicating it. An approved
+    plan must not change without the user any more than it must not be
+    executed without the user; this is the write-side twin of
+    plan_presentation_blockers' read-side gate. [] == may pass.
+
+    Deliberately absent from GUARDIANS for the same signature reason as
+    plan_presentation_blockers and difficulty_blockers.
+
+    Four conditions return [] unconditionally, checked in this order:
+      - the gate is inactive (chat/small-change/AGENTCTL_REPLAN_AUTHORIZATION=0);
+      - state.node is DIAGNOSING AND the difficulty cycle is complete (self-
+        contained: this function calls difficulty_blockers itself rather than
+        trusting the caller's ordering, so its correctness never depends on
+        cmd_replan calling this after checking DIAGNOSING);
+      - diff_kind == 'substantive' (a substantive edit is unaffected — it
+        already carries its own, pre-existing scope-change approval discipline
+        outside this gate's charter);
+      - the proposed plan's current sha256 equals state.accepted_plan_digest
+        (byte-identical to what was last accepted — nothing to authorize).
+
+    Otherwise the receipt/delivery checks mirror plan_presentation_blockers
+    exactly, reusing its shared helpers: a missing replan_diff receipt blocks
+    naming `present-plan --kind replan_diff --plan <target>`; a stale one
+    blocks via _receipt_binding_blocker labelled 'replan-diff presentation'
+    (never the word 'delivery' — see that helper's docstring); then
+    _delivery_stamp_blocker applies the identical fail-CLOSED delivery
+    discipline, including the SOURCE_OVERRIDE by/note requirement and the
+    _no_stamp_blocker hook-wiring diagnosis."""
+    if not replan_authorization_active(state):
+        return []
+    if state.node == Node.DIAGNOSING.value and not difficulty_blockers(state):
+        return []
+    if diff_kind == "substantive":
+        return []
+    if target_plan:
+        try:
+            current_digest = hashlib.sha256(Path(target_plan).read_bytes()).hexdigest()
+        except OSError:
+            current_digest = None
+        if current_digest is not None and current_digest == state.accepted_plan_digest:
+            return []
+
+    receipt = _plan_presentation_for(state, _PLAN_PRESENTATION_KIND_REPLAN_DIFF)
+    if receipt is None:
         return [
-            "delivery proof is stale — it verified a different plan/rendering "
-            "than the current presentation receipt; re-present and re-verify "
-            "(or confirm-delivery --by <you> --note <why> --escape-reason "
-            "<" + "|".join(delivery.DELIVERY_ESCAPE_REASONS) + ">)"
+            "no replan-diff presentation recorded — run: present-plan --kind "
+            f"replan_diff --plan {target_plan!r} (a non-substantive edit to an "
+            "approved plan must be shown to the user before it takes effect)"
         ]
-    if stamp.source == delivery.SOURCE_HOOK:
-        return []
-    if stamp.source == delivery.SOURCE_OVERRIDE:
-        missing = []
-        if not (stamp.by or "").strip():
-            missing.append("by")
-        if not (stamp.note or "").strip():
-            missing.append("note")
-        if missing:
-            return [
-                "delivery override requires a non-empty " + " and ".join(missing) +
-                " (the user's explicit escape reason) — re-run confirm-delivery"
-            ]
-        return []
-    return [f"delivery stamp source is {stamp.source!r} — expected 'hook' or 'override'"]
+    stale = _receipt_binding_blocker(receipt, target_plan, "replan-diff presentation")
+    if stale is not None:
+        return [stale]
+    return _delivery_stamp_blocker(state, receipt, probe)
 
 
 def stage_review_active(state: SessionState) -> bool:

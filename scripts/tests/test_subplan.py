@@ -515,6 +515,211 @@ def test_pop_subplan_restores_pointer_to_active_stage(store):
     assert state.active_stage() is state.stage(2)
 
 
+def _write_parent_plan(fixtures_dir, tmp_path, name, *, repo_root=None, delivery_worktree=None):
+    """A plan_two_stage.toml derivative with a controllable [meta] venue pair --
+    repo_root/delivery_worktree are injected only when given, so a caller can build
+    the majority plan shape (repo_root declared, delivery_worktree absent) as well
+    as the fully-declared one."""
+    inject = ""
+    if repo_root is not None:
+        inject += f'repo_root = "{repo_root}"\n'
+    if delivery_worktree is not None:
+        inject += f'delivery_worktree = "{delivery_worktree}"\n'
+    path = tmp_path / name
+    text = (fixtures_dir / "plan_two_stage.toml").read_text()
+    if inject:
+        text = text.replace("[meta]\n", "[meta]\n" + inject, 1)
+    path.write_text(text)
+    return path
+
+
+# --- pop-subplan venue-substitution guard (stage 7) -----------------------------
+# _sync_venue_from_plan's unconditional re-derive trusts the parent plan FILE even
+# when it moved out from under a pushed child -- the one other post-approval route
+# from an edited plan file to live state. These tests exercise the guard: it
+# compares the exact (repo_root, delivery_worktree) pair captured at push against a
+# fresh read at pop, and keeps the frame's restored venue only when that pair moved.
+
+def test_pop_keeps_frame_venue_when_parent_repo_root_moved_while_pushed(store, fixtures_dir, tmp_path):
+    """(a) Editing the parent plan's repo_root between push and pop must not be
+    silently adopted at pop -- the frame's already-restored venue is kept, and the
+    Directive reports why."""
+    plan = _write_parent_plan(fixtures_dir, tmp_path, "parent.toml",
+                               repo_root="/tmp/orig", delivery_worktree="/tmp/orig-wt")
+    state = _executing_state(store, "guard-a")
+    state.plan_path = str(plan)
+    state.repo_root = "/tmp/orig"
+    state.delivery_worktree = "/tmp/orig-wt"
+    store.save(state)
+
+    cli.cmd_push_subplan(
+        ns(session="guard-a", plan="/tmp/child.toml", task="child", originating_stage=1),
+        store=store,
+    )
+    frame = store.load("guard-a").plan_stack[0]
+    assert frame.parent_venue_captured is True
+    assert (frame.parent_repo_root, frame.parent_delivery_worktree) == ("/tmp/orig", "/tmp/orig-wt")
+
+    # The parent plan FILE's venue moves out from under the pushed child.
+    plan.write_text(plan.read_text().replace('repo_root = "/tmp/orig"', 'repo_root = "/tmp/moved"'))
+
+    _resolve_child(store, "guard-a")
+    d = cli.cmd_pop_subplan(ns(session="guard-a"), store=store)
+    assert d.ok is True
+    assert d.data["venue_source"] == "frame (parent plan venue changed while pushed)"
+    assert "frame" in d.detail
+
+    state = store.load("guard-a")
+    # The frame's ORIGINAL venue is kept -- neither the file's moved value nor a
+    # refusal; pop never refuses.
+    assert state.repo_root == "/tmp/orig"
+    assert state.delivery_worktree == "/tmp/orig-wt"
+
+
+def test_pop_rederives_from_plan_file_when_parent_untouched(store, fixtures_dir, tmp_path):
+    """(b) An untouched parent still re-derives from the file exactly as before this
+    guard existed -- the guard only changes behaviour on an actual venue move."""
+    plan = _write_parent_plan(fixtures_dir, tmp_path, "parent.toml",
+                               repo_root="/tmp/canon", delivery_worktree="/tmp/canon-wt")
+    state = _executing_state(store, "guard-b")
+    state.plan_path = str(plan)
+    state.repo_root = "/tmp/canon"
+    state.delivery_worktree = "/tmp/canon-wt"
+    store.save(state)
+
+    cli.cmd_push_subplan(
+        ns(session="guard-b", plan="/tmp/child.toml", task="child", originating_stage=1),
+        store=store,
+    )
+    _resolve_child(store, "guard-b")
+    d = cli.cmd_pop_subplan(ns(session="guard-b"), store=store)
+    assert d.ok is True
+    assert d.data["venue_source"] == "plan-file"
+
+    state = store.load("guard-b")
+    assert state.repo_root == "/tmp/canon"
+    assert state.delivery_worktree == "/tmp/canon-wt"
+
+
+def test_pop_rederives_despite_parent_edit_outside_venue_fields(store, fixtures_dir, tmp_path):
+    """(c) The regression a whole-file hash would have caused: a parent edited only
+    OUTSIDE the two venue fields (an `Actual effort:` stamp on an already-passed
+    stage -- the canonical in-thread refinement CLAUDE.md sanctions) must not
+    suppress the repair of a frame whose delivery_worktree was already lost before
+    push. A coarse whole-file-hash guard would treat this edit as a venue move and
+    keep the stale frame value forever; the two-field comparison must not."""
+    plan = _write_parent_plan(fixtures_dir, tmp_path, "parent.toml", repo_root="/tmp/canon")
+    # delivery_worktree is NOT declared in the parent file at all.
+    state = _executing_state(store, "guard-c")
+    state.plan_path = str(plan)
+    state.repo_root = "/tmp/canon"
+    state.delivery_worktree = "/tmp/lost"  # stale value the defect leaves before push
+    store.save(state)
+
+    cli.cmd_push_subplan(
+        ns(session="guard-c", plan="/tmp/child.toml", task="child", originating_stage=1),
+        store=store,
+    )
+    frame = store.load("guard-c").plan_stack[0]
+    assert frame.parent_venue_captured is True
+    assert frame.parent_delivery_worktree == ""
+
+    # Edit the parent plan OUTSIDE the venue fields -- an Actual-effort stamp on a
+    # completed stage, as a comment (no schema key changes; parses unconditionally).
+    text = plan.read_text().replace(
+        'title = "Scaffold module"',
+        'title = "Scaffold module"\n# Actual effort: as estimated',
+    )
+    plan.write_text(text)
+
+    _resolve_child(store, "guard-c")
+    d = cli.cmd_pop_subplan(ns(session="guard-c"), store=store)
+    assert d.ok is True
+    assert d.data["venue_source"] == "plan-file"
+
+    state = store.load("guard-c")
+    assert state.repo_root == "/tmp/canon"
+    # Repaired: matches the file's undeclared value, not the stale frame value.
+    assert state.delivery_worktree is None
+
+
+def test_pop_legacy_frame_without_venue_capture_uses_rederive_path(store, fixtures_dir, tmp_path):
+    """(d) A PlanFrame persisted before schema 34 carries none of the three new
+    keys; SessionState.from_dict must default parent_venue_captured to False so pop
+    takes the unconditional re-derive path exactly as it always has, rather than
+    raising or misreading the absent capture as 'nothing changed'."""
+    plan = _write_parent_plan(fixtures_dir, tmp_path, "parent.toml",
+                               repo_root="/tmp/canon", delivery_worktree="/tmp/canon-wt")
+    state = _executing_state(store, "guard-d")
+    state.plan_path = str(plan)
+    state.repo_root = "/tmp/canon"
+    state.delivery_worktree = "/tmp/canon-wt"
+    store.save(state)
+
+    cli.cmd_push_subplan(
+        ns(session="guard-d", plan="/tmp/child.toml", task="child", originating_stage=1),
+        store=store,
+    )
+
+    # Simulate a pre-schema-34 persisted frame: strip the three new keys.
+    import json
+    raw = json.loads(store.load("guard-d").to_json())
+    frame_raw = raw["plan_stack"][0]
+    del frame_raw["parent_repo_root"]
+    del frame_raw["parent_delivery_worktree"]
+    del frame_raw["parent_venue_captured"]
+    store.save(SessionState.from_dict(raw))
+
+    loaded_frame = store.load("guard-d").plan_stack[0]
+    assert loaded_frame.parent_venue_captured is False
+
+    _resolve_child(store, "guard-d")
+    d = cli.cmd_pop_subplan(ns(session="guard-d"), store=store)
+    assert d.ok is True
+    assert d.data["venue_source"] == "plan-file"
+
+    state = store.load("guard-d")
+    assert state.repo_root == "/tmp/canon"
+    assert state.delivery_worktree == "/tmp/canon-wt"
+
+
+def test_pop_catches_delivery_worktree_added_to_bare_parent(store, fixtures_dir, tmp_path):
+    """(e) THE EMPTY-FIELD BLIND SPOT. The majority plan shape declares repo_root and
+    no delivery_worktree at all -- captured pair ('/tmp/a', ''). A delivery_worktree
+    later ADDED to that parent while the child is pushed must be caught like any
+    other move: an empty captured value is an OBSERVATION (nothing declared), not a
+    hole a non-empty precondition on either side of the comparison would step over."""
+    plan = _write_parent_plan(fixtures_dir, tmp_path, "parent.toml", repo_root="/tmp/a")
+    state = _executing_state(store, "guard-e")
+    state.plan_path = str(plan)
+    state.repo_root = "/tmp/a"
+    state.delivery_worktree = None
+    store.save(state)
+
+    cli.cmd_push_subplan(
+        ns(session="guard-e", plan="/tmp/child.toml", task="child", originating_stage=1),
+        store=store,
+    )
+    frame = store.load("guard-e").plan_stack[0]
+    assert frame.parent_venue_captured is True
+    assert (frame.parent_repo_root, frame.parent_delivery_worktree) == ("/tmp/a", "")
+
+    # A delivery_worktree pointing somewhere else is ADDED to the parent.
+    plan.write_text(plan.read_text().replace(
+        'repo_root = "/tmp/a"', 'repo_root = "/tmp/a"\ndelivery_worktree = "/tmp/added-wt"'
+    ))
+
+    _resolve_child(store, "guard-e")
+    d = cli.cmd_pop_subplan(ns(session="guard-e"), store=store)
+    assert d.ok is True
+    assert d.data["venue_source"] == "frame (parent plan venue changed while pushed)"
+
+    state = store.load("guard-e")
+    assert state.repo_root == "/tmp/a"
+    # NOT adopted -- the frame's original (empty) delivery_worktree is kept.
+    assert state.delivery_worktree is None
+
+
 def test_pop_subplan_clears_pointer_when_originating_stage_was_active(store):
     """The other direction: when the ACTIVE stage IS the one the sub-plan
     satisfies, the pop marks it PASSED and no stage is left ACTIVE — the

@@ -361,6 +361,115 @@ def test_override_binds_without_digest(store, fixtures_dir, tmp_path, gate_on):
     assert d.node == Node.APPROVED.value
 
 
+# --- override reviewer must match [meta.order].customer_id (issue: a fabricated
+# --reviewer let anyone self-record an override) --------------------------------
+# plan_two_stage.toml (used everywhere above) declares no [meta.order], so it cannot
+# exercise this check at all -- it needs its own order-bearing plan, modeled on
+# test_meta_order.py's/_write_plan and test_acceptance_verdict.py's _PLAN/_write_plan.
+
+ORDER_PLAN = """
+[meta]
+task_id = "ov"
+goal = "prove the override customer_id check"
+done_criterion = "override reviewer must match order customer_id"
+criterion_type = "measurable"
+weight_class = "substantive"
+external_research = "n/a; internal engine gate test"
+
+[meta.order]
+customer_id = "{customer_id}"
+customer = "the position that posed this fixture's task"
+functional_place = "the norm governing an act of activity, in a test"
+
+[[meta.order.requirements]]
+id = "R1"
+text = "the fixture plan meets the substantive grade"
+
+[meta.order.coverage]
+R1 = ["stage 1 verify_command"]
+
+[[final_check]]
+command = "true"
+expected_exit = 0
+
+[[stage]]
+index = 1
+title = "the stage under test"
+executor = "in_thread"
+expected_result_image = "n/a"
+criterion_type = "measurable"
+done_criterion = "d1"
+verify_command = "true"
+material = "m1"
+means = "bash"
+method = "run"
+conditions = "none"
+preconditions = "none"
+invariants = "none"
+capability_required = "cap"
+material_refs = ["scripts/agentctl/cli.py"]
+knowledge_refs = ["scripts/agentctl/gates.py"]
+knowledge = "n/a"
+[stage.principle]
+statement = "s"
+source = "src"
+derivation = "der"
+confidence = "high"
+refutation = "r"
+"""
+
+
+def _write_order_plan(tmp_path: Path, *, customer_id: str = "user") -> str:
+    path = tmp_path / f"order_{customer_id or 'empty'}.toml"
+    path.write_text(ORDER_PLAN.format(customer_id=customer_id), encoding="utf-8")
+    return str(path)
+
+
+def test_override_reviewer_must_match_order_customer_id(store, tmp_path, gate_on):
+    """A --verdict override authored under a --reviewer that does not match the
+    plan's declared [meta.order].customer_id is refused before the record is
+    written; the SAME override authored as the customer of record succeeds."""
+    sid = "ovcust"
+    plan = _write_order_plan(tmp_path, customer_id="user")
+    _to_plan_ready(store, sid, plan)
+    before = store.load(sid).plan_review
+    d = cli.cmd_plan_review(ns(session=sid, verdict="override", reviewer="root-coordinator",
+                               concerns=None, note="self-stamp", target=None,
+                               plan_digest=None), store=store)
+    assert d.ok is False and "customer_id" in d.detail
+    assert store.load(sid).plan_review == before  # record unchanged
+
+    d = cli.cmd_plan_review(ns(session=sid, verdict="override", reviewer="user",
+                               concerns=None, note="user escape", target=None,
+                               plan_digest=None), store=store)
+    assert d.ok is True
+    assert store.load(sid).plan_review.reviewer == "user"
+
+
+def test_pass_verdict_unaffected_by_order_customer_id(store, tmp_path, gate_on):
+    """The customer_id check binds only the override branch: an ordinary pass
+    verdict authored by a reviewer that does not match customer_id is untouched."""
+    sid = "ovpass"
+    plan = _write_order_plan(tmp_path, customer_id="user")
+    _to_plan_ready(store, sid, plan)
+    d = cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker",
+                               concerns=None, note="", target=None,
+                               plan_digest=_sha256_file(plan)), store=store)
+    assert d.ok is True
+
+
+def test_override_with_empty_customer_id_degrades_gracefully(store, tmp_path, gate_on):
+    """A plan whose [meta.order] declares an empty customer_id gets no check at
+    all -- same pass-through behavior as a plan with no [meta.order]."""
+    sid = "ovempty"
+    plan = _write_order_plan(tmp_path, customer_id="")
+    _to_plan_ready(store, sid, plan)
+    d = cli.cmd_plan_review(ns(session=sid, verdict="override", reviewer="root-coordinator",
+                               concerns=None, note="user escape", target=None,
+                               plan_digest=None), store=store)
+    assert d.ok is True
+
+
 # --- four live spine walks (subprocess, gate ON) -----------------------------
 
 def _run(state_root: Path, *args: str, gate: str = "1"):

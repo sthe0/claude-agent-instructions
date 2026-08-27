@@ -65,6 +65,7 @@ from .state import (
     Actor,
     AcceptanceBypass,
     AcceptanceReview,
+    AUTHORIZE_REPLAN_MARKER,
     CheckKind,
     CheckVenue,
     CodeReview,
@@ -91,6 +92,7 @@ from .state import (
     PermissionRequest,
     PLAN_PRESENTATION_KIND_ESSENCE,
     PLAN_PRESENTATION_KIND_FULL,
+    PLAN_PRESENTATION_KIND_REPLAN_DIFF,
     PLAN_PRESENTATION_KINDS,
     PLAN_PRESENTATION_RENDERING_CAP_BYTES,
     PlanFrame,
@@ -246,6 +248,18 @@ def _snapshot_approved_plan(store: StateStore, state: SessionState) -> tuple[str
     return str(snap), digest
 
 
+def _replan_baseline_path(state: SessionState) -> str | None:
+    """The comparison baseline every replan-family diff is taken against: the
+    approved-plan snapshot when one exists on disk, else state.plan_path (the
+    legacy, pre-snapshot fallback — see _snapshot_approved_plan). Extracted from
+    the three call sites that repeated this derivation (cmd_replan,
+    _renormalize_replan, cmd_check_coverage) so they cannot drift apart; carries
+    ONLY the derivation, not _renormalize_replan's snapshot backfill, which that
+    path performs deliberately and the other two do not."""
+    snap = state.plan_snapshot_path
+    return snap if (snap and Path(snap).exists()) else state.plan_path
+
+
 _CRITERION_ENGINE_WRITTEN_FIELDS = frozenset({"observation"})
 
 
@@ -323,6 +337,25 @@ def _sync_venue_from_plan(state: SessionState, doc: "PlanDoc | None" = None) -> 
             return
     state.repo_root = doc.meta.repo_root
     state.delivery_worktree = doc.meta.delivery_worktree
+
+
+def _plan_venue_pair(path: str | None) -> tuple[str, str] | None:
+    """Read exactly the two [meta] fields _sync_venue_from_plan reads off a plan
+    file, as a plain pair — None on any read failure (absent path, unreadable or
+    unparseable file), distinct from a successful read of two empty fields.
+
+    Exists so cmd_push_subplan and cmd_pop_subplan compare the SAME two values
+    the venue-resolution seam actually uses, and can tell "the file could not be
+    read" apart from "the file has no venue declared" — the latter is the
+    majority plan shape, not an edge case, so collapsing it into None would make
+    the venue-substitution guard blind exactly where a plan is least specified."""
+    if not path:
+        return None
+    try:
+        doc = load_plan(path, strict=False)
+    except (OSError, PlanError):
+        return None
+    return (doc.meta.repo_root or "", doc.meta.delivery_worktree or "")
 
 
 def _restore_current_stage(state: SessionState) -> None:
@@ -2646,16 +2679,42 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     return d
 
 
+# Kinds superseded by KIND ALONE, ignoring plan_path — see
+# _record_plan_presentation's docstring for why replan_diff differs from
+# essence/full. An explicit set, not an inline special case, so a future
+# kind must choose its supersede key deliberately rather than inherit one
+# by falling through an if/else.
+_SUPERSEDE_BY_KIND_ALONE = frozenset({PLAN_PRESENTATION_KIND_REPLAN_DIFF})
+
+
 def _record_plan_presentation(state: SessionState, presentation: PlanPresentation) -> None:
-    """Store a PlanPresentation, one per (plan_path, kind) — SUPERSEDE, not
-    append. Mirrors _record_stage_review's replace-then-append idiom: a later
-    presentation of the same plan/kind fully replaces the prior receipt, so
+    """Store a PlanPresentation — SUPERSEDE, not append. Mirrors
+    _record_stage_review's replace-then-append idiom: a later presentation
+    fully replaces the prior receipt for the same key, so
     gates._plan_presentation_for's last-wins scan never has to choose between
-    a stale and a fresh receipt for the same (plan_path, kind)."""
-    state.plan_presentations = [
-        p for p in state.plan_presentations
-        if not (p.plan_path == presentation.plan_path and p.kind == presentation.kind)
-    ]
+    a stale and a fresh receipt.
+
+    The supersede KEY splits by kind: essence/full supersede on
+    (plan_path, kind), unchanged since these kinds always present
+    state.plan_path — a session only ever runs one plan at a time, so the
+    path component never actually discriminates for them. replan_diff
+    (`_SUPERSEDE_BY_KIND_ALONE`) supersedes on kind ALONE: cmd_present_plan
+    resolves its target from `--plan`, which varies across replan attempts
+    against different candidate plan files, so keying on plan_path would let
+    a receipt for a path the session has since moved off linger forever
+    (unbounded rendering_text growth, and a stale entry surviving in
+    last-wins scans across paths) instead of being replaced the moment a
+    fresh diff is presented — only one proposed-diff receipt is ever
+    current, and a receipt for an abandoned path is dead by definition."""
+    if presentation.kind in _SUPERSEDE_BY_KIND_ALONE:
+        state.plan_presentations = [
+            p for p in state.plan_presentations if p.kind != presentation.kind
+        ]
+    else:
+        state.plan_presentations = [
+            p for p in state.plan_presentations
+            if not (p.plan_path == presentation.plan_path and p.kind == presentation.kind)
+        ]
     state.plan_presentations.append(presentation)
 
 
@@ -2709,17 +2768,40 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
             False, state.node, "noop",
             f"unknown presentation kind {kind!r}; expected one of {PLAN_PRESENTATION_KINDS}",
         )
+    explicit_plan = getattr(args, "plan", None)
+    if explicit_plan and kind != PLAN_PRESENTATION_KIND_REPLAN_DIFF:
+        # --plan is a degree of freedom only replan_diff needs (the proposed
+        # plan is a different file than state.plan_path): widening it to
+        # essence/full would let a receipt be stamped for a file the session
+        # is not executing, which plan_presentation_blockers never checks for.
+        return Directive(
+            False, state.node, "noop",
+            f"--plan is only accepted with --kind {PLAN_PRESENTATION_KIND_REPLAN_DIFF!r}; "
+            f"essence/full always present state.plan_path ({state.plan_path!r})",
+        )
+    target = explicit_plan or state.plan_path
     if kind == PLAN_PRESENTATION_KIND_ESSENCE:
         # essence is the receipt an approval ask is assembled from — gate it on
         # the same plan_review_blockers precondition as approve/replan, so a
         # thinker review must exist BEFORE that receipt can be stamped, not only
         # before the terminal approve. `full` is the detailed on-request view,
         # not the approval trigger, so it stays ungated.
-        prblock = gates.plan_review_blockers(state, state.plan_path)
+        prblock = gates.plan_review_blockers(state, target)
         _log_gate(state, "plan_review", prblock, passed=not prblock)
         if prblock:
             return Directive(
                 False, state.node, "noop", "cannot present essence",
+                data={"blockers": prblock},
+            )
+    elif kind == PLAN_PRESENTATION_KIND_REPLAN_DIFF:
+        # A proposed diff must itself have cleared thinker review before it can
+        # be shown as the authorization prompt — the same precondition essence
+        # pays, over the PROPOSED bytes rather than state.plan_path.
+        prblock = gates.plan_review_blockers(state, target)
+        _log_gate(state, "plan_review", prblock, passed=not prblock)
+        if prblock:
+            return Directive(
+                False, state.node, "noop", "cannot present replan_diff",
                 data={"blockers": prblock},
             )
     rendering_file = getattr(args, "rendering_file", None)
@@ -2805,15 +2887,15 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
                 )
 
     presentation = PlanPresentation(
-        plan_path=state.plan_path,
+        plan_path=target,
         kind=kind,
-        plan_sha256=_plan_file_sha256(state.plan_path),
+        plan_sha256=_plan_file_sha256(target),
         rendering_sha256=hashlib.sha256(raw).hexdigest(),
         rendering_text=text,
         presented_ts=time.time(),
     )
     _record_plan_presentation(state, presentation)
-    state.log("present_plan", plan=state.plan_path, kind=kind,
+    state.log("present_plan", plan=target, kind=kind,
               rendering_sha256=presentation.rendering_sha256)
     store.save(state)
 
@@ -2844,6 +2926,31 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
         }
         return Directive(True, state.node, "continue", detail, data=data)
 
+    if kind == PLAN_PRESENTATION_KIND_REPLAN_DIFF:
+        # Mirrors the essence choreography above exactly, substituting the
+        # replan-authorization marker for the approval one — this is the
+        # rendering a non-substantive replan's diff-authorization ask is
+        # assembled from, gated by gates.replan_authorization_blockers.
+        next_steps = [
+            "arm a `sleep 2` background timer now (atomic with deferring the ask)",
+            "emit THIS exact rendering as the turn's FINAL text message — zero "
+            "tool calls after it",
+            "next turn, open directly with the replan-authorization "
+            "AskUserQuestion (zero preceding text) carrying an option whose "
+            f"label or description embeds the literal marker {AUTHORIZE_REPLAN_MARKER!r}",
+        ]
+        detail = (
+            "presentation receipt recorded (kind=replan_diff). Next: "
+            + " Then, ".join(f"({i}) {step}" for i, step in enumerate(next_steps, 1))
+        )
+        data = {
+            "rendering_sha256": presentation.rendering_sha256,
+            "plan_sha256": presentation.plan_sha256,
+            "authorize_replan_marker": AUTHORIZE_REPLAN_MARKER,
+            "next_steps": next_steps,
+        }
+        return Directive(True, state.node, "continue", detail, data=data)
+
     return Directive(
         True, state.node, "continue",
         f"presentation receipt recorded (kind={kind}); emit this exact rendering "
@@ -2867,14 +2974,28 @@ def cmd_confirm_delivery(args, *, store: StateStore, runner: Runner | None = Non
     manual override), never to gate WHO may approve. cmd_present_plan and the
     delivery hook must never call this themselves; it is reachable only as a
     human-initiated command, enforced by rejecting `--by hook` outright.
+
+    `--kind` (default essence) selects WHICH presentation receipt this stamp
+    binds to — essence/full back the plan-approval gate
+    (gates.plan_presentation_blockers), replan_diff backs the replan-
+    authorization gate (gates.replan_authorization_blockers). Without this,
+    the replan_diff gate would have no reachable escape at all: the same
+    disabled/uninstalled-hook brick this command exists to prevent for
+    approval would apply to every non-substantive replan on such a machine.
     """
     state = _require(store, args.session)
-    receipt = gates._plan_presentation_for(state, PLAN_PRESENTATION_KIND_ESSENCE)
+    kind = getattr(args, "kind", None) or PLAN_PRESENTATION_KIND_ESSENCE
+    if kind not in PLAN_PRESENTATION_KINDS:
+        return Directive(
+            False, state.node, "noop",
+            f"unknown presentation kind {kind!r}; expected one of {PLAN_PRESENTATION_KINDS}",
+        )
+    receipt = gates._plan_presentation_for(state, kind)
     if receipt is None:
         return Directive(
             False, state.node, "noop",
-            "no essence presentation receipt exists yet — run present-plan "
-            "--kind essence before confirm-delivery has anything to bind to",
+            f"no {kind} presentation receipt exists yet — run present-plan "
+            f"--kind {kind} before confirm-delivery has anything to bind to",
         )
     by = (getattr(args, "by", "") or "").strip()
     note = (getattr(args, "note", "") or "").strip()
@@ -2927,12 +3048,12 @@ def cmd_confirm_delivery(args, *, store: StateStore, runner: Runner | None = Non
         escape_reason=escape_reason,
     )
     delivery.write_stamp(state_file, stamp)
-    state.log("confirm_delivery", by=by, note=note, escape_reason=escape_reason)
+    state.log("confirm_delivery", by=by, note=note, escape_reason=escape_reason, kind=kind)
     store.save(state)
     return Directive(
         True, state.node, "continue",
-        f"delivery override recorded by {by!r}; the plan-presentation gate is "
-        "now satisfied for this receipt",
+        f"delivery override recorded by {by!r}; the {kind} presentation's gate "
+        "is now satisfied for this receipt",
     )
 
 
@@ -3047,6 +3168,19 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
                 f"override must come from a distinct reviewer: {new_reviewer!r} is the "
                 "reviewer whose 'revise' verdict it would override (the user is the "
                 "expected override author)",
+            )
+        # An override is the plan's CUSTOMER overruling a reviewer's blocking verdict —
+        # not an escape hatch for any caller to self-record one under an arbitrary
+        # --reviewer string. Mirrors cmd_accept's author/customer_id check: both records
+        # are only valid when authored by the customer of record. Degrades to a
+        # pass-through (no check) when the plan has no [meta.order] or an empty
+        # customer_id, same as cmd_accept.
+        order = doc.meta.order if doc is not None else None
+        if order is not None and order.customer_id and new_reviewer != order.customer_id:
+            return Directive(
+                False, state.node, "noop",
+                f"override reviewer {new_reviewer!r} does not match order customer_id "
+                f"{order.customer_id!r}; record it as the customer of record, or correct --reviewer",
             )
     # --plan-digest is the sha256 the REVIEWER computed from its OWN read of the
     # target plan file. Cross-check it against the engine's live digest and REFUSE
@@ -5044,8 +5178,7 @@ def _renormalize_replan(args, state, store: StateStore, runner: Runner | None) -
         backfilled = _snapshot_approved_plan(store, state)
         if backfilled:
             state.plan_snapshot_path, state.plan_snapshot_hash = backfilled
-    snap = state.plan_snapshot_path
-    old_path = snap if (snap and Path(snap).exists()) else state.plan_path
+    old_path = _replan_baseline_path(state)
     # Lenient OLD / strict NEW, for the reason cmd_replan's own loads document: the
     # comparison baseline may be a snapshot frozen before a newer trunk tightened the
     # schema, and only the incoming plan is held to today's submission grade. Comparing
@@ -5229,6 +5362,28 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
                          "requirements",
                          data={"problems": submission})
 
+    # replan-authorization gate: outside DIAGNOSING, a non-substantive edit
+    # (refinement or no_change) to an ALREADY APPROVED plan must have been
+    # presented to the user as a diff and proven delivered before it may be
+    # applied — the write-side twin of plan_presentation_blockers (see that
+    # gate's docstring on state.py's PlanPresentation). The kind fed to the
+    # gate is computed from the SAME baseline this command's own diff (below)
+    # uses, via _replan_baseline_path, so the kind the gate reasons about is
+    # the kind that will actually be applied. Placed strictly after the
+    # submission refusal above (a plan that does not meet submission grade is
+    # not worth authorizing) and strictly before the plan_approval PLUGIN
+    # block below, whose enumeration folding is destructive and PERSISTED —
+    # nothing that may refuse can follow it; this command has still written
+    # nothing to disk at this point.
+    auth_kind = diff_plans(_load(_replan_baseline_path(state), strict=False), new)
+    arblock = gates.replan_authorization_blockers(state, args.plan, diff_kind=auth_kind)
+    _log_gate(state, "replan_authorization", arblock, passed=not arblock)
+    if arblock:
+        return Directive(False, state.node, "present_plan",
+                         "replan blocked: this plan edit has not been authorized by "
+                         "the user",
+                         data={"blockers": arblock})
+
     # plan_approval PLUGIN gate: mirror cmd_approve's plugins.plugin_gate_blockers
     # composition so a refinement/no_change replan cannot rotate the plan bytes back
     # to VERIFYING while a premise-plugin blocker (undispositioned question, stale
@@ -5322,8 +5477,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # #8: diff against the plan AS APPROVED (the immutable snapshot), not plan_path —
     # which the coordinator may have edited in place. Absent a snapshot (legacy
     # session, or an approve that predates the field) fall back to plan_path.
-    snap = state.plan_snapshot_path
-    old_path = snap if (snap and Path(snap).exists()) else state.plan_path
+    old_path = _replan_baseline_path(state)
     # OLD side is a read-only comparison baseline: a snapshot frozen before a
     # newer trunk tightened the schema (free-text executors #7, or a later-required
     # substantive field like [stage.principle].derivation) must stay diffable — the
@@ -5663,8 +5817,7 @@ def cmd_check_coverage(args, *, store: StateStore, runner: Runner | None = None)
     state = _require(store, args.session)
     if not (state.difficulty and state.difficulty.critique):
         return Directive(True, state.node, "inspect", "no active critique; nothing to cover")
-    snap = state.plan_snapshot_path
-    old_path = snap if (snap and Path(snap).exists()) else state.plan_path
+    old_path = _replan_baseline_path(state)
     old = load_plan(old_path, strict=False)
     new = load_plan(args.new)
     blockers = gates.replan_coverage_blockers(old, new, state.difficulty.critique)
@@ -5715,6 +5868,13 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
     child_plan = args.plan
     child_task = getattr(args, "task", None) or f"sub:{Path(child_plan).stem}"
 
+    # Snapshot the venue pair the PARENT plan file declares right now, at push time —
+    # the comparand cmd_pop_subplan's venue-substitution guard checks the file against
+    # later. A read failure here (unreadable/malformed parent) leaves the pair
+    # uncaptured, which is exactly the signal that tells pop "nothing to compare;
+    # re-derive as always".
+    parent_pair = _plan_venue_pair(state.plan_path)
+
     frame = PlanFrame(
         plan_path=state.plan_path,
         node=state.node,
@@ -5741,6 +5901,9 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
         plan_review_rounds=state.plan_review_rounds,
         plan_review_counted_digest=state.plan_review_counted_digest,
         code_review_rounds=state.code_review_rounds,
+        parent_repo_root=parent_pair[0] if parent_pair is not None else "",
+        parent_delivery_worktree=parent_pair[1] if parent_pair is not None else "",
+        parent_venue_captured=parent_pair is not None,
     )
     state.plan_stack.append(frame)
     # Reset to a fresh child cycle — the child re-classifies and plans normally.
@@ -5846,7 +6009,29 @@ def cmd_pop_subplan(args, *, store: StateStore, runner: Runner | None = None) ->
     # rather than trust the frame: a frame captured after the value was already
     # lost would keep it lost. The frame fields stay as the fallback the helper
     # leaves in place when that file cannot be read.
-    _sync_venue_from_plan(state)
+    #
+    # BUT: re-deriving unconditionally trusts the file even when it moved out from
+    # under the pushed child — the one other post-approval route from an edited plan
+    # FILE to live state. So re-derive only when there is nothing to compare against
+    # (a legacy frame, or the parent was unreadable at push); when the parent's venue
+    # pair was captured, compare it against a fresh read now and keep the frame's
+    # (already-restored, two lines up) venue if either field moved. A missing venue
+    # kept is a lesser-of-two-evils choice, not a clean stop: it is never refused, it
+    # just runs in whatever cwd is ambient, which is safer than silently adopting a
+    # venue nobody approved at plan_approval time.
+    venue_source = "plan-file"
+    if frame.parent_venue_captured:
+        current_pair = _plan_venue_pair(state.plan_path)
+        venue_substituted = (
+            current_pair is not None
+            and current_pair != (frame.parent_repo_root, frame.parent_delivery_worktree)
+        )
+        if venue_substituted:
+            venue_source = "frame (parent plan venue changed while pushed)"
+        else:
+            _sync_venue_from_plan(state)
+    else:
+        _sync_venue_from_plan(state)
     # Mark the originating stage as satisfied, THEN derive the active-stage
     # pointer from stage status — order is load-bearing: deriving first would
     # re-point at a stage this same call is about to mark PASSED.
@@ -5858,14 +6043,15 @@ def cmd_pop_subplan(args, *, store: StateStore, runner: Runner | None = None) ->
         pass
     _restore_current_stage(state)
     state.log("pop_subplan", child_task_id=child_task_id, originating_stage=frame.originating_stage,
-              depth=len(state.plan_stack))
+              depth=len(state.plan_stack), venue_source=venue_source)
     store.save(state)
     return Directive(
         True, state.node, "next_stage",
         f"sub-plan {child_task_id!r} resolved; parent restored at EXECUTING; "
-        f"stage {frame.originating_stage} satisfied — run next-stage to continue",
+        f"stage {frame.originating_stage} satisfied — run next-stage to continue "
+        f"(venue: {venue_source})",
         data={"originating_stage": frame.originating_stage, "child_task_id": child_task_id,
-              "stack_depth": len(state.plan_stack)},
+              "stack_depth": len(state.plan_stack), "venue_source": venue_source},
     )
 
 
@@ -6253,7 +6439,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("plan", ("plan-render", "plan-review-delta", "submit-plan", "replan", "drive",
               "push-subplan", "question-enumerate", "question-enumerate-worker",
               "question-enumerate-escape", "question-dispose",
-              "question-rebind", "question-raise"), "plan file path"),
+              "question-rebind", "question-raise", "present-plan"), "plan file path"),
     ("digest", ("question-enumerate-worker",),
      "plan content digest the launcher computed — the sidecar's key, passed down "
      "verbatim rather than a narrative"),
@@ -6536,13 +6722,23 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("present-plan"); sp.add_argument("--session", required=True)
     sp.add_argument("--kind", choices=list(PLAN_PRESENTATION_KINDS), default=PLAN_PRESENTATION_KIND_ESSENCE,
                     help="essence = free-form summary, no completeness check; "
-                         "full = every [stage N] anchor required, stage-enumerated")
+                         "full = every [stage N] anchor required, stage-enumerated; "
+                         "replan_diff = proposed-diff rendering for a non-substantive "
+                         "replan against a candidate plan file (see --plan)")
+    sp.add_argument("--plan", default=None,
+                    help="candidate plan file the presentation is stamped against; "
+                         "only legal with --kind replan_diff (defaults to the session's "
+                         "current plan_path there too), refused for essence/full which "
+                         "always target the session's own plan")
     sp.add_argument("--rendering-file", dest="rendering_file", default=None,
                     help="file containing the exact bytes shown to the user")
     sp.add_argument("--emit-skeleton", dest="emit_skeleton", action="store_true",
                     help="print the [stage N] anchor scaffold for a `full` rendering; "
                          "stamps nothing")
     sp = add("confirm-delivery"); sp.add_argument("--session", required=True)
+    sp.add_argument("--kind", choices=list(PLAN_PRESENTATION_KINDS), default=PLAN_PRESENTATION_KIND_ESSENCE,
+                    help="which presentation's delivery this override confirms — must "
+                         "match the --kind used at present-plan time")
     sp.add_argument("--by", required=True,
                     help="the human who confirms delivery (must not be 'hook')")
     sp.add_argument("--note", required=True,

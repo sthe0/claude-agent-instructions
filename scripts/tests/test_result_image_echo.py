@@ -141,6 +141,16 @@ def _advisor_on(monkeypatch):
     monkeypatch.setenv("AGENTCTL_ADVISOR", "1")
 
 
+@pytest.fixture(autouse=True)
+def _no_replan_authorization_gate(monkeypatch):
+    """This module predates the replan-authorization gate (stage 5 of the
+    plan-review-override-customer-id fix) and exercises SUBSTANTIVE, non-DIAGNOSING
+    sessions expecting a bare refinement replan to apply without a user-facing diff
+    presentation. That gate's own scoping and behavior are covered directly in
+    test_replan_authorization.py, so it is switched off here."""
+    monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
+
+
 def _submit(store, plan_path, runner):
     cli.cmd_start(ns(session="ri", task="ri", goal="g", done_criterion="dc",
                      criterion_type="measurable", recursion_depth=0), store=store)

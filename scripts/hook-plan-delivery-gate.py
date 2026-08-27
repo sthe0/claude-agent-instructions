@@ -122,9 +122,11 @@ try:
     from agentctl import delivery as _delivery  # noqa: E402
     from agentctl import gates as _gates  # noqa: E402
     from agentctl.state import PLAN_PRESENTATION_KIND_ESSENCE as _KIND_ESSENCE  # noqa: E402
+    from agentctl.state import PLAN_PRESENTATION_KIND_REPLAN_DIFF as _KIND_REPLAN_DIFF  # noqa: E402
     from agentctl.state import PlanPresentation as _PlanPresentation  # noqa: E402
     from agentctl.state import SessionState as _SessionState  # noqa: E402
     from agentctl.state import SHOW_FULL_PLAN_MARKER  # noqa: E402
+    from agentctl.state import AUTHORIZE_REPLAN_MARKER  # noqa: E402
     # Imported directly rather than through a gates.py re-export (the route
     # _normalize_string takes): gates.py has no use of its own for this
     # normalizer, and a re-export exists to spare a module a second import,
@@ -260,10 +262,10 @@ def _receipt_stale_reason(state: _SessionState) -> str | None:
     return None
 
 
-def _has_show_full_plan_option(tool_input: dict) -> bool:
+def _has_marker_option(tool_input: dict, marker: str) -> bool:
     """True iff ANY option, across every question in this ask, carries
-    SHOW_FULL_PLAN_MARKER in its label or description. Tolerant of missing or
-    malformed keys — schema drift contributes nothing rather than raising."""
+    `marker` in its label or description. Tolerant of missing or malformed
+    keys — schema drift contributes nothing rather than raising."""
     if not isinstance(tool_input, dict):
         return False
     questions = tool_input.get("questions")
@@ -280,9 +282,13 @@ def _has_show_full_plan_option(tool_input: dict) -> bool:
                 continue
             for key in ("label", "description"):
                 val = opt.get(key)
-                if isinstance(val, str) and SHOW_FULL_PLAN_MARKER in val:
+                if isinstance(val, str) and marker in val:
                     return True
     return False
+
+
+def _has_show_full_plan_option(tool_input: dict) -> bool:
+    return _has_marker_option(tool_input, SHOW_FULL_PLAN_MARKER)
 
 
 def _same_turn_denied(
@@ -500,6 +506,20 @@ def decide(payload: dict) -> tuple[str, str, Path | None, _PlanPresentation | No
         return "allow", "", sp, None
     node, plan_ts, prompt_ts = fields
 
+    # Memoized so the essence block (unconditional on this ask carrying any
+    # marker) and the replan-authorization block below (which only ever runs
+    # past its own marker check) can each call this without a session that
+    # trips both guards paying for two state loads.
+    _state_loaded = False
+    _state_value: _SessionState | None = None
+
+    def _state() -> _SessionState | None:
+        nonlocal _state_loaded, _state_value
+        if not _state_loaded:
+            _state_value = _load_session_state(sp)
+            _state_loaded = True
+        return _state_value
+
     turn_start_ts = None
     transcript_path = payload.get("transcript_path")
     if isinstance(transcript_path, str) and transcript_path:
@@ -511,6 +531,7 @@ def decide(payload: dict) -> tuple[str, str, Path | None, _PlanPresentation | No
     delivered_texts: list[tuple[str, float | None]] | None = None
     has_marker = False
     is_approval_ask = False
+    replan_receipt_to_stamp: _PlanPresentation | None = None
 
     # Only do the heavier state/transcript work when the same-turn check's
     # own cheap fields say this is even potentially a gated ask — mirrors two
@@ -523,7 +544,7 @@ def decide(payload: dict) -> tuple[str, str, Path | None, _PlanPresentation | No
     # a verdict gate_decision discards.
     if node == GATED_NODE and plan_ts is not None:
         same_turn_denied = _same_turn_denied(plan_ts, prompt_ts, turn_start_ts)
-        state = _load_session_state(sp)
+        state = _state()
         if state is not None:
             presentation_active = _gates.plan_presentation_active(state)
             if presentation_active:
@@ -564,6 +585,28 @@ def decide(payload: dict) -> tuple[str, str, Path | None, _PlanPresentation | No
                     if isinstance(transcript_path, str) and transcript_path:
                         delivered_texts = delivered_final_texts(Path(transcript_path))
 
+    # Replan-authorization certificate — a SIBLING to the essence block above,
+    # not nested inside it: a replan can be proposed from any session node
+    # (EXECUTING, DIAGNOSING, VERIFYING, ...), not only PLAN_READY. The pure,
+    # I/O-free marker check is evaluated FIRST and short-circuits every
+    # ordinary ask (every ask without this marker, which is nearly all of
+    # them) before any state load or transcript scan — see the module
+    # docstring's cost-guard note and test_replan_authorization.py's
+    # cost-invariant case for what this buys.
+    if _has_marker_option(payload.get("tool_input") or {}, AUTHORIZE_REPLAN_MARKER):
+        replan_state = _state()
+        if replan_state is not None:
+            replan_receipt = _gates._plan_presentation_for(replan_state, _KIND_REPLAN_DIFF)
+            if replan_receipt is not None:
+                replan_stale = _gates._receipt_binding_blocker(
+                    replan_receipt, replan_receipt.plan_path, "replan-diff presentation"
+                )
+                if replan_stale is None:
+                    if delivered_texts is None and isinstance(transcript_path, str) and transcript_path:
+                        delivered_texts = delivered_final_texts(Path(transcript_path))
+                    if _delivery_observed(replan_receipt, None, delivered_texts):
+                        replan_receipt_to_stamp = replan_receipt
+
     decision, reason, delivery_verified = gate_decision(
         node, plan_ts, prompt_ts, turn_start_ts,
         presentation_active=presentation_active,
@@ -573,7 +616,8 @@ def decide(payload: dict) -> tuple[str, str, Path | None, _PlanPresentation | No
         has_show_full_plan_option=has_marker,
         is_approval_ask=is_approval_ask,
     )
-    return decision, reason, sp, (receipt if delivery_verified else None)
+    essence_receipt_to_stamp = receipt if delivery_verified else None
+    return decision, reason, sp, (essence_receipt_to_stamp or replan_receipt_to_stamp)
 
 
 def main() -> int:

@@ -20,7 +20,8 @@ import shlex
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 
-SCHEMA_VERSION = 33  # 33: SessionState/PlanFrame gain code_review_rounds (item A / issue #96)
+SCHEMA_VERSION = 34  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+                     # parent_venue_captured (pop-subplan venue-substitution guard)
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -670,7 +671,18 @@ PLAN_PRESENTATION_RENDERING_CAP_BYTES = 64 * 1024
 
 PLAN_PRESENTATION_KIND_ESSENCE = "essence"
 PLAN_PRESENTATION_KIND_FULL = "full"
-PLAN_PRESENTATION_KINDS = (PLAN_PRESENTATION_KIND_ESSENCE, PLAN_PRESENTATION_KIND_FULL)
+# Third instance of the same charter (see the module comment above): proof that
+# a proposed replan's diff rendering was shown to the user, bound to the
+# PROPOSED plan's bytes (the OLD side of the diff is already pinned
+# independently by state.plan_snapshot_path, which cmd_replan diffs against).
+# Gated by gates.replan_authorization_blockers, recorded by cmd_present_plan
+# exactly like the other two kinds.
+PLAN_PRESENTATION_KIND_REPLAN_DIFF = "replan_diff"
+PLAN_PRESENTATION_KINDS = (
+    PLAN_PRESENTATION_KIND_ESSENCE,
+    PLAN_PRESENTATION_KIND_FULL,
+    PLAN_PRESENTATION_KIND_REPLAN_DIFF,
+)
 
 # Language-independent ASCII marker a plan-approval AskUserQuestion option must
 # embed (label or description) to show the full plan. Checked by
@@ -678,6 +690,12 @@ PLAN_PRESENTATION_KINDS = (PLAN_PRESENTATION_KIND_ESSENCE, PLAN_PRESENTATION_KIN
 # cli.cmd_present_plan's essence Directive — single-sourced here so the two can
 # never drift apart.
 SHOW_FULL_PLAN_MARKER = "[show-full-plan]"
+
+# Language-independent ASCII marker a replan-diff rendering must embed so the
+# delivery hook (extended by stage 4) can recognize the turn as carrying a
+# replan-authorization presentation, exactly mirroring SHOW_FULL_PLAN_MARKER —
+# single-sourced here so the emitter and the checker can never drift apart.
+AUTHORIZE_REPLAN_MARKER = "[authorize-replan]"
 
 
 @dataclass
@@ -1120,6 +1138,22 @@ class PlanFrame:
     # above: the service sub-plan's own code-review rounds are a separate budget from the
     # parent's, so cmd_push_subplan snapshots and zeroes, cmd_pop_subplan restores.
     code_review_rounds: int = 0
+    # Venue-substitution guard (schema 34): the exact (repo_root, delivery_worktree)
+    # pair _sync_venue_from_plan read off the PARENT plan file at push time, so pop can
+    # tell "the parent file's venue fields moved out from under the pushed child" apart
+    # from "nothing changed" or "the file could not be read at push" — closing the one
+    # other post-approval route from an edited plan FILE to live state (a parent edited
+    # while its child is pushed, then popped, silently re-deriving a venue nobody
+    # approved). `parent_venue_captured` is load-bearing on its own: an empty captured
+    # value is the common shape (most plans declare repo_root and no delivery_worktree),
+    # so "captured empty" and "not captured" must stay distinguishable, or a
+    # delivery_worktree later ADDED to a parent that declared none is invisible to the
+    # comparison. All three default so a legacy frame (pre-34) loads with captured=False,
+    # i.e. no comparison possible — cmd_pop_subplan re-derives from the plan file exactly
+    # as it always has.
+    parent_repo_root: str = ""
+    parent_delivery_worktree: str = ""
+    parent_venue_captured: bool = False
 
 
 @dataclass
@@ -1728,6 +1762,9 @@ class SessionState:
                 plan_review_rounds=f.get("plan_review_rounds") or 0,
                 plan_review_counted_digest=f.get("plan_review_counted_digest") or "",
                 code_review_rounds=f.get("code_review_rounds") or 0,
+                parent_repo_root=f.get("parent_repo_root") or "",
+                parent_delivery_worktree=f.get("parent_delivery_worktree") or "",
+                parent_venue_captured=bool(f.get("parent_venue_captured", False)),
             )
             for f in data.get("plan_stack", [])
         ]

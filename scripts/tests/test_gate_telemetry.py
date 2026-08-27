@@ -174,15 +174,18 @@ def test_walkthrough_logs_difficulty_and_replan_coverage_gates(store, monkeypatc
     # walkthrough). The completed replan then logs the closure gates in order —
     # normalization_blockers (re-norming) then failure_address_blockers (goal-failure
     # routing) — between the passing difficulty_blockers and the plan_review evaluation
-    # (vacuous, gate off by default in the suite), then the plan_approval PLUGIN gate
-    # (stage 3: cmd_replan now composes plugins.plugin_gate_blockers(state,
-    # "plan_approval") just as cmd_approve does — vacuous here, premise force-off in
-    # the suite), then the replan_coverage check.
+    # (vacuous, gate off by default in the suite), then stage 5 (item B)'s
+    # replan_authorization gate (vacuous here: the session is DIAGNOSING with a
+    # complete difficulty record, one of the gate's own unconditional exemptions),
+    # then the plan_approval PLUGIN gate (stage 3: cmd_replan now composes
+    # plugins.plugin_gate_blockers(state, "plan_approval") just as cmd_approve does —
+    # vacuous here, premise force-off in the suite), then the replan_coverage check.
     assert gates_fired == ["effort_fire", "plan_approval",
                            "effort_fire", "difficulty_blockers",
                            "effort_fire", "difficulty_blockers",
                            "normalization_blockers",
                            "failure_address_blockers", "plan_review",
+                           "replan_authorization",
                            "plan_approval_plugin", "replan_coverage"]
     assert rows[0]["passed"] is True   # effort_fire: no fire yet, submit_plan
     assert rows[1]["passed"] is True   # plan_approval
@@ -193,5 +196,6 @@ def test_walkthrough_logs_difficulty_and_replan_coverage_gates(store, monkeypatc
     assert rows[6]["passed"] is True   # normalization recorded
     assert rows[7]["passed"] is True   # failure_address routed
     assert rows[8]["passed"] is True   # plan_review evaluated (vacuous, gate off)
-    assert rows[9]["passed"] is True   # plan_approval_plugin evaluated (vacuous)
-    assert rows[10]["passed"] is True  # coverage satisfied
+    assert rows[9]["passed"] is True   # replan_authorization evaluated (vacuous, DIAGNOSING exempt)
+    assert rows[10]["passed"] is True  # plan_approval_plugin evaluated (vacuous)
+    assert rows[11]["passed"] is True  # coverage satisfied

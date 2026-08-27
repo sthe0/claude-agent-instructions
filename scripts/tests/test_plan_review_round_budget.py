@@ -35,6 +35,12 @@ def ns(**kw):
 @pytest.fixture
 def gate_on(monkeypatch):
     monkeypatch.setenv("AGENTCTL_PLAN_REVIEW", "1")
+    # This module predates the replan-authorization gate (stage 5 of the
+    # plan-review-override-customer-id fix) and its cmd_replan walkthroughs expect a
+    # bare refinement replan on a SUBSTANTIVE session to apply without a user-facing
+    # diff presentation; that gate's own scoping is covered directly in
+    # test_replan_authorization.py, so it is switched off here.
+    monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
 
 
 def _subst(**kw) -> SessionState:
