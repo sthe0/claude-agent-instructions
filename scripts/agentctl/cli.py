@@ -339,6 +339,25 @@ def _sync_venue_from_plan(state: SessionState, doc: "PlanDoc | None" = None) -> 
     state.delivery_worktree = doc.meta.delivery_worktree
 
 
+def _plan_venue_pair(path: str | None) -> tuple[str, str] | None:
+    """Read exactly the two [meta] fields _sync_venue_from_plan reads off a plan
+    file, as a plain pair — None on any read failure (absent path, unreadable or
+    unparseable file), distinct from a successful read of two empty fields.
+
+    Exists so cmd_push_subplan and cmd_pop_subplan compare the SAME two values
+    the venue-resolution seam actually uses, and can tell "the file could not be
+    read" apart from "the file has no venue declared" — the latter is the
+    majority plan shape, not an edge case, so collapsing it into None would make
+    the venue-substitution guard blind exactly where a plan is least specified."""
+    if not path:
+        return None
+    try:
+        doc = load_plan(path, strict=False)
+    except (OSError, PlanError):
+        return None
+    return (doc.meta.repo_root or "", doc.meta.delivery_worktree or "")
+
+
 def _restore_current_stage(state: SessionState) -> None:
     """Derive state.current_stage from the restored stages' own status, rather
     than trusting whatever the frame snapshotted or hardcoding None.
@@ -5822,6 +5841,13 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
     child_plan = args.plan
     child_task = getattr(args, "task", None) or f"sub:{Path(child_plan).stem}"
 
+    # Snapshot the venue pair the PARENT plan file declares right now, at push time —
+    # the comparand cmd_pop_subplan's venue-substitution guard checks the file against
+    # later. A read failure here (unreadable/malformed parent) leaves the pair
+    # uncaptured, which is exactly the signal that tells pop "nothing to compare;
+    # re-derive as always".
+    parent_pair = _plan_venue_pair(state.plan_path)
+
     frame = PlanFrame(
         plan_path=state.plan_path,
         node=state.node,
@@ -5848,6 +5874,9 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
         plan_review_rounds=state.plan_review_rounds,
         plan_review_counted_digest=state.plan_review_counted_digest,
         code_review_rounds=state.code_review_rounds,
+        parent_repo_root=parent_pair[0] if parent_pair is not None else "",
+        parent_delivery_worktree=parent_pair[1] if parent_pair is not None else "",
+        parent_venue_captured=parent_pair is not None,
     )
     state.plan_stack.append(frame)
     # Reset to a fresh child cycle — the child re-classifies and plans normally.
@@ -5953,7 +5982,29 @@ def cmd_pop_subplan(args, *, store: StateStore, runner: Runner | None = None) ->
     # rather than trust the frame: a frame captured after the value was already
     # lost would keep it lost. The frame fields stay as the fallback the helper
     # leaves in place when that file cannot be read.
-    _sync_venue_from_plan(state)
+    #
+    # BUT: re-deriving unconditionally trusts the file even when it moved out from
+    # under the pushed child — the one other post-approval route from an edited plan
+    # FILE to live state. So re-derive only when there is nothing to compare against
+    # (a legacy frame, or the parent was unreadable at push); when the parent's venue
+    # pair was captured, compare it against a fresh read now and keep the frame's
+    # (already-restored, two lines up) venue if either field moved. A missing venue
+    # kept is a lesser-of-two-evils choice, not a clean stop: it is never refused, it
+    # just runs in whatever cwd is ambient, which is safer than silently adopting a
+    # venue nobody approved at plan_approval time.
+    venue_source = "plan-file"
+    if frame.parent_venue_captured:
+        current_pair = _plan_venue_pair(state.plan_path)
+        venue_substituted = (
+            current_pair is not None
+            and current_pair != (frame.parent_repo_root, frame.parent_delivery_worktree)
+        )
+        if venue_substituted:
+            venue_source = "frame (parent plan venue changed while pushed)"
+        else:
+            _sync_venue_from_plan(state)
+    else:
+        _sync_venue_from_plan(state)
     # Mark the originating stage as satisfied, THEN derive the active-stage
     # pointer from stage status — order is load-bearing: deriving first would
     # re-point at a stage this same call is about to mark PASSED.
@@ -5965,14 +6016,15 @@ def cmd_pop_subplan(args, *, store: StateStore, runner: Runner | None = None) ->
         pass
     _restore_current_stage(state)
     state.log("pop_subplan", child_task_id=child_task_id, originating_stage=frame.originating_stage,
-              depth=len(state.plan_stack))
+              depth=len(state.plan_stack), venue_source=venue_source)
     store.save(state)
     return Directive(
         True, state.node, "next_stage",
         f"sub-plan {child_task_id!r} resolved; parent restored at EXECUTING; "
-        f"stage {frame.originating_stage} satisfied — run next-stage to continue",
+        f"stage {frame.originating_stage} satisfied — run next-stage to continue "
+        f"(venue: {venue_source})",
         data={"originating_stage": frame.originating_stage, "child_task_id": child_task_id,
-              "stack_depth": len(state.plan_stack)},
+              "stack_depth": len(state.plan_stack), "venue_source": venue_source},
     )
 
 
