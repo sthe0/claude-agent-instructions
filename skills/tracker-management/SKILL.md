@@ -84,6 +84,8 @@ Before publishing anything, load:
 
 If the ticket has **numbers, deadlines, TTLs, or abbreviations without an explicit link to a field or config**, surface them to the planner / root: source them or ask the user. Do not let the ticket's vague numerics get interpreted by guess.
 
+**An empty or bare-title description is a signal, not a null case.** A ticket created via a bare `--new`/`--title` launcher commonly carries no description at all. Before decomposing or publishing anything, run task-understanding first (restate the goal, surface ambiguities, confirm with the user — [[reasoning-and-task-solving]] § Understand before acting), then write the result into the ticket's **description** field (`update TICKET --field description=@/path` or the project's tracker-CLI equivalent) — not only into comments. The description is the artifact a later reader (or a future session) checks first; leaving it empty while only comments carry the plan hides the understanding from that reader.
+
 ## Coordination with other skills and agents
 
 - **With `planner`** — the plan it produces is what you publish. If the user approved a revised plan after `overcome-difficulty`, publish the revised version.
