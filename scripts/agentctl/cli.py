@@ -6055,6 +6055,8 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
         parent_repo_root=parent_pair[0] if parent_pair is not None else "",
         parent_delivery_worktree=parent_pair[1] if parent_pair is not None else "",
         parent_venue_captured=parent_pair is not None,
+        plugins=dict(state.plugins),
+        plugins_archive=dict(state.plugins_archive),
     )
     state.plan_stack.append(frame)
     # Reset to a fresh child cycle — the child re-classifies and plans normally.
@@ -6099,6 +6101,12 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
     state.plan_review_counted_digest = ""
     # Code-review round custody (item A, schema 33) — same reasoning, same frame.
     state.code_review_rounds = 0
+    # Plugin custody (schema 35), same reasoning as the review-round block above: the
+    # frame holds the parent's plugins/plugins_archive, so the child's own classify
+    # auto-activates every plugin fresh, uncontaminated by parent bag content or a
+    # parent-left archive-suppression entry.
+    state.plugins = {}
+    state.plugins_archive = {}
     state.log("push_subplan", child_plan=child_plan, originating_stage=originating, depth=len(state.plan_stack))
     store.save(state)
     return Directive(
@@ -6155,6 +6163,11 @@ def cmd_pop_subplan(args, *, store: StateStore, runner: Runner | None = None) ->
     state.plan_review_counted_digest = frame.plan_review_counted_digest
     # Code-review round custody (item A, schema 33) — same restore-not-merge reasoning.
     state.code_review_rounds = frame.code_review_rounds
+    # Plugin custody (schema 35) — restored, NOT merged, same reasoning: a plugin bag
+    # argues about a particular plan, and the child's bags belonged to the child's plan,
+    # which no longer exists once the parent resumes.
+    state.plugins = frame.plugins
+    state.plugins_archive = frame.plugins_archive
     state.node = new_node
     # The parent PLAN FILE is authoritative for the venue, so re-derive it here
     # rather than trust the frame: a frame captured after the value was already

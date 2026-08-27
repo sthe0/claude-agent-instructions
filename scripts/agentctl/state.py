@@ -20,8 +20,9 @@ import shlex
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 
-SCHEMA_VERSION = 34  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 35  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
+                     # 35: PlanFrame also gains plugins/plugins_archive custody
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -1154,6 +1155,18 @@ class PlanFrame:
     parent_repo_root: str = ""
     parent_delivery_worktree: str = ""
     parent_venue_captured: bool = False
+    # Plugin custody (schema 35). Every registered auto-activating plugin (premise,
+    # ledger, obligations, review_dispatch, experience, tracker) declares scope='task'
+    # in plugins.py, promising retirement at a task boundary — a pushed sub-plan IS a
+    # new task (task_id becomes f'sub:{...}'), so these fields finally enforce that
+    # promise across push/pop the same way plan_review_rounds above enforces it for
+    # review rounds. plugins_archive travels with plugins because
+    # plugins.auto_activate_for's suppression guard treats archive-presence the same
+    # as active-presence (`if name in state.plugins or name in state.plugins_archive:
+    # continue`) — sharing it across the boundary would let a first sub-plan's
+    # terminal-retired plugin silently suppress that same plugin for a later sub-plan.
+    plugins: dict[str, dict] = field(default_factory=dict)
+    plugins_archive: dict[str, dict] = field(default_factory=dict)
 
 
 @dataclass
@@ -1765,6 +1778,8 @@ class SessionState:
                 parent_repo_root=f.get("parent_repo_root") or "",
                 parent_delivery_worktree=f.get("parent_delivery_worktree") or "",
                 parent_venue_captured=bool(f.get("parent_venue_captured", False)),
+                plugins=f.get("plugins") or {},
+                plugins_archive=f.get("plugins_archive") or {},
             )
             for f in data.get("plan_stack", [])
         ]

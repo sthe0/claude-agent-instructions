@@ -7,12 +7,15 @@ Covers:
   - _MAX_PLAN_STACK enforcement (push beyond cap raises InvariantError)
   - "no auto-pop across unresolved child": pop requires node=RESOLVED
   - push_subplan / pop_subplan machine transitions wired correctly
+  - plugin custody (schema 35): push snapshots+resets state.plugins/plugins_archive,
+    pop restores verbatim, a legacy frame dict without those keys still loads, and a
+    second sub-plan is not suppressed by the first's archive
 """
 import argparse
 
 import pytest
 
-from agentctl import cli, effort
+from agentctl import cli, effort, plugins
 from agentctl.machine import transition
 from agentctl.state import (
     _MAX_PLAN_STACK,
@@ -739,3 +742,176 @@ def test_pop_subplan_clears_pointer_when_originating_stage_was_active(store):
     assert state.stage(2).outcome.status == StageStatus.PENDING.value
     assert state.current_stage is None
     assert state.active_stage() is None
+
+
+# --- plugin custody across push/pop (schema 35) --------------------------------
+
+_EXPERIENCE_FRESH_BAG = {
+    "searched": False, "decision": "", "recorded": False,
+    "skipped": False, "skip_reason": "",
+}
+
+
+def _classify_substantive(store, sid):
+    """Drive the child (at CLASSIFIED right after push) through a SUBSTANTIVE
+    classify — the same signal shape test_plan_review_round_budget.py's
+    _to_plan_ready uses. This is what fires plugins.auto_activate_for."""
+    cli.cmd_classify(
+        ns(session=sid, chat=False, changed_lines=200, files=5,
+           wall_clock_min=60, tracker_key=None, architectural=True,
+           external_effect=False, new_dependency=False, public_api_change=False),
+        store=store,
+    )
+
+
+def test_push_subplan_resets_plugins_and_snapshots_parent(store):
+    parent = _executing_state(store, "plg1")
+    plugins.activate(parent, "experience")
+    parent.plugins["experience"]["searched"] = True
+    parent.plugins["experience"]["recorded"] = True
+    pre_push_plugins = {"experience": dict(parent.plugins["experience"])}
+    store.save(parent)
+
+    cli.cmd_push_subplan(
+        ns(session="plg1", plan="/tmp/child.toml", task="child-task", originating_stage=1),
+        store=store,
+    )
+    state = store.load("plg1")
+    # Reset immediately after push: the child's own classify starts from empty bags.
+    assert state.plugins == {}
+    assert state.plugins_archive == {}
+    # The frame holds the pre-push snapshot, not a reset copy.
+    frame = state.plan_stack[0]
+    assert frame.plugins == pre_push_plugins
+    assert frame.plugins_archive == {}
+
+
+def test_push_subplan_child_classify_activates_fresh_plugin_bag(store):
+    parent = _executing_state(store, "plg2")
+    plugins.activate(parent, "experience")
+    parent.plugins["experience"]["searched"] = True
+    parent.plugins["experience"]["recorded"] = True
+    store.save(parent)
+
+    cli.cmd_push_subplan(
+        ns(session="plg2", plan="/tmp/child.toml", task="child-task", originating_stage=1),
+        store=store,
+    )
+    _classify_substantive(store, "plg2")
+
+    state = store.load("plg2")
+    # Fresh state_factory() bag — not the parent's mutated (searched/recorded=True) one.
+    assert state.plugins.get("experience") == _EXPERIENCE_FRESH_BAG
+
+
+def test_pop_subplan_restores_parent_plugins_verbatim(store):
+    parent = _executing_state(store, "plg3")
+    plugins.activate(parent, "experience")
+    parent.plugins["experience"]["searched"] = True
+    parent.plugins["experience"]["recorded"] = True
+    pre_push_plugins = {"experience": dict(parent.plugins["experience"])}
+    store.save(parent)
+
+    cli.cmd_push_subplan(
+        ns(session="plg3", plan="/tmp/child.toml", task="child-task", originating_stage=1),
+        store=store,
+    )
+    # Mutate the child's own plugin bag arbitrarily post-push.
+    state = store.load("plg3")
+    plugins.activate(state, "experience")
+    state.plugins["experience"]["searched"] = True
+    state.plugins["obligations"] = {"anything": "child-only"}
+    store.save(state)
+
+    _resolve_child(store, "plg3")
+    d = cli.cmd_pop_subplan(ns(session="plg3"), store=store)
+    assert d.ok is True
+
+    restored = store.load("plg3")
+    # The ORIGINAL pre-push parent dict, exactly — not the child's mutated one and
+    # not a merge of both.
+    assert restored.plugins == pre_push_plugins
+
+
+def test_legacy_planframe_dict_without_plugins_key_loads_with_empty_default(store):
+    import json
+
+    _executing_state(store, "plg4")
+    cli.cmd_push_subplan(
+        ns(session="plg4", plan="/tmp/child.toml", task="child-task", originating_stage=1),
+        store=store,
+    )
+    state = store.load("plg4")
+    raw = json.loads(state.to_json())
+    frame_dict = raw["plan_stack"][0]
+    del frame_dict["plugins"]
+    del frame_dict["plugins_archive"]
+
+    loaded = SessionState.from_dict(raw)
+    assert loaded.plan_stack[0].plugins == {}
+    assert loaded.plan_stack[0].plugins_archive == {}
+
+
+def test_subplan_json_roundtrip_preserves_nondefault_plugins(store):
+    parent = _executing_state(store, "plg5")
+    plugins.activate(parent, "experience")
+    parent.plugins["experience"]["searched"] = True
+    parent.plugins["experience"]["recorded"] = True
+    pre_push_plugins = {"experience": dict(parent.plugins["experience"])}
+    store.save(parent)
+
+    cli.cmd_push_subplan(
+        ns(session="plg5", plan="/tmp/child.toml", task="child-task", originating_stage=1),
+        store=store,
+    )
+    reloaded = store.load("plg5")
+    assert reloaded.plan_stack[0].plugins == pre_push_plugins
+
+
+def test_second_subplan_gets_plugins_not_suppressed_by_first_subplans_archive(store):
+    """The first sub-plan's own terminal-retirement of 'experience' must not leak
+    into plugins_archive shared with the parent or a later sub-plan — that would
+    silently suppress re-activation via auto_activate_for's archive-presence guard."""
+    _executing_state(store, "plg6", n_stages=2, current=1)
+
+    # --- first sub-plan ---
+    cli.cmd_push_subplan(
+        ns(session="plg6", plan="/tmp/child1.toml", task="child1", originating_stage=1),
+        store=store,
+    )
+    _classify_substantive(store, "plg6")
+    state = store.load("plg6")
+    assert "experience" in state.plugins  # activation precondition for fire()
+    # route=SPAWN (SUBSTANTIVE always routes SPAWN) requires partition at/past
+    # EXECUTING; _resolve_child's fast path jumps straight to RESOLVED.
+    state.partition = Partition(verdict="single")
+    store.save(state)
+
+    _resolve_child(store, "plg6")
+
+    # A real terminal-archive transition: neither cmd_resolve nor _resolve_child
+    # ever calls plugins.fire (its only production caller is main()'s dispatch
+    # wrapper via _fire_plugins), so fire it directly.
+    state = store.load("plg6")
+    directive = cli.Directive(True, state.node, "resolve")
+    plugins.fire("resolve", state, directive)
+    # Non-vacuity: the plugin was genuinely active and genuinely archived.
+    assert "experience" in state.plugins_archive
+    assert "experience" not in state.plugins
+    store.save(state)
+
+    d = cli.cmd_pop_subplan(ns(session="plg6"), store=store)
+    assert d.ok is True
+    parent = store.load("plg6")
+    # The parent itself is not left with a disarmed experience-recording gate.
+    assert "experience" not in parent.plugins_archive
+
+    # --- second sub-plan ---
+    cli.cmd_push_subplan(
+        ns(session="plg6", plan="/tmp/child2.toml", task="child2", originating_stage=1),
+        store=store,
+    )
+    _classify_substantive(store, "plg6")
+    state = store.load("plg6")
+    # Activated fresh, not skipped because its name lingered in a stale archive.
+    assert state.plugins.get("experience") == _EXPERIENCE_FRESH_BAG
