@@ -523,6 +523,7 @@ class QuestionCandidate:
     disposition: str = "raised"
     reason: str = ""
     question: str = ""
+    target: str = ""
 
 
 def question_candidates_from_dicts(raw: list[dict]) -> list[QuestionCandidate]:
@@ -533,6 +534,7 @@ def question_candidates_from_dicts(raw: list[dict]) -> list[QuestionCandidate]:
             disposition=d.get("disposition", "raised"),
             reason=d.get("reason", ""),
             question=d.get("question", ""),
+            target=d.get("target", ""),
         )
         for d in raw
     ]
@@ -546,6 +548,7 @@ def question_candidates_to_dicts(candidates: list[QuestionCandidate]) -> list[di
             "disposition": c.disposition,
             "reason": c.reason,
             "question": c.question,
+            "target": c.target,
         }
         for c in candidates
     ]

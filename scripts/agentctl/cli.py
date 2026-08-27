@@ -1807,8 +1807,15 @@ def _candidate_immateriality(target: str, doc) -> str:
 
 
 def _inherit_disposition(existing: dict, entry: dict, preserve: bool) -> dict:
-    if (preserve and existing.get("statement") == entry["statement"]
-            and existing.get("disposition") != "raised"):
+    # Check if the existing dict has a "target" key (new-scheme) or not (legacy row).
+    if "target" in existing:
+        # New-scheme: match on target
+        match = preserve and existing.get("target") == entry.get("target")
+    else:
+        # Legacy row: fall back to matching on statement text
+        match = preserve and existing.get("statement") == entry.get("statement")
+
+    if match and existing.get("disposition") != "raised":
         return dict(existing)
     return entry
 
@@ -1886,7 +1893,7 @@ def _apply_enumeration_result(
             entry = {"id": f"qenum-{part}-{i + 1}",
                      "statement": f"[{target}] {question}",
                      "disposition": "dismissed" if immaterial else "raised",
-                     "reason": immaterial, "question": ""}
+                     "reason": immaterial, "question": "", "target": target}
             _upsert_candidate(candidates, entry, preserve_disposition=preserve_disposition)
             raised.append(entry["id"])
 
