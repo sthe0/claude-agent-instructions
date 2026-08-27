@@ -572,6 +572,22 @@ DEVELOPER_SETTINGS_ALLOW = [
     # ledger for any developer that DID reach for it directly — the exact
     # defect this plan exists to fix.
     "Bash(python3 scripts/measure-marker-extractor-latency.py:*)",
+    # hook-resolution-reminder-pretooluse-gap stage 1 needs to compile its own
+    # edits, check the engine's own worktree-local gate state, and run the new
+    # judge's real-call latency sampler. User-authorized 2026-08-28 as another
+    # narrow, named unblock — same precedent as the grant above, not a
+    # broadening to "any python3". The deferred dynamic per-plan grant
+    # mechanism referenced above still does not exist; this is another
+    # static addition until it does. Root cause of needing this at all:
+    # `agentctl resolve-permission --decision granted` only clears engine
+    # state and returns a continuation string (continuations.py
+    # permission_granted()) — it never writes to any permissions file and
+    # never touches this list, so three consecutive PERMISSION-REQUEST/grant
+    # cycles for this exact stage reproduced the identical block each time.
+    "Bash(python3 -m py_compile:*)",
+    "Bash(python3 -m agentctl classify:*)",
+    "Bash(python3 -m agentctl status:*)",
+    "Bash(python3 samples/judge-latency/sample_landing_discipline.py:*)",
 ]
 
 # The plan-artifact directory (lib.config_root.plans_dir()) is where a
