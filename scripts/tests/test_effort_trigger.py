@@ -23,6 +23,17 @@ def ns(**kw):
     return Namespace(**kw)
 
 
+@pytest.fixture(autouse=True)
+def _no_replan_authorization_gate(monkeypatch):
+    """This module predates the replan-authorization gate (stage 5 of the
+    plan-review-override-customer-id fix) and exercises SUBSTANTIVE,
+    non-DIAGNOSING sessions expecting a bare refinement/no_change replan to
+    apply without a user-facing diff presentation. That gate's own scoping and
+    behavior are covered directly in test_replan_authorization.py; here it is
+    switched off so this module keeps testing what it was written to test."""
+    monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
+
+
 def _to_executing_stage1(store, sid, plan):
     cli.cmd_start(ns(session=sid, task="demo-two-stage", goal="", done_criterion="",
                      criterion_type="measurable", recursion_depth=0), store=store)

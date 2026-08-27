@@ -1001,10 +1001,17 @@ refutation = "r"
     )
 
 
-def test_a_replan_without_the_flag_is_unchanged(store, tmp_path):
+def test_a_replan_without_the_flag_is_unchanged(store, tmp_path, monkeypatch):
     """The branch is opt-in and reached only through the flag, so every existing replan
     — and every existing test of one — must be byte-identical. A procedure-only edit
-    submitted WITHOUT `--renormalize` is an ordinary refinement, gates and all."""
+    submitted WITHOUT `--renormalize` is an ordinary refinement, gates and all.
+
+    This test predates the replan-authorization gate (stage 5 of the
+    plan-review-override-customer-id fix) and expects a bare refinement replan on
+    a SUBSTANTIVE session to apply without a user-facing diff presentation; that
+    gate's own scoping is covered directly in test_replan_authorization.py, so it
+    is switched off here."""
+    monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
     plan = _write_plan(tmp_path / "p.toml")
     _approved(store, plan)
 

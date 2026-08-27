@@ -630,6 +630,12 @@ class TestDetachedRelaunchOnReplan:
         digest entirely), so nothing should be cleared, nothing relaunched, and
         the deadline must be untouched."""
         monkeypatch.delenv("AGENTCTL_PREMISE", raising=False)
+        # This test predates the replan-authorization gate (stage 5 of the
+        # plan-review-override-customer-id fix) and expects a bare refinement
+        # replan on a SUBSTANTIVE session to apply without a user-facing diff
+        # presentation; that gate's own scoping is covered directly in
+        # test_replan_authorization.py, so it is switched off here.
+        monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
         sid = "no-clear"
         base = str(fixtures_dir / "plan_two_stage_finalcheck.toml")
         changed = str(fixtures_dir / "plan_two_stage_finalcheck_changed.toml")

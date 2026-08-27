@@ -248,6 +248,18 @@ def _snapshot_approved_plan(store: StateStore, state: SessionState) -> tuple[str
     return str(snap), digest
 
 
+def _replan_baseline_path(state: SessionState) -> str | None:
+    """The comparison baseline every replan-family diff is taken against: the
+    approved-plan snapshot when one exists on disk, else state.plan_path (the
+    legacy, pre-snapshot fallback — see _snapshot_approved_plan). Extracted from
+    the three call sites that repeated this derivation (cmd_replan,
+    _renormalize_replan, cmd_check_coverage) so they cannot drift apart; carries
+    ONLY the derivation, not _renormalize_replan's snapshot backfill, which that
+    path performs deliberately and the other two do not."""
+    snap = state.plan_snapshot_path
+    return snap if (snap and Path(snap).exists()) else state.plan_path
+
+
 _CRITERION_ENGINE_WRITTEN_FIELDS = frozenset({"observation"})
 
 
@@ -5120,8 +5132,7 @@ def _renormalize_replan(args, state, store: StateStore, runner: Runner | None) -
         backfilled = _snapshot_approved_plan(store, state)
         if backfilled:
             state.plan_snapshot_path, state.plan_snapshot_hash = backfilled
-    snap = state.plan_snapshot_path
-    old_path = snap if (snap and Path(snap).exists()) else state.plan_path
+    old_path = _replan_baseline_path(state)
     # Lenient OLD / strict NEW, for the reason cmd_replan's own loads document: the
     # comparison baseline may be a snapshot frozen before a newer trunk tightened the
     # schema, and only the incoming plan is held to today's submission grade. Comparing
@@ -5305,6 +5316,28 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
                          "requirements",
                          data={"problems": submission})
 
+    # replan-authorization gate: outside DIAGNOSING, a non-substantive edit
+    # (refinement or no_change) to an ALREADY APPROVED plan must have been
+    # presented to the user as a diff and proven delivered before it may be
+    # applied — the write-side twin of plan_presentation_blockers (see that
+    # gate's docstring on state.py's PlanPresentation). The kind fed to the
+    # gate is computed from the SAME baseline this command's own diff (below)
+    # uses, via _replan_baseline_path, so the kind the gate reasons about is
+    # the kind that will actually be applied. Placed strictly after the
+    # submission refusal above (a plan that does not meet submission grade is
+    # not worth authorizing) and strictly before the plan_approval PLUGIN
+    # block below, whose enumeration folding is destructive and PERSISTED —
+    # nothing that may refuse can follow it; this command has still written
+    # nothing to disk at this point.
+    auth_kind = diff_plans(_load(_replan_baseline_path(state), strict=False), new)
+    arblock = gates.replan_authorization_blockers(state, args.plan, diff_kind=auth_kind)
+    _log_gate(state, "replan_authorization", arblock, passed=not arblock)
+    if arblock:
+        return Directive(False, state.node, "present_plan",
+                         "replan blocked: this plan edit has not been authorized by "
+                         "the user",
+                         data={"blockers": arblock})
+
     # plan_approval PLUGIN gate: mirror cmd_approve's plugins.plugin_gate_blockers
     # composition so a refinement/no_change replan cannot rotate the plan bytes back
     # to VERIFYING while a premise-plugin blocker (undispositioned question, stale
@@ -5398,8 +5431,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # #8: diff against the plan AS APPROVED (the immutable snapshot), not plan_path —
     # which the coordinator may have edited in place. Absent a snapshot (legacy
     # session, or an approve that predates the field) fall back to plan_path.
-    snap = state.plan_snapshot_path
-    old_path = snap if (snap and Path(snap).exists()) else state.plan_path
+    old_path = _replan_baseline_path(state)
     # OLD side is a read-only comparison baseline: a snapshot frozen before a
     # newer trunk tightened the schema (free-text executors #7, or a later-required
     # substantive field like [stage.principle].derivation) must stay diffable — the
@@ -5739,8 +5771,7 @@ def cmd_check_coverage(args, *, store: StateStore, runner: Runner | None = None)
     state = _require(store, args.session)
     if not (state.difficulty and state.difficulty.critique):
         return Directive(True, state.node, "inspect", "no active critique; nothing to cover")
-    snap = state.plan_snapshot_path
-    old_path = snap if (snap and Path(snap).exists()) else state.plan_path
+    old_path = _replan_baseline_path(state)
     old = load_plan(old_path, strict=False)
     new = load_plan(args.new)
     blockers = gates.replan_coverage_blockers(old, new, state.difficulty.critique)
