@@ -1,0 +1,3 @@
+{"ts": "2026-08-01T00:00:00+00:00", "session_id": "sess-cost", "project": "proj-x", "date": "2026-08-01", "mtime": 1000.0, "cost_usd": 30.0, "missed_delegation_clusters": 0, "attention": {"corrections": 0}, "effectiveness": {"replans": 0}}
+{"ts": "2026-08-01T00:00:00+00:00", "session_id": "sess-replan", "project": "proj-x", "date": "2026-08-01", "mtime": 1000.0, "cost_usd": 1.0, "missed_delegation_clusters": 0, "attention": {"corrections": 0}, "effectiveness": {"replans": 3}}
+{"ts": "2026-08-01T00:00:00+00:00", "session_id": "sess-clean", "project": "proj-x", "date": "2026-08-01", "mtime": 1000.0, "cost_usd": 0.5, "missed_delegation_clusters": 0, "attention": {"corrections": 0}, "effectiveness": {"replans": 0}}

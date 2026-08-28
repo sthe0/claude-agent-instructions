@@ -88,6 +88,13 @@ sys.modules[_REC_SPEC.name] = _rec_for_scan
 _REC_SPEC.loader.exec_module(_rec_for_scan)
 cluster_by_ground = _rec_for_scan.cluster_by_ground
 
+# The telemetry producer's only two subprocess reaches (policy-scorecard.py's ledger
+# upsert, record-experience.py's dedup search) live in this sibling module, never here —
+# see improvement_scan_shell.py's docstring for why, and
+# test_module_never_shells_out_or_reaches_the_network for the invariant this preserves.
+import improvement_scan_shell as shell  # noqa: E402
+from agentctl.cost import COST_LOG as SPAWN_LEDGER_DEFAULT, read_rows as read_spawn_rows  # noqa: E402
+
 BOARD_SCHEMA = 1
 
 # The closed vocabulary a Finding's `recommended_next_step` must belong to.
@@ -395,6 +402,296 @@ class LedgerCursor:
 
     def mark(self, session_id: str, mtime: float) -> None:
         self.sessions[session_id] = mtime
+
+
+# --- telemetry producer: deterministic detector table ------------------------
+# Each detector reads only closed-vocabulary/numeric fields off a policy-ledger row
+# (policy-scorecard.py's _scan_session shape) and, where relevant, the spawn-cost
+# rows joined to it by session_id — never free text, per CLAUDE.md's rule/perception
+# split. A firing detector reports WHAT crossed its threshold; it never authors a
+# functional_ground — that is the model's job in the grounds-intake pass below.
+
+DEFAULT_POLICY_LEDGER = Path.home() / ".local" / "log" / "claude-policy-ledger.jsonl"
+DEFAULT_TELEMETRY_CURSOR = Path.home() / ".local" / "state" / "claude-improvement-scan-telemetry-cursor.json"
+DEFAULT_TELEMETRY_DAYS = 7
+EVIDENCE_SCHEMA = 1
+
+REPLAN_PRESSURE_CONFIG_KEY = "effort-replan-absolute"
+_REPLAN_PRESSURE_FALLBACK = 3.0
+
+# A session costing >= 3x the large-tier budget is a standing cost outlier worth
+# naming to a human, not a one-off spend spike absorbed by variance.
+COST_CONCENTRATION_MULTIPLE = 3.0
+# Any missed-delegation cluster policy-scorecard already found is worth surfacing —
+# the metric itself is already a threshold-scored signal, not a raw count needing headroom.
+DELEGATION_MISS_MIN_CLUSTERS = 1
+# Any recorded malformed/non-zero-exit spawn is worth surfacing — spawn failures are
+# rare by construction (spawn-specialist.py retries transient errors internally).
+SPAWN_FAILURE_MIN_COUNT = 1
+# CLAUDE.md's own stated overcome-difficulty trigger: "two or more process corrections
+# in a row" — this detector operationalizes that literal threshold.
+ATTENTION_BURN_MIN_CORRECTIONS = 2
+
+
+def _detect_cost_concentration(row: dict, spawn_rows: "list[dict]", *, config_path) -> "dict | None":
+    threshold = read_budget_usd("large", config_path) * COST_CONCENTRATION_MULTIPLE
+    cost = row.get("cost_usd") or 0.0
+    if cost < threshold:
+        return None
+    return {
+        "detector": "cost-concentration",
+        "measured": {"cost_usd": cost, "threshold_usd": threshold},
+        "description": (
+            f"session cost ${cost:.2f} >= {COST_CONCENTRATION_MULTIPLE:g}x "
+            f"the large-tier budget (${threshold:.2f})"
+        ),
+    }
+
+
+def _detect_replan_pressure(row: dict, spawn_rows: "list[dict]", *, config_path) -> "dict | None":
+    threshold = _read_config_float(REPLAN_PRESSURE_CONFIG_KEY, config_path)
+    if threshold is None:
+        threshold = _REPLAN_PRESSURE_FALLBACK
+    replans = (row.get("effectiveness") or {}).get("replans") or 0
+    if replans < threshold:
+        return None
+    return {
+        "detector": "replan-pressure",
+        "measured": {"replans": replans, "threshold": threshold},
+        "description": f"{replans} replan(s) >= the {REPLAN_PRESSURE_CONFIG_KEY} threshold ({threshold:g})",
+    }
+
+
+def _detect_delegation_misses(row: dict, spawn_rows: "list[dict]", *, config_path) -> "dict | None":
+    clusters = row.get("missed_delegation_clusters") or 0
+    if clusters < DELEGATION_MISS_MIN_CLUSTERS:
+        return None
+    return {
+        "detector": "delegation-misses",
+        "measured": {"missed_delegation_clusters": clusters},
+        "description": f"{clusters} missed-delegation cluster(s) >= threshold ({DELEGATION_MISS_MIN_CLUSTERS})",
+    }
+
+
+def _detect_spawn_process_failures(row: dict, spawn_rows: "list[dict]", *, config_path) -> "dict | None":
+    failures = [r for r in spawn_rows if r.get("malformed") or (r.get("exit_code") or 0) != 0]
+    if len(failures) < SPAWN_FAILURE_MIN_COUNT:
+        return None
+    return {
+        "detector": "spawn-process-failure",
+        "measured": {"failed_spawns": len(failures), "total_spawns": len(spawn_rows)},
+        "description": f"{len(failures)} spawned-process failure(s) >= threshold ({SPAWN_FAILURE_MIN_COUNT})",
+    }
+
+
+def _detect_attention_burn(row: dict, spawn_rows: "list[dict]", *, config_path) -> "dict | None":
+    corrections = (row.get("attention") or {}).get("corrections") or 0
+    if corrections < ATTENTION_BURN_MIN_CORRECTIONS:
+        return None
+    return {
+        "detector": "attention-burn",
+        "measured": {"corrections": corrections},
+        "description": (
+            f"{corrections} user correction(s) >= threshold ({ATTENTION_BURN_MIN_CORRECTIONS}) "
+            "— CLAUDE.md's own overcome-difficulty trigger"
+        ),
+    }
+
+
+TELEMETRY_DETECTORS = (
+    _detect_cost_concentration,
+    _detect_replan_pressure,
+    _detect_delegation_misses,
+    _detect_spawn_process_failures,
+    _detect_attention_burn,
+)
+
+
+def run_detectors(
+    row: dict, spawn_rows: "list[dict]", *, config_path: "str | Path" = CONFIG_PATH
+) -> "list[dict]":
+    items = []
+    for detector in TELEMETRY_DETECTORS:
+        result = detector(row, spawn_rows, config_path=config_path)
+        if result is None:
+            continue
+        result = dict(result)
+        result["session_id"] = row.get("session_id")
+        result["project"] = row.get("project")
+        result["date"] = row.get("date")
+        items.append(result)
+    return items
+
+
+def _load_ledger_rows(path: "str | Path") -> "list[dict]":
+    """Tolerant JSONL read mirroring policy-scorecard.load_ledger's fail-open,
+    later-line-wins parsing. This module only ever READS this file — writing it
+    stays the sole job of policy-scorecard.py's own upsert (see module docstring)."""
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+    rows: "dict[str, dict]" = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict) and row.get("session_id"):
+            rows[row["session_id"]] = row
+    return list(rows.values())
+
+
+def _group_spawn_rows_by_session(spawn_rows: "Iterable[dict]") -> "dict[str, list[dict]]":
+    by_session: "dict[str, list[dict]]" = {}
+    for r in spawn_rows:
+        sid = r.get("session_id")
+        if sid:
+            by_session.setdefault(sid, []).append(r)
+    return by_session
+
+
+def scan_telemetry(
+    ledger_rows: "list[dict]",
+    spawn_rows: "list[dict]",
+    cursor: LedgerCursor,
+    *,
+    config_path: "str | Path" = CONFIG_PATH,
+) -> "tuple[list[dict], list[tuple[str, float]]]":
+    """Run every detector against every ledger row the cursor still owes a pass to.
+
+    Returns (evidence_items, due_marks). `due_marks` — the (session_id, mtime)
+    pairs the caller must feed to `cursor.mark` — is returned rather than
+    applied here, so the caller can defer marking until AFTER a successful
+    evidence write: a crash between scan and persist must reprocess the
+    session next run, never silently skip it.
+    """
+    by_session = _group_spawn_rows_by_session(spawn_rows)
+    items: "list[dict]" = []
+    due_marks: "list[tuple[str, float]]" = []
+    for row in ledger_rows:
+        session_id = row.get("session_id")
+        mtime = row.get("mtime")
+        if session_id is None or mtime is None:
+            continue
+        if not cursor.is_due(session_id, mtime):
+            continue
+        due_marks.append((session_id, mtime))
+        items.extend(run_detectors(row, by_session.get(session_id, []), config_path=config_path))
+    return items, due_marks
+
+
+def build_evidence_bundle(
+    items: "list[dict]",
+    *,
+    days: int,
+    sessions_scanned: int,
+    degraded_refresh: bool,
+    degraded_reason: "str | None",
+    now: "datetime | None" = None,
+) -> dict:
+    now = now or datetime.now(timezone.utc)
+    return {
+        "schema": EVIDENCE_SCHEMA,
+        "generated_at": now.isoformat(),
+        "days": days,
+        "sessions_scanned": sessions_scanned,
+        "degraded_refresh": degraded_refresh,
+        "degraded_reason": degraded_reason,
+        "items": items,
+    }
+
+
+# --- telemetry producer: grounds intake, dedup, store ------------------------
+
+def _ground_signal(detector: str, functional_ground: str) -> str:
+    """The store-key identity: detector + ground TEXT, never a session id — so the
+    same standing pattern collapses to one row across runs and sessions instead of
+    minting a fresh key (and a `times_surfaced` stuck at 1) every time it fires."""
+    normalized = f"{detector}\0{' '.join(functional_ground.split())}"
+    return "telemetry-" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+
+
+def _board_ground_match(board: "PriorBoard | None", functional_ground: str) -> "str | None":
+    """A cheap, subprocess-free pre-check: has the backlog board already got an item
+    carrying this exact ground text? A match here short-circuits the (costlier)
+    record-experience subprocess search below — the two dedup against different
+    stores, but either one finding the ground already tracked is sufficient."""
+    if board is None:
+        return None
+    normalized = " ".join(functional_ground.split())
+    for ref, item in board.items.items():
+        if " ".join(item.functional_ground.split()) == normalized:
+            return ref
+    return None
+
+
+def build_findings_from_grounds(
+    grounds: "list[dict]",
+    *,
+    board: "PriorBoard | None" = None,
+    scope: str = "global",
+) -> "tuple[list[Finding], list[dict]]":
+    """For every model-supplied ground: dedup against the backlog board (if given)
+    and existing experience leaves, recording every outcome — a dedup match is
+    NEVER silently dropped, only excluded from the returned findings — then build
+    survivors into Findings keyed by detector+ground, never by session id.
+    """
+    findings: "list[Finding]" = []
+    dedup_log: "list[dict]" = []
+    for g in grounds:
+        detector = g["detector"]
+        ground_text = g["functional_ground"]
+
+        board_ref = _board_ground_match(board, ground_text)
+        if board_ref is not None:
+            dedup_log.append({
+                "detector": detector, "functional_ground": ground_text,
+                "outcome": "board-match", "detail": board_ref,
+            })
+            continue
+
+        ok, found, output = shell.search_experience(ground_text.split(), scope=scope)
+        if not ok:
+            dedup_log.append({
+                "detector": detector, "functional_ground": ground_text,
+                "outcome": "search-failed", "detail": output,
+            })
+        elif found:
+            dedup_log.append({
+                "detector": detector, "functional_ground": ground_text,
+                "outcome": "dedup-match", "detail": output,
+            })
+            continue
+        else:
+            dedup_log.append({
+                "detector": detector, "functional_ground": ground_text,
+                "outcome": "no-match", "detail": output,
+            })
+
+        cost = g.get("cost_signal") or {}
+        findings.append(
+            Finding(
+                kind=sds.KIND_TELEMETRY_PATTERN,
+                signal=_ground_signal(detector, ground_text),
+                title=g.get("title", detector),
+                functional_ground=ground_text,
+                evidence=tuple(g.get("evidence_refs") or ()),
+                cost_signal=CostSignal(
+                    usd_per_week=cost.get("usd_per_week"),
+                    attention_per_week=cost.get("attention_per_week"),
+                    stability_per_week=cost.get("stability_per_week"),
+                    basis=cost.get("basis", ""),
+                    measured=cost.get("measured", False),
+                ),
+                source_ref=detector,
+                recommended_next_step=g.get("recommended_next_step", "self-improvement"),
+            )
+        )
+    return findings, dedup_log
 
 
 # --- backlog producer: cross-source collection ------------------------------
@@ -725,8 +1022,72 @@ def _cmd_backlog(args: argparse.Namespace) -> int:
     return 2
 
 
+def _run_telemetry_scan(args: argparse.Namespace) -> int:
+    ledger_path = Path(args.ledger) if args.ledger else DEFAULT_POLICY_LEDGER
+    spawn_ledger_path = Path(args.spawn_ledger) if args.spawn_ledger else SPAWN_LEDGER_DEFAULT
+    cursor_path = Path(args.cursor) if args.cursor else DEFAULT_TELEMETRY_CURSOR
+
+    ok, message = shell.refresh_policy_ledger(args.days, ledger_path=ledger_path)
+    degraded = not ok
+    if degraded:
+        print(f"improvement-scan telemetry: degraded — ledger refresh failed: {message}", file=sys.stderr)
+
+    cursor = LedgerCursor.load(cursor_path)
+    ledger_rows = _load_ledger_rows(ledger_path)
+    spawn_rows = read_spawn_rows(spawn_ledger_path)
+    items, due_marks = scan_telemetry(ledger_rows, spawn_rows, cursor)
+
+    bundle = build_evidence_bundle(
+        items, days=args.days, sessions_scanned=len(due_marks),
+        degraded_refresh=degraded, degraded_reason=(message if degraded else None),
+    )
+
+    if not args.dry_run:
+        _atomic_write_json(bundle, args.emit_evidence)
+        for session_id, mtime in due_marks:
+            cursor.mark(session_id, mtime)
+        cursor.save(cursor_path)
+
+    print(
+        f"improvement-scan telemetry (scan): {len(due_marks)} session(s) due, "
+        f"{len(items)} evidence item(s) -> {args.emit_evidence}" + (" [degraded]" if degraded else "")
+    )
+    return 1 if degraded else 0
+
+
+def _run_telemetry_grounds(args: argparse.Namespace) -> int:
+    try:
+        grounds = json.loads(Path(args.grounds).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        print(f"improvement-scan telemetry (grounds): cannot read grounds: {exc}", file=sys.stderr)
+        return 2
+    if not isinstance(grounds, list):
+        print("improvement-scan telemetry (grounds): grounds file must be a JSON list", file=sys.stderr)
+        return 2
+
+    board = load_prior_board(args.board) if args.board else None
+    findings, dedup_log = build_findings_from_grounds(grounds, board=board)
+    stored = [] if args.dry_run else store_findings(findings, store_path=args.store)
+
+    print(
+        f"improvement-scan telemetry (grounds): {len(grounds)} ground(s) in, "
+        f"{len(stored)} finding(s) stored, {len(dedup_log)} dedup outcome(s) logged"
+    )
+    for entry in dedup_log:
+        if entry["outcome"] != "no-match":
+            print(f"  {entry['outcome']}: {entry['detector']} — {entry['detail'][:120]}", file=sys.stderr)
+    return 0
+
+
 def _cmd_telemetry(args: argparse.Namespace) -> int:
-    print("improvement-scan telemetry: not implemented in this stage", file=sys.stderr)
+    if args.emit_evidence:
+        return _run_telemetry_scan(args)
+    if args.grounds:
+        return _run_telemetry_grounds(args)
+    print(
+        "improvement-scan telemetry: pass either --emit-evidence (scan) or --grounds (store)",
+        file=sys.stderr,
+    )
     return 2
 
 
@@ -759,6 +1120,20 @@ def main(argv: "list[str] | None" = None) -> int:
     p_backlog.set_defaults(func=_cmd_backlog)
 
     p_telemetry = sub.add_parser("telemetry", help="scan recent session telemetry for recurring difficulties")
+    p_telemetry.add_argument(
+        "--emit-evidence", default=None,
+        help="scan mode: refresh the policy ledger, run detectors, write the evidence bundle here",
+    )
+    p_telemetry.add_argument("--days", type=int, default=DEFAULT_TELEMETRY_DAYS, help="scan mode: policy-scorecard --days window")
+    p_telemetry.add_argument("--ledger", default=None, help="scan mode: policy ledger path (default: ~/.local/log/claude-policy-ledger.jsonl)")
+    p_telemetry.add_argument("--spawn-ledger", default=None, help="scan mode: spawn-cost ledger path (default: agentctl.cost.COST_LOG)")
+    p_telemetry.add_argument("--cursor", default=None, help="scan mode: LedgerCursor state path")
+    p_telemetry.add_argument(
+        "--grounds", default=None,
+        help="store mode: model-supplied functional-ground proposals (JSON list) for a prior evidence bundle",
+    )
+    p_telemetry.add_argument("--board", default=None, help="store mode: backlog board.json to dedup grounds against")
+    p_telemetry.add_argument("--store", default=None, help="store mode: findings store path")
     p_telemetry.set_defaults(func=_cmd_telemetry)
 
     p_report = sub.add_parser("report", help="render the unified ranked report from stored findings")
