@@ -71,7 +71,7 @@ A **difficulty** is a divergence between reality and the plan — either a step'
 
 ## Skills (Cursor has no Skill tool — invoke by reading)
 
-**Four** global skills live in `~/.claude-agent/skills/`. Cursor cannot trigger them through a `Skill` tool, so **you invoke them by reading the SKILL.md and following it in this conversation** when the trigger fires.
+**Five** global skills live in `~/.claude-agent/skills/`. Cursor cannot trigger them through a `Skill` tool, so **you invoke them by reading the SKILL.md and following it in this conversation** when the trigger fires.
 
 ### `overcome-difficulty`
 
@@ -116,6 +116,14 @@ When triggered → read `~/.claude-agent/skills/tracker-management/SKILL.md` and
 **SKIP** when the file is comfortably under 90% of its ceiling and no user request references grooming.
 
 When triggered → read `~/.claude-agent/skills/instruction-grooming/SKILL.md` and work through measure → survey → verify consumers → plan; the actual edit still rides the standard plan-approval spine like any other production change to instructions.
+
+### `improvement-scan`
+
+**TRIGGER:** the user asks to scan for standing self-improvement work ("сделай себя лучше" or similar), or the due-hook's stamp-throttled nudge (Claude Code only — Cursor has no SessionStart hook to fire it, so periodically run the report yourself) reports open findings.
+
+**SKIP** when there is no such request and no open findings to report.
+
+When triggered → read `~/.claude-agent/skills/improvement-scan/SKILL.md` and drive `scripts/improvement-scan.py`'s `backlog` and `telemetry` producers plus its `report` renderer end to end; the tool only collects, scores, and renders — it never files a difficulty, dispatches a specialist, or picks work, so treat its output as one ranked report to review, not an instruction to act.
 
 ## On task resolution (record experience)
 

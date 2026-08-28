@@ -96,3 +96,4 @@ All four are architectural, not patches. None would have been produced by a simp
 - `~/.claude-agent/skills/overcome-difficulty/SKILL.md` — the analysis tool (applies naturally to agent-system-as-plan).
 - `~/.claude-agent/skills/self-improvement/SKILL.md` — the writer of the architectural change.
 - [memory-hierarchy.md](memory-hierarchy.md) — sister leaf produced by the same kind of analysis; demonstrates the "architectural, not patch" distinction.
+- [[improvement-scan]] — the `telemetry` producer of `scripts/improvement-scan.py` mechanizes this leaf's manual cross-session friction scan (§ When to scan's recurrence check across experience leaves): it reads session ledgers directly, on its own resume cursor, and reports candidates for a live session to ground and route through this same OD/architectural-vs-patch discipline — it does not replace this leaf's judgment calls, only the collection pass that used to be done by hand.

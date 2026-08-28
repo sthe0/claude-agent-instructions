@@ -178,6 +178,12 @@ DESIRED = [
     # file near its ceiling) and surface any worklist to stderr. Self-throttled,
     # fail-open — never blocks or slows session start.
     ("SessionStart",     None,    "hook-self-diagnose-due.py",   5),
+    # Throttled nudge (once/7d): counts open, improvement-scan-sourced rows
+    # already in the durable findings store and, if any are open, prints an
+    # instruction to invoke the `improvement-scan` skill. Never runs the scan
+    # itself — that is a full live-session task the hook deliberately defers.
+    # Fail-open, never blocks or slows session start.
+    ("SessionStart",     None,    "hook-improvement-scan-due.py",   5),
     # Fail-loud detector: the gate-bearing hooks are present in the repo but NOT
     # wired into the root THIS session loads from — i.e. canon may silently be
     # writable and the spine's gates silently off. Reports on stdout, so the
