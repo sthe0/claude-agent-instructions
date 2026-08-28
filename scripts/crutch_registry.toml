@@ -14,6 +14,7 @@
 # scripts/agentctl/**                                        | code   | structural
 # scripts/hook-escalation-diagnosis-gate.py (judge-guarded)  | code   | semantic-guarded
 # scripts/hook-deferring-disposition-gate.py (judge-guarded) | code   | semantic-guarded
+# scripts/hook-resolution-reminder.py (judge-guarded)        | code   | semantic-guarded
 # scripts/hook-*.py (other guardian hooks)                   | code   | structural
 # scripts/lib/** (incl. term_ruleset.py)                     | code   | structural
 # scripts/crutch-inventory.py (self)                         | code   | not-a-gate
@@ -1247,41 +1248,49 @@ ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-comm
 id = "d7358151dc0d6466"
 domain = "code"
 file = "scripts/hook-resolution-reminder.py"
-class = "structural"
+class = "semantic-guarded"
 disposition = "keep"
-ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+ground = "decide()'s PreToolUse/AskUserQuestion branch runs agentctl.advisor.judge_landing_discipline_ask (fail-open semantic judge) before building the deny payload, and — unlike the other judge-guarded rows above — deliberately WITHOUT a keyword prefilter gating whether the judge is even consulted: an explicit correction (2026-08-27) that an arbitrary-content regex is a fragile classifier even demoted to a filter, so this hook always asks the judge whenever its gate-open + hint-active precondition holds, and only the judge's verdict decides."
+
+[[entry]]
+id = "5133d1883a7b6e57"
+domain = "code"
+file = "scripts/hook-resolution-reminder.py"
+class = "semantic-guarded"
+disposition = "keep"
+ground = "decide()'s PreToolUse/AskUserQuestion branch runs agentctl.advisor.judge_landing_discipline_ask (fail-open semantic judge) before building the deny payload, and — unlike the other judge-guarded rows above — deliberately WITHOUT a keyword prefilter gating whether the judge is even consulted: an explicit correction (2026-08-27) that an arbitrary-content regex is a fragile classifier even demoted to a filter, so this hook always asks the judge whenever its gate-open + hint-active precondition holds, and only the judge's verdict decides."
 
 [[entry]]
 id = "d77f100f2d6b6180"
 domain = "code"
 file = "scripts/hook-resolution-reminder.py"
-class = "structural"
+class = "semantic-guarded"
 disposition = "keep"
-ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+ground = "decide()'s PreToolUse/AskUserQuestion branch runs agentctl.advisor.judge_landing_discipline_ask (fail-open semantic judge) before building the deny payload, and — unlike the other judge-guarded rows above — deliberately WITHOUT a keyword prefilter gating whether the judge is even consulted: an explicit correction (2026-08-27) that an arbitrary-content regex is a fragile classifier even demoted to a filter, so this hook always asks the judge whenever its gate-open + hint-active precondition holds, and only the judge's verdict decides."
 
 [[entry]]
 id = "9cc26a9bf2e4f44b"
 domain = "code"
 file = "scripts/hook-resolution-reminder.py"
-class = "structural"
+class = "semantic-guarded"
 disposition = "keep"
-ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+ground = "decide()'s PreToolUse/AskUserQuestion branch runs agentctl.advisor.judge_landing_discipline_ask (fail-open semantic judge) before building the deny payload, and — unlike the other judge-guarded rows above — deliberately WITHOUT a keyword prefilter gating whether the judge is even consulted: an explicit correction (2026-08-27) that an arbitrary-content regex is a fragile classifier even demoted to a filter, so this hook always asks the judge whenever its gate-open + hint-active precondition holds, and only the judge's verdict decides."
 
 [[entry]]
 id = "ce166cc1fd3fa387"
 domain = "code"
 file = "scripts/hook-resolution-reminder.py"
-class = "structural"
+class = "semantic-guarded"
 disposition = "keep"
-ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+ground = "decide()'s PreToolUse/AskUserQuestion branch runs agentctl.advisor.judge_landing_discipline_ask (fail-open semantic judge) before building the deny payload, and — unlike the other judge-guarded rows above — deliberately WITHOUT a keyword prefilter gating whether the judge is even consulted: an explicit correction (2026-08-27) that an arbitrary-content regex is a fragile classifier even demoted to a filter, so this hook always asks the judge whenever its gate-open + hint-active precondition holds, and only the judge's verdict decides."
 
 [[entry]]
 id = "07199e376d77f327"
 domain = "code"
 file = "scripts/hook-resolution-reminder.py"
-class = "structural"
+class = "semantic-guarded"
 disposition = "keep"
-ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+ground = "decide()'s PreToolUse/AskUserQuestion branch runs agentctl.advisor.judge_landing_discipline_ask (fail-open semantic judge) before building the deny payload, and — unlike the other judge-guarded rows above — deliberately WITHOUT a keyword prefilter gating whether the judge is even consulted: an explicit correction (2026-08-27) that an arbitrary-content regex is a fragile classifier even demoted to a filter, so this hook always asks the judge whenever its gate-open + hint-active precondition holds, and only the judge's verdict decides."
 
 [[entry]]
 id = "2f5311ca430d6f29"
@@ -7548,6 +7557,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "ed3b47643a10c488"
+domain = "code"
+file = "scripts/tests/test_resolution_reminder_hook.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "30ab0eb196d7131a"
 domain = "code"
 file = "scripts/tests/test_resolution_reminder_hook.py"
@@ -7589,6 +7606,38 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 
 [[entry]]
 id = "f6b51a56d1194196"
+domain = "code"
+file = "scripts/tests/test_resolution_reminder_hook.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "62ad3fc87d1878ff"
+domain = "code"
+file = "scripts/tests/test_resolution_reminder_hook.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "84b6cab0f25b679d"
+domain = "code"
+file = "scripts/tests/test_resolution_reminder_hook.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "2d1a1cbd20b4283b"
+domain = "code"
+file = "scripts/tests/test_resolution_reminder_hook.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "19fd984b8a52aeca"
 domain = "code"
 file = "scripts/tests/test_resolution_reminder_hook.py"
 class = "not-a-gate"
@@ -9143,9 +9192,9 @@ ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-comm
 id = "b89df34a64224b62"
 domain = "code_file_rollup"
 file = "scripts/hook-resolution-reminder.py"
-class = "structural"
+class = "semantic-guarded"
 disposition = "keep"
-ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content. (file-level rollup of the file's scopes.)"
+ground = "decide()'s PreToolUse/AskUserQuestion branch runs agentctl.advisor.judge_landing_discipline_ask (fail-open semantic judge) before building the deny payload, and — unlike the other judge-guarded rows above — deliberately WITHOUT a keyword prefilter gating whether the judge is even consulted: an explicit correction (2026-08-27) that an arbitrary-content regex is a fragile classifier even demoted to a filter, so this hook always asks the judge whenever its gate-open + hint-active precondition holds, and only the judge's verdict decides. (file-level rollup of the file's scopes.)"
 
 [[entry]]
 id = "566123553c195d42"
@@ -16488,6 +16537,22 @@ disposition = "keep"
 ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
 
 [[entry]]
+id = "444656ab9e39b7b2"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-08-27-bash-background-cd-chain-cwd-reset.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "d8a163853136190c"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-08-27-bash-background-cd-chain-cwd-reset.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
 id = "abec5df6e7ff58b6"
 domain = "prose"
 file = "memory-global/leaves/experience/2026-08-27-self-attested-identity-field-needs-declared-principal-check.md"
@@ -16507,6 +16572,14 @@ ground = "Experience leaves (difficulty/v1) are historical narrative records of 
 id = "a64e21b2d5c6c584"
 domain = "prose"
 file = "memory-global/leaves/experience/2026-08-27-self-attested-identity-field-needs-declared-principal-check.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "11f6a438a5b08200"
+domain = "prose"
+file = "memory-global/leaves/experience/MEMORY.md"
 class = "not-normative"
 disposition = "keep"
 ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
@@ -19145,6 +19218,14 @@ ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's
 
 [[entry]]
 id = "32de11b02990fc43"
+domain = "prose"
+file = "memory-global/leaves/reasoning-and-task-solving.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "5fa3e17610c3eaaf"
 domain = "prose"
 file = "memory-global/leaves/reasoning-and-task-solving.md"
 class = "perception"

@@ -319,11 +319,15 @@ def test_an_unsearchable_chain_member_does_not_silence_the_banner(tmp_path):
 def test_advisory_hooks_are_never_reported(tmp_path):
     """Scope discipline: the deliberate root divergence means advisory hooks are
     legitimately absent from a personal root. Naming them every session would
-    train the reader to skip the block that carries the real signal."""
+    train the reader to skip the block that carries the real signal.
+
+    hook-resolution-reminder.py is deliberately absent from this list: since it
+    joined GATE_BEARING_HOOKS (its new PreToolUse/AskUserQuestion branch denies
+    a PR-flavored resolution menu), the wired-check script now reports it like
+    any other gate-bearing hook — see test_names_every_missing_registry_hook."""
     proc = _run(tmp_path, {"hooks": {"PreToolUse": [
         _group("Edit|Write", GUARD_PATH), _group("Bash", GUARD_PATH)]}})
-    for advisory in ("hook-self-diagnose-due.py", "hook-skill-first.py",
-                     "hook-resolution-reminder.py"):
+    for advisory in ("hook-self-diagnose-due.py", "hook-skill-first.py"):
         assert advisory not in proc.stdout
 
 

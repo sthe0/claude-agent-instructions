@@ -49,6 +49,7 @@ _TURN_END = _load_hook("hook-turn-end-gate.py")
 _DEFERRING = _load_hook("hook-deferring-disposition-gate.py")
 _ESCALATION = _load_hook("hook-escalation-diagnosis-gate.py")
 _APPROVAL = _load_hook("hook-plan-delivery-gate.py")
+_RESOLUTION_REMINDER = _load_hook("hook-resolution-reminder.py")
 
 
 def _samples(row: judge_latency.Row) -> "list[float]":
@@ -155,6 +156,8 @@ _DERIVED_CONSTANTS = [
     (_ESCALATION, "_JUDGE_MIN_CALL_S", "outage_escalation", judge_latency.call_floor_s),
     (_DEFERRING, "_ASK_JUDGE_MIN_CALL_S", "deferring_disposition", judge_latency.call_floor_s),
     (_APPROVAL, "_APPROVAL_ASK_JUDGE_MIN_CALL_S", "approval_ask", judge_latency.call_floor_s),
+    (_RESOLUTION_REMINDER, "_LANDING_DISCIPLINE_JUDGE_MIN_CALL_S", "landing_discipline",
+     judge_latency.call_floor_s),
     # _APPROVAL_ASK_JUDGE_BUDGET_S is deliberately ABSENT from this table now.
     # It used to be listed here, tied by EQUALITY to call_ceiling_s("approval_ask")
     # — this hook's own claim, not a family rule, per the comment that used to
@@ -218,6 +221,7 @@ def test_a_single_call_hooks_budget_is_never_what_truncates_its_call():
         "hook-escalation-diagnosis-gate.py": _ESCALATION._JUDGE_BUDGET_S,
         "hook-deferring-disposition-gate.py": _DEFERRING._ASK_JUDGE_BUDGET_S,
         "hook-plan-delivery-gate.py": _APPROVAL._APPROVAL_ASK_JUDGE_BUDGET_S,
+        "hook-resolution-reminder.py": _RESOLUTION_REMINDER._LANDING_DISCIPLINE_JUDGE_BUDGET_S,
     }
     for hook, budget in single.items():
         sequence = judge_latency.HOOK_CALL_SEQUENCE[hook]

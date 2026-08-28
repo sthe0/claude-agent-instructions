@@ -7,7 +7,7 @@ like a considered verdict. This file records the runs that separate the two, and
 `scripts/check-live-run-evidence.py` recomputes every number below from the raw
 samples and the hook sources, so the document cannot drift away from its evidence.
 
-## 1. The three live runs
+## 1. The four live runs
 
 Every hook was fed, on stdin, a payload its own prefilter is **obliged** to fire
 on, and a real judge answered. No stubs, no fakes, no recorded fixtures.
@@ -19,9 +19,18 @@ on, and a real judge answered. No stubs, no fakes, no recorded fixtures.
 | `hook-deferring-disposition-gate.py` | `deferring_disposition` | deny | deny | 43.09 | 45 |
 | `hook-escalation-diagnosis-gate.py` | `outage_escalation` | deny | deny | 4.96 | 30 |
 | `hook-turn-end-gate.py` | `feedback_signal`, `binary_ask`, `outage_escalation` | block | block | 17.05 | 52 |
+| `hook-resolution-reminder.py` | `landing_discipline` | deny | deny | 6.61 | 22 |
 
-All three exited 0 with empty stderr, so no `judges_skipped` line was emitted and
+All four exited 0 with empty stderr, so no `judges_skipped` line was emitted and
 no judge was dropped for want of budget.
+
+**The landing-discipline run** was an `AskUserQuestion` menu whose two options were
+"Open a PR" and "Wait for review" — a PreToolUse call, not a UserPromptSubmit one,
+against a scratch `CLAUDE_CONFIG_DIR` state file declaring `node=RESOLUTION`,
+`resolution.passed=false`, run with cwd at this repo's own root so
+`direct_push_no_pr_hint`'s author/repo-root check resolves truthfully (a real,
+non-dry-run-affecting `git push --dry-run` probe). Real session state and
+`settings.json` were untouched, mirroring the isolation the other three runs use.
 
 **The turn-end run proves all three of its judges ran, not just one.** Its block
 reason carries all three blockers, and each blocker is appended only when its own
@@ -103,6 +112,7 @@ a detail: four standard estimators on the n=18 deferring sample give 29.94 /
 | `hook-turn-end-gate.py` | `binary_ask` | `haiku` | `topup2-sample.json:binary_ask` | 16 | 5.93 | 7.46 | 11.06 | 11.52 | 13 | 0 | 0.0000 | 0.1875 |
 | `hook-turn-end-gate.py` | `outage_escalation` | `haiku` | `latency-sample.json:outage + ab-sample.json:outage_std` | 16 | 7.19 | 10.89 | 19.16 | 25.96 | 27 | 0 | 0.0000 | 0.1875 |
 | `hook-plan-delivery-gate.py` | `approval_ask` | `haiku` | `approval-sample.json:approval + approval-sample.json:not_approval + approval2-sample.json:approval + approval2-sample.json:not_approval` | 64 | 5.88 | 12.77 | 17.29 | 19.14 | 30 | 0 | 0.0000 | 0.0469 |
+| `hook-resolution-reminder.py` | `landing_discipline` | `haiku` | `landing-discipline-sample.json:pr_proposing + landing-discipline-sample.json:direct_push` | 16 | 3.88 | 4.96 | 6.37 | 15.38 | 22 | 0 | 0.0000 | 0.1875 |
 | — | `acceptance_judge` | `haiku` | UNMEASURED — no latency sample exists | — | — | — | — | — | — | — | — | — |
 | — | `question_materiality` | `haiku` | UNMEASURED — no latency sample exists | — | — | — | — | — | — | — | — | — |
 
@@ -121,8 +131,8 @@ With zero events in n trials the 95% upper bound on the rate is the rule of thre
 
 > On the evidence available, the per-call fail-open rate is **at most 17%**
 > (deferring, 3/18), **19%** (outage, 3/16), **12%** (feedback, 3/26),
-> **19%** (binary_ask, 3/16) and **5%** (approval_ask, 3/64), each at 95%
-> confidence.
+> **19%** (binary_ask, 3/16), **5%** (approval_ask, 3/64) and **19%**
+> (landing_discipline, 3/16), each at 95% confidence.
 
 These bounds are wide because the samples are small, and they shrink only with
 more calls. Section 2 supplies the concrete reason not to dismiss them: a live
@@ -180,5 +190,10 @@ sample files it cites, compares each against the frozen contract in
 `lib/judge_latency.py`, reads each ceiling out of the hook source with `ast`,
 recounts the exceedances and their confidence bounds, and fails on a model tag
 that is not `advisor._JUDGE_MODEL`, on `n` below 15, or on a zero claimed without
-a bound. The live runs themselves are driven by `/tmp/cc-scratch/live-run4/run.py`
-with the payloads beside it; re-running them costs real judge calls.
+a bound. The first three live runs were driven by `/tmp/cc-scratch/live-run4/run.py`
+with the payloads beside it; the `landing_discipline` run was driven the same way
+in spirit — a `subprocess.run` of the hook on stdin with `CLAUDE_CONFIG_DIR`
+pointed at a scratch agent home carrying only the `RESOLUTION`-node state the
+hook needs — via a throwaway pytest test, since that machine's session confined
+direct script execution to pytest-mediated invocation. Re-running any of these
+costs real judge calls.

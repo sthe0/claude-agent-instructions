@@ -40,18 +40,53 @@ user's phrasing — the gate is objectively open, so the agent must
 not close without an explicit confirmation. Sessions with no state
 file fall back to the gratitude/meta heuristics above (prose mode).
 
-Exit 0 always; emit stdout (becomes additional system context).
+PreToolUse/AskUserQuestion branch (this module's second registration):
+the UserPromptSubmit path above only ever runs when a NEW user message
+arrives while the gate is open — when the coordinator drives straight
+from a passing verify-final into composing its own resolution ask
+within one turn, no user prompt intervenes and DIRECT_PUSH_NO_PR_HINT
+never gets a chance to steer the menu before it is already shown. This
+second entry point runs on every AskUserQuestion tool call instead: when
+the gate is open AND direct_push_no_pr_hint applies to the delivery
+repo, it consults the semantic judge
+agentctl.advisor.judge_landing_discipline_ask on the ask's own text —
+unconditionally, with NO regex/content-based prefilter gating whether
+the judge is consulted (see that judge's docstring: an arbitrary-content
+regex is a fragile classification mechanism even when demoted to a
+filter, and must not gate consultation of the judge either) — and DENIES
+the tool call only when the judge confirms the menu proposes a
+PR/merge-review delivery path. Fail-open in every other case (gate
+closed, hint inactive, judge unavailable/errors/times out, or the judge
+says the menu already proposes direct push).
+
+Exit 0 always; emit stdout (becomes additional system context) on the
+UserPromptSubmit path, or a PreToolUse deny JSON on the PreToolUse path.
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib import config_root  # noqa: E402
+from lib import judge_ledger  # noqa: E402
+
+# judge_ledger itself must import cleanly above for this to record anything —
+# it is stdlib-only (see its own module docstring) and is what every other
+# import failure here needs a working ledger to be recorded against.
+try:
+    from lib import config_root  # noqa: E402
+    from lib import judge_budget  # noqa: E402
+    from lib.host_llm import JUDGE_CHILD_ENV_VAR  # noqa: E402
+    from lib.ask_text import flat_text  # noqa: E402
+    from agentctl import advisor as _advisor  # noqa: E402
+except BaseException as exc:
+    judge_ledger.import_failed("landing_discipline", f"{type(exc).__name__}: {exc}")
+    raise
 
 try:
     from difficulty_channel import authority  # noqa: E402
@@ -108,6 +143,37 @@ UNPUSHED_BRANCH_HINT = (
     "branch is pre-authorized (§ Acting without asking #4). Never leave the "
     "push as a passive 'tell me if you want to push'. Full landing "
     "discipline: memory-global/leaves/landing-discipline.md."
+)
+
+# Safe-by-default kill-switch for the PreToolUse judge consult: unset or any
+# value other than "0" leaves the classifier enabled, matching every other
+# semantic judge's env convention in this repo.
+_LANDING_DISCIPLINE_KILLSWITCH_ENV = "CLAUDE_LANDING_DISCIPLINE_SEMANTIC"
+
+# This hook's own whole-invocation judge budget for the single
+# judge_landing_discipline_ask call (K=1 — HOOK_CALL_SEQUENCE in
+# lib/judge_latency.py declares one call for this hook), so at K=1 the budget
+# IS the per-call ceiling. lib/judge_latency.call_ceiling_s("landing_discipline")
+# is 17s (ceil(max=15.38)+1); 22s gives 5s of real headroom over that measured
+# ceiling, joining the `>=` shape every other single-call hook here already
+# uses rather than an equality tie — see
+# test_a_single_call_hooks_budget_is_never_what_truncates_its_call in
+# scripts/tests/test_judge_latency.py.
+_LANDING_DISCIPLINE_JUDGE_BUDGET_S = 22
+
+# Below this remaining budget the call cannot plausibly finish and would only
+# spend the wait on a guaranteed timeout — lib/judge_latency.call_floor_s(
+# "landing_discipline") = ceil(p90=6.37) = 7, comfortably above the fastest
+# run observed (3.88s).
+_LANDING_DISCIPLINE_JUDGE_MIN_CALL_S = 7
+
+_LANDING_DISCIPLINE_DENY_REASON = (
+    "this ask's menu appears to propose a pull-request / merge-review "
+    "delivery path, but this repo requires direct push/fast-forward into "
+    "trunk with no distinct human reviewer gating merge (per "
+    "memory-global/leaves/landing-discipline.md). Rework the option(s) to "
+    "land by direct push (`python3 scripts/land-branch.py`) instead of "
+    "opening a PR."
 )
 
 MAX_WORDS = 6
@@ -312,10 +378,104 @@ def merged_leftover_hint(repo_dir: str, trunk: str = "main", remote: str = "orig
     return MERGED_LEFTOVER_HINT.format(trunk=trunk, branches=", ".join(leftovers))
 
 
+def decide(payload: dict) -> tuple[str, str]:
+    """PreToolUse/AskUserQuestion decision: ("deny", reason) or ("allow", "").
+
+    Opened as the very first statement, before resolution_gate_open or
+    _delivery_repo_dir ever touch a state file — mirroring every sibling
+    decide()'s deadline-first discipline (see hook-plan-delivery-gate.py's
+    decide() docstring): the deadline must be live before the first read or
+    it quietly spends part of its own headroom before the budget ever knows
+    the clock started."""
+    budget = judge_budget.JudgeBudget(
+        _LANDING_DISCIPLINE_JUDGE_BUDGET_S, _LANDING_DISCIPLINE_JUDGE_MIN_CALL_S,
+        clock=time.monotonic,
+    )
+    if payload.get("tool_name") != "AskUserQuestion":
+        return "allow", ""
+    session_id = payload.get("session_id") or ""
+    if not resolution_gate_open(session_id):
+        return "allow", ""
+    repo_dir = _delivery_repo_dir(
+        session_id,
+        payload.get("cwd") or str(Path(__file__).resolve().parent),
+    )
+    try:
+        hint = direct_push_no_pr_hint(repo_dir)
+    except Exception:
+        hint = None
+    if not hint:
+        return "allow", ""
+
+    ask_text = flat_text(payload.get("tool_input") or {})
+    # No prefilter, by explicit design: judge_landing_discipline_ask's own
+    # docstring states that an arbitrary-content regex is a fragile
+    # classification mechanism even when demoted to a filter rather than the
+    # decision-maker, and must not gate consultation of this judge either —
+    # every ask that reaches this point (gate open, hint applies) consults
+    # the judge directly.
+    judge_ledger.entered("landing_discipline", prefilter_fired=True)
+    remaining_before_call, call_timeout = budget.remaining_and_timeout(
+        _LANDING_DISCIPLINE_JUDGE_BUDGET_S
+    )
+    if call_timeout is None:
+        judge_ledger.decided(
+            "landing_discipline", stage="budget", verdict=False,
+            reason="budget exhausted before call (fail-open)",
+            remaining=remaining_before_call, threshold=None,
+            ceiling=_LANDING_DISCIPLINE_JUDGE_BUDGET_S,
+        )
+        return "allow", ""
+    proposes_pr, _reason = _advisor.judge_landing_discipline_ask(
+        ask_text,
+        _advisor.subprocess_runner,
+        enabled=os.environ.get(_LANDING_DISCIPLINE_KILLSWITCH_ENV) != "0",
+        timeout=call_timeout,
+        remaining=remaining_before_call,
+        ceiling=_LANDING_DISCIPLINE_JUDGE_BUDGET_S,
+    )
+    if proposes_pr:
+        # Printed here, in the same scope as the judge_landing_discipline_ask
+        # call above, rather than via a helper main() invokes afterward --
+        # crutch-inventory.py's judge-guard check credits a hard-outcome sink
+        # (a permissionDecision=deny dict literal) only when a judge_* call
+        # appears in that SAME function scope, not merely in the call graph.
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": _LANDING_DISCIPLINE_DENY_REASON,
+            }
+        }))
+        return "deny", _LANDING_DISCIPLINE_DENY_REASON
+    return "allow", ""
+
+
 def main() -> int:
+    if os.environ.get(JUDGE_CHILD_ENV_VAR):
+        return 0  # a sandboxed judge subprocess, not a real user turn — allow, no opinion
+
     try:
         payload = json.load(sys.stdin)
     except Exception:
+        return 0
+    if not isinstance(payload, dict):
+        return 0
+
+    if payload.get("tool_name") == "AskUserQuestion":
+        judge_ledger.hook_start("landing_discipline")
+        judge_ledger.source_from_payload(payload)
+        try:
+            decision, _reason = decide(payload)
+            has_directive = decision == "deny"
+            judge_ledger.final(has_directive=has_directive)
+            # decide() itself prints the deny JSON (same scope as its judge
+            # call, see decide()'s comment) -- reaching here without an
+            # exception means that print, if any, already succeeded.
+            judge_ledger.emitted(ok=True, had_directive=has_directive)
+        except Exception as exc:
+            judge_ledger.discarded(reason=repr(exc))
+            return 0  # fail-open — a hook must never wedge the ask
         return 0
 
     if resolution_gate_open(payload.get("session_id") or ""):

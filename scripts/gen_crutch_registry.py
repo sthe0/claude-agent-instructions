@@ -175,6 +175,20 @@ CODE_PARTITIONS = [
         "judge's call.",
     ),
     (
+        "scripts/hook-resolution-reminder.py (judge-guarded)",
+        lambda f: f == "scripts/hook-resolution-reminder.py",
+        "semantic-guarded",
+        "keep",
+        "decide()'s PreToolUse/AskUserQuestion branch runs "
+        "agentctl.advisor.judge_landing_discipline_ask (fail-open semantic judge) "
+        "before building the deny payload, and — unlike the other judge-guarded "
+        "rows above — deliberately WITHOUT a keyword prefilter gating whether the "
+        "judge is even consulted: an explicit correction (2026-08-27) that an "
+        "arbitrary-content regex is a fragile classifier even demoted to a "
+        "filter, so this hook always asks the judge whenever its gate-open + "
+        "hint-active precondition holds, and only the judge's verdict decides.",
+    ),
+    (
         "scripts/hook-*.py (other guardian hooks)",
         lambda f: Path(f).name.startswith("hook-"),
         "structural",
