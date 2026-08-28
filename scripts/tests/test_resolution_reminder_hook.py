@@ -610,8 +610,10 @@ def test_pretooluse_allows_when_direct_push_hint_is_inactive(monkeypatch, capsys
 
 def test_pretooluse_denies_when_judge_confirms_pr_proposing_menu(monkeypatch, capsys, tmp_path):
     """Gate open + hint active + judge verdict True -> a PreToolUse deny JSON,
-    with a bland ask text -- proving no keyword-based prefilter drives the
-    verdict, since the judge alone decides."""
+    for a menu that explicitly proposes a PR -- proving the judge's verdict
+    (not a keyword prefilter) is what the deny is keyed on, since a bland ask
+    text is proven to reach the SAME judge call by the sibling test just below
+    (test_pretooluse_calls_judge_even_when_ask_text_carries_no_pr_vocabulary)."""
     mod = _load_module()
     session_id = _arm_gate(mod, monkeypatch, tmp_path)
     _suppress_other_hints(mod, monkeypatch)
@@ -629,6 +631,36 @@ def test_pretooluse_denies_when_judge_confirms_pr_proposing_menu(monkeypatch, ca
     assert reason == mod._LANDING_DISCIPLINE_DENY_REASON
 
 
+def test_pretooluse_calls_judge_even_when_ask_text_carries_no_pr_vocabulary(monkeypatch, capsys, tmp_path):
+    """Case (4) / principle.refutation: the judge is invoked even for an ask
+    whose text carries NO PR/merge/review vocabulary at all -- proving no
+    content-based prefilter ever short-circuits consultation. A call-tracking
+    fake records the ask text it actually received and returns a compliant
+    ("does not propose a PR") verdict; the result must be allow AND the judge
+    must have been called with the bland text flowing all the way through."""
+    mod = _load_module()
+    session_id = _arm_gate(mod, monkeypatch, tmp_path)
+    _suppress_other_hints(mod, monkeypatch)
+    monkeypatch.setattr(mod.authority, "is_author", lambda *a, **k: True)
+    called = []
+
+    def _tracking_judge(ask_text, *a, **k):
+        called.append(ask_text)
+        return False, ""
+
+    monkeypatch.setattr(mod._advisor, "judge_landing_discipline_ask", _tracking_judge)
+    core_repo = str(mod.authority.REPO_ROOT)
+    bland_text = "Which logging level should we default to in staging?"
+
+    rc, out = _run(monkeypatch, capsys, mod,
+                    _ask_payload(session_id, core_repo, text=bland_text))
+
+    assert rc == 0
+    assert _deny_reason(out) is None
+    assert called
+    assert bland_text in called[0]
+
+
 def test_pretooluse_allows_when_judge_says_menu_already_proposes_direct_push(monkeypatch, capsys, tmp_path):
     mod = _load_module()
     session_id = _arm_gate(mod, monkeypatch, tmp_path)
@@ -640,6 +672,32 @@ def test_pretooluse_allows_when_judge_says_menu_already_proposes_direct_push(mon
 
     rc, out = _run(monkeypatch, capsys, mod, _ask_payload(session_id, core_repo))
 
+    assert rc == 0
+    assert _deny_reason(out) is None
+
+
+def test_pretooluse_gate_is_escapable_not_a_wedge(monkeypatch, capsys, tmp_path):
+    """Case (6) / principle.refutation: the gate denies a PR-proposing menu and
+    then allows once the menu is corrected to propose a direct push instead --
+    proving the gate is escapable by construction (a corrected ask converges to
+    allow), not a wedge that denies every AskUserQuestion once armed."""
+    mod = _load_module()
+    session_id = _arm_gate(mod, monkeypatch, tmp_path)
+    _suppress_other_hints(mod, monkeypatch)
+    monkeypatch.setattr(mod.authority, "is_author", lambda *a, **k: True)
+    core_repo = str(mod.authority.REPO_ROOT)
+
+    monkeypatch.setattr(mod._advisor, "judge_landing_discipline_ask",
+                         lambda *a, **k: (True, ""))
+    rc, out = _run(monkeypatch, capsys, mod,
+                    _ask_payload(session_id, core_repo, text="Open a PR for review?"))
+    assert rc == 0
+    assert _deny_reason(out) == mod._LANDING_DISCIPLINE_DENY_REASON
+
+    monkeypatch.setattr(mod._advisor, "judge_landing_discipline_ask",
+                         lambda *a, **k: (False, ""))
+    rc, out = _run(monkeypatch, capsys, mod,
+                    _ask_payload(session_id, core_repo, text="Push the commit directly to main now?"))
     assert rc == 0
     assert _deny_reason(out) is None
 
