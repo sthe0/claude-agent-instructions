@@ -1540,6 +1540,14 @@ disposition = "keep"
 ground = "Reads only ctx.self_improvement_feedback, which build_context() sets from si_feedback_detect.find_signals (prefilter) gated by a semantic judge — this guardian itself is pure boolean logic over that frozen result, per its own docstring (\"Pure: reads only the frozen ctx booleans\")."
 
 [[entry]]
+id = "6555a6f96dc22349"
+domain = "code"
+file = "scripts/improvement-scan.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
 id = "f33909091ef37127"
 domain = "code"
 file = "scripts/improvement-scan.py"

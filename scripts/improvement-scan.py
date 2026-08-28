@@ -51,6 +51,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -198,6 +199,40 @@ class CostSignal:
             raise ValueError("a measured CostSignal must name its basis")
 
 
+# A backlog item's `cost_estimate` is free text (a model's best guess) — only a value
+# shaped EXACTLY like a rate becomes a measured CostSignal; a range, a prose estimate,
+# or a non-matching currency falls through to `measured=False` rather than guessing a
+# normalization (CLAUDE.md's rule-vs-perception split: the structural match is the
+# rule, and the model's classification of significance stays out of this parse).
+_WEEKS_PER_MONTH = 4.345
+_USD_RATE_RE = re.compile(r"^\$?(\d+(?:\.\d+)?)\s*/\s*(week|wk|month|mo)$", re.IGNORECASE)
+_TOKEN_RATE_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*tokens?\s*/\s*(week|wk|month|mo)$", re.IGNORECASE)
+
+
+def parse_backlog_cost_rate(cost_estimate: "str | None") -> CostSignal:
+    """Structurally parse a backlog item's `cost_estimate` into a CostSignal.
+
+    Matches `$40/week`, `40/month`, `120 tokens/week` (case-insensitive); a monthly
+    rate is normalized to weekly by dividing by `_WEEKS_PER_MONTH`. Anything else —
+    including a range, a prose estimate, or `"not estimable: n/a"` — yields
+    `measured=False`, never an ambiguous parse.
+    """
+    text = (cost_estimate or "").strip()
+    for pattern, unit in ((_USD_RATE_RE, "usd"), (_TOKEN_RATE_RE, "tokens")):
+        m = pattern.match(text)
+        if not m:
+            continue
+        value = float(m.group(1))
+        period = m.group(2).lower()
+        weekly = value if period in ("week", "wk") else value / _WEEKS_PER_MONTH
+        return CostSignal(
+            usd_per_week=weekly,
+            basis=f"backlog cost_estimate rate ({unit}): {text!r}",
+            measured=True,
+        )
+    return CostSignal(measured=False, basis="backlog triage rubric (proxy, not measured)")
+
+
 @dataclass(frozen=True)
 class Finding:
     """One standing improvement-scan finding, from either producer.
@@ -217,6 +252,10 @@ class Finding:
     cost_signal: CostSignal
     source_ref: str
     recommended_next_step: str
+    # The triage rubric's score, carried through ONLY so the `report` renderer can
+    # order the unmeasured band without re-deriving it; never compared against a
+    # measured CostSignal (the two bands never mix — see `_rank_findings`).
+    proxy_score: "float | None" = None
 
     def __post_init__(self) -> None:
         if not self.kind:
@@ -235,12 +274,36 @@ class Finding:
 def _finding_record(finding: Finding) -> dict:
     """Adapt a Finding to the store's generic (kind, path, detail) shape.
 
-    The store's schema predates this producer and stays generic across all
-    three producers; the richer fields (`cost_signal`, `evidence`) live only in
-    the Finding object the `report` renderer (stage 5) consumes directly, not
-    in the durable closure-state row.
+    The store's schema predates this producer and stays generic across all three
+    producers, so the richer fields (`cost_signal`, `evidence`, `functional_ground`,
+    `recommended_next_step`, `proxy_score`) are JSON-encoded into `detail` — the only
+    field the generic row shape leaves free — so the `report` renderer (stage 5) can
+    reconstruct a full Finding from a bare store file, without needing the run that
+    produced it still in memory. Confirmed safe: no existing consumer of an advisory
+    (non-actionable) row's `detail` prints it as human text (self-diagnose-due's
+    `report()` only counts advisory rows; `describe()` is called on actionable rows
+    only) — see `finding_key`'s callers in self_diagnose_store.py.
     """
-    return {"kind": finding.kind, "path": finding.signal, "detail": finding.title}
+    payload = {
+        "title": finding.title,
+        "functional_ground": finding.functional_ground,
+        "evidence": list(finding.evidence),
+        "cost_signal": {
+            "usd_per_week": finding.cost_signal.usd_per_week,
+            "attention_per_week": finding.cost_signal.attention_per_week,
+            "stability_per_week": finding.cost_signal.stability_per_week,
+            "basis": finding.cost_signal.basis,
+            "measured": finding.cost_signal.measured,
+        },
+        "source_ref": finding.source_ref,
+        "recommended_next_step": finding.recommended_next_step,
+        "proxy_score": finding.proxy_score,
+    }
+    return {
+        "kind": finding.kind,
+        "path": finding.signal,
+        "detail": json.dumps(payload, ensure_ascii=False),
+    }
 
 
 def store_findings(
@@ -284,6 +347,10 @@ class PriorBoardItem:
     evidence: "tuple[str, ...]" = ()
     recommended_next_step: str = "planner"
     blocked_by: "tuple[str, ...]" = ()
+    # The raw classified `cost_estimate` text, carried so a re-derived Finding for a
+    # CARRIED (unchanged) item can recompute its CostSignal via
+    # `parse_backlog_cost_rate` without a fresh classifier call.
+    cost_estimate: str = ""
 
 
 @dataclass(frozen=True)
@@ -328,6 +395,7 @@ def load_prior_board(path: "str | Path") -> PriorBoard:
             evidence=tuple(entry.get("evidence") or ()),
             recommended_next_step=str(entry.get("recommended_next_step", "planner")),
             blocked_by=tuple(entry.get("blocked_by") or ()),
+            cost_estimate=str(entry.get("cost_estimate", "")),
         )
     return PriorBoard(
         schema=BOARD_SCHEMA, generated_at=str(raw.get("generated_at", "")), items=items
@@ -352,6 +420,7 @@ def write_board(board: PriorBoard, path: "str | Path") -> None:
                 "evidence": list(item.evidence),
                 "recommended_next_step": item.recommended_next_step,
                 "blocked_by": list(item.blocked_by),
+                "cost_estimate": item.cost_estimate,
             }
             for ref, item in board.items.items()
         },
@@ -911,6 +980,7 @@ def classify_and_score(
                 evidence=evidence,
                 recommended_next_step=c["recommended_next_step"],
                 blocked_by=tuple(c.get("blocked_by") or ()),
+                cost_estimate=c.get("cost_estimate", ""),
             )
             continue
         score = score_item(
@@ -927,6 +997,7 @@ def classify_and_score(
             evidence=evidence,
             recommended_next_step=c["recommended_next_step"],
             blocked_by=tuple(c.get("blocked_by") or ()),
+            cost_estimate=c.get("cost_estimate", ""),
         )
 
     all_items = {**carried, **fresh}
@@ -946,6 +1017,7 @@ def classify_and_score(
             evidence=item.evidence,
             recommended_next_step=item.recommended_next_step,
             blocked_by=item.blocked_by,
+            cost_estimate=item.cost_estimate,
         )
         if final_items[ref].rank is not None:
             findings.append(
@@ -955,14 +1027,171 @@ def classify_and_score(
                     title=final_items[ref].title,
                     functional_ground=final_items[ref].functional_ground,
                     evidence=final_items[ref].evidence,
-                    cost_signal=CostSignal(measured=False, basis="backlog triage rubric (proxy, not measured)"),
+                    cost_signal=parse_backlog_cost_rate(final_items[ref].cost_estimate),
                     source_ref=ref,
                     recommended_next_step=final_items[ref].recommended_next_step,
+                    proxy_score=final_items[ref].score,
                 )
             )
 
     board = PriorBoard(schema=BOARD_SCHEMA, generated_at=now.isoformat(), items=final_items)
     return board, findings, no_urgency_signal
+
+
+# --- report: one cost-first ranking over both producers' findings ----------
+# Reads ONLY the store (a bare `--store <path>` is enough to render) — the richer
+# fields survive there because `_finding_record` JSON-encodes them into `detail`.
+# `--board` is accepted for CLI-surface completeness but unused: the store alone
+# fully determines report content, so there is nothing yet for it to add.
+
+# The rendered command TEXT for each closed-vocabulary next step — printed only,
+# never executed (no subprocess/network reach anywhere in this section; asserted
+# by the module-wide AST purity test).
+_NEXT_STEP_COMMANDS = {
+    "self-improvement": "Skill(self-improvement)",
+    "planner": "Skill(planner)",
+}
+
+
+def _render_next_step(step: str, finding: dict) -> str:
+    if step in _NEXT_STEP_COMMANDS:
+        return _NEXT_STEP_COMMANDS[step]
+    cost = finding["cost_signal"]
+    cost_text = cost["basis"] if cost["measured"] else "not estimable: unmeasured"
+    return (
+        f"scripts/file-difficulty.py --target {finding['path']!r} "
+        f"--ground {finding['functional_ground']!r} --cost {cost_text!r}"
+    )
+
+
+def _decode_finding_detail(row: dict) -> dict:
+    try:
+        return json.loads(row.get("detail") or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+
+def _report_findings(store_path: "str | Path | None") -> "list[dict]":
+    """Every OPEN improvement-scan row, decoded back into report-shaped dicts."""
+    rows = sds.advisory_open(sds.load_rows(store_path))
+    out: "list[dict]" = []
+    for row in rows:
+        if row.get("source") != sds.SOURCE_IMPROVEMENT_SCAN:
+            continue
+        if row.get("kind") not in (sds.KIND_BACKLOG_ITEM, sds.KIND_TELEMETRY_PATTERN):
+            continue
+        payload = _decode_finding_detail(row)
+        cost = payload.get("cost_signal") or {}
+        out.append({
+            "key": row.get("key", ""),
+            "source": row.get("kind", ""),
+            "path": row.get("path", ""),
+            "title": payload.get("title", ""),
+            "functional_ground": payload.get("functional_ground", ""),
+            "evidence": list(payload.get("evidence") or ()),
+            "cost_signal": {
+                "usd_per_week": cost.get("usd_per_week"),
+                "attention_per_week": cost.get("attention_per_week"),
+                "stability_per_week": cost.get("stability_per_week"),
+                "basis": cost.get("basis", ""),
+                "measured": bool(cost.get("measured", False)),
+            },
+            "proxy_score": payload.get("proxy_score"),
+            "source_ref": payload.get("source_ref", ""),
+            "recommended_next_step": payload.get("recommended_next_step", "planner"),
+            "first_seen": row.get("first_seen", ""),
+            "times_surfaced": row.get("times_surfaced", 0),
+            "status": row.get("status", "open"),
+        })
+    return out
+
+
+def _cost_sort_key(cost: dict) -> tuple:
+    return (
+        cost["usd_per_week"] or 0.0,
+        cost["attention_per_week"] or 0.0,
+        cost["stability_per_week"] or 0.0,
+    )
+
+
+def _proxy_sort_key(finding: dict) -> tuple:
+    score = finding.get("proxy_score")
+    return (-(score if score is not None else float("-inf")), finding["key"])
+
+
+def _rank_findings(findings: "list[dict]") -> "list[dict]":
+    """Measured band first (cost, then attention, then stability, descending), then
+    the unmeasured band (proxy score descending) — NEVER interleaved, even when a
+    proxy score is numerically higher than a measured finding's cost."""
+    measured = sorted(
+        (f for f in findings if f["cost_signal"]["measured"]),
+        key=lambda f: _cost_sort_key(f["cost_signal"]), reverse=True,
+    )
+    unmeasured = sorted(
+        (f for f in findings if not f["cost_signal"]["measured"]),
+        key=_proxy_sort_key,
+    )
+    return measured + unmeasured
+
+
+def _format_cost(cost: dict) -> str:
+    if not cost["measured"]:
+        return "unmeasured (" + (cost["basis"] or "no basis given") + ")"
+    parts = []
+    if cost["usd_per_week"] is not None:
+        parts.append(f"**{cost['usd_per_week']:.2f}/week**")
+    if cost["attention_per_week"] is not None:
+        parts.append(f"{cost['attention_per_week']:.2f} attention/week")
+    if cost["stability_per_week"] is not None:
+        parts.append(f"{cost['stability_per_week']:.2f} stability/week")
+    return ", ".join(parts) + f" ({cost['basis']})"
+
+
+def _render_finding_md(f: dict) -> str:
+    evidence = ", ".join(f["evidence"]) if f["evidence"] else "(none)"
+    return "\n".join([
+        f"### {f['title']}",
+        f"- **Functional ground:** {f['functional_ground']}",
+        f"- **Cost:** {_format_cost(f['cost_signal'])}",
+        f"- **Evidence:** {evidence}",
+        f"- **Store key:** `{f['key']}` — {f['status']}, surfaced {f['times_surfaced']}x, "
+        f"first seen {f['first_seen']}",
+        f"- **Recommended next step:** `{_render_next_step(f['recommended_next_step'], f)}`",
+    ])
+
+
+def _render_markdown(ranked: "list[dict]") -> str:
+    measured = [f for f in ranked if f["cost_signal"]["measured"]]
+    unmeasured = [f for f in ranked if not f["cost_signal"]["measured"]]
+    parts = ["# Improvement-scan report", ""]
+    if measured:
+        parts.append("## Measured cost signal — ranked by cost, then attention, then stability")
+        parts.append("")
+        for f in measured:
+            parts.append(_render_finding_md(f))
+            parts.append("")
+    if unmeasured:
+        parts.append("## No measured cost signal — ordered by the triage rubric's proxy score")
+        parts.append("")
+        for f in unmeasured:
+            parts.append(_render_finding_md(f))
+            parts.append("")
+    if not measured and not unmeasured:
+        parts.append("No open improvement-scan findings.")
+    return "\n".join(parts).rstrip() + "\n"
+
+
+def _render_json(ranked: "list[dict]") -> str:
+    return json.dumps({"findings": ranked}, ensure_ascii=False, indent=2)
+
+
+def _cmd_report(args: argparse.Namespace) -> int:
+    ranked = _rank_findings(_report_findings(args.store))
+    if args.format == "json":
+        print(_render_json(ranked))
+    else:
+        print(_render_markdown(ranked))
+    return 0
 
 
 # --- CLI ----------------------------------------------------------------
@@ -1091,11 +1320,6 @@ def _cmd_telemetry(args: argparse.Namespace) -> int:
     return 2
 
 
-def _cmd_report(args: argparse.Namespace) -> int:
-    print("improvement-scan report: not implemented in this stage", file=sys.stderr)
-    return 2
-
-
 def main(argv: "list[str] | None" = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--dry-run", action="store_true", help="never write, only print")
@@ -1137,6 +1361,13 @@ def main(argv: "list[str] | None" = None) -> int:
     p_telemetry.set_defaults(func=_cmd_telemetry)
 
     p_report = sub.add_parser("report", help="render the unified ranked report from stored findings")
+    p_report.add_argument("--store", default=None, help="findings store path to render")
+    p_report.add_argument(
+        "--board", default=None,
+        help="backlog board.json (accepted for CLI-surface parity; unused — the store alone "
+        "fully determines report content)",
+    )
+    p_report.add_argument("--format", choices=("md", "json"), default="md", help="output format")
     p_report.set_defaults(func=_cmd_report)
 
     args = parser.parse_args(argv)
