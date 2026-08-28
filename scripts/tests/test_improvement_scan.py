@@ -272,11 +272,20 @@ def test_help_exits_zero_and_lists_the_three_subcommands(capsys):
         assert sub in out
 
 
-@pytest.mark.parametrize("sub", ["backlog", "telemetry", "report"])
+@pytest.mark.parametrize("sub", ["telemetry", "report"])
 def test_each_stubbed_subcommand_exits_2_and_names_itself(sub, capsys):
     assert scan.main([sub]) == 2
     err = capsys.readouterr().err
     assert "not implemented in this stage" in err
+
+
+def test_backlog_with_no_mode_flags_exits_2_and_names_itself(capsys):
+    """`backlog` is no longer a stage-2 stub (stage 3 implements it), so it gets
+    its own usage-error message rather than the generic "not implemented" one."""
+    assert scan.main(["backlog"]) == 2
+    err = capsys.readouterr().err
+    assert "backlog" in err
+    assert "--emit-worklist" in err
 
 
 def test_no_subcommand_is_a_usage_error():

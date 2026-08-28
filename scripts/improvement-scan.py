@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import sys
@@ -61,6 +62,31 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import self_diagnose_store as sds  # noqa: E402
+from difficulty_channel import DifficultyRecord, Severity, get_channel, is_registered  # noqa: E402
+from difficulty_channel.adapters import load_adapter  # noqa: E402
+from difficulty_channel.port import StreamUnsupported  # noqa: E402
+
+REPO_ROOT = SCRIPT_DIR.parent
+CONFIG_PATH = REPO_ROOT / "config.md"
+
+# Reuse the existing channel-set and clustering primitives rather than re-deriving them
+# (both hyphenated filenames -> load by path, the same idiom core-difficulty-digest.py itself
+# uses for record-experience.py). `core-difficulty-digest.py` is never modified by this stage.
+_DIGEST_SPEC = importlib.util.spec_from_file_location(
+    "core_difficulty_digest_for_improvement_scan", SCRIPT_DIR / "core-difficulty-digest.py"
+)
+_digest = importlib.util.module_from_spec(_DIGEST_SPEC)
+sys.modules[_DIGEST_SPEC.name] = _digest  # dataclass() needs cls.__module__ resolvable in sys.modules
+_DIGEST_SPEC.loader.exec_module(_digest)
+default_channels = _digest.default_channels
+
+_REC_SPEC = importlib.util.spec_from_file_location(
+    "record_experience_for_improvement_scan", SCRIPT_DIR / "record-experience.py"
+)
+_rec_for_scan = importlib.util.module_from_spec(_REC_SPEC)
+sys.modules[_REC_SPEC.name] = _rec_for_scan
+_REC_SPEC.loader.exec_module(_rec_for_scan)
+cluster_by_ground = _rec_for_scan.cluster_by_ground
 
 BOARD_SCHEMA = 1
 
@@ -69,6 +95,76 @@ BOARD_SCHEMA = 1
 # instruction to do something else — validated at construction, not at render
 # time, so an invalid value fails at the producer that emitted it.
 RECOMMENDED_NEXT_STEPS = frozenset({"self-improvement", "planner", "file-difficulty"})
+
+# --- backlog triage rubric: closed vocabularies + config-keyed weights ------
+# Transcribed from memory-global/leaves/backlog-triage-practice.md, not reinvented.
+# score = breadth_weight * recurrence_mass / cost_to_resolve_usd
+# cost_to_resolve_usd = budget_tier_usd / in_flight_coefficient
+
+BREADTH_WEIGHTS = {"narrow": 1, "shared-mechanism": 3, "universal": 8}
+IN_FLIGHT_COEFFICIENTS = {"none": 1.0, "clear-direction": 0.5, "plan-approved": 0.3}
+
+# cost_to_resolve tier -> the config.md key carrying its dollar figure. The values
+# ($1.00/$3.00/$8.00) are read BY KEY, never hardcoded, per CLAUDE.md's rule-vs-
+# perception split; only the fallback (used when config.md is unreadable) is a literal.
+_BUDGET_TIER_KEYS = {
+    "small": "budget-small-usd",
+    "medium": "budget-medium-usd",
+    "large": "budget-large-usd",
+}
+_BUDGET_TIER_FALLBACKS = {"small": 1.00, "medium": 3.00, "large": 8.00}
+
+
+def _read_config_float(key: str, config_path: "str | Path" = CONFIG_PATH) -> "float | None":
+    """The first float-parseable cell on config.md's ``| `key` |`` row, or None.
+
+    `core_difficulty_digest.read_mass_threshold` already reads config.md by key but
+    matches cells with `cell.isdigit()`, which rejects the float budget values
+    (`1.00`/`3.00`/`8.00`) this rubric needs — hence this separate, float-permissive
+    reader rather than reusing that one.
+    """
+    try:
+        lines = Path(config_path).read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return None
+    marker = f"`{key}`"
+    for line in lines:
+        if marker not in line or not line.lstrip().startswith("|"):
+            continue
+        for cell in line.split("|"):
+            cell = cell.strip().strip("`")
+            try:
+                return float(cell)
+            except ValueError:
+                continue
+    return None
+
+
+def read_budget_usd(tier: str, config_path: "str | Path" = CONFIG_PATH) -> float:
+    value = _read_config_float(_BUDGET_TIER_KEYS[tier], config_path)
+    return value if value is not None else _BUDGET_TIER_FALLBACKS[tier]
+
+
+def _validate_vocab(field_name: str, value, vocab) -> None:
+    if value not in vocab:
+        raise ValueError(f"{field_name} {value!r} is not one of {sorted(vocab)}")
+
+
+def score_item(
+    breadth: str,
+    recurrence_mass: float,
+    cost_to_resolve: str,
+    in_flight: str,
+    *,
+    config_path: "str | Path" = CONFIG_PATH,
+) -> float:
+    """The deterministic half of the triage rubric — every input is a closed-vocabulary
+    enum value the model supplied, never free text classified by regex."""
+    _validate_vocab("breadth", breadth, BREADTH_WEIGHTS)
+    _validate_vocab("cost_to_resolve", cost_to_resolve, _BUDGET_TIER_KEYS)
+    _validate_vocab("in_flight", in_flight, IN_FLIGHT_COEFFICIENTS)
+    cost_to_resolve_usd = read_budget_usd(cost_to_resolve, config_path) / IN_FLIGHT_COEFFICIENTS[in_flight]
+    return BREADTH_WEIGHTS[breadth] * recurrence_mass / cost_to_resolve_usd
 
 
 # --- the shared finding model ------------------------------------------------
@@ -174,6 +270,13 @@ class PriorBoardItem:
     score: "float | None"
     rank: "int | None"
     source_digest: str
+    # Carried alongside classification/score so a re-emitted Finding for an UNCHANGED
+    # item never needs a fresh classifier call or a live re-pull to reconstruct itself.
+    title: str = ""
+    functional_ground: str = ""
+    evidence: "tuple[str, ...]" = ()
+    recommended_next_step: str = "planner"
+    blocked_by: "tuple[str, ...]" = ()
 
 
 @dataclass(frozen=True)
@@ -213,6 +316,11 @@ def load_prior_board(path: "str | Path") -> PriorBoard:
             score=entry.get("score"),
             rank=entry.get("rank"),
             source_digest=str(entry["source_digest"]),
+            title=str(entry.get("title", "")),
+            functional_ground=str(entry.get("functional_ground", "")),
+            evidence=tuple(entry.get("evidence") or ()),
+            recommended_next_step=str(entry.get("recommended_next_step", "planner")),
+            blocked_by=tuple(entry.get("blocked_by") or ()),
         )
     return PriorBoard(
         schema=BOARD_SCHEMA, generated_at=str(raw.get("generated_at", "")), items=items
@@ -223,8 +331,6 @@ def write_board(board: PriorBoard, path: "str | Path") -> None:
     """Replace the board atomically, mirroring self_diagnose_store.save_rows so
     a crash mid-write leaves the previous board intact rather than truncated.
     """
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "schema": board.schema,
         "generated_at": board.generated_at,
@@ -234,13 +340,16 @@ def write_board(board: PriorBoard, path: "str | Path") -> None:
                 "score": item.score,
                 "rank": item.rank,
                 "source_digest": item.source_digest,
+                "title": item.title,
+                "functional_ground": item.functional_ground,
+                "evidence": list(item.evidence),
+                "recommended_next_step": item.recommended_next_step,
+                "blocked_by": list(item.blocked_by),
             }
             for ref, item in board.items.items()
         },
     }
-    tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, p)
+    _atomic_write_json(payload, path)
 
 
 # --- telemetry resume seam: mtime-gated upsert -------------------------------
@@ -288,10 +397,331 @@ class LedgerCursor:
         self.sessions[session_id] = mtime
 
 
+# --- backlog producer: cross-source collection ------------------------------
+
+_STREAMS = ("report", "backlog")
+
+
+def collect_records(channel_names: "Iterable[str]") -> "tuple[list[DifficultyRecord], list[dict]]":
+    """Pull every stream of every named channel; never abort on one channel's failure.
+
+    Returns (records, coverage_gaps). A gap names {channel, stream, reason}, with
+    `reason` either "unsupported" (StreamUnsupported) or "collection-failed: <exc>"
+    (any other exception, including channel resolution itself) — never silenced,
+    never aborting collection of the remaining (channel, stream) pairs.
+    """
+    records: "list[DifficultyRecord]" = []
+    coverage_gaps: "list[dict]" = []
+    for name in channel_names:
+        try:
+            if not is_registered(name):
+                load_adapter(name)
+            channel = get_channel(name)
+        except Exception as exc:  # noqa: BLE001 - a channel must never abort the whole scan
+            for stream in _STREAMS:
+                coverage_gaps.append(
+                    {"channel": name, "stream": stream, "reason": f"collection-failed: {exc}"}
+                )
+            continue
+        for stream in _STREAMS:
+            try:
+                records.extend(channel.pull_stream(stream=stream))
+            except StreamUnsupported:
+                coverage_gaps.append({"channel": name, "stream": stream, "reason": "unsupported"})
+            except Exception as exc:  # noqa: BLE001 - same non-aborting contract as above
+                coverage_gaps.append(
+                    {"channel": name, "stream": stream, "reason": f"collection-failed: {exc}"}
+                )
+    return records, coverage_gaps
+
+
+def _item_ref(record: DifficultyRecord) -> str:
+    """The Phase-A diff key: the record's own stable ref, or (documented fallback,
+    exercised by no named test) a content hash when a channel supplies none."""
+    if record.ref:
+        return record.ref
+    return "noref:" + item_digest(record.functional_ground + "\0" + record.reporter, record.ts)
+
+
+def _backlog_text(record: DifficultyRecord) -> str:
+    """The subset of a record's fields that make it "the same item" for the four-bucket
+    diff — deliberately excluding `ts`: a date-only edit (e.g. GitHub's updated_at ticking
+    on an unrelated event) must not itself flip an item from unchanged to changed."""
+    return "\n".join([record.target, record.functional_ground, record.evidence, record.cost_estimate])
+
+
+def diff_backlog(
+    records: "list[DifficultyRecord]", prior: PriorBoard
+) -> "tuple[list, list, list[str], list[str]]":
+    """The four-bucket reconciliation: (new, changed, unchanged_refs, closed_refs).
+
+    `new`/`changed` are lists of (item_ref, DifficultyRecord); `closed` is every prior
+    item_ref absent from this run's live set — dropped without re-scoring, never
+    re-derived from a heuristic about what "probably" closed it.
+    """
+    live_refs: "set[str]" = set()
+    new_items: "list[tuple[str, DifficultyRecord]]" = []
+    changed_items: "list[tuple[str, DifficultyRecord]]" = []
+    unchanged_refs: "list[str]" = []
+    for record in records:
+        ref = _item_ref(record)
+        live_refs.add(ref)
+        text = _backlog_text(record)
+        if prior.is_unchanged(ref, text, "open"):
+            unchanged_refs.append(ref)
+        elif ref in prior.items:
+            changed_items.append((ref, record))
+        else:
+            new_items.append((ref, record))
+    closed_refs = [ref for ref in prior.items if ref not in live_refs]
+    return new_items, changed_items, unchanged_refs, closed_refs
+
+
+def build_worklist(
+    new_items: "list[tuple[str, DifficultyRecord]]",
+    changed_items: "list[tuple[str, DifficultyRecord]]",
+    coverage_gaps: "list[dict]",
+    closed_refs: "list[str]",
+    *,
+    now: "datetime | None" = None,
+) -> dict:
+    now = now or datetime.now(timezone.utc)
+    items = []
+    for bucket, batch in (("new", new_items), ("changed", changed_items)):
+        for ref, record in batch:
+            items.append(
+                {
+                    "item_ref": ref,
+                    "bucket": bucket,
+                    "title": record.target,
+                    "functional_ground": record.functional_ground,
+                    "severity": record.severity.value,
+                    "reporter": record.reporter,
+                    "evidence": record.evidence,
+                    "cost_estimate": record.cost_estimate,
+                    "source_digest": item_digest(_backlog_text(record), "open"),
+                }
+            )
+    return {
+        "schema": BOARD_SCHEMA,
+        "generated_at": now.isoformat(),
+        "coverage_gaps": coverage_gaps,
+        # Not itself an "item" (per the Phase-A contract, only new+changed are) — bookkeeping
+        # Phase B needs, since it has no live channel access of its own to re-derive "closed".
+        "closed_refs": list(closed_refs),
+        "items": items,
+    }
+
+
+def _atomic_write_json(payload: dict, path: "str | Path") -> None:
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, p)
+
+
+def write_worklist(worklist: dict, path: "str | Path") -> None:
+    _atomic_write_json(worklist, path)
+
+
+# --- backlog producer: classification + the deterministic scoring half -----
+
+def _constrained_rank(refs: "list[str]", items: "dict[str, PriorBoardItem]") -> "list[str]":
+    """Order `refs` by score descending, with a HARD partial order from `blocked_by`
+    edges: a blocked item never precedes its blocker, regardless of score. A blocker
+    absent from this board (already closed, or never existed) imposes no constraint.
+    A cycle among the remaining items gives up enforcing it (falls back to score order
+    for just those items) rather than looping forever.
+    """
+    remaining = sorted(refs, key=lambda r: (-(items[r].score or 0.0), r))
+    result: "list[str]" = []
+    guard = len(remaining) + 1
+    while remaining and guard:
+        guard -= 1
+        ready = [
+            r for r in remaining
+            if all(b not in remaining or b in result for b in items[r].blocked_by)
+        ]
+        if not ready:
+            ready = remaining  # a cycle: stop enforcing the order for what's left
+        pick = ready[0]
+        result.append(pick)
+        remaining.remove(pick)
+    return result
+
+
+def classify_and_score(
+    prior: PriorBoard,
+    classified: "dict[str, dict]",
+    closed_refs: "Iterable[str]",
+    *,
+    config_path: "str | Path" = CONFIG_PATH,
+    now: "datetime | None" = None,
+) -> "tuple[PriorBoard, list[Finding], list[str]]":
+    """Phase B: validate, cluster, score, rank, and merge. Returns (board, findings,
+    no_urgency_signal_refs).
+
+    Every classification vocabulary field is validated up front (test case: an
+    out-of-vocabulary value is rejected) before any item is scored, so a single bad
+    input never gets a partial, misleading board written from it.
+    """
+    now = now or datetime.now(timezone.utc)
+    closed = set(closed_refs)
+
+    for ref, c in classified.items():
+        _validate_vocab("breadth", c.get("breadth"), BREADTH_WEIGHTS)
+        _validate_vocab("cost_to_resolve", c.get("cost_to_resolve"), _BUDGET_TIER_KEYS)
+        _validate_vocab("in_flight", c.get("in_flight"), IN_FLIGHT_COEFFICIENTS)
+        _validate_vocab(
+            "recommended_next_step", c.get("recommended_next_step"), RECOMMENDED_NEXT_STEPS
+        )
+
+    # Every unchanged prior item is carried forward VERBATIM: no re-classification, no
+    # re-clustering, no rescoring — only a global rank recompute touches it (below).
+    carried = {
+        ref: item
+        for ref, item in prior.items.items()
+        if ref not in closed and ref not in classified
+    }
+
+    clusters = cluster_by_ground(
+        list(classified.items()), lambda kv: kv[1].get("functional_ground", "")
+    )
+    cluster_size = {ref: len(group) for group in clusters for ref, _c in group}
+
+    no_urgency_signal: "list[str]" = []
+    fresh: "dict[str, PriorBoardItem]" = {}
+    findings: "list[Finding]" = []
+    for ref, c in classified.items():
+        severity = Severity.parse(c.get("severity", "medium"))
+        other_cluster_count = cluster_size.get(ref, 1) - 1
+        recurrence_mass = severity.mass + other_cluster_count
+        evidence = tuple(e for e in (c.get("evidence"),) if e)
+        if other_cluster_count == 0:
+            # Operationalized "no severity signal AND no cluster" as a singleton cluster:
+            # every DifficultyRecord always carries a severity (the GitHub adapter
+            # defaults an unlabeled issue to MEDIUM), so "no signal" can't be observed
+            # post-parse — a lone item with no cluster-mates is the closest proxy.
+            no_urgency_signal.append(ref)
+            fresh[ref] = PriorBoardItem(
+                classification="no-urgency-signal",
+                score=None,
+                rank=None,
+                source_digest=c.get("source_digest", ""),
+                title=c.get("title", ref),
+                functional_ground=c.get("functional_ground", ""),
+                evidence=evidence,
+                recommended_next_step=c["recommended_next_step"],
+                blocked_by=tuple(c.get("blocked_by") or ()),
+            )
+            continue
+        score = score_item(
+            c["breadth"], recurrence_mass, c["cost_to_resolve"], c["in_flight"],
+            config_path=config_path,
+        )
+        fresh[ref] = PriorBoardItem(
+            classification=c["breadth"],
+            score=score,
+            rank=None,
+            source_digest=c.get("source_digest", ""),
+            title=c.get("title", ref),
+            functional_ground=c.get("functional_ground", ""),
+            evidence=evidence,
+            recommended_next_step=c["recommended_next_step"],
+            blocked_by=tuple(c.get("blocked_by") or ()),
+        )
+
+    all_items = {**carried, **fresh}
+    scored_refs = [ref for ref, item in all_items.items() if item.score is not None]
+    order = _constrained_rank(scored_refs, all_items)
+    rank_of = {ref: i + 1 for i, ref in enumerate(order)}
+
+    final_items: "dict[str, PriorBoardItem]" = {}
+    for ref, item in all_items.items():
+        final_items[ref] = PriorBoardItem(
+            classification=item.classification,
+            score=item.score,
+            rank=rank_of.get(ref),
+            source_digest=item.source_digest,
+            title=item.title,
+            functional_ground=item.functional_ground,
+            evidence=item.evidence,
+            recommended_next_step=item.recommended_next_step,
+            blocked_by=item.blocked_by,
+        )
+        if final_items[ref].rank is not None:
+            findings.append(
+                Finding(
+                    kind="backlog-item",
+                    signal=ref,
+                    title=final_items[ref].title,
+                    functional_ground=final_items[ref].functional_ground,
+                    evidence=final_items[ref].evidence,
+                    cost_signal=CostSignal(measured=False, basis="backlog triage rubric (proxy, not measured)"),
+                    source_ref=ref,
+                    recommended_next_step=final_items[ref].recommended_next_step,
+                )
+            )
+
+    board = PriorBoard(schema=BOARD_SCHEMA, generated_at=now.isoformat(), items=final_items)
+    return board, findings, no_urgency_signal
+
+
 # --- CLI ----------------------------------------------------------------
 
+def _run_backlog_phase_a(args: argparse.Namespace) -> int:
+    prior = load_prior_board(args.prior) if args.prior else _empty_board()
+    channels = args.channels or default_channels()
+    records, coverage_gaps = collect_records(channels)
+    new_items, changed_items, unchanged_refs, closed_refs = diff_backlog(records, prior)
+    worklist = build_worklist(new_items, changed_items, coverage_gaps, closed_refs)
+    write_worklist(worklist, args.emit_worklist)
+    print(
+        f"improvement-scan backlog (phase A): {len(new_items)} new, {len(changed_items)} changed, "
+        f"{len(unchanged_refs)} unchanged, {len(closed_refs)} closed, "
+        f"{len(coverage_gaps)} coverage gap(s) -> {args.emit_worklist}"
+    )
+    return 0
+
+
+def _run_backlog_phase_b(args: argparse.Namespace) -> int:
+    prior = load_prior_board(args.prior) if args.prior else _empty_board()
+    try:
+        payload = json.loads(Path(args.classifications).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        print(f"improvement-scan backlog (phase B): cannot read classifications: {exc}", file=sys.stderr)
+        return 2
+    closed_refs = payload.get("closed_refs") or []
+    classified = payload.get("items") or {}
+
+    try:
+        board, findings, no_urgency_signal = classify_and_score(prior, classified, closed_refs)
+    except ValueError as exc:
+        print(f"improvement-scan backlog (phase B): {exc}", file=sys.stderr)
+        return 2
+
+    write_board(board, args.out)
+    store_findings(findings, store_path=args.store)
+    print(
+        f"improvement-scan backlog (phase B): {len(board.items)} item(s) on the board "
+        f"({len(no_urgency_signal)} no-urgency-signal), {len(findings)} finding(s) stored -> {args.out}"
+    )
+    if no_urgency_signal:
+        print("  no urgency signal: " + ", ".join(sorted(no_urgency_signal)), file=sys.stderr)
+    return 0
+
+
 def _cmd_backlog(args: argparse.Namespace) -> int:
-    print("improvement-scan backlog: not implemented in this stage", file=sys.stderr)
+    if args.emit_worklist:
+        return _run_backlog_phase_a(args)
+    if args.classifications and args.out:
+        return _run_backlog_phase_b(args)
+    print(
+        "improvement-scan backlog: pass either --emit-worklist (phase A) or "
+        "--classifications/--out (phase B)",
+        file=sys.stderr,
+    )
     return 2
 
 
@@ -311,6 +741,21 @@ def main(argv: "list[str] | None" = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_backlog = sub.add_parser("backlog", help="reconcile Core + Org backlog against the Triage Board")
+    p_backlog.add_argument("--prior", default=None, help="path to the existing board.json")
+    p_backlog.add_argument(
+        "--emit-worklist", default=None,
+        help="phase A: collect + diff against --prior, write the new+changed worklist here",
+    )
+    p_backlog.add_argument(
+        "--classifications", default=None,
+        help="phase B: model-supplied classifications file (see --emit-worklist's output shape)",
+    )
+    p_backlog.add_argument("--out", default=None, help="phase B: write the merged board here")
+    p_backlog.add_argument(
+        "--channel", action="append", default=[], dest="channels",
+        help="channel to pull from (repeatable); default: core-difficulty-digest's default_channels()",
+    )
+    p_backlog.add_argument("--store", default=None, help="findings store path (phase B only)")
     p_backlog.set_defaults(func=_cmd_backlog)
 
     p_telemetry = sub.add_parser("telemetry", help="scan recent session telemetry for recurring difficulties")

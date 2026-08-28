@@ -283,6 +283,7 @@ def _issue_to_record(issue: dict) -> DifficultyRecord:
             evidence = "\n".join(body_lines[i + 1:]).strip()
             break
 
+    ref = issue.get("html_url") or f"{REPO}#{issue.get('number', '')}"
     return DifficultyRecord(
         ts=ts,
         layer=layer,
@@ -292,6 +293,7 @@ def _issue_to_record(issue: dict) -> DifficultyRecord:
         reporter=reporter,
         evidence=evidence,
         cost_estimate=cost_estimate,
+        ref=ref,
     )
 
 
