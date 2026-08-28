@@ -87,7 +87,15 @@ ACTIONABLE_KINDS = frozenset(
 # flags to stdout once per session and nothing recorded that any of them was
 # ever acted on.
 KIND_POLICY_FLAG = "policy-flag"
-EXTERNAL_KINDS = frozenset({KIND_POLICY_FLAG})
+
+# `backlog-item` and `telemetry-pattern` are improvement-scan.py's — a THIRD
+# producer, and deliberately ADVISORY (see ADVISORY_KINDS below): a scan
+# recommendation must never block a turn boundary, since the script that
+# emits it explicitly never files or dispatches on its own.
+KIND_BACKLOG_ITEM = "backlog-item"
+KIND_TELEMETRY_PATTERN = "telemetry-pattern"
+
+EXTERNAL_KINDS = frozenset({KIND_POLICY_FLAG, KIND_BACKLOG_ITEM, KIND_TELEMETRY_PATTERN})
 
 # The declared complement. Nothing reads this at runtime — `is_actionable` stays
 # a membership test against ACTIONABLE_KINDS alone, so an UNKNOWN kind still
@@ -104,6 +112,8 @@ ADVISORY_KINDS = frozenset(
         "no-root-index",
         "crutch-defer-overdue",
         "crutch-registry-drift",
+        KIND_BACKLOG_ITEM,
+        KIND_TELEMETRY_PATTERN,
     }
 )
 
@@ -139,6 +149,8 @@ REMEDIATION = {
     "oversized-index": "spin off a sub-index (memory-hierarchy.md)",
     "no-root-index": "create the root MEMORY.md for that memory root",
     "policy-flag": "invoke `self-improvement` to adjust the policy, then record the adjustment and the observed metric movement in memory-global/leaves/policy-effectiveness-tracking.md",
+    "backlog-item": "see the item's recommended_next_step (self-improvement | planner | file-difficulty) in the improvement-scan report",
+    "telemetry-pattern": "see the pattern's recommended_next_step (self-improvement | planner | file-difficulty) in the improvement-scan report",
     "crutch-defer-overdue": "re-run scripts/gen_crutch_registry.py and re-disposition the entry (keep it deferred with an updated ground, or remediate it)",
     "crutch-registry-drift": "run scripts/verify-semantic-gates.py to see the newly-unregistered sites, then re-run scripts/gen_crutch_registry.py to classify and register them",
 }
@@ -152,6 +164,7 @@ REMEDIATION = {
 # condition is gone" for rows the scan never looked for.
 SOURCE_SELF_DIAGNOSE = "self-diagnose"
 SOURCE_POLICY_SCORECARD = "policy-scorecard"
+SOURCE_IMPROVEMENT_SCAN = "improvement-scan"
 
 
 def row_source(row: dict) -> str:
