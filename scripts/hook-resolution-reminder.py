@@ -378,6 +378,51 @@ def merged_leftover_hint(repo_dir: str, trunk: str = "main", remote: str = "orig
     return MERGED_LEFTOVER_HINT.format(trunk=trunk, branches=", ".join(leftovers))
 
 
+def _collect_resolution_hints(session_id: str, cwd: str) -> list[str]:
+    """Best-effort resolution-gate hints, in the exact precedence the
+    UserPromptSubmit branch has always printed them: landable-branch (or, if
+    not landable, unpushed-branch as its fallback), then merged-leftover, then
+    direct-push-no-PR. Each computation is independently best-effort; any
+    failure degrades that hint to absent rather than raising, so this never
+    breaks a resolution turn."""
+    repo_dir = _delivery_repo_dir(session_id, cwd)
+    hints: list[str] = []
+    try:
+        hint = landable_branch_hint(repo_dir)
+    except Exception:
+        hint = None
+    if hint:
+        hints.append(hint)
+    else:
+        # Only nudge the plain push when the branch is not cleanly
+        # landable (else the landable hint already covers delivery).
+        try:
+            push_hint = unpushed_branch_hint(repo_dir)
+        except Exception:
+            push_hint = None
+        if push_hint:
+            hints.append(push_hint)
+    # Independent of the landable/unpushed nudges: name any already-merged
+    # local branches still hanging around, so deletion (part of landing)
+    # isn't skipped.
+    try:
+        leftover_hint = merged_leftover_hint(repo_dir)
+    except Exception:
+        leftover_hint = None
+    if leftover_hint:
+        hints.append(leftover_hint)
+    # Independent of the above: when this machine holds direct push rights to
+    # this exact (Core) repo, name the anti-PR default so a review-gated-repo
+    # assumption doesn't leak in from context.
+    try:
+        no_pr_hint = direct_push_no_pr_hint(repo_dir)
+    except Exception:
+        no_pr_hint = None
+    if no_pr_hint:
+        hints.append(no_pr_hint)
+    return hints
+
+
 def decide(payload: dict) -> tuple[str, str]:
     """PreToolUse/AskUserQuestion decision: ("deny", reason) or ("allow", "").
 
@@ -490,43 +535,11 @@ def main() -> int:
             "agent-proposed 1-5 quality rating as the first resolution option "
             "(see leaves/quality-regression-investigation.md)."
         )
-        repo_dir = _delivery_repo_dir(
+        for hint in _collect_resolution_hints(
             payload.get("session_id") or "",
             payload.get("cwd") or str(Path(__file__).resolve().parent),
-        )
-        try:
-            hint = landable_branch_hint(repo_dir)
-        except Exception:
-            hint = None
-        if hint:
+        ):
             print(hint)
-        else:
-            # Only nudge the plain push when the branch is not cleanly
-            # landable (else the landable hint already covers delivery).
-            try:
-                push_hint = unpushed_branch_hint(repo_dir)
-            except Exception:
-                push_hint = None
-            if push_hint:
-                print(push_hint)
-        # Independent of the landable/unpushed nudges: name any already-merged
-        # local branches still hanging around, so deletion (part of landing)
-        # isn't skipped.
-        try:
-            leftover_hint = merged_leftover_hint(repo_dir)
-        except Exception:
-            leftover_hint = None
-        if leftover_hint:
-            print(leftover_hint)
-        # Independent of the above: when this machine holds direct push
-        # rights to this exact (Core) repo, name the anti-PR default so a
-        # review-gated-repo assumption doesn't leak in from context.
-        try:
-            no_pr_hint = direct_push_no_pr_hint(repo_dir)
-        except Exception:
-            no_pr_hint = None
-        if no_pr_hint:
-            print(no_pr_hint)
         return 0
 
     prompt = payload.get("prompt") or ""
