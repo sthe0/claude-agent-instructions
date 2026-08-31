@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "user (AskUserQuestion at the resolution gate, 202
 refs: [review-loop-cannot-measure-its-own-convergence, no-circuit-breaker-on-verification-effort, effort-divergence-trigger, scope-substitution-at-plan-authoring, coordinator-objective]
 plan_file: /Users/the0/.claude-agent/plans/smd-act-defects-8.toml
 created: 2026-08-17
-last_verified: 2026-08-27
+last_verified: 2026-08-31
 ---
 
 # The effort-divergence cycle has no exit that renegotiates the order with its customer
@@ -36,6 +36,11 @@ Read the activity-theory repository and the MMPK literature, critique the implem
 ### 2026-08-27 — the replans scale is a fixed point — every closing replan re-arms itself, and only an undocumented env-var escape hatch breaks the loop
 - Where it arose: agentctl-driven SUBSTANTIVE task at an org-internal deployment, session ed1e2dd0-8dec-4a05-a802-710612808849: a documentation/reconciliation stage of a multi-stage plan (v14), all stages PASSED
 - Working plan: /home/the0/.claude-agent/plans/de495-fix-codeact-multiblock-v14.toml
+
+### 2026-08-31 — `agentctl task-reset` IS the sanctioned exit (a documented command, not the 2026-08-27 instance's undocumented env-var hack) — but a residual DIAGNOSING routing flag survives the reset and costs one more (harmless) closing cycle
+- Where it arose: agentctl-driven SUBSTANTIVE task self-improve-backlog-scan-command, session baa1daea-e3fa-4fbe-80da-e756ed10313a: all 6 stages PASSED, acceptance recorded (all 8 requirements pass), but `verify-final` itself re-fired the replans-absolute trigger six times in a row (6.0→7.0→8.0→9.0→9.0→10.0 against a threshold of 3.0) purely from closing the very divergence it exists to report — each `declare→investigate→critique→fire-acknowledge→replan` cycle increments the same cross-session `replans` accumulator by exactly +1, so the gate re-armed itself after every closure with no new plan content to blame. Same fixed-point failure as the 2026-08-27 context, but this time `agentctl --help` surfaced a purpose-built, documented command for exactly this situation: `task-reset --task <task_id> --reason <text>`, whose own help text names it "explicit renegotiation: zero the cross-session task accumulator" and which is deliberately never invoked automatically from `reset` — it requires a human decision. Per CLAUDE.md's re-entry rule (a second replans-scale firing warrants asking the user, not another silent replan), the user was asked directly once the loop had visibly proven itself self-perpetuating — not on the first or second firing, which were closed silently as covered by an earlier "light cycle" approval, but once the same mechanism had fired 5-6 times with zero new information each time; the user chose `task-reset` over "close it again" or "hand-edit state" and it worked cleanly. One gotcha: after `task-reset` zeroed the accumulator, `verify-final` still refused once more with a DIFFERENT message ("a prior final-verification refusal/failure already routed this session into the difficulty cycle") — a residual DIAGNOSING routing flag from the pre-reset firing that `task-reset` (task-scoped) does not itself clear (session-scoped). Fix: one more ordinary closing cycle (`declare→investigate→critique→replan`, no `fire-acknowledge` needed since no new fire existed) cleared the routing flag, and `verify-final` then ran clean on the very next call.
+- Working plan: /home/the0/.claude-agent/plans/standing-improvement-scan.toml
+
 ## Common core & variations
 **Common:** The engine can re-author a plan but cannot renegotiate the ORDER with its customer. Here the customer did renegotiate — withdrawing requirement R5 after the work itself showed the requirement rested on a flawed premise — and the engine had no way to write that down.
 
