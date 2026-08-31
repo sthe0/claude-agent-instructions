@@ -4,7 +4,7 @@ description: When you hold both the tools and the rights to carry out a step, do
 type: feedback
 schema: leaf/v1
 created: 2026-07-02
-last_verified: 2026-08-19
+last_verified: 2026-08-31
 ---
 
 # Don't offload to the user an action you can perform yourself
@@ -35,6 +35,14 @@ A capability gap asserted without both checks is unverified.
 *To achieve escalations that spend the user's attention only on what is genuinely theirs, exhaust the channels you hold before the question reaches them.* The fourth offload axis, and the one the other three do not cover: the offloaded thing is neither an action, a decision, nor a deferral, but the **work of finding out**. A **knowledge** question — what a system does, how an access is modelled, which flag exists — is closable by channels you already hold: memory, the repo, docs/web search, an MCP, and, when the project defines one, a **domain-expert subagent** (a project-local `.claude/agents/*.md`). A subagent listed in the session is a held capability exactly like a CLI, so putting its question to the user instead is this rule's plain violation. Separate the kinds before escalating: a **decision, permission or preference** is the user's to give and carries no research precondition — asking it directly is correct, and gating it behind research would be its own waste.
 
 The engine codes the discipline for one population only: `question-dispose --to escalated` refuses on empty `own_research` (authority `premise.validate_questions`), binding questions recorded in the `premise` bag at the `plan_approval` gate. Questions arising **mid-execution or at plan review** are outside that binding, so the same three acts — `question-raise` → `question-research` → `question-dispose` — are yours to run there. A project rule naming a specific expert ("ask the domain guru before the user") is an instance of this axis, not a separate norm.
+
+### A broken instrument is evidence about the instrument, not about the goal
+
+*To achieve escalations that reflect the real state of the world, separate the transport that failed from the destination it was carrying to.* When a tool errors, the established fact is that **this tool is broken** — not that the goal it served is unreachable. Before an error report becomes a reason to ask the user where to go instead, name the destination on its own terms and re-check whether another held channel reaches it. Destinations are fixed by the work's own properties — a difficulty's **tier** decides its queue ([[instruction-dev-queues]]), not whichever channel happens to be configured — so a transport failure cannot move one.
+
+Two compounding costs make this worse than an ordinary needless question. First, an option set assembled around a broken tool routinely contains **branches that were never real** — most dangerously an outward-publication path the situation does not select. Offering a non-option invites the user to authorize an exposure nothing required; it is the mirror of CLAUDE.md § Escalation's span-the-full-set rule, which guards options that are too narrow. Second, a tool that fails early **swallows its own corrective output**: the guidance that would have redirected you sits behind the call that crashed, so a degraded channel silently costs you the correction as well as the delivery.
+
+Instance (2026-08-31): `file-difficulty.py` raised `ImportError` from a machine-local adapter authored against a then-unmerged branch. The coordinator read this as "the destination queue is gone", put "private tracker vs PUBLIC GitHub issues" to the user as a choice, and on being pushed back filed four `layer: core` records into the Org backlog — routing by the configured channel instead of by tier. The tool itself would have said otherwise: on an author machine it refuses with *"author machine: propose the fix directly (fix-first); backlog -> --channel github --stream backlog"*. That check runs **after** adapter import, so the plugin's failure preempted it.
 
 ### Deferral-offload: a queue entry is not a resolution
 
