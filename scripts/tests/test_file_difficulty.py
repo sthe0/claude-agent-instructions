@@ -384,6 +384,58 @@ def test_dry_run_explicit_queue_overrides_project_field(org_channel, tmp_path, c
     assert "queue: MYQUEUE" in out
 
 
+# ── broken adapter plugin (AdapterPluginBroken; never a raw traceback) ───────
+
+def _install_broken_adapter(monkeypatch, tmp_path_factory, name):
+    """Install a plugin file that raises at import time and point the CLI at it."""
+    root = tmp_path_factory.mktemp("difficulty-plugins-broken")
+    (root / "adapters").mkdir()
+    (root / "adapters" / f"{name}.py").write_text(
+        "raise ImportError('synthetic plugin import failure')\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("CLAUDE_DIFFICULTY_PLUGIN_DIR", str(root))
+    return name
+
+
+def test_broken_plugin_author_machine_unregistered_channel_reaches_fix_first(
+    monkeypatch, tmp_path_factory, capsys
+):
+    channel = _install_broken_adapter(monkeypatch, tmp_path_factory, "brokenchan-author")
+    monkeypatch.setattr(_mod.authority, "is_author", lambda: True)
+    rc = _run("--target", "CLAUDE.md", "--ground", "x", "--channel", channel, "--dry-run")
+    assert rc == 2
+    assert "fix-first" in capsys.readouterr().err
+
+
+def test_broken_plugin_non_author_machine_unregistered_channel_clean_error(
+    monkeypatch, tmp_path_factory, capsys
+):
+    channel = _install_broken_adapter(monkeypatch, tmp_path_factory, "brokenchan-nonauthor")
+    monkeypatch.setattr(_mod.authority, "is_author", lambda: False)
+    rc = _run("--target", "CLAUDE.md", "--ground", "x", "--channel", channel, "--dry-run")
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert channel in err
+    assert "Traceback" not in err
+
+
+def test_broken_plugin_registered_in_process_channel_files_anyway_with_warning(
+    monkeypatch, tmp_path_factory, capsys
+):
+    channel = _install_broken_adapter(monkeypatch, tmp_path_factory, "brokenchan-registered")
+    monkeypatch.setattr(_mod.authority, "is_author", lambda: False)
+    ch = dc.NullChannel()
+    dc.register_channel(channel, lambda: ch)
+    rc = _run("--target", "CLAUDE.md", "--ground", "x", "--channel", channel,
+              "--cost", "$1/week")
+    assert rc == 0
+    assert len(ch.pull()) == 1
+    err = capsys.readouterr().err
+    assert "warning" in err
+    assert "failed to load" in err
+    assert "Traceback" not in err
+
+
 # ── github/external channel is subject-aware (project-scoped target refused) ─
 
 def test_github_core_target_routes_unchanged(tmp_path, capsys):
