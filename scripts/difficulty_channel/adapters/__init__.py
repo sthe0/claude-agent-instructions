@@ -54,7 +54,12 @@ def load_adapter(name: str):
     (already registered at package-import time — there is no lazily-loaded module to hand back).
     Raises FileNotFoundError naming the plugin file searched and the built-in names that need no
     plugin — mirroring registry.sh's ``_registry_resolve`` error shape — if no plugin provides
-    ``name``.
+    ``name``. Raises ``AdapterPluginBroken`` instead when the plugin file IS there but fails to
+    import; both messages name the built-in names. A caller that distinguishes "no transport
+    configured" from "the transport is broken" must catch both — the two are disjoint (nothing
+    but ``load_plugin_module`` returning ``None`` reaches the FileNotFoundError, and every
+    exception out of it is wrapped) and neither subclasses the other, so a single ``except`` on
+    one of them silently lets the other escape as a traceback.
 
     Plugin contract. A plugin module lives at ``<plugin dir>/adapters/<name>.py`` and must:
 
