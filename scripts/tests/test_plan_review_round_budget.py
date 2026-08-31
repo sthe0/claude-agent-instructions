@@ -71,6 +71,18 @@ def test_at_threshold_requirement_released_with_recorded_reason(gate_on):
     assert "nothing else" not in blockers[0]
 
 
+def test_release_message_names_the_fresh_pass_exit(gate_on):
+    """The release message must name BOTH executable exits, not just override — an
+    omitted-but-valid exit reads as non-existent, and a coordinator recording an honest
+    fresh pass with no other option in view has nowhere else to attribute it but
+    override. See gates.py's design comment above _PLAN_REVIEW_ROUND_RELEASE_MESSAGE."""
+    s = _subst(plan_review_rounds=3,
+               plan_review=PlanReview("/plan.toml", "revise", "thinker"))
+    message = gates.plan_review_blockers(s, s.plan_path)[0]
+    assert "plan-review --verdict pass" in message
+    assert "not an override" in message
+
+
 def test_release_does_not_re_derive_that_a_review_happened(gate_on):
     """"A review happened" is carried by the count, not re-read off the records still on
     file. The two diverge whenever a review is staled by the edit that answers it, and

@@ -510,16 +510,29 @@ def _plan_review_blockers_coverage(state: SessionState, target_plan: str, doc) -
 #: keeps the blockers non-empty by design) and neither is `risk-accept` once a
 #: resubmission has staled the acceptances — a directive whose exits all bounce is the
 #: livelock this plan exists to remove. Hence `plan-review --verdict override`, the one
-#: existing act that both records the decision and opens the gate.
+#: existing act that both records the decision and opens the gate WITHOUT a further
+#: review. But it is not the only executable exit: `_round_release_wrap` only ever
+#: substitutes this message when `blockers` is already non-empty (`if not blockers:
+#: return blockers`), so a FRESH whole-plan review that comes back `pass` never reaches
+#: this message at all — it clears `plan_review_blockers` the same way it always has,
+#: at any round count (see `test_a_recorded_pass_still_clears_regardless_of_rounds`).
+#: An earlier revision of this message named `override` as if it were the only way
+#: forward, which made an honest passing review look, once recorded, like it had been
+#: an override — this message now says so explicitly rather than leaving that exit
+#: for the reader to infer from the code.
 _PLAN_REVIEW_ROUND_RELEASE_MESSAGE = (
     "review round budget exhausted at round {rounds} (Rule-of-Three — config.md's "
     "effort-replan-absolute, reused) — no further thinker review is required, but the "
-    "decision is yours and must be recorded: to go ahead with the plan as it stands, "
-    "run plan-review --verdict override --reviewer <you> --note <why it is acceptable>; "
-    "to cut scope instead, edit the plan and re-apply it by the route your state allows "
-    "— `submit-plan` before approval, `replan --plan <edited>` after it — but the budget "
-    "does not refill, so cutting scope does not by itself open this gate; `approve` "
-    "still answers to every other gate as well"
+    "decision is yours and must be recorded. Two exits, both executable from this "
+    "state: (1) run a fresh whole-plan thinker review and record plan-review --verdict "
+    "pass — this clears the gate exactly as an on-budget pass always does, because it "
+    "is an honest pass, not an override; or (2) go ahead with the plan as it stands, "
+    "without a further review, by running plan-review --verdict override --reviewer "
+    "<you> --note <why it is acceptable>. To cut scope instead, edit the plan and "
+    "re-apply it by the route your state allows — `submit-plan` before approval, "
+    "`replan --plan <edited>` after it — but the budget does not refill, so cutting "
+    "scope does not by itself open this gate; `approve` still answers to every other "
+    "gate as well"
 )
 
 
