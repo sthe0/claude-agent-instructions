@@ -23,13 +23,23 @@ if _SCRIPTS_DIR not in sys.path:  # scripts/ for lib.plugin_dir
     sys.path.insert(0, _SCRIPTS_DIR)
 from lib.plugin_dir import load_plugin_module, resolve_plugin_dir  # noqa: E402
 
-__all__ = ["GitHubChannel", "ExternalChannel", "load_adapter"]
+__all__ = ["GitHubChannel", "ExternalChannel", "load_adapter", "AdapterPluginBroken"]
 
 BUILTIN_NAMES = {"github", "external"}
 
 PLUGIN_DIR_ENV = "CLAUDE_DIFFICULTY_PLUGIN_DIR"
 PLUGIN_DIR_NAME = "difficulty-channel-plugins"
 _PLUGIN_NAMESPACE = "difficulty_channel._plugin_adapters"
+
+
+class AdapterPluginBroken(Exception):
+    """A machine-local adapter plugin file exists but failed to import.
+
+    Distinct from FileNotFoundError (plugin absent) so a caller can tell "the transport is
+    broken" from "no transport was configured" — the two failures call for different responses,
+    and a broken plugin says nothing about whether the configured destination itself is
+    reachable (it is a different question from a different layer).
+    """
 
 
 def _plugin_dir() -> Path:
@@ -48,6 +58,11 @@ def load_adapter(name: str):
 
     Plugin contract. A plugin module lives at ``<plugin dir>/adapters/<name>.py`` and must:
 
+    * be shared by EVERY branch and worktree on the machine — the plugin dir lives outside any
+      git checkout, so a plugin authored against an unmerged branch's port surface breaks this
+      tool on trunk (and every other checkout) the moment it is installed, not just on the
+      branch that needed it;
+
     * call ``difficulty_channel.port.register_channel(<name>, <factory>)`` at import time, with a
       factory returning a ``DifficultyChannel``; that call is what makes ``get_channel(<name>)``
       resolve — loading alone registers nothing;
@@ -65,7 +80,16 @@ def load_adapter(name: str):
         return None
     plugin_dir = _plugin_dir()
     relpath = f"adapters/{name}.py"
-    module = load_plugin_module(plugin_dir, relpath, _PLUGIN_NAMESPACE)
+    try:
+        module = load_plugin_module(plugin_dir, relpath, _PLUGIN_NAMESPACE)
+    except Exception as exc:  # BaseException (KeyboardInterrupt/SystemExit) propagates unwrapped
+        raise AdapterPluginBroken(
+            f"difficulty_channel: adapter plugin {plugin_dir / relpath} failed to import "
+            f"({exc.__class__.__name__}: {exc}). This is a transport failure, not evidence "
+            f"about the configured destination: the destination this plugin was meant to reach "
+            f"may still be reachable. Built-in names need no plugin: "
+            f"{', '.join(sorted(BUILTIN_NAMES))}."
+        ) from exc
     if module is None:
         raise FileNotFoundError(
             f"difficulty_channel: no adapter plugin named {name!r} "
