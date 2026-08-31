@@ -80,7 +80,12 @@ DESIRED = [
     # with the hook's own CHECK_TIMEOUT_S (8 s) bounding it from the inside; 10 here
     # so the outer timeout cannot pre-empt that inner one and lose its silence.
     ("UserPromptSubmit", None,    "hook-effort-divergence-watch.py", 10),
-    ("UserPromptSubmit", None,    "hook-resolution-reminder.py",     5),
+    # 22 = the hook's own _LANDING_DISCIPLINE_JUDGE_BUDGET_S, raised from the prior
+    # flat 5 once this hook grew a landing-discipline judge consult (see the
+    # PreToolUse/AskUserQuestion registration below) — hook_wiring.TIMEOUT_
+    # REQUIREMENTS is keyed by bare basename, so the floor binds both of this
+    # hook's registrations even though only the other one calls the judge.
+    ("UserPromptSubmit", None,    "hook-resolution-reminder.py",     22),
     ("UserPromptSubmit", None,    "hook-self-improvement-reminder.py", 5),
     ("UserPromptSubmit", None,    "hook-tracker-reminder.py",        5),
     ("UserPromptSubmit", None,    "hook-tracker-publish-reminder.py", 5),
@@ -125,6 +130,14 @@ DESIRED = [
     # (lib/judge_latency.py), so the harness cap was binding below the hook's own
     # decide() deadline and killing the call before any verdict came back.
     ("PreToolUse",       "AskUserQuestion", "hook-deferring-disposition-gate.py", 50),
+    # Hard gate: deny an AskUserQuestion, raised while the resolution gate is
+    # open, whose menu proposes a PR/merge-review delivery path in a repo where
+    # this machine holds direct push rights (direct_push_no_pr_hint's condition
+    # for the sibling UserPromptSubmit hint above) — no keyword prefilter gates
+    # the judge consult itself, only the gate-open + hint-active precondition.
+    # 27 = the hook's own _LANDING_DISCIPLINE_JUDGE_BUDGET_S=22 plus interpreter-
+    # start headroom, the same shape as the three gates above.
+    ("PreToolUse",       "AskUserQuestion", "hook-resolution-reminder.py",     27),
     # session_scope: deny/warn on a LIVE cross-session filesystem-scope overlap
     # (Component B wiring). Runs AFTER the plan-approval gate above; blocks only a
     # gated path already held by another live session, otherwise warns — silent

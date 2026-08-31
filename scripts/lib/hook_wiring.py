@@ -136,6 +136,11 @@ GATE_BEARING_HOOKS: "tuple[tuple[str, str], ...]" = (
     ("hook-turn-end-gate.py",
      "the Stop-event guardian shell; absent, no turn-boundary obligation "
      "(self-improvement engagement, resolution) is ever blocked on"),
+    ("hook-resolution-reminder.py",
+     "denies opening an AskUserQuestion menu that proposes a PR/merge-review "
+     "delivery path while the resolution gate is open in a direct-push-only "
+     "repo; absent, that PreToolUse consult never runs and a wrong-shaped "
+     "menu reaches the user unblocked"),
 )
 
 # The TIMEOUT axis: how long a registration must be allowed to run.
@@ -162,6 +167,10 @@ TIMEOUT_REQUIREMENTS: "tuple[tuple[str, int, str], ...]" = (
      "up to three judges in one invocation under a 52s whole-invocation budget"),
     ("hook-plan-delivery-gate.py", 30,
      "one approval-ask judge under a 30s whole-invocation budget"),
+    ("hook-resolution-reminder.py", 22,
+     "one landing-discipline judge under a 22s whole-invocation budget — "
+     "binds BOTH this hook's registrations (PreToolUse/AskUserQuestion and "
+     "UserPromptSubmit), since this table is keyed by bare basename"),
 )
 
 # Each TIMEOUT_REQUIREMENTS minimum, above, is a copy of a number the hook
@@ -176,6 +185,7 @@ TIMEOUT_REQUIREMENT_OWN_CONSTANT: "dict[str, str]" = {
     "hook-deferring-disposition-gate.py": "_ASK_JUDGE_BUDGET_S",
     "hook-turn-end-gate.py": "_TURN_JUDGE_BUDGET_S",
     "hook-plan-delivery-gate.py": "_APPROVAL_ASK_JUDGE_BUDGET_S",
+    "hook-resolution-reminder.py": "_LANDING_DISCIPLINE_JUDGE_BUDGET_S",
 }
 
 # K: how many judge calls one invocation of each hook may make. Keyed as a
@@ -199,6 +209,7 @@ TIMEOUT_REQUIREMENT_CALLS: "dict[str, int]" = {
     "hook-deferring-disposition-gate.py": 1,
     "hook-turn-end-gate.py": 3,
     "hook-plan-delivery-gate.py": 1,
+    "hook-resolution-reminder.py": 1,
 }
 
 

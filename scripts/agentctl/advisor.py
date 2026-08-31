@@ -910,6 +910,109 @@ def judge_deferring_disposition(
         judge_ledger.set_current_judge(None)
 
 
+# LAST-RESORT default for judge_landing_discipline_ask, used only when a caller
+# names no timeout of its own. By lib/judge_latency.py::last_resort_ceiling_s,
+# the same rule and (today) the same number as _BINARY_ASK_TIMEOUT_S /
+# _DEFERRING_DISPOSITION_TIMEOUT_S — outside a hook budget the ceiling covers
+# the whole model family, not one prompt. Named distinctly from those two
+# (rather than reusing either) for the same reason _DEFERRING_DISPOSITION_
+# TIMEOUT_S is not shared with _BINARY_ASK_TIMEOUT_S even though both are 41
+# today: each judge's in-hook ceiling is derived per its own measured row, and
+# a shared name here would invite a caller to reuse whichever it imported
+# first. Deliberately NOT named `_LANDING_DISCIPLINE_TIMEOUT_S` — that name is
+# reserved for hook-resolution-reminder.py's own per-call budget constant
+# (derived from judge_latency.call_ceiling_s('landing_discipline') with
+# headroom, a different number from this family-wide last resort), so the two
+# constants in the two files never collide or get mistaken for each other.
+_LANDING_DISCIPLINE_LAST_RESORT_TIMEOUT_S = 41
+
+_LANDING_DISCIPLINE_JUDGE_PROMPT = (
+    "You are given the question and every option of an AskUserQuestion menu an "
+    "AI coding assistant is about to show its user at a task's resolution gate, "
+    "written in any language. This repo requires every resolved change to land "
+    "by direct push or fast-forward merge into trunk/main -- there is no "
+    "distinct human reviewer who gates it, so a pull-request / merge-review "
+    "delivery path is never the correct default here. Decide whether the "
+    "menu's own content PROPOSES a pull-request / merge-review delivery path "
+    "-- an option or wording that offers to open a PR, wait for review, or "
+    "land only after a review completes.\n\n"
+    "Answer YES only when at least one option or the question's own wording "
+    "proposes opening a pull request, waiting for a review, or landing via a "
+    "review-gated path.\n\n"
+    "Answer NO when every option proposes direct push / fast-forward into "
+    "trunk, or the menu does not concern a delivery/landing mechanism at "
+    "all.\n\n"
+    "Answer on the FIRST line with exactly YES or NO, nothing else.\n\n"
+    "MENU:\n{text}"
+)
+
+
+def judge_landing_discipline_ask(
+    ask_text: str,
+    runner,
+    *,
+    enabled: bool = True,
+    timeout: int = _LANDING_DISCIPLINE_LAST_RESORT_TIMEOUT_S,
+    remaining: float | None = None,
+    ceiling: float | None = None,
+    runtime_host: str = HOST_CLAUDE,
+) -> tuple[bool, str]:
+    """Semantic judge behind hook-resolution-reminder.py's PreToolUse landing-
+    discipline check: does this AskUserQuestion menu's own content propose a
+    pull-request / merge-review delivery path, when this repo requires direct
+    push/fast-forward into trunk with no distinct human reviewer?
+
+    Unlike judge_deferring_disposition and its neighbours, the caller runs NO
+    regex/content-based prefilter ahead of this judge -- every invocation of
+    the hint at an open resolution gate consults the judge directly (an
+    arbitrary-content regex is a fragile classification mechanism even when
+    demoted to a filter rather than the decision-maker, and must not gate
+    consultation of the semantic judge either). The deterministic half that
+    DOES gate this judge lives entirely in the caller: whether the resolution
+    gate is open and whether direct_push_no_pr_hint applies to the delivery
+    repo.
+
+    Three-valued fail-open contract mirroring judge_deferring_disposition:
+    returns (verdict, reason) with reason "" for a genuine model verdict and a
+    non-empty "...(fail-open)" string wherever the False is FABRICATED --
+    disabled/no-text/no-runner, non-zero exit, empty/unparseable output, a
+    timeout (``result.timed_out``), or an exception. The consumer is a
+    PreToolUse deny, so a fabricated False is still the safe failure
+    direction; ``remaining``/``ceiling`` are forwarded to the ledger only,
+    alongside ``timeout`` as the active threshold."""
+    if not enabled:
+        return _judge_unavailable(
+            "landing_discipline", _KILLSWITCH_REASON, stage="killswitch",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    if not isinstance(ask_text, str) or not ask_text:
+        return _judge_unavailable(
+            "landing_discipline", _NO_TEXT_REASON, stage="no_text",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    if runner is None:
+        return _judge_unavailable(
+            "landing_discipline", _NO_RUNNER_REASON, stage="no_runner",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    judge_ledger.set_current_judge("landing_discipline")
+    start = time.monotonic()
+    try:
+        prompt = _LANDING_DISCIPLINE_JUDGE_PROMPT.format(text=ask_text)
+        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY, prompt), timeout=timeout)
+        return _record_result(
+            "landing_discipline", result, duration=time.monotonic() - start,
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    except Exception:
+        return _record_raised(
+            "landing_discipline", duration=time.monotonic() - start,
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    finally:
+        judge_ledger.set_current_judge(None)
+
+
 # LAST-RESORT ceiling, by lib/judge_latency.py::last_resort_ceiling_s — the same
 # number and the same rule as _BINARY_ASK_TIMEOUT_S, for the same reason as
 # _ACCEPTANCE_JUDGE_TIMEOUT_S: this judge runs inside `agentctl question-raise`,

@@ -62,6 +62,13 @@ scripts/hook-escalation-diagnosis-gate.py:59:54dcd9b3  # 27s = judge_latency.cal
 scripts/hook-escalation-diagnosis-gate.py:67:affc3cbd  # floor 20 = judge_latency.call_floor_s("outage_escalation") = ceil(p90 19.16) over n=16
 scripts/hook-escalation-diagnosis-gate.py:68:b040eeee  # 7.19s = the row's min_s, the fastest run the floor must leave reachable
 
+# --- scripts/hook-resolution-reminder.py -------------------------------------
+scripts/hook-resolution-reminder.py:154:8906bee2  # K=1 = HOOK_CALL_SEQUENCE["hook-resolution-reminder.py"], the single-call declaration this hook's budget-equals-ceiling shape rests on
+scripts/hook-resolution-reminder.py:155:64fda3f3  # continues the K=1 point above, concluding "at K=1 the budget IS the per-call ceiling"
+scripts/hook-resolution-reminder.py:157:458bdf33  # 17s = judge_latency.call_ceiling_s("landing_discipline") = ceil(max 15.38) + 1; 22s = _LANDING_DISCIPLINE_JUDGE_BUDGET_S, chosen for 5s of headroom over that ceiling
+scripts/hook-resolution-reminder.py:166:e3d0e39c  # 7 = judge_latency.call_floor_s("landing_discipline") = ceil(p90 6.37), the floor _LANDING_DISCIPLINE_JUDGE_MIN_CALL_S is set to
+scripts/hook-resolution-reminder.py:167:6a09c8e3  # 3.88s = the row's min_s, the fastest observed run the floor above must leave reachable
+
 # --- scripts/agentctl/advisor.py ---------------------------------------------
 scripts/agentctl/advisor.py:37:d1b37b8e  # 15-170s = the observed latency range of the ENUMERATION calibration (advisor-calibration.jsonl); 600s = the measurement cap it was collected under (measure-advisor-latency.py MEASURE_CAP), quoted to show no row was truncated by the bound being measured. Both are a different call shape from every judge_latency row — sonnet on a whole plan, not haiku on one question; see docs/operations/detached-enumeration-design.md § Why 480 s is not a row in judge_latency.py. The shipped 480 is DERIVED from this dataset, not a property of it, and its terms are pinned separately at :43
 scripts/agentctl/advisor.py:41:96329eb1  # 103.213s = the min elapsed_s at the largest sampled size in advisor-calibration.jsonl, a term of the 480 derivation; an enumeration measurement, not a judge one
@@ -93,6 +100,7 @@ scripts/lib/hook_wiring.py:137:12d5e5bc  # 52s = the approved whole-invocation b
 scripts/lib/hook_wiring.py:159:13ce4bee  # K = 1 is the declared call count of the two single-judge hooks; at K=1 judge_latency.required_budget_s has no preceding call to pay for
 scripts/lib/hook_wiring.py:164:7c67ab7c  # 30s = _APPROVAL_ASK_JUDGE_BUDGET_S, the hook's own whole-invocation judge budget, mirroring the sibling rows above (supersedes the 13s tie removed once the equality assertion was dropped)
 scripts/lib/hook_wiring.py:397:56471431  # historical: the 5s registration used as the example of a slow-judge hook the report must surface
+scripts/lib/hook_wiring.py:171:7174ba0b  # 22s = hook-resolution-reminder.py's own _LANDING_DISCIPLINE_JUDGE_BUDGET_S, mirroring the sibling single-judge rows above
 
 # --- samples/judge-latency/README.md -----------------------------------------
 samples/judge-latency/README.md:13:eecb96d2  # K = 1 as declared in lib/hook_wiring.TIMEOUT_REQUIREMENT_CALLS; the identity budget == per-call ceiling is what the single-call test asserts
@@ -101,6 +109,7 @@ samples/judge-latency/README.md:32:8b3fc2d5  # provenance and n of the outage ro
 samples/judge-latency/README.md:33:dcb31d7a  # provenance and n of the feedback row (10 + 16 = 26)
 samples/judge-latency/README.md:34:f159378b  # provenance and n of the binary_ask row (16)
 samples/judge-latency/README.md:41:c4f7ab96  # provenance and n of the approval_ask row after the regime-shift merge: both arms of both samples (16+16+16+16 = 64), mirroring judge_latency.MEASURED's provenance pairs
+samples/judge-latency/README.md:43:4bb3ed6b  # provenance and n of the landing_discipline row: landing-discipline-sample.json's two arms, 8 pr_proposing + 8 direct_push calls, the real n=16 sampler run this session
 samples/judge-latency/README.md:62:26defe90  # the measured cost of excluding topup-sample.json: binary_ask p90 16.70 -> 11.06 and its floor 17 -> 12; recorded so the exclusion is auditable
 samples/judge-latency/README.md:77:81a7a13d  # 11.42s = approval-sample.json's max — the ceiling that production observed being exceeded, prompting approval2-sample.json
 samples/judge-latency/README.md:79:eac5879f  # 12.71/12.51/11.96s = the three live-session calls that exceeded approval-sample.json's ceiling, the direct evidence for taking approval2-sample.json

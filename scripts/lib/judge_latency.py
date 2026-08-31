@@ -120,6 +120,17 @@ MEASURED: "dict[str, dict[str, Row]]" = {
             n=16, min_s=5.93, median_s=7.46, p90_s=11.06, max_s=11.52,
             provenance=(("topup2-sample.json", "binary_ask"),),
         ),
+        "landing_discipline": Row(
+            judge="landing_discipline",
+            # 8 pr_proposing + 8 direct_push calls in one file, one merged
+            # population: unlike approval_ask's two-regime merge, both arms ran
+            # in the same session with no observed contention or timeout-driven
+            # regime shift, so a single combined row is the plain, not the
+            # exceptional, case.
+            n=16, min_s=3.88, median_s=4.96, p90_s=6.37, max_s=15.38,
+            provenance=(("landing-discipline-sample.json", "pr_proposing"),
+                        ("landing-discipline-sample.json", "direct_push")),
+        ),
         "approval_ask": Row(
             judge="approval_ask",
             # Merges two non-overlapping regimes: approval-sample.json's 32
@@ -232,6 +243,7 @@ HOOK_CALL_SEQUENCE: "dict[str, tuple[str, ...]]" = {
     "hook-deferring-disposition-gate.py": ("deferring_disposition",),
     "hook-turn-end-gate.py": ("feedback_signal", "binary_ask", "outage_escalation"),
     "hook-plan-delivery-gate.py": ("approval_ask",),
+    "hook-resolution-reminder.py": ("landing_discipline",),
 }
 
 # Head-room the whole-invocation budget must keep beyond the calls it plans, for

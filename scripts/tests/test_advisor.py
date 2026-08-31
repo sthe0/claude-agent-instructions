@@ -695,6 +695,78 @@ class TestJudgeDeferringDisposition:
         assert seen["argv"][:4] == ["claude", "-p", "--model", "haiku"]
 
 
+class TestJudgeLandingDisciplineAsk:
+    """Fail-open contract for the semantic judge behind
+    hook-resolution-reminder.py's PreToolUse landing-discipline check. No real
+    model call in this class — samples/judge-latency/sample_landing_discipline.py
+    is the one place that costs real calls, per its own docstring."""
+
+    _MENU = (
+        "Задача решена, ветка запушена. Как приземляем?\n"
+        "Открыть PR (Рекомендую)\n"
+        "Открываю pull request и жду ревью перед мержем.\n"
+        "Прямой push в trunk\n"
+        "Мержу сейчас без ревью."
+    )
+
+    def test_yes_menu_proposes_pr(self):
+        assert advisor.judge_landing_discipline_ask(self._MENU, _fake_runner("YES"))[0] is True
+
+    def test_no_menu_proposes_direct_push(self):
+        assert advisor.judge_landing_discipline_ask(self._MENU, _fake_runner("NO"))[0] is False
+
+    def test_disabled(self):
+        result = advisor.judge_landing_discipline_ask(
+            self._MENU, _fake_runner("YES"), enabled=False
+        )
+        assert result[0] is False and result[1]
+
+    def test_no_runner(self):
+        result = advisor.judge_landing_discipline_ask(self._MENU, None)
+        assert result[0] is False and result[1]
+
+    def test_empty_text_skips_runner(self):
+        result = advisor.judge_landing_discipline_ask("", _raising_runner)
+        assert result[0] is False and result[1]
+
+    def test_non_string_text_skips_runner(self):
+        result = advisor.judge_landing_discipline_ask(None, _raising_runner)
+        assert result[0] is False and result[1]
+
+    def test_non_zero_exit_fails_open(self):
+        result = advisor.judge_landing_discipline_ask(self._MENU, _fake_runner("YES", code=1))
+        assert result[0] is False and result[1]
+
+    def test_empty_stdout_fails_open(self):
+        result = advisor.judge_landing_discipline_ask(self._MENU, _fake_runner("  \n  "))
+        assert result[0] is False and result[1]
+
+    def test_unparseable_answer_fails_open(self):
+        result = advisor.judge_landing_discipline_ask(self._MENU, _fake_runner("unclear"))
+        assert result[0] is False and result[1]
+
+    def test_raising_runner_fails_open(self):
+        result = advisor.judge_landing_discipline_ask(self._MENU, _raising_runner)
+        assert result[0] is False and result[1]
+
+    def test_timeout_expired_fails_open(self):
+        def timing_out_runner(argv, **kwargs):
+            raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout", 0))
+
+        result = advisor.judge_landing_discipline_ask(self._MENU, timing_out_runner)
+        assert result[0] is False and result[1]
+
+    def test_argv_carries_judge_model(self):
+        seen = {}
+
+        def recording_runner(argv, **kwargs):
+            seen["argv"] = argv
+            return RunResult(0, stdout="NO", stderr="")
+
+        advisor.judge_landing_discipline_ask(self._MENU, recording_runner)
+        assert seen["argv"][:4] == ["claude", "-p", "--model", "haiku"]
+
+
 # ── each judge's default timeout names ITS OWN constant (structural) ──────────
 
 # judge function -> the module constant its `timeout` default must NAME.
@@ -714,6 +786,7 @@ _JUDGE_TIMEOUT_CONSTANTS = {
     "judge_feedback_signal": "_BINARY_ASK_TIMEOUT_S",
     "judge_outage_escalation": "_BINARY_ASK_TIMEOUT_S",
     "judge_deferring_disposition": "_DEFERRING_DISPOSITION_TIMEOUT_S",
+    "judge_landing_discipline_ask": "_LANDING_DISCIPLINE_LAST_RESORT_TIMEOUT_S",
     "acceptance_judge": "_ACCEPTANCE_JUDGE_TIMEOUT_S",
 }
 

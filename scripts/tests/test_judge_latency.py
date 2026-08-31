@@ -49,6 +49,7 @@ _TURN_END = _load_hook("hook-turn-end-gate.py")
 _DEFERRING = _load_hook("hook-deferring-disposition-gate.py")
 _ESCALATION = _load_hook("hook-escalation-diagnosis-gate.py")
 _APPROVAL = _load_hook("hook-plan-delivery-gate.py")
+_RESOLUTION_REMINDER = _load_hook("hook-resolution-reminder.py")
 
 
 def _samples(row: judge_latency.Row) -> "list[float]":
@@ -155,6 +156,8 @@ _DERIVED_CONSTANTS = [
     (_ESCALATION, "_JUDGE_MIN_CALL_S", "outage_escalation", judge_latency.call_floor_s),
     (_DEFERRING, "_ASK_JUDGE_MIN_CALL_S", "deferring_disposition", judge_latency.call_floor_s),
     (_APPROVAL, "_APPROVAL_ASK_JUDGE_MIN_CALL_S", "approval_ask", judge_latency.call_floor_s),
+    (_RESOLUTION_REMINDER, "_LANDING_DISCIPLINE_JUDGE_MIN_CALL_S", "landing_discipline",
+     judge_latency.call_floor_s),
     # _APPROVAL_ASK_JUDGE_BUDGET_S is deliberately ABSENT from this table now.
     # It used to be listed here, tied by EQUALITY to call_ceiling_s("approval_ask")
     # — this hook's own claim, not a family rule, per the comment that used to
@@ -218,6 +221,7 @@ def test_a_single_call_hooks_budget_is_never_what_truncates_its_call():
         "hook-escalation-diagnosis-gate.py": _ESCALATION._JUDGE_BUDGET_S,
         "hook-deferring-disposition-gate.py": _DEFERRING._ASK_JUDGE_BUDGET_S,
         "hook-plan-delivery-gate.py": _APPROVAL._APPROVAL_ASK_JUDGE_BUDGET_S,
+        "hook-resolution-reminder.py": _RESOLUTION_REMINDER._LANDING_DISCIPLINE_JUDGE_BUDGET_S,
     }
     for hook, budget in single.items():
         sequence = judge_latency.HOOK_CALL_SEQUENCE[hook]
@@ -262,7 +266,8 @@ def test_the_last_resort_ceiling_is_the_family_maximum_plus_one():
     for constant in (advisor._BINARY_ASK_TIMEOUT_S,
                      advisor._DEFERRING_DISPOSITION_TIMEOUT_S,
                      advisor._ACCEPTANCE_JUDGE_TIMEOUT_S,
-                     advisor._APPROVAL_ASK_TIMEOUT_S):
+                     advisor._APPROVAL_ASK_TIMEOUT_S,
+                     advisor._LANDING_DISCIPLINE_LAST_RESORT_TIMEOUT_S):
         assert constant == judge_latency.LAST_RESORT_CEILING_S
 
 
@@ -285,7 +290,7 @@ def test_required_budget_covers_the_preceding_medians_and_the_last_floor():
 
 # --- every judge call carries a timeout of its own ---------------------------
 
-# The five judge entry points and the constant each one's default must be. Every
+# The six judge entry points and the constant each one's default must be. Every
 # one is called with an explicit timeout from inside a hook; the default is what
 # a caller OUTSIDE a hook gets, and `test_advisor.py` reads it structurally.
 _JUDGE_CALLS = {
@@ -293,6 +298,7 @@ _JUDGE_CALLS = {
     "judge_feedback_signal": (lambda run: advisor.judge_feedback_signal("не так", run, enabled=True)),
     "judge_outage_escalation": (lambda run: advisor.judge_outage_escalation("500 от API", run, enabled=True)),
     "judge_deferring_disposition": (lambda run: advisor.judge_deferring_disposition("меню", run, enabled=True)),
+    "judge_landing_discipline_ask": (lambda run: advisor.judge_landing_discipline_ask("меню", run, enabled=True)),
     "acceptance_judge": (lambda run: advisor.acceptance_judge("наблюдение", "ожидание", run, enabled=True)),
 }
 
