@@ -665,6 +665,46 @@ def plans_add_dir_args(kind: str, plans_directory: Path) -> list[str]:
     return []
 
 
+def _vcs_root(cwd: str) -> "str | None":
+    """VCS root of `cwd`: git first, then arc (mirrors
+    hook-scope-track.py::resolve_repo_root_vcs; duplicated rather than
+    imported since that module is a standalone hook script, not a library)."""
+    for probe in (["git", "rev-parse", "--show-toplevel"], ["arc", "root"]):
+        try:
+            out = subprocess.run(probe, cwd=cwd, capture_output=True, text=True, timeout=4)
+        except Exception:
+            continue
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+    return None
+
+
+def repo_root_add_dir_args(kind: str, cwd: str) -> list[str]:
+    """`--add-dir` argv granting a `developer` spawn the same VCS-repo-root
+    scope its parent session already has, when the spawn's cwd (inherited
+    from the parent process — nothing in this module passes an explicit
+    `cwd=` to the child launch) sits strictly below that root.
+
+    Difficulty removed: a monorepo mount can hold several product subtrees
+    under one repo_root (e.g. `team-a/service` and a sibling
+    `team-b/tool/...`). The parent session's own trust boundary
+    (session_scope, repo_root-granular) already covers the whole mount, but a
+    spawned developer's workspace defaults to just its cwd, so a stage whose
+    declared deliverable legitimately lives in a sibling subtree hits a
+    permission wall the parent was never actually going to hit. Granting
+    repo_root here does not widen trust past what the parent already holds —
+    it only propagates the parent's own already-established boundary down to
+    the child. Scoped to `developer` only: read-only kinds (thinker,
+    code-reviewer) don't write outside their brief, and `planner` writes only
+    its own plan file (see PLANS_WRITE_KINDS)."""
+    if kind != "developer":
+        return []
+    root = _vcs_root(cwd)
+    if not root or os.path.normpath(root) == os.path.normpath(cwd):
+        return []
+    return ["--add-dir", root]
+
+
 def build_child_settings(kind: str, plans_directory: "Path | None" = None) -> dict:
     """Child `--settings` payload: the auto-compaction window pin for every kind
     (both forms, mirroring settings/base.json — the env key wins in the client's
@@ -1015,6 +1055,7 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(build_child_settings(args.kind, plans_directory)),
     ]
     cmd.extend(plans_add_dir_args(args.kind, plans_directory))
+    cmd.extend(repo_root_add_dir_args(args.kind, os.getcwd()))
     permission_mode = resolve_permission_mode(args)
     if permission_mode is not None:
         cmd.extend(["--permission-mode", permission_mode])
