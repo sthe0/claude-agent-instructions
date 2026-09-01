@@ -47,6 +47,16 @@ outgrown, re-derived from both regimes instead of replaced):
     never happened.
   * N=16 per arm (32 per judge), the size of every existing per-regime sample,
     and enough for a nearest-rank p90 to rest on more than one observation.
+  * A call that returned NO ANSWER is not an observation and is never recorded.
+    The first run of this file recorded 66 such calls -- all six arms went from
+    a real verdict to `judge exited non-zero (fail-open)` at i=5 and stayed
+    there -- as `latency_s` values of ~10s, the cost of a `claude -p` that
+    starts and fails rather than of a judge that answers. Nothing downstream
+    would have caught it: test_every_row_re_derives_from_the_samples_it_cites
+    reads EVERY entry of a cited series and filters on nothing, so those 10s
+    non-calls would have re-derived a row that looks perfectly consistent and
+    describes a latency no judge has. So each arm retries instead of recording,
+    and a run that cannot get answers stops rather than filling up with them.
 
 The YES arms reuse the EXACT prompt texts of the series already in each row's
 provenance (ab.py's escalation ask, topup2.py's binary-ask turn and feedback
@@ -77,9 +87,33 @@ from agentctl import advisor  # noqa: E402
 from lib import ask_text  # noqa: E402
 
 OUT = HERE / "drift-sample.json"
+PARTIAL = SCRATCH / "drift-sample.partial.json"
 LOCK = SCRATCH / "drift.lock"
 N = 16
 TIMEOUT_S = 60
+
+# Retry budget for calls that came back without an answer. RETRY_SLEEP_S is a
+# pause, not a measurement: the failing regime the first run hit was flat and
+# machine-wide, so a retry that follows instantly only converts one wasted call
+# into two. GIVE_UP_AFTER consecutive no-answers ends the run, because that is
+# no longer noise -- it is a machine that cannot produce a sample right now, and
+# continuing would spend an hour proving it.
+RETRY_SLEEP_S = 10
+GIVE_UP_AFTER = 5
+
+# Reasons that mean the call produced NO ANSWER, so there is no latency to
+# record (advisor's three-valued contract: reason is "" or None for a genuine
+# verdict, and a non-empty "...(fail-open)" string otherwise). "unparseable" is
+# deliberately NOT here: the model answered and the wall-clock is a real
+# observation of this judge: only the parse of its first line failed.
+NO_ANSWER_MARKERS = (
+    "exited non-zero", "returned no output", "timed out", "raised",
+    "disabled", "no runner", "no text",
+)
+
+
+def no_answer(reason: "str | None") -> bool:
+    return bool(reason) and any(m in reason for m in NO_ANSWER_MARKERS)
 
 # --- binary_ask ---------------------------------------------------------------
 
@@ -153,18 +187,41 @@ print(f"lock={LOCK} pid={os.getpid()} ledger={os.environ['AGENTCTL_JUDGE_LEDGER'
 started = time.monotonic()
 try:
     out = {name: [] for name, _, _, _ in ARMS}
+    discarded = 0
+    consecutive = 0
     for i in range(N):
         for name, text, fn, want in ARMS:
-            t0 = time.monotonic()
-            verdict, reason = fn(
-                text, advisor.subprocess_runner, enabled=True, timeout=TIMEOUT_S,
-            )
+            while True:
+                t0 = time.monotonic()
+                verdict, reason = fn(
+                    text, advisor.subprocess_runner, enabled=True, timeout=TIMEOUT_S,
+                )
+                elapsed = round(time.monotonic() - t0, 2)
+                if not no_answer(reason):
+                    consecutive = 0
+                    break
+                discarded += 1
+                consecutive += 1
+                print(f"{name} {i}: NO ANSWER after {elapsed}s ({reason}) — "
+                      f"discarded, {consecutive} in a row", flush=True)
+                if consecutive >= GIVE_UP_AFTER:
+                    raise SystemExit(
+                        f"{consecutive} calls in a row came back without an answer; "
+                        f"stopping with {sum(len(v) for v in out.values())} of "
+                        f"{N * len(ARMS)} observations taken. The partial run is at "
+                        f"{PARTIAL} and {OUT} was NOT written — a sample missing its "
+                        f"slow tail is not a smaller sample, it is a different one."
+                    )
+                time.sleep(RETRY_SLEEP_S)
             row = {"i": i, "verdict": bool(verdict), "reason": reason,
-                   "ok": bool(verdict) == want,
-                   "latency_s": round(time.monotonic() - t0, 2)}
+                   "ok": bool(verdict) == want, "latency_s": elapsed}
             out[name].append(row)
-            print(f"{name} {i}: {verdict} {row['latency_s']}s", flush=True)
-            OUT.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"DONE in {round(time.monotonic() - started)}s")
+            print(f"{name} {i}: {verdict} {elapsed}s", flush=True)
+            # Progress goes to scratch, not to OUT: a run that stops early must
+            # not leave behind a file with a sample's name and a sample's shape.
+            PARTIAL.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    OUT.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"DONE in {round(time.monotonic() - started)}s, "
+          f"{discarded} no-answer call(s) discarded and retried")
 finally:
     os.unlink(str(LOCK))
