@@ -111,7 +111,9 @@ JUDGE_REVIEWER = "judge:haiku"
 _ACCEPTANCE_JUDGE_TIMEOUT_S = 41
 def _prompt_argv(runtime_host: str, complexity: str, prompt: str) -> list[str]:
     model = model_for(runtime_host, complexity)
-    return host_llm.build_prompt_argv(runtime_host, model, prompt)
+    return host_llm.build_prompt_argv(
+        runtime_host, model, prompt, lean=(complexity == _JUDGE_COMPLEXITY)
+    )
 
 _JUDGE_PASS = "pass"
 _JUDGE_REVISE = "revise"

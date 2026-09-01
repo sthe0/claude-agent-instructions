@@ -476,6 +476,23 @@ def isolated_run_kwargs() -> dict:
     return {"cwd": str(cwd), "env": env}
 
 
+# HOST_CLAUDE isolation bundle for a binary-verdict judge call, inserted before
+# the trailing prompt argv element when `lean=True`. Copied verbatim from
+# samples/judge-latency/ab.py's LEAN constant rather than reinvented: a clean,
+# contention-free A/B (this session's /tmp/cc-scratch/clean-ab-feedback.py)
+# showed feedback_signal scoring 0/3 under the bare invocation (2 timeouts, 1
+# unparseable "I don't have direct access to..." answer) and 3/3 under this
+# bundle, because a bare `claude -p` loads the full ambient CLAUDE.md and the
+# judge drifts into role-playing as the root coordinator instead of returning
+# a verdict — a collision specific to prompts that ask about agent behavior.
+LEAN_ISOLATION_FLAGS = [
+    "--system-prompt",
+    "You are a strict binary classifier. Follow the user's instructions exactly.",
+    "--disable-slash-commands",
+    "--strict-mcp-config",
+    "--no-session-persistence",
+]
+
 _HOST_BINARY_FAMILY = {
     HOST_CLAUDE: frozenset({"claude"}),
     HOST_CURSOR: frozenset({"agent", "cursor-agent"}),
@@ -534,13 +551,21 @@ def preflight(host: str) -> tuple[bool, str]:
 
 
 def build_prompt_argv(
-    host: str, model: str | None, prompt: str, *, workspace: "Path | str | None" = None
+    host: str,
+    model: str | None,
+    prompt: str,
+    *,
+    workspace: "Path | str | None" = None,
+    lean: bool = False,
 ) -> list[str]:
     binary = binary_for(host)
     if host == HOST_CLAUDE:
         if model is None:
             raise ValueError("model is required for HOST_CLAUDE")
-        argv = [binary, "-p", "--model", model, prompt]
+        argv = [binary, "-p", "--model", model]
+        if lean:
+            argv += LEAN_ISOLATION_FLAGS
+        argv.append(prompt)
     elif host == HOST_CURSOR:
         # `model is None` is a FIRST-CLASS value here, not an omission: every tier
         # of CURSOR_COMPLEXITY_MODEL is None, and omitting --model is how a caller
