@@ -95,6 +95,19 @@ UNMEASURED_NOTE = (
     "hook, so no harness timeout kills it and the last-resort ceiling applies."
 )
 
+# The other shape of unmeasured, and the reason it is a separate note: what makes
+# UNMEASURED_NOTE harmless is the clause "runs outside any hook", and a judge
+# named in HOOK_CALL_SEQUENCE breaks it. Such a judge HAS a harness timeout above
+# it and a budget beside it, and required_budget_s cannot size that budget from a
+# row with no p90 — so it raises rather than letting the hook be registered on a
+# guessed number. The note names the one command that closes it.
+UNMEASURED_HOOK_CALLED_NOTE = (
+    "UNMEASURED: no latency sample exists for this judge yet, and unlike the "
+    "rows above it IS called from a hook, so its whole-invocation budget cannot "
+    "be sized. Run samples/judge-latency/sample_committed_data.py and record the "
+    "resulting row here."
+)
+
 MEASURED: "dict[str, dict[str, Row]]" = {
     advisor._JUDGE_MODEL: {
         "deferring_disposition": Row(
@@ -163,6 +176,11 @@ MEASURED: "dict[str, dict[str, Row]]" = {
             judge="question_materiality",
             n=0, min_s=None, median_s=None, p90_s=None, max_s=None,
             provenance=(), note=UNMEASURED_NOTE,
+        ),
+        "committed_data": Row(
+            judge="committed_data",
+            n=0, min_s=None, median_s=None, p90_s=None, max_s=None,
+            provenance=(), note=UNMEASURED_HOOK_CALLED_NOTE,
         ),
     },
 }
@@ -244,6 +262,7 @@ HOOK_CALL_SEQUENCE: "dict[str, tuple[str, ...]]" = {
     "hook-turn-end-gate.py": ("feedback_signal", "binary_ask", "outage_escalation"),
     "hook-plan-delivery-gate.py": ("approval_ask",),
     "hook-resolution-reminder.py": ("landing_discipline",),
+    "hook-guard-committed-data.py": ("committed_data",),
 }
 
 # Head-room the whole-invocation budget must keep beyond the calls it plans, for

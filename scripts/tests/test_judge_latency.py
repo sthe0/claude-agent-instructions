@@ -267,7 +267,8 @@ def test_the_last_resort_ceiling_is_the_family_maximum_plus_one():
                      advisor._DEFERRING_DISPOSITION_TIMEOUT_S,
                      advisor._ACCEPTANCE_JUDGE_TIMEOUT_S,
                      advisor._APPROVAL_ASK_TIMEOUT_S,
-                     advisor._LANDING_DISCIPLINE_LAST_RESORT_TIMEOUT_S):
+                     advisor._LANDING_DISCIPLINE_LAST_RESORT_TIMEOUT_S,
+                     advisor._COMMITTED_DATA_LAST_RESORT_TIMEOUT_S):
         assert constant == judge_latency.LAST_RESORT_CEILING_S
 
 
@@ -300,6 +301,7 @@ _JUDGE_CALLS = {
     "judge_deferring_disposition": (lambda run: advisor.judge_deferring_disposition("меню", run, enabled=True)),
     "judge_landing_discipline_ask": (lambda run: advisor.judge_landing_discipline_ask("меню", run, enabled=True)),
     "acceptance_judge": (lambda run: advisor.acceptance_judge("наблюдение", "ожидание", run, enabled=True)),
+    "judge_committed_data": (lambda run: advisor.judge_committed_data('{"chat_id": "c"}', run, enabled=True)),
 }
 
 

@@ -4518,6 +4518,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "411c1dd916d3201e"
+domain = "code"
+file = "scripts/tests/test_hook_guard_committed_data.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "983581b0b115f82b"
 domain = "code"
 file = "scripts/tests/test_hook_import_blindness.py"
@@ -9969,6 +9977,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "731609f9436619d1"
 domain = "code_file_rollup"
 file = "scripts/tests/test_hook_guard_canon_readonly.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "f8d9c48f511ee048"
+domain = "code_file_rollup"
+file = "scripts/tests/test_hook_guard_committed_data.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"

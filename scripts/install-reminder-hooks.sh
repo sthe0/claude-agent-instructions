@@ -159,6 +159,16 @@ DESIRED = [
     # Hard gate: deny a recursive rm that (worst-case, with any empty $VAR) targets
     # /, $HOME, ~/.claude, or the instruction repo — the agent's own memory/config.
     ("PreToolUse",       "Bash",  "hook-guard-destructive-rm.py",    5),
+    # Hard gate: deny a `git`/`arc` add or commit that would put raw production or
+    # personal data (end-user message text, model replies to it, chat / user /
+    # session identifiers) into a shared repository — a personal `junk/` tree
+    # included. A cheap command parse rejects every other Bash call for free; only
+    # a staging command reads a file, and only a prefilter hit costs a judge call.
+    # 50 = the hook's own _COMMITTED_DATA_JUDGE_BUDGET_S=45 plus interpreter-start
+    # headroom, the same shape as the gates above. The budget itself is sized by
+    # lib/judge_latency.LAST_RESORT_CEILING_S because `committed_data` has no
+    # measured row yet; both numbers move to that row's own ceiling once it does.
+    ("PreToolUse",       "Bash",  "hook-guard-committed-data.py",   50),
     # Hard gate: deny an Edit/Write or `git commit` in canon (the serving/PRIMARY
     # Core checkout, on ANY branch, plus any machine-local canon-roots entry) —
     # feature work must go in a linked worktree or second mount, so live hooks

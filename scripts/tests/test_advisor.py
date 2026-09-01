@@ -788,6 +788,7 @@ _JUDGE_TIMEOUT_CONSTANTS = {
     "judge_deferring_disposition": "_DEFERRING_DISPOSITION_TIMEOUT_S",
     "judge_landing_discipline_ask": "_LANDING_DISCIPLINE_LAST_RESORT_TIMEOUT_S",
     "acceptance_judge": "_ACCEPTANCE_JUDGE_TIMEOUT_S",
+    "judge_committed_data": "_COMMITTED_DATA_LAST_RESORT_TIMEOUT_S",
 }
 
 

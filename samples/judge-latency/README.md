@@ -163,6 +163,29 @@ unavailability, never on a judge answering wrong, so this is a note for
 whoever authors the next fixture batch, not a defect in this stage's
 measurement.
 
+## `committed_data` — the one row that is NOT measured yet
+
+`sample_committed_data.py` is written but **has not been run**: it costs real
+model calls, which the stage that added the judge had no permission to make. So
+`lib/judge_latency.py` carries `committed_data` as an unmeasured row with
+`UNMEASURED_HOOK_CALLED_NOTE`, and that is deliberately not harmless the way the
+other two unmeasured rows are — those run outside any hook, this one is named in
+`HOOK_CALL_SEQUENCE`. `required_budget_s` therefore raises on it, and the test
+`test_each_hooks_budget_covers_the_calls_it_declares` (in
+[scripts/tests/test_hook_wiring.py](../../scripts/tests/test_hook_wiring.py))
+fails with a `KeyError` naming this script. That failure IS the calibration
+obligation; it is not a defect to route around.
+
+Meanwhile `scripts/hook-guard-committed-data.py` sizes itself from
+`LAST_RESORT_CEILING_S` (41 s) — the module's own documented rule for a judge
+with no row, and strictly more conservative than any measured row's floor — so
+the hook is honestly sized today, just not yet *checkably* sized.
+
+To close it: run `python3 sample_committed_data.py` (16 calls, 8 per arm), pipe
+the two latency lists through `stats.py`, replace the placeholder row with the
+result plus `committed-data-sample.json` as its provenance, and the test above
+goes green on its own.
+
 ## Supporting samples (not part of the four rows)
 
 - `lean-sample.json` — lean vs standard prompt A/B; shows the lean prompt is not
@@ -173,6 +196,7 @@ measurement.
 ## Reproducing
 
 `sample.py`, `ab.py`, `topup.py` / `topup2.py`, `sample_landing_discipline.py` are the
-runners as executed; `stats.py` prints the table. They import `agentctl.advisor` from
+runners as executed (`sample_committed_data.py` is written but not yet run — see
+above); `stats.py` prints the table. They import `agentctl.advisor` from
 this branch and each call the real judge, so a re-run costs real model calls and will
 not reproduce the latencies exactly — only their shape.
