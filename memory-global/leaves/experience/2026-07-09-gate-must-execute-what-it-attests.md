@@ -9,7 +9,7 @@ tier: 1
 refs: [2026-07-04-topological-gate-when-signal-unobservable.md, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md, 2026-06-24-gate-exemption-is-category-error-for-result-images.md]
 plan_file: /home/the0/.claude-agent/plans/hook-ask-defer-timer-block.v4.toml
 created: 2026-07-09
-last_verified: 2026-08-15
+last_verified: 2026-09-01
 ---
 
 # A gate must execute the artifact it attests, and every refusal it can issue must reach a resolution cycle
@@ -55,6 +55,10 @@ Notice the executed spec differs from the attested artifact (dispatch handed a s
 ### 2026-08-15 — Instance 6 — the assertion that cannot fail, and a red run reasoned instead of run (agentctl criterion-carry fix)
 - Where it arose: scripts/agentctl/cli.py::_apply_refined_stage_fields + scripts/tests/test_replan.py; sub-plan dispatch-stage-projection, stages 4-5
 - Working plan: /Users/the0/.claude-agent/plans/dispatch-stage-projection.toml
+
+### 2026-09-01 — the guard measured a CORRELATED axis, so it could not fail the way the artifact actually fails
+- Where it arose: claude-agent-instructions: scripts/lint-prose-length.py (byte block in main(), deliberately NOT a GOVERNED entry), config.md (new memory-index-max-bytes row), memory-global/MEMORY.md, memory-global/leaves/coordination/MEMORY.md. Landed on origin/main as f8517cd.
+- Working plan: /home/the0/.claude-agent/plans/memory-index-byte-gate-and-subindex.toml
 ## Common core & variations
 **Common:** One functional ground with the two engine defects above: a gate or verifier is only as truthful as the thing it actually reads. Attest what you execute; announce only what you read; scan only what is under version control. Each instance reported GREEN (or a confident directive) while grounded in something other than the artifact it governed.
 
