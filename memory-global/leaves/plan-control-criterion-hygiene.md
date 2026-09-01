@@ -1,6 +1,6 @@
 ---
 name: plan-control-criterion-hygiene
-description: Four plan-authoring norms for a stage's control criterion — declare the venue a check observes instead of hard-coding a `cd` into the verify_command; never let a criterion assert an unverified fact about current behaviour; take a criterion's number from an explicitly bounded invocation; and never let a procedure step rewrite the criterion it is measured by.
+description: Five plan-authoring norms for a stage's control criterion — declare the venue a check observes instead of hard-coding a `cd` into the verify_command; never let a criterion assert an unverified fact about current behaviour; take a criterion's number from an explicitly bounded invocation; never let a procedure step rewrite the criterion it is measured by; and name the lifecycle state the criterion describes, because verify-final re-runs a criterion authored pre-merge in the post-merge world.
 type: feedback
 schema: leaf/v1
 created: 2026-08-31
@@ -14,7 +14,7 @@ last_verified: 2026-09-01
 To achieve a stage check that can actually go red for the right reason and
 green for the right reason, the criterion has to survive the interval between
 plan authoring and stage execution — and the executor has to be able to run it
-without repairing it. Four distinct authoring habits break that, and all four
+without repairing it. Five distinct authoring habits break that, and all five
 were observed live: three of them inside the very plan whose fourth stage
 records this leaf.
 
@@ -29,10 +29,10 @@ cycle plus a fresh thinker review bound to the moved plan digest — and if the
 review-round budget is already spent, a user override on top. That price is
 paid for an authoring slip, every time.
 
-The fourth norm is the one that makes the other three enforceable rather than
-merely advisable: without it, an executor who notices a broken criterion
-"fixes" it in flight, and the plan silently stops being the thing the work was
-measured against.
+The fourth norm is the one that makes the others enforceable rather than merely
+advisable: without it, an executor who notices a broken criterion "fixes" it in
+flight, and the plan silently stops being the thing the work was measured
+against.
 
 ## Guidance
 
@@ -117,6 +117,47 @@ in-flight edit, and that is the point: the extra cost buys an independent read
 of the change, which is exactly what an executor editing its own success
 condition does not have.
 
+### 5. A criterion names the lifecycle state it describes
+
+A change passes through states: unbuilt, built in a delivery worktree, standing
+as an open review, merged into trunk, rolled out. A criterion is only ever true
+of **one** of them. Name which one — and prefer the state that is **terminal**
+for the stage, because that is the state the criterion will be re-executed in.
+
+`verify-final` re-runs every measurable stage's `verify_command` **after** the
+change has landed. So a criterion phrased over the pre-merge world is not merely
+at risk of going stale — it is *guaranteed* to be re-run in the post-merge world,
+where "an open review request exists" is false precisely *because* the stage
+succeeded. Norm 1 governs **where** a check looks; this norm governs **which
+lifecycle state** it is allowed to describe. They fail together often: a check
+pointed at a delivery worktree usually also asserts something only true before
+the branch landed.
+
+Two authoring habits follow:
+
+- **Anchor a past-state clause to something immutable.** A merged revision (or a
+  revision pair spanning the change), a run id, an artifact digest — each stays
+  true forever. "The review request is open", "the branch is ahead of trunk",
+  "the worktree contains N commits" do not. When a stage's real content *is* a
+  transient state — a review had to happen, a run had to be launched — assert the
+  durable trace it leaves, not the state itself.
+- **Sweep the whole plan, not just the stage you touched.** Transient-state
+  phrasing clusters: an author writing one such clause has usually written
+  several. A single pass over every criterion, asking of each "in which state is
+  this sentence true?", is cheap next to one difficulty cycle.
+
+On discovering that a criterion describes a state the work has already left,
+norm 4 applies unchanged: surface it as a difficulty and re-baseline through
+`declare → … → replan`. Do not edit it in flight, even though the correction is
+obviously right — obviousness is what makes this the tempting case.
+
+> **Observed.** A stage's criterion was written against a standing open review.
+> The user then merged and rolled the change out themselves, so the stage's
+> terminal state became the merge and the criterion's subject no longer existed.
+> The repair re-derived both `done_criterion` and `verify_command` against a
+> revision pair — a fact no later event can unmake — and a plan-wide sweep
+> confirmed no other criterion was still phrased over the superseded state.
+
 ## See also
 
 - [[experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan]]
@@ -127,5 +168,5 @@ condition does not have.
   on the *effort* axis; distinct functional ground (pricing a stage) from this
   leaf's (stating a stage's control).
 - [[plan-activity-ontology]] — the eight elements a plan must cover; norms 1–3
-  sharpen the *control criterion* element, norm 4 protects it from its own
+  and 5 sharpen the *control criterion* element, norm 4 protects it from its own
   executor.
