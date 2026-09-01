@@ -115,7 +115,7 @@ a detail: four standard estimators on the n=18 deferring sample give 29.94 /
 | `hook-resolution-reminder.py` | `landing_discipline` | `haiku` | `landing-discipline-sample.json:pr_proposing + landing-discipline-sample.json:direct_push` | 16 | 3.88 | 4.96 | 6.37 | 15.38 | 22 | 0 | 0.0000 | 0.1875 |
 | — | `acceptance_judge` | `haiku` | UNMEASURED — no latency sample exists | — | — | — | — | — | — | — | — | — |
 | — | `question_materiality` | `haiku` | UNMEASURED — no latency sample exists | — | — | — | — | — | — | — | — | — |
-| `hook-guard-committed-data.py` | `committed_data` | `haiku` | UNMEASURED — `sample_committed_data.py` is written but has not been run | — | — | — | — | — | 45 | — | — | — |
+| `hook-guard-committed-data.py` | `committed_data` | `haiku` | `committed-data-sample.json:raw_data + committed-data-sample.json:not_data` | 16 | 4.36 | 5.29 | 7.24 | 11.14 | 45 | 0 | 0.0000 | 0.1875 |
 
 `acceptance_judge` and `question_materiality` are listed because leaving them out
 would be the quieter lie: the `MEASURED` table carries a row for each, and a reader
@@ -123,15 +123,16 @@ comparing the two would otherwise assume they were covered. Both run outside any
 hook, so no harness timeout kills them and the last-resort ceiling applies. Neither
 is sized by evidence.
 
-`committed_data` is the third unmeasured row and the only one that is NOT
-harmless, because it IS called from a hook: its budget is a number that ought to
-be checkable against a sample and currently is not. Sampling costs live model
-calls, which the stage that added the judge had no permission to make, so the
-hook is sized from the family last-resort ceiling — stricter than any measured
-row's own floor — and
-`test_each_hooks_budget_covers_the_calls_it_declares` fails on it by
-construction until `samples/judge-latency/sample_committed_data.py` is run and
-its row lands here. That red test is the obligation, not a defect.
+`committed_data` was, until the row above landed, the third unmeasured row and
+the only one that was NOT harmless, because it IS called from a hook: unlike
+`acceptance_judge` and `question_materiality`, which run outside any hook,
+`committed_data` is named in `HOOK_CALL_SEQUENCE`, so `required_budget_s` raised
+on it and `test_each_hooks_budget_covers_the_calls_it_declares` failed with a
+`KeyError` naming it until `samples/judge-latency/sample_committed_data.py` was
+run and its row was recorded in `lib/judge_latency.py`. See
+`samples/judge-latency/README.md`'s `committed_data` section for the
+measurement itself and the reasoning for one combined row rather than two
+per-arm ones.
 
 ### The zero rule
 
@@ -142,8 +143,9 @@ With zero events in n trials the 95% upper bound on the rate is the rule of thre
 
 > On the evidence available, the per-call fail-open rate is **at most 17%**
 > (deferring, 3/18), **19%** (outage, 3/16), **12%** (feedback, 3/26),
-> **19%** (binary_ask, 3/16), **5%** (approval_ask, 3/64) and **19%**
-> (landing_discipline, 3/16), each at 95% confidence.
+> **19%** (binary_ask, 3/16), **5%** (approval_ask, 3/64), **19%**
+> (landing_discipline, 3/16) and **19%** (committed_data, 3/16), each at 95%
+> confidence.
 
 These bounds are wide because the samples are small, and they shrink only with
 more calls. Section 2 supplies the concrete reason not to dismiss them: a live

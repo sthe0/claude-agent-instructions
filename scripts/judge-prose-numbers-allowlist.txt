@@ -101,7 +101,7 @@ scripts/lib/hook_wiring.py:159:13ce4bee  # K = 1 is the declared call count of t
 scripts/lib/hook_wiring.py:164:7c67ab7c  # 30s = _APPROVAL_ASK_JUDGE_BUDGET_S, the hook's own whole-invocation judge budget, mirroring the sibling rows above (supersedes the 13s tie removed once the equality assertion was dropped)
 scripts/lib/hook_wiring.py:397:56471431  # historical: the 5s registration used as the example of a slow-judge hook the report must surface
 scripts/lib/hook_wiring.py:171:7174ba0b  # 22s = hook-resolution-reminder.py's own _LANDING_DISCIPLINE_JUDGE_BUDGET_S, mirroring the sibling single-judge rows above
-scripts/lib/hook_wiring.py:180:f2c22401  # 45s = hook-guard-committed-data.py's own _COMMITTED_DATA_JUDGE_BUDGET_S; not derived from a committed_data row (there is none yet) but from LAST_RESORT_CEILING_S + 4, and it moves to that row's ceiling once sample_committed_data.py has been run
+scripts/lib/hook_wiring.py:180:f2c22401  # 45s = hook-guard-committed-data.py's own _COMMITTED_DATA_JUDGE_BUDGET_S = LAST_RESORT_CEILING_S + 4; committed_data now has a measured row (ceiling 13s) but this budget was frozen at its prior height rather than retuned down to it
 
 # --- samples/judge-latency/README.md -----------------------------------------
 samples/judge-latency/README.md:13:eecb96d2  # K = 1 as declared in lib/hook_wiring.TIMEOUT_REQUIREMENT_CALLS; the identity budget == per-call ceiling is what the single-call test asserts
@@ -124,7 +124,8 @@ samples/judge-latency/README.md:74:0384f6fb  # 51.53 = the sum of the three obse
 samples/judge-latency/README.md:84:af842d45  # 52s again, in the sentence that names it the APPROVED height rather than a derived one
 samples/judge-latency/README.md:89:e7a33457  # max 71.96 belongs to lean-sample.json, a SUPPORTING sample excluded from every row — cited to show the lean prompt's worse tail
 samples/judge-latency/README.md:90:ba28e247  # historical: the original 5s registration the haiku baseline made look survivable
-samples/judge-latency/README.md:180:2956b46e  # 41 s = LAST_RESORT_CEILING_S, the ceiling hook-guard-committed-data.py sizes itself by while `committed_data` has no measured row — the module's stated rule for exactly that case, not a borrowed neighbour's tail
+samples/judge-latency/README.md:45:d46aeb1f  # n=8 each = the two arms' sample sizes in committed-data-sample.json (raw_data, not_data), matching ARMS' fixture counts in sample_committed_data.py
+samples/judge-latency/README.md:175:fb2bf552  # n=16 = the combined committed_data row size (8 raw_data + 8 not_data), a single row by the same landing_discipline precedent the sentence names
 
 # live-run-evidence.md — the stage-4 write-up. Every number here is either one of
 # the three recorded live runs or a statistic the checker recomputes from the

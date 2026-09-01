@@ -15,7 +15,7 @@ sits in `final_check` and re-runs **from canon** after the change lands.
 Every latency below is wall-clock around `advisor.subprocess_runner`, measured with
 `time.monotonic()`, one process at a time.
 
-## The six calibrated rows
+## The seven calibrated rows
 
 | pool | n | min | median | p90 | max | threshold | ceiling `ceil(max)+1` |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -25,6 +25,7 @@ Every latency below is wall-clock around `advisor.subprocess_runner`, measured w
 | binary_ask | 16 | 5.93 | 7.46 | 11.06 | 11.52 | **12** | **13** |
 | approval_ask | 64 | 5.88 | 12.77 | 17.29 | 19.14 | **18** | **21** |
 | landing_discipline | 16 | 3.88 | 4.96 | 6.37 | 15.38 | **7** | **17** |
+| committed_data | 16 | 4.36 | 5.29 | 7.24 | 11.14 | **8** | **13** |
 
 `approval_ask`'s threshold/ceiling are as computed by `lib/judge_latency.py`
 today; see "approval2-sample.json — the regime shifted" below for why this row
@@ -41,6 +42,7 @@ Provenance of each row, file by file:
 | binary_ask | `topup2-sample.json:binary_ask` (n=16) |
 | approval_ask | `approval-sample.json:approval` (n=16) + `approval-sample.json:not_approval` (n=16) + `approval2-sample.json:approval` (n=16) + `approval2-sample.json:not_approval` (n=16) |
 | landing_discipline | `landing-discipline-sample.json:pr_proposing` (n=8) + `landing-discipline-sample.json:direct_push` (n=8) |
+| committed_data | `committed-data-sample.json:raw_data` (n=8) + `committed-data-sample.json:not_data` (n=8) |
 
 All 32 verdicts in `topup2-sample.json` are correct (`ok: true` on every row); the
 sample measures latency, not accuracy, but a wrong verdict would have invalidated it.
@@ -163,28 +165,36 @@ unavailability, never on a judge answering wrong, so this is a note for
 whoever authors the next fixture batch, not a defect in this stage's
 measurement.
 
-## `committed_data` — the one row that is NOT measured yet
+## `committed_data` — one process, arms alternating, no gap between them
 
-`sample_committed_data.py` is written but **has not been run**: it costs real
-model calls, which the stage that added the judge had no permission to make. So
-`lib/judge_latency.py` carries `committed_data` as an unmeasured row with
-`UNMEASURED_HOOK_CALLED_NOTE`, and that is deliberately not harmless the way the
-other two unmeasured rows are — those run outside any hook, this one is named in
-`HOOK_CALL_SEQUENCE`. `required_budget_s` therefore raises on it, and the test
+`sample_committed_data.py` ran 16 calls (8 `raw_data`, 8 `not_data`) in one
+process under an `O_CREAT|O_EXCL` pid lock, the two arms alternating inside it
+— same discipline as `landing_discipline`. The two arms' latencies overlap
+throughout (`raw_data` 4.38-11.14, `not_data` 4.36-7.24) with no gap and no
+observed contention or regime shift between them, so — same precedent as
+`landing_discipline`, not `approval_ask` — a single combined n=16 row is the
+plain case, not the exceptional one.
+
+`not_data`'s eight verdicts are all correct (`ok: true` on every row): every
+fixture there genuinely is code, schema, docs or an aggregate, so asking the
+judge for NO does not conflict with its own prompt. `raw_data` carries no `ok`
+column at all: every fixture there is synthetic and obviously so (`chat-fake-*`
+/ `user-fake-*` identifiers, invented sentences), and
+`_COMMITTED_DATA_JUDGE_PROMPT` instructs the model to answer NO for exactly
+that shape of content — asserting the judge should say YES to it would ask it
+to contradict its own contract. All 8 `raw_data` verdicts came back NO, which
+is the judge behaving correctly against its documented contract, not a defect;
+this arm exists to measure latency across realistic-shaped payloads, not to
+check the judge's positive class. See `sample_committed_data.py`'s own
+docstring for why no committed fixture can honestly exercise that class.
+
+Before this row landed, `lib/judge_latency.py` carried `committed_data` as an
+unmeasured row with `UNMEASURED_HOOK_CALLED_NOTE` — unlike the two remaining
+unmeasured rows (which run outside any hook), this judge is named in
+`HOOK_CALL_SEQUENCE`, so `required_budget_s` raised on it and
 `test_each_hooks_budget_covers_the_calls_it_declares` (in
 [scripts/tests/test_hook_wiring.py](../../scripts/tests/test_hook_wiring.py))
-fails with a `KeyError` naming this script. That failure IS the calibration
-obligation; it is not a defect to route around.
-
-Meanwhile `scripts/hook-guard-committed-data.py` sizes itself from
-`LAST_RESORT_CEILING_S` (41 s) — the module's own documented rule for a judge
-with no row, and strictly more conservative than any measured row's floor — so
-the hook is honestly sized today, just not yet *checkably* sized.
-
-To close it: run `python3 sample_committed_data.py` (16 calls, 8 per arm), pipe
-the two latency lists through `stats.py`, replace the placeholder row with the
-result plus `committed-data-sample.json` as its provenance, and the test above
-goes green on its own.
+failed with a `KeyError` naming this script until this row was recorded.
 
 ## Supporting samples (not part of the four rows)
 
@@ -195,8 +205,8 @@ goes green on its own.
 
 ## Reproducing
 
-`sample.py`, `ab.py`, `topup.py` / `topup2.py`, `sample_landing_discipline.py` are the
-runners as executed (`sample_committed_data.py` is written but not yet run — see
-above); `stats.py` prints the table. They import `agentctl.advisor` from
-this branch and each call the real judge, so a re-run costs real model calls and will
-not reproduce the latencies exactly — only their shape.
+`sample.py`, `ab.py`, `topup.py` / `topup2.py`, `sample_landing_discipline.py` and
+`sample_committed_data.py` are the runners as executed; `stats.py` prints the
+table. They import `agentctl.advisor` from this branch and each call the real
+judge, so a re-run costs real model calls and will not reproduce the latencies
+exactly — only their shape.

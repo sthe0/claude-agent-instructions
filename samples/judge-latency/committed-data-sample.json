@@ -1,0 +1,134 @@
+{
+  "raw_data": [
+    {
+      "i": 0,
+      "filename": "chats.jsonl",
+      "verdict": false,
+      "reason": "",
+      "ok": false,
+      "latency_s": 6.03
+    },
+    {
+      "i": 1,
+      "filename": "dialogs.jsonl",
+      "verdict": false,
+      "reason": "",
+      "ok": false,
+      "latency_s": 4.65
+    },
+    {
+      "i": 2,
+      "filename": "export.csv",
+      "verdict": false,
+      "reason": "",
+      "ok": false,
+      "latency_s": 4.38
+    },
+    {
+      "i": 3,
+      "filename": "sessions.json",
+      "verdict": false,
+      "reason": "",
+      "ok": false,
+      "latency_s": 6.4
+    },
+    {
+      "i": 4,
+      "filename": "prompts.txt",
+      "verdict": false,
+      "reason": "",
+      "ok": false,
+      "latency_s": 5.05
+    },
+    {
+      "i": 5,
+      "filename": "first_messages.jsonl",
+      "verdict": false,
+      "reason": "",
+      "ok": false,
+      "latency_s": 11.14
+    },
+    {
+      "i": 6,
+      "filename": "transcript.md",
+      "verdict": false,
+      "reason": "",
+      "ok": false,
+      "latency_s": 4.95
+    },
+    {
+      "i": 7,
+      "filename": "queries.tsv",
+      "verdict": false,
+      "reason": "",
+      "ok": false,
+      "latency_s": 6.05
+    }
+  ],
+  "not_data": [
+    {
+      "i": 0,
+      "filename": "aggregate.py",
+      "verdict": false,
+      "reason": "",
+      "ok": true,
+      "latency_s": 6.0
+    },
+    {
+      "i": 1,
+      "filename": "schema.json",
+      "verdict": false,
+      "reason": "",
+      "ok": true,
+      "latency_s": 4.36
+    },
+    {
+      "i": 2,
+      "filename": "test_fixtures.jsonl",
+      "verdict": false,
+      "reason": "",
+      "ok": true,
+      "latency_s": 4.55
+    },
+    {
+      "i": 3,
+      "filename": "metrics.csv",
+      "verdict": false,
+      "reason": "",
+      "ok": true,
+      "latency_s": 4.74
+    },
+    {
+      "i": 4,
+      "filename": "loader.sql",
+      "verdict": false,
+      "reason": "",
+      "ok": true,
+      "latency_s": 5.97
+    },
+    {
+      "i": 5,
+      "filename": "pipeline.yaml",
+      "verdict": false,
+      "reason": "",
+      "ok": true,
+      "latency_s": 7.24
+    },
+    {
+      "i": 6,
+      "filename": "README.md",
+      "verdict": false,
+      "reason": "",
+      "ok": true,
+      "latency_s": 5.42
+    },
+    {
+      "i": 7,
+      "filename": "conftest.py",
+      "verdict": false,
+      "reason": "",
+      "ok": true,
+      "latency_s": 5.15
+    }
+  ]
+}

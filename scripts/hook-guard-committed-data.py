@@ -78,21 +78,21 @@ except BaseException as exc:
     judge_ledger.import_failed("committed_data", f"{type(exc).__name__}: {exc}")
     raise
 
-# Whole-invocation budget for the judge, and the floor below which a call is not
-# started. `committed_data` has NO measured row in lib/judge_latency.py yet, so
-# neither call_floor_s nor call_ceiling_s can be applied to it — and borrowing a
-# neighbour's tail is exactly what that module exists to refuse. The rule that
-# DOES apply to a judge with no row of its own is last_resort_ceiling_s(): one
-# second past the slowest run this model has been seen to make on ANY judge
-# prompt. It is strictly more conservative than any single row's floor, so a call
-# sized by it cannot be truncated by this budget; it is also the same number
-# advisor already gives the other two unmeasured judges.
-#
-# Both constants are re-derived, not hand-typed: the moment a sample lands and
-# `committed_data` gets a measured row, they move to that row's own floor and
-# ceiling and this expression stops being reachable.
+# Floor below which a call is not started: `committed_data` still has no
+# floor of its own recorded here (see below), so this stays last_resort_ceiling_s()
+# — one second past the slowest run this model has been seen to make on ANY
+# judge prompt, strictly more conservative than any single row's own floor.
 _COMMITTED_DATA_JUDGE_MIN_CALL_S = judge_latency.LAST_RESORT_CEILING_S
-_COMMITTED_DATA_JUDGE_BUDGET_S = _COMMITTED_DATA_JUDGE_MIN_CALL_S + 4
+
+# Whole-invocation budget for the judge. `committed_data` now has a measured row
+# (n=16; lib/judge_latency.call_ceiling_s("committed_data") = 13s, well under
+# this number), but the budget itself is deliberately left at its prior
+# last-resort-derived height (41 + 4) rather than retuned down to that tighter
+# ceiling — retuning is a separate judgement call outside this row's own scope.
+# What DOES change here is the assignment shape: a literal, not an expression,
+# because scripts/check-live-run-evidence.py reads this constant out of the
+# source with `ast` and only recognises a literal (see its CEILING_CONST).
+_COMMITTED_DATA_JUDGE_BUDGET_S = 45
 
 # See the module docstring's "Cap" paragraph: one deny blocks the whole command,
 # so a second call cannot change the verdict.

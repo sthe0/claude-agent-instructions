@@ -179,8 +179,16 @@ MEASURED: "dict[str, dict[str, Row]]" = {
         ),
         "committed_data": Row(
             judge="committed_data",
-            n=0, min_s=None, median_s=None, p90_s=None, max_s=None,
-            provenance=(), note=UNMEASURED_HOOK_CALLED_NOTE,
+            # 8 raw_data + 8 not_data calls in one process, arms alternating —
+            # same discipline as landing_discipline, and like that row (not
+            # approval_ask's) a single combined population is the plain case
+            # here: the two arms' ranges overlap throughout (raw_data
+            # 4.38-11.14, not_data 4.36-7.24) with no gap and no observed
+            # contention or regime shift between them, so there is nothing a
+            # split would isolate.
+            n=16, min_s=4.36, median_s=5.29, p90_s=7.24, max_s=11.14,
+            provenance=(("committed-data-sample.json", "raw_data"),
+                        ("committed-data-sample.json", "not_data")),
         ),
     },
 }
