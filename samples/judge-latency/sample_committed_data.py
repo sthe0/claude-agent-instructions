@@ -17,6 +17,19 @@ Every RAW_DATA fixture is SYNTHESIZED and obviously so — invented sentences,
 the last place that may carry a real record: committing one would reproduce, in
 the repository, the exact defect the judge exists to catch.
 
+RAW_DATA therefore measures LATENCY ONLY, not accuracy. `_COMMITTED_DATA_JUDGE_PROMPT`
+instructs the model to answer NO for "a test fixture or example whose values are
+synthetic, hand-written or obviously fake" — exactly what every RAW_DATA row is,
+by the paragraph above. Asserting the judge should call these rows YES would ask
+it to contradict its own contract, so no `want`/`ok` column is carried for this
+arm. This judge's positive class — real captured records — cannot be exercised
+by any payload safe to commit here; that half of the judge's accuracy is verified
+by `test_hook_guard_committed_data.py`'s stubbed-runner tests instead, which
+assert the verdict directly without needing a live model call. NOT_DATA carries
+no such conflict: every row there genuinely is code, schema, docs or an aggregate
+— none of it fake data pretending to be real — so asserting the model should say
+NO to it does not contradict the prompt, and `want`/`ok` stays on that arm.
+
 ONE process, O_CREAT|O_EXCL pid lock, arms alternating inside it so machine-load
 drift hits both equally — same discipline as sample_landing_discipline.py.
 
@@ -199,7 +212,8 @@ NOT_DATA = [
 ]
 
 ARMS = [
-    ("raw_data", RAW_DATA, True),
+    # want=None: no accuracy claim on this arm — see the module docstring for why.
+    ("raw_data", RAW_DATA, None),
     ("not_data", NOT_DATA, False),
 ]
 
@@ -223,10 +237,12 @@ try:
                 filename=filename, enabled=True, timeout=120,
             )
             row = {"i": i, "filename": filename, "verdict": bool(verdict),
-                   "reason": reason, "ok": bool(verdict) == want,
-                   "latency_s": round(time.monotonic() - t0, 2)}
+                   "reason": reason, "latency_s": round(time.monotonic() - t0, 2)}
+            if want is not None:
+                row["ok"] = bool(verdict) == want
             out[name].append(row)
-            print(f"{name} {i} ({filename}): {verdict} {row['latency_s']}s", flush=True)
+            ok_str = f" ok={row['ok']}" if "ok" in row else ""
+            print(f"{name} {i} ({filename}): {verdict}{ok_str} {row['latency_s']}s", flush=True)
             OUT.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     print("DONE")
 finally:
