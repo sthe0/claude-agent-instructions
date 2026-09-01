@@ -189,6 +189,51 @@ def test_prefilter_needs_more_than_a_cue_outside_a_data_extension():
     assert not _mod.advisor.committed_data_prefilter(short_cue, "rows.py")
 
 
+# A conversation rendered into a document: no field name anywhere in the body,
+# only prose under a `**user:**` / `**assistant:**` shape. The one cue in reach
+# is the filename itself.
+RENDERED_TRANSCRIPT_MD = (
+    "## conv-fake-0007 (user-fake-0042) 2026-01-01T00:00:00Z\n\n"
+    "**user:** Hi, can you help me figure out why my sourdough starter keeps "
+    "collapsing after the second day even though I feed it on the same "
+    "schedule every morning?\n\n"
+    "**assistant:** Sure, let's look at your feeding ratio and the ambient "
+    "temperature in your kitchen first, since both affect fermentation speed "
+    "a lot more than people expect.\n"
+)
+
+
+def test_prefilter_fires_on_a_filename_cue_with_a_free_text_body():
+    """The defect this test pins: a rendered chat log carries no field-name
+    cue in its body at all, only in the name someone gave the file. Before the
+    filename was searched, this sample never reached the judge."""
+    assert _mod.advisor.committed_data_prefilter(RENDERED_TRANSCRIPT_MD, "transcript.md")
+
+
+def test_prefilter_does_not_fire_on_a_filename_cue_alone():
+    """A source file named for a cue but carrying no long free-text value must
+    not fire on its name alone — a filename cue outside a data extension goes
+    through the same free-text check a content cue does, or every
+    `response_parser.py` and `query_builder.py` would fire on its own name."""
+    response_parser_py = (
+        '"""Parse a response object into a typed record."""\n'
+        "def parse(response):\n"
+        "    return {\n"
+        '        "id": response["id"],\n'
+        '        "status": response["status"],\n'
+        "    }\n"
+    )
+    assert not _mod.advisor.committed_data_prefilter(response_parser_py, "response_parser.py")
+
+
+def test_prefilter_fires_on_a_data_extension_named_for_a_cue_with_only_short_values():
+    """The sibling boundary: inside a data extension a single cue is enough
+    regardless of source, so a filename cue gets the same one-cue-is-enough
+    treatment a content cue already gets there — no free-text value required."""
+    short_values = '{"a": "x"}\n{"a": "y"}\n'
+    assert _mod.advisor.committed_data_prefilter(short_values, "user_ids.json")
+
+
 # --- the command gate: which Bash calls cost anything at all ------------------
 
 @pytest.mark.parametrize(

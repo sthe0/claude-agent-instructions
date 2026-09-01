@@ -1095,23 +1095,32 @@ def committed_data_prefilter(sample_text: str, filename: str) -> bool:
     field-name list can decide it; all this decides is whether a model call
     happens, and it is tuned to over-fire rather than to be right.
 
+    A cue is looked for in two places, the content and the FILENAME itself —
+    `transcript.md` and `chat_export.json` are cues in their own right, and a
+    rendered conversation pasted into a document carries none of the field
+    names above in its body. Both sources feed the same two-shape rule below;
+    a filename cue is not a shortcut around it.
+
     Two shapes fire. In a data-format file (_COMMITTED_DATA_EXTENSIONS) a single
-    field cue is enough — a dump of one-word user replies has no long value to
-    find, and demanding one would skip the most quotable rows there are.
-    Anywhere else a cue must be accompanied by a long free-text value, because a
-    cue alone is what a SCRIPT ABOUT the data looks like: the remediation this
-    guard came from had five such scripts, each naming `chat_id` and
-    `first_message` as columns and carrying none of them, and each had to be
-    read by hand to be cleared.
+    field cue — from either source — is enough: a dump of one-word user replies
+    has no long value to find, and demanding one would skip the most quotable
+    rows there are. Anywhere else a cue must be accompanied by a long free-text
+    value, because a cue alone is what a SCRIPT ABOUT the data looks like: the
+    remediation this guard came from had five such scripts, each naming
+    `chat_id` and `first_message` as columns and carrying none of them, and
+    each had to be read by hand to be cleared — `response_parser.py` and
+    `query_builder.py` are the same shape by name instead of by content, and
+    must clear the same bar.
 
     Named limits, in the shape they will actually be hit:
       - A source file holding a long string literal near a cue (an embedded SQL
         query, a prompt constant) fires and costs one judge call. That is the
         designed direction of the error.
       - Real data pasted into a source file with only short values is invisible
-        here. Closing it would mean firing on every file that names a data
-        column, which is the false positive above, so the residual is named
-        rather than traded away.
+        here, whether the cue that would have caught it lives in the content or
+        the filename. Closing it would mean firing on every file that names a
+        data column, which is the false positive above, so the residual is
+        named rather than traded away.
       - Public because the caller budgets its judge calls and has to know
         whether a call will happen BEFORE it spends budget deciding;
         judge_committed_data does NOT re-apply it (unlike binary_ask's), since
@@ -1120,9 +1129,12 @@ def committed_data_prefilter(sample_text: str, filename: str) -> bool:
     if not isinstance(sample_text, str) or not sample_text:
         return False
     lowered = sample_text.lower()
-    if not any(cue in lowered for cue in _COMMITTED_DATA_FIELD_CUES):
-        return False
     name = (filename or "").lower()
+    cue_hit = any(cue in lowered for cue in _COMMITTED_DATA_FIELD_CUES) or any(
+        cue in name for cue in _COMMITTED_DATA_FIELD_CUES
+    )
+    if not cue_hit:
+        return False
     if name.endswith(_COMMITTED_DATA_EXTENSIONS):
         return True
     return _carries_free_text_value(sample_text)
