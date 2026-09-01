@@ -32,6 +32,7 @@ _CONFIG_TEMPLATE = """\
 | `policy-md-max-lines` | `50` | . |
 | `skill-description-max-chars` | `850` | . |
 | `always-loaded-surface-advisory-chars` | `100000` | . |
+| `memory-index-max-bytes` | `1000` | . |
 """
 
 
@@ -42,6 +43,11 @@ def _make_repo(tmp: Path, claude_lines: int, claude_line_width: int = 5) -> None
     (tmp / "README.md").write_text("readme\n", encoding="utf-8")
     (tmp / "cursor" / "rules").mkdir(parents=True)
     (tmp / "cursor" / "rules" / "claude-code-sync.mdc").write_text("m\n", encoding="utf-8")
+
+
+def _write_memory_index(tmp: Path, body: str) -> None:
+    (tmp / "memory-global").mkdir(parents=True, exist_ok=True)
+    (tmp / "memory-global" / "MEMORY.md").write_text(body, encoding="utf-8")
 
 
 def _write_skill(tmp: Path, name: str, description: str) -> None:
@@ -108,6 +114,50 @@ def test_fail_above_ceiling_still_fatal(tmp_path, capsys):
     assert rc == 1
     assert "FAIL" in out
     assert "CLAUDE.md: 101 lines, limit 100" in out
+
+
+def test_memory_index_over_byte_ceiling_fails(tmp_path, capsys):
+    _make_repo(tmp_path, claude_lines=50)
+    _write_memory_index(tmp_path, "m" * 1000 + "\n")  # 1001 bytes vs the 1000 ceiling
+    rc, out = _run(tmp_path, capsys)
+    assert rc == 1
+    assert "FAIL" in out
+    assert "memory-global/MEMORY.md: 1001 bytes, limit 1000 (memory-index-max-bytes)" in out
+
+
+def test_memory_index_warn_at_90_percent_exits_zero(tmp_path, capsys):
+    _make_repo(tmp_path, claude_lines=50)
+    _write_memory_index(tmp_path, "m" * 949 + "\n")  # 950 bytes = 95% of the ceiling
+    rc, out = _run(tmp_path, capsys)
+    assert rc == 0
+    assert (
+        "WARN — memory-global/MEMORY.md: 950 bytes, 95% of limit 1000 "
+        "(memory-index-max-bytes)" in out
+    )
+    assert "OK" in out
+
+
+def test_memory_index_under_ceiling_silent(tmp_path, capsys):
+    _make_repo(tmp_path, claude_lines=50)
+    _write_memory_index(tmp_path, "m" * 99 + "\n")  # 100 bytes = 10% of the ceiling
+    rc, out = _run(tmp_path, capsys)
+    assert rc == 0
+    assert "memory-global/MEMORY.md" not in out
+
+
+def test_memory_index_byte_unit_not_char_unit_cyrillic(tmp_path, capsys):
+    # The discriminating case, and the reason this check exists at all: 600
+    # Cyrillic characters plus a newline are 601 CHARACTERS — comfortably under
+    # the 1000 ceiling, so a len(read_text()) implementation reports OK — but
+    # 1201 UTF-8 BYTES, which is the axis the harness truncates on.
+    _make_repo(tmp_path, claude_lines=50)
+    body = "б" * 600 + "\n"
+    _write_memory_index(tmp_path, body)
+    assert len(body) < 1000  # sanity: a char-measured check would pass this
+    assert len(body.encode("utf-8")) > 1000
+    rc, out = _run(tmp_path, capsys)
+    assert rc == 1
+    assert "memory-global/MEMORY.md: 1201 bytes, limit 1000 (memory-index-max-bytes)" in out
 
 
 def test_skill_description_over_cap_fails(tmp_path, capsys):

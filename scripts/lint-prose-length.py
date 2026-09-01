@@ -18,6 +18,12 @@ Governed files (per `config.md` keys):
   skills/specializations/*/SKILL.md      skill-md-max-lines
   skills/*/policy.md                     policy-md-max-lines
   skills/specializations/*/policy.md     policy-md-max-lines
+  memory-global/MEMORY.md                memory-index-max-bytes
+
+`memory-global/MEMORY.md` is measured in UTF-8 BYTES, not lines and not chars:
+the harness caps that file at 25000 bytes on the AutoMem context-assembly path
+and truncates it SILENTLY, so a line-count check reports safety it cannot
+establish (see the `memory-index-max-bytes` row in config.md).
 
 CLAUDE.md also has a char ceiling (`claude-md-max-chars`), measured in UTF-16
 code units — the unit the harness's own `content.length` check uses, not
@@ -501,6 +507,37 @@ def main(argv: list[str] | None = None) -> int:
                     warnings.append(
                         f"CLAUDE.md: {nchars} chars, {nchars * 100 // char_limit}% "
                         f"of limit {char_limit} ({char_key})"
+                    )
+
+    # Byte-size ceiling for the global memory index, measured in UTF-8 BYTES —
+    # the axis the harness's AutoMem cap truncates on, silently. It is NOT a
+    # GOVERNED entry: that table's loop measures line counts, and lines carry no
+    # information about this cap (on 2026-08-31 the file stood at 104 of 200
+    # lines while already over the byte cap, its last two pointers dropped).
+    byte_key = "memory-index-max-bytes"
+    raw_bytes = constants.get(byte_key)
+    if raw_bytes is None:
+        failures.append(f"config.md missing key: {byte_key}")
+    else:
+        try:
+            byte_limit = int(raw_bytes)
+        except ValueError:
+            failures.append(f"config.md key {byte_key} is not an integer: {raw_bytes!r}")
+        else:
+            memory_index = REPO_ROOT / "memory-global" / "MEMORY.md"
+            if memory_index.is_file():
+                scanned += 1
+                nbytes = len(memory_index.read_bytes())
+                level = check_level(nbytes, byte_limit)
+                if level == "fail":
+                    failures.append(
+                        f"memory-global/MEMORY.md: {nbytes} bytes, "
+                        f"limit {byte_limit} ({byte_key})"
+                    )
+                elif level == "warn":
+                    warnings.append(
+                        f"memory-global/MEMORY.md: {nbytes} bytes, "
+                        f"{nbytes * 100 // byte_limit}% of limit {byte_limit} ({byte_key})"
                     )
 
     # Per-skill frontmatter description ceiling — always-visible index cost
