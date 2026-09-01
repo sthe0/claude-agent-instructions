@@ -115,12 +115,23 @@ a detail: four standard estimators on the n=18 deferring sample give 29.94 /
 | `hook-resolution-reminder.py` | `landing_discipline` | `haiku` | `landing-discipline-sample.json:pr_proposing + landing-discipline-sample.json:direct_push` | 16 | 3.88 | 4.96 | 6.37 | 15.38 | 22 | 0 | 0.0000 | 0.1875 |
 | — | `acceptance_judge` | `haiku` | UNMEASURED — no latency sample exists | — | — | — | — | — | — | — | — | — |
 | — | `question_materiality` | `haiku` | UNMEASURED — no latency sample exists | — | — | — | — | — | — | — | — | — |
+| `hook-guard-committed-data.py` | `committed_data` | `haiku` | UNMEASURED — `sample_committed_data.py` is written but has not been run | — | — | — | — | — | 45 | — | — | — |
 
 `acceptance_judge` and `question_materiality` are listed because leaving them out
 would be the quieter lie: the `MEASURED` table carries a row for each, and a reader
 comparing the two would otherwise assume they were covered. Both run outside any
 hook, so no harness timeout kills them and the last-resort ceiling applies. Neither
 is sized by evidence.
+
+`committed_data` is the third unmeasured row and the only one that is NOT
+harmless, because it IS called from a hook: its budget is a number that ought to
+be checkable against a sample and currently is not. Sampling costs live model
+calls, which the stage that added the judge had no permission to make, so the
+hook is sized from the family last-resort ceiling — stricter than any measured
+row's own floor — and
+`test_each_hooks_budget_covers_the_calls_it_declares` fails on it by
+construction until `samples/judge-latency/sample_committed_data.py` is run and
+its row lands here. That red test is the obligation, not a defect.
 
 ### The zero rule
 
