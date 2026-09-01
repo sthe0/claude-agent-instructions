@@ -189,6 +189,20 @@ CODE_PARTITIONS = [
         "hint-active precondition holds, and only the judge's verdict decides.",
     ),
     (
+        "scripts/hook-guard-committed-data.py (judge-guarded)",
+        lambda f: f == "scripts/hook-guard-committed-data.py",
+        "semantic-guarded",
+        "keep",
+        "Built judge-guarded by construction: `decide()` runs the high-recall "
+        "`advisor.committed_data_prefilter` AND `advisor.judge_committed_data` "
+        "(fail-open semantic judge) before it builds the deny payload, in that same "
+        "scope. The structural part of the file — the shlex command parse and the "
+        "staged-file enumeration — decides only WHICH files are looked at; whether a "
+        "file's values are real production records rather than a synthetic fixture, a "
+        "schema or the code that reads either is meaning, not syntax, and is the "
+        "judge's call alone. The file uses no `re` at all.",
+    ),
+    (
         "scripts/hook-*.py (other guardian hooks)",
         lambda f: Path(f).name.startswith("hook-"),
         "structural",

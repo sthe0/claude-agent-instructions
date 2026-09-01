@@ -1013,6 +1013,208 @@ def judge_landing_discipline_ask(
         judge_ledger.set_current_judge(None)
 
 
+# LAST-RESORT default for judge_committed_data, used only when a caller names no
+# timeout of its own. By lib/judge_latency.py::last_resort_ceiling_s, the same
+# rule and (today) the same number as its four siblings — outside a hook budget
+# the ceiling covers the whole model family, not one prompt. Named distinctly
+# rather than shared for the reason _DEFERRING_DISPOSITION_TIMEOUT_S is not
+# shared with _BINARY_ASK_TIMEOUT_S: each judge's in-hook ceiling is derived from
+# its own measured row, and a shared name here would invite a caller to reuse
+# whichever it imported first. Deliberately NOT named
+# `_COMMITTED_DATA_JUDGE_BUDGET_S` — that name belongs to
+# hook-guard-committed-data.py's own whole-invocation budget, a different number
+# derived from this judge's own row.
+_COMMITTED_DATA_LAST_RESORT_TIMEOUT_S = 41
+
+# Field names that mark a payload as records of somebody's conversation rather
+# than code about one. Matched as lowercase substrings, so `chat_id`, `chatId`
+# and `"chat_ids"` all hit — recall is the only thing this list is tuned for.
+_COMMITTED_DATA_FIELD_CUES = (
+    "first_message",
+    "firstmessage",
+    "chat_id",
+    "chatid",
+    "user_id",
+    "userid",
+    "session_id",
+    "sessionid",
+    "message_text",
+    "messagetext",
+    "messages",
+    "content",
+    "prompt",
+    "query",
+    "response",
+    "reply",
+    "utterance",
+    "transcript",
+    "dialog",
+)
+
+# Extensions whose content IS data by construction. In such a file a cue alone
+# is enough to consult the judge: a dump of very short user messages carries no
+# long free-text value, and requiring one would let exactly the smallest, most
+# quotable rows through.
+_COMMITTED_DATA_EXTENSIONS = (
+    ".jsonl", ".json", ".ndjson", ".csv", ".tsv", ".txt", ".log", ".yaml", ".yml",
+)
+
+# Everything that ends a quoted or column-delimited value. `,` is deliberately
+# NOT here: a comma inside a sentence would chop the one long value the payload
+# test is looking for, and JSON/JSONL — the shape that actually gets dumped —
+# already separates its values with quotes.
+_COMMITTED_DATA_VALUE_DELIMITERS = "\"'\t\r\n"
+_COMMITTED_DATA_VALUE_SPLIT = str.maketrans(
+    {ch: "\n" for ch in _COMMITTED_DATA_VALUE_DELIMITERS}
+)
+# A value this long, carrying this many spaces, is prose somebody typed rather
+# than an identifier, a path or a number. Both numbers are recall settings, not
+# measurements: they are the loosest pair that still leaves an ordinary source
+# file (identifiers, short comments, wrapped code lines) below the bar.
+_COMMITTED_DATA_FREE_TEXT_MIN_CHARS = 80
+_COMMITTED_DATA_FREE_TEXT_MIN_SPACES = 2
+
+
+def _carries_free_text_value(sample_text: str) -> bool:
+    for value in sample_text.translate(_COMMITTED_DATA_VALUE_SPLIT).split("\n"):
+        if (
+            len(value) >= _COMMITTED_DATA_FREE_TEXT_MIN_CHARS
+            and value.count(" ") >= _COMMITTED_DATA_FREE_TEXT_MIN_SPACES
+        ):
+            return True
+    return False
+
+
+def committed_data_prefilter(sample_text: str, filename: str) -> bool:
+    """The deterministic half of judge_committed_data: is this file even worth
+    asking the model about?
+
+    High-recall PREFILTER, never the verdict — the boundary
+    memory-global/leaves/regex-not-for-semantic-classification.md draws. Whether
+    a payload is REAL production data or a synthetic fixture is meaning, and no
+    field-name list can decide it; all this decides is whether a model call
+    happens, and it is tuned to over-fire rather than to be right.
+
+    Two shapes fire. In a data-format file (_COMMITTED_DATA_EXTENSIONS) a single
+    field cue is enough — a dump of one-word user replies has no long value to
+    find, and demanding one would skip the most quotable rows there are.
+    Anywhere else a cue must be accompanied by a long free-text value, because a
+    cue alone is what a SCRIPT ABOUT the data looks like: the remediation this
+    guard came from had five such scripts, each naming `chat_id` and
+    `first_message` as columns and carrying none of them, and each had to be
+    read by hand to be cleared.
+
+    Named limits, in the shape they will actually be hit:
+      - A source file holding a long string literal near a cue (an embedded SQL
+        query, a prompt constant) fires and costs one judge call. That is the
+        designed direction of the error.
+      - Real data pasted into a source file with only short values is invisible
+        here. Closing it would mean firing on every file that names a data
+        column, which is the false positive above, so the residual is named
+        rather than traded away.
+      - Public because the caller budgets its judge calls and has to know
+        whether a call will happen BEFORE it spends budget deciding;
+        judge_committed_data does NOT re-apply it (unlike binary_ask's), since
+        the hook needs the filename-aware verdict for its own per-file cap.
+    """
+    if not isinstance(sample_text, str) or not sample_text:
+        return False
+    lowered = sample_text.lower()
+    if not any(cue in lowered for cue in _COMMITTED_DATA_FIELD_CUES):
+        return False
+    name = (filename or "").lower()
+    if name.endswith(_COMMITTED_DATA_EXTENSIONS):
+        return True
+    return _carries_free_text_value(sample_text)
+
+
+_COMMITTED_DATA_JUDGE_PROMPT = (
+    "You are given the NAME of a file about to be committed to a shared source "
+    "repository and a SAMPLE of its beginning. Decide whether the sample is RAW "
+    "PRODUCTION OR PERSONAL DATA -- real end-user message text, model responses "
+    "to real user input, chat / user / session identifiers, or anything else "
+    "from which a real person's own content can be reconstructed.\n\n"
+    "Answer YES only when the sample carries actual records captured from real "
+    "usage: the values themselves are somebody's data.\n\n"
+    "Answer NO for source code (including code that reads, names or processes "
+    "such data); a test fixture or example whose values are synthetic, "
+    "hand-written or obviously fake; a schema, type or field-name declaration "
+    "with no values; configuration; documentation; and derived aggregate metrics "
+    "(counts, quantiles, scores, lengths, rates) that carry no raw text and no "
+    "identifiers.\n\n"
+    "Answer on the FIRST line with exactly YES or NO, nothing else.\n\n"
+    "FILE: {filename}\n\n"
+    "SAMPLE:\n{sample}"
+)
+
+
+def judge_committed_data(
+    sample_text: str,
+    runner,
+    *,
+    filename: str = "",
+    enabled: bool = True,
+    timeout: int = _COMMITTED_DATA_LAST_RESORT_TIMEOUT_S,
+    remaining: float | None = None,
+    ceiling: float | None = None,
+    runtime_host: str = HOST_CLAUDE,
+) -> tuple[bool, str]:
+    """Semantic judge behind committed_data_prefilter: is this file's content raw
+    production / personal data, which memory-global/leaves/committed-files-earn-
+    their-place.md forbids committing to a shared repository at all?
+
+    The distinction the model carries is the one no field-name list can: the same
+    keys, the same shape and the same column names appear in a dump of real
+    chats, in a hand-written fixture, and in the code that reads either. Only the
+    values say which.
+
+    Like judge_feedback_signal / judge_deferring_disposition this is a PURE model
+    call with no inline prefilter: the caller runs committed_data_prefilter per
+    file and calls this judge only for the files it fires on.
+
+    Three-valued fail-open contract, mirroring judge_binary_ask: returns
+    (verdict, reason) with reason "" for a genuine verdict and a non-empty
+    "...(fail-open)" string for disabled/no-text/no-runner, non-zero exit,
+    empty/unparseable output, a timeout (``result.timed_out``), or an exception.
+    The consumer is a PreToolUse deny over an ordinary `git commit`, so a
+    fabricated False — allow the commit — is the only tolerable failure
+    direction; ``remaining``/``ceiling`` are forwarded to the ledger only,
+    alongside ``timeout`` as the active threshold."""
+    if not enabled:
+        return _judge_unavailable(
+            "committed_data", _KILLSWITCH_REASON, stage="killswitch",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    if not isinstance(sample_text, str) or not sample_text:
+        return _judge_unavailable(
+            "committed_data", _NO_TEXT_REASON, stage="no_text",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    if runner is None:
+        return _judge_unavailable(
+            "committed_data", _NO_RUNNER_REASON, stage="no_runner",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    judge_ledger.set_current_judge("committed_data")
+    start = time.monotonic()
+    try:
+        prompt = _COMMITTED_DATA_JUDGE_PROMPT.format(
+            filename=filename or "<unnamed>", sample=sample_text
+        )
+        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY, prompt), timeout=timeout)
+        return _record_result(
+            "committed_data", result, duration=time.monotonic() - start,
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    except Exception:
+        return _record_raised(
+            "committed_data", duration=time.monotonic() - start,
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    finally:
+        judge_ledger.set_current_judge(None)
+
+
 # LAST-RESORT ceiling, by lib/judge_latency.py::last_resort_ceiling_s — the same
 # number and the same rule as _BINARY_ASK_TIMEOUT_S, for the same reason as
 # _ACCEPTANCE_JUDGE_TIMEOUT_S: this judge runs inside `agentctl question-raise`,
