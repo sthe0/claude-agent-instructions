@@ -335,6 +335,22 @@ def plan_review_active(state: SessionState) -> bool:
     return state.weight_class == WeightClass.SUBSTANTIVE.value
 
 
+def _file_sha256(path: str | None) -> str | None:
+    """sha256 of a file's bytes, or None when there is nothing readable to hash.
+
+    Shared read for every content-identity check in this module; they differ only
+    in what they DO with None — `_plan_review_content_stale` fails open,
+    `_binds_across_path_change` fails closed — so each keeps its own posture at
+    the call site. Mirrors cli._plan_file_sha256, which cannot be imported here
+    (circular); the empty-string sentinel there is that caller's convention."""
+    if not path:
+        return None
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
 def _plan_review_content_stale(pr, target_plan: str) -> str | None:
     # #16: the coordinator edits plans in place, so a same-path binding is not a
     # content binding — recompute the plan's sha256 and reject a drift. Fail-open:
@@ -342,11 +358,8 @@ def _plan_review_content_stale(pr, target_plan: str) -> str | None:
     # the gate on a transient read error.
     if not pr.plan_sha256:
         return None
-    try:
-        current = hashlib.sha256(Path(target_plan).read_bytes()).hexdigest()
-    except OSError:
-        return None
-    if current == pr.plan_sha256:
+    current = _file_sha256(target_plan)
+    if current is None or current == pr.plan_sha256:
         return None
     return (
         "thinker review is stale — the plan content at "
@@ -452,14 +465,15 @@ def _binds_across_path_change(pr, target_plan: str | None) -> bool:
     wedge the gate on a plan whose path the reviewer did name) and wrong here,
     where content identity is the ONLY thing standing in for a path the reviewer
     never saw. Hashing the bytes of the single read also leaves no window for the
-    file to change between the readability check and the comparison."""
-    if not target_plan or not pr.plan_sha256:
+    file to change between the readability check and the comparison.
+
+    What makes `pr.plan_sha256` usable as that stand-in is the recorder's refusal
+    to store a digest it could not confirm against the reviewer's own target (see
+    cli.cmd_plan_review): an unverified attestation here would bind any plan whose
+    bytes a caller can hash."""
+    if not pr.plan_sha256:
         return False
-    try:
-        buf = Path(target_plan).read_bytes()
-    except OSError:
-        return False
-    return hashlib.sha256(buf).hexdigest() == pr.plan_sha256
+    return _file_sha256(target_plan) == pr.plan_sha256
 
 
 def _plan_review_blockers_whole(pr, target_plan: str | None, *, state: SessionState | None = None, doc=None) -> list[str]:
@@ -891,10 +905,7 @@ def _receipt_binding_blocker(receipt, target_plan: str | None, label: str) -> st
             "re-run present-plan on the current plan"
         )
     if receipt.plan_sha256:
-        try:
-            current = hashlib.sha256(Path(target_plan).read_bytes()).hexdigest()
-        except OSError:
-            current = None
+        current = _file_sha256(target_plan)
         if current is not None and current != receipt.plan_sha256:
             return (
                 f"{label} is stale — the plan content at "
@@ -1069,10 +1080,7 @@ def replan_authorization_blockers(
     if diff_kind == "substantive":
         return []
     if target_plan:
-        try:
-            current_digest = hashlib.sha256(Path(target_plan).read_bytes()).hexdigest()
-        except OSError:
-            current_digest = None
+        current_digest = _file_sha256(target_plan)
         if current_digest is not None and current_digest == state.accepted_plan_digest:
             return []
 

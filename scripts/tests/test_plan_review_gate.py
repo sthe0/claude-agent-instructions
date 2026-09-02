@@ -367,6 +367,72 @@ def test_plan_digest_absent_pass_does_not_bind(store, fixtures_dir, tmp_path, ga
     assert d.node == Node.PLAN_READY.value  # blocked, not APPROVED
 
 
+def test_plan_digest_attested_over_unreadable_target_refuses(store, fixtures_dir, tmp_path, gate_on):
+    """(e) An attestation the engine cannot cross-check is not an attestation: a
+    --plan-digest supplied against a target whose live read FAILS is refused, and
+    nothing is recorded. Without this, the cross-check below (`if live and ...`)
+    silently skipped on an empty `live` and stored the caller's word as verified."""
+    sid = "pdunreadable"
+    plan = tmp_path / "plan.toml"
+    plan.write_text((fixtures_dir / "plan_two_stage.toml").read_text())
+    _to_plan_ready(store, sid, str(plan))
+    d = cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker",
+                               concerns=None, note="", target=str(tmp_path / "NOPE.toml"),
+                               plan_digest=_sha256_file(plan)), store=store)
+    assert d.ok is False and "cannot be cross-checked" in d.detail
+    assert store.load(sid).plan_review is None  # nothing recorded
+
+
+def test_plan_digest_absent_over_unreadable_target_still_records(store, fixtures_dir, tmp_path, gate_on):
+    """(f) The no-digest degradation survives the refusal above unchanged: with
+    NOTHING attested, an unreadable target still records (an unattested pass that
+    blocks at the gate), rather than wedging on a transient I/O error."""
+    sid = "pdunreadablenodigest"
+    plan = tmp_path / "plan.toml"
+    plan.write_text((fixtures_dir / "plan_two_stage.toml").read_text())
+    _to_plan_ready(store, sid, str(plan))
+    d = cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker",
+                               concerns=None, note="", target=str(tmp_path / "NOPE.toml"),
+                               plan_digest=None), store=store)
+    # ok=False here reports the UNATTESTED gate, not a refusal: the record lands.
+    assert "cannot be cross-checked" not in d.detail
+    s = store.load(sid)
+    assert s.plan_review is not None
+    assert s.plan_review.plan_sha256 == ""
+
+
+def test_plan_digest_attested_over_readable_explicit_target_records(store, fixtures_dir, tmp_path, gate_on):
+    """(g) The positive direction of (e) on the same explicit-`--target` path: a
+    readable target whose bytes hash to the attested digest still records and binds."""
+    sid = "pdexplicittarget"
+    plan = tmp_path / "plan.toml"
+    plan.write_text((fixtures_dir / "plan_two_stage.toml").read_text())
+    _to_plan_ready(store, sid, str(plan))
+    d = cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker",
+                               concerns=None, note="", target=str(plan),
+                               plan_digest=_sha256_file(plan)), store=store)
+    assert d.ok is True
+    assert store.load(sid).plan_review.plan_sha256 == _sha256_file(plan)
+    assert cli.cmd_approve(ns(session=sid, by="user"), store=store).node == Node.APPROVED.value
+
+
+def test_unread_path_cannot_borrow_the_real_plans_digest(store, fixtures_dir, tmp_path, gate_on):
+    """(h) The end-to-end shape (e) closes: reviewing a NONEXISTENT path while
+    passing the REAL plan's sha256 used to record a review that then bound the real
+    plan by byte identity (#195's cross-path binding), carrying it to APPROVED. The
+    real plan must stay blocked."""
+    sid = "pdborrow"
+    plan = tmp_path / "plan.toml"
+    plan.write_text((fixtures_dir / "plan_two_stage.toml").read_text())
+    _to_plan_ready(store, sid, str(plan))
+    cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker",
+                           concerns=None, note="", target=str(tmp_path / "NOPE.toml"),
+                           plan_digest=_sha256_file(plan)), store=store)
+    s = store.load(sid)
+    assert gates.plan_review_blockers(s, str(plan))  # the real plan is NOT bound
+    assert cli.cmd_approve(ns(session=sid, by="user"), store=store).node == Node.PLAN_READY.value
+
+
 def test_override_binds_without_digest(store, fixtures_dir, tmp_path, gate_on):
     """(d) An override (the deadlock escape) still binds with no --plan-digest — the
     attestation requirement lives only in the pass branch."""

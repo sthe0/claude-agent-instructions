@@ -414,6 +414,18 @@ def test_stage_scoped_attestation_cannot_substitute_for_the_whole_plans_own(gate
 # test_plan_review_gate.py; these pin the same path-binding posture with the
 # branch actually active, where the recorded meta/stage keys are the only other
 # thing standing between a review and a plan file it never saw.
+#
+# REACHABILITY: the last two tests hand-set `plan_sha256` after building the
+# review because `cmd_plan_review` derives the digest AND the meta/stage keys
+# from one read of its own target, so it cannot produce a whole-plan record
+# whose digest matches file B while its stage keys predate B — the only shape
+# that puts a stage in `moved_stages` while the whole-plan review still binds,
+# i.e. the only way to reach the per-stage path check in
+# `_plan_review_blockers_coverage`. That check is therefore defence-in-depth
+# over a record shape the recorder itself cannot currently write, not coverage
+# of a supported workflow; it exists so the per-stage branch cannot drift away
+# from the whole-plan branch's posture if a future recorder (or a hand-edited
+# state file) ever does write that shape.
 
 def test_rename_binds_through_coverage_when_bytes_match(gate_on, tmp_path, fixtures_dir):
     """The coverage mirror of test_path_rename_content_match_not_stale: a
@@ -453,6 +465,9 @@ def test_different_file_with_matching_meta_digest_still_blocks(gate_on, tmp_path
     # and the two branches agree, which is the property that was broken
     whole = gates._plan_review_blockers_whole(state.plan_review, str(impostor))
     assert whole and "stale" in whole[0]
+    # the public entry point routes here (a stage review is recorded), so it must
+    # report the same rejection the branch above does
+    assert gates.plan_review_blockers(state, str(impostor)) == coverage
 
 
 def test_moved_stages_review_binds_a_renamed_target_by_bytes(gate_on, tmp_path, fixtures_dir):
