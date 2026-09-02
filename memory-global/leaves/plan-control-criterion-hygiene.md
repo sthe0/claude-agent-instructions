@@ -1,6 +1,6 @@
 ---
 name: plan-control-criterion-hygiene
-description: Six plan-authoring norms for a stage's control criterion — declare the venue a check observes instead of hard-coding a `cd` into the verify_command; never let a criterion assert an unverified fact about current behaviour; take a criterion's number from an explicitly bounded invocation; never let a procedure step rewrite the criterion it is measured by; name the lifecycle state the criterion describes, because verify-final re-runs a criterion authored pre-merge in the post-merge world; and sweep exact-shape criteria after ANY revision round, formal replan or ad-hoc.
+description: Seven plan-authoring norms for a stage's control criterion — declare the venue a check observes instead of hard-coding a `cd` into the verify_command; never let a criterion assert an unverified fact about current behaviour; take a criterion's number from an explicitly bounded invocation; never let a procedure step rewrite the criterion it is measured by; name the lifecycle state the criterion describes, because verify-final re-runs a criterion authored pre-merge in the post-merge world; sweep exact-shape criteria after ANY revision round, formal replan or ad-hoc; and dry-run the verify_command's own script text against live repo state before submit_plan, because a broken check script is a distinct failure class from a false factual claim.
 type: feedback
 schema: leaf/v1
 created: 2026-08-31
@@ -14,12 +14,14 @@ last_verified: 2026-09-02
 To achieve a stage check that can actually go red for the right reason and
 green for the right reason, the criterion has to survive the interval between
 plan authoring and stage execution — and the executor has to be able to run it
-without repairing it. Six distinct authoring habits break that, and all six
-were observed live: three of them inside the very plan whose fourth stage
-first recorded this leaf, and the sixth inside that same plan's own
+without repairing it. Seven distinct authoring habits break that, and all
+seven were observed live: three of them inside the very plan whose fourth
+stage first recorded this leaf, the sixth inside that same plan's own
 resolution — a stale exact-shape criterion caught only at `verify-final`,
 after two further, fully legitimate review rounds had already moved the
-ground it stood on.
+ground it stood on — and the seventh recurring three separate times inside
+one unrelated eight-stage plan (stages 3, 5 and 7), each occurrence costing
+its own full difficulty cycle before the pattern was named.
 
 The engine makes the cost concrete. `record-result` *runs* the stage's
 `verify_command` itself and its exit code overrides the caller's `--status`, so
@@ -219,6 +221,48 @@ clears the round-budget gate — not in a follow-up edit after.
 > <!-- Language exception: direct user quote, kept verbatim as evidence per CLAUDE.md's quote-citation convention -->
 > "Опять перепланирование после приемки задачи. Очень плохо." ("Replanning
 > again after the task was accepted. Very bad.")
+
+### 7. Dry-run the verify_command's own script text before it is frozen
+
+Norm 2 governs a criterion asserting a false **claim about the world**. This is
+a different failure class: the check **script itself** is broken — a shell
+escaping bug, an `else` branch that swallows the exit status of the command it
+guards, a Python call into a function or module that does not exist, or one
+whose signature has since changed. None of these are factual claims that can
+be right or wrong; they are code, and code authored without being run carries
+exactly the defect rate any other unrun code does.
+
+A frozen `verify_command` is authored once, at plan time, against a mental
+model of the repo — then not touched again until `record-result` actually
+executes it, potentially stages and days later. Nothing about `submit_plan` or
+`approve` runs the script, so a scripting defect frozen at authoring time
+survives every review round untouched and is discovered only when the engine
+runs it for real, at the exact moment a genuinely-completed stage is waiting
+to be recorded.
+
+The fix is mechanical and cheap relative to the cycle it prevents: before
+`submit_plan`, extract each stage's `verify_command` and, at minimum,
+syntax-check it (`bash -n` for a shell script) against the real target
+worktree or repo checkout; where it calls into project code, confirm each
+referenced function or module actually exists and that its call signature
+matches, via a direct import and `inspect.signature` rather than by reading
+the source and assuming. This is a dry run of the check's **mechanics**, not
+of the stage's deliverable — it catches nothing about whether the stage's own
+work is correct, only whether the instrument measuring it would fire cleanly
+either way.
+
+> **Observed.** One eight-stage plan hit this three separate times, each
+> costing a full `declare → investigate → critique → normalize → replan`
+> cycle: stage 3's `verify_command` applied an escaping convention
+> (`D = chr(36)`) inconsistently across two branches of the same check; stage
+> 5's used a shell `else` branch that discarded the negative exit status of the
+> command it was meant to be guarding, so a genuine failure there would have
+> reported success; stage 7's asserted a literal internal codename string that
+> had no live referent in the repo at all and was independently banned by the
+> repo's own term-lint gate. None of the three was a false claim about stage
+> behaviour — each was the check script itself misbehaving, and a `bash -n`
+> plus a direct import-and-signature check at authoring time would have caught
+> every one of them before a single stage ever ran.
 
 ## See also
 
