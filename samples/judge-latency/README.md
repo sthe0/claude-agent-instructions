@@ -20,11 +20,16 @@ Every latency below is wall-clock around `advisor.subprocess_runner`, measured w
 | pool | n | min | median | p90 | max | threshold | ceiling `ceil(max)+1` |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | deferring | 18 | 10.29 | 17.43 | 37.58 | 39.99 | **38** | **41** |
-| outage | 16 | 7.19 | 10.89 | 19.16 | 25.96 | **20** | **27** |
-| feedback | 26 | 10.73 | 11.86 | 13.34 | 14.05 | **14** | **16** |
-| binary_ask | 16 | 5.93 | 7.46 | 11.06 | 11.52 | **12** | **13** |
+| outage | 48 | 7.19 | 18.58 | 25.96 | 53.42 | **26** | **55** |
+| feedback | 58 | 10.73 | 13.30 | 17.54 | 19.59 | **18** | **21** |
+| binary_ask | 48 | 5.93 | 15.75 | 18.57 | 19.20 | **19** | **21** |
 | approval_ask | 64 | 5.88 | 12.77 | 17.29 | 19.14 | **18** | **21** |
 | landing_discipline | 16 | 3.88 | 4.96 | 6.37 | 15.38 | **7** | **17** |
+
+The three turn-end rows were re-derived after `drift-sample.json` (see below);
+their thresholds and ceilings are what `lib/judge_latency.py` now computes, and
+the hooks still hold the pre-drift constants — closing that gap is a separate,
+deliberate step, because a ceiling is a tuning decision and a sample is not.
 
 `approval_ask`'s threshold/ceiling are as computed by `lib/judge_latency.py`
 today; see "approval2-sample.json — the regime shifted" below for why this row
@@ -36,9 +41,9 @@ Provenance of each row, file by file:
 | pool | composed from |
 |---|---|
 | deferring | `latency-sample.json:defer` (n=10) + `ab-sample.json:defer_std` (n=8) |
-| outage | `latency-sample.json:outage` (n=10) + `ab-sample.json:outage_std` (n=6) |
-| feedback | `latency-sample.json:feedback` (n=10) + `topup2-sample.json:feedback` (n=16) |
-| binary_ask | `topup2-sample.json:binary_ask` (n=16) |
+| outage | `latency-sample.json:outage` (n=10) + `ab-sample.json:outage_std` (n=6) + `drift-sample.json:outage` (n=16) + `drift-sample.json:not_outage` (n=16) |
+| feedback | `latency-sample.json:feedback` (n=10) + `topup2-sample.json:feedback` (n=16) + `drift-sample.json:feedback` (n=16) + `drift-sample.json:not_feedback` (n=16) |
+| binary_ask | `topup2-sample.json:binary_ask` (n=16) + `drift-sample.json:binary_ask` (n=16) + `drift-sample.json:not_binary_ask` (n=16) |
 | approval_ask | `approval-sample.json:approval` (n=16) + `approval-sample.json:not_approval` (n=16) + `approval2-sample.json:approval` (n=16) + `approval2-sample.json:not_approval` (n=16) |
 | landing_discipline | `landing-discipline-sample.json:pr_proposing` (n=8) + `landing-discipline-sample.json:direct_push` (n=8) |
 
@@ -113,21 +118,88 @@ ceiling or a floor).
 All 32 verdicts in `approval2-sample.json` are correct (`ok: true` on every
 row, both arms), same as `approval-sample.json`.
 
+## `drift-sample.json` — the three turn-end judges, re-taken
+
+Taken because the live judge ledger stopped being able to describe two of them at
+all. Since 2026-08-19 17:00 `binary_ask` ran n=76 at ceiling 13 with min 11.3 /
+p50 13.0 / max 13.2 and 69 calls killed; `feedback_signal` ran n=250 at ceiling
+16 with p50 16.0 / max 16.2 and 244 killed. In both the observed max **is** the
+ceiling: a call killed at ceiling C is recorded at C, so at a 91-98% kill rate
+every statistic is pinned to the ceiling by construction and `ceil(max) + 1`
+returns C + 1 no matter what the true latency is. That population proves a
+ceiling is too low and cannot say by how much — the same right-censoring that
+forced `approval2-sample.json`, resolved the same way. `outage_escalation` is in
+the same run for a different reason: it is not censored (7 calls at ceiling 27),
+but 2 of those 7 were killed at 27.04s and 27.03s against a row declaring a
+25.96s max, and `required_budget_s("hook-turn-end-gate.py")` takes its p90 as the
+inequality's trailing term. Seven calls can cast doubt on an anchor; they cannot
+re-derive one.
+
+Method is `approval2.py`'s: `drift.py`, one process under an `O_CREAT|O_EXCL` pid
+lock, six arms (a YES and a NO arm per judge) alternating so load drift hits each
+equally, N=16 per arm, **60s per-call timeout** — far above anything the old rows
+or the ledger show, which is what makes these latencies uncensored. 60s is a
+sampling instrument and is never committed as a ceiling. Run on an otherwise idle
+machine per the `topup-sample.json` rule below; 96/96 observations, 0 discarded,
+1735s wall-clock, no timeouts and no fail-opens.
+
+Verdicts: 95/96 correct — `feedback` 16/16, `not_feedback` 16/16, `binary_ask`
+16/16, `not_binary_ask` 16/16, `not_outage` 16/16, and `outage` 15/16 (one YES
+case answered NO). That one is recorded with `ok: false` and its latency is kept
+in the population: the sample measures latency, and a judge that answered the
+wrong way still answered — unlike the NO ANSWER calls `drift.py` retries and
+never records at all.
+
+**One arm ran through a different call path than its predecessor.** The new
+series was taken after the lean judge invocation landed
+(`host_llm.build_prompt_argv(..., lean=True)`, reached by every `_JUDGE_COMPLEXITY`
+call site); the old series ran through the bare `claude -p`, which loads the
+ambient `CLAUDE.md`. For `feedback_signal` that is not a nuance — under the bare
+invocation it had stopped answering, 0/3 in a contention-free A/B against 3/3
+lean — so its two regimes differ in call path, not only in speed. The old series
+stay in the provenance anyway, as `approval-sample.json` does: a valid
+observation of an earlier regime, and what keeps `min` conservative.
+
+How far the rows moved, old series alone -> merged:
+
+| pool | median | p90 | max |
+|---|---|---|---|
+| binary_ask | 7.46 -> 15.75 | 11.06 -> 18.57 | 11.52 -> 19.20 |
+| feedback | 11.86 -> 13.30 | 13.34 -> 17.54 | 14.05 -> 19.59 |
+| outage | 10.89 -> 18.58 | 19.16 -> 25.96 | 25.96 -> 53.42 |
+
+`binary_ask`'s two regimes are disjoint (5.93-11.52 then 13.40-19.20) — the
+distribution roughly doubled, which is exactly why 69 of its 76 live calls were
+killed at a ceiling of 13.
+
+`outage`'s max is **one** observation, 53.42s, at more than 1.7x the next slowest
+call in its arm (30.26s) and with nothing in between. It is kept, not trimmed —
+dropping an inconvenient observation is the failure this table exists to prevent
+— but it is the same never-returned shape the plan tracks as its hung-call
+residual, and `ceil(max) + 1` turns it into a 55s per-call ceiling. Read the
+`outage` ceiling in the table above as arithmetic that has been performed, not as
+a number anybody has adopted.
+
 ## Turn-end feasibility
 
 `hook-turn-end-gate.py` runs three judges **sequentially on one budget**:
 `judge_feedback_signal`, then `judge_binary_ask`, then `judge_outage_escalation`.
 Against the approved budget of 52 s:
 
-| basis | sum | fits 52? |
-|---|---:|---|
-| p90 of the three | 43.56 | yes, by 8.44 s |
-| observed maxima | 51.53 | yes, by 0.47 s |
-| per-call ceilings (16 + 13 + 27) | 56 | no |
+| basis | sum, pre-drift rows | fits 52? | sum, merged rows | fits 52? |
+|---|---:|---|---:|---|
+| p90 of the three | 43.56 | yes, by 8.44 s | 62.07 | no |
+| observed maxima | 51.53 | yes, by 0.47 s | 92.21 | no |
+| per-call ceilings | 56 (16 + 13 + 27) | no | 97 (21 + 21 + 55) | no |
 
-So all three judges complete even on the slowest run yet observed, and only the
-sum of the per-call ceilings — each of which is already one second above its own
-observed maximum — does not fit. The plan deferred exactly this inequality to this
+On the pre-drift rows all three judges completed even on the slowest run yet
+observed, and only the sum of the per-call ceilings — each already one second
+above its own observed maximum — did not fit. On the merged rows no basis fits,
+and the maxima column is dominated by the single 53.42s `outage` observation
+discussed above. What the arithmetic settles is that the 52 s budget can no
+longer be justified by the "every judge completes on its slowest observed run"
+argument that justified it before; what to do about that is a tuning decision,
+not a measurement. The plan deferred exactly this inequality to this
 measurement: the budget-size inequality is checked AFTER the precondition, in the
 approved plan's own words —
 <!-- Language exception: verbatim quote of the approved plan's condition; translating a citation stops it being one. -->
@@ -172,7 +244,8 @@ measurement.
 
 ## Reproducing
 
-`sample.py`, `ab.py`, `topup.py` / `topup2.py`, `sample_landing_discipline.py` are the
-runners as executed; `stats.py` prints the table. They import `agentctl.advisor` from
-this branch and each call the real judge, so a re-run costs real model calls and will
-not reproduce the latencies exactly — only their shape.
+`sample.py`, `ab.py`, `topup.py` / `topup2.py`, `sample_landing_discipline.py`,
+`approval.py` / `approval2.py` and `drift.py` are the runners as executed; `stats.py`
+prints the table. They import `agentctl.advisor` from this branch and each call the
+real judge, so a re-run costs real model calls and will not reproduce the latencies
+exactly — only their shape.
