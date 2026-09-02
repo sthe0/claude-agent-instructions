@@ -549,38 +549,6 @@ disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
 
 [[entry]]
-id = "25029f8a5a97e5ae"
-domain = "code"
-file = "scripts/agentctl/plan.py"
-class = "structural"
-disposition = "keep"
-ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
-
-[[entry]]
-id = "4998d2dc0eceb236"
-domain = "code"
-file = "scripts/agentctl/plan.py"
-class = "structural"
-disposition = "keep"
-ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
-
-[[entry]]
-id = "1144557403112596"
-domain = "code"
-file = "scripts/agentctl/plan.py"
-class = "structural"
-disposition = "keep"
-ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
-
-[[entry]]
-id = "d533d008a488b4b8"
-domain = "code"
-file = "scripts/agentctl/plan.py"
-class = "structural"
-disposition = "keep"
-ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
-
-[[entry]]
 id = "028ee68fedd3bed4"
 domain = "code"
 file = "scripts/agentctl/plugins.py"
@@ -8813,70 +8781,6 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
-id = "258c1b1bd4bb29b2"
-domain = "code"
-file = "scripts/tests/test_verify_reachability.py"
-class = "not-a-gate"
-disposition = "keep"
-ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
-
-[[entry]]
-id = "8a126161419c7d4e"
-domain = "code"
-file = "scripts/tests/test_verify_reachability.py"
-class = "not-a-gate"
-disposition = "keep"
-ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
-
-[[entry]]
-id = "8da51c3ed2e0bc13"
-domain = "code"
-file = "scripts/tests/test_verify_reachability.py"
-class = "not-a-gate"
-disposition = "keep"
-ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
-
-[[entry]]
-id = "a0050128cf5f072d"
-domain = "code"
-file = "scripts/tests/test_verify_reachability.py"
-class = "not-a-gate"
-disposition = "keep"
-ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
-
-[[entry]]
-id = "31caa2fc2ed9cd7d"
-domain = "code"
-file = "scripts/tests/test_verify_reachability.py"
-class = "not-a-gate"
-disposition = "keep"
-ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
-
-[[entry]]
-id = "c4d24fddb371f999"
-domain = "code"
-file = "scripts/tests/test_verify_reachability.py"
-class = "not-a-gate"
-disposition = "keep"
-ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
-
-[[entry]]
-id = "47a4d8d637e6b50c"
-domain = "code"
-file = "scripts/tests/test_verify_reachability.py"
-class = "not-a-gate"
-disposition = "keep"
-ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
-
-[[entry]]
-id = "e28a0ed756b77239"
-domain = "code"
-file = "scripts/tests/test_verify_reachability.py"
-class = "not-a-gate"
-disposition = "keep"
-ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
-
-[[entry]]
 id = "5da9cf749ed8a472"
 domain = "code"
 file = "scripts/tests/test_walkthrough.py"
@@ -9400,14 +9304,6 @@ ground = "The deterministic engine. Its regexes parse the engine's own structure
 id = "a28e76bf6a4aea1a"
 domain = "code_file_rollup"
 file = "scripts/agentctl/gates.py"
-class = "structural"
-disposition = "keep"
-ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning. (file-level rollup of the file's scopes.)"
-
-[[entry]]
-id = "635a0f7407558fad"
-domain = "code_file_rollup"
-file = "scripts/agentctl/plan.py"
 class = "structural"
 disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning. (file-level rollup of the file's scopes.)"
@@ -11000,14 +10896,6 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "fd35ae92408fc041"
 domain = "code_file_rollup"
 file = "scripts/tests/test_verify_experience_leaf.py"
-class = "not-a-gate"
-disposition = "keep"
-ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
-
-[[entry]]
-id = "3deb3639979dd757"
-domain = "code_file_rollup"
-file = "scripts/tests/test_verify_reachability.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
@@ -23943,4 +23831,140 @@ file = "skills/tracker-management/SKILL.md"
 class = "perception"
 disposition = "keep"
 ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
+
+[[entry]]
+id = "25029f8a5a97e5ae"
+domain = "code"
+file = "scripts/agentctl/plan.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "4998d2dc0eceb236"
+domain = "code"
+file = "scripts/agentctl/plan.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "13c62b7824400754"
+domain = "code"
+file = "scripts/agentctl/plan.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "1144557403112596"
+domain = "code"
+file = "scripts/agentctl/plan.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "d533d008a488b4b8"
+domain = "code"
+file = "scripts/agentctl/plan.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "258c1b1bd4bb29b2"
+domain = "code"
+file = "scripts/tests/test_verify_reachability.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "8a126161419c7d4e"
+domain = "code"
+file = "scripts/tests/test_verify_reachability.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "66cc2f5160218bdb"
+domain = "code"
+file = "scripts/tests/test_verify_reachability.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "8da51c3ed2e0bc13"
+domain = "code"
+file = "scripts/tests/test_verify_reachability.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "a0050128cf5f072d"
+domain = "code"
+file = "scripts/tests/test_verify_reachability.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "31caa2fc2ed9cd7d"
+domain = "code"
+file = "scripts/tests/test_verify_reachability.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "c4d24fddb371f999"
+domain = "code"
+file = "scripts/tests/test_verify_reachability.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "84f19c4fdadd3c4e"
+domain = "code"
+file = "scripts/tests/test_verify_reachability.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "47a4d8d637e6b50c"
+domain = "code"
+file = "scripts/tests/test_verify_reachability.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "e28a0ed756b77239"
+domain = "code"
+file = "scripts/tests/test_verify_reachability.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "635a0f7407558fad"
+domain = "code_file_rollup"
+file = "scripts/agentctl/plan.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "3deb3639979dd757"
+domain = "code_file_rollup"
+file = "scripts/tests/test_verify_reachability.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
 
