@@ -271,9 +271,18 @@ def validate_questions(
     for q in questions:
         parsed = parse_target(q.target)
         if parsed is None:
-            blockers.append(f"question {q.id!r} has an unparseable target {q.target!r}")
-            continue
-        kind, stage_index, element = parsed
+            if q.disposition != "retired":
+                blockers.append(f"question {q.id!r} has an unparseable target {q.target!r}")
+                continue
+            # 'retired' has deliberately walked away from the target (see the
+            # _KEY_BOUND_DISPOSITIONS comment), same as the dangling-stage branch
+            # below — an unparseable target must not itself keep blocking a question
+            # that has already been retired. Fall through to the reason-required
+            # check with no stage-scoped kind, so the stage-bound rules further down
+            # short-circuit on `kind == "stage"` being false.
+            kind, stage_index, element = None, None, None
+        else:
+            kind, stage_index, element = parsed
 
         if (
             kind == "stage"
