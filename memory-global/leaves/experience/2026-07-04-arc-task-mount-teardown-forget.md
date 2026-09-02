@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "user"
 refs: [memory-global/leaves/system-knowledge/landing-changes-core-git-and-arc.md, https://<internal-review-host>/review/14261429]
 created: 2026-07-04
-last_verified: 2026-07-04
+last_verified: 2026-09-02
 ---
 
 # Arc task-mount lifecycle must end with unmount --forget; GC mechanized
@@ -31,10 +31,14 @@ Desired: task-mount teardown leaves no residue. Actual: plain arc unmount kept s
 - Where it arose: User pushed twice: 'why no autonomous cleanup proposal' and 'why is edit 2 text, not code' — the SI tie-breaker (existing mechanism > prose) applied; both fixes delivered as code in one VCS-trunk PR 14261837.
 - Working plan: Plan autonomous-arc-mount-teardown-v1.toml (2 stages: spawn:developer PR, in_thread verification); thinker review r1=revise(6)/r2=pass; developer needed 2 spawns (first INCOMPLETE at 3 USD cap — recurring pattern, continuation via context dossier); PR adds fs-only residue nudge to hook-resolution-land-arc.py + backend_teardown_workspace() with CLAUDE_DRY_RUN + teardown-arc-mount.sh CLI; 34/34 hermetic tests; verification mount itself torn down by the new CLI (dogfood).
 
-## Common core & variations
-**Common:** TODO — shared solution across contexts
 
-**Variations:** New sub-lesson: a tool without an invocation point is not autonomy — mechanize the trigger (gate-time nudge) and the action (lifecycle verb) in the infra layer that owns the resource; arc specifics stay in arc-side hooks (Core stays org-neutral).
+### 2026-09-02 — residue reached ENOSPC and broke the harness's own diagnostic channel
+- Where it arose: Workstation root filesystem hit 100% (471G/492G, 138M free). Two consequences beyond 'no space': (a) the monorepo VCS mount at the ~/task-mounts anchor dropped, so every hook script referenced through it reported '/bin/sh: 1: ...hook-*.py: not found' across the fleet's other sessions — the symptom looked like broken hook wiring, not a disk problem; (b) the Bash tool could not write its own output file under the harness scratch dir, so command output was silently lost — the fix was to redirect every diagnostic into /dev/shm (RAM tmpfs) and read it with the Read tool. 13 orphaned temporary VCS stores, from ad-hoc mounts rooted under /var/tmp and /tmp rather than under the anchor, had accumulated since the 2026-07-04 sweep (~57G) — the mechanized GC from that context did not cover mounts created outside the anchor.
+- Working plan: /tmp/plan-disk-cleanup.toml (3 stages, all PASSED): forget the unmounted temporary stores (57G) -> strip the build cache (~/.ya/build 100G to 2.8M) -> remove four finished-ticket /tmp dirs (8.4G). 138M free to 165G free, / from 100% to 66%. The anchor mount remounted itself once space existed; no remount needed. Two of the six planned /tmp dirs were kept after ls -ld showed same-day mtimes — the plan's material list was built from name patterns, not from mtimes, and only the pre-delete mtime check caught it.
+## Common core & variations
+**Common:** The mount lifecycle leaves residue that no single cleanup verb owns, and each context surfaces a new class of it (per-task stores under the anchor in 2026-07; ad-hoc mounts outside it in 2026-09) — so a sweep must enumerate the residue's real roots, not the ones the previous sweep happened to know. A cleanup plan that names deletion targets by NAME PATTERN must re-check each target's mtime immediately before deleting: the pattern encodes an assumption about lifecycle, not an observation of it.
+
+**Variations:** A tool without an invocation point is not autonomy — mechanize the trigger (gate-time nudge) and the action (lifecycle verb) in the infra layer that owns the resource; backend specifics stay in backend-side hooks (Core stays org-neutral). Newer sub-lesson: when the root filesystem is full, the harness's own tool-output channel fails silently and a dropped FUSE mount makes ordinary scripts read as 'not found' — check df before believing a file-not-found on a mount-backed path, and route diagnostics through /dev/shm to keep working.
 
 ## Cost
 ~2h wall-clock; 2 developer spawns (~$5.85, first hit $3 budget cap and returned INCOMPLETE — continuation via spawn-specialist.py --context-dossier because agentctl dispatch has no continuation channel); thinker plan review x2
