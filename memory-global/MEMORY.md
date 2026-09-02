@@ -56,6 +56,8 @@ Loaded into every session via `@~/.claude-agent/memory-global/MEMORY.md` import 
 - [Solved-by marker and usage stats](leaves/solved-by-007-marker-and-usage-stats.md) — resolution gate auto-stamps a `solved_by_007` internal-tracker tag / GitHub label on a resolved task's ticket (fail-open, engine-executed — a state-decidable rule, unlike the skill-executed status transition); the quality row's new `tracker_key` field backs `scripts/agent-stats.py`, a single local usage report over the existing ledgers.
 - [Agent usage telemetry](leaves/agent-usage-telemetry.md) — the opt-in (default OFF) cross-installation usage rollup: `usage-digest.py emit` posts an anonymized counts-only aggregate (salted-hash id, disjoint ISO-week period) to a per-channel tracking sink (private GitHub issue / internal-tracker ticket), `pull` sums them rated-row-weighted and channel-segmented; the consent + privacy envelope and the private-sink reachability constraint (fleet + granted collaborators, not arbitrary forks).
 
+- [Propose a skill on the second repeated manual workaround](leaves/propose-skill-on-repeated-workaround.md) — a second hand-rolled repeat of the same complex action with no skill for it is itself a self-improvement trigger, independent of user correction and of task resolution; creation-side counterpart to skill-catalog-curation.
+
 Workflow-level permissions (separate from memory): `~/claude-agent-instructions/permissions/` + `scripts/permissions-cli.py`. Not a memory leaf — operational config.
 
 ## Layers (ADR-0001 substrate)

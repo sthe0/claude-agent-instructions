@@ -1,6 +1,6 @@
 ---
 name: self-improvement
-description: TRIGGER when the user gives substantive correction or feedback about agent behavior — corrects/rejects/clarifies your action or conclusion, states a principle ("don't do that", "prefer X", "always Z"), evaluates agent quality, proposes changes to instructions/agents/skills/memory/repo/workflow, or reminds you that this skill should have run (a reminder counts as feedback — invoke in the current turn). Diagnose what went wrong and write concrete edits to ~/claude-agent-instructions/. SKIP for neutral confirmation ("ok", "thanks", "yes do it") and for pure questions that do not evaluate your actions.
+description: TRIGGER when the user gives substantive correction or feedback about agent behavior — corrects/rejects/clarifies your action or conclusion, states a principle ("don't do that", "prefer X", "always Z"), evaluates agent quality, proposes changes to instructions/agents/skills/memory/repo/workflow, or reminds you that this skill should have run (a reminder counts as feedback — invoke in the current turn). Diagnose what went wrong and write concrete edits to ~/claude-agent-instructions/. Also self-initiated: noticing a second hand-rolled repeat of the same complex reusable action with no skill or tool covering it (see propose-skill-on-repeated-workaround.md). SKIP for neutral confirmation ("ok", "thanks", "yes do it") and for pure questions that do not evaluate your actions.
 ---
 
 # Self-improvement
@@ -25,6 +25,8 @@ You run as a skill in the main thread, so you have full conversation context —
 A user reminder ("did you run self-improvement?", "yes, run it") IS feedback. Invoke in the **same turn** as the trigger, before the final reply. Do not reply with apology only.
 
 **Also self-initiated, not only user-triggered.** `scripts/self-diagnose.py` (run at session start by `hook-self-diagnose-due.py`, throttled + fail-open) mechanically surfaces self-friction in the agent's own memory/instructions — an oversized index, a dangling pointer, a file near its ceiling — proactively, before any user complains. When `overcome-difficulty` (see its § Proactive self-diagnosis) has worked such an item to a re-norming task, author the edit here, through the normal Beat 1/Beat 2 gate below.
+
+**Also self-initiated: a second repeated manual workaround.** Independent of both triggers above, notice when you yourself have now hand-rolled the *same* complex, multi-step action **twice in a row** with no skill or tool covering it (e.g. two point-fixed manual deploy commands, two ad-hoc health-check scripts for the same check) — do not wait for a third repetition or for the ticket to resolve. On the second occurrence, propose via `AskUserQuestion` ("оформить в навык?" / "turn this into a skill?") before doing the workaround a third time. This closes a gap neither existing trigger covers: `overcome-difficulty`'s "two or more process corrections in a row" catches a wrong *plan*, not a missing *tool*, and `systemic-pattern-scan` only fires at ticket resolution, which a narrowly-fixed ticket may never reach. Full rationale and a concrete precedent: [propose-skill-on-repeated-workaround.md](../../memory-global/leaves/propose-skill-on-repeated-workaround.md).
 
 ## Workflow — on the standard plan-approval spine
 

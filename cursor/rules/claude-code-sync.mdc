@@ -93,7 +93,7 @@ When triggered → read `~/.claude-agent/skills/overcome-difficulty/SKILL.md` an
 
 **SKIP** for neutral confirmation ("ok", "thanks", "yes do it") and for pure questions without evaluation of your actions.
 
-**Also self-initiated:** a non-empty `self-diagnose.py` worklist worked to a re-norming task by `overcome-difficulty` is authored here, through the normal gate below — not only user feedback.
+**Also self-initiated:** a non-empty `self-diagnose.py` worklist worked to a re-norming task by `overcome-difficulty` is authored here, through the normal gate below — not only user feedback. Also: noticing a second hand-rolled repeat of the same complex reusable action with no skill/tool covering it — on the second occurrence, propose via AskQuestion turning it into a skill before a third repetition; detail: `memory-global/leaves/propose-skill-on-repeated-workaround.md`.
 
 When triggered → read `~/.claude-agent/skills/self-improvement/SKILL.md` (and `policy.md` for process-as-code / cache-aware editing / instruction-language / file-structure / git-sync rules) and follow them in the **same turn** as the trigger, before the final reply. In Claude Code the end-of-turn `Stop` gate (`hook-turn-end-gate.py`) blocks the turn when a feedback signal is present but neither skill ran; **in Cursor those hooks do not run** — same obligation, prose-enforced: engage the skill or state why it does not apply.
 
