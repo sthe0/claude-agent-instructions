@@ -4733,6 +4733,22 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "adb06893adc141c4"
+domain = "code"
+file = "scripts/tests/test_hook_published_text_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "7e5f9fab0f020a61"
+domain = "code"
+file = "scripts/tests/test_hook_published_text_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "3e98d242f117876c"
 domain = "code"
 file = "scripts/tests/test_hook_published_text_gate.py"
@@ -4789,6 +4805,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "f608431fbe1d0610"
+domain = "code"
+file = "scripts/tests/test_hook_published_text_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "f9c33e8c20c0d9cc"
 domain = "code"
 file = "scripts/tests/test_hook_published_text_gate.py"
@@ -4798,6 +4822,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 
 [[entry]]
 id = "434d2d17c256f297"
+domain = "code"
+file = "scripts/tests/test_hook_published_text_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "0e1f685ff5ece74d"
 domain = "code"
 file = "scripts/tests/test_hook_published_text_gate.py"
 class = "not-a-gate"

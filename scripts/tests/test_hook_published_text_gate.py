@@ -141,6 +141,39 @@ def test_shape2_inline_literal_witnessed_still_denies_since_body_never_matches(t
     assert _is_deny(proc)
 
 
+def test_shape1_unwitnessed_deny_reason_names_the_override_env(tmp_path):
+    write_seam(tmp_path)
+    entry = _by_label("shape1-file-valued-flag")
+    proc = run_hook(bash_payload(entry["command"], transcript("unwitnessed")), tmp_path)
+    assert proc.returncode == 0
+    assert _is_deny(proc)
+    reason = _deny_reason(proc)
+    assert "CLAUDE_PUBLISHED_TEXT_GATE=0" in reason
+
+
+def test_shape2_inline_literal_deny_reason_also_names_the_override_env(tmp_path):
+    write_seam(tmp_path)
+    entry = _by_label("shape2-inline-literal")
+    proc = run_hook(bash_payload(entry["command"], transcript("unwitnessed")), tmp_path)
+    assert proc.returncode == 0
+    assert _is_deny(proc)
+    reason = _deny_reason(proc)
+    assert "CLAUDE_PUBLISHED_TEXT_GATE=0" in reason
+
+
+def test_text_gate_override_force_allows_a_genuine_deny_and_records_advisory(tmp_path):
+    write_seam(tmp_path)
+    entry = _by_label("shape1-file-valued-flag")
+    proc = run_hook(
+        bash_payload(entry["command"], transcript("unwitnessed")), tmp_path,
+        env_extra={"CLAUDE_PUBLISHED_TEXT_GATE": "0"},
+    )
+    assert proc.returncode == 0
+    assert not _is_deny(proc)
+    rows = _advisory_rows(tmp_path)
+    assert any(r.get("kind") == "TEXT_GATE_OVERRIDE_USED" for r in rows)
+
+
 def test_shape3_heredoc_in_command_substitution_wiring(tmp_path):
     entry = _by_label("shape3-heredoc-in-command-substitution")
     proc_unwitnessed = run_hook(bash_payload(entry["command"], transcript("unwitnessed")), tmp_path)
@@ -190,6 +223,34 @@ def test_core_gh_pr_create_body_file_unwitnessed_denies(tmp_path):
     proc = run_hook(bash_payload(entry["command"], transcript("unwitnessed")), tmp_path)
     assert proc.returncode == 0
     assert _is_deny(proc)
+
+
+def test_witnessed_body_with_artifact_hint_gets_the_same_decision_as_without(tmp_path):
+    # Both bodies bind WRITER_OUTPUT/POST_WITNESS, so both must allow with the
+    # identical observable shape (returncode + empty stdout, since the advisory
+    # is a sink record, never a permissionDecision on an allow path -- see the
+    # module docstring's ALLOW-PATH ARTIFACT HINT paragraph). Only the hinted
+    # body's advisory row differs.
+    plain_home = tmp_path / "plain"
+    hinted_home = tmp_path / "hinted"
+    write_seam(plain_home)
+    write_seam(hinted_home)
+
+    plain_entry = _by_label("core-gh-pr-create-body-file")
+    plain_proc = run_hook(bash_payload(plain_entry["command"], transcript("witnessed")), plain_home)
+
+    hinted_command = (
+        'gh pr create --title "Fix" --body-file '
+        "scripts/tests/fixtures/published-text/artifact-hint-body.md"
+    )
+    hinted_proc = run_hook(bash_payload(hinted_command, transcript("artifact-hint")), hinted_home)
+
+    assert plain_proc.returncode == hinted_proc.returncode == 0
+    assert not _is_deny(plain_proc) and not _is_deny(hinted_proc)
+    assert plain_proc.stdout == hinted_proc.stdout == ""
+
+    assert not any(r.get("kind") == "ALLOWED_WITH_ARTIFACT_HINT" for r in _advisory_rows(plain_home))
+    assert any(r.get("kind") == "ALLOWED_WITH_ARTIFACT_HINT" for r in _advisory_rows(hinted_home))
 
 
 # --- UNRESOLVED / NOT_A_PUBLICATION (subprocess end-to-end) -----------------

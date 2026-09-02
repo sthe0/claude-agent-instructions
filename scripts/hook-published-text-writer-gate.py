@@ -55,7 +55,15 @@ FAIL-OPEN DISCIPLINE. Every genuinely missing observable allows and, where a
 sink exists to say so, records to it: no transcript_path in the payload, an
 unreadable transcript (writer_pass.UNREADABLE), an unresolvable body
 (`published_body.resolve` returns UNRESOLVED and records this itself), an
-unreadable attachment, and every fail-open branch of the attachment judge.
+unreadable attachment, and every fail-open branch of the attachment judge. A
+DENIED TEXT body also has one deliberate, human-operated escape:
+`CLAUDE_PUBLISHED_TEXT_GATE=0` (see `_TEXT_GATE_OVERRIDE_ENV`) force-allows
+it, is named in the deny reason itself so a legitimately-blocked caller can
+find it without reading this file, and is recorded to the advisory sink
+(TEXT_GATE_OVERRIDE_USED) every time it fires -- an unusually high rate of
+that kind is the signal the escape is being routed around routinely rather
+than used for a genuine emergency.
+
 NOT_A_PUBLICATION records nothing and is not itself a fail-open case -- it is
 the ordinary "this call is not gated at all" outcome, the overwhelming
 majority of Bash calls this hook ever sees, and it returns in well under
@@ -127,6 +135,19 @@ _PUBLISHED_TEXT_JUDGE_BUDGET_S = 45
 # other semantic judge's env convention (CLAUDE_<JUDGE>_SEMANTIC).
 _PUBLISHED_ATTACHMENT_KILLSWITCH_ENV = "CLAUDE_PUBLISHED_ATTACHMENT_SEMANTIC"
 
+# Structural (non-judge) escape for the TEXT path, mirroring
+# agentctl.gates.plan_presentation_active's AGENTCTL_PLAN_PRESENTATION=0 —
+# another MANDATORY structural gate with an env-only, human-operated force-off.
+# "0" force-disables the TEXT-path deny; there is deliberately no "1 forces
+# on" half, since this gate is mandatory by default and has nothing to force
+# on. Named without "_SEMANTIC" (unlike _PUBLISHED_ATTACHMENT_KILLSWITCH_ENV
+# above) because that suffix is reserved for judge-calling paths in this
+# repo's convention, and the TEXT path calls no model at all. Named in the
+# deny reason itself so a legitimately-blocked caller can see the escape
+# hatch without reading this file; every use is recorded to the advisory
+# sink (TEXT_GATE_OVERRIDE_USED), the same way every other fail-open path is.
+_TEXT_GATE_OVERRIDE_ENV = "CLAUDE_PUBLISHED_TEXT_GATE"
+
 # Leading slice of an attachment's content handed to the judge prompt -- large
 # enough to judge tone/register, small enough to keep the prompt cheap.
 _JUDGE_EXCERPT_CHARS = 4000
@@ -147,12 +168,14 @@ _INLINE_LITERAL_REASON = (
     "Skill inline does NOT by itself clear this gate unless these exact "
     "bytes are that pass's own returned text; spawn (or invoke) tech-writer, "
     "then Write its output to a file and publish via --body-file/-F instead "
-    "of an inline literal"
+    "of an inline literal (structural override, human use only: "
+    "{override_env}=0)"
 )
 _GENERIC_DENY_REASON = (
     "no tech-writer witness is bound to this published body{window_note} -- "
     "spawn (or invoke) tech-writer, then either use its own returned text "
-    "verbatim or Write its output to a file before publishing"
+    "verbatim or Write its output to a file before publishing "
+    "(structural override, human use only: {override_env}=0)"
 )
 _ATTACHMENT_DENY_REASON = (
     "this attachment reads as reader-facing prose rather than a genuine "
@@ -177,7 +200,7 @@ def _window_note(strength: str) -> str:
 
 def _text_deny_reason(shape: int | None, strength: str) -> str:
     template = _INLINE_LITERAL_REASON if shape == 2 else _GENERIC_DENY_REASON
-    return template.format(window_note=_window_note(strength))
+    return template.format(window_note=_window_note(strength), override_env=_TEXT_GATE_OVERRIDE_ENV)
 
 
 def _load_seam() -> list | None:
@@ -244,6 +267,10 @@ def _decide_text(resolution: "published_body.Resolution", command: str, payload:
     if binding.strength in (writer_pass.WRITER_OUTPUT, writer_pass.POST_WITNESS):
         if published_body.artifact_syntax_hint(resolution.body or ""):
             published_body.record_advisory("ALLOWED_WITH_ARTIFACT_HINT", resolution.shape, command)
+        return "allow", ""
+
+    if os.environ.get(_TEXT_GATE_OVERRIDE_ENV) == "0":
+        published_body.record_advisory("TEXT_GATE_OVERRIDE_USED", resolution.shape, command)
         return "allow", ""
 
     return "deny", _text_deny_reason(resolution.shape, binding.strength)
