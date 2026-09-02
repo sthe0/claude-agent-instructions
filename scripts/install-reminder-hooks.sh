@@ -212,6 +212,13 @@ DESIRED = [
     # + reclaimable all satisfied). Establishes its own write-once baseline
     # stamp; never reimplements the predicate. Fail-open, never blocks.
     ("SessionStart",     None,    "hook-phase3-due.py",  10),
+    # Throttled nudge (once/7d): runs judge-usage-report.py --check-drift
+    # (DEFAULT mode only) and speaks only when a judge's live latency has
+    # drifted up to meet its declared ceiling — the detector half of the
+    # ceiling-drift plan closes here, since a ceiling correctly derived today
+    # says nothing about whether tomorrow's call population still fits under
+    # it. Fail-open, never blocks.
+    ("SessionStart",     None,    "hook-judge-ceiling-drift-due.py", 15),
     # End-of-turn GATE (not advisory): a loop-safe shell running a registry of
     # pure turn-boundary guardians. Blocks a stop when any guardian reports an
     # unmet obligation (today: the last user message carried an agent-behavior-

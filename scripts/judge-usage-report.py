@@ -31,6 +31,7 @@ Three deliberate design points, all easy to get wrong:
 Usage:
     scripts/judge-usage-report.py [--ledger PATH]
     scripts/judge-usage-report.py --latency [--since WINDOW] [--ledger PATH]
+    scripts/judge-usage-report.py --check-drift [--strict] [--since WINDOW] [--ledger PATH]
 """
 from __future__ import annotations
 
@@ -551,6 +552,187 @@ def parse_since(value: str, now: "float | None" = None) -> float:
         ) from None
 
 
+# --check-drift thresholds. A pair below MIN_DRIFT_CALLS has not accumulated
+# enough of the current regime to say anything — reported, never judged.
+MIN_DRIFT_CALLS = 30
+DRIFT_TIMEOUT_RATE_WARN = 0.15
+DRIFT_CLUSTER_FRACTION_WARN = 0.5
+DRIFT_CLUSTER_WINDOW_S = 1.0
+DRIFT_SKIP_RATE_WARN = 0.05
+
+DRIFT_INSUFFICIENT = "insufficient data"
+DRIFT_FAIL = "FAIL"
+DRIFT_WARN = "WARN"
+DRIFT_OK = "OK"
+
+
+@dataclass(frozen=True)
+class DriftFinding:
+    """One (hook, judge) pair's drift verdict.
+
+    ``reference_ceiling`` is judge_latency.call_ceiling_s(judge) alone — never
+    a hook's own (possibly padded) enforced timeout — so this check can never
+    disagree with the one table every ceiling is computed from. ``chosen_ceiling``
+    is the smallest ceiling actually recorded in the ledger for this pair that
+    clears the reference: the CURRENT regime, picked without hardcoding any
+    single hook's padding rule. A pair with no such ceiling among its points has
+    never run a single call under an adequate ceiling — INSUFFICIENT DATA, not a
+    zero rate."""
+
+    hook: str
+    judge: str
+    reference_ceiling: float
+    chosen_ceiling: "float | None"
+    n: int
+    median_s: "float | None"
+    timeout_rate: "float | None"
+    cluster_fraction: "float | None"
+    skip_rate: "float | None"
+    status: str
+    reasons: "tuple[str, ...]" = ()
+
+
+def _in_window(point: JudgePoint, since: "float | None") -> bool:
+    return since is None or (point.ts is not None and point.ts >= since)
+
+
+def check_drift(
+    points: "list[JudgePoint]", since: "float | None" = None
+) -> "list[DriftFinding]":
+    """One finding per (hook, judge) pair declared in HOOK_CALL_SEQUENCE.
+
+    Grouped by hook FIRST — filtering `points` to one hook before ever calling
+    latency_by_judge — so a judge declared by two hooks at two (possibly
+    IDENTICAL) ceilings is never pooled into one row: the two hooks' points
+    never share a Stats object, regardless of what ceiling either recorded.
+
+    Pure: computes over `points` alone, prints nothing, blocks nothing."""
+    findings: "list[DriftFinding]" = []
+    for hook_basename, sequence in judge_latency.HOOK_CALL_SEQUENCE.items():
+        hook_name = judge_ledger.HOOK_NAME_BY_BASENAME[hook_basename]
+        hook_points = [p for p in points if p.hook == hook_name]
+        groups = latency_by_judge(hook_points, since)
+        for judge in sequence:
+            reference = float(judge_latency.call_ceiling_s(judge))
+            candidates = sorted(
+                ceiling
+                for (g_judge, ceiling) in groups
+                if g_judge == judge and ceiling is not None and ceiling >= reference
+            )
+            if not candidates:
+                findings.append(DriftFinding(
+                    hook=hook_basename, judge=judge, reference_ceiling=reference,
+                    chosen_ceiling=None, n=0, median_s=None, timeout_rate=None,
+                    cluster_fraction=None, skip_rate=None, status=DRIFT_INSUFFICIENT,
+                ))
+                continue
+            chosen = candidates[0]
+            stats = groups[(judge, chosen)]
+            if stats.n < MIN_DRIFT_CALLS:
+                findings.append(DriftFinding(
+                    hook=hook_basename, judge=judge, reference_ceiling=reference,
+                    chosen_ceiling=chosen, n=stats.n, median_s=stats.median_s,
+                    timeout_rate=stats.rate, cluster_fraction=None, skip_rate=None,
+                    status=DRIFT_INSUFFICIENT,
+                ))
+                continue
+            median = stats.median_s
+            if median is not None and median >= chosen:
+                findings.append(DriftFinding(
+                    hook=hook_basename, judge=judge, reference_ceiling=reference,
+                    chosen_ceiling=chosen, n=stats.n, median_s=median,
+                    timeout_rate=stats.rate, cluster_fraction=None,
+                    skip_rate=None, status=DRIFT_FAIL,
+                    reasons=(f"median {median:.2f}s >= ceiling {chosen:g}s",),
+                ))
+                continue
+            timeout_points = [
+                p for p in hook_points
+                if p.judge == judge and p.ceiling == chosen
+                and p.outcome_id == TIMEOUT_OUTCOME_ID and _in_window(p, since)
+                and p.duration is not None
+            ]
+            if timeout_points:
+                near = [
+                    p for p in timeout_points
+                    if p.duration >= chosen - DRIFT_CLUSTER_WINDOW_S
+                ]
+                cluster_fraction = len(near) / len(timeout_points)
+            else:
+                cluster_fraction = None
+            decision_points = stats.n + stats.budget_skips
+            skip_rate = stats.budget_skips / decision_points if decision_points else 0.0
+            reasons = []
+            if stats.rate is not None and stats.rate >= DRIFT_TIMEOUT_RATE_WARN:
+                reasons.append(
+                    f"timeout rate {stats.rate:.1%} >= {DRIFT_TIMEOUT_RATE_WARN:.0%}"
+                )
+            if cluster_fraction is not None and cluster_fraction > DRIFT_CLUSTER_FRACTION_WARN:
+                reasons.append(
+                    f"{cluster_fraction:.0%} of timeouts land within "
+                    f"{DRIFT_CLUSTER_WINDOW_S:g}s of the ceiling"
+                )
+            if skip_rate > DRIFT_SKIP_RATE_WARN:
+                reasons.append(f"budget-skip rate {skip_rate:.1%} > {DRIFT_SKIP_RATE_WARN:.0%}")
+            findings.append(DriftFinding(
+                hook=hook_basename, judge=judge, reference_ceiling=reference,
+                chosen_ceiling=chosen, n=stats.n, median_s=median,
+                timeout_rate=stats.rate, cluster_fraction=cluster_fraction,
+                skip_rate=skip_rate, status=DRIFT_WARN if reasons else DRIFT_OK,
+                reasons=tuple(reasons),
+            ))
+    return findings
+
+
+def _drift_fails(finding: DriftFinding, strict: bool) -> bool:
+    if finding.status == DRIFT_FAIL:
+        return True
+    return strict and finding.status == DRIFT_WARN
+
+
+def format_drift(findings: "list[DriftFinding]", strict: bool) -> "list[str]":
+    mode = "strict" if strict else "default"
+    lines = [
+        f"Ceiling drift check ({mode} mode) — one finding per (hook, judge) pair, "
+        f"ceilings read from lib.judge_latency:",
+    ]
+    for finding in sorted(findings, key=lambda f: (f.hook, f.judge)):
+        pair = f"{finding.hook} / {finding.judge}"
+        if finding.status == DRIFT_INSUFFICIENT:
+            lines.append(
+                f"  {pair}: INSUFFICIENT DATA — n={finding.n} calls recorded at or "
+                f"above the declared ceiling {finding.reference_ceiling:g}s "
+                f"(need >={MIN_DRIFT_CALLS})"
+            )
+            continue
+        status = DRIFT_FAIL if (strict and finding.status == DRIFT_WARN) else finding.status
+        detail = (
+            f"n={finding.n} median={finding.median_s:.2f}s "
+            f"ceiling={finding.chosen_ceiling:g}s"
+        )
+        if status == DRIFT_OK:
+            timeout_rate = (
+                f"{finding.timeout_rate:.1%}" if finding.timeout_rate is not None else "n/a"
+            )
+            skip_rate = f"{finding.skip_rate:.1%}" if finding.skip_rate is not None else "n/a"
+            lines.append(
+                f"  {pair}: OK — {detail} timeout-rate={timeout_rate} skip-rate={skip_rate}"
+            )
+        elif status == DRIFT_WARN:
+            lines.append(f"  {pair}: WARN — {detail}; " + "; ".join(finding.reasons))
+        else:  # DRIFT_FAIL, whether structural or a strict-promoted WARN
+            reason = "; ".join(finding.reasons) if finding.reasons else "structural"
+            lines.append(
+                f"  {pair}: FAIL — {detail}; {reason}. Remedy: take a fresh sample "
+                f"and re-derive the row (samples/judge-latency)."
+            )
+    if any(_drift_fails(f, strict) for f in findings):
+        lines.append("Verdict: FAIL — at least one (hook, judge) pair needs re-sampling.")
+    else:
+        lines.append("Verdict: no ceiling needs re-deriving right now.")
+    return lines
+
+
 def tally(read: "judge_ledger.LedgerRead", ledger_path: Path) -> Tally:
     """Count one READ of the ledger, not one list of records: whether the file
     was readable at all, and how many of its lines the reader had to skip, are
@@ -927,8 +1109,21 @@ def build_parser() -> argparse.ArgumentParser:
         type=parse_since,
         default=None,
         metavar="WINDOW",
-        help="restrict --latency to calls at or after this point: an ISO date / "
-        "datetime, or Nd for N days back",
+        help="restrict --latency or --check-drift to calls at or after this point: "
+        "an ISO date / datetime, or Nd for N days back",
+    )
+    parser.add_argument(
+        "--check-drift",
+        action="store_true",
+        help="report, per (hook, judge) pair, whether its live latency has drifted "
+        "up to meet its declared ceiling. Report-only: never blocks. Exits "
+        "non-zero iff a pair FAILs",
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="with --check-drift, promote its WARN findings (timeout rate, "
+        "ceiling-clustered survivors, budget-skip rate) to FAIL as well",
     )
     return parser
 
@@ -936,11 +1131,17 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: "list[str] | None" = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.since is not None and not args.latency:
-        parser.error("--since applies to --latency, which was not asked for")
+    if args.since is not None and not args.latency and not args.check_drift:
+        parser.error("--since applies to --latency or --check-drift, which was not asked for")
+    if args.strict and not args.check_drift:
+        parser.error("--strict applies to --check-drift, which was not asked for")
     path = args.ledger if args.ledger is not None else judge_ledger.ledger_path()
     read = judge_ledger.read_ledger(path)
     result = tally(read, path)
+    if args.check_drift:
+        findings = check_drift(result.judge_points, args.since)
+        print("\n".join(format_drift(findings, args.strict)))
+        return 1 if any(_drift_fails(f, args.strict) for f in findings) else 0
     if args.latency:
         window = (
             f"calls at or after {datetime.fromtimestamp(args.since).isoformat(' ')}"
