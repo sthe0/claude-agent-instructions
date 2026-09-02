@@ -69,6 +69,26 @@ def test_c_stale_review_blocks(gate_on):
     assert blockers and "stale" in blockers[0]
 
 
+def test_path_rename_content_match_not_stale(gate_on, tmp_path):
+    """Issue #195: a byte-identical plan re-saved under a new filename must bind
+    via content identity (sha256), not fail on the path check alone."""
+    plan = tmp_path / "renamed.toml"
+    plan.write_text("same content")
+    digest = _sha256_file(plan)
+    s = _subst(plan_review=PlanReview("/OLD.toml", "pass", "thinker", plan_sha256=digest))
+    assert gates.plan_review_blockers(s, str(plan)) == []
+
+
+def test_path_rename_unreadable_target_still_blocks(gate_on, tmp_path):
+    """C1: when the path differs and a digest is present but the target plan is
+    unreadable, the gate must still block — not silently fail open by inheriting
+    _plan_review_content_stale's same-path fail-open semantics."""
+    missing = tmp_path / "does-not-exist.toml"
+    s = _subst(plan_review=PlanReview("/OLD.toml", "pass", "thinker", plan_sha256="ab12"))
+    blockers = gates.plan_review_blockers(s, str(missing))
+    assert blockers and "stale" in blockers[0]
+
+
 def test_d_revise_blocks(gate_on):
     s = _subst(plan_review=PlanReview("/plan.toml", "revise", "thinker"))
     blockers = gates.plan_review_blockers(s, "/plan.toml")

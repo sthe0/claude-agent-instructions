@@ -437,11 +437,30 @@ def _plan_review_verdict_blockers(pr, *, state: SessionState | None = None, doc=
 def _plan_review_blockers_whole(pr, target_plan: str | None, *, state: SessionState | None = None, doc=None) -> list[str]:
     if pr is None:
         return ["no thinker review recorded — run: plan-review (thinker verdict required before this plan is approved/applied)"]
-    if not target_plan or pr.plan_path != target_plan:
+    if not target_plan:
         return [
             "thinker review is stale — it examined "
             f"{pr.plan_path!r} but the target plan is {target_plan!r}; re-run plan-review on the current plan"
         ]
+    path_mismatch = pr.plan_path != target_plan
+    if path_mismatch and not pr.plan_sha256:
+        return [
+            "thinker review is stale — it examined "
+            f"{pr.plan_path!r} but the target plan is {target_plan!r}; re-run plan-review on the current plan"
+        ]
+    if path_mismatch:
+        # A digest is present, so a byte-identical rename can bind via content
+        # identity below — but that fallback fails OPEN on an unreadable target
+        # (see _plan_review_content_stale's own comment), which is the wrong
+        # default for the rarer, riskier path-differs case. Guard readability
+        # here, in the caller, so the same-path behavior stays undisturbed.
+        try:
+            Path(target_plan).read_bytes()
+        except OSError:
+            return [
+                "thinker review is stale — it examined "
+                f"{pr.plan_path!r} but the target plan is {target_plan!r}; re-run plan-review on the current plan"
+            ]
     stale = _plan_review_content_stale(pr, target_plan)
     if stale:
         return [stale]
@@ -461,7 +480,12 @@ def _plan_review_blockers_coverage(state: SessionState, target_plan: str, doc) -
     whole = state.plan_review
     if whole is None:
         return ["no thinker review recorded — run: plan-review (thinker verdict required before this plan is approved/applied)"]
-    if not target_plan or whole.plan_path != target_plan:
+    if not target_plan:
+        return [
+            "thinker review is stale — it examined "
+            f"{whole.plan_path!r} but the target plan is {target_plan!r}; re-run plan-review on the current plan"
+        ]
+    if whole.plan_path != target_plan and not whole.reviewed_meta_digest:
         return [
             "thinker review is stale — it examined "
             f"{whole.plan_path!r} but the target plan is {target_plan!r}; re-run plan-review on the current plan"
