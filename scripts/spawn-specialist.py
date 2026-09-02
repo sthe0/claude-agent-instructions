@@ -588,6 +588,21 @@ DEVELOPER_SETTINGS_ALLOW = [
     "Bash(python3 -m agentctl classify:*)",
     "Bash(python3 -m agentctl status:*)",
     "Bash(python3 samples/judge-latency/sample_landing_discipline.py:*)",
+    # tech-writer-publication-gate stage 6's method is a real in-harness
+    # observation: spawn two actual `claude -p` children (deny arm, allow
+    # arm) against a scratch hook and independently re-check the recorded
+    # timestamps/acts, which a stdin-fed rerun of the hook cannot establish.
+    # User-authorized 2026-09-02 as the same narrow, named, temporary
+    # unblock pattern as the two grants above (the deferred dynamic
+    # per-plan grant mechanism they reference still does not exist). Unlike
+    # the removed "claude -p --model haiku:*" grant noted above, a direct
+    # `claude -p` spawn is this stage's actual deliverable, not an avoidable
+    # implementation detail routed through an already-permitted python3
+    # process — so the raw Bash grant is scoped here, not just the wrapper.
+    "Bash(python3 scripts/check-in-harness-observation.py:*)",
+    "Bash(python3 scripts/check-live-run-evidence.py:*)",
+    "Bash(python3 _ptg_scratch/probe/launch_probe.py:*)",
+    "Bash(claude -p:*)",
 ]
 
 # The plan-artifact directory (lib.config_root.plans_dir()) is where a
