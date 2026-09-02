@@ -71,7 +71,7 @@ runs themselves — they fall on **both sides** of the sampled range:
 | | live run | sampled range for that judge |
 |---|---|---|
 | `deferring_disposition` | **43.09 s** | 10.29 – 39.99 s (n=18) |
-| `outage_escalation` (escalation hook) | **4.96 s** | 7.19 – 25.96 s (n=16) |
+| `outage_escalation` (escalation hook) | **4.96 s** | 7.19 – 53.42 s (n=48) |
 
 Process overhead is not the explanation: the same hook run to completion with a
 non-firing payload (interpreter, imports, prefilter, no judge) takes **0.08 s**
@@ -107,10 +107,10 @@ a detail: four standard estimators on the n=18 deferring sample give 29.94 /
 | Hook | Judge | Model | Sources | n | min | median | p90 | max | Ceiling | ≥ ceiling | Fail-open share | 95% upper bound |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | `hook-deferring-disposition-gate.py` | `deferring_disposition` | `haiku` | `latency-sample.json:defer + ab-sample.json:defer_std` | 18 | 10.29 | 17.43 | 37.58 | 39.99 | 45 | 0 | 0.0000 | 0.1667 |
-| `hook-escalation-diagnosis-gate.py` | `outage_escalation` | `haiku` | `latency-sample.json:outage + ab-sample.json:outage_std` | 16 | 7.19 | 10.89 | 19.16 | 25.96 | 30 | 0 | 0.0000 | 0.1875 |
-| `hook-turn-end-gate.py` | `feedback_signal` | `haiku` | `latency-sample.json:feedback + topup2-sample.json:feedback` | 26 | 10.73 | 11.86 | 13.34 | 14.05 | 16 | 0 | 0.0000 | 0.1154 |
-| `hook-turn-end-gate.py` | `binary_ask` | `haiku` | `topup2-sample.json:binary_ask` | 16 | 5.93 | 7.46 | 11.06 | 11.52 | 13 | 0 | 0.0000 | 0.1875 |
-| `hook-turn-end-gate.py` | `outage_escalation` | `haiku` | `latency-sample.json:outage + ab-sample.json:outage_std` | 16 | 7.19 | 10.89 | 19.16 | 25.96 | 27 | 0 | 0.0000 | 0.1875 |
+| `hook-escalation-diagnosis-gate.py` | `outage_escalation` | `haiku` | `latency-sample.json:outage + ab-sample.json:outage_std + drift-sample.json:outage + drift-sample.json:not_outage` | 48 | 7.19 | 18.58 | 25.96 | 53.42 | 60 | 0 | 0.0000 | 0.0625 |
+| `hook-turn-end-gate.py` | `feedback_signal` | `haiku` | `latency-sample.json:feedback + topup2-sample.json:feedback + drift-sample.json:feedback + drift-sample.json:not_feedback` | 58 | 10.73 | 13.30 | 17.54 | 19.59 | 21 | 0 | 0.0000 | 0.0517 |
+| `hook-turn-end-gate.py` | `binary_ask` | `haiku` | `topup2-sample.json:binary_ask + drift-sample.json:binary_ask + drift-sample.json:not_binary_ask` | 48 | 5.93 | 15.75 | 18.57 | 19.20 | 21 | 0 | 0.0000 | 0.0625 |
+| `hook-turn-end-gate.py` | `outage_escalation` | `haiku` | `latency-sample.json:outage + ab-sample.json:outage_std + drift-sample.json:outage + drift-sample.json:not_outage` | 48 | 7.19 | 18.58 | 25.96 | 53.42 | 55 | 0 | 0.0000 | 0.0625 |
 | `hook-plan-delivery-gate.py` | `approval_ask` | `haiku` | `approval-sample.json:approval + approval-sample.json:not_approval + approval2-sample.json:approval + approval2-sample.json:not_approval` | 64 | 5.88 | 12.77 | 17.29 | 19.14 | 30 | 0 | 0.0000 | 0.0469 |
 | `hook-resolution-reminder.py` | `landing_discipline` | `haiku` | `landing-discipline-sample.json:pr_proposing + landing-discipline-sample.json:direct_push` | 16 | 3.88 | 4.96 | 6.37 | 15.38 | 22 | 0 | 0.0000 | 0.1875 |
 | — | `acceptance_judge` | `haiku` | UNMEASURED — no latency sample exists | — | — | — | — | — | — | — | — | — |
@@ -130,8 +130,8 @@ With zero events in n trials the 95% upper bound on the rate is the rule of thre
 3/n — so the honest statement is not "the hooks never fail open" but:
 
 > On the evidence available, the per-call fail-open rate is **at most 17%**
-> (deferring, 3/18), **19%** (outage, 3/16), **12%** (feedback, 3/26),
-> **19%** (binary_ask, 3/16), **5%** (approval_ask, 3/64) and **19%**
+> (deferring, 3/18), **6%** (outage, 3/48), **5%** (feedback, 3/58),
+> **6%** (binary_ask, 3/48), **5%** (approval_ask, 3/64) and **19%**
 > (landing_discipline, 3/16), each at 95% confidence.
 
 These bounds are wide because the samples are small, and they shrink only with

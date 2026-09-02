@@ -919,7 +919,7 @@ def judge_deferring_disposition(
 # _DEFERRING_DISPOSITION_TIMEOUT_S — outside a hook budget the ceiling covers
 # the whole model family, not one prompt. Named distinctly from those two
 # (rather than reusing either) for the same reason _DEFERRING_DISPOSITION_
-# TIMEOUT_S is not shared with _BINARY_ASK_TIMEOUT_S even though both are 41
+# TIMEOUT_S is not shared with _BINARY_ASK_TIMEOUT_S even though both are 55
 # today: each judge's in-hook ceiling is derived per its own measured row, and
 # a shared name here would invite a caller to reuse whichever it imported
 # first. Deliberately NOT named `_LANDING_DISCIPLINE_TIMEOUT_S` — that name is
@@ -927,7 +927,7 @@ def judge_deferring_disposition(
 # (derived from judge_latency.call_ceiling_s('landing_discipline') with
 # headroom, a different number from this family-wide last resort), so the two
 # constants in the two files never collide or get mistaken for each other.
-_LANDING_DISCIPLINE_LAST_RESORT_TIMEOUT_S = 41
+_LANDING_DISCIPLINE_LAST_RESORT_TIMEOUT_S = 55
 
 _LANDING_DISCIPLINE_JUDGE_PROMPT = (
     "You are given the question and every option of an AskUserQuestion menu an "
@@ -1021,7 +1021,7 @@ def judge_landing_discipline_ask(
 # _ACCEPTANCE_JUDGE_TIMEOUT_S: this judge runs inside `agentctl question-raise`,
 # outside every hook, so no harness budget narrows it and none of the per-row
 # in-hook ceilings apply. Its own latency row is UNMEASURED and says so.
-_QUESTION_MATERIALITY_TIMEOUT_S = 41
+_QUESTION_MATERIALITY_TIMEOUT_S = 55
 
 _QUESTION_MATERIALITY_PROMPT = (
     "A plan carries CONTROLS -- the checks that decide whether its stages passed. "

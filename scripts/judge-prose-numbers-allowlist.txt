@@ -151,7 +151,7 @@ samples/judge-latency/README.md:242:ba28e247  # historical: the original 5s regi
 # the three recorded live runs or a statistic the checker recomputes from the
 # samples, so each reason names which of the two it is.
 live-run-evidence.md:73:b874c9db  # 43.09 = the recorded deferring live run; 10.29-39.99 (n=18) is that judge's sampled range, recomputed by check-live-run-evidence.py from latency-sample.json:defer + ab-sample.json:defer_std
-live-run-evidence.md:74:95087853  # 4.96 = the recorded escalation live run; 7.19-25.96 (n=16) is that judge's sampled range from latency-sample.json:outage + ab-sample.json:outage_std
+live-run-evidence.md:74:0d2a633e  # 4.96 = the recorded escalation live run; 7.19-53.42 (n=48) is that judge's sampled range after the stage-2 re-sample merge, from latency-sample.json:outage + ab-sample.json:outage_std + drift-sample.json:outage + drift-sample.json:not_outage
 live-run-evidence.md:77:3ec0fa34  # 0.08s = measured process overhead (3 trials of the deferring hook on a non-firing payload, no judge call); establishes that a live wall-clock is the judge call almost exactly
 live-run-evidence.md:89:5f4f6e6d  # 45s = _ASK_JUDGE_BUDGET_S in hook-deferring-disposition-gate.py, read out of the source by check-live-run-evidence.py rather than quoted
 live-run-evidence.md:90:0de45831  # 39.99 = max of the sampled deferring pool; 43.09 = the live run that exceeded it — the pair IS the claim that a sample max is not a bound
