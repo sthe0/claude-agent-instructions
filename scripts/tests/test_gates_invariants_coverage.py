@@ -145,8 +145,9 @@ class TestSemanticPath:
 
         def selective_runner(argv, **kw):
             call_count.append(1)
-            # Detect which invariant is being judged from the prompt
-            prompt = argv[-1] if argv else ""
+            # Detect which invariant is being judged from the prompt, delivered via
+            # stdin (never argv, so a large plan_text can't hit E2BIG).
+            prompt = kw.get("stdin", "")
             if "preserve idempotency" in prompt:
                 return RunResult(0, stdout="YES\n", stderr="")
             return RunResult(0, stdout="NO\n", stderr="")
