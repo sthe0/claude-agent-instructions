@@ -550,14 +550,26 @@ def preflight(host: str) -> tuple[bool, str]:
     raise ValueError(f"unknown host {host!r}; must be one of {HOSTS}")
 
 
-def build_prompt_argv(
+def build_launch_argv(
     host: str,
     model: str | None,
-    prompt: str,
     *,
     workspace: "Path | str | None" = None,
     lean: bool = False,
 ) -> list[str]:
+    """Assemble the launch argv for `host` WITHOUT the prompt.
+
+    The prompt is never a member of this argv, on purpose: appended as a
+    single argv string it can exceed Linux MAX_ARG_STRLEN (32 * PAGE_SIZE =
+    131072 bytes), and execve then rejects the whole launch with E2BIG before
+    the child even starts — the failure `agentctl.advisor`'s judge/enumerate
+    calls hit on a large plan. A caller whose prompt can grow past that
+    ceiling (a whole-plan judge/enumerate call) uses this function and
+    delivers the prompt via the child's stdin instead, mirroring
+    spawn-specialist.py's and spawn-cursor-specialist.py's own fix for the
+    identical failure class (`claude -p` / `agent -p` both read the prompt
+    from stdin when it is not given as a positional argv element).
+    """
     binary = binary_for(host)
     if host == HOST_CLAUDE:
         if model is None:
@@ -565,7 +577,6 @@ def build_prompt_argv(
         argv = [binary, "-p", "--model", model]
         if lean:
             argv += LEAN_ISOLATION_FLAGS
-        argv.append(prompt)
     elif host == HOST_CURSOR:
         # `model is None` is a FIRST-CLASS value here, not an omission: every tier
         # of CURSOR_COMPLEXITY_MODEL is None, and omitting --model is how a caller
@@ -580,8 +591,28 @@ def build_prompt_argv(
             argv += ["--model", model]
         if workspace is not None:
             argv += ["--workspace", str(workspace)]
-        argv.append(prompt)
     else:
         raise ValueError(f"unknown host {host!r}; must be one of {HOSTS}")
     assert_same_family(binary, host)
+    return argv
+
+
+def build_prompt_argv(
+    host: str,
+    model: str | None,
+    prompt: str,
+    *,
+    workspace: "Path | str | None" = None,
+    lean: bool = False,
+) -> list[str]:
+    """`build_launch_argv` with the prompt appended as the trailing element.
+
+    Kept, unchanged, for a caller whose prompt is bounded in practice
+    (`lib.marker_extract`, extracting a return marker from an already-short
+    specialist result). A caller whose prompt can grow past MAX_ARG_STRLEN
+    must use `build_launch_argv` and deliver the prompt via the child's
+    stdin instead — see `build_launch_argv`'s own docstring.
+    """
+    argv = build_launch_argv(host, model, workspace=workspace, lean=lean)
+    argv.append(prompt)
     return argv

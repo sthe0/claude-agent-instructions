@@ -214,6 +214,39 @@ def test_build_prompt_argv_unknown_host_raises():
         host_llm.build_prompt_argv("windows", "model", "prompt")
 
 
+# --- build_launch_argv ----------------------------------------------------------------
+# build_prompt_argv appends the prompt as a trailing argv element; a caller whose
+# prompt can exceed Linux MAX_ARG_STRLEN (131072 bytes) must never do that (execve
+# raises E2BIG before the child starts) and uses build_launch_argv -- the identical
+# argv, minus the prompt -- delivering the prompt via the child's stdin instead.
+
+def test_build_launch_argv_claude_shape():
+    argv = host_llm.build_launch_argv(HOST_CLAUDE, "sonnet")
+    assert argv == ["claude", "-p", "--model", "sonnet"]
+
+
+def test_build_launch_argv_cursor_shape(monkeypatch):
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/agent" if name == "agent" else None)
+    argv = host_llm.build_launch_argv(HOST_CURSOR, "auto")
+    assert argv[0] == "/usr/bin/agent"
+    assert "--trust" in argv and "--force" in argv and "--approve-mcps" in argv
+    assert argv[argv.index("--model") + 1] == "auto"
+    assert "--workspace" not in argv
+
+
+def test_build_launch_argv_matches_build_prompt_argv_minus_the_prompt(monkeypatch):
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/agent" if name == "agent" else None)
+    prompt = "do the thing"
+    with_prompt = host_llm.build_prompt_argv(HOST_CURSOR, "auto", prompt, lean=False)
+    without_prompt = host_llm.build_launch_argv(HOST_CURSOR, "auto", lean=False)
+    assert with_prompt == without_prompt + [prompt]
+
+
+def test_build_launch_argv_unknown_host_raises():
+    with pytest.raises(ValueError):
+        host_llm.build_launch_argv("windows", "model")
+
+
 # --- isolated_run_kwargs -------------------------------------------------------------
 
 def _ambient(monkeypatch, tmp_path, *, token=None, raw=None):
