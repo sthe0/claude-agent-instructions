@@ -108,7 +108,7 @@ JUDGE_REVIEWER = "judge:haiku"
 # run this model has been seen to make on ANY judge prompt. Its row in that
 # module is UNMEASURED, so this default is the only number available to it; the
 # test-suite asserts the literal still equals what that rule computes.
-_ACCEPTANCE_JUDGE_TIMEOUT_S = 41
+_ACCEPTANCE_JUDGE_TIMEOUT_S = 55
 def _prompt_argv(runtime_host: str, complexity: str, prompt: str) -> list[str]:
     model = model_for(runtime_host, complexity)
     return host_llm.build_prompt_argv(
@@ -443,7 +443,7 @@ _BINARY_ASK_TRAILING_DECORATION = "*_`~)]}>\"'»”’ \t\r\n"
 # this model has made on ANY judge prompt. A caller inside a hook budget passes
 # its own, narrower, per-judge ceiling and never reaches this number; the
 # test-suite asserts the literal still equals what that rule computes.
-_BINARY_ASK_TIMEOUT_S = 41
+_BINARY_ASK_TIMEOUT_S = 55
 
 _BINARY_ASK_PROMPT = (
     "You are given the FINAL message of an AI assistant's turn, written in any "
@@ -693,10 +693,11 @@ _OUTAGE_ESCALATION_JUDGE_PROMPT = (
 # (n=18: median 17.43, p90 37.58, max 39.99).
 # By lib/judge_latency.py::last_resort_ceiling_s, the same rule and the same
 # number as _BINARY_ASK_TIMEOUT_S: outside a hook budget the ceiling covers the
-# whole model family, not one prompt. The two constants stay SEPARATE names
-# because each judge's in-hook ceiling is derived per row, and a shared name here
-# would invite a caller to reuse whichever it imported first.
-_DEFERRING_DISPOSITION_TIMEOUT_S = 41
+# whole model family, not one prompt (currently outage_escalation's re-sampled
+# max of 53.42 s, not this judge's own tail). The two constants stay SEPARATE
+# names because each judge's in-hook ceiling is derived per row, and a shared
+# name here would invite a caller to reuse whichever it imported first.
+_DEFERRING_DISPOSITION_TIMEOUT_S = 55
 
 _DEFERRING_DISPOSITION_JUDGE_PROMPT = (
     "You are given the question and every option of a menu an AI assistant is "
@@ -1115,7 +1116,7 @@ def judge_question_materiality(
         judge_ledger.set_current_judge(None)
 
 
-_APPROVAL_ASK_TIMEOUT_S = 41
+_APPROVAL_ASK_TIMEOUT_S = 55
 
 _APPROVAL_ASK_PROMPT = (
     "You are given every user-facing string of an AskUserQuestion an AI coding "

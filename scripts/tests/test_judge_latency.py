@@ -173,10 +173,23 @@ _DERIVED_CONSTANTS = [
     # test_the_approval_ask_budgets_headroom_over_its_ceiling_is_real (which
     # pins the reason: the headroom itself, not a coincidence).
     (_TURN_END, "_TURN_FEEDBACK_MIN_CALL_S", "feedback_signal", judge_latency.call_floor_s),
-    (_TURN_END, "_TURN_FEEDBACK_CALL_CAP_S", "feedback_signal", judge_latency.call_ceiling_s),
     (_TURN_END, "_TURN_BINARY_ASK_MIN_CALL_S", "binary_ask", judge_latency.call_floor_s),
-    (_TURN_END, "_TURN_BINARY_ASK_CALL_CAP_S", "binary_ask", judge_latency.call_ceiling_s),
     (_TURN_END, "_TURN_OUTAGE_MIN_CALL_S", "outage_escalation", judge_latency.call_floor_s),
+]
+
+# The turn-end per-call CEILINGS moved off this equality table at the
+# 2026-09-02 replan, onto the `>=` shape below — the same move ca7c7e0 already
+# made for hook-plan-delivery-gate.py's budget. An equality-pinned ceiling has
+# no head-room at all against a population that has now been observed to move
+# twice (approval_ask, then binary_ask/feedback_signal/outage_escalation); a
+# `>=` ceiling absorbs an upward drift up to whatever slack it carries instead
+# of converting the very next slow call into a timeout. The FLOOR constants
+# above are deliberately left at equality: a floor above its own p90 would
+# refuse calls the remainder could in fact have carried, which is the opposite
+# failure mode and has no slack argument in its favour.
+_DERIVED_CEILING_CONSTANTS = [
+    (_TURN_END, "_TURN_FEEDBACK_CALL_CAP_S", "feedback_signal", judge_latency.call_ceiling_s),
+    (_TURN_END, "_TURN_BINARY_ASK_CALL_CAP_S", "binary_ask", judge_latency.call_ceiling_s),
     (_TURN_END, "_TURN_OUTAGE_CALL_CAP_S", "outage_escalation", judge_latency.call_ceiling_s),
 ]
 
@@ -210,6 +223,40 @@ def test_every_per_call_constant_moves_when_its_row_moves(hook, attr, judge, rul
     )
     monkeypatch.setitem(judge_latency.rows(), judge, slower)
     assert rule(judge) != getattr(hook, attr)
+
+
+@pytest.mark.parametrize(
+    "hook,attr,judge,rule",
+    _DERIVED_CEILING_CONSTANTS,
+    ids=[f"{attr}" for _h, attr, _j, _r in _DERIVED_CEILING_CONSTANTS],
+)
+def test_every_per_call_ceiling_constant_is_at_least_what_the_table_computes(hook, attr, judge, rule):
+    assert getattr(hook, attr) >= rule(judge), (
+        f"{attr} must be >= {rule.__name__}({judge!r}) = {rule(judge)}"
+    )
+
+
+@pytest.mark.parametrize(
+    "hook,attr,judge,rule",
+    _DERIVED_CEILING_CONSTANTS,
+    ids=[f"{attr}" for _h, attr, _j, _r in _DERIVED_CEILING_CONSTANTS],
+)
+def test_every_per_call_ceiling_constant_stops_covering_a_large_enough_row_move(
+    hook, attr, judge, rule, monkeypatch
+):
+    """The mutation proof for the `>=` shape: unlike an equality pin, a small
+    row move must NOT break the constant (that is the whole point of the
+    slack), but a row move large enough must still be detectable — otherwise
+    the `>=` check would silently tolerate an unbounded drift forever. A
+    mutation of +1000s makes the computed ceiling exceed any plausible hard-
+    coded constant, so the hook's fixed literal must fail to cover it."""
+    row = judge_latency.row(judge)
+    much_slower = judge_latency.Row(
+        judge=row.judge, n=row.n, min_s=row.min_s, median_s=row.median_s,
+        p90_s=row.p90_s + 1000, max_s=row.max_s + 1000, provenance=row.provenance,
+    )
+    monkeypatch.setitem(judge_latency.rows(), judge, much_slower)
+    assert rule(judge) > getattr(hook, attr)
 
 
 def test_a_single_call_hooks_budget_is_never_what_truncates_its_call():

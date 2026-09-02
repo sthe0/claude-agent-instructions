@@ -115,12 +115,13 @@ DESIRED = [
     # service failure to the user WITHOUT a recorded diagnosis (present-tense outage
     # cue + user-facing ask, and neither overcome-difficulty invoked nor a declared
     # difficulty). Reproduce with the real client + enumerate hypotheses first.
-    # 35 = the hook's own _JUDGE_BUDGET_S=30 plus interpreter-start headroom, the
+    # 65 = the hook's own _JUDGE_BUDGET_S=60 plus interpreter-start headroom, the
     # same shape as the deferring gate below; at 5 the harness killed the hook
-    # mid-judge on every single call, and the superseded 25 still sat below this
-    # judge's own p90 (19.16s over n=16, lib/judge_latency.py) once the hook's
-    # budget was raised to cover it.
-    ("PreToolUse",       "AskUserQuestion", "hook-escalation-diagnosis-gate.py", 35),
+    # mid-judge on every single call, and the superseded 35 still sat below this
+    # judge's own re-sampled ceiling (ceil(max)+1 = 55s over n=48,
+    # lib/judge_latency.py) once outage_escalation's row was re-derived and its
+    # budget raised to clear that ceiling with head-room.
+    ("PreToolUse",       "AskUserQuestion", "hook-escalation-diagnosis-gate.py", 65),
     # Hard gate: deny an AskUserQuestion whose EVERY option defers or refuses work
     # the agent holds the rights and the diagnosis to do now (ticket / backlog /
     # "leave as is"), with no branch that does it and no stated reason it cannot.
@@ -218,13 +219,14 @@ DESIRED = [
     # engaged this turn). Loop-guarded (stop_hook_active + a durable per-message
     # marker under state/turn-gate/) and blockers from every guardian aggregate
     # into one block, so the worst case is exactly one extra model turn.
-    # 57 = the hook's own _TURN_JUDGE_BUDGET_S=52 plus interpreter-start headroom.
+    # 74 = the hook's own _TURN_JUDGE_BUDGET_S=69 plus interpreter-start headroom.
     # It runs up to THREE judges in one invocation, so its whole-invocation budget
     # is larger than the single-judge gates'; at 5 every one of them was killed,
-    # and the superseded 30/35 pair covered barely two of the three medians
-    # (11.86 + 7.46 + 10.89, lib/judge_latency.py) before the outage judge's own
-    # floor was reached.
-    ("Stop",             None,    "hook-turn-end-gate.py",   57),
+    # and the superseded 57 no longer covered the worst-case-safe posture once
+    # binary_ask and feedback_signal were re-sampled and their ceilings raised:
+    # ceil(feedback's ceiling) + ceil(binary_ask's ceiling) + outage's floor +
+    # head-room = 21 + 21 + 26 + 1 = 69 (lib/judge_latency.py).
+    ("Stop",             None,    "hook-turn-end-gate.py",   74),
     # Advisory (not a gate): nudge when a launched run/graph URL appeared in
     # this session's tool output but was never surfaced to the user in a chat
     # message — the structural guard for CLAUDE.md long-running-jobs /

@@ -58,24 +58,28 @@ except BaseException as exc:
     raise
 
 # Whole-invocation deadline for the judge call, and the registration that must
-# accommodate it (install-reminder-hooks.sh: 35s = this budget plus interpreter-
+# accommodate it (install-reminder-hooks.sh: 65s = this budget plus interpreter-
 # start headroom, the same shape the deferring-disposition gate already uses).
 # Before this existed the hook was registered at 5s and called the judge with
 # advisor's 8s default, both under the outage judge's own FASTEST measured run —
 # so the harness killed the hook before any verdict could come back, on every
 # call. The height itself is a judgement (how much of a turn may a gate spend);
 # what is machine-checked against lib/judge_latency.py is that it clears this
-# judge's per-call ceiling `ceil(max) + 1` = 27s over n=16, so the budget can
-# never be what truncates the call. With exactly one call there is no later call
-# to protect, so this number is ALSO the ceiling handed to it: capping the only
-# call lower would forfeit budget for nothing.
-_JUDGE_BUDGET_S = 30
+# judge's per-call ceiling `ceil(max) + 1` = 55s over the re-sampled row (n=48,
+# max 53.42s — this judge is also sampled by hook-turn-end-gate.py's stage 3
+# re-derivation, since it is the SECOND consumer of the same row), so the
+# budget can never be what truncates the call. With exactly one call there is
+# no later call to protect, so a budget above the ceiling here is real head-room
+# (5s), the same `>=` slack shape ca7c7e0 established, not a coincidence of an
+# unmoved literal.
+_JUDGE_BUDGET_S = 60
 # Below this the remaining budget cannot plausibly fit a call, so spending the
 # wait on a guaranteed timeout buys nothing: stop and fail open, the same posture
 # as every other unreachable-judge path. lib/judge_latency.py's floor rule for
-# this judge, `ceil(p90)` over n=16 (p90 19.16) — well above the fastest run
-# observed (7.19s), which is what makes a call started at the floor reachable.
-_JUDGE_MIN_CALL_S = 20
+# this judge, `ceil(p90)` over the re-sampled row (p90 25.96) — well above the
+# fastest run observed (7.19s), which is what makes a call started at the floor
+# reachable.
+_JUDGE_MIN_CALL_S = 26
 
 # Kill-switch for the semantic outage-escalation judge: set to "0" to force it
 # off without a code change. Safe-by-default: unset/unrecognised leaves the

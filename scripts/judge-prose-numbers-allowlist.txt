@@ -44,8 +44,10 @@ scripts/lib/judge_latency.py:146:4d562c1f  # 11.86/13.34/14.05 = feedback_signal
 scripts/lib/judge_latency.py:163:ee1570b4  # 7.46/11.06/11.52 -> 15.755/18.57/19.20 = binary_ask's pre- and post-merge median/p90/max, quoted to show the distribution roughly doubled
 
 # --- scripts/hook-turn-end-gate.py -------------------------------------------
-scripts/hook-turn-end-gate.py:98:539d8834  # 57s registration = the 52s turn-end budget + interpreter-start headroom; both sides pinned by lib/hook_wiring.TIMEOUT_REQUIREMENTS
+scripts/hook-turn-end-gate.py:98:f7af736a  # 74s registration = the 69s turn-end budget + interpreter-start headroom; both sides pinned by lib/hook_wiring.TIMEOUT_REQUIREMENTS
 scripts/hook-turn-end-gate.py:101:e5251162  # historical: the 5s registration and advisor's 8s default this hook used to run under — the defect record, not a current number
+scripts/hook-turn-end-gate.py:112:94bc4e7f  # 56.05s = required_budget_s("hook-turn-end-gate.py") at the two earlier judges' MEDIANS plus the last floor, the minimum the worst-case-safe 69s budget below is sized above
+scripts/hook-turn-end-gate.py:120:73ed7ce4  # 1s = the outage judge's floor slack left in the worst-case arithmetic (69 - 21 - 21 = 27 >= floor 26); spells out the worst-case-safe 69s derivation alongside the two preceding lines
 
 # --- scripts/hook-deferring-disposition-gate.py ------------------------------
 scripts/hook-deferring-disposition-gate.py:72:d731ace3  # quotes the superseded n=4 note ("11.6-13.5s") verbatim, as the evidence base the old budget rested on
@@ -60,12 +62,14 @@ scripts/hook-deferring-disposition-gate.py:99:70c2fdb9  # 10.29s = the row's min
 scripts/hook-deferring-disposition-gate.py:199:deb2103a  # "under 7s" = budget 45 - floor 38, the remainder that still clears the floor for a second call
 
 # --- scripts/hook-escalation-diagnosis-gate.py -------------------------------
-scripts/hook-escalation-diagnosis-gate.py:61:9080a8d7  # 35s registration = the 30s outage budget + interpreter-start headroom; both sides pinned by lib/hook_wiring.TIMEOUT_REQUIREMENTS
+scripts/hook-escalation-diagnosis-gate.py:61:7cdcb640  # 65s registration = the 60s outage budget + interpreter-start headroom; both sides pinned by lib/hook_wiring.TIMEOUT_REQUIREMENTS
 scripts/hook-escalation-diagnosis-gate.py:63:b8592671  # historical: the 5s registration this hook used to carry
 scripts/hook-escalation-diagnosis-gate.py:64:ef72bb50  # historical: advisor's 8s default, below this judge's measured min_s 7.19 — the defect record
-scripts/hook-escalation-diagnosis-gate.py:68:54dcd9b3  # 27s = judge_latency.call_ceiling_s("outage_escalation") = ceil(25.96) + 1 over n=16
-scripts/hook-escalation-diagnosis-gate.py:76:affc3cbd  # floor 20 = judge_latency.call_floor_s("outage_escalation") = ceil(p90 19.16) over n=16
-scripts/hook-escalation-diagnosis-gate.py:77:b040eeee  # 7.19s = the row's min_s, the fastest run the floor must leave reachable
+scripts/hook-escalation-diagnosis-gate.py:68:81f132bb  # 55s/n=48 = judge_latency.call_ceiling_s("outage_escalation") = ceil(53.42) + 1 over the re-sampled row after drift-sample.json's merge
+scripts/hook-escalation-diagnosis-gate.py:69:b279a551  # 53.42s = outage_escalation's re-sampled max, the same merged row hook-turn-end-gate.py's stage 3 re-derivation consumes as its trailing floor term
+scripts/hook-escalation-diagnosis-gate.py:73:38902949  # 5s = the real head-room this K=1 hook's 60s budget carries above its 55s per-call ceiling, the same >= slack shape ca7c7e0 established for hook-plan-delivery-gate.py
+scripts/hook-escalation-diagnosis-gate.py:79:fafd3132  # floor 26/p90 25.96 = judge_latency.call_floor_s("outage_escalation") = ceil(p90) over the re-sampled row
+scripts/hook-escalation-diagnosis-gate.py:80:33d55a40  # 7.19s = the re-sampled row's min_s, the fastest run the floor must leave reachable
 
 # --- scripts/hook-resolution-reminder.py -------------------------------------
 scripts/hook-resolution-reminder.py:154:8906bee2  # K=1 = HOOK_CALL_SEQUENCE["hook-resolution-reminder.py"], the single-call declaration this hook's budget-equals-ceiling shape rests on
@@ -86,6 +90,7 @@ scripts/agentctl/advisor.py:690:0844f6e5  # historical: the 8s neighbour default
 scripts/agentctl/advisor.py:691:d539ad2f  # quotes the superseded n=4 note ("13.9 +/- 2.4 s, min 12.1, max 17.5") verbatim as the basis of the old 30s
 scripts/agentctl/advisor.py:692:1d9f44a3  # same superseded note; "missed the tail by more than 20 s" = max 39.99 - 17.5
 scripts/agentctl/advisor.py:693:011dc63b  # median 17.43 / p90 37.58 / max 39.99 over n=18 = judge_latency.MEASURED["deferring_disposition"]
+scripts/agentctl/advisor.py:697:c43835c3  # 53.42s = outage_escalation's re-sampled max, the value last_resort_ceiling_s() computes over (currently the family-wide slowest row, so it — not deferring_disposition's own tail — sets the shared last-resort ceiling)
 
 # --- scripts/install-reminder-hooks.sh ---------------------------------------
 scripts/install-reminder-hooks.sh:80:486f9f77  # 8 s = hook-effort-divergence-watch.py's own CHECK_TIMEOUT_S, the declared subprocess bound the 10 s registration must not pre-empt; a chosen constant, not a measurement — this hook runs no judge, it drives the read-only `agentctl effort-check`
@@ -93,15 +98,15 @@ scripts/install-reminder-hooks.sh:107:a3879c8a  # n=32, max 11.42s = judge_laten
 scripts/install-reminder-hooks.sh:109:94d47d98  # 19.14s = approval2-sample.json's max, the second n=32 sample whose calls ran past the first sample's ceiling in production
 scripts/install-reminder-hooks.sh:111:4d3f1fb8  # 21s = judge_latency.call_ceiling_s("approval_ask") = ceil(max 19.14) + 1 over the merged n=64 population
 scripts/install-reminder-hooks.sh:112:9e47f121  # 30s = _APPROVAL_ASK_JUDGE_BUDGET_S, the hook's own new whole-invocation budget this registration is sized off
-scripts/install-reminder-hooks.sh:121:6a8d39b3  # p90 19.16 over n=16 = judge_latency.MEASURED["outage_escalation"].p90_s
-scripts/install-reminder-hooks.sh:129:2d2694e5  # quotes the superseded n=4 note ("11.6-13.5s") against the current deferring row (median 17.43, p90 37.58)
+scripts/install-reminder-hooks.sh:121:8575c0c4  # 55s/n=48 = judge_latency.call_ceiling_s("outage_escalation") over the re-sampled row, the value this 65s registration is sized above
+scripts/install-reminder-hooks.sh:130:2d2694e5  # quotes the superseded n=4 note ("11.6-13.5s") against the current deferring row (median 17.43, p90 37.58)
 
 # --- scripts/lib/hook_wiring.py ----------------------------------------------
 scripts/lib/hook_wiring.py:149:171f9b60  # historical: a 5s registration, the wiring defect this axis exists to catch
 scripts/lib/hook_wiring.py:150:29507b25  # 5.9-40.0s = the family-wide measured span (binary_ask min_s 5.93 to deferring max_s 39.99) in lib/judge_latency.py
-scripts/lib/hook_wiring.py:162:0bb1075e  # 30s = the approved whole-invocation budget of hook-escalation-diagnosis-gate.py, the value this row requires
+scripts/lib/hook_wiring.py:162:876c1934  # 60s = the approved whole-invocation budget of hook-escalation-diagnosis-gate.py, raised to clear outage_escalation's re-sampled ceiling (ceil(53.42)+1=55s) with head-room
 scripts/lib/hook_wiring.py:164:b6c91e80  # 45s = the approved whole-invocation budget of hook-deferring-disposition-gate.py
-scripts/lib/hook_wiring.py:167:12d5e5bc  # 52s = the approved whole-invocation budget of hook-turn-end-gate.py, the three-judge hook
+scripts/lib/hook_wiring.py:167:704abb37  # 69s = the approved whole-invocation budget of hook-turn-end-gate.py, the three-judge hook, sized worst-case-safe per lib/judge_latency.required_budget_s after binary_ask/feedback_signal/outage_escalation were re-sampled
 scripts/lib/hook_wiring.py:197:13ce4bee  # K = 1 is the declared call count of the two single-judge hooks; at K=1 judge_latency.required_budget_s has no preceding call to pay for
 scripts/lib/hook_wiring.py:169:7c67ab7c  # 30s = _APPROVAL_ASK_JUDGE_BUDGET_S, the hook's own whole-invocation judge budget, mirroring the sibling rows above (supersedes the 13s tie removed once the equality assertion was dropped)
 scripts/lib/hook_wiring.py:620:56471431  # historical: the 5s registration used as the example of a slow-judge hook the report must surface

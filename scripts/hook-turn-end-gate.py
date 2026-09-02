@@ -95,7 +95,7 @@ except BaseException as exc:
     raise
 
 # Whole-invocation deadline covering ALL judge calls this hook makes, and the
-# registration that must accommodate it (install-reminder-hooks.sh: 57s = this
+# registration that must accommodate it (install-reminder-hooks.sh: 74s = this
 # budget plus interpreter-start headroom). Larger than the single-judge gates'
 # because this one invocation runs up to THREE judges; before it existed the hook
 # was registered at 5s and called every judge with advisor's 8s default, under
@@ -107,33 +107,50 @@ except BaseException as exc:
 # `required_budget_s("hook-turn-end-gate.py")` — the two earlier judges at their
 # medians plus the last judge's floor plus one second of non-judge head-room —
 # so the third judge is structurally REACHABLE on a typical turn rather than
-# starved by the two ahead of it. It is deliberately NOT the sum of the three
-# per-call ceilings (16 + 13 + 27 = 56 before head-room): a budget covering three
-# simultaneous worst cases would hold the turn boundary for a minute to buy a
-# co-occurrence never observed.
-_TURN_JUDGE_BUDGET_S = 52
+# starved by the two ahead of it.
+#
+# This constant is sized ABOVE that median-based minimum (56.05s today), on the
+# worst-case-safe posture: it must hold even when the two earlier judges each
+# run their own full per-call ceiling rather than their median, which is the
+# only way to guarantee the third judge is never converted from a timeout into
+# a budget SKIP (a call dropped for want of remaining budget, recorded as
+# `stage="budget"`, and indistinguishable from a healthy verdict in every
+# timeout statistic). Concretely: ceil(feedback's ceiling) + ceil(binary_ask's
+# ceiling) + outage's floor + head-room = 21 + 21 + 26 + 1 = 69, which leaves
+# exactly 1s of the outage judge's own floor uneaten in the worst case (69 - 21
+# - 21 = 27 >= 26). It is deliberately NOT the sum of the three per-call
+# ceilings (21 + 21 + 55 = 97 before head-room): a budget covering three
+# simultaneous worst cases including the outage tail would hold the turn
+# boundary for well over a minute to buy a co-occurrence never observed.
+_TURN_JUDGE_BUDGET_S = 69
 
 # Per-judge ceiling and floor, one pair per call site. They are NOT one shared
 # pair: these three judges answer different prompts and their measured latencies
-# differ by 3x (lib/judge_latency.py), so a shared ceiling would either truncate
-# the slow judge or let the fast one hold budget it cannot use, and a shared floor
-# would skip a call the remainder could in fact have carried. Ceiling is that
-# judge's `ceil(max) + 1`, floor its `ceil(p90)` — both computed per row, and the
-# test-suite asserts each constant still equals what the rule computes.
-_TURN_FEEDBACK_CALL_CAP_S = 16
-_TURN_FEEDBACK_MIN_CALL_S = 14
-_TURN_BINARY_ASK_CALL_CAP_S = 13
-_TURN_BINARY_ASK_MIN_CALL_S = 12
-_TURN_OUTAGE_CALL_CAP_S = 27
-_TURN_OUTAGE_MIN_CALL_S = 20
+# differ (lib/judge_latency.py), so a shared ceiling would either truncate the
+# slow judge or let the fast one hold budget it cannot use, and a shared floor
+# would skip a call the remainder could in fact have carried. Ceiling is at
+# least that judge's `ceil(max) + 1`, floor its `ceil(p90)` — both computed per
+# row, and the test-suite asserts each constant is `>=` (ceiling) or `==`
+# (floor) what the rule computes. The ceilings carry the same `>=` slack shape
+# ca7c7e0 established for hook-plan-delivery-gate.py rather than sitting at
+# equality: a constant pinned by equality to a computed ceiling has no
+# head-room at all against a population already observed to move twice.
+_TURN_FEEDBACK_CALL_CAP_S = 21
+_TURN_FEEDBACK_MIN_CALL_S = 18
+_TURN_BINARY_ASK_CALL_CAP_S = 21
+_TURN_BINARY_ASK_MIN_CALL_S = 19
+_TURN_OUTAGE_CALL_CAP_S = 55
+_TURN_OUTAGE_MIN_CALL_S = 26
 
 # The budget object's OWN floor, a fallback only: every call site below names its
 # judge's floor, so this is reached solely by a future call site that forgets to.
 # It is the smallest of the three deliberately — the least restrictive value. A
 # fallback that skipped a call the remainder could in fact have carried would be
 # an invisible recall loss, while one that admits a slightly-too-small call is
-# still bounded by that call's own timeout.
-_TURN_JUDGE_MIN_CALL_S = _TURN_BINARY_ASK_MIN_CALL_S
+# still bounded by that call's own timeout. The re-sampled rows moved which
+# judge that is: feedback_signal's floor (18) is now the smallest, not
+# binary_ask's (19) as before.
+_TURN_JUDGE_MIN_CALL_S = _TURN_FEEDBACK_MIN_CALL_S
 
 try:
     from lib import config_root  # noqa: E402
