@@ -1669,6 +1669,22 @@ disposition = "keep"
 ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
 
 [[entry]]
+id = "3af6a3c5b61fa70c"
+domain = "code"
+file = "scripts/lib/published_body.py"
+class = "structural"
+disposition = "keep"
+ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
+
+[[entry]]
+id = "46f51ea1b6a3497c"
+domain = "code"
+file = "scripts/lib/published_body.py"
+class = "structural"
+disposition = "keep"
+ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
+
+[[entry]]
 id = "a5b6daa3bdedad0c"
 domain = "code"
 file = "scripts/lib/shell_tokens.py"

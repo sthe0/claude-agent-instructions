@@ -69,6 +69,14 @@ _VALUE_FLAG_NAMES = ("--body", "--text")
 _INLINE_CAT_RE = re.compile(r"^cat\s+(.+)$", re.DOTALL)
 _INLINE_READ_RE = re.compile(r"^<\s*(.+)$", re.DOTALL)
 
+# A last-resort verb detector for the ONE case tokens can't reach: `shlex.split`
+# raised (e.g. an apostrophe inside an unquoted heredoc body) so `_match_gh`
+# never ran. Matched against the raw command string rather than tokens, so it
+# is deliberately looser than `_match_gh` -- it only ever routes to UNRESOLVED
+# (fail-open + advisory), never to a match, so a false positive here costs an
+# advisory line, not a wrong allow/deny.
+_GH_VERB_FALLBACK_RE = re.compile(r"(?:^|[\s;&|])gh\s+(?:issue|pr)\s+(?:comment|create|edit)\b")
+
 ADVISORY_SINK_NAME = "published-text-gate-advisories.jsonl"
 
 
@@ -192,13 +200,43 @@ def _match_gh(tokens: list[str]) -> _Match | None:
     return None
 
 
-def _match_seam_bash(command: str, seam) -> _Match | None:
+def _segment_matches_verb(seg: list[str], name_tokens: list[str]) -> bool:
+    """True iff `seg` contains `name_tokens` as a contiguous run at some
+    position, matching the run's first token against a segment token's
+    BASENAME (so `.claude/skills/tracker/scripts/tracker-cli.sh` matches a
+    seam name of `tracker-cli.sh`) and every later token exactly. This is a
+    command-position match, not a substring match: `git commit -m "fix
+    tracker-cli.sh comment handling"` tokenizes its message as one operand,
+    so no segment token's basename is ever `tracker-cli.sh` and the verb
+    cannot match -- unlike a raw substring search over the command text."""
+    n = len(name_tokens)
+    if n == 0:
+        return False
+    for start in range(len(seg) - n + 1):
+        window = seg[start:start + n]
+        if os.path.basename(window[0]) != name_tokens[0]:
+            continue
+        if window[1:] == name_tokens[1:]:
+            return True
+    return False
+
+
+def _match_seam_bash(tokens: list[str] | None, seam) -> _Match | None:
+    if not tokens:
+        return None
     for entry in seam or []:
         if not isinstance(entry, dict) or entry.get("kind") != "bash_verb":
             continue
         name = entry.get("name")
-        if name and name in command:
-            return _Match(is_attachment=entry.get("body_shape") == "attachment")
+        if not name:
+            continue
+        try:
+            name_tokens = shlex.split(name)
+        except ValueError:
+            continue
+        for seg in bash_write_targets.split_segments(tokens):
+            if _segment_matches_verb(seg, name_tokens):
+                return _Match(is_attachment=entry.get("body_shape") == "attachment")
     return None
 
 
@@ -211,11 +249,41 @@ def _match_seam_mcp_tool(tool_name: str, seam) -> _Match | None:
     return None
 
 
+def _match_bash_command(command: str, seam) -> tuple[_Match | None, list[str] | None]:
+    """Pure verb match for a `Bash` command -- no advisory side effect, so a
+    caller that only needs to know "is this a publication" (`is_publication`)
+    never writes a diagnostic line for a question it didn't ask. Returns the
+    match (or `None`) alongside the tokens (or `None` on a `shlex.split`
+    failure), since `resolve()` needs both to extract the body."""
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = None
+
+    match = _match_gh(tokens) if tokens else None
+    if match is None:
+        match = _match_seam_bash(tokens, seam)
+    return match, tokens
+
+
 def is_publication(tool_name: str, tool_input, seam=None) -> bool:
     """True iff this tool call is a publication -- text or attachment alike.
-    A thin wrapper over `resolve()`'s own verb match, so the trigger and the
-    resolver can never disagree about which calls count."""
-    return resolve(tool_name, tool_input, cwd=".", seam=seam).kind != NOT_A_PUBLICATION
+    Reuses `resolve()`'s own verb-matching (`_match_bash_command`/
+    `_match_seam_mcp_tool`/`_GH_VERB_FALLBACK_RE`) so the trigger and the
+    resolver can never disagree about which calls count -- but, unlike
+    `resolve()`, never writes an advisory: a pure existence check must not
+    have the side effect of a body-resolution attempt."""
+    if tool_name != "Bash":
+        return _match_seam_mcp_tool(tool_name, seam) is not None
+
+    command = (tool_input or {}).get("command") or ""
+    if not command.strip():
+        return False
+
+    match, tokens = _match_bash_command(command, seam)
+    if match is not None:
+        return True
+    return tokens is None and bool(_GH_VERB_FALLBACK_RE.search(command))
 
 
 def resolve(tool_name: str, tool_input, cwd: str, seam=None) -> Resolution:
@@ -236,28 +304,29 @@ def resolve(tool_name: str, tool_input, cwd: str, seam=None) -> Resolution:
     if not command.strip():
         return Resolution(kind=NOT_A_PUBLICATION)
 
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        tokens = None
-
-    match = _match_gh(tokens) if tokens else None
+    match, tokens = _match_bash_command(command, seam)
     if match is None:
-        match = _match_seam_bash(command, seam)
-    if match is None:
+        if tokens is None and _GH_VERB_FALLBACK_RE.search(command):
+            # A `gh issue/pr comment|create|edit` call whose quoting defeated
+            # `shlex.split` (e.g. an apostrophe inside an unquoted heredoc
+            # body) IS a publication -- `_match_gh` never ran to say so, and
+            # falling through to NOT_A_PUBLICATION here would silently allow
+            # it with no advisory at all.
+            record_advisory(UNRESOLVED, None, command)
+            return Resolution(kind=UNRESOLVED)
         return Resolution(kind=NOT_A_PUBLICATION)
 
     if match.is_attachment:
         path = _attachment_path(tokens or [])
         if not path:
-            record_advisory(ATTACHMENT, 5, command)
+            record_advisory(UNRESOLVED, 5, command)
             return Resolution(kind=UNRESOLVED, shape=5)
         abs_path = path if os.path.isabs(path) else os.path.join(cwd, path)
         return Resolution(kind=ATTACHMENT, path=abs_path, shape=5)
 
     text, shape = _resolve_text_body(command, tokens or [], cwd)
     if not text:
-        record_advisory(TEXT, shape, command)
+        record_advisory(UNRESOLVED, shape, command)
         return Resolution(kind=UNRESOLVED, shape=shape)
     return Resolution(kind=TEXT, body=text, shape=shape)
 

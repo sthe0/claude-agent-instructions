@@ -8,6 +8,7 @@ regression, artifact_syntax_hint non-gating, and record_advisory fail-open.
 from __future__ import annotations
 
 import json
+import shlex
 
 import pytest
 
@@ -67,17 +68,27 @@ def test_at_least_six_distinct_shapes_are_covered(commands):
     assert shapes == {1, 2, 3, 4, 5, 6}
 
 
-def test_seam_parity_gh_pr_create_body_file(commands, seam, repo_root):
-    case = next(c for c in commands if c["label"] == "core-gh-pr-create-body-file (new Core shape)")
-    assert case["expect_kind"] == "TEXT"
-    res_no_seam = _resolve(case, repo_root, seam=None)
-    assert res_no_seam.kind == "TEXT"
+def test_seam_parity_same_shape_core_case(commands, seam, repo_root):
+    """A seam-declared verb resolves identically (kind + shape) to a
+    same-shape Core `gh` case -- the seam only supplies which VERBS count,
+    never a different resolution mechanism."""
+    seam_case = next(
+        c for c in commands
+        if c.get("seam") == "fixture" and c["expect_kind"] == "TEXT" and c.get("expect_shape") == 1
+    )
+    core_case = next(c for c in commands if c["label"] == "core-gh-pr-create-body-file (new Core shape)")
+    res_seam = _resolve(seam_case, repo_root, seam)
+    res_core = _resolve(core_case, repo_root, seam)
+    assert res_seam.kind == res_core.kind == "TEXT"
+    assert res_seam.shape == res_core.shape == 1
 
 
-def test_seam_required_verb_is_not_a_publication_without_seam(commands, repo_root):
-    case = next(c for c in commands if c.get("seam") == "fixture" and c["expect_kind"] != "NOT_A_PUBLICATION")
-    res = _resolve(case, repo_root, seam=None)
-    assert res.kind == "NOT_A_PUBLICATION"
+def test_seam_required_verbs_are_not_publications_without_seam(commands, repo_root):
+    seam_cases = [c for c in commands if c.get("seam") == "fixture" and c["expect_kind"] != "NOT_A_PUBLICATION"]
+    assert seam_cases
+    for case in seam_cases:
+        res = _resolve(case, repo_root, seam=None)
+        assert res.kind == "NOT_A_PUBLICATION", case["label"]
 
 
 def test_attachment_via_seam_is_present(commands):
@@ -105,6 +116,16 @@ def test_missing_target_case_is_present_with_valid_shape(commands):
 
 def test_non_publication_bash_command_resolves_not_a_publication():
     res = published_body.resolve("Bash", {"command": "git status --short"}, cwd=".")
+    assert res.kind == published_body.NOT_A_PUBLICATION
+
+
+def test_seam_verb_name_as_substring_in_unrelated_command_does_not_match(seam):
+    """The code review's verified false positive: a seam verb NAME occurring
+    as a substring of an unrelated command (here, inside a commit message
+    operand) must not match -- `_match_seam_bash` matches at a command
+    POSITION (a verb's own token sequence), not anywhere in the raw text."""
+    command = 'git commit -m "fix tracker-cli.sh comment handling"'
+    res = published_body.resolve("Bash", {"command": command}, cwd=".", seam=seam)
     assert res.kind == published_body.NOT_A_PUBLICATION
 
 
@@ -158,6 +179,28 @@ def test_shape6_both_forms_are_byte_identical_to_shape1(repo_root, seam):
     assert cat_form.body
 
 
+def test_gh_verb_defeating_tokenization_resolves_unresolved_not_not_a_publication():
+    """The blocking bug the code review found: an apostrophe inside an
+    unquoted heredoc body makes `shlex.split` raise, so `_match_gh` never
+    runs on a real `gh issue comment` publication. Without the raw-command
+    verb fallback this fell through to NOT_A_PUBLICATION with no advisory --
+    a real publication allowed silently. Confirms the tokenizer really does
+    fail on this input (otherwise the test would not be exercising the
+    fallback path at all) before asserting the fixed behaviour."""
+    command = (
+        "gh issue comment 125 --repo sthe0/claude-agent-instructions "
+        "--body-file - <<'EOF'\n"
+        "Hello reviewer, don't worry about the apostrophe.\n"
+        "EOF\n"
+    )
+    with pytest.raises(ValueError):
+        shlex.split(command)
+    res = published_body.resolve("Bash", {"command": command}, cwd=".")
+    assert res.kind == published_body.UNRESOLVED
+    assert res.body is None
+    assert published_body.is_publication("Bash", {"command": command}) is True
+
+
 def test_missing_target_resolves_unresolved_never_empty_text(repo_root):
     res = published_body.resolve(
         "Bash",
@@ -193,6 +236,22 @@ def test_artifact_syntax_hint_never_gates_a_decision(published_text_dir, seam, r
     res = published_body.resolve("Bash", {"command": command}, cwd=str(repo_root), seam=seam)
     assert res.kind == published_body.TEXT
     assert res.body == dump
+
+
+def test_is_publication_writes_no_advisory(tmp_path, monkeypatch):
+    """`is_publication` is a pure existence check -- calling it on a command
+    that would resolve UNRESOLVED (a genuinely unmodellable substitution)
+    must not itself write an advisory line; only `resolve()`'s own body
+    resolution does that."""
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("CLAUDE_AGENT_HOME", str(tmp_path))
+    command = (
+        "gh issue comment 125 --repo sthe0/claude-agent-instructions "
+        '--body "$(some-generator arg)"'
+    )
+    assert published_body.is_publication("Bash", {"command": command}) is True
+    sink = tmp_path / "state" / "published-text-gate" / published_body.ADVISORY_SINK_NAME
+    assert not sink.exists()
 
 
 def test_record_advisory_writes_a_parseable_line(tmp_path, monkeypatch):
