@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from agentctl import cli, enumerate_sidecar, plugins, plugins_premise
-from agentctl.plan import load_plan
+from agentctl.plan import PlanError, load_plan
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -190,3 +190,68 @@ class TestFoldBeforeEssenceReceipt:
         bag_after = store.load(sid).plugins["premise"]
         assert bag_after.get("enumerated") == bag_before.get("enumerated")
         assert bag_after.get("candidates") == bag_before.get("candidates")
+
+
+class TestFoldExceptNarrowing:
+    """#182: the fold's `except Exception: pass` swallowed every exception,
+    including bugs unrelated to a plan-load failure. Narrowed to
+    `except (OSError, PlanError)` — the same family every other `load_plan`
+    call site in cli.py already narrows to."""
+
+    def test_still_swallows_a_transient_load_plan_failure(
+            self, store, tmp_path, monkeypatch):
+        """Preserves the ORIGINAL bare except's tolerance for the one failure
+        mode it exists to swallow: a load_plan failure inside this exact race
+        window (#60), which the coverage_block check moments later re-attempts
+        against the same (here: valid) file."""
+        monkeypatch.delenv("AGENTCTL_PREMISE", raising=False)
+        root = tmp_path / "sidecars"
+        monkeypatch.setattr(enumerate_sidecar, "DEFAULT_ROOT", root)
+        sid = "fold-essence-transient-planerror"
+        plan = str(FIXTURES / "plan_two_stage.toml")
+
+        _to_plan_ready_with_premise(store, sid, plan)
+
+        real_load_plan = cli.load_plan
+        calls = {"n": 0}
+
+        def flaky_load_plan(path, *a, **kw):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise PlanError("transient race: plan not readable yet")
+            return real_load_plan(path, *a, **kw)
+
+        monkeypatch.setattr(cli, "load_plan", flaky_load_plan)
+
+        rendering = _write_rendering(tmp_path / "essence-flaky.md")
+        # Must not raise — the narrowed except still catches this exact type.
+        cli.cmd_present_plan(
+            ns(session=sid, kind="essence", rendering_file=str(rendering),
+               emit_skeleton=False),
+            store=store)
+        assert calls["n"] >= 1
+
+    def test_no_longer_swallows_an_unrelated_bug(self, store, tmp_path, monkeypatch):
+        """A ValueError raised from inside the fold itself (not a plan-load
+        failure) used to vanish under the bare `except Exception: pass` — the
+        #182 hole. The narrowed except must let it propagate rather than hide
+        it behind a load-failure route it does not belong to."""
+        monkeypatch.delenv("AGENTCTL_PREMISE", raising=False)
+        root = tmp_path / "sidecars"
+        monkeypatch.setattr(enumerate_sidecar, "DEFAULT_ROOT", root)
+        sid = "fold-essence-unrelated-bug"
+        plan = str(FIXTURES / "plan_two_stage.toml")
+
+        _to_plan_ready_with_premise(store, sid, plan)
+
+        def broken_fold(*a, **kw):
+            raise ValueError("boom: an unrelated bug in the fold, not a plan-load failure")
+
+        monkeypatch.setattr(cli, "_fold_enumeration_sidecar", broken_fold)
+
+        rendering = _write_rendering(tmp_path / "essence-bug.md")
+        with pytest.raises(ValueError, match="boom"):
+            cli.cmd_present_plan(
+                ns(session=sid, kind="essence", rendering_file=str(rendering),
+                   emit_skeleton=False),
+                store=store)
