@@ -178,6 +178,35 @@ def test_plan_goal_target_exempt_from_key_check():
     assert blockers == []
 
 
+def test_plan_goal_bound_key_mismatch_blocks():
+    """A question disposed against plan.goal is invalidated when plan.goal's text
+    changes on replan (#123) — the plan-level twin of test_stage_bound_key_mismatch_blocks."""
+    q = _researched(target="plan.goal", disposed_at_key="OLDKEY")
+    blockers = validate_questions(
+        [q], stage_keys={}, meta_keys={"goal": "NEWKEY", "done_criterion": "DC-KEY"})
+    assert any("plan.goal" in b and "changed" in b for b in blockers)
+
+
+def test_plan_done_criterion_edit_does_not_invalidate_goal_question():
+    """goal and done_criterion must be keyed separately: editing one leaves a
+    question bound to the other undisturbed (the risk plan_meta_digest's bundled
+    hash would have introduced had it been reused for this check)."""
+    q = _researched(target="plan.goal", disposed_at_key="KEEP")
+    blockers = validate_questions(
+        [q], stage_keys={}, meta_keys={"goal": "KEEP", "done_criterion": "CHANGED"})
+    assert blockers == []
+
+
+def test_invalidate_stale_dispositions_stamps_plan_goal_target():
+    q = _researched(target="plan.goal", disposed_at_key="OLDKEY")
+    bag = {"questions": questions_to_dicts([q])}
+    changed = premise.invalidate_stale_dispositions(
+        bag, stage_keys={}, meta_keys={"goal": "NEWKEY", "done_criterion": "DC-KEY"})
+    assert changed is True
+    q_after = questions_from_dicts(bag["questions"])[0]
+    assert q_after.stale_note == premise.STALE_DISPOSITION_NOTE
+
+
 def test_empty_stage_keys_skips_binding_checks():
     q = _researched(target="stage:99.means", disposed_at_key="")
     blockers = validate_questions([q], stage_keys={})

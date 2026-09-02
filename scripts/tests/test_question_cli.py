@@ -18,7 +18,7 @@ from __future__ import annotations
 from argparse import Namespace
 
 from agentctl import cli, plugins, plugins_premise, premise
-from agentctl.plan import load_plan, stage_question_key
+from agentctl.plan import load_plan, plan_meta_element_key, stage_question_key
 from agentctl.state import SessionState
 
 
@@ -181,14 +181,19 @@ def test_dispose_stamps_bound_stage_key(store, tmp_path):
     assert _q(store, "s", "Q1")["disposed_at_key"] != ""
 
 
-def test_dispose_goal_target_stamps_empty_key(store, tmp_path):
+def test_dispose_goal_target_stamps_plan_meta_key(store, tmp_path):
+    """plan.goal binds to `plan_meta_element_key`, not "" (#123) — the plan-level
+    twin of test_dispose_stamps_bound_stage_key, so a later change to plan.goal's
+    text is visible to staleness invalidation the same way a stage edit is."""
     plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one")])
     _state(store, plan_path=plan_path)
     _raise(store, "s", id="Q1", target="plan.goal")
     _research(store, "s", id="Q1", attempted="x")
     _dispose(store, "s", id="Q1", to="assumed", basis="stated by user", risk="none")
-    # plan.goal has no per-stage key to bind to -> ""
-    assert _q(store, "s", "Q1")["disposed_at_key"] == ""
+
+    doc = load_plan(str(plan_path))
+    assert _q(store, "s", "Q1")["disposed_at_key"] == plan_meta_element_key(doc, "goal")
+    assert _q(store, "s", "Q1")["disposed_at_key"] != ""
 
 
 # --- the laundering regression: a later dispose never restamps an earlier one ---

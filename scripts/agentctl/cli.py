@@ -49,6 +49,8 @@ from .plan import (
     check_venue_warnings,
     load_plan,
     plan_meta_digest,
+    plan_meta_element_key,
+    plan_meta_element_keys,
     plan_stage_digests,
     stage_element_keys,
     stage_part,
@@ -57,6 +59,7 @@ from .plan import (
     verify_command_reachability_blockers,
     verify_command_scope_warnings,
 )
+from .text_shape import WHOLE_STAGE_ELEMENT
 from .render import cmd_plan_render, render_plan_md, render_stages_md
 from .submission import submission_advice, submission_violations
 from .state import (
@@ -1291,12 +1294,13 @@ def _bound_stage_key(state, question: "premise.Question", plan_path: str | None 
     """The current stage_question_key of the ELEMENT a Question is bound to — the
     value dispose/rebind stamp into `disposed_at_key`. Scoped to the element rather
     than the whole stage so that editing one place of a stage's definition leaves the
-    questions answered against its other places dispositioned. Returns "" for
-    plan.goal / plan.done_criterion targets (no per-goal key repeats under a stage
-    index), for an unparseable target, and when no plan has been submitted yet
-    (`state.plan_path` empty) — exactly the cases premise.validate_questions
-    exempts from the key-mismatch check. Reads only; the WRITE lives in the two
-    disposing verbs so the package-wide single-writer scan stays exact.
+    questions answered against its other places dispositioned. For a `plan.goal` /
+    `plan.done_criterion` target, returns `plan_meta_element_key(doc, kind)` instead
+    (#123) — the plan-level twin of the per-stage key. Returns "" for an
+    unparseable target and when no plan has been submitted yet (`state.plan_path`
+    empty) — exactly the cases premise.validate_questions exempts from the
+    key-mismatch check. Reads only; the WRITE lives in the two disposing verbs so
+    the package-wide single-writer scan stays exact.
 
     `plan_path`, when given, is read INSTEAD of `state.plan_path` — for the
     CORRECTED plan of a replan, which is not `state.plan_path` until that replan
@@ -1311,15 +1315,47 @@ def _bound_stage_key(state, question: "premise.Question", plan_path: str | None 
     if parsed is None:
         return ""
     kind, stage_index, element = parsed
+    if plan_path is None:
+        plan_path = getattr(state, "plan_path", None)
+    if not plan_path:
+        return ""
+    doc = load_plan(plan_path)
+    if kind in ("goal", "done_criterion"):
+        return plan_meta_element_key(doc, kind)
     if kind != "stage":
+        return ""
+    keys = {s.index: stage_question_key(s, element) for s in doc.stages}
+    return keys.get(stage_index, "")
+
+
+def _bound_order_stage_key(
+    state, element: "premise.OrderElement", plan_path: str | None = None
+) -> str:
+    """The current whole-stage key of the stage an OrderElement is marked 'covered'
+    by — the value cmd_order_dispose stamps into `content_digest` (#123), the
+    order-coverage twin of `_bound_stage_key`. Whole-stage rather than per-element:
+    an order element cites a stage's OUTCOME, not one of its named fields, so any
+    edit to that stage should be visible as coverage drift. Returns "" when
+    `element.stage` is None or no plan has been submitted yet — the cases
+    premise.validate_order_elements exempts from the key-mismatch check.
+
+    `plan_path`, when given, is read INSTEAD of `state.plan_path` — the same
+    CORRECTED-plan escape `_bound_stage_key` documents: re-covering during a
+    blocked replan must stamp against `args.plan`, not the stale `state.plan_path`,
+    or the staleness check just added for OrderElement would deadlock replan with
+    no route out, the same defect #48(b) fixed for questions."""
+    if element.stage is None:
         return ""
     if plan_path is None:
         plan_path = getattr(state, "plan_path", None)
     if not plan_path:
         return ""
     doc = load_plan(plan_path)
-    keys = {s.index: stage_question_key(s, element) for s in doc.stages}
-    return keys.get(stage_index, "")
+    keys = {s.index: stage_element_keys(s) for s in doc.stages}
+    stage_keys = keys.get(element.stage)
+    if not stage_keys:
+        return ""
+    return stage_keys.get(WHOLE_STAGE_ELEMENT, "")
 
 
 def _materiality_doc(state, named_plan) -> "tuple[PlanDoc | None, str]":
@@ -1677,6 +1713,11 @@ def cmd_order_dispose(args, *, store: StateStore, runner: Runner | None = None) 
     match.disposition = args.as_
     match.stage = args.stage if args.as_ == "covered" else None
     match.reason = args.reason if args.as_ == "cut" else ""
+    match.content_digest = (
+        _bound_order_stage_key(state, match, plan_path=getattr(args, "plan", None))
+        if args.as_ == "covered" else ""
+    )
+    match.stale_note = ""
     bag["order_elements"] = premise.order_elements_to_dicts(elements)
     state.log("order_dispose", element=args.id, disposition=args.as_)
     store.save(state)
@@ -1705,7 +1746,10 @@ def cmd_order_list(args, *, store: StateStore, runner: Runner | None = None) -> 
         detail = plugins_premise.coverage_block(state, bag) or premise.render_coverage_block(
             elements, stage_count)
     else:
-        detail = "; ".join(f"{e.id}={e.disposition}" for e in elements) or "no order elements"
+        detail = "; ".join(
+            f"{e.id}={e.disposition}" + (" [stale]" if e.stale_note else "")
+            for e in elements
+        ) or "no order elements"
     return Directive(
         True, state.node, "inspect", detail,
         data={"order_elements": premise.order_elements_to_dicts(elements),
@@ -5540,7 +5584,15 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     _inv_bag = state.plugins.get("premise")
     if _inv_bag is not None:
         _inv_stage_keys = {s.index: stage_element_keys(s) for s in new.stages}
-        if premise.invalidate_stale_dispositions(_inv_bag, _inv_stage_keys):
+        _inv_meta_keys = plan_meta_element_keys(new)
+        _inv_changed = premise.invalidate_stale_dispositions(
+            _inv_bag, _inv_stage_keys, meta_keys=_inv_meta_keys
+        )
+        _inv_changed = (
+            premise.invalidate_stale_order_dispositions(_inv_bag, _inv_stage_keys)
+            or _inv_changed
+        )
+        if _inv_changed:
             store.save(state)
     _log_gate(state, "plan_approval_plugin", pblock, passed=not pblock)
     if pblock:
@@ -6626,7 +6678,8 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("plan", ("plan-render", "plan-review-delta", "submit-plan", "replan", "drive",
               "push-subplan", "question-enumerate", "question-enumerate-worker",
               "question-enumerate-escape", "question-dispose",
-              "question-rebind", "question-raise", "present-plan"), "plan file path"),
+              "question-rebind", "question-raise", "present-plan", "order-dispose"),
+     "plan file path"),
     ("digest", ("question-enumerate-worker",),
      "plan content digest the launcher computed — the sidecar's key, passed down "
      "verbatim rather than a narrative"),
@@ -6883,6 +6936,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--stage", type=int, default=None,
                     help="the stage that covers this element, required when --as covered")
     sp.add_argument("--reason", default="", help="why the element is cut, required when --as cut")
+    sp.add_argument("--plan", default=None,
+                    help="stamp content_digest against this plan instead of the session's "
+                         "current plan_path (use when re-covering against a CORRECTED plan)")
 
     sp = add("order-list"); sp.add_argument("--session", required=True)
     sp.add_argument("--format", dest="format", default="", choices=["", "md"],
