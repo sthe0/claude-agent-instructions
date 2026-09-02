@@ -47,7 +47,7 @@ The substantive-task spine (classify → route → plan-approval gate → dispat
 
 **Fallback** (engine unavailable) — hand-walk the same steps, same order: restate goal + done criterion (marking criterion type) → classify & route → plan approval before editing production → execute against each stage's `Expected result image:` → run the plan's `## Final verification`. Full 5-step walk: [spine-fallback.md](memory-global/leaves/spine-fallback.md).
 
-**Plan-review gate.** At plan-construction (before `approve`) and at every `replan` (refinement or substantive), a thinker-authored review bound to the exact plan version is a machine-blocked precondition (`gates.plan_review_blockers`) — see `planner/SKILL.md` § `PLAN-READY:` and `overcome-difficulty/SKILL.md` § Handoff back to the root.
+**Plan-review gate.** At plan-construction (before `approve`) and at every `replan` (refinement or substantive), a thinker-authored review bound to the exact plan version is a machine-blocked precondition (`gates.plan_review_blockers`) — **scope-aware**: `agentctl plan-review-delta` reports whole-plan vs `--scope stage:<n>`. See `planner/SKILL.md` § `PLAN-READY:` and `overcome-difficulty/SKILL.md` § Handoff back to the root.
 
 **Cognition the engine does NOT replace (always yours):**
 - *Criterion type* — **measurable** (test, command output, file present → run the check) vs **acceptance-review** (user accepts on review when no objective check exists). On any verification failure — `overcome-difficulty`, not chaotic retries.
