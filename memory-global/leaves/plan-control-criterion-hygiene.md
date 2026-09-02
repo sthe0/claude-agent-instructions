@@ -1,6 +1,6 @@
 ---
 name: plan-control-criterion-hygiene
-description: Seven plan-authoring norms for a stage's control criterion — declare the venue a check observes instead of hard-coding a `cd` into the verify_command; never let a criterion assert an unverified fact about current behaviour; take a criterion's number from an explicitly bounded invocation; never let a procedure step rewrite the criterion it is measured by; name the lifecycle state the criterion describes, because verify-final re-runs a criterion authored pre-merge in the post-merge world; sweep exact-shape criteria after ANY revision round, formal replan or ad-hoc; and dry-run the verify_command's own script text against live repo state before submit_plan, because a broken check script is a distinct failure class from a false factual claim.
+description: Eight plan-authoring norms for a stage's control criterion — declare the venue a check observes instead of hard-coding a `cd` into the verify_command; never let a criterion assert an unverified fact about current behaviour; take a criterion's number from an explicitly bounded invocation; never let a procedure step rewrite the criterion it is measured by; name the lifecycle state the criterion describes, because verify-final re-runs a criterion authored pre-merge in the post-merge world; sweep exact-shape criteria after ANY revision round, formal replan or ad-hoc; dry-run the verify_command's own script text against live repo state before submit_plan, because a broken check script is a distinct failure class from a false factual claim; and make a multi-conjunct `&&`-chained verify_command localize its own failure, because an aggregate exit code turns even a genuinely transient flake into a full manual re-derivation before diagnosis can even start.
 type: feedback
 schema: leaf/v1
 created: 2026-08-31
@@ -14,14 +14,17 @@ last_verified: 2026-09-02
 To achieve a stage check that can actually go red for the right reason and
 green for the right reason, the criterion has to survive the interval between
 plan authoring and stage execution — and the executor has to be able to run it
-without repairing it. Seven distinct authoring habits break that, and all
-seven were observed live: three of them inside the very plan whose fourth
+without repairing it. Eight distinct authoring habits break that, and all
+eight were observed live: three of them inside the very plan whose fourth
 stage first recorded this leaf, the sixth inside that same plan's own
 resolution — a stale exact-shape criterion caught only at `verify-final`,
 after two further, fully legitimate review rounds had already moved the
-ground it stood on — and the seventh recurring three separate times inside
-one unrelated eight-stage plan (stages 3, 5 and 7), each occurrence costing
-its own full difficulty cycle before the pattern was named.
+ground it stood on — the seventh recurring three separate times inside one
+unrelated eight-stage plan (stages 3, 5 and 7), each occurrence costing its
+own full difficulty cycle before the pattern was named — and the eighth
+surfacing only after three post-approval replans on one plan's own fourth
+stage were traced back to a single common thread, the third of which closed
+with no reproducible factual cause at all.
 
 The engine makes the cost concrete. `record-result` *runs* the stage's
 `verify_command` itself and its exit code overrides the caller's `--status`, so
@@ -263,6 +266,54 @@ either way.
 > behaviour — each was the check script itself misbehaving, and a `bash -n`
 > plus a direct import-and-signature check at authoring time would have caught
 > every one of them before a single stage ever ran.
+
+### 8. A multi-conjunct verify_command must localize its own failure, not just be factually correct
+
+Norms 2 and 7 both govern *correctness* of a check — a false claim about the
+world, or a broken script. This is a third, orthogonal failure class:
+*diagnosability*. A `verify_command` that chains several heterogeneous checks
+with plain `&&` reports one thing on failure — an aggregate non-zero exit
+code. Nothing in the record says which conjunct fired. A check can be
+completely correct — every clause factually grounded per norm 2, every line
+of script bug-free per norm 7 — and still turn a single transient hiccup in
+any one conjunct into a full `declare → investigate → critique` cycle, because
+the only way to localize the failure is to re-run every conjunct by hand,
+one at a time, exactly reproducing the investigation that norm 7's dry run was
+supposed to make unnecessary.
+
+Where a multi-conjunct chain is authoring-time unavoidable, make it
+self-localizing before it is frozen: never a bare `cmd1 && cmd2 && cmd3`.
+Emit a distinguishing marker before each conjunct (a numbered `echo` line, a
+small runner that names the step it is about to run) so a failure record
+shows which conjunct broke without anyone having to re-execute the chain to
+find out. This is cheap at authoring time and is exactly the information the
+next `declare` will need regardless — the only choice is whether the plan
+captures it once, or an investigator re-derives it by hand on every failure,
+transient or not.
+
+> **Observed.** checker-fix-497's stage 4 `verify_command` chains five
+> heterogeneous checks — git status, a staged-file-set match, a `verify-all`
+> output check, the full pytest suite, and a closing assertion script — with
+> plain `&&`. Across the plan's post-approval life this stage's criterion cost
+> three separate replans. The first two were norm 2's class exactly: a
+> substantive replan when an orthogonal companion-file gate went unchecked at
+> authoring time, then a refinement replan when the pytest conjunct's "full
+> suite green" claim didn't account for three already-known pre-existing
+> failures. The third was different in kind: `verify-final` reported only
+> `exit 1` on the compound; every conjunct, re-run by hand immediately after
+> with zero code or repo-state change in between, came back clean (pytest:
+> 5603 passed / 4 skipped / 0 failed in 375.94s; the closing assertion chain:
+> `OK`). No reproducible factual cause could be found, and the difficulty
+> closed on a normalization-waiver — but reconstructing that finding required
+> manually re-running the entire five-conjunct chain, work the aggregate exit
+> code gave no way to avoid. `declare → investigate → critique` on the
+> resulting effort-divergence trigger (three replans against the
+> `effort-replan-absolute` threshold) confirmed two independent, non-exclusive
+> causes across the three replans: an authoring-verification gap (norm 2's
+> class, recurring a third time inside one plan) and this diagnosability gap,
+> present even in the replans that were about correctness — the compound's
+> shape made every one of them more expensive to localize than it needed to
+> be.
 
 ## See also
 
