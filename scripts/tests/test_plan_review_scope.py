@@ -407,3 +407,94 @@ def test_stage_scoped_attestation_cannot_substitute_for_the_whole_plans_own(gate
                    plan_stage_reviews={"stage:1": stage1})
     blockers = gates.plan_review_blockers(state, str(plan_path))
     assert blockers and "not attested" in blockers[0]
+
+
+# --- 11. a path that differs binds by byte identity and by nothing weaker -----
+# Group 1 above pins the coverage branch's stage-reviews-EMPTY default against
+# test_plan_review_gate.py; these pin the same path-binding posture with the
+# branch actually active, where the recorded meta/stage keys are the only other
+# thing standing between a review and a plan file it never saw.
+
+def test_rename_binds_through_coverage_when_bytes_match(gate_on, tmp_path, fixtures_dir):
+    """The coverage mirror of test_path_rename_content_match_not_stale: a
+    byte-identical plan re-saved under a new filename still binds, with a
+    stage-scoped review recorded (which is what routes to the coverage branch)."""
+    reviewed = tmp_path / "plan.toml"
+    reviewed.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    doc = load_plan(str(reviewed))
+
+    renamed = tmp_path / "plan-v2.toml"
+    renamed.write_text(reviewed.read_text())
+
+    state = _subst(plan_path=str(renamed), plan_review=_whole_review(reviewed, doc),
+                   plan_stage_reviews={"stage:1": _stage_review(reviewed, doc, 1)})
+    assert gates.plan_review_blockers(state, str(renamed)) == []
+
+
+def test_different_file_with_matching_meta_digest_still_blocks(gate_on, tmp_path, fixtures_dir):
+    """`plan_meta_digest` hashes goal/done_criterion/criterion_type/weight_class/
+    repo_root/order — NOT task_id, so a DIFFERENT plan file can match every
+    recorded key while identifying a different task. The coverage branch must
+    reject that pair on content identity exactly as the whole-plan branch does;
+    trusting the recorded keys alone let this through."""
+    reviewed = tmp_path / "plan.toml"
+    reviewed.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    doc = load_plan(str(reviewed))
+
+    impostor = tmp_path / "plan-v2.toml"
+    impostor.write_text(reviewed.read_text().replace(
+        'task_id = "demo-two-stage"', 'task_id = "hijacked"'))
+    assert plan_meta_digest(load_plan(str(impostor))) == plan_meta_digest(doc)   # the premise
+
+    state = _subst(plan_path=str(impostor), plan_review=_whole_review(reviewed, doc),
+                   plan_stage_reviews={"stage:1": _stage_review(reviewed, doc, 1)})
+    coverage = gates._plan_review_blockers_coverage(state, str(impostor), load_plan(str(impostor)))
+    assert coverage and "stale" in coverage[0]
+    # and the two branches agree, which is the property that was broken
+    whole = gates._plan_review_blockers_whole(state.plan_review, str(impostor))
+    assert whole and "stale" in whole[0]
+
+
+def test_moved_stages_review_binds_a_renamed_target_by_bytes(gate_on, tmp_path, fixtures_dir):
+    """The per-stage path check has the same posture as the whole-plan one: a
+    stage-scoped review recorded before a byte-identical rename still covers its
+    stage, rather than prescribing a `--scope stage:1` pass that already exists.
+    The whole-plan record here carries the CURRENT bytes with the PRE-edit stage
+    keys, which is what puts stage 1 in `moved_stages` at all."""
+    reviewed = tmp_path / "plan.toml"
+    reviewed.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    doc0 = load_plan(str(reviewed))
+    reviewed.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
+    doc1 = load_plan(str(reviewed))
+
+    renamed = tmp_path / "plan-v2.toml"
+    renamed.write_text(reviewed.read_text())
+
+    whole = _whole_review(reviewed, doc0)
+    whole.plan_sha256 = _sha256_file(renamed)   # binds the rename; stage keys still doc0's
+    state = _subst(plan_path=str(renamed), plan_review=whole,
+                   plan_stage_reviews={"stage:1": _stage_review(reviewed, doc1, 1)})
+    assert gates.plan_review_blockers(state, str(renamed)) == []
+
+
+def test_moved_stages_review_at_another_path_with_other_bytes_still_blocks(
+        gate_on, tmp_path, fixtures_dir):
+    """The negative half of the test above: without byte identity, a stage-scoped
+    review at another path covers nothing and the per-stage demand stands."""
+    reviewed = tmp_path / "plan.toml"
+    reviewed.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    doc0 = load_plan(str(reviewed))
+    reviewed.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
+    doc1 = load_plan(str(reviewed))
+
+    renamed = tmp_path / "plan-v2.toml"
+    renamed.write_text(reviewed.read_text())
+
+    whole = _whole_review(reviewed, doc0)
+    whole.plan_sha256 = _sha256_file(renamed)
+    stage1 = _stage_review(reviewed, doc1, 1)
+    stage1.plan_sha256 = "deadbeef"             # attested some other bytes
+    state = _subst(plan_path=str(renamed), plan_review=whole,
+                   plan_stage_reviews={"stage:1": stage1})
+    blockers = gates.plan_review_blockers(state, str(renamed))
+    assert blockers and "stage 1" in blockers[0] and "--scope stage:1" in blockers[0]

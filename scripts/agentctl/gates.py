@@ -434,36 +434,49 @@ def _plan_review_verdict_blockers(pr, *, state: SessionState | None = None, doc=
     return default
 
 
+def _stale_path_blocker(reviewed_path: str | None, target_plan: str | None) -> str:
+    return (
+        "thinker review is stale — it examined "
+        f"{reviewed_path!r} but the target plan is {target_plan!r}; re-run plan-review on the current plan"
+    )
+
+
+def _binds_across_path_change(pr, target_plan: str | None) -> bool:
+    """Whether a review recorded at a DIFFERENT path still binds `target_plan`:
+    only when the two files are byte-identical, i.e. the plan was renamed rather
+    than replaced (#195).
+
+    Fails CLOSED where `_plan_review_content_stale` fails open — a missing
+    attestation or an unreadable target leaves the mismatch stale. The fail-open
+    default is right for a same-path binding (a transient read error must not
+    wedge the gate on a plan whose path the reviewer did name) and wrong here,
+    where content identity is the ONLY thing standing in for a path the reviewer
+    never saw. Hashing the bytes of the single read also leaves no window for the
+    file to change between the readability check and the comparison."""
+    if not target_plan or not pr.plan_sha256:
+        return False
+    try:
+        buf = Path(target_plan).read_bytes()
+    except OSError:
+        return False
+    return hashlib.sha256(buf).hexdigest() == pr.plan_sha256
+
+
 def _plan_review_blockers_whole(pr, target_plan: str | None, *, state: SessionState | None = None, doc=None) -> list[str]:
     if pr is None:
         return ["no thinker review recorded — run: plan-review (thinker verdict required before this plan is approved/applied)"]
     if not target_plan:
-        return [
-            "thinker review is stale — it examined "
-            f"{pr.plan_path!r} but the target plan is {target_plan!r}; re-run plan-review on the current plan"
-        ]
-    path_mismatch = pr.plan_path != target_plan
-    if path_mismatch and not pr.plan_sha256:
-        return [
-            "thinker review is stale — it examined "
-            f"{pr.plan_path!r} but the target plan is {target_plan!r}; re-run plan-review on the current plan"
-        ]
-    if path_mismatch:
-        # A digest is present, so a byte-identical rename can bind via content
-        # identity below — but that fallback fails OPEN on an unreadable target
-        # (see _plan_review_content_stale's own comment), which is the wrong
-        # default for the rarer, riskier path-differs case. Guard readability
-        # here, in the caller, so the same-path behavior stays undisturbed.
-        try:
-            Path(target_plan).read_bytes()
-        except OSError:
-            return [
-                "thinker review is stale — it examined "
-                f"{pr.plan_path!r} but the target plan is {target_plan!r}; re-run plan-review on the current plan"
-            ]
-    stale = _plan_review_content_stale(pr, target_plan)
-    if stale:
-        return [stale]
+        return [_stale_path_blocker(pr.plan_path, target_plan)]
+    if pr.plan_path != target_plan:
+        # Content identity IS the binding on this branch, so it subsumes the
+        # drift check the same-path branch runs — reaching for that check here
+        # would only re-read the file to re-confirm the hash just compared.
+        if not _binds_across_path_change(pr, target_plan):
+            return [_stale_path_blocker(pr.plan_path, target_plan)]
+    else:
+        stale = _plan_review_content_stale(pr, target_plan)
+        if stale:
+            return [stale]
     return _plan_review_verdict_blockers(pr, state=state, doc=doc)
 
 
@@ -476,20 +489,20 @@ def _plan_review_blockers_coverage(state: SessionState, target_plan: str, doc) -
     keys still match; a moved stage owes its own stage-scoped pass at the CURRENT
     key. A moved meta/order always demands a fresh whole-plan review — a
     stage-scoped reviewer never saw the order, so it cannot re-cover a meta
-    change no matter how current its own stage's key is."""
+    change no matter how current its own stage's key is.
+
+    A path that differs is excused by byte identity and by nothing weaker: the
+    recorded meta/stage keys this function decides staleness by cover only what
+    `plan_meta_digest`/`plan_stage_digests` hash, so a DIFFERENT file agreeing on
+    those still differs freely in `task_id`, `final_check`, `delivery_worktree`
+    and `external_research` — hence the same `_binds_across_path_change` check
+    `_plan_review_blockers_whole` applies, not a weaker "some keys were
+    recorded" test."""
     whole = state.plan_review
     if whole is None:
         return ["no thinker review recorded — run: plan-review (thinker verdict required before this plan is approved/applied)"]
-    if not target_plan:
-        return [
-            "thinker review is stale — it examined "
-            f"{whole.plan_path!r} but the target plan is {target_plan!r}; re-run plan-review on the current plan"
-        ]
-    if whole.plan_path != target_plan and not whole.reviewed_meta_digest:
-        return [
-            "thinker review is stale — it examined "
-            f"{whole.plan_path!r} but the target plan is {target_plan!r}; re-run plan-review on the current plan"
-        ]
+    if whole.plan_path != target_plan and not _binds_across_path_change(whole, target_plan):
+        return [_stale_path_blocker(whole.plan_path, target_plan)]
     meta_moved, moved_stages = changed_parts(doc, _plan_review_baseline(whole))
     if meta_moved:
         return [
@@ -502,7 +515,8 @@ def _plan_review_blockers_coverage(state: SessionState, target_plan: str, doc) -
     for index in sorted(moved_stages):
         scope = _plan_review_scope_for_stage(index)
         spr = state.plan_stage_reviews.get(scope)
-        if spr is None or spr.plan_path != target_plan:
+        if spr is None or (spr.plan_path != target_plan
+                           and not _binds_across_path_change(spr, target_plan)):
             return [
                 f"stage {index} changed since the whole-plan review; needs its own "
                 f"pass — run: plan-review --scope {scope}"
