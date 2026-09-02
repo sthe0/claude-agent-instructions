@@ -919,8 +919,11 @@ def test_each_hooks_budget_covers_the_calls_it_declares():
     this test has seen: its one call (published_attachment) has n=0, so
     `required_budget_s` cannot compute a p90 floor for it (`call_floor_s`
     raises KeyError on an unmeasured row) — the rule for such a hook is
-    instead `minimum >= LAST_RESORT_CEILING_S + SIZE_HEADROOM_S` (41 + 1 =
-    42s), which this hook's declared 45s budget satisfies. That rule is
+    instead `minimum >= LAST_RESORT_CEILING_S + SIZE_HEADROOM_S`, which this
+    hook's declared budget satisfies with headroom (LAST_RESORT_CEILING_S is
+    a running max over measured rows, so the exact figures shift as samples
+    are added — this test recomputes them live rather than pinning a value
+    here). That rule is
     STRICTER than the measured-row rule it replaces: a measured K = 1 hook
     only needs to clear its own judge's p90 floor, typically well under the
     last-resort ceiling (the worst latency observed on ANY judge on this

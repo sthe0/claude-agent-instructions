@@ -7,7 +7,7 @@ like a considered verdict. This file records the runs that separate the two, and
 `scripts/check-live-run-evidence.py` recomputes every number below from the raw
 samples and the hook sources, so the document cannot drift away from its evidence.
 
-## 1. The four live runs
+## 1. The five live runs
 
 Every hook was fed, on stdin, a payload its own prefilter is **obliged** to fire
 on, and a real judge answered. No stubs, no fakes, no recorded fixtures.
@@ -20,9 +20,16 @@ on, and a real judge answered. No stubs, no fakes, no recorded fixtures.
 | `hook-escalation-diagnosis-gate.py` | `outage_escalation` | deny | deny | 4.96 | 30 |
 | `hook-turn-end-gate.py` | `feedback_signal`, `binary_ask`, `outage_escalation` | block | block | 17.05 | 52 |
 | `hook-resolution-reminder.py` | `landing_discipline` | deny | deny | 6.61 | 22 |
+| `hook-published-text-writer-gate.py` | `published_attachment` | deny | deny | 5.12 | 60 |
 
-All four exited 0 with empty stderr, so no `judges_skipped` line was emitted and
+All five exited 0 with empty stderr, so no `judges_skipped` line was emitted and
 no judge was dropped for want of budget.
+
+**The published-attachment run** fed the judge a real ambiguous-attachment
+payload (a Bash publication call whose body arrives via an attached file rather
+than inline text, with no bound tech-writer witness) and recorded a real
+`published_attachment` verdict — `ledger_record.verdict: true` (deny), duration
+4.83 s, against a 60 s ceiling — not a stub or a recorded fixture.
 
 **The landing-discipline run** was an `AskUserQuestion` menu whose two options were
 "Open a PR" and "Wait for review" — a PreToolUse call, not a UserPromptSubmit one,
@@ -115,12 +122,17 @@ a detail: four standard estimators on the n=18 deferring sample give 29.94 /
 | `hook-resolution-reminder.py` | `landing_discipline` | `haiku` | `landing-discipline-sample.json:pr_proposing + landing-discipline-sample.json:direct_push` | 16 | 3.88 | 4.96 | 6.37 | 15.38 | 22 | 0 | 0.0000 | 0.1875 |
 | — | `acceptance_judge` | `haiku` | UNMEASURED — no latency sample exists | — | — | — | — | — | — | — | — | — |
 | — | `question_materiality` | `haiku` | UNMEASURED — no latency sample exists | — | — | — | — | — | — | — | — | — |
+| `hook-published-text-writer-gate.py` | `published_attachment` | `haiku` | UNMEASURED — no latency sample exists | — | — | — | — | — | — | — | — | — |
 
 `acceptance_judge` and `question_materiality` are listed because leaving them out
 would be the quieter lie: the `MEASURED` table carries a row for each, and a reader
 comparing the two would otherwise assume they were covered. Both run outside any
 hook, so no harness timeout kills them and the last-resort ceiling applies. Neither
 is sized by evidence.
+
+`published_attachment` is listed for the same reason, and its single live deny
+above (Section 1) is liveness evidence, not a latency sample — one call cannot
+seed `n`, `p90`, or a ceiling estimate, so the row stays UNMEASURED.
 
 ### The zero rule
 

@@ -170,11 +170,14 @@ DESIRED = [
     # create, issue edit, or a machine-local seam verb) whose text body has no
     # tech-writer witness bound to it in the transcript -- see
     # scripts/hook-published-text-writer-gate.py's module docstring.
-    # 45 = this hook's own _PUBLISHED_TEXT_JUDGE_BUDGET_S, at or above
-    # judge_latency.LAST_RESORT_CEILING_S(41) + SIZE_HEADROOM_S(1) = 42 since
-    # the published_attachment judge is UNMEASURED (n=0) and has no per-judge
-    # floor to size a tighter budget against.
-    ("PreToolUse",       "Bash",  "hook-published-text-writer-gate.py", 45),
+    # 60 = this hook's own _PUBLISHED_TEXT_JUDGE_BUDGET_S, at or above
+    # judge_latency.LAST_RESORT_CEILING_S + SIZE_HEADROOM_S since the
+    # published_attachment judge is UNMEASURED (n=0) and has no per-judge
+    # floor to size a tighter budget against. That ceiling is a running max
+    # over measured rows and can grow, so this margin is re-checked live by
+    # test_each_hooks_budget_covers_the_calls_it_declares rather than pinned
+    # to a specific ceiling value here.
+    ("PreToolUse",       "Bash",  "hook-published-text-writer-gate.py", 60),
     ("PostToolUse",      "Write", "hook-self-critique-reminder.py",  5),
     # Nudge when an AskUserQuestion answer is free text rather than an offered
     # option label: a correction delivered this way bypasses the

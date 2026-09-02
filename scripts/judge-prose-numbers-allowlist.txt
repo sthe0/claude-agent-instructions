@@ -101,7 +101,7 @@ scripts/install-reminder-hooks.sh:111:4d3f1fb8  # 21s = judge_latency.call_ceili
 scripts/install-reminder-hooks.sh:112:9e47f121  # 30s = _APPROVAL_ASK_JUDGE_BUDGET_S, the hook's own new whole-invocation budget this registration is sized off
 scripts/install-reminder-hooks.sh:121:8575c0c4  # 55s/n=48 = judge_latency.call_ceiling_s("outage_escalation") over the re-sampled row, the value this 65s registration is sized above
 scripts/install-reminder-hooks.sh:130:2d2694e5  # quotes the superseded n=4 note ("11.6-13.5s") against the current deferring row (median 17.43, p90 37.58)
-scripts/install-reminder-hooks.sh:175:9bfd303b  # 45 = hook-published-text-writer-gate.py's own _PUBLISHED_TEXT_JUDGE_BUDGET_S; 41 = judge_latency.LAST_RESORT_CEILING_S; 1 = SIZE_HEADROOM_S; n=0 = judge_latency.MEASURED["published_attachment"]'s UNMEASURED_NOTE row, the reason there is no per-judge floor to size a tighter budget against
+scripts/install-reminder-hooks.sh:175:610ce774  # n=0 = judge_latency.MEASURED["published_attachment"]'s UNMEASURED_NOTE row, the reason this 60s registration has no per-judge floor to size a tighter budget against and instead uses LAST_RESORT_CEILING_S + SIZE_HEADROOM_S, re-checked live rather than pinned here
 
 # --- scripts/lib/hook_wiring.py ----------------------------------------------
 scripts/lib/hook_wiring.py:149:171f9b60  # historical: a 5s registration, the wiring defect this axis exists to catch
@@ -113,7 +113,7 @@ scripts/lib/hook_wiring.py:197:13ce4bee  # K = 1 is the declared call count of t
 scripts/lib/hook_wiring.py:169:7c67ab7c  # 30s = _APPROVAL_ASK_JUDGE_BUDGET_S, the hook's own whole-invocation judge budget, mirroring the sibling rows above (supersedes the 13s tie removed once the equality assertion was dropped)
 scripts/lib/hook_wiring.py:620:56471431  # historical: the 5s registration used as the example of a slow-judge hook the report must surface
 scripts/lib/hook_wiring.py:171:7174ba0b  # 22s = hook-resolution-reminder.py's own _LANDING_DISCIPLINE_JUDGE_BUDGET_S, mirroring the sibling single-judge rows above
-scripts/lib/hook_wiring.py:180:7fc299d7  # n=0 = judge_latency.MEASURED["published_attachment"]'s UNMEASURED_NOTE row; 45s = hook-published-text-writer-gate.py's own _PUBLISHED_TEXT_JUDGE_BUDGET_S, at or above LAST_RESORT_CEILING_S(41) + SIZE_HEADROOM_S(1) since this judge has no measured p90 to size against
+scripts/lib/hook_wiring.py:180:1ff7efac  # n=0 = judge_latency.MEASURED["published_attachment"]'s UNMEASURED_NOTE row; 60s = hook-published-text-writer-gate.py's own _PUBLISHED_TEXT_JUDGE_BUDGET_S, at or above LAST_RESORT_CEILING_S + SIZE_HEADROOM_S since this judge has no measured p90 to size against
 
 # --- samples/judge-latency/README.md -----------------------------------------
 samples/judge-latency/README.md:13:eecb96d2  # K = 1 as declared in lib/hook_wiring.TIMEOUT_REQUIREMENT_CALLS; the identity budget == per-call ceiling is what the single-call test asserts
@@ -153,6 +153,7 @@ samples/judge-latency/README.md:242:ba28e247  # historical: the original 5s regi
 # live-run-evidence.md — the stage-4 write-up. Every number here is either one of
 # the three recorded live runs or a statistic the checker recomputes from the
 # samples, so each reason names which of the two it is.
+live-run-evidence.md:32:060719c9  # 4.83 s = ledger_record.duration from the real published_attachment judge call recorded in the stage-6 in-harness observation; 60 s = _PUBLISHED_TEXT_JUDGE_BUDGET_S, the ceiling that call ran under
 live-run-evidence.md:73:b874c9db  # 43.09 = the recorded deferring live run; 10.29-39.99 (n=18) is that judge's sampled range, recomputed by check-live-run-evidence.py from latency-sample.json:defer + ab-sample.json:defer_std
 live-run-evidence.md:74:0d2a633e  # 4.96 = the recorded escalation live run; 7.19-53.42 (n=48) is that judge's sampled range after the stage-2 re-sample merge, from latency-sample.json:outage + ab-sample.json:outage_std + drift-sample.json:outage + drift-sample.json:not_outage
 live-run-evidence.md:77:3ec0fa34  # 0.08s = measured process overhead (3 trials of the deferring hook on a non-firing payload, no judge call); establishes that a live wall-clock is the judge call almost exactly

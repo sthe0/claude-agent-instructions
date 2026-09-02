@@ -122,14 +122,22 @@ except BaseException as exc:
 
 # This hook's own whole-invocation judge budget, owned here rather than read
 # off advisor's own default -- mirrors every sibling judge-calling hook
-# (_APPROVAL_ASK_JUDGE_BUDGET_S etc.). 45 >= judge_latency.LAST_RESORT_
-# CEILING_S (41) + judge_latency.SIZE_HEADROOM_S (1): the published_attachment
-# judge is UNMEASURED (n=0, lib/judge_latency.py), so there is no per-judge
-# p90 floor to size a tighter budget against -- the last-resort ceiling
-# (the worst latency observed on ANY judge on this model) is what this
-# budget must clear instead. hook_wiring.TIMEOUT_REQUIREMENTS records this
-# same 45 under this hook's own constant name.
-_PUBLISHED_TEXT_JUDGE_BUDGET_S = 45
+# (_APPROVAL_ASK_JUDGE_BUDGET_S etc.). Must be >= judge_latency.
+# LAST_RESORT_CEILING_S + judge_latency.SIZE_HEADROOM_S: the
+# published_attachment judge is UNMEASURED (n=0, lib/judge_latency.py), so
+# there is no per-judge p90 floor to size a tighter budget against -- the
+# last-resort ceiling (the worst latency observed on ANY judge on this
+# model) is what this budget must clear instead, and that ceiling is a
+# running max over every measured row, so it can grow as samples are added
+# (it drifted from 41 to 55 between this hook's authoring and this fix,
+# which is what turned this constant stale in the first place). 60 carries
+# headroom over the 56 currently required. `test_each_hooks_budget_covers_
+# the_calls_it_declares` (scripts/tests/test_hook_wiring.py) re-checks this
+# inequality against the live table on every run, so a future drift fails a
+# test rather than silently reducing this judge to permanent fail-open.
+# hook_wiring.TIMEOUT_REQUIREMENTS records this same value under this
+# hook's own constant name.
+_PUBLISHED_TEXT_JUDGE_BUDGET_S = 60
 
 # Safe-by-default kill-switch for the attachment judge only, matching every
 # other semantic judge's env convention (CLAUDE_<JUDGE>_SEMANTIC).
