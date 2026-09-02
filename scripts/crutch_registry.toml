@@ -1741,6 +1741,22 @@ disposition = "keep"
 ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
 
 [[entry]]
+id = "afa7371a78eed636"
+domain = "code"
+file = "scripts/lib/writer_pass.py"
+class = "structural"
+disposition = "keep"
+ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
+
+[[entry]]
+id = "08a77c491e8c0190"
+domain = "code"
+file = "scripts/lib/writer_pass.py"
+class = "structural"
+disposition = "keep"
+ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
+
+[[entry]]
 id = "c80bc195bfa4637a"
 domain = "code"
 file = "scripts/lint-prose-length.py"
@@ -9504,6 +9520,14 @@ ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifie
 id = "31045be7f8672200"
 domain = "code_file_rollup"
 file = "scripts/lib/term_ruleset.py"
+class = "structural"
+disposition = "keep"
+ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "bbda6f90f09e93c2"
+domain = "code_file_rollup"
+file = "scripts/lib/writer_pass.py"
 class = "structural"
 disposition = "keep"
 ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means. (file-level rollup of the file's scopes.)"
