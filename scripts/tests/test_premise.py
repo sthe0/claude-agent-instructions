@@ -45,6 +45,21 @@ def test_dangling_stage_target_blocks():
     assert any("stage 3" in b and "dangling" in b for b in blockers)
 
 
+def test_retired_question_with_unparseable_target_does_not_block():
+    q = Question(
+        id="q1", target="not-a-target", question="?",
+        disposition="retired", reason="the goal wording changed, question no longer applies",
+    )
+    blockers = validate_questions([q], stage_keys={})
+    assert not any("target" in b for b in blockers)
+
+
+def test_non_retired_question_with_unparseable_target_still_blocks():
+    q = Question(id="q1", target="not-a-target", question="?", disposition="assumed")
+    blockers = validate_questions([q], stage_keys={})
+    assert any("target" in b for b in blockers)
+
+
 def test_open_question_blocks():
     q = Question(id="q1", target="plan.goal", question="?", disposition="open")
     blockers = validate_questions([q], stage_keys={})
