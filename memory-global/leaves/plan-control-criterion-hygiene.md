@@ -1,10 +1,10 @@
 ---
 name: plan-control-criterion-hygiene
-description: Five plan-authoring norms for a stage's control criterion — declare the venue a check observes instead of hard-coding a `cd` into the verify_command; never let a criterion assert an unverified fact about current behaviour; take a criterion's number from an explicitly bounded invocation; never let a procedure step rewrite the criterion it is measured by; and name the lifecycle state the criterion describes, because verify-final re-runs a criterion authored pre-merge in the post-merge world.
+description: Six plan-authoring norms for a stage's control criterion — declare the venue a check observes instead of hard-coding a `cd` into the verify_command; never let a criterion assert an unverified fact about current behaviour; take a criterion's number from an explicitly bounded invocation; never let a procedure step rewrite the criterion it is measured by; name the lifecycle state the criterion describes, because verify-final re-runs a criterion authored pre-merge in the post-merge world; and sweep exact-shape criteria after ANY revision round, formal replan or ad-hoc.
 type: feedback
 schema: leaf/v1
 created: 2026-08-31
-last_verified: 2026-09-01
+last_verified: 2026-09-02
 ---
 
 # Plan control-criterion hygiene
@@ -14,9 +14,12 @@ last_verified: 2026-09-01
 To achieve a stage check that can actually go red for the right reason and
 green for the right reason, the criterion has to survive the interval between
 plan authoring and stage execution — and the executor has to be able to run it
-without repairing it. Five distinct authoring habits break that, and all five
+without repairing it. Six distinct authoring habits break that, and all six
 were observed live: three of them inside the very plan whose fourth stage
-records this leaf.
+first recorded this leaf, and the sixth inside that same plan's own
+resolution — a stale exact-shape criterion caught only at `verify-final`,
+after two further, fully legitimate review rounds had already moved the
+ground it stood on.
 
 The engine makes the cost concrete. `record-result` *runs* the stage's
 `verify_command` itself and its exit code overrides the caller's `--status`, so
@@ -157,6 +160,38 @@ obviously right — obviousness is what makes this the tempting case.
 > The repair re-derived both `done_criterion` and `verify_command` against a
 > revision pair — a fact no later event can unmake — and a plan-wide sweep
 > confirmed no other criterion was still phrased over the superseded state.
+
+### 6. Sweep exact-shape criteria after ANY revision round, formal replan or ad-hoc
+
+An exact-shape criterion — a literal file set, a commit count, a fixed string
+comparison — is authored against the delivery the plan expects **at that
+moment**. A later revision round that legitimately expands or reshapes the
+delivery (a code-reviewer's should-fix finding, a fresh defect a further round
+catches) invalidates that shape even when the revision itself was fully
+sanctioned and independently reviewed. The engine's own `replan` command
+tracks this for a **formally recorded** revision — but a revision round driven
+by an ad-hoc, dossier-based specialist spawn (a manual `code-reviewer` dossier
+outside `agentctl`'s own dispatch) leaves no engine-tracked event to prompt a
+criterion sweep at all. Nothing distinguishes the two from the criterion's
+point of view: both change what "done" looks like on disk.
+
+The check is the same as norm 3's bounded-count rule, applied across time
+rather than at authoring: after every revision round — ask explicitly whether
+any control criterion still names a file set, a count, or a literal string
+that predates the round. Do not wait for `verify-final` to discover it by
+failing.
+
+> **Observed.** `final_check` 3 in this leaf's own governing plan hardcoded
+> "exactly `gates.py`,`test_plan_review_gate.py`, one commit" at authoring
+> time. Two further review rounds — each closing a genuine, independently
+> reproduced code-reviewer finding, run as manual specialist dossiers with no
+> engine-tracked `replan` between them — legitimately expanded delivery to 3
+> stacked commits and 6 files. Nothing flagged the stale criterion until
+> `verify-final` ran the literal command and it failed for real, routing the
+> session into `DIAGNOSING` and costing a full
+> `declare → investigate → critique → normalize → replan` cycle to repair — a
+> cycle norm 4 already prices in, but one a mid-round sweep would have avoided
+> paying at all.
 
 ## See also
 
