@@ -150,6 +150,20 @@ def test_approve_emits_start_progress_and_publish_plan_snapshot():
     assert publish["data"]["plan_snapshot_path"] != state.plan_path
     # the nudge names the skip route so a backend without the verb degrades honestly
     assert "--skipped" in publish["detail"]
+    # the comment body must be a reader-facing rendering, never the raw snapshot bytes
+    assert "rendering" in publish["detail"]
+    assert "dialogue language" in publish["detail"]
+    assert "publish the approved plan SNAPSHOT to the ticket" not in publish["detail"]
+
+
+def test_publish_plan_details_never_instruct_pasting_snapshot_bytes():
+    state = _new_state()
+    plugins.activate(state, "tracker", {"tracker_key": "ABC-1"})
+    submit_fired = plugins.fire("submit_plan", state, Directive(True, state.node, "submit_plan"))
+    for bad in ("post the plan to the ticket", "publish the approved plan snapshot",
+                "post the snapshot"):
+        assert bad not in submit_fired[0]["detail"].lower()
+    assert "rendering" in submit_fired[0]["detail"]
 
 
 def test_approve_publish_plan_snapshot_path_empty_when_unset():
