@@ -150,6 +150,9 @@ def _plan_file_sha256(target: str | None) -> str:
 
     Best-effort by design: an unreadable/absent target yields '' so the plan-review
     gate degrades to path-only binding rather than wedging on a transient I/O error.
+    That degradation is the NOTHING-ATTESTED case only — cmd_plan_review turns the
+    empty result into a refusal when the caller did supply a --plan-digest, since a
+    digest it cannot compare is not evidence the reviewer read anything.
     cmd_plan_review records this over the reviewed bytes; gates.plan_review_blockers
     inlines the same sha256-of-bytes recompute (it cannot import cli — circular)."""
     if not target:
@@ -3173,7 +3176,9 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
 
     The reviewer must pass --plan-digest <hex> (the sha256 of its OWN read of the
     plan); it is cross-checked against the live bytes and stored as the attested
-    plan_sha256. A passing verdict does NOT bind without a matching attestation.
+    plan_sha256. A passing verdict does NOT bind without a matching attestation,
+    and an attestation the engine cannot cross-check — because the target is
+    unreadable — is REFUSED rather than stored on the caller's word.
 
     --scope 'stage:<n>' binds the review to one stage instead of the whole plan
     (stage 5): the record also carries the engine's OWN digests of the plan's
@@ -3257,10 +3262,25 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
     # ABSENT --plan-digest yields plan_sha256="" (unattested); the pass path of
     # gates.plan_review_blockers then BLOCKS on the empty hash (see the inversion
     # note there), so a reviewer that could not read the plan cannot bind a pass.
+    #
+    # An UNREADABLE target refuses too, because an attestation the engine cannot
+    # cross-check is not an attestation: the stored plan_sha256 is what
+    # gates._binds_across_path_change accepts as proof a review of some OTHER path
+    # examined this plan's bytes, so recording an unverified one lets any caller
+    # bind a plan by naming a path nobody read (#195). The absent-digest case keeps
+    # its fail-open degradation — nothing was claimed, so nothing needs checking.
     attested = (getattr(args, "plan_digest", None) or "").strip().lower()
     if attested:
         live = _plan_file_sha256(target)
-        if live and attested != live:
+        if not live:
+            return Directive(
+                False, state.node, "noop",
+                f"--plan-digest {attested!r} cannot be cross-checked: {target!r} is "
+                "unreadable, so the engine cannot confirm the reviewer read it; "
+                "re-run plan-review once the plan file is readable (or omit "
+                "--plan-digest to record an unattested review that does not bind)",
+            )
+        if attested != live:
             return Directive(
                 False, state.node, "noop",
                 f"--plan-digest {attested!r} does not match the live plan bytes "
