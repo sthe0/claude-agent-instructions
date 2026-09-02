@@ -576,17 +576,63 @@ def verify_command_scope_warnings(stages, final_check=None) -> list[str]:
 # stage declares it (a prefix of it) in output_artifacts (the machine-readable
 # answer to "which stage produces this path").
 #
-# Deliberately NARROW to keep the false-positive population empty-in-practice:
+# Deliberately NARROW, to keep the false-positive population as small as the
+# checker can make it — NOT empty: five exemptions are needed to reach the
+# population actually observed, and each is recorded here, with its why and
+# its accepted residual, so the next reader auditing a widening finds every
+# one in this one place rather than scattered across commit messages.
 #   * Only RELATIVE, literal, path-shaped tokens are considered. Absolute paths
 #     (/dev/null, /tmp/scratch written at runtime) are OUT OF SCOPE — a runtime
 #     temp file is exactly the false positive this narrowing avoids.
 #   * Globs ("*?["), shell variables ("$..."), URLs ("://"), option values
 #     ("k=v") and the program string after `-c` / module after `-m` are dropped:
 #     none is a literal filesystem path.
+#   * (A) Here-document bodies (`_strip_heredoc_bodies_for_reachability`) — a
+#     `python3 - <<'TAG'` body is source text, not shell argv.
+#   * (B) A path inside a negated `! test -f P` / `! [ -f P ]` clause (either
+#     spelling of `!`'s position) — the author is asserting ABSENCE.
+#   * (C) A candidate token's trailing `;`, `&`, `|`, `)` — shell clause
+#     syntax shlex glues onto the word, e.g. the `P;` in `for F in ... P; do`.
+#   * (D) The pattern operand of a grep-family command (`grep -qE
+#     '(review|pull)/15149870' file`) is not a path. ACCEPTED HOLE: `grep -f
+#     patterns.txt target.py` has no literal pattern operand, so the
+#     positional rule mistakes `patterns.txt` for it and silently exempts it
+#     too (the `--file=patterns.txt` spelling is worse — see the full account
+#     at (D) in `_reachability_path_tokens`'s own docstring).
+#   * (E) A path with a conventional build/test OUTPUT directory name as one
+#     of its segments (`_BUILD_OUTPUT_SEGMENTS`) — a byproduct the checked
+#     command's own build/test step writes mid-run, not a precondition. The
+#     WEAKEST of the five: convention-based, not a syntactic fact, and wide
+#     enough that a real precondition file stored under e.g. `build/` loses
+#     the check silently — see that constant's own module comment.
+# Full per-exemption detail (narrowing conditions, interaction with the other
+# exemptions, each accepted limit) lives on `_reachability_path_tokens`'s own
+# docstring, next to the code it describes; this block is the index.
+#
+# Why not reuse lib/shell_tokens.strip_heredoc_bodies for (A): that module is
+# fail-CLOSED for two SECURITY consumers (the canon guard,
+# git_cwd.effective_git_cwd) and its clause (ii) disqualifies any command
+# containing `;`, `&&`, `{`, `}` or `$(` — which every real multi-clause
+# verify_command has (measured: it strips neither offending v23 command this
+# exemption targets). This lint's polarity is the opposite of a security
+# gate's — it BLOCKS on an unreachable path, so over-stripping only means
+# fewer tokens get checked (the safe direction) — so merging the two would
+# erode the security module's non-widening argument for consumers that need
+# the opposite doubt polarity. `_strip_first_heredoc_body` above is therefore
+# lint-local by design, not an oversight.
+#
+# Why not an inline `# path-check: skip <token>` annotation instead of any of
+# the five: it was considered and rejected because it requires editing the
+# command it annotates, which is unavailable for a plan whose bytes must stay
+# frozen (e.g. an already-submitted, hash-pinned reference plan) — the
+# annotation route only works going forward, never on an existing plan this
+# lint must also judge correctly.
+#
 # Residual false-positive population (documented, not eliminated): a relative
-# path a stage's command *creates then reads within the same command* (so it is
-# neither pre-existing nor a declared cross-stage artifact). Declare such a path
-# in that stage's output_artifacts to silence the lint.
+# path a stage's command *creates then reads within the same command*, where
+# neither pre-existing on disk nor a declared cross-stage artifact NOR caught
+# by (A)-(E) above. Declare such a path in that stage's output_artifacts to
+# silence the lint.
 #
 # LIMITS, stated so the green light is not over-read:
 #   * Reachability is NOT validity: a reachable path proves the command *can*
@@ -599,6 +645,140 @@ def verify_command_scope_warnings(stages, final_check=None) -> list[str]:
 _PATH_EXTS = (".py", ".toml", ".json", ".md", ".txt", ".sh", ".cfg",
               ".ini", ".yaml", ".yml", ".csv", ".sql")
 
+# Characters that reject a candidate token outright: globs, shell variables,
+# option-values and URLs (original set), plus `(` and `|` — regex
+# metacharacters a grep-family pattern operand commonly carries even after (D)
+# below has failed to recognize it positionally, e.g. the outer
+# `(review|pull)` in `(review|pull)/15149870` — defence in depth, not the
+# primary mechanism.
+# ACCEPTED LIMIT, named rather than left implicit: a real, existing path that
+# contains `(` or `|` (mid-token — a trailing `)` is already stripped by
+# `_GLUE_CHARS` before this set is consulted) is silently excluded from
+# checking too, e.g. `test -f "report (1).csv"`. `)` was considered for this
+# set and dropped: real regex patterns pair it with `(`, so `(` alone already
+# catches every pattern this defence targets, while keeping `)` bought no
+# additional catch and doubled the false-negative surface for a filename that
+# contains `)` but not `(`, e.g. `scripts/gh)ost.py`. Accepted, like the
+# `grep -f` limit in (D) below, because it fails in the same non-blocking
+# direction as every exemption here: a real orphan path containing `(` or
+# `|` goes unchecked rather than wrongly blocked.
+_REJECT_CHARS = "*?[$=(|"
+
+# Trailing characters that are shell clause syntax glued onto a word by shlex
+# (which never splits on them), never a legal trailing character of an
+# unquoted filename — see false-positive (C) below.
+_GLUE_CHARS = ";&|)"
+
+# The one clause-terminator token (B)'s exemption below matches DIRECTLY.
+# `&&`, `||`, `;`, `|` also end the clause but are NOT members here: a token
+# made entirely of `_GLUE_CHARS` (`;`, `&`, `|`, `)`) collapses to the empty
+# string under (C)'s rstrip before this set is ever consulted, so it is the
+# trailing-glue reset (`if glued: ...`) that actually ends the clause for
+# those four spellings, not a lookup here. This set exists only for `]`, the
+# one terminator `_GLUE_CHARS` does not touch.
+_CLOSING_BRACKET = frozenset({"]"})
+
+# grep-family commands whose pattern operand is not a path — see (D) below.
+_GREP_FAMILY = frozenset({"grep", "egrep", "fgrep", "rg"})
+
+# Conventional build/test OUTPUT directory names — see (E) below. A relative
+# path token with one of these as a path SEGMENT (any component, not just the
+# last) is a byproduct the checked command's own build/test step produces as
+# it runs, not a precondition the command requires up front.
+# ACCEPTED LIMIT, named rather than left implicit: `build`, `target`, `dist`
+# and `coverage` are ordinary SOURCE directory names too, so this set is
+# genuinely wide — a project keeping a real precondition file under a
+# directory with one of these names loses the reachability check on it
+# entirely, silently. This is a convention-based judgement, not a syntactic
+# fact like (A)-(D), which makes it the WEAKEST of the five exemptions. Kept
+# wide rather than narrowed to `test-results` alone, because a narrow set
+# would be tuned to one plan and misfire on the next repo; the width is
+# compensated by (E) being self-contained (revertable in one commit without
+# touching (A)-(D)).
+_BUILD_OUTPUT_SEGMENTS = frozenset({
+    "test-results", "build", "dist", "target", "node_modules",
+    "__pycache__", ".pytest_cache", "htmlcov", "coverage",
+})
+
+# A here-document/here-string introducer: `<<`/`<<-` or `<<<` followed by an
+# optionally quoted identifier delimiter.
+_HEREDOC_START = re.compile(
+    r"<<-?\s*(?:'([A-Za-z_][A-Za-z0-9_]*)'|\"([A-Za-z_][A-Za-z0-9_]*)\"|"
+    r"([A-Za-z_][A-Za-z0-9_]*))"
+)
+
+
+def _strip_first_heredoc_body(cmd: str) -> str:
+    """Remove the body of the first here-document operator found outside quotes,
+    or return `cmd` unchanged on any doubt (no body line, no terminator line).
+    Quote-aware only — see `_strip_heredoc_bodies_for_reachability` for why a
+    fuller recognition shape is not needed here."""
+    i, n, quote = 0, len(cmd), None
+    while i < n:
+        c = cmd[i]
+        if quote:
+            if c == "\\" and quote == '"' and i + 1 < n:
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c in "'\"":
+            quote = c
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            i += 2
+            continue
+        if cmd.startswith("<<", i) and not cmd.startswith("<<<", i):
+            m = _HEREDOC_START.match(cmd, i)
+            if m:
+                tag = m.group(1) or m.group(2) or m.group(3)
+                line_end = cmd.find("\n", m.end())
+                if line_end == -1:
+                    return cmd  # doubt: no body line follows -> leave untouched
+                lines = cmd[line_end + 1:].split("\n")
+                terminator = next(
+                    (idx for idx, line in enumerate(lines) if line.strip() == tag),
+                    None,
+                )
+                if terminator is None:
+                    return cmd  # doubt: no terminator line -> leave untouched
+                head = cmd[:line_end]
+                tail = "\n".join(lines[terminator + 1:])
+                return head + ("\n" + tail if tail else "")
+        i += 1
+    return cmd
+
+
+def _strip_heredoc_bodies_for_reachability(cmd: str) -> str:
+    """`cmd` with every here-document body removed, so a Python/shell script
+    living inside `python3 - <<'TAG'` is never shlex-tokenized as shell argv —
+    e.g. `print("ci/tests:", ...)` would otherwise collapse into the bogus
+    path-shaped token `print(ci/tests:,`.
+
+    Deliberately LINT-LOCAL rather than a reuse of lib.shell_tokens.strip_heredoc_
+    bodies: that module is fail-CLOSED for two SECURITY consumers (the canon
+    guard and git_cwd.effective_git_cwd) and its clause (ii) disqualifies any
+    command containing `;`, `&&`, `{`, `}` or `$(` — which every real
+    verify_command with more than one clause has (measured: it strips nothing
+    from either offending v23 reference-plan command this exemption targets, nor
+    does the unlanded issue-#108 span-API follow-up, for the same clause (ii)
+    reason). Merging the two would erode the security module's non-widening
+    argument for consumers that need the opposite doubt polarity. This lint's
+    polarity is the opposite: it BLOCKS on an unreachable path, so
+    over-stripping a body only means fewer tokens get checked — the safe,
+    non-blocking direction — while under-stripping produces exactly the false
+    positive this function exists to remove. A quote-aware scan for the
+    positive `<<TAG ... TAG` shape is therefore enough; it need not carry
+    shell_tokens' full seven-clause security-grade recognition."""
+    prev = None
+    while cmd != prev:
+        prev = cmd
+        cmd = _strip_first_heredoc_body(cmd)
+    return cmd
+
 
 def _reachability_path_tokens(cmd: str) -> list[str]:
     """The relative, literal, path-shaped tokens of a shell command — the tokens
@@ -608,31 +788,170 @@ def _reachability_path_tokens(cmd: str) -> list[str]:
     then discards, instead of being shattered on shell metacharacters that also
     occur inside it. Shell operators (`&&`, `|`, `2>&1`, `>`) survive as tokens but
     are not path-shaped, so they fall out. Tolerant: unbalanced quotes fall back to
-    a plain split rather than raising."""
+    a plain split rather than raising.
+
+    Four exemptions layered on top of that base tokenizer, each narrowed to the
+    shape that actually misfires and paired with a regression case in
+    test_verify_reachability.py pinning what must still block:
+
+    (A) Here-document bodies are stripped from `cmd` before shlex ever sees them
+        — see `_strip_heredoc_bodies_for_reachability`.
+    (B) A path token inside a `! test <flag> P` / `! [ <flag> P ]` clause, or
+        its POSIX operand-position spelling `test ! <flag> P` / `[ ! <flag> P
+        ]`, is exempt: the author is asserting ABSENCE, so demanding P be
+        producible is exactly backwards. Narrowed to arm only when `!` is
+        either the token immediately preceding `test`/`[` (command-position)
+        or the FIRST operand after a `test`/`[` command word (operand-
+        position) — `! grep ... P`, `! <anything else> P`, and a `!` anywhere
+        but the very first operand of `test`/`[` are NOT exempt. The clause
+        ends at a literal `]`, or — via the trailing-glue reset in (C), not a
+        lookup against `_CLOSING_BRACKET` — at any token made entirely of
+        `_GLUE_CHARS` (`&&`, `||`, `;`, `|`); see that set's module comment.
+        ACCEPTED LIMIT: a negated clause with NEITHER a literal `]` NOR a
+        `_GLUE_CHARS`-only token before the next clause starts is never
+        closed — e.g. `test ! -f a.txt\ntest -f scripts/ghost.py` (a bare
+        newline carries no clause-boundary information once shlex has
+        collapsed it to ordinary whitespace) silently exempts ghost.py too.
+        Not closed: doing so needs recognizing a fresh `test`/`[` command
+        word as an implicit clause end even while `command_start` is still
+        False, which risks re-arming (B) on state this lint does not track
+        elsewhere. Accepted for the same reason as the other three limits
+        named in this docstring: it fails in the non-blocking direction.
+    (C) A candidate token's TRAILING `;`, `&`, `|`, `)` characters (including
+        runs such as `;;`) are shell clause syntax glued onto the word by shlex
+        (which never splits on them) — e.g. the `P;` in
+        `for F in ... P; do ...` — and are stripped before the word is judged.
+        (C) runs before (B) reads the stream: `! test -f foo.txt;` must both end
+        (B)'s clause at the `;` AND, were it ever path-checked, be judged on the
+        bare `foo.txt` — running (B) first on the raw `foo.txt;` would leave the
+        trailing `;` unstripped, the trailing-glue reset would never fire, and
+        (B)'s exemption would run past its own clause.
+    (D) The pattern operand of a grep-family invocation (`grep`, `egrep`,
+        `fgrep`, `rg`) is not a path, even when it is `/`-shaped
+        (`grep -qE '(review|pull)/15149870'`). Recognized positionally: after
+        the command word, the operand following a flag cluster ending in
+        `e`/`E`/`P`, otherwise the first non-flag operand. FILE operands after
+        the pattern remain checked normally. `_REJECT_CHARS` gained `(` and `|`
+        as defence in depth for a pattern this positional rule fails to catch
+        — see that constant's module comment for the accepted cost and why
+        `)` was considered and dropped.
+        ACCEPTED LIMIT: `grep -f patterns.txt target.py` has no literal pattern
+        operand (it comes from a file), so the positional rule mistakes
+        `patterns.txt` for the pattern and silently exempts it, while
+        `target.py` is still checked. The `--file=patterns.txt` spelling is
+        WORSE than that: it doesn't end in `e`/`E`/`P` so the positional rule
+        never consumes it as a two-token flag+operand pair, and instead
+        mistakes the FOLLOWING token — `target.py`, the real file operand —
+        for the pattern, so neither `patterns.txt` nor `target.py` is
+        checked. Not closed: closing it needs the full grep flag grammar
+        (`-f`, repeated `-e`, `--file=`, bundled short flags) — the parser
+        this lint deliberately declines to write — and both cases fail in
+        the same non-blocking direction as every exemption here.
+    (E) A path token with a conventional build/test OUTPUT directory name as
+        one of its path segments — `test-results`, `build`, `dist`, `target`,
+        `node_modules`, `__pycache__`, `.pytest_cache`, `htmlcov`, `coverage`
+        (`_BUILD_OUTPUT_SEGMENTS`) — is exempt, e.g.
+        `library/svc/data_science/tests/test-results/py3test/ytest.report.trace`,
+        which `scripts/ya_test_textlog.py` reads only AFTER the `ya make` run
+        it itself launches has written it: a byproduct of the checked
+        command's own execution, not a precondition. See that constant's
+        module comment for the accepted width and why (E) is the WEAKEST of
+        the five exemptions.
+    """
+    cmd = _strip_heredoc_bodies_for_reachability(cmd)
     try:
         toks = shlex.split(cmd)
     except ValueError:
         toks = cmd.split()
     tokens: list[str] = []
-    skip_next = False
-    for t in toks:
-        if skip_next:
-            skip_next = False
+    i = 0
+    n = len(toks)
+    negated_clause = False  # (B): currently inside an exempt `! test`/`! [` clause
+    command_start = True    # (D): is the next token a command word?
+    prev_bang = False       # (B): previous token was exactly `!` (command-position)
+    awaiting_test_operand = False  # (B): previous token was `test`/`[` as a command
+                                    # word, waiting to see if its FIRST operand is `!`
+    while i < n:
+        raw = toks[i]
+        i += 1
+        stripped = raw.rstrip(_GLUE_CHARS)  # (C)
+        glued = stripped != raw
+
+        if prev_bang:
+            prev_bang = False
+            if stripped in ("test", "["):
+                negated_clause = True
+                command_start = False
+                if glued:
+                    negated_clause = False
+                    command_start = True
+                continue  # `test` / `[` itself is never path-shaped
+
+        if awaiting_test_operand:
+            awaiting_test_operand = False
+            if stripped == "!":
+                negated_clause = True
+                continue  # `!` itself is never path-shaped
+            # first operand wasn't `!` -- not a negated clause; this token
+            # (a flag or a path) falls through to the ordinary checks below
+
+        if stripped == "!":
+            prev_bang = True
             continue
-        if t in ("-c", "-m"):  # program string / module name follows, not a path
-            skip_next = True
+
+        if stripped in _CLOSING_BRACKET:
+            negated_clause = False
+            command_start = True
             continue
-        if t.startswith("-"):
+
+        if stripped in ("-c", "-m"):  # program string / module name follows
+            i += 1
+            command_start = False
+            if glued:
+                negated_clause = False
+                command_start = True
             continue
-        if any(ch.isspace() for ch in t):
-            continue  # a real path token has no whitespace or newline
-        head = t.split("::", 1)[0]  # drop a pytest node-id suffix
-        if not head or head.startswith("/"):
-            continue  # empty or absolute -> out of scope
-        if any(ch in head for ch in "*?[$=") or "://" in head:
-            continue  # glob / variable / option-value / URL -> not a literal path
-        if "/" in head or head.endswith(_PATH_EXTS):
-            tokens.append(head)
+
+        if command_start and not negated_clause:
+            # Neither branch below re-checks `glued` on the command word itself
+            # the way `prev_bang` and `-c`/`-m` above do -- e.g. a literal
+            # `test;` or `grep;` token (glue on the command word, not its
+            # operand) is not a realistic unquoted shell shape, so the
+            # asymmetry is harmless on any input seen so far, but it is an
+            # asymmetry: those two branches assume `glued` cannot fire here.
+            base = stripped.rsplit("/", 1)[-1]
+            if base in _GREP_FAMILY:  # (D)
+                command_start = False
+                found_pattern = False
+                while i < n and not found_pattern:
+                    nxt = toks[i].rstrip(_GLUE_CHARS)
+                    if nxt.startswith("-"):
+                        i += 1
+                        if nxt[-1:] in ("e", "E", "P") and i < n:
+                            i += 1  # this flag's operand is the pattern
+                            found_pattern = True
+                        continue
+                    i += 1  # first non-flag operand is the pattern
+                    found_pattern = True
+                continue
+            if stripped in ("test", "["):  # (B) operand-position negation
+                command_start = False
+                awaiting_test_operand = True
+                continue
+
+        command_start = False
+        if not negated_clause:
+            if not stripped.startswith("-") and not any(ch.isspace() for ch in stripped):
+                head = stripped.split("::", 1)[0]  # drop a pytest node-id suffix
+                if head and not head.startswith("/"):
+                    if not any(ch in head for ch in _REJECT_CHARS) and "://" not in head:
+                        if "/" in head or head.endswith(_PATH_EXTS):
+                            if not any(part in _BUILD_OUTPUT_SEGMENTS
+                                       for part in Path(head).parts):  # (E)
+                                tokens.append(head)
+        if glued:
+            negated_clause = False
+            command_start = True
     return tokens
 
 
