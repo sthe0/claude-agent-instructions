@@ -193,6 +193,33 @@ failing.
 > cycle norm 4 already prices in, but one a mid-round sweep would have avoided
 > paying at all.
 
+**Corollary: exhaust the sweep before spending the round, not after.** Running
+the sweep once and fixing only the finding that blocked the gate is not
+enough — a second pass minutes later, after that first fix, routinely
+surfaces a second stale exact-shape criterion the first pass's own edit did
+not cover (a `done_criterion`/`method` field left describing the pre-round
+shape while `final_check`'s command was already corrected in isolation).
+Each such fix is its own plan edit, and `done_criterion`/`method` changes are
+substantive by the refinement/substantive table (`CLAUDE.md` § Acting
+without asking) regardless of how cosmetic the delta reads, so every
+incremental fix re-opens the full re-approval gate — present-plan, user
+approval, `approve`, `partition` — even moments after the user granted an
+override or a fresh review for the *previous* finding. Run the sweep to
+exhaustion (every `qenum-*` candidate genuinely researched and dispositioned,
+not just the ones blocking the immediate gate) and land every resulting
+correction in **one** edit before requesting the review or override that
+clears the round-budget gate — not in a follow-up edit after.
+
+> **Observed.** Fixing `final_check` 3's merge-base bug and getting a second
+> thinker `pass` on it, then separately discovering and fixing Stage 2's own
+> stale `done_criterion`/`method` fields in a follow-up edit, cost a second
+> full re-approval round-trip for what was, in substance, the same sweep the
+> first round should have completed in one pass. User feedback at the second
+> re-approval prompt, quoted verbatim as the evidence for this norm:
+> <!-- Language exception: direct user quote, kept verbatim as evidence per CLAUDE.md's quote-citation convention -->
+> "Опять перепланирование после приемки задачи. Очень плохо." ("Replanning
+> again after the task was accepted. Very bad.")
+
 ## See also
 
 - [[experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan]]
