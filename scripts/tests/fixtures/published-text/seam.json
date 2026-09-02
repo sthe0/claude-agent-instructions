@@ -1,0 +1,5 @@
+[
+  {"name": "tracker-cli.sh comment", "kind": "bash_verb"},
+  {"name": "tracker-cli.sh attachment-upload", "kind": "bash_verb", "body_shape": "attachment"},
+  {"name": "ya tool mcp connect tracker_mcp --tool UpdateComment", "kind": "bash_verb"}
+]

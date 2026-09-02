@@ -495,6 +495,40 @@ def test_case_table_is_large_enough():
     assert len({name for name, _ in CASES}) == len(CASES), "duplicate case names"
 
 
+def _case(name: str) -> str:
+    return dict(CASES)[name]
+
+
+def test_heredoc_bodies_extracts_quoted_delimiter_body_and_stripper_is_unchanged():
+    """`heredoc_bodies()` shares `_strip_bodies` with `strip_heredoc_bodies`, so
+    adding it must not perturb the stripper's own return value -- checked here
+    directly rather than only inferred from the oracle test above."""
+    raw = _case("heredoc delim quoted")
+    stripped = shell_tokens.strip_heredoc_bodies(raw)
+    assert stripped != raw
+    assert shell_tokens.heredoc_bodies(raw) == [R]
+    assert shell_tokens.strip_heredoc_bodies(raw) == stripped
+
+
+def test_heredoc_bodies_extracts_unquoted_delimiter_body_and_stripper_is_unchanged():
+    raw = _case("genuine heredoc tab form")
+    stripped = shell_tokens.strip_heredoc_bodies(raw)
+    assert stripped != raw
+    assert shell_tokens.heredoc_bodies(raw) == [R]
+    assert shell_tokens.strip_heredoc_bodies(raw) == stripped
+
+
+def test_heredoc_bodies_agrees_with_stripper_on_multi_heredoc_no_op():
+    """Two operators on one line leave a residue that holds more than one
+    statement (clause (v)), so `strip_heredoc_bodies` returns `raw` UNCHANGED --
+    a documented no-op, not a partial strip. `heredoc_bodies()` must reach the
+    same verdict (nothing extracted) rather than silently returning the first
+    body a stripper call would never actually surface."""
+    raw = _case("two heredocs one line")
+    assert shell_tokens.strip_heredoc_bodies(raw) == raw
+    assert shell_tokens.heredoc_bodies(raw) == []
+
+
 @pytest.mark.skipif(not _bash_available(), reason="no bash: oracle has no ground truth")
 def test_body_removal_never_turns_a_real_write_from_deny_into_allow(canon):
     """The differential predicate, over every construction in the table."""

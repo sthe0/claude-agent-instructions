@@ -1,0 +1,72 @@
+[
+  {
+    "label": "shape1-file-valued-flag (recorded occurrence 1)",
+    "command": "bash .claude/skills/tracker/scripts/tracker-cli.sh comment PROJ-467 --text @scripts/tests/fixtures/published-text/reader-facing.md",
+    "expect_kind": "TEXT",
+    "expect_shape": 1,
+    "seam": "fixture"
+  },
+  {
+    "label": "shape2-inline-literal (recorded occurrence 2)",
+    "command": "bash .claude/skills/tracker/scripts/tracker-cli.sh comment PROJ-467 --text \"raw pasted bytes, not reader-facing prose\"",
+    "expect_kind": "TEXT",
+    "expect_shape": 2,
+    "seam": "fixture"
+  },
+  {
+    "label": "shape3-heredoc-in-command-substitution (recorded occurrence 3)",
+    "command": "gh issue comment 125 --repo sthe0/claude-agent-instructions --body \"$(cat <<'EOF'\nHello reviewer, thanks for the round.\nEOF\n)\"",
+    "expect_kind": "TEXT",
+    "expect_shape": 3
+  },
+  {
+    "label": "core-gh-pr-create-body-file (new Core shape)",
+    "command": "gh pr create --title \"Fix\" --body-file scripts/tests/fixtures/published-text/reader-facing.md",
+    "expect_kind": "TEXT",
+    "expect_shape": 1
+  },
+  {
+    "label": "shape4-same-command-var-assignment (recorded occurrence 4)",
+    "command": "TEXT6=$(cat scripts/tests/fixtures/published-text/reader-facing.md); ya tool mcp connect tracker_mcp --tool UpdateComment issue_key:PROJ-467 comment_id:42 \"text:$TEXT6\"",
+    "expect_kind": "TEXT",
+    "expect_shape": 4,
+    "seam": "fixture"
+  },
+  {
+    "label": "shape6-inline-path-read-cat-form (modelled, not recorded)",
+    "command": "gh issue comment 125 --repo sthe0/claude-agent-instructions --body \"$(cat scripts/tests/fixtures/published-text/reader-facing.md)\"",
+    "expect_kind": "TEXT",
+    "expect_shape": 6,
+    "modelled_not_recorded": true
+  },
+  {
+    "label": "shape6-inline-path-read-lt-form (modelled, not recorded)",
+    "command": "gh pr comment 42 --repo sthe0/claude-agent-instructions --body \"$(< scripts/tests/fixtures/published-text/reader-facing.md)\"",
+    "expect_kind": "TEXT",
+    "expect_shape": 6,
+    "modelled_not_recorded": true
+  },
+  {
+    "label": "shape5-attachment-operand (recorded occurrence 5)",
+    "command": "bash .claude/skills/tracker/scripts/tracker-cli.sh attachment-upload PROJ-467 scripts/tests/fixtures/published-text/artifact-dump.md",
+    "expect_kind": "ATTACHMENT",
+    "expect_shape": 5,
+    "seam": "fixture"
+  },
+  {
+    "label": "genuinely-unresolvable-substitution",
+    "command": "gh issue comment 125 --repo sthe0/claude-agent-instructions --body \"$(some-generator arg)\"",
+    "expect_kind": "UNRESOLVED"
+  },
+  {
+    "label": "missing-target-file-valued-command",
+    "command": "gh issue comment 999 --repo sthe0/claude-agent-instructions --body-file scripts/tests/fixtures/published-text/does-not-exist.md",
+    "expect_kind": "UNRESOLVED",
+    "expect_shape": 1
+  },
+  {
+    "label": "non-publication-bash-command",
+    "command": "git status --short",
+    "expect_kind": "NOT_A_PUBLICATION"
+  }
+]

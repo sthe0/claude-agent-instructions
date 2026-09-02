@@ -259,10 +259,15 @@ def _body_inert(delimiter_quoted: bool, text: str) -> bool:
     return delimiter_quoted or not any(ch in text for ch in _EXPANSION_TRIGGERS)
 
 
-def _strip_bodies(command: str) -> str:
+def _strip_bodies(command: str, collect: list[str] | None = None) -> str:
     """Remove the first here-document body / here-string operand, or return
     `command` unchanged on any doubt. Fail-closed is the safe direction here: the
-    caller then sees MORE text than the shell would, never less."""
+    caller then sees MORE text than the shell would, never less.
+
+    When `collect` is given, the exact body text of every operand this pass
+    actually strips is appended to it, in order -- this is the sole seam
+    `heredoc_bodies()` uses to share this function's recognizer rather than
+    re-deriving it."""
     out = []
     i = 0
     n = len(command)
@@ -305,7 +310,8 @@ def _strip_bodies(command: str) -> str:
                     k = command.find(operand_quote, j + 1)
                     if k == -1:
                         return command
-                    if not _body_inert(operand_quote == "'", command[j + 1:k]):
+                    body_text = command[j + 1:k]
+                    if not _body_inert(operand_quote == "'", body_text):
                         return command
                     j = k + 1
                     if j < n and command[j] not in _WORD_END:
@@ -314,8 +320,11 @@ def _strip_bodies(command: str) -> str:
                     start = j
                     while j < n and command[j] not in _WORD_END:
                         j += 1
-                    if not _body_inert(False, command[start:j]):
+                    body_text = command[start:j]
+                    if not _body_inert(False, body_text):
                         return command
+                if collect is not None:
+                    collect.append(body_text)
                 out.append(" ")
                 i = j
                 continue
@@ -350,8 +359,11 @@ def _strip_bodies(command: str) -> str:
                         break
                 if terminator is None:
                     return command
-                if not _body_inert(delimiter_quoted, "\n".join(lines[1:terminator])):
+                body_text = "\n".join(lines[1:terminator])
+                if not _body_inert(delimiter_quoted, body_text):
                     return command
+                if collect is not None:
+                    collect.append(body_text)
                 out.append(lines[0])
                 out.append("\n" + "\n".join(lines[terminator + 1:]))
                 return "".join(out)
@@ -375,3 +387,24 @@ def strip_heredoc_bodies(command: str) -> str:
     if residue != command and _holds_multiple_statements(residue):
         return command
     return residue
+
+
+def heredoc_bodies(command: str) -> list[str]:
+    """Every here-document body / here-string operand `strip_heredoc_bodies`
+    would remove from `command`, in extraction order -- or `[]` when `command`
+    falls outside the recognized shape, or when nothing is actually stripped.
+
+    Shares `_strip_bodies`'s recognizer and abort conditions exactly (same
+    function, same call), so this extractor and the stripper can never
+    disagree about which bytes are body text. A caller that needs the BYTES
+    (rather than merely needing them gone) uses this instead of re-deriving
+    the recognizer against `strip_heredoc_bodies`'s return value."""
+    if not _recognized(command):
+        return []
+    collected: list[str] = []
+    residue = _strip_bodies(command, collected)
+    if residue == command:
+        return []
+    if _holds_multiple_statements(residue):
+        return []
+    return collected
