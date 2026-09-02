@@ -2931,7 +2931,13 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
                 _fold_pres_doc = load_plan(state.plan_path)
                 if _fold_enumeration_sidecar(state, _fold_pres_doc, state.plan_path):
                     store.save(state)
-            except Exception:
+            except (OSError, PlanError):
+                # The same load-plan failure modes every other `load_plan` call site
+                # in this file narrows to (a malformed plan, or a TOCTOU race on the
+                # plan file underneath this exact race window) — swallowed here
+                # because it surfaces moments later via the coverage_block check
+                # below, which also loads the plan. Anything else is a bug in the
+                # fold itself and must not be hidden behind it.
                 pass
         # The scope-coverage block must be IN the essence — checked the same
         # mechanical way the `full` branch above checks stage anchors (containment

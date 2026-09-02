@@ -29,6 +29,7 @@ the CLI layer. This plugin is `scope='task'`, retired only at the task boundary.
 from __future__ import annotations
 
 import os
+import time
 
 from . import advisor, gates, plan, premise
 from .plugins import Plugin, PluginDirective, register
@@ -247,16 +248,52 @@ def enumeration_run_scope(bag, doc) -> tuple[bool, set[int]]:
     return True, set(plan.plan_stage_digests(doc))
 
 
+def _enumeration_in_flight(bag) -> bool:
+    """Whether a background enumeration launch is outstanding right now: armed (a
+    launch actually went out), not yet landed, and still inside its deadline. This
+    is the disclosure half of #60's residual gap — cmd_approve's escape-deadline
+    logic already blocks correctly on this exact window (_ENUMERATE_NOT_RUN /
+    _ENUMERATE_STALE), so nothing here changes what `approve` allows; the gap was
+    that a reader of the presented essence had no signal a background pass could
+    still add premise questions before approval is reachable.
+
+    Deliberately silent on a launch whose deadline has already elapsed: that
+    window is `enumeration_not_landed`'s to name (via
+    `question-enumerate-escape`), not this disclosure line's — conflating the two
+    would claim a pass is "in flight" for one that has, in fact, gone missing."""
+    launch = int(bag.get("enumerate_launch") or 0)
+    if launch <= 0 or bag.get("enumerated"):
+        return False
+    deadline = bag.get("enumerate_deadline")
+    if deadline is None:
+        return False
+    return time.time() < float(deadline)
+
+
+def _enumeration_in_flight_line(bag) -> str:
+    launch = int(bag.get("enumerate_launch") or 0)
+    return (
+        f"- enumeration in flight: background cross-check (launch {launch}) has "
+        "not landed yet — approving now may miss questions it would still raise; "
+        "wait for it to land, or run `agentctl question-enumerate` to run it "
+        "synchronously"
+    )
+
+
 def coverage_block(state, bag, *, doc=None) -> str | None:
     """The scope-coverage block the presented essence must carry — the plan's stage
-    count, what it does with each element of the order, and every LIVE risk
-    acceptance discharging a `revise` concern — or None when no plan is submitted yet
+    count, what it does with each element of the order, every LIVE risk
+    acceptance discharging a `revise` concern, and (when one is outstanding) the
+    in-flight-enumeration disclosure line — or None when no plan is submitted yet
     (nothing to size, nothing to cover). `doc` is an already-loaded PlanDoc when the
     caller has one (premise_blockers does), so the block is derived from the same
-    bytes its other checks used. premise.render_coverage_block is the single
-    generator; this only supplies its inputs, including staleness-filtering the
-    acceptances via gates._risk_acceptance_stale (premise.py cannot do this itself —
-    it has no access to gates/state/plan)."""
+    bytes its other checks used. premise.render_coverage_block generates the
+    scope/order/risk lines; the in-flight line is appended here because it reads
+    bag fields (enumerate_launch/enumerated/enumerate_deadline) render_coverage_block
+    has no access to — same division of labour as the risk-staleness filtering
+    below (premise.py cannot do this itself — it has no access to gates/state/plan).
+    Appended the same way coverage_block_missing_lines already picks up every other
+    line: mechanical containment of engine-generated text, never a semantic read."""
     plan_path = getattr(state, "plan_path", None)
     if not plan_path:
         return None
@@ -269,7 +306,10 @@ def coverage_block(state, bag, *, doc=None) -> str | None:
         for ra in getattr(state, "risk_acceptances", [])
         if not gates._risk_acceptance_stale(ra, doc)
     ]
-    return premise.render_coverage_block(elements, len(doc.stages), accepted_risks=accepted_risks)
+    block = premise.render_coverage_block(elements, len(doc.stages), accepted_risks=accepted_risks)
+    if _enumeration_in_flight(bag):
+        block += "\n" + _enumeration_in_flight_line(bag)
+    return block
 
 
 def coverage_block_missing_lines(block: str, rendering_text: str) -> list[str]:

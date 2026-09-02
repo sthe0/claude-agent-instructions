@@ -17,6 +17,7 @@ Proves three things the ledger plugin's `resolution` arm has no analogue for:
 """
 from __future__ import annotations
 
+import time
 from argparse import Namespace
 
 import pytest
@@ -443,3 +444,93 @@ def test_staleness_cleared_after_escape_recorded(fixtures_dir, store):
     blockers = plugins.plugin_gate_blockers(state2, "plan_approval")
     assert not any("enumeration round budget" in b for b in blockers), blockers
     assert not any(pp._ENUMERATE_STALE in b for b in blockers), blockers
+
+
+# --- #60 residual: disclose an in-flight enumeration in the essence coverage block
+
+def _armed_bag(plan_path, **overrides):
+    state = _new_state(plan_path=plan_path)
+    plugins.activate(state, "premise")
+    _cover_the_order(state)
+    bag = state.plugins["premise"]
+    bag.update(overrides)
+    return state, bag
+
+
+def test_enumeration_in_flight_false_with_no_launch(fixtures_dir):
+    plan_path = str(fixtures_dir / "plan_two_stage.toml")
+    _, bag = _armed_bag(plan_path)
+    assert pp._enumeration_in_flight(bag) is False
+
+
+def test_enumeration_in_flight_true_while_outstanding(fixtures_dir):
+    plan_path = str(fixtures_dir / "plan_two_stage.toml")
+    _, bag = _armed_bag(
+        plan_path, enumerate_launch=1, enumerated=False,
+        enumerate_deadline=time.time() + 100,
+    )
+    assert pp._enumeration_in_flight(bag) is True
+
+
+def test_enumeration_in_flight_false_once_landed(fixtures_dir):
+    """A launch is on record, but the pass already landed — no window is open."""
+    plan_path = str(fixtures_dir / "plan_two_stage.toml")
+    _, bag = _armed_bag(
+        plan_path, enumerate_launch=1, enumerated=True,
+        enumerate_deadline=time.time() + 100,
+    )
+    assert pp._enumeration_in_flight(bag) is False
+
+
+def test_enumeration_in_flight_false_past_deadline(fixtures_dir):
+    """The deadline elapsed with nothing landed — that is `enumeration_not_landed`'s
+    window to name via the escape, not this disclosure line's; claiming "in flight"
+    for a launch that has gone missing would misstate what is actually happening."""
+    plan_path = str(fixtures_dir / "plan_two_stage.toml")
+    _, bag = _armed_bag(
+        plan_path, enumerate_launch=1, enumerated=False,
+        enumerate_deadline=time.time() - 1,
+    )
+    assert pp._enumeration_in_flight(bag) is False
+
+
+def test_enumeration_in_flight_false_with_no_deadline_stamped():
+    """A bag minted before enumerate_deadline existed reads as not-in-flight, never
+    raises on the None -> float comparison."""
+    assert pp._enumeration_in_flight({"enumerate_launch": 1, "enumerated": False,
+                                      "enumerate_deadline": None}) is False
+
+
+def test_coverage_block_omits_the_line_with_no_launch_outstanding(fixtures_dir):
+    plan_path = str(fixtures_dir / "plan_two_stage.toml")
+    state, bag = _armed_bag(plan_path)
+    block = pp.coverage_block(state, bag)
+    assert "enumeration in flight" not in block
+
+
+def test_coverage_block_carries_the_line_while_a_launch_is_outstanding(fixtures_dir):
+    plan_path = str(fixtures_dir / "plan_two_stage.toml")
+    state, bag = _armed_bag(
+        plan_path, enumerate_launch=2, enumerated=False,
+        enumerate_deadline=time.time() + 100,
+    )
+    block = pp.coverage_block(state, bag)
+    [line] = [ln for ln in block.splitlines() if "enumeration in flight" in ln]
+    assert "launch 2" in line
+    assert "question-enumerate" in line
+
+
+def test_coverage_block_missing_lines_picks_up_the_in_flight_line(fixtures_dir):
+    """The same mechanical containment check every other coverage-block line rides:
+    an essence presented BEFORE the launch went out no longer carries the line, so
+    the gate must name it missing — proving the new line is wired into the existing
+    #60 essence-must-carry-the-block mechanism, not a parallel one."""
+    plan_path = str(fixtures_dir / "plan_two_stage.toml")
+    state, bag = _armed_bag(plan_path)
+    rendering = pp.coverage_block(state, bag)  # presented before the launch
+
+    bag["enumerate_launch"] = 1
+    bag["enumerate_deadline"] = time.time() + 100
+    live_block = pp.coverage_block(state, bag)
+    missing = pp.coverage_block_missing_lines(live_block, rendering)
+    assert any("enumeration in flight" in m for m in missing)
