@@ -65,6 +65,8 @@ For ticket-driven work the **ticket is the single source of truth for the resolv
 
 ## How to publish
 
+Every publication that travels as a shell command is gated on a preceding tech-writer pass — see [published-text-writer-gate.md](../../memory-global/leaves/published-text-writer-gate.md) — so route reader-facing text through `tech-writer` before posting rather than typing it directly into a publish call.
+
 In priority order:
 
 1. **A local / project-wired tracker skill** — a CLI-backed skill (in the session skill list, or symlinked under `<project_cwd>/.claude/skills/`) that can read *and write* and carries its own write-scoped auth (token auto-fetch, kerberos). **Prefer this for any write.** Enumerate with `ls <project_cwd>/.claude/skills/` and scan the session skill list; do not assume your shell `$*_TOKEN` env vars have write scope.
