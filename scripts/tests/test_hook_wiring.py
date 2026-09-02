@@ -913,10 +913,31 @@ def test_each_hooks_budget_covers_the_calls_it_declares():
     7.46) left less than the outage judge's own 20s floor, so the third judge
     was dropped on every turn that reached it — recorded in `judges_skipped`, but
     the budget itself never said it was too small. K = 1 hooks are checked too;
-    there the rule degenerates to one floor plus headroom."""
+    there the rule degenerates to one floor plus headroom.
+
+    hook-published-text-writer-gate.py is the first UNMEASURED-sequence row
+    this test has seen: its one call (published_attachment) has n=0, so
+    `required_budget_s` cannot compute a p90 floor for it (`call_floor_s`
+    raises KeyError on an unmeasured row) — the rule for such a hook is
+    instead `minimum >= LAST_RESORT_CEILING_S + SIZE_HEADROOM_S` (41 + 1 =
+    42s), which this hook's declared 45s budget satisfies. That rule is
+    STRICTER than the measured-row rule it replaces: a measured K = 1 hook
+    only needs to clear its own judge's p90 floor, typically well under the
+    last-resort ceiling (the worst latency observed on ANY judge on this
+    model) — see judge_latency.call_floor_s vs .last_resort_ceiling_s."""
     from lib import judge_latency
 
     for name, minimum, _why in hook_wiring.TIMEOUT_REQUIREMENTS:
+        sequence = judge_latency.HOOK_CALL_SEQUENCE[name]
+        if any(not judge_latency.row(j).measured for j in sequence):
+            needed = judge_latency.LAST_RESORT_CEILING_S + judge_latency.SIZE_HEADROOM_S
+            assert minimum >= needed, (
+                f"{name}'s {minimum}s budget cannot cover its unmeasured "
+                f"call(s) {sequence} — it needs at least {needed}s "
+                f"(LAST_RESORT_CEILING_S + SIZE_HEADROOM_S, since no "
+                f"per-judge floor exists to size against)"
+            )
+            continue
         needed = judge_latency.required_budget_s(name)
         assert minimum >= needed, (
             f"{name}'s {minimum}s budget cannot fund the "

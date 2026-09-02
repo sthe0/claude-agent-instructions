@@ -553,6 +553,56 @@ class TestJudgeBinaryAsk:
         assert advisor.judge_binary_ask("**Готово.**", _raising_runner)[0] is False
 
 
+class TestJudgePublishedAttachment:
+    def test_yes(self):
+        result = advisor.judge_published_attachment(
+            "notes.md", "Hey team, here is a summary of what we decided today.",
+            _fake_runner("YES"),
+        )
+        assert result == (True, "")
+
+    def test_no(self):
+        result = advisor.judge_published_attachment(
+            "run.log", "2026-09-02T10:00:00Z INFO starting worker\n", _fake_runner("NO"),
+        )
+        assert result == (False, "")
+
+    def test_raising_runner_fails_open(self):
+        result = advisor.judge_published_attachment("notes.md", "some prose", _raising_runner)
+        assert result[0] is False and result[1]
+
+    def test_disabled_fails_open(self):
+        result = advisor.judge_published_attachment(
+            "notes.md", "some prose", _fake_runner("YES"), enabled=False,
+        )
+        assert result[0] is False and result[1]
+
+    def test_no_runner_fails_open(self):
+        result = advisor.judge_published_attachment("notes.md", "some prose", None)
+        assert result[0] is False and result[1]
+
+    def test_no_content_fails_open_without_calling_runner(self):
+        result = advisor.judge_published_attachment("notes.md", "", _raising_runner)
+        assert result[0] is False and result[1]
+
+    def test_timeout_expired_fails_open(self):
+        def timing_out_runner(argv, **kwargs):
+            raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout", 0))
+
+        result = advisor.judge_published_attachment("notes.md", "some prose", timing_out_runner)
+        assert result[0] is False and result[1]
+
+    def test_argv_carries_judge_model(self):
+        seen = {}
+
+        def recording_runner(argv, **kwargs):
+            seen["argv"] = argv
+            return RunResult(0, stdout="NO", stderr="")
+
+        advisor.judge_published_attachment("notes.md", "some prose", recording_runner)
+        assert seen["argv"][:4] == ["claude", "-p", "--model", "haiku"]
+
+
 class TestJudgeFeedbackSignal:
     def test_yes(self):
         assert advisor.judge_feedback_signal("you shouldn't have done that", _fake_runner("YES"))[0] is True
@@ -783,6 +833,7 @@ class TestJudgeLandingDisciplineAsk:
 # hook's constant) is a NAMING defect, visible in the source and nowhere else.
 _JUDGE_TIMEOUT_CONSTANTS = {
     "judge_binary_ask": "_BINARY_ASK_TIMEOUT_S",
+    "judge_published_attachment": "_PUBLISHED_ATTACHMENT_TIMEOUT_S",
     "judge_feedback_signal": "_BINARY_ASK_TIMEOUT_S",
     "judge_outage_escalation": "_BINARY_ASK_TIMEOUT_S",
     "judge_deferring_disposition": "_DEFERRING_DISPOSITION_TIMEOUT_S",

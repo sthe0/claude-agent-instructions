@@ -213,6 +213,11 @@ MEASURED: "dict[str, dict[str, Row]]" = {
             n=0, min_s=None, median_s=None, p90_s=None, max_s=None,
             provenance=(), note=UNMEASURED_NOTE,
         ),
+        "published_attachment": Row(
+            judge="published_attachment",
+            n=0, min_s=None, median_s=None, p90_s=None, max_s=None,
+            provenance=(), note=UNMEASURED_NOTE,
+        ),
     },
 }
 
@@ -293,6 +298,7 @@ HOOK_CALL_SEQUENCE: "dict[str, tuple[str, ...]]" = {
     "hook-turn-end-gate.py": ("feedback_signal", "binary_ask", "outage_escalation"),
     "hook-plan-delivery-gate.py": ("approval_ask",),
     "hook-resolution-reminder.py": ("landing_discipline",),
+    "hook-published-text-writer-gate.py": ("published_attachment",),
 }
 
 # Head-room the whole-invocation budget must keep beyond the calls it plans, for

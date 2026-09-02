@@ -1,7 +1,8 @@
-"""Append-only execution ledger for the five judge-calling hooks (hook-
+"""Append-only execution ledger for the six judge-calling hooks (hook-
 escalation-diagnosis-gate.py, hook-deferring-disposition-gate.py, hook-turn-
-end-gate.py, hook-plan-delivery-gate.py, hook-resolution-reminder.py), all
-funneled through agentctl.advisor.subprocess_runner.
+end-gate.py, hook-plan-delivery-gate.py, hook-resolution-reminder.py,
+hook-published-text-writer-gate.py), all funneled through
+agentctl.advisor.subprocess_runner.
 
 Difficulty removed: a judge call that fails open is, by construction,
 invisible on every existing observable — the hook still exits 0, the harness
@@ -63,13 +64,13 @@ _lock = threading.Lock()
 _state: dict = {"invocation_id": None, "source": None, "hook": None, "judge": None}
 
 # The ``hook`` field carries the SHORT name each hook passes to hook_start(),
-# while every other table that reasons about these same five hooks
+# while every other table that reasons about these same six hooks
 # (lib/judge_latency.HOOK_CALL_SEQUENCE, lib/hook_wiring.TIMEOUT_REQUIREMENTS)
 # is keyed by script basename. A reader that has to cross from one keying to
 # the other needs the translation, and this module owns the ``hook``
 # vocabulary, so the translation lives here once instead of as an inline copy
 # inside each reader. tests/test_dispatch_witness.py asserts the key set still
-# equals HOOK_CALL_SEQUENCE's, so a sixth judge-calling hook cannot be added
+# equals HOOK_CALL_SEQUENCE's, so a seventh judge-calling hook cannot be added
 # to one table and forgotten in the other.
 HOOK_NAME_BY_BASENAME: "dict[str, str]" = {
     "hook-escalation-diagnosis-gate.py": "escalation_diagnosis",
@@ -77,6 +78,7 @@ HOOK_NAME_BY_BASENAME: "dict[str, str]" = {
     "hook-turn-end-gate.py": "turn_end",
     "hook-plan-delivery-gate.py": "plan_delivery",
     "hook-resolution-reminder.py": "landing_discipline",
+    "hook-published-text-writer-gate.py": "published_text_writer",
 }
 
 

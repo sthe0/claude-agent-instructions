@@ -166,6 +166,15 @@ DESIRED = [
     # stay deterministic. Fail-open otherwise.
     ("PreToolUse",       "Edit|Write", "hook-guard-canon-readonly.py", 5),
     ("PreToolUse",       "Bash",  "hook-guard-canon-readonly.py", 5),
+    # Hard gate: deny a Bash publication call (gh/tracker-cli.sh comment, PR
+    # create, issue edit, or a machine-local seam verb) whose text body has no
+    # tech-writer witness bound to it in the transcript -- see
+    # scripts/hook-published-text-writer-gate.py's module docstring.
+    # 45 = this hook's own _PUBLISHED_TEXT_JUDGE_BUDGET_S, at or above
+    # judge_latency.LAST_RESORT_CEILING_S(41) + SIZE_HEADROOM_S(1) = 42 since
+    # the published_attachment judge is UNMEASURED (n=0) and has no per-judge
+    # floor to size a tighter budget against.
+    ("PreToolUse",       "Bash",  "hook-published-text-writer-gate.py", 45),
     ("PostToolUse",      "Write", "hook-self-critique-reminder.py",  5),
     # Nudge when an AskUserQuestion answer is free text rather than an offered
     # option label: a correction delivered this way bypasses the

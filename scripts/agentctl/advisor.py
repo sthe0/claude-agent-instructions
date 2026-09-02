@@ -652,6 +652,102 @@ def judge_binary_ask(
         judge_ledger.set_current_judge(None)
 
 
+# LAST-RESORT default, HARDCODED rather than imported: lib/judge_latency.py
+# already imports this module (`from agentctl import advisor`), so a reverse
+# import of judge_latency.LAST_RESORT_CEILING_S here would be circular. Kept
+# equal to that computed value by
+# test_the_last_resort_defaults_are_computed_from_the_measurements, exactly
+# like _BINARY_ASK_TIMEOUT_S / _ACCEPTANCE_JUDGE_TIMEOUT_S above -- this judge
+# has no measured latency row of its own (lib/judge_latency.py's MEASURED
+# table carries "published_attachment" as n=0/UNMEASURED_NOTE), so the family
+# ceiling is the only number available to it.
+_PUBLISHED_ATTACHMENT_TIMEOUT_S = 41
+
+_PUBLISHED_ATTACHMENT_JUDGE_PROMPT = (
+    "You are given the NAME and a leading CONTENT EXCERPT of a file about to be "
+    "uploaded as an ATTACHMENT to a ticket/issue/PR, rather than posted as the "
+    "comment body text itself. Decide whether this file is actually "
+    "READER-FACING PROSE -- a comment, summary, or explanation meant for a "
+    "human reader -- smuggled past a comment-body gate as a file, as opposed "
+    "to a genuine machine ARTIFACT (a log, a diff/patch, test output, a data "
+    "dump, a screenshot, a generated report) that legitimately belongs as an "
+    "attachment.\n\n"
+    "Answer YES only when the excerpt reads as prose written for a human to "
+    "read as the substance of the comment/PR itself. Answer NO for logs, "
+    "diffs, structured data, machine-generated output, or any other genuine "
+    "artifact -- even one with some English commentary embedded (a log's "
+    "header line, a report's title).\n\n"
+    "Answer on the FIRST line with exactly YES or NO, nothing else.\n\n"
+    "NAME: {name}\n\nCONTENT EXCERPT:\n{excerpt}"
+)
+
+
+def judge_published_attachment(
+    name: str,
+    content_excerpt: str,
+    runner,
+    *,
+    enabled: bool = True,
+    timeout: int = _PUBLISHED_ATTACHMENT_TIMEOUT_S,
+    remaining: float | None = None,
+    ceiling: float | None = None,
+    runtime_host: str = HOST_CLAUDE,
+) -> tuple[bool, str]:
+    """Ships UNMEASURED and fail-open, by design: this is the one place the
+    published-text writer gate (hook-published-text-writer-gate.py) asks a
+    model a question, rather than reading shell-command SHAPE the way
+    lib.published_body / lib.writer_pass do -- "is this file's content
+    actually reader-facing prose" is a MEANING question no structural read can
+    answer, unlike "which shape is this publication call" or "did a witness
+    precede these bytes". The hook calls this only AFTER its own
+    content-shaped parse prefilter has already failed to read the file as a
+    recognized artifact shape -- this judge exists for the residue the
+    prefilter cannot classify, not as a replacement for it.
+
+    Three-valued fail-open contract mirroring judge_binary_ask: returns
+    (verdict, reason) where ``reason`` is "" for a genuine model verdict and a
+    non-empty "...(fail-open)" string on every path where the False is
+    FABRICATED rather than judged. verdict=True means "this reads as
+    reader-facing prose, DENY the attachment"; verdict=False, real or
+    fail-open alike, means ALLOW -- so an unavailable/timed-out/errored judge
+    can only WIDEN what passes, never deny an attachment it never actually
+    looked at.
+
+    ``remaining``/``ceiling`` are forwarded to the ledger only, exactly as in
+    judge_binary_ask."""
+    if not enabled:
+        return _judge_unavailable(
+            "published_attachment", _KILLSWITCH_REASON, stage="killswitch",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    if not content_excerpt:
+        return _judge_unavailable(
+            "published_attachment", _NO_TEXT_REASON, stage="no_text",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    if runner is None:
+        return _judge_unavailable(
+            "published_attachment", _NO_RUNNER_REASON, stage="no_runner",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    judge_ledger.set_current_judge("published_attachment")
+    start = time.monotonic()
+    try:
+        prompt = _PUBLISHED_ATTACHMENT_JUDGE_PROMPT.format(name=name, excerpt=content_excerpt)
+        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY, prompt), timeout=timeout)
+        return _record_result(
+            "published_attachment", result, duration=time.monotonic() - start,
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    except Exception:
+        return _record_raised(
+            "published_attachment", duration=time.monotonic() - start,
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    finally:
+        judge_ledger.set_current_judge(None)
+
+
 _FEEDBACK_JUDGE_PROMPT = (
     "You are given a user's message to an AI coding assistant, written in any "
     "language. Decide whether this message carries AGENT-BEHAVIOR FEEDBACK -- a "

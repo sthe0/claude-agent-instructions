@@ -1189,6 +1189,54 @@ disposition = "keep"
 ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
 
 [[entry]]
+id = "ee8307a8ff4191a7"
+domain = "code"
+file = "scripts/hook-published-text-writer-gate.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+
+[[entry]]
+id = "ecc3a6f1fcc2aa64"
+domain = "code"
+file = "scripts/hook-published-text-writer-gate.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+
+[[entry]]
+id = "7dfcb7078d732f27"
+domain = "code"
+file = "scripts/hook-published-text-writer-gate.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+
+[[entry]]
+id = "f0dc823c7a332ef4"
+domain = "code"
+file = "scripts/hook-published-text-writer-gate.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+
+[[entry]]
+id = "a0ce40334c52b3b1"
+domain = "code"
+file = "scripts/hook-published-text-writer-gate.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+
+[[entry]]
+id = "dd45eb8cef7a1481"
+domain = "code"
+file = "scripts/hook-published-text-writer-gate.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+
+[[entry]]
 id = "961186da808f1161"
 domain = "code"
 file = "scripts/hook-push-confirmation-reminder.py"
@@ -4600,6 +4648,158 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "3dce04048c40019f"
 domain = "code"
 file = "scripts/tests/test_hook_import_blindness.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "b1b271fe683a88cb"
+domain = "code"
+file = "scripts/tests/test_hook_published_text_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "b9c688e939b954fd"
+domain = "code"
+file = "scripts/tests/test_hook_published_text_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "5f44be7609fea149"
+domain = "code"
+file = "scripts/tests/test_hook_published_text_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "bee9afe3e73d2fc7"
+domain = "code"
+file = "scripts/tests/test_hook_published_text_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "77ad147357ca5bfb"
+domain = "code"
+file = "scripts/tests/test_hook_published_text_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "b98f516427ddbd34"
+domain = "code"
+file = "scripts/tests/test_hook_published_text_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "004f316a0488f001"
+domain = "code"
+file = "scripts/tests/test_hook_published_text_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "8d2776c3f5ed1fb9"
+domain = "code"
+file = "scripts/tests/test_hook_published_text_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "5785f816c6fc3bd2"
+domain = "code"
+file = "scripts/tests/test_hook_published_text_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "671e5348725b151f"
+domain = "code"
+file = "scripts/tests/test_hook_published_text_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "3e98d242f117876c"
+domain = "code"
+file = "scripts/tests/test_hook_published_text_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "d85d563355b27156"
+domain = "code"
+file = "scripts/tests/test_hook_published_text_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "2a297257cc60d23e"
+domain = "code"
+file = "scripts/tests/test_hook_published_text_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "41921bdf7d349340"
+domain = "code"
+file = "scripts/tests/test_hook_published_text_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "f6b1cc479247680c"
+domain = "code"
+file = "scripts/tests/test_hook_published_text_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "1210b16bd0ba7e32"
+domain = "code"
+file = "scripts/tests/test_hook_published_text_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "18677fb52b2f2c2c"
+domain = "code"
+file = "scripts/tests/test_hook_published_text_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "f9c33e8c20c0d9cc"
+domain = "code"
+file = "scripts/tests/test_hook_published_text_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "434d2d17c256f297"
+domain = "code"
+file = "scripts/tests/test_hook_published_text_gate.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
@@ -9365,6 +9565,14 @@ disposition = "keep"
 ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "99f435ad70130836"
+domain = "code_file_rollup"
+file = "scripts/hook-published-text-writer-gate.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "6ab5df2d84bf30a4"
 domain = "code_file_rollup"
 file = "scripts/hook-push-confirmation-reminder.py"
@@ -10096,6 +10304,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "e1e8ec80d98e6685"
 domain = "code_file_rollup"
 file = "scripts/tests/test_hook_import_blindness.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "357c86a63ee87d24"
+domain = "code_file_rollup"
+file = "scripts/tests/test_hook_published_text_gate.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"

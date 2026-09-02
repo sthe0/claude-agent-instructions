@@ -91,6 +91,7 @@ scripts/agentctl/advisor.py:691:d539ad2f  # quotes the superseded n=4 note ("13.
 scripts/agentctl/advisor.py:692:1d9f44a3  # same superseded note; "missed the tail by more than 20 s" = max 39.99 - 17.5
 scripts/agentctl/advisor.py:693:011dc63b  # median 17.43 / p90 37.58 / max 39.99 over n=18 = judge_latency.MEASURED["deferring_disposition"]
 scripts/agentctl/advisor.py:697:c43835c3  # 53.42s = outage_escalation's re-sampled max, the value last_resort_ceiling_s() computes over (currently the family-wide slowest row, so it — not deferring_disposition's own tail — sets the shared last-resort ceiling)
+scripts/agentctl/advisor.py:662:fe253a10  # n=0 = judge_latency.MEASURED["published_attachment"]'s UNMEASURED_NOTE row -- this judge has never been measured, so _PUBLISHED_ATTACHMENT_TIMEOUT_S falls back to the family LAST_RESORT_CEILING_S(41) instead of a per-judge p90
 
 # --- scripts/install-reminder-hooks.sh ---------------------------------------
 scripts/install-reminder-hooks.sh:80:486f9f77  # 8 s = hook-effort-divergence-watch.py's own CHECK_TIMEOUT_S, the declared subprocess bound the 10 s registration must not pre-empt; a chosen constant, not a measurement — this hook runs no judge, it drives the read-only `agentctl effort-check`
@@ -100,6 +101,7 @@ scripts/install-reminder-hooks.sh:111:4d3f1fb8  # 21s = judge_latency.call_ceili
 scripts/install-reminder-hooks.sh:112:9e47f121  # 30s = _APPROVAL_ASK_JUDGE_BUDGET_S, the hook's own new whole-invocation budget this registration is sized off
 scripts/install-reminder-hooks.sh:121:8575c0c4  # 55s/n=48 = judge_latency.call_ceiling_s("outage_escalation") over the re-sampled row, the value this 65s registration is sized above
 scripts/install-reminder-hooks.sh:130:2d2694e5  # quotes the superseded n=4 note ("11.6-13.5s") against the current deferring row (median 17.43, p90 37.58)
+scripts/install-reminder-hooks.sh:175:9bfd303b  # 45 = hook-published-text-writer-gate.py's own _PUBLISHED_TEXT_JUDGE_BUDGET_S; 41 = judge_latency.LAST_RESORT_CEILING_S; 1 = SIZE_HEADROOM_S; n=0 = judge_latency.MEASURED["published_attachment"]'s UNMEASURED_NOTE row, the reason there is no per-judge floor to size a tighter budget against
 
 # --- scripts/lib/hook_wiring.py ----------------------------------------------
 scripts/lib/hook_wiring.py:149:171f9b60  # historical: a 5s registration, the wiring defect this axis exists to catch
@@ -111,6 +113,7 @@ scripts/lib/hook_wiring.py:197:13ce4bee  # K = 1 is the declared call count of t
 scripts/lib/hook_wiring.py:169:7c67ab7c  # 30s = _APPROVAL_ASK_JUDGE_BUDGET_S, the hook's own whole-invocation judge budget, mirroring the sibling rows above (supersedes the 13s tie removed once the equality assertion was dropped)
 scripts/lib/hook_wiring.py:620:56471431  # historical: the 5s registration used as the example of a slow-judge hook the report must surface
 scripts/lib/hook_wiring.py:171:7174ba0b  # 22s = hook-resolution-reminder.py's own _LANDING_DISCIPLINE_JUDGE_BUDGET_S, mirroring the sibling single-judge rows above
+scripts/lib/hook_wiring.py:180:7fc299d7  # n=0 = judge_latency.MEASURED["published_attachment"]'s UNMEASURED_NOTE row; 45s = hook-published-text-writer-gate.py's own _PUBLISHED_TEXT_JUDGE_BUDGET_S, at or above LAST_RESORT_CEILING_S(41) + SIZE_HEADROOM_S(1) since this judge has no measured p90 to size against
 
 # --- samples/judge-latency/README.md -----------------------------------------
 samples/judge-latency/README.md:13:eecb96d2  # K = 1 as declared in lib/hook_wiring.TIMEOUT_REQUIREMENT_CALLS; the identity budget == per-call ceiling is what the single-call test asserts

@@ -141,6 +141,10 @@ GATE_BEARING_HOOKS: "tuple[tuple[str, str], ...]" = (
      "delivery path while the resolution gate is open in a direct-push-only "
      "repo; absent, that PreToolUse consult never runs and a wrong-shaped "
      "menu reaches the user unblocked"),
+    ("hook-published-text-writer-gate.py",
+     "denies a Bash publication call whose text body has no preceding "
+     "tech-writer witness in the transcript; absent, unpolished text can reach "
+     "a ticket/PR/issue with nothing to stop it"),
 )
 
 # The TIMEOUT axis: how long a registration must be allowed to run.
@@ -171,6 +175,11 @@ TIMEOUT_REQUIREMENTS: "tuple[tuple[str, int, str], ...]" = (
      "one landing-discipline judge under a 22s whole-invocation budget — "
      "binds BOTH this hook's registrations (PreToolUse/AskUserQuestion and "
      "UserPromptSubmit), since this table is keyed by bare basename"),
+    ("hook-published-text-writer-gate.py", 45,
+     "one published_attachment judge, UNMEASURED (lib/judge_latency.py "
+     "MEASURED row n=0), under a 45s whole-invocation budget — at or above "
+     "LAST_RESORT_CEILING_S + SIZE_HEADROOM_S since no per-judge floor exists "
+     "to size against"),
 )
 
 # Each TIMEOUT_REQUIREMENTS minimum, above, is a copy of a number the hook
@@ -186,6 +195,7 @@ TIMEOUT_REQUIREMENT_OWN_CONSTANT: "dict[str, str]" = {
     "hook-turn-end-gate.py": "_TURN_JUDGE_BUDGET_S",
     "hook-plan-delivery-gate.py": "_APPROVAL_ASK_JUDGE_BUDGET_S",
     "hook-resolution-reminder.py": "_LANDING_DISCIPLINE_JUDGE_BUDGET_S",
+    "hook-published-text-writer-gate.py": "_PUBLISHED_TEXT_JUDGE_BUDGET_S",
 }
 
 # K: how many judge calls one invocation of each hook may make. Keyed as a
@@ -210,6 +220,7 @@ TIMEOUT_REQUIREMENT_CALLS: "dict[str, int]" = {
     "hook-turn-end-gate.py": 3,
     "hook-plan-delivery-gate.py": 1,
     "hook-resolution-reminder.py": 1,
+    "hook-published-text-writer-gate.py": 1,
 }
 
 
