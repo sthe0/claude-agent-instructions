@@ -386,10 +386,12 @@ def premise_blockers(state, bag) -> list[str]:
     if plan_path:
         doc = plan.load_plan(plan_path)
         stage_keys = {s.index: plan.stage_element_keys(s) for s in doc.stages}
+        meta_keys = plan.plan_meta_element_keys(doc)
         content_digest = _plan_content_digest(doc)
     else:
         doc = None
         stage_keys = {}
+        meta_keys = {}
         content_digest = None
 
     questions = premise.questions_from_dicts(bag.get("questions", []))
@@ -397,10 +399,15 @@ def premise_blockers(state, bag) -> list[str]:
     # `.get` with a default, not `bag["order_elements"]`: a premise bag minted before
     # the order-coverage half existed must load, not KeyError.
     order_elements = premise.order_elements_from_dicts(bag.get("order_elements", []))
-    blockers = premise.validate_questions(questions, stage_keys=stage_keys)
+    blockers = premise.validate_questions(
+        questions, stage_keys=stage_keys, meta_keys=meta_keys
+    )
     blockers += premise.validate_question_candidates(candidates, questions)
     blockers += premise.validate_order_elements(
-        order_elements, stage_indices=set(stage_keys), plan_present=bool(plan_path)
+        order_elements,
+        stage_indices=set(stage_keys),
+        plan_present=bool(plan_path),
+        stage_keys=stage_keys,
     )
 
     if not bag.get("enumerated"):
