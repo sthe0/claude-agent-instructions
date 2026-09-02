@@ -1621,6 +1621,14 @@ disposition = "keep"
 ground = "Reads only ctx.self_improvement_feedback, which build_context() sets from si_feedback_detect.find_signals (prefilter) gated by a semantic judge — this guardian itself is pure boolean logic over that frozen result, per its own docstring (\"Pure: reads only the frozen ctx booleans\")."
 
 [[entry]]
+id = "9e815466b3457994"
+domain = "code"
+file = "scripts/hook-turn-end-gate.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+
+[[entry]]
 id = "6555a6f96dc22349"
 domain = "code"
 file = "scripts/improvement-scan.py"
@@ -2320,6 +2328,22 @@ ground = "Regexes found are markdown/frontmatter/command-syntax parsing (heading
 id = "bc5c095b2cbdd809"
 domain = "code"
 file = "scripts/sigma-sentinel.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
+id = "824076e9f2fca68d"
+domain = "code"
+file = "scripts/silent_closure_detect.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
+id = "ba2d2b49f2561b9a"
+domain = "code"
+file = "scripts/silent_closure_detect.py"
 class = "structural"
 disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
@@ -5246,6 +5270,54 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 
 [[entry]]
 id = "1581c9e3e3cd8c72"
+domain = "code"
+file = "scripts/tests/test_hook_turn_end_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "febc4075b855ae2f"
+domain = "code"
+file = "scripts/tests/test_hook_turn_end_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "47a3d16f8a32d52a"
+domain = "code"
+file = "scripts/tests/test_hook_turn_end_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "184539d7cf5a1388"
+domain = "code"
+file = "scripts/tests/test_hook_turn_end_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "540932a1c5e6fcd0"
+domain = "code"
+file = "scripts/tests/test_hook_turn_end_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "aa46f918ef5a3d4b"
+domain = "code"
+file = "scripts/tests/test_hook_turn_end_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "31498a3e89c3e187"
 domain = "code"
 file = "scripts/tests/test_hook_turn_end_gate.py"
 class = "not-a-gate"
@@ -9992,6 +10064,14 @@ ground = "Regexes found are markdown/frontmatter/command-syntax parsing (heading
 id = "e7bbed567e82d153"
 domain = "code_file_rollup"
 file = "scripts/sigma-sentinel.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "79d33c61a76bde0e"
+domain = "code_file_rollup"
+file = "scripts/silent_closure_detect.py"
 class = "structural"
 disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification. (file-level rollup of the file's scopes.)"

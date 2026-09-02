@@ -238,14 +238,15 @@ DESIRED = [
     # engaged this turn). Loop-guarded (stop_hook_active + a durable per-message
     # marker under state/turn-gate/) and blockers from every guardian aggregate
     # into one block, so the worst case is exactly one extra model turn.
-    # 74 = the hook's own _TURN_JUDGE_BUDGET_S=69 plus interpreter-start headroom.
-    # It runs up to THREE judges in one invocation, so its whole-invocation budget
-    # is larger than the single-judge gates'; at 5 every one of them was killed,
-    # and the superseded 57 no longer covered the worst-case-safe posture once
-    # binary_ask and feedback_signal were re-sampled and their ceilings raised:
-    # ceil(feedback's ceiling) + ceil(binary_ask's ceiling) + outage's floor +
-    # head-room = 21 + 21 + 26 + 1 = 69 (lib/judge_latency.py).
-    ("Stop",             None,    "hook-turn-end-gate.py",   74),
+    # 110 = the hook's own _TURN_JUDGE_BUDGET_S=105 plus interpreter-start
+    # headroom. It runs up to FOUR judges in one invocation, so its
+    # whole-invocation budget is larger than the single-judge gates'; at 5
+    # every one of them was killed, and the superseded 74 no longer covered
+    # the worst-case-safe posture once silent_closure was added:
+    # ceil(feedback's ceiling) + ceil(binary_ask's ceiling) +
+    # ceil(silent_closure's ceiling) + outage's floor + head-room =
+    # 21 + 21 + 36 + 26 + 1 = 105 (lib/judge_latency.py).
+    ("Stop",             None,    "hook-turn-end-gate.py",   110),
     # Advisory (not a gate): nudge when a launched run/graph URL appeared in
     # this session's tool output but was never surfaced to the user in a chat
     # message — the structural guard for CLAUDE.md long-running-jobs /

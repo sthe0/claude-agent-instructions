@@ -687,6 +687,48 @@ class TestJudgeOutageEscalation:
         assert seen["argv"][:4] == ["claude", "-p", "--model", "haiku"]
 
 
+class TestJudgeSilentClosure:
+    def test_yes(self):
+        assert advisor.judge_silent_closure("I'll go with the JWT approach. Implementing now.", _fake_runner("YES"))[0] is True
+
+    def test_no(self):
+        assert advisor.judge_silent_closure("This hook detects silent closures via regex.", _fake_runner("NO"))[0] is False
+
+    def test_disabled(self):
+        assert advisor.judge_silent_closure("Готово, задача решена.", _fake_runner("YES"), enabled=False)[0] is False
+
+    def test_no_runner(self):
+        assert advisor.judge_silent_closure("Готово, задача решена.", None)[0] is False
+
+    def test_empty_text_skips_runner(self):
+        assert advisor.judge_silent_closure("", _raising_runner)[0] is False
+
+    def test_non_string_text_skips_runner(self):
+        assert advisor.judge_silent_closure(None, _raising_runner)[0] is False
+
+    def test_non_zero_exit_fails_open(self):
+        assert advisor.judge_silent_closure("Готово, задача решена.", _fake_runner("YES", code=1))[0] is False
+
+    def test_empty_stdout_fails_open(self):
+        assert advisor.judge_silent_closure("Готово, задача решена.", _fake_runner("  \n  "))[0] is False
+
+    def test_unparseable_answer_fails_open(self):
+        assert advisor.judge_silent_closure("Готово, задача решена.", _fake_runner("unclear"))[0] is False
+
+    def test_raising_runner_fails_open(self):
+        assert advisor.judge_silent_closure("Готово, задача решена.", _raising_runner)[0] is False
+
+    def test_argv_carries_judge_model(self):
+        seen = {}
+
+        def recording_runner(argv, **kwargs):
+            seen["argv"] = argv
+            return RunResult(0, stdout="NO", stderr="")
+
+        advisor.judge_silent_closure("some text", recording_runner)
+        assert seen["argv"][:4] == ["claude", "-p", "--model", "haiku"]
+
+
 class TestJudgeDeferringDisposition:
     _ASK = "Что делать с дефектом?\nЗавести отдельной задачей\nНе трогать"
 
@@ -836,6 +878,7 @@ _JUDGE_TIMEOUT_CONSTANTS = {
     "judge_published_attachment": "_PUBLISHED_ATTACHMENT_TIMEOUT_S",
     "judge_feedback_signal": "_BINARY_ASK_TIMEOUT_S",
     "judge_outage_escalation": "_BINARY_ASK_TIMEOUT_S",
+    "judge_silent_closure": "_SILENT_CLOSURE_TIMEOUT_S",
     "judge_deferring_disposition": "_DEFERRING_DISPOSITION_TIMEOUT_S",
     "judge_landing_discipline_ask": "_LANDING_DISCIPLINE_LAST_RESORT_TIMEOUT_S",
     "acceptance_judge": "_ACCEPTANCE_JUDGE_TIMEOUT_S",

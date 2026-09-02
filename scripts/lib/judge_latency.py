@@ -153,6 +153,22 @@ MEASURED: "dict[str, dict[str, Row]]" = {
                         ("drift-sample.json", "feedback"),
                         ("drift-sample.json", "not_feedback")),
         ),
+        "silent_closure": Row(
+            judge="silent_closure",
+            # One process, 8 signal (genuine fork-point decision / completion,
+            # no question) + 8 not_signal (near-misses that still trip the
+            # prefilter: a real question despite the wording, a
+            # only-one-option decision, a routine sub-step, or a status
+            # naming remaining work) calls, alternating arms — see
+            # sample_silent_closure.py. 15/16 matched the arm's expected
+            # verdict; the one miss (signal[2], a genuine decision whose text
+            # also said "moving on to the next file") is real data kept
+            # standing, not trimmed, same discipline the outage_escalation
+            # row's own comment states for its own single-observation max.
+            n=16, min_s=3.30, median_s=4.40, p90_s=6.66, max_s=34.78,
+            provenance=(("silent-closure-sample.json", "signal"),
+                        ("silent-closure-sample.json", "not_signal")),
+        ),
         "binary_ask": Row(
             judge="binary_ask",
             # Same two regimes and the same lean/bare split as feedback_signal,
@@ -295,7 +311,7 @@ LAST_RESORT_CEILING_S = last_resort_ceiling_s()
 HOOK_CALL_SEQUENCE: "dict[str, tuple[str, ...]]" = {
     "hook-escalation-diagnosis-gate.py": ("outage_escalation",),
     "hook-deferring-disposition-gate.py": ("deferring_disposition",),
-    "hook-turn-end-gate.py": ("feedback_signal", "binary_ask", "outage_escalation"),
+    "hook-turn-end-gate.py": ("feedback_signal", "binary_ask", "silent_closure", "outage_escalation"),
     "hook-plan-delivery-gate.py": ("approval_ask",),
     "hook-resolution-reminder.py": ("landing_discipline",),
     "hook-published-text-writer-gate.py": ("published_attachment",),
