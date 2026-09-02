@@ -14,24 +14,33 @@ judgement on this machine" becomes visible instead of inferred.
 Read-only. It opens the ledger and nothing else — no judge is called, no
 subprocess is spawned, no session state is written.
 
-Two deliberate design points, both easy to get wrong:
+Three deliberate design points, all easy to get wrong:
 
 * The duration statistics are computed over outcomes 4 and 5 ONLY, for two
   DIFFERENT reasons (see DURATION_POPULATION_IDS). Widening the population
-  either way makes a sicker judge look faster.
+  either way makes a sicker judge look faster. --latency reuses that same
+  membership rather than filtering the raw ledger again, so the two surfaces
+  cannot come to disagree about which calls count.
 * Every count is derived from the declared OUTCOMES table, so the prose here
   contains no hardcoded tally of how many outcomes there are or how many of
   them fail open. A fifteenth outcome changes the printed numbers by itself.
+* --latency splits every judge by the CEILING its calls ran under. This ledger
+  spans a ceiling change, so a rate pooled across one describes neither regime
+  and can hide a repair as easily as a regression.
 
 Usage:
     scripts/judge-usage-report.py [--ledger PATH]
+    scripts/judge-usage-report.py --latency [--since WINDOW] [--ledger PATH]
+    scripts/judge-usage-report.py --check-drift [--strict] [--since WINDOW] [--ledger PATH]
 """
 from __future__ import annotations
 
 import argparse
 import sys
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -114,6 +123,21 @@ FAIL_OPEN_OUTCOMES = tuple(o for o in OUTCOMES if o.id not in NOT_FAIL_OPEN_IDS)
 #     too would double-count the one call it wraps.
 DURATION_POPULATION_IDS = frozenset({"4", "5"})
 
+# The two members of that population, named so the latency view splits it by the
+# same field the tabulation classified it with. Reading the timeout numerator off
+# `timed_out` instead would give this report two answers to "was it a timeout"
+# — the classifier's and its own — which can then disagree.
+TIMEOUT_OUTCOME_ID = "5"
+
+# NOT part of the duration population, and never folded into it. A judge skipped
+# for want of remaining budget produced no verdict, exactly like one killed on
+# its ceiling — but it never became a call, so no statistic computed over calls
+# can see it. hook-turn-end-gate.py runs three judges in sequence on one fixed
+# budget, so raising an early judge's ceiling spends what a later one needs:
+# the skip channel is a route to "the verdict silently stopped existing" that
+# leaves every timeout number green. It gets its own column.
+BUDGET_SKIP_OUTCOME_ID = "3"
+
 # advisor._judge_unavailable writes three no-call stages, but the taxonomy
 # names only one row for them (7c). They are folded into that row and broken
 # out per stage in the rendering, so the widening stays visible rather than
@@ -167,12 +191,21 @@ NO_HOOK = "(engine path, no hook)"
 
 @dataclass(frozen=True)
 class JudgePoint:
-    """One judge-level outcome, with the two keys the report breaks down by."""
+    """One judge-level outcome, with the two keys the report breaks down by.
+
+    ``ceiling`` and ``ts`` are AXES, not membership: they widen what a point can
+    be grouped and windowed by without touching which points count. The latency
+    view needs both — the ledger spans a ceiling change, so a rate pooled across
+    one describes no regime that ever ran, and "a fresh window" is the unit a
+    post-repair measurement is stated in — while the outcome tabulation above
+    reads neither."""
 
     hook: str
     judge: str
     outcome_id: str
     duration: "float | None"
+    ceiling: "float | None" = None
+    ts: "float | None" = None
 
 
 def _text(value, fallback: str) -> str:
@@ -281,9 +314,10 @@ def classify_judge_points(records: "list[dict]") -> "tuple[list[JudgePoint], lis
     for record in records:
         kind = record.get("kind")
         judge = _text(record.get("judge"), UNATTRIBUTED)
+        ts = _number(record.get("ts"))
         if kind == "entered":
             if not record.get("prefilter_fired"):
-                points.append(JudgePoint(hook, judge, "2", None))
+                points.append(JudgePoint(hook, judge, "2", None, None, ts))
         elif kind == "decided":
             outcome_id = classify_decided(record)
             if outcome_id is None:
@@ -293,7 +327,8 @@ def classify_judge_points(records: "list[dict]") -> "tuple[list[JudgePoint], lis
                 )
                 continue
             duration = _number(record.get("duration"))
-            points.append(JudgePoint(hook, judge, outcome_id, duration))
+            ceiling = _number(record.get("ceiling"))
+            points.append(JudgePoint(hook, judge, outcome_id, duration, ceiling, ts))
     pending, pairing_complaints = unpaired_started(records)
     complaints.extend(pairing_complaints)
     for judge, count in pending.items():
@@ -426,6 +461,276 @@ class Tally:
             for values in self.durations_by_judge().values()
             for duration in values
         ]
+
+
+@dataclass
+class Stats:
+    """One (judge, ceiling) group's latency, its timeout rate, and — held apart
+    from both — how often the judge was skipped before it could be called."""
+
+    durations: "list[float]" = field(default_factory=list)
+    timeouts: int = 0
+    budget_skips: int = 0
+
+    @property
+    def n(self) -> int:
+        return len(self.durations)
+
+    @property
+    def rate(self) -> "float | None":
+        """Timeouts as a share of the CALLS. None when the group holds none —
+        a group that exists only because the judge was skipped has no rate, and
+        printing 0% there would read as "this judge never times out"."""
+        return self.timeouts / self.n if self.n else None
+
+    @property
+    def min_s(self) -> "float | None":
+        return min(self.durations) if self.durations else None
+
+    @property
+    def median_s(self) -> "float | None":
+        return judge_latency.median(self.durations) if self.durations else None
+
+    @property
+    def p90_s(self) -> "float | None":
+        return judge_latency.p90(self.durations) if self.durations else None
+
+    @property
+    def max_s(self) -> "float | None":
+        return max(self.durations) if self.durations else None
+
+
+def latency_by_judge(
+    points: "list[JudgePoint]", since: "float | None" = None
+) -> "dict[tuple[str, float | None], Stats]":
+    """Latency and timeout rate per (judge, ceiling), over `points` alone.
+
+    Pure: no file is read and nothing is printed, because the drift check that
+    consumes these statistics must reach them as values rather than by scraping
+    this script's stdout.
+
+    The population is DURATION_POPULATION_IDS — the SAME membership rule
+    ``Tally.durations_by_judge`` uses, deliberately not a second filter over raw
+    ledger fields. A filter like ``stage == "call"`` looks equivalent and is not:
+    it also admits the calls outcomes 4 and 5 exclude (a fast refusal, an
+    off-vocabulary answer, an exception with no result), which on this repo's own
+    ledger is 4 rows of outage_escalation's 16. Two population definitions living
+    in one script under one word ("duration", "rate") is how this view and the
+    duration table above it come to disagree about a judge in the same output.
+
+    ``since`` is an epoch cutoff; a point with no recorded ``ts`` cannot be shown
+    to fall inside a window, so a window excludes it rather than assuming it."""
+    groups: "dict[tuple[str, float | None], Stats]" = defaultdict(Stats)
+    for point in points:
+        if since is not None and (point.ts is None or point.ts < since):
+            continue
+        if point.outcome_id in DURATION_POPULATION_IDS:
+            if point.duration is None:
+                continue
+            stats = groups[(point.judge, point.ceiling)]
+            stats.durations.append(point.duration)
+            if point.outcome_id == TIMEOUT_OUTCOME_ID:
+                stats.timeouts += 1
+        elif point.outcome_id == BUDGET_SKIP_OUTCOME_ID:
+            groups[(point.judge, point.ceiling)].budget_skips += 1
+    return dict(groups)
+
+
+def parse_since(value: str, now: "float | None" = None) -> float:
+    """Epoch seconds for a ``--since`` argument: ``Nd`` (N days back from now)
+    or an ISO date / datetime. A bare date is read in local time, which is the
+    reading an operator naming a day means."""
+    text = value.strip()
+    if text.endswith("d") and text[:-1].isdigit():
+        days = int(text[:-1])
+        return (time.time() if now is None else now) - days * 86400
+    try:
+        return datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"not a window: {value!r} — expected an ISO date/datetime or Nd"
+        ) from None
+
+
+# --check-drift thresholds. A pair below MIN_DRIFT_CALLS has not accumulated
+# enough of the current regime to say anything — reported, never judged.
+MIN_DRIFT_CALLS = 30
+DRIFT_TIMEOUT_RATE_WARN = 0.15
+DRIFT_CLUSTER_FRACTION_WARN = 0.5
+DRIFT_CLUSTER_WINDOW_S = 1.0
+DRIFT_SKIP_RATE_WARN = 0.05
+
+DRIFT_INSUFFICIENT = "insufficient data"
+DRIFT_FAIL = "FAIL"
+DRIFT_WARN = "WARN"
+DRIFT_OK = "OK"
+
+
+@dataclass(frozen=True)
+class DriftFinding:
+    """One (hook, judge) pair's drift verdict.
+
+    ``reference_ceiling`` is judge_latency.call_ceiling_s(judge) alone — never
+    a hook's own (possibly padded) enforced timeout — so this check can never
+    disagree with the one table every ceiling is computed from. ``chosen_ceiling``
+    is the smallest ceiling actually recorded in the ledger for this pair that
+    clears the reference: the CURRENT regime, picked without hardcoding any
+    single hook's padding rule. A pair with no such ceiling among its points has
+    never run a single call under an adequate ceiling — INSUFFICIENT DATA, not a
+    zero rate."""
+
+    hook: str
+    judge: str
+    reference_ceiling: float
+    chosen_ceiling: "float | None"
+    n: int
+    median_s: "float | None"
+    timeout_rate: "float | None"
+    cluster_fraction: "float | None"
+    skip_rate: "float | None"
+    status: str
+    reasons: "tuple[str, ...]" = ()
+
+
+def _in_window(point: JudgePoint, since: "float | None") -> bool:
+    return since is None or (point.ts is not None and point.ts >= since)
+
+
+def check_drift(
+    points: "list[JudgePoint]", since: "float | None" = None
+) -> "list[DriftFinding]":
+    """One finding per (hook, judge) pair declared in HOOK_CALL_SEQUENCE.
+
+    Grouped by hook FIRST — filtering `points` to one hook before ever calling
+    latency_by_judge — so a judge declared by two hooks at two (possibly
+    IDENTICAL) ceilings is never pooled into one row: the two hooks' points
+    never share a Stats object, regardless of what ceiling either recorded.
+
+    Pure: computes over `points` alone, prints nothing, blocks nothing."""
+    findings: "list[DriftFinding]" = []
+    for hook_basename, sequence in judge_latency.HOOK_CALL_SEQUENCE.items():
+        hook_name = judge_ledger.HOOK_NAME_BY_BASENAME[hook_basename]
+        hook_points = [p for p in points if p.hook == hook_name]
+        groups = latency_by_judge(hook_points, since)
+        for judge in sequence:
+            reference = float(judge_latency.call_ceiling_s(judge))
+            candidates = sorted(
+                ceiling
+                for (g_judge, ceiling) in groups
+                if g_judge == judge and ceiling is not None and ceiling >= reference
+            )
+            if not candidates:
+                findings.append(DriftFinding(
+                    hook=hook_basename, judge=judge, reference_ceiling=reference,
+                    chosen_ceiling=None, n=0, median_s=None, timeout_rate=None,
+                    cluster_fraction=None, skip_rate=None, status=DRIFT_INSUFFICIENT,
+                ))
+                continue
+            chosen = candidates[0]
+            stats = groups[(judge, chosen)]
+            if stats.n < MIN_DRIFT_CALLS:
+                findings.append(DriftFinding(
+                    hook=hook_basename, judge=judge, reference_ceiling=reference,
+                    chosen_ceiling=chosen, n=stats.n, median_s=stats.median_s,
+                    timeout_rate=stats.rate, cluster_fraction=None, skip_rate=None,
+                    status=DRIFT_INSUFFICIENT,
+                ))
+                continue
+            median = stats.median_s
+            if median is not None and median >= chosen:
+                findings.append(DriftFinding(
+                    hook=hook_basename, judge=judge, reference_ceiling=reference,
+                    chosen_ceiling=chosen, n=stats.n, median_s=median,
+                    timeout_rate=stats.rate, cluster_fraction=None,
+                    skip_rate=None, status=DRIFT_FAIL,
+                    reasons=(f"median {median:.2f}s >= ceiling {chosen:g}s",),
+                ))
+                continue
+            timeout_points = [
+                p for p in hook_points
+                if p.judge == judge and p.ceiling == chosen
+                and p.outcome_id == TIMEOUT_OUTCOME_ID and _in_window(p, since)
+                and p.duration is not None
+            ]
+            if timeout_points:
+                near = [
+                    p for p in timeout_points
+                    if p.duration >= chosen - DRIFT_CLUSTER_WINDOW_S
+                ]
+                cluster_fraction = len(near) / len(timeout_points)
+            else:
+                cluster_fraction = None
+            decision_points = stats.n + stats.budget_skips
+            skip_rate = stats.budget_skips / decision_points if decision_points else 0.0
+            reasons = []
+            if stats.rate is not None and stats.rate >= DRIFT_TIMEOUT_RATE_WARN:
+                reasons.append(
+                    f"timeout rate {stats.rate:.1%} >= {DRIFT_TIMEOUT_RATE_WARN:.0%}"
+                )
+            if cluster_fraction is not None and cluster_fraction > DRIFT_CLUSTER_FRACTION_WARN:
+                reasons.append(
+                    f"{cluster_fraction:.0%} of timeouts land within "
+                    f"{DRIFT_CLUSTER_WINDOW_S:g}s of the ceiling"
+                )
+            if skip_rate > DRIFT_SKIP_RATE_WARN:
+                reasons.append(f"budget-skip rate {skip_rate:.1%} > {DRIFT_SKIP_RATE_WARN:.0%}")
+            findings.append(DriftFinding(
+                hook=hook_basename, judge=judge, reference_ceiling=reference,
+                chosen_ceiling=chosen, n=stats.n, median_s=median,
+                timeout_rate=stats.rate, cluster_fraction=cluster_fraction,
+                skip_rate=skip_rate, status=DRIFT_WARN if reasons else DRIFT_OK,
+                reasons=tuple(reasons),
+            ))
+    return findings
+
+
+def _drift_fails(finding: DriftFinding, strict: bool) -> bool:
+    if finding.status == DRIFT_FAIL:
+        return True
+    return strict and finding.status == DRIFT_WARN
+
+
+def format_drift(findings: "list[DriftFinding]", strict: bool) -> "list[str]":
+    mode = "strict" if strict else "default"
+    lines = [
+        f"Ceiling drift check ({mode} mode) — one finding per (hook, judge) pair, "
+        f"ceilings read from lib.judge_latency:",
+    ]
+    for finding in sorted(findings, key=lambda f: (f.hook, f.judge)):
+        pair = f"{finding.hook} / {finding.judge}"
+        if finding.status == DRIFT_INSUFFICIENT:
+            lines.append(
+                f"  {pair}: INSUFFICIENT DATA — n={finding.n} calls recorded at or "
+                f"above the declared ceiling {finding.reference_ceiling:g}s "
+                f"(need >={MIN_DRIFT_CALLS})"
+            )
+            continue
+        status = DRIFT_FAIL if (strict and finding.status == DRIFT_WARN) else finding.status
+        detail = (
+            f"n={finding.n} median={finding.median_s:.2f}s "
+            f"ceiling={finding.chosen_ceiling:g}s"
+        )
+        if status == DRIFT_OK:
+            timeout_rate = (
+                f"{finding.timeout_rate:.1%}" if finding.timeout_rate is not None else "n/a"
+            )
+            skip_rate = f"{finding.skip_rate:.1%}" if finding.skip_rate is not None else "n/a"
+            lines.append(
+                f"  {pair}: OK — {detail} timeout-rate={timeout_rate} skip-rate={skip_rate}"
+            )
+        elif status == DRIFT_WARN:
+            lines.append(f"  {pair}: WARN — {detail}; " + "; ".join(finding.reasons))
+        else:  # DRIFT_FAIL, whether structural or a strict-promoted WARN
+            reason = "; ".join(finding.reasons) if finding.reasons else "structural"
+            lines.append(
+                f"  {pair}: FAIL — {detail}; {reason}. Remedy: take a fresh sample "
+                f"and re-derive the row (samples/judge-latency)."
+            )
+    if any(_drift_fails(f, strict) for f in findings):
+        lines.append("Verdict: FAIL — at least one (hook, judge) pair needs re-sampling.")
+    else:
+        lines.append("Verdict: no ceiling needs re-deriving right now.")
+    return lines
 
 
 def tally(read: "judge_ledger.LedgerRead", ledger_path: Path) -> Tally:
@@ -608,6 +913,68 @@ def format_durations(result: Tally) -> "list[str]":
     return lines
 
 
+def _format_ceiling(ceiling: "float | None") -> str:
+    if ceiling is None:
+        return "unrecorded"
+    return f"{ceiling:g}"
+
+
+def _seconds(value: "float | None") -> str:
+    """A measured second, or a dash where there is nothing to measure. A group
+    reached only through the skip column has no call in it, and a 0.00 there
+    would read as a very fast judge."""
+    return f"{value:>6.2f}" if value is not None else f"{'-':>6}"
+
+
+def _latency_row(judge: str, ceiling: "float | None", stats: Stats, width: int) -> str:
+    key = f"{judge} @ {_format_ceiling(ceiling)}s"
+    # Likewise "n/a" and not 0.0%: a judge that was only ever skipped has no
+    # timeout rate, and the flattering reading of a printed zero is the opposite
+    # of what the row says.
+    rate = f"{stats.rate * 100:>5.1f}%" if stats.rate is not None else f"{'n/a':>6}"
+    return (
+        f"  {key:<{width}}  n={stats.n:>5}  timeouts={stats.timeouts:>5}  "
+        f"rate={rate}  min={_seconds(stats.min_s)} "
+        f"median={_seconds(stats.median_s)} p90={_seconds(stats.p90_s)} "
+        f"max={_seconds(stats.max_s)}  budget-skips={stats.budget_skips}"
+    )
+
+
+def format_latency(
+    result: Tally, since: "float | None" = None, window: str = ""
+) -> "list[str]":
+    """The per-(judge, ceiling) latency and timeout-rate view."""
+    if result.missing or result.read_error:
+        return format_verdict(result)
+    population = ", ".join(sorted(DURATION_POPULATION_IDS))
+    lines = [
+        f"Judge execution ledger: {result.ledger_path}",
+        f"  {result.record_count} records, {_format_size(result.size_bytes)} on disk",
+        f"  window: {window if window else 'the whole ledger'}",
+        "",
+        f"Call latency and timeout rate per judge and per CEILING, over outcomes "
+        f"{population} only",
+        "  (the same population as the duration table — see "
+        "DURATION_POPULATION_IDS). Rows are split by the ceiling the call ran",
+        "  under: this ledger spans a ceiling change, and a rate pooled across "
+        "one describes no regime that ever ran.",
+        f"  budget-skips counts outcome ({BUDGET_SKIP_OUTCOME_ID}) "
+        f"{OUTCOME_BY_ID[BUDGET_SKIP_OUTCOME_ID].label} — held OUT of n and out "
+        f"of the rate,",
+        "  because such a judge never became a call and no rate over calls can "
+        "see it.",
+    ]
+    groups = latency_by_judge(result.judge_points, since)
+    if not groups:
+        lines.append("  (no call in this window carries a duration)")
+        return lines
+    ordered = sorted(groups.items(), key=lambda kv: (kv[0][0], kv[0][1] is None, kv[0][1]))
+    width = max(len(f"{judge} @ {_format_ceiling(ceiling)}s") for judge, ceiling in groups)
+    for (judge, ceiling), stats in ordered:
+        lines.append(_latency_row(judge, ceiling, stats, width))
+    return lines
+
+
 def _plural(count: int, noun: str) -> str:
     """The verdict line is the one sentence an operator reads, and "1 fail-open
     judge decision points" reads as a template rather than a finding."""
@@ -731,14 +1098,59 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="ledger path (default: the configured judge execution ledger)",
     )
+    parser.add_argument(
+        "--latency",
+        action="store_true",
+        help="print the per-judge, per-ceiling latency and timeout-rate view "
+        "instead of the outcome report",
+    )
+    parser.add_argument(
+        "--since",
+        type=parse_since,
+        default=None,
+        metavar="WINDOW",
+        help="restrict --latency or --check-drift to calls at or after this point: "
+        "an ISO date / datetime, or Nd for N days back",
+    )
+    parser.add_argument(
+        "--check-drift",
+        action="store_true",
+        help="report, per (hook, judge) pair, whether its live latency has drifted "
+        "up to meet its declared ceiling. Report-only: never blocks. Exits "
+        "non-zero iff a pair FAILs",
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="with --check-drift, promote its WARN findings (timeout rate, "
+        "ceiling-clustered survivors, budget-skip rate) to FAIL as well",
+    )
     return parser
 
 
 def main(argv: "list[str] | None" = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.since is not None and not args.latency and not args.check_drift:
+        parser.error("--since applies to --latency or --check-drift, which was not asked for")
+    if args.strict and not args.check_drift:
+        parser.error("--strict applies to --check-drift, which was not asked for")
     path = args.ledger if args.ledger is not None else judge_ledger.ledger_path()
     read = judge_ledger.read_ledger(path)
-    print("\n".join(format_report(tally(read, path))))
+    result = tally(read, path)
+    if args.check_drift:
+        findings = check_drift(result.judge_points, args.since)
+        print("\n".join(format_drift(findings, args.strict)))
+        return 1 if any(_drift_fails(f, args.strict) for f in findings) else 0
+    if args.latency:
+        window = (
+            f"calls at or after {datetime.fromtimestamp(args.since).isoformat(' ')}"
+            if args.since is not None
+            else ""
+        )
+        print("\n".join(format_latency(result, args.since, window)))
+        return 0
+    print("\n".join(format_report(result)))
     return 0
 
 

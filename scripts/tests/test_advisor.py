@@ -900,3 +900,38 @@ class TestRuntimeHostArgv:
         seen = []
         advisor.judge("weight_classification", {}, self._recording_runner(seen, "concern"), enabled=True)
         assert seen[0][0] == "claude"
+
+    def test_prompt_argv_dispatches_lean_true_for_a_judge_complexity_call(self, monkeypatch):
+        """Pins `_prompt_argv`'s own dispatch line, not just `build_prompt_argv`'s
+        response to an explicit `lean` value — a spy on `build_prompt_argv` proves
+        the ternary actually passes `lean=True` for a `_JUDGE_COMPLEXITY` call.
+        An inverted or mistyped ternary here would silently route a
+        `_ADVISOR_COMPLEXITY` list-output call through the binary-classifier
+        system-prompt override in production, and nothing else in this stage
+        would catch it."""
+        from lib import host_llm
+
+        seen_lean = []
+        real_build = host_llm.build_prompt_argv
+
+        def spy(*args, **kwargs):
+            seen_lean.append(kwargs.get("lean", False))
+            return real_build(*args, **kwargs)
+
+        monkeypatch.setattr(host_llm, "build_prompt_argv", spy)
+        advisor.judge_binary_ask("do X or Y?", self._recording_runner([], "1\nreason"), enabled=True)
+        assert seen_lean == [True]
+
+    def test_prompt_argv_dispatches_lean_false_for_an_advisor_complexity_call(self, monkeypatch):
+        from lib import host_llm
+
+        seen_lean = []
+        real_build = host_llm.build_prompt_argv
+
+        def spy(*args, **kwargs):
+            seen_lean.append(kwargs.get("lean", False))
+            return real_build(*args, **kwargs)
+
+        monkeypatch.setattr(host_llm, "build_prompt_argv", spy)
+        advisor.enumerate_claims("some deliverable text", self._recording_runner([], "claim one"))
+        assert seen_lean == [False]

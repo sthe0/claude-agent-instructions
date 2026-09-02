@@ -105,20 +105,69 @@ MEASURED: "dict[str, dict[str, Row]]" = {
         ),
         "outage_escalation": Row(
             judge="outage_escalation",
-            n=16, min_s=7.19, median_s=10.89, p90_s=19.16, max_s=25.96,
+            # Merged across the same two regimes as the two rows below, and read
+            # for a different purpose: this judge was re-sampled not because its
+            # own rate had gone pathological but because required_budget_s takes
+            # its p90 as the trailing term of the turn-end inequality, and the
+            # live ledger had already produced two kills at ~27.03s against the
+            # 25.96 max the old series alone declared. The new series settles
+            # that: it reaches 27.13 and 30.26 on its own, so the kills were
+            # drift and not a stuck subprocess. Movement from the old series
+            # alone is large — median 10.89 -> 18.58, p90 19.16 -> 25.96, max
+            # 25.96 -> 53.42.
+            #
+            # That max is ONE observation (53.42) sitting at more than 1.7x the
+            # next slowest call in the same arm (30.26), with no neighbour
+            # between them. It is the same never-returned shape the plan tracks
+            # as residual A, and `ceil(max) + 1` propagates it into a 55s
+            # per-call ceiling that no turn-end budget can hold. Recorded here
+            # rather than trimmed: dropping an inconvenient observation from the
+            # population is exactly the failure this table exists to prevent.
+            # Whether the ceiling rule should be applied to it is stage 3's
+            # decision, made against a number it can see.
+            n=48, min_s=7.19, median_s=18.58, p90_s=25.96, max_s=53.42,
             provenance=(("latency-sample.json", "outage"),
-                        ("ab-sample.json", "outage_std")),
+                        ("ab-sample.json", "outage_std"),
+                        ("drift-sample.json", "outage"),
+                        ("drift-sample.json", "not_outage")),
         ),
         "feedback_signal": Row(
             judge="feedback_signal",
-            n=26, min_s=10.73, median_s=11.86, p90_s=13.34, max_s=14.05,
+            # Two regimes, like approval_ask below, and for a stronger reason
+            # than a slower model: the new series ran through the LEAN judge
+            # invocation (host_llm.build_prompt_argv(..., lean=True)) while the
+            # old one ran through the bare `claude -p` that loads the ambient
+            # CLAUDE.md. This judge's own question topically collides with that
+            # content, and under the bare invocation it stopped answering at all
+            # — 0/3 in a contention-free A/B, against 3/3 lean. So the old
+            # series does not merely describe a faster machine, it describes a
+            # different call path; it stays in the provenance because it remains
+            # a valid observation of that path and keeps min conservative.
+            # Old series alone: median 11.86, p90 13.34, max 14.05. Merged, the
+            # median moves modestly (+1.45, the old regime being half the
+            # population) but p90 and max move materially (+4.20 and +5.54) —
+            # the tail is where the regime change shows.
+            n=58, min_s=10.73, median_s=13.30, p90_s=17.54, max_s=19.59,
             provenance=(("latency-sample.json", "feedback"),
-                        ("topup2-sample.json", "feedback")),
+                        ("topup2-sample.json", "feedback"),
+                        ("drift-sample.json", "feedback"),
+                        ("drift-sample.json", "not_feedback")),
         ),
         "binary_ask": Row(
             judge="binary_ask",
-            n=16, min_s=5.93, median_s=7.46, p90_s=11.06, max_s=11.52,
-            provenance=(("topup2-sample.json", "binary_ask"),),
+            # Same two regimes and the same lean/bare split as feedback_signal,
+            # but this judge answered correctly under both invocations (5/5 std,
+            # 5/5 lean in the same A/B) — for it the regime difference is
+            # latency alone, and the ranges are disjoint: the old series ran
+            # 5.93-11.52 and the new one 13.40-19.20. Everything moved and by a
+            # lot (median 7.46 -> 15.755, p90 11.06 -> 18.57, max 11.52 ->
+            # 19.20, i.e. the whole distribution roughly doubled), which is why
+            # the live ledger showed this judge killed on 69 of 76 calls at the
+            # ceiling of 13 that the old series alone computed.
+            n=48, min_s=5.93, median_s=15.75, p90_s=18.57, max_s=19.20,
+            provenance=(("topup2-sample.json", "binary_ask"),
+                        ("drift-sample.json", "binary_ask"),
+                        ("drift-sample.json", "not_binary_ask")),
         ),
         "landing_discipline": Row(
             judge="landing_discipline",

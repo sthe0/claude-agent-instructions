@@ -731,3 +731,22 @@ def test_probe_ancestor_walk_finds_planted_project_context(tmp_path):
     dirty: list[str] = []
     probe.assert_no_ancestor_project_context(cwd, dirty)
     assert len(dirty) == 1 and "CLAUDE.md" in dirty[0]
+
+
+def test_build_prompt_argv_claude_lean_inserts_isolation_bundle_before_prompt():
+    argv = host_llm.build_prompt_argv(HOST_CLAUDE, "sonnet", "do the thing", lean=True)
+    assert argv[:4] == ["claude", "-p", "--model", "sonnet"]
+    assert argv[4:-1] == host_llm.LEAN_ISOLATION_FLAGS
+    assert argv[-1] == "do the thing"
+
+
+def test_build_prompt_argv_claude_lean_false_is_byte_identical_to_before():
+    assert host_llm.build_prompt_argv(HOST_CLAUDE, "sonnet", "do the thing", lean=False) == [
+        "claude", "-p", "--model", "sonnet", "do the thing",
+    ]
+
+
+def test_build_prompt_argv_claude_omitted_lean_defaults_to_false():
+    assert host_llm.build_prompt_argv(HOST_CLAUDE, "sonnet", "do the thing") == [
+        "claude", "-p", "--model", "sonnet", "do the thing",
+    ]
