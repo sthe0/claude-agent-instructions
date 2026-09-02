@@ -9,26 +9,40 @@ never a speculative narrative.
 ## Residual A — a hung-call tail at approval_ask, ceiling=30
 
 **Evidence** (live `judge-usage-ledger.jsonl`, ceiling=30, n=208 `decided` rows).
-Completed population (n=203, `timed_out: false`): max **22.05s**, p90 **17.55s**.
+Completed population (n=203, `timed_out: false`): max **22.05s**, p90
+**≈15.0s** (14.96–15.30s across the standard percentile-interpolation
+methods — linear/lower/higher/nearest/midpoint/inclusive/exclusive all land
+in that band; the earlier-reported 17.55s was mislabeled and is in fact
+close to the completed population's ~98th percentile).
 Timed-out population (n=5, `timed_out: true`, `reason: "judge timed out
 (fail-open)"`): 29.78s, 29.75s, 29.20s, 28.84s, 29.72s — all within ~1s of the
-30s ceiling and well outside the completed population's max. This is not a
-slightly-too-low ceiling truncating slow calls; it is a distinct population
-consistent with a stuck/wedged subprocess, and raising the ceiling further
-would not help a call that is genuinely stuck — it would only make it fail
-open later.
+30s ceiling and well outside the completed population's max (and further
+still outside its p90). This is not a slightly-too-low ceiling truncating
+slow calls; it is a distinct population consistent with a stuck/wedged
+subprocess, and raising the ceiling further would not help a call that is
+genuinely stuck — it would only make it fail open later.
 
-All 5 kills belong to the same source session, `7514dd40-b947-4cc5-84aa-
-983476c2515c`, spread across 2026-08-20 through 2026-08-27 (no other
-approval_ask@30 session has a single timeout). Per the plan's step 2, a
-bounded single retry inside the existing budget was evaluated and does not
-fit: `_APPROVAL_ASK_JUDGE_BUDGET_S = 30` in `scripts/hook-plan-delivery-
-gate.py`, and a single killed call already consumes up to ~29.8s of it,
-leaving no room for a second call inside the same fixed budget without
-raising the budget or adding a smaller-scoped remedy — both are design
-decisions outside this diagnosis stage's scope.
+**Corrected session distribution.** 4 of the 5 kills (2026-08-20, two on
+2026-08-22, and 2026-08-24) belong to source session `7514dd40-b947-4cc5-
+84aa-983476c2515c`; the 5th (2026-08-27T12:32:41, 29.72s) belongs to a
+**different** source session, `ed1e2dd0-8dec-4a05-a802-710612808849`. The
+kills are therefore not confined to a single session, and the earlier
+"session/environment-specific" framing does not hold as stated — it rested
+on the false claim that all 5 shared one session. What the corrected
+distribution actually supports is the opposite reading: a distinct-population
+wedge that recurs across at least two independent sessions over roughly a
+week is *less* likely to be one session's local artifact and more consistent
+with a generic judge-latency/wedge problem the majority-session concentration
+(4/5) does not rule out. The distinct-population conclusion above — drawn
+from duration shape alone, independent of session — still holds regardless.
+Per the plan's step 2, a bounded single retry inside the existing budget was
+evaluated and does not fit: `_APPROVAL_ASK_JUDGE_BUDGET_S = 30` in
+`scripts/hook-plan-delivery-gate.py`, and a single killed call already
+consumes up to ~29.8s of it, leaving no room for a second call inside the
+same fixed budget without raising the budget or adding a smaller-scoped
+remedy — both are design decisions outside this diagnosis stage's scope.
 
-residual A: filed: #209 approval_ask: cluster of near-ceiling kills (28.8-29.8s) all in one session, not fixable by raising the ceiling
+residual A: filed: #209 approval_ask: cluster of near-ceiling kills (28.8-29.8s), 4 of 5 in one session and 1 in another, not fixable by raising the ceiling
 
 ## Residual B — a stale-delivery block with no approval_ask decision in front of it
 
@@ -49,9 +63,10 @@ invocation, `503460a0` (hook `plan_delivery`, source session `7514dd40-
 b947-4cc5-84aa-983476c2515c`), entered and started at
 2026-08-19T18:08:50.92 and produced no terminal row (no `decided`/`final`/
 `emitted`) — outcome 6, "hook killed by the harness during the call." This
-is ~1h after the 17:08 report and its epoch (1787162930) precedes all five
-of residual A's timeout timestamps (earliest 1787230027, 2026-08-20 12:47),
-so it is not itself the reported block and cannot be read as its cause.
+is ~1h after the 17:08 report and its epoch (1787152130.92) precedes all five
+of residual A's timeout timestamps (earliest 1787230027, 2026-08-20 12:47) by
+~21.6h, so it is not itself the reported block and cannot be read as its
+cause.
 
 **New finding.** Session `7514dd40`'s retained agentctl state shows a `reset`
 from an unrelated prior task (`de495-macro188-provenance-fix`) to
@@ -89,11 +104,12 @@ logic ran to completion and logged a fail-open verdict; `503460a0` is
 `entered`/`started` with no `decided` row at all — the process was killed
 from outside before its own logic ever produced a verdict. These are
 different failure shapes at the ledger level, not two views of the same one.
-On timing, `503460a0` (2026-08-19T18:08:50, epoch 1787162930) precedes every
-one of residual A's five timeouts (earliest 2026-08-20T12:47:07, epoch
-1787230027) by at least 18 hours, and the shared session id is explained by
+On timing, `503460a0` (2026-08-19T18:08:50, epoch 1787152130.92) precedes
+every one of residual A's five timeouts (earliest 2026-08-20T12:47:07, epoch
+1787230027) by at least ~21.6 hours, and the shared session id — for the 4 of
+5 residual-A rows that share it — is explained by
 session `7514dd40` being reused across unrelated tasks over more than a
 week (2026-08-19 through 2026-08-27) rather than by one incident recurring
 within a tight window.
 
-residuals A,B: same_family: no: residual A rows are `decided`/`timed_out: true` (hook completed its own fail-open timeout logic); `503460a0` is `entered`/`started` with no terminal row at all (killed externally before any hook logic ran), and it precedes every residual-A timeout by >=18h under a session id independently shown to be reused across unrelated tasks over more than a week
+residuals A,B: same_family: no: residual A rows are `decided`/`timed_out: true` (hook completed its own fail-open timeout logic); `503460a0` is `entered`/`started` with no terminal row at all (killed externally before any hook logic ran), and it precedes every residual-A timeout by >=21.6h under a session id shown (for 4 of 5 residual-A rows) to be reused across unrelated tasks over more than a week
