@@ -51,10 +51,11 @@ def _fake_runner(text, code=0):
 
 
 def _capturing_runner(text, code=0):
-    """Like _fake_runner but records every prompt argv, so a test can assert WHAT
-    text the judge was fed (the injection-stripping contract)."""
+    """Like _fake_runner but records every prompt (delivered via the `stdin` kwarg,
+    never argv), so a test can assert WHAT text the judge was fed (the
+    injection-stripping contract)."""
     def runner(argv, **kwargs):
-        runner.calls.append(argv)
+        runner.calls.append(kwargs.get("stdin", ""))
         return RunResult(code, stdout=text, stderr="")
     runner.calls = []
     return runner
@@ -177,7 +178,7 @@ def test_feedback_judge_is_fed_injection_stripped_text(tmp_path, isolated_state)
     runner = _capturing_runner("NO")
     _mod.decide({"transcript_path": str(t), "stop_hook_active": False}, runner=runner)
     assert runner.calls, "judge was never invoked -- prefilter did not fire"
-    prompt = runner.calls[0][-1]
+    prompt = runner.calls[0]
     assert "system-reminder" not in prompt
     assert "Next time ask first" not in prompt
     # the human-authored feedback text survives stripping and reaches the judge
@@ -1244,8 +1245,7 @@ _JUDGE_MARKERS = {
 }
 
 
-def _judge_name_of(argv) -> str:
-    prompt = argv[-1]
+def _judge_name_of(prompt: str) -> str:
     for name, marker in _JUDGE_MARKERS.items():
         if marker in prompt:
             return name
@@ -1265,7 +1265,7 @@ def _recording_runner(text="NO", code=0, elapsed=0.0, clock=None):
     clock) advances that clock by `elapsed` per call, so a test can spend the
     invocation's judge budget without waiting in real time."""
     def runner(argv, **kwargs):
-        runner.calls.append((_judge_name_of(argv), kwargs.get("timeout")))
+        runner.calls.append((_judge_name_of(kwargs.get("stdin", "")), kwargs.get("timeout")))
         if clock is not None:
             clock.now += elapsed
         return RunResult(code, stdout=text, stderr="")

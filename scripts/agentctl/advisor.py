@@ -1047,7 +1047,7 @@ def judge_silent_closure(
     start = time.monotonic()
     try:
         prompt = _SILENT_CLOSURE_JUDGE_PROMPT.format(text=assistant_text)
-        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY, prompt), timeout=timeout)
+        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY), timeout=timeout, stdin=prompt)
         return _record_result(
             "silent_closure", result, duration=time.monotonic() - start,
             timeout=timeout, remaining=remaining, ceiling=ceiling,

@@ -1575,10 +1575,8 @@ def _semantic_invariants_coverage(
         prompt = _advisor._INVARIANTS_JUDGE_PROMPT.format(
             invariant=item, plan_text=norm_haystack
         )
-        argv = _advisor._prompt_argv(
-            _advisor.HOST_CLAUDE, _advisor._JUDGE_COMPLEXITY, prompt
-        )
-        result = runner(argv, timeout=_advisor._ADVISOR_TIMEOUT_S)
+        argv = _advisor._prompt_argv(_advisor.HOST_CLAUDE, _advisor._JUDGE_COMPLEXITY)
+        result = runner(argv, timeout=_advisor._ADVISOR_TIMEOUT_S, stdin=prompt)
         if result.returncode != 0:
             return True  # non-zero exit — fail open
         lines = [
