@@ -28,12 +28,15 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 def _runner(stdout, *, returncode=0):
     calls: list[list[str]] = []
+    prompts: list[str] = []
 
     def run(argv, **kw):
         calls.append(argv)
+        prompts.append(kw.get("stdin", ""))
         return SimpleNamespace(returncode=returncode, stdout=stdout, stderr="")
 
     run.calls = calls
+    run.prompts = prompts
     return run
 
 
@@ -200,7 +203,7 @@ def test_a_narrowed_pass_reads_only_the_changed_stages(store, tmp_path):
 
     run = _runner("stage:2.result\tis the edited image still checkable?")
     d = _enumerate(store, "s", run)
-    prompt = run.calls[0][4]
+    prompt = run.prompts[0]
     assert "stage 2 done" in prompt
     assert "stage 1 done" not in prompt
     assert d.data["whole_plan"] is False and d.data["stages"] == [2]
