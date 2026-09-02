@@ -661,7 +661,7 @@ def judge_binary_ask(
 # has no measured latency row of its own (lib/judge_latency.py's MEASURED
 # table carries "published_attachment" as n=0/UNMEASURED_NOTE), so the family
 # ceiling is the only number available to it.
-_PUBLISHED_ATTACHMENT_TIMEOUT_S = 41
+_PUBLISHED_ATTACHMENT_TIMEOUT_S = 55
 
 _PUBLISHED_ATTACHMENT_JUDGE_PROMPT = (
     "You are given the NAME and a leading CONTENT EXCERPT of a file about to be "
