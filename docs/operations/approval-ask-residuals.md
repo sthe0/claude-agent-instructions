@@ -10,7 +10,7 @@ never a speculative narrative.
 
 **Evidence** (live `judge-usage-ledger.jsonl`, ceiling=30, n=208 `decided` rows).
 Completed population (n=203, `timed_out: false`): max **22.05s**, p90
-**≈15.0s** (14.96–15.30s across the standard percentile-interpolation
+**≈15.0s** (14.85–15.08s across the standard percentile-interpolation
 methods — linear/lower/higher/nearest/midpoint/inclusive/exclusive all land
 in that band; the earlier-reported 17.55s was mislabeled and is in fact
 close to the completed population's ~98th percentile).
